@@ -1,7 +1,8 @@
 """MELI recipe integration against real published/ontologized/resolved facts.
 
-Only research-snapshot/source-inventory coverage is isolated in the model tests;
-its separate tests exercise inventory logic. This is not live package qualification.
+Model fixtures use real sealed ontology, resolution watermarks and canonical
+projections. Research-snapshot/source-inventory coverage remains isolated; its
+separate tests exercise inventory logic. This is not live package qualification.
 """
 
 from __future__ import annotations
@@ -27,6 +28,12 @@ from dcf.readiness import load_valuation_readiness
 from dcf.specialized_price import SpecializedPriceObservation
 from execution import build_meli_platform_dcf as meli
 from execution import preview_meli_inputs as preview_cli
+from provenance.analysis_scope import (
+    AnalysisEvidenceScope,
+    AnalysisScopeRequest,
+    ReportPdfPageSelection,
+    ReportPdfTableScope,
+)
 from provenance.canonical_fact_resolution import (
     CanonicalFactResolutionEngine,
     ResolutionPolicy,
@@ -34,6 +41,9 @@ from provenance.canonical_fact_resolution import (
 )
 from provenance.fact_plane_v2 import (
     CanonicalJSONObject,
+    DerivationInputV2,
+    DerivationSealV2,
+    DerivedFactObservationV2,
     ExtractionRunCompletenessSealV2,
     FactCellV2,
     FactDimensionV2,
@@ -51,9 +61,16 @@ from provenance.metric_ontology import (
     CanonicalMetricDefinitionRevision,
     MappingRevision,
     MetricOntology,
+    OntologySnapshot,
     SourceDimensionMappingRevision,
     SourceObservationTaxonomyAssertion,
     SourceTaxonomyComponent,
+)
+from provenance.report_evidence_contract import (
+    MELI_REPORT_EVIDENCE_RECIPE,
+    MELI_REPORT_EVIDENCE_REQUIREMENTS,
+    MemoReportSourcePopulation,
+    MemoReportSourceRequirement,
 )
 from provenance.reporting_entity_registry import (
     EvidenceSubjectBindingRevision,
@@ -62,9 +79,15 @@ from provenance.reporting_entity_registry import (
 )
 from provenance.research_snapshot import ResearchSnapshotRequest
 from provenance.source_fact_repository import (
+    DerivedSourceFact,
     ReportedSourceFact,
     SourceFactPublication,
     SourceFactRepository,
+)
+from provenance.source_fact_stream import bind_resolution_snapshot_watermark
+from search.canonical_fact_projection import (
+    ProjectionGenerationRequest,
+    build_canonical_projection_generation,
 )
 from tests.test_source_fact_repository import STAMP, make_cell, make_report, seed_foundation, sha256
 
@@ -111,6 +134,39 @@ def _snapshot() -> ResearchSnapshotRequest:
     )
 
 
+def seal_model_projection_context(
+    conn: sqlite3.Connection, snapshot: ResearchSnapshotRequest
+) -> None:
+    """Seal real model selection context; do not claim corpus/inventory coverage."""
+    MetricOntology(conn).seal_snapshot(
+        OntologySnapshot(
+            ontology_snapshot_id=snapshot.ontology_snapshot_id,
+            idempotency_key=snapshot.ontology_snapshot_id,
+            cutoff_at=snapshot.cutoff_at,
+            recorded_at=snapshot.recorded_at,
+        )
+    )
+    bind_resolution_snapshot_watermark(
+        conn,
+        resolution_snapshot_id=snapshot.canonical_fact_resolution_snapshot_id,
+        cutoff_at=snapshot.cutoff_at,
+        recorded_at=snapshot.recorded_at,
+    )
+    build_canonical_projection_generation(
+        conn,
+        ProjectionGenerationRequest(
+            generation_id=snapshot.canonical_fact_projection_run_id,
+            idempotency_key=snapshot.canonical_fact_projection_run_id,
+            generation_kind="checkpoint",
+            resolution_snapshot_id=snapshot.canonical_fact_resolution_snapshot_id,
+            ontology_snapshot_id=snapshot.ontology_snapshot_id,
+            cutoff_at=snapshot.cutoff_at,
+            recorded_at=snapshot.recorded_at,
+        ),
+    )
+    conn.commit()
+
+
 def _inputs() -> dict[str, float]:
     assumptions = meli.Assum(
         derive_capm=0,
@@ -131,6 +187,10 @@ def _seed_real_inputs(
     shared_revenues: bool = False,
     extra_country: bool = False,
     security_scope: bool = False,
+    page_number: int | None = None,
+    page_overrides: dict[str, int] | None = None,
+    requirements: tuple[evidence.InputRequirement, ...] | None = None,
+    amounts_override: dict[str, float] | None = None,
 ) -> dict[str, evidence.FactBinding]:
     """No mocking source publication, ontology, binding, resolver or fact reader."""
     seed_foundation(conn, source_path=source_path)
@@ -198,7 +258,8 @@ def _seed_real_inputs(
         "reported_current_operating_lease_liabilities": 513,
         "reported_noncurrent_operating_lease_liabilities": 2037,
     }
-    requirements = meli_inputs.requirements_for(END)
+    amounts.update(amounts_override or {})
+    requirements = requirements if requirements is not None else meli_inputs.requirements_for(END)
     role_requirements = {req.role: req for req in requirements}
     facts: list[ReportedSourceFact] = []
     for index, req in enumerate(requirements):
@@ -221,7 +282,7 @@ def _seed_real_inputs(
                 ]
             )
         )
-        if req.period_end is not None:
+        if req.period_end is not None and req.key not in (amounts_override or {}):
             amount *= (
                 Decimal(".9")
                 if key.endswith("_fy")
@@ -288,12 +349,17 @@ def _seed_real_inputs(
                     "currency": req.currency,
                     "fiscal_period": None,
                     "accounting_basis": req.accounting_basis or "us_gaap",
+                    "consolidation_scope": req.consolidation_scope,
                 }
             )
             .model_dump(mode="json")
         )
         node = f"meli-node-{index}"
         source_locator: dict[str, object] = {"path": key}
+        if page_number is not None:
+            source_locator["page_number"] = page_number
+        if page_overrides is not None and key in page_overrides:
+            source_locator["page_number"] = page_overrides[key]
         if key == "reported_available_cash_and_investments":
             source_locator.update(
                 {
@@ -557,7 +623,7 @@ def _seed_real_inputs(
                 "accounting_basis": cell.accounting_basis,
                 "concept_name": cell.concept_name,
                 "concept_namespace": "us-gaap",
-                "consolidation_scope": "consolidated",
+                "consolidation_scope": req.consolidation_scope,
                 "period_kind": req.period_kind,
                 "reporting_entity_id": "reporting-1",
                 "schema_version": "source-definition-identity/v1",
@@ -661,7 +727,7 @@ def _seed_real_inputs(
                 scope_security_id=cell.scope_security_id,
                 unit_family=family,
                 accounting_basis=cell.accounting_basis,
-                consolidation_scope="consolidated",
+                consolidation_scope=req.consolidation_scope,
                 effective_at=STAMP,
                 knowledge_at=STAMP,
                 recorded_at=STAMP,
@@ -760,6 +826,12 @@ def _request(
     return request.model_copy(update={"assumption_review": review})
 
 
+# Shared admitted-source fixture builders for native model-reader regressions.
+synthetic_input_values = _inputs
+seed_real_input_facts = _seed_real_inputs
+synthetic_model_snapshot = _snapshot
+
+
 @pytest.fixture
 def source_context(tmp_path: Path) -> evidence.SourceReadContext:
     """Explicit isolated raw-byte authority; no database-path inference."""
@@ -775,11 +847,13 @@ def real_inputs(
 ) -> Generator[tuple[sqlite3.Connection, evidence.ModelInputRequest], None, None]:
     conn = sqlite3.connect(migrated_db(tmp_path / "meli.db"))
     refs = _seed_real_inputs(conn, source_path=source_context.content_roots[0] / "fixture.json")
+    snapshot = _snapshot()
+    seal_model_projection_context(conn, snapshot)
 
     def coverage(
         _conn: sqlite3.Connection, _request: evidence.ModelInputRequest, _cutoff: datetime
     ) -> tuple[ResearchSnapshotRequest, str, tuple[str, ...]]:
-        return _snapshot(), "b" * 64, ("inventory",)
+        return snapshot, "b" * 64, ("inventory",)
 
     monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
     try:
@@ -799,15 +873,242 @@ def shared_revenue_inputs(
     refs = _seed_real_inputs(
         conn, shared_revenues=True, source_path=source_context.content_roots[0] / "fixture.json"
     )
+    snapshot = _snapshot()
+    seal_model_projection_context(conn, snapshot)
 
     def coverage(
         _conn: sqlite3.Connection, _request: evidence.ModelInputRequest, _cutoff: datetime
     ) -> tuple[ResearchSnapshotRequest, str, tuple[str, ...]]:
-        return _snapshot(), "b" * 64, ("inventory",)
+        return snapshot, "b" * 64, ("inventory",)
 
     monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
     try:
         yield conn, _request(conn, refs, source_context)
+    finally:
+        conn.close()
+
+
+def reviewed_pdf_table_scope(
+    observation_id: str, *, document_version_id: str = "document-1", reviewed_at: datetime = NOW
+) -> ReportPdfTableScope:
+    population = MemoReportSourcePopulation.model_construct(
+        recipe=MELI_REPORT_EVIDENCE_RECIPE,
+        requirements=tuple(
+            MemoReportSourceRequirement(
+                requirement=name,
+                observation_ids=(observation_id,),
+                rationale="Synthetic reviewed model source population",
+            )
+            for name in MELI_REPORT_EVIDENCE_REQUIREMENTS
+        ),
+    )
+    population = MemoReportSourcePopulation.model_validate(
+        {
+            **population.model_dump(),
+            "population_sha256": evidence.canonical_digest(population.model_dump()),
+        }
+    )
+    scope = ReportPdfTableScope.model_construct(
+        document_version_id=document_version_id,
+        raw_pdf_sha256="a" * 64,
+        artifact_id="reviewed-pdf-artifact",
+        artifact_sha256="b" * 64,
+        pages=(
+            ReportPdfPageSelection(
+                page_number=1,
+                page_sha256="c" * 64,
+                table_requirement="required",
+                rationale="Synthetic required financial table page",
+            ),
+            ReportPdfPageSelection(
+                page_number=2,
+                page_sha256="d" * 64,
+                table_requirement="deferred",
+                defer_basis="outside_report_population",
+                rationale="Synthetic page outside the reviewed population",
+            ),
+        ),
+        source_population=population,
+        reviewer="synthetic analyst",
+        reviewed_at=reviewed_at,
+        rationale="Synthetic reviewed two-page PDF scope",
+    )
+    payload = scope.model_dump(mode="json")
+    return ReportPdfTableScope.model_validate(
+        {**payload, "scope_sha256": evidence.canonical_digest(payload)}
+    )
+
+
+@pytest.mark.parametrize(
+    ("scoped", "page_number", "derived", "rejected"),
+    [
+        (True, 2, False, True),
+        (True, None, False, True),
+        (True, 3, False, True),
+        (True, 2, True, True),
+        (True, 1, False, False),
+        (False, None, False, False),
+    ],
+    ids=["deferred", "unknown", "out-of-range", "derived-deferred-leaf", "included", "unscoped"],
+)
+def test_model_input_reviewed_pdf_pages(
+    source_context: evidence.SourceReadContext,
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    scoped: bool,
+    page_number: int | None,
+    derived: bool,
+    rejected: bool,
+) -> None:
+    conn = sqlite3.connect(migrated_db(tmp_path / "pdf-model-inputs.db"))
+    try:
+        refs = _seed_real_inputs(
+            conn,
+            source_path=source_context.content_roots[0] / "fixture.json",
+            page_number=1 if derived else page_number,
+            # Only the derived anchor's sealed leaf belongs to the deferred page.
+            page_overrides={meli_inputs.requirements_for(END)[0].key: 2} if derived else None,
+        )
+        snapshot = _snapshot()
+        seal_model_projection_context(conn, snapshot)
+
+        def coverage(
+            _conn: sqlite3.Connection, _request: evidence.ModelInputRequest, _cutoff: datetime
+        ) -> tuple[ResearchSnapshotRequest, str, tuple[str, ...]]:
+            return snapshot, "b" * 64, ("inventory",)
+
+        monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
+        request = _request(conn, refs, source_context)
+        key = next(iter(request.facts))
+        source_id = request.facts[key].observation_id
+        if derived:
+            cell = make_cell("pdf-derived")
+            observation = DerivedFactObservationV2(
+                observation_id="pdf-derived",
+                idempotency_key="pdf-derived",
+                fact_cell_id=cell.fact_cell_id,
+                observation_kind="derived",
+                value_kind="numeric",
+                numeric_value="200",
+                method_name="formula-engine",
+                method_version="v1",
+                method_config_sha256=sha256("formula-method"),
+                revision_kind="initial",
+                effective_at=STAMP,
+                knowledge_at=STAMP,
+                recorded_at=STAMP,
+                formula_id="double",
+                formula_version="v1",
+            )
+            SourceFactRepository(conn).publish(
+                SourceFactPublication(
+                    publication_id="pdf-derived",
+                    idempotency_key="pdf-derived",
+                    derived_facts=(DerivedSourceFact(cell=cell, observation=observation),),
+                    derivations=(
+                        DerivationSealV2(
+                            derivation_seal_id="pdf-derived-seal",
+                            idempotency_key="pdf-derived-seal",
+                            derived_observation_id=observation.observation_id,
+                            ordered_inputs=(
+                                DerivationInputV2(
+                                    edge_id="pdf-derived-edge",
+                                    idempotency_key="pdf-derived-edge",
+                                    derived_observation_id=observation.observation_id,
+                                    input_position=0,
+                                    input_observation_id=source_id,
+                                    input_role="base",
+                                    recorded_at=STAMP,
+                                ),
+                            ),
+                            input_basis="as_reported",
+                            formula_definition_sha256=sha256("formula-definition"),
+                            formula_config_sha256=sha256("formula-config"),
+                            seal_method="canonical-json",
+                            seal_method_version="v1",
+                            effective_at=STAMP,
+                            knowledge_at=STAMP,
+                            recorded_at=STAMP,
+                        ),
+                    ),
+                )
+            )
+            request = request.model_copy(
+                update={
+                    "facts": {
+                        **request.facts,
+                        key: request.facts[key].model_copy(
+                            update={"observation_id": observation.observation_id}
+                        ),
+                    }
+                }
+            )
+        if scoped:
+            # As in real_inputs, isolate source-coverage admission while retaining
+            # real sealed facts and the validated reviewed page-scope contract.
+            analysis = AnalysisEvidenceScope.model_construct(
+                request=AnalysisScopeRequest(
+                    purpose="Synthetic model input page boundary",
+                    issuer_id="issuer-1",
+                    inventory_key="inventory",
+                    required_period_ends=(END,),
+                    cutoff_at=NOW,
+                    observed_through=NOW,
+                    readiness_profile="complete_report_evidence/v1",
+                    report_pdf_tables=(reviewed_pdf_table_scope(source_id),),
+                )
+            )
+            snapshot = snapshot.model_copy(
+                update={
+                    "research_universe": snapshot.research_universe.model_copy(
+                        update={"analysis_scope": analysis}
+                    )
+                }
+            )
+
+        def verify() -> evidence.ModelInputReceipt:
+            return evidence.verify_model_inputs(
+                conn,
+                request,
+                recipe=meli_inputs.RECIPE,
+                requirements=meli_inputs.requirements_for(END),
+                effective_inputs={key: item.value for key, item in request.assumptions.items()},
+                assumption_keys=meli_inputs.ASSUMPTION_KEYS,
+                as_of=NOW,
+                source_context=source_context,
+            )
+
+        if rejected:
+            with pytest.raises(
+                evidence.InputEvidenceError, match=r"^model_input_deferred_pdf_page_used$"
+            ):
+                verify()
+            if not derived:
+                # Isolate the source-membership call: skipping the earlier
+                # observation check must still reject the exact evidence node.
+                shared_guard = evidence.require_included_pdf_pages
+
+                def node_only_guard(
+                    conn: sqlite3.Connection,
+                    scopes: tuple[ReportPdfTableScope, ...],
+                    *,
+                    evidence_node_ids: tuple[str, ...] = (),
+                    observation_ids: tuple[str, ...] = (),
+                    cutoff: datetime,
+                ) -> None:
+                    del observation_ids
+                    shared_guard(conn, scopes, evidence_node_ids=evidence_node_ids, cutoff=cutoff)
+
+                monkeypatch.setattr(evidence, "require_included_pdf_pages", node_only_guard)
+                with pytest.raises(
+                    evidence.InputEvidenceError, match=r"^model_input_deferred_pdf_page_used$"
+                ):
+                    verify()
+        else:
+            receipt = verify()
+            assert receipt.source_integrity == "present_bytes_verified"
+            assert len(receipt.inputs) == len(request.facts)
     finally:
         conn.close()
 
@@ -892,13 +1193,15 @@ def test_real_published_distractor_cell_cannot_feed_meli_role(
             extra_country=distraction == "extra_country",
             security_scope=distraction == "security_scope",
         )
+        snapshot = _snapshot()
+        seal_model_projection_context(conn, snapshot)
 
         def coverage(
             _conn: sqlite3.Connection,
             _request: evidence.ModelInputRequest,
             _cutoff: datetime,
         ) -> tuple[ResearchSnapshotRequest, str, tuple[str, ...]]:
-            return _snapshot(), "b" * 64, ("inventory",)
+            return snapshot, "b" * 64, ("inventory",)
 
         monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
         ref = refs[DISTRACTOR_KEY]
@@ -1056,9 +1359,9 @@ def test_shared_revenue_revised_definition_fails_closed(
             "revision": 2,
             "supersedes_metric_definition_revision_id": old.metric_definition_revision_id,
             "scope_constraints": scopes[change],
-            "effective_at": NOW,
-            "knowledge_at": NOW,
-            "recorded_at": NOW,
+            "effective_at": NOW + timedelta(seconds=1),
+            "knowledge_at": NOW + timedelta(seconds=1),
+            "recorded_at": NOW + timedelta(seconds=1),
         }
     )
     ontology.persist_metric_definition(revised)
@@ -1081,7 +1384,11 @@ def test_shared_revenue_revised_definition_fails_closed(
         )
     with pytest.raises(evidence.InputEvidenceError, match="input_semantic_admission_failed"):
         meli_inputs.prepare_meli_inputs(
-            conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+            conn,
+            request,
+            effective_inputs=_inputs(),
+            as_of=NOW + timedelta(seconds=1),
+            source_context=source_context,
         )
 
 
@@ -1102,6 +1409,172 @@ def test_shared_revenue_append_only_dimension_and_recipe_cannot_be_bypassed(
             "WHERE canonical_metric_cell_id=?",
             (cell_id,),
         )
+
+
+@pytest.mark.parametrize("drift", ["definition", "binding", "mapping"])
+def test_model_inputs_cannot_mix_later_semantics_with_an_older_projected_context(
+    real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+    source_context: evidence.SourceReadContext,
+    monkeypatch: pytest.MonkeyPatch,
+    drift: str,
+) -> None:
+    conn, request = real_inputs
+    ontology = MetricOntology(conn)
+    ref = request.facts["comm_rev0_ytd"]
+    binding = ontology.binding_as_known(ref.observation_id, NOW)
+    assert binding is not None
+    later = NOW + timedelta(seconds=1)
+    replacement_mapping: MappingRevision | None = None
+    if drift == "definition":
+        definition = ontology.metric_definition_as_known(ref.metric_id, NOW)
+        assert definition is not None
+        replacement = definition.model_copy(
+            update={
+                "metric_definition_revision_id": definition.metric_definition_revision_id
+                + ":later",
+                "idempotency_key": definition.idempotency_key + ":later",
+                "revision": 2,
+                "supersedes_metric_definition_revision_id": definition.metric_definition_revision_id,
+                "definition_text": definition.definition_text
+                + " Reviewed later, same economic role.",
+                "effective_at": later,
+                "knowledge_at": later,
+                "recorded_at": later,
+            }
+        )
+        ontology.persist_metric_definition(replacement)
+        # Updating the caller's refs must not retroactively update the snapshot.
+        request = request.model_copy(
+            update={
+                "facts": {
+                    key: point.model_copy(
+                        update={
+                            "metric_definition_revision_id": replacement.metric_definition_revision_id
+                        }
+                    )
+                    if point.metric_id == ref.metric_id
+                    else point
+                    for key, point in request.facts.items()
+                }
+            }
+        )
+    elif drift == "binding":
+        ontology.persist_binding(
+            binding.model_copy(
+                update={
+                    "binding_revision_id": binding.binding_revision_id + ":later",
+                    "idempotency_key": binding.idempotency_key + ":later",
+                    "revision": 2,
+                    "supersedes_binding_revision_id": binding.binding_revision_id,
+                    "effective_at": later,
+                    "knowledge_at": later,
+                    "recorded_at": later,
+                }
+            )
+        )
+    else:
+        assert binding.source_component_id is not None
+        mapping = ontology.mapping_as_known(binding.source_component_id, NOW)
+        assert mapping is not None
+        replacement_mapping = mapping.model_copy(
+            update={
+                "mapping_revision_id": mapping.mapping_revision_id + ":later",
+                "idempotency_key": mapping.idempotency_key + ":later",
+                "revision": 2,
+                "supersedes_mapping_revision_id": mapping.mapping_revision_id,
+                "method_version": "later-review-same-metric",
+                "effective_at": later,
+                "knowledge_at": later,
+                "recorded_at": later,
+            }
+        )
+        ontology.persist_mapping(replacement_mapping)
+    conn.commit()
+    inputs = _inputs()
+    with pytest.raises(evidence.InputEvidenceError, match="input_snapshot_context_mismatch"):
+        evidence.verify_model_inputs(
+            conn,
+            request,
+            recipe=meli_inputs.RECIPE,
+            requirements=meli_inputs.requirements_for(END),
+            effective_inputs={key: inputs[key] for key in meli_inputs.ASSUMPTION_KEYS},
+            assumption_keys=meli_inputs.ASSUMPTION_KEYS,
+            as_of=later,
+            source_context=source_context,
+        )
+
+    # Accept the changed mapping through an explicit new binding before sealing
+    # a new context. A new seal is not permission to reuse the obsolete binding.
+    if replacement_mapping is not None:
+        for point in request.facts.values():
+            affected = ontology.binding_as_known(point.observation_id, NOW)
+            assert affected is not None
+            if affected.source_component_id != replacement_mapping.source_component_id:
+                continue
+            ontology.persist_binding(
+                affected.model_copy(
+                    update={
+                        "binding_revision_id": affected.binding_revision_id + ":later",
+                        "idempotency_key": affected.idempotency_key + ":later",
+                        "revision": 2,
+                        "supersedes_binding_revision_id": affected.binding_revision_id,
+                        "mapping_revision_id": replacement_mapping.mapping_revision_id,
+                        "effective_at": later,
+                        "knowledge_at": later,
+                        "recorded_at": later,
+                    }
+                )
+            )
+    resolver = CanonicalFactResolutionEngine(conn)
+    facts: dict[str, evidence.FactBinding] = {}
+    for key, point in request.facts.items():
+        selected = resolver.resolve(
+            point.canonical_metric_cell_id,
+            later,
+            ResolutionPolicy(name="synthetic", version="1", config={}),
+            recorded_at=later,
+        )
+        facts[key] = point.model_copy(
+            update={"canonical_resolution_revision_id": selected.canonical_resolution_revision_id}
+        )
+    resolver.seal_snapshot(
+        "resolution-later",
+        later,
+        later,
+        ResolutionSnapshotScope(issuer_id="issuer-1", reporting_entity_ids=("reporting-1",)),
+    )
+    snapshot = _snapshot().model_copy(
+        update={
+            "research_snapshot_id": "snapshot-later",
+            "idempotency_key": "snapshot-later",
+            "ontology_snapshot_id": "ontology-later",
+            "canonical_fact_resolution_snapshot_id": "resolution-later",
+            "canonical_fact_projection_run_id": "projection-later",
+            "cutoff_at": later,
+            "recorded_at": later,
+        }
+    )
+    seal_model_projection_context(conn, snapshot)
+
+    def coverage(
+        _conn: sqlite3.Connection, _request: evidence.ModelInputRequest, _cutoff: datetime
+    ) -> tuple[ResearchSnapshotRequest, str, tuple[str, ...]]:
+        return snapshot, "c" * 64, ("inventory-later",)
+
+    monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
+    verified = evidence.verify_model_inputs(
+        conn,
+        request.model_copy(update={"research_snapshot_id": "snapshot-later", "facts": facts}),
+        recipe=meli_inputs.RECIPE,
+        requirements=meli_inputs.requirements_for(END),
+        effective_inputs={key: inputs[key] for key in meli_inputs.ASSUMPTION_KEYS},
+        assumption_keys=meli_inputs.ASSUMPTION_KEYS,
+        as_of=later,
+        source_context=source_context,
+    )
+    assert len(verified.inputs) == 28
+    assert verified.request.research_snapshot_id == "snapshot-later"
+    assert verified.source_integrity == "present_bytes_verified"
 
 
 def test_real_reported_bindings_compute_ttm_and_bridge(
@@ -1367,9 +1840,9 @@ def test_current_definition_supersession_invalidates_old_binding_recipe(
                 "revision": 2,
                 "supersedes_metric_definition_revision_id": old.metric_definition_revision_id,
                 "scope_constraints": {**old.scope_constraints, "funding_costs": "not_deducted"},
-                "effective_at": NOW,
-                "knowledge_at": NOW,
-                "recorded_at": NOW,
+                "effective_at": NOW + timedelta(seconds=1),
+                "knowledge_at": NOW + timedelta(seconds=1),
+                "recorded_at": NOW + timedelta(seconds=1),
             }
         )
     )
@@ -1389,7 +1862,11 @@ def test_current_definition_supersession_invalidates_old_binding_recipe(
         )
     with pytest.raises(evidence.InputEvidenceError, match="input_semantic_admission_failed"):
         meli_inputs.prepare_meli_inputs(
-            conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+            conn,
+            request,
+            effective_inputs=_inputs(),
+            as_of=NOW + timedelta(seconds=1),
+            source_context=source_context,
         )
 
 
@@ -1540,6 +2017,18 @@ def test_real_builder_persistence_keeps_subsecond_calculation_clock(
         "BEAR_SEED",
         meli.redesign_mod.ScenarioDeltas(growth_near=-0.03, exit_multiple=-2),
     )
+
+    def timestamp_workbook(
+        _assumptions: meli.Assum,
+        _model: meli.Mirror,
+        path: Path,
+        _holdings: dict[str, object] | None,
+    ) -> None:
+        # This test owns persistence clocks. The separate artifact-engine suite
+        # proves formula recalculation, saved caches and financial parity.
+        path.write_bytes(b"synthetic timestamp-only workbook")
+
+    monkeypatch.setattr(meli, "build", timestamp_workbook)
     meli.build(assumptions, model, destination, None)
     os.utime(destination, (NOW.timestamp(), NOW.timestamp()))
     assert meli.persist_dcf_run(
@@ -1634,9 +2123,9 @@ def test_input_preview_refuses_missing_or_ambiguous_roles_without_partial_bindin
                 "revision": 2,
                 "supersedes_metric_definition_revision_id": old.metric_definition_revision_id,
                 "scope_constraints": scope,
-                "effective_at": NOW,
-                "knowledge_at": NOW,
-                "recorded_at": NOW,
+                "effective_at": NOW + timedelta(seconds=1),
+                "knowledge_at": NOW + timedelta(seconds=1),
+                "recorded_at": NOW + timedelta(seconds=1),
             }
         )
     )
@@ -1646,7 +2135,7 @@ def test_input_preview_refuses_missing_or_ambiguous_roles_without_partial_bindin
         conn,
         research_snapshot_id=request.research_snapshot_id,
         financial_period_end=END,
-        as_of=NOW,
+        as_of=NOW + timedelta(seconds=1),
         source_context=source_context,
     )
     slots = {slot.key: slot for slot in result.slots}
@@ -1752,9 +2241,9 @@ def test_input_preview_excludes_old_basis_cell_after_definition_reclassification
                 "supersedes_metric_definition_revision_id": credit.metric_definition_revision_id,
                 "accounting_basis": cash.accounting_basis,
                 "scope_constraints": cash.scope_constraints,
-                "effective_at": NOW,
-                "knowledge_at": NOW,
-                "recorded_at": NOW,
+                "effective_at": NOW + timedelta(seconds=1),
+                "knowledge_at": NOW + timedelta(seconds=1),
+                "recorded_at": NOW + timedelta(seconds=1),
             }
         )
     )
@@ -1764,7 +2253,7 @@ def test_input_preview_excludes_old_basis_cell_after_definition_reclassification
         conn,
         research_snapshot_id=request.research_snapshot_id,
         financial_period_end=END,
-        as_of=NOW,
+        as_of=NOW + timedelta(seconds=1),
         source_context=source_context,
     )
     slots = {slot.key: slot for slot in result.slots}
@@ -1794,9 +2283,9 @@ def test_input_preview_excludes_retired_binding_from_apparent_competing_role(
                 "revision": 2,
                 "supersedes_metric_definition_revision_id": total.metric_definition_revision_id,
                 "scope_constraints": commerce.scope_constraints,
-                "effective_at": NOW,
-                "knowledge_at": NOW,
-                "recorded_at": NOW,
+                "effective_at": NOW + timedelta(seconds=1),
+                "knowledge_at": NOW + timedelta(seconds=1),
+                "recorded_at": NOW + timedelta(seconds=1),
             }
         )
     )
@@ -1810,9 +2299,9 @@ def test_input_preview_excludes_retired_binding_from_apparent_competing_role(
                 "revision": 2,
                 "supersedes_binding_revision_id": binding.binding_revision_id,
                 "binding_status": "retired",
-                "effective_at": NOW,
-                "knowledge_at": NOW,
-                "recorded_at": NOW,
+                "effective_at": NOW + timedelta(seconds=1),
+                "knowledge_at": NOW + timedelta(seconds=1),
+                "recorded_at": NOW + timedelta(seconds=1),
             }
         )
     )
@@ -1822,7 +2311,7 @@ def test_input_preview_excludes_retired_binding_from_apparent_competing_role(
         conn,
         research_snapshot_id=request.research_snapshot_id,
         financial_period_end=END,
-        as_of=NOW,
+        as_of=NOW + timedelta(seconds=1),
         source_context=source_context,
     )
     slots = {slot.key: slot for slot in result.slots}
@@ -1902,3 +2391,52 @@ def test_input_preview_cli_refuses_source_root_before_database_access(
     assert refusal["reason_code"] == "source_authority_unavailable"
     assert refusal["model_ready"] is False
     assert not database.exists() and not output.exists()
+
+
+@pytest.mark.parametrize("knowledge_shift_seconds", [0, 1])
+def test_identical_later_resolution_preserves_exact_model_snapshot(
+    source_context: evidence.SourceReadContext,
+    real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+    knowledge_shift_seconds: int,
+) -> None:
+    """Another population pass must not replace the model's saved K/O selection."""
+    conn, request = real_inputs
+    original_values, original = meli_inputs.prepare_meli_inputs(
+        conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+    )
+    ref = request.facts["comm_rev0_fy"]
+    later = NOW + timedelta(seconds=2)
+    replay = CanonicalFactResolutionEngine(conn).resolve(
+        ref.canonical_metric_cell_id,
+        NOW + timedelta(seconds=knowledge_shift_seconds),
+        ResolutionPolicy(name="synthetic", version="1", config={}),
+        recorded_at=later,
+    )
+    assert replay.status == "resolved"
+    assert replay.selected_observation_id == ref.observation_id
+    assert replay.canonical_resolution_revision_id != ref.canonical_resolution_revision_id
+    conn.commit()
+    verified = meli_inputs.verify_meli_inputs(
+        conn, original, effective_inputs=original_values, as_of=later, source_context=source_context
+    )
+    assert verified.inputs == original.inputs
+    assert verified.request == original.request
+    assert verified.model_output_sha256 == original.model_output_sha256
+    # Keeping the same observation does not authorize changing the saved
+    # resolution revision to one outside the original sealed projection.
+    tainted = request.model_copy(
+        update={
+            "facts": {
+                **request.facts,
+                "comm_rev0_fy": ref.model_copy(
+                    update={
+                        "canonical_resolution_revision_id": replay.canonical_resolution_revision_id
+                    }
+                ),
+            }
+        }
+    )
+    with pytest.raises(evidence.InputEvidenceError, match="input_outside_canonical_snapshot"):
+        meli_inputs.prepare_meli_inputs(
+            conn, tainted, effective_inputs=_inputs(), as_of=later, source_context=source_context
+        )

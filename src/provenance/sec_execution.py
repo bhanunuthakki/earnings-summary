@@ -8,12 +8,13 @@ state is inferred. Receipt replay preserves the original terminal result and tim
 from __future__ import annotations
 
 import hashlib
-import json
 import sqlite3
 from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from runtime.deterministic import content_sha256_ascii as _digest
 
 ExecutionKind = Literal["native_capture", "inventory_sync"]
 ExecutionState = Literal["requested", "running", "succeeded", "partial", "deferred", "failed"]
@@ -96,12 +97,6 @@ class SecExecutionReceipt(BaseModel):
         if self.sequence == 2 and (self.result is None or self.state != self.result.state):
             raise ValueError("terminal phase requires its exact typed result")
         return self
-
-
-def _digest(value: object) -> str:
-    return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
 
 
 def _append(conn: sqlite3.Connection, receipt: SecExecutionReceipt) -> None:

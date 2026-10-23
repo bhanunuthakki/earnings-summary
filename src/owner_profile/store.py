@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
+from clock import now_iso as _now_iso
 from identity import DEFAULT_USER_ID
 from model_provenance.versioning import mark_superseded_by, supersede_current
 from owner_profile.models import CATEGORIES, PROVENANCES, STATUSES
@@ -68,10 +69,6 @@ class OwnerProfileFactRow:
     is_latest: bool
     superseded_at: str | None
     superseded_by_id: int | None
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).replace(tzinfo=None).isoformat()
 
 
 def _decode_row(row: sqlite3.Row) -> OwnerProfileFactRow | None:

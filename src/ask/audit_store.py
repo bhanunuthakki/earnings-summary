@@ -7,9 +7,12 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from functools import partial
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from runtime.deterministic import require_sha256
 
 
 def canonical_json(value: object) -> str:
@@ -48,11 +51,7 @@ def retrieval_query_sha256(query_text: str) -> str:
     )
 
 
-def _sha(value: str) -> str:
-    normalized = value.lower()
-    if len(normalized) != 64 or any(char not in "0123456789abcdef" for char in normalized):
-        raise ValueError("must be a lowercase SHA-256 digest")
-    return normalized
+_sha = partial(require_sha256, message="must be a lowercase SHA-256 digest")
 
 
 def _time(value: datetime) -> datetime:

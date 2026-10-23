@@ -101,6 +101,7 @@ from pipeline.queries import open_db
 from provenance.evidence_ledger import EvidenceLocator
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.fulltext_extractor_identity import (
+    readable_fulltext_extractor_identities,
     resolve_fulltext_extractor_identity,
 )
 from runtime.job_runtime import JobAlreadyRunningError, JobLock
@@ -752,10 +753,11 @@ def _validate_source_binding(
     }:
         raise RepairBlockedError("evidence_node_not_substantive")
     extractor = resolve_fulltext_extractor_identity(str(document["file_path"]), None)
-    if (
-        str(evidence["extractor_name"]) != extractor.name
-        or str(evidence["extractor_config_sha256"]) != extractor.config_sha256
-        or str(evidence["extractor_code_version"]) != extractor.code_version
+    if not any(
+        str(evidence["extractor_name"]) == approved.name
+        and str(evidence["extractor_config_sha256"]) == approved.config_sha256
+        and str(evidence["extractor_code_version"]) == approved.code_version
+        for approved in readable_fulltext_extractor_identities(extractor)
     ):
         raise RepairBlockedError("evidence_extractor_not_promoted")
     if str(evidence["ticker"]).upper() != str(document["ticker"]).upper():

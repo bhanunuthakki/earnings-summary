@@ -28,8 +28,10 @@ from provenance.issuer_registry import (
 )
 from provenance.sec_companyfacts_capture import (
     SecCompanyFactsCaptureRequest,
+    SecCompanyFactsUnchangedObservationRequest,
     capture_sec_companyfacts,
     parse_companyfacts_body,
+    record_companyfacts_unchanged_observation,
 )
 from schema_compat import expected_head
 
@@ -263,6 +265,84 @@ def test_capture_persists_exact_bytes_shared_snapshot_and_exact_replay(
             conn.execute("SELECT COUNT(*) FROM evidence_document_observation_links").fetchone()[0]
             == 2
         )
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("retrieval_delay", [timedelta(0), timedelta(hours=1)])
+def test_unchanged_observation_preserves_primary_and_replays_exact_links(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    retrieval_delay: timedelta,
+) -> None:
+    conn = _database(tmp_path, migrated_db)
+    _seed_issuer_identity(conn)
+    body = _body()
+    request = _request(tmp_path, body, snapshot_document_id=1)
+    try:
+        _seed_snapshot_document(conn, body, document_id=1)
+        first = capture_sec_companyfacts(conn, request)
+        conn.commit()
+        immutable_tables = (
+            "evidence_content_blobs",
+            "evidence_document_versions",
+            "evidence_extraction_runs",
+            "evidence_nodes",
+            "legacy_document_evidence_binding_revisions",
+        )
+        retained = {
+            table: [tuple(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY rowid")]
+            for table in immutable_tables
+        }
+        primary = tuple(
+            conn.execute(
+                "SELECT * FROM evidence_document_observation_links WHERE link_kind='primary'"
+            ).fetchone()
+        )
+        unchanged = SecCompanyFactsUnchangedObservationRequest(
+            ticker=request.ticker,
+            normalized_cik=request.normalized_cik,
+            issuer_id=request.issuer_id,
+            source_url=request.source_url,
+            blob_sha256=first.blob_sha256,
+            observed_at=request.observed_at + retrieval_delay,
+            retrieved_at=request.retrieved_at + retrieval_delay,
+        )
+        later_retrieval = retrieval_delay > timedelta(0)
+        result = record_companyfacts_unchanged_observation(conn, unchanged)
+        conn.commit()
+        assert result.records_created == (2 if later_retrieval else 0)
+        assert result.records_replayed == (0 if later_retrieval else 2)
+        assert result.document_version_id == first.document_version_id
+        assert not result.document_version_created
+        assert conn.execute("SELECT COUNT(*) FROM evidence_source_observations").fetchone()[0] == (
+            2 if later_retrieval else 1
+        )
+        links = [
+            tuple(row)
+            for row in conn.execute(
+                "SELECT * FROM evidence_document_observation_links ORDER BY rowid"
+            )
+        ]
+        assert links[0] == primary
+        assert [row[3] for row in links] == (
+            ["primary", "retrieval"] if later_retrieval else ["primary"]
+        )
+        replay = record_companyfacts_unchanged_observation(conn, unchanged)
+        conn.commit()
+        assert replay.records_created == 0
+        assert replay.records_replayed == 2
+        assert [
+            tuple(row)
+            for row in conn.execute(
+                "SELECT * FROM evidence_document_observation_links ORDER BY rowid"
+            )
+        ] == links
+        assert {
+            table: [tuple(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY rowid")]
+            for table in immutable_tables
+        } == retained
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:
         conn.close()
 

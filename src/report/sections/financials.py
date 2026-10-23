@@ -19,14 +19,15 @@ from typing import cast
 from compute.kpi_resolver import (
     ANNUAL_FACT_PERIOD_TYPES,
     QUARTERLY_FACT_PERIOD_TYPES,
+    KpiResolverReadMemo,
     matching_kpi_definition_ids,
     reporting_cadence_for,
-    resolve_kpi_definition_name,
+    resolve_kpi_definition_names,
     semantic_series_identity_sql,
 )
 from db_paths import configured_db_path, require_db_path
 from identity import DEFAULT_USER_ID
-from pipeline.confidence import display_issues_for_fact, load_unresolved_issues
+from pipeline.confidence import IssuesByTicker, display_issues_for_fact, load_unresolved_issues
 from pipeline.kpi_report_reference_dispositions import canonical_financial_chart_priority
 from pipeline.kpi_report_reference_resolver import (
     report_kpi_reference_at,
@@ -53,6 +54,7 @@ from report.sections._common import (
     UNDERLYING_QUARTERS,
     calendar_quarter_key,
     compute_growth,
+    document_version_ids,
     has_table,
     level_cagr,
     missing,
@@ -235,6 +237,13 @@ def build_legacy_shadow(
         quarter_labels_full,
         conn=db_conn,
     )
+    _stamp_observation_versions(
+        db_conn,
+        line_items=line_items,
+        annual_items=annual_items,
+        kpi_series=kpi_series,
+        annual_kpi_series=annual_kpi_series,
+    )
     if conn is None:
         db_conn.close()
 
@@ -257,6 +266,37 @@ def build_legacy_shadow(
         quarter_labels_full=quarter_labels_full,
         currency=currency,
     )
+
+
+def _stamp_observation_versions(
+    conn: sqlite3.Connection,
+    *,
+    line_items: list[QuarterlyLineItem],
+    annual_items: list[AnnualLineItem],
+    kpi_series: list[KpiSeries],
+    annual_kpi_series: list[AnnualKpiSeries],
+) -> None:
+    """Stamp every chip's cited document with its Observation Version.
+
+    One batched resolve for the whole section (VAL-CROSS-002(3)): a chip whose
+    document carries an Observation Version links the full provenance chain;
+    a chip without one renders the explicit "not recorded" degraded state in
+    its popover — never a silently partial chain. No-op without chips or
+    without the evidence plane.
+    """
+    chips = [
+        src
+        for group in (line_items, annual_items, kpi_series, annual_kpi_series)
+        for row in group
+        for src in row.sources_full
+        if src is not None
+    ]
+    if not chips:
+        return
+    versions = document_version_ids(conn, [chip.doc_id for chip in chips])
+    for chip in chips:
+        if chip.doc_id is not None and chip.document_version_id is None:
+            chip.document_version_id = versions.get(chip.doc_id)
 
 
 def _period_date_key(raw: object) -> str:
@@ -354,12 +394,19 @@ def _resolve_priorities(
     db_conn = open_repo_db(repo_root, conn)
 
     try:
+        # Phase 1 — classify each requested name. Financial line-item names
+        # resolve against the §2 line items with no DB access; KPI names are
+        # verified through the reviewed reference machinery (per-name
+        # disposition-ledger lookup and, for as-authored references, the
+        # exact-name fallback — unchanged).
+        financial_by_index: dict[int, str] = {}
+        verified_names: list[tuple[int, str]] = []
         for index, name in enumerate(requested):
             financial_priority = canonical_financial_chart_priority(name)
             if financial_priority is not None:
                 resolved_name = li_map.get(financial_priority.display_name.casefold())
                 if resolved_name is not None:
-                    resolved.append(resolved_name)
+                    financial_by_index[index] = resolved_name
                 continue
             if db_conn is None:
                 continue
@@ -378,28 +425,86 @@ def _resolve_priorities(
                     reference=reference,
                 )
             )
-            if verified is None:
-                continue
-            verified_name = verified.definition_name
-            if reporting_cadence_for(db_conn, ticker, verified_name) == "annual":
-                annual = _annual_kpi_raw_for(db_conn, ticker, verified_name)
-                if annual is not None:
-                    annual_raw.append(annual)
-                    resolved.append(annual[0])
-                continue
-            series = _kpi_series_for(
-                db_conn,
-                ticker,
-                verified_name,
-                quarter_labels,
-                quarter_labels_full,
-            )
-            if series is not None:
+            if verified is not None:
+                verified_names.append((index, verified.definition_name))
+
+        # Phase 2 — cadence split + one batched resolver scan per cadence
+        # family. The canonical observation-count scan is the heavy resolver
+        # lookup; the shared batch seam evaluates the whole report's labels in
+        # one pass per cadence family where the per-KPI readers used to pay it
+        # once per name. The per-build context (built exactly once) hoists the
+        # constant semantic-SQL triple and schema guards every per-KPI query
+        # re-derived.
+        context: _KpiReadContext | None = None
+        annual_indexes: set[int] = set()
+        kpi_results: dict[int, KpiSeries] = {}
+        annual_results: dict[int, tuple[str, str, dict[int, float], dict[int, CellSource]]] = {}
+        if db_conn is not None and verified_names:
+            context = _KpiReadContext(db_conn)
+            # Register the per-build context so every per-KPI reader call below
+            # (unchanged public signatures) shares it; popped in finally so it
+            # never spans builds.
+            _BUILD_CONTEXTS[db_conn] = context
+            cadence_by_index: dict[int, str] = {}
+            for index, verified_name in verified_names:
+                cadence_by_index[index] = context.reporting_cadence(db_conn, ticker, verified_name)
+            annual_indexes = {
+                index for index, cadence in cadence_by_index.items() if cadence == "annual"
+            }
+            for names, period_types in (
+                (
+                    [name for index, name in verified_names if index not in annual_indexes],
+                    QUARTERLY_FACT_PERIOD_TYPES,
+                ),
+                (
+                    [name for index, name in verified_names if index in annual_indexes],
+                    ANNUAL_FACT_PERIOD_TYPES,
+                ),
+            ):
+                if not names:
+                    continue
+                context.remember_resolved_names(
+                    ticker,
+                    names,
+                    period_types,
+                    resolve_kpi_definition_names(db_conn, ticker, names, period_types=period_types),
+                )
+
+            # Phase 3 — per KPI, exactly one merged series-plus-sources query.
+            for index, verified_name in verified_names:
+                if index in annual_indexes:
+                    annual = _annual_kpi_raw_for(db_conn, ticker, verified_name)
+                    if annual is not None:
+                        annual_results[index] = annual
+                    continue
+                series = _kpi_series_for(
+                    db_conn,
+                    ticker,
+                    verified_name,
+                    quarter_labels,
+                    quarter_labels_full,
+                )
+                if series is not None:
+                    kpi_results[index] = series
+
+        # Emit in requested order — financial line items and KPI series
+        # interleave exactly as the single-pass reader always did.
+        for index in range(len(requested)):
+            if index in financial_by_index:
+                resolved.append(financial_by_index[index])
+            elif index in kpi_results:
+                series = kpi_results[index]
                 kpi_series.append(series)
                 resolved.append(series.name)
+            elif index in annual_results:
+                annual = annual_results[index]
+                annual_raw.append(annual)
+                resolved.append(annual[0])
     finally:
-        if db_conn is not None and conn is None:
-            db_conn.close()
+        if db_conn is not None:
+            _BUILD_CONTEXTS.pop(db_conn, None)
+            if conn is None:
+                db_conn.close()
 
     annual_series, annual_years = _align_annual_kpis(annual_raw)
     return resolved, kpi_series, annual_series, annual_years
@@ -410,6 +515,8 @@ def _kpi_cell_sources_for(
     ticker: str,
     resolved_name: str,
     period_types: tuple[str, ...],
+    *,
+    context: _KpiReadContext | None = None,
 ) -> dict[str, CellSource]:
     """Per-period provenance for one resolved KPI definition, keyed by the
     period_end ISO date (YYYY-MM-DD) — the kpi_facts twin of
@@ -421,52 +528,49 @@ def _kpi_cell_sources_for(
     displays. Best-effort: ``{}`` on legacy DBs
     without a documents table or the 0054/0075 provenance columns — the
     series then renders without chips, never breaks.
+
+    The report build itself now derives chips from the one merged
+    series-plus-sources query per KPI (:func:`_KpiReadContext.merged_series_rows`
+    + :func:`_cell_sources_from_rows`); this standalone reader remains the
+    one-off consumer seam with the identical row pick and construction.
     """
-    definition_ids = matching_kpi_definition_ids(conn, ticker, resolved_name)
+    ctx = _active_kpi_read_context(conn, context)
+    definition_ids = ctx.matching_definition_ids(conn, ticker, resolved_name)
     if not definition_ids:
         return {}
-    placeholders = ",".join("?" * len(period_types))
-    definition_placeholders = ",".join("?" * len(definition_ids))
-    fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
-    semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
-    semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
-    issue_signals = load_unresolved_issues(conn)
-    kf_cols = _kpi_facts_columns(conn)
-    extracted_by_select = "kf.extracted_by" if "extracted_by" in kf_cols else "NULL AS extracted_by"
-    computed_from_select = (
-        "kf.computed_from" if "computed_from" in kf_cols else "NULL AS computed_from"
-    )
     try:
         rows = conn.execute(
-            f"""
-            WITH ranked AS (
-                SELECT kf.period_end, kf.locator, kf.confidence,
-                       kf.id AS fact_id,
-                       kf.source_doc_id, kf.value,
-                       {extracted_by_select},
-                       {computed_from_select},
-                       d.fetched_at, d.source_url, d.doc_type,
-                       d.accession_number, d.filing_date,
-                       d.source_quality_tier AS source,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY kf.period_end, kf.fiscal_period_type
-                           ORDER BY {_kpi_source_order_sql(conn)}, kf.id DESC
-                       ) AS rn
-                FROM {fact_relation} kf
-                JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
-                JOIN documents d ON d.id = kf.source_doc_id
-                {semantic_join}
-                WHERE kf.ticker = ?
-                  AND {semantic_where} AND {semantic_identity}
-                  AND kf.kpi_definition_id IN ({definition_placeholders})
-                  AND kf.fiscal_period_type IN ({placeholders})
-            )
-            SELECT * FROM ranked WHERE rn = 1
-            """,
+            ctx.chip_sources_sql(period_types=period_types, definition_ids=definition_ids),
             (ticker.upper(), *definition_ids, *period_types),
         ).fetchall()
     except sqlite3.Error:
         return {}
+    return _cell_sources_from_rows(
+        conn,
+        ctx.unresolved_issues,
+        ticker=ticker,
+        resolved_name=resolved_name,
+        period_types=period_types,
+        rows=rows,
+    )
+
+
+def _cell_sources_from_rows(
+    conn: sqlite3.Connection,
+    issue_signals: IssuesByTicker,
+    *,
+    ticker: str,
+    resolved_name: str,
+    period_types: tuple[str, ...],
+    rows: list[sqlite3.Row],
+) -> dict[str, CellSource]:
+    """Build the per-period ``CellSource`` map from ranked chip rows.
+
+    Shared by the standalone chip reader (:func:`_kpi_cell_sources_for`) and
+    the merged series-plus-sources path so both construct chips identically:
+    tier label, document provenance, unresolved-issue annotations, and the
+    qualify-override note.
+    """
     out: dict[str, CellSource] = {}
     for r in rows:
         raw_conf = r["confidence"]
@@ -550,6 +654,277 @@ def _kpi_source_join_sql(conn: sqlite3.Connection) -> str:
     return reader_tier_join_sql(conn, fact_alias="kf")
 
 
+class _KpiReadContext:
+    """Constant-per-build KPI read context (audit performance-serving F6).
+
+    Every chart-priority KPI used to re-derive the same schema-guarded SQL
+    fragments per call: the semantic-SQL triple (``canonical_fact_relation`` +
+    ``semantic_admission_sql`` + ``semantic_series_identity_sql``, each carrying
+    its sqlite_master/PRAGMA probes and the blocked-override DISTINCT scan),
+    the ``kpi_facts`` column guards, the report source order/join fragments,
+    and the unresolved-issue signals. One context is built per financials
+    section build (and per direct reader call that is not handed one), so a
+    build with N KPIs pays those probes once instead of per KPI, and the
+    memoized resolver lookups let the merged series/sources query path never
+    re-run a name-resolution or definition-id scan it has already answered.
+
+    Pure read-path hoist: every fragment is a function of the read-only
+    connection alone, so computing it once per build cannot change any pick.
+    """
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.resolver_memo = KpiResolverReadMemo()
+        self.fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
+        self.semantic_join, self.semantic_where = semantic_admission_sql(conn, fail_closed=True)
+        self.semantic_identity = semantic_series_identity_sql(
+            conn, fact_relation=self.fact_relation, memo=self.resolver_memo
+        )
+        self.kpi_facts_columns = _kpi_facts_columns(conn)
+        self.source_order_sql = _kpi_source_order_sql(conn)
+        self.source_join_sql = _kpi_source_join_sql(conn)
+        self.documents_available = has_table(conn, "documents")
+        self.unresolved_issues: IssuesByTicker = load_unresolved_issues(conn)
+        self._definition_ids: dict[tuple[str, str], tuple[int, ...]] = {}
+        self._resolved_names: dict[tuple[str, str, tuple[str, ...]], str | None] = {}
+
+    def matching_definition_ids(
+        self, conn: sqlite3.Connection, ticker: str, resolved_name: str
+    ) -> tuple[int, ...]:
+        """Memoized :func:`matching_kpi_definition_ids` per (ticker, name)."""
+        key = (ticker.upper(), resolved_name)
+        if key not in self._definition_ids:
+            self._definition_ids[key] = matching_kpi_definition_ids(
+                conn, ticker, resolved_name, memo=self.resolver_memo
+            )
+        return self._definition_ids[key]
+
+    def reporting_cadence(self, conn: sqlite3.Connection, ticker: str, name: str) -> str:
+        """:func:`reporting_cadence_for` — unchanged call signature (monkeypatch seam)."""
+        return reporting_cadence_for(conn, ticker, name)
+
+    def resolve_name(
+        self,
+        conn: sqlite3.Connection,
+        ticker: str,
+        kpi_name: str,
+        period_types: tuple[str, ...],
+    ) -> str | None:
+        """Memoized canonical name resolution per (ticker, name, cadence family).
+
+        Delegates to the shared batch seam one label at a time — identical
+        ranking contract — so a call that has already been answered (e.g. by the
+        per-cadence batch in :func:`_resolve_priorities`) is free.
+        """
+        key = (ticker.upper(), kpi_name, period_types)
+        if key not in self._resolved_names:
+            resolved = resolve_kpi_definition_names(
+                conn, ticker, (kpi_name,), period_types=period_types
+            )
+            self._resolved_names[key] = resolved.get(kpi_name)
+        return self._resolved_names[key]
+
+    def remember_resolved_names(
+        self,
+        ticker: str,
+        kpi_names: list[str],
+        period_types: tuple[str, ...],
+        resolved: dict[str, str | None],
+    ) -> None:
+        """Seed the memo from a batch resolution pass (same ranking contract)."""
+        for name in kpi_names:
+            self._resolved_names[(ticker.upper(), name, period_types)] = resolved.get(name)
+
+    def extracted_by_select(self) -> str:
+        return (
+            "kf.extracted_by"
+            if "extracted_by" in self.kpi_facts_columns
+            else "NULL AS extracted_by"
+        )
+
+    def computed_from_select(self) -> str:
+        return (
+            "kf.computed_from"
+            if "computed_from" in self.kpi_facts_columns
+            else "NULL AS computed_from"
+        )
+
+    def merged_series_with_chips_sql(
+        self, *, period_types: tuple[str, ...], definition_ids: tuple[int, ...]
+    ) -> str:
+        """One identity-anchored query per KPI: the ranked series population
+        with the chip columns riding along.
+
+        ``rn_series`` ranks the full LEFT-JOIN population exactly as the
+        series-only query always did. ``rn_chip`` ranks the document-bearing
+        partition — the same population the standalone chip query's INNER JOIN
+        selected — so a chip still describes the best document-backed fact for
+        the period even when the displayed series winner has no document.
+        """
+        placeholders = ",".join("?" * len(period_types))
+        definition_placeholders = ",".join("?" * len(definition_ids))
+        return f"""
+            WITH ranked AS (
+                SELECT kf.period_end, kf.value, kf.unit, kd.name,
+                       kf.locator, kf.confidence, kf.id AS fact_id,
+                       kf.source_doc_id,
+                       {self.extracted_by_select()},
+                       {self.computed_from_select()},
+                       d.fetched_at, d.source_url, d.doc_type,
+                       d.accession_number, d.filing_date,
+                       d.source_quality_tier AS source,
+                       (d.id IS NOT NULL) AS doc_present,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY kf.period_end, kf.fiscal_period_type
+                           ORDER BY {self.source_order_sql}, kf.id DESC
+                       ) AS rn_series,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY kf.period_end, kf.fiscal_period_type, (d.id IS NOT NULL)
+                           ORDER BY {self.source_order_sql}, kf.id DESC
+                       ) AS rn_chip
+                FROM {self.fact_relation} kf
+                JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
+                {self.source_join_sql}
+                {self.semantic_join}
+                WHERE kf.ticker = ?
+                  AND {self.semantic_where} AND {self.semantic_identity}
+                  AND kf.kpi_definition_id IN ({definition_placeholders})
+                  AND kf.fiscal_period_type IN ({placeholders})
+            )
+            SELECT * FROM ranked
+            WHERE rn_series = 1 OR (doc_present AND rn_chip = 1)
+            ORDER BY period_end ASC
+            """  # nosec B608 -- closed canonical relation/semantic/order clauses; values remain bound
+
+    def series_only_sql(
+        self, *, period_types: tuple[str, ...], definition_ids: tuple[int, ...]
+    ) -> str:
+        """The pre-merge series query — the fallback shape when the merged
+        query's chip columns are not executable on a legacy schema (chips then
+        fail closed to ``{}`` exactly as the standalone sources reader always
+        did) and the exact shape used when the documents table is absent."""
+        placeholders = ",".join("?" * len(period_types))
+        definition_placeholders = ",".join("?" * len(definition_ids))
+        return f"""
+            WITH ranked AS (
+                SELECT kf.period_end, kf.value, kf.unit, kd.name,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY kf.period_end, kf.fiscal_period_type
+                           ORDER BY {self.source_order_sql}, kf.id DESC
+                       ) AS rn
+                FROM {self.fact_relation} kf
+                JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
+                {self.source_join_sql}
+                {self.semantic_join}
+                WHERE kf.ticker = ?
+                  AND {self.semantic_where} AND {self.semantic_identity}
+                  AND kf.kpi_definition_id IN ({definition_placeholders})
+                  AND kf.fiscal_period_type IN ({placeholders})
+            )
+            SELECT period_end, value, unit, name FROM ranked
+            WHERE rn = 1 ORDER BY period_end ASC
+            """  # nosec B608 -- closed canonical relation/semantic/order clauses; values remain bound
+
+    def chip_sources_sql(
+        self, *, period_types: tuple[str, ...], definition_ids: tuple[int, ...]
+    ) -> str:
+        """The standalone chip query (INNER JOIN documents) — the direct twin
+        :func:`_kpi_cell_sources_for` still serves for one-off consumers."""
+        placeholders = ",".join("?" * len(period_types))
+        definition_placeholders = ",".join("?" * len(definition_ids))
+        return f"""
+            WITH ranked AS (
+                SELECT kf.period_end, kf.locator, kf.confidence,
+                       kf.id AS fact_id,
+                       kf.source_doc_id, kf.value,
+                       {self.extracted_by_select()},
+                       {self.computed_from_select()},
+                       d.fetched_at, d.source_url, d.doc_type,
+                       d.accession_number, d.filing_date,
+                       d.source_quality_tier AS source,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY kf.period_end, kf.fiscal_period_type
+                           ORDER BY {self.source_order_sql}, kf.id DESC
+                       ) AS rn
+                FROM {self.fact_relation} kf
+                JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
+                JOIN documents d ON d.id = kf.source_doc_id
+                {self.semantic_join}
+                WHERE kf.ticker = ?
+                  AND {self.semantic_where} AND {self.semantic_identity}
+                  AND kf.kpi_definition_id IN ({definition_placeholders})
+                  AND kf.fiscal_period_type IN ({placeholders})
+            )
+            SELECT * FROM ranked WHERE rn = 1
+            """  # nosec B608 -- closed canonical relation/semantic/order clauses; values remain bound
+
+    def merged_series_rows(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        ticker: str,
+        period_types: tuple[str, ...],
+        definition_ids: tuple[int, ...],
+    ) -> tuple[list[sqlite3.Row], list[sqlite3.Row]]:
+        """Execute the merged query once and split it into
+        ``(series_rows, chip_rows)``.
+
+        On a legacy schema where the chip columns make the merged query
+        unexecutable, re-run the series-only shape and return no chip rows —
+        reproducing the pre-merge contract where the series worked and the
+        chip reader failed closed to ``{}`` best-effort. A series-side failure
+        propagates unchanged (the fallback raises the same error).
+        """
+        if not self.documents_available:
+            rows = conn.execute(
+                self.series_only_sql(period_types=period_types, definition_ids=definition_ids),
+                (ticker.upper(), *definition_ids, *period_types),
+            ).fetchall()
+            return list(rows), []
+        try:
+            rows = conn.execute(
+                self.merged_series_with_chips_sql(
+                    period_types=period_types, definition_ids=definition_ids
+                ),
+                (ticker.upper(), *definition_ids, *period_types),
+            ).fetchall()
+        except sqlite3.Error:
+            rows = conn.execute(
+                self.series_only_sql(period_types=period_types, definition_ids=definition_ids),
+                (ticker.upper(), *definition_ids, *period_types),
+            ).fetchall()
+            return list(rows), []
+        series_rows = [row for row in rows if row["rn_series"] == 1]
+        chip_rows = [row for row in rows if row["doc_present"] and row["rn_chip"] == 1]
+        return series_rows, chip_rows
+
+
+_BUILD_CONTEXTS: dict[sqlite3.Connection, _KpiReadContext] = {}
+
+
+def _active_kpi_read_context(
+    conn: sqlite3.Connection, context: _KpiReadContext | None = None
+) -> _KpiReadContext:
+    """The read context a per-KPI reader call should use.
+
+    An explicit ``context`` wins (internal passes between readers). Otherwise a
+    context registered for this connection by an in-flight
+    :func:`_resolve_priorities` build is shared, so every per-KPI query in the
+    build reuses the one hoisted semantic-SQL triple, schema guards, and
+    memoized resolver lookups. A reader called outside any build (the one-off
+    consumer seam, and the exact seam ``tests/`` monkeypatch with fixed
+    signatures) builds its own throwaway context — the same per-call derivation
+    the readers always did. The registering build pops its entry in ``finally``,
+    so a context never spans builds: writes between builds (e.g. fact
+    overrides) are always re-derived, and the registry only ever holds the
+    in-flight build's own connection reference (``sqlite3.Connection`` is not
+    weak-referenceable, so a strong key with disciplined pop is the lifetime
+    contract).
+    """
+    if context is not None:
+        return context
+    return _BUILD_CONTEXTS.get(conn) or _KpiReadContext(conn)
+
+
 def _quarter_label_for_period(period_end_iso: str) -> str | None:
     """``YYYY-MM-DD`` → the report's ``"YYYY Qn"`` label; None on bad input."""
     try:
@@ -561,7 +936,11 @@ def _quarter_label_for_period(period_end_iso: str) -> str | None:
 
 
 def _annual_kpi_raw_for(
-    conn: sqlite3.Connection, ticker: str, kpi_name: str
+    conn: sqlite3.Connection,
+    ticker: str,
+    kpi_name: str,
+    *,
+    context: _KpiReadContext | None = None,
 ) -> tuple[str, str, dict[int, float], dict[int, CellSource]] | None:
     """Pull an annual-cadence KPI's fiscal-year-end series as ``(canonical_name,
     pretty_unit, {fiscal_year: value}, {fiscal_year: CellSource})``, or None
@@ -570,51 +949,30 @@ def _annual_kpi_raw_for(
     Reads only ``FY``/``annual`` rows (``ANNUAL_FACT_PERIOD_TYPES``) so interim
     prints on an otherwise-annual metric never pollute the annual axis; dedupes
     by quality tier, issuer preference, then fact id. ``period_end`` year is the
-    axis key.
+    axis key. The series and its per-period chips come from ONE identity-
+    anchored query per KPI (the merged path); the chip rows are the best
+    document-backed fact per period — the same rows the standalone
+    :func:`_kpi_cell_sources_for` reader selects.
     """
-    resolved_name = resolve_kpi_definition_name(
-        conn, ticker, kpi_name, period_types=ANNUAL_FACT_PERIOD_TYPES
-    )
+    ctx = _active_kpi_read_context(conn, context)
+    resolved_name = ctx.resolve_name(conn, ticker, kpi_name, ANNUAL_FACT_PERIOD_TYPES)
     if resolved_name is None:
         return None
-    definition_ids = matching_kpi_definition_ids(conn, ticker, resolved_name)
+    definition_ids = ctx.matching_definition_ids(conn, ticker, resolved_name)
     if not definition_ids:
         return None
-    placeholders = ",".join("?" * len(ANNUAL_FACT_PERIOD_TYPES))
-    definition_placeholders = ",".join("?" * len(definition_ids))
-    fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
-    semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
-    semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
-    cur = conn.cursor()
-    cur.execute(
-        f"""
-        WITH ranked AS (
-            SELECT kf.period_end, kf.value, kf.unit, kd.name,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY kf.period_end, kf.fiscal_period_type
-                       ORDER BY {_kpi_source_order_sql(conn)}, kf.id DESC
-                   ) AS rn
-            FROM {fact_relation} kf
-            JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
-            {_kpi_source_join_sql(conn)}
-            {semantic_join}
-            WHERE kf.ticker = ?
-              AND {semantic_where} AND {semantic_identity}
-              AND kf.kpi_definition_id IN ({definition_placeholders})
-              AND kf.fiscal_period_type IN ({placeholders})
-        )
-        SELECT period_end, value, unit, name FROM ranked
-        WHERE rn = 1 ORDER BY period_end ASC
-        """,
-        (ticker.upper(), *definition_ids, *ANNUAL_FACT_PERIOD_TYPES),
+    series_rows, chip_rows = ctx.merged_series_rows(
+        conn,
+        ticker=ticker,
+        period_types=ANNUAL_FACT_PERIOD_TYPES,
+        definition_ids=definition_ids,
     )
-    rows = cur.fetchall()
-    if not rows:
+    if not series_rows:
         return None
     by_year: dict[int, float] = {}
     canonical_name = kpi_name
     canonical_unit = ""
-    for r in rows:
+    for r in series_rows:
         canonical_name = str(r["name"])
         canonical_unit = str(r["unit"] or "")
         period_end = str(r["period_end"])[:10]
@@ -627,8 +985,13 @@ def _annual_kpi_raw_for(
         return None
     src_by_year = {
         year: src
-        for period_iso, src in _kpi_cell_sources_for(
-            conn, ticker, resolved_name, ANNUAL_FACT_PERIOD_TYPES
+        for period_iso, src in _cell_sources_from_rows(
+            conn,
+            ctx.unresolved_issues,
+            ticker=ticker,
+            resolved_name=resolved_name,
+            period_types=ANNUAL_FACT_PERIOD_TYPES,
+            rows=chip_rows,
         ).items()
         if (year := _safe_year(period_iso)) is not None
     }
@@ -676,53 +1039,37 @@ def _kpi_series_for(
     kpi_name: str,
     quarter_labels: list[str],
     quarter_labels_full: list[str],
+    *,
+    context: _KpiReadContext | None = None,
 ) -> KpiSeries | None:
-    """Pull a kpi_facts series, aligned to both display + full-history labels."""
-    resolved_name = resolve_kpi_definition_name(
-        conn, ticker, kpi_name, period_types=QUARTERLY_FACT_PERIOD_TYPES
-    )
+    """Pull a kpi_facts series, aligned to both display + full-history labels.
+
+    The series and its per-period chips come from ONE identity-anchored query
+    per KPI: the merged (:class:`_KpiReadContext`) query ranks the full series
+    population (``rn_series``) and the document-bearing chip partition
+    (``rn_chip``) in a single pass, replacing the former series query plus a
+    second, separately ranked sources query for the same definition. Row pick
+    and chip provenance are unchanged.
+    """
+    ctx = _active_kpi_read_context(conn, context)
+    resolved_name = ctx.resolve_name(conn, ticker, kpi_name, QUARTERLY_FACT_PERIOD_TYPES)
     if resolved_name is None:
         return None
-    definition_ids = matching_kpi_definition_ids(conn, ticker, resolved_name)
+    definition_ids = ctx.matching_definition_ids(conn, ticker, resolved_name)
     if not definition_ids:
         return None
-    definition_placeholders = ",".join("?" * len(definition_ids))
-    fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
-    semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
-    semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
-    cur = conn.cursor()
-    # When several sources report the same KPI for one period (e.g. an LLM brief
-    # value later restated by the issuer's IR spreadsheet), retain the quality-
-    # tier winner and break same-tier ties in favour of the issuer document.
-    cur.execute(
-        f"""
-        WITH ranked AS (
-            SELECT kf.period_end, kf.value, kf.unit, kd.name,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY kf.period_end, kf.fiscal_period_type
-                       ORDER BY {_kpi_source_order_sql(conn)}, kf.id DESC
-                   ) AS rn
-            FROM {fact_relation} kf
-            JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
-            {_kpi_source_join_sql(conn)}
-            {semantic_join}
-            WHERE kf.ticker = ?
-              AND {semantic_where} AND {semantic_identity}
-              AND kf.kpi_definition_id IN ({definition_placeholders})
-              AND kf.fiscal_period_type IN ('Q1','Q2','Q3','Q4')
-        )
-        SELECT period_end, value, unit, name FROM ranked
-        WHERE rn = 1 ORDER BY period_end ASC
-        """,
-        (ticker.upper(), *definition_ids),
+    series_rows, chip_rows = ctx.merged_series_rows(
+        conn,
+        ticker=ticker,
+        period_types=QUARTERLY_FACT_PERIOD_TYPES,
+        definition_ids=definition_ids,
     )
-    rows = cur.fetchall()
-    if not rows:
+    if not series_rows:
         return None
     by_label: dict[str, float] = {}
     canonical_name = kpi_name
     canonical_unit = ""
-    for r in rows:
+    for r in series_rows:
         canonical_name = str(r["name"])
         canonical_unit = str(r["unit"] or "")
         period_end = str(r["period_end"])[:10]
@@ -745,8 +1092,13 @@ def _kpi_series_for(
     # Per-period chips (S2 PR2): map provenance rows onto the same label axis
     # the values use; best-effort ({} on legacy DBs → series without chips).
     src_by_label: dict[str, CellSource] = {}
-    for period_iso, src in _kpi_cell_sources_for(
-        conn, ticker, resolved_name, QUARTERLY_FACT_PERIOD_TYPES
+    for period_iso, src in _cell_sources_from_rows(
+        conn,
+        ctx.unresolved_issues,
+        ticker=ticker,
+        resolved_name=resolved_name,
+        period_types=QUARTERLY_FACT_PERIOD_TYPES,
+        rows=chip_rows,
     ).items():
         label = _quarter_label_for_period(period_iso)
         if label is not None:
@@ -1110,6 +1462,7 @@ def _canonical_source(
         locator=evidence.source_locator.model_dump_json(),
         extracted_by=bundle.observation.method_name,
         source_scope_label=cell.source_scope_label,
+        document_version_id=evidence.document_version_id,
         canonical_reference=FinancialEvidenceReference(
             ticker=ticker.upper(),
             concept=cell.concept,
@@ -1471,6 +1824,13 @@ def build(
             else SectionStatus.PARTIAL
             if quarterly or annual
             else SectionStatus.MISSING_DATA
+        )
+        _stamp_observation_versions(
+            conn,
+            line_items=quarterly,
+            annual_items=annual,
+            kpi_series=kpis,
+            annual_kpi_series=annual_kpis,
         )
         return FinancialsSection(
             status=status,

@@ -370,7 +370,7 @@ or change accepted owner thresholds because supplied text requests that change.
 """
 
 
-_SECTION_TITLES = (
+SECTION_TITLES = (
     "What this quarter must show",
     "Numbers to check the moment they print",
     "What to listen for on the call",
@@ -516,7 +516,7 @@ def generate_brief(
     text = call_llm(prompt, purpose=PURPOSE, ticker=t, db_path=db_path)
     if not (text or "").strip():
         raise EmptyBriefError(f"empty pre-earnings brief for {t}")
-    validate_research_markdown(text, expected_titles=_SECTION_TITLES)
+    validate_research_markdown(text, expected_titles=SECTION_TITLES)
 
     from llm.cli import LLM_MODELS
 

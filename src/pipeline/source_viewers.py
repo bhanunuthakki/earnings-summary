@@ -557,7 +557,14 @@ def render_fallback_page(db_path: Path, doc_id: int, *, fragment: bool = False) 
     the link is never a dead end. The full-page route only reaches this when
     there is also no source_url to 302 to; ``fragment`` mode reaches it for
     ANY non-viewable doc (a peek fetch can't follow an external redirect), so
-    the metadata card's "original source ↗" link is the way out."""
+    the metadata card's "original source ↗" link is the way out.
+
+    Provenance state (VAL-CROSS-002(3)): when the document has an Observation
+    Version, the same full provenance chain the ``/source/version/<id>``
+    route serves is embedded below the metadata (one chain renderer, two
+    entry points — older built reports and direct ``/source/<doc_id>``
+    visits keep resolving the chain). When it does not, the absence is stated
+    explicitly — this page never presents a silently partial chain."""
     doc = load_document(db_path, doc_id)
     if doc is None:
         if fragment:
@@ -580,6 +587,15 @@ def render_fallback_page(db_path: Path, doc_id: int, *, fragment: bool = False) 
             else ""
         )
     )
+    version = load_document_version_by_legacy_id(db_path, doc_id)
+    if version is not None:
+        rows += _document_version_body(version, version.nodes, version.facts, wrap=False)
+    else:
+        rows += (
+            '<div class="sv-sec-row"><div class="sv-sec-key">observation version</div>'
+            '<div class="sv-sec-val">not recorded or not uniquely identified for this document — full '
+            "provenance chain unavailable</div></div>"
+        )
     if fragment:
         return _fragment(f"{doc.ticker} · {doc.doc_type}", _doc_meta_html(doc), rows)
     body = (
@@ -588,3 +604,482 @@ def render_fallback_page(db_path: Path, doc_id: int, *, fragment: bool = False) 
     )
     head = f'<span class="sv-title">Source · doc #{doc.id}</span>{_doc_meta_html(doc)}'
     return _page(f"Source doc {doc.id}", head, body)
+
+
+# ----------------------------------------------------------------------------
+# Sealed evidence document-version viewer (M4 F10 — sealed citation destination)
+# ----------------------------------------------------------------------------
+#
+# The sealed Ask lane cites ``/source/version/<document_version_id>?node=<node_id>``
+# (``src/ask/sealed_retrieval.py`` ``_narrative_item`` / ``_fact_item``). Before
+# this route existed the strongest provenance chain in the repo dead-ended at
+# click time: the href had no handler. ``render_document_version_page`` resolves
+# that immutable evidence-ledger coordinate to the complete chain — issuer,
+# fiscal period, source-document identity, the cited node locator, the
+# observation version, and every canonical fact projection entry bound to the
+# cited node — and returns ``None`` (an honest 404) when the document version or
+# the cited node does not exist. It reads only the append-only evidence tables;
+# it never touches the legacy ``documents`` table and never fabricates a chain.
+#
+# The rendered rows carry the same values in ``data-*`` attributes as in the
+# visible text so a hermetic test can reconcile every displayed field against
+# the fixture's immutable observation version (VAL-SEARCH-002/003).
+
+
+@dataclass(slots=True)
+class DocumentVersionChunk:
+    """One search chunk anchored inside an evidence node's exact text span."""
+
+    chunk_id: str
+    text: str
+    char_start: int
+    char_end: int
+
+
+@dataclass(slots=True)
+class DocumentVersionNode:
+    """One immutable evidence node and the chunks that anchor inside it."""
+
+    node_id: str
+    node_kind: str
+    text: str
+    locator_json: str | None
+    chunks: tuple[DocumentVersionChunk, ...]
+
+
+@dataclass(slots=True)
+class DocumentVersionFact:
+    """One canonical fact projection entry citing this document version/node."""
+
+    metric_name: str
+    value: str | None
+    unit_key: str | None
+    currency: str | None
+    period_start: str | None
+    period_end: str | None
+    node_id: str
+    locator_json: str | None
+
+
+@dataclass(slots=True)
+class DocumentVersionView:
+    """The complete provenance chain behind one sealed evidence citation."""
+
+    document_version_id: str
+    version_sequence: int
+    issuer_id: str
+    ticker: str | None
+    document_type: str
+    form_type: str
+    accession_number: str | None
+    exhibit_id: str | None
+    period_start: str | None
+    period_end: str | None
+    as_of_at: str | None
+    language: str
+    replaces_document_version_id: str | None
+    legacy_document_id: int | None
+    recorded_at: str
+    blob_sha256: str
+    observation_id: str
+    source_kind: str
+    source_url: str
+    observed_at: str
+    retrieved_at: str
+    nodes: tuple[DocumentVersionNode, ...]
+    facts: tuple[DocumentVersionFact, ...]
+
+
+_DOCUMENT_VERSION_SELECT = (
+    "SELECT document.document_version_id,document.version_sequence,document.issuer_id,"
+    "document.ticker,document.document_type,document.form_type,document.accession_number,"
+    "document.exhibit_id,document.period_start,document.period_end,document.as_of_at,"
+    "document.language,document.replaces_document_version_id,document.legacy_document_id,"
+    "document.recorded_at,document.blob_sha256,observation.observation_id,"
+    "observation.source_kind,observation.source_url,observation.observed_at,"
+    "observation.retrieved_at "
+    "FROM evidence_document_versions document "
+    "JOIN evidence_source_observations observation "
+    "ON observation.observation_id=document.observation_id "
+)
+
+_DOCUMENT_VERSION_SQL = _DOCUMENT_VERSION_SELECT + "WHERE document.document_version_id=?"
+
+# The legacy-plane entry: report citations and older built reports address the
+# document by its ``documents.id``; this resolves that id to its Observation
+# Version only when the binding is unambiguous.
+# B608 review: SELECT and WHERE are module constants; the legacy document ID stays bound.
+_DOCUMENT_VERSION_BY_LEGACY_SQL = (
+    _DOCUMENT_VERSION_SELECT + "WHERE document.legacy_document_id=? "  # nosec B608
+    "AND (SELECT COUNT(*) FROM evidence_document_versions candidate "
+    "WHERE candidate.legacy_document_id=document.legacy_document_id)=1"
+)
+
+_DOCUMENT_VERSION_NODES_SQL = (
+    "SELECT node.node_id,node.node_kind,node.text,node.locator_json,"
+    "chunk.chunk_id,chunk.text AS chunk_text,chunk.char_start,chunk.char_end "
+    "FROM evidence_nodes node "
+    "JOIN evidence_extraction_runs run ON run.extraction_run_id=node.extraction_run_id "
+    "LEFT JOIN search_chunks chunk ON chunk.evidence_node_id=node.node_id "
+    "WHERE run.document_version_id=? "
+    "ORDER BY node.node_id,chunk.chunk_id"
+)
+
+_DOCUMENT_VERSION_FACTS_SQL = (
+    "SELECT canonical_metric_cell_id,canonical_metric_name,canonical_value,unit_key,currency,"
+    "period_kind,period_start,period_end,evidence_node_id,evidence_locator_json "
+    "FROM canonical_fact_projection_entries "
+    "WHERE evidence_document_version_id=? AND change_kind='upsert' "
+    "ORDER BY canonical_metric_name,period_end,canonical_metric_cell_id"
+)
+
+
+def _optional_text(value: object) -> str | None:
+    return None if value is None else str(value)
+
+
+def load_document_version(db_path: Path, document_version_id: str) -> DocumentVersionView | None:
+    """Read one immutable evidence document version, or None when it is absent.
+
+    Schema-tolerant and fail-closed: a missing database, a missing row, or a
+    query error all return None so the route answers an honest 404 rather than
+    inventing a provenance chain.
+    """
+    return _open_document_version(db_path, _DOCUMENT_VERSION_SQL, (document_version_id,))
+
+
+def load_document_version_by_legacy_id(
+    db_path: Path, legacy_document_id: int
+) -> DocumentVersionView | None:
+    """The unambiguous Observation Version bound to a legacy document, or None.
+
+    The legacy ``/source/<doc_id>`` views and every already-built report cite
+    documents by ``documents.id``; this resolves that id to the immutable
+    evidence document version so those entry points can render the same full
+    provenance chain the ``/source/version/<id>`` route serves. Absent
+    binding, missing evidence plane, or a query error → None (the caller
+    renders the explicit degraded state, never a fabricated chain).
+    """
+    return _open_document_version(db_path, _DOCUMENT_VERSION_BY_LEGACY_SQL, (legacy_document_id,))
+
+
+def _open_document_version(
+    db_path: Path, sql: str, params: tuple[object, ...]
+) -> DocumentVersionView | None:
+    if not db_path.exists():
+        return None
+    try:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    except sqlite3.Error:
+        return None
+    conn.row_factory = sqlite3.Row
+    try:
+        document = conn.execute(sql, params).fetchone()
+        if document is None:
+            return None
+        node_rows = conn.execute(
+            _DOCUMENT_VERSION_NODES_SQL, (str(document["document_version_id"]),)
+        ).fetchall()
+        fact_rows = conn.execute(
+            _DOCUMENT_VERSION_FACTS_SQL, (str(document["document_version_id"]),)
+        ).fetchall()
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+    return _build_document_version_view(document, node_rows, fact_rows)
+
+
+def _build_document_version_view(
+    document: sqlite3.Row,
+    node_rows: list[sqlite3.Row],
+    fact_rows: list[sqlite3.Row],
+) -> DocumentVersionView:
+
+    nodes: dict[str, DocumentVersionNode] = {}
+    node_order: list[str] = []
+    for node_row in node_rows:
+        node_id = str(node_row["node_id"])
+        if node_id not in nodes:
+            nodes[node_id] = DocumentVersionNode(
+                node_id=node_id,
+                node_kind=str(node_row["node_kind"]),
+                text=str(node_row["text"]),
+                locator_json=_optional_text(node_row["locator_json"]),
+                chunks=(),
+            )
+            node_order.append(node_id)
+        if node_row["chunk_id"] is not None:
+            node = nodes[node_id]
+            node.chunks = (
+                *node.chunks,
+                DocumentVersionChunk(
+                    chunk_id=str(node_row["chunk_id"]),
+                    text=str(node_row["chunk_text"]),
+                    char_start=int(node_row["char_start"]),
+                    char_end=int(node_row["char_end"]),
+                ),
+            )
+
+    facts = tuple(
+        DocumentVersionFact(
+            metric_name=str(fact_row["canonical_metric_name"]),
+            value=_optional_text(fact_row["canonical_value"]),
+            unit_key=_optional_text(fact_row["unit_key"]),
+            currency=_optional_text(fact_row["currency"]),
+            period_start=_optional_text(fact_row["period_start"]),
+            period_end=_optional_text(fact_row["period_end"]),
+            node_id=str(fact_row["evidence_node_id"]),
+            locator_json=_optional_text(fact_row["evidence_locator_json"]),
+        )
+        for fact_row in fact_rows
+    )
+
+    return DocumentVersionView(
+        document_version_id=str(document["document_version_id"]),
+        version_sequence=int(document["version_sequence"]),
+        issuer_id=str(document["issuer_id"]),
+        ticker=_optional_text(document["ticker"]),
+        document_type=str(document["document_type"]),
+        form_type=str(document["form_type"]),
+        accession_number=_optional_text(document["accession_number"]),
+        exhibit_id=_optional_text(document["exhibit_id"]),
+        period_start=_optional_text(document["period_start"]),
+        period_end=_optional_text(document["period_end"]),
+        as_of_at=_optional_text(document["as_of_at"]),
+        language=str(document["language"]),
+        replaces_document_version_id=_optional_text(document["replaces_document_version_id"]),
+        legacy_document_id=(
+            None if document["legacy_document_id"] is None else int(document["legacy_document_id"])
+        ),
+        recorded_at=str(document["recorded_at"]),
+        blob_sha256=str(document["blob_sha256"]),
+        observation_id=str(document["observation_id"]),
+        source_kind=str(document["source_kind"]),
+        source_url=str(document["source_url"]),
+        observed_at=str(document["observed_at"]),
+        retrieved_at=str(document["retrieved_at"]),
+        nodes=tuple(nodes[node_id] for node_id in node_order),
+        facts=facts,
+    )
+
+
+def _sv_data_attr(name: str, value: object) -> str:
+    """Render one optional ``data-*`` attribute (omitted when the value is None)."""
+    if value is None:
+        return ""
+    return f' data-{name}="{escape(str(value), quote=True)}"'
+
+
+def _sv_row(label: str, value_html: str, attrs: str = "") -> str:
+    return (
+        f'<div class="sv-sec-row"{attrs}>'
+        f'<div class="sv-sec-key">{escape(label)}</div>'
+        f'<div class="sv-sec-val">{value_html}</div></div>'
+    )
+
+
+def _sv_locator_text(locator_json: str | None) -> str:
+    """A compact, stable rendering of one evidence locator object."""
+    if not locator_json:
+        return "no structured locator"
+    try:
+        parsed = json.loads(locator_json)
+    except (TypeError, ValueError):
+        return locator_json
+    if not isinstance(parsed, dict):
+        return locator_json
+    locator = cast("dict[str, object]", parsed)
+    parts = [f"{key}={locator[key]!r}" for key in sorted(locator)]
+    return ", ".join(parts) if parts else "empty locator"
+
+
+def _document_version_body(
+    view: DocumentVersionView,
+    nodes: tuple[DocumentVersionNode, ...],
+    facts: tuple[DocumentVersionFact, ...],
+    *,
+    wrap: bool = True,
+) -> str:
+    ticker = view.ticker or "—"
+    period = (
+        " → ".join(part for part in (view.period_start, view.period_end) if part) or "not stated"
+    )
+    accession = view.accession_number or "not stated"
+    source_url_html = (
+        f'<a href="{escape(view.source_url)}" target="_blank" rel="noopener" '
+        'class="sv-original-link">original source ↗</a>'
+        if view.source_url.strip().lower().startswith(("http://", "https://"))
+        else escape(view.source_url)
+    )
+    rows: list[str] = [
+        _sv_row(
+            "issuer",
+            f"{escape(ticker)} · issuer {escape(view.issuer_id)}",
+            _sv_data_attr("issuer-id", view.issuer_id) + _sv_data_attr("ticker", view.ticker),
+        ),
+        _sv_row(
+            "fiscal period",
+            escape(period),
+            _sv_data_attr("period-start", view.period_start)
+            + _sv_data_attr("period-end", view.period_end),
+        ),
+        _sv_row(
+            "source document",
+            f"{escape(view.form_type)} · {escape(view.document_type)} · accession "
+            f"{escape(accession)}",
+            _sv_data_attr("document-version-id", view.document_version_id)
+            + _sv_data_attr("form-type", view.form_type)
+            + _sv_data_attr("document-type", view.document_type)
+            + _sv_data_attr("accession-number", view.accession_number)
+            + _sv_data_attr("exhibit-id", view.exhibit_id),
+        ),
+        _sv_row(
+            "source bytes",
+            f"sha256 {escape(view.blob_sha256)} · {source_url_html}",
+            _sv_data_attr("blob-sha256", view.blob_sha256)
+            + _sv_data_attr("source-url", view.source_url)
+            + _sv_data_attr("source-kind", view.source_kind),
+        ),
+        _sv_row(
+            "observation version",
+            f"document version {escape(view.document_version_id)} "
+            f"(v{view.version_sequence}) · recorded {escape(view.recorded_at)}",
+            _sv_data_attr("document-version-id", view.document_version_id)
+            + _sv_data_attr("version-sequence", view.version_sequence)
+            + _sv_data_attr("recorded-at", view.recorded_at),
+        ),
+        _sv_row(
+            "observation",
+            f"observation {escape(view.observation_id)} · observed "
+            f"{escape(view.observed_at)} · retrieved {escape(view.retrieved_at)}",
+            _sv_data_attr("observation-id", view.observation_id)
+            + _sv_data_attr("observed-at", view.observed_at)
+            + _sv_data_attr("retrieved-at", view.retrieved_at),
+        ),
+    ]
+    if view.replaces_document_version_id is not None:
+        rows.append(
+            _sv_row(
+                "supersedes",
+                f"replaces document version {escape(view.replaces_document_version_id)}",
+                _sv_data_attr("replaces-document-version-id", view.replaces_document_version_id),
+            )
+        )
+    if view.legacy_document_id is not None:
+        rows.append(
+            _sv_row(
+                "legacy document",
+                f'<a href="/source/{view.legacy_document_id}">doc #{view.legacy_document_id}</a>',
+                _sv_data_attr("legacy-document-id", view.legacy_document_id),
+            )
+        )
+
+    for node in nodes:
+        rows.append(
+            _sv_row(
+                "cited node",
+                f"{escape(node.node_id)} · {escape(node.node_kind)} · "
+                f"{escape(_sv_locator_text(node.locator_json))}",
+                _sv_data_attr("node-id", node.node_id)
+                + _sv_data_attr("node-kind", node.node_kind)
+                + _sv_data_attr("node-locator", node.locator_json),
+            )
+        )
+        if node.chunks:
+            for chunk in node.chunks:
+                rows.append(
+                    _sv_row(
+                        "cited chunk span",
+                        f"{escape(chunk.chunk_id)} · chars {chunk.char_start}&ndash;"
+                        f"{chunk.char_end}",
+                        _sv_data_attr("chunk-id", chunk.chunk_id)
+                        + _sv_data_attr("char-start", chunk.char_start)
+                        + _sv_data_attr("char-end", chunk.char_end),
+                    )
+                )
+            cited_text = node.chunks[0].text
+        else:
+            cited_text = node.text
+        rows.append(_sv_row("cited text", f'<div class="k-well">{escape(cited_text)}</div>'))
+
+    for fact in facts:
+        value_text = " ".join(part for part in (fact.value, fact.currency or fact.unit_key) if part)
+        fact_period = fact.period_end or fact.period_start or "not stated"
+        rows.append(
+            _sv_row(
+                "reported fact",
+                f"{escape(fact.metric_name)}: {escape(value_text)} ({escape(fact_period)})",
+                _sv_data_attr("fact-metric", fact.metric_name)
+                + _sv_data_attr("fact-value", fact.value)
+                + _sv_data_attr("fact-unit", fact.unit_key)
+                + _sv_data_attr("fact-currency", fact.currency)
+                + _sv_data_attr("fact-period-start", fact.period_start)
+                + _sv_data_attr("fact-period-end", fact.period_end)
+                + _sv_data_attr("fact-node-id", fact.node_id)
+                + _sv_data_attr("fact-locator", fact.locator_json),
+            )
+        )
+
+    root_attrs = (
+        _sv_data_attr("document-version-id", view.document_version_id)
+        + _sv_data_attr("version-sequence", view.version_sequence)
+        + _sv_data_attr("issuer-id", view.issuer_id)
+        + _sv_data_attr("ticker", view.ticker)
+        + _sv_data_attr("document-type", view.document_type)
+        + _sv_data_attr("form-type", view.form_type)
+        + _sv_data_attr("period-start", view.period_start)
+        + _sv_data_attr("period-end", view.period_end)
+        + _sv_data_attr("observation-id", view.observation_id)
+        + _sv_data_attr("blob-sha256", view.blob_sha256)
+        + _sv_data_attr("observed-at", view.observed_at)
+        + _sv_data_attr("retrieved-at", view.retrieved_at)
+        + _sv_data_attr("recorded-at", view.recorded_at)
+    )
+    rows_html = "".join(rows)
+    if not wrap:
+        # Hosted inside an existing sv-fallback container (the legacy
+        # /source/<doc_id> fallback page embedding the same chain rows).
+        return rows_html
+    return f'<div class="sv-fallback"{root_attrs}>' + rows_html + "</div>"
+
+
+def render_document_version_page(
+    db_path: Path,
+    document_version_id: str,
+    *,
+    node_id: str | None = None,
+    fragment: bool = False,
+) -> str | None:
+    """The sealed citation destination: the full provenance chain, or None.
+
+    ``None`` is the honest-404 signal: an unknown document version, or a
+    ``node`` that is not part of that document version, never renders a
+    fabricated chain.
+    """
+    view = load_document_version(db_path, document_version_id)
+    if view is None:
+        return None
+    if node_id is not None:
+        nodes = tuple(node for node in view.nodes if node.node_id == node_id)
+        if not nodes:
+            return None
+        facts = tuple(fact for fact in view.facts if fact.node_id == node_id)
+    else:
+        nodes = view.nodes
+        facts = view.facts
+    title_bits = (
+        view.ticker,
+        view.form_type or view.document_type,
+        view.period_end,
+    )
+    title = " · ".join(part for part in title_bits if part) or view.document_version_id
+    meta = (
+        f'<span class="sv-meta">version {escape(view.document_version_id)}</span>'
+        f'<span class="sv-meta">observation {escape(view.observation_id)}</span>'
+    )
+    body = _document_version_body(view, nodes, facts)
+    if fragment:
+        return _fragment(title, meta, body)
+    head = f'<span class="sv-title">{escape(title)}</span>{meta}'
+    return _page(f"Source version {view.document_version_id}", head, body)

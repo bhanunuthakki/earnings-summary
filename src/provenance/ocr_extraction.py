@@ -43,6 +43,8 @@ from provenance.evidence_native_candidates import (
     select_evidence_native_candidates,
     select_evidence_native_candidates_by_id,
 )
+from runtime.deterministic import canonical_json as _canonical_json
+from runtime.deterministic import sha256_text as _sha256_text
 
 _EXTRACTOR_NAME = "governed-pdf-ocr"
 _EXTRACTOR_CODE_VERSION = "governed-pdf-ocr@1"
@@ -1371,10 +1373,6 @@ def _stable_token(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()[:48]
 
 
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
 def _canonical_sha256(value: object) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
@@ -1387,10 +1385,6 @@ def normalize_extracted_text(text: str) -> str:
 
 def _substantive_character_count(text: str) -> int:
     return sum(character.isalnum() for character in text)
-
-
-def _sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _sha256_file(path: Path) -> str:

@@ -30,10 +30,15 @@ Two consequences fall out of that:
 
 Cost is bounded: one batched call per ticker per run (up to
 ``_MAX_STORIES_PER_SCAN`` headlines), cached in ``llm_artifacts`` keyed on
-(ticker, sorted news ids, anchor sha). NOTE: this scan-time LLM cost is not
-gated by the driver's ``--max-cost-usd`` (that cap gates ``build_alert``, which
-here is a cheap deterministic assembly of the judgment ``scan`` already made).
-That is an accepted tradeoff — the batch is bounded and cached.
+(ticker, sorted news ids, anchor sha). Scan-time LLM cost is cap-accounted by
+the driver: the morning driver runs this trigger's scans in its
+bounded-concurrency sweep (``triggers.base.ScanSweepTrigger``), admits each
+wave only while the ``llm_calls`` ledger total since run start is below the
+run's ``--max-cost-usd``, and explicitly defers any ticker the cap or the
+per-ticker timeout leaves unscanned — so the biggest stage_1 consumer is
+bounded by the same cap that gates candidate spend (the pre-sweep driver
+could never see this spend: the cap check lived in the per-candidate loop,
+which this lane never reaches because it emits zero candidates).
 
 The news table
 --------------
@@ -56,7 +61,6 @@ LLM call, so the alert body is stable and cheap.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import sqlite3
@@ -87,6 +91,8 @@ from llm_artifact_store import (
     read_current,
     upsert,
 )
+from runtime.deterministic import sha256_text as _sha256_text
+from runtime.deterministic import table_exists_or_false as _has_table
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from triggers.base import (
     AlertDraft,
@@ -259,18 +265,6 @@ class _Score:
 # --------------------------------------------------------------------------
 # DB helpers
 # --------------------------------------------------------------------------
-
-
-def _has_table(conn: sqlite3.Connection, table: str) -> bool:
-    """True iff ``table`` exists. Returns False on any sqlite error."""
-    try:
-        row = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-            (table,),
-        ).fetchone()
-    except sqlite3.Error:
-        return False
-    return row is not None
 
 
 def _conn_db_path(conn: sqlite3.Connection) -> Path | None:
@@ -692,11 +686,6 @@ def _dedup_by_event(
 # --------------------------------------------------------------------------
 
 
-def _sha256_text(text: str) -> str:
-    """Deterministic sha256 over UTF-8 bytes."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
 def _classification_cache_inputs(
     *, ticker: str, news_ids: list[int], anchor_text: str
 ) -> list[bytes | str]:
@@ -758,6 +747,14 @@ class MaterialNewsTrigger:
 
     kind: ClassVar[str] = "material_news"
     cadence: ClassVar[Cadence] = Cadence.ON_NEWS
+    # Driver dispatch marker (triggers.base.ScanSweepTrigger): scan() is this
+    # trigger's entire deliverable — it emits no candidates, its classification
+    # spend is attributable per ticker in the shared llm_calls ledger, and its
+    # writes (news_events, llm_artifacts) are short per-ticker writer
+    # transactions — so the morning driver runs these scans in its
+    # bounded-concurrency sweep with per-ticker timeouts and cap-accounted
+    # wave admission instead of the serial per-ticker loop.
+    concurrent_scan: ClassVar[bool] = True
 
     def scan(self, ticker: str, db: sqlite3.Connection) -> list[TriggerCandidate]:
         """Classify recent news and persist material events; emit NO candidates.

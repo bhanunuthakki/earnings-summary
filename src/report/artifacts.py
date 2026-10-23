@@ -6,7 +6,7 @@ import hashlib
 import os
 import re
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from datetime import UTC, date, datetime
 from pathlib import Path, PurePosixPath
 from typing import Literal
@@ -124,6 +124,7 @@ class ReportArtifactRef(BaseModel):
     ticker: str
     title: str
     artifact_kind: Literal["full_brief"] = "full_brief"
+    publication_status: Literal["retained", "draft_preview"] = "retained"
     coverage_role: CoverageRole
     report_date: date
     fiscal_period_label: str | None = None
@@ -303,6 +304,8 @@ def latest_report_artifacts(index: ReportArtifactIndex) -> tuple[ReportArtifactR
 
     latest_by_ticker: dict[str, ReportArtifactRef] = {}
     for artifact in index.items:
+        if artifact.publication_status == "draft_preview":
+            continue
         prior = latest_by_ticker.get(artifact.ticker)
         if prior is None or (artifact.generated_at, artifact.artifact_id) > (
             prior.generated_at,
@@ -316,6 +319,36 @@ def latest_report_artifacts(index: ReportArtifactIndex) -> tuple[ReportArtifactR
             reverse=True,
         )
     )
+
+
+def latest_report_artifacts_for_tickers(
+    repo_root: Path,
+    tickers: Collection[str],
+) -> dict[str, ReportArtifactRef]:
+    """Resolve only the newest existing indexed brief for each requested ticker.
+
+    This avoids building the full library or statting unrelated deliverables on
+    a per-roster URL lookup. The index remains the sole artifact authority.
+    """
+    requested = {ticker.strip().upper() for ticker in tickers if ticker.strip()}
+    if not requested:
+        return {}
+    latest: dict[str, ReportArtifactRef] = {}
+    for artifact in _read_index(repo_root).items:
+        if artifact.publication_status == "draft_preview":
+            continue
+        ticker = artifact.ticker.strip().upper()
+        if ticker not in requested:
+            continue
+        if not (repo_root / artifact.standalone_path).is_file():
+            continue
+        prior = latest.get(ticker)
+        if prior is None or (artifact.generated_at, artifact.artifact_id) > (
+            prior.generated_at,
+            prior.artifact_id,
+        ):
+            latest[ticker] = artifact
+    return latest
 
 
 def _write_index(repo_root: Path, items: tuple[ReportArtifactRef, ...]) -> None:
@@ -342,6 +375,7 @@ def persist_report_artifact(
     coverage_role: CoverageRole,
     title: str,
     provenance_ref: int | None = None,
+    publication_status: Literal["retained", "draft_preview"] = "retained",
 ) -> ReportArtifactRef:
     """Persist a shared body and atomically upsert its immutable index entry."""
 
@@ -354,6 +388,8 @@ def persist_report_artifact(
     manifest_path = artifact_dir / "manifest.json"
     if manifest_path.is_file():
         existing = ReportArtifactRef.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+        if existing.publication_status != publication_status:
+            raise ValueError("report artifact publication status differs from retained identity")
         existing_body = repo_root / (existing.body_path or "")
         existing_standalone = repo_root / existing.standalone_path
         if not existing_body.is_file() or not existing_standalone.is_file():
@@ -390,6 +426,7 @@ def persist_report_artifact(
         body_sha256=reader_body.body_sha256,
         section_ids=tuple(section.section_id for section in body.sections),
         provenance_ref=provenance_ref,
+        publication_status=publication_status,
     )
     _write_manifest(repo_root, ref)
     prior = _read_index(repo_root)
@@ -897,6 +934,7 @@ __all__ = [
     "ReportSectionRef",
     "backfill_report_fiscal_periods",
     "latest_report_artifacts",
+    "latest_report_artifacts_for_tickers",
     "load_report_artifact_index",
     "migrate_legacy_report_bodies",
     "persist_report_artifact",

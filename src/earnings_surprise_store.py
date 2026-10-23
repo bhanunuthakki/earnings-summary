@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import sqlite3
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Self
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, field_validator
+
+from runtime.deterministic import canonical_json as _canonical_json
+from runtime.deterministic import sha256_text as _sha256
 
 
 class EarningsSurpriseRecordV1(BaseModel):
@@ -104,14 +105,6 @@ def validate_source_record(raw: object, *, ticker_hint: str) -> ValidationDispos
             reason_details={"error": str(exc)[:1000]},
         )
     return ValidationDisposition(record=record, reason_code=None, reason_details={})
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
-def _sha256(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _record_payload(record: EarningsSurpriseRecordV1) -> dict[str, object]:

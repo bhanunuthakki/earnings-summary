@@ -22,17 +22,12 @@ from pathlib import Path
 from typing import cast
 from uuid import uuid4
 
-from clock import now_iso
+from clock import now_iso as _now_iso
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # ---------------------------------------------------------------------------
 # Naive-UTC convention
 # ---------------------------------------------------------------------------
-
-
-def _now_iso() -> str:
-    """Naive-UTC ISO string — the repo-wide convention for TEXT timestamps."""
-    return now_iso()
 
 
 def _open(db_path: Path) -> sqlite3.Connection:

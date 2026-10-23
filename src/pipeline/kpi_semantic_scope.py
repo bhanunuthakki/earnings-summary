@@ -16,6 +16,7 @@ from pipeline.kpi_report_reference_dispositions import (
 )
 from pipeline.kpi_report_reference_resolver import read_report_kpi_reference_definitions
 from provenance.financial_fact_resolution import canonical_fact_relation
+from runtime.deterministic import table_or_view_exists as _table_exists
 
 
 class ScopedKpiDefinition(BaseModel):
@@ -40,15 +41,6 @@ class ScopedKpiDefinition(BaseModel):
     report_reference_pointer: str | None = None
     report_reference_source_status: ReportKpiReferenceSourceStatus | None = None
     report_reference_source_reason_code: str | None = None
-
-
-def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    return (
-        conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name=?", (name,)
-        ).fetchone()
-        is not None
-    )
 
 
 def portfolio_tickers(

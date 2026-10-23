@@ -258,6 +258,41 @@ class FactLocator(BaseModel):
         return cls.model_validate_json(raw)
 
 
+def table_cell_locator(
+    *,
+    section: str | None,
+    table_title: str | None = None,
+    row_label: str | None,
+    row_axis_path: list[str] | None = None,
+    column_header: str | None,
+    json_path: str | None,
+    accession_number: str | None = None,
+    cell_value_as_extracted: str | None = None,
+    verbatim_snippet: str | None = None,
+) -> FactLocator:
+    """A ``fmp_json_table`` locator: FMP statement-endpoint arrays, FMP
+    form-10-K/10-Q section tables, generic_xbrl_capture note tables, segment
+    crosstab cells (docs/design/provenance_clickthrough.md §1.5)."""
+    cell = TableCellRef(
+        section=section,
+        table_title=table_title,
+        row_label=row_label,
+        row_axis_path=list(row_axis_path) if row_axis_path else [],
+        column_header=column_header,
+        cell_value_as_extracted=cell_value_as_extracted,
+        json_path=json_path,
+    )
+    return FactLocator(
+        section=section,
+        json_path=json_path,
+        accession_number=accession_number,
+        locator_version=2,
+        kind=LocatorKind.FMP_JSON_TABLE,
+        table_cell=cell,
+        verbatim_snippet=(verbatim_snippet or cell_value_as_extracted),
+    )
+
+
 class LegacyEscapeHatch(BaseModel):
     """Explicit, grep-able opt-out for a writer that genuinely cannot produce
     a renderable locator yet.

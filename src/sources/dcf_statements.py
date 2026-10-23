@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict
 from dcf.fiscal_periods import detect_fy_periods
 from dcf.primary_fact_overlay import Statement, primary_source_eligible, statement_field_mappings
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
-from provenance.fact_read_model import FactReadModel, ProvenanceBundle
+from provenance.fact_read_model import ProvenanceBundle
 from provenance.metric_ontology import MetricOntology
 
 _STATEMENTS: tuple[Statement, ...] = ("income", "balance", "cash_flow")
@@ -36,7 +36,6 @@ _REQUIRED_DURATION = frozenset(
     }
 )
 _REQUIRED_BALANCE = frozenset({"total_stockholders_equity", "total_debt"})
-_ReadPlan = tuple[str, str, str, str, str, str]
 
 
 class DcfStatementCell(BaseModel):
@@ -373,68 +372,36 @@ def read_dcf_statements(
             "AND julianday(binding.knowledge_at)<=julianday(?) ORDER BY source.concept_name,binding.canonical_metric_cell_id",
             (ticker, cutoff.isoformat(), cutoff.isoformat()),
         ).fetchall()
-        plans: list[DcfStatementCell | _ReadPlan] = []
-        observation_ids: list[str] = []
+        selected_rows = tuple(row for row in rows if str(row[1]) in _MAPPING)
         resolver = CanonicalFactResolutionEngine(conn)
-        for cell_id, concept, metric_id in rows:
-            if str(concept) not in _MAPPING:
-                continue
-            try:
-                resolution = resolver.as_known(str(cell_id), cutoff)
-                if (
-                    resolution is None
-                    or resolution.status != "resolved"
-                    or resolution.selected_observation_id is None
-                ):
-                    plans.append(
-                        DcfStatementCell(
-                            concept=str(concept),
-                            canonical_metric_cell_id=str(cell_id),
-                            metric_id=str(metric_id),
-                            reason_codes=("canonical_resolution_unavailable",),
-                        )
-                    )
-                    continue
-                observation_id = resolution.selected_observation_id
-                observation_ids.append(observation_id)
-                plans.append(
-                    (
-                        str(concept),
-                        str(cell_id),
-                        str(metric_id),
-                        resolution.canonical_resolution_revision_id,
-                        observation_id,
-                        ticker,
-                    )
-                )
-            except (ValueError, RuntimeError, sqlite3.Error):
-                plans.append(
+        try:
+            reads = resolver.read_as_known(tuple(str(row[0]) for row in selected_rows), cutoff)
+        except (ValueError, RuntimeError, sqlite3.Error):
+            # Required evidence is one batch. A broken selected source must not
+            # leave a partially usable model input population.
+            return DcfStatementInputs(
+                ticker=ticker,
+                as_of=cutoff,
+                cells=tuple(
                     DcfStatementCell(
                         concept=str(concept),
                         canonical_metric_cell_id=str(cell_id),
                         metric_id=str(metric_id),
                         reason_codes=("canonical_evidence_invalid",),
                     )
-                )
-        try:
-            batch = FactReadModel(conn).provenance_bundles(tuple(observation_ids), cutoff=cutoff)
-        except (ValueError, RuntimeError, sqlite3.Error):
-            batch = ()
-        reads = iter(batch)
+                    for cell_id, concept, metric_id in selected_rows
+                ),
+            )
         cells: list[DcfStatementCell] = []
-        for plan in plans:
-            if isinstance(plan, DcfStatementCell):
-                cells.append(plan)
-                continue
-            concept, cell_id, metric_id, resolution_revision_id, observation_id, plan_ticker = plan
-            result = next(reads, None)
-            if result is None or result.observation_id != observation_id or result.bundle is None:
+        for (cell_id, concept, metric_id), read in zip(selected_rows, reads, strict=True):
+            resolution, bundle = read.resolution, read.bundle
+            if resolution is None or resolution.status != "resolved" or bundle is None:
                 cells.append(
                     DcfStatementCell(
-                        concept=concept,
-                        canonical_metric_cell_id=cell_id,
-                        metric_id=metric_id,
-                        reason_codes=("canonical_evidence_invalid",),
+                        concept=str(concept),
+                        canonical_metric_cell_id=str(cell_id),
+                        metric_id=str(metric_id),
+                        reason_codes=("canonical_resolution_unavailable",),
                     )
                 )
                 continue
@@ -442,21 +409,21 @@ def read_dcf_statements(
                 cells.append(
                     _read_cell(
                         conn,
-                        plan_ticker,
-                        concept,
-                        cell_id,
-                        metric_id,
-                        resolution_revision_id,
-                        result.bundle,
+                        ticker,
+                        str(concept),
+                        str(cell_id),
+                        str(metric_id),
+                        resolution.canonical_resolution_revision_id,
+                        bundle,
                         cutoff,
                     )
                 )
             except (ValueError, RuntimeError, sqlite3.Error):
                 cells.append(
                     DcfStatementCell(
-                        concept=concept,
-                        canonical_metric_cell_id=cell_id,
-                        metric_id=metric_id,
+                        concept=str(concept),
+                        canonical_metric_cell_id=str(cell_id),
+                        metric_id=str(metric_id),
                         reason_codes=("canonical_evidence_invalid",),
                     )
                 )

@@ -1,0 +1,36 @@
+{
+  "scope": "MPL private temporary configuration lifecycle; global mutex is in existing C# launcher",
+  "reason": "Required bounded configuration and identity-checked cleanup for the observed contained Matplotlib failure. No new Python module, abstraction, dependency, provider, or state store.",
+  "scanner_unchanged": true,
+  "measurement": {
+    "executable_modules": {
+      "prior": 1468,
+      "current": 1468
+    },
+    "total_noncomment_loc": {
+      "prior": 562342,
+      "current": 562371
+    },
+    "modules_over_1000_loc": {
+      "prior": 108,
+      "current": 108
+    },
+    "modules_over_2000_loc": {
+      "prior": 24,
+      "current": 24
+    },
+    "max_internal_fan_out": {
+      "prior": 40,
+      "current": 40
+    },
+    "scc_count": {
+      "prior": 21,
+      "current": 21
+    },
+    "largest_scc": {
+      "prior": 16,
+      "current": 16
+    }
+  },
+  "baseline_update": "Complete unchanged-scanner receipt regenerated intentionally for reviewed feature growth. Full checks and Opus activation review remain required."
+}

@@ -29,4 +29,27 @@ foreach($case in $cases){
 }
 $oldAccepted=($prefix+'S:AI(ML;;NW;;;LW)').EndsWith('S:(ML;;NW;;;LW)',[StringComparison]::Ordinal)
 if($oldAccepted){throw 'synthetic red proof missing'}
-@{passed=$true;source='synthetic in-memory descriptors; actual compiled launcher method';launcher_sha256=(Get-FileHash -Algorithm SHA256 $path).Hash.ToLowerInvariant();old_oracle_accepts_observed_form=$oldAccepted;cases=$result}|ConvertTo-Json -Depth 5
+$factory=$assembly.GetType('FilingXbrlAppContainerLauncher').GetMethod('OpenInvocationMutex',[Reflection.BindingFlags]'NonPublic,Static')
+$mutex=$null
+$owned=$false
+try {
+ $mutex=[Threading.Mutex]$factory.Invoke($null,@())
+ $owned=$mutex.WaitOne(0)
+ if(-not $owned){throw 'native mutex test requires an idle global mutex'}
+ $probe={
+  param([bool]$Expected)
+  $shell=[PowerShell]::Create()
+  try {
+   [void]$shell.AddScript('$m=[Threading.Mutex]::OpenExisting("Global\EarningsSummaryFilingXbrlLauncherV2");try{$held=$m.WaitOne(100);try{$held}finally{if($held){$m.ReleaseMutex()}}}finally{$m.Dispose()}')
+   $pending=$shell.BeginInvoke()
+   if(-not $pending.AsyncWaitHandle.WaitOne(5000)){$shell.Stop();throw 'native mutex contention probe exceeded deadline'}
+   $values=@($shell.EndInvoke($pending))
+   if($shell.HadErrors -or $values.Count -ne 1 -or [bool]$values[0] -ne $Expected){throw 'native mutex contention mismatch'}
+  }finally{$shell.Dispose()}
+ }
+ & $probe $false
+ $mutex.ReleaseMutex();$owned=$false
+ & $probe $true
+ $mutexProof=@{name='Global\EarningsSummaryFilingXbrlLauncherV2';contention_blocked=$true;acquired_after_release=$true;effective_security_validated=$true}
+}finally{if($owned){$mutex.ReleaseMutex()};if($null -ne $mutex){$mutex.Dispose()}}
+@{passed=$true;global_mutex=$mutexProof;source='synthetic in-memory descriptors; actual compiled launcher method';launcher_sha256=(Get-FileHash -Algorithm SHA256 $path).Hash.ToLowerInvariant();old_oracle_accepts_observed_form=$oldAccepted;cases=$result}|ConvertTo-Json -Depth 5

@@ -5,6 +5,16 @@ writes raw JSON to `data/historical/sec/{TICKER}_companyfacts.json`, registers
 one `documents` row per unique accession number, then inserts `financial_facts`
 rows for the curated GAAP/IFRS tag map.
 
+Conditional ingest
+------------------
+Each ticker's last completed fetch leaves a receipt (ETag / Last-Modified /
+payload sha256) committed with its ingest. The next run sends those validators
+as a conditional GET: a `304` (or a downloaded body whose digest matches a
+completed ingest's) skips the download, the pydantic re-parse, and the fact
+re-walk, and emits an explicit `sec_companyfacts_unchanged_skip` receipt.
+Interrupted runs resume from the receipts: completed tickers are skipped by
+receipt and content identity; only incomplete tickers reprocess.
+
 Silent-staleness detector
 -------------------------
 The brief_dirty SQL triggers (migration 0026) flip brief_dirty=1 on any
@@ -13,7 +23,9 @@ zero fact rows (parser fell behind a tag-map change, the filing carried no
 mapped tags, all values were YTD aggregates that got skipped, etc.) those
 triggers never fire and the next brief render uses stale data. After each
 ticker's ingest we check (accessions_inserted > 0 AND facts_inserted == 0)
-and force-flip brief_dirty so the daily worker re-attempts the build.
+and force-flip brief_dirty so the daily worker re-attempts the build. An
+unchanged-payload skip is a positive freshness result, never staleness: it
+registers no accessions and the detector leaves it alone.
 
 Rate-limited per SEC fair-use policy: ~10 req/sec absolute max; we sleep 0.2s
 between tickers (~5 req/sec) to stay polite.
@@ -84,6 +96,33 @@ def emit_ingest_timing(receipt: SecIngestTimingReceipt, *, run_id: str) -> None:
                 "event": "sec_xbrl_ingest_timing",
                 "run_id": run_id,
                 **receipt.model_dump(mode="json"),
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+
+def emit_unchanged_skip(stats: IngestStats, *, ticker: str, run_id: str) -> None:
+    """Emit one redaction-safe unchanged-payload skip receipt per ticker.
+
+    The skip receipt names the unchanged content identity explicitly — the
+    digest, the disposition, and why (a conditional 304 or a digest match) —
+    so a rerun over an unchanged fixture set leaves zero-download,
+    zero-parse, zero-walk evidence on stderr instead of silence.
+    """
+
+    sys.stderr.write(
+        json.dumps(
+            {
+                "event": "sec_companyfacts_unchanged_skip",
+                "run_id": run_id,
+                "ticker": ticker.upper(),
+                "disposition": stats.disposition,
+                "reason": stats.skip_reason,
+                "payload_sha256": stats.payload_sha256,
+                "accessions_registered": stats.accessions_inserted,
+                "facts_inserted": stats.facts_inserted,
             },
             sort_keys=True,
         )
@@ -277,6 +316,7 @@ def main() -> int:
             return 0
         rows: list[dict[str, object]] = []
         failed = 0
+        skipped_unchanged = 0
 
         for i, ticker in enumerate(tickers):
             if i > 0:
@@ -348,6 +388,23 @@ def main() -> int:
                 )
                 failed += 1
                 continue
+            if stats.disposition == "skipped_unchanged":
+                # A conditional 304 / digest match is a positive freshness
+                # result: unchanged content, nothing re-downloaded, parsed, or
+                # walked, and never a silent-staleness candidate.
+                skipped_unchanged += 1
+                emit_unchanged_skip(stats, ticker=ticker, run_id=run_id)
+                rows.append(
+                    {
+                        "ticker": ticker,
+                        "disposition": stats.disposition,
+                        "skip_reason": stats.skip_reason,
+                        "payload_sha256": stats.payload_sha256,
+                        "accessions_registered": stats.accessions_inserted,
+                        "facts_inserted": stats.facts_inserted,
+                    }
+                )
+                continue
             silent_staleness = stats.accessions_inserted > 0 and stats.facts_inserted == 0
             flagged_dirty, artifacts_flipped = handle_silent_staleness(
                 conn,
@@ -358,6 +415,8 @@ def main() -> int:
             rows.append(
                 {
                     "ticker": ticker,
+                    "disposition": stats.disposition,
+                    "payload_sha256": stats.payload_sha256,
                     "accessions_registered": stats.accessions_inserted,
                     "facts_inserted": stats.facts_inserted,
                     "silent_staleness": silent_staleness,
@@ -378,6 +437,7 @@ def main() -> int:
                     "run_id": run_id,
                     "tickers": len(tickers),
                     "failed": failed,
+                    "skipped_unchanged": skipped_unchanged,
                     "total_accessions_registered": total_accessions,
                     "total_facts_inserted": total_facts,
                     "rows": rows,

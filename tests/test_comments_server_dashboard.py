@@ -30,6 +30,8 @@ from integrations.portfolio_offline_snapshot import OfflinePortfolioSnapshot
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
 from sources.financial_growth_evidence import FinancialGrowthReference
 from sources.report_financials import FinancialEvidenceReference
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from tests.comments_server_seams import patch_server_seam
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -208,7 +210,9 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # +1 exact, read-only canonical financial evidence peek.
     # +1 read-only calculation peek that opens the original reported inputs.
     # +1 exact-edition descriptor for shared-reader reload and historical links.
-    assert len(rules) == 179
+    # +1 sealed evidence citation source-version viewer: the destination for
+    # /source/version/<document_version_id>?node=… citations.
+    assert len(rules) == 180
     assert rules["peek_canonical_financial"] == "/api/peek/canonical-financial"
     assert rules["peek_financial_calculation"] == "/api/peek/financial-calculation"
     assert rules["operations_host_runtime_api"] == "/api/operations/host-runtime"
@@ -248,6 +252,7 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
         endpoint: rules[endpoint]
         for endpoint in (
             "source_viewer",
+            "source_version_viewer",
             "source_pdf_page_image",
             "vendored_font_file",
             "peek_alert",
@@ -292,6 +297,7 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
         )
     } == {
         "source_viewer": "/source/<int:doc_id>",
+        "source_version_viewer": "/source/version/<document_version_id>",
         "source_pdf_page_image": "/source/<int:doc_id>/page/<int:page>.png",
         "vendored_font_file": "/src/ui/vendor/fonts/<filename>",
         "peek_alert": "/api/peek/alert/<int:alert_id>",
@@ -339,22 +345,22 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
 def test_financial_calculation_uses_read_only_database_role(
     client: FlaskClient, app_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    roles: list[comments_server.SQLiteConnectionRole] = []
-    connect = comments_server.connect_sqlite
+    roles: list[SQLiteConnectionRole] = []
+    connect = connect_sqlite
 
     def observed_connect(
         path: str | os.PathLike[str],
         *,
-        role: comments_server.SQLiteConnectionRole,
+        role: SQLiteConnectionRole,
         schema_preflight: bool | None = None,
     ) -> sqlite3.Connection:
         roles.append(role)
-        assert role is comments_server.SQLiteConnectionRole.READ_ONLY
+        assert role is SQLiteConnectionRole.READ_ONLY
         assert schema_preflight is True
         # The dashboard fixture has a minimal schema, not an Alembic stamp.
         return connect(path, role=role, schema_preflight=False)
 
-    monkeypatch.setattr(comments_server, "connect_sqlite", observed_connect)
+    patch_server_seam(monkeypatch, "connect_sqlite", observed_connect)
     reference = FinancialGrowthReference(
         formula="qoq",
         inputs=tuple(
@@ -376,10 +382,10 @@ def test_financial_calculation_uses_read_only_database_role(
         "/api/peek/financial-calculation", query_string={"reference": reference.model_dump_json()}
     )
     assert response.status_code == 404
-    assert roles == [comments_server.SQLiteConnectionRole.READ_ONLY]
+    assert roles == [SQLiteConnectionRole.READ_ONLY]
     assert database.read_bytes() == before
     assert client.post("/api/peek/financial-calculation").status_code == 405
-    assert roles == [comments_server.SQLiteConnectionRole.READ_ONLY]
+    assert roles == [SQLiteConnectionRole.READ_ONLY]
 
 
 def test_replaced_compatibility_routes_are_absent(client: FlaskClient) -> None:
@@ -480,8 +486,8 @@ def test_work_os_portfolio_api_hydrates_only_portfolio_companies(
         """
     )
     conn.close()
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(
+        monkeypatch,
         "fetch_live_portfolio",
         lambda: LivePortfolio(
             available=True,
@@ -501,8 +507,8 @@ def test_work_os_portfolio_api_hydrates_only_portfolio_companies(
             ],
         ),
     )
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(
+        monkeypatch,
         "fetch_portfolio_allocation",
         _available_allocation,
     )
@@ -607,7 +613,7 @@ def test_work_os_portfolio_api_caches_its_degraded_tracker_payload(
         tracker_calls["count"] += 1
         return LivePortfolio(available=False, api_url="http://tracker.test", error="tracker down")
 
-    monkeypatch.setattr(comments_server, "fetch_live_portfolio", down_tracker)
+    patch_server_seam(monkeypatch, "fetch_live_portfolio", down_tracker)
     local_client = comments_server.create_app(app_repo).test_client()
 
     first = local_client.get("/api/work-os/portfolio")
@@ -714,8 +720,8 @@ def test_investment_profile_review_is_fingerprint_bound_and_append_only(
     def fake_evaluation(*_args: object, **_kwargs: object) -> WorkOsEvaluationHydration:
         return hydration
 
-    monkeypatch.setattr(comments_server, "build_cockpit_rows", fake_cockpit_rows)
-    monkeypatch.setattr(comments_server, "build_work_os_evaluation", fake_evaluation)
+    patch_server_seam(monkeypatch, "build_cockpit_rows", fake_cockpit_rows)
+    patch_server_seam(monkeypatch, "build_work_os_evaluation", fake_evaluation)
     client = comments_server.create_app(app_repo).test_client()
 
     stale = client.post(
@@ -789,8 +795,8 @@ def test_etf_profile_review_uses_the_same_append_only_contract(
     def fake_evaluation(*_args: object, **_kwargs: object) -> WorkOsEvaluationHydration:
         return hydration
 
-    monkeypatch.setattr(comments_server, "build_cockpit_rows", fake_cockpit_rows)
-    monkeypatch.setattr(comments_server, "build_work_os_evaluation", fake_evaluation)
+    patch_server_seam(monkeypatch, "build_cockpit_rows", fake_cockpit_rows)
+    patch_server_seam(monkeypatch, "build_work_os_evaluation", fake_evaluation)
     client = comments_server.create_app(app_repo).test_client()
 
     recorded = client.post(
@@ -823,14 +829,14 @@ def test_work_os_portfolio_api_uses_governed_snapshot_only_after_tracker_failure
             envelope_warnings=["portfolio_offline_snapshot"],
         ),
     )
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(
+        monkeypatch,
         "fetch_live_portfolio",
         lambda: LivePortfolio(available=False, api_url="http://tracker.test", error="account 1234"),
     )
-    monkeypatch.setattr(comments_server, "fetch_portfolio_allocation", _available_allocation)
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(monkeypatch, "fetch_portfolio_allocation", _available_allocation)
+    patch_server_seam(
+        monkeypatch,
         "read_configured_offline_portfolio_snapshot",
         lambda: snapshot,
     )
@@ -881,8 +887,8 @@ def test_work_os_portfolio_api_includes_latest_persisted_earnings_readout(
     app_repo: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(
+        monkeypatch,
         "fetch_portfolio_allocation",
         lambda: unavailable_portfolio_allocation("positions_unavailable"),
     )
@@ -926,13 +932,13 @@ def test_work_os_portfolio_api_keeps_research_rows_when_allocation_is_unavailabl
     app_repo: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(
+        monkeypatch,
         "fetch_live_portfolio",
         lambda: LivePortfolio(available=True, api_url="http://tracker.test"),
     )
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(
+        monkeypatch,
         "fetch_portfolio_allocation",
         lambda: unavailable_portfolio_allocation("securities_unavailable"),
     )
@@ -1152,3 +1158,78 @@ def test_vendored_font_route_serves_immutable_binaries(client: Any) -> None:
     assert client.get("/src/ui/vendor/fonts/missing-latin.woff2").status_code == 404
     assert client.get("/src/ui/vendor/fonts/inter-latin.css").status_code == 404
     assert client.get("/src/ui/vendor/fonts/../../tokens.py").status_code == 404
+
+
+def test_portfolio_skips_fundamentals_without_poisoning_full_cockpit(
+    app_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from comments_server_cockpit_memo import CockpitDataMemo, CockpitDataReservation
+
+    import pipeline.research_cockpit as cockpit
+    from pipeline.work_os_earnings import EarningsReadoutProjection, EarningsReadoutSummary
+
+    calls: list[str] = []
+
+    def cached(*_args: object) -> dict[str, tuple[float, float]]:
+        calls.append("cache")
+        return {}
+
+    def compute(*_args: object) -> dict[str, tuple[float, float]]:
+        calls.append("compute")
+        return {"NU": (38.0, 22.0), "MELI": (25.0, 18.0)}
+
+    def readouts(
+        _conn: sqlite3.Connection, tickers: list[str], *, coverage_roles: dict[str, str]
+    ) -> EarningsReadoutProjection:
+        assert set(tickers) == {"NU", "MELI"}
+        assert coverage_roles == {"NU": "portfolio", "MELI": "evaluation"}
+        return EarningsReadoutProjection(
+            status="ok",
+            readouts={
+                "MELI": EarningsReadoutSummary(
+                    artifact_id=7,
+                    ticker="MELI",
+                    fiscal_period="2026-06-30",
+                    period_label="Q2",
+                    generated_at=None,
+                    route="/earnings-readout/MELI",
+                    coverage_role="evaluation",
+                )
+            },
+            warnings=[],
+        )
+
+    monkeypatch.setattr(cockpit, "read_materialized_fundamentals", cached)
+    monkeypatch.setattr(cockpit, "_eval_fundamentals", compute)
+    patch_server_seam(monkeypatch, "load_latest_earnings_readouts", readouts)
+    patch_server_seam(
+        monkeypatch,
+        "fetch_live_portfolio",
+        lambda: LivePortfolio(available=False, api_url="http://tracker.test", error="unavailable"),
+    )
+    patch_server_seam(monkeypatch, "fetch_portfolio_allocation", _available_allocation)
+    app = comments_server.create_app(app_repo)
+    memo = cast(object, app.config["COCKPIT_DATA_MEMO"])
+    assert isinstance(memo, CockpitDataMemo)
+    # A slow full projection must not block or supply the portfolio projection.
+    memo_key = cast(object, app.config["COCKPIT_DATA_MEMO_KEY"])
+    assert isinstance(memo_key, str)
+    reservation = memo.get_or_reserve(memo_key)
+    assert isinstance(reservation, CockpitDataReservation)
+    local_client = app.test_client()
+    try:
+        response = local_client.get("/api/work-os/portfolio")
+        assert response.status_code == 200
+        assert response.get_json()["earnings_readouts"][0]["ticker"] == "MELI"
+        assert response.get_json()["status"] == "degraded"
+        assert calls == []
+        assert memo.entry_count() == 0
+    finally:
+        memo.abandon(reservation)
+    evaluation = local_client.get("/api/work-os/evaluation")
+    assert evaluation.status_code == 200
+    assert calls == ["cache", "compute"]
+    assert memo.entry_count() == 1
+    overview = local_client.get("/api/panel/overview")
+    assert overview.status_code == 200
+    assert calls == ["cache", "compute"]

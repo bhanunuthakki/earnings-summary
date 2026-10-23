@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from clock import now_iso
+from clock import now_iso as _now_iso
 from db_paths import resolve_db_path
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -76,11 +76,6 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
         return conn
     except (sqlite3.Error, OSError):
         return None
-
-
-def _now_iso() -> str:
-    # Naive-UTC, the repo-wide convention (matches decision_conditions).
-    return now_iso()
 
 
 def _clean(text: str | None, *, cap: int) -> str | None:

@@ -383,6 +383,7 @@ class ResearchProposal:
     target_precondition_sha256: str | None = None
     target_postcondition_sha256: str | None = None
     ask_exchange_request_id: str | None = None
+    owner_authorization_id: str | None = None
     actionable_at: str | None = None
     invalidated_at: str | None = None
     invalidation_reason: str | None = None
@@ -410,9 +411,12 @@ def create_proposal(
     canonical_content_sha256: str | None = None,
     target_precondition_sha256: str | None = None,
     ask_exchange_request_id: str | None = None,
+    owner_authorization_id: str | None = None,
+    actionable_at: str | None = None,
+    connection: sqlite3.Connection | None = None,
     db_path: Path | str | None = None,
 ) -> int:
-    conn = open_conn(db_path)
+    conn = connection if connection is not None else open_conn(db_path)
     try:
         now = now_iso()
         columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(research_proposals)")}
@@ -425,14 +429,25 @@ def create_proposal(
         )
         if not has_approval_authority and any(value is not None for value in governed_values):
             raise RuntimeError("governed proposal approval requires database migration 0006")
+        owner_columns = ""
+        owner_placeholders = ""
+        owner_values: tuple[str | None, ...] = ()
+        if owner_authorization_id is not None:
+            if "owner_authorization_id" not in columns:
+                raise RuntimeError("owner proposal approval requires database migration 0060")
+            owner_columns = ", owner_authorization_id, actionable_at"
+            owner_placeholders = ", ?, ?"
+            owner_values = (owner_authorization_id, actionable_at)
         if has_approval_authority:
             cur = conn.execute(
                 "INSERT INTO research_proposals "
                 "(task_id, kind, ticker, title, body_md, evidence_json, source_note_ids, status, "
                 " adversarial_verdict, budget_tier, provenance, tainted_by_proposal_id, "
                 " artifact_json, canonical_content_json, canonical_content_sha256, "
-                " target_precondition_sha256, ask_exchange_request_id, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " target_precondition_sha256, ask_exchange_request_id, created_at, updated_at"
+                f"{owner_columns}) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
+                f"{owner_placeholders})",
                 (
                     task_id,
                     kind,
@@ -452,6 +467,7 @@ def create_proposal(
                     ask_exchange_request_id,
                     now,
                     now,
+                    *owner_values,
                 ),
             )
         else:
@@ -478,10 +494,12 @@ def create_proposal(
                     now,
                 ),
             )
-        conn.commit()
+        if connection is None:
+            conn.commit()
         return int(cur.lastrowid or 0)
     finally:
-        conn.close()
+        if connection is None:
+            conn.close()
 
 
 def _parse_note_ids(raw: object) -> list[int]:
@@ -550,6 +568,11 @@ def _row_to_proposal(row: sqlite3.Row) -> ResearchProposal:
             None
             if "ask_exchange_request_id" not in keys or row["ask_exchange_request_id"] is None
             else str(row["ask_exchange_request_id"])
+        ),
+        owner_authorization_id=(
+            str(row["owner_authorization_id"])
+            if "owner_authorization_id" in keys and row["owner_authorization_id"] is not None
+            else None
         ),
         actionable_at=(
             None

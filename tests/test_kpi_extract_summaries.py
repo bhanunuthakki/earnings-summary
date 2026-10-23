@@ -1,5 +1,3 @@
-# These tests exercise internal extraction seams (_build_manifest, _llm_extract, …).
-# pyright: reportPrivateUsage=false
 """Tests for compute.kpi_extract_summaries value parsing.
 
 Regression for the VEEV extraction abort: Haiku returned a non-numeric KPI value
@@ -19,17 +17,16 @@ from pathlib import Path
 import pytest
 
 import compute.kpi_extract_summaries as kes
-from compute.kpi_extract_summaries import (
-    _build_manifest,
-    _canonical_units_from_holdings,
-    _ensure_summary_document_row,
-    _fact_units_by_name,
-    _llm_extract,
-    _period_end,
-    parse_decimal_value,
-)
+from compute.kpi_extract_summaries import parse_decimal_value
 from models.facts import Currency, FiscalPeriodType, Unit
 from models.validation import Severity, ValidationRule
+
+_build_manifest = getattr(kes, "_build_manifest")
+_canonical_units_from_holdings = getattr(kes, "_canonical_units_from_holdings")
+_ensure_summary_document_row = getattr(kes, "_ensure_summary_document_row")
+_fact_units_by_name = getattr(kes, "_fact_units_by_name")
+_llm_extract = getattr(kes, "_llm_extract")
+_period_end = getattr(kes, "_period_end")
 
 
 def test_parse_decimal_value_parses_clean_numbers() -> None:
@@ -572,3 +569,69 @@ def test_ensure_summary_document_row_is_idempotent_on_sha256(tmp_path: Path) -> 
     )
     assert first_id == second_id
     assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("text, limit", [("", 20), (" ", 20), ("too long", 3)])
+def test_capture_rejects_empty_or_truncated_source(text: str, limit: int) -> None:
+    from compute import kpi_extract_summaries as module
+
+    with pytest.raises(ValueError):
+        getattr(module, "_complete_capture_text")(text, limit)
+
+
+def test_capture_preserves_complete_source() -> None:
+    from compute import kpi_extract_summaries as module
+
+    assert getattr(module, "_complete_capture_text")("whole source", 12) == "whole source"
+
+
+@pytest.mark.parametrize("source_text", ["", "source exceeds limit"])
+def test_ir_capture_errors_before_model_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source_text: str
+) -> None:
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"PDF fixture")
+
+    def list_sources(*args: object) -> list[tuple[int, Path, datetime]]:
+        return [(1, source, datetime(2026, 6, 30))]
+
+    def not_captured(*args: object) -> bool:
+        return False
+
+    def read_source(*args: object) -> str:
+        return source_text
+
+    monkeypatch.setattr(kes, "_list_ir_capture_pdf_docs", list_sources)
+    monkeypatch.setattr(kes, "_doc_already_captured", not_captured)
+    monkeypatch.setattr(kes, "_read_pdf_text", read_source)
+
+    def reject_call(*args: object, **kwargs: object) -> list[dict[str, object]]:
+        pytest.fail("invalid input must not trigger a model call")
+
+    monkeypatch.setattr(kes, "_llm_extract_enumerate", reject_call)
+    with sqlite3.connect(":memory:") as conn:
+        result = kes.capture_for_ir_pdf_docs("FOO", tmp_path, conn, max_input_chars=5)
+    assert result.error is not None
+    assert result.quarters_extracted == []
+    assert result.kpis_inserted_total == 0
+
+
+def test_enumeration_limit_is_unknown_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
+    row = {
+        "label": "Margin",
+        "value": 20,
+        "unit": "percent",
+        "source_excerpt": "Margin 20%",
+        "reported_period_end": "2026-06-30",
+        "period_role": "current",
+        "accounting_basis": "gaap",
+        "consolidation_scope": "consolidated",
+        "source_unit_scale": "none",
+    }
+
+    def return_rows(*args: object, **kwargs: object) -> list[dict[str, str | int]]:
+        return [row]
+
+    monkeypatch.setattr(kes, "call_llm_structured", return_rows)
+    with pytest.raises(ValueError, match="coverage is unknown"):
+        getattr(kes, "_llm_extract_enumerate")("FOO", "2026-Q2", "Margin 20%", max_facts=1)

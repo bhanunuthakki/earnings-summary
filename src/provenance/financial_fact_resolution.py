@@ -4,6 +4,11 @@ The database migration captures future fact writes.  This module owns the
 bounded legacy backfill, complete-candidate resolution policy, and the one
 read-side compatibility boundary.  It never averages or deletes candidates:
 material ambiguity is recorded and canonical reads fail closed.
+
+The historical ``current_fact_selection`` table is not a read authority. Its
+unconsumed mirror and convergence writes are retired; canonical readers use
+the immutable resolution ledger through the resolved views. Historical schema
+revisions and checkpoint fields remain compatible.
 """
 
 from __future__ import annotations
@@ -372,6 +377,8 @@ class FactCutoverCheckpoint(_CutoverModel):
     table_index: int = Field(default=0, ge=0, le=len(_TABLES))
     last_row_id: int = Field(default=0, ge=0)
     updated_at: datetime
+    # Retain old checkpoints without running the retired materialization scan.
+    selection_cursor: str = Field(default="")
 
 
 class FactCutoverSummary(BaseModel):
@@ -388,6 +395,10 @@ class FactCutoverSummary(BaseModel):
     resolutions_created: int = 0
     resolutions_replayed: int = 0
     unresolved_material: int = 0
+    selection_keys_examined: int = 0
+    selection_rows_written: int = 0
+    selection_rows_deleted: int = 0
+    selection_pass_wrapped: bool = False
     checkpoint_complete: bool = False
     finding_counts: dict[str, int] = Field(default_factory=dict[str, int])
 
@@ -967,6 +978,7 @@ def execute_fact_cutover(
             table_index=next_checkpoint.table_index,
             last_row_id=next_checkpoint.last_row_id,
             updated_at=datetime.now(UTC),
+            selection_cursor=checkpoint.selection_cursor,
         ),
     )
     summary.checkpoint_complete = _is_complete(conn, next_checkpoint)

@@ -48,6 +48,92 @@ stops that provider. Independent items may proceed with a degraded batch result;
 dependent stages cannot consume a failed prerequisite as success. Retry checkpoints
 are bound to the intended database and retain failed item identities.
 
+## Analysis-specific evidence selection (2026-10-02)
+
+An [Analysis Evidence Scope](../DEFINITIONS.md#analysis-evidence-scope) selects the
+evidence required for one analysis. It does not change source acquisition policy or
+the eight pipeline stages. `src/provenance/analysis_scope.py` owns selection and
+verification. The request declares issuer, purpose, required reporting-period ends,
+knowledge cutoff, observation cutoff, and any additional accession packages with
+reasons. The receipt binds the current complete authoritative SEC inventory and
+its exact expected-document population. Latest reporting-period inclusion is the
+default; missing or ambiguous required periods fail explicitly.
+
+The same immutable receipt is an input to processing, corpus construction, and
+research assembly. Processing and research retain it. The corpus key and selection
+configuration digest bind it without storing the full receipt in the manifest.
+Selected periodic packages include known amendments. Unknown
+amendment periods block when the amendment could concern a declared base filing.
+An amendment filed before every declared base filing remains explicitly outside.
+Related current reports require explicit selection; unavailable original/amendment
+linkage remains a failure, not an inferred relationship.
+
+Capture must cover every selected package member. Primary filings become research
+documents. Generated report pages and other selected children remain required
+capture dependencies; they do not duplicate the primary research text. Applicable
+processing lanes, including XBRL extraction, remain mandatory. Processing, corpus,
+and research must agree on the exact primary document set.
+
+### Complete report evidence profile (owner-approved 2026-10-18)
+
+An explicit `AnalysisScopeRequest.readiness_profile=complete_report_evidence/v1`
+selects the versioned v3 report boundary. This is an additive acceptance profile.
+The default full-processing policy above remains unchanged. The report profile
+requires every selected primary, including known amendments, and its complete
+qualified text. Original SEC exhibits keep their capture requirement. This
+profile has no implicit nonmaterial-exhibit exemption. Other package-child
+capture coverage remains visible in the same scope; it is deferred, not complete.
+Applicable native filing-XBRL processing is a
+separate deferred duty. The processing receipt names that duty and its bounded
+profile. No XBRL obligation becomes succeeded or not applicable through deferral.
+
+This profile changes processing prerequisites, not financial truth. Source bytes,
+identity, public and physical clocks, extraction, definitions, admission, conflicts,
+comparability, canonical resolution and reader reconstruction remain mandatory.
+Processing, corpus and financial research bind the same exact scope. A report
+cannot obtain acceptance merely from all model slots or all rendered claims.
+Its versioned required evidence population must also cover the complete report.
+Missing critical evidence blocks acceptance. Full-output claim verification,
+integrated model/scenario proof and recalculated workbook parity remain required.
+A qualified result identifies its bounded report scope and cannot inherit a
+whole-filing or whole-issuer decision-grade label.
+
+Analysis Evidence Scope v7 can bind an explicit `report-pdf-table-scope/v1`
+under the same report profile. This implements the approved report-first boundary;
+it does not add a package-wide table requirement. The review commits every page,
+the exact retained native artifact and raw PDF, and a source population for the
+existing ten MELI report requirements before generation. Each deferred page has a
+content-backed rationale and either exact replacement sources or an explicit
+outside-report disposition. Required quarantined pages still block acceptance.
+
+The distinct `report-pdf-table-certificate/v1` verifies required native child pages
+and the complete parent artifact/member seal. It retains all page dispositions,
+complete qualified text, the quarantined parent and deferred-page receipt. Its
+obligation and certificate identities bind the reviewed page scope. It cannot
+satisfy an unscoped/full-PDF obligation. A report cannot use a deferred page through
+fulltext, financial references, calculation operands, derived financial leaves,
+supporting contexts or model inputs. Replacement sources require native snapshot
+membership and actual report use. Report review binds the independently declared
+source population to the existing analytical requirements. Review rationales are
+analyst judgments; a schema-valid page plan does not supply materiality approval.
+
+Unrelated archive gaps remain visible. A complete selected analysis does not make
+the archive complete or establish financial-fact admission or model readiness.
+The scoped artifact has its own identity. Full-population verification does not
+count it as full-population completion. Terminal research coordinates are issuer,
+knowledge cutoff, observation cutoff, and Analysis Evidence Scope identity when
+present. The existing unscoped coordinate and retrieval-mode conflict rule remain.
+
+New processing, corpus, and research operations require the current inventory.
+Verification of a stored artifact can explicitly reconstruct the inventory visible
+at the receipt's original observation cutoff. It cannot fall back past an incomplete
+newer inventory already visible at that cutoff. Historical verification is a read
+operation; it does not authorize a new write with a stale inventory.
+
+`execution/plan_analysis_evidence_scope.py` produces a selection-only receipt through
+an explicit read-only database connection. The [Operations contract](operations_governance_surface.md#analysis-evidence-scope-planning-and-use)
+owns its manual interface. This change adds no scheduled work, provider activation,
+financial publication, or production-state change.
 The morning pipeline selects its database and artifact root independently.
 `execution/run_morning_pipeline.py --repo-root` names the artifact root; it
 defaults to the installed project root. `--db-path` names the database authority.
@@ -120,7 +206,23 @@ at completion, not creation. Pytest stores its default fixtures in that owned ru
 root on Windows and seals it through its session-finish hook. Other hosts retain
 pytest's existing fixture cleanup; tests can opt in through
 `EARNINGS_SUMMARY_MANAGED_TEST_TEMPS=1`. Failed or interrupted sessions
-remain protected. Explicit user `--basetemp` paths are not claimed by this hook.
+remain protected for their seven-day review window. A run's peak storage lease covers only its live producer: the
+seal releases it after a pass or a failure, and the next admission on the same
+host reclaims a lease whose holder process no longer exists. Retained failed
+bytes still count against the free-space headroom. A reviewed resolution can
+bind to a passed rerun whose only holds are retained links or multiply linked
+files. Explicit user `--basetemp` paths are not claimed by this hook.
+
+At session start, the pytest controller prunes earlier session roots in the
+system temp directory (`prune_abandoned_test_runs`). It considers only roots the
+harness names (`earnings-summary-pytest-<controller|gwN>-*`). It never touches
+the shared `earnings-summary-pytest-secrets*` folders, links, roots with an
+unreadable manifest, or any root whose lease holder may still run. Completed
+roots and roots without a manifest are removed one day after completion or last
+change. Failed roots, and active roots whose holder is gone, are removed after
+the seven-day review window. Owner decision, 2026-10-22: no host runs a cleaner
+for these local roots, so a failed pytest session's local evidence expires after
+seven days instead of waiting indefinitely for a reviewed resolution.
 The existing weekly cleaner discovers these receipts in both configured state
 and runtime `.tmp` roots, plus narrowly named `earnings-summary-*` runs under
 the Windows/user temporary roots. Unknown paths are inventoried, not registered
@@ -162,7 +264,8 @@ unclassified files, source evidence or recovery holds.
 
 `execution/run_weekly_cleanup.py` and `execution/db_gc.py` are the executable
 allowlists and exact cutoff implementations. Their already-registered weekly jobs are
-the only cleanup writers; this lifecycle does not authorize a new operation, schedule,
+the only cleanup writers, apart from the pytest session-start pruning of its own
+earlier session roots above; this lifecycle does not authorize a new operation, schedule,
 or generic directory sweep. A retention change belongs here first, followed by its
 executable constant and focused tests.
 

@@ -6,6 +6,7 @@ import atexit
 import importlib
 import os
 import shutil
+import stat
 import tempfile
 from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
@@ -52,27 +53,81 @@ os.environ.setdefault(
     os.path.join(os.path.dirname(__file__), ".pytest-no-external-env"),
 )
 
+
 # Test modules may resolve the default database during collection, before any
 # fixture can redirect it. Point every pytest process at its own disposable DB
 # so collection and tests cannot touch the checkout's data/portfolio.db or
 # contend with another xdist worker. The PID is unique even across simultaneous
 # local sessions; the worker id keeps paths useful when diagnosing a retained
 # crash directory.
+def _collection_temp_policy() -> tuple[Path | None, int]:
+    """A smaller floor belongs only to fresh synthetic GitHub Actions fixtures."""
+    ordinary = 50 * 1024**3
+    configured = os.environ.get("RUNNER_TEMP", "")
+    if os.environ.get("GITHUB_ACTIONS") != "true" or not configured:
+        return None, ordinary
+    root = Path(configured)
+    if not root.is_absolute() or ".." in root.parts:
+        return None, ordinary
+    try:
+        if not root.is_dir():
+            return None, ordinary
+        for parent in (root, *root.parents):
+            metadata = parent.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or bool(
+                getattr(metadata, "st_file_attributes", 0)
+                & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+            ):
+                return None, ordinary
+    except OSError:
+        return None, ordinary
+    # RUNNER_TEMP can be outside the admitted system-temp ownership boundary.
+    return None, 4 * 1024**3
+
+
 _worker_id = os.environ.get("PYTEST_XDIST_WORKER", "controller")
-_test_db_dir = Path(tempfile.mkdtemp(prefix=f"earnings-summary-pytest-{_worker_id}-")).resolve()
+_test_temp_parent, _test_headroom = _collection_temp_policy()
+_test_db_dir = Path(
+    tempfile.mkdtemp(prefix=f"earnings-summary-pytest-{_worker_id}-", dir=_test_temp_parent)
+).resolve()
 _test_code_root = Path(__file__).resolve().parents[1]
-_managed_test_temps = (
-    os.name == "nt" or os.environ.get("EARNINGS_SUMMARY_MANAGED_TEST_TEMPS") == "1"
-)
+_managed_test_temps = os.environ.get("EARNINGS_SUMMARY_MANAGED_TEST_TEMPS", "1") != "0"
 
 
 def _begin_collection_temp_run() -> None:
     from src.operations.temp_run_retention import begin_temp_run
 
-    begin_temp_run(_test_db_dir, repo_root=_test_code_root, code_root=_test_code_root)
+    begin_temp_run(
+        _test_db_dir,
+        repo_root=_test_code_root,
+        code_root=_test_code_root,
+        disposable_class="isolated_test_fixture",
+        purpose="pytest synthetic fixtures",
+        byte_budget=2 * 1024 * 1024 * 1024,
+        min_free_bytes=_test_headroom,
+    )
+
+
+def _prune_abandoned_test_runs() -> None:
+    """Remove earlier sessions' runs whose owner is gone, once per session."""
+    if _worker_id != "controller" or not _managed_test_temps:
+        return
+    from src.operations.temp_run_retention import prune_abandoned_test_runs
+
+    try:
+        prune_abandoned_test_runs()
+    except (OSError, ValueError):
+        import warnings
+
+        warnings.warn(
+            "Earlier test runs were not pruned; their manifests keep them for review.",
+            RuntimeWarning,
+            stacklevel=1,
+        )
 
 
 _begin_collection_temp_run()
+_prune_abandoned_test_runs()
 _test_db_path = _test_db_dir / f"portfolio-{os.getpid()}.db"
 _db_original_marker = "_EARNINGS_SUMMARY_PYTEST_ORIGINAL_DB_PATH"
 _db_path_absent = "__pytest_db_path_was_absent__"
@@ -116,29 +171,87 @@ def pytest_configure(config: pytest.Config) -> None:
         config.option.basetemp = os.fspath(_test_db_dir / "fixtures")
 
 
-def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Seal fixture output after teardown; retain failed or interrupted sessions."""
-    del session
-    from src.operations.temp_run_retention import finish_temp_run
+def _collection_disposable_paths() -> Iterator[Path]:
+    """Declare fixture payload, preserving reports and unknown session outputs."""
+    if _test_db_path.exists() or _test_db_path.is_symlink():
+        yield _test_db_path
+    for suffix in ("-wal", "-shm", "-journal"):
+        sidecar = Path(str(_test_db_path) + suffix)
+        if sidecar.exists():
+            yield sidecar
+    fixtures = _test_db_dir / "fixtures"
+    if not fixtures.exists() and not fixtures.is_symlink():
+        return
+    metadata = fixtures.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or getattr(metadata, "st_file_attributes", 0) & 0x400:
+        yield fixtures
+        return
+    for directory, children, names in os.walk(fixtures, followlinks=False):
+        for name in (*children, *names):
+            path = Path(directory) / name
+            metadata = path.lstat()
+            if name in children and (
+                stat.S_ISLNK(metadata.st_mode) or getattr(metadata, "st_file_attributes", 0) & 0x400
+            ):
+                children.remove(name)
+            if path.suffix.casefold() not in {".xml", ".log", ".jsonl"}:
+                yield path
+
+
+def _retire_collection_temp_run() -> None:
+    """Retire exact owned payload at process exit, outside pytest's hook chain."""
+    from src.operations.temp_run_retention import retire_completed_temp_run
 
     try:
-        manifest = finish_temp_run(
+        result = retire_completed_temp_run(
             _test_db_dir,
             repo_root=_test_code_root,
             code_root=_test_code_root,
-            success=exitstatus == 0,
-            disposable_paths=_test_db_dir.rglob("*"),
-            allow_partial=True,
+            apply=True,
+            # Collection restores the caller's DB configuration. In an isolated
+            # child with no retained DB, this nonexistent guard is never opened.
+            live_db=Path(
+                os.environ.get("EARNINGS_SUMMARY_DB_PATH") or _test_code_root / ".pytest-no-live-db"
+            ),
         )
-        if exitstatus == 0 and not _managed_test_temps and not manifest.held_paths:
-            # macOS keeps pytest's existing fixture retention. It has no Windows
-            # weekly task; remove its private collection DB directory on exit.
-            atexit.register(shutil.rmtree, _test_db_dir, ignore_errors=True)
+        if result.errors:
+            raise ValueError("fixture retirement has journaled errors")
     except (OSError, ValueError):
         import warnings
 
         warnings.warn(
-            "Test temp finalization failed; its active manifest preserves the files for review.",
+            "Test fixture retirement remains for review; its manifest and journal are retained.",
+            RuntimeWarning,
+            stacklevel=1,
+        )
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Seal after teardown; retire successful payload at this process's exit."""
+    del session
+    from src.operations.temp_run_retention import finish_temp_run
+
+    try:
+        finish_temp_run(
+            _test_db_dir,
+            repo_root=_test_code_root,
+            code_root=_test_code_root,
+            success=exitstatus == 0,
+            disposable_paths=_collection_disposable_paths(),
+            allow_partial=True,
+        )
+        # A GitHub Actions runner is discarded after its job, so retiring its payload
+        # adds no storage value; the run is still sealed and its lease released.
+        # Exact retirement re-reads the run manifest per file, which costs minutes
+        # for a large shard and exceeded the job timeout.
+        if exitstatus == 0 and os.environ.get("GITHUB_ACTIONS") != "true":
+            atexit.register(_retire_collection_temp_run)
+    except (OSError, ValueError):
+        import warnings
+
+        warnings.warn(
+            "Test temp closure failed; its ownership manifest preserves the run for review.",
             RuntimeWarning,
             stacklevel=1,
         )

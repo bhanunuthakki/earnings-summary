@@ -3,21 +3,19 @@
 from __future__ import annotations
 
 import sqlite3
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
+import comments_server
 import pytest
 
+from report import builder
+from report.models import ReportFlavor
+from sqlite_runtime import SQLiteConnectionRole
+from tests.comments_server_seams import patch_server_seam
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import comments_server  # noqa: E402
-
-from report import builder  # noqa: E402
-from report.models import ReportFlavor  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole  # noqa: E402
 
 
 class _TrackingConnection(sqlite3.Connection):
@@ -55,8 +53,8 @@ def test_dashboard_read_connection_is_read_only_and_closed_at_teardown(
         seen.append(conn)
         return {}
 
-    monkeypatch.setattr(comments_server, "connect_sqlite", connect)
-    monkeypatch.setattr(comments_server, "build_dashboard_rows", build_rows)
+    patch_server_seam(monkeypatch, "connect_sqlite", connect)
+    patch_server_seam(monkeypatch, "build_dashboard_rows", build_rows)
 
     response = comments_server.create_app(tmp_path).test_client().get("/api/dashboard")
 
@@ -97,9 +95,9 @@ def test_overview_composition_uses_one_request_reader(
     def overview_stub(*_args: object, **_kwargs: object) -> str:
         return "ok"
 
-    monkeypatch.setattr(comments_server, "connect_sqlite", connect)
-    monkeypatch.setattr(comments_server, "build_cockpit_rows", empty_cockpit)
-    monkeypatch.setattr(comments_server, "render_overview_panel", overview_stub)
+    patch_server_seam(monkeypatch, "connect_sqlite", connect)
+    patch_server_seam(monkeypatch, "build_cockpit_rows", empty_cockpit)
+    patch_server_seam(monkeypatch, "render_overview_panel", overview_stub)
 
     response = comments_server.create_app(tmp_path).test_client().get("/api/panel/overview")
 
@@ -112,8 +110,9 @@ def test_overview_composition_uses_one_request_reader(
 
 
 def test_panel_activation_metrics_never_create_schema_from_request_path() -> None:
-    source = (PROJECT_ROOT / "execution" / "comments_server.py").read_text(encoding="utf-8")
-    assert "CREATE TABLE IF NOT EXISTS panel_activation_counts" not in source
+    for path in sorted((PROJECT_ROOT / "execution").glob("comments_server*.py")):
+        source = path.read_text(encoding="utf-8")
+        assert "CREATE TABLE IF NOT EXISTS panel_activation_counts" not in source, path
 
 
 def test_build_report_threads_one_borrowed_connection_to_db_sections(

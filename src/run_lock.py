@@ -51,9 +51,9 @@ from clock import now_naive_utc
 
 LOCK_SUFFIX = ".write.lock"
 
-_STILL_ACTIVE = 259
-_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-_ERROR_ACCESS_DENIED = 5
+_PROCESS_SYNCHRONIZE = 0x100000
+_ERROR_INVALID_PARAMETER = 87
+_WAIT_OBJECT_0 = 0
 
 
 class RunLockHeldError(RuntimeError):
@@ -74,33 +74,51 @@ def lock_path_for(db_path: str | os.PathLike[str]) -> Path:
     return p.with_name(p.name + LOCK_SUFFIX)
 
 
+def pid_is_alive(pid: int) -> bool:
+    """Public liveness probe shared with sibling lock modules.
+
+    Same semantics as the run lock's own stale-holder check: a negative or
+    zero pid is dead; on Windows liveness is probed via OpenProcess (never
+    ``os.kill(pid, 0)``, which terminates there); elsewhere signal-0.
+    """
+    return _pid_alive(pid)
+
+
 def _pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
     if sys.platform == "win32":
         import ctypes
+        from ctypes import wintypes
 
-        # use_last_error=True + ctypes.get_last_error() is the ONLY reliable
-        # way to read Win32 error state through ctypes: plain
-        # kernel32.GetLastError() can be clobbered by ctypes' own internal
-        # API calls between the failing call and the query, misreading a LIVE
-        # holder as dead and breaking its lock (2026-08-03 adversarial
-        # review, #6).
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-        if not handle:
-            # Access denied means the process exists but is not ours — alive.
-            return ctypes.get_last_error() == _ERROR_ACCESS_DENIED
         try:
-            code = ctypes.c_ulong()
-            ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
-            return bool(ok) and code.value == _STILL_ACTIVE
-        finally:
-            kernel32.CloseHandle(handle)
+            # Full-width HANDLE declarations are required on 64-bit Windows.
+            # Only a signaled process handle proves exit; unknown API results
+            # and access/load/query failures must retain ownership.
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            kernel32.WaitForSingleObject.restype = wintypes.DWORD
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            handle = kernel32.OpenProcess(_PROCESS_SYNCHRONIZE, False, pid)
+            if not handle:
+                return ctypes.get_last_error() != _ERROR_INVALID_PARAMETER
+            try:
+                exited = kernel32.WaitForSingleObject(handle, 0) == _WAIT_OBJECT_0
+            finally:
+                closed = kernel32.CloseHandle(handle)
+            return not exited or not closed
+        except Exception:
+            # Probe errors cannot grant authority to replace a live owner.
+            return True
     try:
         os.kill(pid, 0)
-    except OSError:
+    except ProcessLookupError:
         return False
+    except (PermissionError, OSError):
+        return True
     return True
 
 
@@ -108,10 +126,18 @@ def _read_holder(lock_path: Path) -> dict[str, object] | None:
     try:
         raw = lock_path.read_text(encoding="utf-8")
         parsed = json.loads(raw)
-    except (OSError, ValueError):
+    except (FileNotFoundError, ValueError):
         return None
     # cast at the validated JSON boundary (repo convention).
     return cast(dict[str, object], parsed) if isinstance(parsed, dict) else None
+
+
+def _holder_context(lock_path: Path) -> dict[str, object] | None:
+    """Return read evidence; an unavailable read never means a stale owner."""
+    try:
+        return _read_holder(lock_path)
+    except OSError as error:
+        return {"ownership_state": "unknown", "read_error_type": type(error).__name__}
 
 
 @dataclass(slots=True)
@@ -121,14 +147,28 @@ class RunLock:
     lock_path: Path
     pid: int
 
-    def release(self) -> None:
-        holder = _read_holder(self.lock_path)
-        # Only remove a lock file this process still owns — never clobber a
-        # successor that legitimately broke our lock while we were suspended.
-        if holder is not None and holder.get("pid") != self.pid:
-            return
-        with suppress(OSError):
-            self.lock_path.unlink()
+    def release(self, *, timeout_s: float = 30.0, poll_s: float = 0.02) -> None:
+        """Retry transient ownership reads within a bounded cleanup budget."""
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        while True:
+            holder = _holder_context(self.lock_path)
+            if holder is None:
+                return
+            if holder.get("ownership_state") != "unknown":
+                if holder.get("pid") != self.pid:
+                    return
+                try:
+                    self.lock_path.unlink()
+                except FileNotFoundError:
+                    return
+                except OSError as error:
+                    holder = {**holder, "release_error_type": type(error).__name__}
+                else:
+                    return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RunLockHeldError(self.lock_path, holder) from None
+            time.sleep(min(poll_s, remaining))
 
 
 def acquire_run_lock(
@@ -176,9 +216,10 @@ def acquire_run_lock(
             try:
                 os.link(tmp_path, lock_path)
             except FileExistsError:
-                holder = _read_holder(lock_path)
+                holder = _holder_context(lock_path)
                 holder_pid = holder.get("pid") if holder else None
-                if not (isinstance(holder_pid, int) and _pid_alive(holder_pid)):
+                unknown = holder is not None and holder.get("ownership_state") == "unknown"
+                if not unknown and not (isinstance(holder_pid, int) and _pid_alive(holder_pid)):
                     # Stale: dead holder, or an unreadable payload — which,
                     # now that creation is atomic-with-payload, can only be
                     # real corruption, never a half-written live lock.
@@ -187,7 +228,7 @@ def acquire_run_lock(
                     continue
                 if time.monotonic() >= deadline:
                     raise RunLockHeldError(lock_path, holder) from None
-                time.sleep(poll_s)
+                time.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
                 continue
             return RunLock(lock_path=lock_path, pid=os.getpid())
     finally:
@@ -205,7 +246,16 @@ def hold_run_lock(
 ) -> Generator[RunLock]:
     """Context-manager form of ``acquire_run_lock`` with guaranteed release."""
     lock = acquire_run_lock(db_path, owner=owner, timeout_s=timeout_s, poll_s=poll_s)
+    primary_error: BaseException | None = None
     try:
         yield lock
+    except BaseException as error:
+        primary_error = error
+        raise
     finally:
-        lock.release()
+        try:
+            lock.release()
+        except BaseException as cleanup_error:
+            if primary_error is None:
+                raise
+            primary_error.add_note(f"run lock cleanup also failed: {type(cleanup_error).__name__}")

@@ -8,7 +8,6 @@ issuer policy, IR configuration, documents, or runtime scheduling.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from collections.abc import Generator, Sequence
@@ -31,6 +30,8 @@ from pipeline.source_policy import (
     ir_url_is_authorized,
     issuer_policy,
 )
+from runtime.deterministic import canonical_json_ascii as _canonical_json
+from runtime.deterministic import sha256_text as _sha256_text
 
 
 class IrApprovalError(ValueError):
@@ -257,14 +258,6 @@ class VerifiedIrAdmission(_FrozenModel):
         _validate_sha256
     )
     _captured_at = field_validator("captured_at")(_validate_naive_utc)
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-
-
-def _sha256_text(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _model_sha256(model: BaseModel) -> str:

@@ -25,6 +25,7 @@ from provenance.search_index_lineage import (
     load_projection_seal,
     verify_ledger_projection_seal,
 )
+from runtime.deterministic import canonical_json_ascii as _canonical_json
 from search.canonical_fact_projection import canonical_decimal
 from search.embedding_promotion import (
     EmbeddingPromotion,
@@ -39,6 +40,12 @@ from search.local_vector import (
     canonical_float32_vector,
     vector_records_digest,
     vector_sha256,
+)
+from search.request_verification import (
+    NOT_VERIFIED,
+    SEMANTIC_PROJECTION_READ,
+    SEMANTIC_RUNTIME_COORDINATES,
+    RequestVerificationCache,
 )
 
 EXACT_SEMANTIC_ALGORITHM_VERSION = "canonical-float32-normalized-cosine.v1"
@@ -140,6 +147,7 @@ class ExactSemanticRuntime:
         seal: SearchProjectionSeal,
         promotion: EmbeddingPromotion,
         exact_row_cap: int,
+        verification: RequestVerificationCache | None = None,
     ) -> None:
         if exact_row_cap <= 0 or exact_row_cap > MAX_EXACT_VECTOR_ROWS:
             raise ValueError(f"exact_row_cap must be in [1,{MAX_EXACT_VECTOR_ROWS}]")
@@ -149,7 +157,10 @@ class ExactSemanticRuntime:
         self._seal = seal
         self._promotion = promotion
         self._exact_row_cap = exact_row_cap
-        self._verify_coordinates()
+        self._verification = verification
+        if self._verification is not None:
+            self._verification.ensure_bound(conn)
+        self._require_verified_coordinates()
 
     @property
     def vector_index_run_id(self) -> str:
@@ -172,6 +183,7 @@ class ExactSemanticRuntime:
         embedding_promotion_id: str,
         runtime_root: Path | None = None,
         exact_row_cap: int = MAX_EXACT_VECTOR_ROWS,
+        verification: RequestVerificationCache | None = None,
     ) -> ExactSemanticRuntime:
         """Resolve the sealed index path and approved model from the local ledger."""
 
@@ -210,6 +222,7 @@ class ExactSemanticRuntime:
             seal=seal,
             promotion=promotion,
             exact_row_cap=exact_row_cap,
+            verification=verification,
         )
 
     @classmethod
@@ -222,6 +235,7 @@ class ExactSemanticRuntime:
         index: ExactVectorProjection,
         encoder: PassageQueryEncoder,
         exact_row_cap: int = MAX_EXACT_VECTOR_ROWS,
+        verification: RequestVerificationCache | None = None,
     ) -> ExactSemanticRuntime:
         """Test seam; ledger coordinates remain fully verified and cannot be replaced."""
 
@@ -237,6 +251,7 @@ class ExactSemanticRuntime:
             seal=seal,
             promotion=promotion,
             exact_row_cap=exact_row_cap,
+            verification=verification,
         )
 
     def search(self, query_text: str, *, limit: int) -> ExactSemanticEvidence:
@@ -244,7 +259,7 @@ class ExactSemanticRuntime:
             raise ExactSemanticError("exact semantic query must not be empty")
         if limit <= 0:
             raise ExactSemanticError("exact semantic limit must be positive")
-        self._verify_coordinates()
+        self._require_verified_coordinates()
         if self._seal.chunk_count > self._exact_row_cap:
             raise ExactSemanticError("sealed vector projection exceeds exact row cap")
         rows = self._read_and_verify_projection()
@@ -310,6 +325,24 @@ class ExactSemanticRuntime:
                 "semantic receipt does not match recomputed sealed exact top-k"
             )
 
+    def _require_verified_coordinates(self) -> None:
+        """Run the runtime coordinate verification once per request coordinate.
+
+        The constructor binds this runtime to one promotion/seal pair; inside
+        a single request every later scan reuses the memoized verification of
+        the same immutable coordinates, bounded by the connection's
+        ``PRAGMA data_version`` token (an external commit re-verifies)."""
+
+        if self._verification is None:
+            self._verify_coordinates()
+            return
+        self._verification.ensure_bound(self._conn)
+        coordinate = (self._seal.index_run_id, self._promotion.promotion_id)
+        memoized = self._verification.verified(SEMANTIC_RUNTIME_COORDINATES, coordinate)
+        if memoized is NOT_VERIFIED:
+            self._verify_coordinates()
+            self._verification.record(SEMANTIC_RUNTIME_COORDINATES, coordinate, None)
+
     def _verify_coordinates(self) -> None:
         current = current_promotion(self._conn)
         if current is None or current != self._promotion:
@@ -338,6 +371,22 @@ class ExactSemanticRuntime:
             raise ExactSemanticError("semantic vector storage URI differs from seal")
 
     def _read_and_verify_projection(self) -> list[dict[str, object]]:
+        """Read, re-hash, and ledger-cross-check the whole sealed projection.
+
+        The full pass runs at most once per unique projection seal per
+        request; later scans inside the same request reuse the verified rows,
+        bounded by the connection's ``PRAGMA data_version`` token."""
+
+        coordinate = (
+            self._seal.index_run_id,
+            self._promotion.promotion_id,
+            self._seal.projection_seal_id,
+        )
+        if self._verification is not None:
+            self._verification.ensure_bound(self._conn)
+            memoized = self._verification.verified(SEMANTIC_PROJECTION_READ, coordinate)
+            if memoized is not NOT_VERIFIED:
+                return cast(list[dict[str, object]], memoized)
         try:
             rows = self._index.read_projection(
                 self._seal.index_run_id,
@@ -396,6 +445,9 @@ class ExactSemanticRuntime:
                 raise ExactSemanticError(
                     "semantic external vector row differs from ledger artifact"
                 )
+        if self._verification is not None:
+            self._verification.ensure_bound(self._conn)
+            self._verification.record(SEMANTIC_PROJECTION_READ, coordinate, rows)
         return rows
 
     def _encode_query(self, query_text: str) -> list[float]:
@@ -490,15 +542,6 @@ def _chunk_id(row: dict[str, object]) -> str:
 
 def _model_digest(model: BaseModel) -> str:
     return _digest_text(_canonical_json(model.model_dump(mode="json")))
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
 
 
 def _digest_text(value: str) -> str:

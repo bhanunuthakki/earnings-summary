@@ -1,7 +1,8 @@
 """Real sealed source facts, reviewed admission, model save, and reader replay.
 
-Snapshot/inventory verification is isolated here, as in the MELI recipe suite.
-Separate coverage tests retain that authority's complete and current checks.
+Ontology, resolution watermarks and canonical projections are real and sealed.
+Research-snapshot/inventory verification is isolated here, as in the MELI recipe
+suite. Separate coverage tests retain that authority's complete/current checks.
 """
 
 from __future__ import annotations
@@ -28,7 +29,11 @@ from dcf.cashflow_inputs import (
 from dcf.cashflow_refresh import PreparedCashflowDcfRequest, prepare_cashflow_dcf
 from dcf.input_recipes import model_engine, prepare_model_inputs, verify_model_input_receipt
 from dcf.readiness import load_valuation_readiness
-from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
+from provenance.canonical_fact_resolution import (
+    CanonicalFactResolutionEngine,
+    ResolutionPolicy,
+    ResolutionSnapshotScope,
+)
 from provenance.fact_read_model import FactReadModel
 from provenance.financial_statement_admission import (
     FinancialStatementAdmissionRequest,
@@ -39,6 +44,7 @@ from provenance.financial_statement_admission import (
 )
 from provenance.metric_ontology import MetricOntology
 from provenance.research_snapshot import ResearchSnapshotRequest
+from tests.test_meli_input_evidence import seal_model_projection_context
 from tests.test_report_canonical_financials import STAMP, seed_table
 from tests.test_source_fact_repository import seed_foundation
 
@@ -257,10 +263,16 @@ def _request(
             ).fetchone()[0]
         )
         definition = ontology.metric_definition_as_known(metric, CLOCK)
-        resolution = CanonicalFactResolutionEngine(conn).as_known(
-            binding.canonical_metric_cell_id, CLOCK
+        # The reviewed financial-role admission creates new binding context.
+        # Resolve that context before sealing, rather than retaining the source
+        # fixture's earlier resolution and mixing it with current definitions.
+        resolution = CanonicalFactResolutionEngine(conn).resolve(
+            binding.canonical_metric_cell_id,
+            CLOCK,
+            ResolutionPolicy(name="cashflow-reviewed-model-inputs", version="1", config={}),
+            recorded_at=CLOCK,
         )
-        assert definition is not None and resolution is not None
+        assert definition is not None
         key = (
             f"{concept}_fy"
             if concept in CONCEPTS[:3]
@@ -280,11 +292,12 @@ def _request(
                 observation.observation_id, cutoff=CLOCK
             ).observation_payload_sha256,
         )
-    snapshot_id = str(
-        conn.execute(
-            "SELECT resolution_snapshot_id FROM canonical_fact_resolution_snapshot_members WHERE canonical_metric_cell_id=?",
-            (next(iter(facts.values())).canonical_metric_cell_id,),
-        ).fetchone()[0]
+    snapshot_id = "cashflow-model-resolution"
+    CanonicalFactResolutionEngine(conn).seal_snapshot(
+        snapshot_id,
+        CLOCK,
+        CLOCK,
+        ResolutionSnapshotScope(issuer_id="issuer-1", reporting_entity_ids=("reporting-1",)),
     )
     snapshot = ResearchSnapshotRequest.model_validate(
         {
@@ -311,6 +324,7 @@ def _request(
             "recorded_at": CLOCK,
         }
     )
+    seal_model_projection_context(conn, snapshot)
 
     def coverage(
         _conn: sqlite3.Connection, _request: evidence.ModelInputRequest, _cutoff: datetime

@@ -10,7 +10,6 @@ with no behavioral tests.
 from __future__ import annotations
 
 import sys
-import types
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
@@ -102,15 +101,12 @@ def test_discover_no_tree_returns_empty(tmp_path: Path) -> None:
 
 
 def _install_fake_parser(monkeypatch: pytest.MonkeyPatch, text_by_name: dict[str, str]) -> None:
-    """Inject a fake `parser` module so extract_for_ticker's late
-    `from parser import extract_text_from_pdf` resolves to our stub — no pypdf."""
-    fake = types.ModuleType("parser")
+    """Stub the canonical source-text projection without requiring binary PDFs."""
 
-    def _fake_extract(path: str) -> str:
-        return text_by_name.get(Path(path).name, "")
+    def project(_raw_bytes: bytes, source_ref: str) -> str:
+        return text_by_name.get(Path(source_ref).name, "")
 
-    setattr(fake, "extract_text_from_pdf", _fake_extract)
-    monkeypatch.setitem(sys.modules, "parser", fake)
+    monkeypatch.setattr(ir_narrative, "project_source_text", project)
 
 
 def test_extract_writes_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -194,7 +190,7 @@ def test_pending_uses_narrative_source_and_cache_owner(tmp_path: Path) -> None:
     cache = tmp_path / "data" / "ir_narrative" / "FOO" / "ir_presentation__2025-Q4.txt"
     cache.parent.mkdir(parents=True)
     cache.write_text("existing narrative", encoding="utf-8")
-    assert not has_pending_narrative(tmp_path, "FOO")
+    assert has_pending_narrative(tmp_path, "FOO")
 
 
 def test_partial_pdf_failure_remains_pending_and_cli_exits_nonzero(
@@ -203,18 +199,70 @@ def test_partial_pdf_failure_remains_pending_and_cli_exits_nonzero(
     base = tmp_path / "ir_documents" / "FOO" / "2025-Q4"
     _touch_pdf(base / "ir_presentation__aaaaaaaa.pdf")
     _touch_pdf(base / "ir_presentation__bbbbbbbb.pdf")
-    fake = types.ModuleType("parser")
 
-    def extract(path: str) -> str:
+    def extract(_raw_bytes: bytes, path: str) -> str:
         if Path(path).name.endswith("bbbbbbbb.pdf"):
             raise ValueError("invalid PDF")
         return "Successful first document content. " * 20
 
-    monkeypatch.setattr(fake, "extract_text_from_pdf", extract, raising=False)
-    monkeypatch.setitem(sys.modules, "parser", fake)
+    monkeypatch.setattr(ir_narrative, "project_source_text", extract)
     monkeypatch.setattr(
         sys, "argv", ["ir_narrative.py", "--ticker", "FOO", "--repo-root", str(tmp_path)]
     )
     assert ir_narrative.main() == 1
     assert has_pending_narrative(tmp_path, "FOO")
     assert not (tmp_path / "data" / "ir_narrative" / "FOO").exists()
+
+
+def test_full_text_and_new_sources_invalidate_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path / "ir_documents" / "FOO" / "2025-Q4"
+    _touch_pdf(base / "ir_presentation__aaaaaaaa.pdf")
+    full_text = "Narrative content. " * 2000 + "END OF DECK"
+    _install_fake_parser(
+        monkeypatch,
+        {
+            "ir_presentation__aaaaaaaa.pdf": full_text,
+            "ir_presentation__bbbbbbbb.pdf": "Second source. " * 30,
+        },
+    )
+    extract_for_ticker(tmp_path, "FOO")
+    cache = tmp_path / "data/ir_narrative/FOO/ir_presentation__2025-Q4.txt"
+    assert cache.read_text().endswith("END OF DECK")
+    assert not has_pending_narrative(tmp_path, "FOO")
+    _touch_pdf(base / "ir_presentation__bbbbbbbb.pdf")
+    assert has_pending_narrative(tmp_path, "FOO")
+    assert extract_for_ticker(tmp_path, "FOO")["processed"] == 1
+    assert "Second source" in cache.read_text()
+    (base / "ir_presentation__aaaaaaaa.pdf").write_bytes(b"changed PDF")
+    assert has_pending_narrative(tmp_path, "FOO")
+
+
+def test_empty_member_invalidates_existing_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path / "ir_documents" / "FOO" / "2025-Q4"
+    _touch_pdf(base / "ir_presentation__aaaaaaaa.pdf")
+    _install_fake_parser(monkeypatch, {"ir_presentation__aaaaaaaa.pdf": "Good source. " * 30})
+    extract_for_ticker(tmp_path, "FOO")
+    _touch_pdf(base / "ir_presentation__bbbbbbbb.pdf")
+    counts = extract_for_ticker(tmp_path, "FOO")
+    assert counts["failed"] == 1
+    assert has_pending_narrative(tmp_path, "FOO")
+    assert not (tmp_path / "data/ir_narrative/FOO/ir_presentation__2025-Q4.txt").exists()
+
+
+def test_projection_identity_change_invalidates_narrative_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _touch_pdf(tmp_path / "ir_documents/FOO/2025-Q4/ir_presentation__abcd1234.pdf")
+    _install_fake_parser(monkeypatch, {"ir_presentation__abcd1234.pdf": "content " * 50})
+    extract_for_ticker(tmp_path, "FOO")
+    assert not has_pending_narrative(tmp_path, "FOO")
+
+    def changed_identity(_source_ref: str) -> str:
+        return "new-projection-identity"
+
+    monkeypatch.setattr(ir_narrative, "source_text_projection_identity", changed_identity)
+    assert has_pending_narrative(tmp_path, "FOO")

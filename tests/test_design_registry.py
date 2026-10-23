@@ -9,13 +9,10 @@ from __future__ import annotations
 
 import ast
 import re
-import sys
 from dataclasses import FrozenInstanceError, is_dataclass
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ui import design_registry as registry
 from ui.controls import controls_css
@@ -119,8 +116,10 @@ def test_registry_is_frozen_typed_and_complete() -> None:
         entry = next(item for item in registry.VISUAL_EMITTER_MANIFEST if item.path == producer)
         assert entry.disposition is registry.EmitterDisposition.NONVISUAL
         assert producer not in registry.REGISTERED
+    # The manual draft renderer uses the existing report visual family.
+    assert "report/renderers/bound_draft.py" in registry.REGISTERED
     assert len(registry.REGISTERED) == 114
-    assert len(registry.VISUAL_EMITTER_MANIFEST) == 161
+    assert len(registry.VISUAL_EMITTER_MANIFEST) == 162
     calculation_evidence = next(
         entry
         for entry in registry.VISUAL_EMITTER_MANIFEST
@@ -137,6 +136,15 @@ def test_registry_is_frozen_typed_and_complete() -> None:
         if entry.path == "operations/backup_observer.py"
     )
     assert backup_observer.disposition is registry.EmitterDisposition.NONVISUAL
+    workbook_adapter = next(
+        entry
+        for entry in registry.VISUAL_EMITTER_MANIFEST
+        if entry.path == "execution/meli_workbook_adapter.mjs"
+    )
+    assert workbook_adapter.disposition is registry.EmitterDisposition.NONVISUAL
+    assert workbook_adapter.adapter_kinds == frozenset({registry.EvidenceAdapter.PYTHON_CSS})
+    assert workbook_adapter.owner == "dcf-workbook"
+    assert workbook_adapter.path not in registry.GOVERNED
     assert len(registry.GOVERNED) == 135
     assert (
         frozenset(

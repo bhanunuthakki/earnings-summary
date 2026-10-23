@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Literal, Protocol
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
 import provenance.population_document_processing as population
+from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
+from provenance.issuer_registry import IssuerEntity, IssuerRegistry
 from provenance.population_completeness import PopulationTemporalScope
 from provenance.population_document_processing import (
     DocumentProcessingCheckpoint,
@@ -26,6 +30,18 @@ from provenance.population_document_processing import (
 from provenance.population_document_processing import (
     build_document_processing_receipt as _build_document_processing_receipt,
 )
+from provenance.reporting_entity_registry import (
+    ReportingEntity,
+    ReportingEntityRegistry,
+    SourceObligationRevision,
+)
+from provenance.source_coverage import (
+    ExpectedDocument,
+    SourceCoverageLedger,
+    SourceInventorySnapshot,
+)
+from runtime.deterministic import sha256_joined_nul, sha256_joined_unit_sep
+from sqlite_runtime import register_sqlite_integrity_functions
 
 
 class _CheckpointFactory(Protocol):
@@ -352,7 +368,10 @@ def test_snapshot_batch_preflights_every_issuer_before_first_write(
         _cutoff: datetime,
         document_ids: tuple[str, ...],
         _recorded: datetime,
+        *,
+        defer_filing_xbrl: bool,
     ) -> dict[str, int]:
+        assert defer_filing_xbrl is False
         return {"total": 1 if document_ids == ("document-a",) else 2}
 
     def sealed_stub(
@@ -360,7 +379,10 @@ def test_snapshot_batch_preflights_every_issuer_before_first_write(
         _cutoff: datetime,
         _document_ids: tuple[str, ...],
         _recorded: datetime,
+        *,
+        defer_filing_xbrl: bool,
     ) -> int:
+        assert defer_filing_xbrl is False
         return 1
 
     monkeypatch.setattr(population, "_obligation_totals", totals_stub)
@@ -400,7 +422,10 @@ def test_snapshot_batch_rolls_back_every_issuer_when_later_seal_fails(
         _cutoff: datetime,
         _document_ids: tuple[str, ...],
         _recorded: datetime,
+        *,
+        defer_filing_xbrl: bool,
     ) -> dict[str, int]:
+        assert defer_filing_xbrl is False
         return {"total": 1}
 
     def sealed_stub(
@@ -408,7 +433,10 @@ def test_snapshot_batch_rolls_back_every_issuer_when_later_seal_fails(
         _cutoff: datetime,
         _document_ids: tuple[str, ...],
         _recorded: datetime,
+        *,
+        defer_filing_xbrl: bool,
     ) -> int:
+        assert defer_filing_xbrl is False
         return 1
 
     calls = 0
@@ -529,7 +557,7 @@ def test_bounded_all_returns_checkpoint_without_sealing(
     ]:
         return (decision,), {"issuer": ("document",)}, 0
 
-    def input_stub(*_args: object) -> str:
+    def input_stub(*_args: object, **_kwargs: object) -> str:
         return "a" * 64
 
     def created_stub(*_args: object, **_kwargs: object) -> int:
@@ -553,13 +581,13 @@ def test_bounded_all_returns_checkpoint_without_sealing(
     def totals_stub(*_args: object, **_kwargs: object) -> dict[str, int]:
         return {"total": 1, "applicable": 1, "not_applicable": 0}
 
-    def zero_stub(*_args: object) -> int:
+    def zero_stub(*_args: object, **_kwargs: object) -> int:
         return 0
 
     def one_stub(*_args: object) -> int:
         return 1
 
-    def output_stub(*_args: object) -> str:
+    def output_stub(*_args: object, **_kwargs: object) -> str:
         return "b" * 64
 
     def must_not_seal(*_args: object) -> None:
@@ -648,7 +676,7 @@ def test_document_verifier_ignores_snapshot_recorded_after_observation() -> None
         );
         CREATE TABLE document_processing_snapshot_headers (
             processing_snapshot_id TEXT,scope_sha256 TEXT,policy_sha256 TEXT,
-            cutoff_at TEXT,recorded_at TEXT
+            cutoff_at TEXT,recorded_at TEXT,scope_json TEXT DEFAULT '{}'
         );
         CREATE TABLE document_processing_snapshot_seals (
             processing_snapshot_id TEXT,member_set_sha256 TEXT,sealed_at TEXT
@@ -680,7 +708,8 @@ def test_document_verifier_ignores_snapshot_recorded_after_observation() -> None
         ),
     )
     conn.execute(
-        "INSERT INTO document_processing_snapshot_headers VALUES (?,?,?,?,?)",
+        "INSERT INTO document_processing_snapshot_headers "
+        "(processing_snapshot_id,scope_sha256,policy_sha256,cutoff_at,recorded_at) VALUES (?,?,?,?,?)",
         ("snapshot", sha, sha, cutoff.isoformat(), recorded.isoformat()),
     )
     conn.execute(
@@ -1141,3 +1170,306 @@ def test_registration_processing_duty_does_not_reuse_publisher_duty(
         assert len(written) == 1
     finally:
         conn.close()
+
+
+def _source_binding_fixture(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> tuple[sqlite3.Connection, ReportingDocumentDecision, datetime]:
+    stamp = datetime(2026, 7, 29, 12, 0, 0, 123456, tzinfo=UTC)
+    conn = sqlite3.connect(migrated_db(tmp_path / "coverage-binding.db", target="head"))
+    conn.execute("PRAGMA foreign_keys=ON")
+    register_sqlite_integrity_functions(conn)
+    IssuerRegistry(conn).persist(
+        IssuerEntity(
+            issuer_id="binding-issuer",
+            idempotency_key="binding-issuer",
+            entity_kind="operating_company",
+            created_at=stamp,
+        )
+    )
+    registry = ReportingEntityRegistry(conn)
+    registry.persist(
+        ReportingEntity(
+            reporting_entity_id="binding-reporting",
+            idempotency_key="binding-reporting",
+            issuer_id="binding-issuer",
+            reporting_entity_kind="legal_registrant",
+            display_name="Synthetic binding fixture",
+            created_at=stamp,
+        )
+    )
+    registry.persist(
+        SourceObligationRevision(
+            obligation_revision_id="binding-obligation",
+            idempotency_key="binding-obligation",
+            obligation_key="binding-obligation",
+            revision=1,
+            issuer_id="binding-issuer",
+            reporting_entity_id="binding-reporting",
+            authority_kind="issuer_publisher",
+            document_family="issuer_presentations",
+            obligation_state="required",
+            completeness_rule="publisher_surface_exhaustion",
+            active_from=stamp,
+            active_to=None,
+            decision_kind="deterministic",
+            reason_code="synthetic_binding",
+            reason_details=(("fixture", "one immutable presentation binding"),),
+            effective_at=stamp,
+            knowledge_at=stamp,
+            recorded_at=stamp,
+        )
+    )
+    evidence = EvidenceLedger(conn)
+    evidence.persist(
+        ContentBlob(
+            sha256="a" * 64,
+            byte_size=1,
+            media_type="text/plain",
+            storage_uri="https://synthetic.invalid/inventory",
+            recorded_at=stamp,
+        )
+    )
+    evidence.persist(
+        SourceObservation(
+            observation_id="binding-observation",
+            idempotency_key="binding-observation",
+            source_kind="issuer",
+            source_url="https://synthetic.invalid/inventory",
+            blob_sha256="a" * 64,
+            source_published_at=stamp,
+            filing_at=None,
+            accepted_at=None,
+            observed_at=stamp,
+            retrieved_at=stamp,
+            retrieval_config_sha256="b" * 64,
+            collector_code_version="synthetic-binding@1",
+        )
+    )
+    ledger = SourceCoverageLedger(conn)
+    ledger.persist(
+        SourceInventorySnapshot(
+            snapshot_id="binding-inventory",
+            idempotency_key="binding-inventory",
+            inventory_key="binding-inventory",
+            revision=1,
+            issuer_id="binding-issuer",
+            source_kind="ir_crawl",
+            source_url="https://synthetic.invalid/inventory",
+            source_observation_id="binding-observation",
+            outcome="succeeded",
+            authoritative=True,
+            retrieval_config_sha256="b" * 64,
+            collector_code_version="synthetic-binding@1",
+            started_at=stamp,
+            completed_at=stamp,
+            recorded_at=stamp,
+        )
+    )
+    ledger.persist(
+        ExpectedDocument(
+            expected_document_id="binding-expected",
+            idempotency_key="binding-expected",
+            snapshot_id="binding-inventory",
+            expected_document_key="binding-presentation",
+            issuer_id="binding-issuer",
+            source_kind="ir_document",
+            document_type="investor_presentation",
+            form_type="presentation",
+            expectation_basis="authoritative",
+            recorded_at=stamp,
+        )
+    )
+    return (
+        conn,
+        ReportingDocumentDecision(
+            expected_document_id="binding-expected",
+            issuer_id="binding-issuer",
+            outcome="governed_reporting",
+            reason_code="governed_ir_reporting_document",
+            document_family="issuer_presentations",
+            coverage_status="captured",
+            document_version_id="binding-document",
+            reporting_entity_id="binding-reporting",
+        ),
+        stamp,
+    )
+
+
+def _binding_row(conn: sqlite3.Connection) -> tuple[object, ...]:
+    return tuple(conn.execute("SELECT * FROM expected_document_obligation_bindings").fetchone())
+
+
+def test_source_coverage_binding_replays_at_original_clock_in_later_population(
+    tmp_path: Path, migrated_db: Callable[..., Path], caplog: pytest.LogCaptureFixture
+) -> None:
+    conn, decision, stamp = _source_binding_fixture(tmp_path, migrated_db)
+    logger = logging.getLogger(population.__name__)
+    logger.addHandler(caplog.handler)
+    try:
+        before = _binding_row(conn)
+        assert before[0] == "expected-obligation-binding:" + sha256_joined_nul(
+            decision.expected_document_id, "binding-obligation"
+        )
+        # SQLite's datetime adapter writes a space separator; requests use ISO T.
+        assert " " in str(before[9])
+        assert not ensure_expected_document_binding(conn, decision, stamp, stamp)
+        cutoff = stamp + timedelta(days=1)
+        recorded = cutoff + timedelta(hours=2)
+        caplog.set_level("INFO", logger=population.__name__)
+        assert not ensure_expected_document_binding(conn, decision, cutoff, recorded)
+        assert caplog.records[-1].msg == {
+            "event": "expected_document_binding_replay",
+            "legacy_binding_id": False,
+            "source_recording_clock_replay": True,
+        }
+        assert _binding_row(conn) == before
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        logger.removeHandler(caplog.handler)
+        conn.close()
+
+
+_BINDING_MUTATIONS = (
+    (
+        "UPDATE expected_document_obligation_bindings SET binding_id=?1,idempotency_key=?1",
+        "expected-obligation-binding:" + "0" * 64,
+    ),
+    ("UPDATE expected_document_obligation_bindings SET binding_id=?", "arbitrary-binding"),
+    ("UPDATE expected_document_obligation_bindings SET idempotency_key=?", "arbitrary-key"),
+    ("UPDATE expected_document_obligation_bindings SET issuer_id=?", "other-issuer"),
+    ("UPDATE expected_document_obligation_bindings SET reporting_entity_id=?", "other-entity"),
+    ("UPDATE expected_document_obligation_bindings SET document_family=?", "continuous_disclosure"),
+    (
+        "UPDATE expected_document_obligation_bindings SET source_obligation_revision_id=?",
+        "other-duty",
+    ),
+    ("UPDATE expected_document_obligation_bindings SET canonical_binding_json=?", "{}"),
+    (
+        "UPDATE expected_document_obligation_bindings SET canonical_binding_json=?1,"
+        "binding_sha256=fact_sha256(?1)",
+        "{}",
+    ),
+    ("UPDATE expected_document_obligation_bindings SET binding_sha256=?", "c" * 64),
+    ("UPDATE expected_document_obligation_bindings SET effective_at=?", "nearby-clock"),
+    ("UPDATE expected_document_obligation_bindings SET knowledge_at=?", "nearby-clock"),
+    ("UPDATE expected_document_obligation_bindings SET recorded_at=?", "nearby-clock"),
+)
+
+
+@pytest.mark.parametrize(("statement", "mutation"), _BINDING_MUTATIONS)
+def test_binding_replay_rejects_changed_identity_payload_or_each_clock(
+    tmp_path: Path, migrated_db: Callable[..., Path], statement: str, mutation: str
+) -> None:
+    source, decision, stamp = _source_binding_fixture(tmp_path, migrated_db)
+    conn = sqlite3.connect(":memory:")
+    try:
+        source.commit()
+        source.backup(conn)
+        register_sqlite_integrity_functions(conn)
+        # Inject damaged storage only into a disposable copy, independently of
+        # the real source ledger's append-only trigger and clock CHECK guard.
+        conn.execute("DROP TRIGGER trg_expected_document_obligation_bindings_append_only")
+        conn.execute("PRAGMA ignore_check_constraints=ON")
+        value = (
+            (stamp + timedelta(microseconds=1)).isoformat()
+            if mutation == "nearby-clock"
+            else mutation
+        )
+        conn.execute(statement, (value,))
+        before = _binding_row(conn)
+        with pytest.raises(ValueError, match="binding replay changed immutable values"):
+            ensure_expected_document_binding(
+                conn, decision, stamp + timedelta(days=1), stamp + timedelta(days=2)
+            )
+        assert _binding_row(conn) == before
+        assert _binding_row(source) != before
+    finally:
+        conn.close()
+        source.close()
+
+
+def test_legacy_binding_retains_exact_historical_operation_clocks_and_id(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    source, decision, stamp = _source_binding_fixture(tmp_path, migrated_db)
+    conn = sqlite3.connect(":memory:")
+    try:
+        source.commit()
+        source.backup(conn)
+        register_sqlite_integrity_functions(conn)
+        conn.execute("DROP TRIGGER trg_expected_document_obligation_bindings_append_only")
+        legacy_id = "expected-obligation-binding:" + sha256_joined_unit_sep(
+            decision.expected_document_id, "binding-obligation"
+        )
+        cutoff = stamp + timedelta(days=1)
+        recorded = cutoff + timedelta(hours=2)
+        conn.execute(
+            "UPDATE expected_document_obligation_bindings SET binding_id=?,idempotency_key=?,"
+            "effective_at=?,knowledge_at=?,recorded_at=?",
+            (legacy_id, legacy_id, cutoff.isoformat(), cutoff.isoformat(), recorded.isoformat()),
+        )
+        before = _binding_row(conn)
+        assert not ensure_expected_document_binding(conn, decision, cutoff, recorded)
+        assert _binding_row(conn) == before
+        # A different old request cannot be inferred from clock ordering alone.
+        with pytest.raises(ValueError, match="binding replay changed immutable values"):
+            ensure_expected_document_binding(
+                conn, decision, cutoff + timedelta(days=1), recorded + timedelta(days=1)
+            )
+        assert _binding_row(conn) == before
+    finally:
+        conn.close()
+        source.close()
+
+
+def test_source_binding_clock_visibility_and_equivalent_offsets_are_exact(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn, decision, stamp = _source_binding_fixture(tmp_path, migrated_db)
+    try:
+        before = _binding_row(conn)
+        offset = timezone(timedelta(hours=7))
+        assert not ensure_expected_document_binding(
+            conn, decision, stamp.astimezone(offset), stamp.astimezone(offset)
+        )
+        with pytest.raises(ValueError, match="binding replay changed immutable values"):
+            ensure_expected_document_binding(
+                conn, decision, stamp - timedelta(microseconds=1), stamp + timedelta(days=1)
+            )
+        assert _binding_row(conn) == before
+    finally:
+        conn.close()
+
+
+def test_new_population_binding_uses_source_identity_and_preserves_operation_clocks(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    source, decision, stamp = _source_binding_fixture(tmp_path, migrated_db)
+    conn = sqlite3.connect(":memory:")
+    try:
+        source.commit()
+        source.backup(conn)
+        register_sqlite_integrity_functions(conn)
+        # Model a historical unbound expectation only in this disposable copy.
+        conn.execute("DROP TRIGGER trg_expected_document_obligation_bindings_append_only_delete")
+        conn.execute("DELETE FROM expected_document_obligation_bindings")
+        cutoff = stamp + timedelta(days=1)
+        recorded = cutoff + timedelta(hours=2)
+        assert ensure_expected_document_binding(conn, decision, cutoff, recorded)
+        before = _binding_row(conn)
+        assert before[0] == "expected-obligation-binding:" + sha256_joined_nul(
+            decision.expected_document_id, "binding-obligation"
+        )
+        assert before[9:] == (cutoff.isoformat(), cutoff.isoformat(), recorded.isoformat())
+        assert not ensure_expected_document_binding(conn, decision, cutoff, recorded)
+        assert _binding_row(conn) == before
+        # New IDs retain the old population writer's exact-operation replay rule.
+        with pytest.raises(ValueError, match="binding replay changed immutable values"):
+            ensure_expected_document_binding(
+                conn, decision, cutoff + timedelta(days=1), recorded + timedelta(days=1)
+            )
+        assert _binding_row(conn) == before
+    finally:
+        conn.close()
+        source.close()

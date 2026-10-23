@@ -11,7 +11,7 @@ Two layers fix that:
 
 * **Deterministic baseline (always, NO LLM)** — the tier-1/tier-2 KPI grading
   already in ``kpi_definitions.threshold_tier`` (the thesis breakers). Rendered
-  straight from the DB by ``src/pipeline/key_metrics.py`` on every render.
+  straight from the DB by ``src/pipeline/explore_panel.py`` on every render.
 * **LLM augmentation (this module, runs on ``--enable-llm``, NOT on render)** —
   ranks the metrics MOST important to the business over the FULL available
   catalog (so it can surface important CAPTURED metrics — ``definition_origin

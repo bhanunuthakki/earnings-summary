@@ -43,7 +43,10 @@ from execution.apply_kpi_semantic_refresh import (
     validate_refresh_entry,
 )
 from models.facts import Currency, Unit
-from operations.kpi_semantic_review_export import KpiSemanticReviewExport
+from operations.kpi_semantic_review_export import (
+    KpiSemanticReviewExport,
+    decode_kpi_semantic_review_artifact,
+)
 from pipeline.kpi_definition_revisions import (
     IssuerKpiDefinitionRevision,
     KpiDefinitionComparabilityRevision,
@@ -572,9 +575,7 @@ def main(argv: list[str] | None = None) -> int:
     inputs = {database, args.review_export.resolve(), args.decisions.resolve()}
     if output in inputs:
         raise ValueError("refresh manifest output must not overwrite an input")
-    review_export = KpiSemanticReviewExport.model_validate_json(
-        args.review_export.read_text(encoding="utf-8")
-    )
+    review_export, _wire_bytes = decode_kpi_semantic_review_artifact(path=args.review_export)
     decisions = KpiSemanticRefreshDecisionBatch.model_validate_json(
         args.decisions.read_text(encoding="utf-8")
     )

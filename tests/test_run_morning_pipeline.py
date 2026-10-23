@@ -1,19 +1,25 @@
 """Tests for execution/run_morning_pipeline.py — the morning orchestrator.
 
-The orchestrator runs an unconditional environment preflight, then chains
+The orchestrator runs an unconditional environment preflight, then dispatches
 the subprocess stages (news -> decisions -> lifecycle -> fundamentals ->
 reprice -> candidate_fit -> factor_proxies -> triggers -> standup -> feed ->
-validate). Its load-bearing contract is
+validate) as manifest-driven, bounded-parallel LANES: a stage starts once its
+declared scheduling dependencies have settled, independent read/compute stages
+overlap the single in-flight DB writer, and every stage keeps its own timeout
+and resume checkpoint. Its load-bearing contract is
 resilience: it must attempt every non-skipped stage even when an earlier one
 fails or times out, and report the
 count of failed stages as the exit code only after all stages have run.
 
 ``subprocess.run`` is monkeypatched throughout — no real processes are spawned.
-A recording fake captures each invocation's argv (so we can assert call order,
-script names, and pass-through args) and returns a per-script-configurable
-exit code (so one stage can fail while the others succeed). Tests assert
-structural properties — call counts/order, exit codes, summary statuses — never
-on log wording or echoed output text.
+A recording fake captures each invocation's argv (so we can assert call
+membership, per-stage argv pass-through, and dependency-forced call order) and
+returns a per-script-configurable exit code (so one stage can fail while the
+others succeed). Cross-stage order is asserted through the dispatcher's
+deterministic dispatch order (``run_morning_pipeline.last_dispatch_order``)
+and through dependency-chain guarantees, never through incidental completion
+order or log wording — lanes overlap, so the global invocation order of
+independent stages is deliberately unspecified.
 """
 
 from __future__ import annotations
@@ -34,11 +40,15 @@ import pytest
 
 from execution import run_morning_pipeline
 from pipeline.morning_manifest import (
+    STAGE_FEED,
     STAGE_MANIFEST,
     STAGE_REPRICE,
     STAGE_STANDUP,
+    STAGE_TRIGGERS,
+    ArgumentProfile,
     StageSpec,
     manifest_digest,
+    selection_closure,
     validate_manifest,
 )
 from run_lock import acquire_run_lock
@@ -76,6 +86,43 @@ POST_ER_READOUT_SCRIPT = "generate_post_earnings_readouts.py"
 FEED_SCRIPT = "build_alert_feed.py"
 VALIDATE_SCRIPT = "run_validation_engine.py"
 
+# Every stage script in canonical manifest order. Lanes overlap independent
+# stages, so full-run membership is asserted as an unordered set against this
+# list; ordering is asserted only where the manifest declares a dependency.
+_ALL_SCRIPTS = [
+    PREFLIGHT_SCRIPT,
+    NEWS_SCRIPT,
+    LIST_TYPE_SCRIPT,
+    DECISIONS_SCRIPT,
+    LIFECYCLE_SCRIPT,
+    DECISION_ACTIONS_SCRIPT,
+    FUNDAMENTALS_SCRIPT,
+    DOCUMENT_EVIDENCE_SCRIPT,
+    DERIVED_METRICS_SCRIPT,
+    REPRICE_SCRIPT,
+    CANDIDATE_FIT_SCRIPT,
+    FACTOR_PROXIES_SCRIPT,
+    POSITION_GUARD_SCRIPT,
+    RISK_SNAPSHOT_SCRIPT,
+    WEALTH_CONTEXT_SCRIPT,
+    TRIGGERS_SCRIPT,
+    STANDUP_SCRIPT,
+    PRE_ER_BRIEF_SCRIPT,
+    POST_ER_READOUT_SCRIPT,
+    FEED_SCRIPT,
+    VALIDATE_SCRIPT,
+]
+
+
+def _assert_ran_exactly(fake: _RecordingRun, expected: list[str]) -> None:
+    """Assert the run dispatched exactly ``expected`` (unordered).
+
+    Lanes overlap independent stages, so the global invocation order is
+    unspecified; membership is the contract. Dependency-forced ordering is
+    asserted separately via the dispatcher's dispatch order.
+    """
+    assert sorted(fake.scripts) == sorted(expected)
+
 
 class _FakeCompleted:
     """Stand-in for subprocess.CompletedProcess.
@@ -107,14 +154,17 @@ class _RecordingRun:
         timeout_scripts: set[str] | None = None,
     ) -> None:
         self.calls: list[list[str]] = []
+        self.timeouts: dict[str, float] = {}
         self._returncodes = returncodes or {}
         self._timeout_scripts = timeout_scripts or set()
 
     def __call__(self, argv: list[str], **kwargs: object) -> _FakeCompleted:
         self.calls.append(list(argv))
         script = _script_of(argv)
+        timeout = kwargs.get("timeout")
+        if isinstance(timeout, int | float):
+            self.timeouts[script or ""] = timeout
         if script in self._timeout_scripts:
-            timeout = kwargs.get("timeout")
             raise subprocess.TimeoutExpired(
                 cmd=argv, timeout=timeout if isinstance(timeout, float | int) else 0
             )
@@ -179,10 +229,15 @@ def test_manifest_is_complete_ordered_and_selection_dependency_valid() -> None:
         assert spec.script.endswith(".py")
         assert (PROJECT_ROOT / "execution" / spec.script).is_file()
         assert spec.timeout_s > 0
+        assert isinstance(spec.db_writer, bool)
         assert all(dependency in positions for dependency in spec.selection_dependencies)
+        assert all(dependency in positions for dependency in spec.lane_dependencies)
         assert all(
             positions[dependency] < positions[spec.key]
             for dependency in spec.selection_dependencies
+        )
+        assert all(
+            positions[dependency] < positions[spec.key] for dependency in spec.lane_dependencies
         )
 
 
@@ -197,6 +252,10 @@ def test_manifest_is_complete_ordered_and_selection_dependency_valid() -> None:
         (
             StageSpec("a", "A", "a.py", (), 1, ("b",)),
             StageSpec("b", "B", "b.py", (), 1, ()),
+        ),
+        (
+            StageSpec("b", "B", "b.py", (), 1, (), (), ArgumentProfile.NONE, True, ("a",)),
+            StageSpec("a", "A", "a.py", (), 1, ()),
         ),
     ],
 )
@@ -214,6 +273,15 @@ def test_manifest_digest_is_deterministic_and_binds_stage_contract() -> None:
 
     assert manifest_digest(changed) != manifest_digest(STAGE_MANIFEST)
 
+    # The single-writer classification is part of the dispatch contract the
+    # resume checkpoint binds: reclassifying a stage must rotate the digest.
+    reclassified = (
+        replace(STAGE_MANIFEST[0], db_writer=not STAGE_MANIFEST[0].db_writer),
+        *STAGE_MANIFEST[1:],
+    )
+
+    assert manifest_digest(reclassified) != manifest_digest(STAGE_MANIFEST)
+
 
 def test_only_selects_target_and_transitive_selection_dependencies(
     monkeypatch: pytest.MonkeyPatch,
@@ -223,12 +291,19 @@ def test_only_selects_target_and_transitive_selection_dependencies(
 
     assert run_morning_pipeline.main(["--only", STAGE_STANDUP]) == 0
 
+    # The focused selection is exactly the manifest's transitive selection
+    # closure; the standup (a writer, and the only stage whose deps are all
+    # settled by the time the sweep finishes) is dispatched last.
+    expected = [
+        spec.script
+        for spec in run_morning_pipeline.STAGE_MANIFEST
+        if spec.key in selection_closure(STAGE_STANDUP)
+    ]
+    _assert_ran_exactly(fake, expected)
     assert fake.scripts[-1] == STANDUP_SCRIPT
     assert PREFLIGHT_SCRIPT in fake.scripts
     assert TRIGGERS_SCRIPT in fake.scripts
     assert FEED_SCRIPT not in fake.scripts
-    manifest_scripts = [spec.script for spec in run_morning_pipeline.STAGE_MANIFEST]
-    assert fake.scripts == sorted(fake.scripts, key=manifest_scripts.index)
 
 
 def test_from_selects_manifest_suffix_and_keeps_preflight(
@@ -241,10 +316,14 @@ def test_from_selects_manifest_suffix_and_keeps_preflight(
 
     manifest_scripts = [spec.script for spec in run_morning_pipeline.STAGE_MANIFEST]
     expected_start = manifest_scripts.index(REPRICE_SCRIPT)
-    assert fake.scripts == [
-        PREFLIGHT_SCRIPT,
-        *manifest_scripts[expected_start:],
-    ]
+    _assert_ran_exactly(
+        fake,
+        [PREFLIGHT_SCRIPT, *manifest_scripts[expected_start:]],
+    )
+    # The validation gate closes the run: it is a writer that depends on the
+    # feed, so the single-writer slot + dependency settle it after everything
+    # else is dispatched.
+    assert fake.scripts[-1] == VALIDATE_SCRIPT
 
 
 def test_partial_failure_resumes_only_failed_stage(
@@ -462,9 +541,9 @@ def test_morning_orchestrator_does_not_hold_global_lock_across_slow_stage(
 def test_all_stages_succeed(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Every stage returns 0 → exit 0, summary all-ok, and the scripts are
-    invoked exactly once each in preflight -> news -> decisions -> lifecycle ->
-    fundamentals -> triggers -> feed -> validate order."""
+    """Every stage returns 0 → exit 0, summary all-ok, and every script is
+    invoked exactly once each; the dispatch order is manifest-legal (every
+    stage follows its declared dependencies)."""
     fake = _RecordingRun()
     _install_fake(monkeypatch, fake)
 
@@ -473,29 +552,14 @@ def test_all_stages_succeed(
     assert rc == 0
     bootstrap = str(PROJECT_ROOT / "execution" / "sqlite_bootstrap.py")
     assert all(call[:3] == [sys.executable, "-u", bootstrap] for call in fake.calls)
-    assert fake.scripts == [
-        PREFLIGHT_SCRIPT,
-        NEWS_SCRIPT,
-        LIST_TYPE_SCRIPT,
-        DECISIONS_SCRIPT,
-        LIFECYCLE_SCRIPT,
-        DECISION_ACTIONS_SCRIPT,
-        FUNDAMENTALS_SCRIPT,
-        DOCUMENT_EVIDENCE_SCRIPT,
-        DERIVED_METRICS_SCRIPT,
-        REPRICE_SCRIPT,
-        CANDIDATE_FIT_SCRIPT,
-        FACTOR_PROXIES_SCRIPT,
-        POSITION_GUARD_SCRIPT,
-        RISK_SNAPSHOT_SCRIPT,
-        WEALTH_CONTEXT_SCRIPT,
-        TRIGGERS_SCRIPT,
-        STANDUP_SCRIPT,
-        PRE_ER_BRIEF_SCRIPT,
-        POST_ER_READOUT_SCRIPT,
-        FEED_SCRIPT,
-        VALIDATE_SCRIPT,
-    ]
+    _assert_ran_exactly(fake, _ALL_SCRIPTS)
+
+    order = run_morning_pipeline.last_dispatch_order()
+    assert len(order) == 21
+    positions = {key: index for index, key in enumerate(order)}
+    for spec in run_morning_pipeline.STAGE_MANIFEST:
+        for dependency in (*spec.selection_dependencies, *spec.lane_dependencies):
+            assert positions[dependency] < positions[spec.key], (dependency, spec.key)
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_preflight"] == "ok"
@@ -527,36 +591,18 @@ def test_stage1_failure_still_runs_feed(
 ) -> None:
     """If triggers fails, the feed render MUST still run — it is read-only
     over existing alerts, so a trigger failure cannot be allowed to leave the
-    user with a stale feed. Exit code reflects exactly one failed stage."""
+    user with a stale feed. Exit code reflects exactly one failed stage, and
+    the feed is still dispatched after the sweep settles (the failure stops
+    delaying it, never cancels it)."""
     fake = _RecordingRun(returncodes={TRIGGERS_SCRIPT: 1})
     _install_fake(monkeypatch, fake)
 
     rc = run_morning_pipeline.main([])
 
     assert rc == 1
-    assert fake.scripts == [
-        PREFLIGHT_SCRIPT,
-        NEWS_SCRIPT,
-        LIST_TYPE_SCRIPT,
-        DECISIONS_SCRIPT,
-        LIFECYCLE_SCRIPT,
-        DECISION_ACTIONS_SCRIPT,
-        FUNDAMENTALS_SCRIPT,
-        DOCUMENT_EVIDENCE_SCRIPT,
-        DERIVED_METRICS_SCRIPT,
-        REPRICE_SCRIPT,
-        CANDIDATE_FIT_SCRIPT,
-        FACTOR_PROXIES_SCRIPT,
-        POSITION_GUARD_SCRIPT,
-        RISK_SNAPSHOT_SCRIPT,
-        WEALTH_CONTEXT_SCRIPT,
-        TRIGGERS_SCRIPT,
-        STANDUP_SCRIPT,
-        PRE_ER_BRIEF_SCRIPT,
-        POST_ER_READOUT_SCRIPT,
-        FEED_SCRIPT,
-        VALIDATE_SCRIPT,
-    ]
+    _assert_ran_exactly(fake, _ALL_SCRIPTS)
+    order = run_morning_pipeline.last_dispatch_order()
+    assert order.index(STAGE_TRIGGERS) < order.index(STAGE_FEED)
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_1_triggers"] == "failed"
@@ -574,29 +620,7 @@ def test_feed_failure_still_runs_validation(
     rc = run_morning_pipeline.main([])
 
     assert rc == 1
-    assert fake.scripts == [
-        PREFLIGHT_SCRIPT,
-        NEWS_SCRIPT,
-        LIST_TYPE_SCRIPT,
-        DECISIONS_SCRIPT,
-        LIFECYCLE_SCRIPT,
-        DECISION_ACTIONS_SCRIPT,
-        FUNDAMENTALS_SCRIPT,
-        DOCUMENT_EVIDENCE_SCRIPT,
-        DERIVED_METRICS_SCRIPT,
-        REPRICE_SCRIPT,
-        CANDIDATE_FIT_SCRIPT,
-        FACTOR_PROXIES_SCRIPT,
-        POSITION_GUARD_SCRIPT,
-        RISK_SNAPSHOT_SCRIPT,
-        WEALTH_CONTEXT_SCRIPT,
-        TRIGGERS_SCRIPT,
-        STANDUP_SCRIPT,
-        PRE_ER_BRIEF_SCRIPT,
-        POST_ER_READOUT_SCRIPT,
-        FEED_SCRIPT,
-        VALIDATE_SCRIPT,
-    ]
+    _assert_ran_exactly(fake, _ALL_SCRIPTS)
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_1_triggers"] == "ok"
@@ -634,29 +658,7 @@ def test_all_stages_fail_exit_code_counts_failures(
     rc = run_morning_pipeline.main([])
 
     assert rc == 16
-    assert fake.scripts == [
-        PREFLIGHT_SCRIPT,
-        NEWS_SCRIPT,
-        LIST_TYPE_SCRIPT,
-        DECISIONS_SCRIPT,
-        LIFECYCLE_SCRIPT,
-        DECISION_ACTIONS_SCRIPT,
-        FUNDAMENTALS_SCRIPT,
-        DOCUMENT_EVIDENCE_SCRIPT,
-        DERIVED_METRICS_SCRIPT,
-        REPRICE_SCRIPT,
-        CANDIDATE_FIT_SCRIPT,
-        FACTOR_PROXIES_SCRIPT,
-        POSITION_GUARD_SCRIPT,
-        RISK_SNAPSHOT_SCRIPT,
-        WEALTH_CONTEXT_SCRIPT,
-        TRIGGERS_SCRIPT,
-        STANDUP_SCRIPT,
-        PRE_ER_BRIEF_SCRIPT,
-        POST_ER_READOUT_SCRIPT,
-        FEED_SCRIPT,
-        VALIDATE_SCRIPT,
-    ]
+    _assert_ran_exactly(fake, _ALL_SCRIPTS)
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_preflight"] == "failed"
@@ -687,36 +689,20 @@ def test_stage1_timeout_is_caught_and_renders_still_run(
 ) -> None:
     """A TimeoutExpired from the triggers subprocess must be caught (not
     propagate), counted as a failed stage, and NOT prevent the feed from
-    running."""
+    running. The timeout keeps the stage's own manifest budget (1800s) — a
+    lane never extends it."""
     fake = _RecordingRun(timeout_scripts={TRIGGERS_SCRIPT})
     _install_fake(monkeypatch, fake)
 
     rc = run_morning_pipeline.main([])
 
     assert rc == 1
-    assert fake.scripts == [
-        PREFLIGHT_SCRIPT,
-        NEWS_SCRIPT,
-        LIST_TYPE_SCRIPT,
-        DECISIONS_SCRIPT,
-        LIFECYCLE_SCRIPT,
-        DECISION_ACTIONS_SCRIPT,
-        FUNDAMENTALS_SCRIPT,
-        DOCUMENT_EVIDENCE_SCRIPT,
-        DERIVED_METRICS_SCRIPT,
-        REPRICE_SCRIPT,
-        CANDIDATE_FIT_SCRIPT,
-        FACTOR_PROXIES_SCRIPT,
-        POSITION_GUARD_SCRIPT,
-        RISK_SNAPSHOT_SCRIPT,
-        WEALTH_CONTEXT_SCRIPT,
-        TRIGGERS_SCRIPT,
-        STANDUP_SCRIPT,
-        PRE_ER_BRIEF_SCRIPT,
-        POST_ER_READOUT_SCRIPT,
-        FEED_SCRIPT,
-        VALIDATE_SCRIPT,
-    ]
+    _assert_ran_exactly(fake, _ALL_SCRIPTS)
+    order = run_morning_pipeline.last_dispatch_order()
+    assert order.index(STAGE_TRIGGERS) < order.index(STAGE_FEED)
+    # The lane keeps the stage's own manifest timeout budget — a parallel
+    # dispatch never extends (or shrinks) it.
+    assert fake.timeouts[TRIGGERS_SCRIPT] == 1800
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_1_triggers"] == "failed"
@@ -846,29 +832,7 @@ def test_validation_halt_counts_as_failed_stage_after_renders(
 
     rc = run_morning_pipeline.main([])
     assert rc == 1  # exactly the validation stage failed
-    assert fake.scripts == [
-        PREFLIGHT_SCRIPT,
-        NEWS_SCRIPT,
-        LIST_TYPE_SCRIPT,
-        DECISIONS_SCRIPT,
-        LIFECYCLE_SCRIPT,
-        DECISION_ACTIONS_SCRIPT,
-        FUNDAMENTALS_SCRIPT,
-        DOCUMENT_EVIDENCE_SCRIPT,
-        DERIVED_METRICS_SCRIPT,
-        REPRICE_SCRIPT,
-        CANDIDATE_FIT_SCRIPT,
-        FACTOR_PROXIES_SCRIPT,
-        POSITION_GUARD_SCRIPT,
-        RISK_SNAPSHOT_SCRIPT,
-        WEALTH_CONTEXT_SCRIPT,
-        TRIGGERS_SCRIPT,
-        STANDUP_SCRIPT,
-        PRE_ER_BRIEF_SCRIPT,
-        POST_ER_READOUT_SCRIPT,
-        FEED_SCRIPT,
-        VALIDATE_SCRIPT,
-    ]
+    _assert_ran_exactly(fake, _ALL_SCRIPTS)
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_2_feed"] == "ok"
@@ -884,28 +848,7 @@ def test_skip_validation_removes_only_stage3(
 
     rc = run_morning_pipeline.main(["--skip-validation"])
     assert rc == 0
-    assert fake.scripts == [
-        PREFLIGHT_SCRIPT,
-        NEWS_SCRIPT,
-        LIST_TYPE_SCRIPT,
-        DECISIONS_SCRIPT,
-        LIFECYCLE_SCRIPT,
-        DECISION_ACTIONS_SCRIPT,
-        FUNDAMENTALS_SCRIPT,
-        DOCUMENT_EVIDENCE_SCRIPT,
-        DERIVED_METRICS_SCRIPT,
-        REPRICE_SCRIPT,
-        CANDIDATE_FIT_SCRIPT,
-        FACTOR_PROXIES_SCRIPT,
-        POSITION_GUARD_SCRIPT,
-        RISK_SNAPSHOT_SCRIPT,
-        WEALTH_CONTEXT_SCRIPT,
-        TRIGGERS_SCRIPT,
-        STANDUP_SCRIPT,
-        PRE_ER_BRIEF_SCRIPT,
-        POST_ER_READOUT_SCRIPT,
-        FEED_SCRIPT,
-    ]
+    _assert_ran_exactly(fake, [script for script in _ALL_SCRIPTS if script != VALIDATE_SCRIPT])
     assert VALIDATE_SCRIPT not in fake.scripts
 
     summary = _parse_summary(capsys.readouterr().out)
@@ -946,8 +889,12 @@ def test_stage1b_standup_runs_after_triggers_with_user_and_db_path(
         ["--db-path", str(db_path), "--repo-root", str(tmp_path), "--user-id", "alice"]
     )
     assert rc == 0
-    assert fake.scripts.index(TRIGGERS_SCRIPT) < fake.scripts.index(STANDUP_SCRIPT)
-    assert fake.scripts.index(STANDUP_SCRIPT) < fake.scripts.index(FEED_SCRIPT)
+    # Standup follows the sweep (its declared dependency); the feed also waits
+    # for the sweep but may overlap the standup lane — no ordering is pinned
+    # between those two independent stages.
+    order = run_morning_pipeline.last_dispatch_order()
+    assert order.index(STAGE_TRIGGERS) < order.index(STAGE_STANDUP)
+    assert order.index(STAGE_TRIGGERS) < order.index(STAGE_FEED)
 
     standup_argv = next(c for c in fake.calls if _script_of(c) == STANDUP_SCRIPT)
     assert _has_flag(standup_argv, "--user-id", "alice")
@@ -1103,14 +1050,18 @@ def test_configured_db_path_forwarded_when_cli_unset(monkeypatch: pytest.MonkeyP
 
 def test_stage0_news_runs_first_with_default_source(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stage 0 is the first MAIN stage (right after the unconditional
-    preflight) and invokes fetch_news.py --source auto."""
+    preflight, whose settle gates every other dispatch) and invokes
+    fetch_news.py --source auto; the sweep itself starts only after news
+    settles (its declared dependency)."""
     fake = _RecordingRun()
     _install_fake(monkeypatch, fake)
 
     rc = run_morning_pipeline.main([])
     assert rc == 0
     assert fake.scripts[0] == PREFLIGHT_SCRIPT  # unconditional, always first
-    assert fake.scripts[1] == NEWS_SCRIPT  # ordered before triggers
+    order = run_morning_pipeline.last_dispatch_order()
+    assert order[0] == "stage_preflight"
+    assert order.index("stage_0_news") < order.index(STAGE_TRIGGERS)
 
     news_argv = next(c for c in fake.calls if _script_of(c) == NEWS_SCRIPT)
     assert _flag_value(news_argv, "--source") == "auto"
@@ -1125,28 +1076,7 @@ def test_skip_news_removes_only_stage0(
 
     rc = run_morning_pipeline.main(["--skip-news"])
     assert rc == 0
-    assert fake.scripts == [
-        PREFLIGHT_SCRIPT,
-        LIST_TYPE_SCRIPT,
-        DECISIONS_SCRIPT,
-        LIFECYCLE_SCRIPT,
-        DECISION_ACTIONS_SCRIPT,
-        FUNDAMENTALS_SCRIPT,
-        DOCUMENT_EVIDENCE_SCRIPT,
-        DERIVED_METRICS_SCRIPT,
-        REPRICE_SCRIPT,
-        CANDIDATE_FIT_SCRIPT,
-        FACTOR_PROXIES_SCRIPT,
-        POSITION_GUARD_SCRIPT,
-        RISK_SNAPSHOT_SCRIPT,
-        WEALTH_CONTEXT_SCRIPT,
-        TRIGGERS_SCRIPT,
-        STANDUP_SCRIPT,
-        PRE_ER_BRIEF_SCRIPT,
-        POST_ER_READOUT_SCRIPT,
-        FEED_SCRIPT,
-        VALIDATE_SCRIPT,
-    ]
+    _assert_ran_exactly(fake, [script for script in _ALL_SCRIPTS if script != NEWS_SCRIPT])
     assert NEWS_SCRIPT not in fake.scripts
 
     summary = _parse_summary(capsys.readouterr().out)
@@ -1172,35 +1102,16 @@ def test_news_failure_does_not_stop_triggers(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A failed stage 0 is counted but never blocks triggers/feed — the
-    trigger sweep runs over whatever news already exists, degrading to none."""
+    trigger sweep runs over whatever news already exists, degrading to none.
+    The failure settles (rather than cancels) so the sweep still dispatches."""
     fake = _RecordingRun(returncodes={NEWS_SCRIPT: 1})
     _install_fake(monkeypatch, fake)
 
     rc = run_morning_pipeline.main([])
     assert rc == 1  # exactly the news stage failed
-    assert fake.scripts == [
-        PREFLIGHT_SCRIPT,
-        NEWS_SCRIPT,
-        LIST_TYPE_SCRIPT,
-        DECISIONS_SCRIPT,
-        LIFECYCLE_SCRIPT,
-        DECISION_ACTIONS_SCRIPT,
-        FUNDAMENTALS_SCRIPT,
-        DOCUMENT_EVIDENCE_SCRIPT,
-        DERIVED_METRICS_SCRIPT,
-        REPRICE_SCRIPT,
-        CANDIDATE_FIT_SCRIPT,
-        FACTOR_PROXIES_SCRIPT,
-        POSITION_GUARD_SCRIPT,
-        RISK_SNAPSHOT_SCRIPT,
-        WEALTH_CONTEXT_SCRIPT,
-        TRIGGERS_SCRIPT,
-        STANDUP_SCRIPT,
-        PRE_ER_BRIEF_SCRIPT,
-        POST_ER_READOUT_SCRIPT,
-        FEED_SCRIPT,
-        VALIDATE_SCRIPT,
-    ]
+    _assert_ran_exactly(fake, _ALL_SCRIPTS)
+    order = run_morning_pipeline.last_dispatch_order()
+    assert order.index("stage_0_news") < order.index(STAGE_TRIGGERS)
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_0_news"] == "failed"
@@ -1340,16 +1251,19 @@ def test_stage0d2_derived_metrics_takes_db_flag_and_all_scope(
 def test_stage0g_factor_proxies_runs_between_candidate_fit_and_triggers(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Stage 0g refreshes the ETF style-proxy series after the derived-cache
-    stages and before triggers; a yfinance outage (stage failure) must not
-    block the sweep — the Risk panel degrades to the last-good files."""
+    """Stage 0g refreshes the ETF style-proxy series before the risk snapshot
+    (its declared dependency) and so before triggers; a yfinance outage (stage
+    failure) must not block the sweep — the Risk panel degrades to the
+    last-good files. The stage is manifest-independent of the derived-cache
+    lane, so lanes may dispatch it while the writer queue is still busy."""
     fake = _RecordingRun(returncodes={FACTOR_PROXIES_SCRIPT: 1})
     _install_fake(monkeypatch, fake)
 
     rc = run_morning_pipeline.main([])
     assert rc == 1  # exactly the proxies stage failed
-    assert fake.scripts.index(CANDIDATE_FIT_SCRIPT) < fake.scripts.index(FACTOR_PROXIES_SCRIPT)
-    assert fake.scripts.index(FACTOR_PROXIES_SCRIPT) < fake.scripts.index(TRIGGERS_SCRIPT)
+    order = run_morning_pipeline.last_dispatch_order()
+    assert order.index("stage_0g_factor_proxies") < order.index("stage_0i_risk_snapshot")
+    assert order.index("stage_0g_factor_proxies") < order.index(STAGE_TRIGGERS)
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_0g_factor_proxies"] == "failed"
@@ -1383,19 +1297,21 @@ def test_stage0g_factor_proxies_takes_explicit_artifact_root(
     assert _has_flag(default_argv, "--repo-root", str(PROJECT_ROOT))
 
 
-def test_stage0h_position_guard_runs_between_factor_proxies_and_triggers(
+def test_stage0h_position_guard_runs_between_lifecycle_and_triggers(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Stage 0h materializes the naked-position gate cache after the factor
-    proxies refresh and before triggers; a failure must not block the sweep —
-    the Risk panel degrades to the last-good cache file."""
+    """Stage 0h materializes the naked-position gate cache after the position
+    lifecycle reconciler (its declared dependency) and before the trigger
+    sweep; a failure must not block the sweep — the Risk panel degrades to the
+    last-good cache file."""
     fake = _RecordingRun(returncodes={POSITION_GUARD_SCRIPT: 1})
     _install_fake(monkeypatch, fake)
 
     rc = run_morning_pipeline.main([])
     assert rc == 1  # exactly the position-guard stage failed
-    assert fake.scripts.index(FACTOR_PROXIES_SCRIPT) < fake.scripts.index(POSITION_GUARD_SCRIPT)
-    assert fake.scripts.index(POSITION_GUARD_SCRIPT) < fake.scripts.index(TRIGGERS_SCRIPT)
+    order = run_morning_pipeline.last_dispatch_order()
+    assert order.index("stage_0c_lifecycle") < order.index("stage_0h_position_guard")
+    assert order.index("stage_0h_position_guard") < order.index(STAGE_TRIGGERS)
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_0h_position_guard"] == "failed"

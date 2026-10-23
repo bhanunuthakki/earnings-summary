@@ -14,16 +14,62 @@ Iterates the cartesian product of (ticker, trigger) under
      halts the loop cleanly when reached — the driver exits 0 with a
      summary noting the cap, not 1.
 
+Two lanes (2026-10, audit ``.tmp/audit/performance-pipeline.md`` F1/F1b):
+
+  * **Serial pair lane** — the candidate lifecycle above, ticker-major,
+    exactly as before. Candidate spend is cap-gated per candidate, as
+    before.
+  * **Scan sweep lane** — triggers declaring ``triggers.base.ScanSweepTrigger``
+    (``material_news``: its ``scan`` is the entire deliverable — it emits
+    zero candidates, so the per-candidate cap check could never see its
+    spend, and its ~100 serial per-ticker Opus calls were the stage's long
+    pole) run AFTER the serial lane in a bounded-concurrency sweep: waves
+    of at most ``--scan-workers`` simultaneous per-ticker scans (default 4),
+    each scan under its own ``--scan-timeout-s`` wall-clock budget
+    (default 180s). Wave admission re-reads the shared ``llm_calls``
+    ledger total since run start and admits a wave only while it is below
+    the cap, so scan-time spend is cap-accounted exactly like candidate
+    spend. A wave is the admission unit: when the cap boundary falls inside
+    a wave the committed total may exceed the cap by at most one wave's
+    cost (the same one-admission-unit tolerance the per-candidate loop
+    has, amplified by the worker bound) — never more, because admission
+    is wave-synchronized: a wave is fully admitted before any of its scans
+    run, so no refill can straddle a cap check nondeterministically.
+
+**Nothing is silently truncated.** Every ticker a cap halt or a per-ticker
+timeout leaves unscanned gets an explicit ``scan_deferred`` event and a
+``scan_deferrals`` summary entry (reason ``cost_cap`` or
+``per_ticker_timeout``), and each sweep opens with a ``scan_sweep_start``
+event listing its full intended ticker coverage — a killed stage's log
+always shows exactly which tickers were and were not reached, so coverage
+gaps are explicit instead of an alphabetical tail silently going dark. A
+timed-out scan is abandoned, not killed: its worker thread is no longer
+waited on (the executor shuts down with ``wait=False``), its late writes
+are idempotent (``news_events`` is ``INSERT OR IGNORE`` on UNIQUE(news_id)
+and the artifact cache is input-sha keyed), and the underlying LLM
+transport still enforces its own per-call subprocess timeout.
+
 Usage:
     python execution/run_triggers.py
     python execution/run_triggers.py --tickers META,GOOG --triggers earnings_tone
     python execution/run_triggers.py --dry-run --max-cost-usd 5
     python execution/run_triggers.py --user-id bhanu --db-path /tmp/test.db
+    python execution/run_triggers.py --scan-workers 8 --scan-timeout-s 240
 
 Stub triggers (``build_alert`` raises NotImplementedError) are tolerated:
 the driver logs ``trigger_stub_skipping`` and moves on. This lets a
 half-implemented sensor sit in ``ALL_TRIGGERS`` (via ``--triggers``)
 without crashing a scheduled run.
+
+Note on ``--dry-run``: the sweep lane's scans run identically under
+``--dry-run`` (as they always have — ``material_news.scan`` persists its
+``news_events`` product before any candidate exists); ``--dry-run`` gates
+alert persistence in the serial lane, not scan-time classification.
+
+The ticker-independent 90-day dismissed-signature lookback
+(``_load_dismissed_signatures``) is loaded ONCE per run and shared by every
+(ticker × trigger) pair's user-state snapshot (audit F5) — it previously
+rebuilt the identical set, on a fresh read-only connection, per pair.
 """
 
 from __future__ import annotations
@@ -36,40 +82,57 @@ import sqlite3
 import sys
 import time
 import traceback
+from collections import deque
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import TypeAlias
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import resolve_db_path as canonical_db_path
+except ImportError:
+    from execution._lib import resolve_db_path as canonical_db_path
 
-from alerts.store import (  # noqa: E402
+from alerts.store import (
     compute_signature_sha,
     find_by_signature,
     fire_alert,
     queue_action,
 )
-from db_paths import resolve_db_path as canonical_db_path  # noqa: E402
-from identity import DEFAULT_USER_ID  # noqa: E402
-from log_redact import redact  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
-from triggers.base import (  # noqa: E402
+from identity import DEFAULT_USER_ID
+from log_redact import redact
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from triggers.base import (
     AlertDraft,
+    ScanSweepTrigger,
     StatefulTrigger,
     Trigger,
     TriggerCandidate,
     UserStateContext,
 )
-from triggers.registry import ALL_TRIGGERS, ENABLED_TRIGGERS  # noqa: E402
-from user_state.registry import list_kpis  # noqa: E402
-from user_state.sizing import list_intents  # noqa: E402
+from triggers.registry import ALL_TRIGGERS, ENABLED_TRIGGERS
+from user_state.registry import list_kpis
+from user_state.sizing import list_intents
 
 log = logging.getLogger(__name__)
 
 DEFAULT_MAX_COST_USD = 10.0
 DISMISSED_LOOKBACK_DAYS = 90
+# Bounded-concurrency scan sweep (material_news today): at most this many
+# per-ticker scans run simultaneously in one admitted wave. 4 keeps the
+# sweep inside the shared quota window's peak-concurrency expectations
+# while cutting a ~100-ticker book's wall-clock from the sum of every
+# ticker's Opus call to roughly a quarter of it.
+DEFAULT_SCAN_WORKERS = 4
+# Per-ticker wall-clock budget for each scan in the sweep: well over a
+# typical batched Opus classification (~15-60s) plus its one parse retry,
+# but bounded well under the stage's 1800s budget so one hung ticker
+# degrades to an explicit per_ticker_timeout deferral and frees its wave
+# instead of the run inheriting the stall. The LLM transport's own
+# per-call subprocess timeout (1200s default) remains the inner bound.
+DEFAULT_SCAN_TIMEOUT_S = 180.0
 RegisteredTrigger: TypeAlias = type[Trigger] | type[StatefulTrigger]
 
 
@@ -184,13 +247,24 @@ def _load_dismissed_signatures(db_path: Path, *, user_id: str, lookback_days: in
         conn.close()
 
 
-def _compose_user_state(db_path: Path, *, user_id: str, ticker: str) -> UserStateContext:
+def _compose_user_state(
+    db_path: Path,
+    *,
+    user_id: str,
+    ticker: str,
+    dismissed_signatures: set[str],
+) -> UserStateContext:
     """Snapshot the user-stated thesis state for ``ticker``.
 
     Best-effort: if the user_state tables are absent the snapshot
     degrades to empty lists / set rather than blocking the driver. The
     trigger's own ``should_fire`` decides how much of the context it
     cares about.
+
+    ``dismissed_signatures`` is the run-scope 90-day dismissed set the
+    driver loads once per run (the lookback takes no ticker argument, so
+    the per-(ticker x trigger) recompute rebuilt the identical set for
+    every pair — audit F5); the driver always supplies it.
     """
     try:
         kpi_rows = list_kpis(user_id=user_id, ticker=ticker, db_path=db_path)
@@ -202,13 +276,10 @@ def _compose_user_state(db_path: Path, *, user_id: str, ticker: str) -> UserStat
         intents: list[dict[str, object]] = [_dc_to_dict(r) for r in intent_rows]
     except (FileNotFoundError, RuntimeError, sqlite3.Error):
         intents = []
-    dismissed = _load_dismissed_signatures(
-        db_path, user_id=user_id, lookback_days=DISMISSED_LOOKBACK_DAYS
-    )
     return UserStateContext(
         registered_kpis=kpis,
         sizing_intents=intents,
-        recent_dismissed_signatures=dismissed,
+        recent_dismissed_signatures=dismissed_signatures,
     )
 
 
@@ -313,6 +384,36 @@ class _RunSummary:
     started_at: str = ""
     ended_at: str = ""
     seen_tickers: set[str] = field(default_factory=set[str])
+    # Explicit coverage accounting (F1b): one entry per (ticker, trigger)
+    # scan unit the cost cap or a per-ticker timeout left unscanned —
+    # {ticker, trigger_kind, reason} with reason from the closed set
+    # ("cost_cap", "per_ticker_timeout"). Empty means every scan unit ran.
+    scan_deferrals: list[dict[str, str]] = field(default_factory=list[dict[str, str]])
+
+
+def _record_scan_deferral(
+    summary: _RunSummary,
+    *,
+    ticker: str,
+    trigger_kind: str,
+    reason: str,
+) -> None:
+    """Emit + tally one explicit scan deferral (never a silent skip).
+
+    ``reason`` is from the closed set ("cost_cap", "per_ticker_timeout");
+    callers document their reason inline.
+    """
+    _emit(
+        {
+            "event": "scan_deferred",
+            "ticker": ticker,
+            "trigger_kind": trigger_kind,
+            "reason": reason,
+        }
+    )
+    summary.scan_deferrals.append(
+        {"ticker": ticker, "trigger_kind": trigger_kind, "reason": reason}
+    )
 
 
 # --------------------------------------------------------------------------
@@ -526,6 +627,7 @@ def _process_ticker_trigger(
     max_cost_usd: Decimal,
     run_started_at: datetime,
     summary: _RunSummary,
+    dismissed_signatures: set[str],
 ) -> bool:
     """Run one trigger against one ticker. Returns False iff the cost cap
     was reached mid-iteration and the driver should stop processing.
@@ -535,6 +637,10 @@ def _process_ticker_trigger(
     the whole driver — only this one (ticker, trigger) pair gets
     skipped. The summary still records the ticker as "seen" for the
     final processed-count.
+
+    ``dismissed_signatures`` is the run-scope 90-day set the driver
+    loaded once per run (F5); it flows into this pair's user-state
+    snapshot unmodified.
     """
     summary.seen_tickers.add(ticker)
     if isinstance(trigger, StatefulTrigger):
@@ -600,7 +706,12 @@ def _process_ticker_trigger(
         summary.no_candidate_skips += 1
         return True
 
-    user_state = _compose_user_state(db_path, user_id=user_id, ticker=ticker)
+    user_state = _compose_user_state(
+        db_path,
+        user_id=user_id,
+        ticker=ticker,
+        dismissed_signatures=dismissed_signatures,
+    )
 
     for candidate in candidates:
         current_cost = query_run_cost_usd(db_path, run_started_at)
@@ -645,6 +756,252 @@ def _process_ticker_trigger(
 
 
 # --------------------------------------------------------------------------
+# Bounded-concurrency scan sweep (F1/F1b)
+# --------------------------------------------------------------------------
+
+
+def _partition_triggers(
+    triggers: list[Trigger | StatefulTrigger],
+) -> tuple[list[ScanSweepTrigger], list[Trigger | StatefulTrigger]]:
+    """Split the run's triggers into the sweep lane and the serial lane.
+
+    Sweep membership is the trigger's own ``ScanSweepTrigger`` declaration
+    (``concurrent_scan``); a stateful trigger that wrongly declares it stays
+    serial with a loud event, because its ``run`` owns one transaction across
+    its whole pass and cannot be swept (the sweep drives ``scan``).
+    """
+    sweep: list[ScanSweepTrigger] = []
+    serial: list[Trigger | StatefulTrigger] = []
+    for trigger in triggers:
+        if isinstance(trigger, ScanSweepTrigger) and not isinstance(trigger, StatefulTrigger):
+            sweep.append(trigger)
+        else:
+            if isinstance(trigger, ScanSweepTrigger):
+                _emit(
+                    {
+                        "event": "scan_sweep_stateful_optin_refused",
+                        "trigger_kind": trigger.kind,
+                        "reason": "stateful triggers own one transaction per pass",
+                    }
+                )
+            serial.append(trigger)
+    return sweep, serial
+
+
+def _scan_ticker_for_sweep(
+    *,
+    trigger: ScanSweepTrigger,
+    ticker: str,
+    db_path: Path,
+) -> list[TriggerCandidate]:
+    """One worker unit: a fresh read-only connection and one ``scan`` call.
+
+    Mirrors the serial lane's scan step (one connection per scan). The
+    trigger's own writes (``news_events``, ``llm_artifacts``, its ledger rows)
+    happen on the trigger-managed writer connections, each a short
+    transaction against the single SQLite writer lock — no write transaction
+    is ever held across an LLM call's subprocess wait.
+    """
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
+    try:
+        return trigger.scan(ticker, conn)
+    finally:
+        conn.close()
+
+
+def _run_scan_sweep(
+    *,
+    trigger: ScanSweepTrigger,
+    tickers: list[str],
+    db_path: Path,
+    max_cost_usd: Decimal,
+    run_started_at: datetime,
+    summary: _RunSummary,
+    workers: int,
+    per_ticker_timeout_s: float,
+) -> None:
+    """Sweep one scan-only trigger's per-ticker scans under bounded concurrency.
+
+    Wave-synchronized admission: a wave of at most ``workers`` tickers is
+    dispatched only while the ``llm_calls`` ledger total since run start is
+    below the cap, and the wave fully settles (completes or per-ticker
+    timeout) before the next wave is admitted. Wave synchronization is what
+    makes the cap deterministic under concurrency — a refill-as-you-go pool
+    could dispatch extra calls nondeterministically while sibling completions
+    are still unobserved. The committed total may exceed the cap by at most
+    one wave's cost when the cap boundary falls inside a wave (the same
+    one-admission-unit tolerance the serial per-candidate check has, at the
+    worker bound's granularity).
+
+    Per-ticker timeout: each scan gets its own wall-clock budget from its
+    wave's dispatch; a ticker that exceeds it is explicitly deferred with
+    reason ``per_ticker_timeout`` and its worker is abandoned (the executor
+    shuts down with ``wait=False`` — the run never blocks on an abandoned
+    scan; its late writes are idempotent, and the LLM transport's own
+    per-call subprocess timeout bounds the abandoned thread).
+
+    The summary and event stream are mutated only from this (coordinator)
+    thread; worker threads only run the scan.
+    """
+    if not tickers:
+        return
+    t0 = time.monotonic()
+    _emit(
+        {
+            "event": "scan_sweep_start",
+            "trigger_kind": trigger.kind,
+            "tickers": tickers,
+            "workers": workers,
+            "per_ticker_timeout_s": per_ticker_timeout_s,
+            "max_cost_usd": str(max_cost_usd),
+        }
+    )
+    scanned = 0
+    deferred_cost_cap = 0
+    deferred_timeout = 0
+    remaining = deque(tickers)
+    executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="trigger-scan")
+    try:
+        while remaining:
+            spend = query_run_cost_usd(db_path, run_started_at)
+            if spend >= max_cost_usd:
+                _emit(
+                    {
+                        "event": "cost_cap_reached",
+                        "current_spend_usd": str(spend),
+                        "cap_usd": str(max_cost_usd),
+                        "trigger_kind": trigger.kind,
+                        "deferred_count": len(remaining),
+                    }
+                )
+                summary.cost_cap_reached = True
+                for ticker in list(remaining):
+                    remaining.popleft()
+                    deferred_cost_cap += 1
+                    _record_scan_deferral(
+                        summary,
+                        ticker=ticker,
+                        trigger_kind=trigger.kind,
+                        reason="cost_cap",
+                    )
+                break
+            wave = [remaining.popleft() for _ in range(min(workers, len(remaining)))]
+            for ticker in wave:
+                summary.seen_tickers.add(ticker)
+            # future -> (ticker, deadline); deadlines are absolute monotonic.
+            pending: dict[Future[list[TriggerCandidate]], tuple[str, float]] = {
+                executor.submit(
+                    _scan_ticker_for_sweep,
+                    trigger=trigger,
+                    ticker=ticker,
+                    db_path=db_path,
+                ): (ticker, time.monotonic() + per_ticker_timeout_s)
+                for ticker in wave
+            }
+            while pending:
+                now = time.monotonic()
+                next_deadline = min(deadline for _, deadline in pending.values())
+                done, _not_done = wait(
+                    pending.keys(),
+                    timeout=max(0.0, next_deadline - now),
+                    return_when=FIRST_COMPLETED,
+                )
+                for future in done:
+                    ticker, _deadline = pending.pop(future)
+                    try:
+                        candidates = future.result()
+                    except Exception as exc:
+                        _emit(
+                            {
+                                "event": "scan_failed",
+                                "ticker": ticker,
+                                "trigger_kind": trigger.kind,
+                                "error": f"{type(exc).__name__}: {exc}",
+                                "traceback": traceback.format_exc(),
+                            }
+                        )
+                        summary.errors += 1
+                        continue
+                    scanned += 1
+                    if not candidates:
+                        _emit(
+                            {
+                                "event": "no_candidates",
+                                "ticker": ticker,
+                                "trigger_kind": trigger.kind,
+                            }
+                        )
+                        summary.no_candidate_skips += 1
+                    else:
+                        # The ScanSweepTrigger contract is scan-only: no
+                        # candidates. Loud, never silent — the sweep does not
+                        # run the per-candidate lifecycle.
+                        _emit(
+                            {
+                                "event": "scan_sweep_unexpected_candidates",
+                                "ticker": ticker,
+                                "trigger_kind": trigger.kind,
+                                "candidate_count": len(candidates),
+                            }
+                        )
+                        summary.errors += 1
+                now = time.monotonic()
+                for future, (ticker, deadline) in list(pending.items()):
+                    if deadline <= now:
+                        pending.pop(future)
+                        future.cancel()  # no-op if running; the worker is abandoned
+                        deferred_timeout += 1
+                        _record_scan_deferral(
+                            summary,
+                            ticker=ticker,
+                            trigger_kind=trigger.kind,
+                            reason="per_ticker_timeout",
+                        )
+    finally:
+        # wait=False: an abandoned (timed-out) scan's thread is never waited
+        # on — the run returns as soon as every admitted future settled or
+        # was given up on (same contract as fetch_news.collect_primary).
+        executor.shutdown(wait=False)
+    _emit(
+        {
+            "event": "scan_sweep_complete",
+            "trigger_kind": trigger.kind,
+            "scanned": scanned,
+            "deferred_cost_cap": deferred_cost_cap,
+            "deferred_timeout": deferred_timeout,
+            "elapsed_seconds": round(time.monotonic() - t0, 3),
+        }
+    )
+
+
+def _defer_remaining_serial_pairs(
+    tickers: list[str],
+    serial_triggers: list[Trigger | StatefulTrigger],
+    *,
+    from_ticker_index: int,
+    from_trigger_index: int,
+    summary: _RunSummary,
+) -> None:
+    """Explicitly defer every serial pair a cost-cap halt leaves unprocessed.
+
+    The halt itself is unchanged (clean, exit 0); what changes is silence:
+    the remaining (ticker, trigger) pairs now carry an explicit
+    ``scan_deferred`` event + summary entry with reason ``cost_cap`` instead
+    of the loop simply breaking — the run's log always shows exactly which
+    scan units did not run.
+    """
+    for ticker_index in range(from_ticker_index, len(tickers)):
+        trigger_start = from_trigger_index + 1 if ticker_index == from_ticker_index else 0
+        for trigger in serial_triggers[trigger_start:]:
+            _record_scan_deferral(
+                summary,
+                ticker=tickers[ticker_index],
+                trigger_kind=trigger.kind,
+                reason="cost_cap",
+            )
+
+
+# --------------------------------------------------------------------------
 # CLI plumbing
 # --------------------------------------------------------------------------
 
@@ -682,6 +1039,24 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "cleanly with exit 0.",
     )
     parser.add_argument(
+        "--scan-workers",
+        type=int,
+        default=DEFAULT_SCAN_WORKERS,
+        help=f"Bounded-concurrency worker count for the scan sweep lane "
+        "(material_news): at most this many per-ticker scans run simultaneously "
+        f"(default {DEFAULT_SCAN_WORKERS}). Each admitted wave re-checks the "
+        "cost cap before dispatching.",
+    )
+    parser.add_argument(
+        "--scan-timeout-s",
+        type=float,
+        default=DEFAULT_SCAN_TIMEOUT_S,
+        help=f"Per-ticker wall-clock budget for each scan in the sweep lane; a "
+        "ticker that exceeds it is explicitly deferred with reason "
+        f"per_ticker_timeout while other tickers continue (default "
+        f"{DEFAULT_SCAN_TIMEOUT_S}s).",
+    )
+    parser.add_argument(
         "--user-id",
         default=DEFAULT_USER_ID,
         help=f"Owner of the alerts / user_state rows. Default: {DEFAULT_USER_ID!r}.",
@@ -693,7 +1068,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Override the portfolio DB path. Defaults to db.DB_PATH "
         "(data/portfolio.db under the project root).",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.scan_workers < 1:
+        parser.error(f"--scan-workers must be >= 1 (got {args.scan_workers})")
+    if args.scan_timeout_s <= 0:
+        parser.error(f"--scan-timeout-s must be > 0 (got {args.scan_timeout_s})")
+    return args
 
 
 def _split_csv(raw: str | None) -> list[str] | None:
@@ -733,6 +1113,24 @@ def main(argv: list[str] | None = None) -> int:
 
     summary = _RunSummary(started_at=run_started_at.isoformat())
 
+    # Hoisted once per run (F5): the 90-day dismissed-signature lookback takes
+    # no ticker argument, so the per-(ticker x trigger) recompute rebuilt the
+    # identical set (and reopened a read-only connection) for every pair that
+    # produced candidates. One run-scope snapshot now feeds every pair's
+    # user-state context. No current sensor consults the set
+    # (find_by_signature already covers dismissed rows), so the snapshot's
+    # run-scope lifetime is unobservable today.
+    dismissed_signatures = _load_dismissed_signatures(
+        db_path, user_id=args.user_id, lookback_days=DISMISSED_LOOKBACK_DAYS
+    )
+
+    # Lane partition (F1/F1b): scan-only triggers (material_news) sweep after
+    # the serial candidate lane, so candidate/alert processing keeps its
+    # existing cap priority and the sweep's admission then accounts the
+    # ledger's TOTAL spend — candidate spend gates the sweep, and the sweep's
+    # own spend gates its waves.
+    sweep_triggers, serial_triggers = _partition_triggers(triggers)
+
     _emit(
         {
             "event": "run_starting",
@@ -742,14 +1140,19 @@ def main(argv: list[str] | None = None) -> int:
             "max_cost_usd": str(max_cost_usd),
             "user_id": args.user_id,
             "db_path": str(db_path),
+            "scan_workers": args.scan_workers,
+            "scan_timeout_s": args.scan_timeout_s,
         }
     )
 
     halt = False
-    for ticker in tickers:
+    halted_at: tuple[int, int] | None = None
+    for ticker_index, ticker in enumerate(tickers):
         if halt:
             break
-        for trigger in triggers:
+        for trigger_index, trigger in enumerate(serial_triggers):
+            if halt:
+                break
             try:
                 keep_going = _process_ticker_trigger(
                     trigger=trigger,
@@ -760,6 +1163,7 @@ def main(argv: list[str] | None = None) -> int:
                     max_cost_usd=max_cost_usd,
                     run_started_at=run_started_at,
                     summary=summary,
+                    dismissed_signatures=dismissed_signatures,
                 )
             except Exception as exc:
                 # Outer defense-in-depth: only a true programming error
@@ -778,7 +1182,33 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             if not keep_going:
                 halt = True
+                halted_at = (ticker_index, trigger_index)
                 break
+    if halted_at is not None:
+        # The cap halt is clean (exit 0) but no longer silent: every serial
+        # pair it leaves unprocessed gets an explicit deferral.
+        _defer_remaining_serial_pairs(
+            tickers,
+            serial_triggers,
+            from_ticker_index=halted_at[0],
+            from_trigger_index=halted_at[1],
+            summary=summary,
+        )
+
+    # The sweep lane runs even after a serial-lane cap halt: its first wave
+    # admission re-reads the ledger and explicitly defers every sweep ticker
+    # with reason cost_cap — visible coverage, never a silent skip.
+    for trigger in sweep_triggers:
+        _run_scan_sweep(
+            trigger=trigger,
+            tickers=tickers,
+            db_path=db_path,
+            max_cost_usd=max_cost_usd,
+            run_started_at=run_started_at,
+            summary=summary,
+            workers=args.scan_workers,
+            per_ticker_timeout_s=args.scan_timeout_s,
+        )
 
     summary.tickers_processed = len(summary.seen_tickers)
     summary.elapsed_seconds = round(time.monotonic() - t0, 3)
@@ -798,6 +1228,8 @@ def main(argv: list[str] | None = None) -> int:
                 "dry_run_alerts": summary.dry_run_alerts,
                 "errors": summary.errors,
                 "cost_cap_reached": summary.cost_cap_reached,
+                "scan_workers": args.scan_workers,
+                "scan_deferrals": summary.scan_deferrals,
                 "elapsed_seconds": summary.elapsed_seconds,
                 "started_at": summary.started_at,
                 "ended_at": summary.ended_at,

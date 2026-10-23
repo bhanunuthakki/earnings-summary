@@ -79,6 +79,7 @@ from provenance.source_fact_repository import (
 )
 from report.sections._common import calendar_quarter_key
 from report.sections.financials import dedupe_by_calendar_quarter
+from runtime.deterministic import as_utc as _aware
 from sources.canonical_financial_series import (
     CanonicalFinancialCoordinate,
     CanonicalFinancialObservation,
@@ -1209,10 +1210,6 @@ class MetricAttemptResult(BaseModel):
     output_observation_id: str | None = None
     kpi_fact_id: int | None = None
     provenance: ProvenanceBundle | None = None
-
-
-def _aware(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _canonical_digest(value: object) -> str:

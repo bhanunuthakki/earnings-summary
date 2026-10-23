@@ -12,6 +12,8 @@ from typing import Literal, cast
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from materialized_cache import cache_metadata, read_fresh_payload, write_payload_atomically
+from provenance.evidence_revision import canonical_financial_revision
+from provenance.source_fact_publication import publication_verification_scope
 from sources.canonical_financial_series import (
     CanonicalFinancialObservation,
     CanonicalFinancialReadError,
@@ -30,7 +32,7 @@ __all__ = [
 ]
 
 _CACHE_REL: tuple[str, ...] = ("data", "cockpit_fundamentals.json")
-_CACHE_SCHEMA = "cockpit-fundamentals-canonical/v2"
+_CACHE_SCHEMA = "cockpit-fundamentals-canonical/v3"
 _SOURCE_AUTHORITY = "canonical_fact_resolution"
 _METRICS = ("revenue", "free_cash_flow", "operating_cash_flow", "capital_expenditure")
 _CADENCES = (
@@ -550,7 +552,8 @@ def compute_snapshot(
             cadences=_CADENCES,
             cutoff=cutoff_at,
         )
-        fundamentals = {ticker: _compute_ticker(conn, ticker, cutoff_at) for ticker in tickers}
+        with publication_verification_scope(conn):
+            fundamentals = {ticker: _compute_ticker(conn, ticker, cutoff_at) for ticker in tickers}
         return CockpitFundamentalsSnapshot(
             cutoff=cutoff_at,
             ticker_universe=tickers,
@@ -579,19 +582,42 @@ def materialize_fundamentals(
     *,
     cutoff: datetime | None = None,
 ) -> int:
-    """Atomically replace the cache only after a complete canonical read."""
-    snapshot = compute_snapshot(conn, cutoff=cutoff)
+    """Atomically replace the cache only after a complete canonical read.
+
+    The cache records the canonical revision it was read at, in the same read
+    transaction, so readers can reject it once canonical facts change. It reads
+    only committed state: inside a caller's open transaction it could publish
+    facts that are later rolled back.
+    """
+    if conn.in_transaction:
+        raise ValueError("cockpit fundamentals must be materialized from committed state")
+    try:
+        conn.execute("BEGIN")
+        source_revision = list(canonical_financial_revision(conn))
+        snapshot = compute_snapshot(conn, cutoff=cutoff)
+    finally:
+        if conn.in_transaction:
+            conn.rollback()
     payload: dict[str, object] = {
         **cache_metadata(_CACHE_SCHEMA, now=snapshot.cutoff),
+        "source_revision": source_revision,
         "snapshot": snapshot.model_dump(mode="json"),
     }
     write_payload_atomically(_cache_path(repo_root), payload, prefix="cockpit_fundamentals.")
     return len(snapshot.ticker_universe)
 
 
-def _read_cached_snapshot(repo_root: Path) -> CockpitFundamentalsSnapshot | None:
+def _read_cached_snapshot(
+    repo_root: Path, conn: sqlite3.Connection
+) -> CockpitFundamentalsSnapshot | None:
     payload = read_fresh_payload(_cache_path(repo_root), schema=_CACHE_SCHEMA)
     if not payload:
+        return None
+    try:
+        current_revision = list(canonical_financial_revision(conn))
+    except (sqlite3.Error, RuntimeError):
+        return None
+    if payload.get("source_revision") != current_revision:
         return None
     raw = payload.get("snapshot")
     computed_at = payload.get("computed_at")
@@ -613,7 +639,8 @@ def _read_cached_snapshot(repo_root: Path) -> CockpitFundamentalsSnapshot | None
 
 def read_materialized_fundamentals(
     repo_root: Path,
+    conn: sqlite3.Connection,
 ) -> dict[str, tuple[float | None, float | None]]:
-    """Read a complete, fresh canonical cache and project existing values."""
-    snapshot = _read_cached_snapshot(repo_root)
+    """Read a complete, fresh cache built at the current canonical revision."""
+    snapshot = _read_cached_snapshot(repo_root, conn)
     return {} if snapshot is None else snapshot.value_projection()

@@ -9,24 +9,21 @@ either its prior binding or the fact observations already captured from it.
 from __future__ import annotations
 
 import hashlib
-import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from runtime import deterministic
+from runtime.deterministic import require_sha256
+
 _SHA256_LENGTH = 64
 
 
-def _sha256(value: str) -> str:
-    normalized = value.lower()
-    if len(normalized) != _SHA256_LENGTH or any(
-        character not in "0123456789abcdef" for character in normalized
-    ):
-        raise ValueError("must be a lowercase SHA-256 hex digest")
-    return normalized
+_sha256 = partial(require_sha256, message="must be a lowercase SHA-256 hex digest")
 
 
 def _optional_sha256(value: str | None) -> str | None:
@@ -49,11 +46,7 @@ class LegacyDocumentScopeLocator(_ClosedRecord):
 
     @property
     def canonical_json(self) -> str:
-        return json.dumps(
-            self.model_dump(mode="json", exclude_none=True),
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        return deterministic.canonical_json_ascii(self.model_dump(mode="json", exclude_none=True))
 
     @property
     def canonical_sha256(self) -> str:

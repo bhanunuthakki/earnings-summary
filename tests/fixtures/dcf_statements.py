@@ -43,19 +43,89 @@ def seed_dcf_statements(
     canonical_bindings: bool = True,
     transform_cell: Callable[[FactCellV2], FactCellV2] | None = None,
     publication_granularity: Literal["statement_period", "all"] = "statement_period",
-) -> None:
+    namespace: str = "",
+    document_id: int = 1,
+    seed_foundation: bool = True,
+) -> int:
+    """Publish one ticker's statement observations through the real writers.
+
+    The optional ``namespace`` / ``document_id`` / ``seed_foundation``
+    parameters exist for the multi-ticker seed (several tickers' facts in ONE
+    database copy): every fixed key that collides across tickers (document
+    version, legacy document id, extraction run ids, node/observation
+    suffixes) is namespaced per ticker, and the shared foundation graph is
+    seeded once by the first caller. Defaults reproduce the single-ticker
+    layout exactly. Returns the number of facts published.
+    """
     # The foundational graph helper has no public fixture seam on the released
     # baseline. Call its typed seed only; the owning migrated_db supplies schema.
     seed = cast("Callable[[sqlite3.Connection], None]", getattr(foundation, "_seed_foundation"))
-    seed(conn)
+    if seed_foundation:
+        seed(conn)
+    document_version_id = f"{namespace}dcf-document"
+    issuer_id = f"{namespace}issuer-1"
+    reporting_entity_id = f"{namespace}reporting-1"
+    subject_binding_id = f"{namespace}binding-1"
+    if namespace:
+        # Multi-ticker seed: FactCellV2 is keyed by reporting identity, never
+        # ticker, so each ticker gets its own issuer + reporting entity. Two
+        # tickers reporting the same concept/period stay distinct semantic
+        # coordinates in one database copy instead of conflicting envelopes.
+        conn.execute(
+            "INSERT INTO issuer_entities VALUES (?,?,?,?)",
+            (issuer_id, f"{namespace}issuer-key-1", "operating_company", STAMP),
+        )
+        conn.execute(
+            "INSERT INTO reporting_entities VALUES (?,?,?,?,?,?)",
+            (
+                reporting_entity_id,
+                f"{namespace}reporting-key-1",
+                issuer_id,
+                "legal_registrant",
+                f"{ticker} Registrant",
+                STAMP,
+            ),
+        )
+        # The reported-anchor trigger binds every anchor's subject revision to
+        # the cell's reporting entity and the document version's issuer (and
+        # binding revisions are unique per recorded issuer), so each ticker
+        # needs its own selected binding revision too.
+        conn.execute(
+            "INSERT INTO recorded_subject_binding_revisions "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                subject_binding_id,
+                f"{namespace}binding-key-1",
+                issuer_id,
+                1,
+                issuer_id,
+                reporting_entity_id,
+                None,
+                "selected",
+                "deterministic",
+                "exact_subject",
+                "{}",
+                0,
+                STAMP,
+                STAMP,
+                STAMP,
+                None,
+            ),
+        )
     conn.execute(
-        "INSERT INTO documents (id,ticker,source_type,doc_type,source_url,file_path,sha256,fetched_at,fetch_status,raw_bytes_size,source_quality_tier) VALUES (1,?,'sec_xbrl','10-K','https://data.sec.gov/example.json','synthetic.json',?,'2026-07-27T12:00:00+00:00','ok',12,'sec_official')",
-        (ticker, hashlib.sha256(b"filing bytes").hexdigest()),
+        "INSERT INTO documents (id,ticker,source_type,doc_type,source_url,file_path,sha256,fetched_at,fetch_status,raw_bytes_size,source_quality_tier) VALUES (?,?,'sec_xbrl','10-K','https://data.sec.gov/example.json','synthetic.json',?,'2026-07-27T12:00:00+00:00','ok',12,'sec_official')",
+        (document_id, ticker, hashlib.sha256(f"filing bytes {ticker}".encode()).hexdigest()),
     )
     conn.execute(
         "INSERT INTO evidence_document_versions(document_version_id,document_key,version_sequence,observation_id,blob_sha256,issuer_id,ticker,document_type,form_type,language,legacy_document_id,recorded_at) "
-        "SELECT 'dcf-document','dcf-document',1,observation_id,blob_sha256,issuer_id,?,'regulatory_filing','10-K','en',1,recorded_at FROM evidence_document_versions WHERE document_version_id='document-1'",
-        (ticker,),
+        "SELECT ?,?,1,observation_id,blob_sha256,?,?,'regulatory_filing','10-K','en',?,recorded_at FROM evidence_document_versions WHERE document_version_id='document-1'",
+        (
+            document_version_id,
+            document_version_id,
+            issuer_id,
+            ticker,
+            document_id,
+        ),
     )
     facts: list[ReportedSourceFact] = []
     # Routine fixtures select one statement period per extraction config. Each
@@ -67,15 +137,20 @@ def seed_dcf_statements(
             year = int(str(record["fiscalYear"]))
             fiscal = str(record["period"])
             run_id = (
-                "dcf-run"
+                f"{namespace}dcf-run"
                 if publication_granularity == "all"
-                else f"dcf-run-{statement}-{year}-{fiscal}"
+                else f"{namespace}dcf-run-{statement}-{year}-{fiscal}"
             )
             if run_id not in batches:
                 batches[run_id] = []
                 conn.execute(
-                    "INSERT INTO evidence_extraction_runs SELECT ?,?,'dcf-document',input_sha256,extractor_name,?,extractor_code_version,output_sha256,started_at,completed_at,outcome FROM evidence_extraction_runs WHERE extraction_run_id='run-1'",
-                    (run_id, run_id, hashlib.sha256(run_id.encode()).hexdigest()),
+                    "INSERT INTO evidence_extraction_runs SELECT ?,?,?,input_sha256,extractor_name,?,extractor_code_version,output_sha256,started_at,completed_at,outcome FROM evidence_extraction_runs WHERE extraction_run_id='run-1'",
+                    (
+                        run_id,
+                        run_id,
+                        document_version_id,
+                        hashlib.sha256(run_id.encode()).hexdigest(),
+                    ),
                 )
             quarter = int(fiscal[1])
             half_year = {str(row["period"]) for row in records} == {"Q2", "Q4"}
@@ -87,7 +162,7 @@ def seed_dcf_statements(
                 raw = record.get(mapping.fmp_field)
                 if not isinstance(raw, (int, float)):
                     continue
-                suffix = f"dcf-{len(facts)}"
+                suffix = f"{namespace}dcf-{len(facts)}"
                 locator = {"path": f"/facts/{len(facts)}/value"}
                 locator_json = json.dumps(locator, sort_keys=True, separators=(",", ":"))
                 node = f"node-{suffix}"
@@ -108,6 +183,7 @@ def seed_dcf_statements(
                 cell = FactCellV2.model_validate(
                     {
                         **foundation.make_cell(suffix).model_dump(),
+                        "reporting_entity_id": reporting_entity_id,
                         "semantic_key_sha256": None,
                         "concept_namespace": "urn:earnings-summary:legacy:financial",
                         "concept_name": mapping.line_item,
@@ -130,7 +206,8 @@ def seed_dcf_statements(
                 ).model_copy(
                     update={
                         "evidence_node_id": node,
-                        "document_version_id": "dcf-document",
+                        "document_version_id": document_version_id,
+                        "subject_binding_revision_id": subject_binding_id,
                         "source_locator": CanonicalJSONObject.model_validate(locator),
                         "source_locator_sha256": hashlib.sha256(locator_json.encode()).hexdigest(),
                     }
@@ -164,7 +241,7 @@ def seed_dcf_statements(
         )
     if not canonical_bindings:
         conn.commit()
-        return
+        return len(facts)
     ontology = populate_metric_ontology(
         conn,
         MetricOntologyPopulationRequest(
@@ -180,3 +257,4 @@ def seed_dcf_statements(
     )
     assert result.resolved_cell_count == len(facts)
     conn.commit()
+    return len(facts)

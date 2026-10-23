@@ -15,6 +15,7 @@ from operations.host_runtime import (
     HostReceipt,
     HostRuntimeBundle,
 )
+from tests.comments_server_seams import patch_server_seam
 
 ORIGIN = "https://review.example.ts.net"
 CODE_IDENTITY = "isolated-reviewed-code"
@@ -30,8 +31,8 @@ def test_host_runtime_serves_only_cached_sanitized_evidence(
     def code_identity(_: Path) -> str:
         return CODE_IDENTITY
 
-    monkeypatch.setattr(comments_server, "private_mobile_origin", configured_origin)
-    monkeypatch.setattr(comments_server, "review_code_identity", code_identity)
+    patch_server_seam(monkeypatch, "private_mobile_origin", configured_origin)
+    patch_server_seam(monkeypatch, "review_code_identity", code_identity)
     target = tmp_path / RELATIVE_RECEIPT
     if state != "missing":
         target.parent.mkdir(parents=True)
@@ -51,7 +52,7 @@ def test_host_runtime_serves_only_cached_sanitized_evidence(
     def forbidden(*_: object, **__: object) -> None:
         raise AssertionError("request must not probe host or open financial database")
 
-    monkeypatch.setattr(comments_server, "connect_sqlite", forbidden)
+    patch_server_seam(monkeypatch, "connect_sqlite", forbidden)
     monkeypatch.setattr("operations.host_runtime.collect_host_receipt", forbidden)
     app = comments_server.create_app(tmp_path, db_path=tmp_path / "unused.db")
     response = app.test_client().get(
@@ -78,7 +79,7 @@ def test_host_runtime_refuses_missing_or_non_https_authority(
     def configured_origin(**_: object) -> str | None:
         return origin
 
-    monkeypatch.setattr(comments_server, "private_mobile_origin", configured_origin)
+    patch_server_seam(monkeypatch, "private_mobile_origin", configured_origin)
     response = (
         comments_server.create_app(tmp_path, db_path=tmp_path / "unused.db")
         .test_client()

@@ -486,25 +486,80 @@ These are the owner-facing verbs that are allowed to mutate durable state. A lab
 **Subsumes.** Processing result, lane disposition, and extraction outcome.
 **Current admission boundary.** `filing_xbrl` can succeed only through the exact native 0242 extraction-disposition seal and its verified Source Fact Publication. Every other applicable lane fails closed until a native closure adapter can recompute its ordered outputs and final seal; synthetic or caller-attested commitments never admit.
 
+## Analysis Evidence Scope
+
+**Definition.** An immutable selection of the documents required for one declared
+analysis purpose and issuer. It binds the required reporting periods, explicit
+related accessions and reasons, knowledge cutoff, observation cutoff, and one
+complete authoritative SEC inventory with its component commitment. Every expected
+document in that inventory has a role: research document, required package
+dependency, or outside the analysis with an explicit reason.
+**Lives in.** `AnalysisScopeRequest`, `AnalysisEvidenceScope`,
+`src/provenance/analysis_scope.py`, and
+`execution/plan_analysis_evidence_scope.py`. The immutable CLI artifact, Document
+Processing Scope, and Research Universe retain the full receipt. The corpus key
+and selection configuration digest bind it; the corpus manifest does not retain
+the full receipt or selection configuration.
+**Contract.** Both request clocks require an explicit time zone. All selected
+package members must be captured before qualification. Only primary filings enter
+the research text collection. `require_latest_period` checks the latest known
+10-K/10-Q/20-F/40-F periodic base. It does not establish latest interim financial
+coverage for a 20-F/40-F issuer. Explicit 6-K/8-K selections retain their stated
+reasons; they do not replace a reviewed interim financial-package obligation. Required periodic filings
+include their known amendments. Related current reports require explicit accession
+selection; unavailable amendment linkage is not guessed. Outside archive gaps stay
+visible and do not block unrelated selected work. New operations require the current
+inventory. Stored-artifact verification reconstructs the inventory visible at the
+receipt's original observation cutoff and cannot skip an incomplete newer inventory
+already visible then. Scoped processing and research coordinates include the scope
+identity; a scoped artifact does not count as full-population completion.
+**Not to be confused with.** Source acquisition completeness, financial-fact
+admission, a Document Processing Snapshot, or model readiness. The receipt selects
+evidence; it does not prove capture, extraction, financial meaning, or valuation.
+
 ## Document Processing Snapshot
 
 **Definition.** An exhaustive, ordered, hash-sealed set containing every applicable Document Processing Obligation and its one verified Document Processing Disposition as known at one explicit cutoff.
 **Lives in.** `document_processing_snapshot_headers`, `document_processing_snapshot_members`, `document_processing_snapshot_seals`, and `src/provenance/research_snapshot.py`.
 **Not to be confused with.** A current processing dashboard or a caller-supplied document list; membership is derived internally and cannot change when later evidence arrives.
 **Subsumes.** Processing completeness seal and document readiness snapshot.
+**Analysis boundary.** When present, an Analysis Evidence Scope defines the exact
+primary document set. Every applicable processing obligation for that set remains
+required, including `filing_xbrl`; required package dependencies must also be
+captured. Unscoped snapshots retain their full-population contract.
 
 ## Native Processing Evidence Seal
 
 **Definition.** An immutable header/member/final-seal publication derived from one exact successful extraction run and the complete ordered native rows required for a supported Document Processing lane. Its public verifier re-derives membership from the pinned native run and compares every locator, content commitment, clock, and final member-set digest.
 **Lives in.** `document_processing_evidence_headers`, `document_processing_evidence_members`, `document_processing_evidence_seals`, `src/provenance/document_processing_evidence.py`, and `alembic/versions/0248_native_processing_closure_adapters.py`.
 **Not to be confused with.** A successful extraction attempt or caller-supplied evidence list; neither proves that the native output set is complete.
-**Current admission boundary.** HTML hierarchy, PDF native text/OCR/tables, standalone image OCR, PPTX slides/charts/tables, XLSX workbook/sheets/named tables, transcript turns, and fully time-coded transcript speakers can seal. Each applicable lane still fails closed when its exact native inventory is missing, quarantined, old, or tampered.
+**Current admission boundary.** HTML hierarchy, PDF native text/OCR/tables, standalone image OCR, PPTX slides/charts/tables, XLSX workbook/sheets/named tables, transcript turns, and fully time-coded transcript speakers can seal. The finite `native-pdf-transcript-review/v1` profile also admits untimed PDF turns and speakers from a pinned promoted native PDF text seal. It partitions every source page into exact character spans, preserves reviewed raw speaker labels, and retains unknown attribution for page openings and reviewed speakerless headings. It does not carry a speaker across pages or infer names or timecodes. Timecodes remain explicitly unavailable. The existing time-coded profile keeps its speaker and timecode requirements. Each applicable lane still fails closed when its exact native inventory is missing, quarantined, old, or tampered.
+
+## Report PDF Table Scope
+
+**Definition.** An immutable, reviewed all-page inventory for one PDF in an
+Analysis Evidence Scope v7 under `complete_report_evidence/v1`. It binds the raw
+PDF, retained native artifact, exact page commitments, required/deferred table
+population and independently declared source dependencies for the existing ten
+MELI report requirements. Deferral requires a content-backed review basis. A
+schema-valid source plan is not materiality approval.
+**Lives in.** `ReportPdfTableScope`, `ReportPdfPageSelection`,
+`MemoReportSourcePopulation`, `src/provenance/report_evidence_contract.py` and
+the existing analysis-scope artifact.
+**Proof.** `report-pdf-table-certificate/v1` verifies the full retained native
+parent seal and the complete required child-page inventories. The distinct
+adapter and scoped obligation cannot stand in for full-PDF table completion.
+The processing receipt retains scoped identities and deferred pages. All selected
+text remains required. Deferred-page anchors fail through direct source, financial,
+calculation, derived-leaf, supporting-context and model-input paths.
 
 ## PDF Table Extraction Artifact
 
 **Definition.** An append-only header/member/final-seal publication over one exact PDF byte stream and one pinned PyMuPDF/MuPDF dual-detector configuration. Its ordered members preserve every page disposition and detected table, row, cell, coordinate, nested commitment, and explicit no-table proof.
 **Lives in.** `pdf_table_extraction_artifact_headers`, `pdf_table_extraction_artifact_members`, `pdf_table_extraction_artifact_seals`, `src/provenance/pdf_table_extraction.py`, and `src/provenance/document_processing_evidence.py`.
-**Not to be confused with.** A claim of semantic table exhaustiveness. The artifact proves exact detector-relative coverage; encrypted, scanned, image-only, malformed, ambiguous, or resource-capped inputs remain quarantined and cannot satisfy the `pdf_table` lane.
+**Not to be confused with.** A claim of semantic table exhaustiveness. The artifact proves exact detector-relative coverage; encrypted, scanned, image-only, malformed, ambiguous, or resource-capped inputs remain quarantined and cannot satisfy a full-PDF `pdf_table` obligation.
+A Report PDF Table Scope can verify valid child pages for a distinct bounded
+report obligation while retaining that full parent quarantine.
 
 ## Research Snapshot
 
@@ -512,6 +567,23 @@ These are the owner-facing verbs that are allowed to mutate durable state. A lab
 **Lives in.** `research_snapshot_headers`, `research_snapshot_members`, `research_snapshot_seals`, and `src/provenance/research_snapshot.py`.
 **Not to be confused with.** A database backup, current-view query, or generated research report; it is the reproducible admission boundary those consumers must cite.
 **Subsumes.** Research evidence snapshot and research-readiness seal.
+**Analysis boundary.** When present, the Analysis Evidence Scope identity is part
+of the terminal coordinate with issuer and knowledge/observation cutoffs. Processing,
+corpus, and Research Universe must contain the same exact primary document set.
+Different scopes remain separate; retrieval mode changes cannot replace a terminal
+within the same scope.
+
+
+**Resolution materialization clock.** A report-table financial reference can retain
+`resolution_observed_through=O` for a canonical resolution physically recorded
+between its knowledge cutoff K and O. Source facts, financial roles, ontology
+admission and bindings remain bounded by K. This field does not grant later
+financial evidence. A Research Snapshot consumer requires exact K and the
+snapshot's exact recorded-at O, plus the sealed resolution revision. NU PRE/POST
+baselines retain the same exact cell and Observation Version. Each immutable
+context preserves its own sealed resolution revision; a later materialization
+can change that revision only after both native reads verify the same source. O is omitted
+for legacy references; series references cannot use this adapter.
 
 ## Research Snapshot Admission
 

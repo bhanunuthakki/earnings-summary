@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -453,3 +454,152 @@ def test_pagination_seeks_both_primary_key_bounds(
     assert len(document_search) == 1
     assert "INTEGER PRIMARY KEY" in document_search[0]
     assert "rowid>?" in document_search[0] and "rowid<?" in document_search[0]
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_retained_pdf_coverage_skips_backfill_and_scheduled_resume(
+    connection: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    resume: bool,
+) -> None:
+    from datetime import UTC, datetime
+
+    from execution import process_document_evidence as cli
+    from provenance.evidence_backfill import ensure_legacy_document_evidence
+    from provenance.evidence_ledger import (
+        EvidenceLedger,
+        EvidenceLocator,
+        EvidenceNode,
+        ExtractionRun,
+    )
+    from provenance.fulltext_backfill import FullTextBackfillRequest, backfill_fulltext_evidence
+    from provenance.fulltext_extractor_identity import RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0
+
+    document_id = _seed(connection, tmp_path, suffix=".pdf")
+    ensure_legacy_document_evidence(connection, repo_root=tmp_path, document_id=document_id)
+    version = connection.execute(
+        "SELECT document_version_id,blob_sha256 FROM evidence_document_versions WHERE legacy_document_id=?",
+        (document_id,),
+    ).fetchone()
+    identity = RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0
+    stamp = datetime(2026, 9, 18, 12, tzinfo=UTC)
+    ledger = EvidenceLedger(connection)
+    ledger.persist(
+        ExtractionRun(
+            extraction_run_id="retained-pdf",
+            idempotency_key="retained-pdf",
+            document_version_id=str(version[0]),
+            input_sha256=str(version[1]),
+            extractor_name=identity.name,
+            extractor_code_version=identity.code_version,
+            extractor_config_sha256=identity.config_sha256,
+            output_sha256="c" * 64,
+            started_at=stamp,
+            completed_at=stamp,
+            outcome="succeeded",
+        )
+    )
+    ledger.persist(
+        EvidenceNode(
+            node_id="retained-page",
+            evidence_key="retained-page",
+            revision=1,
+            extraction_run_id="retained-pdf",
+            node_kind="pdf_page",
+            text="Reported revenue.",
+            locator=EvidenceLocator(source_ref="ACME.pdf", page_number=1),
+            recorded_at=stamp,
+        )
+    )
+    connection.commit()
+    before_runs = tuple(connection.execute("SELECT * FROM evidence_extraction_runs"))
+    before_nodes = tuple(connection.execute("SELECT * FROM evidence_nodes"))
+    if resume:
+        monkeypatch.setattr(cli, "PROJECT_ROOT", tmp_path)
+        database = str(connection.execute("PRAGMA database_list").fetchone()[2])
+        argv = [
+            "--db",
+            database,
+            "--repo-root",
+            str(tmp_path),
+            "--apply",
+            "--resume",
+            "--batch-size",
+            "2",
+        ]
+        for _ in range(2):
+            assert cli.main(argv) == 2  # Missing source inventories stay degraded.
+            receipt = tmp_path / ".tmp/operations/runtime/document-evidence.latest.json"
+            result = cli.DocumentEvidenceResumeReceipt.model_validate_json(
+                receipt.read_text()
+            ).result
+            assert result.extracted == 0
+            assert result.items[0].status == "already-covered"
+    else:
+        backfill = backfill_fulltext_evidence(
+            connection, FullTextBackfillRequest(repo_root=tmp_path, apply=True)
+        )
+        assert backfill.documents_skipped_covered == 1
+        assert backfill.documents_extracted == backfill.records_created == 0
+    assert tuple(connection.execute("SELECT * FROM evidence_extraction_runs")) == before_runs
+    assert tuple(connection.execute("SELECT * FROM evidence_nodes")) == before_nodes
+
+
+@pytest.mark.parametrize("ascending", [False, True])
+@pytest.mark.parametrize("filtered", [False, True])
+def test_source_filter_preserves_both_pagination_directions(
+    connection: sqlite3.Connection, tmp_path: Path, ascending: bool, filtered: bool
+) -> None:
+    from models.documents import SourceType
+
+    ir_id = _seed(connection, tmp_path)
+    row = connection.execute(
+        "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, "
+        "fetched_at, fetch_status, raw_bytes_size) VALUES "
+        "('ACME', 'fmp', 'earnings_release', 'fmp.txt', ?, '2026-09-18T12:00:00Z', 'ok', 1) "
+        "RETURNING id",
+        (hashlib.sha256(b"fmp").hexdigest(),),
+    ).fetchone()
+    assert row is not None
+    fmp_id = int(row[0])
+    connection.commit()
+    result = process_document_evidence(
+        connection,
+        DocumentEvidenceRequest(
+            repo_root=tmp_path,
+            ticker="ACME",
+            source_type=SourceType.IR_DOC if filtered else None,
+            newer_than_document_id=0 if ascending else None,
+        ),
+    )
+    expected = [ir_id] if filtered else ([ir_id, fmp_id] if ascending else [fmp_id, ir_id])
+    assert [item.document_id for item in result.items] == expected
+
+
+def test_resume_receipt_binds_source_filter_and_accepts_old_unfiltered_scope(
+    connection: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from execution import process_document_evidence as cli
+    from models.documents import SourceType
+
+    monkeypatch.setattr(cli, "PROJECT_ROOT", tmp_path)
+    _seed(connection, tmp_path)
+    database = Path(connection.execute("PRAGMA database_list").fetchone()[2])
+    argv = ["--db", str(database), "--repo-root", str(tmp_path), "--apply", "--resume"]
+    assert cli.main([*argv, "--source-type", "ir_doc"]) == 2
+    receipt_path = tmp_path / ".tmp" / "operations" / "runtime" / "document-evidence.latest.json"
+    receipt = cli.DocumentEvidenceResumeReceipt.model_validate_json(receipt_path.read_text())
+    assert receipt.source_type is SourceType.IR_DOC
+    with pytest.raises(ValueError, match="scope mismatch"):
+        cli.main(argv)
+    with pytest.raises(ValueError, match="scope mismatch"):
+        cli.main([*argv, "--source-type", "fmp"])
+    # Receipts written before this optional field retain unfiltered semantics.
+    old_receipt = receipt.model_dump(mode="json", exclude={"source_type"})
+    receipt_path.write_text(json.dumps(old_receipt))
+    assert cli.main(argv) == 2
+    capsys.readouterr()

@@ -1,112 +1,31 @@
 {
   "schema_version": "filing-xbrl-candidate-evidence/v1",
-  "status": "qualified_candidate_installation_not_approved",
-  "installation_approved": false,
-  "financial_admission": false,
-  "source_base_commit": "bce89d9d5b1f494f2352b0a25bf350c03ef45303",
+  "status": "activation_preparation_pending_target_identity_qualification_and_Opus_signoff",
+  "installation_approved_by_owner_condition": "User requests full activation only after independent Opus5.5 signoff; production unchanged until final signoff.",
+  "supersedes_candidate_commit": "8a950da3970d7e9821b77c4cc9064b360a69dd1e",
   "profile": "EarningsSummaryFilingXbrlV2",
   "preserved_profile": "EarningsSummaryFilingXbrlV1",
-  "bundle": {
-    "manifest_sha256": "6e739cf97cd831163dfc95a2bafaf04567ac0fe09179e760f6285e279f3d9786",
-    "runtime_artifact_sha256": "af4ae37b901d68b314a2a93b81ea7b3a26d55876682939066c5a4f7065586301",
-    "runtime_member_count": 9596,
-    "runtime_byte_count": 364920792,
-    "sandbox_launcher_sha256": "e9a2a416855b6d6998b15b363baaef00868586bc339bd52d589106e134f5bf7f"
-  },
-  "manifest_artifact_sha256": "7227d7ae82b72aeac651b10bc228aab5045e7788c03200c1b4e55950f9101676",
   "sources": {
     "execution/build_filing_xbrl_processor_bundle.py": "0d33126e9680a6ec4a33e3383d6854da4efd62d271fc16db25ee0108825e9afc",
     "execution/filing_xbrl_bridge.py": "9e01a0e76cfbe1fc10c2b42c64523f0166dc7a9d0807e9370b51c2404917331e",
-    "execution/filing_xbrl_appcontainer_launcher.cs": "03d93e5fbaf444bdb1a2bb2a4c9f14e51562877d481638955237baf980f01092",
+    "execution/filing_xbrl_appcontainer_launcher.cs": "d45b73dc56cb9e06bd7ef885f46e7d105b690850114123cf6022048142925476",
     "src/filings/xbrl_units.py": "b9f2fc5fbac15f9d7ac2fdef339b36783479aa8730a1adedf10ec6f5c9a2281c"
   },
-  "normal_entrypoint": {
-    "module": "earnings_summary_xbrl_bridge",
-    "diagnostic_shim": false,
-    "timeout_seconds": 600,
-    "source_fact_count": 1934,
-    "returned_fact_count": 1934,
-    "normalized_fact_count": 1934,
-    "divided_unit_fact_count": 63,
-    "declared_taxonomy_count": 5,
-    "python_network_attempts": 0,
-    "all_owned_trees_stopped": true,
-    "exact_acl_parity": true,
-    "protected_bytes_parity": true,
-    "result_sha256": "ca768d5bb7f920b070fe99898b70cb629287dc4e9df96ecdb2737640e6c2748a"
+  "bundle": {
+    "runtime_artifact_sha256": "af4ae37b901d68b314a2a93b81ea7b3a26d55876682939066c5a4f7065586301",
+    "sandbox_launcher_sha256": "6a83b3faeae1a0b3f14ae86a1d28d59af1399a1d56f7e9044f8f63619a059ebe",
+    "timeout_seconds": 600
   },
-  "containment_controls": {
-    "exact_launcher": true,
-    "actual_child_token_appcontainer": true,
-    "actual_child_token_capabilities": 0,
-    "network_positive_control_succeeded": true,
-    "contained_socket_error": 10013,
-    "network_application_bytes_sent": 0,
-    "loopback_exemption": false,
-    "file_boundary_checks_passed": 6,
-    "native_label_cases_passed": 10,
-    "evidence_note": "Controls28 bind the retained launcher and Python executable. Runtime30 changes only the bridge member; ordinary replay31 independently passes on the complete new runtime.",
-    "boundary_access_denials": 13,
-    "boundary_access_scope": "11 private-UI requests, one host-window-station request and one controller-process access request"
-  },
-  "source_limits": [
+  "manifest_sha256": "89655d6d8815317b2396c000a084bc255747b71a6c363aaba58339dceedf9449",
+  "manifest_artifact_sha256": "df3de318801337afbce1e94b8d560a4cfb47790c8be975751d0d54659c586115",
+  "runtime_members": 9596,
+  "runtime_bytes": 364920792,
+  "qualification": "Target identity tests and final activation review pending. Previous receipts apply only to the prior launcher and are preserved in commit8a950da3 and task evidence.",
+  "financial_admission": false,
+  "production_deployment_changed": false,
+  "previous_research_limits": [
     "Retained ONON source is ZIP-derived; direct-response equality is not established.",
     "No archive completeness, semantic admission, database writes, thesis changes, financial activation or decision-grade claim.",
     "Normal extraction success does not approve installation or a service deployment."
-  ],
-  "independent_review": {
-    "role": "Astra advisory source and evidence review",
-    "formal_judge_verdict": false,
-    "normal31_review": "No blocking source defect reported; normal result and one-member runtime delta independently checked.",
-    "final34_review": "No blocking candidate issue found. Exact result, all referenced receipt hashes, six-entry synthetic ACL repair, cleanup and parity independently reviewed. Advisory review; no formal Judge acceptance or installation authority."
-  },
-  "receipts": {
-    "canonical30-build-receipt.json": "26c1d3ea689b7a6e2fb19d7f999c0bba4f47f65666d726f7169a0e1eda98004b",
-    "canonical31-owner-receipt.json": "ac9d63dd77cfac57910ac631183b1167a87f76833fc02b15ae0576f7b5e70b76",
-    "canonical31-run-receipt.json": "02b1825f970dd9ea432b6fbacf45a8ffe7d4b909ec9b7764ff298b87f9221bc9",
-    "canonical31-independent-result-check.json": "3f00e84ba7ffae49d846786f0162a3041ba7d103a92eedf78391c524642c6604",
-    "canonical28-owner-receipt.json": "98c770d6040b4306c71f7418144a03777b0c85ed12ef482f9f01351d4b63831b",
-    "canonical28-acl-semantic-check.json": "a9d85080157b6f4538534978d1d94f740b0ee6fa1397bfc8dcbd70317c0def5b",
-    "synthetic34-owner-receipt.json": "3a80ad1cdf2fe0ab3de5052ae2eaa44ee5686849e4aa3ab66d83d5227d3552ac",
-    "synthetic34-run-receipt.json": "b88390ae76cf26d935c817469d4ab8855df30e3d4acde62e55c78a3d9455e9cf",
-    "synthetic34-run/normalization.json": "641a6bd52dc4101a706ebbc52bd6e4f967d0954edd763c59b2b4e87cfa18ffc6",
-    "synthetic33-owner-receipt.json": "7be00d866622d2a9949b316284a5946f999a9690f6ac721c6cd03b34fe010891",
-    "synthetic32-owner-receipt.json": "1ccb94ff16839e25f74314cbe09b59672e808b7e3eb1d8c01f442820c50fde20",
-    "approval-proposal-schema-check.json": "819f40d966536d6b852dc5279d85d9504c5d05b62e08e08fd0383c5125b51a4b",
-    "synthetic34-independent-result-check.json": "e35bdc8a21ddf71d16f361579fbddebcbb7e7fd5dea7b81402e405b7cf0be40f",
-    "repository-gate-final.json": "6dea435a2db4a9c5b54905181a8a95ed1a6b0fbd2b5f96f918e0579fadb092f8",
-    "final-native-resource-postflight.json": "2f5acf84866eb9e0322575ca2e76758b2f13baa6c28bf98e4ed9636c54314d38",
-    "transport-retention-disposition.json": "8ca8675a61e8b18f0698555728900f2406f631d7dd68b846eb95f034f993ead8"
-  },
-  "evidence_location": "Task-owned .tmp/xbrl-replacement-candidate-20261022; complete runtime and result retained on the canonical Windows host. Receipts and source fixture are retained for review; installation remains a separate decision.",
-  "synthetic_smoke": {
-    "source_fact_count": 1,
-    "returned_fact_count": 1,
-    "normalized_fact_count": 1,
-    "python_network_attempts": 0,
-    "all_owned_trees_stopped": true,
-    "exact_acl_parity": true,
-    "protected_bytes_parity": true,
-    "result_sha256": "34df882b16ca8643ff0e1a2c6e373a68e94a7c92e1787bb0ddf31a2399d273c3"
-  },
-  "approval_proposal_sha256": "8a1537dcbf442b6079d81a782a1660e9deef95b4278ecddd211305509f147768",
-  "approval_proposal_note": "The proposal is inert review evidence. config/filing_xbrl_processor_approval.json remains unchanged. Installation requires approval and a reviewed source release that matches these source hashes.",
-  "preparation_dispositions": [
-    "Preserve run28 exact ACL parity failure:35 staged-input entries gained AI/order metadata; next baseline was explicitly bound to the observed state, with exact parity required thereafter.",
-    "Preserve32/33 synthetic setup failures. Only the fresh task-owned synthetic cache was repaired by removing exact redundant explicit OW/SY/BA entries. Prior descriptors were saved before repair. Final34 baseline and cleanup matched exactly."
-  ],
-  "repository_gate": {
-    "passed": true,
-    "platform": "macOS",
-    "pytest": {
-      "passed": 19419,
-      "skipped": 79,
-      "warnings": 2,
-      "subtests_passed": 2,
-      "seconds": 1923.25,
-      "workers": 2,
-      "distribution": "loadfile"
-    },
-    "format_lint_changed_types_full_static_quality_suppressions": "passed"
-  }
+  ]
 }

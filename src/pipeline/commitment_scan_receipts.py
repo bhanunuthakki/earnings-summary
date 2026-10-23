@@ -15,6 +15,8 @@ from typing import cast
 
 from pipeline.data_coverage_dispositions import fiscal_quarter_period_end
 from provenance.selection import selected_transcripts_relation
+from runtime.deterministic import canonical_json_ascii as _canonical_json
+from runtime.deterministic import sha256_text as _sha256
 
 _TRANSCRIPT_NAME = re.compile(r"^(?P<ticker>[A-Z0-9.-]+)_Q(?P<quarter>[1-4])_(?P<year>[0-9]{4})$")
 _OBSERVATION_SCHEMA = "commitment-segment-observations@1"
@@ -147,14 +149,6 @@ class CommitmentScanCoverage:
     receipt: CommitmentScanReceipt | None = None
     legacy_receipt_id: str | None = None
     legacy_n_extracted: int | None = None
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
-
-
-def _sha256(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def scan_receipt_table_available(conn: sqlite3.Connection) -> bool:

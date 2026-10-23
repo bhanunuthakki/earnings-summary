@@ -10,8 +10,11 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from dcf import input_evidence, meli_inputs
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
-from provenance.fact_read_model import FactReadModel
-from provenance.metric_ontology import CanonicalDimension, MetricOntology
+from provenance.metric_ontology import (
+    CanonicalDimension,
+    CanonicalMetricDefinitionRevision,
+    MetricOntology,
+)
 
 
 class InputSlot(BaseModel):
@@ -84,8 +87,15 @@ def preview_meli_inputs(
     ).fetchall()
     resolver = CanonicalFactResolutionEngine(conn)
     ontology = MetricOntology(conn)
-    reader = FactReadModel(conn)
     matches: dict[str, list[input_evidence.FactBinding]] = {item.key: [] for item in requirements}
+    candidates: list[
+        tuple[
+            str,
+            str,
+            CanonicalMetricDefinitionRevision,
+            tuple[input_evidence.InputRequirement, ...],
+        ]
+    ] = []
     for cell_id, revision_id, metric_id in rows:
         definition = ontology.metric_definition_as_known(str(metric_id), cutoff)
         if definition is None or definition.lifecycle != "active":
@@ -106,22 +116,29 @@ def preview_meli_inputs(
         ]
         if not roles:
             continue
-        resolution = resolver.as_known(str(cell_id), cutoff)
+        candidates.append((str(cell_id), str(revision_id), definition, tuple(roles)))
+    reads = {
+        read.canonical_metric_cell_id: read
+        for read in resolver.read_as_known(tuple(item[0] for item in candidates), cutoff)
+    }
+    for cell_id, revision_id, definition, roles in candidates:
+        read = reads[cell_id]
+        resolution, bundle = read.resolution, read.bundle
         if (
             resolution is None
             or resolution.status != "resolved"
-            or resolution.canonical_resolution_revision_id != str(revision_id)
+            or resolution.canonical_resolution_revision_id != revision_id
             or resolution.selected_observation_id is None
+            or bundle is None
         ):
             continue
         binding = ontology.binding_as_known(resolution.selected_observation_id, cutoff)
         if (
             binding is None
             or binding.binding_status != "bound"
-            or binding.canonical_metric_cell_id != str(cell_id)
+            or binding.canonical_metric_cell_id != cell_id
         ):
             continue
-        bundle = reader.provenance_bundle(resolution.selected_observation_id, cutoff=cutoff)
         fact = bundle.observation
         for item in roles:
             if (
@@ -151,7 +168,7 @@ def preview_meli_inputs(
             matches[item.key].append(
                 input_evidence.FactBinding(
                     canonical_metric_cell_id=str(cell_id),
-                    metric_id=str(metric_id),
+                    metric_id=definition.metric_id,
                     metric_definition_revision_id=definition.metric_definition_revision_id,
                     canonical_resolution_revision_id=str(revision_id),
                     observation_id=fact.observation_id,

@@ -1,4 +1,4 @@
-"""Closed MELI H1 displayed-statement population; no XBRL or semantic admission.
+"""Closed MELI H1 and calendar-FY displayed-statement populations; no XBRL or semantic admission.
 
 Each concept names a displayed row and its complete displayed scope. Empty XBRL
 coordinates are intentional: table scope is retained in the definition/locator,
@@ -42,6 +42,8 @@ from provenance.source_fact_repository import (
 )
 
 RECIPE = "meli-h1-displayed-statements.v1"
+FY_RECIPE = "meli-fy-displayed-statements.v1"
+StatementRecipe = Literal["meli-h1-displayed-statements.v1", "meli-fy-displayed-statements.v1"]
 _NAME = "meli-reported-statements"
 _NAMESPACE = "issuer-reported-statement:sec:1099590"
 _NORMALIZATION = "meli-statement-displayed-unit-normalization.v1"
@@ -89,11 +91,11 @@ class StatementDisposition(_Closed):
 
 class StatementResult(_Closed):
     mode: Literal["dry_run", "apply"]
-    recipe: Literal["meli-h1-displayed-statements.v1"] = RECIPE
+    recipe: StatementRecipe = RECIPE
     document_version_id: str
     extraction_run_id: str
     population: tuple[StatementDisposition, ...]
-    expected_count: Literal[18] = 18
+    expected_count: Literal[18, 7] = 18
     captured_count: int
     rejected_count: int
     source_population_complete: bool
@@ -183,39 +185,57 @@ def _revenue_rows(
 ) -> list[tuple[_Row, int, tuple[ReportedTableNode, ...], dict[str, str]]]:
     results: list[tuple[_Row, int, tuple[ReportedTableNode, ...], dict[str, str]]] = []
     year = evidence.period_end.year
+    annual = evidence.period_end.month == 12
     for rows in tables.values():
         for row in rows:
             if row.texts[0] != label:
                 continue
             header = _header(rows, row.index)
-            if ["Six Months Ended June 30,"] not in header:
-                continue  # An explicitly separate quarterly table is not an H1 candidate.
-            expected = [
-                ["Six Months Ended June 30,"],
-                ["Brazil", "Mexico", "Argentina", "Other Countries (6)", "Total"],
-                [str(year), str(year - 1)] * 5,
-                ["(In millions)"],
-            ]
-            if header[:4] != expected or len(_numeric(row)) != 10:
+            heading = f"Year Ended December 31, {year}" if annual else "Six Months Ended June 30,"
+            if [heading] not in header:
+                continue  # Separately displayed periods are not this recipe's candidates.
+            expected = (
+                [
+                    [heading],
+                    ["Brazil", "Mexico", "Argentina", "Other Countries (7)", "Total"],
+                    ["(In millions)"],
+                ]
+                if annual
+                else [
+                    ["Six Months Ended June 30,"],
+                    ["Brazil", "Mexico", "Argentina", "Other Countries (6)", "Total"],
+                    [str(year), str(year - 1)] * 5,
+                    ["(In millions)"],
+                ]
+            )
+            if header[: len(expected)] != expected or len(_numeric(row)) != (5 if annual else 10):
                 raise ReportedTableRejectionError(
                     "revenue_period_geography_or_unit_columns_invalid"
                 )
             labels = [r.texts[0] for r in rows]
             order = [
                 "Commerce services (1)",
-                "Commerce product sales (2)",
+                "Commerce products sales (2)" if annual else "Commerce product sales (2)",
                 "Total commerce revenues",
                 "Financial services and income (3)",
                 "Credit revenues (4)",
-                "Fintech product sales (5)",
+                "Fintech products sales (5)" if annual else "Fintech product sales (5)",
                 "Total fintech revenues",
                 "Total net revenues and financial income",
             ]
-            if labels[4:] != order:
+            if labels[len(expected) :] != order:
                 raise ReportedTableRejectionError("revenue_business_product_population_changed")
             definition = tuple(
                 n
-                for phrase in _REVENUE_DEFINITIONS
+                for phrase in (
+                    (
+                        *_REVENUE_DEFINITIONS[:3],
+                        "Includes interest earned on loans and advances granted to merchants and consumers, and interest and commissions earned on Mercado Pago credit card transactions.",
+                        _REVENUE_DEFINITIONS[4],
+                    )
+                    if annual
+                    else _REVENUE_DEFINITIONS
+                )
                 for n in reported_table_passage(evidence, phrase)
             )
             scope = {
@@ -228,7 +248,7 @@ def _revenue_rows(
                 else "Total",
                 "product": "Credit revenues" if label == "Credit revenues (4)" else "Total",
             }
-            results.append((row, 8, definition, scope))
+            results.append((row, 4 if annual else 8, definition, scope))
     return results
 
 
@@ -240,8 +260,14 @@ def _flow_rows(
         return _revenue_rows(evidence, tables, label)
     income = concept in {"total_revenues", "operating_income"}
     year = evidence.period_end.year
+    annual = evidence.period_end.month == 12
     expected = (
         [
+            ["Year Ended December 31,"],
+            [str(year), str(year - 1), str(year - 2) + (" (1)" if income else "")],
+        ]
+        if annual
+        else [
             ["Six Months Ended June 30,", "Three Months Ended June 30,"],
             [str(year), str(year - 1)] * 2,
         ]
@@ -268,11 +294,13 @@ def _flow_rows(
                     "Cash flows from financing activities:",
                 },
             )
-            if len(_numeric(row)) != (4 if income else 2):
+            if len(_numeric(row)) != (3 if annual else 4 if income else 2):
                 raise ReportedTableRejectionError("statement_column_population_changed")
-            title = "Interim Condensed Consolidated Statements of " + (
-                "Income" if income else "Cash Flows"
-            )
+            title = (
+                "Consolidated Statements of "
+                if annual
+                else "Interim Condensed Consolidated Statements of "
+            ) + ("Income" if income else "Cash Flows")
             unit = (
                 "(In millions of U.S. dollars, except for share data)"
                 if income
@@ -439,7 +467,18 @@ def _extract(
     shares = concept == "diluted_weighted_average_shares"
     end = evidence.period_end.replace(year=evidence.period_end.year - int(prior))
     start = end.replace(month=1, day=1) if flow or shares else None
-    key = concept + ("_prior_h1" if prior else "_current_h1" if flow or shares else "_current")
+    annual = evidence.period_end.month == 12
+    if annual and prior:
+        raise ValueError("annual statement recipe selects only the current FY")
+    key = concept + (
+        "_current_fy"
+        if annual
+        else "_prior_h1"
+        if prior
+        else "_current_h1"
+        if flow or shares
+        else "_current"
+    )
     empty = StatementDisposition(
         population_key=key,
         concept=concept,
@@ -472,8 +511,22 @@ def _extract(
         if concept == "productive_asset_expenditures" and values[0] > 0:
             raise ReportedTableRejectionError("expenditure_cashflow_sign_changed")
         row, _, definitions, scope = matches[0]
-        basis_nodes = reported_table_passage(evidence, _BASIS)
-        currency_nodes = () if shares else reported_table_passage(evidence, _CURRENCY)
+        basis_nodes = reported_table_passage(
+            evidence,
+            "The accompanying audited consolidated financial statements are prepared in conformity with accounting principles generally accepted in the U.S."
+            if annual
+            else _BASIS,
+        )
+        currency_nodes = (
+            ()
+            if shares
+            else reported_table_passage(
+                evidence,
+                "These audited consolidated financial statements are stated in U.S. dollars, except for where otherwise indicated."
+                if annual
+                else _CURRENCY,
+            )
+        )
         definitions = (*definitions, *basis_nodes, *currency_nodes)
         all_nodes = tuple(
             n
@@ -494,7 +547,7 @@ def _extract(
         )
         unit = "shares" if shares else "USD_millions"
         definition = {
-            "recipe": RECIPE,
+            "recipe": FY_RECIPE if annual else RECIPE,
             "concept": concept,
             "label": row.texts[0],
             "displayed_scope": scope,
@@ -525,30 +578,37 @@ def _extract(
 def publish_meli_reported_statements(
     conn: sqlite3.Connection, request: ReportedTableRequest
 ) -> StatementResult:
-    """Publish only the 18-member displayed population inside one read/write snapshot."""
+    """Publish the closed H1 18-member or FY seven-flow source population."""
     if conn.in_transaction:
         raise ValueError("statement publication requires an idle connection")
     conn.execute("BEGIN")
     try:
-        evidence = load_reported_table_evidence(conn, request)
+        evidence = load_reported_table_evidence(conn, request, allow_annual_statements=True)
+        annual = evidence.period_end.month == 12
+        recipe: StatementRecipe = FY_RECIPE if annual else RECIPE
+        expected_count = 7 if annual else 18
         tables = _rows(evidence)
         population = tuple(
             _extract(evidence, tables, concept, prior)
             for concept in _FLOW_LABELS
-            for prior in (False, True)
-        ) + tuple(
-            _extract(evidence, tables, concept)
-            for concept in (
-                "gross_loans_receivable",
-                "diluted_weighted_average_shares",
-                "current_operating_lease_liabilities",
-                "noncurrent_operating_lease_liabilities",
+            for prior in ((False,) if annual else (False, True))
+        ) + (
+            ()
+            if annual
+            else tuple(
+                _extract(evidence, tables, concept)
+                for concept in (
+                    "gross_loans_receivable",
+                    "diluted_weighted_average_shares",
+                    "current_operating_lease_liabilities",
+                    "noncurrent_operating_lease_liabilities",
+                )
             )
         )
         config = _sha(
             _json(
                 {
-                    "recipe": RECIPE,
+                    "recipe": recipe,
                     "document": request.document_version_id,
                     "sha": evidence.blob_sha256,
                     "fulltext_run": request.fulltext_run_id,
@@ -559,12 +619,14 @@ def publish_meli_reported_statements(
         captured = sum(p.status == "captured" for p in population)
         result = StatementResult(
             mode="apply" if request.apply else "dry_run",
+            recipe=recipe,
+            expected_count=expected_count,
             document_version_id=request.document_version_id,
             extraction_run_id=run_id,
             population=population,
             captured_count=captured,
-            rejected_count=18 - captured,
-            source_population_complete=captured == 18,
+            rejected_count=expected_count - captured,
+            source_population_complete=captured == expected_count,
         )
         if request.apply:
             result = _publish(conn, request, evidence, result, config)
@@ -605,7 +667,7 @@ def _publish(
             document_version_id=request.document_version_id,
             input_sha256=evidence.blob_sha256,
             extractor_name=_NAME,
-            extractor_code_version=RECIPE,
+            extractor_code_version=result.recipe,
             extractor_config_sha256=config,
             output_sha256=_sha(output),
             started_at=stamp,
@@ -677,7 +739,11 @@ def _publish(
             period_start=item.period_start,
             period_end=item.period_end,
             fiscal_year=item.period_end.year,
-            fiscal_period="H1" if item.period_start else "Q2",
+            fiscal_period="FY"
+            if result.recipe == FY_RECIPE
+            else "H1"
+            if item.period_start
+            else "Q2",
             unit_key=item.normalized_unit_key,
             currency=None if item.normalized_unit_key == "shares" else "USD",
             effective_at=item.period_end,
@@ -705,7 +771,7 @@ def _publish(
                     if item.concept == "productive_asset_expenditures"
                     else "displayed_signed_amount",
                 },
-                "recipe": RECIPE,
+                "recipe": result.recipe,
                 "fulltext_run_id": request.fulltext_run_id,
                 "scope_representation": "displayed_table_labels_not_xbrl_dimensions",
             }
@@ -719,7 +785,7 @@ def _publish(
             numeric_value=item.normalized_numeric_value,
             raw_lexical_value=item.raw_lexical_value,
             method_name=_NAME,
-            method_version=RECIPE,
+            method_version=result.recipe,
             method_config_sha256=config,
             revision_kind="initial",
             effective_at=item.period_end,
@@ -747,9 +813,13 @@ def _publish(
                     extraction_seal_id=seal_id,
                     idempotency_key=seal_id,
                     extraction_run_id=result.extraction_run_id,
-                    expected_node_count=18,
-                    completeness_policy_name="closed_meli_h1_18_statement_population_not_document_coverage",
-                    completeness_policy_version=RECIPE,
+                    expected_node_count=result.expected_count,
+                    completeness_policy_name=(
+                        "closed_meli_fy_7_statement_population_not_document_coverage"
+                        if result.recipe == FY_RECIPE
+                        else "closed_meli_h1_18_statement_population_not_document_coverage"
+                    ),
+                    completeness_policy_version=result.recipe,
                     completeness_policy_sha256=_sha(output),
                     knowledge_at=stamp,
                     recorded_at=stamp,

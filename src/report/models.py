@@ -545,6 +545,11 @@ class CellSource(BaseModel):
     # (the original P4.3 chip source); KPI-sourced chips set "kpi_facts"
     # (provenance Phase B, where IR-deck pdf_slide locators live).
     fact_table: str = "financial_facts"
+    # The cited document's Observation Version (evidence plane row bound via
+    # legacy_document_id). The chip popover renders it (or the explicit "not
+    # recorded" degraded state) and links /source/version/<id> — the full
+    # provenance chain — when present. None on legacy DBs / built reports.
+    document_version_id: str | None = None
     # Exact admitted report selection. The shared chip prefers this over
     # mutable legacy fact/document references when it is present.
     canonical_reference: FinancialEvidenceReference | None = None
@@ -1090,6 +1095,12 @@ class SourceDocRow(BaseModel):
     # documents.id — lets the Sources tab deep-link each row into the in-app
     # /source/<doc_id> viewer (S10 PR2). None on legacy built reports.
     doc_id: int | None = None
+    # The cited document's Observation Version (evidence_document_versions
+    # row bound via legacy_document_id). When present the Sources-tab citation
+    # anchor routes to /source/version/<id> — the full provenance chain; when
+    # None the row renders the explicit "not recorded" degraded state and
+    # keeps the legacy viewer link. None on pre-evidence-plane builds.
+    document_version_id: str | None = None
 
 
 class ValidationIssueRow(BaseModel):

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 from typing import Literal, cast
 
@@ -24,14 +24,9 @@ from provenance.source_fact_publication import (
     PublicationVerificationError,
     verify_source_fact_publication,
 )
+from runtime.deterministic import as_utc as _utc
 
 AdmissionDisposition = Literal["missing_provenance", "quarantined"]
-
-
-def _utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
 
 
 class FactAdmissionError(RuntimeError):
@@ -485,6 +480,35 @@ class FactReadModel:
             derivation=observation.derivation,
             relations=self.relations(observation_id, cutoff=cutoff),
         )
+
+    def required_provenance_bundles(
+        self,
+        observation_ids: tuple[str, ...],
+        *,
+        cutoff: datetime,
+    ) -> tuple[ProvenanceBundle, ...]:
+        """Read one complete batch or raise the original admission failure.
+
+        Required-input consumers cannot use partial batch results. Publication
+        verification is shared only inside this call, at this exact cutoff.
+        """
+        bundles: list[ProvenanceBundle] = []
+        for read in self.provenance_bundles(observation_ids, cutoff=cutoff):
+            if read.bundle is not None:
+                bundles.append(read.bundle)
+                continue
+            failure = read.failure
+            if failure is None:
+                raise RuntimeError("required provenance batch has no outcome")
+            if failure.reason_code == "observation_unavailable_at_cutoff":
+                raise ObservationUnavailableError(failure.record_id)
+            raise FactAdmissionError(
+                failure.reason_code,
+                record_kind=failure.record_kind,
+                record_id=failure.record_id,
+                disposition=failure.disposition,
+            )
+        return tuple(bundles)
 
     def provenance_bundles(
         self,

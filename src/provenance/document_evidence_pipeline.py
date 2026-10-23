@@ -14,6 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from models.documents import SourceType
 from pipeline.source_policy import (
     ArtifactKind,
     CollectionSource,
@@ -44,6 +45,7 @@ class DocumentEvidenceRequest(BaseModel):
     repo_root: Path
     apply: bool = False
     ticker: str | None = None
+    source_type: SourceType | None = None
     document_id: int | None = Field(default=None, gt=0)
     before_document_id: int = Field(default=0, ge=0)
     newer_than_document_id: int | None = Field(default=None, ge=0)
@@ -148,6 +150,7 @@ def process_document_evidence(
         WHERE document.id > :lower_bound
           AND document.id <= :upper_bound
           AND (:ticker IS NULL OR UPPER(document.ticker) = :ticker)
+          AND (:source_type IS NULL OR document.source_type = :source_type)
           AND EXISTS (
               SELECT 1 FROM tracked_companies AS company
               WHERE UPPER(company.ticker) = UPPER(document.ticker)
@@ -162,6 +165,7 @@ def process_document_evidence(
             WHERE document.id > :lower_bound
               AND document.id <= :upper_bound
               AND (:ticker IS NULL OR UPPER(document.ticker) = :ticker)
+              AND (:source_type IS NULL OR document.source_type = :source_type)
               AND EXISTS (
                   SELECT 1 FROM tracked_companies AS company
                   WHERE UPPER(company.ticker) = UPPER(document.ticker)
@@ -176,6 +180,7 @@ def process_document_evidence(
             "lower_bound": lower_bound,
             "upper_bound": upper_bound,
             "ticker": request.ticker.strip().upper() if request.ticker is not None else None,
+            "source_type": request.source_type.value if request.source_type is not None else None,
             "limit": request.batch_size + 1,
         },
     ).fetchall()

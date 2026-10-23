@@ -34,7 +34,6 @@ failure — the deterministic memo is the contract.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import sqlite3
@@ -46,20 +45,12 @@ from typing import ClassVar
 from alerts.store import compute_signature_sha
 from identity import DEFAULT_USER_ID
 from llm.anchors import (
-    compose_anchor_block,
     load_bear_anchor,
     load_ir_anchor,
     load_priors_anchor,
     load_thesis_anchor,
 )
 from llm.prompt_versions import prompt_version_for
-from llm_artifact_store import (
-    UpsertRequest,
-    artifact_is_reusable,
-    compute_input_sha256,
-    read_current,
-    upsert,
-)
 from llm_client import call_llm
 from timeseries import (
     Observation,
@@ -70,10 +61,12 @@ from timeseries import (
 from triggers.base import (
     AlertDraft,
     Cadence,
+    LlmContextSite,
     QueuedActionDraft,
     ThesisAnchor,
     TriggerCandidate,
     UserStateContext,
+    maybe_trigger_llm_context,
 )
 from user_state.registry import UserKpiRegistryRow, list_kpis
 
@@ -385,6 +378,16 @@ def _build_context_prompt(factual_core: str, anchor_block: str) -> str:
     )
 
 
+# Optional LLM context line wiring — the shared mechanics live in triggers.base.
+_CONTEXT_SITE = LlmContextSite(
+    purpose=_ARTIFACT_PURPOSE,
+    prompt_version=_PROMPT_VERSION,
+    event_prefix="kpi_inflection",
+    period_label="period_end",
+    build_prompt=_build_context_prompt,
+)
+
+
 def _as_float(value: object) -> float:
     """Narrow a numeric evidence value to float. Fails loud on a non-numeric
     (rejecting bool, an int subclass) — scan() always stores prev/curr as
@@ -392,30 +395,6 @@ def _as_float(value: object) -> float:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
     raise TypeError(f"expected numeric evidence value, got {type(value).__name__}")
-
-
-def _sha256_text(text: str) -> str:
-    """Deterministic sha256 over UTF-8 bytes."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _context_cache_inputs(
-    *,
-    ticker: str,
-    kpi_name: str,
-    period_end: str,
-    factual_core: str,
-    anchor_text: str,
-) -> list[bytes | str]:
-    """Deterministic cache-input list for ``compute_input_sha256``. Order is
-    part of the contract — changing it invalidates every cached context."""
-    return [
-        f"ticker={ticker}",
-        f"kpi={kpi_name}",
-        f"period_end={period_end}",
-        "factual_sha=" + _sha256_text(factual_core),
-        "anchor_sha=" + _sha256_text(anchor_text),
-    ]
 
 
 # --------------------------------------------------------------------------
@@ -735,124 +714,30 @@ class KpiInflectionTrigger:
     def _maybe_llm_context(
         self, *, ticker: str, evidence: dict[str, object], factual_core: str
     ) -> str | None:
-        """Best-effort 1-2 sentence context line, or None.
+        """Best-effort 1-2 sentence context line, or None (never raises).
 
-        Degrades silently to None on ANY failure (LLM down, budget cap, empty
-        response, store error) so build_alert always emits the deterministic
-        memo. Cache-aware via the artifact store.
+        The mechanics (anchor load, cache, prompt, silent degradation) live in
+        ``triggers.base.maybe_trigger_llm_context``; this method only supplies
+        this sensor's wiring and evidence fields.
         """
         kpi_name = str(evidence["kpi_name"])
-        period_end = str(evidence["period_end"])
-        repo_root = _repo_root()
-        db_path = _db_path()
-
-        try:
-            # Compose the full 4-block anchor (thesis + bear + IR + analyst
-            # priors) so the "why it matters" line can read an inflection
-            # against the bear case, management's IR framing, and the analyst's
-            # own open watch-items — not the thesis alone; empty blocks are
-            # omitted by compose_anchor_block.
-            anchor_block = compose_anchor_block(
-                load_thesis_anchor(repo_root, ticker),
-                load_bear_anchor(repo_root, ticker),
-                load_ir_anchor(repo_root, ticker),
-                load_priors_anchor(repo_root, ticker),
-            )
-        except Exception as exc:  # anchor is optional; never block the memo
-            log.debug(
-                {
-                    "event": "kpi_inflection_anchor_load_failed",
-                    "ticker": ticker,
-                    "error": str(exc),
-                }
-            )
-            anchor_block = ""
-
-        cache_inputs = _context_cache_inputs(
+        return maybe_trigger_llm_context(
+            site=_CONTEXT_SITE,
             ticker=ticker,
             kpi_name=kpi_name,
-            period_end=period_end,
-            factual_core=factual_core,
-            anchor_text=anchor_block,
-        )
-        try:
-            return self._read_cached_or_call_llm_context(
-                ticker=ticker,
-                kpi_name=kpi_name,
-                factual_core=factual_core,
-                anchor_block=anchor_block,
-                cache_inputs=cache_inputs,
-                db_path=db_path,
-            )
-        except Exception as exc:
-            # The deterministic memo is the contract — an LLM/budget/parse
-            # failure here must NOT sink the alert. Log and proceed without
-            # the context line.
-            log.warning(
-                {
-                    "event": "kpi_inflection_context_failed",
-                    "ticker": ticker,
-                    "kpi": kpi_name,
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-            )
-            return None
-
-    def _read_cached_or_call_llm_context(
-        self,
-        *,
-        ticker: str,
-        kpi_name: str,
-        factual_core: str,
-        anchor_block: str,
-        cache_inputs: list[bytes | str],
-        db_path: Path,
-    ) -> str | None:
-        """Return the context line, hitting the artifact-store cache when
-        possible. Per-KPI artifacts share the (ticker, purpose) slot, so the
-        KPI name rides in ``fiscal_period`` to keep distinct KPIs from
-        superseding each other; ``input_sha256`` still guards correctness."""
-        existing = read_current(
-            ticker=ticker,
-            purpose=_ARTIFACT_PURPOSE,
+            period_value=str(evidence["period_end"]),
             fiscal_period=kpi_name,
-            db_path=db_path,
-        )
-        new_sha = compute_input_sha256(prompt_version=_PROMPT_VERSION, cache_inputs=cache_inputs)
-        if (
-            existing is not None
-            and artifact_is_reusable(existing, input_sha256=new_sha)
-            and isinstance(existing.content_md, str)
-            and existing.content_md.strip()
-        ):
-            log.info(
-                {
-                    "event": "kpi_inflection_context_cache_hit",
-                    "ticker": ticker,
-                    "kpi": kpi_name,
-                    "artifact_id": existing.id,
-                }
-            )
-            return existing.content_md
-
-        prompt = _build_context_prompt(factual_core, anchor_block)
-        raw = call_llm(prompt, purpose=_ARTIFACT_PURPOSE, ticker=ticker)
-        context = raw.strip()
-        if not context:
-            return None
-
-        _ = upsert(
-            UpsertRequest(
-                ticker=ticker,
-                purpose=_ARTIFACT_PURPOSE,
-                fiscal_period=kpi_name,
-                content_md=context,
-                cache_inputs=cache_inputs,
-                prompt_version=_PROMPT_VERSION,
+            factual_core=factual_core,
+            repo_root=_repo_root(),
+            db_path=_db_path(),
+            anchor_loaders=(
+                load_thesis_anchor,
+                load_bear_anchor,
+                load_ir_anchor,
+                load_priors_anchor,
             ),
-            db_path=db_path,
+            call_llm=call_llm,
         )
-        return context
 
 
 def _threshold_label(evidence: dict[str, object]) -> str:

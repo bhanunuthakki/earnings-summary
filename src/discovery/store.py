@@ -34,7 +34,7 @@ CANDIDATE_STATUSES: tuple[str, ...] = ("new", "queued", "building", "built", "di
 
 # Candidates a build may start from. Anything else is either already done
 # (built), in flight (building), or explicitly rejected (dismissed). Shared
-# by the /discovery chat command (ask.commands) and the REST build routes.
+# by the /discovery chat command (ask.engine) and the REST build routes.
 BUILDABLE_STATUSES: frozenset[str] = frozenset({"new", "queued"})
 
 

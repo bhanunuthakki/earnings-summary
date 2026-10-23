@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import cast
 
 from db_paths import resolve_db_path
+from pipeline.db_writer_gate import WriterGateHeldError
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -930,6 +931,31 @@ def _open(
             conn.close()
             return None
         return conn
+    except WriterGateHeldError as exc:
+        # A daily-chain writer-gate timeout while opening the WRITER connection:
+        # the store stays best-effort (return None — the caller recomputes the
+        # artifact), but the dropped cache write is OBSERVABLE: warning plus a
+        # durable drop counter beside the database, never silence.
+        path = resolve_db_path(db_path)
+        log.warning(
+            {
+                "event": "artifact_store_open_gate_timeout",
+                "role": str(role),
+                "error": str(exc)[:200],
+            }
+        )
+        if path is not None:
+            try:
+                from telemetry_health import DROPPED_LLM_ARTIFACT_WRITE, record_dropped_write
+
+                record_dropped_write(
+                    DROPPED_LLM_ARTIFACT_WRITE,
+                    db_path=path,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            except Exception:  # never escalate from a failure handler
+                log.debug({"event": "artifact_drop_counter_failed"})
+        return None
     except (sqlite3.Error, OSError) as exc:
         log.debug({"event": "artifact_store_open_failed", "error": str(exc)})
         return None

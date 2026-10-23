@@ -17,6 +17,8 @@ from typing import Literal, Self, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from provenance.observation_resolution import persist_idempotent_row
+
 LocationKind: TypeAlias = Literal["local", "object", "archive", "mirror"]
 AvailabilityState: TypeAlias = Literal["present", "missing", "quarantined"]
 DocumentObservationLinkKind: TypeAlias = Literal["primary", "retrieval", "mirror"]
@@ -94,23 +96,6 @@ class PersistResult:
     created: bool
 
 
-def _matches_stored_values(existing: tuple[object, ...], expected: tuple[object, ...]) -> bool:
-    """Compare SQLite values with its timestamp serialization normalized."""
-    if len(existing) != len(expected):
-        return False
-    for stored, supplied in zip(existing, expected, strict=True):
-        if isinstance(supplied, datetime):
-            try:
-                stored_time = datetime.fromisoformat(str(stored)).replace(tzinfo=None)
-            except ValueError:
-                return False
-            if stored_time != supplied.replace(tzinfo=None):
-                return False
-        elif stored != supplied:
-            return False
-    return True
-
-
 class EvidenceLinkLedger:
     """Typed, exact-replay-only writer for replica and retrieval-link history."""
 
@@ -185,19 +170,12 @@ class EvidenceLinkLedger:
         identity_value: str,
         record_id: str,
     ) -> PersistResult:
-        placeholders = ", ".join("?" for _ in columns)
-        cursor = self._conn.execute(
-            f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders}) ON CONFLICT DO NOTHING",  # nosec B608 -- trusted internal SQL shape; values remain bound
-            values,
+        created = persist_idempotent_row(
+            self._conn,
+            table=table,
+            columns=columns,
+            values=values,
+            identity_column=identity_column,
+            identity_value=identity_value,
         )
-        if cursor.rowcount == 1:
-            return PersistResult(record_id=record_id, created=True)
-        existing = self._conn.execute(
-            f"SELECT {', '.join(columns)} FROM {table} WHERE {identity_column} = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
-            (identity_value,),
-        ).fetchone()
-        if existing is None or not _matches_stored_values(tuple(existing), values):
-            raise ValueError(
-                f"immutable {table} identity {identity_value!r} conflicts with existing data"
-            )
-        return PersistResult(record_id=record_id, created=False)
+        return PersistResult(record_id=record_id, created=created)

@@ -26,6 +26,7 @@ except ImportError:
     from execution._lib import PROJECT_ROOT
 
 from cockpit_fundamentals import materialize_fundamentals
+from pipeline.cockpit_file_inputs import materialize_cockpit_file_inputs
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger("refresh_cockpit_fundamentals")
@@ -65,10 +66,15 @@ def main() -> int:
     conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     try:
         n = materialize_fundamentals(conn, repo_root)
+        file_input_count = materialize_cockpit_file_inputs(conn, repo_root)
     finally:
         conn.close()
 
-    print(f"Cockpit fundamentals materialised · tickers={n} · cache=data/cockpit_fundamentals.json")
+    print(
+        "Cockpit fundamentals materialised "
+        f"· tickers={n} · cache=data/cockpit_fundamentals.json "
+        f"· file_inputs={file_input_count} · cache=.cache/cockpit_file_inputs.json"
+    )
     return 0
 
 

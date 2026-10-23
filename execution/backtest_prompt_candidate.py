@@ -41,6 +41,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import logging
 import os
@@ -464,10 +465,8 @@ def main() -> int:
 
     # Importing the modules that REGISTER templates.
     # Import for SIDE EFFECT: these modules register their templates.
-    import llm_client
-    from dcf import scenario_prior
-
-    log.debug("template modules loaded: %s", [m.__name__ for m in (llm_client, scenario_prior)])
+    modules = (importlib.import_module("llm_client"), importlib.import_module("dcf.scenario_prior"))
+    log.debug("template modules loaded: %s", [module.__name__ for module in modules])
 
     baseline = REGISTRY.get(args.template_id)
     if baseline is None:

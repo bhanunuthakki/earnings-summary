@@ -8,8 +8,6 @@ no commit: callers own the surrounding transaction and writer lock.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -17,6 +15,9 @@ from datetime import datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
+
+from runtime.deterministic import canonical_json_no_nan as _canonical_json
+from runtime.deterministic import sha256_text as _sha256
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _POLICY_VERSION = "forward_v1"
@@ -52,10 +53,6 @@ class _FrozenModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
-def _sha256(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
 def _validate_sha256(value: str) -> str:
     if _SHA256.fullmatch(value) is None:
         raise ValueError("must be a lowercase SHA-256")
@@ -66,16 +63,6 @@ def _validate_aware(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("must be timezone-aware")
     return value
-
-
-def _canonical_json(value: JsonValue) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        allow_nan=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
 
 
 class SemanticRuleInput(_FrozenModel):

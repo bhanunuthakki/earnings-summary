@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import sqlite3
 from collections.abc import Callable, Generator, Iterable, Iterator, Mapping
 from contextlib import contextmanager
@@ -31,6 +30,9 @@ from provenance.metric_ontology import (
     SourceTaxonomyComponent,
 )
 from provenance.population_completeness import PopulationTemporalScope
+from runtime.deterministic import as_utc as _utc
+from runtime.deterministic import canonical_json as _canonical_json
+from runtime.deterministic import sha256_joined_unit_sep as _digest
 
 _POLICY_NAME = "deterministic_legacy_metric_admission"
 _POLICY_VERSION = "7"
@@ -963,14 +965,6 @@ def _ontology_receipt_sha(receipt: MetricOntologyOperationReceipt) -> str:
     return hashlib.sha256(_canonical_json(payload).encode()).hexdigest()
 
 
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
-def _digest(*parts: str) -> str:
-    return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
-
-
 def _record_id(prefix: str, *parts: str) -> str:
     return f"{prefix}:{_digest(*parts)}"
 
@@ -1012,10 +1006,6 @@ class _CanonicalArrayFold:
         digest = self._digest.copy()
         digest.update(b"]")
         return digest.hexdigest()
-
-
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _parse_time(value: object) -> datetime:

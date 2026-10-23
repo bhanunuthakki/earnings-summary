@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 from ask.exchange_store import SessionContextV1
 from identity import DEFAULT_USER_ID
+from runtime.deterministic import table_exists_or_false as _table_exists
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from user_state.notes import AnalystNoteRow, list_notes
 
@@ -101,16 +102,6 @@ class EvaluationDialogue(BaseModel):
                 "matching_state is 'indeterminate' if and only if total_matching is None"
             )
         return self
-
-
-def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
-    try:
-        row = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
-        ).fetchone()
-        return row is not None
-    except sqlite3.Error:
-        return False
 
 
 def _instrument(raw: object) -> _Instrument:

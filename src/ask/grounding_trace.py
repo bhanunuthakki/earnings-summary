@@ -9,7 +9,6 @@ or retrieved passages, so the audit trail does not duplicate prompt material.
 from __future__ import annotations
 
 import hashlib
-import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +18,7 @@ from urllib.parse import urlsplit, urlunsplit
 from pydantic import BaseModel, ConfigDict, Field
 
 from ask.grounding import EvidenceItem
+from runtime.deterministic import canonical_json_ascii as _canonical_json
 from sources.report_financials import FinancialEvidenceReference
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.source_chip import viewer_href
@@ -221,10 +221,6 @@ def persist_grounding_trace(
     if stored is None or tuple(stored) != (trace_id, outcome, len(items), item_set_sha256):
         raise GroundingTraceError("grounded Ask retrieval trace conflicts with stored data")
     return GroundingTrace(trace_id=trace_id, outcome=outcome, item_count=len(items))
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
 def _trace_source_url(value: str | None) -> str | None:

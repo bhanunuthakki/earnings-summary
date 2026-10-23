@@ -7,7 +7,6 @@ work, opens a writer connection, or changes the plan or database snapshot.
 from __future__ import annotations
 
 import hashlib
-import json
 import sqlite3
 from pathlib import Path
 from typing import Literal, Self
@@ -32,6 +31,7 @@ from provenance.data_backbone_rehearsal import (
     database_storage_identity,
     require_sidecar_free_database,
 )
+from runtime.deterministic import canonical_json_ascii as _canonical_json
 from schema_compat import expected_head
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -40,10 +40,6 @@ ADMISSION_VERSION = "sec-delta-native-inventory-admission.v2"
 
 class SecDeltaAdmissionError(ValueError):
     """The planned task cannot be authorized against current exact state."""
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
 def _sha256_bytes(value: bytes) -> str:

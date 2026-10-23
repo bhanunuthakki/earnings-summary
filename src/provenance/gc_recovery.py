@@ -47,6 +47,8 @@ from provenance.immutable_artifact import (
     require_canonical_text_artifact,
     require_no_reparse_points,
 )
+from runtime.deterministic import canonical_json_ascii_no_nan as _canonical_json
+from runtime.deterministic import table_exists as _table_exists
 from runtime.service_registry import managed_service_names
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -2892,16 +2894,6 @@ def _normalized_sql(value: str) -> str:
     return " ".join(value.split()).casefold()
 
 
-def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
-    return (
-        connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-            (table,),
-        ).fetchone()
-        is not None
-    )
-
-
 def _table_columns(connection: sqlite3.Connection, table: str) -> tuple[str, ...]:
     _quote_identifier(table)
     rows = connection.execute(f"PRAGMA table_info({_quote_identifier(table)})").fetchall()
@@ -3088,10 +3080,6 @@ def _file_identity(value: os.stat_result) -> tuple[int, int, int, int, int, int]
         int(value.st_mtime_ns),
         int(value.st_ctime_ns),
     )
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True)
 
 
 def _canonical_sha(value: object) -> str:

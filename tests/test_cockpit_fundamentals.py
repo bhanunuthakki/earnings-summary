@@ -6,6 +6,7 @@ import json
 import shutil
 import sqlite3
 from collections.abc import Callable, Iterator
+from datetime import datetime
 from pathlib import Path
 from typing import cast
 
@@ -242,7 +243,7 @@ def test_materialized_cache_requires_complete_canonical_manifest(
     assert materialize_fundamentals(conn, repo_root) == 1
     cache = repo_root / "data" / "cockpit_fundamentals.json"
     payload = json.loads(cache.read_text(encoding="utf-8"))
-    assert payload["cache_schema"] == "cockpit-fundamentals-canonical/v2"
+    assert payload["cache_schema"] == "cockpit-fundamentals-canonical/v3"
     snapshot = payload["snapshot"]
     assert snapshot["source_authority"] == "canonical_fact_resolution"
     assert snapshot["status"] == "complete"
@@ -255,13 +256,15 @@ def test_materialized_cache_requires_complete_canonical_manifest(
     assert selected["observation_id"]
     assert selected["canonical_resolution_revision_id"]
     assert selected["document_version_id"]
-    assert read_materialized_fundamentals(repo_root)["SYNTH"][0] == pytest.approx(20.0)
+    assert read_materialized_fundamentals(repo_root, conn)["SYNTH"][0] == pytest.approx(20.0)
 
 
-def test_legacy_or_incomplete_cache_cannot_claim_canonical(repo_root: Path) -> None:
+def test_legacy_or_incomplete_cache_cannot_claim_canonical(
+    conn: sqlite3.Connection, repo_root: Path
+) -> None:
     cache = repo_root / "data" / "cockpit_fundamentals.json"
     cache.write_text(json.dumps({"fundamentals": {"OLD": [99.0, 99.0]}}), encoding="utf-8")
-    assert read_materialized_fundamentals(repo_root) == {}
+    assert read_materialized_fundamentals(repo_root, conn) == {}
 
 
 def test_cache_rejects_manifest_or_envelope_cutoff_tampering(
@@ -274,15 +277,15 @@ def test_cache_rejects_manifest_or_envelope_cutoff_tampering(
     manifests = payload["snapshot"]["fundamentals"]["SYNTH"]["fcf_margin"]["source_manifests"]
     next(iter(manifests.values()))["cutoff"] = "2001-01-01T00:00:00Z"
     cache.write_text(json.dumps(payload), encoding="utf-8")
-    assert read_materialized_fundamentals(repo_root) == {}
+    assert read_materialized_fundamentals(repo_root, conn) == {}
 
     materialize_fundamentals(conn, repo_root)
     payload = json.loads(cache.read_text(encoding="utf-8"))
     payload["computed_at"] = "2001-01-01T00:00:00"
     cache.write_text(json.dumps(payload), encoding="utf-8")
-    assert read_materialized_fundamentals(repo_root) == {}
+    assert read_materialized_fundamentals(repo_root, conn) == {}
     cache.write_text("not-json", encoding="utf-8")
-    assert read_materialized_fundamentals(repo_root) == {}
+    assert read_materialized_fundamentals(repo_root, conn) == {}
 
 
 def test_global_failure_preserves_previous_cache_bytes(
@@ -318,3 +321,231 @@ def test_build_cockpit_rows_uses_cache_and_canonical_fallback(
     with_cache = build_cockpit_rows(conn, repo_root)
     row = {item.base.ticker: item for item in with_cache["evaluation"]}["SYNTH"]
     assert row.rev_yoy_pct == pytest.approx(20.0)
+
+
+def test_existing_morning_stage_runs_file_input_materializer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import execution.refresh_cockpit_fundamentals as refresh
+    from sqlite_runtime import SQLiteConnectionRole
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    db_path = repo_root / "data" / "portfolio.db"
+    db_path.parent.mkdir()
+    db_path.touch()
+    conn = sqlite3.connect(":memory:")
+
+    def connect(_path: str, *, role: SQLiteConnectionRole) -> sqlite3.Connection:
+        assert role is SQLiteConnectionRole.READ_ONLY
+        return conn
+
+    def stub_materializer(_conn: sqlite3.Connection, _repo_root: Path) -> int:
+        return 12
+
+    monkeypatch.setattr(refresh, "connect_sqlite", connect)
+    monkeypatch.setattr(refresh, "materialize_fundamentals", stub_materializer)
+    monkeypatch.setattr(refresh, "materialize_cockpit_file_inputs", stub_materializer)
+    monkeypatch.setattr(
+        refresh.sys,
+        "argv",
+        ["refresh_cockpit_fundamentals.py", "--repo-root", str(repo_root)],
+    )
+
+    assert refresh.main() == 0
+    assert "file_inputs=12 · cache=.cache/cockpit_file_inputs.json" in capsys.readouterr().out
+    conn.close()
+
+
+def test_cockpit_never_serves_cache_built_before_canonical_facts_changed(
+    conn: sqlite3.Connection, head_template: Path, repo_root: Path, tmp_path: Path
+) -> None:
+    """A fresh-by-clock cache built before new canonical facts landed must not
+    be shown as current: the cockpit row agrees with the live canonical read."""
+    from pipeline.research_cockpit import build_cockpit_rows
+
+    rows = _quarter_rows()
+    earlier_path = tmp_path / "earlier.db"
+    shutil.copy(head_template, earlier_path)
+    earlier = sqlite3.connect(earlier_path)
+    earlier.row_factory = sqlite3.Row
+    try:
+        _publish(earlier, [row for row in rows if row[1] != "2026-01-01"])
+        materialize_fundamentals(earlier, repo_root)
+    finally:
+        earlier.close()
+    _publish(conn, rows)
+    _track_synth(conn)
+
+    live_yoy, live_margin = compute_from_db(conn)["SYNTH"]
+    assert live_yoy == pytest.approx(20.0)
+    cockpit = build_cockpit_rows(conn, repo_root)
+    row = {item.base.ticker: item for item in cockpit["evaluation"]}["SYNTH"]
+    assert (row.rev_yoy_pct, row.fcf_margin_pct) == (live_yoy, live_margin)
+
+
+def test_materialize_refuses_an_open_caller_transaction(
+    conn: sqlite3.Connection, repo_root: Path
+) -> None:
+    _publish(conn, _quarter_rows())
+    conn.execute("BEGIN")
+    try:
+        with pytest.raises(ValueError, match="committed state"):
+            materialize_fundamentals(conn, repo_root)
+    finally:
+        conn.rollback()
+    assert not (repo_root / "data" / "cockpit_fundamentals.json").exists()
+
+
+def test_every_revision_token_table_rejects_update_and_delete(conn: sqlite3.Connection) -> None:
+    """The cache token relies on MAX(rowid) moving on every change; that holds
+    only while each table it reads rejects in-place UPDATE and DELETE."""
+    import inspect
+    import re
+
+    from provenance.evidence_revision import canonical_financial_revision
+
+    _publish(conn, _quarter_rows())
+    tables = re.findall(r"FROM (\w+)\)", inspect.getsource(canonical_financial_revision))
+    assert len(tables) == 9
+    for table in tables:
+        newest = conn.execute(f"SELECT MAX(rowid) FROM {table}").fetchone()[0]
+        assert newest is not None, f"{table} has no row to test"
+        for statement in (
+            f"UPDATE {table} SET rowid = rowid WHERE rowid = ?",
+            f"DELETE FROM {table} WHERE rowid = ?",
+        ):
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(statement, (newest,))
+        conn.rollback()
+
+
+def test_same_database_capture_invalidates_the_cache(
+    conn: sqlite3.Connection, repo_root: Path
+) -> None:
+    """New governed facts committed to the same database after materialization
+    make the cache unusable; the cockpit then shows the live canonical read."""
+    from pipeline.research_cockpit import build_cockpit_rows
+
+    _publish(conn, _quarter_rows())
+    _track_synth(conn)
+    materialize_fundamentals(conn, repo_root)
+    assert read_materialized_fundamentals(repo_root, conn)["SYNTH"][0] == pytest.approx(20.0)
+
+    seed_table(
+        conn,
+        [("revenue", "2026-04-01", "2026-06-30", "Q2", "130", "USD")],
+        publication_prefix="later",
+        populate=False,
+    )
+    conn.commit()
+
+    assert read_materialized_fundamentals(repo_root, conn) == {}
+    cockpit = build_cockpit_rows(conn, repo_root)
+    row = {item.base.ticker: item for item in cockpit["evaluation"]}["SYNTH"]
+    assert (row.rev_yoy_pct, row.fcf_margin_pct) == compute_from_db(conn)["SYNTH"]
+
+
+def test_snapshot_reuses_publications_only_within_one_read(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from provenance import source_fact_publication as publication
+
+    _publish(conn, _quarter_rows())
+    original = getattr(publication, "_verify_source_fact_publication")
+    calls: list[str] = []
+
+    def counted(
+        connection: sqlite3.Connection,
+        *,
+        publication_id: str,
+        cutoff: datetime,
+        observed_through: datetime | None,
+    ) -> publication.VerifiedSourceFactPublication:
+        calls.append(publication_id)
+        return original(
+            connection,
+            publication_id=publication_id,
+            cutoff=cutoff,
+            observed_through=observed_through,
+        )
+
+    monkeypatch.setattr(publication, "_verify_source_fact_publication", counted)
+    first = compute_snapshot(conn, cutoff=STAMP)
+    assert calls
+    assert len(calls) == len(set(calls))
+    first_calls = list(calls)
+    calls.clear()
+    second = compute_snapshot(conn, cutoff=STAMP)
+    assert first == second
+    assert calls == first_calls
+    from contextlib import nullcontext
+
+    import cockpit_fundamentals
+
+    def uncached_scope(connection: sqlite3.Connection) -> nullcontext[None]:
+        return nullcontext()
+
+    monkeypatch.setattr(cockpit_fundamentals, "publication_verification_scope", uncached_scope)
+    calls.clear()
+    uncached = compute_snapshot(conn, cutoff=STAMP)
+    assert uncached == first
+    assert len(calls) > len(first_calls)
+
+
+def test_publication_scope_keeps_clocks_and_connections_separate(
+    conn: sqlite3.Connection, head_template: Path
+) -> None:
+    from datetime import timedelta
+
+    from provenance.source_fact_publication import (
+        PublicationVerificationError,
+        publication_verification_scope,
+        verify_source_fact_publication,
+    )
+
+    _publish(conn, _quarter_rows())
+    conn.execute("BEGIN")
+    with publication_verification_scope(conn):
+        verify_source_fact_publication(conn, publication_id="report-publication", cutoff=STAMP)
+        with pytest.raises(PublicationVerificationError):
+            verify_source_fact_publication(
+                conn, publication_id="report-publication", cutoff=STAMP - timedelta(days=3650)
+            )
+        with pytest.raises(PublicationVerificationError, match="publication_ledger_malformed"):
+            verify_source_fact_publication(
+                conn,
+                publication_id="report-publication",
+                cutoff=STAMP,
+                observed_through=STAMP - timedelta(seconds=1),
+            )
+        with sqlite3.connect(head_template) as other, pytest.raises(PublicationVerificationError):
+            verify_source_fact_publication(other, publication_id="report-publication", cutoff=STAMP)
+    conn.rollback()
+
+
+@pytest.mark.parametrize("replace_transaction", [False, True])
+def test_publication_scope_rejects_changed_snapshot(
+    conn: sqlite3.Connection, replace_transaction: bool
+) -> None:
+    from provenance.source_fact_publication import (
+        publication_verification_scope,
+        verify_source_fact_publication,
+    )
+
+    _publish(conn, _quarter_rows())
+    conn.execute("BEGIN")
+    with (
+        pytest.raises((RuntimeError, sqlite3.OperationalError)),
+        publication_verification_scope(conn),
+    ):
+        verify_source_fact_publication(conn, publication_id="report-publication", cutoff=STAMP)
+        if replace_transaction:
+            conn.rollback()
+            conn.execute("BEGIN")
+        else:
+            conn.execute("INSERT INTO tenants(id,created_at) VALUES ('scope-test','2026-01-01')")
+        verify_source_fact_publication(conn, publication_id="report-publication", cutoff=STAMP)
+    conn.rollback()

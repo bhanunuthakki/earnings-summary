@@ -21,6 +21,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
+from provenance.analysis_scope import AnalysisEvidenceScope
 from provenance.evidence_ledger import EvidenceLedger, EvidenceLocator, EvidenceNode, ExtractionRun
 from provenance.evidence_native_candidates import (
     resolve_local_storage_uri,
@@ -42,6 +43,7 @@ from provenance.source_fact_repository import (
     SourceFactPublication,
     SourceFactRepository,
 )
+from runtime.deterministic import sha256_text as _sha
 
 _RECIPE = "meli-10q-current-h1-reported-tables.v2"
 _NORMALIZATION_RECIPE = "meli-reported-unit-normalization.v1"
@@ -83,6 +85,9 @@ class ReportedTableRequest(_Closed):
     content_roots: tuple[Path, ...] = Field(min_length=1)
     recorded_at: datetime
     apply: bool = False
+    analysis_scope: AnalysisEvidenceScope | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @field_validator("recorded_at")
     @classmethod
@@ -146,10 +151,6 @@ class ReportedTableRejectionError(ValueError):
     """A source population member that cannot be safely interpreted."""
 
 
-def _sha(value: str) -> str:
-    return hashlib.sha256(value.encode()).hexdigest()
-
-
 def _json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
@@ -164,11 +165,21 @@ def _time(value: object) -> datetime:
 
 
 def load_reported_table_evidence(
-    conn: sqlite3.Connection, request: ReportedTableRequest
+    conn: sqlite3.Connection,
+    request: ReportedTableRequest,
+    *,
+    allow_annual_statements: bool = False,
 ) -> ReportedTableEvidence:
+    if request.analysis_scope is not None:
+        scope = request.analysis_scope
+        if request.recorded_at < scope.request.observed_through:
+            raise ValueError("reported statement scope is not visible at publication time")
     try:
         package = load_captured_sec_filing_package(
-            conn, inventory_key=request.inventory_key, accession_number=request.accession_number
+            conn,
+            inventory_key=request.inventory_key,
+            accession_number=request.accession_number,
+            analysis_scope=request.analysis_scope,
         )
     except SecNativeCaptureError as error:
         raise ValueError(str(error)) from error
@@ -190,7 +201,11 @@ def load_reported_table_evidence(
         "WHERE d.document_version_id=?",
         (request.document_version_id,),
     ).fetchone()
-    if row is None or row[0] != "10-Q" or row[2] is None:
+    if (
+        row is None
+        or row[2] is None
+        or (row[0] != "10-Q" and not (allow_annual_statements and row[0] == "10-K"))
+    ):
         raise ValueError("MELI H1 recipe requires an explicitly dated 10-Q")
     if tuple(row[4:7]) != (primary.issuer_id, request.accession_number, primary.source_url):
         raise ValueError("native document issuer/accession/source conflicts with inventory")
@@ -198,9 +213,12 @@ def load_reported_table_evidence(
     # The admitted NIMAL row must separately prove the exact six-month header.
     # SEC submissions commonly omit a start date; do not invent capture metadata.
     start = datetime(end.year, 1, 1, tzinfo=UTC) if row[1] is None else _time(row[1])
-    if (start.month, start.day, end.month, end.day) != (1, 1, 6, 30) or start.year != end.year:
+    expected_span = (1, 1, 12, 31) if row[0] == "10-K" else (1, 1, 6, 30)
+    if (start.month, start.day, end.month, end.day) != expected_span or start.year != end.year:
         raise ValueError(
-            "unsupported fiscal period: only an explicitly dated H1 filing is qualified"
+            "unsupported fiscal period: only an explicitly dated calendar FY or H1 filing is qualified"
+            if allow_annual_statements
+            else "unsupported fiscal period: only an explicitly dated H1 filing is qualified"
         )
     run = conn.execute(
         "SELECT document_version_id,input_sha256,extractor_name,extractor_code_version,extractor_config_sha256,outcome,completed_at FROM evidence_extraction_runs WHERE extraction_run_id=?",

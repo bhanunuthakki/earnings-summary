@@ -167,7 +167,13 @@ class PersistResult:
     created: bool
 
 
-def _matches_stored_values(existing: tuple[object, ...], expected: tuple[object, ...]) -> bool:
+def matches_stored_values(existing: tuple[object, ...], expected: tuple[object, ...]) -> bool:
+    """Compare a stored row against supplied values for an exact replay.
+
+    SQLite serializes datetimes to text, so a stored timestamp is parsed before
+    comparison; a supplied bool compares through the stored SQLite integer.
+    Used by every append-only provenance ledger that accepts idempotent replays.
+    """
     if len(existing) != len(expected):
         return False
     for stored, supplied in zip(existing, expected, strict=True):
@@ -184,6 +190,40 @@ def _matches_stored_values(existing: tuple[object, ...], expected: tuple[object,
         elif stored != supplied:
             return False
     return True
+
+
+def persist_idempotent_row(
+    conn: sqlite3.Connection,
+    *,
+    table: str,
+    columns: tuple[str, ...],
+    values: tuple[object, ...],
+    identity_column: str,
+    identity_value: str,
+) -> bool:
+    """Append one immutable row or accept only an exact idempotent replay.
+
+    Shared persistence primitive for the provenance ledgers: insert with
+    ``ON CONFLICT DO NOTHING`` and, when the identity already exists, require
+    the stored row to match every supplied value before accepting the replay.
+    Returns ``True`` when the row was created.
+    """
+    placeholders = ", ".join("?" for _ in columns)
+    cursor = conn.execute(
+        f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders}) ON CONFLICT DO NOTHING",  # nosec B608 -- trusted internal SQL shape; values remain bound
+        values,
+    )
+    if cursor.rowcount == 1:
+        return True
+    existing = conn.execute(
+        f"SELECT {', '.join(columns)} FROM {table} WHERE {identity_column} = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
+        (identity_value,),
+    ).fetchone()
+    if existing is None or not matches_stored_values(tuple(existing), values):
+        raise ValueError(
+            f"immutable {table} identity {identity_value!r} conflicts with existing data"
+        )
+    return False
 
 
 class ObservationResolutionLedger:
@@ -259,22 +299,15 @@ class ObservationResolutionLedger:
         identity_value: str,
         record_id: str,
     ) -> PersistResult:
-        placeholders = ", ".join("?" for _ in columns)
-        cursor = self._conn.execute(
-            f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders}) ON CONFLICT DO NOTHING",  # nosec B608 -- trusted internal SQL shape; values remain bound
-            values,
+        created = persist_idempotent_row(
+            self._conn,
+            table=table,
+            columns=columns,
+            values=values,
+            identity_column=identity_column,
+            identity_value=identity_value,
         )
-        if cursor.rowcount == 1:
-            return PersistResult(record_id=record_id, created=True)
-        existing = self._conn.execute(
-            f"SELECT {', '.join(columns)} FROM {table} WHERE {identity_column} = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
-            (identity_value,),
-        ).fetchone()
-        if existing is None or not _matches_stored_values(tuple(existing), values):
-            raise ValueError(
-                f"immutable {table} identity {identity_value!r} conflicts with existing data"
-            )
-        return PersistResult(record_id=record_id, created=False)
+        return PersistResult(record_id=record_id, created=created)
 
     def _verify_resolution_replay(self, resolution: ResolutionRevision) -> PersistResult:
         columns, values = self._resolution_values(resolution)
@@ -291,7 +324,7 @@ class ObservationResolutionLedger:
         stored_candidates = tuple(str(row[0]) for row in candidates)
         if (
             existing is None
-            or not _matches_stored_values(tuple(existing), values)
+            or not matches_stored_values(tuple(existing), values)
             or stored_candidates != resolution.candidate_observation_ids
         ):
             raise ValueError(

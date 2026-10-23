@@ -8,23 +8,17 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from pathlib import Path
 
+import comments_server
+import discovery_build
 import pytest
 from flask.testing import FlaskClient
 
 from discovery.store import list_candidates, upsert_candidate
+from dispatch_registry import Job, Registry
 from pipeline.discovery_panel import render_discovery_list, render_discovery_panel
 from tests.ask_stream_support import fold_sse_response
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import comments_server  # noqa: E402
-import discovery_build  # noqa: E402
-
-from dispatch_registry import Registry  # noqa: E402
 
 _DDL = """
 CREATE TABLE tracked_companies (
@@ -90,8 +84,26 @@ CREATE TABLE discovery_sources (
 class _NonSpawningRegistry(Registry):
     """Registry that records starts but never spawns a real subprocess."""
 
-    def start(self, *, ticker, kind, argv, spawn=True):  # type: ignore[override]
-        return super().start(ticker=ticker, kind=kind, argv=argv, spawn=False)
+    def start(
+        self,
+        *,
+        ticker: str,
+        kind: str,
+        argv: list[str],
+        spawn: bool = True,
+        cwd: str | None = None,
+        write_sets: list[str] | None = None,
+        code_root: str | Path | None = None,
+    ) -> Job:
+        return super().start(
+            ticker=ticker,
+            kind=kind,
+            argv=argv,
+            spawn=False,
+            cwd=cwd,
+            write_sets=write_sets,
+            code_root=code_root,
+        )
 
 
 def _seed(db: Path) -> None:
@@ -315,7 +327,9 @@ def test_source_weight_edit(client: FlaskClient, repo: Path) -> None:
     assert res.get_json()["source"]["base_weight"] == 0.95
     from discovery.sources import get_source
 
-    assert get_source("appaloosa", db_path=db).base_weight == 0.95  # type: ignore[union-attr]
+    source = get_source("appaloosa", db_path=db)
+    assert source is not None
+    assert source.base_weight == 0.95
     # Validation + unknown key.
     assert client.post("/api/discovery/sources/appaloosa/weight", json={}).status_code == 400
     assert (
@@ -557,7 +571,7 @@ def test_build_one_success_ladder(repo: Path) -> None:
         statuses.append(cand.status)
         return 0
 
-    ok = discovery_build.build_one("wdc", repo_root=repo, runner=runner)
+    ok = discovery_build.build_one("wdc", repo_root=repo, runner=runner, db_path=db)
     assert ok is True
     # Three steps since P1.1 (#963): onboard -> artifacts -> Investment
     # Decision Card (runs last so its deterministic inputs are fresh).
@@ -584,7 +598,7 @@ def test_build_one_failure_requeues(repo: Path) -> None:
     def runner(argv: list[str]) -> int:
         return 1  # the onboard step fails
 
-    ok = discovery_build.build_one("WDC", repo_root=repo, runner=runner)
+    ok = discovery_build.build_one("WDC", repo_root=repo, runner=runner, db_path=db)
     assert ok is False
     wdc = next(c for c in list_candidates(db_path=db) if c.ticker == "WDC")
     assert wdc.status == "queued"  # back to the queue for the owner to retry
@@ -597,7 +611,9 @@ def test_build_main_caps_batch(repo: Path) -> None:
 
 
 def test_build_emits_streamable_events(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    discovery_build.build_one("WDC", repo_root=repo, runner=lambda _argv: 0)
+    discovery_build.build_one(
+        "WDC", repo_root=repo, runner=lambda _argv: 0, db_path=repo / "data" / "portfolio.db"
+    )
     out = capsys.readouterr().out
     events = [json.loads(line)["event"] for line in out.splitlines() if line.strip()]
     assert events[0] == "discovery_build_start"

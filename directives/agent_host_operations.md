@@ -68,3 +68,39 @@ checkout does not make that database isolated.
    Preserve appended evidence and immutable files. Database restoration must use the validated
    snapshot and account for intervening legitimate writes; never blindly replace live state
    or force a downgrade that would discard rows requiring the newer schema.
+
+
+## Filing-XBRL configuration recovery
+
+The qualified bridge uses a fresh `earnings-summary-xbrl-mpl-` directory in its
+AppContainer temporary directory. A hard process stop can leave that directory.
+Four matching entries block another allocation. This is a recovery hold, not a
+permission to delete an existing profile or unrelated temporary files.
+
+1. Resolve the configured installation and its invoking identity through the
+   canonical service or operator configuration. Do not infer the service route
+   from an SSH user's environment. The launcher requires LocalSystem or an
+   administrative operator and uses one protected global mutex across sessions.
+2. Stop only the affected task-owned invocation through its process owner. Prove
+   that the launcher and every child Job stopped. A stopped root PID alone is
+   insufficient. Preserve the failure receipt and original source operands.
+3. Derive the V2 package SID and query `GetAppContainerFolderPath` under that same
+   identity. Match the profile's user SID and the actual contained TEMP path from
+   the qualification receipt. Do not substitute the host TEMP or a user home.
+4. Inspect only matching configuration entries in that verified private TEMP.
+   Reject reparse points and identity changes. Record each entry's path, owner,
+   file identity and size. Directory names or age alone do not prove ownership.
+5. Use a separately reviewed exact recovery plan. Retain unknown or unique data.
+   When deletion ownership is unproved, a bounded same-profile quarantine may
+   preserve the entries and remove them from the allocation prefix. It needs
+   explicit entry identities, a maximum of four retained entries and a review
+   disposition before another recovery. Do not create an unbounded quarantine.
+6. Recheck profile and directory identities. Run one bounded synthetic smoke
+   through the configured installation. Require its cleanup and exact source/ACL
+   parity. Keep processing on hold if any proof is missing. Never delete V1 or
+   reset an existing V2 profile as incidental recovery.
+
+The existing application caller enforces the manifest's 600-second deadline and
+output caps through `run_capped_process`. Its Windows Job owns the launcher tree.
+The launcher stops its nested child Job before private UI cleanup. Direct
+unbounded launcher invocation is not an approved operational entrypoint.

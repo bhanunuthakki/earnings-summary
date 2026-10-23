@@ -3,8 +3,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only fields declared in the checked-in _SOTP_SPEC dashboard spec.",
-      "fingerprint": "976c68270d1fb29d2e7a9316d8a635f57a60c0151e4073f3765fceae4f92c71c",
-      "line": 440,
+      "fingerprint": "05409fe3a9075c8e8b0894947002d3778ccb48009228f538bed503af4aec8c3d",
+      "line": 450,
       "path": "execution/build_holdco_sotp.py",
       "targets": [
         "_SOTP_SPEC"
@@ -13,8 +13,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Sync writes only _SOTP_SPEC fields via getattr on the Sotp dataclass.",
-      "fingerprint": "88ace674023ecbcb2ae2abe133e2d801b0740e27356cefd503aa1d5808ab1a58",
-      "line": 603,
+      "fingerprint": "0f70bc632a2da07d6bfd5ea89d8305aee28bb02c2e56128ec74be2b39077d824",
+      "line": 613,
       "path": "execution/build_holdco_sotp.py",
       "targets": [
         "_SOTP_SPEC"
@@ -23,8 +23,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Sync reads only _SOTP_SPEC fields via getattr on the Sotp dataclass.",
-      "fingerprint": "90d2a97cc87f30460bda7df77d525657cd099c95ef84d02af9fbe12b13a0459f",
-      "line": 605,
+      "fingerprint": "387b516b46c8361491c4de10e8f8d632ea8d6059d22787b7c9d8836afe2aa0cc",
+      "line": 615,
       "path": "execution/build_holdco_sotp.py",
       "targets": [
         "_SOTP_SPEC"
@@ -33,8 +33,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Dashboard build reads only _SOTP_SPEC fields via getattr.",
-      "fingerprint": "79549e887e686fd7d47dffb234c7f268222597ef744d08073d0890974a5b3b5f",
-      "line": 733,
+      "fingerprint": "861fcbdff89be0948f095f68be08e900f1fa2bdad951e38057b6d4051691da79",
+      "line": 744,
       "path": "execution/build_holdco_sotp.py",
       "targets": [
         "_SOTP_SPEC"
@@ -43,8 +43,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal near-growth scenario attribute tuple.",
-      "fingerprint": "ad1d6f625bff200433df0198ed1ce7b7a805073e19cc8d759edea0f61e77a461",
-      "line": 301,
+      "fingerprint": "54d2b4e7321f233189f3c83c5aacfd57eb99e34c61104986a01ef3b25c3b90f0",
+      "line": 304,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_g_near",
@@ -55,8 +55,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal terminal-growth scenario attribute tuple.",
-      "fingerprint": "1581c3643fbbfbdf595998695348d8f13c526064df4b07f13e7e4bb87749565f",
-      "line": 303,
+      "fingerprint": "d70adba3ed237213ca3fd18b60248cb2a0f27c57a535b4debd0b127531dfe441",
+      "line": 306,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_g_term",
@@ -67,8 +67,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal near-margin scenario attribute tuple.",
-      "fingerprint": "8b7d6dd5763fd3ca58233eb8735fcbbde93b17bffb010e529a400796d7eb05b7",
-      "line": 305,
+      "fingerprint": "f7af3358ca33401448c5593530f6ac9ecd570ec07fb956c0c189a6eb06e98361",
+      "line": 308,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_margin_near",
@@ -79,8 +79,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal terminal-margin scenario attribute tuple.",
-      "fingerprint": "b05ec111cb11835332f8495a214ebe4049cf115ad3ecd6936cf8b0238ca0e412",
-      "line": 307,
+      "fingerprint": "c59470bbe6ee9fb2699eb3b5207c33077604a974a3d3f057c4982ea6cf0cec0e",
+      "line": 310,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_margin_term",
@@ -101,9 +101,9 @@
     {
       "disposition": "external_adapter",
       "evidence": "Dynamic level selects only standard logging adapter methods.",
-      "fingerprint": "429094327816a8155bfcc5f5f935bf2defd8c6e0694d3f42c0213f935cbb3d04",
-      "line": 705,
-      "path": "execution/comments_server.py",
+      "fingerprint": "aff809d7cc8990c92c22780b759c44f804010c9908e7c16aa2d2ba9383df6a1f",
+      "line": 220,
+      "path": "execution/comments_server_context.py",
       "targets": [
         "logging"
       ]
@@ -111,8 +111,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr validates only the checked-in positive_fields argparse tuple.",
-      "fingerprint": "a76c4c585e475230eefcc95258829da571c4aef31dfd6c9dcd77bb3930ee3cb0",
-      "line": 1174,
+      "fingerprint": "ea894cc34bcdb09758e98a589569397fba2f6587e9c3374d60ecf54ec9a34422",
+      "line": 1328,
       "path": "execution/discover_ir_documents_all.py",
       "targets": [
         "positive_fields"
@@ -173,8 +173,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only StageSpec.skip_flags from the checked-in manifest.",
-      "fingerprint": "813fa293267fd90e28a8403a3cfd3e09966f1e96166f5bd3aaca789200f28a35",
-      "line": 162,
+      "fingerprint": "02abaf8d08c86211a4a28b51390b046557e7cf8bc6d6c0967c36ef370efb5c44",
+      "line": 192,
       "path": "execution/run_morning_pipeline.py",
       "targets": [
         "StageSpec.skip_flags"
@@ -225,8 +225,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "_verified_metric_expression iterates only the literal numerator, denominator, input, left, right field tuple on the frozen, extra-forbid MetricExpression schema. Each child is recursively rebound through its source-file-bound KPI reference. No source data controls the attribute name.",
-      "fingerprint": "4965cdbe728c8ed000c17c44a93e37fd387c88a0489b7a589f48c8af9247cd75",
-      "line": 1164,
+      "fingerprint": "c45d8c1f2a07f5b866f0bf7b33700d10bf0e77be8bb46467020ff18df52c0b15",
+      "line": 1155,
       "path": "src/compute/thesis_evaluator.py",
       "targets": [
         "numerator",
@@ -268,6 +268,184 @@
     },
     {
       "disposition": "closed_literal_set",
+      "evidence": "Attribute reads iterate only the checked-in WORKBOOK_DRIVERS tuple. Each selected name is a declared Assum numeric field used for base-case parity or worksheet cell values; no callable, module or command is selected.",
+      "fingerprint": "c9ec0a6ce1ceec2014cfb01b1fde929d24dc579b55c67741379781989b78a674",
+      "line": 182,
+      "path": "src/dcf/meli_workbook.py",
+      "targets": [
+        "comm_rev0",
+        "comm_g_near",
+        "comm_g_term",
+        "comm_margin_near",
+        "comm_margin_term",
+        "fpay_rev0",
+        "fpay_g_near",
+        "fpay_g_term",
+        "fpay_margin_near",
+        "fpay_margin_term",
+        "da_pct",
+        "capex_pct_near",
+        "capex_pct_term",
+        "nwc_pct",
+        "tax",
+        "op_exit_ebitda_mult",
+        "wacc",
+        "cb0",
+        "cbg_near",
+        "cbg_term",
+        "nimal_near",
+        "nimal_term",
+        "credit_opex_ratio",
+        "cap_ratio",
+        "credit_ke",
+        "credit_g_term",
+        "credit_terminal_roe",
+        "net_cash",
+        "years",
+        "shares",
+        "price"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Reported-anchor comparisons use the fixed five-field tuple, adding only financing_other_expenses_reserve for the explicit financing recipe. Both operands are Assum records; no callable or dispatch target is selected.",
+      "fingerprint": "b1b58c8a76e17b916d4e208d7693fd80183830e684d36a2c58779886987709bb",
+      "line": 192,
+      "path": "src/dcf/meli_workbook.py",
+      "targets": [
+        "comm_rev0",
+        "fpay_rev0",
+        "cb0",
+        "shares",
+        "net_cash",
+        "financing_other_expenses_reserve"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Attribute reads iterate only the checked-in WORKBOOK_DRIVERS tuple. Each selected name is a declared Assum numeric field used for base-case parity or worksheet cell values; no callable, module or command is selected.",
+      "fingerprint": "0c3c39eae53c86eb2da9c752eda45150ff9430f055850909988883ec834a4dda",
+      "line": 238,
+      "path": "src/dcf/meli_workbook.py",
+      "targets": [
+        "comm_rev0",
+        "comm_g_near",
+        "comm_g_term",
+        "comm_margin_near",
+        "comm_margin_term",
+        "fpay_rev0",
+        "fpay_g_near",
+        "fpay_g_term",
+        "fpay_margin_near",
+        "fpay_margin_term",
+        "da_pct",
+        "capex_pct_near",
+        "capex_pct_term",
+        "nwc_pct",
+        "tax",
+        "op_exit_ebitda_mult",
+        "wacc",
+        "cb0",
+        "cbg_near",
+        "cbg_term",
+        "nimal_near",
+        "nimal_term",
+        "credit_opex_ratio",
+        "cap_ratio",
+        "credit_ke",
+        "credit_g_term",
+        "credit_terminal_roe",
+        "net_cash",
+        "years",
+        "shares",
+        "price"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Attribute reads iterate only the checked-in WORKBOOK_DRIVERS tuple. Each selected name is a declared Assum numeric field used for base-case parity or worksheet cell values; no callable, module or command is selected.",
+      "fingerprint": "6ae1dac0c5c1e0638fd6f9b3c9751d66052f4a81cccf7f984748ad554c5a703a",
+      "line": 247,
+      "path": "src/dcf/meli_workbook.py",
+      "targets": [
+        "comm_rev0",
+        "comm_g_near",
+        "comm_g_term",
+        "comm_margin_near",
+        "comm_margin_term",
+        "fpay_rev0",
+        "fpay_g_near",
+        "fpay_g_term",
+        "fpay_margin_near",
+        "fpay_margin_term",
+        "da_pct",
+        "capex_pct_near",
+        "capex_pct_term",
+        "nwc_pct",
+        "tax",
+        "op_exit_ebitda_mult",
+        "wacc",
+        "cb0",
+        "cbg_near",
+        "cbg_term",
+        "nimal_near",
+        "nimal_term",
+        "credit_opex_ratio",
+        "cap_ratio",
+        "credit_ke",
+        "credit_g_term",
+        "credit_terminal_roe",
+        "net_cash",
+        "years",
+        "shares",
+        "price"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Expected workbook Valuation values read only the literal row/attribute tuple on the typed dcf.meli_model.Mirror result. The attributes are numeric model outputs, not callable or module targets.",
+      "fingerprint": "7cff7d23c760e96d41dd8b730ef58a3af0b232591a08b550d6ac6cf620f3b88e",
+      "line": 444,
+      "path": "src/dcf/meli_workbook.py",
+      "targets": [
+        "pv_op_fcff",
+        "op_terminal_ev",
+        "pv_op_terminal",
+        "operating_ev",
+        "pv_credit_fcfe",
+        "credit_terminal",
+        "pv_credit_terminal",
+        "credit_equity_value",
+        "equity_value",
+        "vps",
+        "op_terminal_revenue",
+        "credit_terminal_roe"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Expected workbook Model values read only the literal row/attribute tuple on dcf.meli_model.Row members of Mirror.rows. These are numeric annual model outputs, not callable or module targets.",
+      "fingerprint": "be98d7b65f94e1268c9b593706914a32f805de3af462dde77e873b552ee9169d",
+      "line": 488,
+      "path": "src/dcf/meli_workbook.py",
+      "targets": [
+        "comm_rev",
+        "fpay_rev",
+        "op_rev",
+        "op_ebit",
+        "op_da",
+        "op_capex",
+        "op_fcff",
+        "df_op",
+        "cb",
+        "credit_ni",
+        "reqcap",
+        "credit_fcfe",
+        "df_cr"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
       "evidence": "getattr reads only _SCALAR_ROW_ATTR dashboard scalar attributes.",
       "fingerprint": "90b15a52dcf79ed10d08b00b3c3e98e62a9b10ef6d54d3586ad8e34962abf733",
       "line": 1491,
@@ -279,8 +457,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Decimal loop accesses only the six persisted earnings-surprise fields.",
-      "fingerprint": "6dab249dd256b4609012fbcf9b625cd8ccaeeb9e267ff801026d45552700986d",
-      "line": 148,
+      "fingerprint": "1c8acfb60ced1db04ac029ba9a1851d8a289982a0f5e70561b48ff4c913aa4ce",
+      "line": 141,
       "path": "src/earnings_surprise_store.py",
       "targets": [
         "eps_estimate",
@@ -294,8 +472,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Count loop accesses only the two analyst-count fields.",
-      "fingerprint": "3df50ec566bfa14b46265e9e1a1ada3d1e64b7136ba66986982fa90de41ee2a8",
-      "line": 168,
+      "fingerprint": "9ec8c47cd109ea767a3451ccae091f532baacd87cb7a66ff30a329f375a03776",
+      "line": 161,
       "path": "src/earnings_surprise_store.py",
       "targets": [
         "num_analysts_eps",
@@ -305,8 +483,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Persistence tuple reads only the six persisted decimal fields.",
-      "fingerprint": "0da289720fdea5b11ed150126a03df67dbb101bf30149edc18fd0201df87692f",
-      "line": 258,
+      "fingerprint": "75764050e21ed82883d6904396315c8cb747692060cc121e069a590e902a3b3f",
+      "line": 251,
       "path": "src/earnings_surprise_store.py",
       "targets": [
         "eps_estimate",
@@ -452,8 +630,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only _OPTIONAL_COLUMNS ledger fields.",
-      "fingerprint": "3e4219e0b4339e751304225c4c16ead957f099c9c98499fb4043a01b5a2a8ea3",
-      "line": 341,
+      "fingerprint": "7854f56a6a4fb6905854be2fe547fb68a8369b129ec7d88975141a74117c6478",
+      "line": 342,
       "path": "src/llm_call_ledger.py",
       "targets": [
         "_OPTIONAL_COLUMNS"
@@ -519,9 +697,58 @@
     },
     {
       "disposition": "closed_literal_set",
+      "evidence": "Selected issuer-document capture identity is compared against only the literal ExpectedDocument identity-field tuple. The attributes are schema data fields, not callable or dispatch targets.",
+      "fingerprint": "e6d12e61b62e50f07d41a114cac5f9d60895f8eef8a322bd75553f30cb50d4f1",
+      "line": 930,
+      "path": "src/provenance/analysis_scope.py",
+      "targets": [
+        "issuer_id",
+        "document_type",
+        "form_type",
+        "accession_number"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Selected issuer-document periods compare only the two literal ExpectedDocument date fields. Both repeated getattr reads at this statement are data comparisons, not callable or dispatch targets.",
+      "fingerprint": "b6daec75f598d05ee487121de8b07d557ce6b1cc36b0afbed1e633520a420d40",
+      "line": 936,
+      "path": "src/provenance/analysis_scope.py",
+      "targets": [
+        "period_start",
+        "period_end"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Analysis coverage compares only this fixed tuple of ExpectedDocument identity fields; no callable or dispatch target is selected.",
+      "fingerprint": "2b4889b932414159c0b02ed4c7214c7c63d05a3f8645189bc89998e9b949d209",
+      "line": 1374,
+      "path": "src/provenance/analysis_scope.py",
+      "targets": [
+        "issuer_id",
+        "document_type",
+        "form_type",
+        "accession_number",
+        "source_url"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Analysis coverage compares only this fixed tuple of ExpectedDocument identity fields; no callable or dispatch target is selected.",
+      "fingerprint": "7e98c97482fb3088f9879cca08dd9a82508f0311c72e5ad66f76eadcee23b7e4",
+      "line": 1377,
+      "path": "src/provenance/analysis_scope.py",
+      "targets": [
+        "period_start",
+        "period_end"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
       "evidence": "getattr projects only _DISPOSITION_COLUMNS fields.",
-      "fingerprint": "dedf20b2e0c84ce6b6486f8c8b65f89c4321adf4b8188cc24c03bd45b6c204c1",
-      "line": 220,
+      "fingerprint": "c9d8a3170b5df5c4169c6747e78814ffa79552b8156bfea38540776e588394a6",
+      "line": 198,
       "path": "src/provenance/filing_xbrl_extraction_ledger.py",
       "targets": [
         "_DISPOSITION_COLUMNS"
@@ -530,8 +757,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr projects only _SEAL_COLUMNS fields.",
-      "fingerprint": "77ff3e0f621077b32039eef0a84101dce5e79ee9e3d4c27d3756673553db03e9",
-      "line": 269,
+      "fingerprint": "944645ae9354a3f5aefbad9a5d1225c8e7669157daf803c6cb6345b78f9f92b5",
+      "line": 247,
       "path": "src/provenance/filing_xbrl_extraction_ledger.py",
       "targets": [
         "_SEAL_COLUMNS"
@@ -561,10 +788,22 @@
       ]
     },
     {
+      "disposition": "closed_literal_set",
+      "evidence": "POSIX bounded-source preflight reads only os constants O_NOFOLLOW, O_DIRECTORY and O_NONBLOCK from the literal generator tuple. A missing or zero constant refuses opening; this lookup dispatches no callable and has no input-selected attribute name.",
+      "fingerprint": "b94506cefc3145fb3176c77d94476f17ab5450323dc1143e3f124dff49e69df4",
+      "line": 56,
+      "path": "src/provenance/immutable_artifact.py",
+      "targets": [
+        "O_NOFOLLOW",
+        "O_DIRECTORY",
+        "O_NONBLOCK"
+      ]
+    },
+    {
       "disposition": "schema_field",
       "evidence": "getattr reads the typed registry spec id_column.",
-      "fingerprint": "7000d52085aadbc3024f284eb4d47495a28e4b1dc3cad77eb95a149d55304394",
-      "line": 503,
+      "fingerprint": "4bc18e5e5aecfdda815219257c5768bac4de18e093411803652ed8e1e868bf62",
+      "line": 500,
       "path": "src/provenance/issuer_registry.py",
       "targets": [
         "id_column"
@@ -573,8 +812,8 @@
     {
       "disposition": "schema_field",
       "evidence": "getattr is bounded by the locator parity validator fields.",
-      "fingerprint": "d83ed5352b31f5eefac496697c02c8b07602d9f4f409d15903ffcd9427fc5ed7",
-      "line": 385,
+      "fingerprint": "d4bd493d716a74ef43b08e25299eca370cd5b9df913db2932880979658d06683",
+      "line": 373,
       "path": "src/provenance/legacy_fact_evidence_match.py",
       "targets": [
         "locator fields"
@@ -583,8 +822,8 @@
     {
       "disposition": "schema_field",
       "evidence": "getattr is bounded by the locator digest validator fields.",
-      "fingerprint": "19c22a972a71bcbee569ef553370e632fcc39d0d578d2cd3a8e74cab61545925",
-      "line": 399,
+      "fingerprint": "8b83d11d1d7c9ae8956efd9f8f1a0fbffabbef88cf15c1c6cf548c22d03ac6e1",
+      "line": 387,
       "path": "src/provenance/legacy_fact_evidence_match.py",
       "targets": [
         "locator digest fields"
@@ -593,8 +832,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only the pinned extraction policy fields.",
-      "fingerprint": "4fa2fd0029c2ede342a002ed1bf0bc4237f4e1ab2e17f2bf723dd511d664af23",
-      "line": 104,
+      "fingerprint": "3492e92b3ebc62bf86794254ba28006897516f0c6ae72a2ff72b1085bc282395",
+      "line": 93,
       "path": "src/provenance/pdf_table_extraction.py",
       "targets": [
         "extraction policy"
@@ -603,8 +842,8 @@
     {
       "disposition": "schema_field",
       "evidence": "getattr reads the typed reporting-entity spec id_column.",
-      "fingerprint": "1aa604f2c1ebec5a14c50d9af8ab12bcf5ebac192cd27183d76d5e97ec71411a",
-      "line": 469,
+      "fingerprint": "b0392bf342b7a2d534e7cdb98d2cd6ce5deb95016bf4fcf5a63af34b3477e848",
+      "line": 467,
       "path": "src/provenance/reporting_entity_registry.py",
       "targets": [
         "id_column"
@@ -613,18 +852,45 @@
     {
       "disposition": "schema_field",
       "evidence": "Columns come from SearchProjectionSeal.model_fields.",
-      "fingerprint": "89a37d6de4e0f9cc2992b9b30421f547e57e8f08021fd246ba5b4d1351483cf4",
-      "line": 179,
+      "fingerprint": "a1290adf30468b9e6b8f304bfaeb7c2ae79342020b09511ca269bffc4a1ca0d9",
+      "line": 180,
       "path": "src/provenance/search_index_lineage.py",
       "targets": [
         "SearchProjectionSeal.model_fields"
       ]
     },
     {
+      "disposition": "closed_literal_set",
+      "evidence": "Retained SEC member replay compares DocumentVersion and ExpectedSecDocument using only the literal native identity/period-field tuple. The attributes are schema data; no callable, module or command is selected.",
+      "fingerprint": "9f3acc0c118fb8033ac66730da64ecd3b9047cdd0097abedbd42f565c68cdcc5",
+      "line": 263,
+      "path": "src/provenance/sec_submission_import.py",
+      "targets": [
+        "issuer_id",
+        "ticker",
+        "document_type",
+        "form_type",
+        "accession_number",
+        "period_start",
+        "period_end"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Native parent replay iterates only the closed table/identity/schema tuples: evidence_source_observations with observation_id on SourceObservation, and evidence_content_blobs with sha256 on ContentBlob. The attribute supplies a bound SQL identity value; no callable or code target is selected.",
+      "fingerprint": "0f33141df7d8a6dfd95d5feed8b3af48362398577f53b21c8ff07957a09c6806",
+      "line": 615,
+      "path": "src/provenance/sec_submission_import.py",
+      "targets": [
+        "observation_id",
+        "sha256"
+      ]
+    },
+    {
       "disposition": "schema_field",
       "evidence": "getattr projects only the typed publication-member columns.",
-      "fingerprint": "47a9c70d5d2c9e39bfc22fc18e27c69db70da7d9f37665e402f1b2578de473bc",
-      "line": 760,
+      "fingerprint": "1508d851c889f45ab469be852653f20928ff2903e1862d347c158e4b531d22fe",
+      "line": 755,
       "path": "src/provenance/source_fact_repository.py",
       "targets": [
         "member_columns"
@@ -653,9 +919,9 @@
     {
       "disposition": "schema_field",
       "evidence": "Columns come from EmbeddingEvaluationReceipt.model_fields.",
-      "fingerprint": "885a71905692ea9666990039bbb90c10e66656f32a2693fa294ce356a09420cd",
-      "line": 108,
-      "path": "src/search/embedding_evaluation_receipt.py",
+      "fingerprint": "66f4d5f3699de815932d257736e0a82ddf6043811ae96e9464eb01783b5ee85d",
+      "line": 145,
+      "path": "src/search/embedding_promotion.py",
       "targets": [
         "EmbeddingEvaluationReceipt.model_fields"
       ]
@@ -663,8 +929,8 @@
     {
       "disposition": "schema_field",
       "evidence": "Columns come from EmbeddingRuntimeRegistration.model_fields.",
-      "fingerprint": "865973482f4c491dacfcbfe625035cc69c5c37436f8bbad64dd411366bd9526d",
-      "line": 115,
+      "fingerprint": "22e4937db2133eaa96f9b272b20310af99fcaf650103b35b36513037ba268f33",
+      "line": 116,
       "path": "src/search/embedding_runtime_registration.py",
       "targets": [
         "EmbeddingRuntimeRegistration.model_fields"
@@ -672,23 +938,13 @@
     },
     {
       "disposition": "closed_literal_set",
-      "evidence": "Seal parity compares only the 12 FactProjectionSeal fields in the adjacent literal tuple.",
-      "fingerprint": "be9674a7f430e296c8f629e35ea192614bfb6ac258d330c0ca9e26f6839b7079",
-      "line": 1988,
-      "path": "src/search/fact_projection.py",
+      "evidence": "Offline-mode verification reads only the two fixed fastembed attribute spellings in the adjacent literal tuple.",
+      "fingerprint": "165ba4e418d125ea1679713dffe0165793c91679bb4b155a16cd709b569f0458",
+      "line": 596,
+      "path": "src/search/local_vector.py",
       "targets": [
-        "projection_run_id",
-        "manifest_id",
-        "eligible_fact_cell_count",
-        "membership_count",
-        "included_count",
-        "unresolved_material_count",
-        "missing_provenance_count",
-        "quarantined_count",
-        "row_count",
-        "membership_set_sha256",
-        "row_set_sha256",
-        "config_sha256"
+        "local_files_only",
+        "_local_files_only"
       ]
     },
     {
@@ -720,6 +976,20 @@
     },
     {
       "disposition": "closed_literal_set",
+      "evidence": "Test-only baseline mutation reads an Assum value from synthetic_cases using exactly the five literal pytest parameter keys declared immediately above the test. No callable or dispatch target is selected; this exact test seam is classified without changing the protected residual unknown-edge total.",
+      "fingerprint": "38050665002dd8aa3d0704ac863a1d18ad49b5fe56d0948a714a02dcb9a41443",
+      "line": 45,
+      "path": "tests/test_meli_workbook_recalculation.py",
+      "targets": [
+        "comm_rev0",
+        "fpay_rev0",
+        "cb0",
+        "shares",
+        "net_cash"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
       "evidence": "The parameterized reporting-date regression selects only the two literal quarter and annual cell readers declared in its pytest parameter table.",
       "fingerprint": "e252ddb5e4049a27d98f84a5b6aacac9e228665b46b2bb0bde8ec8c405f1e759",
       "line": 220,
@@ -741,43 +1011,6 @@
         "FMP_DIR",
         "STATE_ROOT"
       ]
-    },
-    {
-      "disposition": "closed_literal_set",
-      "evidence": "POSIX bounded-source preflight reads only os constants O_NOFOLLOW, O_DIRECTORY and O_NONBLOCK from the literal generator tuple. A missing or zero constant refuses opening; this lookup dispatches no callable and has no input-selected attribute name.",
-      "fingerprint": "b94506cefc3145fb3176c77d94476f17ab5450323dc1143e3f124dff49e69df4",
-      "line": 56,
-      "path": "src/provenance/immutable_artifact.py",
-      "targets": [
-        "O_NOFOLLOW",
-        "O_DIRECTORY",
-        "O_NONBLOCK"
-      ]
-    },
-    {
-      "disposition": "closed_literal_set",
-      "evidence": "Analysis coverage compares only this fixed tuple of ExpectedDocument identity fields; no callable or dispatch target is selected.",
-      "fingerprint": "9f9e9e19676fb26ca0829cb61b7961b2d82330e2f17874670b867878825fc05d",
-      "line": 450,
-      "path": "src/provenance/analysis_scope.py",
-      "targets": [
-        "issuer_id",
-        "document_type",
-        "form_type",
-        "accession_number",
-        "source_url"
-      ]
-    },
-    {
-      "disposition": "closed_literal_set",
-      "evidence": "Analysis coverage compares only this fixed tuple of ExpectedDocument identity fields; no callable or dispatch target is selected.",
-      "fingerprint": "0a72df9f575cedbd860b3e28c22f863733d7edc593d202175b02ba65b8080186",
-      "line": 453,
-      "path": "src/provenance/analysis_scope.py",
-      "targets": [
-        "period_start",
-        "period_end"
-      ]
     }
   ],
   "graph_provenance": {
@@ -785,7 +1018,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "6e001f2b7ce42f09a305da392a0577c6d62a8ce9237c1bc1ab20fe9304a24726",
+      "source_sha256": "4f41fb6f1a4eb6a11497ceaed4f68a6b2672e3144f2487e3269a095deabea6c2",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

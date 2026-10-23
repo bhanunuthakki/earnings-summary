@@ -33,7 +33,7 @@ class ProcessIrDocuments(Protocol):
     CACHE_DIR: Path
     index_manager: _IndexManager
 
-    def main(self) -> None: ...
+    def main(self) -> int | None: ...
 
 
 def _load_processor() -> ProcessIrDocuments:
@@ -81,10 +81,10 @@ def main(argv: list[str] | None = None) -> int:
         sys.argv = ["process_ir_documents.py", "--ticker", args.ticker]
         if args.regenerate_missing:
             sys.argv.append("--regenerate-missing")
-        processor.main()
+        result = processor.main()
     finally:
         sys.argv = original_argv
-    return 0
+    return result if result is not None else 0
 
 
 if __name__ == "__main__":

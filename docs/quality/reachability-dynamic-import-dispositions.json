@@ -168,8 +168,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Browser capture lazily loads the optional playwright.sync_api runtime.",
-      "fingerprint": "1191fb8b611d83b0e49f77c316b2c25da45826824ba600be7f9a48d10ef240fd",
-      "line": 340,
+      "fingerprint": "ca88782d272e501a1ffc1eed5b5e25cb6fc76b1538eb1c0a32488629675993e5",
+      "line": 341,
       "path": "src/ir_pipeline/approved_ir_observation_capture.py",
       "targets": [
         "playwright.sync_api"
@@ -178,8 +178,8 @@
     {
       "disposition": "internal_target",
       "evidence": "_ADAPTERS is a fixed registry whose mz entry resolves to this checked-in adapter.",
-      "fingerprint": "2c70099e25d4296ee0dcb5770fc426e3eb391c1dae1614da864b1b152d8eaaff",
-      "line": 40,
+      "fingerprint": "fd2cf31ac57e1fde4f51f342c581e912f9d7063b76c458edd3d3771187b69145",
+      "line": 45,
       "path": "src/ir_pipeline/discover/__init__.py",
       "targets": [
         "src/ir_pipeline/discover/mz.py"
@@ -208,8 +208,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Table extraction lazily loads the optional fitz PyMuPDF module.",
-      "fingerprint": "6875d0631fd114311327f402d6a1d1f845b9ab964ef24486d272908a36ae6f57",
-      "line": 439,
+      "fingerprint": "9a26cad528f4dd04141a4dc22f3291872f5646f26e136d316e0f3bc3d92b6b7f",
+      "line": 428,
       "path": "src/provenance/pdf_table_extraction.py",
       "targets": [
         "fitz"
@@ -217,9 +217,9 @@
     },
     {
       "disposition": "internal_target",
-      "evidence": "The fixed MUTATING_KINDS set plus the explicit ask-kind branch select only these checked-in self-registering artifact modules.",
-      "fingerprint": "aaa079ba3bc000f89002e2b010b9b36d370fcf204f77b83284b829d61a156894",
-      "line": 66,
+      "evidence": "The fixed MUTATING_KINDS set plus the explicit Ask/owner-kind branch select only these checked-in self-registering artifact modules.",
+      "fingerprint": "62c109c10badeb5b394ecc0f21f12f6f9116102010a975367398c58d22192b51",
+      "line": 217,
       "path": "src/research/apply.py",
       "targets": [
         "src/research/ask_proposal_artifact.py",
@@ -297,7 +297,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "6e001f2b7ce42f09a305da392a0577c6d62a8ce9237c1bc1ab20fe9304a24726",
+      "source_sha256": "4f41fb6f1a4eb6a11497ceaed4f68a6b2672e3144f2487e3269a095deabea6c2",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

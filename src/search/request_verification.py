@@ -1,0 +1,383 @@
+"""In-request verification memo for the sealed Ask retrieval plane.
+
+Audit findings F2/F3 (``.tmp/audit/search.md``): within one sealed turn the
+same immutable coordinates were re-derived several times — the full vector
+projection re-read/re-hash/verify pass ran at every exact-scan site, and the
+promotion, population-cutover, research-snapshot, projection-generation, and
+whole retrieval-trace verifications re-ran at every orchestration site
+(readiness, execution, and the trace verifications).  This module owns the turn-scoped memo that
+collapses those repeated derivations into one executed pass per immutable
+coordinate per request.
+
+Contract:
+
+* One cache instance per request, bound to the single connection that serves
+  the turn.  Using it through a different connection fails closed.
+* Every entry is bounded by the connection's ``PRAGMA data_version`` token,
+  which changes exactly when another connection commits a change this
+  connection can observe.  The request's own writes (the retrieval trace it
+  is building) never touch the sealed coordinates and so do not invalidate
+  the memo; any external commit invalidates every entry, so a memoized
+  "verified" can never outlive the database state it proved.  A verification
+  that completes while the token moves is journaled but never memoized.
+* ``enabled=False`` journals every executed verification but stores nothing:
+  the un-deduplicated reference instrument for output-preservation proofs on
+  the same fixtures.
+* The journal is the instrument.  It records every verification that actually
+  executed, grouped by kind and immutable coordinate, so a fixture can prove
+  each required verification runs once per request.
+
+Synthetic-fixture timings measured through this cache are non-representative
+of production latency; its purpose is exactly-once verification work, not
+speed.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import cast
+
+from sqlite_runtime import (
+    ATTACH_OR_DETACH_PATTERN,
+    ROLLBACK_PATTERN,
+    ManagedConnection,
+    active_managed_trace_connection_count,
+)
+
+TraceObserver = Callable[[str], None]
+
+
+def _quote_identifier(identifier: str) -> str:
+    """Quote a SQLite identifier by enclosing in double quotes and escaping embedded quotes."""
+    escaped = identifier.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _is_managed_connection(conn: object) -> bool:
+    return isinstance(conn, ManagedConnection) or (
+        type(conn).__name__ == "ManagedConnection"
+        and hasattr(conn, "register_trace_observer")
+        and hasattr(conn, "register_rollback_observer")
+        and hasattr(conn, "rollback_generation")
+    )
+
+
+def register_connection_trace_observer(
+    conn: sqlite3.Connection, observer: TraceObserver
+) -> Callable[[], None]:
+    """Register a trace observer through the connection-owned dispatcher.
+
+    Returns a callable that unregisters the observer when invoked.
+    Fails closed if the connection is not a ManagedConnection, ensuring
+    unmanaged connections never have their trace callbacks replaced or wiped.
+    """
+    if _is_managed_connection(conn):
+        managed = cast(ManagedConnection, conn)
+        return managed.register_trace_observer(observer)
+    raise VerificationCacheError(
+        "RequestVerificationCache requires a ManagedConnection to guarantee trace callback "
+        f"preservation without replacing caller state; received {type(conn).__name__}"
+    )
+
+
+def active_connection_trace_dispatcher_count() -> int:
+    """Return the number of connections currently registered in the trace dispatcher."""
+    return active_managed_trace_connection_count()
+
+
+def active_connection_trace_observer_count(conn: sqlite3.Connection) -> int:
+    """Return the number of active observers registered on the given connection."""
+    if isinstance(conn, ManagedConnection):
+        return conn.trace_observer_count
+    return 0
+
+
+# Kinds of verification work the sealed plane memoizes per request.
+SEMANTIC_PROJECTION_READ = "semantic_projection_read_rehash_verify"
+SEMANTIC_RUNTIME_COORDINATES = "semantic_runtime_coordinates"
+SEMANTIC_RUNTIME_INSTANCE = "semantic_runtime_instance"
+PROMOTION_COORDINATES = "promotion_coordinates"
+POPULATION_CUTOVER_CURRENT = "population_cutover_current"
+POPULATION_RECEIPT = "population_receipt"
+RESEARCH_COORDINATES = "research_coordinates"
+PROJECTION_GENERATION_ADMISSION = "projection_generation_admission"
+RETRIEVAL_TRACE = "retrieval_trace"
+
+
+class VerificationCacheError(RuntimeError):
+    """The in-request verification memo was used outside its contract."""
+
+
+@dataclass(frozen=True)
+class VerificationEvent:
+    """One verification that actually executed against the ledger."""
+
+    kind: str
+    coordinate: tuple[str, ...]
+    change_token: object
+    sequence: int
+
+
+class _NotVerified:
+    """Sentinel for a memo miss; distinct from any memoized value."""
+
+    def __repr__(self) -> str:  # pragma: no cover - diagnostic only
+        return "NOT_VERIFIED"
+
+
+NOT_VERIFIED = _NotVerified()
+
+
+DataVersionMap = tuple[tuple[str, int], ...]
+SchemaTopologyMap = tuple[tuple[str, str, int], ...]
+StateToken = tuple[DataVersionMap, SchemaTopologyMap, int]
+
+
+class RequestVerificationCache:
+    """Turn-scoped memo over immutable verification coordinates.
+
+    The memo is intentionally not a cross-request cache: a fresh instance is
+    created per sealed request and dies with it, so a new turn always pays a
+    full verification pass over the current state.
+    """
+
+    def __init__(self, conn: sqlite3.Connection, *, enabled: bool = True) -> None:
+        if not _is_managed_connection(conn):
+            raise VerificationCacheError(
+                "RequestVerificationCache requires a ManagedConnection to guarantee trace callback "
+                f"preservation without replacing caller state; received {type(conn).__name__}"
+            )
+        self._conn = cast(ManagedConnection, conn)
+        self.enabled = enabled
+        self.journal: list[VerificationEvent] = []
+        self._entries: dict[tuple[str, tuple[str, ...]], tuple[StateToken, object]] = {}
+        self._token: DataVersionMap | None = None
+        self._epoch: int = 0
+        self._in_flight_tokens: dict[tuple[str, tuple[str, ...]], list[StateToken]] = {}
+        self._expected_changes: int = self._conn.total_changes
+        self._schema_version: SchemaTopologyMap = self._read_schema_version()
+        self._rollback_generation: int = self._conn.rollback_generation
+        self._closed: bool = False
+        self._unregister_trace: Callable[[], None] | None = register_connection_trace_observer(
+            self._conn, self._on_trace_sql
+        )
+        self._unregister_rollback: Callable[[], None] | None = (
+            self._conn.register_rollback_observer(self.notify_rollback)
+        )
+
+    def _read_schema_version(self) -> SchemaTopologyMap:
+        versions: list[tuple[str, str, int]] = []
+        for row in self._conn.execute("PRAGMA database_list").fetchall():
+            schema_name = str(row[1])
+            file_path = str(row[2])
+            quoted_schema = _quote_identifier(schema_name)
+            cursor = self._conn.execute(f"PRAGMA {quoted_schema}.schema_version")
+            row_v = cursor.fetchone()
+            version = int(row_v[0]) if row_v is not None else 0
+            versions.append((schema_name, file_path, version))
+        if not any(name == "temp" for name, _, _ in versions):
+            cursor = self._conn.execute('PRAGMA "temp".schema_version')
+            row_v = cursor.fetchone()
+            version = int(row_v[0]) if row_v is not None else 0
+            versions.append(("temp", "", version))
+        return tuple(sorted(versions))
+
+    def _read_data_versions(self) -> DataVersionMap:
+        versions: list[tuple[str, int]] = []
+        for row in self._conn.execute("PRAGMA database_list").fetchall():
+            schema_name = str(row[1])
+            quoted_schema = _quote_identifier(schema_name)
+            cursor = self._conn.execute(f"PRAGMA {quoted_schema}.data_version")
+            row_v = cursor.fetchone()
+            version = int(row_v[0]) if row_v is not None else 0
+            versions.append((schema_name, version))
+        return tuple(sorted(versions))
+
+    @property
+    def is_closed(self) -> bool:
+        """Whether the cache has completed its lifecycle and closed."""
+        return self._closed
+
+    @property
+    def entry_count(self) -> int:
+        """Return the number of currently memoized entries."""
+        return len(self._entries)
+
+    @property
+    def in_flight_count(self) -> int:
+        """Return the number of active in-flight verification tokens."""
+        return len(self._in_flight_tokens)
+
+    def _assert_not_closed(self) -> None:
+        if self._closed:
+            raise VerificationCacheError(
+                "RequestVerificationCache is closed and cannot perform verification operations"
+            )
+
+    def _on_trace_sql(self, statement: str) -> None:
+        if ROLLBACK_PATTERN.match(statement) or ATTACH_OR_DETACH_PATTERN.match(statement):
+            self.invalidate()
+
+    def close(self) -> None:
+        """Release trace and rollback registrations on the connection and release cached entries."""
+
+        if self._closed:
+            return
+        self._closed = True
+        if self._unregister_trace is not None:
+            self._unregister_trace()
+            self._unregister_trace = None
+        if self._unregister_rollback is not None:
+            self._unregister_rollback()
+            self._unregister_rollback = None
+        self._entries.clear()
+        self._in_flight_tokens.clear()
+
+    def __enter__(self) -> RequestVerificationCache:
+        return self
+
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+        self.close()
+
+    def ensure_bound(self, conn: sqlite3.Connection) -> None:
+        """Fail closed when the memo is used through a different connection."""
+
+        self._assert_not_closed()
+        if conn is not self._conn:
+            raise VerificationCacheError(
+                "in-request verification cache is bound to a different connection; "
+                "a sealed request must verify through the connection it opened"
+            )
+
+    @contextmanager
+    def authorized_write(self) -> Generator[None, None, None]:
+        """Acknowledge authorized same-connection trace writes without invalidating memo."""
+
+        self._assert_not_closed()
+        before = self._conn.total_changes
+        try:
+            yield
+        finally:
+            delta = self._conn.total_changes - before
+            if delta > 0:
+                self._expected_changes += delta
+
+    @contextmanager
+    def savepoint(self, name: str) -> Generator[None, None, None]:
+        """Execute within a SQLite savepoint; roll back and invalidate memo on error."""
+
+        self._assert_not_closed()
+        quoted_name = _quote_identifier(name)
+        self._conn.execute(f"SAVEPOINT {quoted_name}")
+        try:
+            yield
+        except Exception:
+            self._conn.execute(f"ROLLBACK TO SAVEPOINT {quoted_name}")
+            self._conn.execute(f"RELEASE SAVEPOINT {quoted_name}")
+            self.invalidate()
+            raise
+        self._conn.execute(f"RELEASE SAVEPOINT {quoted_name}")
+
+    def notify_rollback(self) -> None:
+        """Notify the cache that a rollback occurred, invalidating all memoized entries."""
+
+        self._assert_not_closed()
+        self.invalidate()
+
+    def _check_same_connection_mutation(self) -> None:
+        """Clear memoized entries and advance epoch when unacknowledged writes, DDL, or rollbacks occur."""
+
+        current_changes = self._conn.total_changes
+        current_schema = self._read_schema_version()
+        current_rollback = self._conn.rollback_generation
+        if (
+            current_changes != self._expected_changes
+            or current_schema != self._schema_version
+            or current_rollback != self._rollback_generation
+        ):
+            self._entries.clear()
+            self._epoch += 1
+            self._expected_changes = current_changes
+            self._schema_version = current_schema
+            self._rollback_generation = current_rollback
+
+    def invalidate(self) -> None:
+        """Explicitly invalidate all memoized entries."""
+
+        self._assert_not_closed()
+        self._entries.clear()
+        self._epoch += 1
+        self._expected_changes = self._conn.total_changes
+        self._schema_version = self._read_schema_version()
+        self._rollback_generation = self._conn.rollback_generation
+
+    def _state_token(self) -> StateToken:
+        token = self._change_token()
+        return (token, self._schema_version, self._epoch)
+
+    def verified(self, kind: str, coordinate: tuple[str, ...]) -> object:
+        """Return the memoized verification value, or ``NOT_VERIFIED``."""
+
+        self._assert_not_closed()
+        state = self._state_token()
+        entry = self._entries.get((kind, coordinate))
+        if entry is not None and entry[0] == state:
+            return entry[1]
+        self._in_flight_tokens.setdefault((kind, coordinate), []).append(state)
+        return NOT_VERIFIED
+
+    def record(
+        self,
+        kind: str,
+        coordinate: tuple[str, ...],
+        value: object,
+        *,
+        start_token: StateToken | tuple[object, ...] | int | None = None,
+    ) -> None:
+        """Journal one executed verification and memoize it at the live token."""
+
+        self._assert_not_closed()
+
+        current_state = self._state_token()
+        token = current_state[0]
+        self.journal.append(
+            VerificationEvent(
+                kind=kind,
+                coordinate=coordinate,
+                change_token=token,
+                sequence=len(self.journal),
+            )
+        )
+        if not self.enabled:
+            return
+        stack = self._in_flight_tokens.get((kind, coordinate))
+        lookup_state = start_token if start_token is not None else (stack.pop() if stack else None)
+        if lookup_state is not None:
+            if isinstance(lookup_state, tuple) and lookup_state != current_state:
+                # Database mutated (external commit, unacknowledged write, rollback,
+                # or explicit invalidation) while verification was running; do not memoize.
+                return
+            if isinstance(lookup_state, int):
+                return
+        self._entries[(kind, coordinate)] = (current_state, value)
+
+    def counts(self) -> dict[tuple[str, tuple[str, ...]], int]:
+        """Executed-verification counters grouped by kind and coordinate."""
+
+        counts: dict[tuple[str, tuple[str, ...]], int] = {}
+        for event in self.journal:
+            key = (event.kind, event.coordinate)
+            counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    def _change_token(self) -> DataVersionMap:
+        self._check_same_connection_mutation()
+        versions = self._read_data_versions()
+        if self._token != versions:
+            self._token = versions
+            self._entries.clear()
+            self._epoch += 1
+        return versions

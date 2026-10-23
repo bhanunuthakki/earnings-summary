@@ -25,6 +25,7 @@ from pipeline.kpi_report_reference_dispositions import (
     ReportKpiReferenceStatus,
 )
 from pipeline.kpi_semantic_scope import ScopedKpiDefinition
+from runtime.deterministic import sha256_text as _sha256_text
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 REVIEW_CODE_IDENTITY_DEPENDENCY_CLASSES = (
@@ -35,7 +36,6 @@ REVIEW_CODE_IDENTITY_DEPENDENCY_CLASSES = (
             "execution/comments_server.py",
             "src/operations/models.py",
             "src/operations/host_runtime.py",
-            "src/operations/topology_observer.py",
             "src/operations/backup_observer.py",
             "src/operations/registry.py",
             "src/operations/review_bundle.py",
@@ -276,10 +276,6 @@ class OperationsReviewBundle(_FrozenModel):
         ):
             raise ValueError("review bundle content_sha256 does not match its payload")
         return self
-
-
-def _sha256_text(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def review_code_identity(repo_root: Path) -> str:

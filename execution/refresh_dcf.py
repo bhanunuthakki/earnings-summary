@@ -52,13 +52,15 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:  # ``python -m execution.refresh_dcf``
+    from execution._lib import PROJECT_ROOT
 
 from db_paths import configured_db_path
 from dcf import assumptions_doc
 from dcf import equity_bridge as equity_bridge_mod
 from dcf import forecast_series as forecast_series_mod
-from dcf import live_price as live_price_mod
 from dcf import persist as persist_mod
 from dcf import redesign as redesign_mod
 from dcf import reverse as reverse_mod
@@ -75,13 +77,13 @@ from dcf.input_evidence import InputEvidenceError, ModelInputRequest, SourceRead
 from dcf.meli_inputs import RECIPE as MELI_INPUT_RECIPE
 from dcf.onon_inputs import RECIPE as ONON_INPUT_RECIPE
 from dcf.provenance import DcfInputProvenance, input_clock_summary
+from pipeline.db_writer_gate import hold_writer_gate
 from runtime.job_runtime import JobAlreadyRunningError
 from runtime.python_process import managed_python_prefix
+from sources import price as live_price_mod
 from sources import registry as source_calls_registry
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ticker_validation import safe_ticker
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 DCF_DIR_NAME = "dcf"
 CURRENCY_DEFAULT = "USD"
@@ -477,7 +479,10 @@ def main() -> int:
         print(json.dumps({"event": "no_tickers", "detail": "nothing to refresh"}))
         return 0
 
-    db_path = configured_db_path(repo_root)
+    # The driver passes the resolved database explicitly (--db); standalone
+    # invocations fall back to the configured authority, never a bare
+    # checkout-relative guess.
+    db_path = Path(args.db).resolve() if args.db is not None else configured_db_path(repo_root)
     if not db_path.exists():
         sys.stderr.write(f"FATAL: no DB at {db_path}\n")
         return 2
@@ -541,6 +546,17 @@ def _parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Explicit reviewed ONON cash-rent and SBC input artifact.",
+    )
+    p.add_argument(
+        "--db",
+        type=Path,
+        default=None,
+        help=(
+            "Explicit portfolio database. The daily brief worker passes the "
+            "resolved database so this step never derives a checkout-local "
+            "default; absent, the configured authority applies "
+            "(EARNINGS_SUMMARY_DB_PATH, else the repo-root default)."
+        ),
     )
     return p.parse_args()
 
@@ -1939,10 +1955,16 @@ def _refresh_redesign(
         assumptions_synced_at=None,
         provenance=input_provenance,
     )
-    with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
-        # Hold the writer lock across the read-only preflight and the final
-        # upsert so a competing refresh cannot change the current run between
-        # the decision and persistence.
+    with (
+        hold_writer_gate(db_path, owner=f"refresh_dcf:{ticker}"),
+        connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn,
+    ):
+        # Hold the cross-process writer gate (and SQLite's own writer lock via
+        # BEGIN IMMEDIATE) across the read-only preflight and the final upsert
+        # so a competing refresh cannot change the current run between the
+        # decision and persistence. The gate is what serializes this window
+        # against the pool driver and the sibling chain steps when the daily
+        # brief worker overlaps tickers; it is NOT the whole-job run lock.
         conn.execute("BEGIN IMMEDIATE")
         row = dataclasses.replace(
             row,

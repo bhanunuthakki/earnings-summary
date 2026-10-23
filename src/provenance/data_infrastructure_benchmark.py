@@ -9,7 +9,6 @@ projection commitments, bounded reads, and full-versus-bucket verification.
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 import os
 import platform
@@ -69,6 +68,7 @@ from provenance.source_fact_stream import (
     bind_resolution_snapshot_watermark,
     read_publication_page,
 )
+from runtime.deterministic import canonical_json
 from search.canonical_fact_projection import (
     ProjectionConfig,
     ProjectionGenerationRequest,
@@ -88,15 +88,6 @@ DELTA_GENERATION = "delta-v1"
 PRODUCTION_CHECKPOINT_GENERATION = "production-checkpoint-v1"
 PRODUCTION_DELTA_GENERATION = "production-delta-v1"
 PRODUCTION_STAMP = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
-
-
-def canonical_json(value: object) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
 
 
 def digest_text(value: str) -> str:

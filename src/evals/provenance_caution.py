@@ -47,7 +47,7 @@ from evals.harness import (
     EvalAbortError,
     EvalRunSummary,
     dumps_compact,
-    load_golden_document,
+    load_golden_doc,
     now_naive_utc,
     resolve_git_sha,
     sha256_file,
@@ -126,7 +126,7 @@ class CautionCase:
 
 
 def _load_doc(path: Path) -> list[dict[str, object]]:
-    return load_golden_document(path, PURPOSE)
+    return load_golden_doc(path, PURPOSE)
 
 
 def _require_str(c: dict[str, object], key: str, label: str, errors: list[str]) -> str:

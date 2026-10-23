@@ -1,4 +1,4 @@
-"""Cheap canonical revision coordinates for Ask evidence caches.
+"""Cheap canonical revision coordinates for evidence caches.
 
 The token deliberately follows governed fact-observation capture and the
 current transcript selection view. It does not read legacy fact tables and it
@@ -55,7 +55,29 @@ def current_evidence_revision(conn: sqlite3.Connection) -> tuple[object, ...]:
         "(SELECT MAX(id) FROM fact_overrides),"
         "(SELECT MAX(id) FROM validation_issues),"
         "(SELECT MAX(id) FROM kpi_definitions),"
-        "(SELECT MAX(id) FROM kpi_fact_semantic_contexts),"
+        "(SELECT MAX(id) FROM kpi_fact_semantic_contexts)"
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("current evidence revision query returned no row")
+    return (
+        *legacy_fact_append_revision(conn),
+        *tuple(row),
+        *canonical_financial_revision(conn),
+    )
+
+
+def canonical_financial_revision(conn: sqlite3.Connection) -> tuple[object, ...]:
+    """Return coordinates that change whenever governed fact capture or
+    canonical resolution can change a canonical financial read.
+
+    Every table here is append-only by database trigger, so an in-place edit
+    or delete cannot leave the coordinates unchanged. Replacing the database
+    file (for example a snapshot restore) is outside this guarantee; refresh
+    derived caches after such an operator action.
+    """
+
+    row = conn.execute(
+        "SELECT "
         "(SELECT MAX(rowid) FROM fact_observations_v2),"
         "(SELECT MAX(rowid) FROM source_fact_publication_seals),"
         "(SELECT MAX(rowid) FROM recorded_subject_binding_revisions),"
@@ -67,8 +89,8 @@ def current_evidence_revision(conn: sqlite3.Connection) -> tuple[object, ...]:
         "(SELECT MAX(rowid) FROM canonical_fact_resolution_snapshot_seals)"
     ).fetchone()
     if row is None:
-        raise RuntimeError("current evidence revision query returned no row")
-    return (*legacy_fact_append_revision(conn), *tuple(row))
+        raise RuntimeError("canonical financial revision query returned no row")
+    return tuple(row)
 
 
 __all__ = ["current_evidence_revision", "legacy_fact_append_revision"]

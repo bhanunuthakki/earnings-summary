@@ -428,25 +428,41 @@ def test_stale_ontology_snapshot_is_rejected_before_resolution_write(
             ("canonical:revenue",),
         ).fetchone()
         assert original is not None
-        MetricOntology(conn).persist_canonical_metric_cell(
-            CanonicalMetricCell(
-                canonical_metric_cell_id="canonical:stale-snapshot-cell",
-                idempotency_key="canonical:stale-snapshot-cell",
-                metric_id=str(original[0]),
-                reporting_entity_id=str(original[1]),
-                period_kind=cast(PeriodKind, str(original[2])),
-                period_start=None
-                if original[3] is None
-                else population.datetime.fromisoformat(str(original[3])),
-                period_end=population.datetime.fromisoformat(str(original[4])) + timedelta(days=1),
-                unit_family=str(original[5]),
-                accounting_basis=str(original[6]),
-                consolidation_scope=str(original[7]),
-                effective_at=NOW,
-                knowledge_at=NOW,
-                recorded_at=NOW,
-            )
+        stale_cell = CanonicalMetricCell(
+            canonical_metric_cell_id="canonical:stale-snapshot-cell",
+            idempotency_key="canonical:stale-snapshot-cell",
+            metric_id=str(original[0]),
+            reporting_entity_id=str(original[1]),
+            period_kind=cast(PeriodKind, str(original[2])),
+            period_start=None
+            if original[3] is None
+            else population.datetime.fromisoformat(str(original[3])),
+            period_end=population.datetime.fromisoformat(str(original[4])) + timedelta(days=1),
+            unit_family=str(original[5]),
+            accounting_basis=str(original[6]),
+            consolidation_scope=str(original[7]),
+            effective_at=NOW,
+            knowledge_at=NOW,
+            recorded_at=NOW,
         )
+        with pytest.raises(sqlite3.IntegrityError, match="sealed_ontology_admission_conflict"):
+            MetricOntology(conn).persist_canonical_metric_cell(stale_cell)
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM canonical_metric_cells WHERE canonical_metric_cell_id=?",
+                (stale_cell.canonical_metric_cell_id,),
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            conn.execute("SELECT COUNT(*) FROM canonical_fact_resolution_revisions").fetchone()[0]
+            == 0
+        )
+        # Deliberate corruption in this disposable fixture must still reach the
+        # consumer's stale-snapshot check. Retain every other database guard.
+        conn.execute("DROP TRIGGER trg_canonical_metric_cells_sealed_admission")
+        conn.execute("DROP TRIGGER trg_canonical_metric_cell_seals_sealed_admission")
+        MetricOntology(conn).persist_canonical_metric_cell(stale_cell)
 
         with pytest.raises(ValueError, match="ontology snapshot is stale"):
             populate_canonical_resolution(

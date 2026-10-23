@@ -49,6 +49,9 @@ def test_launcher_validates_low_labels_by_meaning(tmp_path: Path) -> None:
     receipt = json.loads(result.stdout)
     assert receipt["passed"] is True
     assert len(receipt["cases"]) == 10
+    assert receipt["global_mutex"]["contention_blocked"] is True
+    assert receipt["global_mutex"]["acquired_after_release"] is True
+    assert receipt["global_mutex"]["effective_security_validated"] is True
     assert receipt["old_oracle_accepts_observed_form"] is False
 
 
@@ -89,3 +92,14 @@ def test_launcher_reconciles_only_safe_stale_read_acl() -> None:
     assert "security.RemoveAccessRuleSpecific(existing);" in source
     assert "FileSystemRights.WriteData" in source
     assert "FileSystemRights.ChangePermissions" in source
+
+
+def test_launcher_serializes_sessions_with_a_protected_operator_mutex() -> None:
+    source = (ROOT / "execution/filing_xbrl_appcontainer_launcher.cs").read_text(encoding="utf-8")
+    assert '"Global\\\\EarningsSummaryFilingXbrlLauncherV2"' in source
+    assert "using (Mutex mutex = OpenInvocationMutex())" in source
+    assert "security.SetAccessRuleProtection(true, false);" in source
+    assert "WellKnownSidType.LocalSystemSid" in source
+    assert "WellKnownSidType.BuiltinAdministratorsSid" in source
+    assert "actual.AreAccessRulesProtected" in source
+    assert "if (rules.Count != 2)" in source

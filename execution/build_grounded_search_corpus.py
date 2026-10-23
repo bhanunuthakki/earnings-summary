@@ -1,7 +1,7 @@
 """Plan or build a sealed, evidence-grounded SQLite lexical corpus.
 
-The reporting universe is projected from complete sealed acquisition inventories.
-Caller-supplied JSON requires explicit administrative compatibility mode.
+The expected reporting universe comes from sealed coverage or a verified analysis
+scope. A caller-supplied JSON inventory requires explicit administrative opt-in.
 Without ``--apply`` this command opens SQLite read-only and emits only a
 deterministic plan; its stdout is exactly one JSON result and stderr is JSONL.
 """
@@ -10,34 +10,37 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
-from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
+from provenance.analysis_scope import AnalysisEvidenceScope
+from provenance.immutable_artifact import (
+    ImmutableArtifactSnapshot,
+    assert_artifact_unchanged,
+    read_stable_artifact,
+    require_canonical_text_artifact,
+)
+from runtime.deterministic import parse_iso8601_cli as _parse_datetime
 from runtime.job_runtime import JobAlreadyRunningError, JobLock
 from search.corpus_builder import (
     ChunkerConfig,
     CorpusBuildRequest,
     build_grounded_search_corpus,
+    load_analysis_expected_document_inventory,
     load_coverage_expected_document_inventory,
     load_expected_document_inventory,
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
 
 def _event(event: str, **fields: object) -> None:
     sys.stderr.write(json.dumps({"event": event, **fields}, sort_keys=True) + "\n")
-
-
-def _parse_datetime(value: str) -> datetime:
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as error:
-        raise argparse.ArgumentTypeError("must be an ISO-8601 datetime") from error
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -48,6 +51,11 @@ def main(argv: list[str] | None = None) -> int:
         "--inventory",
         type=Path,
         help="Closed JSON expected-document inventory (requires explicit unsafe opt-in)",
+    )
+    inventory_group.add_argument(
+        "--analysis-scope",
+        type=Path,
+        help="Verified analysis evidence scope receipt; retain archive gaps outside this scope",
     )
     inventory_group.add_argument(
         "--coverage-inventory-key",
@@ -84,20 +92,23 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.inventory is not None and not args.allow_unsealed_inventory:
         parser.error("--inventory requires --allow-unsealed-inventory")
-    if args.coverage_inventory_keys and args.allow_unsealed_inventory:
+    if args.inventory is None and args.allow_unsealed_inventory:
         parser.error("--allow-unsealed-inventory only applies to --inventory")
     if args.coverage_inventory_keys and args.knowledge_cutoff is None:
         parser.error("--coverage-inventory-key requires --knowledge-cutoff")
     if args.apply:
+        resources = [
+            "portfolio-db",
+            f"sqlite:{args.db.resolve()}",
+            f"search-corpus:{args.corpus_key}",
+        ]
+        if args.analysis_scope is not None:
+            resources.append(f"artifact:{args.analysis_scope.resolve()}")
         try:
             with JobLock(
                 PROJECT_ROOT,
                 "build-grounded-search-corpus",
-                [
-                    "portfolio-db",
-                    f"sqlite:{args.db.resolve()}",
-                    f"search-corpus:{args.corpus_key}",
-                ],
+                resources,
             ):
                 return _run(args)
         except JobAlreadyRunningError as exc:
@@ -110,52 +121,81 @@ def _run(args: argparse.Namespace) -> int:
     role = SQLiteConnectionRole.WRITER if args.apply else SQLiteConnectionRole.READ_ONLY
     conn = connect_sqlite(args.db, role=role, schema_preflight=args.apply)
     try:
-        if args.inventory is not None:
-            inventory = load_expected_document_inventory(str(args.inventory))
-            snapshot_ids: tuple[str, ...] = ()
-        else:
-            inventory, snapshot_ids = load_coverage_expected_document_inventory(
-                conn,
-                tuple(args.coverage_inventory_keys),
-                knowledge_cutoff=args.knowledge_cutoff,
-                observed_through=args.recorded_at,
-            )
-            _event(
-                "grounded_search_reporting_projection",
-                knowledge_cutoff=inventory.knowledge_cutoff.isoformat(),
-                observed_through=inventory.observed_through.isoformat(),
-                source_inventory_snapshot_ids=list(snapshot_ids),
-                decisions=[item.model_dump(mode="json") for item in inventory.reporting_decisions],
-            )
-        request = CorpusBuildRequest(
-            corpus_key=args.corpus_key,
-            revision=args.revision,
-            selector_code_version=args.selector_code_version,
-            recorded_at=args.recorded_at,
-            knowledge_cutoff=args.knowledge_cutoff,
-            expected_documents=inventory.expected_documents,
-            source_inventory_snapshot_ids=snapshot_ids,
-            chunker=ChunkerConfig(max_characters=args.max_characters, max_tokens=args.max_tokens),
-            persist_batch_size=args.persist_batch_size,
-            required_extractor_names=tuple(
-                args.extractor_names
-                or (
-                    "fulltext-evidence-backfill",
-                    "governed-pdf-ocr",
-                    "governed-image-ocr",
-                )
-            ),
-            apply=args.apply,
-        )
-        _event(
-            "grounded_search_corpus_started",
-            corpus_key=request.corpus_key,
-            revision=request.revision,
-            mode="apply" if request.apply else "dry_run",
-        )
-        result = build_grounded_search_corpus(conn, request)
+        return _run_connected(args, conn)
     finally:
         conn.close()
+
+
+def _run_connected(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
+    analysis_scope: AnalysisEvidenceScope | None = None
+    scope_artifact: ImmutableArtifactSnapshot | None = None
+    if args.inventory is not None:
+        inventory = load_expected_document_inventory(str(args.inventory))
+        snapshot_ids: tuple[str, ...] = ()
+    elif args.analysis_scope is not None:
+        scope_artifact, scope_payload = read_stable_artifact(args.analysis_scope)
+        analysis_scope = AnalysisEvidenceScope.model_validate_json(scope_payload)
+        require_canonical_text_artifact(scope_artifact, analysis_scope.model_dump_json())
+        inventory, snapshot_ids = load_analysis_expected_document_inventory(
+            conn,
+            analysis_scope,
+            cutoff_at=args.knowledge_cutoff or args.recorded_at,
+            observed_through=args.recorded_at,
+        )
+    else:
+        inventory, snapshot_ids = load_coverage_expected_document_inventory(
+            conn,
+            tuple(args.coverage_inventory_keys),
+            knowledge_cutoff=args.knowledge_cutoff,
+            observed_through=args.recorded_at,
+        )
+        _event(
+            "grounded_search_reporting_projection",
+            knowledge_cutoff=inventory.knowledge_cutoff.isoformat(),
+            observed_through=inventory.observed_through.isoformat(),
+            source_inventory_snapshot_ids=list(snapshot_ids),
+            decisions=[item.model_dump(mode="json") for item in inventory.reporting_decisions],
+        )
+    request = CorpusBuildRequest(
+        corpus_key=args.corpus_key,
+        revision=args.revision,
+        selector_code_version=args.selector_code_version,
+        recorded_at=args.recorded_at,
+        knowledge_cutoff=args.knowledge_cutoff,
+        expected_documents=inventory.expected_documents,
+        source_inventory_snapshot_ids=snapshot_ids,
+        chunker=ChunkerConfig(max_characters=args.max_characters, max_tokens=args.max_tokens),
+        persist_batch_size=args.persist_batch_size,
+        required_extractor_names=tuple(
+            args.extractor_names
+            or (
+                "fulltext-evidence-backfill",
+                "governed-pdf-ocr",
+                "governed-image-ocr",
+            )
+        ),
+        apply=args.apply,
+        analysis_scope=analysis_scope,
+    )
+    _event(
+        "grounded_search_corpus_started",
+        corpus_key=request.corpus_key,
+        revision=request.revision,
+        mode="apply" if request.apply else "dry_run",
+    )
+
+    def verify_scope_artifact() -> None:
+        if scope_artifact is not None:
+            assert_artifact_unchanged(scope_artifact)
+
+    verify_scope_artifact()
+    result = build_grounded_search_corpus(
+        conn,
+        request,
+        before_publish=None if scope_artifact is None else verify_scope_artifact,
+    )
+    if not request.apply:
+        verify_scope_artifact()
     sys.stdout.write(result.model_dump_json() + "\n")
     _event(
         "grounded_search_corpus_finished",

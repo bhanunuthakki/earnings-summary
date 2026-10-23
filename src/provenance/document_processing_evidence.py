@@ -10,12 +10,13 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
+from provenance.analysis_scope import ReportPdfTableScope
 from provenance.evidence_ledger import EvidenceLocator, EvidenceNode, EvidenceNodeKind
 from provenance.fulltext_extractor_identity import (
     BASE_FULLTEXT_EXTRACTOR,
@@ -24,9 +25,20 @@ from provenance.fulltext_extractor_identity import (
     PDF_TABLE_EXTRACTOR_NAME,
     STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR,
     pdf_table_extractor_code_version,
+    readable_fulltext_extractor_identities,
+    select_approved_fulltext_run,
 )
+from provenance.native_pdf_transcript import (
+    EXTRACTOR_CONFIG_SHA256 as PDF_TRANSCRIPT_CONFIG_SHA256,
+)
+from provenance.native_pdf_transcript import EXTRACTOR_NAME as PDF_TRANSCRIPT_EXTRACTOR_NAME
+from provenance.native_pdf_transcript import EXTRACTOR_VERSION as PDF_TRANSCRIPT_EXTRACTOR_VERSION
+from provenance.native_pdf_transcript import verify_native_pdf_transcript
 from provenance.ocr_extraction import normalize_extracted_text
 from provenance.pdf_table_extraction import PdfTableExtractionArtifact
+from runtime.deterministic import as_utc as _utc
+from runtime.deterministic import canonical_json as _canonical_json
+from runtime.deterministic import content_sha256_or_text as _digest
 
 DocumentProcessingLane = Literal[
     "html_native_hierarchy",
@@ -70,6 +82,10 @@ _ADAPTER_CONFIG_SHA256 = hashlib.sha256(
     b"explicit-slide-sheet-workbook-zero-proofs,"
     b"sealed-pdf-table-artifact,ordered-page-table-row-cell-inventory,"
     b"pdf-geometry-dispositions-and-all-level-commitments"
+).hexdigest()
+_SCOPED_ADAPTER_VERSION = "v3-report-pdf-tables@1"
+_SCOPED_ADAPTER_CONFIG_SHA256 = hashlib.sha256(
+    (_ADAPTER_CONFIG_SHA256 + ":exact-reviewed-page-scope:retained-quarantined-parent:v1").encode()
 ).hexdigest()
 _MAX_NATIVE_MEMBERS = 25_000
 _MAX_SERIALIZED_MEMBER_SET_BYTES = 16 * 1024 * 1024
@@ -161,26 +177,6 @@ class _Derived:
     native_scope_json: str
     knowledge_at: datetime
     members: tuple[_NativeMember, ...]
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
-
-
-def _digest(value: str | object) -> str:
-    encoded = value if isinstance(value, str) else _canonical_json(value)
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
-
-def _utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
 
 
 def _datetime(value: object, field: str) -> datetime:
@@ -367,9 +363,12 @@ def _all_run_nodes(
             ) from exc
         if _utc(recorded_at) > _utc(cutoff_at):
             raise DocumentProcessingEvidenceIntegrityError("native_node_after_cutoff")
-        locator_json, locator_payload = _canonical_locator(row["locator_json"])
+        _, locator_payload = _canonical_locator(row["locator_json"])
+        locator = EvidenceLocator.model_validate(locator_payload)
         stored_locator_sha = row["locator_sha256"]
-        expected_locator_sha = _digest(locator_json)
+        # Native rows use the ledger's ASCII locator encoding. Closure members
+        # retain their separate Unicode JSON encoding for sealed replay.
+        expected_locator_sha = locator.canonical_sha256
         if stored_locator_sha is None or str(stored_locator_sha) != expected_locator_sha:
             raise DocumentProcessingEvidenceIntegrityError("native_locator_commitment_mismatch")
         node_kind_value = _require_text(row, "node_kind")
@@ -399,7 +398,7 @@ def _all_run_nodes(
                 ),
                 node_kind=cast(EvidenceNodeKind, node_kind_value),
                 text=_require_text(row, "text"),
-                locator=EvidenceLocator.model_validate(locator_payload),
+                locator=locator,
                 locator_sha256=expected_locator_sha,
                 recorded_at=recorded_at,
             )
@@ -921,6 +920,8 @@ def _node_derived(
     lane: SealableDocumentProcessingLane,
     cutoff_at: datetime,
     pinned_run_id: str | None,
+    pinned_assessment_id: str | None = None,
+    report_pdf_table_scope: ReportPdfTableScope | None = None,
 ) -> _Derived:
     media_type = _require_text(document, "media_type").partition(";")[0].lower()
     expected_media_types = {
@@ -1021,13 +1022,32 @@ def _node_derived(
         )
         retained_identities = {
             (identity.code_version, identity.config_sha256)
-            for identity in (BASE_FULLTEXT_EXTRACTOR, PDF_FULLTEXT_EXTRACTOR)
+            for identity in (
+                BASE_FULLTEXT_EXTRACTOR,
+                *readable_fulltext_extractor_identities(PDF_FULLTEXT_EXTRACTOR),
+            )
         }
         if (
             _require_text(run, "extractor_code_version"),
             _require_sha(run, "extractor_config_sha256"),
         ) not in retained_identities:
             raise DocumentProcessingEvidenceIntegrityError("pdf_extractor_identity_not_approved")
+    elif lane == "pdf_text":
+        selected_run_id = select_approved_fulltext_run(
+            conn,
+            _require_text(document, "document_version_id"),
+            PDF_FULLTEXT_EXTRACTOR,
+            observed_through=cutoff_at,
+        )
+        if selected_run_id is None:
+            raise DocumentProcessingEvidenceMissingError("native_extraction_run_missing")
+        run = _run(
+            conn,
+            _require_text(document, "document_version_id"),
+            cutoff_at,
+            extractor_name=extractor_name,
+            pinned_run_id=selected_run_id,
+        )
     else:
         run = _run(
             conn,
@@ -1053,6 +1073,7 @@ def _node_derived(
             conn,
             _require_text(document, "document_version_id"),
             cutoff_at,
+            pinned_assessment_id,
         )
         assessment_table = "ocr_document_assessments"
         assessment_id = _require_text(assessment, "assessment_id")
@@ -1206,6 +1227,7 @@ def _pdf_native_assessment(
     conn: sqlite3.Connection,
     document_version_id: str,
     cutoff_at: datetime,
+    pinned_assessment_id: str | None = None,
 ) -> dict[str, object]:
     return _one(
         conn,
@@ -1215,8 +1237,9 @@ def _pdf_native_assessment(
         "FROM ocr_document_assessments WHERE document_version_id=? "
         "AND outcome='native_sufficient' "
         "AND datetime(assessed_at)<=datetime(?) "
+        "AND (? IS NULL OR assessment_id=?) "
         "ORDER BY assessed_at, assessment_id",
-        (document_version_id, _iso(cutoff_at)),
+        (document_version_id, _iso(cutoff_at), pinned_assessment_id, pinned_assessment_id),
         "pdf_native_sufficient_assessment_missing_or_ambiguous",
     )
 
@@ -1260,6 +1283,48 @@ def _ocr_derived(
     pinned_assessment_id: str | None,
 ) -> _Derived:
     is_pdf = lane == "pdf_ocr"
+    if is_pdf:
+        assessments = _rows(
+            conn,
+            "SELECT assessment_id,outcome FROM ocr_document_assessments "
+            "WHERE document_version_id=? AND datetime(assessed_at)<=datetime(?) "
+            "AND (? IS NULL OR assessment_id=?) ORDER BY assessed_at,assessment_id",
+            (
+                _require_text(document, "document_version_id"),
+                _iso(cutoff_at),
+                pinned_assessment_id,
+                pinned_assessment_id,
+            ),
+        )
+        if len(assessments) == 1 and assessments[0]["outcome"] == "native_sufficient":
+            assessment_id = _require_text(assessments[0], "assessment_id")
+            assessment = _pdf_native_assessment(
+                conn, _require_text(document, "document_version_id"), cutoff_at, assessment_id
+            )
+            if _require_sha(assessment, "input_sha256") != _require_sha(document, "blob_sha256"):
+                raise DocumentProcessingEvidenceIntegrityError("pdf_preflight_input_mismatch")
+            preflight = _pdf_preflight(conn, assessment, cutoff_at)
+            if any(_require_int(page, "requires_ocr") != 0 for page in preflight):
+                raise DocumentProcessingEvidenceIntegrityError("pdf_native_preflight_requires_ocr")
+            native = _node_derived(
+                conn, document, "pdf_text", cutoff_at, pinned_run_id, assessment_id
+            )
+            scope: dict[str, object] = dict(_JSON_OBJECT.validate_json(native.native_scope_json))
+            scope["ocr_decision"] = {
+                "profile": "native-sufficient-no-ocr-required/v1",
+                "outcome": "no_ocr_required",
+                "ocr_performed": False,
+                "preflight": [_scope_row(page) for page in preflight],
+            }
+            return replace(
+                native,
+                lane=lane,
+                native_scope_json=_canonical_json(scope),
+                knowledge_at=max(
+                    native.knowledge_at,
+                    _datetime(assessment["assessed_at"], "assessment.assessed_at"),
+                ),
+            )
     run = _run(
         conn,
         _require_text(document, "document_version_id"),
@@ -1702,16 +1767,25 @@ def _pdf_table_derived(
     cutoff_at: datetime,
     pinned_run_id: str | None,
     pinned_artifact_id: str | None,
+    report_pdf_table_scope: ReportPdfTableScope | None = None,
 ) -> _Derived:
     clauses = [
         "header.document_version_id=?",
-        "header.disposition='sealed'",
+        "(?=1 OR header.disposition='sealed')",
         "datetime(header.recorded_at)<=datetime(?)",
     ]
     parameters: list[object] = [
         _require_text(document, "document_version_id"),
+        int(report_pdf_table_scope is not None),
         _iso(cutoff_at),
     ]
+    if report_pdf_table_scope is not None:
+        if (
+            pinned_artifact_id is not None
+            and pinned_artifact_id != report_pdf_table_scope.artifact_id
+        ):
+            raise DocumentProcessingEvidenceIntegrityError("report_pdf_table_artifact_mismatch")
+        pinned_artifact_id = report_pdf_table_scope.artifact_id
     if pinned_run_id is not None:
         clauses.append("header.extraction_run_id=?")
         parameters.append(pinned_run_id)
@@ -1739,10 +1813,31 @@ def _pdf_table_derived(
         raise DocumentProcessingEvidenceIntegrityError(
             "pdf_table_artifact_schema_or_commitment_invalid"
         ) from exc
-    if artifact.disposition != "sealed" or any(
-        page.disposition == "quarantined" for page in artifact.pages
+    if report_pdf_table_scope is None and (
+        artifact.disposition != "sealed"
+        or any(page.disposition == "quarantined" for page in artifact.pages)
     ):
         raise DocumentProcessingEvidenceMissingError("pdf_table_artifact_not_publishable")
+    if report_pdf_table_scope is not None:
+        selected = ReportPdfTableScope.model_validate(report_pdf_table_scope.model_dump())
+        if (
+            selected.document_version_id != _require_text(document, "document_version_id")
+            or selected.raw_pdf_sha256 != artifact.raw_pdf_sha256
+            or selected.artifact_sha256 != _require_sha(artifact_row, "artifact_sha256")
+            or selected.reviewed_at > cutoff_at
+            or len(selected.pages) != len(artifact.pages)
+            or artifact.pdf_page_count != len(artifact.pages)
+        ):
+            raise DocumentProcessingEvidenceIntegrityError("report_pdf_table_scope_mismatch")
+        for requirement, page in zip(selected.pages, artifact.pages, strict=True):
+            if requirement.page_number != page.page_number or requirement.page_sha256 != _digest(
+                _canonical_json(page.model_dump(mode="json"))
+            ):
+                raise DocumentProcessingEvidenceIntegrityError(
+                    "report_pdf_page_commitment_mismatch"
+                )
+            if requirement.table_requirement == "required" and page.disposition == "quarantined":
+                raise DocumentProcessingEvidenceMissingError("required_report_pdf_page_quarantined")
     code_version = pdf_table_extractor_code_version(
         detector_version=artifact.detector.detector_version,
         pymupdf_version=artifact.detector.pymupdf_version,
@@ -1866,13 +1961,27 @@ def _pdf_table_derived(
         or _datetime(artifact_row["sealed_at"], "artifact.sealed_at") != artifact_recorded
     ):
         raise DocumentProcessingEvidenceIntegrityError("pdf_table_member_set_mismatch")
+    native_scope: dict[str, object] = {"artifact": _scope_row(artifact_row)}
+    if report_pdf_table_scope is not None:
+        required_pages = {
+            page.page_number
+            for page in report_pdf_table_scope.pages
+            if page.table_requirement == "required"
+        }
+        members = [
+            member
+            for member in members
+            if json.loads(member.locator_json)["page_number"] in required_pages
+        ]
+        native_scope["report_pdf_table_scope"] = report_pdf_table_scope.model_dump(mode="json")
+        native_scope["certificate_schema"] = "report-pdf-table-certificate/v1"
     return _derived_from_parts(
         document,
         "pdf_table",
         run,
         "pdf_table_extraction_artifact_headers",
         artifact_id,
-        {"artifact": _scope_row(artifact_row)},
+        native_scope,
         tuple(members),
     )
 
@@ -1890,7 +1999,11 @@ def _derived_from_parts(
         raise DocumentProcessingEvidenceMissingError("native_member_set_empty")
     run_completed = _datetime(run["completed_at"], "run.completed_at")
     scope = {
-        "adapter_config_sha256": _ADAPTER_CONFIG_SHA256,
+        "adapter_config_sha256": (
+            _SCOPED_ADAPTER_CONFIG_SHA256
+            if "report_pdf_table_scope" in scope_extra
+            else _ADAPTER_CONFIG_SHA256
+        ),
         "document": {
             "blob_recorded_at": _iso(_datetime(document["blob_recorded_at"], "blob.recorded_at")),
             "blob_sha256": _require_sha(document, "blob_sha256"),
@@ -1929,7 +2042,10 @@ def _derive(
     *,
     pinned_run_id: str | None = None,
     pinned_assessment_id: str | None = None,
+    report_pdf_table_scope: ReportPdfTableScope | None = None,
 ) -> _Derived:
+    if report_pdf_table_scope is not None and processing_lane != "pdf_table":
+        raise DocumentProcessingEvidenceIntegrityError("report_pdf_table_scope_wrong_lane")
     if processing_lane in _UNSUPPORTED:
         raise DocumentProcessingEvidenceUnsupportedError(_UNSUPPORTED[processing_lane])
     supported = {
@@ -1951,6 +2067,62 @@ def _derive(
         raise DocumentProcessingEvidenceUnsupportedError("unknown_document_processing_lane")
     lane = cast(SealableDocumentProcessingLane, processing_lane)
     document = _document_context(conn, document_version_id)
+    if lane in {"transcript_turns", "transcript_speakers"} and (
+        _require_text(document, "media_type").partition(";")[0].lower() == "application/pdf"
+    ):
+        candidates = _rows(
+            conn,
+            "SELECT extraction_run_id FROM evidence_extraction_runs "
+            "WHERE document_version_id=? AND extractor_name=? "
+            "AND datetime(completed_at)<=datetime(?) "
+            "AND (? IS NULL OR extraction_run_id=?)",
+            (
+                document_version_id,
+                PDF_TRANSCRIPT_EXTRACTOR_NAME,
+                _iso(cutoff_at),
+                pinned_run_id,
+                pinned_run_id,
+            ),
+        )
+        if candidates:
+            run = _run(
+                conn,
+                document_version_id,
+                cutoff_at,
+                extractor_name=PDF_TRANSCRIPT_EXTRACTOR_NAME,
+                code_version=PDF_TRANSCRIPT_EXTRACTOR_VERSION,
+                config_sha256=PDF_TRANSCRIPT_CONFIG_SHA256,
+                pinned_run_id=pinned_run_id,
+            )
+            try:
+                proof = verify_native_pdf_transcript(
+                    conn, _require_text(run, "extraction_run_id"), observed_through=cutoff_at
+                )
+            except ValueError as exc:
+                raise DocumentProcessingEvidenceIntegrityError(
+                    "native_pdf_transcript_partition_not_verified"
+                ) from exc
+            nodes = _all_run_nodes(conn, run, cutoff_at)
+            selected = [row for row in nodes if row["node_kind"] == "transcript_turn"]
+            if len(selected) != proof.span_count:
+                raise DocumentProcessingEvidenceIntegrityError(
+                    "native_pdf_transcript_member_count_mismatch"
+                )
+            return _derived_from_parts(
+                document,
+                lane,
+                run,
+                None,
+                None,
+                {
+                    "profile": "native-pdf-transcript-review/v1",
+                    "review_sha256": proof.review_sha256,
+                    "source_page_count": proof.source_page_count,
+                    "unknown_span_count": proof.unknown_span_count,
+                    "timecode_status": proof.timecode_status,
+                },
+                tuple(_node_member(row, run, lane=lane) for row in selected),
+            )
     if lane == "pdf_table":
         return _pdf_table_derived(
             conn,
@@ -1958,6 +2130,7 @@ def _derive(
             cutoff_at,
             pinned_run_id,
             pinned_assessment_id,
+            report_pdf_table_scope,
         )
     if lane in {"pdf_ocr", "image_ocr"}:
         return _ocr_derived(
@@ -1974,6 +2147,7 @@ def _derive(
         lane,
         cutoff_at,
         pinned_run_id,
+        pinned_assessment_id,
     )
 
 
@@ -1995,10 +2169,13 @@ def _member_payload(
 
 
 def _header_payload(derived: _Derived, cutoff_at: datetime) -> dict[str, object]:
+    scoped = "report_pdf_table_scope" in json.loads(derived.native_scope_json)["native"]
     return {
-        "adapter_config_sha256": _ADAPTER_CONFIG_SHA256,
+        "adapter_config_sha256": _SCOPED_ADAPTER_CONFIG_SHA256
+        if scoped
+        else _ADAPTER_CONFIG_SHA256,
         "adapter_name": _ADAPTER_NAME,
-        "adapter_version": _ADAPTER_VERSION,
+        "adapter_version": _SCOPED_ADAPTER_VERSION if scoped else _ADAPTER_VERSION,
         "assessment_id": derived.assessment_id,
         "assessment_table": derived.assessment_table,
         "cutoff_at": _iso(cutoff_at),
@@ -2018,6 +2195,7 @@ def publish_document_processing_evidence(
     processing_lane: DocumentProcessingLane | str,
     cutoff_at: datetime,
     recorded_at: datetime,
+    report_pdf_table_scope: ReportPdfTableScope | None = None,
 ) -> DocumentProcessingEvidenceReceipt:
     """Derive and atomically seal one complete native processing inventory."""
 
@@ -2044,6 +2222,7 @@ def publish_document_processing_evidence(
             processing_lane=str(processing_lane),
             cutoff_at=cutoff,
             observed_through=recorded,
+            report_pdf_table_scope=report_pdf_table_scope,
         )
         return DocumentProcessingEvidenceReceipt(
             evidence_seal_id=verified.evidence_seal_id,
@@ -2060,6 +2239,7 @@ def publish_document_processing_evidence(
         document_version_id,
         str(processing_lane),
         cutoff,
+        report_pdf_table_scope=report_pdf_table_scope,
     )
     identity = _digest(
         {
@@ -2067,10 +2247,16 @@ def publish_document_processing_evidence(
             "document_version_id": document_version_id,
             "processing_lane": processing_lane,
             "run_id": derived.run_id,
+            **(
+                {"report_pdf_table_scope_sha256": report_pdf_table_scope.scope_sha256}
+                if report_pdf_table_scope is not None
+                else {}
+            ),
         }
     )
     evidence_seal_id = f"dpe_{identity}"
-    header_json = _canonical_json(_header_payload(derived, cutoff))
+    header_payload = _header_payload(derived, cutoff)
+    header_json = _canonical_json(header_payload)
     member_jsons = tuple(
         _canonical_json(_member_payload(evidence_seal_id, ordinal, member))
         for ordinal, member in enumerate(derived.members)
@@ -2100,8 +2286,8 @@ def publish_document_processing_evidence(
                 derived.assessment_table,
                 derived.assessment_id,
                 _ADAPTER_NAME,
-                _ADAPTER_VERSION,
-                _ADAPTER_CONFIG_SHA256,
+                header_payload["adapter_version"],
+                header_payload["adapter_config_sha256"],
                 derived.input_blob_sha256,
                 derived.native_output_sha256,
                 derived.native_scope_json,
@@ -2177,6 +2363,7 @@ def verify_document_processing_evidence(
     processing_lane: DocumentProcessingLane | str,
     cutoff_at: datetime,
     observed_through: datetime | None = None,
+    report_pdf_table_scope: ReportPdfTableScope | None = None,
 ) -> VerifiedDocumentProcessingEvidence:
     """Recompute a sealed publication from its exact pinned native rows."""
 
@@ -2214,8 +2401,14 @@ def verify_document_processing_evidence(
         raise DocumentProcessingEvidenceIntegrityError("processing_evidence_coordinate_mismatch")
     if (
         _require_text(header, "adapter_name") != _ADAPTER_NAME
-        or _require_text(header, "adapter_version") != _ADAPTER_VERSION
-        or _require_sha(header, "adapter_config_sha256") != _ADAPTER_CONFIG_SHA256
+        or _require_text(header, "adapter_version")
+        != (_SCOPED_ADAPTER_VERSION if report_pdf_table_scope is not None else _ADAPTER_VERSION)
+        or _require_sha(header, "adapter_config_sha256")
+        != (
+            _SCOPED_ADAPTER_CONFIG_SHA256
+            if report_pdf_table_scope is not None
+            else _ADAPTER_CONFIG_SHA256
+        )
     ):
         raise DocumentProcessingEvidenceIntegrityError(
             "processing_evidence_adapter_identity_mismatch"
@@ -2229,6 +2422,7 @@ def verify_document_processing_evidence(
         pinned_assessment_id=(
             None if header["assessment_id"] is None else str(header["assessment_id"])
         ),
+        report_pdf_table_scope=report_pdf_table_scope,
     )
     expected_header_json = _canonical_json(_header_payload(derived, cutoff))
     if (

@@ -17,11 +17,11 @@ from quality import performance_experiment
 from quality.git_env import clean_local_git_env
 from quality.performance_experiment import (
     MAX_COMPANION_OUTPUT_BYTES,
+    ExperimentDeclaration,
     PerformanceExperimentError,
     capture_performance_experiment,
     run_experiment_subprocess,
 )
-from quality.performance_experiment_models import ExperimentDeclaration
 
 
 def _git(root: Path, *args: str) -> str:

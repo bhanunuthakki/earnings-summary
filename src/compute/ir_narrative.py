@@ -32,21 +32,24 @@ a single cache file with a ``=== SOURCE BREAK ===`` delimiter so the loader
 sees the full narrative for that period in one read.
 
 CLI:
-    python src/compute/ir_narrative.py --ticker META
-    python src/compute/ir_narrative.py --all
+    python execution/sqlite_bootstrap.py src/compute/ir_narrative.py --ticker META
+    python execution/sqlite_bootstrap.py src/compute/ir_narrative.py --all
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import re
 import sys
-from collections.abc import Callable
-from importlib import import_module
 from pathlib import Path
-from typing import cast
+
+from provenance.fulltext_backfill import (
+    project_source_text,
+    source_text_projection_identity,
+)
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +84,6 @@ _NOISE_LINE = re.compile(
 )
 
 _MIN_CACHE_BYTES = 200  # below this the deck has no usable narrative
-_MAX_CHARS_PER_DOC = 24000  # post-normalize per-PDF cap; loader trims further
 _SOURCE_BREAK = "\n\n=== SOURCE BREAK ===\n\n"
 
 
@@ -147,11 +149,29 @@ def _discover_sources(repo_root: Path, ticker: str) -> dict[tuple[str, str], lis
     return out
 
 
+def _source_manifest(pdfs: list[Path]) -> dict[str, str]:
+    return {str(pdf): hashlib.sha256(pdf.read_bytes()).hexdigest() for pdf in pdfs}
+
+
+def _cache_is_current(cache: Path, pdfs: list[Path]) -> bool:
+    try:
+        receipt = json.loads(cache.with_suffix(".json").read_text(encoding="utf-8"))
+        return (
+            receipt["version"] == 2
+            and receipt["source_text_identities"]
+            == {str(pdf): source_text_projection_identity(str(pdf)) for pdf in pdfs}
+            and receipt["sources"] == _source_manifest(pdfs)
+            and receipt["text_sha256"] == hashlib.sha256(cache.read_bytes()).hexdigest()
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def has_pending_narrative(repo_root: Path, ticker: str) -> bool:
-    """Use the extractor's source and cache rules to find retryable local work."""
+    """Require current source and text fingerprints before reusing extracted text."""
     return any(
-        not _cache_path_for(repo_root, ticker, doctype, period).is_file()
-        for doctype, period in _discover_sources(repo_root, ticker)
+        not _cache_is_current(_cache_path_for(repo_root, ticker, doctype, period), pdfs)
+        for (doctype, period), pdfs in _discover_sources(repo_root, ticker).items()
     )
 
 
@@ -166,16 +186,6 @@ def extract_for_ticker(
     Failures are logged and counted but don't abort the run — a single
     corrupted PDF can't block the rest of a ticker's narrative cache.
     """
-    # Late import: pypdf is a heavy dep and tests that don't touch the
-    # extractor shouldn't pay for it. Also keeps this module importable in
-    # environments where pypdf isn't installed (the cache may already exist).
-    src_dir = Path(__file__).resolve().parents[1]
-    if str(src_dir) not in sys.path:
-        sys.path.insert(0, str(src_dir))
-    extract_text_from_pdf = cast(
-        Callable[[str], str], import_module("parser").extract_text_from_pdf
-    )
-
     sources = _discover_sources(repo_root, ticker)
     counts = {"processed": 0, "cached": 0, "failed": 0, "skipped_empty": 0}
     if not sources:
@@ -183,15 +193,17 @@ def extract_for_ticker(
 
     for (doctype, period), pdfs in sources.items():
         cache = _cache_path_for(repo_root, ticker, doctype, period)
-        if cache.exists() and not refresh:
+        if not refresh and _cache_is_current(cache, pdfs):
             counts["cached"] += 1
             continue
 
+        source_manifest = _source_manifest(pdfs)
         chunks: list[str] = []
+        had_empty = False
         had_failure = False
         for pdf in pdfs:
             try:
-                raw = extract_text_from_pdf(str(pdf))
+                raw = project_source_text(pdf.read_bytes(), str(pdf))
             except Exception as exc:  # pypdf has many failure modes
                 log.warning(
                     {
@@ -204,12 +216,14 @@ def extract_for_ticker(
                 continue
             cleaned = _normalize(raw)
             if len(cleaned) < _MIN_CACHE_BYTES:
+                had_empty = True
                 continue
-            if len(cleaned) > _MAX_CHARS_PER_DOC:
-                cleaned = cleaned[:_MAX_CHARS_PER_DOC].rstrip() + "\n[...truncated]"
             chunks.append(cleaned)
 
-        if had_failure:
+        if had_failure or had_empty:
+            cache.unlink(missing_ok=True)
+            cache.with_suffix(".json").unlink(missing_ok=True)
+        if had_failure or (had_empty and chunks):
             counts["failed"] += 1
             continue
         if not chunks:
@@ -219,6 +233,19 @@ def extract_for_ticker(
         merged = _SOURCE_BREAK.join(chunks)
         cache.parent.mkdir(parents=True, exist_ok=True)
         cache.write_text(merged, encoding="utf-8")
+        cache.with_suffix(".json").write_text(
+            json.dumps(
+                {
+                    "version": 2,
+                    "sources": source_manifest,
+                    "source_text_identities": {
+                        str(pdf): source_text_projection_identity(str(pdf)) for pdf in pdfs
+                    },
+                    "text_sha256": hashlib.sha256(cache.read_bytes()).hexdigest(),
+                }
+            ),
+            encoding="utf-8",
+        )
         counts["processed"] += 1
 
     return counts
@@ -263,7 +290,7 @@ def main() -> int:
     failures = 0
     for ticker in tickers:
         counts = extract_for_ticker(repo_root, ticker, refresh=args.refresh)
-        failures += counts["failed"]
+        failures += counts["failed"] + counts["skipped_empty"]
         row: dict[str, object] = dict(counts)
         row["ticker"] = ticker
         summary.append(row)

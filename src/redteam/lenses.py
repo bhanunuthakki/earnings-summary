@@ -62,7 +62,7 @@ def load_holdings_json(repo_root: Path, ticker: str) -> dict[str, object] | None
     """Read ``micro_thesis/holdings/<TICKER>.json`` defensively. ``None`` on
     any read/parse failure so the pack degrades to thesis-anchor-only.
 
-    Public (not module-private) because ``cross_book.py`` reuses it for the
+    Public (not module-private) because ``engine.py`` reuses it for the
     factor-block pass's business-description one-liners — same package, one
     loader.
     """

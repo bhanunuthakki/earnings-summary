@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ctypes
+import json
 import os
 import subprocess
 import sys
@@ -14,10 +16,12 @@ from typing import Protocol, cast
 import pytest
 
 import runtime.job_runtime as job_runtime
-from runtime.job_runtime import main
+from runtime.job_runtime import JobLock, main
 
 
 class WindowsJobForTest(Protocol):
+    def __init__(self, handle: int) -> None: ...
+
     @staticmethod
     def create_for_process(pid: int) -> WindowsJobForTest: ...
 
@@ -92,6 +96,185 @@ class _RecordingJob:
         self.events.append("close")
 
 
+@pytest.mark.parametrize("error_code", [0, 5, 6])
+def test_windows_job_close_failure_retains_handle_and_native_error(
+    monkeypatch: pytest.MonkeyPatch, error_code: int
+) -> None:
+    handle = 0x123456789ABC
+    events: list[tuple[str, int]] = []
+
+    def close_handle(value: int) -> int:
+        events.append(("close", value))
+        return 0
+
+    def last_error() -> int:
+        events.append(("error", error_code))
+        return error_code
+
+    def win_error(code: int, _description: str) -> OSError:
+        error = OSError(code, "controlled native close failure")
+        setattr(error, "winerror", code)
+        return error
+
+    monkeypatch.setattr(job_runtime.sys, "platform", "win32")
+    monkeypatch.setattr(
+        job_runtime,
+        "_load_process_query_kernel32",
+        lambda: SimpleNamespace(CloseHandle=close_handle),
+    )
+    monkeypatch.setattr(ctypes, "get_last_error", last_error, raising=False)
+    monkeypatch.setattr(ctypes, "WinError", win_error, raising=False)
+    job = runtime_test_api.windows_job(handle)
+
+    with pytest.raises(OSError) as raised:
+        job.close()
+
+    assert getattr(job, "_handle") == handle
+    assert getattr(raised.value, "winerror") == error_code
+    assert events == [("close", handle), ("error", error_code)]
+
+
+def test_windows_job_close_success_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed: list[int] = []
+    monkeypatch.setattr(job_runtime.sys, "platform", "win32")
+
+    def close_handle(handle: int) -> int:
+        closed.append(handle)
+        return 1
+
+    monkeypatch.setattr(
+        job_runtime,
+        "_load_process_query_kernel32",
+        lambda: SimpleNamespace(CloseHandle=close_handle),
+    )
+    job = runtime_test_api.windows_job(12345)
+    job.close()
+    job.close()
+
+    assert closed == [12345]
+    assert getattr(job, "_handle") == 0
+
+
+def test_windows_job_close_loader_failure_retains_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(job_runtime.sys, "platform", "win32")
+
+    def unavailable() -> None:
+        raise OSError("controlled loader failure")
+
+    monkeypatch.setattr(job_runtime, "_load_process_query_kernel32", unavailable)
+    job = runtime_test_api.windows_job(12345)
+    with pytest.raises(OSError, match="controlled loader failure"):
+        job.close()
+    assert getattr(job, "_handle") == 12345
+
+
+@pytest.mark.parametrize("startup_failure", [True, False])
+def test_owned_root_cleanup_runs_when_job_close_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, startup_failure: bool
+) -> None:
+    events: list[str] = []
+
+    class Process(_SuspendedProcess):
+        def kill(self) -> None:
+            events.append("kill")
+            super().kill()
+
+        def wait(self, timeout: float | None = None) -> int:
+            events.append("wait")
+            return super().wait(timeout)
+
+    class Job:
+        def close(self) -> None:
+            events.append("close")
+            raise OSError("controlled job close failure")
+
+    process = Process()
+
+    def resume(_pid: int) -> None:
+        if startup_failure:
+            raise ValueError("controlled resume failure")
+
+    def popen(*_args: object, **_kwargs: object) -> Process:
+        return process
+
+    def create_job(_process: object) -> Job:
+        return Job()
+
+    def owner_alive(_owner: object) -> bool:
+        return False
+
+    monkeypatch.setattr(job_runtime, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
+    monkeypatch.setattr(job_runtime.subprocess, "Popen", popen)
+    monkeypatch.setattr(job_runtime, "_create_process_tree_job", create_job)
+    monkeypatch.setattr(job_runtime, "_resume_process_threads", resume)
+    monkeypatch.setattr(job_runtime, "_process_identity_is_alive", owner_alive)
+
+    with pytest.raises(OSError, match="controlled job close failure") as raised:
+        _run_managed_child(
+            ["python", "worker.py"], cwd=tmp_path, env={}, scheduler_owner=(1234, "win:start")
+        )
+
+    assert events[:3] == ["close", "kill", "wait"]
+    if startup_failure:
+        assert isinstance(raised.value.__context__, ValueError)
+    else:
+        assert events == ["close", "kill", "wait", "close"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows held process handle integration")
+@pytest.mark.parametrize("exit_code", [0, 259])
+def test_windows_exited_process_with_held_handle_is_dead_and_lock_is_recoverable(
+    tmp_path: Path, exit_code: int
+) -> None:
+    """Keep both Popen and a probe handle open after exit, including STILL_ACTIVE."""
+    kernel32 = getattr(job_runtime, "_load_process_query_kernel32")()
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-I",
+            "-B",
+            "-c",
+            "import sys; sys.stdin.buffer.read(1); sys.exit(int(sys.argv[1]))",
+            str(exit_code),
+        ],
+        stdin=subprocess.PIPE,
+    )
+    handle: int | None = None
+    try:
+        handle = kernel32.OpenProcess(0x100000, False, process.pid)
+        assert handle
+        identity = getattr(job_runtime, "_process_start_identity")(process.pid)
+        assert identity is not None
+        assert getattr(job_runtime, "_pid_is_alive")(process.pid) is True
+        assert process.stdin is not None
+        process.stdin.write(b"x")
+        process.stdin.close()
+        assert process.wait(timeout=5) == exit_code
+        assert kernel32.WaitForSingleObject(handle, 0) == 0
+        assert getattr(job_runtime, "_pid_is_alive")(process.pid) is False
+        assert getattr(job_runtime, "_process_identity_is_alive")((process.pid, identity)) is False
+
+        lock_path = getattr(job_runtime, "_write_set_lock_path")(tmp_path, "unit-held-handle")
+        lock_path.parent.mkdir(parents=True)
+        lock_path.write_text(
+            json.dumps({"pid": process.pid, "token": "exited-owner", "process_start": identity}),
+            encoding="utf-8",
+        )
+        with JobLock(tmp_path, "successor", ["unit-held-handle"], wait_s=0):
+            assert json.loads(lock_path.read_text(encoding="utf-8"))["token"] != "exited-owner"
+        assert not lock_path.exists()
+    finally:
+        if process.stdin is not None:
+            process.stdin.close()
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        if handle:
+            kernel32.CloseHandle(handle)
+
+
 def test_windows_child_is_assigned_while_suspended_before_resume(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -134,12 +317,14 @@ def test_windows_kill_on_close_job_terminates_process_and_descendant(tmp_path: P
     """Exercise nested assignment when the test host already belongs to a job."""
     gate = tmp_path / "spawn-child"
     child_pid_file = tmp_path / "child.pid"
+    # Existence is the readiness signal below; publish the complete PID atomically.
     code = (
         "import pathlib, subprocess, sys, time; "
         "gate=pathlib.Path(sys.argv[1]); out=pathlib.Path(sys.argv[2]); "
         "\nwhile not gate.exists(): time.sleep(0.01); "
         "\nchild=subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
-        "out.write_text(str(child.pid), encoding='ascii'); time.sleep(60)"
+        "out.with_suffix('.tmp').write_text(str(child.pid), encoding='ascii'); "
+        "out.with_suffix('.tmp').replace(out); time.sleep(60)"
     )
     # The venv launcher must not create its interpreter before job assignment.
     parent = subprocess.Popen(

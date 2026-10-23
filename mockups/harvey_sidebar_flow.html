@@ -2003,9 +2003,12 @@
               <optgroup label="Active Holdings (10)">
                 <option value="NU" selected>NU — Nu Holdings Ltd.</option>
                 <option value="BKNG">BKNG — Booking Holdings Inc.</option>
-                <option value="TSM">TSM — Taiwan Semiconductor</option>
               </optgroup>
               <optgroup label="Evaluation Watchlist (20+)">
+                <option value="ONON">ONON — On Holding AG</option>
+                <option value="CPNG">CPNG — Coupang, Inc.</option>
+                <option value="TSM">TSM — Taiwan Semiconductor</option>
+                <option value="LITE">LITE — Lumentum Holdings Inc.</option>
                 <option value="MELI">MELI — MercadoLibre Inc.</option>
                 <option value="SE">SE — Sea Limited</option>
                 <option value="NVDA">NVDA — NVIDIA Corporation</option>
@@ -2763,16 +2766,78 @@
           { symbol: 'ABNB', name: 'Airbnb Inc', desc: 'Alternative Stays' }
         ]
       },
+      ONON: {
+        symbol: 'ONON',
+        name: 'On Holding AG · Premium Performance Footwear',
+        price: '$48.50',
+        target: 'Target $58.00 (+19.6%)',
+        return1y: '+42.3%',
+        weight: 'Watchlist',
+        conviction: '78%',
+        statusClass: 'k-pill-ok',
+        statusText: 'WATCHLIST · 78%',
+        thesis: `<p style="margin-bottom: var(--sp-3);"><strong style="color: var(--fg);">On Holding AG (ONON)</strong> is a Swiss high-performance athletic footwear and sportswear compounder. CloudTec patented cushioning technology drives strong direct-to-consumer (DTC) expansion with gross margin expanding toward 60%.</p><p style="margin-bottom: var(--sp-3);">Wholesale door discipline and international scaling across APAC (China +72% YoY) and EMEA validate global brand resonance beyond core running enthusiasts.</p><p>Multi-category expansion into tennis (Roger Federer partnership), training, and apparel provides substantial runway for 25%+ top-line CAGR with expanding EBITDA margins.</p>`,
+        saydo: [
+          { target: 'DTC channel mix > 40%', call: 'Q4 2025 Call', actual: '42.1%', cite: 'doc:onon_q2_p5', status: 'BEAT', class: 'k-pill-ok' },
+          { target: 'Gross margin > 59.5%', call: 'Q1 2026 Call', actual: '60.2%', cite: 'doc:onon_q2_p9', status: 'BEAT', class: 'k-pill-ok' }
+        ],
+        financials: [
+          { metric: 'Net Sales (CHF M)', q3: '560.2', q4: '645.0', q1: '612.4', q2: '720.5' },
+          { metric: 'Gross Margin %', q3: '59.8%', q4: '60.4%', q1: '59.9%', q2: '60.2%' },
+          { metric: 'DTC Share %', q3: '38.5%', q4: '41.0%', q1: '39.8%', q2: '42.1%' },
+          { metric: 'Adj EBITDA (CHF M)', q3: '88.5', q4: '110.2', q1: '95.4', q2: '125.0' }
+        ],
+        falsifiers: [
+          { title: '1. Gross Margin < 57.0%', status: 'PASS (60.2%)', statusColor: 'var(--ok)' },
+          { title: '2. Inventory Growth > Sales Growth +15%', status: 'PASS (+4.2%)', statusColor: 'var(--ok)' },
+          { title: '3. Wholesale Partner Discounting Surge', status: 'MONITOR', statusColor: 'var(--warn)' }
+        ],
+        peers: [
+          { symbol: 'NKE', name: 'Nike Inc', desc: 'Global Athletic Footwear' },
+          { symbol: 'DECK', name: 'Deckers (HOKA)', desc: 'Running Footwear Rival' }
+        ]
+      },
+      CPNG: {
+        symbol: 'CPNG',
+        name: 'Coupang, Inc. · Commerce & Logistics Flywheel',
+        price: '$23.80',
+        target: 'Target $30.00 (+26.1%)',
+        return1y: '+31.4%',
+        weight: 'Watchlist',
+        conviction: '74%',
+        statusClass: 'k-pill-ok',
+        statusText: 'WATCHLIST · 74%',
+        thesis: `<p style="margin-bottom: var(--sp-3);"><strong style="color: var(--fg);">Coupang, Inc. (CPNG)</strong> operates Korea's dominant e-commerce network with end-to-end Rocket Delivery logistics infrastructure. Active customers reached 22.5M (+12% YoY) with Product Commerce segment EBITDA compounding steadily.</p><p style="margin-bottom: var(--sp-3);">Developing Offerings (Taiwan expansion, Coupang Eats, Farfetch turnaround) expand TAM, with Taiwan achieving faster operational milestones than Korea at comparable maturity <a onclick="openPeekDrawer('doc:cpng_q2_p11')" class="src-chip">doc:cpng_q2_p11</a>.</p><p>Free cash flow conversion continues to expand as fulfillment capex moderates and FLC (Fulfillment and Logistics by Coupang) merchant adoption scales.</p>`,
+        saydo: [
+          { target: 'Taiwan unit economics breakeven path', call: 'Q4 2025 Call', actual: 'Gross Margin Positive', cite: 'doc:cpng_q2_p11', status: 'ON TRACK', class: 'k-pill-ok' },
+          { target: 'Product Commerce EBITDA margin > 7%', call: 'Q1 2026 Call', actual: '7.3%', cite: 'doc:cpng_q2_p6', status: 'BEAT', class: 'k-pill-ok' }
+        ],
+        financials: [
+          { metric: 'Total Net Revenue ($B)', q3: '7.1', q4: '7.8', q1: '7.6', q2: '8.3' },
+          { metric: 'Product Commerce EBITDA ($M)', q3: '490', q4: '550', q1: '540', q2: '605' },
+          { metric: 'Active Customers (M)', q3: '20.4', q4: '21.2', q1: '21.8', q2: '22.5' },
+          { metric: 'Free Cash Flow TTM ($B)', q3: '1.4', q4: '1.6', q1: '1.8', q2: '2.1' }
+        ],
+        falsifiers: [
+          { title: '1. Active Customer Growth < 5% YoY', status: 'PASS (+12%)', statusColor: 'var(--ok)' },
+          { title: '2. Farfetch Operating Loss > $150M/Q', status: 'PASS (Narrowing)', statusColor: 'var(--ok)' },
+          { title: '3. Taiwan Logistics Bottleneck', status: 'MONITOR', statusColor: 'var(--warn)' }
+        ],
+        peers: [
+          { symbol: 'AMZN', name: 'Amazon.com', desc: 'Global Logistics & Retail' },
+          { symbol: 'MELI', name: 'MercadoLibre', desc: 'Emerging Market E-Com' }
+        ]
+      },
       TSM: {
         symbol: 'TSM',
         name: 'Taiwan Semiconductor Co. · Foundry Monopoly',
         price: '$168.50',
         target: 'Target $195.00 (+15.7%)',
         return1y: '+35.1%',
-        weight: '5.5%',
-        conviction: '62%',
-        statusClass: 'k-pill-warn',
-        statusText: 'REVIEW · 62%',
+        weight: 'Watchlist',
+        conviction: '82%',
+        statusClass: 'k-pill-ok',
+        statusText: 'WATCHLIST · 82%',
         thesis: `<p style="margin-bottom: var(--sp-3);"><strong style="color: var(--fg);">Taiwan Semiconductor (TSM)</strong> maintains an effective monopoly over leading-edge chip manufacturing (3nm/2nm process nodes). High-performance computing (HPC) & AI demand accounts for 52% of total wafer revenue.</p><p style="margin-bottom: var(--sp-3);">N2 (2nm) yield ramp remains on schedule for H2 2026 volume production <a onclick="openPeekDrawer('doc:tsm_2nm_p8')" class="src-chip">doc:tsm_2nm_p8</a>, providing pricing power of +8% per wafer.</p><p>Geopolitical wafer exposure is partially offset by Arizona Fab 1 & Fab 2 expansion, though trailing node capacity remains concentrated in Hsinchu & Tainan.</p>`,
         saydo: [
           { target: 'N2 node volume prod H2 26', call: 'Q4 2025 Call', actual: 'On Track (Q3 Test Run)', cite: 'doc:tsm_2nm_p8', status: 'VERIFIED', class: 'k-pill-ok' },
@@ -2792,6 +2857,37 @@
         peers: [
           { symbol: 'ASML', name: 'ASML Holding', desc: 'EUV Lithography' },
           { symbol: 'NVDA', name: 'NVIDIA Corp', desc: 'Primary AI Customer' }
+        ]
+      },
+      LITE: {
+        symbol: 'LITE',
+        name: 'Lumentum Holdings Inc. · Datacenter Optical Components',
+        price: '$184.00',
+        target: 'Target $220.00 (+19.6%)',
+        return1y: '+64.2%',
+        weight: 'Watchlist',
+        conviction: '76%',
+        statusClass: 'k-pill-ok',
+        statusText: 'WATCHLIST · 76%',
+        thesis: `<p style="margin-bottom: var(--sp-3);"><strong style="color: var(--fg);">Lumentum Holdings (LITE)</strong> is a primary beneficiary of the datacenter optics inflection. The Optical Communications segment (external / ultra-high-power lasers for co-packaged optics) drives revenue acceleration as AI cluster bandwidth migrates to 800G, 1.6T, and 3.2T.</p><p style="margin-bottom: var(--sp-3);">Narrow-linewidth high-power laser engineering lead plugs directly into ring-modulator CPO architectures, supported by hyperscaler customer commitments <a onclick="openPeekDrawer('doc:lite_q3_p7')" class="src-chip">doc:lite_q3_p7</a>.</p><p>Gross margins expanding from 36% toward 45%+ as cloud and AI photonics product mix displaces legacy telecom transmission demand.</p>`,
+        saydo: [
+          { target: 'Cloud transceiver lasers ramp > 50%', call: 'Q2 2026 Call', actual: '+68% YoY', cite: 'doc:lite_q3_p7', status: 'BEAT', class: 'k-pill-ok' },
+          { target: 'Gross margin > 40%', call: 'Q2 2026 Call', actual: '44.2%', cite: 'doc:lite_q3_p4', status: 'BEAT', class: 'k-pill-ok' }
+        ],
+        financials: [
+          { metric: 'Revenue ($M)', q3: '366.5', q4: '410.2', q1: '520.4', q2: '615.8' },
+          { metric: 'GAAP Gross Margin %', q3: '34.2%', q4: '38.1%', q1: '41.5%', q2: '44.2%' },
+          { metric: 'Cloud Optics Mix %', q3: '42.0%', q4: '48.0%', q1: '55.0%', q2: '62.0%' },
+          { metric: 'Operating Margin %', q3: '8.2%', q4: '14.5%', q1: '18.2%', q2: '21.6%' }
+        ],
+        falsifiers: [
+          { title: '1. Cloud Optics Rev YoY < 15% for 2Q', status: 'PASS (+68%)', statusColor: 'var(--ok)' },
+          { title: '2. Gross Margin Compress < 35%', status: 'PASS (44.2%)', statusColor: 'var(--ok)' },
+          { title: '3. CPO Lead Lost to Silicon Photonics Integrated Rivals', status: 'MONITOR', statusColor: 'var(--warn)' }
+        ],
+        peers: [
+          { symbol: 'COHR', name: 'Coherent Corp', desc: 'Optical Materials & Lasers' },
+          { symbol: 'CIEN', name: 'Ciena Corp', desc: 'Networking Systems' }
         ]
       },
       MELI: {

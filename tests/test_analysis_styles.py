@@ -10,7 +10,6 @@ CONSUMERS = (
     "src/pipeline/worldview_panel.py",
     "src/pipeline/redteam_pnl_panel.py",
     "src/pipeline/attribution_panel.py",
-    "src/pipeline/key_metrics.py",
     "src/pipeline/since_last.py",
     "src/pipeline/you_said.py",
     "src/pipeline/three_regime_renderer.py",

@@ -22,6 +22,9 @@ from typing import Literal, Protocol, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from runtime.deterministic import canonical_json_no_nan as _canonical_json
+from runtime.deterministic import content_sha256_no_nan as _digest
+
 _SCHEMA_VERSION = "pdf-table-extraction@1"
 _POLICY_VERSION = "pymupdf-dual-table-policy@1"
 _COORDINATE_SPACE = "pymupdf-rotated-page-points"
@@ -35,20 +38,6 @@ PageDisposition = Literal[
     "quarantined",
 ]
 DocumentDisposition = Literal["sealed", "quarantined"]
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-
-
-def _digest(value: object) -> str:
-    return sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
 def _validate_sha256(value: str) -> str:

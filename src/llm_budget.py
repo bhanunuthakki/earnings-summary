@@ -33,6 +33,8 @@ from decimal import Decimal
 from pathlib import Path
 
 from db_paths import resolve_db_path
+from pipeline.db_writer_gate import WriterGateHeldError
+from runtime.deterministic import table_exists as _table_exists
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -185,17 +187,6 @@ def _has_on_exceed(conn: sqlite3.Connection) -> bool:
     except sqlite3.Error:
         return False
     return "on_exceed" in cols
-
-
-def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
-    """Return whether a table exists, propagating unreadable-store errors."""
-    return (
-        conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-            (table,),
-        ).fetchone()
-        is not None
-    )
 
 
 def _row_on_exceed(row: sqlite3.Row, *, has_mode: bool, hard_block: bool) -> str:
@@ -493,6 +484,31 @@ def record_alert(
             return cur.rowcount > 0
         finally:
             conn.close()
+    except WriterGateHeldError as exc:
+        # A daily-chain writer-gate timeout drops the alert row. The call path
+        # continues (best-effort, like every failure of this write), but the
+        # drop is OBSERVABLE — warning plus a durable counter beside the
+        # database — never a silently missed threshold crossing.
+        log.warning(
+            {
+                "event": "record_alert_gate_timeout",
+                "purpose": purpose,
+                "threshold_pct": threshold_pct,
+                "error": str(exc)[:200],
+            }
+        )
+        try:
+            from telemetry_health import DROPPED_LLM_BUDGET_ALERT_WRITE, record_dropped_write
+
+            record_dropped_write(
+                DROPPED_LLM_BUDGET_ALERT_WRITE,
+                db_path=path,
+                error=f"{type(exc).__name__}: {exc}",
+                purpose=purpose,
+            )
+        except Exception:  # never escalate from a failure handler
+            log.debug({"event": "budget_alert_drop_counter_failed", "purpose": purpose})
+        return False
     except sqlite3.Error as exc:
         log.debug(
             {

@@ -1,5 +1,3 @@
-# These tests exercise internal capture-enumerate seams.
-# pyright: reportPrivateUsage=false
 """Tests for the Stage-B capture-every-number enumerate mode in
 compute.kpi_extract_summaries — the no-allowlist path that recovers the numbers
 the tier_1 allowlist drops.
@@ -9,7 +7,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
@@ -19,21 +16,26 @@ from typing import cast
 import pytest
 from pydantic import ValidationError
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import compute.kpi_extract_summaries as kes  # noqa: E402
-from compute.kpi_extract_summaries import (  # noqa: E402
-    _build_capture_manifest,
-    _fiscal_period_type_for,
-    _llm_extract_enumerate,
+import compute.kpi_extract_summaries as kes
+from compute.kpi_extract_summaries import (
     capture_for_ir_pdf_docs,
     capture_for_ticker,
 )
-from models.facts import FiscalPeriodType, Unit  # noqa: E402
-from models.kpis import DefinitionOrigin  # noqa: E402
-from models.runs import StageStatus  # noqa: E402
-from pipeline.run_accounting import PipelineRunSuppressedError  # noqa: E402
+from models.facts import FiscalPeriodType, Unit
+from models.kpis import DefinitionOrigin
+from models.runs import StageStatus
+from pipeline.kpi_persistence import KpiExtractionManifest
+from pipeline.run_accounting import PipelineRunSuppressedError
+
+_build_capture_manifest = cast(
+    Callable[..., KpiExtractionManifest], getattr(kes, "_build_capture_manifest")
+)
+_fiscal_period_type_for = cast(
+    Callable[[str, datetime], FiscalPeriodType], getattr(kes, "_fiscal_period_type_for")
+)
+_llm_extract_enumerate = cast(
+    Callable[..., list[dict[str, object]]], getattr(kes, "_llm_extract_enumerate")
+)
 
 
 def _const_caller(response: str) -> Callable[..., object]:
@@ -85,11 +87,20 @@ def test_enumerate_prompt_has_no_allowlist_and_valid_units(
     assert rows[0]["label"] == "Revenue"
 
 
-def test_enumerate_strips_fence_and_caps_max_facts(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_enumerate_strips_fence_without_truncating(monkeypatch: pytest.MonkeyPatch) -> None:
     fenced = "```json\n" + _ENUMERATE_JSON + "\n```"
     monkeypatch.setattr(kes, "call_llm_structured", _const_caller(fenced))
-    rows = _llm_extract_enumerate("NU", "Q1 2025", "text", max_facts=2)
-    assert len(rows) == 2  # capped
+    rows = _llm_extract_enumerate("NU", "Q1 2025", "text", max_facts=4)
+    assert len(rows) == 3
+
+
+@pytest.mark.parametrize("max_facts", [2, 3])
+def test_enumerate_rejects_truncated_or_saturated_fact_output(
+    monkeypatch: pytest.MonkeyPatch, max_facts: int
+) -> None:
+    monkeypatch.setattr(kes, "call_llm_structured", _const_caller(_ENUMERATE_JSON))
+    with pytest.raises(ValueError, match="fact limit"):
+        _llm_extract_enumerate("NU", "Q1 2025", "text", max_facts=max_facts)
 
 
 def test_enumerate_rejects_non_array_but_blank_input_short_circuits(
@@ -416,7 +427,7 @@ def test_capture_surfaces_accounting_suppression(
     source = cast(dict[str, object], source_obj)
     assert isinstance(source["sha256"], str)
     assert inputs["source_group"] == "ir"
-    assert inputs["max_facts_per_doc"] == kes._CAPTURE_MAX_FACTS
+    assert inputs["max_facts_per_doc"] == cast(int, getattr(kes, "_CAPTURE_MAX_FACTS"))
     assert captured["deduplicate_completed"] is True
     assert captured["force"] is True
     conn.close()

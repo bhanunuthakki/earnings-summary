@@ -11,9 +11,16 @@ from pathlib import Path
 import pytest
 
 from execution import plan_analysis_evidence_scope as cli
+from provenance import population_research_snapshots as population
 from provenance.analysis_scope import AnalysisScopeRequest, build_analysis_scope
 from provenance.immutable_artifact import ImmutableArtifactConflictError
-from tests.test_analysis_scope import scope_db
+from provenance.research_snapshot import (
+    CorpusProjectionBundle,
+    ResearchSnapshotAdmission,
+    ResearchSnapshotRequest,
+    ResearchUniverse,
+)
+from tests.test_analysis_scope import K, scope_db
 
 
 def test_selection_cli_is_read_only_and_replays_exact_receipt(
@@ -92,6 +99,96 @@ def test_selection_cli_cannot_replace_request(tmp_path: Path) -> None:
             ]
         )
     assert request.read_text(encoding="utf-8") == "preserved"
+
+
+def test_publication_recheck_rolls_back_released_inner_savepoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        "CREATE TABLE research_snapshot_seals(research_snapshot_id TEXT);"
+        "CREATE TABLE published_evidence(value TEXT);"
+    )
+    plan = ResearchSnapshotRequest(
+        research_snapshot_id="snapshot",
+        idempotency_key="snapshot",
+        research_universe=ResearchUniverse(
+            issuer_id="issuer",
+            reporting_entity_ids=("entity",),
+            document_version_ids=("document",),
+            source_obligation_revision_ids=("obligation",),
+        ),
+        processing_snapshot_ids=("processing",),
+        corpus_bundles=(
+            CorpusProjectionBundle(corpus_manifest_id="manifest", lexical_index_run_id="lexical"),
+        ),
+        source_fact_publication_ids=(),
+        ontology_snapshot_id="ontology",
+        canonical_fact_resolution_snapshot_id="resolution",
+        canonical_fact_projection_run_id="projection",
+        cutoff_at=K,
+        recorded_at=K,
+    )
+
+    def no_check(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    def issuers(*_args: object) -> tuple[str, ...]:
+        return ("issuer",)
+
+    def assemble(*_args: object, **_kwargs: object) -> ResearchSnapshotRequest:
+        return plan
+
+    def manifest(*_args: object) -> dict[str, object]:
+        return {"issuer_id": "issuer"}
+
+    def output_hash(*_args: object, **_kwargs: object) -> str:
+        return "a" * 64
+
+    def publish(
+        db: sqlite3.Connection, selected: ResearchSnapshotRequest
+    ) -> ResearchSnapshotAdmission:
+        # The real publisher uses a savepoint. Releasing it must not commit the outer operation.
+        db.execute("SAVEPOINT inner_publisher")
+        db.execute("INSERT INTO published_evidence VALUES ('candidate')")
+        db.execute("RELEASE inner_publisher")
+        return ResearchSnapshotAdmission(
+            research_snapshot_id=selected.research_snapshot_id,
+            member_set_sha256="b" * 64,
+            cutoff_at=selected.cutoff_at,
+            member_count=1,
+            requested_lanes=("test",),
+        )
+
+    checks = 0
+
+    def recheck() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise ValueError("immutable evidence changed before publication")
+
+    for name in ("_require_schema", "_require_unambiguous_terminal"):
+        monkeypatch.setattr(population, name, no_check)
+    monkeypatch.setattr(population, "_issuer_ids", issuers)
+    monkeypatch.setattr(population, "assemble_research_snapshot_request", assemble)
+    monkeypatch.setattr(population, "_request_input_manifest", manifest)
+    monkeypatch.setattr(population, "_output_commitment", output_hash)
+    monkeypatch.setattr(population, "build_research_snapshot", publish)
+    try:
+        result = population.populate_research_snapshots(
+            conn,
+            population.ResearchSnapshotPopulationRequest(
+                cutoff_at=plan.cutoff_at, operation_recorded_at=plan.recorded_at, apply=True
+            ),
+            before_publish=recheck,
+        )
+        assert result.blocked_issuer_count == 1
+        assert result.created_snapshot_count == 0
+        assert checks == 2
+        assert conn.execute("SELECT COUNT(*) FROM published_evidence").fetchone()[0] == 0
+    finally:
+        conn.close()
 
 
 @pytest.mark.parametrize("malformed_json", [False, True])

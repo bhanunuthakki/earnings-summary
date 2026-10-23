@@ -58,6 +58,9 @@ from provenance.source_fact_repository import (
     SourceFactPublication,
     SourceFactRepository,
 )
+from runtime.deterministic import as_utc as _utc
+from runtime.deterministic import canonical_json as _canonical_json
+from runtime.deterministic import sha256_joined_unit_sep as _digest
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _POLICY_NAME = "governed_legacy_reported_fact_bridge"
@@ -584,14 +587,6 @@ class _RunDependencySpill:
                 "WHERE edge.child_run_id=run_nodes.run_id)"
             )
         return tuple(ordered)
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
-def _digest(*parts: str) -> str:
-    return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
 
 
 def _record_id(prefix: str, *parts: str) -> str:
@@ -1950,10 +1945,6 @@ def _parse_required_datetime(value: object) -> datetime:
     if parsed is None:
         raise ValueError("required population clock is missing")
     return parsed
-
-
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _db_time(value: datetime) -> str:

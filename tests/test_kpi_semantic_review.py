@@ -43,7 +43,12 @@ from pipeline.kpi_semantic_review import (
     build_quarantined_kpi_correction_review,
 )
 from provenance.evidence_ledger import EvidenceLocator
-from provenance.fulltext_extractor_identity import resolve_fulltext_extractor_identity
+from provenance.fulltext_extractor_identity import (
+    PDF_FULLTEXT_EXTRACTOR,
+    RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0,
+    FulltextExtractorIdentity,
+    resolve_fulltext_extractor_identity,
+)
 
 NOW = datetime(2026, 8, 30, tzinfo=UTC)
 SHA = "a" * 64
@@ -218,12 +223,21 @@ def test_synthetic_fact_resolves_to_parent_and_requests_ledger_capture(tmp_path:
     assert item.state is KpiSemanticReviewState.NEEDS_LEDGER_CAPTURE
 
 
-def test_exact_evidence_value_is_a_review_candidate_not_auto_admission(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "identity", [PDF_FULLTEXT_EXTRACTOR, RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0]
+)
+def test_exact_evidence_value_is_a_review_candidate_not_auto_admission(
+    tmp_path: Path, identity: FulltextExtractorIdentity
+) -> None:
     conn = _database()
     _document(conn, document_id=10, source_type="ir_doc", doc_type="ir_presentation")
     _fact(conn, fact_id=1, definition_id=1, document_id=10)
     source_text = "Customers (MM) 114.2. Active customers (MM) 94.9."
     _evidence(conn, document_id=10, text=source_text)
+    conn.execute(
+        "UPDATE evidence_extraction_runs SET extractor_code_version=?,extractor_config_sha256=?",
+        (identity.code_version, identity.config_sha256),
+    )
 
     batch = build_kpi_semantic_review_batch(
         conn, repo_root=tmp_path, user_id="owner", observed_at=NOW
@@ -1089,7 +1103,8 @@ def test_semantic_review_export_is_content_addressed_and_current_portfolio_scope
 
     assert loaded == export
     assert index.ticker_manifests[0].partitions[0].content_sha256 == export.content_sha256
-    assert payload == (root / "artifacts" / f"{export.content_sha256}.json").read_bytes()
+    assert payload == export_module.encoded_kpi_semantic_review_export(export)
+    assert (root / "artifacts" / f"{export.content_sha256}.json").is_file()
     with pytest.raises(KpiSemanticReviewExportError, match="outside the current portfolio"):
         load_current_kpi_semantic_review_export(
             root=root,
@@ -1310,3 +1325,74 @@ def test_incomplete_evidence_is_exported_but_remains_explicitly_non_actionable(
     assert export.review.items[0].evidence_search_incomplete is True
     assert export.review.items[0].state is KpiSemanticReviewState.EVIDENCE_SEARCH_INCOMPLETE
     assert index.state_counts == {"evidence_search_incomplete": 1}
+
+
+@pytest.mark.parametrize("complete_promotion", [False, True])
+def test_pdf_review_selects_one_complete_run_when_promotion_omits_page(
+    tmp_path: Path, complete_promotion: bool
+) -> None:
+    conn = _database()
+    _document(conn, document_id=10, source_type="ir_doc", doc_type="ir_presentation")
+    _fact(conn, fact_id=1, definition_id=1, document_id=10)
+    text = "Customers (MM) 114.2."
+    _evidence(conn, document_id=10, text=text)
+    retained = RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0
+    conn.execute(
+        "UPDATE evidence_extraction_runs SET extractor_code_version=?,extractor_config_sha256=?",
+        (retained.code_version, retained.config_sha256),
+    )
+    conn.executescript("""
+        CREATE TABLE ocr_document_assessments (
+            assessment_id TEXT, document_version_id TEXT, input_sha256 TEXT,
+            page_count INTEGER, assessed_at TEXT
+        );
+        CREATE TABLE ocr_preflight_pages (
+            assessment_id TEXT, page_number INTEGER, native_character_count INTEGER,
+            requires_ocr INTEGER
+        );
+    """)
+    conn.execute(
+        "INSERT INTO ocr_document_assessments VALUES ('assessment','doc-v1',?,2,?)", (SHA, NOW)
+    )
+    for page in (1, 2):
+        conn.execute("INSERT INTO ocr_preflight_pages VALUES ('assessment',?,20,0)", (page,))
+        locator = EvidenceLocator(source_ref="C:/sources/document.pdf", page_number=page)
+        if page == 1:
+            conn.execute(
+                "UPDATE evidence_nodes SET locator_json=?,locator_sha256=? WHERE node_id='node-1'",
+                (locator.canonical_json, locator.canonical_sha256),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO evidence_nodes VALUES ('node-2','run-1','pdf_page',?,?,?,NULL)",
+                (text, locator.canonical_json, locator.canonical_sha256),
+            )
+    current = PDF_FULLTEXT_EXTRACTOR
+    conn.execute(
+        "INSERT INTO evidence_extraction_runs VALUES ('promoted','doc-v1',?,?,?,?, 'succeeded')",
+        (SHA, current.name, current.config_sha256, current.code_version),
+    )
+    for page in range(1, 3 if complete_promotion else 2):
+        locator = EvidenceLocator(source_ref="C:/sources/document.pdf", page_number=page)
+        conn.execute(
+            "INSERT INTO evidence_nodes VALUES (?,'promoted','pdf_page',?,?,?,?)",
+            (f"new-{page}", text, locator.canonical_json, locator.canonical_sha256, f"node-{page}"),
+        )
+    batch = build_kpi_semantic_review_batch(
+        conn, repo_root=tmp_path, user_id="owner", observed_at=NOW
+    )
+    candidates = batch.items[0].evidence_candidates
+    assert {candidate.extraction_run_id for candidate in candidates} == {
+        "promoted" if complete_promotion else "run-1"
+    }
+    prefix = "new" if complete_promotion else "node"
+    assert {candidate.evidence_node_id for candidate in candidates} == {
+        f"{prefix}-1",
+        f"{prefix}-2",
+    }
+    assert (
+        conn.execute(
+            "SELECT count(*) FROM evidence_nodes WHERE extraction_run_id='run-1'"
+        ).fetchone()[0]
+        == 3
+    )

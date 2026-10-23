@@ -27,6 +27,97 @@ Every row in `documents` must have `(source_type, doc_type, file_path, sha256, f
 
 LLM-extracted documents must carry `parent_document_id` pointing at the primary document the LLM read from.
 
+### Analysis Evidence Scope and reconstruction (2026-10-02)
+
+An [Analysis Evidence Scope](../DEFINITIONS.md#analysis-evidence-scope) is a derived
+selection receipt. It is not a company-reported fact or proof that selected numbers
+are ready for a model. The immutable CLI artifact, processing scope, and research
+universe retain its full contents. The corpus key and selection configuration digest
+bind the receipt; the corpus manifest does not store its full contents or that
+configuration. No second database store is introduced.
+
+The receipt binds issuer, purpose, declared reporting periods, related accessions
+with reasons, knowledge/observation cutoffs, and the current authoritative SEC
+inventory identity and component digest. Its document population retains immutable
+expected metadata and explicit research/dependency/outside roles. Capture status is
+resolved separately at the consumer's declared cutoffs. Later recording can complete
+coverage when the source observation was already available by the knowledge cutoff.
+A source first retrieved after that cutoff requires a new selection with a later
+knowledge cutoff. The original receipt remains unchanged.
+
+All selected dependencies need positive capture evidence. Captured document issuer,
+accession, form, source URL, reporting period, blob identity, and observation clocks
+must match their expectations. Only primary research documents enter the text
+collection. Outside missing, failed, or unknown coverage stays visible. A scope
+receipt does not waive definition, unit, currency, accounting basis, comparability,
+source-fact publication, canonical resolution, reader parity, or model-input checks.
+
+New operations recompute the selection against the current inventory. Stored
+artifact verification uses the frozen selection observation cutoff and retained
+inventory records. It cannot skip an incomplete newer inventory visible at that
+time. The `require_current_inventory=False` internal read option is only for stored
+artifact verification; no CLI exposes it as a stale-write option. Processing and
+research identities include the scope identity when present. Unscoped identities
+and their retained serialized contents remain unchanged.
+
+The explicit `analysis-evidence-scope/v2` historical reconstruction mode keeps
+the public availability cutoff separate from physical knowledge and observation
+cutoffs. It pins original document versions for reviewed quarterly 6-K subjects.
+Exact retained SEC submissions bytes must replay each selected accession's
+acceptance time. Authority references retain observation IDs and blob hashes;
+they do not copy raw metadata into each report. SEC acceptance records the
+filing event; SEC dissemination can follow later. It does not establish exact
+public availability, the first issuer release time or a contemporaneous system
+record. Legacy v2 reason names retain their bytes but are not public-availability
+witnesses. Missing or ambiguous
+acceptance times fail closed. This mode does not waive package dependencies,
+processing lanes, financial admission or narrative verification. V1 serialized
+requests and scope identities remain unchanged.
+
+Historical financial Research Snapshots additionally require exact financial
+source closure. The verifier checks native canonical resolution and the complete
+required publication set, including dissenting candidates and unrelated members
+of those publications. Every reported leaf of every selected observation and
+derived operand must resolve to an exact original selected document version.
+Missing, changed, outside-scope or unadmitted evidence blocks assembly. Both the
+default and custom verifier paths require this native proof. Admission and operand
+seals must be available by physical knowledge cutoff K; this conservatively holds
+evidence recorded between K and the later observation cutoff O.
+
+The owner-approved `complete_report_evidence/v1` profile uses a v3 scope identity
+for its original boundary; explicit issuer PDFs and reviewed page scopes use
+additive later scope identities without changing that profile.
+It preserves the current complete inventory and every package dependency entry.
+Generated/supporting dependency capture and native filing-XBRL processing are
+deferred; their coverage is not relabelled complete or not applicable. Declared
+original SEC exhibits still require capture. In nonhistorical bounded scopes they
+also enter the research document population, with exact native text and corpus
+proof. Historical scopes retain explicit original selections. This profile supplies
+no implicit nonmaterial-exhibit disposition. Exact primary capture,
+complete qualified text, financial admission, source closure, semantic definitions,
+comparability, canonical resolution and all reader proofs remain required. The
+same financial source closure applies to this bounded profile. Report acceptance
+also requires a fixed, independently declared critical evidence population, whole
+output verification, joint brief/model/scenario proof and recalculated workbook
+parity. Its result is scoped to the complete report and does not claim whole
+filing or issuer decision-grade coverage. Unprofiled v1/v2 scope identities remain
+unchanged. Historical financial readiness always retains a bounded label and
+`decision_grade=False`; original document closure does not establish exact public
+availability or complete historical report acceptance.
+
+Analysis Evidence Scope v7 can retain a reviewed per-page PDF table boundary.
+The full native artifact and all qualified text remain immutable evidence. A
+separate scoped certificate verifies only required, valid native child pages;
+quarantined required pages fail. Deferred pages remain visible and cannot supply
+report anchors, including fulltext numbers, derived financial leaves or model
+inputs. The page review commits exact source hashes and the existing ten-topic
+MELI report source population before generation. Replacement observations and
+source nodes require exact native snapshot membership. The existing complete
+output and report-population checks also bind actual claims to that declared
+population. Full/unprofiled evidence cannot consume a scoped table certificate.
+No detector identity, semantic admission, financial accuracy or full-letter table
+completion is inferred from a reviewed deferral.
+
 ### Progressive proof and legacy repair (2026-09-19)
 
 Capture, extraction, source coverage, semantic admission, and reader parity are
@@ -41,9 +132,17 @@ PDF full-text extraction uses the deliberately promoted identity in
 library version. The writer checks the loaded parser before parsing; a missing or
 different version is quarantined without recording an approved extraction run.
 Dependency updates require an explicit identity promotion and isolated parser
-validation. Readers select the approved identity independently of their installed
-libraries. Prior sealed evidence remains reconstructible under its pinned
-historical identity, but cannot authorize a new seal or current coverage.
+validation. New extraction uses pypdf 6.21.1 only. Readers select exact approved
+identities independently of their installed libraries, retaining the prior 6.19.0
+code/config pair for seals, current coverage, search and KPI evidence. Readers
+select one complete approved run per document, preferring 6.21.1 and falling back
+to 6.19.0; they never combine nodes across parser runs. Retained coverage also
+counts as complete for scheduled resume and explicit full-text backfill, so the
+promotion does not trigger re-extraction. Historical
+base `@1` sealed evidence remains reconstructible under its pinned identity, but
+cannot authorize a new seal or current coverage. The 6.21.1 writer has a distinct
+idempotency namespace to avoid colliding with 6.19.0 runs; `fulltext-pdf-v6`
+evidence keys retain explicit superseding revisions without erasing old nodes.
 
 Mutable provider caches are working projections. Before registration, exact retained FMP
 cache bytes are installed without clobbering under content-addressed
@@ -72,12 +171,50 @@ Only genuinely matching retained bytes can receive a byte-verification stamp.
 
 ### Selected financial evidence and calculations
 
+The finite `native-pdf-transcript-review/v1` profile binds untimed transcript turns
+and speakers to the complete promoted native PDF text seal and exact page/character
+spans. Reviewed raw source labels supply attribution; page openings and reviewed
+speakerless headings retain unknown attribution. Timecodes remain explicitly
+unavailable, and the existing time-coded transcript profile keeps its requirements.
+
 Financials, Explore, Ask and financial decision conditions retain the exact
 selected observation and one aware knowledge cutoff. Table and series references
 name their reader policy. Supported annual and quarterly series preserve native
 currency, units, fiscal coordinates and comparison continuity. Unsupported
 semantics and unadmitted overrides remain unavailable. A newer override or
 restatement cannot change the evidence selected at an earlier cutoff.
+
+Sealed ontology and canonical-resolution selections reject new admissions that
+would become visible behind their retained cutoffs. Migration0058 enforces this
+at the database boundary, including direct SQL. Ontology membership is global;
+resolution membership follows its retained reporting-entity scope and knowledge/
+observation clocks. Existing whole-row exact replay remains valid. Conflicting
+replay and new retroactive rows fail closed with `sealed_ontology_admission_conflict`
+or `sealed_resolution_admission_conflict`. The guards also cover the current
+readers' second-precision visibility, so a same-second fractional append may be
+blocked. Do not retry the same input unchanged, manufacture later clocks, or
+rewrite retained rows. A legitimate late admission needs an explicit new-coordinate
+producer; this guard does not implement that workflow or repair an already-invalid
+seal. Other upstream closures retain their own verification requirements.
+
+`CanonicalFactResolutionEngine.read_as_known` returns each exact canonical
+selection with its admitted source bundle under one read snapshot. It retains
+the same resolution, publication and derived-lineage checks as `as_known`.
+Required source batches fail as a whole; they expose no partial usable inputs.
+MELI preview, model-input verification and generic DCF statements reuse this owner. Full publication
+verification is shared only within one bounded batch at one cutoff. Separate
+verification passes and later calls verify again; no persistent cache is added.
+
+Model-input verification also reads exact selected cells from the snapshot's
+sealed canonical projection. The projected observation, resolution, definition,
+binding and mapping identities must match the requested/current admitted context.
+Definition, binding and mapping payload hashes must match too. A later compatible
+revision does not change the saved context. It requires a new snapshot before it
+can supply model inputs. Current lifecycle, role, basis, unit, source-byte and
+inventory checks still apply independently. Exact lookup shares projection
+admission and entry verification with lexical reads; it does not use query terms
+or the lexical candidate limit. Absence must agree with the sealed effective
+bucket, including checkpoint/delta tombstones.
 
 Growth evidence retains every input and comparison witness, plus the versioned
 calculation rule. The evidence reader re-admits that complete selection at its
@@ -581,3 +718,16 @@ its immutable resolution receipt remains intact. Derived publication and
 financial consumers use this same check. Financial binding replay requires the
 complete committed review, unchanged current mapping and definition, and exact
 reviewed clocks.
+
+A reviewed memo can use `MemoObservationSum` for a signed USD-million sum of reported monetary observations that are not standard report-table concepts. Each operand pins the observation, canonical cell, resolution and metric-definition revision in the same sealed research snapshot. `read_memo_observation_sum` reads the existing canonical financial projection and original provenance; it does not create a report-table alias or a new fact. Its currency, accounting basis, reporting entity, security scope, consolidation scope, dimensions and exact period must agree. Stock and flow observations cannot be mixed. The native whole-output verifier replays the sum and binds every displayed number. Analyst review must still establish additivity and disclose any difference from a management metric's perimeter or basis.
+
+MELI's optional `meli-report-driver-checks/v1` recipe context adds model-owned
+diagnostic calculations to the source-qualified input receipt. These include
+funding/reserve/liquidity counterfactuals, credit-cost stresses with coherent
+terminal returns, and an explicit aggregate-profit allocation bridge. A residual
+calibration is an analyst allocation, never a reported segment profit or cost.
+Annualized margin and ending-book proxies retain their period limitations. The
+original source bindings are reused; cash counterfactuals rerun the native bridge
+rather than patching net cash. Report selectors and workbook expectations read
+the same receipt calculations. Legacy contexts do not claim these diagnostics.
+Workbook edits do not renew financial qualification.

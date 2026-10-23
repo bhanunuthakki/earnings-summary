@@ -22,8 +22,10 @@ import comments_server
 import pytest
 from flask.testing import FlaskClient
 
+from ask.engine import AskTurn
 from capture import decision_draft_actions
 from tests.ask_stream_support import parse_sse_events
+from tests.comments_server_seams import patch_server_seam
 
 
 @pytest.fixture
@@ -317,17 +319,17 @@ def test_ask_rejects_overlong_query_with_correlation_id(client: FlaskClient) -> 
 def test_ask_history_is_bounded_at_the_http_boundary(
     monkeypatch: pytest.MonkeyPatch, client: FlaskClient
 ) -> None:
-    captured: dict[str, comments_server.AskTurn] = {}
+    captured: dict[str, AskTurn] = {}
 
     def _pack(*_a: object, **_k: object) -> SimpleNamespace:
         return SimpleNamespace(default_tickers=[])
 
-    def _respond(turn: comments_server.AskTurn, *_a: object, **_k: object):
+    def _respond(turn: AskTurn, *_a: object, **_k: object):
         captured["turn"] = turn
         yield {"type": "final", "text": "ok"}
 
-    monkeypatch.setattr(comments_server, "build_portfolio_pack", _pack)
-    monkeypatch.setattr(comments_server, "respond_turn", _respond)
+    patch_server_seam(monkeypatch, "build_portfolio_pack", _pack)
+    patch_server_seam(monkeypatch, "respond_turn", _respond)
     history = [
         {"role": "user" if i % 2 == 0 else "assistant", "text": "z" * 2_000} for i in range(20)
     ]
@@ -347,8 +349,8 @@ def test_streaming_ask_error_is_generic_and_correlated(
     def _failed(*_a: object, **_k: object):
         yield {"type": "error", "error": "provider failed?api_key=secret-value"}
 
-    monkeypatch.setattr(comments_server, "build_portfolio_pack", _pack)
-    monkeypatch.setattr(comments_server, "respond_turn", _failed)
+    patch_server_seam(monkeypatch, "build_portfolio_pack", _pack)
+    patch_server_seam(monkeypatch, "respond_turn", _failed)
     resp = client.post(
         "/api/ask/stream",
         json={"query": "what changed?"},

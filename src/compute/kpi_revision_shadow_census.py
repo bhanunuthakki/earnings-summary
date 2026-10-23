@@ -32,6 +32,7 @@ from compute.kpi_resolver import (
 from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.verifier_identity import verifier_source_artifact_sha256
+from runtime.deterministic import sha256_text as _sha256
 from sqlite_runtime import reject_forbidden_mac_checkout_database
 from sqlite_snapshot import SnapshotManifest
 
@@ -48,10 +49,6 @@ def _canonical_json(value: object) -> str:
         separators=(",", ":"),
         sort_keys=True,
     )
-
-
-def _sha256(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _file_sha256(path: Path) -> str:

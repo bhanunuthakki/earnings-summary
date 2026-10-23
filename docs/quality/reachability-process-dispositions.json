@@ -23,8 +23,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Fixed ingest_transcripts_state.py retained; adds selected --db while --repo-root, owner-requested and exact receipt IDs remain.",
-      "fingerprint": "d314e3cf85cc9bd6118f3cbf761aec8052f4e44ff0250e059b66a3adc15230c5",
-      "line": 794,
+      "fingerprint": "f08c9ae3a71fa0425da13817bd4b4d8816a339d93f89e8b0f970c3bdd3ac796b",
+      "line": 786,
       "path": "execution/backfill_transcripts.py",
       "targets": [
         "execution/ingest_transcripts_state.py"
@@ -33,11 +33,21 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Fixed extract_commitments_from_transcript.py retained; --auto/exact transcript ID remain; --db now uses db.DB_PATH rather than derived state-local portfolio.db.",
-      "fingerprint": "9e0af7735f220af29c92a17fdb5ccf925d5884fd0fb97cd76064196c8d2b311d",
-      "line": 824,
+      "fingerprint": "056ffa4f740ecec463ae86b574bbba0a406fb7950a140d07fa945fd821c68f27",
+      "line": 816,
       "path": "execution/backfill_transcripts.py",
       "targets": [
         "execution/extract_commitments_from_transcript.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "The paint-cycle runner launches only this checked-in harness in its fixed child-sample mode through the managed Python bootstrap to isolate cold request sequences.",
+      "fingerprint": "e64c57305fbc6cc887aba13cc8575b3fcc27902b02d791f7a04a209ce23c434f",
+      "line": 571,
+      "path": "execution/bench_flows.py",
+      "targets": [
+        "execution/bench_flows.py"
       ]
     },
     {
@@ -65,8 +75,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_TICKER_SPECIFIC_EXTRACTORS remains one NVO extract_nvo_patent_timeline_state.py entry; adds require_db_path() --db. Optional LLM gating is separate caller behavior.",
-      "fingerprint": "0489584797cd9e6101344d68369d67138d7876e17456965e3558206fb55bafc0",
-      "line": 121,
+      "fingerprint": "4426c7b711a819e92f879973e570a2f696f4e85964fe0d4d0602b14849c15935",
+      "line": 123,
       "path": "execution/build_artifacts.py",
       "targets": [
         "execution/extract_nvo_patent_timeline_state.py"
@@ -85,8 +95,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_step executes only the five fixed managed-Python stage scripts.",
-      "fingerprint": "0d00c2f62dd67939bca3757ae02087a276914c5e28a97e7608befbbcd6201bc4",
-      "line": 515,
+      "fingerprint": "21d2b2945e1a62dccbe10ba5a932e6b96e92b1e1762edd2dd7ccb854b00db117",
+      "line": 667,
       "path": "execution/daily_fetch_and_brief.py",
       "targets": [
         "execution/run_thesis_evaluator.py",
@@ -108,22 +118,23 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "Replace prior process_ir_documents.py target with process_ir_documents_state.py: _run_child accepts only argv assembled by this module fixed discovery/fetch and opt-in narrative/summary call sites, then ensure_managed_python_argv. The summary adapter is the existing state-root-aware owner; ticker/repo-root are arguments, never script identity. Opt-in narrative remains unchanged in authority.",
-      "fingerprint": "b3fd310b2a1280a1246bb8fa37a35861190e218e72a9c59b9bad143ca1559fa3",
-      "line": 258,
+      "evidence": "_run_child accepts only argv assembled by this module fixed discovery, fetch, canonical document-evidence, narrative and summary-adapter call sites, then ensure_managed_python_argv. process_document_evidence.py is the existing byte-capture/extraction/coverage owner; source type ir_doc, ticker, explicit database and state root are arguments, never script identity. Narrative and summaries remain derived views; this disposition grants no collection or persistence authority.",
+      "fingerprint": "9d269109d5fbc63a7775d07583881b44cbd9138c1d37d28078adf59f8b31aee6",
+      "line": 266,
       "path": "execution/discover_ir_documents_all.py",
       "targets": [
         "execution/discover_ir_documents.py",
         "execution/fetch_ir_documents.py",
         "src/compute/ir_narrative.py",
-        "execution/process_ir_documents_state.py"
+        "execution/process_ir_documents_state.py",
+        "execution/process_document_evidence.py"
       ]
     },
     {
       "disposition": "internal_python_target",
       "evidence": "build_one runs only the three fixed managed-Python onboard, build, and card scripts.",
-      "fingerprint": "1eceb602743268232131406a18b6ea4057e3b6f89b1dfdcfec22831504565c47",
-      "line": 58,
+      "fingerprint": "684ad287e2cc9c84723619a651677f6156b7f151b5c3dea1d7718fdef647d217",
+      "line": 60,
       "path": "execution/discovery_build.py",
       "targets": [
         "execution/onboard_ticker.py",
@@ -134,8 +145,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_categorize invokes the fixed _CATEGORIZER script via managed_python_prefix.",
-      "fingerprint": "31c1d250e92b6f908a4fab20feb9db246df66886afe34f8ca1b2f3749f8bcf7b",
-      "line": 577,
+      "fingerprint": "deabedc12f5483af5bb9081af290fd1959638791509db250ab44a093e322007a",
+      "line": 598,
       "path": "execution/fetch_ir_documents.py",
       "targets": [
         "execution/categorize_ir_uploads.py"
@@ -310,8 +321,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_bank runs the fixed _BANK_BUILDER via managed_python_prefix.",
-      "fingerprint": "e8a6a7008de2568f6524f844ac451b39068bb2f173d1eea3ffe08e70b54cee60",
-      "line": 884,
+      "fingerprint": "c5aed4f4552fcbe3f6bc411a473ce676f5f29559a783b09892190ce6394f38c4",
+      "line": 900,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_bank_dcf.py"
@@ -320,8 +331,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_holdco runs the fixed _HOLDCO_BUILDER via managed_python_prefix.",
-      "fingerprint": "6db345b973b5a26f53713e09d00bdc06dcaae360e669d89ca96525eec8bff4de",
-      "line": 929,
+      "fingerprint": "725df3a3153f2ac364f26187f49da214bec88151584237fdf67e19e362727bee",
+      "line": 945,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_holdco_sotp.py"
@@ -330,8 +341,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_fintech_sotp runs the fixed _FINTECH_BUILDER via managed_python_prefix.",
-      "fingerprint": "fb46ecf7084bcee52a29a0ca59f3908323ae4c2922b9e97a5973f9c94d74e74b",
-      "line": 982,
+      "fingerprint": "15bb5101cb173a2bd131f54eb7a286da8a3efab20d77a7a7e321767cb7c187f4",
+      "line": 998,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_fintech_sotp.py"
@@ -340,8 +351,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_platform runs the fixed _PLATFORM_BUILDER via managed_python_prefix.",
-      "fingerprint": "11a66188be293d4177c40c327849ad3823edc74c965f50ae398adeedb8be5a9e",
-      "line": 1035,
+      "fingerprint": "78a9c9389a18a29edc93536184746683c16953e4c05c29c9c4bc294dba820fad",
+      "line": 1051,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_nu_platform_dcf.py"
@@ -350,8 +361,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_meli_sotp runs the fixed _MELI_SOTP_BUILDER via managed_python_prefix.",
-      "fingerprint": "2742dc288ee81216f8470a3da59734d891006771e6010340c49f6628586c6944",
-      "line": 1129,
+      "fingerprint": "43f03110dae9b35e5994a3b6c45d2b9168afb2b8e3e839215c3f697e7ec925cf",
+      "line": 1145,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_meli_platform_dcf.py"
@@ -360,8 +371,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_onon runs only the fixed _ONON_BUILDER execution/build_onon_dcf.py through managed_python_prefix; the explicit hash-bound reviewed input artifact supplies model inputs, not executable code.",
-      "fingerprint": "8e3922661560f0d67761597c017786d1b17c84763160c1cdf55d22e20ec9805b",
-      "line": 1222,
+      "fingerprint": "e88329abcf7a2b54b4a0ac5a08a84a703ab9aa37077d1875d26082a3b6681567",
+      "line": 1238,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_onon_dcf.py"
@@ -370,8 +381,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_builder runs the fixed _BUILDER_SCRIPT via managed_python_prefix.",
-      "fingerprint": "090de908177ca350b7aa650ba28f726b5d515c9efb6084f303ff030be26a404b",
-      "line": 1287,
+      "fingerprint": "686a0bea793861f3a3cce02b7b5ee7d05756887778651f48ee811f6908f62d66",
+      "line": 1303,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_redesigned_dcf.py"
@@ -467,8 +478,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Add execution/process_document_evidence.py to existing closed STAGE_MANIFEST dispatch. _selected_specs chooses manifest members; _build_stages resolves execution/spec.script via managed_python_argv. New deterministic stage is --apply --resume --batch-size 100, timeout600s; depends on preflight/list identity only and has DB_AND_STATE_ROOT argument profile. The target does no LLM/narrative dispatch and no arbitrary process invocation. This is a reviewed change to target scope, not a line-only refresh.",
-      "fingerprint": "5f569590896c5286a44e020acef85b049f51624b752eae022c95fb5fb48c4c56",
-      "line": 377,
+      "fingerprint": "d08725bbef5a507796d87403796b5843f460192e630e88410c66df2195e67e89",
+      "line": 404,
       "path": "execution/run_morning_pipeline.py",
       "targets": [
         "execution/validate_environment.py",
@@ -520,8 +531,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_ingest runs the fixed execution/ingest_transcripts.py via managed_python_prefix.",
-      "fingerprint": "df5fb1efecf2055ac1ddc2957e1a808be48b29b5c4752f5c43902bf2013ccce2",
-      "line": 257,
+      "fingerprint": "c8e18f81064ea46aa7ae871eaa413b2928592e87ccc7a03786eb7000f08ee72d",
+      "line": 248,
       "path": "execution/scan_ir_transcripts.py",
       "targets": [
         "execution/ingest_transcripts.py"
@@ -530,8 +541,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "_run_target executes the operator-supplied script or -m module path.",
-      "fingerprint": "624b7c9258e3a9196318c5a5f064ad143e46f557aee8fe021d9fa784e48c09bd",
-      "line": 96,
+      "fingerprint": "db1e54c00b2e92ca9ee02a0625ba191594da29f82abecea1621d1081b5afb006",
+      "line": 98,
       "path": "execution/sqlite_bootstrap.py",
       "targets": [
         "operator-supplied Python target"
@@ -578,6 +589,18 @@
       ]
     },
     {
+      "disposition": "external_process",
+      "evidence": "Runs the explicitly configured WorkbookRuntime.node executable with fixed argv pointing to a copy of execution/meli_workbook_adapter.mjs, spec.json and workbook.xlsx. shell is not enabled and timeout is 120 seconds. The adapter imports @oai/artifact-tool from configured node_modules. This records the external process boundary and fixed script selection; it does not establish executable or dependency identity or immutable runtime code.",
+      "fingerprint": "aadb458b77eb4209e2c8cff2fdf9fff6f5a96abdc55e5379977a3b57ed8a8486",
+      "line": 711,
+      "path": "src/dcf/meli_workbook.py",
+      "targets": [
+        "configured WorkbookRuntime.node",
+        "execution/meli_workbook_adapter.mjs",
+        "@oai/artifact-tool"
+      ]
+    },
+    {
       "disposition": "runtime_registry",
       "evidence": "Job.start_subprocess executes the registry-owned argv which may mix targets.",
       "fingerprint": "e67f3ee629f1d9693d1c983f95ee5715cfe15c7388becf5d06a69016e6f413a0",
@@ -610,8 +633,8 @@
     {
       "disposition": "external_process",
       "evidence": "_call_claude spawns the fixed claude CLI executable.",
-      "fingerprint": "e3b7bd537d9a813d2e0c7e76030f6a2a04335dfd38e83cbf77ce0fe2ba20040b",
-      "line": 1303,
+      "fingerprint": "fd6bf59c52bbe078d931d16e119d781ab78846daade8dd16bc686298254921a6",
+      "line": 1342,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -620,8 +643,8 @@
     {
       "disposition": "external_process",
       "evidence": "Streaming path spawns the fixed claude CLI executable.",
-      "fingerprint": "dadc8a9ac3d072ccf481590632f485abf9a9f745250599ca539eefec3b877bc3",
-      "line": 2100,
+      "fingerprint": "6d099427ba2d0d8e2cc058cf37a851ee9dba5628b5879a6e6dfb4cdf1f541305",
+      "line": 2139,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -630,8 +653,8 @@
     {
       "disposition": "external_process",
       "evidence": "Web path spawns the fixed claude CLI with WebSearch tools.",
-      "fingerprint": "0014ca54758699d308c08a3f6dd761cc0a93478ab968f1a2d318effbaf50653c",
-      "line": 2552,
+      "fingerprint": "56accdec502a4447ee2beb43cc4a074305829b2479137ab23cd04d061853f983",
+      "line": 2591,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -640,8 +663,8 @@
     {
       "disposition": "external_process",
       "evidence": "Private _system_probe has one production caller observe_owner. Both validated OwnerConfig.kind branches construct a fixed native PowerShell program. OwnerConfig.name and task_path restrictive validators exclude quote/code delimiters. Task branch queries Get-ScheduledTask/Get-ScheduledTaskInfo/Export-ScheduledTask and COM Schedule.Service; service branch queries Get-CimInstance/Get-ItemProperty and fixed sc.exe sdshow. No Python entrypoint, owner-supplied executable, or arbitrary command is accepted. Output uses bounded temporary capture, timeout15s and discarded stderr. This classification proves dispatch scope, not native command success or current host configuration.",
-      "fingerprint": "7766e42371e98f0e169214b680ca95feed775ee61ee934741158a73b0b5f794d",
-      "line": 382,
+      "fingerprint": "826a9460678b62c6ca0ce19b973179a761b33f52695a08350bbefd1488ab51ba",
+      "line": 273,
       "path": "src/operations/host_runtime.py",
       "targets": [
         "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
@@ -650,9 +673,9 @@
     {
       "disposition": "external_process",
       "evidence": "Private _json_command has exactly two production callers, both native_projection: fixed PS executable with fixed flags and locally constructed read-only process/listener/service/task query; fixed TAILSCALE executable with literal serve status --json. Configuration executable paths and route URLs are compared only and never form argv executables. Service/task names and task paths are constrained by closed safe-character validators; ports are strict bounded integers. No caller passes an operator command or Python entrypoint. Output is bounded, stderr discarded, timeouts30s and5s.",
-      "fingerprint": "c41ccab48cae97518e62a967326f7213c09e54d0d1ff89deefc8d6ec2529144b",
-      "line": 209,
-      "path": "src/operations/topology_observer.py",
+      "fingerprint": "707e86617efb83a5f4d517ab70ff34f77b7fdfd88a9c9644e2d6a5215a2af0e8",
+      "line": 617,
+      "path": "src/operations/host_runtime.py",
       "targets": [
         "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
         "C:\\Program Files\\Tailscale\\tailscale.exe"
@@ -671,8 +694,8 @@
     {
       "disposition": "external_process",
       "evidence": "_collect_live_process_census executes the fixed SYSTEMROOT-based Windows PowerShell path with fixed -NoProfile -NonInteractive -Command flags and locally constructed Get-CimInstance Win32_Process census program. No caller-provided executable or Python target; timeout 60s, captured output, fail-closed return-code/JSON validation. This corrects existing git/canonical_runtime_git_commit metadata; the literal Git HEAD probe is a separate call. No runtime call was added.",
-      "fingerprint": "bec37b420cb4ea3850b0d2016e3af3b5ae836258d4d1ecd5e8dbde67bdea0800",
-      "line": 1824,
+      "fingerprint": "0c063a64e37be776fee1da702c6188e463b8466138a8607f625d4b4796062eb1",
+      "line": 1826,
       "path": "src/provenance/gc_recovery.py",
       "targets": [
         "SYSTEMROOT/System32/WindowsPowerShell/v1.0/powershell.exe"
@@ -681,8 +704,8 @@
     {
       "disposition": "external_process",
       "evidence": "TesseractImageProvider runs the pinned tesseract executable.",
-      "fingerprint": "6c07d4b0559658bff1cf8f6cdf7ede08109c5841e695d82e1684b4fd7f6d8dd4",
-      "line": 328,
+      "fingerprint": "85e0498be7a4738a192a4f8d6e4151508bc1a2df263ec77b20b67a3de9291c99",
+      "line": 330,
       "path": "src/provenance/image_ocr_extraction.py",
       "targets": [
         "tesseract"
@@ -691,8 +714,8 @@
     {
       "disposition": "external_process",
       "evidence": "_binary_version probes the pinned tesseract --version command.",
-      "fingerprint": "47d6b31eb47c7fcf28160afe03f188f6c3104a4f4ac8fa5c1f08ccc52600014e",
-      "line": 1309,
+      "fingerprint": "af9a5f7d9cf977d4fd96565a75402bbaf25da6614b66109a8a21728cbfa2ed27",
+      "line": 1307,
       "path": "src/provenance/image_ocr_extraction.py",
       "targets": [
         "tesseract"
@@ -701,8 +724,8 @@
     {
       "disposition": "external_process",
       "evidence": "Provider renders pages with its configured, resolved pdftoppm executable. The descriptor records the executable version and SHA256; this disposition classifies the external process and does not approve an executable pin.",
-      "fingerprint": "8e02f0411cbd09f9f77d712dd6cf41bdf4560b603e32c83610bb1aac6ddc5522",
-      "line": 377,
+      "fingerprint": "315ebd2eae1964b0e05f595e67194de1d3aaa0202c6e1607a10b9861fe0a46fa",
+      "line": 379,
       "path": "src/provenance/ocr_extraction.py",
       "targets": [
         "pdftoppm"
@@ -711,8 +734,8 @@
     {
       "disposition": "external_process",
       "evidence": "Provider extracts text with its configured, resolved tesseract executable. The descriptor records the executable version and SHA256; this disposition classifies the external process and does not approve an executable pin.",
-      "fingerprint": "d383bb389bafc600bd36fa6f487070de6bb0a8297096d783d55a9850f33fb63b",
-      "line": 400,
+      "fingerprint": "83cb3561425089f3670567ca499ecdb8e33a7cb8af72532cf711a97e2f996b71",
+      "line": 402,
       "path": "src/provenance/ocr_extraction.py",
       "targets": [
         "tesseract"
@@ -721,8 +744,8 @@
     {
       "disposition": "external_process",
       "evidence": "_binary_version probes the configured, resolved OCR executable with the constructor's fixed version arguments. This is an external process identity probe, not an executable approval.",
-      "fingerprint": "6330a95fe8a19e1259d5ff917b6065bc4aa71e481cea22b02a43acfad2f2d42c",
-      "line": 1415,
+      "fingerprint": "047e33bca82660d15b0d651e87966ca67ccbffc2cb7c0524465964ca197ec4f7",
+      "line": 1409,
       "path": "src/provenance/ocr_extraction.py",
       "targets": [
         "ocr executable"
@@ -761,6 +784,16 @@
       ]
     },
     {
+      "disposition": "closed_command_set",
+      "evidence": "The collector runner executes only fixed read-only Git ls-files, rev-parse HEAD and status probes. The command vectors are internal literals, use a checked repository root and clean_local_git_env; no operator-selected executable or shell is used.",
+      "fingerprint": "5bd212a6475ce4ddd33c7a73f604246b2c424d2426452048e074ef6ce398b026",
+      "line": 120,
+      "path": "src/quality/function_lifecycle.py",
+      "targets": [
+        "git"
+      ]
+    },
+    {
       "disposition": "operator_supplied_process",
       "evidence": "run_benchmark_subprocess executes the operator-supplied benchmark argv.",
       "fingerprint": "a7a00b6582c387dc4d33143e851594d42e8d782d0fbaf51ffb5932e9b4f618cc",
@@ -773,8 +806,8 @@
     {
       "disposition": "closed_command_set",
       "evidence": "run_git executes only fixed Git commit, blob, tree, and archive probes used to bind and extract the two immutable experiment arms.",
-      "fingerprint": "573f3857da49479d189f81df50e7c37fa18ba235d6c519cf0879469aea2abffb",
-      "line": 111,
+      "fingerprint": "c01bc6dc821865a77ddf3563cbb36f65c3b034757d99aeb576d3e3832a0071af",
+      "line": 254,
       "path": "src/quality/performance_experiment.py",
       "targets": [
         "git"
@@ -783,8 +816,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "run_experiment_subprocess executes the immutable workload argv from the validated sealed experiment declaration.",
-      "fingerprint": "7f416189dcf6625eaa817c08dc02bcd80c42b9c2c6b6c9d9a3b18d2f39368d14",
-      "line": 124,
+      "fingerprint": "4e9fac74cd49182383277da9b88dc71bb403075714f0cd02c4453f0efd82f735",
+      "line": 267,
       "path": "src/quality/performance_experiment.py",
       "targets": [
         "sealed declaration workload argv"
@@ -863,8 +896,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "Same operator-supplied command in no-owner/no-deadline branch; now forwards optional stdout/stderr. It is not a closed internal Python target.",
-      "fingerprint": "4e6af971fa746e68240163e762143e9fd987ad3408bfea97db29c52655157c96",
-      "line": 903,
+      "fingerprint": "00545b2c7eb19fec1a4c727a7552d126a337b1b8203d7f6a6ab6632b1eeedbe5",
+      "line": 933,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -873,8 +906,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "Old single Popen becomes two branches: no redirection and stdout/stderr redirection. Both retain command/cwd/env/suspended-create flags and owned job-tree lifecycle; each requires a separate disposition.",
-      "fingerprint": "0f4f536a8afeee61c7f8832b666149172cc0b96995cdc61b2b181b86cfc8b181",
-      "line": 910,
+      "fingerprint": "3b20c85ce792e38e8f59994c7cfe015cf6afbe2c29be27b77b8045f7c08e7be8",
+      "line": 940,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -883,8 +916,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "Old single Popen becomes two branches: no redirection and stdout/stderr redirection. Both retain command/cwd/env/suspended-create flags and owned job-tree lifecycle; each requires a separate disposition.",
-      "fingerprint": "2f6486616983f75c565ff9c151e59310218f0cd7d6799e912c2eaad7597e686d",
-      "line": 912,
+      "fingerprint": "0fd5cdeeb0413001003546e14023f1dbc2f039d4f3da74ae5f83af158d212676",
+      "line": 942,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -902,6 +935,16 @@
     },
     {
       "disposition": "internal_python_target",
+      "evidence": "The stdio round trip runs sys.executable with the fixed repository execution/serve_research_tools.py entrypoint and a pytest-owned temporary database; no target is caller supplied.",
+      "fingerprint": "116ff52943a5d5039d59ff4cbcb7c9451b8ba9d386e7257e9b7fc0c6b5c23186",
+      "line": 448,
+      "path": "tests/test_ask_tool_server.py",
+      "targets": [
+        "execution/serve_research_tools.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
       "evidence": "The help probe runs sys.executable with the fixed repository execution/sqlite_bootstrap.py entrypoint and execution/audit_kpi_revision_shadow_census.py --help; neither target is caller supplied.",
       "fingerprint": "6406141a7ab18cc08103750f6e4651bc8187ccf9a289a556c15c5f8ed924bd31",
       "line": 87,
@@ -909,6 +952,26 @@
       "targets": [
         "execution/sqlite_bootstrap.py",
         "execution/audit_kpi_revision_shadow_census.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "The hermetic smoke test invokes only the fixed bench harness CLI using the test process's Python interpreter.",
+      "fingerprint": "92227ec2d74eaa1e08cd8df0bc94502a864214b3b14a0c39f9907d1f7adeb2e4",
+      "line": 38,
+      "path": "tests/test_bench_flows.py",
+      "targets": [
+        "execution/bench_flows.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "REFRESH_DCF is the checked-in execution/refresh_dcf.py path run via managed_python_prefix.",
+      "fingerprint": "70770e6fbb240839a5f2c7bf748c320fd941014cd233616fc12a8eb251f4cb10",
+      "line": 351,
+      "path": "tests/test_daily_fetch_brief_cross_process_writers.py",
+      "targets": [
+        "execution/refresh_dcf.py"
       ]
     },
     {
@@ -920,6 +983,29 @@
       "targets": [
         "cmd.exe",
         "cron/run_fetch_fmp_earnings_calendar.bat"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "The synthetic HTML-release registration regression invokes only fixed execution/sqlite_bootstrap.py and fixed execution/categorize_ir_uploads.py through sys.executable. Its explicit database, source directory and relative root belong to pytest tmp_path. It verifies retained publisher bytes and source URL without live state, network collection or model calls. Arguments cannot select a different script.",
+      "fingerprint": "a9be80fc7e4580eed44692048ed179e1ec9fc8a7c082364755e39957aaa43129",
+      "line": 240,
+      "path": "tests/test_ir_autofetch_registration.py",
+      "targets": [
+        "execution/sqlite_bootstrap.py",
+        "execution/categorize_ir_uploads.py"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "Test-only process runs configured WorkbookRuntime.node with the literal generated edits.mjs in tmp_path, no shell and timeout120s. The script imports @oai/artifact-tool plus a copied checked-in meli_workbook_adapter.mjs, edits synthetic workbooks and verifies recalculated/exported values and fixed Actuals. Runtime executable and dependency identity are configurable, not identity-verified by this test. No production data or application source is executed as a Python target.",
+      "fingerprint": "036481c70183f92c7f8c2e8a6bfd1cc1b2925064f2a3f0e01b9f303e9c1ac39d",
+      "line": 384,
+      "path": "tests/test_meli_workbook_recalculation.py",
+      "targets": [
+        "configured WorkbookRuntime.node",
+        "test-written edits.mjs",
+        "@oai/artifact-tool"
       ]
     },
     {
@@ -938,16 +1024,6 @@
       "fingerprint": "65f67f50bbc9c1244ddf5dad81b269cb35803c6b892709b8beb25a3b6ac9e097",
       "line": 1020,
       "path": "tests/test_reconcile_quality_baseline.py"
-    },
-    {
-      "disposition": "closed_command_set",
-      "evidence": "The collector runner executes only fixed read-only Git ls-files, rev-parse HEAD and status probes. The command vectors are internal literals, use a checked repository root and clean_local_git_env; no operator-selected executable or shell is used.",
-      "fingerprint": "5bd212a6475ce4ddd33c7a73f604246b2c424d2426452048e074ef6ce398b026",
-      "line": 120,
-      "path": "src/quality/function_lifecycle.py",
-      "targets": [
-        "git"
-      ]
     }
   ],
   "graph_provenance": {
@@ -955,7 +1031,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "6e001f2b7ce42f09a305da392a0577c6d62a8ce9237c1bc1ab20fe9304a24726",
+      "source_sha256": "4f41fb6f1a4eb6a11497ceaed4f68a6b2672e3144f2487e3269a095deabea6c2",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

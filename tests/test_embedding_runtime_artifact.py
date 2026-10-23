@@ -265,3 +265,148 @@ def test_fastembed_adapter_is_explicit_offline_and_verifies_after_load(
                 "onnxruntime": "4.5.6",
             }[name],
         )
+
+
+def test_fastembed_adapter_accepts_kwargs_only_local_files_only(tmp_path: Path) -> None:
+    """fastembed 0.9.0 ships local_files_only through **kwargs, not a named parameter.
+
+    The guard accepts that shape while keeping offline loading verifiable: the
+    constructed instance must report the resolved local-only mode, so the flag
+    cannot be silently swallowed by an unrelated **kwargs signature.
+    """
+    root = tmp_path / "runtime"
+    _files(root)
+    artifact = _build(root)
+    calls: list[dict[str, object]] = []
+
+    class KwargsTextEmbedding:
+        # Mirrors fastembed 0.9.0: local_files_only is not a named constructor
+        # parameter; the base class pops it from **kwargs and records the
+        # resolved mode as _local_files_only on the instance.
+        def __init__(
+            self,
+            model_name: str,
+            cache_dir: Path,
+            threads: int | None = None,
+            providers: list[str] | None = None,
+            cuda: bool = False,
+            device_ids: list[int] | None = None,
+            lazy_load: bool = False,
+            **kwargs: object,
+        ) -> None:
+            self._local_files_only = bool(kwargs.pop("local_files_only", False))
+            calls.append({"model_name": model_name, "local_files_only": self._local_files_only})
+
+    class KwargsModule:
+        TextEmbedding = KwargsTextEmbedding
+
+    encoder = FastEmbedEncoder.from_spec(
+        EmbeddingModelSpec(provider="fastembed", model="acme/local-model", dimensions=2),
+        runtime_artifact=artifact,
+        runtime_root=root,
+        sources=(
+            RuntimeArtifactSource(
+                logical_name="model/model.onnx",
+                role="model",
+                relative_path=Path("physical-model.bin"),
+            ),
+            RuntimeArtifactSource(
+                logical_name="tokenizer/tokenizer.json",
+                role="tokenizer",
+                relative_path=Path("physical-tokenizer.bin"),
+            ),
+        ),
+        importer=lambda name: KwargsModule(),
+        version_lookup=lambda name: {"fastembed": "1.2.3", "onnxruntime": "4.5.6"}[name],
+    )
+    assert isinstance(encoder, FastEmbedEncoder)
+    assert calls == [{"model_name": "acme/local-model", "local_files_only": True}]
+
+
+def test_fastembed_adapter_fails_closed_when_kwargs_swallow_local_files_only(
+    tmp_path: Path,
+) -> None:
+    """A **kwargs signature alone is not proof: an instance that never reports
+    local-only mode must fail closed instead of looking like an offline load."""
+    root = tmp_path / "runtime"
+    _files(root)
+    artifact = _build(root)
+
+    class SwallowingTextEmbedding:
+        def __init__(
+            self,
+            model_name: str,
+            cache_dir: Path,
+            threads: int | None = None,
+            providers: list[str] | None = None,
+            **kwargs: object,
+        ) -> None:
+            self.model_name = model_name
+
+    class SwallowingModule:
+        TextEmbedding = SwallowingTextEmbedding
+
+    with pytest.raises(LocalVectorCapabilityError, match="local-only loading"):
+        FastEmbedEncoder.from_spec(
+            EmbeddingModelSpec(provider="fastembed", model="acme/local-model", dimensions=2),
+            runtime_artifact=artifact,
+            runtime_root=root,
+            sources=(
+                RuntimeArtifactSource(
+                    logical_name="model/model.onnx",
+                    role="model",
+                    relative_path=Path("physical-model.bin"),
+                ),
+                RuntimeArtifactSource(
+                    logical_name="tokenizer/tokenizer.json",
+                    role="tokenizer",
+                    relative_path=Path("physical-tokenizer.bin"),
+                ),
+            ),
+            importer=lambda name: SwallowingModule(),
+            version_lookup=lambda name: {"fastembed": "1.2.3", "onnxruntime": "4.5.6"}[name],
+        )
+
+
+def test_fastembed_adapter_fails_closed_without_any_offline_parameter_path(
+    tmp_path: Path,
+) -> None:
+    """Neither a named local_files_only parameter nor **kwargs means offline
+    loading cannot be requested at all; the adapter must fail closed."""
+    root = tmp_path / "runtime"
+    _files(root)
+    artifact = _build(root)
+
+    class LegacyTextEmbedding:
+        def __init__(
+            self,
+            model_name: str,
+            cache_dir: Path,
+            threads: int | None = None,
+            providers: list[str] | None = None,
+        ) -> None:
+            self.model_name = model_name
+
+    class LegacyModule:
+        TextEmbedding = LegacyTextEmbedding
+
+    with pytest.raises(LocalVectorCapabilityError, match="local-only loading"):
+        FastEmbedEncoder.from_spec(
+            EmbeddingModelSpec(provider="fastembed", model="acme/local-model", dimensions=2),
+            runtime_artifact=artifact,
+            runtime_root=root,
+            sources=(
+                RuntimeArtifactSource(
+                    logical_name="model/model.onnx",
+                    role="model",
+                    relative_path=Path("physical-model.bin"),
+                ),
+                RuntimeArtifactSource(
+                    logical_name="tokenizer/tokenizer.json",
+                    role="tokenizer",
+                    relative_path=Path("physical-tokenizer.bin"),
+                ),
+            ),
+            importer=lambda name: LegacyModule(),
+            version_lookup=lambda name: {"fastembed": "1.2.3", "onnxruntime": "4.5.6"}[name],
+        )

@@ -42,8 +42,12 @@ python execution/sqlite_bootstrap.py execution/sync_thesis_state.py --apply \
 Run the checks with `make check-fast`. See [AGENTS.md](AGENTS.md) for the
 architecture and [DEFINITIONS.md](DEFINITIONS.md) for domain vocabulary.
 For a concise ownership map and the current architecture drift guard, see
-[docs/architecture/codebase_map.md](docs/architecture/codebase_map.md) and
-[`scripts/check_architecture_boundaries.py`](scripts/check_architecture_boundaries.py).
+[docs/architecture/codebase_map.md](docs/architecture/codebase_map.md),
+[`scripts/check_architecture_boundaries.py`](scripts/check_architecture_boundaries.py)
+(baseline-only seam allowlist), and
+[`scripts/check_architecture_ratchet.py`](scripts/check_architecture_ratchet.py)
+(metric ratchet over `docs/quality/architecture-ratchet.json` and
+`docs/quality/duplicates-ratchet.json`; the two checks always run together).
 
 ## Public boundary
 

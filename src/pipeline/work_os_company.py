@@ -25,12 +25,6 @@ from calendar_clock import calendar_today
 from dcf.availability import resolve_dcf_route_artifact
 from dcf.latest import latest_dcf_row
 from integrations.portfolio_tracker_client import LivePortfolio
-from pipeline.earnings_doorway import (
-    POST_EARNINGS_WINDOW_DAYS,
-    PRE_EARNINGS_WINDOW_DAYS,
-    EarningsDoorway,
-    resolve_earnings_doorway,
-)
 from pipeline.work_os_briefs import BriefLibraryItem, build_brief_descriptor
 from pipeline.work_os_decisions import (
     DecisionCondition,
@@ -42,6 +36,101 @@ from provenance.selection import selected_transcripts_relation
 from report.artifacts import load_report_artifact_index
 from report.models import BreakRuleEvaluation, KpiLedgerRow, SectionStatus, ThesisSection
 from report.sections import thesis as thesis_section
+
+# ---------------------------------------------------------------------------
+# Pure PRE/POST earnings doorway selection (folded in from the former
+# ``pipeline.earnings_doorway``). Routes are capability evidence: an absent
+# route means the corresponding persisted artifact is absent, so the result
+# can never create a speculative link.
+# ---------------------------------------------------------------------------
+
+PRE_EARNINGS_WINDOW_DAYS = 7
+POST_EARNINGS_WINDOW_DAYS = 90
+
+EarningsPhase = Literal["pre", "post"]
+EarningsDoorwayStatus = Literal["available", "pending", "unavailable"]
+
+
+class EarningsDoorway(BaseModel):
+    """One honest earnings doorway state for a company and event."""
+
+    model_config = ConfigDict(frozen=True)
+
+    status: EarningsDoorwayStatus
+    phase: EarningsPhase | None = None
+    event_date: date | None = None
+    label: str
+    route: str | None = None
+
+
+def resolve_earnings_doorway(
+    *,
+    today: date,
+    event_date: date | None,
+    pre_route: str | None,
+    post_route: str | None,
+) -> EarningsDoorway:
+    """Choose PRE or POST from dates and already-verified artifact routes.
+
+    ``today`` is injected so the caller owns the application calendar.
+    """
+
+    if event_date is None:
+        return EarningsDoorway(
+            status="unavailable",
+            label="Earnings artifact unavailable",
+        )
+
+    days_after_event = (today - event_date).days
+    if days_after_event < -PRE_EARNINGS_WINDOW_DAYS or days_after_event > (
+        POST_EARNINGS_WINDOW_DAYS
+    ):
+        return EarningsDoorway(
+            status="unavailable",
+            event_date=event_date,
+            label="Earnings artifact unavailable",
+        )
+
+    if days_after_event == 0 and post_route is not None:
+        return EarningsDoorway(
+            status="available",
+            phase="post",
+            event_date=event_date,
+            label="Post-earnings readout →",
+            route=post_route,
+        )
+
+    if days_after_event <= 0:
+        if pre_route is not None:
+            return EarningsDoorway(
+                status="available",
+                phase="pre",
+                event_date=event_date,
+                label="Pre-earnings brief →",
+                route=pre_route,
+            )
+        return EarningsDoorway(
+            status="pending",
+            phase="pre",
+            event_date=event_date,
+            label="Pre-earnings brief pending",
+        )
+
+    if post_route is not None:
+        return EarningsDoorway(
+            status="available",
+            phase="post",
+            event_date=event_date,
+            label="Post-earnings readout →",
+            route=post_route,
+        )
+    return EarningsDoorway(
+        status="pending",
+        phase="post",
+        event_date=event_date,
+        label="Post-earnings readout pending",
+    )
+
 
 CoverageRole = Literal["portfolio", "evaluation", "unknown"]
 KpiProjectionState = Literal[

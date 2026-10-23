@@ -8,6 +8,7 @@ state.
 
 from __future__ import annotations
 
+import concurrent.futures
 import hashlib
 import sqlite3
 from collections.abc import Callable
@@ -192,6 +193,27 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             render_fallback_page(db_path, doc_id, fragment=fragment),
             mimetype="text/html",
         )
+
+    @app.route("/source/version/<document_version_id>", methods=["GET"])
+    def source_version_viewer(document_version_id: str):
+        """Resolve one sealed evidence citation to its provenance chain.
+
+        The sealed Ask lane cites ``/source/version/<document_version_id>?node=…``
+        (``src/ask/sealed_retrieval.py``); this is that destination. An unknown
+        document version, or a ``node`` that is not part of it, 404s honestly
+        rather than rendering a fabricated chain.
+        """
+        from pipeline.source_viewers import render_document_version_page
+
+        html = render_document_version_page(
+            db_path,
+            document_version_id,
+            node_id=request.args.get("node"),
+            fragment=request.args.get("fragment") == "1",
+        )
+        if html is None:
+            abort(404)
+        return Response(html, mimetype="text/html")
 
     @app.route("/source/<int:doc_id>/page/<int:page>.png", methods=["GET"])
     def source_pdf_page_image(doc_id: int, page: int):
@@ -639,16 +661,35 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             validated = context.safe_ticker(ticker)
         except ValueError:
             abort(400)
-        tracker_alive, tracker_url = context.probe_tracker()
-        live = (
-            context.fetch_live_portfolio()
-            if tracker_alive
-            else LivePortfolio(
-                available=False,
-                api_url=tracker_url,
-                error="tracker liveness probe failed (connection refused or timed out)",
-            )
+        # The liveness probe and the live-portfolio fetch are independent
+        # round-trips to the same tracker, so they overlap on a request-scoped
+        # 2-worker pool: a slow-but-alive tracker costs ONE window instead of
+        # probe-then-fetch (M2 audit F7), and the request still issues at most
+        # ONE probe. The probe keeps gating the payload: when it fails
+        # (connection refused or timed out) the response carries the exact
+        # same prompt degraded envelope as before and never waits for the
+        # in-flight fetch — the fetch result is discarded and its worker
+        # drains on its own bounded per-call timeout.
+        probe_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="desk-tracker"
         )
+        try:
+            probe_future = probe_pool.submit(context.probe_tracker)
+            live_future = probe_pool.submit(context.fetch_live_portfolio)
+            tracker_alive, tracker_url = probe_future.result()
+            if tracker_alive:
+                live = live_future.result()
+            else:
+                live = LivePortfolio(
+                    available=False,
+                    api_url=tracker_url,
+                    error="tracker liveness probe failed (connection refused or timed out)",
+                )
+        finally:
+            # wait=False: a failed probe must not block the response on the
+            # still-running fetch (bounded by its own per-call timeout); on
+            # the alive path both futures are already resolved.
+            probe_pool.shutdown(wait=False, cancel_futures=True)
         try:
             payload = build_company_desk(
                 repo_root,

@@ -11,7 +11,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -22,6 +22,7 @@ from provenance.source_fact_publication import (
     digest_text,
     verify_source_fact_publication,
 )
+from runtime.deterministic import as_utc as _utc
 
 SOURCE_FACT_STREAM_ID = "source-fact-publication-stream-v1"
 PUBLICATION_EVENT_VERSION = "source_fact_publication_event.v1"
@@ -1051,12 +1052,6 @@ def _datetime(value: object) -> datetime:
     except (TypeError, ValueError) as exc:
         raise ValueError(f"invalid stream clock: {value!r}") from exc
     return _utc(parsed)
-
-
-def _utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
 
 
 def _optional_int(value: object | None) -> int | None:

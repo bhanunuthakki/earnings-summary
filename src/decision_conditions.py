@@ -75,7 +75,7 @@ from typing import TYPE_CHECKING, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, field_validator
 
-from clock import now_iso
+from clock import now_iso as _now_iso
 from llm.cli import is_hard_stop
 from llm.structured import StructuredParseError, call_llm_structured
 from models.facts import Unit
@@ -789,11 +789,6 @@ def _open(db_path: Path | str) -> sqlite3.Connection | None:
         return conn
     except (sqlite3.Error, OSError):
         return None
-
-
-def _now_iso() -> str:
-    # Naive-UTC, the repo-wide convention.
-    return now_iso()
 
 
 def record_socratic_decisions(

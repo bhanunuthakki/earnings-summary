@@ -37,12 +37,24 @@ from provenance.financial_statement_admission import (
     verify_reviewed_financial_role,
 )
 from provenance.immutable_artifact import read_stable_artifact
-from provenance.metric_ontology import CanonicalDimension, MetricOntology, canonical_json
-from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
+from provenance.metric_ontology import (
+    CanonicalDimension,
+    MetricOntology,
+    canonical_json,
+    sha256_json,
+)
+from provenance.research_snapshot import (
+    DeferredPdfPageError,
+    ResearchSnapshotRequest,
+    require_included_pdf_pages,
+    verify_research_snapshot,
+)
 from provenance.sec_package_subject_witness import (
     SecPackageSubjectWitnessError,
     verify_sec_package_subject_witness,
 )
+from runtime.deterministic import as_utc as _utc
+from search.canonical_fact_projection import read_canonical_facts_by_id
 
 
 class InputEvidenceError(ValueError):
@@ -352,10 +364,6 @@ def canonical_digest(value: object) -> str:
     ).hexdigest()
 
 
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
-
-
 def _time(raw: object) -> datetime:
     return _utc(datetime.fromisoformat(str(raw).replace("Z", "+00:00")))
 
@@ -539,7 +547,24 @@ def verify_source_coverage(
     about quarterly fact age. A newer inventory invalidates the old proof even
     when the old inventory is within that window. No FMP cache participates.
     """
-    admission = verify_research_snapshot(conn, request.research_snapshot_id)
+    try:
+        admission = verify_research_snapshot(conn, request.research_snapshot_id)
+    except ValueError as exc:
+        # The snapshot owner uses ValueError for both absence and corruption.
+        # Normalize only missing state; a present but invalid seal still fails
+        # through its original verifier. No exception text becomes a reason code.
+        state = conn.execute(
+            "SELECT seal.research_snapshot_id FROM research_snapshot_headers header "
+            "LEFT JOIN research_snapshot_seals seal "
+            "ON seal.research_snapshot_id=header.research_snapshot_id "
+            "WHERE header.research_snapshot_id=?",
+            (request.research_snapshot_id,),
+        ).fetchone()
+        if state is None:
+            raise InputEvidenceError("research_snapshot_missing") from exc
+        if state[0] is None:
+            raise InputEvidenceError("research_snapshot_unsealed") from exc
+        raise
     row = conn.execute(
         "SELECT request_json FROM research_snapshot_headers WHERE research_snapshot_id=?",
         (request.research_snapshot_id,),
@@ -675,18 +700,68 @@ def verify_model_inputs(
         if effective_inputs.get(key) != assumption.value:
             raise InputEvidenceError(f"assumption_value_mismatch:{key}")
     snapshot, member_sha, inventories = verify_source_coverage(conn, request, cutoff)
+    analysis = snapshot.research_universe.analysis_scope
+    pdf_scopes = analysis.request.report_pdf_tables if analysis is not None else ()
+    try:
+        require_included_pdf_pages(
+            conn,
+            pdf_scopes,
+            observation_ids=tuple(ref.observation_id for ref in request.facts.values()),
+            cutoff=cutoff,
+        )
+    except DeferredPdfPageError as exc:
+        raise InputEvidenceError("model_input_deferred_pdf_page_used") from exc
     reader, resolver, ontology = (
         FactReadModel(conn),
         CanonicalFactResolutionEngine(conn),
         MetricOntology(conn),
     )
+    cell_ids = tuple(
+        dict.fromkeys(request.facts[item.key].canonical_metric_cell_id for item in requirements)
+    )
+    projected = dict(
+        zip(
+            cell_ids,
+            read_canonical_facts_by_id(
+                conn,
+                generation_id=snapshot.canonical_fact_projection_run_id,
+                canonical_metric_cell_ids=cell_ids,
+            ),
+            strict=True,
+        )
+    )
+    selections = {
+        read.canonical_metric_cell_id: read for read in resolver.read_as_known(cell_ids, cutoff)
+    }
+    # Original resolution revisions are checked below against the verified
+    # snapshot membership and its sealed projection. A later resolution can
+    # select the same observation; verify its current publication once.
+    bundles = {
+        read.bundle.observation.observation_id: read.bundle
+        for read in selections.values()
+        if read.bundle is not None
+    }
+    # Valid references reuse the resolver's exact admitted context. A wrong
+    # reference still crosses the normal admission boundary before rejection.
+    unmatched = tuple(
+        dict.fromkeys(
+            request.facts[item.key].observation_id
+            for item in requirements
+            if request.facts[item.key].observation_id not in bundles
+        )
+    )
+    bundles.update(
+        (bundle.observation.observation_id, bundle)
+        for bundle in reader.required_provenance_bundles(unmatched, cutoff=cutoff)
+    )
     inputs: list[VerifiedInput] = []
     for requirement in requirements:
         ref = request.facts[requirement.key]
-        resolution = resolver.as_known(ref.canonical_metric_cell_id, cutoff)
+        hit = projected[ref.canonical_metric_cell_id]
+        resolution = selections[ref.canonical_metric_cell_id].resolution
         definition = ontology.metric_definition_as_known(ref.metric_id, cutoff)
         binding = ontology.binding_as_known(ref.observation_id, cutoff)
-        bundle = reader.provenance_bundle(ref.observation_id, cutoff=cutoff)
+        bundle = bundles[ref.observation_id]
         fact = bundle.observation
         identity = conn.execute(
             "SELECT cell.metric_id,cell.dimension_count,seal.dimension_set_json,"
@@ -721,13 +796,19 @@ def verify_model_inputs(
             or len({item.axis_id for item in dimensions}) != len(dimensions)
             or member is None
             or str(member[0]) != ref.canonical_resolution_revision_id
+            or hit is None
+            or hit.lineage.get("resolution_snapshot_id")
+            != snapshot.canonical_fact_resolution_snapshot_id
+            or hit.lineage.get("ontology_snapshot_id") != snapshot.ontology_snapshot_id
+            or hit.lineage.get("canonical_resolution_revision_id")
+            != ref.canonical_resolution_revision_id
+            or hit.lineage.get("selected_observation_id") != ref.observation_id
         ):
             raise InputEvidenceError(f"input_outside_canonical_snapshot:{requirement.key}")
         if (
             resolution is None
             or resolution.status != "resolved"
             or resolution.selected_observation_id != ref.observation_id
-            or resolution.canonical_resolution_revision_id != ref.canonical_resolution_revision_id
             or binding is None
             or binding.binding_status != "bound"
             or binding.canonical_metric_cell_id != ref.canonical_metric_cell_id
@@ -747,6 +828,29 @@ def verify_model_inputs(
             or bundle.cell.scope_security_id is not None
         ):
             raise InputEvidenceError(f"input_semantic_admission_failed:{requirement.key}")
+        # A current, individually admissible definition or binding can still
+        # differ from the report's saved selection. Compare the exact retained
+        # identities and payloads; role/value equality does not prove parity.
+        mapping = (
+            ontology.mapping_as_known(binding.source_component_id, cutoff)
+            if binding.source_component_id is not None
+            else None
+        )
+        if (
+            hit.lineage.get("metric_definition_revision_id")
+            != definition.metric_definition_revision_id
+            or hit.lineage.get("metric_definition_commitment_sha256")
+            != sha256_json(definition.commitment_payload)
+            or hit.lineage.get("binding_revision_id") != binding.binding_revision_id
+            or hit.lineage.get("binding_commitment_sha256")
+            != sha256_json(binding.commitment_payload)
+            or mapping is None
+            or mapping.mapping_revision_id != binding.mapping_revision_id
+            or hit.lineage.get("mapping_revision_id") != mapping.mapping_revision_id
+            or hit.lineage.get("mapping_commitment_sha256")
+            != sha256_json(mapping.commitment_payload)
+        ):
+            raise InputEvidenceError(f"input_snapshot_context_mismatch:{requirement.key}")
         if requirement.role.startswith("cashflow_equity."):
             reviews = definition.scope_constraints.get("financial_statement_reviews")
             try:
@@ -787,6 +891,15 @@ def verify_model_inputs(
             not in snapshot.research_universe.document_version_ids
         ):
             raise InputEvidenceError(f"input_outside_source_universe:{requirement.key}")
+        try:
+            require_included_pdf_pages(
+                conn,
+                pdf_scopes,
+                evidence_node_ids=(bundle.evidence.evidence_node_id,),
+                cutoff=cutoff,
+            )
+        except DeferredPdfPageError as exc:
+            raise InputEvidenceError("model_input_deferred_pdf_page_used") from exc
         if requirement.annual and (
             fact.period_start is None
             or not 350 <= (fact.period_end - fact.period_start).days <= 380

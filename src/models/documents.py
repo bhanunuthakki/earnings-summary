@@ -40,7 +40,7 @@ class SourceQualityTier(StrEnum):
     """Provenance tier — the read-side loader prefers higher tiers.
 
     Mirrors migration 0054's _BACKFILL_TIER_BY_SOURCE_TYPE mapping and the
-    loaders' SOURCE_QUALITY_TIER_RANK. Keep both in sync when adding a tier.
+    SOURCE_QUALITY_TIER_RANK below. Keep both in sync when adding a tier.
     """
 
     SEC_OFFICIAL = "sec_official"
@@ -50,8 +50,24 @@ class SourceQualityTier(StrEnum):
     # Lowest tier: audited figures lifted from an S-1 before the issuer has filed
     # any 10-Q/10-K. The same numbers will be re-reported (and possibly recast)
     # in real filings, so any FMP/SEC row for the period must win. Maps to rank 0
-    # in loaders.SOURCE_QUALITY_TIER_RANK (below yfinance_fallback).
+    # in SOURCE_QUALITY_TIER_RANK (below yfinance_fallback).
     S1_PROVISIONAL = "s1_provisional"
+
+
+# Higher rank wins. Mirrors the documents.source_quality_tier enum
+# in migration 0053. Unknown tiers fall back to 0 (lowest).
+#
+# `s1_provisional` is audited data lifted from an S-1 before the issuer files
+# any 10-Q/10-K; it sits at rank 0 so a real FMP/SEC row always supersedes it
+# for the same logical key. (Rank 0 also happens to be the unknown-tier
+# fallback, but it's listed explicitly so the intent survives a refactor.)
+SOURCE_QUALITY_TIER_RANK: dict[str, int] = {
+    "sec_official": 4,
+    "fmp_normalized": 3,
+    "llm_extracted": 2,
+    "yfinance_fallback": 1,
+    "s1_provisional": 0,
+}
 
 
 _SOURCE_TYPE_TO_TIER: dict[SourceType, SourceQualityTier] = {

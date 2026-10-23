@@ -13,6 +13,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from typing import Annotated, Literal, Self
 
 from pydantic import (
@@ -25,19 +26,16 @@ from pydantic import (
     model_validator,
 )
 
+from runtime import deterministic
+from runtime.deterministic import require_sha256
+
 FactTable = Literal["financial_facts", "kpi_facts"]
 MatchCheck = Literal["pass", "fail", "not_evaluated"]
 MatchOutcome = Literal["accepted", "retryable", "terminal"]
 _SHA256_LENGTH = 64
 
 
-def _sha256(value: str) -> str:
-    normalized = value.lower()
-    if len(normalized) != _SHA256_LENGTH or any(
-        character not in "0123456789abcdef" for character in normalized
-    ):
-        raise ValueError("must be a lowercase SHA-256 hex digest")
-    return normalized
+_sha256 = partial(require_sha256, message="must be a lowercase SHA-256 hex digest")
 
 
 def _optional_sha256(value: str | None) -> str | None:
@@ -55,12 +53,7 @@ class CanonicalJSONObject(RootModel[dict[str, JsonValue]]):
 
     @property
     def canonical_json(self) -> str:
-        return json.dumps(
-            self.root,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
+        return deterministic.canonical_json(self.root)
 
     @property
     def canonical_sha256(self) -> str:
@@ -98,12 +91,7 @@ class CompanyFactsRelocatedLocator(BaseModel):
 
     @property
     def canonical_json(self) -> str:
-        return json.dumps(
-            self.model_dump(mode="json"),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
+        return deterministic.canonical_json(self.model_dump(mode="json"))
 
     @property
     def canonical_sha256(self) -> str:

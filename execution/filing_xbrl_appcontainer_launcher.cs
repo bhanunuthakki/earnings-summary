@@ -15,7 +15,7 @@ internal static class FilingXbrlAppContainerLauncher
 {
     private const string Contract = "earnings-xbrl-os-sandbox.v1";
     private const string ProfileName = "EarningsSummaryFilingXbrlV2";
-    private const string MutexName = "Local\\EarningsSummaryFilingXbrlLauncherV2";
+    private const string MutexName = "Global\\EarningsSummaryFilingXbrlLauncherV2";
     private const int ErrorAlreadyExistsHresult = unchecked((int)0x800700B7);
     private const uint ExtendedStartupInfoPresent = 0x00080000;
     private const uint CreateNoWindow = 0x08000000;
@@ -274,7 +274,7 @@ internal static class FilingXbrlAppContainerLauncher
         try
         {
             Invocation invocation = Parse(args);
-            using (Mutex mutex = new Mutex(false, MutexName))
+            using (Mutex mutex = OpenInvocationMutex())
             {
                 if (!mutex.WaitOne(TimeSpan.FromMinutes(15)))
                 {
@@ -300,6 +300,46 @@ internal static class FilingXbrlAppContainerLauncher
                 (win32 == null ? 0 : win32.NativeErrorCode) +
                 ",\"stage\":\"" + (win32 == null ? "managed" : win32.Stage) + "\"}");
             return 125;
+        }
+    }
+
+    private static Mutex OpenInvocationMutex()
+    {
+        SecurityIdentifier system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+        SecurityIdentifier administrators = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+        MutexSecurity security = new MutexSecurity();
+        security.SetOwner(administrators);
+        security.SetAccessRuleProtection(true, false);
+        security.AddAccessRule(new MutexAccessRule(system, MutexRights.FullControl, AccessControlType.Allow));
+        security.AddAccessRule(new MutexAccessRule(administrators, MutexRights.FullControl, AccessControlType.Allow));
+        bool created;
+        Mutex mutex = new Mutex(false, MutexName, out created, security);
+        try
+        {
+            MutexSecurity actual = mutex.GetAccessControl();
+            SecurityIdentifier owner = (SecurityIdentifier)actual.GetOwner(typeof(SecurityIdentifier));
+            if (!actual.AreAccessRulesProtected || (owner != system && owner != administrators))
+                throw new InvalidOperationException("sandbox global mutex ownership changed");
+            HashSet<string> allowed = new HashSet<string>();
+            AuthorizationRuleCollection rules = actual.GetAccessRules(true, true, typeof(SecurityIdentifier));
+            if (rules.Count != 2)
+                throw new InvalidOperationException("sandbox global mutex grants changed");
+            foreach (MutexAccessRule rule in rules)
+            {
+                if (rule.AccessControlType != AccessControlType.Allow || rule.IsInherited ||
+                    rule.InheritanceFlags != InheritanceFlags.None || rule.PropagationFlags != PropagationFlags.None ||
+                    rule.MutexRights != MutexRights.FullControl)
+                    throw new InvalidOperationException("sandbox global mutex rights changed");
+                allowed.Add(rule.IdentityReference.Value);
+            }
+            if (!allowed.SetEquals(new string[] { system.Value, administrators.Value }))
+                throw new InvalidOperationException("sandbox global mutex principals changed");
+            return mutex;
+        }
+        catch
+        {
+            mutex.Dispose();
+            throw;
         }
     }
 

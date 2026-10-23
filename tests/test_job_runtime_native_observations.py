@@ -103,6 +103,8 @@ class Kernel:
             "TerminateProcess",
             "IsProcessInJob",
             "CloseHandle",
+            "WaitForSingleObject",
+            "GetProcessTimes",
             "CreateToolhelp32Snapshot",
             "Thread32First",
             "Thread32Next",
@@ -163,6 +165,7 @@ class Kernel:
     def context(self) -> ExitStack:
         stack = ExitStack()
         stack.enter_context(patch.object(job_runtime.os, "name", "nt"))
+        stack.enter_context(patch.object(job_runtime.sys, "platform", "win32"))
         stack.enter_context(patch.object(ctypes, "WinDLL", side_effect=self.dll, create=True))
         stack.enter_context(
             patch.object(ctypes, "get_last_error", side_effect=lambda: self.last_error, create=True)
@@ -439,7 +442,7 @@ class NativeObservationTests(unittest.TestCase):
         self.assertEqual(failure.exception.winerror, 5)
         self.assertEqual(buffer.retention_error_type, "MemoryError")
 
-    def test_default_close_false_bool_and_exception_keep_existing_contract(self) -> None:
+    def test_default_close_failure_retains_handle_without_automatic_retry(self) -> None:
         for close_error in (None, NativeError(88)):
             with self.subTest(close_error=close_error):
                 k = Kernel()
@@ -447,16 +450,14 @@ class NativeObservationTests(unittest.TestCase):
                 job = runtime_test_api.windows_job(40)
                 if close_error is not None:
                     k.close_errors[40] = close_error
-                with k.context():
-                    if close_error is None:
-                        self.assertIsNone(job.close())
-                    else:
-                        with self.assertRaises(NativeError) as failure:
-                            job.close()
-                        self.assertIs(failure.exception, close_error)
-                    self.assertIsNone(job.close())
+                with k.context(), self.assertRaises(NativeError) as failure:
+                    job.close()
+                if close_error is None:
+                    self.assertEqual(failure.exception.winerror, k.close_last_error)
+                else:
+                    self.assertIs(failure.exception, close_error)
                 self.assertEqual(k.closed(), [40])
-                self.assertEqual(vars(job)["_handle"], 0)
+                self.assertEqual(vars(job)["_handle"], 40)
 
     def test_default_cleanup_error_precedence_keeps_existing_contract(self) -> None:
         k = Kernel()

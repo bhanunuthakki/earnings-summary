@@ -8,6 +8,7 @@ import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 import requests
@@ -240,6 +241,9 @@ def test_companyfacts_fetch_uses_dynamic_sec_identity_header(
     class Response:
         content = b"{}"
         status_code = 200
+        # Conditional-GET fetches consume the validators the server served;
+        # this stub models a response that carried none.
+        headers: ClassVar[dict[str, str]] = {}
 
         @staticmethod
         def raise_for_status() -> None:
@@ -262,6 +266,9 @@ def test_companyfacts_fetch_uses_dynamic_sec_identity_header(
 
     fetched = sec_xbrl.fetch_companyfacts("0000000001", timeout=17)
 
+    # An unconditional GET returns payload bytes; the 304 shape only exists
+    # for conditional requests that carry receipt validators.
+    assert isinstance(fetched, FetchedCompanyFacts)
     assert fetched.raw_body == b"{}"
     assert seen == [
         (

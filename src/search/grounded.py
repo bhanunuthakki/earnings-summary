@@ -10,16 +10,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from provenance.issuer_registry import evidence_document_relation
+from runtime.deterministic import require_sha256
+from search.lexical_query import kpi_alias_expansions, plan_lexical_query
 
 _SHA_LEN = 64
 MembershipStatus = Literal["included", "missing", "quarantined"]
@@ -28,11 +30,7 @@ Outcome = Literal["succeeded", "failed"]
 IndexKind = Literal["lexical", "vector"]
 
 
-def _sha(value: str) -> str:
-    value = value.lower()
-    if len(value) != _SHA_LEN or any(char not in "0123456789abcdef" for char in value):
-        raise ValueError("must be a lowercase SHA-256 digest")
-    return value
+_sha = partial(require_sha256, message="must be a lowercase SHA-256 digest")
 
 
 def _optional_sha(value: str | None) -> str | None:
@@ -620,12 +618,12 @@ class HybridRetriever:
         self, query: str, manifest_id: str, filters: SearchFilter, limit: int
     ) -> list[VectorCandidate]:
         self._require_fts5()
-        fts_query = _fts_query(query)
-        if not fts_query:
+        plan = plan_lexical_query(query, aliases=kpi_alias_expansions(self._conn))
+        if plan is None:
             return []
         where, params = _filter_sql(filters)
         document_relation = evidence_document_relation(self._conn)
-        rows = self._conn.execute(
+        sql = (
             "SELECT lex.chunk_id FROM search_lexical_chunks AS lex "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "JOIN search_chunks AS chunk ON chunk.chunk_id = lex.chunk_id "
             "JOIN evidence_nodes AS node ON node.node_id = chunk.evidence_node_id "
@@ -635,9 +633,13 @@ class HybridRetriever:
             "JOIN evidence_source_observations AS source ON source.observation_id = doc.observation_id "
             "WHERE search_lexical_chunks MATCH ? AND chunk.manifest_id = ? "
             + where
-            + " ORDER BY bm25(search_lexical_chunks), lex.chunk_id LIMIT ?",
-            (fts_query, manifest_id, *params, limit),
-        ).fetchall()
+            + " ORDER BY bm25(search_lexical_chunks), lex.chunk_id LIMIT ?"
+        )
+        # AND-biased first; the OR fallback only runs on an empty result so
+        # recall never drops below the pre-planner OR-of-all-tokens behavior.
+        rows = self._conn.execute(sql, (plan.match_all, manifest_id, *params, limit)).fetchall()
+        if not rows:
+            rows = self._conn.execute(sql, (plan.match_any, manifest_id, *params, limit)).fetchall()
         return [VectorCandidate(chunk_id=str(row[0]), score=0.0) for row in rows]
 
     def _bundle(
@@ -812,13 +814,6 @@ def _filter_sql(filters: SearchFilter) -> tuple[str, list[object]]:
             (filters.knowledge_cutoff, filters.knowledge_cutoff, filters.knowledge_cutoff)
         )
     return "".join(parts), params
-
-
-def _fts_query(query: str) -> str:
-    """Compile untrusted natural language into inert FTS5 token operands."""
-
-    tokens = list(dict.fromkeys(re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]+", query)))
-    return " OR ".join(f'"{token}"' for token in tokens)
 
 
 def _dt(value: object) -> datetime | None:

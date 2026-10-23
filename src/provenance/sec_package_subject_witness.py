@@ -11,6 +11,7 @@ import sqlite3
 from datetime import UTC, datetime
 from typing import cast
 
+from filings.sec_financial_classification import parse_sec_subject_period_text
 from provenance.issuer_registry import evidence_document_relation
 
 _SUBJECT_DOCUMENT_QUERIES = {
@@ -135,7 +136,7 @@ def verify_sec_package_subject_witness(
             raise SecPackageSubjectWitnessError("financial_reporting_subject_period_mismatch")
     else:
         text = detail("subject_period_end_text")
-        parsed = datetime.strptime(text.replace(",", ""), "%B %d %Y").date()
+        parsed = parse_sec_subject_period_text(text)
         if period is None or parsed != _time(period).date() or text not in heading:
             raise SecPackageSubjectWitnessError("financial_reporting_subject_period_mismatch")
     document = conn.execute(

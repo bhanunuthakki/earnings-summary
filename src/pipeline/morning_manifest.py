@@ -21,7 +21,22 @@ class ArgumentProfile(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class StageSpec:
-    """Static stage contract; runtime values are expanded by the orchestrator."""
+    """Static stage contract; runtime values are expanded by the orchestrator.
+
+    ``db_writer`` declares whether the stage's subprocess can hold a write
+    transaction on the pipeline's SQLite database file. The lane scheduler
+    never runs two ``db_writer`` stages concurrently (single-writer discipline);
+    read/compute stages — verified to touch the DB through read-only
+    connections only, persisting to file caches instead — may overlap a writer.
+
+    ``lane_dependencies`` adds full-run scheduling dependencies beyond
+    ``selection_dependencies``. They gate lane dispatch in a normal run but are
+    deliberately excluded from ``--only``/focused-selection closure expansion:
+    a stage that is safely runnable standalone (e.g. the feed render for a
+    re-render-only pass) may still have to follow an earlier stage when the
+    whole pipeline runs (the feed renders the day's alerts, so a full run must
+    not dispatch it before the trigger sweep settles).
+    """
 
     key: str
     label: str
@@ -31,6 +46,8 @@ class StageSpec:
     selection_dependencies: tuple[str, ...]
     skip_flags: tuple[str, ...] = ()
     argument_profile: ArgumentProfile = ArgumentProfile.NONE
+    db_writer: bool = True
+    lane_dependencies: tuple[str, ...] = ()
 
 
 STAGE_PREFLIGHT = "stage_preflight"
@@ -57,9 +74,12 @@ STAGE_VALIDATE = "stage_3_validate"
 
 
 # Ordering, activation, dependencies, command shape, and timeout live together.
-# Selection dependencies control focused ``--only`` expansion only; they never
-# short-circuit a normal run because the pipeline's best-effort contract always
-# attempts every active stage even after an upstream failure.
+# Dependencies control two distinct things. Selection dependencies (plus the
+# optional lane supplements) drive focused ``--only`` expansion and full-run
+# lane scheduling respectively; they never short-circuit a normal run because
+# the pipeline's best-effort contract always attempts every active stage even
+# after an upstream failure — a settled failure stops delaying a dependent,
+# it never cancels it.
 STAGE_MANIFEST: tuple[StageSpec, ...] = (
     StageSpec(
         STAGE_PREFLIGHT,
@@ -68,6 +88,10 @@ STAGE_MANIFEST: tuple[StageSpec, ...] = (
         (),
         30,
         (),
+        (),
+        ArgumentProfile.NONE,
+        # Environment checks only: reads config/paths, never the pipeline DB.
+        False,
     ),
     StageSpec(
         STAGE_NEWS,
@@ -128,6 +152,9 @@ STAGE_MANIFEST: tuple[StageSpec, ...] = (
         (STAGE_PREFLIGHT,),
         ("skip_triggers",),
         ArgumentProfile.DB_PATH,
+        # Read-only DB pass materializing data/cockpit_fundamentals.json and
+        # the cockpit file-input caches; never opens a writer connection.
+        False,
     ),
     StageSpec(
         STAGE_DOCUMENT_EVIDENCE,
@@ -168,6 +195,9 @@ STAGE_MANIFEST: tuple[StageSpec, ...] = (
         (STAGE_LIFECYCLE, STAGE_REPRICE),
         ("skip_triggers",),
         ArgumentProfile.DB_PATH,
+        # Read-only DB pass materializing data/candidate_fit.json (plus the
+        # ETF score cache); never opens a writer connection.
+        False,
     ),
     StageSpec(
         STAGE_FACTOR_PROXIES,
@@ -178,6 +208,8 @@ STAGE_MANIFEST: tuple[StageSpec, ...] = (
         (STAGE_PREFLIGHT,),
         ("skip_triggers",),
         ArgumentProfile.REPO_ROOT_FROM_DB,
+        # No DB at all: fetches ETF price series into data/factor_proxies/.
+        False,
     ),
     StageSpec(
         STAGE_POSITION_GUARD,
@@ -188,6 +220,8 @@ STAGE_MANIFEST: tuple[StageSpec, ...] = (
         (STAGE_LIFECYCLE,),
         ("skip_triggers",),
         ArgumentProfile.DB_PATH,
+        # Read-only DB pass materializing the position-guard cache file.
+        False,
     ),
     StageSpec(
         STAGE_RISK_SNAPSHOT,
@@ -268,6 +302,14 @@ STAGE_MANIFEST: tuple[StageSpec, ...] = (
         (STAGE_PREFLIGHT,),
         (),
         ArgumentProfile.DB_PATH,
+        # Read-only render of the persisted alert/inbox stream into
+        # data/dashboard/feed.html; never opens a writer connection.
+        False,
+        # Selection-wise the feed is standalone (a re-render-only pass runs it
+        # alone), but in a FULL run it renders the day's alerts, decisions, and
+        # queued-action drafts — all of which are transitive inputs of the
+        # trigger sweep — so lanes must not dispatch it before stage 1 settles.
+        (STAGE_TRIGGERS,),
     ),
     StageSpec(
         STAGE_VALIDATE,
@@ -283,7 +325,8 @@ STAGE_MANIFEST: tuple[StageSpec, ...] = (
 
 
 def validate_manifest(specs: tuple[StageSpec, ...] = STAGE_MANIFEST) -> None:
-    """Reject duplicate, missing, cyclic, or forward selection dependencies."""
+    """Reject duplicate, missing, cyclic, or forward dependencies."""
+
     keys = [spec.key for spec in specs]
     if len(keys) != len(set(keys)):
         raise ValueError("morning pipeline manifest contains duplicate stage keys")
@@ -291,11 +334,51 @@ def validate_manifest(specs: tuple[StageSpec, ...] = STAGE_MANIFEST) -> None:
     for spec in specs:
         if spec.timeout_s <= 0:
             raise ValueError(f"{spec.key}: timeout must be positive")
-        for dependency in spec.selection_dependencies:
-            if dependency not in positions:
-                raise ValueError(f"{spec.key}: unknown selection dependency {dependency}")
-            if positions[dependency] >= positions[spec.key]:
-                raise ValueError(f"{spec.key}: selection dependency {dependency} must precede it")
+        for field_name, dependencies in (
+            ("selection_dependencies", spec.selection_dependencies),
+            ("lane_dependencies", spec.lane_dependencies),
+        ):
+            for dependency in dependencies:
+                if dependency not in positions:
+                    raise ValueError(f"{spec.key}: unknown {field_name} dependency {dependency}")
+                if positions[dependency] >= positions[spec.key]:
+                    raise ValueError(
+                        f"{spec.key}: {field_name} dependency {dependency} must precede it"
+                    )
+
+
+def selection_closure(target: str, specs: tuple[StageSpec, ...] = STAGE_MANIFEST) -> frozenset[str]:
+    """Return ``target`` plus every transitive selection dependency.
+
+    Deliberately excludes ``lane_dependencies``: focused selection answers
+    "what is safe to run standalone", which the lane supplements never gate.
+    """
+
+    by_key = {spec.key: spec for spec in specs}
+    if target not in by_key:
+        raise ValueError(f"unknown stage key: {target}")
+    selected: set[str] = set()
+
+    def add(key: str) -> None:
+        if key in selected:
+            return
+        selected.add(key)
+        for dependency in by_key[key].selection_dependencies:
+            add(dependency)
+
+    add(target)
+    return frozenset(selected)
+
+
+def lane_dependencies(spec: StageSpec) -> tuple[str, ...]:
+    """The full-run scheduling dependency set: selection deps plus lane deps.
+
+    Callers intersect this with the actually-selected stage keys so a skipped
+    or unselected dependency never deadlocks its dependent (the pipeline's
+    always-attempt contract: a missing upstream degrades, it never blocks).
+    """
+
+    return (*spec.selection_dependencies, *spec.lane_dependencies)
 
 
 def manifest_digest(specs: tuple[StageSpec, ...] = STAGE_MANIFEST) -> str:
@@ -304,6 +387,8 @@ def manifest_digest(specs: tuple[StageSpec, ...] = STAGE_MANIFEST) -> str:
         {
             "argument_profile": spec.argument_profile.value,
             "base_argv": spec.base_argv,
+            "db_writer": spec.db_writer,
+            "lane_dependencies": spec.lane_dependencies,
             "selection_dependencies": spec.selection_dependencies,
             "key": spec.key,
             "label": spec.label,

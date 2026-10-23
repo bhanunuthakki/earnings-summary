@@ -41,6 +41,26 @@ inventory. The cleanup does not infer ownership or deletion rights from that cou
 
 ## Outcome
 
+### Pytest session-start pruning of abandoned temp runs (2026-10-22)
+Disposition: **no surface change** (internal test-harness storage behavior; not an operator workflow). No host ran a cleaner for local pytest session roots. Weekly cleanup only counts system-temp test pools, completed runs kept their folder, manifest and receipts with no expiry, and failed runs waited indefinitely for a reviewed resolution. A Mac accumulated 435 such roots (about 15 GB). Each pytest controller now prunes earlier harness-named roots whose lease holder no longer runs: completed and manifest-less roots after one day, failed and holder-gone active roots after the seven-day review window (owner decision). Shared secrets folders, links, unreadable manifests and live-leased roots are kept. No operator action, scheduler, service or Operations surface changed. Regression evidence: `tests/test_temp_run_pruning.py`.
+
+### Linear fixture retirement validation and Actions runner exit (2026-10-21)
+Disposition: **no surface change** (internal performance change inside existing retention; not an operator workflow). Exact retirement re-read and re-hashed the run's `.earnings-temp-run.json` up to three times per payload file. For a large pytest shard (22,182 files, a 5 MiB manifest) that took 383 s at process exit, and CI shard 4 hung after its tests passed until the 40-minute job timeout. `src/operations/artifact_retention.py` still reads fresh manifest and proof bytes for every validation and never trusts file metadata; it now reuses a SHA-256 only for byte-identical content already hashed in the process (`_fresh_digest`, `_fresh_file_digest`). The same run now exits in 208 s locally; the remaining cost is the deliberate per-file fresh read. `tests/conftest.py` skips the at-exit payload retirement on GitHub Actions runners, which are discarded after the job; those runs are still sealed `completed` with their lease released, and fixtures stay inside the admitted temporary roots. Batching validations under one manifest read would make retirement linear but changes its freshness guarantee, so it is left to the retention owner. Evidence: `tests/test_artifact_retention.py::test_fresh_file_digest_rereads_bytes_and_ignores_metadata` (same-length tamper with a restored mtime is detected), `tests/test_pytest_temp_lifecycle.py` (local successful runs still retire at exit; an Actions run seals and keeps its payload; failed runs stay protected), and the unchanged retention suites.
+
+### Peripheral scheduled-task freeze (2026-10-20)
+Disposition: **no surface change** (enabled-state change to existing tasks; no task, wrapper, cadence, write lane or service ownership changed). Simplification Phase 0 sets `Settings/Enabled` to `false` in the tracked XML for `coach_pings`, `decision_nudge`, `grade_calibration`, `monthly_calibration_scorecard`, `ledger_synthesis`, `red_team`, `tenet_accountability`, `thesis_collision`, `weekly_score_stances`, `weekly_packet` and `submit_saydo_batch`. These jobs are outside the briefs, reports, portfolio decisions, Q&A and data-plane jobs. The existing Jobs projection derives `required_disabled` from each XML, so it stays truthful: until the canonical host re-registers the tasks, a host state of `Ready` shows as a policy violation, not as healthy. Registration on the host is a separate deployment step that this change does not perform. Their artifacts become stale rather than deleted; re-enabling restores them. Evidence: `execution/generate_cron_artifacts.py --check` (45 tasks validated) and the existing `required_disabled` cases in `tests/test_operations_snapshot.py` and `tests/test_operations_panel.py`.
+
+### Lazy `operations` package exports (2026-10-20)
+Disposition: **no surface change** (import-time refactor). `src/operations/__init__.py` resolves its five public exports on first access instead of importing the registry, evals and domain code eagerly. The public export set in `docs/quality/compatibility-baseline.json` is unchanged. Importing `operations.journal` from a job wrapper now loads 176 modules in 0.07 s instead of 618 modules in 0.99 s. Evidence: the `tests/test_operations_*.py` and `tests/test_job_runtime*.py` suites.
+
+### Read-only research tool server (2026-10-20)
+Disposition: **no surface change** (internal CLI for an orchestrator agent; not an operator workflow). `execution/serve_research_tools.py` serves `src/ask/tool_server.py` over MCP stdio for a client session that starts it. It requires an explicit database through `require_db_path`, opens it only with the `READ_ONLY` role, never calls the LLM pack router or any model, and writes nothing. No scheduler task, managed service, route, panel, alert or operator action is added. Evidence: `tests/test_ask_tool_server.py` (byte-identical database after a tool call, ticker path-traversal rejection, ledger numbering and status labels, claim binding, JSON-RPC handshake and a stdio subprocess round trip).
+
+### Folded-module reference sweep and review-identity digest cleanup (2026-10-13)
+Disposition: **no surface change** (prose-only reference corrections plus one digest-registry entry removal; not an operator workflow). The stale prose references left by the 27f0e240 module folds now name their retained homes: the canonical next-dollar directive's module list names `book_risk.py` (not the folded `covariance.py`), the QA walkthrough's `REVIEW_FULL_VERDICT` row cites `src/ask/engine.py:161` where the flag is read, and the seven source docstrings/comments (`src/compute/key_metrics.py`, `execution/extract_key_metrics.py`, `src/redteam/__init__.py`, `src/redteam/lenses.py`, `src/discovery/store.py`, `execution/comments_server_shared.py`, `src/ask/engine.py`) point at `src/pipeline/explore_panel.py`, `src/redteam/engine.py`, and `ask.engine`/`run_chat_command` instead of the folded modules. `REVIEW_CODE_IDENTITY_DEPENDENCY_CLASSES` no longer digests the phantom topology-observer path (that module folded into `src/operations/host_runtime.py`, which remains a listed dependency); `execution/extract_key_metrics.py` keeps byte-identical CLI behavior (line-neutral docstring-plus-import-block diff; `--help`, defaults, and the bandit/canonical-helpers line-pinned receipts unchanged) while its legacy per-file `sys.path` bootstrap and `# noqa: E402` directives were replaced by the shared `execution/_lib.py` bootstrap seam, and its stale `execution_sys_path_mutations` allowlist entry was removed together (allowlist 308 → 307). No operator action, alert, panel, route, scheduler task, managed service, flag, or default changed: the Ask command routing (`COMMAND_PREFIXES`, `run_chat_command`), the `REVIEW_FULL_VERDICT` default-on kill switch, and the operations review bundle's identity/digest contract are unchanged, and every listed review-identity dependency still binds the digest. Evidence: serial `tests/test_operations_review_bundle.py` green (its registry iteration proves each remaining dependency — `src/operations/host_runtime.py` included — binds `review_code_identity`), `execution/extract_key_metrics.py --help` direct-invocation parity after the bootstrap change, `make instruction-check`, `scripts/check_architecture_boundaries.py`, and the standing changed-file gates (format, lint, strict pyright, suppressions) green, and the folded-destination reference sweep over the VAL-CROSS-004 scope returning zero live operational references (remaining hits are history-classified directives per `directives/directive_manifest.json` and committed receipt artifacts).
+### Sealed citation source-version viewer route (2026-10-08)
+Disposition: **no surface change** (read-only product viewer route; not an operator workflow). The cockpit now serves `GET /source/version/<document_version_id>` (with the sealed lane's `?node=<evidence_node_id>` locator and the existing `?fragment=1` peek shape) through the new `pipeline.source_viewers.render_document_version_page`. It resolves one immutable evidence-ledger coordinate — `evidence_document_versions` + `evidence_source_observations` + `evidence_nodes` + `search_chunks` + the canonical fact projection entries bound to the cited node — and renders the issuer, fiscal period, source-document identity (form/document type, accession, source URL, blob sha256), the cited node locator, the observation version (document version id/sequence, observation id, observed/retrieved/recorded times, supersede link), and every reported fact (metric, value, unit, currency, period, locator). An unknown document version, an unknown node, or a node belonging to a different document version returns an honest 404; nothing is fabricated. It reads only append-only evidence tables on one READ_ONLY connection, adds no operator action, alert, panel, scheduler task, managed service, mutable state, or network call, and changes no existing route. The sealed plane's emitted href shape (`src/ask/sealed_retrieval.py` `_narrative_item` / `_fact_item`) is unchanged. Evidence: `tests/test_source_version_routes.py` (fixture corpus resolves to 200 with every displayed field reconciling to the immutable fixture observation; unknown version / unknown node / cross-version node 404; href-template coupling to the sealed lane) and the reconciliation artifacts under `.tmp/search-validation/source-version-val-search-00{2,3}-*.json`; `services.yaml:commands.source-version-validate` reproduces them.
+
 ### `execution/_lib.py` adoption for a bounded read-only command subset (2026-10-10)
 Disposition: **CLI database-resolution hardening, no new surface**. Six read-only
 `execution/` diagnostics now resolve their database through the shared
@@ -63,11 +83,55 @@ and `scripts/check_architecture_boundaries.py` exits 0. No alert, action, panel,
 route, scheduler task, or managed service changed; the weekly
 `cron/run_weekly_cleanup.bat` `expire_stale_research.py --apply` invocation is
 unchanged and resolves the machine-visible `EARNINGS_SUMMARY_DB_PATH` as before.
-Evidence: `tests/test_execution_lib.py` (legacy-help reproduction, raw-formatter,
+Evidence: `.tmp/valid/exec-lib/` (per-command `--help` and functional before/after
+transcripts byte-identical against `.tmp/portfolio_bench.db`; the six
+checkout-default refusal transcripts; env-only vs explicit-flag output equality),
+`tests/test_execution_lib.py` (legacy-help reproduction, raw-formatter,
 `require_db_path` refusal, and no-own-bootstrap tests), and the unchanged
 `tests/test_source_calls_routes.py`, `tests/test_provenance_coverage_report.py`,
 `tests/test_audit_transcript_evidence.py`, `tests/test_expire_stale_research.py`.
 
+### Report citation anchors resolve the Observation Version chain (2026-10-12)
+Disposition: **no surface change** (reader-facing citation routing in the workspace report and the read-only source viewers; not an operator workflow). Report citation anchors now resolve the full provenance chain wherever the cited document has an Observation Version: the Sources-tab document rows route their citation link to `/source/version/<document_version_id>` and render a visible per-row Observation Version column; synthesis-lens cite-mark chips route their href the same way; fact-cell source-chip popovers state the Observation Version and link the chain beside the existing in-app viewer and original-source links. A cited document WITHOUT an Observation Version keeps its legacy `/source/<doc_id>` viewer link and carries the explicit "not recorded" degraded state on every surface (Sources-tab row and anchor title, cite-mark popover meta in both the Python and JS mirrors, chip popover row) — never a silently partial chain. The legacy `/source/<doc_id>` fallback view (documents with no in-app viewer, including every already-built report's hrefs) resolves the cited document's Observation Version through the same evidence-plane reader the `/source/version/<id>` route uses and embeds the identical chain rows, or states the absence explicitly. Resolution is one batched read-only query per section build; no existing route changes shape, no route is added, and unknown versions/nodes keep their honest 404s. No operator action, alert, panel, scheduler task, managed service, mutable state, or network call changed. Evidence: `tests/test_report_citation_version_chain.py` (exact admitted-version preservation, unique legacy binding, and fail-closed behavior; Sources-tab routing + degraded state; cite-mark payload routing + popover degraded state in both mirrors; chip popover chain link vs degraded state; the financials section stamping pass; the fallback view's embedded chain, explicit degraded state, fragment parity, and the by-legacy-id loader's honest 404s), the regenerated and reviewed `tests/golden/workspace/` panes (sources table column/routing, chip popovers, scripts mirror), and `scripts/check_design_sync.py` green with the updated `pipeline/source_viewers.py` dynamic-visual digest (existing `sv-*` classes only, no new visual vocabulary).
+
+### Sealed Ask retrieval readiness
+
+Disposition: **no additional operator surface**. Startup emits the cheap
+`ask_retrieval_readiness deferred_to_request=true fail_closed=true` event. It
+does not open the financial database, derive a cohort, inspect vector storage,
+or start a background worker. Actual sealed requests retain the typed registry,
+cohort, vector-runtime and evidence checks. A missing or invalid prerequisite
+remains a visible request failure; startup telemetry does not claim readiness.
+The unused boot-assessment helper and its dedicated tests are removed.
+Evidence: startup non-probing tests and actual-request fail-closed retrieval tests.
+
+### Cross-process daily-brief writer gate (2026-10-07)
+Disposition: **no surface change** (internal execution change inside an existing scheduled job). The 06:30 daily-brief pool's single-writer guarantee now holds across the driver AND its writer-capable step subprocesses, not just the driver's threads: `src/pipeline/db_writer_gate.py` serializes actual write transactions per resolved database path with a process-safe advisory gate (an atomic `os.link` claim with holder payload, stale-holder breaking, a bounded 120 s wait and per-thread re-entrancy — never the whole-job production run lock, which stays a run-scope one-per-host claim), and every chain participant (driver skip/completed-build windows, thesis-evaluator run accounting and episode alerts, commitments matching, DCF refresh and the five specialized DCF builders, artifact sync and provenance) takes that gate around its real write windows while reads and compute stay ungated. This entry's original claim covered the chain's EXPLICIT windows only; the auxiliary connections opened by best-effort writers inside the same chain were closed at the connection seam by the follow-up entry below, which also corrects this scope statement. The driver hands the resolved database path to each child entrypoint explicitly (`--db` / `--db-path`, plus `EARNINGS_SUMMARY_DB_PATH` for the in-process builder legs), so no child can derive a checkout-local `data/portfolio.db`; `refresh_dcf.apply_edits` deliberately stays on SQLite's busy timeout because it serves the cockpit's `/api/dcf/save` request path, which is not a chain child of the daily pool. Pool width, per-ticker step order, per-step 600 s timeouts, summary keys, exit codes and the scheduler task are unchanged; the pool benchmark's measured overlap survives (2.75× median, 96 σ beyond observed noise on the same stubbed fixture). No alert, action, panel, route, scheduler task, or managed service changed, and no new operator action is supported. Evidence: `tests/test_db_writer_gate.py` (gate claim/hold/break/re-entrancy contract), `tests/test_daily_fetch_brief_cross_process_writers.py` (real width-3 driver with real step subprocesses over a disposable migrated database: the writer-gate trace shows a maximum of one open writer window per database path across processes, chain order intact, no lock-timeout self-contention, evaluator run records and `dcf_runs` rows landed, the env-configured database outside `repo/data` reaches every child argv with no checkout-local database created, and two real concurrent refresh children serialize their gated windows), and the unchanged `tests/test_daily_fetch_brief_pool.py` / `tests/test_daily_fetch_brief_gates.py`.
+
+### Daily-brief auxiliary writers serialized at the connection seam (2026-10-08)
+Disposition: **no surface change** (internal execution change inside an existing scheduled job; corrects the scope statement of the 2026-10-07 entry above). The 2026-10-07 gate covered the chain's explicit write windows; it did NOT cover the WRITER-role connections that auxiliary best-effort helpers open for themselves inside the same chain — source-call telemetry (`sources.registry.log_call` / `log_calls_batch` / `log_http_measurement`), and, under `--enable-llm`, the `llm_calls` cost ledger, `llm_artifacts` upserts, `llm_budget_alerts`, and the quota-breaker row (`llm_circuit_breakers`). Those could overlap a sibling chain's window. The fix serializes them at the single common seam instead of at each call site: the driver marks the run (`pipeline.db_writer_gate.CHAIN_WRITER_DB_ENV` = the resolved database path) for its duration, every descendant inherits the mark, and `sqlite_runtime.connect_sqlite` then holds one cross-process writer gate per resolved database path for the LIFETIME of every `WRITER`-role connection a marked process opens on that database — explicit windows and auxiliary writers alike. Scope is exactly that: chain-marked processes, that one resolved path, `WRITER`-role connections, connection lifetime. Exclusions are unchanged and explicit — processes outside the chain (cockpit, crons, one-off CLIs, `refresh_dcf.apply_edits` on the `/api/dcf/save` request path) keep their previous behavior and pay one environment lookup; other database files and `READ_ONLY`/quiesced/snapshot-destination roles are untouched. Loss is never silent: a gate timeout in an auxiliary writer leaves a WARNING plus a durable counter beside the database (`telemetry_health.record_dropped_write`: `source_call_write`, `source_attempt_write`, `llm_ledger_write`, `llm_artifact_write`, `llm_budget_alert_write`, `llm_quota_breaker_write`), which is what the cron-health panel reads. Pool width, per-ticker step order, per-step timeouts, summary keys, exit codes and the scheduler task are unchanged; no alert, action, panel, route, scheduler task, or managed service changed, and no new operator action is supported. Evidence: `tests/test_daily_chain_auxiliary_writers.py` (real width-3 `--enable-llm` chain over a disposable migrated database with a local stub `claude` CLI: `source_calls`, `llm_calls`, `llm_artifacts` and `llm_budget_alerts` rows really land, and the opt-in connection-seam trace proves the maximum simultaneous `WRITER`-role open per database path is 1 across pids with every chain open holding the gate; a stubbed exhausted usage window records the breaker row and still serializes; per-writer drop-counter tests; non-chain opens stay ungated) and the unchanged `tests/test_daily_fetch_brief_cross_process_writers.py` / `tests/test_daily_fetch_brief_pool.py` / `tests/test_db_writer_gate.py`.
+
+### Trigger-stage dismissed-signature lookup hoist (2026-10-07)
+Disposition: **no surface change** (internal execution change inside an existing scheduled stage). The stage_1 trigger driver (`execution/run_triggers.py`) loads the ticker-independent 90-day dismissed-signature lookback (`_load_dismissed_signatures`) once per run instead of once per (ticker × trigger) pair that produced candidates (audit F5); the identical set is threaded into every pair's user-state snapshot (`_compose_user_state` takes it as a required argument, so every caller supplies the run-scope set explicitly). No current sensor consults the set — `find_by_signature` already covers dismissed rows — so the hoist is unobservable in run outputs, which the M3 closeout fixture-equivalence record confirms (identical alerts, queued actions and memo artifacts pre/post; the set still reaches every pair with the 90-day lookback semantics intact). No flag, summary key, structured event, alert, action, panel, route, scheduler task, or managed service changed, and no new operator action is supported. Evidence: `tests/test_run_triggers_dismissed_signature_hoist.py` (exactly one lookback query per run across six candidate pairs, delivered-set parity with the fresh-in/91-day-stale-out lookback semantics) and the unchanged `tests/test_run_triggers_e2e.py`.
+
+### SEC CompanyFacts conditional fetch and digest short-circuit (2026-10-06)
+Disposition: **no surface change** (internal execution change inside an existing scheduled job). The Saturday 01:40 `fetch_sec_xbrl` stage now sends conditional companyfacts GETs (ETag/If-Modified-Since, taken from the per-ticker fetch receipt written in the same commit as the ingest) and short-circuits unchanged payloads on the sha256 digest: an unchanged ticker performs zero downloads when the server honors the validator, skips the pydantic re-parse and the fact re-walk otherwise, writes no staleness fields, and emits an explicit `sec_companyfacts_unchanged_skip` stderr receipt plus a summary row carrying the disposition, skip reason and payload digest; the run summary gained the additive `skipped_unchanged` count. Interrupted runs resume from per-ticker completion receipts (receipt presence means the ingest committed), and a retry reprocesses only incomplete tickers; the per-fact `PRAGMA table_info` probes were hoisted to once per ingest, and the write transaction now covers only the bounded persistence batch (parse and fact-walk selection run before it opens). Stage identity, ingestion-run accounting, genuine-staleness handling, exit codes and the scheduler task are unchanged; a skip is a positive capture-boundary observation — one retrieval observation is recorded against the retained digest, never silence. No alert, action, panel, route, scheduler task, or managed service changed, and no new operator action is supported. Evidence: `tests/test_sec_companyfacts_conditional_ingest.py` (zero re-download/re-parse/re-walk on unchanged replay, changed payload reprocesses exactly that ticker, interrupted-run resume from receipts, probe hoist, bounded transaction window), the unchanged `tests/test_sec_native_capture.py`, `tests/test_sec_accession_refresh.py` and `tests/test_filing_xbrl_extraction_ledger.py`, and the M3 closeout fixture-equivalence record (identical fact plane, documents, observations and links pre/post; the receipts table is the migration-0050 addition).
+
+### Daily brief ticker pool (2026-10-07)
+
+Disposition: **no surface change** (internal execution change inside an existing scheduled job). `execution/daily_fetch_and_brief.py` now drains the independent tickers of the 06:30 dirty-brief queue on a bounded worker pool (new internal flag `--workers`, default 3; the cron wrapper's argv is unchanged, so it takes the default) instead of one serial chain, so a rebuild day no longer pays every ticker's 4-5 process boots end to end. The step order inside one ticker is unchanged (thesis evaluator → commitments → DCF → artifacts → history sweep) and only across-ticker work overlaps. Every driver-side database write (skip record, completed-build record, artifact-dirty pass) runs inside one writer lock per database file, so at most one writer connection per file is open at once; the step subprocesses keep their own connections and their own 600s per-step timeout, so a hung ticker fails alone. The run's stdout summary keeps its existing keys (`started_at`, `tickers`, `skipped_by_tier`) and lists tickers in candidate order; a `--workers` value below 1 fails closed with exit 2. No alert, action, panel, route, scheduler task, or managed service changed, and no new operator action is supported. The driver also adopted the shared `execution/_lib.py` bootstrap seam in the same change (its legacy per-file `sys.path` bootstrap and the stale architecture-allowlist entry were removed together). Evidence: `tests/test_daily_fetch_brief_pool.py` (recorded cross-ticker overlap with per-ticker step order preserved, bounded pool width, one writer connection per database file, independent timeout failure, and `--workers 1`/`3` summary parity) and the unchanged `tests/test_daily_fetch_brief_gates.py`.
+
+### Morning-pipeline stage lanes (2026-10-06)
+
+Disposition: **no surface change** (internal execution change inside an existing scheduled job). `execution/run_morning_pipeline.py` now dispatches the manifest's stages as bounded lanes (at most 3 stage subprocesses at once) instead of one serial chain. A stage starts only after every declared dependency in the run has settled. At most one stage that can write to the database runs at a time; the manifest now marks this with `StageSpec.db_writer`. The read-only and file-cache stages (preflight, fundamentals, candidate fit, factor proxies, position guard, feed) may overlap the writer. The feed also waits for the trigger sweep (`StageSpec.lane_dependencies`) so it renders the day's alerts. Stage keys, argv, per-stage timeouts, the always-attempt contract, the 18h resume checkpoint, run accounting, exit codes and the scheduler task are unchanged. The single dispatcher thread records checkpoint completions, so concurrent completions cannot lose a key. Both new manifest fields are bound into the manifest digest. No alert, action, panel, route, scheduler task or managed service changed, and no new operator action is supported. Evidence: `tests/test_morning_pipeline_lanes.py` (recorded overlap, single in-flight writer, dependency ordering, manifest timeout under lanes, checkpoint merge and resume) and `tests/test_run_morning_pipeline.py`.
+
+### Overnight writer start stagger (2026-10-06)
+
+Disposition: **scheduler cadence change, no new surface**. The three database-writing jobs that all started at 02:00 on Saturdays now start at different times: `fetch_sec_xbrl` at Saturday 01:40 (after the Friday P2 lens dispatch stops at 01:35), `backfill_transcripts` at daily 02:00 (unchanged), and `submit_saydo_batch` at Saturday 02:20. `cron/task_manifest.json`, the task XML files, the wrapper comments and the generated `cron/TASKS.generated.md` agree. The Jobs projection derives cadence from the manifest, so it shows the new times without a code change. The moved SayDo LLM leg is registered in `directives/llm_quota_scheduling.md`. Task ceilings are unchanged, so a long `fetch_sec_xbrl` run can still overlap the later jobs; their writes then serialize through SQLite's busy timeout as before. The live Windows Task Scheduler must be re-registered from the main checkout, and that has not been verified from this Mac. Evidence: `tests/test_cron_hardening.py::test_overnight_writer_cluster_is_staggered` and `tests/test_scheduler_manifest.py`.
+
+### Trigger-stage scan sweep and cost-cap accounting (2026-10-06)
+
+Disposition: **no surface change** (internal execution change inside an existing scheduled stage). The stage_1 trigger driver (`execution/run_triggers.py`) now runs the `material_news` per-ticker classification scans in a bounded-concurrency sweep (new internal flags `--scan-workers`, default 4, and `--scan-timeout-s`, default 180s; the morning-pipeline manifest's stage argv is unchanged) and admits each wave only while the shared `llm_calls` ledger total since run start is below the run's `--max-cost-usd`, so scan-time spend is cap-accounted exactly like candidate spend. The LLM governance view remains complete and attributable with an unchanged schema: each `material_news_classification` call still writes its per-call ledger row (purpose, ticker, model, cost) at call time through the same transport writer — the change is that the run's cap decision now reads that spend. The run's stdout summary gained additive internal accounting (`scan_deferrals` with a closed reason set `cost_cap`/`per_ticker_timeout`, `scan_workers`); no alert, action, panel, route, scheduler-task, or managed-service surface changed, and no new operator action is supported. The driver also adopted the shared `execution/_lib.py` bootstrap seam in the same change (its legacy per-file `sys.path` bootstrap and the stale architecture-allowlist entry were removed together); its agreed CLI-flag change is the two sweep flags above. Evidence: `tests/test_run_triggers_material_news_sweep.py` (bounded worker maximum, wave-synchronized cap admission reconciling to the ledger total, explicit per-ticker timeout/cap deferrals, fixed-fixture driver parity via the unchanged `tests/test_run_triggers_e2e.py`).
 ### Shared truth remedies — 2026-10-03
 
 Disposition: **no Operations surface change**. Explore, Ask, saved financial
@@ -301,6 +365,31 @@ Forward calendar coverage is deliberately surfaced beside its retained events us
 claim about provider health. Missing, stale and failed receipts cannot render a
 verified empty calendar. `tests/test_ir_events_ingestion.py` and
 `tests/test_ir_events_cli_unavailable.py` cover these boundaries and disabled apply.
+
+### IR acquisition batch
+
+The weekly IR discovery batch now treats an empty crawl, failed URL download,
+or failed registration as a failed ticker. The failing-crawler retry includes
+both zero-document names and names with a failed last crawl despite older
+registered documents. The source status and batch exit code expose these cases;
+no new scheduler task or operator action was added. The batch requires an
+existing configured database and rejects the checkout-default database before
+opening a source. A successful batch still means acquisition and optional
+narrative processing only; it does not certify fact-extraction completeness.
+Hybrid and list discovery now use the same inventory crawler. Partial crawls
+retain available documents, expose page diagnostics, and retry discovery.
+Categorizer exit zero must also reconcile every downloaded source URL with
+registered documents. The batch invokes the existing bounded document-evidence
+continuation before derived views, including when downloads are unchanged.
+Its existing selector accepts an optional source-type filter; the IR batch uses
+`ir_doc` so unrelated stored source formats do not block IR work. The existing
+resume receipt binds that filter. It adds no second cursor or evidence writer. Failed or unfinished extraction
+defers views. Missing inventory remains degraded but does not block views of
+current extracted documents. Summary and narrative views share the full-text
+owner's source-text projection. Financial admission remains with existing owners.
+Official HTML earnings releases use the existing download, classification,
+registration, and source-URL operation. Failed HTML classification remains an
+acquisition failure. No new operation, listener, or scheduled LLM leg was added.
 
 ### Legacy evidence backfill and managed IR byte admission
 
@@ -666,6 +755,14 @@ contract are retained. This adds no operator action, scheduler, managed
 service, source acquisition permission, or production activation; the
 Operations registry and visible workspace contracts remain unchanged.
 
+The same existing morning stage also materializes a bounded cockpit file-input
+snapshot under `.cache/` for FMP profile, valuation-basis, earnings-calendar,
+and holdings inputs. The cockpit continues to read the original source files on
+a per-ticker cache miss or invalid entry; source authority and freshness
+semantics do not change. This adds no operator action, schedule, managed
+service, source acquisition permission, or production activation; the
+Operations registry and visible workspace contracts remain unchanged.
+
 ### Canonical revenue year-over-year computation
 
 The existing metrics engine can now persist an admitted canonical revenue
@@ -879,15 +976,77 @@ Preview with the approved explicit `--db`, `--cutoff-at`, `--recorded-at` and op
 the existing managed SQLite bootstrap. Both commitments bind the selected mode;
 a mode switch refuses the old pins before writes. Lexical-only requests omit vector
 and promotion coordinates and have distinct identities; retained semantic identities
-are unchanged. There is still exactly one terminal per issuer and K/O scope:
+are unchanged. There is exactly one terminal per issuer, K/O, and Analysis Evidence
+Scope identity when present. An unscoped request retains its existing coordinate:
 `research_snapshot_terminal_scope_conflict` blocks a second terminal, including a
 mode switch. This operation does not supersede an existing terminal or alter that
-universe policy. Replay verifies the existing seal through the public source verifier;
+scope. Replay verifies the existing seal through the public source verifier;
 terminal verification infers the persisted mode, reassembles that exact request, and
 performs the same lineage checks. No schema, store, service, schedule, provider, or
 new dashboard action is introduced. A preview is an assembly plan, not a successful
 sealed-source verification receipt.
 
+### Analysis Evidence Scope planning and use
+
+`execution/plan_analysis_evidence_scope.py --db <approved-database> --request <request.json>
+--scope-receipt <receipt.json>` is a manual, read-only selection operation. Run it
+through the managed SQLite bootstrap. The request is an `AnalysisScopeRequest` with
+issuer, purpose, inventory key, sorted required period ends, knowledge cutoff,
+observation cutoff, and optional extra accession/reason pairs. Latest-period
+inclusion is the default. The command requires a current, complete authoritative
+SEC inventory. It writes one immutable output receipt with no replacement of its
+request, database, or an existing conflicting artifact. It does not fetch reports
+or write database rows. Its result reports `selection_only_not_model_ready` and
+research-document, package-dependency, and outside-scope counts.
+
+The receipt retains every expected document in the selected inventory. Primary
+filings are research documents. All other selected package members are required
+capture dependencies. Outside documents retain explicit reasons and visible
+coverage gaps. Selected periodic packages include known amendments. Missing or
+ambiguous required periods and unavailable current-report amendment linkage fail;
+selection never invents reporting dates or relationships.
+
+The optional `historical_reconstruction` request selects reviewed original 6-K
+financial subjects under a separate public cutoff. It requires sorted exact
+authority observation/hash references and original document-version selections.
+Latest-period selection and extra accessions are disabled in this mode. Physical
+knowledge and observation clocks retain their actual values. Stored SEC metadata
+must replay acceptance times; issuer identity must also be visible at the
+observation cutoff. Missing clocks, changed originals and unstable metadata fail.
+This remains a source selection operation. Financial Research Snapshots return
+`historical_research_fact_source_closure_unavailable` until selected reported and
+derived facts prove the same historical source boundary. No scheduler, service or
+interactive Operations control changes.
+
+Use the receipt through the existing manual interfaces:
+
+- `execution/populate_document_processing.py --analysis-scope <receipt.json>` accepts
+  it for a dry-run. Apply uses the scope embedded in the admitted request through
+  `--admission-receipt`; passing a separate `--analysis-scope` to apply is rejected.
+- `execution/build_grounded_search_corpus.py --analysis-scope <receipt.json>` uses
+  it instead of `--inventory` or `--coverage-inventory-key`. All selected package
+  members must be captured. Only primary research documents enter the corpus.
+  The scoped corpus key must equal the receipt's `scope_id`
+  (`analysis-scope:<sha256>`).
+- `execution/populate_research_snapshots.py --analysis-scope <receipt.json>` uses
+  it for planning and committed apply through the existing input/plan commitment
+  checks. Processing, corpus, and research primary document sets must match exactly.
+
+These operations retain their explicit database, clock, locking, immutable receipt,
+and apply requirements. New operations require the current inventory. Internal
+verification of a stored artifact can reconstruct the inventory visible at its
+original scope observation cutoff. No CLI permits historical verification to
+authorize a stale write. Research terminal identity includes the scope identity;
+distinct purposes do not replace each other's artifacts. Scoped artifacts do not
+count as full-population readiness.
+
+This is an internal manual CLI capability. The existing `OperationsRegistry`,
+`OperationsSnapshot`, and Operations workspace controls remain unchanged. There is
+no new dashboard button, background job, provider activation, schema, financial
+admission, valuation update, or production-state change. Selection and successful
+capture alone do not establish model readiness. The focused analysis-scope tests
+own selection, retained reconstruction, missing dependency, processing-lane, and
+corpus consistency checks.
 The same command accepts `--source-publication-reference-clock publication_created_v2`
 for current research that includes earlier publications.
 This mode uses the verified publication creation clock; it preserves the actual
@@ -993,6 +1152,36 @@ failure; no successful snapshot or revision is inferred from those raw captures.
 No source duty taxonomy, schema, provider, schedule or financial readiness rule
 changes. Mixed-inventory tests use the actual migrated ledger and duty bindings;
 network responses alone are synthetic fixtures.
+
+### Windows job-owner liveness
+
+The shared `src/runtime/job_runtime.py` process probe uses a zero-time wait on a
+Windows process handle. A signaled handle proves that the process has terminated,
+even if another handle keeps its kernel object available. A failed or unavailable
+probe retains ownership. A positive creation-identity mismatch still proves that
+the recorded owner is no longer the current process. Creation-time calls use
+explicit pointer-sized Windows argument and result types.
+
+Disposition: **no surface change**. The existing `OperationsRegistry`, Jobs
+projection, job identities, health-receipt format, lock tokens, write sets and
+Scheduler cadence remain unchanged. This corrects the existing stale-lock and
+scheduler-owner checks; it adds no retry action, service, scheduled job or
+operator control. `tests/test_job_runtime.py` covers signaled, running, unknown
+and identity-mismatch decisions. `tests/test_job_runtime_process_tree.py` retains
+the Windows held-handle and process-tree checks. Local tests do not establish
+deployment or a successful future scheduled run.
+
+### Manual financial-fact resolution backfill
+
+`execution/backfill_financial_fact_resolutions.py` remains a manual bounded
+observation/resolution operation. Dry-run is the default. Apply uses the explicit
+configured database, existing transaction boundary, and durable checkpoint.
+The unused selection mirror and its convergence scan are retired. Historical
+checkpoint fields remain readable. Canonical selection stays with the immutable
+ledger and resolved views. No daily writer task or wrapper is added.
+
+Operations surface disposition: **no additional scheduled writer**. A future
+scheduled backfill needs its own workload, overlap, source and activation review.
 
 ### Investing workflow maintenance and brief inputs
 
@@ -1112,16 +1301,19 @@ checks the effective permissions and low-integrity label, restores its own UI
 context, and starts the child with the private desktop. It stops the complete
 child process tree before it closes the private objects. A failed check refuses
 the invocation. This adds no network capability, loopback exemption, host-desktop
-grant, service, schedule, or installed-runtime approval. The launcher uses the stable `EarningsSummaryFilingXbrlV2` profile and its V2
-mutex. It preserves the existing V1 profile. The stdout protocol remains
-unchanged. Native qualification must
-bind the exact compiled launcher before bundle approval or installation.
+grant, service, schedule, or installed-runtime approval. The launcher uses the
+stable `EarningsSummaryFilingXbrlV2` profile and its V2 mutex. The mutex uses the global Windows namespace to serialize sessions. Its
+protected permissions allow only LocalSystem and built-in Administrators. The
+launcher checks the effective owner and exact grants before it changes any
+profile or directory. Other operators fail closed. It preserves the existing V1
+profile. The stdout protocol remains unchanged. Native qualification must bind the exact compiled launcher before bundle approval or installation.
 
 The bridge gives the SEC renderer a fresh `MPLCONFIGDIR` inside its private
 temporary directory. It restores the environment and removes that directory on
 success or handled failure. Four incomplete directories block another allocation
 and require recovery; the bridge does not delete prior incomplete requests.
 This avoids reading a host home configuration or writing into the sealed runtime.
+Recovery follows the bounded filing-XBRL procedure in `agent_host_operations.md`.
 
 `provenance.integrity_audit.verify_filing_xbrl_run` is a read-only retained-run
 verifier. Its caller must hold one read transaction and supply an exact retained
@@ -1337,7 +1529,21 @@ check the changed behavior. The dated [audit](history/financial_narrative_ground
 records the remaining runtime gates; these instruction changes do not establish
 that all financial narratives are verified before release.
 
-### MELI H1 displayed-statement source population
+### Report claim binding contract — no operational surface change
+
+The memo verifier now binds analyst prose to its support. A figure in an analyst
+claim must match a cited verbatim excerpt of a retained node, an admitted value, a
+verified model value or arithmetic that the verifier replays; quoted wording must
+occur in a cited excerpt. Claims may also quote the owner's thesis when the review
+pins its exact text and hash. Reader blocks exclude citation markers, and an
+analyst section can be marked with `data-voice="analyst"`. Earlier claim
+serializations are unchanged. This adds no operator action, route, service,
+schedule, provider, model pin, budget, schema or live-state write.
+`tests/test_memo_analysis_binding.py` and the existing memo suites check it. The
+binding is a deterministic release check; it does not certify the meaning of a
+paraphrase, so semantic review remains required.
+
+### MELI displayed-statement source populations
 
 `execution/publish_meli_reported_statements.py` is a manual, source-only operation:
 
@@ -1352,9 +1558,22 @@ Dry-run is the default. Its separate `meli-h1-displayed-statements.v1` recipe cl
 exactly 18 members: current/prior H1 Commerce, consolidated, Fintech and Credit
 revenues, operating income, D&A and productive-asset expenditures; June 30 gross
 loans and current/noncurrent operating leases; and current H1 diluted weighted
-average shares. FY annual values, TTM, net cash, economic allocations, model-role
+average shares. The separate `meli-fy-displayed-statements.v1` recipe closes seven
+annual duration members from an explicitly dated 10-K: Commerce, consolidated,
+Fintech and Credit revenues, operating income, D&A and productive-asset
+expenditures. Exact annual headings, units, business populations and footnotes
+are required. Interim and annual recipes have separate extraction identities and
+completeness memberships. TTM, net cash, economic allocations, model-role
 bindings and assumptions are outside this operation. The existing three-member
 NIMAL/liquidity/debt publisher keeps its recipe and immutable identities.
+
+Both MELI displayed-source publishers accept optional `--analysis-scope <receipt>`.
+They replay that receipt and require its exact inventory, current primary versions,
+physical clocks and selected document membership. Only an explicit
+`complete_report_evidence/v1` receipt permits primary-only loading before package
+children are captured. Without that profile the complete-package gate stays in
+force. This option does not admit facts or qualify a model. Dry-run stays the
+default; apply retains the existing source-publication write boundary.
 
 The publisher reuses the qualified native HTML hierarchy/replay and captured
 primary-filing authority. It reads displayed rows, headers, subsections and
@@ -1364,7 +1583,7 @@ separate `issuer-reported-statement` namespace with complete displayed
 business/product/geography scope in hash-bound definitions and locators.
 XBRL dimensions remain empty; no invented axis/member or canonical equivalence is
 admitted. A later reviewed mapping must establish any relationship to an XBRL
-series. Current/prior H1 are durations; gross loans and leases are instants.
+series. Current/prior H1 and FY flows are durations; gross loans and leases are instants.
 Diluted shares remain a count under the explicit share-data exception, never a
 million-scaled amount. Source cash-flow parentheses are retained; the explicitly
 named expenditure measure uses their positive payment magnitude, with the signed
@@ -1397,6 +1616,20 @@ corpus/processing contract. Model-scope qualification and restoration of the
 held native XBRL lane remain unresolved prerequisites. This operation is not a
 route around their applicability, corpus or completeness guards.
 
+
+### pypdf 6.21.1 PDF extractor promotion — no operational surface change
+
+New PDF full-text extraction uses pypdf 6.21.1 under a distinct idempotency
+namespace. The exact pypdf 6.19.0 extractor identity stays approved for reading,
+so existing PDF evidence keeps verifying, and retained coverage counts as complete
+for the scheduled `process_document_evidence.py --apply --resume` stage and for
+explicit full-text backfill. The promotion therefore triggers no re-extraction.
+Readers select one complete approved run per document and never combine nodes
+across parser runs. This adds no operator action, route, service, schedule,
+provider, model pin, budget, schema or live-state write. Re-extracting retained
+PDFs with 6.21.1 remains an optional, separately approved operation.
+`tests/test_document_processing_evidence.py`, `tests/test_fulltext_evidence_backfill.py`,
+`tests/test_search_corpus_builder.py` and `tests/test_kpi_semantic_review.py` check it.
 
 ### Function lifecycle collector — no operational surface change
 
@@ -1431,6 +1664,15 @@ selection. This integration adds no collection action, scheduler, dashboard
 control, or production operation. Consumer adoption requires a separate current
 source-clock and financial acceptance integration.
 
+The owner-approved report profile is selected through the typed request field
+`readiness_profile: complete_report_evidence/v1`. Its v3 scope has a distinct
+identity; existing requests keep their original identity. Package dependency
+coverage remains inspectable and native filing-XBRL processing remains deferred.
+Processing receipts expose the profile and `deferred_processing_lanes`. Complete
+primary text and exact reported/derived fact-source closure stay mandatory. This
+does not change source collection limits, start a provider or authorize production
+writes. The report evidence population and reader/model gates determine acceptance.
+
 ### MELI reported-input and explicit-vector previews — 2026-10-10
 
 Disposition: **no Operations surface change**. The bounded CLI
@@ -1463,3 +1705,263 @@ immutable artifact replay/conflict, and explicit scenario replay and refusal cas
 Source-inventory/research coverage is mocked in these fixtures; this evidence
 does not establish native package qualification, production readiness or
 financial/scenario acceptance.
+
+
+### PR 1695 reconciliation — 2026-10-16
+
+Disposition: **no new operator surface**. The combined branch preserves the current
+`main` database authority, source-root forwarding, cached host evidence, financial
+evidence views and scheduler receipt roots through the extracted route modules.
+The migration merge retains both historical revision chains. CompanyFacts receipt
+reuse also requires the bounded transitive extractor import closure, active
+vendor dependencies, metric ladders and full schema identity. Shared tier ranks
+and table-cell locators live with their domain models. SEC ingestion imports
+neither IR discovery nor PDF parsing; unrelated adapter changes do not invalidate
+its receipts. Missing legacy identities force reprocessing. Relevant source replacement
+within the process requires a restart; unrelated UI changes do not invalidate SEC
+receipts. Closure discovery is lazy; module import does not scan the source tree.
+Unknown loaders fail closed. Report fact chips retain their exact admitted document version; an
+ambiguous legacy document identity does not select the latest version.
+
+Discovery commands, build children and card rendering use the selected database
+independently of the source state root. The two discovery/card CLIs use the
+shared `execution/_lib.py` bootstrap; their obsolete per-file path-mutation
+allowlist entries are removed. This changes internal authority forwarding and
+bootstrap mechanics only. Existing actions and approval boundaries remain.
+Cockpit cached snapshots expire 30 seconds after build reservation. Slow direct
+results can return to the requesting caller, but expired results enter neither
+the data memo nor the response cache.
+
+The unused `current_fact_selection` mirror writes and convergence scan are
+retired. Its historical schema and checkpoint fields remain readable. Canonical
+reads still use the established resolved views, so stale preparation rows cannot
+change selected facts. The existing manual bounded backfill still serves observation
+capture and resolution convergence. No scheduler task is added or activated,
+no database is migrated, and no application is deployed by this source merge.
+
+
+### Sealed native admission and MELI input-preview diagnostics
+
+Migration0058 rejects new rows that would retroactively change a sealed ontology
+or issuer-scoped canonical-resolution snapshot. Existing exact replay is retained.
+The stable SQLite failure reasons are `sealed_ontology_admission_conflict` and
+`sealed_resolution_admission_conflict`. These are terminal validation failures for
+that input, not transient retry signals. Preserve the failed input and old seals;
+plan a supported new-coordinate admission instead of changing timestamps or seals.
+No backfill operation or live migration is activated by the source change.
+
+`preview_meli_inputs.py` keeps its read-only database, explicit roots, no-clobber
+artifact and exit-code contracts. Known verification failures return exit3 and
+bounded unavailable JSON with the requested snapshot, period, cutoff and whether
+candidate inspection was performed/completed. They emit no usable bindings or
+invented slot counts. Unexpected faults and output conflicts remain command
+failures. Candidate selection and the final model-input verifier share the same
+canonical/source reader, but each independently verifies its own bounded pass.
+The final verifier requires definition, binding and mapping identity/payload parity
+with the snapshot's sealed projection. A later valid revision fails with
+`input_snapshot_context_mismatch`; it needs a new snapshot. An absent or different
+projected selection fails with `input_outside_canonical_snapshot`. These checks
+also apply to other model recipes using the shared verifier.
+
+Disposition: no interactive Operations control, scheduler, service, provider,
+publication or model-readiness change. Existing manual CLI and migration owners
+remain authoritative. Regression evidence: `tests/test_sealed_snapshot_admission.py`,
+`tests/test_meli_preview_batch_reuse.py` and `tests/test_preview_meli_inputs_cli.py`.
+Exact-read and model-context regressions are in
+`tests/test_canonical_fact_exact_read.py`, `tests/test_meli_input_evidence.py`,
+`tests/test_cashflow_input_evidence.py` and `tests/test_memo_model_roundtrip.py`.
+
+### Native untimed PDF transcript evidence — 2026-10-19
+
+Disposition: **tested no UI or operator CLI surface change**. The new typed
+`provenance.native_pdf_transcript` library profile supplies the existing required
+transcript-turn and transcript-speaker processing lanes. A task-only qualification
+runner can call it under the existing isolated database writer boundary. It adds
+no registered operator command, dashboard control, scheduler, provider call,
+production activation or live write authority. The profile requires a verified
+promoted native PDF text seal and replays a complete exact page-span partition.
+It preserves reviewed raw speaker labels, explicit unknown attribution and
+unavailable timecodes. The existing legacy speaker/timecode guard stays in force.
+Evidence: `tests/test_native_pdf_transcript.py` and
+`tests/test_document_processing_evidence.py::test_transcript_speaker_lane_requires_immutable_speaker_and_timecodes`.
+
+
+### Scoped issuer-document obligation bindings — 2026-10-19
+
+Disposition: **no UI or operator CLI surface change**. The native research
+snapshot assembler and verifier share one membership-to-duty resolver. An exact
+issuer document selected by a verified analysis scope can bind to its persisted
+publisher duty without claiming that its partial publisher inventory is a SEC
+inventory. The existing authority, coverage, public-witness, issuer and reporting
+entity checks remain required. No source collection, processing waiver, scheduler,
+service or publication authority changes. Regression evidence:
+`tests/test_research_issuer_obligation_bindings.py`,
+`tests/test_population_research_snapshots.py` and `tests/test_research_snapshot.py`.
+
+
+### Financial report resolution materialization clock — 2026-10-19
+
+Disposition: **no UI or operator CLI surface change**. The shared report-table
+reader can retain a later physical canonical-resolution recording clock O while
+keeping reported source evidence, financial-role review, definitions and bindings
+at knowledge cutoff K. A memo requires O to equal its exact Research Snapshot
+recording clock. NU PRE/POST baseline checks retain the exact original cell and Observation
+Version while verifying each context's separate sealed resolution revision.
+Legacy wire identities omit the optional field. This adapter
+adds no source collection, financial admission, review approval, service or
+publication authority. Native regression evidence:
+`tests/test_report_financial_resolution_clock.py`,
+`tests/test_report_canonical_financials.py` and `tests/test_nu_earnings_evidence.py`.
+
+
+### Reviewed report PDF table scope — 2026-10-19
+
+Disposition: **tested no UI or operator CLI surface change**. Existing typed
+analysis-scope and processing-library entrypoints can retain a reviewed all-page
+PDF table scope and issue a distinct report-scoped certificate. No dashboard,
+registered command, scheduler, parser, provider or production authority is added.
+The source review must be actual and precede generation. Full text and the full
+native quarantined artifact remain retained. Required quarantined pages fail
+closed. The model-input verifier rejects deferred pages, unknown pages in scoped
+documents, and derived observations with deferred source leaves through the shared
+provenance page guard. Memo financial-reference and evidence-node consumers now verify each source
+page against the reviewed scope. Deferred pages, unknown page locators, missing
+anchors and derivation leaves outside the scope fail closed. Evidence:
+`tests/test_report_pdf_table_scope.py` and `tests/test_decision_brief.py`. The processing receipt
+names scoped identities and deferred pages. Full/default certificates remain strict.
+Evidence: `tests/test_meli_input_evidence.py`,
+`tests/test_document_processing_evidence.py`,
+`tests/test_population_document_processing.py`, `tests/test_report_evidence_scope.py`
+and `tests/test_analysis_issuer_pdf_scope.py`.
+
+
+### Test-storage peak lease lifetime — 2026-10-21
+
+Disposition: **no UI or operator CLI surface change**. A disposable run's peak
+lease in `src/operations/storage_reservation.py` now covers only its live
+producer. `finish_temp_run` releases it after a passed or failed seal. The next
+admission on the same host reclaims a lease when the operating system reports
+that its holder process does not exist. Any doubt, including denied access or a
+reused process number, keeps the lease. A failed run keeps its manifest and
+payload protected until a reviewed resolution, as before. Its retained bytes
+still count through the 50 GiB free-space headroom, but no longer through the
+20 GiB concurrent-producer limit. A reviewed resolution can now bind to a passed
+rerun whose only holds are pytest links or multiply linked files. Those paths
+stay in place and are never followed or retired. Other holds still block. This
+removes the outage where ten failed local test sessions blocked all later pytest
+runs. No operator action, scheduler, service, Operations surface or retention
+window changed. Regression evidence: `tests/test_storage_reservation.py`,
+`tests/test_temp_run_review_resolution.py` and
+`tests/test_pytest_temp_lifecycle.py`.
+
+
+
+### Coach delivery confirmation and fundamentals cache revision — 2026-10-22
+
+Disposition: **tested existing operational behavior repair; no new operator action**.
+Coach delivery claims use `sending` until Telegram confirmation. A 15-minute
+expired claim becomes retryable; completion is fenced to the exact claim timestamp.
+The manual and scheduled coach entrypoints share the `notification-delivery` lane.
+Owner acknowledgement and dismissal of an unlinked `sending` carrier remain
+recordable, and completion preserves those terminal states. Acknowledgement after
+a claim cannot recall a push already in flight. Delivery is at least once: a crash
+after Telegram accepts the push but before confirmation may produce a duplicate.
+This change does not establish durable send-time frequency accounting.
+
+The cockpit fundamentals cache binds the canonical financial revision captured
+with its values in one committed read transaction and rejects changed revisions.
+Snapshot replacement still requires an explicit derived-cache refresh. No schedule,
+service, database authority, publication permission, or UI geometry changes.
+Evidence: `tests/test_governor.py`, `tests/test_run_coach_pings.py`, and
+`tests/test_cockpit_fundamentals.py`; hosted native Windows application coverage
+is distinct from deployment proof on the managed production runtime.
+
+
+### Owner-reviewed governed proposal registration — 2026-10-21
+
+Disposition: **deliberate exclusion from the Operations workspace**. The manual
+CLI is the primary registration surface:
+`execution/register_owner_proposal.py --db <explicit-db> --repo-root <state-root>
+--diff <diff.json> --authorization <authorization.json> [--apply]` validates one
+closed thesis or KPI-tier diff. The default dry run opens no database and prints
+the canonical content, content hash, exact target-file precondition and normalized
+authorization. `--apply` registers a pending, actionable `owner_thesis_edit` or
+`owner_kpi_edit`; it does not approve or replace the holdings file. Registration
+atomically retains the immutable owner authorization, evidence manifest and its
+hash alongside the proposal. Authorization JSON contains `authorization_id`,
+`ticker`, `user_id`, `statement`, `source_ref`, and nonempty `evidence` objects
+with `path` and `sha256`. The CLI computes omitted `canonical_content_sha256`
+and `evidence_sha256` values; supplied mismatches refuse registration.
+
+The existing `/api/research/proposals/<id>` detail and `/decision` route remain
+the decision surface. Owner proposals require matching hash-bound authorization;
+Ask proposals still require a completed exchange. Both use the existing revision
+CAS, decision receipt, exact target-file drift guard, canonical applier, mirror
+refresh and thesis ledger behavior. Migration 0060 refuses downgrade when owner
+proposals or authorization records remain, preserving retained approval evidence.
+The typed owners are `OwnerProposalAuthorizationV1`, `OwnerProposalPreviewV1`
+and `ResearchProposal`; the Operations registry, snapshot and visible Jobs,
+Sources, Data and Actions contracts remain unchanged. No scheduler, service,
+provider call, automatic decision or Operations-page control is added. Tests in
+`tests/test_owner_proposal_approval.py` cover route
+approval, whole-tier registration, receipts/replay, mirrors/ledger, drift,
+authorization and link immutability, transactional rollback, read-only dry run,
+Ask insert refusal and migration round trips.
+
+
+Owner-governed authorization and proposal retention also reject SQL replacement,
+and owner-governed proposals cannot be deleted, re-keyed, or overwritten by an
+ID update from another row, including SQLite's rowid aliases. The new
+authorization table has no hidden row identity that replacement can target.
+Decision admission reconstructs
+the retained authorization and verifies its evidence-manifest digest before any
+file replacement or decision receipt. These checks preserve existing Ask behavior.
+Evidence: `tests/test_owner_proposal_approval.py`.
+### Bulk corpus lexical coverage checks — 2026-10-19
+
+Disposition: **tested no UI or operator CLI surface change**. The existing
+corpus library checks persisted FTS rows in one bulk read. Migration 0061 replaces
+the exact lexical coverage trigger with a grouped scan through the normal
+Alembic path. Missing, duplicate, altered and extra target rows still fail.
+Corpus identities, commitments, immutable guards and exact replay remain intact.
+No collection, financial admission, scheduler, service or publication authority
+changes. Evidence: `tests/test_corpus_fts_bulk_validation.py`,
+`tests/test_search_corpus_builder.py` and `tests/test_search_projection_seals.py`.
+
+### MELI Scenario cache and provenance repair — 2026-10-19
+
+Disposition: **tested no operator CLI surface change**. The existing workbook
+library refreshes three unchanged Scenario formulas after native data-table
+calculation. The saved workbook records Bear provenance from the existing thesis,
+seed or explicit-vector route. Explicit vectors keep acceptance recorded
+separately. The recalculation receipt checks all three Scenario outputs and the
+same provenance before export and after reopen. Saved XML and synthetic edit
+controls preserve the formulas, native tables and numeric caches. This adds no
+operator action, financial admission or live activation. Evidence:
+`tests/test_meli_workbook_recalculation.py` and
+`tests/test_platform_scenario_emission.py`.
+
+The model input re-verification correction preserves the retained snapshot resolution clocks and independently checks the current selected observation. It adds no operator command, write authority, provider call or production operation. Existing model input and readiness interfaces own the behavior.
+
+MELI persistence also retains the full existing model-engine output in the assumption snapshot for exact memo reconstruction. This adds no new operator interface or authority. Historical incomplete model runs remain retained and cannot pass the integrated memo output commitment.
+
+
+### Manual earnings draft preview — 2026-10-22
+
+`execution/preview_report_draft.py` accepts an explicit read-only `--db`, output
+`--repo-root`, structured `--draft`, and `--post-quarter` for POST. Invoke it through
+`execution/sqlite_bootstrap.py`. It binds supplied paragraphs to an admitted
+snapshot, resolved listing, source nodes and canonical financial references in one
+caller-preserving read transaction. POST baseline selection shares that snapshot.
+The command writes a `draft_preview` through the existing report artifact owner.
+Draft, binding and baseline receipts remain beside the saved body and standalone
+page. Source locators and reported/inference labels remain visible on reopening.
+
+The receipt certifies source/numerical binding only. Completeness stays unassessed,
+semantic review stays required, and decision-grade stays false. Draft previews do
+not replace latest reports and the decision-brief assessor rejects their acceptance.
+Late PRE binding remains historical reconstruction even with an earlier draft date.
+Selected legacy PRE baselines do not acquire verified binding. Scheduled generators
+and financial state remain unchanged. There are no provider calls or new routes.
+Evidence: `tests/test_report_contract.py`, `tests/test_report_preview.py`, existing
+artifact-index and PRE/POST regressions, and isolated rendered preview receipts.

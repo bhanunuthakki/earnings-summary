@@ -19,6 +19,7 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
+from runtime.deterministic import canonical_json_ascii as _canonical_json
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -1282,7 +1283,3 @@ def write_json_atomically(path: Path, payload: BaseModel | Mapping[str, object])
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)

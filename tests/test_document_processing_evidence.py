@@ -4,9 +4,9 @@ import hashlib
 import json
 import shutil
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import fitz
@@ -32,11 +32,17 @@ from provenance.evidence_ledger import (
     SourceObservation,
 )
 from provenance.fulltext_extractor_identity import (
+    BASE_FULLTEXT_EXTRACTOR,
     OFFICE_FULLTEXT_EXTRACTOR,
+    PDF_FULLTEXT_EXTRACTOR,
     PDF_TABLE_EXTRACTOR_NAME,
+    RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0,
     STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR,
+    FulltextExtractorIdentity,
     pdf_table_extractor_code_version,
+    select_approved_fulltext_run,
 )
+from provenance.integrity_audit import CutoverAuditOptions, audit_cutover_readiness
 from provenance.pdf_table_extraction import PdfTableExtractionArtifact, extract_pdf_tables
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -336,6 +342,7 @@ def _seed_run(
     children: tuple[tuple[str, str, EvidenceLocator], ...],
     legacy_ascii_output: bool = False,
     node_recorded_at: datetime = T0,
+    completed_at: datetime = T0,
 ) -> tuple[EvidenceNode, ...]:
     document_node = _node(
         run_id=run_id,
@@ -378,7 +385,7 @@ def _seed_run(
             extractor_code_version=extractor_code_version,
             output_sha256=output_sha,
             started_at=T0,
-            completed_at=T0,
+            completed_at=completed_at,
             outcome="succeeded",
         )
     )
@@ -1522,6 +1529,77 @@ def test_transcript_speaker_lane_requires_immutable_speaker_and_timecodes(
             )
 
 
+@pytest.mark.parametrize("lane", ["transcript_turns", "transcript_speakers"])
+@pytest.mark.parametrize("tampered", [False, True])
+def test_transcript_unicode_locator_uses_native_commitment(
+    conn: sqlite3.Connection, lane: str, tampered: bool
+) -> None:
+    blob = _seed_document(conn, document_version_id="unicode-call", media_type="text/plain")
+    locator = EvidenceLocator(
+        transcript_turn_sequence=0,
+        transcript_speaker="Pedro  Leduc  -  Itaú  BBA",
+        transcript_time_code_start="00:00:01",
+        transcript_time_code_end="00:00:10",
+    )
+    nodes = _seed_run(
+        conn,
+        document_version_id="unicode-call",
+        blob_sha=blob,
+        run_id="unicode-call-run",
+        extractor_name="legacy-evidence-backfill",
+        extractor_code_version="evidence-backfill@1",
+        extractor_config_sha256="b" * 64,
+        children=(("transcript_turn", "Question.", locator),),
+        legacy_ascii_output=True,
+    )
+    assert locator.canonical_sha256 != _sha(locator.model_dump(mode="json", exclude_none=True))
+    if tampered:
+        conn.execute("DROP TRIGGER trg_evidence_nodes_append_only")
+        conn.execute(
+            "UPDATE evidence_nodes SET locator_json=? WHERE node_id=?",
+            (
+                EvidenceLocator.model_validate(
+                    locator.model_dump(exclude_none=True) | {"transcript_speaker": "Other"}
+                ).canonical_json,
+                nodes[1].node_id,
+            ),
+        )
+        with pytest.raises(
+            DocumentProcessingEvidenceIntegrityError, match="native_locator_commitment_mismatch"
+        ):
+            publish_document_processing_evidence(
+                conn,
+                document_version_id="unicode-call",
+                processing_lane=lane,
+                cutoff_at=T1,
+                recorded_at=T2,
+            )
+        return
+
+    receipt = publish_document_processing_evidence(
+        conn,
+        document_version_id="unicode-call",
+        processing_lane=lane,
+        cutoff_at=T1,
+        recorded_at=T2,
+    )
+    proof = verify_document_processing_evidence(
+        conn,
+        receipt.evidence_seal_id,
+        document_version_id="unicode-call",
+        processing_lane=lane,
+        cutoff_at=T1,
+    )
+    assert proof.member_count == 1
+    member = conn.execute(
+        "SELECT locator_json,locator_sha256 FROM document_processing_evidence_members "
+        "WHERE evidence_seal_id=?",
+        (receipt.evidence_seal_id,),
+    ).fetchone()
+    closure_locator_json = _canonical(locator.model_dump(mode="json", exclude_none=True))
+    assert tuple(member) == (closure_locator_json, _sha(closure_locator_json))
+
+
 def test_pdf_ocr_rejects_partial_required_page_set_then_closes_exactly(
     conn: sqlite3.Connection,
 ) -> None:
@@ -1933,9 +2011,15 @@ def test_pdf_preflight_matches_normalized_text_but_seals_raw_output(
         )
 
 
-@pytest.mark.parametrize("unapproved_field", [None, "code", "config"])
-def test_pdf_legacy_seal_replays_but_cannot_authorize_new_seal(
-    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, unapproved_field: str | None
+@pytest.mark.parametrize(
+    "legacy", [BASE_FULLTEXT_EXTRACTOR, RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0]
+)
+@pytest.mark.parametrize("unapproved_field", [None, "code", "config", "version"])
+def test_pdf_retained_seals_replay_with_exact_approved_identities(
+    conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    unapproved_field: str | None,
+    legacy: FulltextExtractorIdentity,
 ) -> None:
     from provenance import document_processing_evidence as processing
     from provenance.fulltext_extractor_identity import (
@@ -1945,11 +2029,19 @@ def test_pdf_legacy_seal_replays_but_cannot_authorize_new_seal(
 
     document_id = "pdf-runtime-history"
     blob_sha = _seed_document(conn, document_version_id=document_id, media_type="application/pdf")
-    legacy = BASE_FULLTEXT_EXTRACTOR
     if unapproved_field == "code":
         legacy = replace(legacy, code_version="fulltext-evidence-backfill@999-unapproved")
     elif unapproved_field == "config":
         legacy = replace(legacy, config_sha256="f" * 64)
+    elif unapproved_field == "version":
+        legacy = replace(
+            legacy,
+            code_version="fulltext-evidence-backfill@6-pdf-public-access;pypdf=6.18.0",
+            config_sha256=_sha(
+                "fulltext-evidence-backfill-config-v6-pdf:pdf-pages,empty-opening-password,"
+                "verify-permissions,pypdf=6.18.0"
+            ),
+        )
     _seed_run(
         conn,
         document_version_id=document_id,
@@ -2019,16 +2111,26 @@ def test_pdf_legacy_seal_replays_but_cannot_authorize_new_seal(
         observed_through=T2,
     )
     assert verified.extraction_run_id == "historical-pdf-run"
-    with pytest.raises(
-        DocumentProcessingEvidenceMissingError, match="native_extraction_run_missing"
-    ):
-        publish_document_processing_evidence(
+    if legacy is BASE_FULLTEXT_EXTRACTOR:
+        with pytest.raises(
+            DocumentProcessingEvidenceMissingError, match="native_extraction_run_missing"
+        ):
+            publish_document_processing_evidence(
+                conn,
+                document_version_id=document_id,
+                processing_lane="pdf_text",
+                cutoff_at=T2,
+                recorded_at=T2,
+            )
+    else:
+        retained_seal = publish_document_processing_evidence(
             conn,
             document_version_id=document_id,
             processing_lane="pdf_text",
-            cutoff_at=T2,
+            cutoff_at=T1 + timedelta(minutes=1),
             recorded_at=T2,
         )
+        assert retained_seal.extraction_run_id == "historical-pdf-run"
     current = PDF_FULLTEXT_EXTRACTOR
     _seed_run(
         conn,
@@ -2054,6 +2156,17 @@ def test_pdf_legacy_seal_replays_but_cannot_authorize_new_seal(
         recorded_at=T2,
     )
     assert new_seal.extraction_run_id == "promoted-pdf-run"
+    assert (
+        verify_document_processing_evidence(
+            conn,
+            new_seal.evidence_seal_id,
+            document_version_id=document_id,
+            processing_lane="pdf_text",
+            cutoff_at=T2,
+            observed_through=T2,
+        ).extraction_run_id
+        == "promoted-pdf-run"
+    )
     assert new_seal.evidence_seal_id != old_seal.evidence_seal_id
     assert (
         verify_document_processing_evidence(
@@ -2241,4 +2354,193 @@ def test_native_clock_invalid_value_fails_closed(conn: sqlite3.Connection) -> No
         )
     assert (
         conn.execute("SELECT COUNT(*) FROM document_processing_evidence_headers").fetchone()[0] == 0
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "seal_cutoff",
+        "recorded_at",
+        "audit_cutoff",
+        "observed_through",
+        "expected_count",
+        "late_seal",
+    ),
+    [
+        (T1, T1, T2, T2, 1, False),
+        (T2, T2, T1, T2, 0, False),
+        (T1, T2, T1, T1, 0, False),
+        (T1, T1, T1, T1, 1, True),
+    ],
+    ids=["historical-evidence", "future-knowledge", "future-recording", "future-seal"],
+)
+def test_cutover_processing_evidence_dual_clocks(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    seal_cutoff: datetime,
+    recorded_at: datetime,
+    audit_cutoff: datetime,
+    observed_through: datetime,
+    expected_count: int,
+    late_seal: bool,
+) -> None:
+    path = migrated_db(tmp_path / "evidence.db")
+    with sqlite3.connect(path) as conn:
+        conn.create_function("fact_sha256", 1, _sha)
+        blob = _seed_document(conn, document_version_id="native-html", media_type="text/html")
+        identity = STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR
+        _seed_run(
+            conn,
+            document_version_id="native-html",
+            blob_sha=blob,
+            run_id="native-html-run",
+            extractor_name=identity.name,
+            extractor_code_version=identity.code_version,
+            extractor_config_sha256=identity.config_sha256,
+            children=(
+                ("passage", "Revenue increased.", EvidenceLocator(source_ref="report.html")),
+            ),
+            node_recorded_at=T0,
+        )
+        receipt = publish_document_processing_evidence(
+            conn,
+            document_version_id="native-html",
+            processing_lane="html_native_hierarchy",
+            cutoff_at=seal_cutoff,
+            recorded_at=recorded_at,
+        )
+        if late_seal:
+            # Simulate corruption: an eligible header cannot hide a post-O seal.
+            conn.execute("DROP TRIGGER trg_document_processing_evidence_seals_update_append_only")
+            conn.execute(
+                "UPDATE document_processing_evidence_seals SET sealed_at=?",
+                (T2.isoformat(),),
+            )
+        before = conn.total_changes
+        summary = audit_cutover_readiness(
+            conn,
+            CutoverAuditOptions(knowledge_cutoff=audit_cutoff, observed_through=observed_through),
+        )
+        assert conn.total_changes == before
+        coverage = next(
+            row for row in summary.coverage if row.gate == "document_processing_evidence"
+        )
+        assert coverage.eligible_count == expected_count
+        assert coverage.verified_count == (0 if late_seal else expected_count)
+        assert coverage.failed_count == int(late_seal)
+        assert receipt.member_count == 1
+        # Other absent populations remain blockers; native evidence cannot waive them.
+        assert summary.has_blockers
+        assert len(summary.coverage) == 13
+
+
+@pytest.mark.parametrize("complete_promotion", [False, True])
+@pytest.mark.parametrize("has_assessment", [False, True])
+@pytest.mark.parametrize("promoted_clock", ["eligible", "late_completion", "late_nodes"])
+def test_pdf_seal_selects_one_complete_run_when_promotion_omits_page(
+    conn: sqlite3.Connection,
+    complete_promotion: bool,
+    has_assessment: bool,
+    promoted_clock: str,
+) -> None:
+    document_id = "pdf-omitted-page"
+    cutoff = T1.replace(minute=0, second=0, microsecond=100_000)
+    late = cutoff.replace(microsecond=900_000)
+    blob_sha = _seed_document(conn, document_version_id=document_id, media_type="application/pdf")
+    text = "Reported revenue."
+    for run_id, identity, page_count in (
+        ("retained", RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0, 2),
+        ("promoted", PDF_FULLTEXT_EXTRACTOR, 2 if complete_promotion else 1),
+    ):
+        _seed_run(
+            conn,
+            document_version_id=document_id,
+            blob_sha=blob_sha,
+            run_id=run_id,
+            extractor_name=identity.name,
+            extractor_code_version=identity.code_version,
+            extractor_config_sha256=identity.config_sha256,
+            completed_at=late
+            if run_id == "promoted" and promoted_clock == "late_completion"
+            else T0,
+            node_recorded_at=late
+            if run_id == "promoted" and promoted_clock == "late_nodes"
+            else T0,
+            children=tuple(
+                ("pdf_page", text, EvidenceLocator(source_ref=document_id, page_number=page))
+                for page in range(1, page_count + 1)
+            ),
+        )
+    selected_run_id = (
+        "promoted" if complete_promotion and promoted_clock == "eligible" else "retained"
+    )
+    if not has_assessment:
+        assert (
+            select_approved_fulltext_run(
+                conn, document_id, PDF_FULLTEXT_EXTRACTOR, observed_through=cutoff
+            )
+            == selected_run_id
+        )
+        with pytest.raises(
+            DocumentProcessingEvidenceMissingError,
+            match="pdf_native_sufficient_assessment_missing_or_ambiguous",
+        ):
+            publish_document_processing_evidence(
+                conn,
+                document_version_id=document_id,
+                processing_lane="pdf_text",
+                cutoff_at=cutoff,
+                recorded_at=T2,
+            )
+        return
+    conn.execute(
+        "INSERT INTO ocr_document_assessments VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "native-assessment",
+            "native-assessment",
+            document_id,
+            blob_sha,
+            "pdf-preflight",
+            "d" * 64,
+            "pdf-preflight@1",
+            "e" * 64,
+            2,
+            "native_sufficient",
+            None,
+            T0,
+        ),
+    )
+    conn.executemany(
+        "INSERT INTO ocr_preflight_pages VALUES (?,?,?,?,?)",
+        [("native-assessment", page, len(text), _sha(text), 0) for page in (1, 2)],
+    )
+    seal = publish_document_processing_evidence(
+        conn,
+        document_version_id=document_id,
+        processing_lane="pdf_text",
+        cutoff_at=cutoff,
+        recorded_at=T2,
+    )
+    assert seal.extraction_run_id == selected_run_id
+    members = conn.execute(
+        "SELECT native_id FROM document_processing_evidence_members WHERE evidence_seal_id=?",
+        (seal.evidence_seal_id,),
+    ).fetchall()
+    assert {row[0] for row in members} == {f"{selected_run_id}:1", f"{selected_run_id}:2"}
+    assert (
+        conn.execute(
+            "SELECT count(*) FROM evidence_nodes WHERE extraction_run_id='retained'"
+        ).fetchone()[0]
+        == 3
+    )
+    assert (
+        verify_document_processing_evidence(
+            conn,
+            seal.evidence_seal_id,
+            document_version_id=document_id,
+            processing_lane="pdf_text",
+            cutoff_at=cutoff,
+            observed_through=T2,
+        ).extraction_run_id
+        == selected_run_id
     )

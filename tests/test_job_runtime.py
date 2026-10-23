@@ -206,6 +206,243 @@ class _PollingProcess:
         self.terminated = True
 
 
+class _ProcessWaitKernel:
+    def __init__(self, wait_result: int, *, handle: int = 1 << 40) -> None:
+        self.wait_result = wait_result
+        self.handle = handle
+        self.opened: list[tuple[int, bool, int]] = []
+        self.waited: list[tuple[int, int]] = []
+        self.closed: list[int] = []
+
+    def OpenProcess(self, desired_access: int, inherit_handle: bool, pid: int) -> int:
+        self.opened.append((desired_access, inherit_handle, pid))
+        return self.handle
+
+    def WaitForSingleObject(self, handle: int, milliseconds: int) -> int:
+        self.waited.append((handle, milliseconds))
+        return self.wait_result
+
+    def CloseHandle(self, handle: int) -> int:
+        self.closed.append(handle)
+        return 1
+
+
+def _install_process_wait_kernel(
+    monkeypatch: pytest.MonkeyPatch, kernel: _ProcessWaitKernel
+) -> None:
+    # Keep pathlib on the host platform while exercising only the Windows probe.
+    monkeypatch.setattr(job_runtime, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
+    monkeypatch.setattr(job_runtime, "_load_process_query_kernel32", lambda: kernel)
+
+
+@pytest.mark.parametrize(
+    ("wait_result", "expected_alive"),
+    [(0, False), (0x102, True), (0xFFFFFFFF, True), (0x80, True)],
+)
+def test_windows_process_probe_checks_termination_and_closes_handle(
+    monkeypatch: pytest.MonkeyPatch, wait_result: int, expected_alive: bool
+) -> None:
+    kernel = _ProcessWaitKernel(wait_result)
+    _install_process_wait_kernel(monkeypatch, kernel)
+
+    assert getattr(job_runtime, "_pid_is_alive")(12345) is expected_alive
+    assert kernel.opened == [(0x100000, False, 12345)]
+    assert kernel.waited == [(kernel.handle, 0)]
+    assert kernel.closed == [kernel.handle]
+
+
+@pytest.mark.parametrize(("error", "expected_alive"), [(87, False), (5, True), (6, True)])
+def test_windows_process_open_failure_requires_positive_absence_evidence(
+    monkeypatch: pytest.MonkeyPatch, error: int, expected_alive: bool
+) -> None:
+    import ctypes
+
+    kernel = _ProcessWaitKernel(0, handle=0)
+    _install_process_wait_kernel(monkeypatch, kernel)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: error, raising=False)
+
+    assert getattr(job_runtime, "_pid_is_alive")(12345) is expected_alive
+    assert kernel.waited == []
+    assert kernel.closed == []
+
+
+@pytest.mark.parametrize("times_available", [True, False])
+def test_windows_creation_identity_uses_full_handle_and_closes_on_query_failure(
+    monkeypatch: pytest.MonkeyPatch, times_available: bool
+) -> None:
+    from ctypes import wintypes
+
+    kernel = _ProcessWaitKernel(0x102)
+    _install_process_wait_kernel(monkeypatch, kernel)
+    api = getattr(job_runtime, "_load_process_query_kernel32")()
+    times_handles: list[int] = []
+
+    def process_times(
+        handle: int, created: object, _exited: object, _kernel: object, _user: object
+    ) -> bool:
+        times_handles.append(handle)
+        filetime = getattr(created, "_obj")
+        assert isinstance(filetime, wintypes.FILETIME)
+        filetime.dwHighDateTime = 0x12345678
+        filetime.dwLowDateTime = 0x87654321
+        return times_available
+
+    api.GetProcessTimes = process_times
+
+    # Refuse a fresh untyped DLL route; this function must use the typed loader.
+    def untyped_dll(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("creation identity bypassed the typed process-query loader")
+
+    import ctypes
+
+    monkeypatch.setattr(ctypes, "WinDLL", untyped_dll, raising=False)
+    expected = f"win:{(0x12345678 << 32) | 0x87654321}" if times_available else None
+    assert getattr(job_runtime, "_process_start_identity")(12345) == expected
+    assert kernel.opened == [(0x1000, False, 12345)]
+    assert times_handles == [kernel.handle]
+    assert kernel.closed == [kernel.handle]
+
+
+def test_windows_process_loader_declares_handle_and_filetime_pointer_abi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    class NativeFunction:
+        argtypes: list[object] | None = None
+        restype: object | None = None
+
+    api = SimpleNamespace(
+        OpenProcess=NativeFunction(),
+        WaitForSingleObject=NativeFunction(),
+        GetProcessTimes=NativeFunction(),
+        CloseHandle=NativeFunction(),
+    )
+
+    def load_dll(_name: str, *, use_last_error: bool) -> SimpleNamespace:
+        assert use_last_error
+        return api
+
+    monkeypatch.setattr(job_runtime.sys, "platform", "win32")
+    monkeypatch.setattr(ctypes, "WinDLL", load_dll, raising=False)
+    assert getattr(job_runtime, "_load_process_query_kernel32")() is api
+    assert api.OpenProcess.restype is wintypes.HANDLE
+    assert api.OpenProcess.argtypes == [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    assert api.GetProcessTimes.argtypes == [
+        wintypes.HANDLE,
+        *([ctypes.POINTER(wintypes.FILETIME)] * 4),
+    ]
+    assert api.GetProcessTimes.restype is wintypes.BOOL
+    assert api.WaitForSingleObject.argtypes == [wintypes.HANDLE, wintypes.DWORD]
+    assert api.CloseHandle.argtypes == [wintypes.HANDLE]
+
+
+@pytest.mark.parametrize("wait_result", [0, 0x102, 0xFFFFFFFF, 0x80])
+def test_windows_owner_wait_state_controls_stale_lock_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wait_result: int
+) -> None:
+    from contextlib import nullcontext
+
+    kernel = _ProcessWaitKernel(wait_result)
+    _install_process_wait_kernel(monkeypatch, kernel)
+
+    def no_transition_guard(_path: Path) -> nullcontext[None]:
+        return nullcontext()
+
+    def start_identity(_pid: int) -> str:
+        return "win:same"
+
+    monkeypatch.setattr(job_runtime, "_lock_transition_guard", no_transition_guard)
+    monkeypatch.setattr(job_runtime, "_process_start_identity", start_identity)
+    lock_path = _write_set_lock_path(tmp_path, "unit-liveness")
+    lock_path.parent.mkdir(parents=True)
+    lock_path.write_text(
+        json.dumps({"pid": 12345, "token": "exited-owner", "process_start": "win:same"}),
+        encoding="utf-8",
+    )
+
+    if wait_result == 0:
+        with JobLock(tmp_path, "successor", ["unit-liveness"], wait_s=0):
+            assert json.loads(lock_path.read_text(encoding="utf-8"))["token"] != "exited-owner"
+        assert not lock_path.exists()
+    else:
+        with (
+            pytest.raises(JobAlreadyRunningError),
+            JobLock(tmp_path, "successor", ["unit-liveness"], wait_s=0),
+        ):
+            pass
+        assert json.loads(lock_path.read_text(encoding="utf-8"))["token"] == "exited-owner"
+    assert kernel.waited
+    assert kernel.closed == [kernel.handle] * len(kernel.waited)
+
+
+@pytest.mark.parametrize(
+    ("wait_result", "observed_start", "expected_exit"),
+    [
+        (0, "win:same", -15),
+        (0x102, "win:same", 17),
+        (0xFFFFFFFF, "win:same", 17),
+        (0x80, "win:same", 17),
+        (0x102, None, 17),
+        (0x102, "win:other", -15),
+    ],
+)
+def test_windows_scheduler_owner_wait_state_controls_child_termination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    wait_result: int,
+    observed_start: str | None,
+    expected_exit: int,
+) -> None:
+    kernel = _ProcessWaitKernel(wait_result)
+    _install_process_wait_kernel(monkeypatch, kernel)
+    process = _PollingProcess()
+    polls = 0
+
+    def poll() -> int | None:
+        nonlocal polls
+        polls += 1
+        # Bound the old implementation's failure without leaving a worker loop.
+        return -15 if process.terminated else 17 if polls > 1 else None
+
+    monkeypatch.setattr(process, "poll", poll)
+
+    def fake_popen(*_args: object, **_kwargs: object) -> _PollingProcess:
+        return process
+
+    def no_process_tree_job(_process: object) -> None:
+        return None
+
+    def start_identity(_pid: int) -> str | None:
+        return observed_start
+
+    def no_sleep(_seconds: float) -> None:
+        pass
+
+    monkeypatch.setattr(job_runtime.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(job_runtime, "_create_process_tree_job", no_process_tree_job)
+    monkeypatch.setattr(job_runtime, "_process_start_identity", start_identity)
+    monkeypatch.setattr(job_runtime.time, "sleep", no_sleep)
+    terminated: list[int] = []
+
+    def terminate_tree(target: _PollingProcess) -> None:
+        terminated.append(target.pid)
+        target.terminated = True
+
+    monkeypatch.setattr(job_runtime, "_terminate_process_tree", terminate_tree)
+
+    assert (
+        _run_managed_child(
+            ["python", "worker.py"], cwd=tmp_path, env={}, scheduler_owner=(12345, "win:same")
+        )
+        == expected_exit
+    )
+    assert terminated == ([process.pid] if expected_exit == -15 else [])
+    assert kernel.waited == [(kernel.handle, 0)]
+    assert kernel.closed == [kernel.handle]
+
+
 def test_scheduler_owner_exit_terminates_managed_child_tree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -452,7 +689,7 @@ def test_every_cron_portfolio_db_job_has_an_explicit_reviewed_classification() -
 
 def test_only_proven_bounded_database_jobs_keep_the_coarse_mutex() -> None:
     # db-gc owns deliberate batch/VACUUM maintenance; expiry is a bounded row
-    # update; weekly validation is a measured seconds-long confidence rescore.
+    # update; weekly validation is a measured seconds-long confidence rescore;
     # Every job that reads a large file corpus or can perform external I/O is
     # intentionally absent even when it eventually writes portfolio.db.
     assert {

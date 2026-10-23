@@ -89,13 +89,22 @@ def test_growth_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
 
     def grow(descriptor: int, count: int) -> bytes:
         sizes.append(count)
-        source.write_bytes(b"exact-and-extra")
+        if os.name == "nt":
+            with pytest.raises(PermissionError):
+                source.write_bytes(b"exact-and-extra")
+        else:
+            source.write_bytes(b"exact-and-extra")
         return original_read(descriptor, count)
 
     monkeypatch.setattr(os, "read", grow)
-    with pytest.raises(ImmutableArtifactConflictError, match="byte limit"):
-        read_stable_artifact(source, max_bytes=5, allowed_root=tmp_path)
-    assert sizes == [5]
+    if os.name == "nt":
+        _, payload = read_stable_artifact(source, max_bytes=5, allowed_root=tmp_path)
+        assert payload == b"exact"
+        assert sizes == [5]
+    else:
+        with pytest.raises(ImmutableArtifactConflictError, match="byte limit"):
+            read_stable_artifact(source, max_bytes=5, allowed_root=tmp_path)
+        assert sizes == [5]
 
 
 def test_full_final_path_stat_is_checked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -132,14 +141,23 @@ def test_parent_replacement_refuses_pinned_source(
         nonlocal replaced
         if not replaced:
             replaced = True
-            folder.rename(tmp_path / "moved")
-            folder.mkdir()
-            source.write_bytes(b"exact")
+            if os.name == "nt":
+                with pytest.raises(PermissionError):
+                    folder.rename(tmp_path / "moved")
+            else:
+                folder.rename(tmp_path / "moved")
+                folder.mkdir()
+                source.write_bytes(b"exact")
         return original_read(descriptor, count)
 
     monkeypatch.setattr(os, "read", swap_parent)
-    with pytest.raises(ImmutableArtifactConflictError, match=r"path changed|directory changed"):
-        read_stable_artifact(source, max_bytes=5, allowed_root=tmp_path)
+    if os.name == "nt":
+        _, payload = read_stable_artifact(source, max_bytes=5, allowed_root=tmp_path)
+        assert replaced and payload == b"exact"
+        assert folder.is_dir() and not (tmp_path / "moved").exists()
+    else:
+        with pytest.raises(ImmutableArtifactConflictError, match=r"path changed|directory changed"):
+            read_stable_artifact(source, max_bytes=5, allowed_root=tmp_path)
 
 
 class FakeWinFunction:

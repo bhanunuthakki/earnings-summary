@@ -1,0 +1,19 @@
+# Owner-approved M4 local search runtime (R4): the LanceDB local vector index
+# plus the FastEmbed encoder consumed by src/search/local_vector.py. Kept out
+# of the default application lock (requirements.lock) so the heavy native
+# stack stays scoped to machines that opt into local semantic search; compiled
+# to requirements-search.lock with hashes and installed only with
+# --require-hashes (services.yaml: commands lock-search / install-search).
+# Shared dependencies (onnxruntime 1.28.0, huggingface-hub, numpy, pillow,
+# tokenizers, tqdm, requests, packaging, pydantic, urllib3, ...) are pinned
+# by the compile-time --constraints requirements.lock and must not drift.
+# overrides (lancedb; python_version<'3.12') is intentionally absent.
+fastembed==0.9.0
+lancedb==0.40.0
+pyarrow==25.0.1
+loguru==0.7.3
+mmh3==5.3.1
+py-rust-stemmers==0.1.8
+deprecation==2.1.0
+lance-namespace==0.13.0
+lance-namespace-urllib3-client==0.13.0

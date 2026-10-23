@@ -9,7 +9,6 @@ projection over its evidence authorities.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from enum import StrEnum
@@ -18,6 +17,7 @@ from typing import Literal, Self, cast
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from identity import DEFAULT_USER_ID
+from runtime.deterministic import content_sha256_ascii_default_str as _sha
 
 PROFILE_RULE_VERSION = "company_profile_rules.v1"
 ETF_PROFILE_RULE_VERSION = "etf_profile_rules.v1"
@@ -287,11 +287,6 @@ class CompanyProfileProjection(BaseModel):
     moat: MoatAssessment
     source_artifact_id: int | None = None
     refresh_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
-
-
-def _sha(payload: object) -> str:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _coarse_band(value: float | None, cuts: tuple[float, ...]) -> str:

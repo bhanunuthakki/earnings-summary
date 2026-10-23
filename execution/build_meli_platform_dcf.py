@@ -32,6 +32,12 @@ geography, not Commerce/Fintech.
 Verified refresh requires DCF_MELI_ASSUMPTIONS_PATH and the configured database,
 plus staged DCF_DEST/DCF_PROMOTE_DEST. The artifact owns the reviewed effective
 discount rates; implicit cached CAPM recalculation is disabled in this route.
+Reviewed scenario vectors use that same assumptions artifact. Their existing
+ScenarioAcceptance is supplied separately with DCF_MELI_SCENARIO_ACCEPTANCE_PATH
+(optional SHA256 pin). DCF_MELI_INPUT_RECEIPT_PATH supplies the original retained
+ModelInputReceipt (optional SHA256 pin); fresh verification preserves its
+commitment and records current physical checks separately. Workbook execution
+requires explicit loader-supplied DCF_ARTIFACT_NODE and DCF_ARTIFACT_NODE_MODULES.
 DCF_PERSIST=0 permits only a labeled, non-promoting .tmp draft. Values are $M;
 shares are millions.
 """
@@ -46,11 +52,6 @@ from dataclasses import asdict, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, cast
-
-import openpyxl
-from openpyxl.styles import Border, Font, PatternFill, Side
-from openpyxl.utils import get_column_letter
-from openpyxl.worksheet.worksheet import Worksheet
 
 # Import co-located package code (this script's repo), NOT REPO/src — REPO points
 # at the DATA repo (which may be a different checkout, e.g. a worktree's data lives
@@ -71,11 +72,19 @@ from dcf.input_evidence import (
     ModelInputReceipt,
     ModelInputRequest,
     SourceReadContext,
+    canonical_digest,
 )
 from dcf.meli_inputs import (
-    ASSUMPTION_KEYS,
+    ASSUMPTION_KEYS as ASSUMPTION_KEYS,
+)
+from dcf.meli_inputs import (
     RECIPE,
+    REPORTED_DRIVER_KEYS,
+    assumption_keys_for_recipe,
+    calculate_actuals,
     effective_numeric_inputs,
+    is_meli_recipe,
+    model_output,
     prepare_meli_inputs,
     verify_meli_inputs,
 )
@@ -83,12 +92,25 @@ from dcf.meli_model import Assum as Assum
 from dcf.meli_model import Mirror as Mirror
 from dcf.meli_model import mirror as mirror
 from dcf.meli_model import validate_credit_terminal
+from dcf.meli_workbook import (
+    BearProvenance,
+    MeliWorkbookSpec,
+    WorkbookRuntime,
+    build_workbook,
+    validate_cases,
+)
+from dcf.meli_workbook import R as R
+from dcf.meli_workbook import workbook_spec as _workbook_spec
 from dcf.provenance import build_file_provenance, schema_supports_provenance
+from dcf.readiness import replay_model_scenarios
+from dcf.scenario_acceptance import ScenarioAcceptance, verify_scenario_acceptance
 from dcf.specialized_price import (
     SpecializedPriceObservation,
     price_seed_source_files,
     resolve_specialized_price,
 )
+from pipeline.db_writer_gate import hold_writer_gate
+from provenance.immutable_artifact import read_stable_artifact
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 try:  # persistence is best-effort -- the workbook builds without a DB
@@ -107,13 +129,6 @@ else:
     country_risk = _country_risk_module
     global_dcf = _global_assumptions_module
 
-# Growth fade curvature — kept identical to the redesigned FCFF engine so the two
-# models decelerate growth the same way (convex, front-loaded). Imported when the
-# package is available; falls back to the same literal.
-try:
-    from dcf.redesign import GROWTH_FADE_CURVATURE as _CURVATURE
-except ImportError:  # pragma: no cover
-    _CURVATURE = 2.0
 try:  # scenario emission (Monthly Red Team PR8) -- best-effort like persistence
     from dcf import redesign as _redesign_module
 except ImportError:  # pragma: no cover
@@ -124,18 +139,6 @@ else:
 REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
 T = os.environ.get("DCF_TICKER", "MELI")
 DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
-
-YELLOW = PatternFill("solid", fgColor="FFF2CC")
-HEAD_FILL = PatternFill("solid", fgColor="1F2937")
-HEAD_FONT = Font(color="FFFFFF", bold=True)
-SUB_FONT = Font(bold=True, color="374151")
-THIN = Side(style="thin", color="D1D5DB")
-BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
-PCT = "0.0%"
-USD0 = "#,##0"
-NUM1 = "0.0"
-NUM2 = "0.00"
-MULT = '0.0"x"'
 
 
 def reverse_valuation(s: Assum, m: Mirror) -> dict[str, object] | None:
@@ -312,12 +315,32 @@ def scenario_assumptions(s: Assum, deltas: Any) -> Assum:
     return s2
 
 
-def scenarios_block(s: Assum, m: Mirror, holdings: dict[str, object] | None) -> dict[str, object]:
+def scenarios_block(
+    s: Assum,
+    m: Mirror,
+    holdings: dict[str, object] | None,
+    *,
+    cases: dict[str, Assum] | None = None,
+    recipe: str = RECIPE,
+) -> dict[str, object]:
     """The ``scenarios`` payload for ``dcf_runs.assumption_snapshot_json`` —
     structurally identical to ``refresh_dcf._redesign_snapshot``'s block, so
     ``parse_scenario_fair_values`` / ``parse_scenario_bear_provenance`` read it
     unchanged. Requires ``redesign_mod`` (caller gates on it)."""
     import dataclasses as _dc
+
+    if cases is not None:
+        verified = _validated_workbook_cases(s, holdings, cases, recipe=recipe)
+        return {
+            name: {
+                "fair_value_per_share_usd": mirror(case).vps,
+                "provenance": "explicit_vector_acceptance_separate",
+                "effective_inputs_sha256": canonical_digest(
+                    effective_numeric_inputs(asdict(case), recipe=recipe)
+                ),
+            }
+            for name, case in verified.items()
+        }
 
     if redesign_mod is None:
         raise RuntimeError("MELI scenario calculation requires the redesign module")
@@ -340,351 +363,81 @@ def scenarios_block(s: Assum, m: Mirror, holdings: dict[str, object] | None) -> 
 # --------------------------------------------------------------------------- #
 # workbook
 # --------------------------------------------------------------------------- #
-def _hdr(ws: Worksheet, cell: str, text: str) -> None:
-    ws[cell] = text
-    ws[cell].fill = HEAD_FILL
-    ws[cell].font = HEAD_FONT
+def _validated_workbook_cases(
+    s: Assum,
+    holdings: dict[str, object] | None,
+    cases: dict[str, Assum] | None,
+    *,
+    recipe: str = RECIPE,
+) -> dict[str, Assum]:
+    if cases is None:
+        if redesign_mod is None:
+            raise InputEvidenceError("workbook_scenarios_unavailable")
+        cases = {
+            "base": s,
+            "bear": scenario_assumptions(s, redesign_mod.thesis_bear_seed(holdings)),
+            "bull": scenario_assumptions(s, redesign_mod.BULL_SEED),
+        }
+    return validate_cases(s, cases, recipe=recipe)
 
 
-def _inp(ws: Worksheet, row: int, label: str, val: float, fmt: str) -> None:
-    ws.cell(row=row, column=1, value=label).font = Font(color="6B7280")
-    c = ws.cell(row=row, column=2, value=val)
-    c.fill = YELLOW
-    c.number_format = fmt
-    c.border = BORDER
+def _workbook_bear_provenance(
+    holdings: dict[str, object] | None,
+    cases: dict[str, Assum] | None,
+) -> BearProvenance:
+    if cases is not None:
+        return "explicit_vector_acceptance_separate"
+    if redesign_mod is not None and redesign_mod.parse_thesis_bear_deltas(holdings) is not None:
+        return "thesis"
+    return "seed"
 
 
-# Dashboard input rows (column B = the editable yellow cell).
-R = {
-    "comm_rev0": 3,
-    "comm_gn": 4,
-    "comm_gt": 5,
-    "comm_mn": 6,
-    "comm_mt": 7,
-    "fpay_rev0": 8,
-    "fpay_gn": 9,
-    "fpay_gt": 10,
-    "fpay_mn": 11,
-    "fpay_mt": 12,
-    "da": 13,
-    "capxn": 14,
-    "capxt": 15,
-    "nwc": 16,
-    "tax": 17,
-    "opmult": 18,
-    "wacc": 19,
-    "cb0": 20,
-    "cbgn": 21,
-    "cbgt": 22,
-    "niman": 23,
-    "nimat": 24,
-    "cropex": 25,
-    "cap": 26,
-    "cke": 27,
-    "cgt": 28,
-    "croe": 29,
-    "netcash": 30,
-    "years": 31,
-    "sh": 32,
-    "px": 33,
-    "curv": 34,
-    # outputs
-    "opev": 37,
-    "crev": 38,
-    "eqv": 39,
-    "vps": 40,
-    "up": 41,
-    "termrev": 42,
-    "croet": 43,
-}
-
-
-def build(s: Assum, m: Mirror, dest: Path, holdings: dict[str, object] | None = None) -> None:
-    """``holdings`` (Monthly Red Team PR10) is the already-loaded
-    ``micro_thesis/holdings/<T>.json`` dict, threaded through so the Scenario
-    sheet's Bear/Bull rows derive from the SAME ``scenario_assumptions()`` call
-    ``scenarios_block`` uses for the persisted ``dcf_runs`` snapshot — the sheet
-    can no longer show a bear the rest of the platform (bear_lint, tail stress,
-    red-team evidence packs) disagrees with. ``None`` (no holdings on file / not
-    passed) degrades to the generic ``BEAR_SEED`` fallback, same as
-    ``scenarios_block``."""
-    wb = openpyxl.Workbook()
-    dash = wb.active
-    if not isinstance(dash, Worksheet):
-        raise RuntimeError("MELI workbook requires an active worksheet")
-    dash.title = "Dashboard"
-    mod = wb.create_sheet("Model")
-    val = wb.create_sheet("Valuation")
-    scn = wb.create_sheet("Scenario")
-    D = "Dashboard"
-
-    # ---------- Dashboard ----------
-    _hdr(dash, "A1", f"{T} - Sum-of-the-Parts Platform DCF | Dashboard")
-    dash["A2"] = (
-        "Commerce + Fintech-payments (operating FCFF @ WACC) + credit book (excess-return @ Ke)"
-    )
-    dash["A2"].font = SUB_FONT
-    rows = [
-        ("comm_rev0", "Commerce revenue Y0 ($M)", s.comm_rev0, USD0),
-        ("comm_gn", "Commerce growth - near", s.comm_g_near, PCT),
-        ("comm_gt", "Commerce growth - terminal", s.comm_g_term, PCT),
-        ("comm_mn", "Commerce EBIT margin - near", s.comm_margin_near, PCT),
-        ("comm_mt", "Commerce EBIT margin - terminal", s.comm_margin_term, PCT),
-        ("fpay_rev0", "Fintech-payments revenue Y0 ($M)", s.fpay_rev0, USD0),
-        ("fpay_gn", "Fintech-pay growth - near", s.fpay_g_near, PCT),
-        ("fpay_gt", "Fintech-pay growth - terminal", s.fpay_g_term, PCT),
-        ("fpay_mn", "Fintech-pay EBIT margin - near", s.fpay_margin_near, PCT),
-        ("fpay_mt", "Fintech-pay EBIT margin - terminal", s.fpay_margin_term, PCT),
-        ("da", "D&A % of operating revenue", s.da_pct, PCT),
-        ("capxn", "Capex % rev - near", s.capex_pct_near, PCT),
-        ("capxt", "Capex % rev - terminal", s.capex_pct_term, PCT),
-        ("nwc", "Working capital % of incr. rev", s.nwc_pct, PCT),
-        ("tax", "Tax rate", s.tax, PCT),
-        ("opmult", "Operating exit EV/EBITDA", s.op_exit_ebitda_mult, MULT),
-        ("wacc", "WACC (operating discount)", s.wacc, PCT),
-        ("cb0", "Credit book Y0 ($M)", s.cb0, USD0),
-        ("cbgn", "Credit book growth - near", s.cbg_near, PCT),
-        ("cbgt", "Credit book growth - terminal", s.cbg_term, PCT),
-        ("niman", "NIMAL - near", s.nimal_near, PCT),
-        ("nimat", "NIMAL - terminal", s.nimal_term, PCT),
-        ("cropex", "Credit opex % of book", s.credit_opex_ratio, PCT),
-        ("cap", "Capital ratio (req eq / book)", s.cap_ratio, PCT),
-        ("cke", "Credit cost of equity Ke", s.credit_ke, PCT),
-        ("cgt", "Credit terminal growth g", s.credit_g_term, PCT),
-        ("croe", "Credit terminal ROE", s.credit_terminal_roe, PCT),
-        ("netcash", "Net non-operating cash ($M)", s.net_cash, USD0),
-        ("years", "Forecast years", s.years, "0"),
-        ("sh", "Diluted shares (M)", s.shares, NUM1),
-        ("px", "Current price ($)", s.price, NUM2),
-        ("curv", "Growth fade curvature", _CURVATURE, NUM1),
-    ]
-    for key, lab, v, fmt in rows:
-        _inp(dash, R[key], lab, v, fmt)
-
-    _hdr(dash, "A36", "OUTPUT")
-    for rr, lab, ref, fmt in (
-        (R["opev"], "Operating EV ($M)", "Valuation!$B$5", USD0),
-        (R["crev"], "Credit equity value ($M)", "Valuation!$B$9", USD0),
-        (R["eqv"], "Equity value ($M)", "Valuation!$B$11", USD0),
-        (R["vps"], "Value per share ($)", "Valuation!$B$12", NUM2),
-        (R["up"], "Upside vs price", "Valuation!$B$13", PCT),
-        (R["termrev"], "Terminal operating revenue ($M)", "Valuation!$B$14", USD0),
-        (R["croet"], "Terminal credit ROE", "Valuation!$B$15", PCT),
-    ):
-        dash.cell(row=rr, column=1, value=lab).font = SUB_FONT
-        oc = dash.cell(row=rr, column=2, value=f"={ref}")
-        oc.number_format = fmt
-        oc.font = Font(bold=True)
-    dash.column_dimensions["A"].width = 36
-    dash.column_dimensions["B"].width = 14
-
-    # ---------- Model (formula-first engine) ----------
-    _hdr(mod, "A1", f"{T} - SOTP engine (formula-first; $M)")
-    n = s.years
-    col0 = 3  # column C = Y1
-
-    def cl(i: int) -> str:
-        return get_column_letter(i)
-
-    labels = {
-        3: "Year",
-        4: "Commerce revenue",
-        5: "Fintech-pay revenue",
-        6: "Operating revenue",
-        7: "Operating EBIT",
-        8: "  D&A",
-        9: "  Capex",
-        10: "Operating FCFF",
-        11: "DF (WACC)",
-        12: "PV operating FCFF",
-        13: "Credit book",
-        14: "Credit NI",
-        15: "Required capital",
-        16: "Credit FCFE",
-        17: "DF (Ke)",
-        18: "PV credit FCFE",
-    }
-    for r, lab in labels.items():
-        mod.cell(row=r, column=2, value=lab).font = SUB_FONT if r == 3 else Font(color="374151")
-
-    def dref(key: str) -> str:
-        return f"{D}!$B${R[key]}"
-
-    def fade_f(c: str, near_key: str, term_key: str) -> str:
-        """Excel convex-fade formula mirroring _fade for the year in row 3 of col c."""
-        near, term = dref(near_key), dref(term_key)
-        yrs = dref("years")
-        return f"{term}+({near}-{term})*(({yrs}-{c}$3)/({yrs}-1))^{dref('curv')}"
-
-    def interp_f(c: str, near_key: str, term_key: str) -> str:
-        near, term = dref(near_key), dref(term_key)
-        return f"{near}+({term}-{near})*({c}$3-1)/({dref('years')}-1)"
-
-    for j in range(1, n + 1):
-        c = cl(col0 + j - 1)
-        p = cl(col0 + j - 2)  # prior column (j==1 references Dashboard Y0)
-        mod[f"{c}3"] = j
-        if j == 1:
-            mod[f"{c}4"] = f"={dref('comm_rev0')}*(1+{fade_f(c, 'comm_gn', 'comm_gt')})"
-            mod[f"{c}5"] = f"={dref('fpay_rev0')}*(1+{fade_f(c, 'fpay_gn', 'fpay_gt')})"
-            mod[f"{c}13"] = f"={dref('cb0')}*(1+{fade_f(c, 'cbgn', 'cbgt')})"
-            prev_oprev = f"({dref('comm_rev0')}+{dref('fpay_rev0')})"
-            prev_cb = dref("cb0")
-            prev_reqcap = f"{dref('cap')}*{dref('cb0')}"
-        else:
-            mod[f"{c}4"] = f"={p}4*(1+{fade_f(c, 'comm_gn', 'comm_gt')})"
-            mod[f"{c}5"] = f"={p}5*(1+{fade_f(c, 'fpay_gn', 'fpay_gt')})"
-            mod[f"{c}13"] = f"={p}13*(1+{fade_f(c, 'cbgn', 'cbgt')})"
-            prev_oprev = f"{p}6"
-            prev_cb = f"{p}13"
-            prev_reqcap = f"{p}15"
-        mod[f"{c}6"] = f"={c}4+{c}5"
-        mod[f"{c}7"] = (
-            f"={c}4*({interp_f(c, 'comm_mn', 'comm_mt')})+{c}5*({interp_f(c, 'fpay_mn', 'fpay_mt')})"
-        )
-        mod[f"{c}8"] = f"={c}6*{dref('da')}"
-        mod[f"{c}9"] = f"={c}6*({interp_f(c, 'capxn', 'capxt')})"
-        mod[f"{c}10"] = f"={c}7*(1-{dref('tax')})+{c}8-{c}9-({c}6-{prev_oprev})*{dref('nwc')}"
-        mod[f"{c}11"] = f"=1/(1+{dref('wacc')})^{c}3"
-        mod[f"{c}12"] = f"={c}10*{c}11"
-        # credit: NI on avg book at NIMAL net of opex; FCFE charges capital growth
-        mod[f"{c}14"] = (
-            f"=(({c}13+{prev_cb})/2)*(({interp_f(c, 'niman', 'nimat')})-{dref('cropex')})*(1-{dref('tax')})"
-        )
-        mod[f"{c}15"] = f"={dref('cap')}*{c}13"
-        mod[f"{c}16"] = f"={c}14-({c}15-{prev_reqcap})"
-        mod[f"{c}17"] = f"=1/(1+{dref('cke')})^{c}3"
-        mod[f"{c}18"] = f"={c}16*{c}17"
-    for r in range(4, 19):
-        for j in range(1, n + 1):
-            cc = mod.cell(row=r, column=col0 + j - 1)
-            cc.number_format = NUM2 if r in (11, 17) else USD0
-    mod.column_dimensions["B"].width = 20
-
-    # ---------- Valuation (SOTP sum) ----------
-    _hdr(val, "A1", f"{T} - Sum-of-the-Parts ($M)")
-    cN = cl(col0 + n - 1)
-    c1 = cl(col0)
-    vrows = [
-        ("PV operating FCFF (yrs 1-N)", f"=SUM(Model!{c1}12:{cN}12)", USD0, 2),
-        (
-            "Operating terminal EV (EV/EBITDA)",
-            f"=(Model!{cN}7+Model!{cN}8)*{D}!$B${R['opmult']}",
-            USD0,
-            3,
+def workbook_spec(
+    s: Assum,
+    m: Mirror,
+    holdings: dict[str, object] | None = None,
+    *,
+    cases: dict[str, Assum] | None = None,
+    input_receipt: ModelInputReceipt | None = None,
+    bear_provenance: BearProvenance | None = None,
+) -> MeliWorkbookSpec:
+    return _workbook_spec(
+        s,
+        m,
+        cases=_validated_workbook_cases(
+            s, holdings, cases, recipe=input_receipt.recipe if input_receipt else RECIPE
         ),
-        ("PV operating terminal", f"=B3*Model!{cN}11", USD0, 4),
-        ("Operating EV", "=B2+B4", USD0, 5),
-        ("PV credit FCFE (yrs 1-N)", f"=SUM(Model!{c1}18:{cN}18)", USD0, 6),
-        (
-            "Credit terminal value (sustainable)",
-            f"=Model!{cN}14*(1+{D}!$B${R['cgt']})*(1-{D}!$B${R['cgt']}/{D}!$B${R['croe']})/({D}!$B${R['cke']}-{D}!$B${R['cgt']})",
-            USD0,
-            7,
-        ),
-        ("PV credit terminal", f"=B7*Model!{cN}17", USD0, 8),
-        ("Credit equity value", "=B6+B8", USD0, 9),
-        ("+ Net non-operating cash", f"={D}!$B${R['netcash']}", USD0, 10),
-        ("Equity value", "=B5+B9+B10", USD0, 11),
-        ("Value per share ($)", f"=B11/{D}!$B${R['sh']}", NUM2, 12),
-        ("Upside vs price", f"=B12/{D}!$B${R['px']}-1", PCT, 13),
-        ("Terminal operating revenue", f"=Model!{cN}6", USD0, 14),
-        ("Terminal credit ROE", f"=Model!{cN}14/Model!{cN}15", PCT, 15),
-    ]
-    for lab, formula, fmt, rr in vrows:
-        val.cell(row=rr, column=1, value=lab).font = (
-            SUB_FONT if rr in (5, 9, 11, 12) else Font(color="374151")
-        )
-        vc = val.cell(row=rr, column=2, value=formula)
-        vc.number_format = fmt
-        if rr in (11, 12):
-            vc.font = Font(bold=True)
-    val.column_dimensions["A"].width = 36
-    val.column_dimensions["B"].width = 14
-
-    # ---------- Scenario ----------
-    _hdr(scn, "A1", "Scenarios & sum-of-the-parts bridge")
-    scn["A2"], scn["B2"], scn["C2"], scn["D2"], scn["E2"] = (
-        "Scenario",
-        "Commerce g (near)",
-        "Comm margin (term)",
-        "NIMAL (term)",
-        "Value/share",
+        input_receipt=input_receipt,
+        ticker=T,
+        bear_provenance=bear_provenance or _workbook_bear_provenance(holdings, cases),
     )
-    for cc in ("A2", "B2", "C2", "D2", "E2"):
-        scn[cc].font = SUB_FONT
-    r = 3
-    if redesign_mod is not None:
-        # Monthly Red Team PR10: Bear/Bull rows come from the SAME
-        # scenario_assumptions() call scenarios_block() uses for the persisted
-        # dcf_runs snapshot (bear deltas from holdings bear_deltas when present,
-        # provenance "thesis"; else the generic BEAR_SEED, provenance "seed") —
-        # this sheet and the snapshot every risk consumer reads (bear_lint,
-        # tail stress, red-team evidence packs) can no longer disagree.
-        bull_d = redesign_mod.BULL_SEED
-        bear_d = redesign_mod.thesis_bear_seed(holdings)
-        bear_provenance = (
-            "thesis" if redesign_mod.parse_thesis_bear_deltas(holdings) is not None else "seed"
-        )
-        scenario_rows: list[tuple[str, Assum]] = [
-            ("Bear", scenario_assumptions(s, bear_d)),
-            ("Base", s),
-            ("Bull", scenario_assumptions(s, bull_d)),
-        ]
-        for name, s2 in scenario_rows:
-            v = mirror(s2).vps
-            scn.cell(row=r, column=1, value=name).font = Font(bold=(name == "Base"), color="374151")
-            for col, vv in zip(
-                ("B", "C", "D"),
-                (s2.comm_g_near, s2.comm_margin_term, s2.nimal_term),
-                strict=True,
-            ):
-                cc = scn[f"{col}{r}"]
-                cc.value = vv
-                cc.number_format = PCT
-            ec = scn.cell(row=r, column=5, value=round(v, 2))
-            ec.number_format = NUM2
-            ec.font = Font(bold=(name == "Base"))
-            r += 1
-        prov_label = (
-            "bear from holdings bear_deltas (thesis)"
-            if bear_provenance == "thesis"
-            else "bear from generic BEAR_SEED (seed fallback -- no holdings bear_deltas on file)"
-        )
-        scn.cell(row=r, column=1, value="Bear provenance").font = Font(italic=True, color="6B7280")
-        prov_cell = scn.cell(row=r, column=2, value=prov_label)
-        prov_cell.font = Font(italic=True, color="6B7280", size=9)
-        scn.merge_cells(start_row=r, start_column=2, end_row=r, end_column=5)
-        r += 1
-    else:  # pragma: no cover - import failure only, exercised by no test env
-        # dcf.redesign unavailable: degrade LOUDLY (an empty/stale scenario row
-        # is exactly the PR10 bug) rather than silently falling back to the old
-        # hardcoded Bear/Bull levers.
-        scn.cell(
-            row=r, column=1, value="Scenarios unavailable (dcf.redesign import failed)"
-        ).font = Font(italic=True, color="B91C1C")
-        r += 1
-    r += 1
-    _hdr(scn, f"A{r}", "SUM-OF-THE-PARTS BRIDGE ($M)")
-    r += 1
-    bridge = [
-        ("Operating EV (Commerce + Fintech-pay)", f"{m.operating_ev:,.0f}"),
-        ("Credit-book equity value (FCFE @ Ke)", f"{m.credit_equity_value:,.0f}"),
-        ("Net non-operating cash", f"{s.net_cash:,.0f}"),
-        ("= Equity value", f"{m.equity_value:,.0f}"),
-        ("Value per share", f"${m.vps:,.2f}  (vs ${s.price:,.2f}, {m.vps / s.price - 1:+.0%})"),
-        ("Terminal credit ROE", f"{m.credit_terminal_roe:.0%}"),
-        ("Terminal blended op margin", f"{m.terminal_blended_op_margin:.0%}"),
-    ]
-    for lab, txt in bridge:
-        scn.cell(row=r, column=1, value=lab).font = Font(color="374151")
-        scn.cell(row=r, column=2, value=txt).font = Font(size=10, color="374151")
-        r += 1
-    scn.column_dimensions["A"].width = 40
-    scn.column_dimensions["B"].width = 26
 
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(dest)
+
+def build(
+    s: Assum,
+    m: Mirror,
+    dest: Path,
+    holdings: dict[str, object] | None = None,
+    *,
+    cases: dict[str, Assum] | None = None,
+    runtime: WorkbookRuntime | None = None,
+    input_receipt: ModelInputReceipt | None = None,
+    bear_provenance: BearProvenance | None = None,
+) -> None:
+    if input_receipt is not None and cases is None:
+        raise InputEvidenceError("reviewed_scenario_vectors_required")
+    build_workbook(
+        s,
+        m,
+        dest,
+        cases=_validated_workbook_cases(
+            s, holdings, cases, recipe=input_receipt.recipe if input_receipt else RECIPE
+        ),
+        runtime=runtime,
+        input_receipt=input_receipt,
+        ticker=T,
+        bear_provenance=bear_provenance or _workbook_bear_provenance(holdings, cases),
+    )
 
 
 def persist_dcf_run(
@@ -698,6 +451,8 @@ def persist_dcf_run(
     input_receipt: ModelInputReceipt | None = None,
     assumptions_path: Path | None = None,
     source_context: SourceReadContext | None = None,
+    cases: dict[str, Assum] | None = None,
+    scenario_acceptance: ScenarioAcceptance | None = None,
 ) -> bool:
     """``holdings=None`` (the pre-PR10 2-arg call shape every test/caller uses)
     loads ``micro_thesis/holdings/<T>.json`` itself, same as before. ``main()``
@@ -723,6 +478,38 @@ def persist_dcf_run(
     recomputed = mirror(s)
     if recomputed != m:
         raise InputEvidenceError("model_output_input_mismatch")
+    calculated_at = datetime.now(UTC)
+    effective = effective_numeric_inputs(asdict(s), recipe=input_receipt.recipe)
+    scenario_review: dict[str, object] | None = None
+    scenario_vectors: dict[str, object] | None = None
+    if cases is not None:
+        cases = _validated_workbook_cases(s, holdings, cases, recipe=input_receipt.recipe)
+        if scenario_acceptance is None:
+            raise InputEvidenceError("scenario_acceptance_required")
+        scenario_vectors = {
+            name: effective_numeric_inputs(asdict(case), recipe=input_receipt.recipe)
+            for name, case in cases.items()
+        }
+        replay = replay_model_scenarios(
+            "MELI",
+            effective,
+            model_output(effective),
+            {"reviewed_scenario_inputs": scenario_vectors},
+            recipe=input_receipt.recipe,
+        )
+        verify_scenario_acceptance(
+            scenario_acceptance,
+            input_receipt=input_receipt,
+            model="meli_platform_sotp",
+            engine_version="meli_platform_sotp_v1",
+            effective_inputs=effective,
+            output=replay,
+            as_of=calculated_at,
+            calculated_at=calculated_at,
+        )
+        scenario_review = scenario_acceptance.model_dump(mode="json")
+    elif scenario_acceptance is not None:
+        raise InputEvidenceError("reviewed_scenario_vectors_required")
     if holdings is None:
         holdings = _load_holdings(T)
     mos: object = holdings.get("mos_bar") if holdings else None
@@ -733,7 +520,9 @@ def persist_dcf_run(
     live_workbook = live_path_from_env(DEST)
     snap_payload: dict[str, object] = {
         "model": "meli_platform_sotp",
-        "effective_model_inputs": effective_numeric_inputs(asdict(s)),
+        "effective_model_inputs": effective,
+        "model_output": model_output(effective),
+        "input_recipe": input_receipt.recipe,
         "financial_period_end": input_receipt.request.financial_period_end.isoformat(),
         "value_per_share": m.vps,
         "operating_ev_m": m.operating_ev,
@@ -754,8 +543,12 @@ def persist_dcf_run(
             "sync_status": "not_applicable",
         },
     }
-    if redesign_mod is not None:
-        snap_payload["scenarios"] = scenarios_block(s, m, holdings)
+    if scenario_vectors is not None:
+        snap_payload["reviewed_scenario_inputs"] = scenario_vectors
+    if cases is not None or redesign_mod is not None:
+        snap_payload["scenarios"] = scenarios_block(
+            s, m, holdings, cases=cases, recipe=input_receipt.recipe
+        )
     reverse = reverse_valuation(s, m)
     if reverse is not None:
         snap_payload["reverse_valuation"] = reverse
@@ -766,7 +559,7 @@ def persist_dcf_run(
         workbook_path=DEST,
         workbook_locator_path=live_workbook,
         engine_version="meli_platform_sotp_v1",
-        effective_inputs=asdict(s),
+        effective_inputs=model_parameters(s, input_receipt.recipe),
         assumption_snapshot=snap_payload,
         live_price=s.price or None,
         live_price_at=observed_at,
@@ -785,6 +578,7 @@ def persist_dcf_run(
         ),
         equity_direct_archetype="platform_sotp",
         model_input_receipt=input_receipt.model_dump(mode="json"),
+        scenario_acceptance=scenario_review,
     )
     row = persist_mod.DcfRunRow(
         ticker=T,
@@ -801,15 +595,21 @@ def persist_dcf_run(
         assumption_snapshot_json=snap,
         notes=f"workbook={live_workbook.name} (MELI sum-of-the-parts platform DCF)",
         provenance=provenance,
-        calculated_at=datetime.now(UTC),
+        calculated_at=calculated_at,
     )
-    with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
+    with (
+        hold_writer_gate(db, owner=f"build_meli_platform_dcf:{T}"),
+        connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn,
+    ):
+        # The cross-process writer gate serializes this upsert against the
+        # daily brief driver and its sibling chain steps; it is NOT the
+        # whole-job run lock.
         if not conn.in_transaction:
             conn.execute("BEGIN IMMEDIATE")
         verify_meli_inputs(
             conn,
             input_receipt,
-            effective_inputs=effective_numeric_inputs(asdict(s)),
+            effective_inputs=effective,
             as_of=datetime.now(UTC),
             source_context=source_context if source_context is not None else model_source_context(),
         )
@@ -826,6 +626,14 @@ def model_source_context() -> SourceReadContext | None:
     return SourceReadContext.for_sec_state_root(Path(state_root)) if state_root else None
 
 
+def model_parameters(s: Assum, recipe: str = RECIPE) -> dict[str, Any]:
+    """Preserve legacy v4 parameter serialization after the explicit v5 field."""
+    values = asdict(s)
+    if recipe == RECIPE:
+        values.pop("financing_other_expenses_reserve", None)
+    return values
+
+
 def load_verified_assumptions(
     ticker: str,
     *,
@@ -833,6 +641,8 @@ def load_verified_assumptions(
     assumptions_path: Path,
     expected_sha256: str | None = None,
     source_context: SourceReadContext | None = None,
+    retained_receipt: ModelInputReceipt | None = None,
+    verification_output: Path | None = None,
 ) -> tuple[Assum, ModelInputReceipt]:
     """Read one explicit reviewed artifact; no repo/data or DB-directory fallback.
 
@@ -854,11 +664,11 @@ def load_verified_assumptions(
         raise InputEvidenceError("model_input_request_missing_or_invalid") from exc
     if request.ticker != ticker:
         raise InputEvidenceError("meli_input_recipe_ticker_mismatch")
-    if request.recipe != RECIPE:
+    if not is_meli_recipe(request.recipe):
         raise InputEvidenceError("model_input_recipe_mismatch")
     s = Assum()
     for key, assumption in request.assumptions.items():
-        if key not in ASSUMPTION_KEYS:
+        if key not in assumption_keys_for_recipe(request.recipe):
             raise InputEvidenceError("assumption_population_mismatch")
         setattr(
             s, key, int(assumption.value) if key in {"years", "derive_capm"} else assumption.value
@@ -868,12 +678,49 @@ def load_verified_assumptions(
     s.price_seed_source = "unavailable"
     with connect_sqlite(require_db_path(db_path), role=SQLiteConnectionRole.READ_ONLY) as conn:
         conn.execute("BEGIN")
-        values, receipt = prepare_meli_inputs(
-            conn,
-            request,
-            effective_inputs=effective_numeric_inputs(asdict(s)),
-            as_of=datetime.now(UTC),
-            source_context=source_context if source_context is not None else model_source_context(),
+        context = source_context if source_context is not None else model_source_context()
+        if retained_receipt is None:
+            values, receipt = prepare_meli_inputs(
+                conn,
+                request,
+                effective_inputs=effective_numeric_inputs(asdict(s), recipe=request.recipe),
+                as_of=datetime.now(UTC),
+                source_context=context,
+            )
+            refreshed = receipt
+        else:
+            if (
+                retained_receipt.request != request
+                or retained_receipt.assumptions_source_path != str(assumptions_path.resolve())
+                or retained_receipt.assumptions_source_sha256
+                != hashlib.sha256(source_bytes).hexdigest()
+            ):
+                raise InputEvidenceError("retained_input_request_or_source_mismatch")
+            actuals, _ = calculate_actuals(retained_receipt)
+            values = {
+                **effective_numeric_inputs(asdict(s), recipe=request.recipe),
+                **{key: actuals[key] for key in REPORTED_DRIVER_KEYS},
+            }
+            refreshed = verify_meli_inputs(
+                conn,
+                retained_receipt,
+                effective_inputs=values,
+                as_of=datetime.now(UTC),
+                source_context=context,
+            )
+            # The exact original receipt is the scenario commitment. New physical
+            # reads prove current availability without changing the analyst's input.
+            receipt = retained_receipt
+    if verification_output is not None:
+        verification_output.parent.mkdir(parents=True, exist_ok=True)
+        verification_output.write_text(
+            refreshed.model_copy(
+                update={
+                    "assumptions_source_path": str(assumptions_path.resolve()),
+                    "assumptions_source_sha256": hashlib.sha256(source_bytes).hexdigest(),
+                }
+            ).model_dump_json(indent=2),
+            encoding="utf-8",
         )
     for key, value in values.items():
         setattr(s, key, int(value) if key in {"years", "derive_capm"} else value)
@@ -883,6 +730,95 @@ def load_verified_assumptions(
             "assumptions_source_sha256": hashlib.sha256(source_bytes).hexdigest(),
         }
     )
+
+
+def load_reviewed_cases(
+    s: Assum,
+    assumptions_path: Path,
+    input_receipt: ModelInputReceipt,
+    *,
+    scenario_acceptance_path: Path,
+    expected_sha256: str | None = None,
+) -> tuple[dict[str, Assum], ScenarioAcceptance]:
+    """Use the existing reviewed-vector artifact and exact scenario receipt."""
+    raw = _read_input_artifact(assumptions_path)
+    if hashlib.sha256(raw).hexdigest() != input_receipt.assumptions_source_sha256:
+        raise InputEvidenceError("assumptions_authority_changed_after_review")
+    try:
+        payload = json.loads(raw)
+    except ValueError as exc:
+        raise InputEvidenceError("reviewed_scenario_vectors_invalid") from exc
+    if not isinstance(payload, dict):
+        raise InputEvidenceError("reviewed_scenario_vectors_required")
+    parsed = cast(dict[str, object], payload)
+    raw_vectors = parsed.get("reviewed_scenario_inputs")
+    if not isinstance(raw_vectors, dict):
+        raise InputEvidenceError("reviewed_scenario_vectors_required")
+    vectors = cast(dict[str, object], raw_vectors)
+    cases: dict[str, Assum] = {}
+    for name, value in vectors.items():
+        if not isinstance(value, dict):
+            raise InputEvidenceError("reviewed_scenario_vector_invalid")
+        vector = cast(dict[str, object], value)
+        if (
+            frozenset(vector)
+            != assumption_keys_for_recipe(input_receipt.recipe) | REPORTED_DRIVER_KEYS
+        ):
+            raise InputEvidenceError("reviewed_scenario_vector_population_invalid")
+        numeric = effective_numeric_inputs(vector, recipe=input_receipt.recipe)
+        case = replace(s)
+        for key, number in numeric.items():
+            setattr(case, key, int(number) if key in {"years", "derive_capm"} else number)
+        cases[name] = case
+    cases = _validated_workbook_cases(s, None, cases, recipe=input_receipt.recipe)
+    # Acceptance commits the full receipt, which commits this assumptions file.
+    # Embedding acceptance in that file would create an impossible hash cycle.
+    acceptance_bytes = _read_input_artifact(scenario_acceptance_path)
+    if (
+        expected_sha256 is not None
+        and hashlib.sha256(acceptance_bytes).hexdigest() != expected_sha256
+    ):
+        raise InputEvidenceError("scenario_acceptance_changed_after_dispatch")
+    try:
+        acceptance = ScenarioAcceptance.model_validate_json(acceptance_bytes)
+    except ValueError as exc:
+        raise InputEvidenceError("scenario_acceptance_invalid") from exc
+    effective = effective_numeric_inputs(asdict(s), recipe=input_receipt.recipe)
+    output = replay_model_scenarios(
+        "MELI", effective, model_output(effective), parsed, recipe=input_receipt.recipe
+    )
+    now = datetime.now(UTC)
+    verify_scenario_acceptance(
+        acceptance,
+        input_receipt=input_receipt,
+        model="meli_platform_sotp",
+        engine_version="meli_platform_sotp_v1",
+        effective_inputs=effective,
+        output=output,
+        as_of=now,
+        calculated_at=now,
+    )
+    return cases, acceptance
+
+
+def _read_input_artifact(path: Path) -> bytes:
+    try:
+        _snapshot, raw = read_stable_artifact(path, max_bytes=8 * 1024 * 1024)
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise InputEvidenceError("model_review_artifact_unavailable") from exc
+    return raw
+
+
+def load_retained_input_receipt(
+    path: Path, expected_sha256: str | None = None
+) -> ModelInputReceipt:
+    raw = _read_input_artifact(path)
+    if expected_sha256 is not None and hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise InputEvidenceError("retained_input_receipt_changed_after_dispatch")
+    try:
+        return ModelInputReceipt.model_validate_json(raw)
+    except ValueError as exc:
+        raise InputEvidenceError("retained_input_receipt_invalid") from exc
 
 
 def _main_owned() -> int:
@@ -919,11 +855,20 @@ def _main_owned() -> int:
         if not raw_assumptions_path:
             raise InputEvidenceError("explicit_assumptions_authority_required")
         assumptions_path = Path(raw_assumptions_path)
+        retained_path = os.environ.get("DCF_MELI_INPUT_RECEIPT_PATH", "").strip()
+        if not retained_path:
+            raise InputEvidenceError("retained_input_receipt_required")
+        retained_receipt = load_retained_input_receipt(
+            Path(retained_path),
+            os.environ.get("DCF_MELI_INPUT_RECEIPT_SHA256"),
+        )
         s, input_receipt = load_verified_assumptions(
             T,
             db_path=db_path,
             assumptions_path=assumptions_path,
             expected_sha256=os.environ.get("DCF_MELI_ASSUMPTIONS_SHA256"),
+            retained_receipt=retained_receipt,
+            verification_output=DEST.with_suffix(DEST.suffix + ".input-verification.json"),
         )
     price_observation = resolve_specialized_price(
         REPO,
@@ -938,7 +883,20 @@ def _main_owned() -> int:
     # persisted snapshot (persist_dcf_run) — PR10: one holdings read, one bear,
     # never two that could drift on a mid-run file edit.
     holdings = _load_holdings(T)
-    build(s, m, DEST, holdings)
+    cases: dict[str, Assum] | None = None
+    scenario_acceptance: ScenarioAcceptance | None = None
+    if input_receipt is not None and assumptions_path is not None:
+        acceptance_path = os.environ.get("DCF_MELI_SCENARIO_ACCEPTANCE_PATH", "").strip()
+        if not acceptance_path:
+            raise InputEvidenceError("scenario_acceptance_required")
+        cases, scenario_acceptance = load_reviewed_cases(
+            s,
+            assumptions_path,
+            input_receipt,
+            scenario_acceptance_path=Path(acceptance_path),
+            expected_sha256=os.environ.get("DCF_MELI_SCENARIO_ACCEPTANCE_SHA256"),
+        )
+    build(s, m, DEST, holdings, input_receipt=input_receipt, cases=cases)
     if os.environ.get("DCF_PERSIST", "1") != "1":
         persisted = False
     elif artifact_promotion is not None:
@@ -951,6 +909,8 @@ def _main_owned() -> int:
             db_path=db_path,
             input_receipt=input_receipt,
             assumptions_path=assumptions_path,
+            cases=cases,
+            scenario_acceptance=scenario_acceptance,
         )
     else:
         persisted = persist_dcf_run(
@@ -961,6 +921,8 @@ def _main_owned() -> int:
             db_path=db_path,
             input_receipt=input_receipt,
             assumptions_path=assumptions_path,
+            cases=cases,
+            scenario_acceptance=scenario_acceptance,
         )
     up = (m.vps / s.price - 1) if s.price else 0.0
     print(

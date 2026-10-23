@@ -28,15 +28,16 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 
-from clock import now_naive_utc
-from timeseries.loaders import SOURCE_QUALITY_TIER_RANK
+from clock import now_iso_space_seconds as _now_iso
+from models.documents import SOURCE_QUALITY_TIER_RANK
+from runtime.deterministic import table_exists_or_false as _has_table
 
 log = logging.getLogger(__name__)
 
 
 def _tier_rank(tier: object) -> int:
     """Canonical source-quality rank (higher wins); unknown / None → 0.
-    Shares ``timeseries.loaders.SOURCE_QUALITY_TIER_RANK`` so the authority a
+    Shares ``models.documents.SOURCE_QUALITY_TIER_RANK`` so the authority a
     disagreement is graded against is the same row the loaders surface."""
     if not isinstance(tier, str):
         return 0
@@ -68,11 +69,6 @@ class _GradedFact:
     source_tier: str | None
 
 
-def _now_iso() -> str:
-    """Naive-UTC ISO stamp — the repo storage convention."""
-    return now_naive_utc().isoformat(sep=" ", timespec="seconds")
-
-
 def _delta_pct(old: float | None, new: float | None) -> float | None:
     """``|new - old| / |old| * 100``, or None when old is missing / zero."""
     if old is None or new is None or old == 0.0:
@@ -95,16 +91,6 @@ def restatement_outcome(old: float | None, new: float | None) -> int:
         return 1 if new == 0.0 else 0
     pct = abs(new - old) / abs(old) * 100.0
     return 1 if pct <= IMMATERIAL_TOLERANCE_PCT else 0
-
-
-def _has_table(conn: sqlite3.Connection, table: str) -> bool:
-    try:
-        row = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
-        ).fetchone()
-    except sqlite3.Error:
-        return False
-    return row is not None
 
 
 def _fetch_graded_fact(

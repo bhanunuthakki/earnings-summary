@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from research import tier
+import research.run as tier
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0059_kpi_facts_restatement"

@@ -17,25 +17,30 @@ import argparse
 import json
 import sqlite3
 import sys
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:  # ``python -m execution.run_thesis_evaluator``
+    from execution._lib import PROJECT_ROOT
 
-from compute.thesis_episode_attention import (  # noqa: E402
+from compute.thesis_episode_attention import (
     AttentionError,
     deliver_due_episode_alerts,
 )
-from compute.thesis_evaluator import (  # noqa: E402
+from compute.thesis_evaluator import (
     ThesisVerdict,
     evaluate_ticker_thesis,
     persist_verdict,
 )
-from models.runs import StageName, StageStatus  # noqa: E402
-from pipeline.invocation_fingerprint import files_fingerprint, payload_sha256  # noqa: E402
-from pipeline.queries import open_db  # noqa: E402
-from pipeline.run_accounting import (  # noqa: E402
+from db_paths import configured_db_path
+from models.runs import StageName, StageStatus
+from pipeline.db_writer_gate import hold_writer_gate
+from pipeline.invocation_fingerprint import files_fingerprint, payload_sha256
+from pipeline.run_accounting import (
     JsonValue,
     PipelineRunSuppressedError,
     end_run,
@@ -43,8 +48,9 @@ from pipeline.run_accounting import (  # noqa: E402
     start_run,
     suppression_payload,
 )
-from provenance.financial_fact_resolution import canonical_fact_relation  # noqa: E402
-from thesis_reunderwrite_gate import ReUnderwriteBlockedError  # noqa: E402
+from provenance.financial_fact_resolution import canonical_fact_relation
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from thesis_reunderwrite_gate import ReUnderwriteBlockedError
 
 _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
 _MATERIAL_TABLE_QUERIES = {
@@ -168,13 +174,43 @@ def _verdict_to_dict(verdict: ThesisVerdict) -> dict[str, object]:
     }
 
 
+@contextmanager
+def _writer_window(db_path: Path, *, owner: str) -> Generator[sqlite3.Connection]:
+    """One gated database write window for this evaluator run.
+
+    The daily brief worker overlaps this subprocess with sibling chains on a
+    bounded pool, so the evaluator must not hold a writer connection open for
+    its whole lifetime (the pre-pool guarantee was one writer PROCESS at a
+    time; the pool broke it). Reads and evaluation compute run on read-only
+    connections and overlap freely; every mutation happens inside this window,
+    which takes the same cross-process per-database writer gate the pool
+    driver and the other chain steps honor — so at most one writer window is
+    open on the database file at any instant, across processes.
+    """
+    with hold_writer_gate(db_path, owner=owner):
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--ticker", help="Evaluate a single ticker")
     group.add_argument("--all", action="store_true", help="Evaluate every ticker in thesis_state")
     parser.add_argument("--dry-run", action="store_true", help="Print verdicts without persisting")
-    parser.add_argument("--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"))
+    parser.add_argument(
+        "--db",
+        default=str(configured_db_path(PROJECT_ROOT)),
+        help=(
+            "Portfolio database. The daily brief worker passes the resolved "
+            "database explicitly; the default is the configured authority "
+            "(EARNINGS_SUMMARY_DB_PATH, else the repo-root default for the "
+            "production host)."
+        ),
+    )
     parser.add_argument("--holdings-dir", default=str(_HOLDINGS_DIR), type=Path)
     parser.add_argument(
         "--override",
@@ -189,20 +225,22 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    db_path = Path(args.db)
 
-    conn = open_db(args.db)
+    read_conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
-        tickers = _resolve_tickers(conn, args)
+        tickers = _resolve_tickers(read_conn, args)
         if not tickers:
             print(json.dumps({"warning": "no tickers in thesis_state"}, indent=2))
             return 0
 
-        run_id = start_run(
-            conn,
-            directive="run_thesis_evaluator",
-            ticker_scope=tickers,
-            invocation_inputs=_invocation_inputs(conn, args, tickers),
-        )
+        with _writer_window(db_path, owner="run_thesis_evaluator:run") as run_conn:
+            run_id = start_run(
+                run_conn,
+                directive="run_thesis_evaluator",
+                ticker_scope=tickers,
+                invocation_inputs=_invocation_inputs(read_conn, args, tickers),
+            )
         verdicts: list[ThesisVerdict] = []
         skipped: list[dict[str, str]] = []
         failed = 0
@@ -210,76 +248,81 @@ def main() -> int:
         for ticker in tickers:
             try:
                 verdict = evaluate_ticker_thesis(
-                    conn, ticker=ticker, holdings_dir=args.holdings_dir
+                    read_conn, ticker=ticker, holdings_dir=args.holdings_dir
                 )
             except FileNotFoundError as e:
                 skipped.append({"ticker": ticker, "reason": str(e)})
-                record_stage(
-                    conn,
-                    run_id,
-                    ticker,
-                    StageName.SYNTHESIZE,
-                    StageStatus.SKIPPED,
-                    error_msg=f"{type(e).__name__}: {e}"[:500],
-                )
+                with _writer_window(db_path, owner=f"run_thesis_evaluator:{ticker}") as conn:
+                    record_stage(
+                        conn,
+                        run_id,
+                        ticker,
+                        StageName.SYNTHESIZE,
+                        StageStatus.SKIPPED,
+                        error_msg=f"{type(e).__name__}: {e}"[:500],
+                    )
                 continue
             except (ValueError, KeyError) as e:
                 failed += 1
-                record_stage(
-                    conn,
-                    run_id,
-                    ticker,
-                    StageName.SYNTHESIZE,
-                    StageStatus.FAILED,
-                    error_msg=f"{type(e).__name__}: {e}"[:500],
-                )
-                sys.stderr.write(f"FAILED {ticker}: {type(e).__name__}: {e}\n")
-                continue
-
-            verdicts.append(verdict)
-            if not args.dry_run:
-                try:
-                    # Pass holdings_dir so the thesis_state content mirror
-                    # (raw_json/thesis) is re-synced from the file this verdict was
-                    # built from — the mirror can't silently drift behind the file.
-                    persist_verdict(
-                        conn,
-                        verdict,
-                        run_id=run_id,
-                        holdings_dir=args.holdings_dir,
-                        override=args.override,
-                    )
-                except ReUnderwriteBlockedError as e:
-                    failed += 1
+                with _writer_window(db_path, owner=f"run_thesis_evaluator:{ticker}") as conn:
                     record_stage(
                         conn,
                         run_id,
                         ticker,
                         StageName.SYNTHESIZE,
                         StageStatus.FAILED,
-                        error_msg=str(e)[:500],
+                        error_msg=f"{type(e).__name__}: {e}"[:500],
                     )
+                sys.stderr.write(f"FAILED {ticker}: {type(e).__name__}: {e}\n")
+                continue
+
+            verdicts.append(verdict)
+            if not args.dry_run:
+                try:
+                    # One window per ticker's persistence: persist_verdict and
+                    # the OK stage receipt share the same write batch. Pass
+                    # holdings_dir so the thesis_state content mirror
+                    # (raw_json/thesis) is re-synced from the file this verdict
+                    # was built from — the mirror can't silently drift behind
+                    # the file.
+                    with _writer_window(db_path, owner=f"run_thesis_evaluator:{ticker}") as conn:
+                        persist_verdict(
+                            conn,
+                            verdict,
+                            run_id=run_id,
+                            holdings_dir=args.holdings_dir,
+                            override=args.override,
+                        )
+                        record_stage(conn, run_id, ticker, StageName.SYNTHESIZE, StageStatus.OK)
+                except ReUnderwriteBlockedError as e:
+                    failed += 1
+                    with _writer_window(db_path, owner=f"run_thesis_evaluator:{ticker}") as conn:
+                        record_stage(
+                            conn,
+                            run_id,
+                            ticker,
+                            StageName.SYNTHESIZE,
+                            StageStatus.FAILED,
+                            error_msg=str(e)[:500],
+                        )
                     sys.stderr.write(f"BLOCKED {ticker}: {e}\n")
                     continue
-            record_stage(
-                conn,
-                run_id,
-                ticker,
-                StageName.SYNTHESIZE,
-                StageStatus.OK,
-            )
+            else:
+                with _writer_window(db_path, owner=f"run_thesis_evaluator:{ticker}") as conn:
+                    record_stage(conn, run_id, ticker, StageName.SYNTHESIZE, StageStatus.OK)
 
         due_review_alerts = 0
         if not args.dry_run:
             try:
-                due_review_alerts = deliver_due_episode_alerts(conn, now=datetime.now(UTC))
-                conn.commit()
+                with _writer_window(db_path, owner="run_thesis_evaluator:episode-alerts") as conn:
+                    due_review_alerts = deliver_due_episode_alerts(conn, now=datetime.now(UTC))
+                    conn.commit()
             except (AttentionError, sqlite3.Error) as exc:
-                conn.rollback()
                 failed += 1
                 sys.stderr.write(f"FAILED due thesis review delivery: {exc}\n")
         terminal = StageStatus.OK if failed == 0 else StageStatus.FAILED
-        end_run(conn, run_id, terminal, error_summary=f"{failed} failed" if failed else None)
+        with _writer_window(db_path, owner="run_thesis_evaluator:run") as conn:
+            end_run(conn, run_id, terminal, error_summary=f"{failed} failed" if failed else None)
 
         print(
             json.dumps(
@@ -300,7 +343,7 @@ def main() -> int:
         print(json.dumps(suppression_payload(exc)))
         return 0
     finally:
-        conn.close()
+        read_conn.close()
 
 
 if __name__ == "__main__":

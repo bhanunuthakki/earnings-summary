@@ -205,11 +205,14 @@ class RuntimeHashSearch:
 
 
 class FakeLanceQuery:
+    """Mirrors the lancedb 0.40.0 sync query builders returned by search()."""
+
     def __init__(self, rows: list[dict[str, object]]) -> None:
         self.rows = rows
         self.maximum = len(rows)
 
-    def where(self, predicate: str) -> FakeLanceQuery:
+    def where(self, predicate: str, *, prefilter: bool = True) -> FakeLanceQuery:
+        assert prefilter is True
         quoted = predicate.split("'")
         first = quoted[1].replace("''", "'")
         last = quoted[3].replace("''", "'")
@@ -225,13 +228,16 @@ class FakeLanceQuery:
 
 
 class FakeLanceTable:
+    """Mirrors the lancedb 0.40.0 sync Table: scans go through search(), not query()."""
+
     def __init__(self, rows: list[dict[str, object]]) -> None:
         self.rows = rows
 
     def add(self, data: list[dict[str, object]]) -> None:
         self.rows.extend(data)
 
-    def query(self) -> FakeLanceQuery:
+    def search(self, vector: list[float] | None) -> FakeLanceQuery:
+        assert vector is None or all(isinstance(value, float) for value in vector)
         return FakeLanceQuery(list(self.rows))
 
     def count_rows(self, where_filter: str | None = None) -> int:
@@ -272,6 +278,29 @@ class FakeLanceModule:
         path.mkdir(parents=True, exist_ok=True)
         key = path.name.removesuffix(".staging")
         return FakeLanceDatabase(self, key)
+
+
+def _lance_records() -> list[dict[str, object]]:
+    return [
+        {
+            "chunk_id": f"chunk-{number}",
+            "vector": [float(number), 1.0],
+            "vector_sha256": vector_sha256([float(number), 1.0], dimensions=2),
+            "dimensions": 2,
+            "input_sha256": f"{number}" * 64,
+            "manifest_id": "manifest-1",
+            "issuer_id": "issuer-1",
+            "ticker": "ACME",
+            "form_type": "10-Q",
+            "period_start": "2026-01-01",
+            "period_end": "2026-03-31",
+            "node_kind": "passage",
+            "available_at": STAMP.isoformat(),
+            "observed_at": STAMP.isoformat(),
+            "retrieved_at": STAMP.isoformat(),
+        }
+        for number in (1, 2)
+    ]
 
 
 def _conn() -> sqlite3.Connection:
@@ -537,26 +566,7 @@ def test_lance_staging_path_is_published_only_after_bounded_receipt_verification
     module = FakeLanceModule()
     monkeypatch.setattr(local_vector, "require_lancedb", lambda: module)
     index = LanceVectorIndex(tmp_path / "vectors")
-    records: list[dict[str, object]] = [
-        {
-            "chunk_id": f"chunk-{number}",
-            "vector": [float(number), 1.0],
-            "vector_sha256": vector_sha256([float(number), 1.0], dimensions=2),
-            "dimensions": 2,
-            "input_sha256": f"{number}" * 64,
-            "manifest_id": "manifest-1",
-            "issuer_id": "issuer-1",
-            "ticker": "ACME",
-            "form_type": "10-Q",
-            "period_start": "2026-01-01",
-            "period_end": "2026-03-31",
-            "node_kind": "passage",
-            "available_at": STAMP.isoformat(),
-            "observed_at": STAMP.isoformat(),
-            "retrieved_at": STAMP.isoformat(),
-        }
-        for number in (1, 2)
-    ]
+    records = _lance_records()
     index.stage_batch("run-atomic", records[:1])
     index.stage_batch("run-atomic", records[1:])
     staging = next((tmp_path / "vectors").glob("*.staging"))
@@ -576,6 +586,36 @@ def test_lance_staging_path_is_published_only_after_bounded_receipt_verification
     assert index.verify_batch("run-atomic", receipt) is True
     with pytest.raises(ValueError, match="published"):
         index.stage_batch("run-atomic", records[:1])
+
+
+def test_lance_sync_scans_use_search_none_builder_not_query(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """lancedb 0.40.0 sync tables expose no query(); plain scans use search(None)."""
+    import search.local_vector as local_vector
+
+    module = FakeLanceModule()
+    monkeypatch.setattr(local_vector, "require_lancedb", lambda: module)
+    index = LanceVectorIndex(tmp_path / "vectors")
+    records = _lance_records()
+    index.stage_batch("run-scan", records[:1])
+    index.stage_batch("run-scan", records[1:])
+    (table,) = module.tables.values()
+    assert not hasattr(table, "query")
+    receipt = VectorBatchReceipt(
+        batch_number=1,
+        first_chunk_id="chunk-1",
+        last_chunk_id="chunk-2",
+        chunk_count=2,
+        records_sha256=vector_records_digest(records),
+    )
+    bounded = index.read_batch("run-scan", receipt)
+    assert [str(row["chunk_id"]) for row in bounded] == ["chunk-1", "chunk-2"]
+    assert index.verify_batch("run-scan", receipt) is True
+    assert index.count_records("run-scan") == 2
+    projection = index.read_projection("run-scan", expected_count=2)
+    assert [str(row["chunk_id"]) for row in projection] == ["chunk-1", "chunk-2"]
 
 
 def test_optional_dependency_error_is_loud() -> None:

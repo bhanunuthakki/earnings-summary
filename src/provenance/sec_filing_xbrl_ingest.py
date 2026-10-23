@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from datetime import UTC, datetime
@@ -43,6 +42,7 @@ from provenance.issuer_registry import IssuerRegistry
 from provenance.reporting_entity_registry import ReportingEntityRegistry
 from provenance.sec_native_capture import load_captured_sec_filing_package
 from provenance.source_coverage_refresh import CoverageRefreshRequest, refresh_source_coverage
+from runtime.deterministic import sha256_bytes as _sha
 
 _EXTRACTOR_NAME = "filing-native-xbrl"
 _EXTRACTOR_VERSION = "v1"
@@ -980,10 +980,6 @@ def _node_id(run_id: str, ordinal: int) -> str:
 
 def _canonical(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
-def _sha(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
 
 
 # Retained replay and its fixtures reuse these owners through typed public names.

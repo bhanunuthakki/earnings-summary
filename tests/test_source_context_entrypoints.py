@@ -118,7 +118,9 @@ def test_dashboard_dispatch_and_bulk_rebuild_do_not_infer_byte_authority(
         return Path("/Applications/earnings-summary/.venv/bin/python")
 
     monkeypatch.setattr(registry, "start", no_spawn)
-    monkeypatch.setattr(comments_server, "application_python_executable", python)
+    from tests.comments_server_seams import patch_server_seam
+
+    patch_server_seam(monkeypatch, "application_python_executable", python)
     client = comments_server.create_app(
         root,
         code_root=code,

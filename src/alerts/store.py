@@ -35,7 +35,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-from clock import now_iso
+from clock import now_iso as _now_iso
 from db_paths import resolve_db_path
 from identity import DEFAULT_USER_ID
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -356,6 +356,46 @@ def list_alerts(
     finally:
         if conn is None:
             db_conn.close()
+
+
+def recent_alert_identities(
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    limit: int = 500,
+    db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> dict[int, tuple[str, str]]:
+    """id → (ticker, status) for the ``limit`` most recent alerts — the lean
+    identity projection of :func:`list_alerts` with the same filters, order
+    and window (F4: callers that only consume id/ticker/status — the inbox's
+    orphan check — no longer transfer and decode every alert's full row
+    (evidence_json included) to learn two fields).
+
+    Exact-parity note: same ``WHERE user_id = ?`` / ``ORDER BY fired_at DESC,
+    id DESC`` / ``LIMIT ?`` as ``list_alerts(user_id=..., limit=...)`` — the
+    same ids are selected and ``str()`` is applied to the same two columns
+    ``_row_to_alert`` would apply it to. A lean projection cannot raise the
+    hand-built-fixture ``IndexError`` the full row decoder tolerates, so a
+    missing-table/missing-column error degrades to ``{}`` like every other
+    best-effort read here.
+    """
+    db_conn = conn or _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    try:
+        rows = db_conn.execute(
+            """
+            SELECT id, ticker, status FROM alerts
+            WHERE user_id = ?
+            ORDER BY fired_at DESC, id DESC
+            LIMIT ?
+            """,
+            (user_id, int(limit)),
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    finally:
+        if conn is None:
+            db_conn.close()
+    return {int(r["id"]): (str(r["ticker"]), str(r["status"])) for r in rows}
 
 
 def approve_alert(alert_id: int, db_path: Path | str | None = None) -> AlertRow:
@@ -766,14 +806,6 @@ def _open(
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
-
-
-def _now_iso() -> str:
-    # Naive-UTC, matching ``alerts.fired_at`` (written by triggers as
-    # ``datetime.now(UTC).replace(tzinfo=None)``) and the repo-wide
-    # convention. An aware offset here is the landmine that crashes any
-    # consumer comparing a store stamp against a naive datetime.
-    return now_iso()
 
 
 def _parse_dt(raw: object) -> datetime:

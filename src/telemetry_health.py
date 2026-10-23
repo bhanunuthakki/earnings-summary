@@ -36,6 +36,15 @@ log = logging.getLogger(__name__)
 #: Kind written by ``llm_call_ledger.record_call`` when an ``llm_calls`` row
 #: could not be persisted (schema drift, a locked database, a missing table).
 DROPPED_LLM_LEDGER_WRITE = "llm_ledger_write"
+#: Kinds written by the daily chain's auxiliary best-effort writers when a row
+#: is dropped instead of persisted — most notably a writer-gate timeout
+#: (``pipeline.db_writer_gate.WriterGateHeldError``), which must be observable
+#: rather than a silently lost row (M3 scrutiny 2026-10-08).
+DROPPED_SOURCE_CALL_WRITE = "source_call_write"  # sources.registry.log_call(s)
+DROPPED_SOURCE_ATTEMPT_WRITE = "source_attempt_write"  # registry.log_http_measurement
+DROPPED_LLM_ARTIFACT_WRITE = "llm_artifact_write"  # llm_artifact_store upserts
+DROPPED_LLM_BUDGET_ALERT_WRITE = "llm_budget_alert_write"  # llm_budget.record_alert
+DROPPED_QUOTA_BREAKER_WRITE = "llm_quota_breaker_write"  # llm transport breaker rows
 
 # One rotation, no archive. The question this file answers is "is this
 # happening, how often, and what was the last error" — not "replay every drop

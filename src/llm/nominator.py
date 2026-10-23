@@ -36,8 +36,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+from clock import now_iso as _now_iso
 from llm.frontier import frontier_sha, merged_cheaper_candidates, promise_of
 from llm.workload_inventory import PurposeWorkload, build_workload_inventory, risk_note_for
+from runtime.deterministic import table_exists as _has_table
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -135,19 +137,6 @@ class Nomination:
     calls_30d: int = 0
     expires_at: str | None = None
     row_id: int | None = None
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).replace(tzinfo=None).isoformat()
-
-
-def _has_table(conn: sqlite3.Connection, name: str) -> bool:
-    return (
-        conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", (name,)
-        ).fetchone()
-        is not None
-    )
 
 
 # ---------------------------------------------------------------------------

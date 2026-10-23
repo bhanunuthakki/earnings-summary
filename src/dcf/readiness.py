@@ -269,7 +269,10 @@ def _assess(
     market_status: Literal["current", "stale", "missing", "invalid"] = "current"
     if evidence.live_price is None or evidence.live_price_at is None:
         market_status = "missing"
-        reasons.append("market_price_or_timestamp_missing")
+        if purpose != "analyst_memo" or (
+            evidence.live_price is not None or evidence.live_price_at is not None
+        ):
+            reasons.append("market_price_or_timestamp_missing")
     elif market_at is None:
         market_status = "invalid"
         reasons.append("market_timestamp_invalid")
@@ -387,7 +390,7 @@ def _assess(
                     reasons.extend(bridge.reasons or ("equity_bridge_source_scope_unverified",))
                 if canonical_digest(snapshot.get("model_output")) != canonical_digest(replay):
                     raise InputEvidenceError("persisted_model_output_replay_mismatch")
-                _scenario_replay(ticker, effective, replay, snapshot)
+                replay_model_scenarios(ticker, effective, replay, snapshot, recipe=receipt.recipe)
             if receipt.verified_at > cutoff or (
                 calculated_at and receipt.verified_at > calculated_at
             ):
@@ -418,7 +421,7 @@ def _assess(
                 ("equity_value", snapshot.get("equity_value_m")),
                 ("operating_ev", snapshot.get("operating_ev_m")),
             ]
-            if receipt.recipe == meli_inputs.RECIPE:
+            if meli_inputs.is_meli_recipe(receipt.recipe):
                 outputs.append(("credit_equity_value", snapshot.get("credit_equity_value_m")))
             for key, stored in outputs:
                 expected = replay[key]
@@ -479,7 +482,9 @@ def _assess(
                         model=model,
                         engine_version=engine_version,
                         effective_inputs=effective,
-                        output=_scenario_replay(ticker, effective, replay, snapshot),
+                        output=replay_model_scenarios(
+                            ticker, effective, replay, snapshot, recipe=receipt.recipe
+                        ),
                         as_of=cutoff,
                         calculated_at=calculated_at,
                     )
@@ -543,11 +548,13 @@ def _assess(
     )
 
 
-def _scenario_replay(
+def replay_model_scenarios(
     ticker: str,
     effective: dict[str, float],
     replay: dict[str, object],
     snapshot: dict[str, object],
+    *,
+    recipe: str = meli_inputs.RECIPE,
 ) -> dict[str, object]:
     if ticker == "ONON":
         # The fixed ONON vector includes all three complete scenario schedules.
@@ -562,7 +569,7 @@ def _scenario_replay(
         raise InputEvidenceError("scenario_acceptance_population_mismatch")
     scenarios: dict[str, object] = {}
     for name, vector in vectors.items():
-        numeric = meli_inputs.effective_numeric_inputs(_mapping(vector))
+        numeric = meli_inputs.effective_numeric_inputs(_mapping(vector), recipe=recipe)
         if any(numeric[key] != effective[key] for key in meli_inputs.REPORTED_DRIVER_KEYS):
             raise InputEvidenceError("scenario_acceptance_reported_anchor_changed")
         if name == "base" and numeric != effective:
@@ -571,7 +578,25 @@ def _scenario_replay(
             "effective_inputs": numeric,
             "model_output": meli_inputs.model_output(numeric),
         }
+    # Consumers may retain this compact projection. Verify it against the same
+    # reviewed vectors before allowing the persisted run to support a reader.
+    if "scenarios" in snapshot:
+        expected_projection: dict[str, dict[str, object]] = {}
+        for name, scenario in scenarios.items():
+            item = _mapping(scenario)
+            output = _mapping(item["model_output"])
+            expected_projection[name] = {
+                "fair_value_per_share_usd": output["vps"],
+                "provenance": "explicit_vector_acceptance_separate",
+                "effective_inputs_sha256": canonical_digest(item["effective_inputs"]),
+            }
+        if canonical_digest(snapshot["scenarios"]) != canonical_digest(expected_projection):
+            raise InputEvidenceError("persisted_scenario_output_replay_mismatch")
     return {"base_model_output": replay, "scenarios": scenarios}
+
+
+# Preserve callers of the former internal name during the API transition.
+_scenario_replay = replay_model_scenarios
 
 
 def load_valuation_readiness(

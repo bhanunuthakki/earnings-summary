@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import tempfile
 from datetime import UTC, datetime
@@ -13,6 +12,8 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from runtime.deterministic import canonical_json_ascii_no_nan as _canonical_json
+from runtime.deterministic import sha256_file as _sha256
 from runtime.job_runtime import JobLock, portfolio_db_path
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -723,23 +724,6 @@ def _write_failure_receipt(path: Path, receipt: ActivationReceipt) -> None:
         raise AtomicCutoverError(
             f"{receipt.failure}; additionally failed to persist receipt: {_safe_failure(exc)}"
         ) from exc
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(
-        value,
-        allow_nan=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
 
 
 def _canonical_sha(value: object) -> str:

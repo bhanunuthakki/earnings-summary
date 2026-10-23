@@ -13,6 +13,7 @@ from typing import cast
 import pytest
 from bs4 import BeautifulSoup
 
+from provenance.analysis_scope import AnalysisEvidenceScope, AnalysisScopeRequest
 from provenance.canonical_fact_resolution import (
     CanonicalFactResolutionEngine,
     ResolutionSnapshotScope,
@@ -56,6 +57,7 @@ from sources.report_financials import (
     read_financial_table,
 )
 from tests import test_report_canonical_financials as canonical
+from tests.test_meli_input_evidence import reviewed_pdf_table_scope
 from ui.source_chip import source_chip_html, source_hover_title
 
 STAMP = canonical.STAMP
@@ -469,6 +471,36 @@ def test_financial_reference_requires_exact_ontology_and_resolution_members(
         }
     )
     verify_memo_snapshot_reference(database, reference, snapshot, "SYNTH", STAMP)
+    # A scoped PDF claim must identify a reviewed page. This fixture has no
+    # page locator; the page-aware report tests cover required/deferred pages.
+    scope = reviewed_pdf_table_scope(
+        reference.observation_id, document_version_id="report-document", reviewed_at=STAMP
+    )
+    analysis = AnalysisEvidenceScope.model_construct(
+        request=AnalysisScopeRequest(
+            purpose="Synthetic memo scoped-PDF page boundary",
+            issuer_id="issuer-1",
+            inventory_key="synthetic",
+            required_period_ends=(date(2025, 12, 31),),
+            cutoff_at=STAMP,
+            observed_through=STAMP,
+            readiness_profile="complete_report_evidence/v1",
+            report_pdf_tables=(scope,),
+        )
+    )
+    scoped = snapshot.model_copy(
+        update={
+            "research_universe": snapshot.research_universe.model_copy(
+                update={"analysis_scope": analysis}
+            )
+        }
+    )
+    with pytest.raises(MemoEvidenceError, match=r"^memo_report_pdf_anchor_page_unknown$"):
+        verify_memo_snapshot_reference(database, reference, scoped, "SYNTH", STAMP)
+    # Node labels are not evidence. Unretained anchors fail before admission.
+    for node_id in ("source-page-1", "source-page-2", "source-page-unknown", "missing"):
+        with pytest.raises(MemoEvidenceError, match=r"^memo_report_pdf_anchor_missing$"):
+            verify_memo_snapshot_node(database, node_id, scoped, STAMP)
     series_reference = reference.model_copy(
         update={
             "reader_kind": "series",

@@ -1,5 +1,5 @@
 {
-  "manifest_version": "2026-10-07.1",
+  "manifest_version": "2026-10-19.1",
   "workspace_name": "earnings-summary",
   "description": "11-subsystem reconstruction manifest and deterministic inventory definition for the earnings-summary research platform.",
   "canonical_runtime": {
@@ -29,7 +29,14 @@
         "src/provenance/financial_derivations.py",
         "src/provenance/research_snapshot.py",
         "src/provenance/population_research_snapshots.py",
-        "execution/populate_research_snapshots.py"
+        "execution/populate_research_snapshots.py",
+        "alembic/versions/0058_sealed_snapshot_admission_fences.py",
+        "alembic/versions/0059_scoped_research_universe_commitments.py",
+        "alembic/versions/0061_bulk_lexical_projection_coverage.py",
+        "src/search/corpus_builder.py",
+        "src/provenance/canonical_fact_resolution.py",
+        "src/provenance/fact_read_model.py",
+        "src/provenance/native_pdf_transcript.py"
       ],
       "dependencies": [
         "requirements.lock",
@@ -38,7 +45,14 @@
       "test_commands": [
         "pytest tests/test_sqlite_runtime.py -q",
         "pytest tests/test_research_snapshot.py tests/test_research_snapshot_publication_clock.py tests/test_population_research_snapshots.py tests/test_population_research_projection_mode.py -q",
-        "pytest tests/test_kpi_legacy_dispositions.py tests/test_kpi_source_precision.py tests/test_financial_source_repairs.py tests/test_reviewed_kpi_native_population.py -q"
+        "pytest tests/test_kpi_legacy_dispositions.py tests/test_kpi_source_precision.py tests/test_financial_source_repairs.py tests/test_reviewed_kpi_native_population.py -q",
+        "pytest tests/test_sealed_snapshot_admission.py tests/test_fact_read_model_batch.py -q",
+        "pytest tests/test_native_pdf_transcript.py tests/test_document_processing_evidence.py -q",
+        "pytest tests/test_research_sec_financial_authority.py -q",
+        "pytest tests/test_research_issuer_obligation_bindings.py -q",
+        "pytest tests/test_report_financial_resolution_clock.py -q",
+        "pytest tests/test_pdf_no_ocr_processing_evidence.py -q",
+        "pytest tests/test_corpus_fts_bulk_validation.py tests/test_search_corpus_builder.py tests/test_search_projection_seals.py tests/test_scoped_research_universe_migration.py -q"
       ],
       "documentation": [
         "AGENTS.md",
@@ -96,7 +110,11 @@
         "execution/publish_meli_reported_statements.py",
         "execution/plan_analysis_evidence_scope.py",
         "src/provenance/analysis_scope.py",
-        "execution/preview_meli_inputs.py"
+        "src/provenance/report_evidence_contract.py",
+        "execution/preview_meli_inputs.py",
+        "src/filings/sec_submission_text.py",
+        "src/provenance/sec_submission_import.py",
+        "src/provenance/historical_public_witness.py"
       ],
       "dependencies": [
         "core_data_layer"
@@ -106,8 +124,10 @@
         "pytest tests/test_onboard_sec_fallback.py tests/test_sec_onboarding_identity.py tests/test_onboarding_state_authority.py tests/test_runtime_state_authority.py tests/test_decision_brief_workflow.py -q",
         "pytest tests/test_source_context_entrypoints.py tests/test_refresh_dispatch.py -q",
         "pytest tests/test_meli_reported_statements.py -q",
-        "pytest tests/test_analysis_scope.py tests/test_analysis_scope_cli.py -q",
-        "pytest tests/test_meli_input_evidence.py -q"
+        "pytest tests/test_analysis_scope.py tests/test_historical_analysis_scope.py tests/test_historical_research_boundary.py tests/test_report_evidence_scope.py tests/test_decision_brief_report_scope.py tests/test_analysis_scope_cli.py -q",
+        "pytest tests/test_report_pdf_table_scope.py -q",
+        "pytest tests/test_meli_input_evidence.py -q",
+        "pytest tests/test_sec_submission_text.py tests/test_sec_submission_import.py tests/test_sec_subject_date_witness.py -q"
       ],
       "documentation": [
         "AGENTS.md",
@@ -137,7 +157,8 @@
         "All scripts use typed CLI arguments and Pydantic models",
         "Outputs >100KB or >2000 lines write to .tmp/",
         "Scripts log JSON-lines to stderr and return data on stdout",
-        "Orchestration is resumable via .tmp/ checkpoint state"
+        "Orchestration is resumable via .tmp/ checkpoint state",
+        "Analysis Evidence Scope selects immutable purpose-specific evidence without weakening capture, processing, financial admission, or full-population readiness"
       ],
       "exit_ready_boundary": "Pure Python CLI entrypoints with standard library argparse/typer; independent of proprietary orchestration engines"
     },
@@ -227,6 +248,9 @@
         "src/dcf/onon_inputs.py",
         "src/dcf/scenario_acceptance.py",
         "execution/build_onon_dcf.py",
+        "execution/build_meli_platform_dcf.py",
+        "src/dcf/meli_workbook.py",
+        "execution/meli_workbook_adapter.mjs",
         "src/compute/thesis_metric_series.py",
         "src/evals/kpi_repair_judge.py",
         "src/dcf/reviewed_input_roles.py",
@@ -247,7 +271,10 @@
         "pytest tests/test_onon_model.py tests/test_onon_inputs.py tests/test_build_onon_dcf.py tests/test_scenario_acceptance.py -q",
         "pytest tests/test_reviewed_input_roles.py tests/test_review_onon_input_roles.py -q",
         "pytest tests/test_model_source_bytes.py tests/test_source_context_entrypoints.py tests/test_meli_input_evidence.py tests/test_onon_explicit_routing.py -q",
-        "pytest tests/test_meli_scenario_preview.py -q"
+        "pytest tests/test_meli_scenario_preview.py -q",
+        "pytest tests/test_meli_workbook_recalculation.py -q",
+        "pytest tests/test_meli_preview_batch_reuse.py tests/test_preview_meli_inputs_cli.py -q",
+        "pytest tests/test_canonical_fact_exact_read.py tests/test_memo_model_roundtrip.py -q"
       ],
       "documentation": [
         "directives/data_provenance.md"
@@ -297,7 +324,17 @@
         "src/research/decision_brief_workflow.py",
         "src/research/decision_brief.py",
         "src/research/memo_claim_support.py",
-        "src/research/memo_model_evidence.py"
+        "src/research/memo_model_evidence.py",
+        "execution/register_owner_proposal.py",
+        "src/research/proposal_approval.py",
+        "alembic/versions/0060_owner_governed_proposals.py",
+        "src/research/nu_earnings_evidence.py",
+        "src/research/memo_report_evidence.py",
+        "src/research/report_contract.py",
+        "src/research/earnings_report_contract.py",
+        "src/research/report_preview.py",
+        "src/report/renderers/bound_draft.py",
+        "execution/preview_report_draft.py"
       ],
       "dependencies": [
         "financial_compute_engine"
@@ -305,8 +342,11 @@
       "test_commands": [
         "pytest tests/test_advisor_memos.py -q",
         "pytest tests/test_qualitative_stress.py -q",
+        "pytest tests/test_owner_proposal_approval.py tests/test_ask_proposal_approval.py -q",
         "pytest tests/test_decision_brief.py tests/test_memo_claim_support.py -q",
-        "pytest tests/test_memo_context_v2.py tests/test_memo_model_evidence.py tests/test_memo_model_roundtrip.py tests/test_memo_peer_roundtrip.py -q"
+        "pytest tests/test_memo_context_v2.py tests/test_memo_model_evidence.py tests/test_memo_model_roundtrip.py tests/test_memo_peer_roundtrip.py -q",
+        "pytest tests/test_nu_earnings_evidence.py tests/test_decision_brief_report_scope.py -q",
+        "pytest tests/test_report_contract.py tests/test_report_preview.py tests/test_earnings_brief.py tests/test_earnings_readout.py -q"
       ],
       "documentation": [
         "HOW_TO_USE_REPORTS.md",

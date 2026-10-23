@@ -17,14 +17,21 @@ from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from provenance.analysis_scope import (
+    AnalysisEvidenceScope,
+    require_analysis_documents,
+    resolve_analysis_coverage,
+)
 from provenance.fulltext_extractor_identity import (
     BASE_FULLTEXT_EXTRACTOR,
     FULLTEXT_EXTRACTOR_IDENTITY_POLICY_VERSION,
     FULLTEXT_EXTRACTOR_NAME,
     OFFICE_FULLTEXT_EXTRACTOR,
+    PDF_FULLTEXT_EXTRACTOR,
     STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR,
     FulltextExtractorIdentity,
     resolve_fulltext_extractor_identity,
+    select_approved_fulltext_run,
 )
 from provenance.image_ocr_extraction import (
     IMAGE_OCR_EXTRACTOR_CODE_VERSION,
@@ -39,6 +46,7 @@ from provenance.source_inventory_seal import (
     InventoryManifestLink,
     SourceInventorySealStore,
 )
+from runtime.deterministic import sha256_text as _sha256_text
 from search.grounded import (
     CorpusDocumentMembership,
     CorpusManifest,
@@ -123,10 +131,15 @@ class CorpusBuildRequest(_ClosedModel):
     knowledge_cutoff: datetime | None = None
     persist_batch_size: int = Field(default=250, ge=1, le=5_000)
     apply: bool = False
+    analysis_scope: AnalysisEvidenceScope | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def _validate_inventory(self) -> Self:
         ExpectedDocumentInventory(expected_documents=self.expected_documents)
+        if self.analysis_scope is None and self.corpus_key.startswith("analysis-scope:"):
+            raise ValueError("analysis-scope corpus namespace requires its verified scope receipt")
         if any(not name.strip() for name in self.required_extractor_names):
             raise ValueError("required extractor names must be non-empty")
         if len(self.required_extractor_names) != len(set(self.required_extractor_names)):
@@ -254,10 +267,69 @@ def load_coverage_expected_document_inventory(
     )
 
 
+def load_analysis_expected_document_inventory(
+    conn: sqlite3.Connection,
+    scope: AnalysisEvidenceScope,
+    *,
+    cutoff_at: datetime,
+    observed_through: datetime,
+) -> tuple[ExpectedDocumentInventory, tuple[str, ...]]:
+    """Require the selected package; index its primary research documents only."""
+
+    document_ids = require_analysis_documents(conn, scope, cutoff_at, observed_through)
+    coverage = resolve_analysis_coverage(conn, scope, cutoff_at, observed_through)
+    expected = tuple(
+        ExpectedDocument(
+            expected_document_key=item.expected_document_key,
+            document_version_id=item.document_version_id,
+            membership_status="included",
+            reason=f"analysis:{scope.scope_id}:coverage:{item.coverage_status}",
+        )
+        for item in sorted(coverage, key=lambda item: item.expected_document_key)
+        if item.role == "research_document"
+    )
+    if (
+        tuple(sorted(item.document_version_id for item in expected if item.document_version_id))
+        != document_ids
+    ):
+        raise ValueError("analysis primary coverage identities differ")
+    return ExpectedDocumentInventory(expected_documents=expected), (scope.inventory.snapshot_id,)
+
+
+def _validate_analysis_inventory(conn: sqlite3.Connection, request: CorpusBuildRequest) -> None:
+    scope = request.analysis_scope
+    if scope is None:
+        if request.corpus_key.startswith("analysis-scope:"):
+            raise ValueError("analysis-scope corpus namespace requires its verified scope receipt")
+        return
+    if request.corpus_key != scope.scope_id:
+        raise ValueError("scoped corpus key must equal the analysis scope identity")
+    inventory, snapshot_ids = load_analysis_expected_document_inventory(
+        conn,
+        scope,
+        cutoff_at=request.knowledge_cutoff or request.recorded_at,
+        observed_through=request.recorded_at,
+    )
+    if request.source_inventory_snapshot_ids != snapshot_ids:
+        raise ValueError("scoped corpus must link exactly its analysis source inventory")
+    actual = sorted(
+        (item.expected_document_key, item.document_version_id, item.membership_status)
+        for item in request.expected_documents
+    )
+    required = sorted(
+        (item.expected_document_key, item.document_version_id, item.membership_status)
+        for item in inventory.expected_documents
+    )
+    if actual != required:
+        raise ValueError("scoped corpus expected documents differ from its analysis scope")
+
+
 def build_grounded_search_corpus(
     conn: sqlite3.Connection,
     request: CorpusBuildRequest,
     on_chunk_batch_complete: Callable[[int], None] | None = None,
+    *,
+    before_publish: Callable[[], None] | None = None,
 ) -> CorpusBuildResult:
     """Plan or incrementally stage and atomically publish a lexical corpus.
 
@@ -267,6 +339,9 @@ def build_grounded_search_corpus(
     queryable only after a second deterministic pass proves that every expected
     chunk is present exactly and no extra chunk exists; the short publication
     transaction then inserts the seal and lexical run together.
+
+    ``before_publish`` checks immutable caller inputs inside that transaction,
+    before publication records are inserted and again immediately before commit.
     """
 
     store = GroundedSearchStore(conn)
@@ -335,6 +410,9 @@ def build_grounded_search_corpus(
     )
     try:
         conn.execute("BEGIN IMMEDIATE")
+        if before_publish is not None:
+            before_publish()
+        _validate_analysis_inventory(conn, request)
         # Rows are append-only.  Rechecking the count under the write lock is
         # sufficient to prove the previously verified digest cannot have
         # changed between verification and publication.
@@ -364,6 +442,8 @@ def build_grounded_search_corpus(
             )
             records_created += int(projection_created)
             records_replayed += int(not projection_created)
+        if before_publish is not None:
+            before_publish()
         conn.commit()
     except Exception:
         conn.rollback()
@@ -440,9 +520,10 @@ def _plan(conn: sqlite3.Connection, request: CorpusBuildRequest) -> _CorpusPlan:
 
 
 def _metadata_plan(conn: sqlite3.Connection, request: CorpusBuildRequest) -> _CorpusMetadata:
+    _validate_analysis_inventory(conn, request)
     inventory = sorted(request.expected_documents, key=lambda item: item.expected_document_key)
     reporting_projection: dict[str, object] = {}
-    if request.source_inventory_snapshot_ids:
+    if request.source_inventory_snapshot_ids and request.analysis_scope is None:
         if request.knowledge_cutoff is None:
             raise ValueError("sealed reporting projection requires an explicit knowledge cutoff")
         keys: list[str] = []
@@ -479,6 +560,8 @@ def _metadata_plan(conn: sqlite3.Connection, request: CorpusBuildRequest) -> _Co
         "source_inventory_snapshot_ids": sorted(request.source_inventory_snapshot_ids),
         "node_selection_policy": _node_selection_policy_config(),
     }
+    if request.analysis_scope is not None:
+        config["analysis_scope"] = request.analysis_scope.model_dump(mode="json")
     if reporting_projection:
         config["reporting_projection"] = reporting_projection
     config_sha = _sha256_json(config)
@@ -606,7 +689,7 @@ def _document_extraction_complete(
         media_type=media_type,
         observed_through=observed_through,
     )
-    if media_type.lower() != "application/pdf":
+    if fulltext_identity != PDF_FULLTEXT_EXTRACTOR:
         return _has_approved_substantive_extraction(
             conn,
             document_version_id,
@@ -644,20 +727,15 @@ def _document_extraction_complete(
     }
     if set(preflight) != set(range(1, page_count + 1)):
         return False
+    selected_run_id = select_approved_fulltext_run(
+        conn, document_version_id, fulltext_identity, observed_through=observed_through
+    )
     native_pages: set[int] = set()
     for item in conn.execute(
         "SELECT node.locator_json FROM evidence_nodes AS node "
-        "JOIN evidence_extraction_runs AS run "
-        "ON run.extraction_run_id = node.extraction_run_id "
-        "WHERE run.document_version_id = ? AND run.outcome = 'succeeded' "
-        "AND node.node_kind = 'pdf_page' AND run.extractor_name = ? "
-        "AND run.extractor_code_version = ? AND run.extractor_config_sha256 = ?",
-        (
-            document_version_id,
-            fulltext_identity.name,
-            fulltext_identity.code_version,
-            fulltext_identity.config_sha256,
-        ),
+        "WHERE node.extraction_run_id=? AND node.node_kind='pdf_page' "
+        "AND datetime(node.recorded_at)<=datetime(?)",
+        (selected_run_id, _db_clock(observed_through)),
     ).fetchall():
         if item[0] is None:
             continue
@@ -702,10 +780,13 @@ def _has_approved_substantive_extraction(
     accepted_image_node_ids: frozenset[str],
     observed_through: datetime,
 ) -> bool:
+    selected_run_id = select_approved_fulltext_run(
+        conn, document_version_id, fulltext_identity, observed_through=observed_through
+    )
     placeholders = ", ".join("?" for _ in extractor_names)
     rows = conn.execute(
         "SELECT DISTINCT node.node_id, run.extractor_name, run.extractor_code_version, "  # nosec B608 -- trusted internal SQL shape; values remain bound
-        "run.extractor_config_sha256 FROM evidence_nodes AS node "
+        "run.extractor_config_sha256, run.extraction_run_id FROM evidence_nodes AS node "
         "JOIN evidence_extraction_runs AS run "
         "ON run.extraction_run_id = node.extraction_run_id "
         "WHERE run.document_version_id = ? AND run.outcome = 'succeeded' "
@@ -713,6 +794,8 @@ def _has_approved_substantive_extraction(
         "AND datetime(node.recorded_at)<=datetime(?) "
         "AND NOT EXISTS (SELECT 1 FROM evidence_nodes newer "
         "WHERE newer.evidence_key=node.evidence_key AND newer.revision>node.revision "
+        "AND (run.extractor_name<>'fulltext-evidence-backfill' "
+        "OR newer.extraction_run_id=node.extraction_run_id) "
         "AND datetime(newer.recorded_at)<=datetime(?)) "
         "AND node.node_kind <> 'document' AND length(trim(node.text)) > 0 "
         f"AND run.extractor_name IN ({placeholders})",
@@ -735,10 +818,7 @@ def _has_approved_substantive_extraction(
             continue
         if extractor_name != FULLTEXT_EXTRACTOR_NAME:
             return True
-        if (
-            str(row[2]) == fulltext_identity.code_version
-            and str(row[3]) == fulltext_identity.config_sha256
-        ):
+        if str(row[4]) == selected_run_id:
             return True
     return False
 
@@ -960,6 +1040,9 @@ def _selected_substantive_nodes(
     if media_row is None:
         raise ValueError("document version does not exist: " + document_version_id)
     fulltext_identity = resolve_fulltext_extractor_identity(str(media_row[0]), str(media_row[1]))
+    selected_run_id = select_approved_fulltext_run(
+        conn, document_version_id, fulltext_identity, observed_through=observed_through
+    )
     placeholders = ", ".join("?" for _ in extractor_names)
     raw_rows = conn.execute(
         "SELECT node.node_id, node.text, run.completed_at "  # nosec B608 -- trusted internal SQL shape; values remain bound
@@ -973,6 +1056,8 @@ def _selected_substantive_nodes(
         "AND datetime(node.recorded_at)<=datetime(?) "
         "AND NOT EXISTS (SELECT 1 FROM evidence_nodes newer "
         "WHERE newer.evidence_key=node.evidence_key AND newer.revision>node.revision "
+        "AND (run.extractor_name<>'fulltext-evidence-backfill' "
+        "OR newer.extraction_run_id=node.extraction_run_id) "
         "AND datetime(newer.recorded_at)<=datetime(?)) "
         "AND node.node_kind <> 'document' "
         f"AND run.extractor_name IN ({placeholders}) "
@@ -985,7 +1070,7 @@ def _selected_substantive_nodes(
             *extractor_names,
         ),
     ).fetchall()
-    if str(media_row[1]) != "application/pdf":
+    if fulltext_identity != PDF_FULLTEXT_EXTRACTOR:
         accepted_image_node_ids = _accepted_current_image_ocr_node_ids(
             conn,
             document_version_id,
@@ -995,7 +1080,7 @@ def _selected_substantive_nodes(
         return _canonical_non_pdf_nodes(
             _authoritative_non_pdf_rows(
                 raw_rows,
-                fulltext_identity,
+                selected_run_id,
                 accepted_image_node_ids=accepted_image_node_ids,
             )
         )
@@ -1056,10 +1141,7 @@ def _selected_substantive_nodes(
             continue
         node_id = str(row[0])
         extractor_name = str(row[5])
-        if extractor_name == FULLTEXT_EXTRACTOR_NAME and (
-            str(row[7]) != fulltext_identity.code_version
-            or str(row[8]) != fulltext_identity.config_sha256
-        ):
+        if extractor_name == FULLTEXT_EXTRACTOR_NAME and str(row[9]) != selected_run_id:
             continue
         requires_ocr = page_policy[page_value]
         if requires_ocr:
@@ -1083,7 +1165,7 @@ def _selected_substantive_nodes(
 
 def _authoritative_non_pdf_rows(
     raw_rows: Sequence[sqlite3.Row | tuple[object, ...]],
-    fulltext_identity: FulltextExtractorIdentity,
+    selected_run_id: str | None,
     *,
     accepted_image_node_ids: frozenset[str],
 ) -> tuple[sqlite3.Row | tuple[object, ...], ...]:
@@ -1099,11 +1181,7 @@ def _authoritative_non_pdf_rows(
         row
         for row in raw_rows
         if (
-            (
-                str(row[5]) == FULLTEXT_EXTRACTOR_NAME
-                and str(row[7]) == fulltext_identity.code_version
-                and str(row[8]) == fulltext_identity.config_sha256
-            )
+            (str(row[5]) == FULLTEXT_EXTRACTOR_NAME and str(row[9]) == selected_run_id)
             or (str(row[5]) == IMAGE_OCR_EXTRACTOR_NAME and str(row[0]) in accepted_image_node_ids)
             or str(row[5])
             not in {
@@ -1335,14 +1413,23 @@ def _verify_complete_chunk_stage(
 ) -> int:
     """Prove all deterministic chunks exist exactly and no extra row exists."""
 
+    # FTS5's chunk_id is UNINDEXED. Read it once, with FTS as the outer
+    # scan, instead of scanning the entire projection for every chunk.
+    lexical_rows = {
+        str(row[0]): (int(row[1]), row[2], row[3])
+        for row in conn.execute(
+            "SELECT lexical.chunk_id, COUNT(*), MIN(lexical.text), MAX(lexical.text) "
+            "FROM search_lexical_chunks AS lexical CROSS JOIN search_chunks AS chunk "
+            "ON chunk.chunk_id = lexical.chunk_id WHERE chunk.manifest_id = ? "
+            "GROUP BY lexical.chunk_id",
+            (manifest_id,),
+        )
+    }
     expected_count = 0
     for expected in _iter_manifest_chunks(conn, memberships, request, chunker_sha):
         expected_count += 1
         _require_exact_chunk(conn, expected)
-        row = conn.execute(
-            "SELECT COUNT(*), MIN(text), MAX(text) FROM search_lexical_chunks WHERE chunk_id = ?",
-            (expected.chunk_id,),
-        ).fetchone()
+        row = lexical_rows.get(expected.chunk_id)
         if (
             row is None
             or int(row[0]) != 1
@@ -1766,10 +1853,6 @@ def _result(
         chunker_config_sha256=plan.chunker_config_sha256,
         planned_chunks=plan.chunks,
     )
-
-
-def _sha256_text(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _sha256_json(value: object) -> str:

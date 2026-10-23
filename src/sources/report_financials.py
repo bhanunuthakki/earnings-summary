@@ -79,9 +79,18 @@ class FinancialEvidenceReference(BaseModel):
     canonical_resolution_revision_id: str = Field(min_length=1, max_length=128)
     metric_definition_revision_id: str = Field(min_length=1, max_length=128)
     as_of: AwareDatetime
+    resolution_observed_through: AwareDatetime | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def _reader_shape(self) -> FinancialEvidenceReference:
+        if self.resolution_observed_through is not None and (
+            self.reader_kind != "report_table" or self.resolution_observed_through < self.as_of
+        ):
+            raise ValueError(
+                "resolution observation clock requires a report table and must follow K"
+            )
         if self.reader_kind == "report_table":
             if (
                 self.concept not in REPORT_CONCEPTS
@@ -105,9 +114,11 @@ class FinancialEvidenceReference(BaseModel):
             raise ValueError("evidence identities must be nonblank")
         return value
 
-    @field_validator("as_of", mode="before")
+    @field_validator("as_of", "resolution_observed_through", mode="before")
     @classmethod
     def _json_iso_cutoff(cls, value: object, info: ValidationInfo) -> object:
+        if value is None and info.field_name == "resolution_observed_through":
+            return None
         if info.mode == "json":
             if not isinstance(value, str):
                 raise ValueError("financial evidence cutoff must be an ISO datetime string")
@@ -115,9 +126,11 @@ class FinancialEvidenceReference(BaseModel):
             return datetime.fromisoformat(value)
         return value
 
-    @field_validator("as_of")
+    @field_validator("as_of", "resolution_observed_through")
     @classmethod
-    def _past_utc_cutoff(cls, value: datetime) -> datetime:
+    def _past_utc_cutoff(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
         cutoff = value.astimezone(UTC)
         if cutoff > datetime.now(UTC):
             raise ValueError("financial evidence cutoff must not be in the future")
@@ -133,7 +146,7 @@ class FinancialTableCell(BaseModel):
     metric_id: str
     metric_definition_revision_id: str | None = None
     canonical_resolution_revision_id: str | None = None
-    cadence: Literal["quarterly", "annual", "unsupported"] = "unsupported"
+    cadence: Literal["quarterly", "annual", "semiannual", "unsupported"] = "unsupported"
     display_coordinate: str | None = None
     reason_codes: tuple[str, ...] = ()
     provenance: ProvenanceBundle | None = None
@@ -198,11 +211,12 @@ def _admit_cell(
     resolver: CanonicalFactResolutionEngine,
     reader: FactReadModel,
     ontology: MetricOntology,
+    resolution_observed_through: datetime | None = None,
 ) -> FinancialTableCell:
     initial = FinancialTableCell(
         concept=concept, canonical_metric_cell_id=cell_id, metric_id=metric_id
     )
-    resolution = resolver.as_known(cell_id, cutoff)
+    resolution = resolver.as_known(cell_id, cutoff, observed_through=resolution_observed_through)
     if (
         resolution is None
         or resolution.status != "resolved"
@@ -284,7 +298,7 @@ def _admit_cell(
     )
     if currency is None or value.unit_key not in expected_units:
         reasons.append("currency_or_scale_unavailable")
-    cadence: Literal["quarterly", "annual", "unsupported"] = "unsupported"
+    cadence: Literal["quarterly", "annual", "semiannual", "unsupported"] = "unsupported"
     coordinate = None
     if source.fiscal_period in {"Q1", "Q2", "Q3", "Q4"} and source.fiscal_year is not None:
         # Same supported quarter duration as sources.discovery_financials.
@@ -298,6 +312,15 @@ def _admit_cell(
     elif source.fiscal_period == "FY" and source.fiscal_year is not None:
         cadence = "annual"
         coordinate = str(source.fiscal_year)
+    elif (
+        source.fiscal_period in {"H1", "H2"}
+        and source.fiscal_year is not None
+        and source.period_start is not None
+        # Match canonical_financial_series' inclusive semiannual duration policy.
+        and 175 <= (source.period_end.date() - source.period_start.date()).days + 1 <= 200
+    ):
+        cadence = "semiannual"
+        coordinate = f"{source.fiscal_year} {source.fiscal_period}"
     else:
         reasons.append("fiscal_cadence_or_year_unavailable")
     document = (
@@ -335,11 +358,22 @@ def read_financial_table(
     ticker: str,
     *,
     as_of: datetime,
+    resolution_observed_through: datetime | None = None,
 ) -> FinancialTableProjection:
-    """Resolve retained bindings at one explicit knowledge/recording cutoff."""
+    """Read facts at K, with an optional later resolution-materialization clock.
+
+    Only the stored canonical resolution read uses O. Source, financial role,
+    definition and binding admission remain bounded by K.
+    """
     if as_of.tzinfo is None:
         raise ValueError("financial table cutoff must be timezone-aware")
     cutoff = as_of.astimezone(UTC)
+    if resolution_observed_through is not None and (
+        resolution_observed_through.tzinfo is None
+        or resolution_observed_through < cutoff
+        or resolution_observed_through > datetime.now(UTC)
+    ):
+        raise ValueError("resolution observation clock must be timezone-aware and within K and now")
     ticker = ticker.upper()
     original_factory = conn.row_factory
     owns_snapshot = not conn.in_transaction
@@ -400,6 +434,7 @@ def read_financial_table(
                     resolver=resolver,
                     reader=reader,
                     ontology=ontology,
+                    resolution_observed_through=resolution_observed_through,
                 )
             except (ValueError, RuntimeError, sqlite3.Error):
                 cell = initial.model_copy(update={"reason_codes": ("canonical_evidence_invalid",)})
@@ -473,7 +508,12 @@ def read_financial_evidence(
             ):
                 return point
         return None
-    projection = read_financial_table(conn, reference.ticker, as_of=reference.as_of)
+    projection = read_financial_table(
+        conn,
+        reference.ticker,
+        as_of=reference.as_of,
+        resolution_observed_through=reference.resolution_observed_through,
+    )
     for cell in projection.cells:
         if (
             cell.available

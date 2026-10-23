@@ -32,16 +32,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
-from uuid import uuid4
 
 from evals.harness import (
     CaseResult,
     EvalAbortError,
     EvalRunSummary,
     dumps_compact,
-    now_naive_utc,
-    resolve_git_sha,
-    sha256_file,
+    run_golden_eval,
 )
 from llm.cli import DEFAULT_MODEL, LLM_MODELS, is_hard_stop
 from llm.prompt_versions import prompt_version_for
@@ -234,42 +231,14 @@ def run_sector_benchmark_proposal_eval(
     (execution/run_llm_evals.py). ``suggest_fn`` injects a fake generator for
     tests; None = the production ``compute.sector_benchmark_proposal.propose_benchmark``.
     """
-    cases = load_sector_benchmark_golden(golden_path)
-    if limit is not None:
-        cases = cases[: max(0, limit)]
     target: SuggestFn = suggest_fn if suggest_fn is not None else _production_suggest
-
-    summary = EvalRunSummary(
-        run_id=uuid4().hex,
+    return run_golden_eval(
         purpose=PURPOSE,
-        mode="live",
+        golden_path=golden_path,
+        code_root=code_root,
+        cases=load_sector_benchmark_golden(golden_path),
+        grade_case=lambda case: grade_sector_benchmark_case(case, suggest_fn=target),
         prompt_version=prompt_version_for(PURPOSE),
         model=LLM_MODELS.get(PURPOSE, DEFAULT_MODEL),
-        judge_model=None,  # hand-picked ground truth — deterministic match, no judge
-        golden_set_sha=sha256_file(golden_path),
-        started_at=now_naive_utc(),
-        git_sha=resolve_git_sha(code_root),
+        limit=limit,
     )
-    for i, case in enumerate(cases):
-        result = grade_sector_benchmark_case(case, suggest_fn=target)
-        if i == 0 and result.failure_stage == "call":
-            retry = grade_sector_benchmark_case(case, suggest_fn=target)
-            if retry.failure_stage == "call":
-                raise EvalAbortError(
-                    f"{PURPOSE}: the first case errored twice ({result.judge_rationale}) — "
-                    "transport looks down; aborting instead of scoring 0s."
-                )
-            result = retry
-        summary.cases.append(result)
-        log.info(
-            {
-                "event": "eval_case_graded",
-                "purpose": PURPOSE,
-                "case_id": result.case_id,
-                "passed": result.passed,
-                "score": result.score,
-                "failure_stage": result.failure_stage,
-            }
-        )
-    summary.finished_at = now_naive_utc()
-    return summary

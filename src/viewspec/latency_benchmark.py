@@ -33,7 +33,6 @@ because that is what a memoizing cache pays on every rerun after the first.
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 import os
 import pickle
@@ -52,6 +51,7 @@ from alembic.config import Config
 from pydantic import BaseModel, ConfigDict, Field
 
 from alembic import command
+from runtime.deterministic import canonical_json
 from viewspec.engine import execute_view, metric_catalog
 from viewspec.spec import MAX_METRICS, MAX_TICKERS, MetricRef, ViewSpec
 
@@ -193,10 +193,6 @@ class LatencyReport(_FrozenModel):
     budget_results: tuple[BudgetResult, ...]
     overall_pass: bool
     report_sha256: str = Field(min_length=64, max_length=64)
-
-
-def canonical_json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
 def _percentile(values: list[float], percentile: float) -> float:

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Literal, Protocol, cast
 
 from bs4 import BeautifulSoup
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from pipeline.queries import ANALYZED_LIST_TYPE_VALUES
 from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
@@ -49,6 +49,7 @@ from provenance.reporting_entity_registry import (
     reporting_identifier_candidate_digest,
     security_identifier_candidate_digest,
 )
+from runtime.deterministic import parse_instant as _parse_datetime
 
 SEC_COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_MUTUAL_FUND_TICKERS_URL = "https://www.sec.gov/files/company_tickers_mf.json"
@@ -175,6 +176,59 @@ class SecHistoricalIssuerIdentity(_ClosedModel):
     termination_date: date
     termination_accession: str = Field(pattern=r"^\d{10}-\d{2}-\d{6}$")
     termination_primary_document: str = Field(min_length=1)
+
+
+class SecSubmissionsIssuerRequest(_ClosedModel):
+    """Import retained current-issuer metadata; capture and admission clocks differ."""
+
+    ticker: str = Field(min_length=1, max_length=32)
+    normalized_cik: str = Field(pattern=r"^\d{10}$")
+    source_url: str = Field(min_length=1)
+    raw_body: bytes = Field(min_length=1)
+    blob_root: Path
+    observed_at: datetime
+    retrieved_at: datetime
+    recorded_at: datetime
+    apply: bool = False
+
+    @field_validator("ticker")
+    @classmethod
+    def _ticker(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("ticker must not be blank")
+        return normalized
+
+    @field_validator("observed_at", "retrieved_at", "recorded_at")
+    @classmethod
+    def _clock(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("retained source and admission clocks require a timezone")
+        return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def _source_and_clocks(self) -> SecSubmissionsIssuerRequest:
+        expected = f"https://data.sec.gov/submissions/CIK{self.normalized_cik}.json"
+        if self.source_url != expected:
+            raise ValueError("source URL must identify the exact SEC submissions root")
+        if not self.observed_at <= self.retrieved_at <= self.recorded_at:
+            raise ValueError("source capture must precede identity admission")
+        return self
+
+
+class SecSubmissionsIssuerResult(_ClosedModel):
+    mode: Literal["dry_run", "apply"]
+    ticker: str
+    normalized_cik: str
+    canonical_issuer_id: str
+    reporting_entity_id: str
+    legal_name: str
+    sec_entity_type: Literal["operating", "other"]
+    source_sha256: str
+    source_observation_id: str | None
+    security_id: None = None
+    security_status: Literal["unavailable_from_submissions"] = "unavailable_from_submissions"
+    records_created: int = Field(ge=0)
 
 
 class SecHistoricalIssuerRequest(_ClosedModel):
@@ -1019,6 +1073,275 @@ def bootstrap_sec_fund_registry(
     )
 
 
+def bootstrap_sec_submissions_issuer(
+    conn: sqlite3.Connection,
+    *,
+    request: SecSubmissionsIssuerRequest,
+) -> SecSubmissionsIssuerResult:
+    """Bind a current reporting issuer from exact retained submissions bytes.
+
+    The root proves issuer, current ticker and reporting registrant. It does not
+    prove a security class or listing currency, create roster membership, or
+    establish filing inventory completeness.
+    """
+    try:
+        decoded: object = json.loads(request.raw_body, object_pairs_hook=_strict_json_object)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SecCompanyTickerContractError("SEC submissions body is not valid JSON") from exc
+    if not isinstance(decoded, dict):
+        raise SecCompanyTickerContractError("SEC submissions body must be an object")
+    payload = cast(dict[str, object], decoded)
+    cik = payload.get("cik")
+    if (
+        isinstance(cik, bool)
+        or not isinstance(cik, (int, str))
+        or not str(cik).isdigit()
+        or str(cik).zfill(10) != request.normalized_cik
+    ):
+        raise SecCompanyTickerContractError("SEC submissions CIK conflicts with requested CIK")
+    name = payload.get("name")
+    tickers = payload.get("tickers")
+    if not isinstance(name, str) or not name.strip():
+        raise SecCompanyTickerContractError("SEC submissions has no legal name")
+    entity_type = payload.get("entityType")
+    if entity_type not in ("operating", "other"):
+        raise SecCompanyTickerContractError(
+            "SEC submissions registrant classification is unsupported"
+        )
+    sec_entity_type = entity_type
+    series = payload.get("seriesAndClassesInformation")
+    if series is not None and series != [] and series != {}:
+        raise SecCompanyTickerContractError(
+            "SEC submissions fund series require the fund identity lane"
+        )
+    if sec_entity_type == "other":
+        filings = payload.get("filings")
+        recent: object = None
+        if isinstance(filings, dict):
+            recent = cast(dict[str, object], filings).get("recent")
+        forms: object = None
+        if isinstance(recent, dict):
+            forms = cast(dict[str, object], recent).get("form")
+        if not isinstance(forms, list):
+            raise SecCompanyTickerContractError(
+                "SEC other registrant requires periodic reporting proof"
+            )
+        form_values = cast(list[object], forms)
+        if any(not isinstance(form, str) for form in form_values) or not any(
+            form in {"10-K", "10-K/A", "10-Q", "10-Q/A", "20-F", "20-F/A", "40-F", "40-F/A"}
+            for form in form_values
+        ):
+            raise SecCompanyTickerContractError(
+                "SEC other registrant requires periodic reporting proof"
+            )
+    if not isinstance(tickers, list):
+        raise SecCompanyTickerContractError("SEC submissions current tickers must be a list")
+    ticker_values = cast(list[object], tickers)
+    if any(not isinstance(item, str) or not item.strip() for item in ticker_values):
+        raise SecCompanyTickerContractError(
+            "SEC submissions current tickers must be nonempty strings"
+        )
+    if len(ticker_values) != len(set(ticker_values)) or ticker_values.count(request.ticker) != 1:
+        raise SecCompanyTickerContractError(
+            "SEC submissions has no unique requested current ticker"
+        )
+    legal_name = name.strip()
+    issuer_id = _issuer_id(request.normalized_cik)
+    reporting_id = f"reporting:sec:{request.normalized_cik}"
+    digest = hashlib.sha256(request.raw_body).hexdigest()
+    binding = conn.execute(
+        "SELECT issuer_id,outcome,material_dissent,reason_code FROM legacy_issuer_binding_revisions "
+        "WHERE recorded_issuer_id=? ORDER BY revision DESC LIMIT 1",
+        (f"legacy-ticker:{request.ticker}",),
+    ).fetchone()
+    if binding is not None and (
+        bool(binding[2])
+        or (binding[1] == "selected" and binding[0] != issuer_id)
+        or (binding[1] != "selected" and binding[3] != "sec_ticker_missing")
+    ):
+        raise SecCompanyTickerContractError("existing ticker identity conflicts with submissions")
+    identifiers = conn.execute(
+        "SELECT DISTINCT issuer_id FROM issuer_identifier_assertions "
+        "WHERE identifier_type='sec_cik' AND normalized_value=?",
+        (request.normalized_cik,),
+    ).fetchall()
+    if any(str(row[0]) != issuer_id for row in identifiers):
+        raise SecCompanyTickerContractError("existing CIK identity conflicts with submissions")
+    subject = conn.execute(
+        "SELECT issuer_id,reporting_entity_id,security_id,outcome,material_dissent "
+        "FROM recorded_subject_binding_revisions WHERE recorded_issuer_id=? "
+        "ORDER BY revision DESC LIMIT 1",
+        (f"legacy-ticker:{request.ticker}",),
+    ).fetchone()
+    canonical_subject = conn.execute(
+        "SELECT issuer_id,reporting_entity_id,security_id,outcome,material_dissent "
+        "FROM recorded_subject_binding_revisions WHERE recorded_issuer_id=? "
+        "ORDER BY revision DESC LIMIT 1",
+        (issuer_id,),
+    ).fetchone()
+    for existing_subject in (subject, canonical_subject):
+        if existing_subject is not None and (
+            bool(existing_subject[4])
+            or existing_subject[3] != "selected"
+            or existing_subject[0] != issuer_id
+            or existing_subject[1] not in (None, reporting_id)
+        ):
+            raise SecCompanyTickerContractError(
+                "existing reporting subject conflicts with submissions"
+            )
+    observation_id: str | None = None
+    created = 0
+    if request.apply:
+        with conn:
+            observation_id, created, _ = _capture_source(
+                conn,
+                raw_body=request.raw_body,
+                request=BootstrapRequest(
+                    source_url=request.source_url,
+                    blob_root=request.blob_root,
+                    apply=True,
+                    recorded_at=request.recorded_at,
+                ),
+                source_sha=digest,
+                source_kind="sec_submissions",
+                collector_version="sec-current-submissions-bootstrap@1",
+                observed_at=request.observed_at,
+                retrieved_at=request.retrieved_at,
+            )
+            assertion_id = _record_id(
+                "identifier-assertion", issuer_id, request.normalized_cik, observation_id
+            )
+            prior = conn.execute(
+                "SELECT recorded_at FROM issuer_identifier_assertions WHERE assertion_id=?",
+                (assertion_id,),
+            ).fetchone()
+            admitted_at = request.recorded_at if prior is None else _parse_datetime(prior[0])
+            registry = IssuerRegistry(conn)
+            reporting = ReportingEntityRegistry(conn)
+            created += _persist_entity(conn, registry, issuer_id=issuer_id, recorded_at=admitted_at)
+            created += _persist_profile(
+                conn,
+                registry,
+                issuer_id=issuer_id,
+                legal_name=legal_name,
+                observation_id=observation_id,
+                source_sha=digest,
+                recorded_at=admitted_at,
+                reason_code="sec_submissions_current_issuer",
+            )
+            assertion = IdentifierAssertion(
+                assertion_id=assertion_id,
+                idempotency_key=assertion_id,
+                issuer_id=issuer_id,
+                identifier_type="sec_cik",
+                identifier_value=request.normalized_cik,
+                normalized_value=request.normalized_cik,
+                authority="sec_registry",
+                source_observation_id=observation_id,
+                effective_at=admitted_at,
+                knowledge_at=admitted_at,
+                recorded_at=admitted_at,
+            )
+            created += int(registry.persist(assertion).created)
+            created += _persist_identifier_resolution(
+                conn, registry, assertion=assertion, recorded_at=admitted_at
+            )
+            created += _persist_sec_surface(
+                conn,
+                registry,
+                issuer_id=issuer_id,
+                normalized_cik=request.normalized_cik,
+                observation_id=observation_id,
+                source_sha=digest,
+                recorded_at=admitted_at,
+                verification_method="sec_submissions_current_identity",
+            )
+            created += _persist_reporting_boundary(
+                conn,
+                issuer_id=issuer_id,
+                legal_name=legal_name,
+                normalized_cik=request.normalized_cik,
+                observation_id=observation_id,
+                recorded_at=admitted_at,
+                active_scope=False,
+            )
+            for family in (
+                "operating_company_periodic",
+                "continuous_disclosure",
+                "issuer_financial_statements",
+            ):
+                created += _persist_source_obligation(
+                    conn,
+                    reporting,
+                    issuer_id=issuer_id,
+                    reporting_entity_id=reporting_id,
+                    authority_kind="sec_edgar",
+                    document_family=family,
+                    obligation_state="required",
+                    completeness_rule="regulator_inventory",
+                    source_observation_id=observation_id,
+                    recorded_at=admitted_at,
+                    reason_code="sec_submissions_reporting_registrant",
+                )
+            details = (
+                ("source_observation_id", observation_id),
+                ("source_sha256", digest),
+                ("sec_entity_type", sec_entity_type),
+            )
+            created += _persist_binding(
+                conn,
+                registry,
+                ticker=request.ticker,
+                issuer_id=issuer_id,
+                outcome="selected",
+                reason_code="sec_submissions_current_ticker",
+                reason_details=details,
+                material_dissent=False,
+                source_sha=digest,
+                recorded_at=admitted_at,
+            )
+            if subject is None or subject[2] is None:
+                created += _persist_subject_binding(
+                    conn,
+                    reporting,
+                    ticker=request.ticker,
+                    issuer_id=issuer_id,
+                    reporting_entity_id=reporting_id,
+                    security_id=None,
+                    registry_observation_id=observation_id,
+                    registry_source_sha=digest,
+                    recorded_at=admitted_at,
+                    reason_code="sec_submissions_current_ticker",
+                    reason_details=details,
+                )
+            created += _persist_subject_binding(
+                conn,
+                reporting,
+                ticker=request.ticker,
+                recorded_issuer_id=issuer_id,
+                issuer_id=issuer_id,
+                reporting_entity_id=reporting_id,
+                security_id=None if canonical_subject is None else canonical_subject[2],
+                registry_observation_id=observation_id,
+                registry_source_sha=digest,
+                recorded_at=request.recorded_at,
+                reason_code="sec_submissions_current_issuer",
+                reason_details=details,
+            )
+    return SecSubmissionsIssuerResult(
+        mode="apply" if request.apply else "dry_run",
+        ticker=request.ticker,
+        normalized_cik=request.normalized_cik,
+        canonical_issuer_id=issuer_id,
+        reporting_entity_id=reporting_id,
+        legal_name=legal_name,
+        sec_entity_type=sec_entity_type,
+        source_sha256=digest,
+        source_observation_id=observation_id,
+        records_created=created,
+    )
+
+
 def bootstrap_sec_historical_issuer(
     conn: sqlite3.Connection,
     *,
@@ -1554,6 +1877,8 @@ def _capture_source(
     collector_version: str = _COLLECTOR_VERSION,
     media_type: str = "application/json",
     accept: str = "application/json",
+    observed_at: datetime | None = None,
+    retrieved_at: datetime | None = None,
 ) -> tuple[str, int, datetime]:
     config_sha = _digest(
         "retrieval-config",
@@ -1565,7 +1890,7 @@ def _capture_source(
     )
     observation_id = _record_id("source-observation", request.source_url, source_sha, config_sha)
     existing_observation = conn.execute(
-        "SELECT observed_at FROM evidence_source_observations WHERE idempotency_key = ?",
+        "SELECT observed_at,retrieved_at FROM evidence_source_observations WHERE idempotency_key = ?",
         (observation_id,),
     ).fetchone()
     recorded_at = (
@@ -1573,6 +1898,15 @@ def _capture_source(
         if existing_observation is None
         else _parse_datetime(existing_observation[0])
     )
+    if (
+        existing_observation is not None
+        and observed_at is not None
+        and (
+            _parse_datetime(existing_observation[0]) != observed_at
+            or _parse_datetime(existing_observation[1]) != retrieved_at
+        )
+    ):
+        raise ValueError("retained SEC source capture clocks conflict with existing observation")
     path = request.blob_root / source_sha[:2] / source_sha
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
@@ -1603,6 +1937,17 @@ def _capture_source(
         raise ValueError("existing SEC authority evidence blob metadata conflicts")
     storage_uri = path.resolve().as_uri()
     location_id = _record_id("blob-location", source_sha, storage_uri)
+    existing_location = conn.execute(
+        "SELECT verified_at,recorded_at FROM evidence_blob_location_observations "
+        "WHERE location_observation_id=?",
+        (location_id,),
+    ).fetchone()
+    location_verified_at = (
+        recorded_at if existing_location is None else _parse_datetime(existing_location[0])
+    )
+    location_recorded_at = (
+        recorded_at if existing_location is None else _parse_datetime(existing_location[1])
+    )
     created += int(
         EvidenceLinkLedger(conn)
         .persist_location(
@@ -1614,10 +1959,10 @@ def _capture_source(
                 location_kind="local",
                 availability_state="present",
                 location_sequence=1,
-                verified_at=recorded_at,
+                verified_at=location_verified_at,
                 verified_byte_size=len(raw_body),
                 verified_sha256=source_sha,
-                recorded_at=recorded_at,
+                recorded_at=location_recorded_at,
             )
         )
         .created
@@ -1634,8 +1979,8 @@ def _capture_source(
                     source_published_at=None,
                     filing_at=None,
                     accepted_at=None,
-                    observed_at=recorded_at,
-                    retrieved_at=recorded_at,
+                    observed_at=observed_at or recorded_at,
+                    retrieved_at=retrieved_at or recorded_at,
                     retrieval_config_sha256=config_sha,
                     collector_code_version=collector_version,
                 )
@@ -2325,8 +2670,10 @@ def _persist_subject_binding(
     recorded_at: datetime,
     reason_code: str = "sec_series_class_mapping",
     reason_details: tuple[tuple[str, str], ...] | None = None,
+    recorded_issuer_id: str | None = None,
 ) -> int:
-    recorded_issuer_id = f"legacy-ticker:{ticker}"
+    if recorded_issuer_id is None:
+        recorded_issuer_id = f"legacy-ticker:{ticker}"
     current = conn.execute(
         "SELECT binding_revision_id, revision, issuer_id, reporting_entity_id, "
         "security_id, outcome FROM recorded_subject_binding_revisions "
@@ -3211,8 +3558,3 @@ def _record_id(prefix: str, *parts: str) -> str:
 
 def _digest(namespace: str, payload: str) -> str:
     return hashlib.sha256(f"{namespace}\0{payload}".encode()).hexdigest()
-
-
-def _parse_datetime(value: object) -> datetime:
-    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
-    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)

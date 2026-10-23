@@ -65,6 +65,7 @@ from provenance.reporting_entity_registry import (
     reporting_identifier_candidate_digest,
     security_identifier_candidate_digest,
 )
+from runtime.deterministic import parse_instant as _parse_datetime
 
 _COLLECTOR_VERSION = "foreign-issuer-bootstrap@1"
 _POLICY_NAME = "analyst_reviewed_authority_bundle"
@@ -1425,8 +1426,3 @@ def _policy_sha(purpose: str) -> str:
             separators=(",", ":"),
         ),
     )
-
-
-def _parse_datetime(value: object) -> datetime:
-    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
-    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
