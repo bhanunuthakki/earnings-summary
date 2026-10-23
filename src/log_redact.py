@@ -13,12 +13,13 @@ from collections.abc import Mapping
 from typing import Literal, cast
 
 _CREDENTIAL_NAME = (
+    r"(?:[a-z][a-z0-9]*[_-]+)*(?:"
     r"x[ _-]*api[ _-]*key|apikey|api[ _-]*key|access[ _-]*token|auth[ _-]*token|"
     r"refresh[ _-]*token|id[ _-]*token|client[ _-]*secret|private[ _-]*token|"
     r"session(?:[ _-]*(?:id|token))?|password|passphrase|secret|token|credential|key|"
     r"x[ _-]*amz[ _-]*(?:credential|signature|security[ _-]*token)|"
     r"x[ _-]*goog[ _-]*(?:credential|signature|security[ _-]*token)|"
-    r"sig|signature|se|sp|sv|srt|ss|skoid|sktid|skt|ske|skv"
+    r"sig|signature|se|sp|sv|srt|ss|skoid|sktid|skt|ske|skv)"
 )
 _QUERY_CRED_RE = re.compile(
     rf"(?P<prefix>[?&])(?P<param>{_CREDENTIAL_NAME})(?P<sep>=)(?P<val>[^&\s;]+)",
@@ -50,12 +51,8 @@ _BEARER_RE = re.compile(
 )
 _BASIC_RE = re.compile(r"(?i)(\bbasic\s+)(?=[A-Za-z0-9+/=._\-]*[0-9+/=])[A-Za-z0-9+/=._\-]{8,}")
 _BASIC_URL_RE = re.compile(r"(?i)(\bhttps?://)[^/\s:@]+:[^/\s@]+@")
-_JSON_SECRET_RE = re.compile(
-    r'(?i)("(?:apikey|api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|'
-    r"id[_-]?token|client[_-]?secret|private[_-]?token|session(?:[_-]?(?:id|token))?|"
-    r'token|secret|password|passphrase|credential|key|signature)"'
-    r'\s*:\s*")[^"]*(")'
-)
+_TELEGRAM_URL_RE = re.compile(r"(?i)(\bhttps?://api\.telegram\.org/(?:file/)?bot)[^/\s?#\"'<>]+")
+_JSON_SECRET_RE = re.compile(rf'(?i)("{_CREDENTIAL_NAME}"\s*:\s*")(?:\\.|[^"\\\r\n])*(")')
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+(@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})")
 _URL_RE = re.compile(r"(?i)\b(?:https?|file)://[^\s<>\"'\u00b7;]+")
 _WINDOWS_PATH_RE = re.compile(r"(?i)(?<![\w])(?:[a-z]:[\\/]|\\\\)[^<>\r\n\"'\u00b7;]*")
@@ -70,6 +67,7 @@ def redact(text: object) -> str:
 
     sanitized = str(text)
     sanitized = _BASIC_URL_RE.sub(lambda match: f"{match.group(1)}***:***@", sanitized)
+    sanitized = _TELEGRAM_URL_RE.sub(lambda match: f"{match.group(1)}***", sanitized)
     sanitized = _AUTH_BASIC_HEADER_RE.sub(lambda match: f"{match.group('prefix')}***", sanitized)
     sanitized = _AUTH_BEARER_HEADER_RE.sub(lambda match: f"{match.group('prefix')}***", sanitized)
     sanitized = _X_API_KEY_HEADER_RE.sub(lambda match: f"{match.group('prefix')}***", sanitized)

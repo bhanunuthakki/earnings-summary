@@ -4,12 +4,12 @@
   "scanner_unchanged": true,
   "measurement": {
     "executable_modules": {
-      "prior": 1474,
-      "current": 1477
+      "prior": 1476,
+      "current": 1479
     },
     "total_noncomment_loc": {
-      "prior": 566310,
-      "current": 568203
+      "prior": 566614,
+      "current": 568507
     },
     "modules_over_1000_loc": {
       "prior": 109,
@@ -33,6 +33,6 @@
     }
   },
   "baseline_update": "Complete unchanged-scanner receipt regenerated intentionally for the reviewed source launcher. Full checks and independent GPT-6.1 Sol activation review remain required.",
-  "integrated_main": "c635c7fa3778a50c3ae3e23342e3d79d66958112",
+  "integrated_main": "2a3e7bed8b4f869311313d54e200e0eb83cde37e",
   "additional_noncomment_loc": 1893
 }
