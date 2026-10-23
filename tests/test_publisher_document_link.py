@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from urllib.parse import urlunsplit
 
 import pytest
 from pydantic import ValidationError
@@ -112,7 +113,10 @@ def test_rejects_invalid_proof_paths(path: tuple[str | int, ...]) -> None:
 
 @pytest.mark.parametrize(
     "url",
-    ["http://publisher.example/file.pdf", "https://user:pass@publisher.example/file.pdf"],
+    [
+        "http://publisher.example/file.pdf",
+        urlunsplit(("https", "user:pass@publisher.example", "/file.pdf", "", "")),
+    ],
 )
 def test_rejects_non_https_or_credentialed_expected_url(url: str) -> None:
     with pytest.raises(ValueError, match="publisher_document_link_expected_url_invalid"):
