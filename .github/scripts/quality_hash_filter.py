@@ -117,7 +117,13 @@ _CANONICAL_HELPERS_COMMIT_MEMBER = re.compile(
 _GROUNDED_SEARCH_DIGEST_ASSIGNMENT = re.compile(
     r'[ \t]*expected_bundle_sha256[ \t]*=[ \t]*"[0-9a-f]{64}"[ \t]*(?:\r?\n)?\Z'
 )
-_FILING_XBRL_HASH_KEYS = {
+_PATH_HASH_KEYS = {
+    "docs/quality/pdf-6212-architecture-growth-20261023.json": {
+        "scoped_commit": 40,
+        "baseline_commit": 40,
+        "current_source_sha256": 64,
+        "baseline_source_sha256": 64,
+    },
     "docs/quality/filing-xbrl-architecture-review.json": {"integrated_main": 40},
     "docs/quality/filing-xbrl-v2-candidate.json": {
         "supersedes_candidate_commit": 40,
@@ -144,7 +150,7 @@ _FILING_XBRL_HASH_KEYS = {
         "support_source_sha256": 64,
     },
 }
-_FILING_XBRL_HASH_MEMBER = re.compile(
+_PATH_HASH_MEMBER = re.compile(
     r'[ \t]*"(?P<key>[^"\r\n]+)"[ \t]*(?::|=)[ \t]*"(?P<digest>[0-9a-f]+)"[ \t]*,?[ \t]*(?:\r?\n)?\Z'
 )
 
@@ -153,11 +159,11 @@ def is_quality_evidence_hash(filename: str, line: str) -> bool:
     """Return whether one exact allowed line contains non-secret digest metadata."""
 
     canonical_path = filename.replace(os.sep, "/")
-    if canonical_path in _FILING_XBRL_HASH_KEYS:
-        member = _FILING_XBRL_HASH_MEMBER.fullmatch(line)
-        return member is not None and len(member["digest"]) == _FILING_XBRL_HASH_KEYS[
-            canonical_path
-        ].get(member["key"])
+    if canonical_path in _PATH_HASH_KEYS:
+        member = _PATH_HASH_MEMBER.fullmatch(line)
+        return member is not None and len(member["digest"]) == _PATH_HASH_KEYS[canonical_path].get(
+            member["key"]
+        )
     if canonical_path in _MELI_SOURCE_FIXTURES:
         return _MELI_SOURCE_DIGEST_MEMBER.fullmatch(line) is not None
     if canonical_path == _INVESTING_REVIEW_BASELINE:
