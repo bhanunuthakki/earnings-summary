@@ -6,7 +6,7 @@ import sqlite3
 
 import pytest
 
-from research.decision_brief import ReviewedMemoClaimV2, memo_reader_blocks
+from research.decision_brief import MemoContextReviewV2, ReviewedMemoClaimV2, memo_reader_blocks
 from research.memo_claim_support import (
     MemoClaimSupportError,
     MemoDerivedFigure,
@@ -182,3 +182,140 @@ def test_analyst_prose_may_carry_model_values_but_facts_may_not() -> None:
     verify_memo_claim_population(BeautifulSoup(body, "html.parser"), review("analyst_inference"))
     with pytest.raises(MemoEvidenceError, match="memo_calculation_kind_mismatch"):
         verify_memo_claim_population(BeautifulSoup(body, "html.parser"), review("reported_fact"))
+
+
+def _owner_calculation_review(
+    key: str = "wacc", value: str = "0.11", displayed: str = "11", *, kind: str = "calculation"
+) -> MemoContextReviewV2:
+    import hashlib
+    from datetime import UTC, datetime
+
+    from research.decision_brief import MemoContextReviewV2
+
+    text = f'{{"{key}": {value}}}'
+    return MemoContextReviewV2.model_validate(
+        {
+            "artifact_id": "owner-calculation",
+            "body_sha256": "a" * 64,
+            "research_snapshot_id": "synthetic",
+            "reviewed_section_ids": ["assumptions"],
+            "reviewer": "synthetic-test",
+            "reviewed_at": datetime(2026, 1, 1, tzinfo=UTC),
+            "rationale": "Verify owner assumptions without treating them as issuer facts.",
+            "owner_thesis": {
+                "ticker": "MELI",
+                "revision": "test",
+                "text": text,
+                "sha256": hashlib.sha256(text.encode()).hexdigest(),
+            },
+            "claims": [
+                {
+                    "block_id": "b" * 64,
+                    "passage": f"Your {key}, percent: {value} \u00d7 100 = {displayed}",
+                    "kind": kind,
+                    "owner_thesis_excerpts": [f'"{key}": {value}'],
+                    "derived_values": [
+                        {
+                            "expression": "x*100",
+                            "operands": {"x": value},
+                            "displayed_value": displayed,
+                            "decimals": 0,
+                        }
+                    ],
+                    "rationale": "Convert the pinned owner assumption to percent.",
+                }
+            ],
+        }
+    )
+
+
+def _verify_owner_calculation(
+    review: MemoContextReviewV2,
+) -> tuple[frozenset[str], frozenset[str]]:
+    from datetime import UTC, datetime
+
+    from provenance.research_snapshot import (
+        CorpusProjectionBundle,
+        ResearchSnapshotRequest,
+        ResearchUniverse,
+    )
+    from research.decision_brief import verify_memo_claims
+
+    stamp = datetime(2026, 1, 1, tzinfo=UTC)
+    snapshot = ResearchSnapshotRequest(
+        research_snapshot_id="synthetic",
+        idempotency_key="synthetic",
+        research_universe=ResearchUniverse(
+            issuer_id="issuer",
+            reporting_entity_ids=("entity",),
+            document_version_ids=("document",),
+            source_obligation_revision_ids=("obligation",),
+        ),
+        processing_snapshot_ids=("processing",),
+        corpus_bundles=(
+            CorpusProjectionBundle(corpus_manifest_id="corpus", lexical_index_run_id="lexical"),
+        ),
+        source_fact_publication_ids=(),
+        ontology_snapshot_id="ontology",
+        canonical_fact_resolution_snapshot_id="resolution",
+        canonical_fact_projection_run_id="projection",
+        cutoff_at=stamp,
+        recorded_at=stamp,
+    )
+    with sqlite3.connect(":memory:") as conn:
+        return verify_memo_claims(
+            conn,
+            review=review,
+            snapshot=snapshot,
+            ticker="MELI",
+            snapshots={},
+            supporting_contexts={},
+            used_contexts=set(),
+            cutoff=stamp,
+            verified_model=None,
+            earnings=None,
+        )
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "displayed"), [("wacc", "0.11", "11"), ("mos_bar", "0.2", "20")]
+)
+def test_owner_only_calculation_reaches_the_existing_arithmetic_verifier(
+    key: str, value: str, displayed: str
+) -> None:
+    assert _verify_owner_calculation(_owner_calculation_review(key, value, displayed)) == (
+        frozenset(("b" * 64,)),
+        frozenset(),
+    )
+
+
+def test_owner_only_calculation_rejects_wrong_result_and_changed_excerpt() -> None:
+    from research.decision_brief import MemoContextReviewV2, MemoEvidenceError
+
+    with pytest.raises(MemoEvidenceError, match="memo_derived_value_mismatch"):
+        _verify_owner_calculation(_owner_calculation_review(displayed="12"))
+    payload = _owner_calculation_review().model_dump()
+    payload["claims"][0]["owner_thesis_excerpts"] = ['"wacc": 0.12']
+    with pytest.raises(MemoEvidenceError, match="memo_excerpt_not_in_source"):
+        _verify_owner_calculation(MemoContextReviewV2.model_validate(payload))
+
+
+@pytest.mark.parametrize("kind", ["reported_fact", "management_claim"])
+def test_owner_assumption_does_not_support_a_reported_claim(kind: str) -> None:
+    from research.decision_brief import MemoEvidenceError
+
+    with pytest.raises(MemoEvidenceError, match="memo_reported_claim_support_missing"):
+        _verify_owner_calculation(_owner_calculation_review(kind=kind))
+
+
+def test_owner_only_calculation_requires_a_pinned_thesis_and_a_derived_value() -> None:
+    from research.decision_brief import MemoContextReviewV2, MemoEvidenceError
+
+    payload = _owner_calculation_review().model_dump()
+    payload["owner_thesis"] = None
+    with pytest.raises(ValueError, match="owner_thesis_excerpt_without_pinned_thesis"):
+        MemoContextReviewV2.model_validate(payload)
+    payload = _owner_calculation_review().model_dump()
+    payload["claims"][0]["derived_values"] = []
+    with pytest.raises(MemoEvidenceError, match="memo_reported_claim_support_missing"):
+        _verify_owner_calculation(MemoContextReviewV2.model_validate(payload))

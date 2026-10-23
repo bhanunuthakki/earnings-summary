@@ -325,14 +325,17 @@ def _lexical_representation_complete(
     manifest_id: str,
     extraction_run_id: str,
 ) -> bool:
+    # FTS chunk IDs are unindexed. Aggregate once across all manifests so a
+    # duplicate anywhere still fails without scanning the FTS table per chunk.
     missing = conn.execute(
-        "SELECT 1 FROM search_chunks AS chunk "
+        "WITH lexical AS MATERIALIZED ("
+        "SELECT chunk_id, COUNT(*) AS row_count, MIN(text) AS text "
+        "FROM search_lexical_chunks GROUP BY chunk_id"
+        ") SELECT 1 FROM search_chunks AS chunk "
         "JOIN evidence_nodes AS node ON node.node_id = chunk.evidence_node_id "
+        "LEFT JOIN lexical ON lexical.chunk_id = chunk.chunk_id "
         "WHERE chunk.manifest_id = ? AND node.extraction_run_id = ? "
-        "AND ((SELECT COUNT(*) FROM search_lexical_chunks AS lexical "
-        "WHERE lexical.chunk_id = chunk.chunk_id) <> 1 "
-        "OR NOT EXISTS (SELECT 1 FROM search_lexical_chunks AS lexical "
-        "WHERE lexical.chunk_id = chunk.chunk_id AND lexical.text = chunk.text)) "
+        "AND (lexical.row_count IS NOT 1 OR lexical.text IS NOT chunk.text) "
         "LIMIT 1",
         (manifest_id, extraction_run_id),
     ).fetchone()
