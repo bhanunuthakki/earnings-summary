@@ -33,7 +33,7 @@ def _args(ticker: str | None = None, *, all_mapped: bool = False) -> argparse.Na
 def test_sec_scheduled_scope_includes_all_research_roles_and_is_priority_ordered(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def tracked(_conn: sqlite3.Connection) -> list[Company]:
+    def tracked(_conn: sqlite3.Connection, **_kwargs: object) -> list[Company]:
         return _companies(
             [
                 ("WIX", ListType.EVALUATION),
@@ -98,7 +98,7 @@ def test_sec_explicit_request_uses_stored_role_and_cannot_bypass_denial(
 def test_sec_evaluation_scope_requires_corporate_instrument(
     monkeypatch: pytest.MonkeyPatch, instrument: str | None
 ) -> None:
-    def tracked(_conn: sqlite3.Connection) -> list[Company]:
+    def tracked(_conn: sqlite3.Connection, **_kwargs: object) -> list[Company]:
         return cast(
             "list[Company]",
             [
@@ -120,7 +120,7 @@ def test_sec_documented_foreign_non_filer_emits_an_honest_disposition(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    def tracked(_conn: sqlite3.Connection) -> list[Company]:
+    def tracked(_conn: sqlite3.Connection, **_kwargs: object) -> list[Company]:
         return _companies([("NTDOY", ListType.PORTFOLIO)])
 
     monkeypatch.setattr(fetch_sec_xbrl, "tracked_companies_for_user", tracked)
@@ -171,7 +171,9 @@ def test_sec_cli_uses_selected_artifact_root_for_ingestion_and_raw_error_path(
     def open_test_db(_path: str) -> sqlite3.Connection:
         return conn
 
-    def tickers(_args: argparse.Namespace, _conn: sqlite3.Connection) -> list[str]:
+    def tickers(
+        _args: argparse.Namespace, _conn: sqlite3.Connection, **_kwargs: object
+    ) -> list[str]:
         return ["MBGL"]
 
     def begin_run(*_args: object, **_kwargs: object) -> str:
@@ -226,7 +228,9 @@ def test_sec_cli_without_override_uses_existing_configured_database_for_consumer
         opened.append(path)
         return conn
 
-    def tickers(_args: argparse.Namespace, _conn: sqlite3.Connection) -> list[str]:
+    def tickers(
+        _args: argparse.Namespace, _conn: sqlite3.Connection, **_kwargs: object
+    ) -> list[str]:
         return ["MBGL"]
 
     def begin_run(*_args: object, **_kwargs: object) -> str:
@@ -330,7 +334,9 @@ def test_sec_auth_denial_halts_before_the_next_ticker(
     def open_test_db(_path: Path) -> sqlite3.Connection:
         return conn
 
-    def tickers(_args: argparse.Namespace, _conn: sqlite3.Connection) -> list[str]:
+    def tickers(
+        _args: argparse.Namespace, _conn: sqlite3.Connection, **_kwargs: object
+    ) -> list[str]:
         return ["META", "RBRK"]
 
     def begin_run(*_args: object, **_kwargs: object) -> str:

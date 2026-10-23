@@ -54,7 +54,7 @@ from db_paths import require_db_path
 from llm_artifact_store import mark_artifacts_dirty_for_fact_change
 from models.companies import ListType
 from models.runs import StageStatus
-from pipeline.queries import open_db, tracked_companies_for_user
+from pipeline.queries import TrackedCompanyRejection, open_db, tracked_companies_for_user
 from pipeline.run_accounting import (
     PipelineRunSuppressedError,
     end_run,
@@ -180,18 +180,45 @@ def handle_silent_staleness(
     return (flagged_dirty, artifacts_flipped)
 
 
-def _resolve_tickers(args: argparse.Namespace, conn: sqlite3.Connection) -> list[str]:
+def _resolve_tickers(
+    args: argparse.Namespace,
+    conn: sqlite3.Connection,
+    scope_issues: list[dict[str, object]] | None = None,
+) -> list[str]:
     """Automatic research-company scope, bounded by stored role and instrument."""
+
+    requested_ticker = args.ticker.upper() if args.ticker else None
+
+    def record_issue(issue: dict[str, object]) -> None:
+        if scope_issues is not None:
+            scope_issues.append(issue)
+        sys.stderr.write(
+            json.dumps({"event": "sec_xbrl_scope_rejected", **issue}, sort_keys=True) + "\n"
+        )
+
+    def reject_company(rejection: TrackedCompanyRejection) -> None:
+        if requested_ticker is not None and rejection.ticker != requested_ticker:
+            return
+        record_issue(
+            {
+                "reason_code": "tracked_company_invalid",
+                "row_id": rejection.row_id,
+                "ticker": rejection.ticker,
+                "fields": list(rejection.fields),
+            }
+        )
 
     try:
         if args.ticker:
-            tracked = tracked_companies_for_user(conn, list_types=frozenset(ListType))
+            tracked = tracked_companies_for_user(
+                conn, list_types=frozenset(ListType), on_invalid=reject_company
+            )
         else:
-            tracked = tracked_companies_for_user(conn)
+            tracked = tracked_companies_for_user(conn, on_invalid=reject_company)
     except sqlite3.Error:
         # No governed roster means no authorized network scope.
+        record_issue({"reason_code": "tracked_roster_unavailable"})
         return []
-    requested_ticker = args.ticker.upper() if args.ticker else None
     candidates = [
         CollectionTarget(
             ticker=company.ticker,
@@ -308,12 +335,13 @@ def main() -> int:
         return 3
     conn = open_db(database)
     try:
-        tickers = _resolve_tickers(args, conn)
+        scope_issues: list[dict[str, object]] = []
+        tickers = _resolve_tickers(args, conn, scope_issues=scope_issues)
         try:
             run_id = start_run(conn, directive="fetch_sec_xbrl", ticker_scope=tickers)
         except PipelineRunSuppressedError as exc:
-            print(json.dumps(suppression_payload(exc)))
-            return 0
+            print(json.dumps({**suppression_payload(exc), "scope_issues": scope_issues}))
+            return 1 if scope_issues else 0
         rows: list[dict[str, object]] = []
         failed = 0
         skipped_unchanged = 0
@@ -424,9 +452,18 @@ def main() -> int:
                     "llm_artifacts_marked_dirty": artifacts_flipped,
                 }
             )
-        terminal = StageStatus.OK if failed == 0 else StageStatus.FAILED
+        terminal = StageStatus.OK if failed == 0 and not scope_issues else StageStatus.FAILED
         end_run(
-            conn, run_id, terminal, error_summary=f"{failed} tickers failed" if failed else None
+            conn,
+            run_id,
+            terminal,
+            error_summary=(
+                f"{failed} tickers failed; {len(scope_issues)} scope issues"
+                if scope_issues
+                else f"{failed} tickers failed"
+                if failed
+                else None
+            ),
         )
 
         total_accessions = sum(_integer_stat(row, "accessions_registered") for row in rows)
@@ -435,6 +472,9 @@ def main() -> int:
             json.dumps(
                 {
                     "run_id": run_id,
+                    "status": terminal.value,
+                    "scope_issues": scope_issues,
+                    "scope_issue_count": len(scope_issues),
                     "tickers": len(tickers),
                     "failed": failed,
                     "skipped_unchanged": skipped_unchanged,
@@ -445,7 +485,7 @@ def main() -> int:
                 indent=2,
             )
         )
-        return 0 if failed == 0 else 1
+        return 0 if terminal == StageStatus.OK else 1
     finally:
         conn.close()
 
