@@ -12,7 +12,7 @@ import pytest
 
 import ask.engine as engine
 import ask.sealed_retrieval as sealed
-import provenance.fact_read_model as fact_reader
+import provenance.source_fact_publication as source_publication
 from ask.audit_store import canonical_json, digest_text
 from ask.sealed_retrieval import (
     PromotionVerificationError,
@@ -1005,6 +1005,9 @@ def test_fact_batch_keeps_rank_order_and_verifies_shared_publication_once(
         "FROM canonical_fact_projection_entries ORDER BY entry_ordinal DESC"
     ).fetchall()
     verifications: list[tuple[str, datetime]] = []
+    complete_verification: Callable[..., VerifiedSourceFactPublication] = getattr(
+        source_publication, "_verify_source_fact_publication"
+    )
 
     def counted_verification(
         source_conn: sqlite3.Connection,
@@ -1014,14 +1017,14 @@ def test_fact_batch_keeps_rank_order_and_verifies_shared_publication_once(
         observed_through: datetime | None = None,
     ) -> VerifiedSourceFactPublication:
         verifications.append((publication_id, cutoff))
-        return verify_source_fact_publication(
+        return complete_verification(
             source_conn,
             publication_id=publication_id,
             cutoff=cutoff,
             observed_through=observed_through,
         )
 
-    monkeypatch.setattr(fact_reader, "verify_source_fact_publication", counted_verification)
+    monkeypatch.setattr(source_publication, "_verify_source_fact_publication", counted_verification)
     items = _load_fact_items(conn, receipt, candidates, cutoff=FACT_STAMP, start_number=7)
     assert tuple(item.candidate_id for item in items) == (
         "canonical-revenue-batch",

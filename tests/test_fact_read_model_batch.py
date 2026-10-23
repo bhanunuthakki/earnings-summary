@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable, Generator
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -14,7 +14,7 @@ from provenance.fact_plane_v2 import (
     DerivedFactObservationV2,
     FactCellV2,
 )
-from provenance.fact_read_model import FactReadModel
+from provenance.fact_read_model import FactEvidenceIntegrityError, FactReadModel
 from provenance.source_fact_publication import VerifiedSourceFactPublication
 from provenance.source_fact_repository import (
     DerivedSourceFact,
@@ -625,8 +625,6 @@ def test_nested_verification_scope_uses_complete_normalized_clock_keys(
 def test_malformed_stored_observation_clock_is_typed_and_independent_publication_survives(
     conn: sqlite3.Connection,
 ) -> None:
-    from provenance.fact_read_model import FactEvidenceIntegrityError
-
     broken = _two_observation_publication()
     valid = _derived_publication(broken.reported_facts[0].observation.observation_id)
     repository = SourceFactRepository(conn)
@@ -658,7 +656,6 @@ def test_stored_primitive_decode_failures_have_narrow_types(
     from decimal import Decimal
 
     from provenance.fact_plane_v2 import FactPlaneDecodeError, FactPlaneV2
-    from provenance.fact_read_model import FactEvidenceIntegrityError
 
     if primitive == "plane_clock":
         decode: Callable[[object], datetime | None] = getattr(FactPlaneV2, "_as_datetime")
@@ -682,7 +679,6 @@ def test_fact_plane_decode_boundary_preserves_operation_and_programmer_errors(
     error: str,
 ) -> None:
     from provenance.fact_plane_v2 import FactPlaneDecodeError, FactPlaneV2
-    from provenance.fact_read_model import FactEvidenceIntegrityError
 
     publication = make_publication()
     SourceFactRepository(conn).publish(publication)
@@ -765,3 +761,75 @@ def test_cached_publication_failure_reuses_metadata_without_reusing_tracebacks(
     assert len(errors) == 32
     assert len({id(exc) for exc in errors}) == len(errors)
     assert {exc.reason_code for exc in errors} == {"publication_graph_missing"}
+
+
+@pytest.mark.parametrize(
+    ("value", "reader_iso", "publication_iso"),
+    [
+        (datetime(2026, 7, 27, 12), "2026-07-27T12:00:00", "2026-07-27T12:00:00+00:00"),
+        (
+            datetime(2026, 7, 27, 12, tzinfo=timezone(timedelta(hours=5, minutes=30))),
+            "2026-07-27T12:00:00+05:30",
+            "2026-07-27T06:30:00+00:00",
+        ),
+        ("2026-07-27T08:00:00-04:00", "2026-07-27T08:00:00-04:00", "2026-07-27T12:00:00+00:00"),
+        ("2026-07-27T12:00:00Z", "2026-07-27T12:00:00+00:00", "2026-07-27T12:00:00+00:00"),
+        ("2026-07-27", "2026-07-27T00:00:00", "2026-07-27T00:00:00+00:00"),
+    ],
+)
+def test_domain_clock_parsers_preserve_pre_quarantine_valid_results(
+    value: object, reader_iso: str, publication_iso: str
+) -> None:
+    """Pin c978523d results: the reader keeps offsets; publications normalize UTC."""
+    reader_clock: Callable[[object], datetime] = getattr(FactReadModel, "_datetime")
+    publication_clock: Callable[[object], datetime] = getattr(source_publication, "_datetime")
+    assert reader_clock(value).isoformat() == reader_iso
+    assert publication_clock(value).isoformat() == publication_iso
+    assert publication_clock(value).tzinfo is UTC
+
+
+@pytest.mark.parametrize("value", ["private-malformed-clock", "0000-01-01T00:00:00+00:00"])
+def test_domain_clock_failures_are_typed_without_raw_values(value: str) -> None:
+    reader_clock: Callable[[object], datetime] = getattr(FactReadModel, "_datetime")
+    publication_clock: Callable[[object], datetime] = getattr(source_publication, "_datetime")
+    publication_error: type[ValueError] = getattr(
+        source_publication, "_PublicationValueIntegrityError"
+    )
+    with pytest.raises(
+        FactEvidenceIntegrityError, match=r"^stored fact clock is malformed$"
+    ) as reader:
+        reader_clock(value)
+    with pytest.raises(publication_error, match=r"^invalid publication clock$") as publication:
+        publication_clock(value)
+    assert type(reader.value) is FactEvidenceIntegrityError
+    assert type(publication.value) is publication_error
+    assert value not in str(reader.value)
+    assert value not in str(publication.value)
+
+
+def test_malformed_publication_clock_is_quarantined_by_real_verifier(
+    conn: sqlite3.Connection,
+) -> None:
+    publication = _two_observation_publication()
+    SourceFactRepository(conn).publish(publication)
+    conn.execute("DROP TRIGGER trg_source_fact_publications_append_only")
+    conn.execute(
+        "UPDATE source_fact_publications SET created_at='0000-01-01T00:00:00+00:00' "
+        "WHERE publication_id=?",
+        (publication.publication_id,),
+    )
+    with pytest.raises(source_publication.PublicationVerificationError) as error:
+        source_publication.verify_source_fact_publication(
+            conn, publication_id=publication.publication_id, cutoff=STAMP
+        )
+    assert error.value.reason_code == "publication_clock_tampered"
+    assert error.value.disposition == "quarantined"
+    assert "0000-01-01T00:00:00+00:00" not in str(error.value)
+    reads = FactReadModel(conn).provenance_bundles(
+        tuple(item.observation.observation_id for item in publication.reported_facts), cutoff=STAMP
+    )
+    assert all(read.bundle is None for read in reads)
+    assert all(
+        read.failure and read.failure.reason_code == "publication_clock_tampered" for read in reads
+    )
+    assert all(read.failure and read.failure.disposition == "quarantined" for read in reads)
