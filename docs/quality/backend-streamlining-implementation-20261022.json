@@ -13,7 +13,7 @@
       "review_prompt_sha256": "67f05f10b536e75227ab8bee20d6e91269bbf39dd0a79c1ca10955337b5ffb08",
       "scope": "Source-preserving spreadsheet parser to existing KPI writer handoff (native writer not retired)",
       "score": 92,
-      "status": "accepted; committed locally unchanged"
+      "status": "reviewed handoff committed locally; adjacent global-SHA/issuer conflict correction now pending separate implementation review"
     },
     "R7-SayDo": {
       "code_and_test_sha256": {
@@ -32,11 +32,12 @@
         "tests/test_workspace_golden.py": "03dfcbba5fe2a35fe8479e1777858eff6c6aa6cae81b70337ad8406fe3733c2b",
         "tests/test_workspace_p3_panels.py": "af514324f51f6e84549aebc41ff6b5f931884b72e1c0bf849a20ff3ab0763428"
       },
+      "commit": "f1056db487f55883d90289d4ba7a74a027d5db03",
       "proof": "second reviewed candidate986changed-file tests and153transitive tests; R5focused15; R7focused212 incl comparison-mode goldens; no fullrelease claim",
       "review_prompt_sha256": "67f05f10b536e75227ab8bee20d6e91269bbf39dd0a79c1ca10955337b5ffb08",
       "scope": "Prepared Say/Do section only (generated Markdown and other panel DB reads retained)",
       "score": 93,
-      "status": "accepted source unchanged since second review; prepared for separate local commit"
+      "status": "accepted; committed locally unchanged"
     }
   },
   "authority": {
@@ -46,6 +47,15 @@
     "push": false
   },
   "base_commit": "c978523d84a4efea07858e7029307dd588d2a841",
+  "current_accepted_local_units": [
+    "R1",
+    "R2",
+    "R3-adapter",
+    "R5-handoff",
+    "R6",
+    "R7-SayDo",
+    "R8-setup"
+  ],
   "first_review": {
     "effort": "high",
     "elapsed_seconds": 340.08,
@@ -395,12 +405,25 @@
       }
     ]
   },
+  "first_sol_proxy_call_failure": {
+    "artifact": ".tmp/streamlining-sol-independent-proxy-review-round3.failure.json",
+    "prompt_bytes": 1204722,
+    "response_evidence": "No diagnostic captured for first failure; compacted duplicate source packet982247bytes succeeded.",
+    "state": "CLI failed before review; no score; no fallback"
+  },
+  "fourth_revision_in_progress": {
+    "accepted_scope_unchanged": "R1/R2/R3-adapter/R5-handoff/R7-SayDo locally committed after matching exact reviewed source hashes",
+    "proof_completed": "discovery/report4 failbefore;8 focusedafter;203affected38.76s; broad same-pattern wrappermatrix in progress",
+    "scope": "Consolidate complete discovery/report snapshot ownership and equivalent financial consumer/DCF/thesis/soft-rule/cockpit/condition wrappers through existing publication_verification_scope. No new guard/cache owner."
+  },
   "historical_artifact_aliases": {
     ".tmp/streamlining-architecture-candidate.json": ".tmp/streamlining-architecture-candidate-round1.json",
     ".tmp/streamlining-architecture-comparison.json": ".tmp/streamlining-architecture-comparison-round1.json",
     ".tmp/streamlining-opus-code-manifest.json": ".tmp/streamlining-opus-code-manifest-round1.json",
     ".tmp/streamlining-opus-implementation-prompt.txt": ".tmp/streamlining-opus-implementation-prompt-round1.txt",
-    ".tmp/streamlining-validation-summary.json": ".tmp/streamlining-validation-summary-round1.json"
+    ".tmp/streamlining-validation-summary.json": ".tmp/streamlining-validation-summary-round1.json",
+    "round2_reader_comparison": ".tmp/reader-batch-comparison-round2.json",
+    "round2_validation": ".tmp/streamlining-validation-summary-round2.json"
   },
   "r1_local_unit": {
     "code_and_test_sha256": {
@@ -412,13 +435,21 @@
       "tests/test_pipeline_quarterly_refresh.py": "fe71417f91697e3a19da4c96952b4666a2d0683aa1289b98525e04d904be60ef"
     },
     "commit": "3ef4c783c348ede72939be139ab1a6b4e6053dcc",
+    "latest_correction_commit": "3065638a69dd0d399d5ed376427c8c0e007678e6",
     "proof": "58 focused FMP tests and original integrated925tests pass; unit source/tests unchanged since independent review",
     "score": 91,
     "status": "earlier reviewed code committed locally; later review found transaction-entry gap; revision in progress",
     "transaction_audit": "The only stage before FMP that can write is optional SEC ingest; ingest_for_ticker commits at its commit phase and rolls back a started transaction on failure. Segment cache validation is read-only. Supplied-record refresh_cache retains its separate commit=False caller-owned path. No cross-document atomicity claim."
   },
-  "remaining_work": "Resolve concrete review2 findings under Astra architecture judgment, provide missing source closure, rerun affected proofs and integrated checks, obtain fresh exact subscription review above90 overall and per scoped unit. Roadmap Opus sign-off and release obligations remain open.",
-  "review_kind": "owner-requested independent ad hoc review via exact Claude Opus5.5 subscription; no formal frontier qualification claimed",
+  "r1_pending_revision": "Resolved, accepted and committed3065638a; later checkpoint proxyR1 score96.",
+  "remaining_work": "Continue producer, consumer, and setup cuts under independent 6.1 Sol proxy review; complete combined applicable checks; retain original architecture-baseline failure explicitly. No further Astra or Opus dependency. No release/live completion claimed.",
+  "review_kind": "Owner-selected independent GPT-6.1 Sol proxy; earlier exact Opus receipts preserved as history. No formal model-purpose qualification claimed.",
+  "review_route_update": {
+    "authority": "Owner latest steering allows independent6.1Sol proxies and no further Astra requirement.",
+    "gate": "overall and all scoped key units strictly >90, ACCEPT, no blockers",
+    "qualification": "ad hoc advisory numeric proxy, not Opus acceptance or formal release qualification",
+    "selected_checkpoint_route": "Exact gpt-6.1-sol ChatGPT membership CLI, independent empty context, no paid fallback; owner-selected numeric proxy, not formal qualification."
+  },
   "revised_code_manifest_sha256": "926cf2754b0706827d39c9edb1e21954d79a077460a23650d6f46c264cd59e37",
   "revised_prompt_sha256": "67f05f10b536e75227ab8bee20d6e91269bbf39dd0a79c1ca10955337b5ffb08",
   "revised_validation": {
@@ -597,7 +628,7 @@
       }
     ]
   },
-  "revision_state": "Review2 retained; source freeze lifted for concrete fixes and evidence gaps. Prior986+153 pass describes reviewed candidate only.",
+  "revision_state": "Round4 source frozen and reviewed; R6 committed b7f4b998, R8 separately reviewed and committed274074fb. Next reader cut and test-fixture cleanup are independent in-progress changes.",
   "schema_version": 1,
   "second_review": {
     "effort": "high",
@@ -776,5 +807,1785 @@
     "transport": "claude_membership"
   },
   "static_count_clarification": "Old2012/1835 values are previous configured ceilings, not a paired prechange measurement of actual diagnostics/suppressions. Revised measured1826/1811 values tighten those ceilings.",
-  "status": "UNDER_REVISION; second review66 REVISE; owner gate not passed"
+  "status": "LOCAL_CHECKPOINTS_ACCEPTED: first92,retention95,metricsfixture94,FMPfixture94,series93; fullcombinedgateRUNNING; originalstructuralbaselineFAIL; widerroadmapopen",
+  "third_independent_sol_proxy_review": {
+    "binding_sha256": "53493b3675b5a59400c3527a8954914d8a50ea0ae9d09a819d27d854d8c897d0",
+    "effort": "high",
+    "elapsed_seconds": 131.56,
+    "model_route": "exact CLI --model, no fallback; resolved model not separately exposed in event receipt",
+    "owner_proxy_gate_passed": false,
+    "prompt_sha256": "4e9d1bd40f3930f2834e555e6be8f716dc3ef3405f490d052bfcca487e91acfe",
+    "requested_model": "gpt-6.1-sol",
+    "review": {
+      "artifact": "implementation",
+      "blocking_findings": [
+        {
+          "evidence": "src/sources/discovery_financials.py/read_financial_history records owns_snapshot before BEGIN and finally rolls back any active transaction when that flag is true. If verification commits that snapshot and begins a replacement transaction, publication_verification_scope correctly rejects the replacement and preserves it, but read_financial_history subsequently rolls it back. The supplied commit+rebegin tests exercise FactReadModel.provenance_bundles directly and do not cover this enclosing consumer.",
+          "smallest_fix": "Make the complete discovery operation use transaction ownership that detects replacement, removing the unconditional outer rollback. Add consumer-level commit+rebegin cases with and without a pending replacement write, and inspect the report reader for the same cleanup pattern.",
+          "title": "Discovery reader can roll back a replacement caller transaction"
+        }
+      ],
+      "criteria": {
+        "correctness_preservation": 23,
+        "goal_fit_simplicity": 26,
+        "performance_setup_plan": 18,
+        "scope_acceptance": 19
+      },
+      "limitations": [
+        "This is the owner-selected Sol proxy review. No tools were used; tests, hashes, timing measurements and raw artifacts were not independently reproduced.",
+        "Evidence is synthetic. Complete NU/MELI briefs, Q&A and portfolio semantic acceptance were not rerun.",
+        "The interrupted full-suite teardown is not a full-suite pass; browser interaction and global dynamic reachability closure remain open.",
+        "R4, R3 completion-authority migration, R5 native-writer retirement and broader renderer retirement are outside this checkpoint.",
+        "The overall score and R6 do not meet the owner's strictly-above-90 ACCEPT criterion. This review authorizes no collection, push, merge or deployment."
+      ],
+      "required_changes": [
+        "Fix discovery transaction cleanup and prove replacement transactions survive at the complete consumer boundary, including pending writes.",
+        "Check equivalent outer snapshot cleanup in report consumers and add regression coverage wherever the same ownership flaw exists.",
+        "Keep the original architecture comparison visible. The proposed baseline refresh is a real maintenance-cost exception, not evidence of source reduction; record its owner disposition and retain the stated retirement checkpoint."
+      ],
+      "score": 86,
+      "strengths": [
+        "Actual retirement is demonstrated for duplicate FMP procedures, the state adapter, broad categorizer invocation and renderer-side analysis dependencies.",
+        "The supplied focused integration gate reports 1,048 passing tests, with separate transitive and paired-operation evidence and explicit overlap disclosures.",
+        "Compatibility boundaries and unfinished roadmap work are retained without claiming analytical-depth cuts.",
+        "The original architecture failure is disclosed: +1,355 noncomment lines, one additional module over 2,000 lines, unchanged executable-module count and no duplication-baseline regression."
+      ],
+      "units": [
+        {
+          "findings": [
+            "Both duplicate dispatch/execution procedures are replaced, and the duplicated quarterly test schema is retired.",
+            "Entry transaction rejection, parse failure versus valid zero, NU dispatch, rollback and committed partial counts have concrete source and focused test coverage.",
+            "This consolidates active procedures without establishing whole-pipeline transaction isolation."
+          ],
+          "scope": "One actual FMP batch selection, ordering, dispatch and execution owner used by both callers; existing extractor commits and supplied-record refresh_cache remain.",
+          "score": 95,
+          "unit": "R1",
+          "verdict": "ACCEPT"
+        },
+        {
+          "findings": [
+            "Qualified inputs bypass sidecar registration and the broad categorizer subprocess; retained families use exact-file compatibility intake.",
+            "Source/context binding, owner_requested/calendar propagation, committed finalization recovery, multiple-document aliases and truthful partial outcomes receive substantial focused coverage.",
+            "Historical registration inspection explicitly avoids claiming renewed admission.",
+            "Consolidation carries substantial complexity cost: the managed owner grows from 1,725 to 2,459 noncomment lines."
+          ],
+          "scope": "Calendar-year PDF ir_presentation managed registration through automatic and manual callers, including recovery and compatibility projection.",
+          "score": 92,
+          "unit": "R2",
+          "verdict": "ACCEPT"
+        },
+        {
+          "findings": [
+            "The adapter is deleted, with explicit arguments replacing global path and sys.argv rebinding.",
+            "The real governed-chain fixture covers selected database pins, budgets, alerts, usage, cache/index ownership and context restoration.",
+            "The statistical-anchor path limitation is documented as preexisting and remains outside this qualification."
+          ],
+          "scope": "Retirement of the explicit-state adapter and migration of its three callers; completion authority remains unchanged.",
+          "score": 94,
+          "unit": "R3-adapter",
+          "verdict": "ACCEPT"
+        },
+        {
+          "findings": [
+            "Numeric output becomes a projection of one parser; selected values retain whole winning-record provenance through overwrite rules.",
+            "Byte/config checks and the foreign-issuer hash guard occur before the relevant writes.",
+            "Focused evidence covers locators, semantic lane preservation, retry and numeric/typed replay suppression.",
+            "This adds provenance capability; it does not retire the native writer or establish durable rejected-cell capture."
+          ],
+          "scope": "Source-preserving spreadsheet parser handoff to the existing KPI writer, retaining numeric compatibility and replay identities.",
+          "score": 93,
+          "unit": "R5-handoff",
+          "verdict": "ACCEPT"
+        },
+        {
+          "findings": [
+            "Source admission stays at K while O controls resolution visibility; derived currentness remains bounded at K.",
+            "The shared cache replaces the private batch cache, includes normalized publication/K/O keys, retains immutable failure metadata and refuses excess keys without eviction.",
+            "Synthetic paired results demonstrate substantial discovery/report runtime reductions and DCF parity.",
+            "The enclosing discovery reader defeats the lower-level replacement-transaction preservation fix; consumer-level transaction ownership remains incorrect."
+          ],
+          "scope": "Ordered canonical financial reads and one bounded recursive publication-verification cache per snapshot.",
+          "score": 79,
+          "unit": "R6",
+          "verdict": "REVISE"
+        },
+        {
+          "findings": [
+            "Parser/filter responsibilities move to the section owner, and the renderer's duplicate verdict read is removed.",
+            "Complete supported rows and narrative/citations remain available; compact selection preserves indices and explicit fallback dispositions.",
+            "Strict dirty-refresh failures propagate, and repeated rendering avoids analysis/cache/database work.",
+            "Byte equality and protected goldens support the bounded rendering claim; browser interaction remains unverified."
+          ],
+          "scope": "Prepared Say/Do rows, selection, context and verdicts consumed by rendering; Markdown and other panel readers remain supported.",
+          "score": 95,
+          "unit": "R7-SayDo",
+          "verdict": "ACCEPT"
+        }
+      ],
+      "verdict": "REVISE"
+    },
+    "review_kind": "owner-requested independent GPT-6.1 Sol proxy; not Opus or formal qualification",
+    "transport": "codex_chatgpt_membership",
+    "usage": {
+      "cached_input_tokens": 8960,
+      "input_tokens": 253793,
+      "output_tokens": 3955,
+      "reasoning_output_tokens": 2500
+    }
+  },
+  "third_proxy_code_manifest_sha256": "53493b3675b5a59400c3527a8954914d8a50ea0ae9d09a819d27d854d8c897d0",
+  "third_proxy_prompt_sha256": "4e9d1bd40f3930f2834e555e6be8f716dc3ef3405f490d052bfcca487e91acfe",
+  "third_revision_in_progress": {
+    "R1": "Completed/frozen: caller transaction rejection; missing vs zero revenue coordinate-degraded outcomes, exact committed partial counts; current1048 rootgate passes.",
+    "R2": "Completed/frozen: bound classification, best-effort transport gaps, independent pending work, top-level childdecode, cheap recorded status vs strict recovery, allsubjectattempt finalization; root1048 passes.",
+    "R3": "Real governed summary-chain proof1passed and combined21; state/ledger tests in root1048, sourceclosure current; retained statisticalanchor path limit.",
+    "R5": "Completed/frozen: foreignissuer globalSHA reuse fails before write, both typed/numeric; sameissuer replay intact; currentfile in root1048.",
+    "R6": "Completed/frozen:265 affected, exactlegacyJSONpair, fourpairedbodies pass,4096operationcache bound and freshfailure instances.",
+    "R7": "Source remains unchanged at accepted scoped localcommit; protectedgoldens in root1048 gate."
+  },
+  "third_revision_validation": {
+    "additional_focused_proof": [
+      {
+        "artifact": ".tmp/streamlining-r3-real-chain-focused-round3.log",
+        "evidence_kind": "tool completion transcribed, not original raw tee log",
+        "passed": 1,
+        "scope": "R3 real chain",
+        "seconds": 3.83
+      },
+      {
+        "artifact": ".tmp/streamlining-r3-real-chain-combined-round3.log",
+        "evidence_kind": "tool completion transcribed",
+        "passed": 21,
+        "scope": "R3 combined",
+        "seconds": 3.93
+      },
+      {
+        "artifact": ".tmp/r6-round3-regression.log",
+        "passed": 265,
+        "scope": "R6 owners+consumer+clock+derived+DCF",
+        "seconds": 67.01
+      },
+      {
+        "evidence_kind": "worker tool-reported completion, current applicable changed tests pass in root raw1048 gate",
+        "passed": 92,
+        "scope": "R1 segment prerequisites related files",
+        "seconds": 8.16
+      },
+      {
+        "evidence_kind": "worker tool-reported completion",
+        "passed": 5,
+        "scope": "R1 expanded coordinate matrix",
+        "seconds": 4.33
+      },
+      {
+        "evidence_kind": "worker tool-reported completion, current file included raw1048 gate",
+        "passed": 17,
+        "scope": "R5 foreign issuer hash guard all writer tests",
+        "seconds": 4.37
+      }
+    ],
+    "architecture": {
+      "baseline_refresh_status": "proposed pending independent Opus review",
+      "candidate_baseline_sha256": "36fc826eccc3941d5c71f168cdd2e504254fa0319bea00b1ae361357194d5918",
+      "duplicate_baseline_changed": false,
+      "exact_base_remeasurement": {
+        "actual_modules_over_2000": 24,
+        "actual_noncomment_loc": 562282,
+        "artifact": ".tmp/streamlining-exact-base-architecture.json",
+        "matches_original_baseline": true,
+        "source_sha256": "5bfd7adc255f2eb0f3f43eba8ca0b95e2554d8db50398ad75a0eefc0cf1ff8f1"
+      },
+      "old_baseline_sha256": "d2878d60b3b0d88aa37e5e36f8353f0563a55de12909d4fbbd0aac4c854a8004",
+      "original_comparison": {
+        "architecture": {
+          "baseline_commit": "36735db5c1ff065cc85975d0de1727b27c7afed3",
+          "baseline_source_sha256": "5bfd7adc255f2eb0f3f43eba8ca0b95e2554d8db50398ad75a0eefc0cf1ff8f1",
+          "current_source_sha256": "c51431cec22717a2ed04e6964d436677cf307a3350a01d146b80a0b74a34ad24",
+          "regressions": [
+            "total_noncomment_loc increased from 562282 to 563637",
+            "modules_over_2000_loc increased from 24 to 25"
+          ],
+          "scanner_mismatch": false,
+          "schema_version": "architecture-ratchet-v1",
+          "scoped_commit": "f1056db487f55883d90289d4ba7a74a027d5db03",
+          "status": "FAIL"
+        },
+        "duplicates": {
+          "baseline_commit": "82bf9753dd9218761c9b44a8f47c2d744a31d82d",
+          "exact_totals": {
+            "duplicated_loc": 158,
+            "groups": 4,
+            "participating_functions": 8
+          },
+          "near_miss_totals": {
+            "duplicated_loc": 9753,
+            "groups": 145,
+            "participating_functions": 234
+          },
+          "regressions": [],
+          "scanner_mismatch": false,
+          "schema_version": "duplicate-ratchet-v1",
+          "scoped_commit": "f1056db487f55883d90289d4ba7a74a027d5db03",
+          "status": "PASS"
+        },
+        "metric_changes": {
+          "modules_over_2000_loc": {
+            "after": 25,
+            "before": 24
+          },
+          "total_noncomment_loc": {
+            "after": 563637,
+            "before": 562282
+          }
+        }
+      },
+      "reason": "Proposed bounded transition cost +1355 noncomment LOC (+0.241%) and one >2000 module: recovery and exact context in existing owners; no whole-codebase size cut. Review at next producer retirement or 2026-10-30 Pacific; close only at original measured ceilings or explicit renewed disposition. No scanner/rule/duplication-baseline relaxation.",
+      "scanner_or_rule_changes": false,
+      "source_sha256": "c51431cec22717a2ed04e6964d436677cf307a3350a01d146b80a0b74a34ad24",
+      "status_with_proposed_refresh": "PASS"
+    },
+    "authority": {
+      "new_persistent_store": false,
+      "new_source_collection": false,
+      "production_database_access": false,
+      "production_mutation": false,
+      "push_merge_deploy": false,
+      "schema_migration": false,
+      "test_listeners_started": 0
+    },
+    "base_commit": "c978523d84a4efea07858e7029307dd588d2a841",
+    "branch": "codex/research-procedure-cleanup",
+    "changed_python_files": {
+      "format": "PASS",
+      "lint": "PASS",
+      "prohibited_suppressions": 0,
+      "retained": 80,
+      "strict_pyright_errors": 0
+    },
+    "current_corrections": [
+      "R1 batch rejects caller-owned pending transaction before work or commit; segment prerequisite typed partial outcomes preserve independent committed counts.",
+      "R2 transport gaps remain best-effort skips; pending registered/narrative work runs independently of failed fetch; classification bound to bytes/context and reused once; cheap registration metadata inspection is not verifier/current-policy requalification; inspect every subject attempt and resume actual unfinished publication.",
+      "R3 actual mocked-transport governed generation chain proves explicit DB pins, budget, ledger and denial, plus root-bound cache/index; no blanket anchor-loader migration claimed.",
+      "R5 same global document hash owned by another issuer fails before write, numeric and typed paths; global UNIQUE(sha256) design remains.",
+      "R6 reviewed currency invariant retained, legacy/no-source_currency exact baseline pair preserved; narrow malformed period/reference handling;4096-key operation bound/fresh cached exceptions."
+    ],
+    "oracle_corrections": [
+      {
+        "after": "source fix preserves replacement transaction and pending replacement write; guard still rejects invalid snapshot",
+        "before": "two reproduced failures: replacement caller transaction was rolled back",
+        "test": "test_batch_rejects_commit_and_rebegin_that_replaces_its_snapshot"
+      },
+      {
+        "after": "spy underlying full verifier; exactly1 normalizedpublication/K/Okey, completebatch, completeactuals, serialoutputequality; final29DCFtests and153transitivechecks pass",
+        "before": "old wrapper spy observed224 cache adapter calls after internal cache moved",
+        "test": "test_statement_reader_uses_one_sealed_provenance_batch"
+      },
+      {
+        "after": "Unknown revenue is coordinate-degraded, independent periods commit once with exact retained counts; known zero retains cap arithmetic. Locator fixtures now seed real synthetic income evidence; locator/dedup assertions retained.",
+        "before": "Nonempty segments with no revenue prerequisite were accepted because old gate bypassed both None and zero. Locator fixtures used that bypass.",
+        "test": "segment extraction prerequisite fixtures and matrix"
+      }
+    ],
+    "other_checks": {
+      "design_sync": "PASS",
+      "diff_whitespace": "PASS",
+      "directive_manifest": "PASS84",
+      "folder_contract": "PASS",
+      "reconstruction_inventory": "PASS all11subsystems",
+      "workspace_goldens": "PASS comparison mode; no regeneration"
+    },
+    "paired_operation_proof": {
+      "baseline_source": "coherent owner and consumer closure from Git c978523d",
+      "cases": 4,
+      "complete_json_equal": true,
+      "dcf_complete_actuals": 56,
+      "status": "PASS synthetic fixtures; no production latency claim",
+      "thresholds": ".tmp/reader-batch-target-check.json"
+    },
+    "proof_artifacts": {
+      ".tmp/compare_reader_reuse.py": "3e822ccee1bb786690f774872ccfa1fcf7d668b0119db318292fbaa011279b8b",
+      ".tmp/r6-round3-legacy-pair.json": "b622d376ca8eac9338bff7c733c78443fe211b8f6543b80b8b45b3d8e48b133d",
+      ".tmp/reader-batch-comparison-run-round3.log": "3436761cddac6652bcb131f0d2fd93d37e2a138345e3b815cb1b7d989ab0b24e",
+      ".tmp/reader-batch-comparison.json": "f62a24258354b8755575d3240499cc50f5cdce2eb4e4370a834132355ea23815",
+      ".tmp/reader-batch-outputs.json": "5352ef2be8420df6d7f7aed50d5e65f4126e9bc7b8df1a3df5c45913c530a97e",
+      ".tmp/reader-batch-target-check.json": "af173e2aa4eb617bbe748d237047561ed813aab2610d291a638b468faf8073d5",
+      ".tmp/saydo-mvp/comparison.json": "5795e858f983ca973fecf62fd7b892f30049875a64f5e9e534fd07a0c6e946a9",
+      ".tmp/spreadsheet-handoff-cost.json": "bd7936aff62ef20139933751d96c9354739baa353a817b9aabba78ced948df6b",
+      ".tmp/streamlining-architecture-comparison-round3.json": "93ad9ed7e497c4e12ffb7ce28394ef79335d936399cf65c32df32fcc00bed3b0",
+      ".tmp/streamlining-check-fast-round3.log": "442ac09172288dc4afd03bf12b080352fa1f1f76b32d39afd94f639858767e95",
+      ".tmp/streamlining-design-round3.log": "8ad6a07f4aa417819b000e8fc68aa8e97d34ed53e2bdf5f8ff5ae0886a9f75e6",
+      ".tmp/streamlining-directives-round3.log": "a9ce6864433724b8f544cfba45e528d9a62c4d1dafd240019daf1b32b0ab87ec",
+      ".tmp/streamlining-exact-base-architecture.json": "bd5f4eef445bceec2f627b7c839d11e71929e0485241c366b0f7dc1f8623652e",
+      ".tmp/streamlining-final-unchanged-dependency-closure.md": "012ddec0742d4c9090d7414955df88750748c289059258c5b2df17f122822aaa",
+      ".tmp/streamlining-folders-round3.log": "1cd6ab367ebdcc7936c558dcad141b8df28beabddf6708dc2485f336cf47e063",
+      ".tmp/streamlining-r3-real-chain-source-round3.md": "5543010e2b1d2c0d9ae4c041351d661741d088bede299dfced6670b611641afc",
+      ".tmp/streamlining-reachability-round3.json": "49b8cf94392eef378733e2b3f78352e5f86ce3a02b1f184aea2fe79eb32680fd",
+      ".tmp/streamlining-reconstruction-round3.log": "0ee2a5e5d8fdf1b3033582c0de9ee812ff3e0a3a75f79ff53c30980f3d084471",
+      ".tmp/streamlining-static-ratchet-round3.log": "94fa37aa7a62025bc404cc7be688d9916249ede226aefee37bf445b5600b22fa",
+      ".tmp/streamlining-transitive-tests-round3.log": "e9a223607f8508947a4f0641e1746eaffb0a883cdbeb65238d400b1ef32fd4ca"
+    },
+    "reachability": {
+      "closure_reasons": [
+        "3 disposition diagnostics require review",
+        "188 production unknown edges require review"
+      ],
+      "closure_status": "HOLD",
+      "collection_status": "COMPLETE",
+      "source_manifest_sha256": "117b4cf55792c2a614f4e14de92ca39329a4f6f5390889121e1a316e37ec7a6e",
+      "stats": {
+        "diagnostics": 3,
+        "edges": 38730,
+        "files": 3519,
+        "production_unknown": 188,
+        "production_unresolved": 0,
+        "unknown": 364
+      }
+    },
+    "retained_limits": [
+      "R2 calendar-year PDF presentations only",
+      "R3 completion flags/cache authority not migrated",
+      "R4 held original/brief pair not established locally; no new collection",
+      "R5 no native writer retirement or durable rejected-cell capture",
+      "R7 current/generated Markdown remains; other panels still read DB",
+      "full release suite not passed: prior full-run teardown interrupted in existing retention path",
+      "browser localfile URL rejected; no alternative route attempted",
+      "NU/MELI full semantic acceptance not rerun",
+      "old verifier-code receipt requalification not performed",
+      "global dynamic reachability closure remains HOLD",
+      "concurrent original-checkout changes not integrated"
+    ],
+    "review_state": "fresh exact Claude Opus 5.5 subscription implementation review pending; previous failed verdicts retained separately; no formal frontier qualification claimed",
+    "scope": "first bounded local backend streamlining checkpoint; not full roadmap or release acceptance",
+    "static_ratchet": {
+      "before_values_kind": "previous configured ceilings, not paired prechange diagnostic measurement",
+      "config_change": "ceilings decreased to exact measured counts; no new suppressions",
+      "pyright_after": 1826,
+      "pyright_before": 2012,
+      "retained_files": 2876,
+      "status": "PASS",
+      "suppressions_after": 1811,
+      "suppressions_before": 1835
+    },
+    "test_counts_overlap": true,
+    "test_transport_incident": "An intermediate bootstrap test loaded an alternate fetch module; reserved .test source guard blocked transfer after DNS resolution. Package import was corrected. No provider source body or model call resulted. Final tests use mocked transport.",
+    "tests": [
+      {
+        "command": "make check-fast PYTHON_BIN=/Applications/earnings-summary/.venv/bin/python",
+        "log": ".tmp/streamlining-check-fast-round3.log",
+        "passed": 1048,
+        "seconds": 133.01,
+        "serial": true,
+        "status": "PASS",
+        "test_files": 35
+      },
+      {
+        "command": "PYTHONPATH=src:. /Applications/earnings-summary/.venv/bin/python -m pytest -q tests/test_source_fact_repository.py tests/test_dcf_canonical_statements.py tests/test_canonical_financial_evidence.py tests/test_report_evidence_scope.py tests/test_decision_brief_report_scope.py tests/test_allocation_next_dollar_profile.py tests/test_canonical_fact_resolution.py",
+        "log": ".tmp/streamlining-transitive-tests-round3.log",
+        "passed": 153,
+        "seconds": 28.95,
+        "serial": true,
+        "status": "PASS"
+      }
+    ]
+  },
+  "fourth_independent_sol_proxy_review": {
+    "review_kind": "owner-requested independent GPT-6.1 Sol proxy; not Opus or formal qualification",
+    "requested_model": "gpt-6.1-sol",
+    "model_route": "exact CLI --model, no fallback; resolved model not separately exposed in event receipt",
+    "transport": "codex_chatgpt_membership",
+    "effort": "high",
+    "elapsed_seconds": 210.58,
+    "usage": {
+      "input_tokens": 249574,
+      "cached_input_tokens": 8960,
+      "output_tokens": 6767,
+      "reasoning_output_tokens": 5529
+    },
+    "prompt_sha256": "142e1715418a97ec8fb68cf5b8c5ba7ee436255b41074afd82314cc73403b24b",
+    "binding_sha256": "f65198f97fb25ffc42a5e5e5711a928bb5f6060d6100455cf719b370b4441d54",
+    "review": {
+      "artifact": "implementation",
+      "criteria": {
+        "goal_fit_simplicity": 26,
+        "correctness_preservation": 28,
+        "performance_setup_plan": 19,
+        "scope_acceptance": 19
+      },
+      "score": 92,
+      "verdict": "ACCEPT",
+      "blocking_findings": [],
+      "units": [
+        {
+          "unit": "R1",
+          "scope": "Shared actual FMP selection, ordering, dispatch and execution owner for both callers; document commit boundaries retained.",
+          "score": 96,
+          "verdict": "ACCEPT",
+          "findings": [
+            "Both callers replace their duplicate procedures with fmp_batch; this is actual consolidation.",
+            "Entry transaction refusal, rollback before accounting, fatal database handling, valid zero results and committed partial segment counts have concrete source and focused test coverage.",
+            "This does not establish whole-pipeline transaction isolation."
+          ]
+        },
+        {
+          "unit": "R2",
+          "scope": "Calendar-year PDF ir_presentation managed registration through automatic and explicit-URL callers, with recovery outcomes.",
+          "score": 91,
+          "verdict": "ACCEPT",
+          "findings": [
+            "Qualified inputs retire the sidecar/categorizer registration route and broad subprocess sweep; compatibility families remain supported.",
+            "Owner-requested/calendar propagation, byte/context binding, committed finalization recovery, projection retry, alias preservation and process=False have substantial focused coverage.",
+            "Recorded registration is explicitly distinguished from renewed verification and narrative completion.",
+            "The publisher grows from 1,725 to 2,459 noncomment lines. This is a material maintenance cost despite the narrower active procedure set."
+          ]
+        },
+        {
+          "unit": "R3-adapter",
+          "scope": "Explicit-state adapter retirement only; completion authority remains unchanged.",
+          "score": 95,
+          "verdict": "ACCEPT",
+          "findings": [
+            "The adapter is deleted and its three callers use the real CLI with explicit authorities.",
+            "The governed-chain fixture exercises actual pin, budget, alert and ledger routing plus context restoration.",
+            "Legacy completion/cache semantics and the preexisting statistical-anchor path limitation remain outside this acceptance."
+          ]
+        },
+        {
+          "unit": "R5-handoff",
+          "scope": "Source-preserving spreadsheet parser handoff to the existing KPI writer.",
+          "score": 93,
+          "verdict": "ACCEPT",
+          "findings": [
+            "The numeric dictionary becomes a projection of one parser result; the native writer is retained.",
+            "Original float/scale arithmetic, overwrite winners, winning-cell provenance, replay suppression and foreign-issuer hash refusal have targeted evidence.",
+            "Bytes/config checks precede typed ingest; semantic status remains unclassified.",
+            "Rejected-cell capture is bounded and transient, not durable workbook completeness."
+          ]
+        },
+        {
+          "unit": "R6",
+          "scope": "Ordered canonical financial reads, one bounded recursive verification cache and complete snapshot ownership at ten financial-reader boundaries.",
+          "score": 94,
+          "verdict": "ACCEPT",
+          "findings": [
+            "Duplicate consumer bundle reads, the private batch cache and ten independent snapshot owners are actually removed.",
+            "The shared scope protects replacement transactions, pending writes, cancellation, row factories and materializer cache publication.",
+            "Source admission and derived currentness remain at K while O permits later resolution records; typed evidence failures remain distinct from operation failures.",
+            "Supplied complete-JSON comparisons support discovery/report improvements and DCF parity. DCF retains 1,576 SELECTs and one full verification, so no DCF runtime reduction is established."
+          ]
+        },
+        {
+          "unit": "R7-SayDo",
+          "scope": "Prepared Say/Do rows, selection, context and verdicts; Markdown and other renderer database reads retained.",
+          "score": 95,
+          "verdict": "ACCEPT",
+          "findings": [
+            "Preparation moves into the section owner and the duplicate renderer verdict read is removed.",
+            "Full supported row populations, narrative/citations, existing cache identity and strict dirty-refresh failures are preserved by focused tests.",
+            "Repeated rendering is free of Say/Do preparation I/O; supplied HTML equality and comparison-mode goldens support bounded preservation."
+          ]
+        }
+      ],
+      "strengths": [
+        "Consolidation includes real caller cutovers and deleted procedures, not merely reusable abstractions.",
+        "Failure and recovery outcomes preserve committed work without presenting incomplete attempts as successful.",
+        "The evidence separates source size, procedure retirement and runtime work.",
+        "The reported 1,147-test changed-file gate provides substantial bounded integration evidence without claiming a full-suite pass."
+      ],
+      "required_changes": [],
+      "limitations": [
+        "This is a text-only independent Sol proxy assessment. I did not execute tests, recompute hashes, inspect referenced raw artifacts or reproduce timings.",
+        "The proposed structural baseline refresh is defensible for this frozen checkpoint, but accepts +1,363 noncomment lines (+0.2424%) and one additional module above 2,000 lines. The original ratchet fails; unchanged duplication rules passing does not establish a duplication reduction. Owner disposition and the stated retirement/date review remain open.",
+        "Complete NU/MELI brief, Q&A and portfolio semantic acceptance was not rerun. Synthetic parity cannot establish issuer-level analytical completeness.",
+        "Browser interaction remains unverified; renderer evidence consists of supplied byte equality and protected golden comparisons.",
+        "The interrupted full-suite run is not a pass. Global dynamic reachability closure also remains open.",
+        "R4 is unimplemented and unqualified. R3 completion migration, R5 native-writer retirement and broader renderer retirement are not accepted here.",
+        "Acceptance applies only to this bounded local checkpoint. It does not authorize collection, push, deployment or release."
+      ]
+    },
+    "owner_proxy_gate_passed": true
+  },
+  "fourth_revision_validation": {
+    "additional_focused_proof": [
+      {
+        "artifact": ".tmp/streamlining-r3-real-chain-focused-round3.log",
+        "evidence_kind": "tool completion transcribed, not original raw tee log",
+        "passed": 1,
+        "scope": "R3 real chain",
+        "seconds": 3.83
+      },
+      {
+        "artifact": ".tmp/streamlining-r3-real-chain-combined-round3.log",
+        "evidence_kind": "tool completion transcribed",
+        "passed": 21,
+        "scope": "R3 combined",
+        "seconds": 3.93
+      },
+      {
+        "artifact": ".tmp/r6-round3-regression.log",
+        "passed": 265,
+        "scope": "R6 owners+consumer+clock+derived+DCF",
+        "seconds": 67.01
+      },
+      {
+        "evidence_kind": "worker tool-reported completion, current applicable changed tests pass in root raw1048 gate",
+        "passed": 92,
+        "scope": "R1 segment prerequisites related files",
+        "seconds": 8.16
+      },
+      {
+        "evidence_kind": "worker tool-reported completion",
+        "passed": 5,
+        "scope": "R1 expanded coordinate matrix",
+        "seconds": 4.33
+      },
+      {
+        "evidence_kind": "worker tool-reported completion, current file included raw1048 gate",
+        "passed": 17,
+        "scope": "R5 foreign issuer hash guard all writer tests",
+        "seconds": 4.37
+      },
+      {
+        "after": "8 focusedpassed5.03s;203regressionspassed38.76s",
+        "before": "4 failed5.81s",
+        "logs": [
+          ".tmp/r6-consumer-snapshot-fail-before.log",
+          ".tmp/r6-consumer-snapshot-focused-after.log",
+          ".tmp/r6-consumer-snapshot-regression-after.log"
+        ],
+        "scope": "Discovery/report replacement transaction consumer boundaries"
+      },
+      {
+        "after": "47focusedpassed13.51s including15cancellations; finalroot1147gatepassesall current changedfiles",
+        "before": "16 failed6.79s",
+        "logs": [
+          ".tmp/r6-expanded-snapshot-fail-before.log",
+          ".tmp/r6-expanded-snapshot-focused-after.log",
+          ".tmp/r6-expanded-snapshot-regression-after.log",
+          ".tmp/r6-expanded-snapshot-oracle-after.log",
+          ".tmp/r6-expanded-snapshot-clock-after.log"
+        ],
+        "regression_history": "401passed/1intentionalpublic-policyoraclefailure69.32s, then91passed28.85s and finaltargeted1passed4.07s; no nonexistent402-passsinglecommand claimed",
+        "scope": "Eight additional complete financial-reader boundaries"
+      }
+    ],
+    "architecture": {
+      "baseline_refresh_status": "proposed pending independent Opus review",
+      "candidate_baseline_sha256": "1f1a32f9e276d32bce921b1c975fa62347e3857e4d9cea3b5e565f7dd170e1d2",
+      "duplicate_baseline_changed": false,
+      "exact_base_remeasurement": {
+        "actual_modules_over_2000": 24,
+        "actual_noncomment_loc": 562282,
+        "artifact": ".tmp/streamlining-exact-base-architecture.json",
+        "matches_original_baseline": true,
+        "source_sha256": "5bfd7adc255f2eb0f3f43eba8ca0b95e2554d8db50398ad75a0eefc0cf1ff8f1"
+      },
+      "old_baseline_sha256": "d2878d60b3b0d88aa37e5e36f8353f0563a55de12909d4fbbd0aac4c854a8004",
+      "original_comparison": {
+        "architecture": {
+          "baseline_commit": "36735db5c1ff065cc85975d0de1727b27c7afed3",
+          "baseline_source_sha256": "5bfd7adc255f2eb0f3f43eba8ca0b95e2554d8db50398ad75a0eefc0cf1ff8f1",
+          "current_source_sha256": "547b93f0e19f80062261c7e3bc605c4bf4b53022524543501e37017be47d2230",
+          "regressions": [
+            "total_noncomment_loc increased from 562282 to 563645",
+            "modules_over_2000_loc increased from 24 to 25"
+          ],
+          "scanner_mismatch": false,
+          "schema_version": "architecture-ratchet-v1",
+          "scoped_commit": "1a26516423e51a483b9f88834ae05ab6d948491b",
+          "status": "FAIL"
+        },
+        "duplicates": {
+          "baseline_commit": "82bf9753dd9218761c9b44a8f47c2d744a31d82d",
+          "exact_totals": {
+            "duplicated_loc": 158,
+            "groups": 4,
+            "participating_functions": 8
+          },
+          "near_miss_totals": {
+            "duplicated_loc": 9753,
+            "groups": 145,
+            "participating_functions": 234
+          },
+          "regressions": [],
+          "scanner_mismatch": false,
+          "schema_version": "duplicate-ratchet-v1",
+          "scoped_commit": "1a26516423e51a483b9f88834ae05ab6d948491b",
+          "status": "PASS"
+        },
+        "metric_changes": {
+          "modules_over_2000_loc": {
+            "after": 25,
+            "before": 24
+          },
+          "total_noncomment_loc": {
+            "after": 563645,
+            "before": 562282
+          }
+        }
+      },
+      "reason": "Proposed frozen transition exception +1363 noncomment LOC (+0.2424%) and one >2000 module. Exact handoff, recovery and ten complete read boundaries reuse existing owners. No overall size or duplication cut. Original baseline FAIL is retained; assess exception separately. Review next producer retirement or 2026-10-30 Pacific; no further growth allowance without a new disposition.",
+      "scanner_or_rule_changes": false,
+      "source_sha256": "547b93f0e19f80062261c7e3bc605c4bf4b53022524543501e37017be47d2230",
+      "status_with_proposed_refresh": "PASS"
+    },
+    "authority": {
+      "new_persistent_store": false,
+      "new_source_collection": false,
+      "production_access_scope": "Separate bounded R4 canonical Windows metadata and retained-file hash inventory read-only; no DB copy/restore, generation, collection, source mutation or service change; all remote processes ended.",
+      "production_database_access": true,
+      "production_mutation": false,
+      "push_merge_deploy": false,
+      "schema_migration": false,
+      "test_listeners_started": 0
+    },
+    "base_commit": "c978523d84a4efea07858e7029307dd588d2a841",
+    "branch": "codex/research-procedure-cleanup",
+    "changed_python_files": {
+      "format": "PASS",
+      "lint": "PASS",
+      "prohibited_suppressions": 0,
+      "retained": 87,
+      "strict_pyright_errors": 0
+    },
+    "current_corrections": [
+      "R1 batch rejects caller-owned pending transaction before work or commit; segment prerequisite typed partial outcomes preserve independent committed counts.",
+      "R2 transport gaps remain best-effort skips; pending registered/narrative work runs independently of failed fetch; classification bound to bytes/context and reused once; cheap registration metadata inspection is not verifier/current-policy requalification; inspect every subject attempt and resume actual unfinished publication.",
+      "R3 actual mocked-transport governed generation chain proves explicit DB pins, budget, ledger and denial, plus root-bound cache/index; no blanket anchor-loader migration claimed.",
+      "R5 same global document hash owned by another issuer fails before write, numeric and typed paths; global UNIQUE(sha256) design remains.",
+      "R6 reviewed currency invariant retained, legacy/no-source_currency exact baseline pair preserved; narrow malformed period/reference handling;4096-key operation bound/fresh cached exceptions.",
+      "Complete discovery/report and eight additional financial/DCF/thesis/soft-rule/cockpit/condition read boundaries now reuse publication_verification_scope, removing outer BEGIN/owns_snapshot/unconditional rollback; replacement pending writes survive and invalid snapshots fail closed before cache publication. No new owner/helper/cache."
+    ],
+    "oracle_corrections": [
+      {
+        "after": "source fix preserves replacement transaction and pending replacement write; guard still rejects invalid snapshot",
+        "before": "two reproduced failures: replacement caller transaction was rolled back",
+        "test": "test_batch_rejects_commit_and_rebegin_that_replaces_its_snapshot"
+      },
+      {
+        "after": "spy underlying full verifier; exactly1 normalizedpublication/K/Okey, completebatch, completeactuals, serialoutputequality; final29DCFtests and153transitivechecks pass",
+        "before": "old wrapper spy observed224 cache adapter calls after internal cache moved",
+        "test": "test_statement_reader_uses_one_sealed_provenance_batch"
+      },
+      {
+        "after": "Unknown revenue is coordinate-degraded, independent periods commit once with exact retained counts; known zero retains cap arithmetic. Locator fixtures now seed real synthetic income evidence; locator/dedup assertions retained.",
+        "before": "Nonempty segments with no revenue prerequisite were accepted because old gate bypassed both None and zero. Locator fixtures used that bypass.",
+        "test": "segment extraction prerequisite fixtures and matrix"
+      },
+      {
+        "after": "Current R6 deliberately distinguishes caller argument errors from typed stored-ledger corruption. Updated ONLY invalid-O assertion to ValueError with exact message, retained earlier-K and cross-connection checks, and added valid same-publication read after invalid O to prove no poison. This is an intentional public failure-policy/oracle update, not proof that the old expectation was wrong.",
+        "before": "c978 public wrapper converted generic ValueError, including invalid O<K arguments, into publication_ledger_malformed. Internal O<K guard already raised ValueError.",
+        "test": "test_publication_scope_keeps_clocks_and_connections_separate"
+      }
+    ],
+    "other_checks": {
+      "design_sync": "PASS",
+      "diff_whitespace": "PASS",
+      "directive_manifest": "PASS84",
+      "folder_contract": "PASS",
+      "reconstruction_inventory": "PASS all11subsystems",
+      "workspace_goldens": "PASS comparison mode; no regeneration"
+    },
+    "paired_operation_proof": {
+      "baseline_source": "coherent owner and consumer closure from Git c978523d",
+      "cases": 4,
+      "complete_json_equal": true,
+      "current_log": ".tmp/reader-batch-comparison-run-round4-direct.log",
+      "dcf_complete_actuals": 56,
+      "harness_invocation_incident": {
+        "exit_code": 3,
+        "failed_log": ".tmp/reader-batch-comparison-run-round4.log",
+        "reason": "Script runs pytest.main itself; invoked through pytest once caused outer import/SystemExit collection error after inner4passed. Correct direct script invocation exited0; final artifacts/targets bound below."
+      },
+      "passed_comparison_bodies": 4,
+      "seconds": 10.51,
+      "status": "PASS synthetic fixtures; no production latency claim",
+      "thresholds": ".tmp/reader-batch-target-check.json"
+    },
+    "proof_artifacts": {
+      ".tmp/compare_reader_reuse.py": "3e822ccee1bb786690f774872ccfa1fcf7d668b0119db318292fbaa011279b8b",
+      ".tmp/r6-round4-source-closure.md": "29b6f6573cfa5170ccf964f50830f148bcf2fa8265beb042599031a0fd1098ab",
+      ".tmp/reader-batch-comparison-round4.json": "250a2031918ff75597e7dde7fa208105a08392a2419251ab69ec0f6f0610af6d",
+      ".tmp/reader-batch-comparison-run-round4-direct.log": "0622a76d1e5d136a0578f0f1ac3c94761f28343784fe94d42432f7ef9f2ae49a",
+      ".tmp/reader-batch-outputs-round4.json": "5352ef2be8420df6d7f7aed50d5e65f4126e9bc7b8df1a3df5c45913c530a97e",
+      ".tmp/reader-batch-target-check-round4.json": "8e94130af933758b71660433397b45aca61b8731e0343b9bb0505cb8e0f68877",
+      ".tmp/saydo-mvp/comparison.json": "5795e858f983ca973fecf62fd7b892f30049875a64f5e9e534fd07a0c6e946a9",
+      ".tmp/spreadsheet-handoff-cost.json": "bd7936aff62ef20139933751d96c9354739baa353a817b9aabba78ced948df6b",
+      ".tmp/streamlining-architecture-candidate-round4.json": "1f1a32f9e276d32bce921b1c975fa62347e3857e4d9cea3b5e565f7dd170e1d2",
+      ".tmp/streamlining-architecture-comparison-round4.json": "86da4c8cabf48cdde5d6c3c9905648f22e9118bd4079fecf293fd227eef924d4",
+      ".tmp/streamlining-check-fast-round4.log": "8d051b353aab3200275d4179790595a43ce65b44ef98ce1c624cb1698ce07285",
+      ".tmp/streamlining-data-source-closure-round4.md": "30391377ab3cdbc9dee21dc7e0ad2f61a1073a50fca3aaa0933b09e370615c6e",
+      ".tmp/streamlining-exact-base-architecture.json": "bd5f4eef445bceec2f627b7c839d11e71929e0485241c366b0f7dc1f8623652e",
+      ".tmp/streamlining-final-unchanged-dependency-closure.md": "012ddec0742d4c9090d7414955df88750748c289059258c5b2df17f122822aaa",
+      ".tmp/streamlining-r3-real-chain-source-round3.md": "5543010e2b1d2c0d9ae4c041351d661741d088bede299dfced6670b611641afc",
+      ".tmp/streamlining-static-ratchet-round4.log": "94fa37aa7a62025bc404cc7be688d9916249ede226aefee37bf445b5600b22fa"
+    },
+    "reachability": {
+      "closure_reasons": [
+        "3 disposition diagnostics require review",
+        "188 production unknown edges require review"
+      ],
+      "closure_status": "HOLD",
+      "collection_status": "COMPLETE",
+      "source_manifest_sha256": "117b4cf55792c2a614f4e14de92ca39329a4f6f5390889121e1a316e37ec7a6e",
+      "stats": {
+        "diagnostics": 3,
+        "edges": 38730,
+        "files": 3519,
+        "production_unknown": 188,
+        "production_unresolved": 0,
+        "unknown": 364
+      }
+    },
+    "retained_limits": [
+      "R2 calendar-year PDF presentations only",
+      "R3 completion flags/cache authority not migrated",
+      "R5 no native writer retirement or durable rejected-cell capture",
+      "R7 current/generated Markdown remains; other panels still read DB",
+      "full release suite not passed: prior full-run teardown interrupted in existing retention path",
+      "browser localfile URL rejected; no alternative route attempted",
+      "NU/MELI full semantic acceptance not rerun",
+      "old verifier-code receipt requalification not performed",
+      "global dynamic reachability closure remains HOLD",
+      "concurrent original-checkout changes not integrated",
+      "R4 canonical retained rendered-presentation/originalPDF counterparts found; exact rawMarkdown absent at inspected registered paths. Historical raw-route replay and automated source numeric/novel coverage not qualified."
+    ],
+    "review_state": "Fresh independent GPT-6.1 Sol proxy implementation review pending; no prior scores supplied in this evidence",
+    "scope": "first bounded local backend streamlining checkpoint; not full roadmap or release acceptance",
+    "static_ratchet": {
+      "before_values_kind": "previous configured ceilings, not paired prechange diagnostic measurement",
+      "config_change": "ceilings decreased to exact measured counts; no new suppressions",
+      "pyright_after": 1826,
+      "pyright_before": 2012,
+      "retained_files": 2876,
+      "status": "PASS",
+      "suppressions_after": 1811,
+      "suppressions_before": 1835
+    },
+    "test_counts_overlap": true,
+    "test_transport_incident": "An intermediate bootstrap test loaded an alternate fetch module; reserved .test source guard blocked transfer after DNS resolution. Package import was corrected. No provider source body or model call resulted. Final tests use mocked transport.",
+    "tests": [
+      {
+        "command": "make check-fast PYTHON_BIN=/Applications/earnings-summary/.venv/bin/python",
+        "log": ".tmp/streamlining-check-fast-round4.log",
+        "passed": 1147,
+        "seconds": 175.59,
+        "serial": true,
+        "status": "PASS",
+        "test_files": 37
+      }
+    ]
+  },
+  "fourth_proxy_code_manifest_sha256": "f65198f97fb25ffc42a5e5e5711a928bb5f6060d6100455cf719b370b4441d54",
+  "fourth_proxy_prompt_sha256": "142e1715418a97ec8fb68cf5b8c5ba7ee436255b41074afd82314cc73403b24b",
+  "r6_accepted_local_unit": {
+    "commit": "b7f4b99820170adef8fc7f476545e5c3382af0ce",
+    "score": 94,
+    "scope": "Ordered outcomes, shared operation verification, ten existing financial-read snapshot boundaries; terminal series loop cut not included"
+  },
+  "r8_accepted_local_unit": {
+    "commit": "274074fb",
+    "review": {
+      "review_kind": "owner-requested independent GPT-6.1 Sol proxy; not Opus or formal qualification",
+      "requested_model": "gpt-6.1-sol",
+      "model_route": "exact CLI --model, no fallback; resolved model not separately exposed in event receipt",
+      "transport": "codex_chatgpt_membership",
+      "effort": "high",
+      "elapsed_seconds": 40.46,
+      "usage": {
+        "input_tokens": 37144,
+        "cached_input_tokens": 8960,
+        "output_tokens": 1146,
+        "reasoning_output_tokens": 516
+      },
+      "prompt_sha256": "f184f02511ec903cdabb70b3c91ff265ed0b369cc2272c6b44f9ea509778f393",
+      "binding_sha256": "510399a3b8f955e60f8beedb5aa4ebe8fb05c953598301c82b3bcf8466ac12ce",
+      "review": {
+        "artifact": "retention",
+        "criteria": {
+          "goal_fit_simplicity": 29,
+          "correctness_preservation": 29,
+          "performance_setup_plan": 18,
+          "scope_acceptance": 19
+        },
+        "score": 95,
+        "verdict": "ACCEPT",
+        "blocking_findings": [],
+        "units": [
+          {
+            "unit": "R8-setup",
+            "scope": "Operation-local hold-path indexing in finalization, failed-run recovery and reviewed registration.",
+            "score": 95,
+            "verdict": "ACCEPT",
+            "findings": [
+              "The predicate preserves the original rule: the normalized candidate itself or any ancestor must equal an exact hold path. Root holds, nested holds, duplicate holds and sibling exclusions remain correct.",
+              "_absolute executes before membership checks even for empty sets, preserving traversal rejection and trusted temporary-boundary normalization without resolving child links.",
+              "Each caller builds one local frozenset from its original hold list. Ordered hold records and reasons remain intact; finalization, recovery and registration retain their distinct rejection and skipping policies.",
+              "Public-operation tests measure bounded hold-list iteration at two declaration counts while checking file order, retained links, external bytes and failed-manifest preservation. Their instrumentation targets the repeated work directly.",
+              "The benchmark supports the bounded path-classification improvement. It does not establish filesystem cleanup performance or successful full-suite completion."
+            ]
+          }
+        ],
+        "strengths": [
+          "Small, readable change with no persistent cache, additional authority or public API change.",
+          "Replaces per-declaration hold-list scans with one set construction and candidate/ancestor membership checks.",
+          "Preserves existing sealing, unique-file, symlink, Git-artifact and retirement protections.",
+          "Adds equivalence coverage for exact, ancestor, root, sibling, relative and absolute paths, plus empty-set traversal and trusted-alias behavior.",
+          "Reports baseline regression failures, focused validation and benchmark limits explicitly.",
+          "Accurately presents the +3 production lines as a performance and ownership simplification rather than a code-size reduction."
+        ],
+        "required_changes": [],
+        "limitations": [
+          "This is acceptance of the bounded implementation, not release authority or formal frontier qualification.",
+          "No tools were used. Reported test results, timings, hashes, AST comparisons and proof-file contents were not independently reproduced or verified.",
+          "The full suite previously stalled and was interrupted; successful completion and process exit after this change remain unverified.",
+          "The benchmark compares only 30 paired declarations over three rounds; the complete old 40,000-declaration run was not executed.",
+          "Paired lookup timings exclude set construction, which is measured separately. No whole-operation or whole-suite speedup follows from these measurements.",
+          "Filesystem walking, hashing, manifest writing and retirement costs remain outside the measured improvement.",
+          "Native Windows behavior remains unverified, and symlink-dependent tests can skip where link creation is unavailable."
+        ]
+      },
+      "owner_proxy_gate_passed": true
+    },
+    "proof_relocation": {
+      "source_root": "ATTACHED_FEATURE_WORKTREE/.tmp",
+      "reason": "Preserve exact review and deterministic proof before managed worker worktree cleanup",
+      "source_commit": "d43a65ee19617a03ebdc6cf17956120741e599e8",
+      "files": {
+        "retention-diff-check.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "retention-fail-before-binding.json": "4d30c1d80f4b1d7f9f691d5f9dfa1e2c105c2925f8daeb71767eacb9d8a31b51",
+        "retention-fail-before.log": "2930b8839a55b83649732c1a3555d5ce2bb44cd2dfdb5ab37fbd6eacbbd10084",
+        "retention-focused-tests.log": "5cb58f8b5442fa93e8b2fc6575a68c02a16e01e8cdfe1628a838a9c63264a39d",
+        "retention-format.log": "3bc53bf3e981a98a34a852e175bf9b77af841edea74fca595d9aedcbaf9a4938",
+        "retention-independent-proxy-prompt.txt": "f184f02511ec903cdabb70b3c91ff265ed0b369cc2272c6b44f9ea509778f393",
+        "retention-independent-proxy-review.json": "7cf0414f1dd3b551c74070e67eaebde22132d252a7f19ef6fbc6040134c9829a",
+        "retention-independent-proxy-run.log": "71eeabe5cee22617543abc1b70d89b1b3eaef6ca951478fc335f156d42a57557",
+        "retention-lint.log": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+        "retention-path-benchmark.log": "c21a6dc40d7030bfa0485df35377afe465fc83140967e3ccb3217705b530f95b",
+        "retention-path-benchmark.py": "e841eabee249fa3279858c4114038f8a1e2e271c7d8cdcc81e0ad7523f2ab6b1",
+        "retention-review-code-manifest.json": "510399a3b8f955e60f8beedb5aa4ebe8fb05c953598301c82b3bcf8466ac12ce",
+        "retention-review-evidence.json": "0befc1c61c5f260c8e6fc5222afec2e047107af418fa66dc1594a50a62c8668b",
+        "retention-types.log": "6d88a1b220adb7a3d62092b6e38431f0b3fe8babe9864fab90e5849766260332"
+      }
+    },
+    "limits": [
+      "Focused52passed1Windows-onlyskip; full suite not rerun yet.",
+      "Path-only benchmark; no full-operation speed claim."
+    ]
+  },
+  "r5_existing_evidence_capability": {
+    "status": "partial_capability_proven; typed per-cell disposition durability is a gap",
+    "proof": ".tmp/r5-existing-evidence-proof.json",
+    "sha256": "b6160edf45d23263f2351f84c052c479d8c3b378efa088075eccd4a900e914a9",
+    "tests": "1 passed in3.36s; direct script exit0; four task harness setup/oracle/API failures retained, not application fail-before evidence",
+    "proven": [
+      "Committed3evidence nodes,1observation; independent completeness counts3/1.",
+      "Two evidence-only unknown/nonnumeric cells without invented financial context.",
+      "Exact source bytes, SHA, source-entry locator reconstruction.",
+      "Replay without duplication, conflict and failed-seal rollback."
+    ],
+    "remaining_gap": "EvidenceNode rejects typed parser disposition/representation fields; narrow existing-owner capability proposal pending, no schema/writer cutover authorized or implemented.",
+    "retirement_credit": false
+  },
+  "r9_accepted_fixture_unit": {
+    "scope": "One metrics IO test file; actual cached current/historical migration fixture, duplicate97lineSQLhelper removed,17netphysicaltestlines cut",
+    "source_commit": "8a0c16cf899b9f1d7f56c881c252e35842d5ad78",
+    "main_integration": "cb7cb140",
+    "review": {
+      "review_kind": "owner-requested independent GPT-6.1 Sol proxy; not Opus or formal qualification",
+      "requested_model": "gpt-6.1-sol",
+      "model_route": "exact CLI --model, no fallback; resolved model not separately exposed in event receipt",
+      "transport": "codex_chatgpt_membership",
+      "effort": "high",
+      "elapsed_seconds": 37.21,
+      "usage": {
+        "input_tokens": 35143,
+        "cached_input_tokens": 8960,
+        "output_tokens": 1387,
+        "reasoning_output_tokens": 855
+      },
+      "prompt_sha256": "74870d34170cdd887e929aa17a37a3f0f91560301ce76e5f3300bfb35e470c52",
+      "binding_sha256": "9b2a7508383089e007788136747cfa622d8c79742ed947bcb06a4cecd3029188",
+      "review": {
+        "artifact": "fixture",
+        "criteria": {
+          "goal_fit_simplicity": 29,
+          "correctness_preservation": 28,
+          "performance_setup_plan": 18,
+          "scope_acceptance": 19
+        },
+        "score": 94,
+        "verdict": "ACCEPT",
+        "blocking_findings": [],
+        "units": [
+          {
+            "unit": "R9-fixture",
+            "scope": "Single-file replacement of duplicate schema setup with cached migrated databases and explicitly historical valuation coverage.",
+            "score": 94,
+            "verdict": "ACCEPT",
+            "findings": [
+              "Historical valuation coverage is honestly preserved: the former fake schema lacked the cutover, and the replacement explicitly selects and verifies an actual archived revision.",
+              "Ordinary cases now require the real cutover table; the existing deferral oracle checks exact failure details, one attempt after replay, and zero KPI facts.",
+              "Historical cache keys distinguish graph, bootstrap revision, target revision, and bootstrap-owner source digest. Each test receives a separate database copy.",
+              "Bootstrap mocking is narrowly confined to the connection boundary. New fixture and verification connections are explicitly closed.",
+              "Current-head end-to-end valuation accounting and replay behavior remain unproven by the direct persistence guard."
+            ]
+          }
+        ],
+        "strengths": [
+          "Removes duplicate schema ownership without changing application code or shared fixtures.",
+          "Uses real synthetic document bytes, matching hashes and sizes, and the existing evidence bridge.",
+          "Models missing lease inputs through initial omission rather than deleting immutable history.",
+          "Preserves numerical, lineage, classification, and failure assertions while strengthening schema realism.",
+          "Reports scoped qualification and setup costs without claiming speedup or full-suite success."
+        ],
+        "required_changes": [],
+        "limitations": [
+          "Review used supplied text only; source hashes, assertion-retention analysis, test execution, and static-check results were not independently verified.",
+          "Complete migrations and evidence-backfill implementation were not supplied, limiting verification of their constraints and side effects.",
+          "The reported 33 passing cases cover one serial test file; broader integration and concurrency behavior are unverified.",
+          "Historical valuation success does not establish current-head valuation publication, summary accounting, or end-to-end idempotency.",
+          "An inherited KPI-count idempotency assertion reads both counts after replay and therefore does not independently prove absence of duplicate facts.",
+          "Earlier failure artifacts are identified by hashes, but their contents were not supplied for review."
+        ]
+      },
+      "owner_proxy_gate_passed": true
+    },
+    "qualification": {
+      "status": "SCOPED_QUALIFICATION_PASSED_SOURCE_FROZEN_NOT_COMMITTED",
+      "worktree": "ATTACHED_FEATURE_WORKTREE",
+      "baseline_commit": "d43a65ee19617a03ebdc6cf17956120741e599e8",
+      "owned_path": "tests/test_metrics_engine_io.py",
+      "baseline_sha256": "3d53a5b3f0144f1f7d54bd6556ef888ad20a7fc79724d0eedf174b38e95dc0e8",
+      "qualified_sha256": "fd979ce54bb8434ef44b80fcc542e63b8f8163d4f3618e72f61f6d9350f6bce3",
+      "patch": ".tmp/metrics-fixture-qualified-final.patch",
+      "patch_sha256": "83efe2639adb64f20acda4f225cdcaa2416ad8a8b3de73271fb5b555ee13e51b",
+      "changes": {
+        "added_lines": 106,
+        "deleted_lines": 123,
+        "net_lines": -17,
+        "original_lines": 1034,
+        "current_lines": 1017,
+        "removed_schema_helper_lines": 97,
+        "removed_schema_helper_tables": 7,
+        "removed_schema_helper_indices": 2,
+        "retained_legacy_DDL": "Named two-column tracked_companies tolerance case only.",
+        "current_schema": "Ordinary cases clone existing session-cached migrated_db head; exact real head cutover table is present.",
+        "historical_schema": "Nine explicitly marked pre_cutover_valuation cases clone cached actual archived0224_expected_document_lifecycle. Existing db.init_db body constructs actual baseline via temporary explicit connection; migrated_db stamps0000 only after that bootstrap and upgrades actual archived graph. No copied SQL or new shape.",
+        "seed_constraints": "Synthetic JSON document bytes with actual SHA256/size, legitimate document evidence via existing backfill owner, required tracked company name/list_type, foreign keys enabled.",
+        "missing_lease_fixture": "Omit lease at first insertion; no DELETE from append-only fact history.",
+        "path_boundary": "Only db.get_connection mocked during init_db; DB_PATH/DATA_DIR/FMP_DIR/STATE_ROOT asserted unchanged and checkout data/portfolio.db absent before/after. init_db body has no path IO outside that connection boundary.",
+        "connection_lifetime": "Verification connection is now explicitly closed with contextlib.closing; migration and assertion behavior unchanged."
+      },
+      "assertion_ast_proof": {
+        "original_count": 100,
+        "current_count": 106,
+        "original_unique": 83,
+        "current_unique": 88,
+        "missing_original_multiset": {},
+        "missing_original_by_test": {},
+        "all_original_assertions_preserved": true,
+        "original_test_functions": 30,
+        "current_test_functions": 30,
+        "same_test_function_names": true,
+        "method": "Counter(ast.dump(assert, include_attributes=False)); baseline HEAD vs frozen source globally and within every original test function."
+      },
+      "qualification": {
+        "command": "PYTHONPATH=src:. /Applications/earnings-summary/.venv/bin/python -m pytest -q tests/test_metrics_engine_io.py --durations=5",
+        "passed": 33,
+        "seconds": 19.17,
+        "exit_code": 0,
+        "raw_log": ".tmp/metrics-fixture-cleanup-tests.log",
+        "head_template_first_setup_seconds": 2.75,
+        "historical_template_first_setup_seconds": 1.38,
+        "speedup_claim": false,
+        "scope": "One serial file only; no full suite or cross-session amortized speed claim. Global pytest slot released to root."
+      },
+      "static": {
+        "format": "passed",
+        "ruff": "passed",
+        "whole_file_pyright": "0errors0warnings",
+        "diff_check": "passed"
+      },
+      "previous_unqualified_evidence_unchanged": {
+        ".tmp/metrics-fixture-unqualified.patch": "f9d9a4172817d4ac590848899118370e83565891e4a5550be66ce11e38eb5ae6",
+        ".tmp/metrics-fixture-disposition.json": "fcba1d8b9576405a1179bf4725f99254df0df0a9d31aa8e57149e612093fc8ce",
+        ".tmp/metrics-fixture-tests.log": "6474f4aae76f1a18c3ee0b4c2e3e05ca6c394b063e1f2799f83e6e36e80f728b"
+      },
+      "source_bindings": {
+        "src/db.py": "4daa69e6e627f606382db6547c52b081f53dbf414890dd232718624a420208d2",
+        "tests/conftest.py": "74a26884be2dcc5ce5cafc89aee842ce450b97d6cabfc34d05f3134f54b66852",
+        "alembic/versions_archived/0000_baseline.py": "5b719580ff40d01ff2fd38a874cd6b7c8ab5fc40fc17fcbb0b0aff85e4bc59ee",
+        "src/operations/temp_run_retention.py": "b341f71acb78efc73315fe4bd1b9515e2312b4c2b5f98a3b4cac043fe517ec98",
+        "tests/test_temp_run_retention.py": "52d58bb29465a06dd2dee5296c383b375734cd3050d1f7fac317ef442d475425"
+      },
+      "logs": {
+        ".tmp/metrics-fixture-cleanup-diffcheck.log": {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        ".tmp/metrics-fixture-cleanup-format.log": {
+          "sha256": "fd2299c9f1c6dc869070883e281051bfe93aacf66c1a3b0069f45b4aa410ca50",
+          "bytes": 25
+        },
+        ".tmp/metrics-fixture-cleanup-lint.log": {
+          "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+          "bytes": 19
+        },
+        ".tmp/metrics-fixture-cleanup-tests.log": {
+          "sha256": "79a7532a2f597f500565adb41704723d3e648851d55994e0f5fd8737a6acd5c3",
+          "bytes": 780
+        },
+        ".tmp/metrics-fixture-cleanup-types.log": {
+          "sha256": "6d88a1b220adb7a3d62092b6e38431f0b3fe8babe9864fab90e5849766260332",
+          "bytes": 37
+        },
+        ".tmp/metrics-fixture-continuation-format.log": {
+          "sha256": "d807f3580f2470a7fe15ad89e1a6c08e4166ffe1e33d94152d605f0c46d21bfa",
+          "bytes": 22
+        },
+        ".tmp/metrics-fixture-continuation-lint.log": {
+          "sha256": "aac3a0503d8b95052cc85fb9f1717dc82b74aa55853a5aa9749b41e30275d472",
+          "bytes": 38
+        },
+        ".tmp/metrics-fixture-continuation-tests.log": {
+          "sha256": "5017383ef2c5395627d3954e1465045924c0fd22dd66296c7e7e2623ef4aa170",
+          "bytes": 763
+        },
+        ".tmp/metrics-fixture-continuation-types.log": {
+          "sha256": "6d88a1b220adb7a3d62092b6e38431f0b3fe8babe9864fab90e5849766260332",
+          "bytes": 37
+        },
+        ".tmp/metrics-fixture-final-diffcheck.log": {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        ".tmp/metrics-fixture-final-format.log": {
+          "sha256": "fd2299c9f1c6dc869070883e281051bfe93aacf66c1a3b0069f45b4aa410ca50",
+          "bytes": 25
+        },
+        ".tmp/metrics-fixture-final-lint.log": {
+          "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+          "bytes": 19
+        },
+        ".tmp/metrics-fixture-final-types.log": {
+          "sha256": "6d88a1b220adb7a3d62092b6e38431f0b3fe8babe9864fab90e5849766260332",
+          "bytes": 37
+        },
+        ".tmp/metrics-fixture-format.log": {
+          "sha256": "d807f3580f2470a7fe15ad89e1a6c08e4166ffe1e33d94152d605f0c46d21bfa",
+          "bytes": 22
+        },
+        ".tmp/metrics-fixture-lint.log": {
+          "sha256": "aac3a0503d8b95052cc85fb9f1717dc82b74aa55853a5aa9749b41e30275d472",
+          "bytes": 38
+        },
+        ".tmp/metrics-fixture-tests.log": {
+          "sha256": "6474f4aae76f1a18c3ee0b4c2e3e05ca6c394b063e1f2799f83e6e36e80f728b",
+          "bytes": 61695
+        },
+        ".tmp/metrics-fixture-types.log": {
+          "sha256": "6d88a1b220adb7a3d62092b6e38431f0b3fe8babe9864fab90e5849766260332",
+          "bytes": 37
+        }
+      },
+      "limits": [
+        "No app source, schema, shared fixture, or accepted R8 edits.",
+        "No application provider, network, live database, or listener access.",
+        "No commits. Root owns acceptance and integration.",
+        "Historical valuation success is not represented as current cutover behavior.",
+        "First attempted qualification failure is retained independently; its patch/disposition/raw log remain unchanged."
+      ],
+      "previous_qualified_evidence_unchanged": {
+        ".tmp/metrics-fixture-qualification-before-close.json": "0d153400e22d66a66862fab20f6431e01ee4e66508e16b7af7586419f5cc3d76",
+        ".tmp/metrics-fixture-continuation-tests.log": "5017383ef2c5395627d3954e1465045924c0fd22dd66296c7e7e2623ef4aa170",
+        ".tmp/metrics-fixture-qualified.patch": "cfa2cbdad564de04ab30b9ee2b5f45f75e8c8d4b21b27d915a4141769e6a2e1d"
+      }
+    },
+    "relocation": ".tmp/fixture-proof/relocation.json",
+    "root_verification": "All5boundsourcehashes and review prompt/manifest SHA match;100original assertion ASTs preserved;106current assertions."
+  },
+  "r9_fmp_accepted_fixture_unit": {
+    "commit": "127470e6",
+    "source_commit": "7145ebaa",
+    "review": {
+      "review_kind": "owner-requested independent GPT-6.1 Sol proxy; not Opus or formal qualification",
+      "requested_model": "gpt-6.1-sol",
+      "model_route": "exact CLI --model, no fallback; resolved model not separately exposed in event receipt",
+      "transport": "codex_chatgpt_membership",
+      "effort": "high",
+      "elapsed_seconds": 38.64,
+      "usage": {
+        "input_tokens": 45871,
+        "cached_input_tokens": 11648,
+        "output_tokens": 1375,
+        "reasoning_output_tokens": 796
+      },
+      "prompt_sha256": "688b576c6decdbbdfaf8a7334b66ef17995b9eac48353af30bde2dee99fb74eb",
+      "binding_sha256": "005de5942a091784e367ba59bc38a278f7e3898e42b1e8e52237ad9edd4055a8",
+      "review": {
+        "artifact": "setup2",
+        "criteria": {
+          "goal_fit_simplicity": 29,
+          "correctness_preservation": 27,
+          "performance_setup_plan": 18,
+          "scope_acceptance": 20
+        },
+        "score": 94,
+        "verdict": "ACCEPT",
+        "blocking_findings": [],
+        "units": [
+          {
+            "unit": "R9-fmp-setup",
+            "scope": "Setup consolidation in tests/test_compute_fmp_derived_kpis.py only",
+            "score": 94,
+            "verdict": "ACCEPT",
+            "findings": [
+              "The supplied patch preserves test inputs and existing assertions while replacing three schema builders with isolated copies of the existing cached active-head database.",
+              "Document setup writes explicitly synthetic bytes, derives their actual SHA-256 and size, and calls the existing evidence owner before inserting facts. No admission bypass is added.",
+              "Foreign keys are enabled before writes; closing guarantees connection cleanup; each test receives its own database copy.",
+              "Winning-document lineage, replay insertion counts, currency reasons, segment aliases and pure quarterly/TTM arithmetic expectations remain intact.",
+              "An inherited oracle limitation remains: the quarterly-file test labels an unsuffixed filename as annual, but the supplied reader excludes only _annual.json and _ttm.json. Its proportional competing values also cannot distinguish the selected document through margin values. This patch neither introduces nor strengthens that limitation.",
+              "The mixed SEC/FMP test checks winning-document lineage, not SEC observation admission or decision-grade semantic admission. Mixed FMP lineage correctly remains unclassified under the supplied implementation."
+            ]
+          }
+        ],
+        "strengths": [
+          "Removes duplicated schema ownership without changing application, shared fixture or migration code.",
+          "Uses retained temporary files and the existing evidence backfill transaction seam.",
+          "Preserves existing financial and provenance expectations without weakening assertions.",
+          "Reuses migration caching while maintaining per-test isolation and explicit connection lifetime.",
+          "Reports focused execution evidence without claiming a speedup or full-suite qualification."
+        ],
+        "required_changes": [],
+        "limitations": [
+          "Source-only proxy assessment: supplied source, manifests, hashes, AST preservation receipt and test/static logs were not independently verified.",
+          "Evidence preparation/persistence internals and the complete active migration graph were not supplied; admission conclusions are bounded by the shown owner function, triggers and reported focused pass.",
+          "Replay coverage remains same-document idempotency; historical restatement ordering is not established by this file.",
+          "The supplied log reports 17 passing cases in 3.84 seconds; broader compatibility and comparative performance remain unverified.",
+          "This verdict provides no formal purpose qualification, release authority or current production assurance."
+        ]
+      },
+      "owner_proxy_gate_passed": true
+    },
+    "source_sha256": "900564cfc87b5ab076bd82afe6662d4e9b960855b85eadc512832ab72d8176df",
+    "tests": "17passed3.84s; rawlog/receipt/patch preserved in .tmp/fmp-fixture-proof",
+    "assertions": "All55originalassertions retained;58currentassertions;17testfunctions and7purefunctionASTs unchanged",
+    "net_physical_test_lines": -87,
+    "relocation": ".tmp/fmp-fixture-proof/relocation.json"
+  },
+  "r6_terminal_series_review_history": {
+    "first_review": {
+      "review_kind": "owner-requested independent GPT-6.1 Sol proxy; not Opus or formal qualification",
+      "requested_model": "gpt-6.1-sol",
+      "model_route": "exact CLI --model, no fallback; resolved model not separately exposed in event receipt",
+      "transport": "codex_chatgpt_membership",
+      "effort": "high",
+      "elapsed_seconds": 112.49,
+      "usage": {
+        "input_tokens": 117526,
+        "cached_input_tokens": 8960,
+        "output_tokens": 2707,
+        "reasoning_output_tokens": 2070
+      },
+      "prompt_sha256": "cd96ae9ceaa7f95acd8fe78095f47fa1a483f3585f2bcb1844bac744a5c4dc7c",
+      "binding_sha256": "1b1aaa8728c5e54eb13de3f7305ae2ffe5599bcb43c2d9312842c1a261ed2096",
+      "review": {
+        "artifact": "series",
+        "criteria": {
+          "goal_fit_simplicity": 28,
+          "correctness_preservation": 24,
+          "performance_setup_plan": 18,
+          "scope_acceptance": 18
+        },
+        "score": 88,
+        "verdict": "REVISE",
+        "blocking_findings": [
+          {
+            "title": "Duplicate selected observations lose their original failure disposition",
+            "evidence": "Both baseline selection paths reject when len(bundles) != len(selected_ids), including when distinct canonical cells select the same observation. Both replacements remove that check and proceed into selected-binding validation. With a stale reported selection after rebinding, this can change canonical_financial_provenance_unavailable to selected_financial_binding_unavailable. The supplied resolver does not reject stale reported bindings during outcome materialization, and the paired scenarios do not cover duplicate selected observation IDs.",
+            "smallest_fix": "After the existing bundle handoff, restore the distinct-selected-observation count check in both paths before financial admission. Add a paired stale-selection/rebinding case asserting complete output and provenance_for parity."
+          }
+        ],
+        "units": [
+          {
+            "unit": "R6-series",
+            "scope": "Terminal series and coordinate batching, strict-policy extraction, evidence handoff, and verification instrumentation",
+            "score": 88,
+            "verdict": "REVISE",
+            "findings": [
+              "The consolidation removes actual selection and bundle-read duplication without adding a cache or engine.",
+              "Quarterly eager validation and annual missing-selection short circuits are explicitly preserved for the supplied cases.",
+              "Duplicate selected-observation failure parity needs restoration.",
+              "The corrected MELI spy measures actual verification work; unchanged thresholds and the cache-bypass fault support the correction."
+            ]
+          }
+        ],
+        "strengths": [
+          "Strict failure mapping is visibly extracted unchanged into the existing resolver.",
+          "Source SQL and binding metadata validation each have one implementation.",
+          "Ordered deduplication preserves first-visit order.",
+          "Final caches and admitted-evidence handoff remain separate from eager outcome materialization.",
+          "Reported parity evidence includes complete financial output, citations, exception messages, handoff state, and a positive derived quarter.",
+          "Performance claims remain limited to removed calls."
+        ],
+        "required_changes": [
+          "Restore and test duplicate selected-observation failure parity.",
+          "Complete the combined validation gate on the final artifact before claiming gate closure."
+        ],
+        "limitations": [
+          "Review used supplied text only; hashes, retained artifacts, execution results, and AST assertions were not independently verified.",
+          "The parity harness loads the baseline reader against the current resolver; the visible unchanged strict-policy extraction supports this comparison.",
+          "369 passing tests with two failures and the later five passing tests are separate overlapping runs, not a single 371-test pass.",
+          "The complete combined gate has not passed.",
+          "No production latency, cold-cache improvement, release qualification, or broader roadmap completion is established."
+        ]
+      },
+      "owner_proxy_gate_passed": false
+    },
+    "status": "ACCEPT93 for bounded series-loop/caches cut; broaderR6caller population remains open",
+    "proof": ".tmp/r6-terminal-series/round2/terminal-reader-proof.json",
+    "root_meli_counter_proof": ".tmp/r6-terminal-series/root-counter-proof.json",
+    "second_review": {
+      "review_kind": "owner-requested independent GPT-6.1 Sol proxy; not Opus or formal qualification",
+      "requested_model": "gpt-6.1-sol",
+      "model_route": "exact CLI --model, no fallback; resolved model not separately exposed in event receipt",
+      "transport": "codex_chatgpt_membership",
+      "effort": "high",
+      "elapsed_seconds": 72.51,
+      "usage": {
+        "input_tokens": 128594,
+        "cached_input_tokens": 8960,
+        "output_tokens": 2082,
+        "reasoning_output_tokens": 1516
+      },
+      "prompt_sha256": "696821f5d0089b18aba3c5809402d3320f47e5ffe2f0c3d4b86f478efa5c742b",
+      "binding_sha256": "52500e0d87692361d4b6d90ce6d6a3b992e8f521a4bb3e3620225013a198331a",
+      "review": {
+        "artifact": "series",
+        "criteria": {
+          "goal_fit_simplicity": 28,
+          "correctness_preservation": 28,
+          "performance_setup_plan": 18,
+          "scope_acceptance": 19
+        },
+        "score": 93,
+        "verdict": "ACCEPT",
+        "blocking_findings": [],
+        "units": [
+          {
+            "unit": "R6-series",
+            "scope": "Bounded terminal-series consolidation and associated regression instrumentation.",
+            "score": 93,
+            "verdict": "ACCEPT",
+            "findings": [
+              "One ordered canonical outcome population replaces scalar selection calls per uncached series/projection operation.",
+              "Strict validation remains in the resolver owner with the extracted exception body unchanged.",
+              "Quarterly eager coverage and annual ordered validation preserve the demonstrated failure and handoff boundaries.",
+              "Duplicate selected-observation guards restore baseline cardinality failure after bundle handoff and before local binding validation.",
+              "Remaining binding, definition and coordinate checks repeat some local work, but do not establish another selection engine or cache owner.",
+              "The MELI spy correction measures actual verification work; unchanged thresholds and the supplied cache-bypass failures support its sensitivity."
+            ]
+          }
+        ],
+        "strengths": [
+          "Removes the direct FactReadModel instance, negative bundle cache and duplicate source-query/binding bodies while retaining admitted evidence and final-result caches.",
+          "Preserves financial admission, cadence, comparability and calculations locally.",
+          "Public binding/resolver fixtures establish reachable duplicate selections without mocked resolver outcomes.",
+          "Paired harness compares complete serialized outputs, exact exception types/messages and direct-reader provenance handoffs, including a positive derived quarter.",
+          "Supplied final log reports one 375-test passing run; overlapping earlier runs are correctly distinguished.",
+          "Performance evidence concerns reduced calls and verification reuse without claiming production latency improvements."
+        ],
+        "required_changes": [],
+        "limitations": [
+          "Static review only: supplied hashes, execution logs, artifact completeness and reported failures were not independently verified or reproduced.",
+          "The paired harness loads the baseline reader against the current resolver; equivalence relies on the supplied resolver diff being limited to the unchanged validation extraction.",
+          "The 17 paired scenarios cover quarterly and annual paths, not exhaustive semiannual, reported-TTM, resource-limit or database-error combinations.",
+          "Batch materialization visits later cells before ordered validation; supplied regressions establish parity for demonstrated corruption classes, not every possible operation-wide failure.",
+          "Consumer calls intentionally retain separate series and coordinate populations.",
+          "The complete combined application gate has not passed. This acceptance is a bounded implementation assessment, not release authority or formal purpose qualification."
+        ]
+      },
+      "owner_proxy_gate_passed": true
+    },
+    "commit": "8027659a6ddb852607f4d010e3eaa3860c304b38",
+    "validation": "375passed103.92s affected+strict-owner single run;51pairedcases19.96s. Fullgate running separately.",
+    "remaining": "Consumer composition still performs separate series+coordinate preparations; no new cache added. Terminal wholecaller closure not claimed."
+  },
+  "r5_capture_plan_review_history": {
+    "first_review": {
+      "review_kind": "owner-requested independent GPT-6.1 Sol proxy; not Opus or formal qualification",
+      "requested_model": "gpt-6.1-sol",
+      "model_route": "exact CLI --model, no fallback; resolved model not separately exposed in event receipt",
+      "transport": "codex_chatgpt_membership",
+      "effort": "high",
+      "elapsed_seconds": 73.58,
+      "usage": {
+        "input_tokens": 47718,
+        "cached_input_tokens": 4864,
+        "output_tokens": 2758,
+        "reasoning_output_tokens": 1873
+      },
+      "prompt_sha256": "c7354e979439abdcb9079770f54d46fb8d7f6513ac894b35ad24a78b88fa77a0",
+      "binding_sha256": "0f2849444faf662547de862b246ce12f53cc110c408f5874f724a2a0ec392ab9",
+      "review": {
+        "artifact": "capture-plan",
+        "criteria": {
+          "goal_fit_simplicity": 28,
+          "correctness_preservation": 25,
+          "performance_setup_plan": 17,
+          "scope_acceptance": 19
+        },
+        "score": 89,
+        "verdict": "REVISE",
+        "blocking_findings": [
+          {
+            "title": "Parser-config and extraction-config commitments need an exact binding",
+            "evidence": "The supplied parser hashes payload_sha256(asdict(config)); that hash excludes max_quarters, output schema and resource limits. The proposal separately requires ExtractionRun.extractor_config_sha256 to commit those fields, but does not specify its canonical payload or distinguish both hashes precisely in the wire schema. Comparing the manifest's config_sha256 directly with the run would therefore be incorrect.",
+            "smallest_fix": "Define the exact versioned extraction-config payload and serialization. Name the retained parser-config digest separately, specify how it is embedded in or reconstructed from the extraction config, and require the reader to recompute both commitments. Include negative cases changing only the quarter window, schema or limits."
+          },
+          {
+            "title": "The proposed node-payload commitment has no defined digest contract",
+            "evidence": "source_node_commitments requires an 'exact existing node-payload digest'. The supplied EvidenceNode defines a locator digest, while the fulltext excerpts define an ordered node-array digest. Neither establishes a reusable individual-node payload digest. Field inclusion, null omission, clock encoding and canonical serialization remain unspecified.",
+            "smallest_fix": "Define a V1 node-commitment encoding in the spreadsheet capture contract, or identify and supply the existing implementation it reuses. Specify the committed fields and serialization, including root-node treatment. Explicitly prohibit output-digest-dependent node IDs, text or payloads so the dependency chain remains acyclic. Leave historical fulltext encodings unchanged."
+          }
+        ],
+        "units": [
+          {
+            "unit": "R5-capture-plan",
+            "scope": "Architecture contract and local synthetic proof plan for durable typed spreadsheet output; excludes producer migration, live integration and retirement.",
+            "score": 89,
+            "verdict": "REVISE",
+            "findings": [
+              "The existing immutable artifact/ContentBlob route is a coherent prerequisite and appears narrower than shared EvidenceNode metadata changes or a new detail store.",
+              "Freeze the two digest contracts before treating V1 as an approved output contract.",
+              "Concrete finite caps must apply during proof construction and decoding, including before oversized output is fully materialized. Output limits alone do not establish bounded workbook parsing.",
+              "Root propagation, output recovery and consumer verification are explicitly unresolved integration gates, rather than demonstrated capabilities.",
+              "No completed retirement, net reduction or financial parity credit is warranted."
+            ]
+          }
+        ],
+        "strengths": [
+          "Preserves one run-to-output pointer and existing storage owners without introducing a mutable manifest authority.",
+          "Retains null, missing, unknown and unavailable selections without fabricated source text or financial observations.",
+          "Separates decoded parser values from exact workbook bytes, formula/cache distinctions and issuer wording.",
+          "The supplied excerpts support extractor-specific output digests; the proposal correctly protects approved fulltext and Office identities.",
+          "Addresses immutable replay, clock preservation, file/database failure separation and the document-specific replica limitation.",
+          "Requires explicit consumer, financial, transaction and recovery qualification before producer cutover or deletion."
+        ],
+        "required_changes": [
+          "Specify and test the distinct parser-config and extraction-config digest contracts.",
+          "Specify and test the individual-node commitment encoding and its acyclic dependency order.",
+          "Before executing the bounded proof, choose concrete fixture/resource caps and rejection behavior; retain measured production limits as a separate qualification gate."
+        ],
+        "limitations": [
+          "Assessment uses only supplied text. Repository contents, line references, manifest hashes and reported proof results were not independently verified.",
+          "The prior three-cell proof does not establish typed manifest durability, decoding or recovery.",
+          "The proposed V1 implementation, actual consumer path, approved durable roots and derived-output backup/recovery remain unverified.",
+          "This review provides no formal model-purpose qualification and no approval for live integration."
+        ]
+      },
+      "owner_proxy_gate_passed": false
+    },
+    "status": "Second frozen review89REVISE. Executable wire/orphan proof passed1case6.26s; fresh plan/capability proxy review pending; noappcode orwriterdeletion.",
+    "proposal": ".tmp/r5-cell-metadata-proposal-round2.md",
+    "drift_incident": ".tmp/r5-capture-plan-round2-drift.json",
+    "no_schema_change": true,
+    "writer_retirement_credit": false,
+    "second_frozen_review": {
+      "review_kind": "owner-requested independent GPT-6.1 Sol proxy; not Opus or formal qualification",
+      "requested_model": "gpt-6.1-sol",
+      "model_route": "exact CLI --model, no fallback; resolved model not separately exposed in event receipt",
+      "transport": "codex_chatgpt_membership",
+      "effort": "high",
+      "elapsed_seconds": 105.33,
+      "usage": {
+        "input_tokens": 46074,
+        "cached_input_tokens": 8960,
+        "output_tokens": 3005,
+        "reasoning_output_tokens": 2070
+      },
+      "prompt_sha256": "e93dd03c48b48708cfb051ebd01e2de082ea928e0c647bde7d46938e3e59786e",
+      "binding_sha256": "d9be8dd302090991ba185e2b061a67cffcea923f63faffb265da9ea6e31e2be1",
+      "review": {
+        "artifact": "capture-plan",
+        "criteria": {
+          "goal_fit_simplicity": 28,
+          "correctness_preservation": 24,
+          "performance_setup_plan": 18,
+          "scope_acceptance": 19
+        },
+        "score": 89,
+        "verdict": "REVISE",
+        "blocking_findings": [
+          {
+            "title": "The claimed frozen output schema is not yet exact",
+            "evidence": "E and N have explicit encodings, but the manifest envelope, capture records, configuration wire representation and tagged value union remain prose descriptions. Float tagging is optional for configuration; non-finite variants, unavailable-value reasons, ordinal fields and canonical manifest serialization lack exact wire definitions. Independent readers could implement incompatible spreadsheet-parser-capture.v1 artifacts.",
+            "smallest_fix": "Freeze one closed envelope and record schema, exact tagged-union shapes and canonical manifest encoding. Specify required versus nullable fields and reconstruction rules for configuration, scaled values, non-finite floats and unavailable values. Add independently specified golden bytes and typed round-trip expectations to the synthetic proof plan."
+          },
+          {
+            "title": "Post-file/pre-database retry lacks a recoverable clock policy",
+            "evidence": "Actual first-capture node clocks affect N and therefore the manifest digest. A database rollback can leave only an unregistered manifest containing N, without the node payloads or clocks needed to reconstruct it. The proposal requires reusing original clocks and reconciling exact bytes, but forbids filesystem discovery and supplies no surviving recovery mechanism or explicit orphan-abandonment rule.",
+            "smallest_fix": "Define the outcome when publication succeeds but no run commits. A minimal option is to permit a fresh capture only after confirming no committed logical run, leave the unregistered content-addressed artifact outside replay authority, and bound its cleanup through the existing storage owner. Distinguish this from committed replay, which must reuse retained nodes and clocks. Specify artifact naming and test repeated failure, retry and reopen."
+          }
+        ],
+        "units": [
+          {
+            "unit": "R5-capture-plan",
+            "scope": "Local synthetic qualification of typed spreadsheet output through existing immutable artifacts, ContentBlob and ExtractionRun.output_sha256; excludes producer integration and retirement.",
+            "score": 89,
+            "verdict": "REVISE",
+            "findings": [
+              "The artifact route is a coherent prerequisite and preferable here to node metadata columns or a separate detail store: it retains parser output without extending source-text semantics or adding another database authority.",
+              "The stated P/E/N/output dependency graph is acyclic. N matches the supplied fulltext encoder excerpt; historical output contracts remain separate.",
+              "The wire schema and uncommitted-artifact retry policy require the bounded revisions identified above.",
+              "The proof must ensure preflight and parsing consume the same verified workbook snapshot: the supplied parser currently performs its own path.read_bytes().",
+              "Root propagation, derived-output recovery and reader enforcement are explicitly gated before producer integration; they remain unproved capabilities."
+            ]
+          }
+        ],
+        "strengths": [
+          "Separates parser configuration identity from extraction configuration identity and binds retained limits and quarter window.",
+          "Preserves blank, null, unknown and missing selections without invented source text or financial context.",
+          "Uses one complete ordered node commitment and explicitly excludes output-dependent node identities and content.",
+          "Preserves Office/fulltext identities and distinguishes capture durability from financial admission and writer deletion.",
+          "Acknowledges the document-only replica fallback and requires fresh byte verification through approved roots."
+        ],
+        "required_changes": [
+          "Freeze the complete wire schema and canonical manifest bytes before claiming a versioned durable contract.",
+          "Define and test uncommitted-artifact retry, clock handling, naming and bounded orphan cleanup.",
+          "Make consumption of the verified, preflighted workbook snapshot explicit in the synthetic implementation plan.",
+          "Retain the explicit qualification gate before any production reader or writer integration."
+        ],
+        "limitations": [
+          "No tools or live access were used. Manifest hashes, omitted sources and supplied proof results were not independently verified.",
+          "The earlier three-cell proof establishes reported ledger behavior only; it does not establish typed-manifest durability or the proposed reader.",
+          "P/E helper equivalence and timestamp-adapter behavior remain source claims where full implementations were not supplied.",
+          "This proposal earns no producer-retirement, completed-roadmap or net-reduction credit; source is currently larger."
+        ]
+      },
+      "owner_proxy_gate_passed": false
+    },
+    "wire_proof": ".tmp/r5-capture-wire-proof.json",
+    "wire_amendment": ".tmp/r5-capture-wire-amendment.md"
+  },
+  "current_combined_source": {
+    "head": "8027659a6ddb852607f4d010e3eaa3860c304b38",
+    "source_sha256": "3a4f95a24b23efae3f97f7d7ff9b3301f3c8f042adf15f2593898bb28ced3ecd",
+    "noncomment_source_loc": 563630,
+    "original": 562282,
+    "delta": 1348,
+    "large_modules": 25,
+    "original_large_modules": 24,
+    "original_architecture_result": "FAIL",
+    "duplication_result": "PASS against unchanged original baseline",
+    "measurement": ".tmp/streamlining-architecture-comparison-checkpoint5.json",
+    "configured_baseline": "Working-tree proposal remains unapproved; current source is below that proposal but above original."
+  },
+  "combined_full_gate": {
+    "status": "FAILED_COMPLETE_SUITE_WITH_CLEAN_TEARDOWN",
+    "command": "make -j1 check PYTHON_BIN=/Applications/earnings-summary/.venv/bin/python BASE=c978523d CHANGE_MODE=worktree PYTEST_WORKERS=2",
+    "log": ".tmp/streamlining-full-check-checkpoint5.log",
+    "supervision": ".tmp/run-combined-checkpoint5.py",
+    "head_frozen": "8027659a6ddb852607f4d010e3eaa3860c304b38",
+    "receipt": ".tmp/streamlining-full-check-checkpoint5.json",
+    "result": {
+      "command": [
+        "make",
+        "-j1",
+        "check",
+        "PYTHON_BIN=/Applications/earnings-summary/.venv/bin/python",
+        "BASE=c978523d",
+        "CHANGE_MODE=worktree",
+        "PYTEST_WORKERS=2"
+      ],
+      "head_before": "8027659a6ddb852607f4d010e3eaa3860c304b38",
+      "head_after": "8027659a6ddb852607f4d010e3eaa3860c304b38",
+      "source_sha256_before": "3a4f95a24b23efae3f97f7d7ff9b3301f3c8f042adf15f2593898bb28ced3ecd",
+      "source_sha256_after": "3a4f95a24b23efae3f97f7d7ff9b3301f3c8f042adf15f2593898bb28ced3ecd",
+      "source_unchanged": true,
+      "elapsed_seconds": 1807.1,
+      "returncode": 2,
+      "supervision_failure": null,
+      "observed_task_processes": 520,
+      "cleanup_signalled_pids": [],
+      "remaining_task_processes": [],
+      "log": ".tmp/streamlining-full-check-checkpoint5.log",
+      "log_sha256": "712c61c0f39df0cd60947b53633975cf6fd3504e1f0188d0568d6caaddd89c7e",
+      "original_architecture_comparison": "FAIL retained explicitly; configured architecture baseline is proposed, not owner-approved."
+    },
+    "pytest": {
+      "passed": 21410,
+      "failed": 5,
+      "skipped": 101,
+      "warnings": 11,
+      "subtests_passed": 2,
+      "elapsed_seconds": 1537.3
+    },
+    "failures": [
+      "test_build_operational_reachability.py::test_actual_head_is_supported",
+      "test_ask_sealed_retrieval_cutover.py::test_fact_batch_keeps_rank_order_and_verifies_shared_publication_once",
+      "test_public_tree_guard.py::test_public_tree_has_no_private_or_generated_material",
+      "test_canonical_helpers_equivalence.py::test_tree_state_matches_every_disposition",
+      "test_legacy_fact_access_architecture.py::test_no_new_legacy_fact_readers_before_canonical_cutover"
+    ],
+    "disposition": "Investigating. No full-gate pass. Reachability HOLD was already disclosed; counter/disposition and report path corrections need proof. Legacy-reader inventory affected sources are byte-identical to cleanup base; exact baseline evidence pending.",
+    "legacy_inventory_baseline_proof": ".tmp/combined-legacy-inventory-baseline.json",
+    "public_tree_report_path_fix": "Normalized personal worktree roots only in checkpoint report metadata. Raw ignored proofs unchanged. Direct execution/verify_public_tree.py PASS afterfix; no test guard changed."
+  },
+  "r5_capture_wire_qualified_prototype": {
+    "status": "ACCEPTED_BOUNDARY_ONLY_NO_APPLICATION_CHANGE",
+    "proof": ".tmp/r5-capture-wire-proof.json",
+    "amendment": ".tmp/r5-capture-wire-amendment.md",
+    "independent_review": {
+      "review_kind": "owner-requested independent GPT-6.1 Sol proxy; not Opus or formal qualification",
+      "requested_model": "gpt-6.1-sol",
+      "model_route": "exact CLI --model, no fallback; resolved model not separately exposed in event receipt",
+      "transport": "codex_chatgpt_membership",
+      "effort": "high",
+      "elapsed_seconds": 86.07,
+      "usage": {
+        "input_tokens": 57549,
+        "cached_input_tokens": 8960,
+        "output_tokens": 2109,
+        "reasoning_output_tokens": 1363
+      },
+      "prompt_sha256": "74c02fff386968b80ed849a85560a66de73f02f65329337038a8e2698370cf7d",
+      "binding_sha256": "ae6d77fb66d7564f3fb47d22ef4c6468595f8ec3f8d8ace5100478ed1eae2b2a",
+      "review": {
+        "artifact": "capture-plan",
+        "criteria": {
+          "goal_fit_simplicity": 29,
+          "correctness_preservation": 27,
+          "performance_setup_plan": 18,
+          "scope_acceptance": 20
+        },
+        "score": 94,
+        "verdict": "ACCEPT",
+        "blocking_findings": [],
+        "units": [
+          {
+            "unit": "R5-capture-plan",
+            "scope": "Bounded typed-output architecture and synthetic executable contract only; excludes producer integration, financial admission and retirement.",
+            "score": 94,
+            "verdict": "ACCEPT",
+            "findings": [
+              "The immutable manifest is a coherent prerequisite to producer replacement. Existing ContentBlob ownership and ExtractionRun.output_sha256 avoid a new metadata table, pointer or completion authority.",
+              "Parser, extraction, node-array and output digests have distinct, explicit meanings. The proposed dependency graph contains no output-dependent predecessor or self-referential hash.",
+              "The executable fixture's base() derives configured_name_order from configuration, whereas the actual parser derives it from winning series. This works for the supplied NII fixture; future capture construction must retain parsed.configured_name_order exactly, including missing selections and repeated configurations.",
+              "The reopen test establishes the supplied successful storage path, not the complete verified reader. It does not explicitly compare freshly read artifact SHA/size against the run/blob, validate every record-to-node relationship, or exercise committed replay against changed parsed material.",
+              "Existing ledger replay comparison removes timezone information. V1 UTC enforcement and independent node commitment verification remain necessary; the UTC-only fixture does not qualify offset-conflict behavior."
+            ]
+          }
+        ],
+        "strengths": [
+          "Compared with node metadata columns or a detail store, one extractor-specific output preserves the complete ordered parser result without expanding the shared node schema or creating another authority.",
+          "Tagged values preserve bool/int distinctions, float bits, temporal components, null and explicit unavailability. Source bytes remain separately retained; missing context does not become fabricated wording or financial facts.",
+          "The amendment resolves orphan retry ambiguity: rolled-back files have zero replay authority, fresh attempts may use fresh clocks, and committed replay retains original nodes and bytes.",
+          "Literal byte oracles and the supplied migrated-fixture receipt materially strengthen representation and recovery evidence beyond the earlier ledger-only proof.",
+          "Historical fulltext/Office contracts remain separate, and producer migration and deletion gates are explicit."
+        ],
+        "required_changes": [
+          "Before producer migration, implement and qualify the strict reader's byte/hash/size, source/version/run, exact identity, graph membership, locator, clock and cutoff checks.",
+          "Before producer migration, preserve the actual parser's complete ordered population, spec ordinals and configured_name_order; qualify blank, missing, formula/cache, error, overwrite and unsupported cases.",
+          "Before producer migration, enforce retained resource bounds before materialization and qualify approved roots, derived-output recovery, retention/export and transaction behavior.",
+          "Before deleting any writer, demonstrate downstream financial admission/rejection, correction, lineage, historical reader and numeric parity through the existing authorities."
+        ],
+        "limitations": [
+          "Assessment uses supplied text only. Execution, receipts, repository state and listed source hashes were not independently verified.",
+          "The bounded fixture and fourteen tagged-value cases do not qualify hostile workbooks, complete actual source-state coverage, production roots/replicas or downstream financial behavior.",
+          "Acceptance applies only to this prerequisite decision. No completed retirement, net source reduction, roadmap completion or production capability credit is awarded."
+        ]
+      },
+      "owner_proxy_gate_passed": true
+    },
+    "scope": "Exact closed wire envelope, fourteen tagged-value byte oracles, rollback/reopen/retry clocks, committed replay and existing-owner orphan cleanup. No native financial writer retirement, production reader integration or schema change.",
+    "next": ".tmp/r5-capture-reader-proof.py prepared only; serial database test pending. Hostile-resource preflight, output-artifact recovery and financial admission/transaction parity remain open."
+  },
+  "owner_approved_feature_cuts_20261023": {
+    "status": "COMMITTED_IN_FEATURE_WORKTREE_MAIN_INTEGRATION_PENDING",
+    "sandbox": "Retire standalone shell, exclusive setup/theme pipeline and optional dependency; retain Explore and shared analytics. Eight files,1430netphysical lines including generatedCSS;560deletedPythonlines.",
+    "advisor_memos": "Remove monthly automatic declaration and its XML/BAT; retain requested CLI/dashboard generation, analysis and history.",
+    "live_authority": "No live scheduler change. Exact-task disable/unregister and recovery require separately reserved owner approval.",
+    "worktree": "ATTACHED_FEATURE_WORKTREE",
+    "source_packets": [
+      ".tmp/sandbox-retirement/source-ready.json",
+      ".tmp/sandbox-retirement/post-index-proof.json",
+      ".tmp/monthly-advisor-on-demand/source-proof.json"
+    ],
+    "commit": "9f69835b456ce83cc8bf2a44718360099dd8fb7c",
+    "targeted_tests": {
+      "passed": 256,
+      "seconds": 96.11,
+      "receipt": ".tmp/feature-retirement-tests.json",
+      "source_unchanged": true,
+      "remaining_observed_processes": []
+    },
+    "independent_review": {
+      "review_kind": "owner-requested independent GPT-6.1 Sol proxy; not Opus or formal qualification",
+      "requested_model": "gpt-6.1-sol",
+      "model_route": "exact CLI --model, no fallback; resolved model not separately exposed in event receipt",
+      "transport": "codex_chatgpt_membership",
+      "effort": "high",
+      "elapsed_seconds": 47.2,
+      "usage": {
+        "input_tokens": 167116,
+        "cached_input_tokens": 8960,
+        "output_tokens": 1324,
+        "reasoning_output_tokens": 516
+      },
+      "prompt_sha256": "665b4b94e617ac8bac4ce56d76caa4d7ec5f7d94b391bcc65f27ea2bf227b454",
+      "binding_sha256": "d8d0623626d62bed773f96056a3af7c42d1b7cc5a2617d324c6b593b20bc30be",
+      "review": {
+        "artifact": "features",
+        "criteria": {
+          "goal_fit_simplicity": 29,
+          "correctness_preservation": 28,
+          "performance_setup_plan": 18,
+          "scope_acceptance": 20
+        },
+        "score": 95,
+        "verdict": "ACCEPT",
+        "blocking_findings": [],
+        "units": [
+          {
+            "unit": "F1-sandbox",
+            "scope": "Standalone Streamlit sandbox and its exclusive setup, generated artifacts, tests and checker references against HEAD8027659a; retained Explore behavior only.",
+            "score": 95,
+            "verdict": "ACCEPT",
+            "findings": [
+              "Deletion covers the app, kit, exclusive generator, generated theme, optional dependency entry and sandbox-only test. Shared analytics, UI authorities and dependency locks remain.",
+              "Checker changes remove only sandbox-specific coverage and exclusions; retained design and static-quality rules remain intact.",
+              "Supplied reference-search disposition identifies only historical references and a generic latency analogy, with no demonstrated dangling executable reference.",
+              "Later receipts resolve the earlier pending folder-contract and pytest states. Retained-file discovery passes, and the combined targeted suite reports 256 passed.",
+              "Renderer byte equality covers synthetic ticker, empty-list and shell output. Browser lifecycle coverage comes from the separate targeted browser tests.",
+              "The 779 deleted CSS lines are generated mirrors. The reported 560 deleted Python lines include generator and test code, not solely application logic."
+            ]
+          },
+          {
+            "unit": "F2-on-demand-memos",
+            "scope": "Removal of the monthly next-dollar/swap memo source declaration and artifacts; preservation of requested generation, calculations, history and grading. Live scheduler retirement excluded.",
+            "score": 96,
+            "verdict": "ACCEPT",
+            "findings": [
+              "The diff removes exactly one manifest record, XML, wrapper, generated inventory row and generated registration block. Supplied parity evidence preserves all 44 other declarations and 94 other cron files.",
+              "Memo executable changes are confined to its docstring; calibration XML changes are confined to Description.",
+              "Retained routes and panel preserve explicit generation and deterministic screening. Tests exercise persistence, backlinks, screening exclusions, no-spend outcomes and failure handling.",
+              "Generated ownership remains with the manifest and existing generator; deterministic artifact checks remain enforced.",
+              "The installer does not remove omitted registrations, and the verifier reports an undeclared task as extra even when disabled. The plan correctly distinguishes disable from separately approved unregister and preserves exact-task recovery.",
+              "Acceptance establishes source readiness only. An installed task may continue to run until separately stopped."
+            ]
+          }
+        ],
+        "strengths": [
+          "Both removals directly match the owner's selected simplification without replacing retained analytical capabilities.",
+          "Supplied test receipts bind unchanged before/after file hashes to the reviewed baseline and report 256 passing tests with no reported skips.",
+          "No relevant deterministic failure remains demonstrated in the supplied evidence.",
+          "Operational documentation explicitly avoids claiming that source deletion stops a live task or establishes production acceptance."
+        ],
+        "required_changes": [],
+        "limitations": [
+          "Review used supplied text and receipts only; hashes, searches and test execution were not independently reproduced.",
+          "Full retained-population static diagnostic and exact-ceiling comparison was not supplied; retained-file discovery and targeted type checks do not establish that broader gate.",
+          "Synthetic renders, fixtures and browser tests do not establish live application behavior, production data integrity or paid-provider execution.",
+          "Live task state, disable, unregister, deployment and recovery execution remain unverified and outside this acceptance.",
+          "Reconstruction-manifest consistency is described but its complete current contents are not supplied.",
+          "No acceptance is awarded for the broader backend roadmap, src/execution shrinkage, financial producer migration or formal frontier qualification."
+        ]
+      },
+      "owner_proxy_gate_passed": true
+    },
+    "git_text_diff": {
+      "insertions": 42,
+      "deletions": 1515,
+      "net": -1473,
+      "note": "Git text stat excludes UTF16 binary XML lines; includes generatedCSS,docs,test/generator deletion. Not core source reduction."
+    }
+  },
+  "path_notation": {
+    "ATTACHED_FEATURE_WORKTREE": "Attached managed research-test-retention worktree; local absolute roots are retained only in ignored raw proof artifacts. Report path normalization does not alter raw review/proof files."
+  },
+  "r5_strict_capture_reader_prototype": {
+    "status": "QUALIFIED_TASK_ONLY_NO_APPLICATION_CHANGE",
+    "receipt": ".tmp/r5-capture-reader-proof.json",
+    "packet_index": ".tmp/r5-capture-reader-review-index.json",
+    "independent_review": {
+      "review_kind": "owner-requested independent GPT-6.1 Sol proxy; not Opus or formal qualification",
+      "requested_model": "gpt-6.1-sol",
+      "model_route": "exact CLI --model, no fallback; resolved model not separately exposed in event receipt",
+      "transport": "codex_chatgpt_membership",
+      "effort": "high",
+      "elapsed_seconds": 46.13,
+      "usage": {
+        "input_tokens": 55904,
+        "cached_input_tokens": 8960,
+        "output_tokens": 1614,
+        "reasoning_output_tokens": 843
+      },
+      "prompt_sha256": "bdc16c2dfc0e64b08bd0dcf34d68cbfd6b2261a3f53effb582e72ee2c662db46",
+      "binding_sha256": "0bdcee3933d6a71d8885a1b9ff57aacaddd22929ed626b424683194c4542639d",
+      "review": {
+        "artifact": "capture",
+        "criteria": {
+          "goal_fit_simplicity": 28,
+          "correctness_preservation": 29,
+          "performance_setup_plan": 17,
+          "scope_acceptance": 20
+        },
+        "score": 94,
+        "verdict": "ACCEPT",
+        "blocking_findings": [],
+        "units": [
+          {
+            "unit": "R5-capture",
+            "scope": "Task-only strict spreadsheet capture-reader validation against supplied source, receipts and logs; no production integration qualification.",
+            "score": 94,
+            "verdict": "ACCEPT",
+            "findings": [
+              "The reader binds the requested run to source/document/blob lineage, verified input/output bytes and sizes, supported versions, requested parser configuration, extraction material, window and trusted limits.",
+              "Node checks establish exact membership, ordered commitment, run/revision identity, parent relationships, text and document/cell locator binding.",
+              "The caller supplies the SQLite transaction and retains commit/rollback ownership. Verified immutable byte snapshots are consumed directly; no document identity is supplied to the replica fallback seam.",
+              "The supplied successful receipt reports 41 actual parser records, nine XLSX-reachable dispositions and 29 nodes including the root. Independent numeric, disposition-count and winner-order assertions supplement parser replay.",
+              "All 13 reader negatives have explicit rejection evidence. They do not establish exhaustive negative coverage of every implemented check.",
+              "The initial attempt genuinely failed semantic-run uniqueness. The correction isolates synthetic document/source identities while retaining the constraint and append-only owners; the subsequent supplied log reports one passing test.",
+              "Reparsing verified source bytes and comparing every wire record is legitimate bounded validation. It establishes proof-oracle replay, not a deployable one-parse consumer architecture."
+            ]
+          }
+        ],
+        "strengths": [
+          "Preserves original workbook bytes while explicitly identifying typed values as openpyxl data-only outcomes; blank/empty and formula distinctions remain recoverable from source bytes.",
+          "Uses actual parser population, including duplicate periods/names, missing selections, exclusions, unknown periods and cached/uncached formulas.",
+          "Corrects configured_name_order from actual parser winners and deliberately tests its difference from configuration order.",
+          "Separates fourteen tagged encoding cases and independent literal byte oracles from narrower real-XLSX coverage.",
+          "Checks task-defined UTC visibility and clock ordering, exact committed replay and unchanged stored node clocks.",
+          "Keeps database/programmer failures outside successful degradation handling and leaves production integration gates explicit."
+        ],
+        "required_changes": [],
+        "limitations": [
+          "Assessment uses supplied evidence only. No artifacts, hashes or execution results were independently verified through tools.",
+          "No runtime efficiency or deletion credit is awarded. The reader performs workbook preflight and source reparsing on reads.",
+          "This implementation cannot be accepted as a production one-parse design. That claim requires a separately qualified consumer path that validates and reconstructs committed capture without ordinary-read workbook reparsing, supported by producer/reader parity evidence and version dispatch.",
+          "Replay shares parser and record-conversion code with capture construction; independent numeric, coordinate, count and byte oracles reduce but do not eliminate common-mode errors.",
+          "The supplied negatives mutate committed output bytes, not source bytes; source verification exists in code but has no separate source-tampering negative here. Concurrent snapshot behavior is also untested.",
+          "Resource preflight is bounded prototype evidence, not complete hostile-workbook qualification or proof that every advertised limit is enforced.",
+          "Production roots, replica recovery, historical dispatch qualification, repeated-spec ordinal handling, financial admission, writer switching, whole-workbook completeness and procedure retirement remain outside acceptance."
+        ]
+      },
+      "owner_proxy_gate_passed": true
+    },
+    "cases": {
+      "parser_records": 41,
+      "evidence_nodes": 29,
+      "negative_cases": 13,
+      "pytest_passed": 1,
+      "seconds": 4.09
+    },
+    "limits": "No production one-parse design, efficiency/deletion credit, source-tampering negative, concurrent snapshot test, hostile-resource/replica/fullfinancial qualification. Reader reparsing is a bounded proof oracle only."
+  },
+  "r5_writer_architecture_finding": {
+    "status": "SOURCE_ASSESSED_RETAIN_CURRENT_OWNER_NO_APPLICATION_CHANGE",
+    "evidence": ".tmp/r5-native-retirement-minimal-plan.md",
+    "finding": "No second spreadsheet-specific financial writer exists. Active path uses shared persist_manifest and legacy KPI consumers; native financial promotion would require new source-reviewed semantic context and does not mechanically delete shared writer.",
+    "candidate": "Resolve config definitions/currency once in existing adapter, preserve all-spec validation, ordering, typedlocators and errorsemantics. No newregistry/model/store.",
+    "scope_boundary": "Native financial promotion is a separate qualification feature, not present retirement credit. Current speculative native migration stays on HOLD."
+  }
 }

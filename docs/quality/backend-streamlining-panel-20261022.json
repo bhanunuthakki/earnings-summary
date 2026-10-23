@@ -1,6 +1,6 @@
 {
   "authority": "Advisory roadmap evidence. No live state, collection, publication, provider fallback or physical retirement authority granted.",
-  "current_gate_state": "Roadmap proxy ACCEPT94 (ambition97/effectiveness93), no blockers; implementation proxy pending; no release or transition-exception acceptance",
+  "current_gate_state": "Roadmap proxy ACCEPT94 (ambition97/effectiveness93), no blockers; first implementation checkpoint proxy ACCEPT92; separate R8 ACCEPT95. Wider roadmap, original structural-baseline disposition and full release checks remain open.",
   "current_technical_body_sha256": "ba61fdb0ea864206c95fa926ebbce76b9a57731f14952ca7a3eefece312b6195",
   "deterministic_source_evidence": [
     {

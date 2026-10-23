@@ -1,5 +1,129 @@
 # Operations & Governance Surface Impact
 
+### Research backend consolidation (2026-10-22)
+
+Disposition: **existing operations consolidated; no new schedule or live action**.
+`pipeline.fmp_batch` now owns registered FMP document selection, dependency order,
+dispatch and per-document outcomes for the bulk CLI and quarterly refresh. Parse
+failures are failed documents rather than valid zero-result extractions. Entry
+rejects a pending caller transaction before extractor or accounting work. Pending
+failed writes roll back before accounting; earlier committed documents remain.
+Missing segment revenue is a failed prerequisite with exact period coordinates;
+reported zero remains available. Independent reconciled periods can commit, and
+failed outcomes retain their actual inserted counts. Valid empty input can succeed
+with zero rows. Extractors retain document commits; these boundaries do not make
+the whole quarterly path atomic. The immutable-record `refresh_cache` transaction
+path remains caller-owned.
+
+Calendar-year PDF presentations now use managed prepare/validate/publish from
+automatic discovery and explicit URLs. Qualified candidates download once and
+bypass loose sidecar/categorizer registration. Other families and fiscal calendars
+retain exact-file legacy categorization. That route receives one prior classification
+bound to bytes, size, issuer, calendar and URL; a changed binding fails before writes.
+Undetermined inputs retain legacy rejection. The broad categorizer subprocess sweep
+is removed; explicit local-upload CLI ingestion remains. Actual owner-requested
+policy and calendar are sealed through preparation and validation. Old default
+request serialization is preserved. Legacy staging copies remain because the path
+callback has no deletion authority.
+
+Completed registrations use a read-only recorded-status check, memoized for one
+operation. It reads all subject attempts, small completion metadata, current rows
+and retained-file status. It does not hash canonical PDF bytes, compare current
+code identity or renew admission. Fetch reports `registration_not_reverified` for
+this outcome. An older coherent attempt cannot hide a later unfinished attempt.
+Missing/incoherent completion or a needed projection repair enters strict recovery.
+That path checks the original sealed binding and canonical evidence and can fail
+after code-root drift. A committed unfinished publication can finalize from its
+retained receipt and intent without download, classification or duplicate document
+insertion. Uncommitted work requires current code, policy and classification checks.
+
+The index owner projects compatibility aliases from verified committed candidates.
+Replay preserves any coherent incumbent; a missing/invalid entry repairs only
+with one candidate. Multiple candidates remain ambiguous. Whole-file malformed
+JSON, invalid root values and read errors fail projection without overwriting
+state. A committed publication can therefore remain not ready. Downloaded,
+registered, newly ready, existing ready and projection-failed remain distinct
+operational outcomes; they do not imply narrative completion.
+
+The explicit URL adapter returns ready URL entries, including coherent/repaired
+registrations, only when the attempt succeeds. Any registration, projection or
+required deterministic-effect failure returns zero. With processing enabled,
+coherent retries can finish anchor/dirty effects without another download,
+classification or model call. Disabling processing retains that boundary. Fetch
+CLI failed/partial outcomes return nonzero; bulk policy-denied role skips retain
+their existing handling. Discovery can process usable partial work but returns
+failure for the overall partial attempt. Repair-only processing defers optional
+model summaries explicitly. Transport skips are distinct from registration failure:
+automatic fetching remains best effort, while an explicit URL call with no ready
+work returns zero. Previously registered pending work can still process after a new
+publication fails; this does not make the overall failed attempt successful.
+Exact-file legacy categorization scopes and restores its runtime issuer registry.
+Per-file input failures remain explicit partial outcomes; database failure stops
+dependent legacy work. Post-commit writer contention is reported without losing
+earlier committed publications.
+
+The separate `process_ir_documents_state.py` entrypoint is retired. Its three
+callers invoke `process_ir_documents.py` with the same explicit state/database
+arguments. Existing index operations accept an explicit path; anchors and model
+bookkeeping use `db_path_context`, without module/path or `sys.argv` rebinding.
+The real summary chain uses the explicit database for model pins, budget alerts
+and usage rows, and the explicit state for cache/index writes. Context restores
+after success or budget denial. This does not change the preexisting statistical
+anchor branch that derives a checkout database path. Pure previews require no
+database. Completion flags and narrative-cache existence remain legacy authorities
+pending the separately qualified artifact migration.
+
+Financial consumers use ordered canonical outcomes and the existing bounded
+publication-verification scope. Source admission and derived currentness use K;
+selection retains the explicit recorded clock O. Typed corrupt evidence is local
+to affected cells/publications; database failures abort the operation and reports
+retain their whole-table unavailable state. Programmer failures propagate. Caller
+transactions, replacement transactions and row factories retain ownership. No
+verification cache survives an operation or creates a new persisted authority.
+The scope admits at most 4,096 distinct verification keys; another key fails before
+verification rather than evicting earlier proof. Cached failures store immutable
+metadata and create fresh exceptions. Reviewed mappings require matching committed
+currency, a stricter discovery predicate under the existing contract. Legacy
+mappings without `source_currency` retain their qualified complete-output parity.
+Stored period/reference corruption remains explicit, including outside the growth
+window; calculated output fails closed while valid references stay inspectable.
+
+Ten financial-read boundaries reuse the same validated snapshot owner. A caller's
+replacement transaction and pending writes survive rejected reads. Invalid O<K
+arguments raise ValueError; stored corrupt evidence retains typed quarantine errors.
+The financial-series reader consumes one ordered canonical population. Quarterly
+coverage keeps eager validation. Annual eligibility and missing-selection order,
+duplicate-selected-observation disposition and admitted-bundle handoff stay intact.
+Strict outcome validation remains in the canonical resolver. These are internal
+read changes, with no new operator action, data source or completion authority.
+
+Temporary-run finalization, recovery and reviewed registration build a hold-path
+set once per operation. Full reasons and ordering remain. The lookup algorithm
+changes; retention policy and operator capabilities do not. Metrics and FMP-derived
+KPI tests reuse the existing cached real migration fixture. They add no setup
+command, production schema, service or fixture framework.
+
+Say/Do preparation now owns full supported rows, selected indices, selection
+disposition, owner context, the existing filter cache, and verdict availability.
+Both normal build and strict dirty refresh use this owner. Rendering consumes
+prepared section values without parser, model, context, cache or verdict database
+work. Prompts, model route, budget and cache identity remain unchanged. Historical
+and current Markdown imports remain supported; other workspace panel reads remain.
+
+Spreadsheet ingestion receives source-preserving selected records from the existing
+parser. Winning values carry their cell/header locator, labels, scale and available
+openpyxl representation. The old numeric dictionary remains a projection and its
+invocation identity is retained. Source/config changes fail before writes. A workbook
+hash registered to another issuer is rejected before document/fact writes; same-issuer
+retry suppression remains. This guard does not change the global hash schema. The
+existing KPI writer, per-period commits and recovery contract remain; native writer
+retirement and durable per-cell rejected capture are not qualified by this change.
+
+Evidence belongs to the FMP batch/quarterly, explicit-state, canonical read,
+spreadsheet ingest and Say/Do regression suites and the bounded implementation
+receipt. All runtime verification uses explicit synthetic fixtures. No collection,
+production mutation, migration, trade, publication or deployment is performed.
+
 ### Shared fiscal-calendar calculation (2026-10-22)
 
 Disposition: **internal consolidation; no new operator action or schedule**.
