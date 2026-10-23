@@ -164,9 +164,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "_run_fetch runs the fixed execution/save_fmp_data.py manifest command.",
-      "fingerprint": "67580e75e44f71728d372eaa02e700f50f9c25eb37bc534d047cec7442f77dbc",
-      "line": 188,
+      "evidence": "_run_fetch launches only fixed PROJECT_ROOT/execution/save_fmp_data.py through managed_python_prefix; selected --db, --repo-root, exact --tickers, manifest, receipt path and HTTP-attempt budget are arguments. The child inherits the exact reviewed artifact lock proof and DB route.",
+      "fingerprint": "fc1f00f186d816ab4073fc4ce38e0421b4497193f7c1b1c450796fbb0b166685",
+      "line": 210,
       "path": "execution/fmp_backpop.py",
       "targets": [
         "execution/save_fmp_data.py"
@@ -174,9 +174,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "_run_extract runs the fixed execution/extract_facts.py command.",
-      "fingerprint": "f83fac470b81ba9da8d9b21d7f53faf9b6d2e25c2b149139099e20a7a6f5905e",
-      "line": 205,
+      "evidence": "_run_extract launches only fixed PROJECT_ROOT/execution/extract_facts.py through managed_python_prefix; selected --db, --repo-root and exact --tickers are arguments. Environment forwards the selected database and artifact lock proof.",
+      "fingerprint": "cc5577d7bc85e5240121dc4aa6b88cbbc474d49e299086428d5c03854a904d22",
+      "line": 316,
       "path": "execution/fmp_backpop.py",
       "targets": [
         "execution/extract_facts.py"
@@ -530,12 +530,12 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "_run_ingest runs the fixed execution/ingest_transcripts.py via managed_python_prefix.",
-      "fingerprint": "c8e18f81064ea46aa7ae871eaa413b2928592e87ccc7a03786eb7000f08ee72d",
-      "line": 248,
+      "evidence": "_run_ingest launches the existing fixed PROJECT_ROOT/execution/ingest_transcripts_state.py through managed_python_prefix, with explicit --db, --repo-root, ticker and exact receipt when present. Source content and state roots never choose executable code.",
+      "fingerprint": "5d8a2e6e3c48f0ff2bb203aaaca079ff05930455592a05f8579eefd3be1eff53",
+      "line": 280,
       "path": "execution/scan_ir_transcripts.py",
       "targets": [
-        "execution/ingest_transcripts.py"
+        "execution/ingest_transcripts_state.py"
       ]
     },
     {
@@ -1011,8 +1011,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "The private test helper launches the fixed third-party detect_secrets.pre_commit_hook.main entrypoint. Its optional --filter argument loads this fixed repository callback, so retain that local-code edge. Other arguments are test-controlled scanner flags/fixture paths; --no-verify disables provider verification.",
-      "fingerprint": "802d6b00df58132768f6f572311d8949ffc0c8e00c7fd4b9e26d1949abeae089",
-      "line": 202,
+      "fingerprint": "34b976e755f48a5ce98b9526f0916f6c637d6f561a7a48542c2a9e5c748ba8dd",
+      "line": 211,
       "path": "tests/test_quality_hash_filter.py",
       "targets": [
         ".github/scripts/quality_hash_filter.py"
@@ -1042,7 +1042,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "9e958fe3fdbd08c0f4618efc2b8c8b6bfae9d8ed63305bee901c625b1a39976e",
+      "source_sha256": "5da86a16cead5101be015f53877f0dd5e03a66284fd177d478488c2ca94a63d6",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

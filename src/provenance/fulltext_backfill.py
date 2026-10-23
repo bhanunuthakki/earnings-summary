@@ -1420,7 +1420,11 @@ def _bounded_dom_locator(path: str) -> str:
     return f"{prefix}{path[-suffix_budget:]}"
 
 
-def _extract_pdf_pages(raw_bytes: bytes, source_ref: str) -> list[_NodeText]:
+def project_pdf_page_texts(raw_bytes: bytes) -> tuple[str, ...]:
+    """Return native page text in source order, including unresolved empty pages.
+
+    This projection uses the fulltext parser. It is not a coverage receipt.
+    """
     try:
         import pypdf
     except ImportError as error:
@@ -1437,21 +1441,25 @@ def _extract_pdf_pages(raw_bytes: bytes, source_ref: str) -> list[_NodeText]:
                 raise _ExtractionError("encrypted_pdf")
             if reader.are_permissions_valid is not True:
                 raise _ExtractionError("invalid_pdf_permissions")
-        nodes = [
-            _NodeText(
-                local_key=f"page:{index}",
-                node_kind="pdf_page",
-                text=text,
-                locator=EvidenceLocator(source_ref=source_ref, page_number=index),
-            )
-            for index, page in enumerate(reader.pages, start=1)
-            if (text := (page.extract_text() or "")).strip()
-        ]
+        return tuple(page.extract_text() or "" for page in reader.pages)
     except _ExtractionError:
         raise
     except Exception as error:
         # ``pypdf`` parses untrusted issuer bytes and has a broad exception tree.
         raise _ExtractionError("unreadable_pdf") from error
+
+
+def _extract_pdf_pages(raw_bytes: bytes, source_ref: str) -> list[_NodeText]:
+    nodes = [
+        _NodeText(
+            local_key=f"page:{index}",
+            node_kind="pdf_page",
+            text=text,
+            locator=EvidenceLocator(source_ref=source_ref, page_number=index),
+        )
+        for index, text in enumerate(project_pdf_page_texts(raw_bytes), start=1)
+        if text.strip()
+    ]
     if not nodes:
         raise _ExtractionError("no_substantive_text")
     return nodes

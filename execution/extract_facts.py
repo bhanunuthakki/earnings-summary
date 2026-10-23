@@ -21,25 +21,24 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from compute.as_reported import extract_as_reported_facts  # noqa: E402
-from compute.balance_sheet import extract_balance_sheet_facts  # noqa: E402
-from compute.cashflow import extract_cashflow_facts  # noqa: E402
-from compute.income_statement import extract_income_statement_facts  # noqa: E402
-from compute.segment_oi_10k import extract_segment_oi_facts  # noqa: E402
-from compute.segments import extract_segment_facts  # noqa: E402
-from compute.segments_nu import extract_nu_segment_facts  # noqa: E402
-from models.companies import ListType  # noqa: E402
-from models.runs import StageName, StageStatus  # noqa: E402
-from pipeline.invocation_fingerprint import file_fingerprint  # noqa: E402
-from pipeline.queries import (  # noqa: E402
+from compute.as_reported import extract_as_reported_facts
+from compute.balance_sheet import extract_balance_sheet_facts
+from compute.cashflow import extract_cashflow_facts
+from compute.income_statement import extract_income_statement_facts
+from compute.segment_oi_10k import extract_segment_oi_facts
+from compute.segments import extract_segment_facts
+from compute.segments_nu import extract_nu_segment_facts
+from models.companies import ListType
+from models.runs import StageName, StageStatus
+from pipeline.invocation_fingerprint import file_fingerprint
+from pipeline.queries import (
     ANALYZED_LIST_TYPES,
     open_db,
     tracked_companies_for_user,
 )
-from pipeline.run_accounting import (  # noqa: E402
+from pipeline.run_accounting import (
     JsonValue,
     PipelineRunSuppressedError,
     end_run,
@@ -47,6 +46,8 @@ from pipeline.run_accounting import (  # noqa: E402
     start_run,
     suppression_payload,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 _Extractor = Callable[[sqlite3.Connection, int, Path], int]
 
@@ -80,6 +81,17 @@ def _resolve_extractor(ticker: str, doc_type: str) -> _Extractor:
 
 def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:
     """Return the list of tickers to extract for, per CLI args."""
+    if getattr(args, "tickers", None) is not None:
+        requested = list(
+            dict.fromkeys(t.strip().upper() for t in args.tickers.split(",") if t.strip())
+        )
+        eligible = {
+            c.ticker.upper()
+            for c in tracked_companies_for_user(conn, list_types=frozenset(ListType))
+        }
+        if not requested or any(t not in eligible for t in requested):
+            raise ValueError("--tickers must name eligible tracked companies for the current user")
+        return requested
     if args.ticker:
         return [args.ticker.upper()]
     list_types = frozenset(ListType) if args.include_index_members else ANALYZED_LIST_TYPES
@@ -177,6 +189,8 @@ def _run_extraction(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--tickers", help="Exact comma-separated eligible ticker subset")
+    parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
     group.add_argument("--ticker", help="Single ticker to extract for")
     group.add_argument("--all", action="store_true", help="All classified tracked companies")
     parser.add_argument(
@@ -215,14 +229,16 @@ def main() -> int:
                 conn,
                 directive="extract_facts",
                 ticker_scope=tickers,
-                invocation_inputs=_invocation_inputs(conn, docs, doc_types, PROJECT_ROOT),
+                invocation_inputs=_invocation_inputs(
+                    conn, docs, doc_types, args.repo_root.resolve()
+                ),
                 force=bool(args.force),
                 deduplicate_completed=True,
             )
         except PipelineRunSuppressedError as exc:
             print(json.dumps(suppression_payload(exc)))
             return 0
-        total, ok, failed = _run_extraction(conn, run_id, docs, PROJECT_ROOT)
+        total, ok, failed = _run_extraction(conn, run_id, docs, args.repo_root.resolve())
 
         terminal = StageStatus.OK if failed == 0 else StageStatus.FAILED
         end_run(
