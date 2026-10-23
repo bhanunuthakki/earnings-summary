@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from time import perf_counter
 
 import pytest
 from alembic.config import Config
@@ -19,12 +20,22 @@ from compute.fmp_derived_kpis import (
     _fetch_full_kpi_series,  # pyright: ignore[reportPrivateUsage] -- exact producer seam
 )
 from execution import backfill_financial_fact_resolutions as cutover_cli
-from models.facts import Unit
+from models.facts import Currency, Unit
+from pipeline.kpi_definition_revisions import (
+    KpiCurrencyDisposition,
+    KpiDefinitionPeriodKind,
+    KpiStockFlowBehavior,
+    KpiUnitFamily,
+    persist_kpi_definition_revision,
+)
+from pipeline.kpi_semantics import current_kpi_semantic_context, persist_kpi_semantic_context
+from pipeline.queries import open_db
 from pipeline.restatement_detector import insert_with_restatement_detection
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
     EvidenceLedger,
+    EvidenceLocator,
     EvidenceNode,
     ExtractionRun,
     SourceObservation,
@@ -33,6 +44,7 @@ from provenance.financial_fact_resolution import (
     FactCutoverRequest,
     _dimensions,  # pyright: ignore[reportPrivateUsage] -- current-head seam under test
     canonical_fact_relation,
+    canonical_fact_selections_as_known,
     execute_fact_cutover,
     resolve_fact_logical_key,
     resolve_fact_row,
@@ -40,6 +52,7 @@ from provenance.financial_fact_resolution import (
 from provenance.integrity_audit import AuditOptions, audit_connection
 from run_lock import hold_run_lock
 from sqlite_runtime import SQLiteConnectionRole
+from tests.fixtures.kpi_revision_setup import definition_fixture
 from tests.kpi_semantic_support import admit_all_kpi_facts
 from timeseries.loaders import load_financial_series
 
@@ -292,14 +305,15 @@ def _insert_financial_fact(
     value: str,
     unit: str = "actual",
     period_end: str = "2026-06-30",
+    line_item: str = "revenue",
 ) -> int:
     cursor = conn.execute(
         "INSERT INTO financial_facts "
         "(ticker, period_end, fiscal_period_type, line_item, value, currency, unit, "
         "source_doc_id, confidence, extracted_by, locator) "
-        "VALUES ('ACME', ?, 'Q2', 'revenue', ?, 'USD', ?, ?, 0.99, "
+        "VALUES ('ACME', ?, 'Q2', ?, ?, 'USD', ?, ?, 0.99, "
         "'deterministic:test', '{\"json_path\":\"[0].revenue\"}')",
-        (period_end, value, unit, document_id),
+        (period_end, line_item, value, unit, document_id),
     )
     assert cursor.lastrowid is not None
     return int(cursor.lastrowid)
@@ -311,6 +325,7 @@ def _insert_kpi_fact(
     document_id: int,
     value: str,
     unit: str,
+    currency: str | None = None,
     supersedes_id: int | None = None,
 ) -> int:
     conn.execute(
@@ -318,14 +333,24 @@ def _insert_kpi_fact(
         "VALUES (1, 'ACME', 'Active customers', ?)",
         (unit,),
     )
-    cursor = conn.execute(
-        "INSERT INTO kpi_facts "
-        "(ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, "
-        "source_doc_id, confidence, extracted_by, locator, supersedes_id) "
-        "VALUES ('ACME', '2026-06-30', 'Q2', 1, ?, ?, ?, 0.95, "
-        "'deterministic:test', '{\"pdf_page\":3}', ?)",
-        (value, unit, document_id, supersedes_id),
-    )
+    if currency is None:
+        cursor = conn.execute(
+            "INSERT INTO kpi_facts "
+            "(ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, "
+            "source_doc_id, confidence, extracted_by, locator, supersedes_id) "
+            "VALUES ('ACME', '2026-06-30', 'Q2', 1, ?, ?, ?, 0.95, "
+            "'deterministic:test', '{\"pdf_page\":3}', ?)",
+            (value, unit, document_id, supersedes_id),
+        )
+    else:
+        cursor = conn.execute(
+            "INSERT INTO kpi_facts "
+            "(ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, currency, "
+            "source_doc_id, confidence, extracted_by, locator, supersedes_id) "
+            "VALUES ('ACME', '2026-06-30', 'Q2', 1, ?, ?, ?, ?, 0.95, "
+            "'deterministic:test', '{\"pdf_page\":3}', ?)",
+            (value, unit, currency, document_id, supersedes_id),
+        )
     assert cursor.lastrowid is not None
     return int(cursor.lastrowid)
 
@@ -1132,6 +1157,861 @@ def test_canonical_relation_uses_legacy_only_before_0225(tmp_path: Path) -> None
         assert relation.selection_mode == "resolved_view"
     finally:
         current_conn.close()
+
+
+def test_derived_relation_requires_exact_current_v1_input_selection(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    path = migrated_db(tmp_path / "derived-input-selection.db")
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        conn.execute(
+            "INSERT INTO issuer_entities VALUES (?,?,?,?)",
+            ("issuer-acme", "issuer:acme", "operating_company", STAMP),
+        )
+        _seed_document(conn, document_id=1, source_tier="sec_official", value_suffix="SEC")
+        _seed_document(conn, document_id=2, source_tier="sec_official", value_suffix="CHILD")
+        child_id = _insert_financial_fact(conn, document_id=2, value="100")
+        assert (
+            resolve_fact_row(
+                conn, fact_table="financial_facts", fact_row_id=child_id, knowledge_cutoff=STAMP
+            )
+            is not None
+        )
+        child_link = conn.execute(
+            "SELECT fact_revision,observation_id FROM fact_observation_revisions "
+            "WHERE fact_table='financial_facts' AND fact_row_id=?",
+            (child_id,),
+        ).fetchone()
+        child_resolution = conn.execute(
+            "SELECT resolution_id,revision FROM v_observation_resolution_current "
+            "WHERE selected_observation_id=?",
+            (child_link["observation_id"],),
+        ).fetchone()
+        assert child_resolution is not None
+        input_ref = {
+            "ref": "legacy_canonical_fact",
+            "fact_table": "financial_facts",
+            "fact_id": child_id,
+            "fact_revision": child_link["fact_revision"],
+            "observation_id": child_link["observation_id"],
+            "resolution_id": child_resolution["resolution_id"],
+            "resolution_revision": child_resolution["revision"],
+            "doc_id": 2,
+            "document_version_id": "document-version-2",
+            "item": "revenue",
+        }
+        conn.execute(
+            "INSERT INTO kpi_definitions (id,ticker,name,unit,primary_source) "
+            "VALUES (706,'ACME','Revenue ratio','percent','sec_xbrl')"
+        )
+        cursor = conn.execute(
+            "INSERT INTO kpi_facts "
+            "(ticker,period_end,fiscal_period_type,kpi_definition_id,value,unit,"
+            "source_doc_id,confidence,extracted_by,computed_from,formula_id,formula_version) "
+            "VALUES ('ACME','2026-06-30','Q2',706,50,'percent',1,0.95,"
+            "'fmp_derived',?,1,1)",
+            (json.dumps({"inputs": [input_ref]}),),
+        )
+        assert cursor.lastrowid is not None
+        derived_id = int(cursor.lastrowid)
+        admit_all_kpi_facts(conn)
+        assert (
+            resolve_fact_row(
+                conn, fact_table="kpi_facts", fact_row_id=derived_id, knowledge_cutoff=STAMP
+            )
+            is not None
+        )
+        relation = canonical_fact_relation(conn, "kpi_facts")
+        selected = conn.execute(f"SELECT id FROM {relation.sql}").fetchall()
+        assert [int(row[0]) for row in selected] == [derived_id]
+        conn.execute(
+            "INSERT INTO kpi_definitions (id,ticker,name,unit,primary_source) "
+            "VALUES (707,'ACME','Invalid ratio','percent','sec_xbrl')"
+        )
+        invalid_cursor = conn.execute(
+            "INSERT INTO kpi_facts "
+            "(ticker,period_end,fiscal_period_type,kpi_definition_id,value,unit,"
+            "source_doc_id,confidence,extracted_by,computed_from,formula_id,formula_version) "
+            "VALUES ('ACME','2026-06-30','Q2',707,50,'percent',1,0.95,"
+            "'fmp_derived',?,1,1)",
+            (json.dumps({"inputs": [{**input_ref, "resolution_revision": 999}]}),),
+        )
+        assert invalid_cursor.lastrowid is not None
+        invalid_id = int(invalid_cursor.lastrowid)
+        admit_all_kpi_facts(conn)
+        assert (
+            resolve_fact_row(
+                conn, fact_table="kpi_facts", fact_row_id=invalid_id, knowledge_cutoff=STAMP
+            )
+            is not None
+        )
+        assert [int(row[0]) for row in conn.execute(f"SELECT id FROM {relation.sql}")] == [
+            derived_id
+        ]
+        historical = canonical_fact_selections_as_known(
+            conn,
+            fact_table="kpi_facts",
+            effective_at=STAMP.replace(tzinfo=UTC),
+            known_at=datetime(2027, 1, 1, tzinfo=UTC),
+        )
+        assert [selection.fact_row_id for selection in historical] == [derived_id]
+        assert (
+            canonical_fact_selections_as_known(
+                conn,
+                fact_table="kpi_facts",
+                effective_at=STAMP.replace(tzinfo=UTC),
+                known_at=datetime(2026, 9, 1, tzinfo=UTC),
+            )
+            == ()
+        )
+        quarantine_at = datetime(2027, 1, 2, tzinfo=UTC)
+        conn.execute(
+            "INSERT INTO document_semantic_disposition_revisions "
+            "(assessment_id,idempotency_key,document_version_id,revision,semantic_status,"
+            "reason_code,reason_details_json,decision_kind,reviewer_identity,policy_name,"
+            "policy_version,policy_config_sha256,effective_at,knowledge_at,recorded_at,"
+            "supersedes_assessment_id,material_dissent) "
+            "VALUES ('child-quarantine','child-quarantine','document-version-2',1,"
+            "'quarantined','source_review','{\"reason\":\"test\"}',"
+            "'human','reviewer','source-test','v1',?,?,?,?,NULL,0)",
+            ("a" * 64, quarantine_at, quarantine_at, quarantine_at),
+        )
+        assert conn.execute(f"SELECT id FROM {relation.sql}").fetchall() == []
+        before_quarantine = canonical_fact_selections_as_known(
+            conn,
+            fact_table="kpi_facts",
+            effective_at=STAMP.replace(tzinfo=UTC),
+            known_at=datetime(2027, 1, 1, tzinfo=UTC),
+        )
+        assert [selection.fact_row_id for selection in before_quarantine] == [derived_id]
+        assert (
+            canonical_fact_selections_as_known(
+                conn,
+                fact_table="kpi_facts",
+                effective_at=STAMP.replace(tzinfo=UTC),
+                known_at=datetime(2027, 1, 3, tzinfo=UTC),
+            )
+            == ()
+        )
+        release_at = datetime(2027, 1, 4, tzinfo=UTC)
+        conn.execute(
+            "INSERT INTO document_semantic_disposition_revisions "
+            "(assessment_id,idempotency_key,document_version_id,revision,semantic_status,"
+            "reason_code,reason_details_json,decision_kind,reviewer_identity,policy_name,"
+            "policy_version,policy_config_sha256,effective_at,knowledge_at,recorded_at,"
+            "supersedes_assessment_id,material_dissent) "
+            "VALUES ('child-release','child-release','document-version-2',2,"
+            "'required','source_review','{\"reason\":\"test\"}',"
+            "'human','reviewer','source-test','v1',?,?,?,?,'child-quarantine',0)",
+            ("a" * 64, release_at, release_at, release_at),
+        )
+        assert [int(row[0]) for row in conn.execute(f"SELECT id FROM {relation.sql}")] == [
+            derived_id
+        ]
+        after_release = canonical_fact_selections_as_known(
+            conn,
+            fact_table="kpi_facts",
+            effective_at=STAMP.replace(tzinfo=UTC),
+            known_at=datetime(2027, 1, 5, tzinfo=UTC),
+        )
+        assert [selection.fact_row_id for selection in after_release] == [derived_id]
+        _seed_document(
+            conn,
+            document_id=4,
+            source_tier="sec_official",
+            value_suffix="RESTATEMENT",
+            source_clock=datetime(2027, 1, 6, tzinfo=UTC),
+        )
+        replacement = conn.execute(
+            "INSERT INTO financial_facts "
+            "(ticker,period_end,fiscal_period_type,line_item,value,currency,unit,"
+            "source_doc_id,confidence,extracted_by,locator,supersedes_id) "
+            "VALUES ('ACME','2026-06-30','Q2','revenue',105,'USD','actual',4,0.99,"
+            "'deterministic:test','{\"json_path\":\"[0].revenue\"}',?)",
+            (child_id,),
+        )
+        assert replacement.lastrowid is not None
+        assert (
+            resolve_fact_row(
+                conn,
+                fact_table="financial_facts",
+                fact_row_id=int(replacement.lastrowid),
+                knowledge_cutoff=datetime(2027, 1, 7, tzinfo=UTC),
+            )
+            is not None
+        )
+        assert conn.execute(f"SELECT id FROM {relation.sql}").fetchall() == []
+        assert [
+            selection.fact_row_id
+            for selection in canonical_fact_selections_as_known(
+                conn,
+                fact_table="kpi_facts",
+                effective_at=STAMP.replace(tzinfo=UTC),
+                known_at=datetime(2027, 1, 5, tzinfo=UTC),
+            )
+        ] == [derived_id]
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("monetary", [False, True])
+def test_typed_kpi_child_requires_source_bound_definition_revision(
+    tmp_path: Path, migrated_db: Callable[..., Path], monetary: bool
+) -> None:
+    path = migrated_db(tmp_path / f"derived-kpi-definition-{monetary}.db")
+    conn = open_db(path)
+    try:
+        conn.execute(
+            "INSERT INTO issuer_entities VALUES (?,?,?,?)",
+            ("issuer-acme", "issuer:acme", "operating_company", STAMP),
+        )
+        conn.execute(
+            "INSERT INTO reporting_entities "
+            "(reporting_entity_id,idempotency_key,issuer_id,reporting_entity_kind,"
+            "display_name,created_at) VALUES "
+            "('entity-acme','entity-acme','issuer-acme','legal_registrant','ACME',?)",
+            (STAMP,),
+        )
+        _seed_document(conn, document_id=1, source_tier="sec_official", value_suffix="OUTPUT")
+        _seed_document(conn, document_id=2, source_tier="sec_official", value_suffix="CHILD")
+        _seed_document(conn, document_id=3, source_tier="sec_official", value_suffix="DEFINITION")
+        locator = EvidenceLocator(page_number=3)
+        EvidenceLedger(conn).persist(
+            EvidenceNode(
+                node_id="definition-node-3",
+                evidence_key="definition-node-3",
+                revision=1,
+                extraction_run_id="run-3",
+                parent_node_id="node-document-3",
+                supersedes_node_id=None,
+                node_kind="passage",
+                text="Active customers",
+                locator=locator,
+                recorded_at=STAMP,
+            )
+        )
+        child_unit = "actual" if monetary else "count"
+        child_currency = "USD" if monetary else None
+        child_id = _insert_kpi_fact(
+            conn,
+            document_id=2,
+            value="100",
+            unit=child_unit,
+            currency=child_currency,
+        )
+        conn.execute(
+            "UPDATE kpi_facts SET source_excerpt='Active customers: 100' WHERE id=?",
+            (child_id,),
+        )
+        conn.execute(
+            "INSERT INTO kpi_definitions (id,ticker,name,unit,primary_source) "
+            "VALUES (706,'ACME','Active customers',?,'sec_xbrl')",
+            (child_unit,),
+        )
+        conn.execute("UPDATE kpi_facts SET kpi_definition_id=706 WHERE id=?", (child_id,))
+        admit_all_kpi_facts(conn)
+        assert current_kpi_semantic_context(conn, kpi_fact_id=child_id) is not None
+        revision = definition_fixture(
+            kpi_definition_revision_id="definition-acme-customers-r1",
+            idempotency_key="definition-acme-customers-r1",
+            kpi_definition_id=706,
+            reporting_entity_id="entity-acme",
+            reported_label="Active customers",
+            reported_definition_text="Active customers",
+            period_kind=KpiDefinitionPeriodKind.INSTANT,
+            stock_flow_behavior=KpiStockFlowBehavior.STOCK,
+            unit_family=KpiUnitFamily.CURRENCY if monetary else KpiUnitFamily.COUNT,
+            unit_key=Unit.ACTUAL if monetary else Unit.COUNT,
+            currency_disposition=(
+                KpiCurrencyDisposition.EXPLICIT
+                if monetary
+                else KpiCurrencyDisposition.NOT_APPLICABLE
+            ),
+            currency=Currency.USD if monetary else None,
+            source_document_version_id="document-version-3",
+            source_evidence_node_id="definition-node-3",
+            source_locator=json.loads(locator.canonical_json),
+            effective_at=datetime(2026, 4, 1, tzinfo=UTC),
+        )
+        persist_kpi_definition_revision(conn, revision)
+        original_context = current_kpi_semantic_context(conn, kpi_fact_id=child_id)
+        assert original_context is not None
+        persist_kpi_semantic_context(
+            conn,
+            kpi_fact_id=child_id,
+            context=original_context.context,
+            knowledge_at=datetime(2026, 10, 24, tzinfo=UTC),
+            kpi_definition_revision_id=revision.kpi_definition_revision_id,
+        )
+        child_result = resolve_fact_row(
+            conn,
+            fact_table="kpi_facts",
+            fact_row_id=child_id,
+            knowledge_cutoff=datetime(2026, 10, 24, tzinfo=UTC),
+        )
+        assert child_result is not None
+        assert child_result.selected_observation_id is not None, child_result
+        selected_concept = conn.execute(
+            "SELECT concept_key FROM reported_observations WHERE observation_id=?",
+            (child_result.selected_observation_id,),
+        ).fetchone()
+        assert selected_concept is not None
+        assert selected_concept[0] == "kpi_definition:706"
+        link = conn.execute(
+            "SELECT fact_revision,observation_id FROM fact_observation_revisions "
+            "WHERE fact_table='kpi_facts' AND fact_row_id=? "
+            "ORDER BY fact_revision DESC LIMIT 1",
+            (child_id,),
+        ).fetchone()
+        resolution = conn.execute(
+            "SELECT resolution_id,revision FROM v_observation_resolution_current "
+            "WHERE selected_observation_id=?",
+            (link["observation_id"],),
+        ).fetchone()
+        assert resolution is not None
+        typed = {
+            "ref": "legacy_canonical_fact",
+            "fact_table": "kpi_facts",
+            "fact_id": child_id,
+            "fact_revision": link["fact_revision"],
+            "observation_id": link["observation_id"],
+            "resolution_id": resolution["resolution_id"],
+            "resolution_revision": resolution["revision"],
+            "doc_id": 2,
+            "document_version_id": "document-version-2",
+            "item": "Active customers",
+        }
+        conn.execute(
+            "INSERT INTO kpi_definitions (id,ticker,name,unit,primary_source) "
+            "VALUES (707,'ACME','Customer ratio','percent','sec_xbrl')"
+        )
+        cursor = conn.execute(
+            "INSERT INTO kpi_facts "
+            "(ticker,period_end,fiscal_period_type,kpi_definition_id,value,unit,"
+            "source_doc_id,confidence,extracted_by,computed_from,formula_id,formula_version) "
+            "VALUES ('ACME','2026-06-30','Q2',707,50,'percent',1,0.95,"
+            "'fmp_derived',?,1,1)",
+            (json.dumps({"inputs": [typed]}),),
+        )
+        assert cursor.lastrowid is not None
+        output_id = int(cursor.lastrowid)
+        admit_all_kpi_facts(conn)
+        assert (
+            resolve_fact_row(
+                conn,
+                fact_table="kpi_facts",
+                fact_row_id=output_id,
+                knowledge_cutoff=datetime(2026, 10, 24, tzinfo=UTC),
+            )
+            is not None
+        )
+        relation = canonical_fact_relation(conn, "kpi_facts")
+        assert [int(row[0]) for row in conn.execute(f"SELECT id FROM {relation.sql}")] == [
+            child_id,
+            output_id,
+        ]
+        captured_dimensions = conn.execute(
+            "SELECT dimensions_json FROM reported_observations WHERE observation_id=?",
+            (child_result.selected_observation_id,),
+        ).fetchone()
+        assert captured_dimensions is not None
+        assert json.loads(str(captured_dimensions[0])) == [
+            {"key": "kpi_definition_id", "value": "706"}
+        ]
+        before_change = datetime(2026, 10, 25, tzinfo=UTC)
+        if monetary:
+            captured_currency = conn.execute(
+                "SELECT currency FROM reported_observations WHERE observation_id=?",
+                (child_result.selected_observation_id,),
+            ).fetchone()
+            assert captured_currency is not None
+            assert captured_currency[0] == "USD"
+            assert [
+                selection.fact_row_id
+                for selection in canonical_fact_selections_as_known(
+                    conn,
+                    fact_table="kpi_facts",
+                    effective_at=STAMP.replace(tzinfo=UTC),
+                    known_at=before_change,
+                )
+            ] == [child_id, output_id]
+        conn.execute("DROP TRIGGER trg_reported_observations_append_only")
+        if monetary:
+            # Fault injection: a persisted observation cannot be changed in production.
+            conn.execute(
+                "UPDATE reported_observations SET currency='EUR' WHERE observation_id=?",
+                (child_result.selected_observation_id,),
+            )
+            assert [int(row[0]) for row in conn.execute(f"SELECT id FROM {relation.sql}")] == [
+                child_id
+            ]
+            assert [
+                selection.fact_row_id
+                for selection in canonical_fact_selections_as_known(
+                    conn,
+                    fact_table="kpi_facts",
+                    effective_at=STAMP.replace(tzinfo=UTC),
+                    known_at=before_change,
+                )
+            ] == [child_id]
+            conn.execute(
+                "UPDATE reported_observations SET currency='USD' WHERE observation_id=?",
+                (child_result.selected_observation_id,),
+            )
+        conn.execute(
+            "UPDATE reported_observations SET dimensions_json=? WHERE observation_id=?",
+            (
+                json.dumps(
+                    [
+                        {"key": "kpi_definition_id", "value": "706"},
+                        {"key": "semantic_status", "value": "admitted"},
+                    ]
+                ),
+                child_result.selected_observation_id,
+            ),
+        )
+        assert [int(row[0]) for row in conn.execute(f"SELECT id FROM {relation.sql}")] == [child_id]
+        child_row = conn.execute("SELECT * FROM kpi_facts WHERE id=?", (child_id,)).fetchone()
+        assert child_row is not None
+        full_dimensions = [
+            dimension.model_dump()
+            for dimension in _dimensions(
+                conn,
+                "kpi_facts",
+                child_row,
+            )
+        ]
+        conn.execute(
+            "UPDATE reported_observations SET dimensions_json=? WHERE observation_id=?",
+            (json.dumps(full_dimensions), child_result.selected_observation_id),
+        )
+        assert [int(row[0]) for row in conn.execute(f"SELECT id FROM {relation.sql}")] == [
+            child_id,
+            output_id,
+        ]
+        conn.execute(
+            "UPDATE reported_observations SET dimensions_json=? WHERE observation_id=?",
+            (captured_dimensions[0], child_result.selected_observation_id),
+        )
+        assert [
+            selection.fact_row_id
+            for selection in canonical_fact_selections_as_known(
+                conn,
+                fact_table="kpi_facts",
+                effective_at=STAMP.replace(tzinfo=UTC),
+                known_at=before_change,
+            )
+        ] == [child_id, output_id]
+        quarantine_at = datetime(2026, 11, 1, tzinfo=UTC)
+        conn.execute(
+            "INSERT INTO document_semantic_disposition_revisions "
+            "(assessment_id,idempotency_key,document_version_id,revision,semantic_status,"
+            "reason_code,reason_details_json,decision_kind,reviewer_identity,policy_name,"
+            "policy_version,policy_config_sha256,effective_at,knowledge_at,recorded_at,"
+            "supersedes_assessment_id,material_dissent) "
+            "VALUES ('definition-quarantine','definition-quarantine','document-version-3',1,"
+            "'quarantined','source_review','{\"reason\":\"test\"}',"
+            "'human','reviewer','source-test','v1',?,?,?,?,NULL,0)",
+            ("a" * 64, quarantine_at, quarantine_at, quarantine_at),
+        )
+        assert [int(row[0]) for row in conn.execute(f"SELECT id FROM {relation.sql}")] == [child_id]
+        assert [
+            selection.fact_row_id
+            for selection in canonical_fact_selections_as_known(
+                conn,
+                fact_table="kpi_facts",
+                effective_at=STAMP.replace(tzinfo=UTC),
+                known_at=before_change,
+            )
+        ] == [child_id, output_id]
+        release_at = datetime(2026, 11, 3, tzinfo=UTC)
+        conn.execute(
+            "INSERT INTO document_semantic_disposition_revisions "
+            "(assessment_id,idempotency_key,document_version_id,revision,semantic_status,"
+            "reason_code,reason_details_json,decision_kind,reviewer_identity,policy_name,"
+            "policy_version,policy_config_sha256,effective_at,knowledge_at,recorded_at,"
+            "supersedes_assessment_id,material_dissent) "
+            "VALUES ('definition-release','definition-release','document-version-3',2,"
+            "'required','source_review','{\"reason\":\"test\"}',"
+            "'human','reviewer','source-test','v1',?,?,?,?,'definition-quarantine',0)",
+            ("a" * 64, release_at, release_at, release_at),
+        )
+        assert [int(row[0]) for row in conn.execute(f"SELECT id FROM {relation.sql}")] == [
+            child_id,
+            output_id,
+        ]
+        current_context = current_kpi_semantic_context(conn, kpi_fact_id=child_id)
+        assert current_context is not None
+        persist_kpi_semantic_context(
+            conn,
+            kpi_fact_id=child_id,
+            context=current_context.context,
+            knowledge_at=datetime(2026, 11, 4, tzinfo=UTC),
+            kpi_definition_revision_id=None,
+        )
+        assert [int(row[0]) for row in conn.execute(f"SELECT id FROM {relation.sql}")] == [child_id]
+    finally:
+        conn.close()
+
+
+def test_derived_reader_batches_163_selected_outputs_with_ledger_history(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    path = migrated_db(tmp_path / "derived-163-read.db")
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        conn.execute(
+            "INSERT INTO issuer_entities VALUES (?,?,?,?)",
+            ("issuer-acme", "issuer:acme", "operating_company", STAMP),
+        )
+        _seed_document(conn, document_id=1, source_tier="sec_official", value_suffix="OUTPUT")
+        _seed_document(conn, document_id=2, source_tier="sec_official", value_suffix="CHILD")
+        _seed_document(conn, document_id=3, source_tier="fmp_normalized", value_suffix="COMPETITOR")
+        for ordinal in range(163):
+            line_item = f"component_{ordinal}"
+            child_id = _insert_financial_fact(
+                conn,
+                document_id=2,
+                value=str(100 + ordinal),
+                line_item=line_item,
+            )
+            child_result = resolve_fact_row(
+                conn,
+                fact_table="financial_facts",
+                fact_row_id=child_id,
+                knowledge_cutoff=STAMP,
+            )
+            assert child_result is not None
+            assert child_result.selected_observation_id is not None
+            if ordinal % 10 == 0:
+                competitor_id = _insert_financial_fact(
+                    conn,
+                    document_id=3,
+                    value=str(101 + ordinal),
+                    line_item=line_item,
+                )
+                assert (
+                    resolve_fact_row(
+                        conn,
+                        fact_table="financial_facts",
+                        fact_row_id=competitor_id,
+                        knowledge_cutoff=STAMP,
+                    )
+                    is not None
+                )
+            link = conn.execute(
+                "SELECT fact_revision,observation_id FROM fact_observation_revisions "
+                "WHERE fact_table='financial_facts' AND fact_row_id=? "
+                "ORDER BY fact_revision DESC LIMIT 1",
+                (child_id,),
+            ).fetchone()
+            resolution = conn.execute(
+                "SELECT resolution_id,revision FROM v_observation_resolution_current "
+                "WHERE selected_observation_id=?",
+                (link["observation_id"],),
+            ).fetchone()
+            assert resolution is not None
+            ref = {
+                "ref": "legacy_canonical_fact",
+                "fact_table": "financial_facts",
+                "fact_id": child_id,
+                "fact_revision": link["fact_revision"],
+                "observation_id": link["observation_id"],
+                "resolution_id": resolution["resolution_id"],
+                "resolution_revision": resolution["revision"],
+                "doc_id": 2,
+                "document_version_id": "document-version-2",
+                "item": line_item,
+            }
+            definition_id = 1000 + ordinal
+            conn.execute(
+                "INSERT INTO kpi_definitions (id,ticker,name,unit,primary_source) "
+                "VALUES (?,'ACME',?,'percent','sec_xbrl')",
+                (definition_id, f"Derived metric {ordinal}"),
+            )
+            conn.execute(
+                "INSERT INTO kpi_facts "
+                "(ticker,period_end,fiscal_period_type,kpi_definition_id,value,unit,"
+                "source_doc_id,confidence,extracted_by,computed_from,formula_id,formula_version) "
+                "VALUES ('ACME','2026-06-30','Q2',?,50,'percent',1,0.95,"
+                "'fmp_derived',?,1,1)",
+                (definition_id, json.dumps({"inputs": [ref]})),
+            )
+        admit_all_kpi_facts(conn)
+        output_rows = conn.execute("SELECT id FROM kpi_facts ORDER BY id").fetchall()
+        assert len(output_rows) == 163
+        for output_row in output_rows:
+            assert (
+                resolve_fact_row(
+                    conn,
+                    fact_table="kpi_facts",
+                    fact_row_id=int(output_row[0]),
+                    knowledge_cutoff=datetime(2027, 1, 1, tzinfo=UTC),
+                )
+                is not None
+            )
+        traced: list[str] = []
+        conn.set_trace_callback(traced.append)
+        current_start = perf_counter()
+        relation = canonical_fact_relation(conn, "kpi_facts")
+        current = [int(row[0]) for row in conn.execute(f"SELECT id FROM {relation.sql}")]
+        current_elapsed = perf_counter() - current_start
+        historical_start = perf_counter()
+        historical = canonical_fact_selections_as_known(
+            conn,
+            fact_table="kpi_facts",
+            effective_at=STAMP.replace(tzinfo=UTC),
+            known_at=datetime(2027, 1, 2, tzinfo=UTC),
+        )
+        historical_elapsed = perf_counter() - historical_start
+        conn.set_trace_callback(None)
+        assert len(current) == 163
+        assert len(historical) == 163
+        assert len(traced) <= 30
+        print(
+            f"derived-reader-163 current={current_elapsed:.3f}s "
+            f"as_known={historical_elapsed:.3f}s statements={len(traced)}"
+        )
+    finally:
+        conn.close()
+
+
+def test_derived_reader_accepts_32_observations_and_rejects_33(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    path = migrated_db(tmp_path / "derived-depth.db")
+    conn = open_db(path)
+    try:
+        conn.execute(
+            "INSERT INTO issuer_entities VALUES (?,?,?,?)",
+            ("issuer-acme", "issuer:acme", "operating_company", STAMP),
+        )
+        _seed_document(conn, document_id=1, source_tier="sec_official", value_suffix="OUTPUT")
+        _seed_document(conn, document_id=2, source_tier="sec_official", value_suffix="CHILD")
+        _seed_document(conn, document_id=3, source_tier="sec_official", value_suffix="DEFINITION")
+        conn.execute(
+            "INSERT INTO reporting_entities "
+            "(reporting_entity_id,idempotency_key,issuer_id,reporting_entity_kind,"
+            "display_name,created_at) VALUES "
+            "('entity-acme','entity-acme','issuer-acme','legal_registrant','ACME',?)",
+            (STAMP,),
+        )
+        locator = EvidenceLocator(page_number=3)
+        EvidenceLedger(conn).persist(
+            EvidenceNode(
+                node_id="depth-definition-node",
+                evidence_key="depth-definition-node",
+                revision=1,
+                extraction_run_id="run-3",
+                parent_node_id="node-document-3",
+                supersedes_node_id=None,
+                node_kind="passage",
+                text="Derived metric definition",
+                locator=locator,
+                recorded_at=STAMP,
+            )
+        )
+        leaf_id = _insert_financial_fact(conn, document_id=2, value="100")
+        assert (
+            resolve_fact_row(
+                conn, fact_table="financial_facts", fact_row_id=leaf_id, knowledge_cutoff=STAMP
+            )
+            is not None
+        )
+        prior_table = "financial_facts"
+        prior_id = leaf_id
+        prior_item = "revenue"
+        prior_doc = 2
+        root_ids: list[int] = []
+        for level in range(1, 33):
+            link = conn.execute(
+                "SELECT fact_revision,observation_id FROM fact_observation_revisions "
+                "WHERE fact_table=? AND fact_row_id=? ORDER BY fact_revision DESC LIMIT 1",
+                (prior_table, prior_id),
+            ).fetchone()
+            resolution = conn.execute(
+                "SELECT resolution_id,revision FROM v_observation_resolution_current "
+                "WHERE selected_observation_id=?",
+                (link["observation_id"],),
+            ).fetchone()
+            assert resolution is not None
+            ref = {
+                "ref": "legacy_canonical_fact",
+                "fact_table": prior_table,
+                "fact_id": prior_id,
+                "fact_revision": link["fact_revision"],
+                "observation_id": link["observation_id"],
+                "resolution_id": resolution["resolution_id"],
+                "resolution_revision": resolution["revision"],
+                "doc_id": prior_doc,
+                "document_version_id": f"document-version-{prior_doc}",
+                "item": prior_item,
+            }
+            definition_id = 2000 + level
+            label = f"Derived metric {level}"
+            conn.execute(
+                "INSERT INTO kpi_definitions (id,ticker,name,unit,primary_source) "
+                "VALUES (?,'ACME',?,'percent','sec_xbrl')",
+                (definition_id, label),
+            )
+            cursor = conn.execute(
+                "INSERT INTO kpi_facts "
+                "(ticker,period_end,fiscal_period_type,kpi_definition_id,value,unit,"
+                "source_doc_id,confidence,extracted_by,computed_from,formula_id,formula_version) "
+                "VALUES ('ACME','2026-06-30','Q2',?,50,'percent',1,0.95,"
+                "'fmp_derived',?,1,1)",
+                (definition_id, json.dumps({"inputs": [ref]})),
+            )
+            assert cursor.lastrowid is not None
+            current_id = int(cursor.lastrowid)
+            admit_all_kpi_facts(conn)
+            definition = definition_fixture(
+                kpi_definition_revision_id=f"depth-definition-{level}",
+                idempotency_key=f"depth-definition-{level}",
+                kpi_definition_id=definition_id,
+                reporting_entity_id="entity-acme",
+                reported_label=label,
+                reported_definition_text="Derived metric definition",
+                period_kind=KpiDefinitionPeriodKind.DURATION,
+                stock_flow_behavior=KpiStockFlowBehavior.RATIO,
+                unit_family=KpiUnitFamily.PERCENTAGE,
+                unit_key=Unit.PERCENT,
+                currency_disposition=KpiCurrencyDisposition.NOT_APPLICABLE,
+                currency=None,
+                source_document_version_id="document-version-3",
+                source_evidence_node_id="depth-definition-node",
+                source_locator=json.loads(locator.canonical_json),
+                effective_at=datetime(2026, 4, 1, tzinfo=UTC),
+            )
+            persist_kpi_definition_revision(conn, definition)
+            context = current_kpi_semantic_context(conn, kpi_fact_id=current_id)
+            assert context is not None
+            persist_kpi_semantic_context(
+                conn,
+                kpi_fact_id=current_id,
+                context=context.context,
+                knowledge_at=datetime(2026, 10, 24, tzinfo=UTC),
+                kpi_definition_revision_id=definition.kpi_definition_revision_id,
+            )
+            assert (
+                resolve_fact_row(
+                    conn,
+                    fact_table="kpi_facts",
+                    fact_row_id=current_id,
+                    knowledge_cutoff=datetime(2026, 10, 24, tzinfo=UTC),
+                )
+                is not None
+            )
+            root_ids.append(current_id)
+            prior_table = "kpi_facts"
+            prior_id = current_id
+            prior_item = label
+            prior_doc = 1
+        relation = canonical_fact_relation(conn, "kpi_facts")
+        accepted = {
+            int(row[0])
+            for row in conn.execute(
+                f"SELECT id FROM {relation.sql} WHERE id IN (?,?)", root_ids[-2:]
+            )
+        }
+        assert accepted == {root_ids[-2]}
+    finally:
+        conn.close()
+
+
+def test_derived_reader_accepts_500_unique_observations_and_rejects_501(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    path = migrated_db(tmp_path / "derived-width.db")
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        conn.execute(
+            "INSERT INTO issuer_entities VALUES (?,?,?,?)",
+            ("issuer-acme", "issuer:acme", "operating_company", STAMP),
+        )
+        _seed_document(conn, document_id=1, source_tier="sec_official", value_suffix="OUTPUT")
+        _seed_document(conn, document_id=2, source_tier="sec_official", value_suffix="CHILD")
+        inputs: list[dict[str, object]] = []
+        for ordinal in range(500):
+            line_item = f"wide_component_{ordinal}"
+            child_id = _insert_financial_fact(conn, document_id=2, value="100", line_item=line_item)
+            assert (
+                resolve_fact_row(
+                    conn,
+                    fact_table="financial_facts",
+                    fact_row_id=child_id,
+                    knowledge_cutoff=STAMP,
+                )
+                is not None
+            )
+            link = conn.execute(
+                "SELECT fact_revision,observation_id FROM fact_observation_revisions "
+                "WHERE fact_table='financial_facts' AND fact_row_id=? "
+                "ORDER BY fact_revision DESC LIMIT 1",
+                (child_id,),
+            ).fetchone()
+            resolution = conn.execute(
+                "SELECT resolution_id,revision FROM v_observation_resolution_current "
+                "WHERE selected_observation_id=?",
+                (link["observation_id"],),
+            ).fetchone()
+            assert resolution is not None
+            inputs.append(
+                {
+                    "ref": "legacy_canonical_fact",
+                    "fact_table": "financial_facts",
+                    "fact_id": child_id,
+                    "fact_revision": link["fact_revision"],
+                    "observation_id": link["observation_id"],
+                    "resolution_id": resolution["resolution_id"],
+                    "resolution_revision": resolution["revision"],
+                    "doc_id": 2,
+                    "document_version_id": "document-version-2",
+                    "item": line_item,
+                }
+            )
+        output_ids: list[int] = []
+        for count in (499, 500):
+            definition_id = 3000 + count
+            conn.execute(
+                "INSERT INTO kpi_definitions (id,ticker,name,unit,primary_source) "
+                "VALUES (?,'ACME',?,'percent','sec_xbrl')",
+                (definition_id, f"Wide derived {count}"),
+            )
+            cursor = conn.execute(
+                "INSERT INTO kpi_facts "
+                "(ticker,period_end,fiscal_period_type,kpi_definition_id,value,unit,"
+                "source_doc_id,confidence,extracted_by,computed_from,formula_id,formula_version) "
+                "VALUES ('ACME','2026-06-30','Q2',?,50,'percent',1,0.95,"
+                "'fmp_derived',?,1,1)",
+                (definition_id, json.dumps({"inputs": inputs[:count]})),
+            )
+            assert cursor.lastrowid is not None
+            output_ids.append(int(cursor.lastrowid))
+        admit_all_kpi_facts(conn)
+        for output_id in output_ids:
+            assert (
+                resolve_fact_row(
+                    conn,
+                    fact_table="kpi_facts",
+                    fact_row_id=output_id,
+                    knowledge_cutoff=datetime(2027, 1, 1, tzinfo=UTC),
+                )
+                is not None
+            )
+        relation = canonical_fact_relation(conn, "kpi_facts")
+        assert [
+            int(row[0]) for row in conn.execute(f"SELECT id FROM {relation.sql} ORDER BY id")
+        ] == [output_ids[0]]
+    finally:
+        conn.close()
 
 
 def test_canonical_timeseries_loader_reads_selected_resolution_and_fails_closed(
