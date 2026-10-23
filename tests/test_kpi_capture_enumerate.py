@@ -59,7 +59,7 @@ def _const_caller(response: str) -> Callable[..., object]:
 
 _ENUMERATE_JSON = (
     "[\n"
-    '  {"label": "Revenue", "value": 1200000000, "unit": "actual", "currency": "USD", "source_excerpt": "Revenue was $1.2 billion", "source_value_text": "1.2", "reported_period_end": "2025-03-31", "period_role": "current", "accounting_basis": "gaap", "consolidation_scope": "consolidated", "source_unit_scale": "none"},\n'
+    '  {"label": "Revenue", "value": 1200000000, "unit": "actual", "currency": "USD", "source_excerpt": "Revenue was $1.2 billion", "source_value_text": "1.2", "reported_period_end": "2025-03-31", "period_role": "current", "accounting_basis": "gaap", "consolidation_scope": "consolidated", "source_unit_scale": "billions"},\n'
     '  {"label": "Net interest margin", "value": 17.8, "unit": "percent", "source_excerpt": "NIM of 17.8%", "source_value_text": "17.8%", "reported_period_end": "2025-03-31", "period_role": "current", "accounting_basis": "management", "consolidation_scope": "consolidated", "source_unit_scale": "none"},\n'
     '  {"label": "Customers", "value": 118000000, "unit": "count", "source_excerpt": "118 million customers", "source_value_text": "118", "reported_period_end": "2025-03-31", "period_role": "current", "accounting_basis": "management", "consolidation_scope": "consolidated", "source_unit_scale": "millions"}\n'
     "]"
@@ -721,7 +721,11 @@ def test_capture_for_ir_pdf_docs_retains_native_page_locators_without_financial_
     monkeypatch.setattr(kes, "resolve_model_and_backend", _fixture_model_route)
 
     def extract_page(prompt: str, **kwargs: object) -> object:
-        return json.loads(_ENUMERATE_JSON)[:2] if "NIM of 17.8%" in prompt else []
+        return (
+            json.loads(_ENUMERATE_JSON)[:2]
+            if "NIM of 17.8%" in prompt.split("EXTRACT ONLY FROM THIS SOURCE SECTION:\n")[-1]
+            else []
+        )
 
     monkeypatch.setattr(
         kes, "call_llm_structured_with_raw", partial(_governed_fixture_call, response=extract_page)
@@ -741,3 +745,128 @@ def test_capture_for_ir_pdf_docs_retains_native_page_locators_without_financial_
         "Net interest margin",
     }
     conn.close()
+
+
+@pytest.mark.parametrize(
+    ("unit", "scale", "token", "value", "valid"),
+    [
+        ("actual", "millions", "60,801", "60801000000", True),
+        ("actual", "millions", "60,801", "60801", False),
+        ("actual", "none", "(12)", "-12", True),
+        ("actual", "none", "(12)", "12", False),
+        ("actual", "billions", "1.2", "1200000000", True),
+        ("count", "millions", "3.6", "3600000", True),
+        ("count", "millions", "3.6", "3.6", False),
+        ("percent", "none", "5%", "5", True),
+        ("percent", "none", "5%", "0.05", False),
+        ("actual", "none", "1.23", "1.23", True),
+    ],
+)
+def test_direct_wire_numeric_scale_contract(
+    unit: str, scale: str, token: str, value: str, valid: bool
+) -> None:
+    row = json.loads(_ENUMERATE_JSON)[0]
+    row.update(
+        unit=unit,
+        source_unit_scale=scale,
+        source_value_text=token,
+        source_excerpt=f"Reported value {token}",
+        value=value,
+    )
+    validate = getattr(kes, "_validated_enumerated_rows")
+    if valid:
+        assert validate([row], source_scope="direct_pdf_rich")[0].value == Decimal(value)
+    else:
+        with pytest.raises(ValueError, match="conflicts with its source token and scale"):
+            validate([row], source_scope="direct_pdf_rich")
+
+
+@pytest.mark.parametrize(
+    ("token", "quote", "value"),
+    [
+        ("60", "Revenue 60,801", "60000000"),
+        ("12", "Loss (12)", "12"),
+        ("12", "Loss -12", "12"),
+        ("12", "Loss - 12", "12"),
+    ],
+)
+def test_direct_wire_rejects_partial_or_hidden_signed_tokens(
+    token: str, quote: str, value: str
+) -> None:
+    row = json.loads(_ENUMERATE_JSON)[0]
+    row.update(
+        source_value_text=token,
+        source_excerpt=quote,
+        value=value,
+        source_unit_scale="millions" if token == "60" else "none",
+    )
+    with pytest.raises(ValueError, match="numeric token must occur"):
+        getattr(kes, "_validated_enumerated_rows")([row], source_scope="direct_pdf_rich")
+
+
+@pytest.mark.parametrize(
+    ("quote", "token", "value", "valid"),
+    [
+        ("Outlook 10 -20", "20", "20", True),
+        ("Outlook 10 -20", "-20", "-20", False),
+        ("Outlook 3 -5%", "5%", "5", True),
+        ("Outlook 3 -5%", "-5%", "-5", False),
+        ("Outlook 1,000.25 -2,000.75", "2,000.75", "2000.75", True),
+        ("Q2 -20", "-20", "-20", True),
+        ("Q2 -20", "20", "20", False),
+    ],
+)
+def test_direct_wire_spaced_range_token(quote: str, token: str, value: str, valid: bool) -> None:
+    row = json.loads(_ENUMERATE_JSON)[1]
+    row.update(source_excerpt=quote, source_value_text=token, value=value)
+    if valid:
+        assert getattr(kes, "_validated_enumerated_rows")([row], source_scope="direct_pdf_rich")
+    else:
+        with pytest.raises(ValueError, match="numeric token must occur"):
+            getattr(kes, "_validated_enumerated_rows")([row], source_scope="direct_pdf_rich")
+
+
+@pytest.mark.parametrize(
+    ("quote", "token", "value", "valid"),
+    [
+        ("Revenue -$ 20", "20", "20", False),
+        ("Revenue \u2212 $ 20", "20", "20", False),
+        ("Revenue ($ 20)", "20", "20", False),
+        ("Revenue 1e3", "1", "1", False),
+        ("Revenue 1E-3", "1", "1", False),
+        ("Revenue -$ 20", "-$ 20", "-20", True),
+        ("Revenue $- 20", "$- 20", "-20", True),
+        ("Revenue ($ 20)", "($ 20)", "-20", True),
+    ],
+)
+def test_closed_wire_numeric_envelopes(quote: str, token: str, value: str, valid: bool) -> None:
+    row = json.loads(_ENUMERATE_JSON)[0]
+    row.update(source_excerpt=quote, source_value_text=token, value=value, source_unit_scale="none")
+    if valid:
+        assert getattr(kes, "_validated_enumerated_rows")([row], source_scope="direct_pdf_rich")
+    else:
+        with pytest.raises(ValueError, match="numeric token must occur"):
+            getattr(kes, "_validated_enumerated_rows")([row], source_scope="direct_pdf_rich")
+
+
+@pytest.mark.parametrize(
+    ("quote", "token", "value", "valid"),
+    [
+        ("Revenue \ufe6320", "20", "20", False),
+        ("Revenue \uff0d20", "20", "20", False),
+        ("Revenue ..20", ".20", ".20", False),
+        ("Revenue ,20", "20", "20", False),
+        ("Revenue 2\u200b0", "2", "2", False),
+        ("Revenue 20\u200f", "20", "20", False),
+        ('"Revenue":20', "20", "20", True),
+        ("Revenue -20", "-20", "-20", True),
+    ],
+)
+def test_boundary_wire_numeric_envelopes(quote: str, token: str, value: str, valid: bool) -> None:
+    row = json.loads(_ENUMERATE_JSON)[0]
+    row.update(source_excerpt=quote, source_value_text=token, value=value, source_unit_scale="none")
+    if valid:
+        assert getattr(kes, "_validated_enumerated_rows")([row], source_scope="direct_pdf_rich")
+    else:
+        with pytest.raises(ValueError, match="numeric token must occur"):
+            getattr(kes, "_validated_enumerated_rows")([row], source_scope="direct_pdf_rich")

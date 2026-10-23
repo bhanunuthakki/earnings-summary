@@ -71,7 +71,7 @@ from models.documents import SourceType, tier_for_source_type
 from models.facts import Currency, FactLocator, FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import DefinitionOrigin
 from models.runs import StageName, StageStatus
-from models.unit_convert import same_family
+from models.unit_convert import convert_unit, same_family
 from models.validation import Severity, ValidationRule
 from pipeline.capture_coverage import CaptureCoverageRecord, record_coverage
 from pipeline.invocation_fingerprint import file_fingerprint
@@ -92,6 +92,9 @@ from pipeline.kpi_semantics import (
     KpiSemanticContext,
     KpiSemanticStatus,
     KpiUnitScale,
+    normalize_source_numeric,
+    parse_source_numeric,
+    source_numeric_token_occurs,
 )
 from pipeline.locators import html_span_locator, locate_char_span, verify_quote_in_source
 from pipeline.restatement_detector import table_has_column
@@ -209,6 +212,13 @@ class _EnumeratedKpi(BaseModel):
     currency: Currency | None = None
     source_excerpt: str = Field(min_length=1, max_length=200)
     source_value_text: str | None = Field(default=None, min_length=1, max_length=80)
+    # Prospective, unreviewed context. These fields do not grant publication.
+    period_kind: Literal["instant", "duration", "unknown"] = "unknown"
+    guidance_horizon: str | None = Field(default=None, max_length=200)
+    source_definition: str | None = Field(default=None, max_length=512)
+    context_witnesses: list[dict[str, object]] = Field(
+        default_factory=list[dict[str, object]], max_length=8
+    )
     reported_period_start: date | None = None
     reported_period_end: date
     period_role: KpiPeriodRole
@@ -1291,6 +1301,10 @@ def _enumerate_prompt(
     rich_fields = (
         (
             ',\n  "reported_period_start": "<ISO date when the source states a duration start; omit when not supported>",'
+            '\n  "period_kind": "instant | duration | unknown",'
+            '\n  "guidance_horizon": "<literal forecast horizon, or null when unknown>",'
+            '\n  "source_definition": "<preserve source definition, including change versus balance; null when unknown>",'
+            '\n  "context_witnesses": [{"page": 1, "quote": "<exact context quote from supplied DOCUMENT CONTEXT>", "fields": ["accounting_basis"]}],'
             '\n  "range_bound": "<lower | upper for each endpoint of an explicit guidance range; omit for a point value>"'
         )
         if source_scope == "direct_pdf_rich"
@@ -1338,7 +1352,8 @@ Unit conventions (identical to our standard):
 
 Rules:
 {scope_rule}{range_rule}
-  - For continuation inputs with CONTEXT ONLY and EXTRACT ONLY FROM THIS SOURCE SECTION blocks, use context for headers, currency, units and period only. Enumerate and quote facts only from the source section.
+  - For continuation inputs with CONTEXT ONLY and EXTRACT ONLY FROM THIS SOURCE SECTION blocks, use context for headers, currency, units, period, accounting basis, scope and source definitions only. Enumerate and quote facts only from the source section.
+  - For direct PDF input, preserve instant versus duration, duration start, average versus ending level, flow change versus balance, forecast horizon and source definition. Do not invent a start date or accounting basis. Use unknown/null when the supplied source does not establish a field. Management authorship alone does not establish accounting_basis management. Use context_witnesses only for exact supplied context quotes, with their page and supported field names; these are unreviewed evidence, never admission.
   - One row per distinct metric, reported period, accounting basis, scope and dimensions. Preserve repeated labels for distinct scopes. Do not invent — if you cannot quote it verbatim, omit it.
   - Return at most {max_facts} rows. Return ONLY the JSON array — no markdown fence, no commentary.
 
@@ -1357,8 +1372,32 @@ def _validated_enumerated_rows(
         return rows
     ranges: dict[tuple[object, ...], dict[str, Decimal]] = {}
     for row in rows:
-        if row.source_value_text is None or row.source_value_text not in row.source_excerpt:
+        if row.source_value_text is None or not source_numeric_token_occurs(
+            row.source_value_text, row.source_excerpt
+        ):
             raise ValueError("direct IR PDF numeric token must occur in its exact source quote")
+        source_number = parse_source_numeric(row.source_value_text)
+        expected_value: Decimal | None = None
+        if row.unit == "actual" and row.source_unit_scale is not KpiUnitScale.UNKNOWN:
+            source_unit = (
+                Unit.ACTUAL
+                if row.source_unit_scale is KpiUnitScale.NONE
+                else Unit(row.source_unit_scale.value)
+            )
+            expected_value = convert_unit(source_number, source_unit, Unit.ACTUAL)
+        elif row.unit == "count" and row.source_unit_scale is not KpiUnitScale.UNKNOWN:
+            expected_value = normalize_source_numeric(
+                source_number, unit=Unit.COUNT, unit_scale=row.source_unit_scale
+            )
+        elif row.unit in {"percent", "ratio", "bps"}:
+            expected_value = source_number
+        # A word such as decrease can supply a sign absent from the literal token.
+        # Preserve that source interpretation; never permit a magnitude mismatch.
+        if expected_value is not None and (
+            abs(row.value) != abs(expected_value)
+            or (expected_value < 0 and row.value != expected_value)
+        ):
+            raise ValueError("direct IR PDF value conflicts with its source token and scale")
         if row.range_bound is None:
             continue
         key = (
@@ -1982,14 +2021,29 @@ def retain_and_publish_reviewed_ir_source(
         for exchange in exchanges
     )
     retained_exchanges = {response.llm_call_id: response for response in responses}
+    capture_versions = [
+        ir_supplement_capture.historical_capture_version(conn, exchange, source_sha256)
+        or "v10-closed-numeric-boundaries"
+        for exchange in exchanges
+    ]
+    if len(set(capture_versions)) > 1:
+        raise ValueError("IR governed exchanges mix producing capture versions")
+    capture_version = capture_versions[0] if capture_versions else "v10-closed-numeric-boundaries"
+    historical = capture_version != "v10-closed-numeric-boundaries"
+
+    def retained_rows(raw: object) -> list[_EnumeratedKpi]:
+        if historical:
+            # Keep old raw wire failures inspectable, not silently corrected or
+            # admitted. Only immutable producing artifacts select this path.
+            return TypeAdapter(list[_EnumeratedKpi]).validate_python(raw)
+        return _validated_enumerated_rows(
+            raw, source_scope="direct_pdf_rich", saturation_limit=max_facts_per_doc
+        )
+
     processed: list[tuple[SupplementExchange, list[dict[str, object]]]] = []
     for exchange in exchanges:
         parsed: object = parse_json_payload(exchange.raw_response, expect="array")
-        source_rows = _validated_enumerated_rows(
-            parsed,
-            source_scope="direct_pdf_rich",
-            saturation_limit=max_facts_per_doc,
-        )
+        source_rows = retained_rows(parsed)
         if len(source_rows) < max_facts_per_doc:
             if not isinstance(parsed, list) or any(
                 not isinstance(row, dict) for row in cast("list[object]", parsed)
@@ -2001,11 +2055,9 @@ def retain_and_publish_reviewed_ir_source(
     native_pages = ir_supplement_capture.project_pdf_page_texts(raw_pdf_bytes)
     raw_rows: list[IrRawRow] = []
     for (page, rows), (exchange, original) in zip(page_rows, processed, strict=True):
-        validated = [
-            item.model_dump(mode="json")
-            for item in _validated_enumerated_rows(original, source_scope="direct_pdf_rich")
-        ]
-        if validated != rows:
+        validated = [item.model_dump(mode="json") for item in retained_rows(original)]
+        normalized_rows = [item.model_dump(mode="json") for item in retained_rows(rows)]
+        if validated != normalized_rows:
             raise ValueError("IR page rows differ from their governed raw response")
         for ordinal, original_row in enumerate(original):
             quote = original_row.get("source_excerpt")
@@ -2034,7 +2086,7 @@ def retain_and_publish_reviewed_ir_source(
             document_version_id=document_version_id,
             source_sha256=source_sha256,
             extractor_name="ir-supplement-native-continuation",
-            extractor_code_version="v6-native-hyphen-wrap",
+            extractor_code_version=capture_version,
             extractor_config_sha256=extractor_config_sha256,
             extraction_started_at=extraction_started_at,
             extraction_completed_at=completed_at,
@@ -2094,7 +2146,7 @@ def retain_and_publish_reviewed_ir_source(
             scope_security_id=subject.security_id,
             concept_namespace="issuer-ir-pdf-source:" + str(issuer_row[0]),
             extractor_name="ir-supplement-native-continuation",
-            extractor_code_version="v6-native-hyphen-wrap",
+            extractor_code_version=capture_version,
             extractor_config_sha256=extractor_config_sha256,
             candidate_population_sha256=population.candidate_population_sha256,
             review_node_id=review_node_id,
@@ -2202,6 +2254,7 @@ def capture_for_ir_pdf_docs(
                 db_path: Path = db_path,
                 period_label: str = period_label,
                 run_id: str,
+                context_guardrail: Callable[[list[dict[str, object]]], None] | None = None,
             ) -> SupplementExchange:
                 if (model, backend) != resolve_model_and_backend(
                     "kpi_summary_enumerate",
@@ -2282,6 +2335,9 @@ def capture_for_ir_pdf_docs(
                             ir_supplement_capture.require_native_source_quotes(
                                 [row.model_dump(mode="json") for row in rows], source_body
                             )
+                            if context_guardrail is None:
+                                raise ValueError("IR context validator is unavailable")
+                            context_guardrail([row.model_dump(mode="json") for row in rows])
                         except ValueError as error:
                             return False, str(error)
                         return True, ""
@@ -2343,7 +2399,7 @@ def capture_for_ir_pdf_docs(
                     "source_scope": "direct_pdf_rich",
                     "max_chunks": max_chunks,
                     "max_structured_calls": max_structured_calls,
-                    "continuation_version": "ir-supplement-native-continuation-v6-native-hyphen-wrap",
+                    "continuation_version": "ir-supplement-native-continuation-v10-closed-numeric-boundaries",
                     "prompt_sha256": prompt_sha256,
                     "schema_sha256": schema_sha256,
                     "projection_identity": projection_identity,
@@ -2376,6 +2432,11 @@ def capture_for_ir_pdf_docs(
                 schema_sha256=schema_sha256,
                 projection_identity=projection_identity,
                 document_version_id=evidence.document_version_id,
+            )
+            continuation.extract = partial(
+                extract_section,
+                run_id=extraction_run_id,
+                context_guardrail=continuation.require_context_witnesses,
             )
             source_started_at = datetime.now(UTC)
             page_rows = continuation.capture(raw_bytes)

@@ -89,7 +89,7 @@ def _capture(
         try:
             rows = extract(text)
         except SupplementSaturatedError:
-            saturated_row: dict[str, object] = {"source_excerpt": text[:80]}
+            saturated_row: dict[str, object] = {"source_excerpt": _body[:80]}
             rows = [saturated_row] * capture.max_facts
         prompt = capture.prompt(text)
         exchange = _synthetic_exchange(
@@ -133,6 +133,7 @@ def test_more_than_80k_and_200_facts_last_page_and_replay(
     calls: list[str] = []
 
     def extract(text: str) -> list[dict[str, object]]:
+        text = text.split("EXTRACT ONLY FROM THIS SOURCE SECTION:\n")[-1]
         calls.append(text)
         return [
             {"label": line.split(" 10%")[0], "source_excerpt": line[:80]}
@@ -143,9 +144,9 @@ def test_more_than_80k_and_200_facts_last_page_and_replay(
     output = job.capture(b"original source")
     assert sum(len(rows) for _, rows in output) == 360
     assert output[-1][1][-1]["label"] == "Metric 2:119"
-    assert len(calls) == 3
+    assert len(calls) == 15
     assert _capture(conn, monkeypatch, pages, extract).capture(b"original source") == output
-    assert len(calls) == 3
+    assert len(calls) == 15
 
 
 def test_failed_later_page_replays_earlier_page(
@@ -156,6 +157,7 @@ def test_failed_later_page_replays_earlier_page(
 
     def extract(text: str) -> list[dict[str, object]]:
         nonlocal failed
+        text = text.split("EXTRACT ONLY FROM THIS SOURCE SECTION:\n")[-1]
         calls.append(text)
         if text == "last 30%" and failed:
             failed = False
@@ -176,6 +178,7 @@ def test_changed_bytes_prompt_and_model_invalidate_cache(
     calls: list[str] = []
 
     def extract(text: str) -> list[dict[str, object]]:
+        text = text.split("EXTRACT ONLY FROM THIS SOURCE SECTION:\n")[-1]
         calls.append(text)
         return [{"source_excerpt": text}]
 
@@ -226,7 +229,7 @@ def test_saturation_splits_with_source_context_and_replays(
 
     def extract(text: str) -> list[dict[str, object]]:
         calls.append(text)
-        if text == page:
+        if text.split("EXTRACT ONLY FROM THIS SOURCE SECTION:\n")[-1] == page:
             raise SupplementSaturatedError("split")
         body = text.split("EXTRACT ONLY FROM THIS SOURCE SECTION:\n")[-1]
         return [
@@ -281,6 +284,7 @@ def test_cache_output_tamper_cannot_replay(
     calls: list[str] = []
 
     def extract(text: str) -> list[dict[str, object]]:
+        text = text.split("EXTRACT ONLY FROM THIS SOURCE SECTION:\n")[-1]
         calls.append(text)
         return [{"source_excerpt": text}]
 
@@ -430,6 +434,8 @@ def test_direct_capture_retains_distinct_candidates_without_legacy_projection(
     monkeypatch.setattr("pipeline.locators.PdfQuoteLocator", locator_factory)
 
     def extract(ticker: str, period: str, text: str, **kwargs: object) -> list[dict[str, object]]:
+        supplied_text = text
+        text = text.split("EXTRACT ONLY FROM THIS SOURCE SECTION:\n")[-1]
         north = text.startswith("North")
         rows: list[dict[str, object]] = [
             {
@@ -457,7 +463,7 @@ def test_direct_capture_retains_distinct_candidates_without_legacy_projection(
         from llm.structured import StructuredCallResult
 
         prompt = getattr(summaries, "_enumerate_prompt")(
-            ticker, period, text, 200, source_scope="direct_pdf_rich"
+            ticker, period, supplied_text, 200, source_scope="direct_pdf_rich"
         )
         raw = json.dumps(rows)
         record_llm_call(
@@ -872,3 +878,60 @@ def test_numeric_repair_feedback_is_specific_bounded_and_primary_unchanged() -> 
     assert "untrusted-secret-content" not in continuation.repair_supplement_prompt(
         primary, "untrusted-secret-content"
     )
+
+
+def test_short_dense_native_page_uses_bounded_lines(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    page = "Header\n" + "".join(f"Item {i}: {i}\n" for i in range(48))
+    supplied: list[str] = []
+    capture = _capture(conn, monkeypatch, (page,), lambda text: supplied.append(text) or [])
+    capture.capture(b"original source")
+    assert len(supplied) == 3
+    assert all(
+        len(text.split("EXTRACT ONLY FROM THIS SOURCE SECTION:\n")[-1].splitlines()) <= 24
+        for text in supplied
+    )
+    assert all("DOCUMENT CONTEXT" in text and capture.source_sha256 in text for text in supplied)
+
+
+def test_dense_line_plan_checks_global_budget_before_calls(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called: list[str] = []
+    capture = _capture(
+        conn,
+        monkeypatch,
+        ("row\n" * 49,),
+        lambda text: called.append(text) or [],
+        max_structured_calls=4,
+    )
+    with pytest.raises(ValueError, match="before extraction"):
+        capture.capture(b"original source")
+    assert called == []
+
+
+def test_context_witnesses_are_native_and_limited_to_supplied_pages(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capture = _capture(conn, monkeypatch, ("Basis: non-GAAP\n", "Revenue 10\n"), lambda text: [])
+    capture.capture(b"original source")
+    row: dict[str, object] = {
+        "context_witnesses": [
+            {"page": 1, "quote": "Basis: non-GAAP", "fields": ["accounting_basis"]}
+        ]
+    }
+    capture.require_context_witnesses([row])
+    for bad in (
+        {"page": 1, "quote": "Basis: GAAP", "fields": ["accounting_basis"]},
+        {"page": 3, "quote": "Basis: non-GAAP", "fields": ["accounting_basis"]},
+        {"page": 1, "quote": "Basis: non-GAAP", "fields": ["publication_approval"]},
+    ):
+        with pytest.raises(ValueError, match="supplied native context"):
+            capture.require_context_witnesses([{"context_witnesses": [bad]}])
+    omitted = _capture(
+        conn, monkeypatch, ("Basis: non-GAAP\n" + ("x" * 500 + "\n") * 70,), lambda text: []
+    )
+    omitted.capture(b"original source")
+    with pytest.raises(ValueError, match="supplied native context"):
+        omitted.require_context_witnesses([row])

@@ -439,7 +439,7 @@ def test_capped_lower_range_bound_recurses_and_retains_complete_raw_population(
     responses: list[list[dict[str, object]]] = []
 
     def capped_then_complete(prompt: str, **_kwargs: object) -> object:
-        if "CONTEXT ONLY (page header" not in prompt:
+        if not responses:
             rows = [*actuals, guidance]
         elif "EXTRACT ONLY FROM THIS SOURCE SECTION:\nMargin North" in prompt:
             rows = actuals

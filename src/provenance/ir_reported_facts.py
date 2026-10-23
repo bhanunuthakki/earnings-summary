@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -23,6 +22,7 @@ from pipeline.kpi_semantics import (
     KpiUnitScale,
     normalize_source_numeric,
     parse_source_numeric,
+    source_numeric_token_occurs,
     validate_admitted_unit_scale,
 )
 from pipeline.locators import locate_char_span
@@ -121,8 +121,7 @@ class IrReportedCandidate(BaseModel):
             != self.numeric_value
         ):
             raise ValueError("numeric value must equal the source token after its reviewed scale")
-        token_pattern = rf"(?<![\d.]){re.escape(self.source_value_text)}(?![\d.])"
-        if re.search(token_pattern, self.source_quote) is None:
+        if not source_numeric_token_occurs(self.source_value_text, self.source_quote):
             raise ValueError("source numeric token is absent from its quote")
         if self.full_wording not in self.source_quote:
             raise ValueError("full management wording must occur in the source quote")

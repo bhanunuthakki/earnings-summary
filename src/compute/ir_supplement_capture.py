@@ -11,7 +11,7 @@ import json
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -20,6 +20,7 @@ from llm_artifact_store import (
     UpsertRequest,
     artifact_is_reusable,
     compute_input_sha256,
+    read_artifact,
     read_current,
     upsert,
 )
@@ -52,6 +53,8 @@ class SupplementExchange(BaseModel):
 _SUPPLEMENT_REPAIR_FEEDBACK = {
     "": "The response failed JSON, row schema or source validation.",
     "direct IR PDF numeric token must occur in its exact source quote": "direct IR PDF numeric token must occur in its exact source quote",
+    "direct IR PDF value conflicts with its source token and scale": "Return the full-unit numeric value consistent with the exact source token and its presentation scale.",
+    "IR context witness is not supported by supplied native context": "Use only exact quotes on pages supplied in DOCUMENT CONTEXT; leave unsupported context unknown.",
     "source numeric token must occur in source_excerpt": "source numeric token must occur in source_excerpt",
     "IR extracted quote does not occur in its native source section": "IR extracted quote does not occur in its native source section",
     "direct IR PDF guidance range repeats an endpoint": "direct IR PDF guidance range repeats an endpoint",
@@ -98,6 +101,75 @@ class _ChunkResult(BaseModel):
     validation_error: str | None = None
 
 
+def historical_capture_version(
+    conn: sqlite3.Connection, exchange: SupplementExchange, source_sha256: str
+) -> str | None:
+    """Recognize exact old producing artifacts; never accept a caller legacy flag.
+
+    This authorizes raw evidence rehydration only, not current extraction reuse or
+    financial admission. The artifact owner verifies the complete stored body.
+    """
+    versions = {
+        "ir-supplement-native-continuation-v3-semantic-repair",
+        "ir-supplement-native-continuation-v4-native-spans",
+        "ir-supplement-native-continuation-v5-literal-endpoint-repair",
+        "ir-supplement-native-continuation-v6-native-hyphen-wrap",
+    }
+    db_path = str(conn.execute("PRAGMA database_list").fetchone()[2])
+    if not db_path:
+        return None
+    rows = conn.execute(
+        "SELECT id FROM llm_artifacts WHERE llm_call_id=? AND purpose='kpi_summary_enumerate'",
+        (exchange.llm_call_id,),
+    ).fetchall()
+    matched: set[str] = set()
+    for row in rows:
+        artifact = read_artifact(int(row[0]), db_path=db_path)
+        if artifact is None or artifact.dirty or artifact.prompt_version not in versions:
+            continue
+        result = _ChunkResult.model_validate(artifact.content_json)
+        if (
+            result.status != "processed"
+            or result.exchange != exchange
+            or artifact.model != exchange.model
+        ):
+            continue
+        if len(artifact.source_doc_ids) != 1:
+            continue
+        doc_id = artifact.source_doc_ids[0]
+        source = conn.execute("SELECT sha256 FROM documents WHERE id=?", (doc_id,)).fetchone()
+        if (
+            source is None
+            or source[0] != source_sha256
+            or not artifact.scope.startswith(f"ir_supplement:{doc_id}:page:")
+        ):
+            continue
+        call = conn.execute(
+            "SELECT model,provider,transport,prompt_sha256,response_sha256,run_id,purpose,error,outcome "
+            "FROM llm_calls WHERE id=?",
+            (exchange.llm_call_id,),
+        ).fetchone()
+        expected = (
+            exchange.model,
+            exchange.provider,
+            exchange.transport,
+            exchange.prompt_sha256,
+            exchange.response_sha256,
+            exchange.run_id,
+            "kpi_summary_enumerate",
+            None,
+            "success",
+        )
+        if call is None or tuple(call) != expected:
+            raise ValueError("IR historical producing governed call metadata differs")
+        if hashlib.sha256(exchange.raw_response.encode()).hexdigest() != exchange.response_sha256:
+            raise ValueError("IR historical governed response bytes differ")
+        matched.add(artifact.prompt_version.removeprefix("ir-supplement-native-continuation-"))
+    if len(matched) > 1:
+        raise ValueError("IR historical producing capture version is ambiguous")
+    return next(iter(matched), None)
+
+
 @dataclass
 class SupplementCapture:
     """Plan native pages, resume exact responses, and fail closed on gaps."""
@@ -130,6 +202,8 @@ class SupplementCapture:
     structured_calls_reserved: int = field(default=0, init=False)
     chunks_processed: int = field(default=0, init=False)
     _pages: tuple[str, ...] = field(default=(), init=False)
+    _document_context: str = field(default="", init=False)
+    _context_pages: set[int] = field(default_factory=set[int], init=False)
 
     def capture(self, raw_bytes: bytes) -> list[tuple[int, list[dict[str, object]]]]:
         if (
@@ -147,24 +221,55 @@ class SupplementCapture:
             )
         self._existing_page_preflight(pages)
         self._pages = pages
+        # This packet supplies context, not a completeness or accounting verdict.
+        # Whole pages only: omitted pages remain explicit unknown context.
+        context_budget = min(32_000, self.max_input_chars // 2)
+        context_pages: list[dict[str, object]] = []
+        used = 0
+        self._context_pages = set()
+        for page, text in enumerate(pages, 1):
+            entry: dict[str, object] = {
+                "page": page,
+                "char_start": 0,
+                "char_end": len(text),
+                "text_sha256": hashlib.sha256(text.encode()).hexdigest(),
+                "text": text,
+            }
+            size = len(json.dumps(entry, ensure_ascii=False))
+            if used + size <= max(0, context_budget - 500):
+                context_pages.append(entry)
+                self._context_pages.add(page)
+                used += size
+        self._document_context = json.dumps(
+            {
+                "source_sha256": self.source_sha256,
+                "pages": context_pages,
+                "omitted_page_count": len(pages) - len(context_pages),
+                "coverage": "native context only; visual/table coverage and financial recall unknown",
+            },
+            ensure_ascii=False,
+        )
         planned: list[tuple[int, int, str]] = []
         for page, text in enumerate(pages, 1):
-            if len(text) <= self.max_input_chars:
+            if len(text) <= self.max_input_chars // 4 and len(text.splitlines()) <= 24:
                 planned.append((page, 0, text))
                 continue
             # Keep source lines intact. A line too large for a bounded section
             # needs another approved extraction path; never cut a numeric token.
-            capacity = self.max_input_chars // 2
+            capacity = self.max_input_chars // 4
             start = 0
             body = ""
+            line_count = 0
             for line in text.splitlines(keepends=True):
                 if len(line) > capacity:
                     raise ValueError(f"IR native source line exceeds section budget at page {page}")
-                if len(body) + len(line) > capacity:
+                if body and (len(body) + len(line) > capacity or line_count >= 24):
                     planned.append((page, start, body))
                     start += len(body)
                     body = ""
+                    line_count = 0
                 body += line
+                line_count += 1
             if body:
                 planned.append((page, start, body))
         # The structured owner can make a primary request plus one repair.
@@ -176,6 +281,9 @@ class SupplementCapture:
             )
         if self.conn.in_transaction:
             raise ValueError("IR continuation requires an owned transaction boundary")
+        # Validate every serialized section before any governed call.
+        for page, start, body in planned:
+            self._section_text(page, start, body)
         output: list[tuple[int, list[dict[str, object]]]] = []
         for page, start, body in planned:
             output.extend(self._section(page, start, body))
@@ -225,6 +333,38 @@ class SupplementCapture:
                 )
         self.native_assessment_id = str(assessment["assessment_id"])
 
+    def _section_text(self, page: int, start: int, body: str) -> str:
+        """Serialize the exact section and bounded native context for preflight/replay."""
+        source_page = self._pages[page - 1]
+        context_size = min(1200, self.max_input_chars // 16)
+        local_context = (
+            source_page[:context_size] + source_page[max(0, start - context_size) : start]
+        )
+        manifest = json.dumps(
+            {
+                "page": page,
+                "char_start": start,
+                "char_end": start + len(body),
+                "line_start": source_page[:start].count("\n") + 1,
+                "source_sha256": self.source_sha256,
+                "section_sha256": hashlib.sha256(body.encode()).hexdigest(),
+            },
+            sort_keys=True,
+        )
+        model_text = (
+            "CONTEXT ONLY — DOCUMENT CONTEXT (unreviewed native source):\n"
+            + self._document_context
+            + "\nCONTEXT ONLY (page header and preceding source text):\n"
+            + local_context
+            + "\nSOURCE SECTION MANIFEST: "
+            + manifest
+            + "\nEXTRACT ONLY FROM THIS SOURCE SECTION:\n"
+            + body
+        )
+        if len(model_text) > self.max_input_chars:
+            raise ValueError(f"IR section context exceeds input budget at page {page}")
+        return model_text
+
     def _section(
         self, page: int, start: int, body: str
     ) -> list[tuple[int, list[dict[str, object]]]]:
@@ -233,19 +373,7 @@ class SupplementCapture:
                 f"IR continuation chunk budget exhausted at page {page}, offset {start}"
             )
         self.chunks_processed += 1
-        source_page = self._pages[page - 1]
-        model_text = body
-        if start != 0 or body != source_page:
-            context_size = min(1200, self.max_input_chars // 8)
-            context = source_page[:context_size] + source_page[max(0, start - context_size) : start]
-            model_text = (
-                "CONTEXT ONLY (page header and preceding source text):\n"
-                + context
-                + "\nEXTRACT ONLY FROM THIS SOURCE SECTION:\n"
-                + body
-            )
-            if len(model_text) > self.max_input_chars:
-                raise ValueError(f"IR section context exceeds input budget at page {page}")
+        model_text = self._section_text(page, start, body)
         prompt = self.prompt(model_text)
         override_identity = self.override_identity()
         effective_prompt = self.effective_prompt(prompt)
@@ -265,7 +393,7 @@ class SupplementCapture:
             prompt,
             *[repair_supplement_prompt(prompt, error) for error in _SUPPLEMENT_REPAIR_FEEDBACK],
         ]
-        version = "ir-supplement-native-continuation-v6-native-hyphen-wrap"
+        version = "ir-supplement-native-continuation-v10-closed-numeric-boundaries"
         scope = f"ir_supplement:{self.document_id}:page:{page}:section:{start}:{len(body)}"
         expected_sha = compute_input_sha256(prompt_version=version, cache_inputs=inputs)
         artifact = read_current(
@@ -408,11 +536,66 @@ class SupplementCapture:
         ):
             raise ValueError("IR producing governed call metadata is missing or mismatched")
 
+    def require_context_witnesses(self, rows: list[dict[str, object]]) -> None:
+        """Check proposed evidence against supplied native pages, not admission."""
+        allowed_fields = {
+            "accounting_basis",
+            "consolidation_scope",
+            "dimensions",
+            "period_kind",
+            "reported_period_start",
+            "reported_period_end",
+            "guidance_horizon",
+            "source_definition",
+            "source_unit_scale",
+            "currency",
+            "period_role",
+        }
+        for row in rows:
+            witnesses = row.get("context_witnesses", [])
+            if not isinstance(witnesses, list):
+                raise ValueError("IR context witness is not supported by supplied native context")
+            witness_list = cast(list[object], witnesses)
+            if len(witness_list) > 8:
+                raise ValueError("IR context witness is not supported by supplied native context")
+            for witness in witness_list:
+                if not isinstance(witness, dict):
+                    raise ValueError(
+                        "IR context witness is not supported by supplied native context"
+                    )
+                item = cast(dict[str, object], witness)
+                if set(item) != {"page", "quote", "fields"}:
+                    raise ValueError(
+                        "IR context witness is not supported by supplied native context"
+                    )
+                page, quote, fields = item["page"], item["quote"], item["fields"]
+                if not isinstance(fields, list):
+                    raise ValueError(
+                        "IR context witness is not supported by supplied native context"
+                    )
+                field_list = cast(list[object], fields)
+                if (
+                    type(page) is not int
+                    or page not in self._context_pages
+                    or not isinstance(quote, str)
+                    or not 0 < len(quote) <= 512
+                    or not field_list
+                    or any(
+                        not isinstance(name, str) or name not in allowed_fields
+                        for name in field_list
+                    )
+                    or locate_char_span(quote, self._pages[page - 1], whitespace_only=True) is None
+                ):
+                    raise ValueError(
+                        "IR context witness is not supported by supplied native context"
+                    )
+
     def _validated(self, result: _ChunkResult, body: str, prompt: str) -> None:
         self._validated_attempts(result, prompt)
         exchange = result.exchange
         source_rows = self.validate_rows(parse_json_payload(exchange.raw_response, expect="array"))
         require_native_source_quotes(source_rows, body)
+        self.require_context_witnesses(source_rows)
         if result.status == "saturated":
             if result.rows or len(source_rows) < self.max_facts:
                 raise ValueError("IR saturated cache does not match its governed response")

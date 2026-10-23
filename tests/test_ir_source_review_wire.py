@@ -7,6 +7,7 @@ import sqlite3
 from collections.abc import Callable, Generator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -239,3 +240,88 @@ def test_identical_response_bodies_preserve_each_governed_exchange_and_replay(
     assert conn.execute("SELECT * FROM evidence_extraction_runs").fetchall() == clocks
     assert conn.execute("SELECT COUNT(*) FROM fact_cells_v2").fetchone() == (0,)
     assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone() == (0,)
+
+
+def test_historical_scaled_wire_rehydrates_only_from_exact_old_producing_artifact(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from compute.ir_supplement_capture import SupplementExchange
+    from llm_artifact_store import UpsertRequest, upsert
+    from tests import test_ir_supplement_continuation as continuation_fixtures
+
+    synthetic_exchange = cast(
+        Callable[..., SupplementExchange], getattr(continuation_fixtures, "_synthetic_exchange")
+    )
+
+    original_rows, _ = _capture_inputs()
+    raw = {
+        **original_rows[0][1][0],
+        "label": "Revenue",
+        "source_excerpt": "Revenue 60,801",
+        "source_value_text": "60,801",
+        "value": "60801",
+        "unit": "actual",
+        "currency": "USD",
+        "source_unit_scale": "millions",
+    }
+    exchange = synthetic_exchange(conn, "exact retained historical prompt", [raw])
+
+    def native_pages(raw: bytes) -> tuple[str, ...]:
+        return ("Revenue 60,801",)
+
+    monkeypatch.setattr("provenance.ir_reported_facts.project_pdf_page_texts", native_pages)
+    monkeypatch.setattr("compute.ir_supplement_capture.project_pdf_page_texts", native_pages)
+    # A caller cannot select legacy behavior; unbound bodies stay current/strict.
+    with pytest.raises(ValueError, match="source token and scale"):
+        _wire(conn, [(1, [raw])], [exchange])
+    conn.execute(
+        "INSERT INTO documents (ticker,source_type,doc_type,file_path,sha256,fetched_at,fetch_status,raw_bytes_size) VALUES ('TEST','ir_doc','ir_supplement','/synthetic/historical.pdf',?,'2026-10-23T00:00:00Z','ok',1)",
+        (sha(PDF_BYTES),),
+    )
+    doc_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    conn.commit()
+    artifact_id, _ = upsert(
+        UpsertRequest(
+            ticker="TEST",
+            purpose="kpi_summary_enumerate",
+            scope=f"ir_supplement:{doc_id}:page:1:section:0:14",
+            prompt_version="ir-supplement-native-continuation-v6-native-hyphen-wrap",
+            model=exchange.model,
+            llm_call_id=exchange.llm_call_id,
+            source_doc_ids=[doc_id],
+            cache_inputs=["retained historical input identity"],
+            content_json={
+                "status": "processed",
+                "rows": [raw],
+                "exchange": exchange.model_dump(mode="json"),
+                "attempts": [exchange.model_dump(mode="json")],
+            },
+        ),
+        conn=conn,
+    )
+    conn.commit()
+    assert artifact_id is not None
+    _wire(conn, [(1, [raw])], [exchange])
+    payload = json.loads(
+        conn.execute(
+            "SELECT text FROM evidence_nodes WHERE node_id LIKE 'ir-pdf-candidate:%'"
+        ).fetchone()[0]
+    )
+    assert payload["row"]["raw_row"] == raw
+    assert (
+        conn.execute(
+            "SELECT extractor_code_version FROM evidence_extraction_runs WHERE extractor_name='ir-supplement-native-continuation'"
+        ).fetchone()[0]
+        == "v6-native-hyphen-wrap"
+    )
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
+    # Whole-body integrity, not merely the fact/token, binds eligibility.
+    other = SupplementExchange.model_validate(
+        {
+            **exchange.model_dump(),
+            "raw_response": exchange.raw_response + " ",
+            "response_sha256": sha(exchange.raw_response + " "),
+        }
+    )
+    with pytest.raises(ValueError, match="source token and scale"):
+        _wire(conn, [(1, [raw])], [other])
