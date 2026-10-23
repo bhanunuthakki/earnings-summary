@@ -38,6 +38,30 @@
       "scope": "Prepared Say/Do section only (generated Markdown and other panel DB reads retained)",
       "score": 93,
       "status": "accepted; committed locally unchanged"
+    },
+    "L1-location-history": {
+      "scope": "Shared verified local-location history",
+      "score": 96,
+      "status": "accepted local source checkpoint; whole branch HOLD",
+      "review_receipt": ".tmp/shared-data-owners-independent-review.json",
+      "review_sha256": "b826a4f782317008f0be77e9c1dd7420e8146acd2f11a65bd39978355d51ebdd",
+      "local_commit_receipt": ".tmp/shared-data-owners-final/local-commit.json"
+    },
+    "V1-valuation-validation": {
+      "scope": "Shared valuation review and receipt commitments",
+      "score": 95,
+      "status": "accepted local source checkpoint; whole branch HOLD",
+      "review_receipt": ".tmp/shared-data-owners-independent-review.json",
+      "review_sha256": "b826a4f782317008f0be77e9c1dd7420e8146acd2f11a65bd39978355d51ebdd",
+      "local_commit_receipt": ".tmp/shared-data-owners-final/local-commit.json"
+    },
+    "B1-unused-history-badge": {
+      "scope": "Owner-approved unused decision-history badge retirement",
+      "score": 96,
+      "status": "accepted local source checkpoint; whole branch HOLD",
+      "review_receipt": ".tmp/shared-data-owners-independent-review.json",
+      "review_sha256": "b826a4f782317008f0be77e9c1dd7420e8146acd2f11a65bd39978355d51ebdd",
+      "local_commit_receipt": ".tmp/shared-data-owners-final/local-commit.json"
     }
   },
   "authority": {
@@ -821,7 +845,7 @@
     "transport": "claude_membership"
   },
   "static_count_clarification": "Old2012/1835 values are previous configured ceilings, not a paired prechange measurement of actual diagnostics/suppressions. Revised measured1826/1811 values tighten those ceilings.",
-  "status": "LOCAL_CHECKPOINTS_ACCEPTED; latest feature-retirement96; scoped deterministic checks PASS; original large-module-count baseline FAIL; wider roadmap open",
+  "status": "LOCAL_SHARED_DATA_OWNER_CUTS_ACCEPTED; scoped deterministic gates PASS; independent Sol advisory 95.67; original large-module-count FAIL and wider roadmap open",
   "third_independent_sol_proxy_review": {
     "binding_sha256": "53493b3675b5a59400c3527a8954914d8a50ea0ae9d09a819d27d854d8c897d0",
     "effort": "high",
@@ -3564,5 +3588,183 @@
     },
     "final_checks": ".tmp/feature-retirement-final/final-checks.json",
     "local_commit_receipt": ".tmp/feature-retirement-final/local-commit.json"
+  },
+  "shared_data_owners_checkpoint": {
+    "status": "ACCEPTED_LOCAL_SOURCE_CHECKPOINT",
+    "baseline_commit": "d5c068905e006b6159f57bf6c689f3b82a4be2ee",
+    "source_binding": ".tmp/shared-data-owners-final/freeze.json",
+    "source_binding_sha256": "d20bee3928da8259e86cf6c63bbff56ef7c8e04d0d61a68498fcc36aa7cc3b9d",
+    "counts": {
+      "production": {
+        "inserted": 133,
+        "deleted": 420,
+        "files": 9,
+        "net_removed": 287
+      },
+      "tests": {
+        "inserted": 102,
+        "deleted": 241,
+        "files": 3,
+        "net_removed": 139
+      },
+      "other": {
+        "inserted": 33,
+        "deleted": 4,
+        "files": 5,
+        "net_removed": -29
+      }
+    },
+    "production_functions_removed": 7,
+    "units": {
+      "L1-location-history": {
+        "change": "Three capture procedures use existing EvidenceLinkLedger.ensure_local_location, preserving fixed prefixes, NUL hash bytes, present replay clocks, revision history and transaction ownership.",
+        "proof": ".tmp/blob-location-consolidation/equivalence.json",
+        "paired_cases": 45,
+        "tests_passed": 125,
+        "seconds": 15.84,
+        "source_lines_removed": 78
+      },
+      "V1-valuation-validation": {
+        "change": "MELI and ONON share assumption-review and explicit committed receipt checks. Calculations, recipes, field populations and clocks remain. ONON retains its extra integrity term at its original short-circuit position.",
+        "proof": ".tmp/dcf-input-consolidation/proof.json",
+        "paired_behavior_assertions": 144,
+        "unchanged_owner_ast_checks": 42,
+        "tests_passed": 148,
+        "tests_skipped": 1,
+        "seconds": 93.64,
+        "skip": "Existing optional real-workbook engine case needs runtime paths; not executed.",
+        "source_lines_removed": 42
+      },
+      "B1-unused-history-badge": {
+        "owner_approval": "Retire the unused badge",
+        "change": "Remove unused standalone cohort/badge renderer, its dedicated tests and exact UI emitter registration. All four recorded shared decision/calibration owners byte-identical.",
+        "proof": ".tmp/shared-data-owners-final/badge-retirement.json",
+        "source_lines_removed": 167,
+        "retired_test_lines": 238,
+        "current_surface": "No current application caller; no current rendered task changed."
+      }
+    },
+    "tests": {
+      "retained_history_and_strict_oracle": "216passed,5optionalbenchskips,1obsolete registry-countfailure in combined run; all source/record owners stable.",
+      "corrected_registry": "14passed2.12s after all three exact counts updated and explicit retiredpathabsence.",
+      "receipts": [
+        ".tmp/shared-data-owners-final/affected-receipt.json",
+        ".tmp/shared-data-owners-final/design-registry-corrected-tests.txt"
+      ],
+      "corrections": [
+        ".tmp/shared-data-owners-final/badge-oracle-and-ceiling-update.json",
+        ".tmp/shared-data-owners-final/final-oracle-provenance-rebind.json",
+        ".tmp/shared-data-owners-final/governed-count-provenance-rebind.json"
+      ],
+      "limits": "No complete post-correction full-suite rerun; existing optional workbook and benchmark cases remain skipped."
+    },
+    "static": {
+      "status": "PASS",
+      "whole_retained_files": 2866,
+      "whole_pyright_diagnostics": 1825,
+      "whole_suppressions": 1804,
+      "changed_files": 124,
+      "changed_format_lint_strict_types_suppressions": "PASS",
+      "stricter_ceiling": "Only tests diagnostic ceiling1386to1385. No other diagnostic/suppression ceiling increased.",
+      "whole_receipt": ".tmp/streamlining-static-checkpoint15.json",
+      "current_changed_receipt": ".tmp/shared-data-owners-final/changed-checks-corrected.txt",
+      "temporary_node_heap_mib": 8192,
+      "source_unchanged": true,
+      "remaining_owned_processes": [],
+      "qualification_note": "Last expected-integer registry count changed during the whole check. Fresh typing of all124current changed files, including that file, passes; all other source unchanged."
+    },
+    "dependency_graph": {
+      "status": "PASS",
+      "collection": "COMPLETE",
+      "source_sha256": "dc17b2ae07ee10ee8e7f333845a02371b2d68232a735403436cb8ca081f57b1c",
+      "unknown": 161,
+      "production_unknown": 0,
+      "production_unresolved": 0,
+      "diagnostics": 0,
+      "receipt": ".tmp/shared-data-owners-final/reachability.json",
+      "unchanged_reviewed_sites": 202,
+      "unchanged_internal_target_files": 86,
+      "preservation": "Only global source hash refreshed; no scanner, source-list, test oracle, coordinate, classification, target or exemption changed."
+    },
+    "architecture": {
+      "architecture": {
+        "schema_version": "architecture-ratchet-v1",
+        "status": "FAIL",
+        "scoped_commit": "d5c068905e006b6159f57bf6c689f3b82a4be2ee",
+        "baseline_commit": "36735db5c1ff065cc85975d0de1727b27c7afed3",
+        "current_source_sha256": "c256f0c86d800a396a2d58fa2c7fd0902924c9f3aea10c948c3a68bde6ab0485",
+        "baseline_source_sha256": "5bfd7adc255f2eb0f3f43eba8ca0b95e2554d8db50398ad75a0eefc0cf1ff8f1",
+        "regressions": [
+          "modules_over_2000_loc increased from 24 to 25"
+        ],
+        "scanner_mismatch": false
+      },
+      "duplicates": {
+        "schema_version": "duplicate-ratchet-v1",
+        "status": "PASS",
+        "scoped_commit": "d5c068905e006b6159f57bf6c689f3b82a4be2ee",
+        "baseline_commit": "82bf9753dd9218761c9b44a8f47c2d744a31d82d",
+        "scanner_mismatch": false,
+        "regressions": [],
+        "exact_totals": {
+          "groups": 3,
+          "participating_functions": 6,
+          "duplicated_loc": 110
+        },
+        "near_miss_totals": {
+          "groups": 142,
+          "participating_functions": 231,
+          "duplicated_loc": 9534
+        }
+      },
+      "metric_changes": {
+        "executable_modules": {
+          "before": 1469,
+          "after": 1464
+        },
+        "total_noncomment_loc": {
+          "before": 562282,
+          "after": 561594
+        },
+        "modules_over_2000_loc": {
+          "before": 24,
+          "after": 25
+        }
+      },
+      "baseline_disposition": "Original active baseline restored. It controls structural acceptance; no transition exception is approved."
+    },
+    "contracts": {
+      "design_sync": "PASS",
+      "directive_manifest": "PASS",
+      "folder_contract": "PASS",
+      "architecture_boundaries": "PASS",
+      "reconstruction_subsystems_passed": 11
+    },
+    "scope": "Local source only. No schema, durable identity, history row, receipt version, source collection, forecast, model/prompt, external send or live-state change. No push/merge/deployment/scheduler activation. NU/MELI native and whole-application semantic qualification remain open.",
+    "failed_evidence_retained": [
+      ".tmp/shared-data-owners-final/affected.log",
+      ".tmp/shared-data-owners-final/design-registry-final-tests.txt",
+      ".tmp/streamlining-static-checkpoint14.json"
+    ],
+    "storage": "Retain bounded source/proof closures under existing .tmp owner until wider integration/qualification and recovery questions are closed. Synthetic tests clean their own databases; no production state copied.",
+    "independent_review": {
+      "receipt": ".tmp/shared-data-owners-independent-review.json",
+      "sha256": "b826a4f782317008f0be77e9c1dd7420e8146acd2f11a65bd39978355d51ebdd",
+      "scope": "L1, V1, B1 local source only",
+      "overall": {
+        "verdict": "ACCEPT",
+        "score": 95.67,
+        "aggregation": "Equal-weight mean of the three unit totals; each unit exceeds 90.",
+        "open_in_scope_blockers": 0
+      },
+      "unit_scores": {
+        "L1": 96,
+        "V1": 95,
+        "B1": 96
+      },
+      "qualification": "User-authorized independent GPT-6.1 Sol advisory proxy; no purpose-qualified frontier-seat claim",
+      "broader_branch": "HOLD; original architecture failure and wider qualification unwaived"
+    },
+    "local_commit_receipt": ".tmp/shared-data-owners-final/local-commit.json"
   }
 }

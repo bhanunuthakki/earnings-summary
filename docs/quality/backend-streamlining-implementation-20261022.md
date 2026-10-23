@@ -1,6 +1,6 @@
 # Backend streamlining: implementation checkpoints
 
-Status: **latest exercise and Telegram coaching checkpoint accepted by independent Sol proxy: 96/100**.
+Status: **shared data-owner consolidation accepted locally at 95.67/100; broader release HOLD**.
 Production source is below the original baseline. One large-module-count gate still fails.
 Started 2026-10-22; revised 2026-10-23 Pacific. Base: `c978523d`.
 Branch: `codex/research-procedure-cleanup`. R1 corrections are at `3065638a`,
@@ -531,6 +531,62 @@ The coach task source changes its Description only. All other XML fields match.
 The installed task and canonical host were not inspected or changed. Evidence is
 under `.tmp/feature-retirement-final/`, `.tmp/exercise-retirement/` and
 `.tmp/coach-telegram-retirement/`. Local integration is separate from deployment.
+
+## Shared data owners and unused badge — 2026-10-23
+
+Three further cuts remove **287 physical production lines**, **seven functions**,
+and **139 net test lines**. Scoped deterministic checks pass. Independent Sol
+advisory review accepts L1 at **96**, V1 at **95**, B1 at **96**, and the combined
+scope at **95.67/100**, with no open scoped blockers. This is the owner-authorized
+proxy, without a purpose-qualified frontier-seat claim. No schema, receipt version,
+forecast, numerical output or history changes.
+
+- IR, SEC native and CompanyFacts capture use one existing location-history writer.
+  Fixed identities, hash bytes, present-location replay clocks, revision history
+  and caller-owned transactions remain. **125 tests pass**, including **45 exact
+  before/current cases** covering every table, result/error and transaction state.
+  This removes 78 source lines and two functions; it does not claim faster SQL.
+- MELI and ONON use shared assumption-review and committed receipt checks. Their
+  calculations, drivers, recipes and source rules remain. **148 tests pass**, with
+  one existing optional workbook-runtime case skipped. The proof includes **144
+  paired behavior assertions** and **42 unchanged-owner AST checks**. Review caught
+  and corrected ONON's source-integrity check order before acceptance. One explicit
+  argument preserves that existing difference; MELI's field contract does not grow.
+  Fresh raw-document verification clocks can advance as before. This removes 42 lines.
+- The owner approved retiring the unused standalone decision-history badge. Remove
+  its 166-line module, 238-line dedicated test and exact UI emitter registration.
+  Its only caller was that test. Decision records, outcome scoring, shared
+  calibration, historical grading and direct reviews remain. No current task UI changes.
+
+The retained-history and strict dependency/helper run passed 216 tests, skipped five
+optional benchmark cases and failed one obsolete registry-count assertion. The
+registry has exactly one fewer registered, governed and manifest entry. All other
+assertions remain, with named retired-path absence added. The first correction
+missed one related count; its failure is retained. The final **14 registry tests
+pass**. This is an intended retirement-oracle update, not a whole-suite pass.
+
+All **124 current retained changed files** pass format, lint, strict typing and
+suppression checks. Whole-tree checking covers **2,866 files**, with **1,825 type
+diagnostics** and **1,804 suppressions**. The tests diagnostic ceiling is one lower;
+no quality limit increases. The final integer-only oracle correction is also covered
+by fresh current-file and changed-set typing. Supervised child process sets are empty.
+The normal unchanged graph is COMPLETE/PASS, with zero unknown/unresolved production
+edges or diagnostics. All 202 reviewed sites and 86 internal targets retain their
+bytes; only the global source provenance hash changes.
+
+The original comparison now measures **561,594 noncomment source lines**, **688 fewer**
+than 562,282. Executable modules are 1,464 versus 1,469. Exact duplicate groups fall
+from **four to three** (158 to 110 duplicated lines). Near-duplicate groups fall
+from **145 to 142** (9,753 to 9,534 lines). Duplication passes its unchanged baseline.
+The oversized-module count stays **25 versus 24**, so that original gate remains open.
+No baseline change or file split is used to close it.
+
+Proofs are under `.tmp/shared-data-owners-final/`, `.tmp/blob-location-consolidation/`
+and `.tmp/dcf-input-consolidation/`. The review is
+`.tmp/shared-data-owners-independent-review.json`; the local commit is recorded in
+`.tmp/shared-data-owners-final/local-commit.json`. Design sync, directive/folder/boundary contracts
+and all 11 reconstruction subsystems pass. This is local source work, without new
+collection, provider calls, database migration, deployment or live activation.
 
 ## Gates that remain open
 

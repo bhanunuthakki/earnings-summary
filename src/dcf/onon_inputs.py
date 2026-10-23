@@ -21,6 +21,8 @@ from dcf.input_evidence import (
     ModelInputRequest,
     SourceReadContext,
     canonical_digest,
+    verify_assumption_review,
+    verify_model_input_commitments,
     verify_model_inputs,
 )
 from dcf.onon_model import ASSUMPTION_KEYS, REPORTED_DRIVER_KEYS, replay, validate_inputs
@@ -298,38 +300,6 @@ def review_drivers(
     }
 
 
-def _verify_review(
-    receipt: ModelInputReceipt,
-    actuals: Mapping[str, float],
-    inputs: Mapping[str, float],
-    as_of: datetime,
-) -> None:
-    review = receipt.request.assumption_review
-    if review is None:
-        raise InputEvidenceError("assumption_review_unverified")
-    if (
-        review.reviewed_at > as_of
-        or review.reviewed_at < max(item.recorded_at for item in receipt.inputs)
-        or review.effective_inputs_sha256 != canonical_digest(dict(inputs))
-        or review.actuals_sha256 != canonical_digest(dict(actuals))
-    ):
-        raise InputEvidenceError("assumption_review_clock_or_basis_mismatch")
-    drivers = review_drivers(actuals, inputs)
-    if set(review.drivers) != set(drivers):
-        raise InputEvidenceError("assumption_review_population_mismatch")
-    for key, (observed, forecast) in drivers.items():
-        item = review.drivers[key]
-        if not all(
-            math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-9)
-            for a, b in (
-                (item.observed, observed),
-                (item.forecast, forecast),
-                (item.variance, forecast - observed),
-            )
-        ):
-            raise InputEvidenceError(f"assumption_review_variance_mismatch:{key}")
-
-
 def prepare_onon_inputs(
     conn: sqlite3.Connection,
     request: ModelInputRequest,
@@ -379,7 +349,7 @@ def prepare_onon_inputs(
             or assumption.recorded_at > proof.verified_at
         ):
             raise InputEvidenceError(f"onon_assumption_source_clock_invalid:{key}")
-    _verify_review(proof, actuals, numeric, as_of)
+    verify_assumption_review(proof, actuals, numeric, as_of, review_drivers)
     return numeric, proof.model_copy(
         update={
             "effective_inputs_sha256": canonical_digest(numeric),
@@ -417,37 +387,7 @@ def verify_onon_inputs(
         or receipt.effective_inputs_sha256 != verified.effective_inputs_sha256
     ):
         raise InputEvidenceError("effective_input_digest_mismatch")
-    if (
-        receipt.required_keys != verified.required_keys
-        or receipt.inputs != verified.inputs
-        or receipt.snapshot_member_sha256 != verified.snapshot_member_sha256
-        or receipt.inventory_snapshot_ids != verified.inventory_snapshot_ids
-        or receipt.calculations != verified.calculations
-        or receipt.actuals_sha256 != verified.actuals_sha256
-        or receipt.model_output_sha256 != verified.model_output_sha256
-        or receipt.source_integrity != verified.source_integrity
-        or tuple(
-            (
-                item.document_version_id,
-                item.blob_sha256,
-                item.byte_size,
-                item.reader_policy,
-                item.storage_uri_sha256,
-            )
-            for item in receipt.raw_documents
-        )
-        != tuple(
-            (
-                item.document_version_id,
-                item.blob_sha256,
-                item.byte_size,
-                item.reader_policy,
-                item.storage_uri_sha256,
-            )
-            for item in verified.raw_documents
-        )
-    ):
-        raise InputEvidenceError("model_input_receipt_mismatch")
+    verify_model_input_commitments(receipt, verified, check_source_integrity=True)
     return verified
 
 

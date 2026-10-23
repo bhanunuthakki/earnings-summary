@@ -631,7 +631,6 @@ _BHA_89_TO_92_ADDITIONAL_EMITTERS = (
     "execution/comments_server_financial_evidence_routes.py",
     "pipeline/annual_letter_panel.py",
     "pipeline/analysis_styles.py",
-    "pipeline/calibration_receipt.py",
     "pipeline/console_scaffold.py",
     "pipeline/ir_approval_panel.py",
     "pipeline/operations_styles.py",

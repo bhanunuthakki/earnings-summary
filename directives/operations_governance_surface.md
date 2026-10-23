@@ -2184,3 +2184,32 @@ Selected legacy PRE baselines do not acquire verified binding. Scheduled generat
 and financial state remain unchanged. There are no provider calls or new routes.
 Evidence: `tests/test_report_contract.py`, `tests/test_report_preview.py`, existing
 artifact-index and PRE/POST regressions, and isolated rendered preview receipts.
+
+
+### Shared location history and valuation verification — 2026-10-23
+
+Disposition: **no Operations surface change**. IR capture, SEC native filing
+capture and SEC CompanyFacts use `EvidenceLinkLedger.ensure_local_location` for
+their existing verified local-location history. Each keeps its existing identity
+prefix, NUL-separated digest, replay no-op, verification clocks, revision chain
+and caller-owned transaction. This adds no capture, download, admission, schema,
+task, automatic retry or live-write authority.
+
+MELI and ONON input preparation use shared assumption-review and committed receipt
+checks in `dcf.input_evidence`. Issuer calculations, drivers, recipes, source
+checks, errors and field populations remain. The shared check has one explicit
+argument for ONON's existing additional source-integrity comparison, in its
+original position before raw-document reads. MELI retains its existing exclusion.
+Fresh physical-reader clocks can advance; all previously committed raw-document
+identity fields stay compared. No model, prompt, forecast, financial fact,
+scenario, allocation permission or stored receipt version changes.
+
+The owner approved retirement of the unused standalone decision-history badge.
+Its module, dedicated tests and exact design-emitter entry are removed. Current
+application routes had no caller. Decision records, outcome scoring, shared
+calibration analysis, historical grades and direct reviews remain.
+
+Evidence belongs to the implementation checkpoint: synthetic migrated fixtures,
+full before/current row and result comparisons, caller rollback, revision history,
+review/replay mutations and retained consumer tests. These source changes do not
+activate a live service, collect data or establish native financial acceptance.

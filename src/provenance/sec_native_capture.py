@@ -33,7 +33,6 @@ from provenance.evidence_ledger import (
     SourceObservation,
 )
 from provenance.evidence_links import (
-    BlobLocationObservation,
     DocumentObservationLink,
     EvidenceLinkLedger,
 )
@@ -936,9 +935,8 @@ def _persist_fetched(
     )
     created, replayed = _account(is_new, created, replayed)
     link_ledger = EvidenceLinkLedger(conn)
-    location_created = _ensure_location(
-        conn,
-        link_ledger,
+    location_created = link_ledger.ensure_local_location(
+        identity_prefix="sec-native-location",
         digest=digest,
         storage_uri=storage_uri,
         byte_size=_required_entry_size(entry),
@@ -1067,43 +1065,6 @@ def _document_version(
     )
     result = ledger.persist(document)
     return document.document_version_id, result.created
-
-
-def _ensure_location(
-    conn: sqlite3.Connection,
-    ledger: EvidenceLinkLedger,
-    *,
-    digest: str,
-    storage_uri: str,
-    byte_size: int,
-    verified_at: datetime,
-) -> bool:
-    current = conn.execute(
-        "SELECT location_observation_id, availability_state, location_sequence "
-        "FROM v_evidence_blob_locations_current WHERE blob_sha256 = ? AND storage_uri = ?",
-        (digest, storage_uri),
-    ).fetchone()
-    if current is not None and str(current[1]) == "present":
-        return False
-    sequence = 1 if current is None else int(current[2]) + 1
-    supersedes = None if current is None else str(current[0])
-    identity = _stable_digest(digest, storage_uri, str(sequence), "present")
-    return ledger.persist_location(
-        BlobLocationObservation(
-            location_observation_id=f"sec-native-location:{identity}",
-            idempotency_key=f"sec-native-location:{identity}",
-            blob_sha256=digest,
-            storage_uri=storage_uri,
-            location_kind="local",
-            availability_state="present",
-            location_sequence=sequence,
-            verified_at=verified_at,
-            verified_byte_size=byte_size,
-            verified_sha256=digest,
-            supersedes_location_observation_id=supersedes,
-            recorded_at=verified_at,
-        )
-    ).created
 
 
 def _persist_coverage(
