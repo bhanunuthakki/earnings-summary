@@ -238,9 +238,9 @@ def test_actual_head_is_supported() -> None:
             )
             for line in lines
         ]
-    # Retain the existing test seams and managed children after sandbox retirement.
-    # No production gap is admitted.
-    assert len(graph.unknown_edges) == 161
+    # SEC creator retirement removes only its three test-only process edges.
+    assert not any(e.source == "tests/test_sec_delta_planner.py" for e in graph.unknown_edges)
+    assert len(graph.unknown_edges) == 158
     assert [
         edge for edge in graph.unknown_edges if edge.source == "tests/test_db_writer_gate.py"
     ] == [

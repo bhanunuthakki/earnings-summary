@@ -39,11 +39,12 @@ def test_on_demand_disclosure_scans_have_no_scheduler_surface() -> None:
     assert all(not (ROOT / path).exists() for path in retired_13f_surface)
 
 
-def test_sec_delta_prototype_is_implemented_but_not_scheduled() -> None:
+def test_sec_delta_preserves_saved_plan_readers_without_creation_or_schedule() -> None:
     manifest = json.loads((ROOT / "cron" / "task_manifest.json").read_text(encoding="utf-8"))
     assert "sec_delta" not in json.dumps(manifest).lower()
     assert (ROOT / "src" / "pipeline" / "sec_delta_planner.py").is_file()
     assert (ROOT / "src" / "pipeline" / "sec_delta_admission.py").is_file()
+    assert not (ROOT / "execution" / "plan_sec_delta_refresh.py").exists()
 
 
 def test_retired_podcast_has_no_executable_or_eval_surface() -> None:

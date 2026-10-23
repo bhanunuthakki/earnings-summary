@@ -101,3 +101,14 @@ The initial duplicate scanner found six exact groups and 116 optimistic copied b
 The initial local reports remain under the original checkout's `.tmp/code-relevance-2026-10-03/`, `.tmp/cleanup-assessment-2026-10-03/` and `.tmp/migration-bloat-assessment-2026-10-03/`. Their census scripts, file hashes and dated subject establish the measured populations. They are local investigation artifacts, not application sources of truth or production usage receipts.
 
 Current replacement tests, design lifecycle inventory, database-target regressions and root-run logs establish the bounded source outcomes above. Final commit, independent Judge verdict, complete gates, push and merge belong in the release audit. Live reader/tracker activation, historical-data retirement, backup conversion and deployment remain separate governed actions. This record grants no new authority for them.
+
+## SEC plan creation retirement — 2026-10-23 addendum
+
+The owner approved retiring new experimental SEC refresh-plan creation while
+preserving saved plans. The earlier unscheduled-prototype row records the
+2026-10-03 state. The current scope removes the manual creator and generator;
+it retains receipt models, exact seal rules and native-inventory admission at
+their existing import paths. Existing old-format, schema, policy and snapshot
+refusals remain. Standard SEC acquisition is separate. No saved artifact,
+production state or installed task is changed. The current capability disposition
+is in `directives/operations_governance_surface.md`.

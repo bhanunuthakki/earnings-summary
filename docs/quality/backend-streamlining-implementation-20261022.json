@@ -78,6 +78,14 @@
       "review_receipt": ".tmp/lifecycle-and-macro-independent-review.json",
       "review_sha256": "4b73fb04f667f65d7805799d5f47c0b549c738d4bb1bfa48d0ea9cf18ddedea0",
       "local_commit_receipt": ".tmp/lifecycle-and-macro-final/local-commit.json"
+    },
+    "SEC1": {
+      "scope": "Retire new experimental SEC plan creation; keep saved-plan schemas, seals and current admission",
+      "score": 97,
+      "status": "acceptedlocal; broaderHOLD",
+      "review_receipt": ".tmp/sec-plan-creation-independent-review.json",
+      "review_sha256": "35bb7776d36760f1f460ec61d16a9042d8d3b9ab586c4e150d869c44340e88da",
+      "local_commit_receipt": ".tmp/sec-plan-creation-final/local-commit.json"
     }
   },
   "authority": {
@@ -861,7 +869,7 @@
     "transport": "claude_membership"
   },
   "static_count_clarification": "Old2012/1835 values are previous configured ceilings, not a paired prechange measurement of actual diagnostics/suppressions. Revised measured1826/1811 values tighten those ceilings.",
-  "status": "LOCAL_UNUSED_PRUNER_AND_MACRO_SCHEMA_CUT_ACCEPTED; Sol advisory96; original architecture FAIL and wider roadmap open",
+  "status": "LOCAL_SEC_PLAN_CREATOR_RETIREMENT_ACCEPTED; Sol advisory97; original architecture FAIL and wider roadmap open",
   "third_independent_sol_proxy_review": {
     "binding_sha256": "53493b3675b5a59400c3527a8954914d8a50ea0ae9d09a819d27d854d8c897d0",
     "effort": "high",
@@ -3810,5 +3818,32 @@
     "reduction_from_original": 877,
     "broader_branch": "HOLD; oversized25vs24",
     "next_approved": "Retire SEC plan creation; preserve current saved-plan verification"
+  },
+  "sec_plan_creator_checkpoint": {
+    "status": "ACCEPTED_LOCAL_SOURCE_CHECKPOINT",
+    "approval": "Retire new plan creation; preserve saved plans",
+    "freeze": ".tmp/sec-plan-creation-final/freeze.json",
+    "freeze_sha256": "59c3f35bfb365f167137b1699e59dd94f151d0a1c47bf7fcb4555997eed10ea7",
+    "source_lines_removed": 822,
+    "test_lines_removed": 308,
+    "retained_models": 9,
+    "old_artifact_checks": 50,
+    "independent_review": {
+      "path": ".tmp/sec-plan-creation-independent-review.json",
+      "sha256": "35bb7776d36760f1f460ec61d16a9042d8d3b9ab586c4e150d869c44340e88da",
+      "unit_and_overall_score": 97,
+      "verdict": "ACCEPT",
+      "qualification": "User-selected independent GPT-6.1 Sol advisory proxy; no formal purpose-qualified frontier claim"
+    },
+    "commit_receipt": ".tmp/sec-plan-creation-final/local-commit.json",
+    "next_decision_pending": "Retire dormant metric-to-DCF mapping/resolution path while retaining unit conversion, bounds, normal DCF editing and no research-screen writes; owner answer pending.",
+    "proof": ".tmp/sec-plan-creation-final/checkpoint-data.json",
+    "tests": "33focusedpass;50preservationchecks;185retainedpass5optionalbenchskips1obsoletecountfailure;1correctedoraclepass",
+    "current_changed": "129filesclean",
+    "whole_static": "2863files1825diagnostics1803suppressions; composedcurrentoracleproof",
+    "graph": "COMPLETE/PASS158test-onlyunknown0productiongaps0diagnostics",
+    "source_noncomment_lines": 560637,
+    "reduction_from_original": 1645,
+    "broader_branch": "HOLD25oversizedmodulesversus24; full/nativequalificationopen"
   }
 }

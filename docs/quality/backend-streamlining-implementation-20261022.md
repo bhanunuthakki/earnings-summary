@@ -1,6 +1,6 @@
 # Backend streamlining: implementation checkpoints
 
-Status: **unused pruner and macro-schema cuts accepted locally at 96/100; broader release HOLD**.
+Status: **SEC plan-creator retirement accepted locally at 97/100; broader release HOLD**.
 Production source is below the original baseline. One large-module-count gate still fails.
 Started 2026-10-22; revised 2026-10-23 Pacific. Base: `c978523d`.
 Branch: `codex/research-procedure-cleanup`. R1 corrections are at `3065638a`,
@@ -615,6 +615,42 @@ Proof: `.tmp/lifecycle-and-macro-final/checkpoint-data.json` and
 `.tmp/lifecycle-and-macro-final/local-commit.json`. No live activation or full-matrix
 rerun is claimed. The owner next approved retiring new SEC plan creation while
 keeping saved-plan parsing, seals and existing admission rules. That is a separate phase.
+
+## SEC plan creator retirement — 2026-10-23
+
+The owner approved stopping new experimental SEC refresh-plan creation while
+preserving saved plans. The creator CLI, planning queries, selection procedures
+and writer are removed. This cuts **822 production lines** and **308 test lines**.
+All nine saved-plan models, fields, validators, seals, supported-revision rules
+and import paths remain. Admission source and standard SEC acquisition owners
+are byte-identical. Old plans gain no new admissibility; saved artifacts are untouched.
+
+Independent Sol advisory review accepts SEC1 at **97/100**, without scoped blockers.
+The focused suites pass 33 cases. Fifty preservation checks compare old creator
+plan/terminal bytes, serialization, hashes, schema ASTs and refusal behavior.
+Creator-only tests retire. All admission success/refusal scenarios remain. The
+retained seven-suite run passed 185 cases, skipped five optional bench checks and
+failed one obsolete exact inventory count. Only the three removed creator-test
+process edges disappeared: 161 becomes 158, with explicit named absence. All other
+assertions remain. The corrected actual-head check passes. One retirement-prose
+reference was also corrected; the scanner and edge exemptions stay unchanged.
+
+All 129 changed files pass current format/lint/strict/suppression checks. Whole
+static checking passes for 2,863 files: 1,825 diagnostics, 1,803 suppressions. The
+execution suppression ceiling tightens by one. The whole check predates the final
+test-only count/prose correction; current changed-file typing and unchanged
+production source supply the composed final proof. The current normal graph is
+COMPLETE/PASS with zero production gaps or diagnostics; all 3,685 input hashes
+match. Contract checks pass. Source measures **560,637 noncomment lines**, **1,645
+below** the original baseline. Duplication passes; oversized modules remain
+**25 versus 24, FAIL**. No baseline exception or full-suite rerun is claimed.
+
+Proof: `.tmp/sec-plan-creation-final/checkpoint-data.json` and
+`.tmp/sec-plan-creation-independent-review.json`. The local commit receipt is
+`.tmp/sec-plan-creation-final/local-commit.json`. No collection, source admission,
+provider call, live-state operation, push, merge or deployment occurred. The next
+owner question concerns the dormant metric-to-DCF mapping experiment; its unit
+conversion, bounds and normal model editing would remain. No removal is approved yet.
 
 ## Gates that remain open
 

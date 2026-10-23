@@ -178,7 +178,6 @@
     "execution/migrate_transcript_local_paths.py",
     "execution/performance_pf1_smoke.py",
     "execution/plan_embedding_cutover.py",
-    "execution/plan_sec_delta_refresh.py",
     "execution/populate_canonical_resolution.py",
     "execution/populate_metric_ontology.py",
     "execution/populate_retrieval_runtime.py",

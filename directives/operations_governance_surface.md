@@ -2231,3 +2231,21 @@ suite uses the existing migrated-schema fixture instead of its private SQL schem
 Its missing-database/table cases remain explicit. The two acquisition suites keep
 their existing setup; no private-function test adapters or suppression exceptions
 are added. Production macro behavior and provider policy do not change.
+
+## SEC refresh-plan creation retirement — 2026-10-23
+
+The owner approved retiring new experimental SEC refresh-plan creation. Remove
+the `plan_sec_delta_refresh` creator CLI and its request, planning and
+writer procedures. This removes a manual development interface; no scheduler
+definition or installed task changes. Standard CompanyFacts, native filing
+inventory, package capture and filing-text acquisition keep their existing owners.
+
+Saved-plan and terminal-receipt models, nested types, serialization, seals and
+supported-revision checks remain at `pipeline.sec_delta_planner`. The existing
+`sec_delta_admission.py` source stays unchanged. Parsing and seal verification
+do not establish current admission. Existing version, schema, policy, issuer,
+roster, inventory and exact-snapshot refusals still apply. No replacement creator,
+collection permission, fallback, verifier CLI or new stored representation is added.
+No saved plan, terminal receipt, source document, historical row or backup is
+rewritten or deleted. Creator-only tests retire; retained artifact and admission
+contracts keep their tests and bounded synthetic fixtures.

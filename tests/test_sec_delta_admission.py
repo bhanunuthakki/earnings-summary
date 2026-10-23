@@ -5,8 +5,8 @@ import json
 import os
 import sqlite3
 import time
-from datetime import date
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from pydantic import ValidationError
@@ -19,11 +19,7 @@ from pipeline.sec_delta_admission import (
     SecDeltaNativeInventoryAuthorization,
     admit_native_inventory_task,
 )
-from pipeline.sec_delta_planner import (
-    EvaluationAuthorization,
-    SecDeltaPlannerRequest,
-    build_sec_delta_plan,
-)
+from tests.test_sec_delta_planner import saved_plan
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -82,15 +78,11 @@ def _write_plan(
     root: Path,
     db: Path,
     *,
-    evaluation_request: EvaluationAuthorization | None = None,
+    ticker: str = "RBRK",
+    role: Literal["portfolio", "evaluation", "watchlist"] = "portfolio",
+    owner_request_id: str | None = None,
 ) -> tuple[Path, bytes, str]:
-    plan = build_sec_delta_plan(
-        SecDeltaPlannerRequest(
-            database_path=db,
-            as_of=date(2026, 8, 12),
-            evaluation_requests=(() if evaluation_request is None else (evaluation_request,)),
-        )
-    )
+    plan = saved_plan(db, ticker=ticker, role=role, owner_request_id=owner_request_id)
     task = next(
         task
         for ticker_plan in plan.ticker_plans
@@ -137,7 +129,7 @@ def test_admits_one_ready_portfolio_native_inventory_task(tmp_path: Path) -> Non
     assert result.inventory_key == "sec-cik-0001943896:sec-submissions"
     assert result.next_inventory_revision == 1
     assert result.plan_sha256 == _sha256_bytes(raw_plan)
-    assert result.source_policy_version == planner.POLICY_VERSION
+    assert result.source_policy_version == admission.POLICY_VERSION
     assert result.database_total_changes == 0
     assert len(result.database_storage_identity.entries) == 1
     assert result.computed_authorization_sha256() == result.authorization_sha256
@@ -147,10 +139,12 @@ def test_admits_one_ready_portfolio_native_inventory_task(tmp_path: Path) -> Non
 
 
 @pytest.mark.parametrize("role", ["evaluation", "watchlist"])
-def test_admits_automatic_research_roles_without_owner_request(tmp_path: Path, role: str) -> None:
+def test_admits_automatic_research_roles_without_owner_request(
+    tmp_path: Path, role: Literal["evaluation", "watchlist"]
+) -> None:
     db = tmp_path / "snapshot.db"
     _create_db(db, ticker="WIX", list_type=role)
-    plan_path, raw_plan, task_id = _write_plan(tmp_path, db)
+    plan_path, raw_plan, task_id = _write_plan(tmp_path, db, ticker="WIX", role=role)
 
     result = admit_native_inventory_task(_request(plan_path, raw_plan, db, task_id))
 
@@ -163,8 +157,9 @@ def test_admits_automatic_research_roles_without_owner_request(tmp_path: Path, r
 def test_admits_owner_requested_evaluation_only_with_bound_attestation(tmp_path: Path) -> None:
     db = tmp_path / "portfolio.db"
     _create_db(db, ticker="WIX", list_type="evaluation")
-    request = EvaluationAuthorization(ticker="WIX", owner_request_id="owner-req-wix-7")
-    plan_path, raw_plan, task_id = _write_plan(tmp_path, db, evaluation_request=request)
+    plan_path, raw_plan, task_id = _write_plan(
+        tmp_path, db, ticker="WIX", role="evaluation", owner_request_id="owner-req-wix-7"
+    )
 
     result = admit_native_inventory_task(_request(plan_path, raw_plan, db, task_id))
 
@@ -373,7 +368,7 @@ def test_authorization_self_seal_rejects_tampering(tmp_path: Path) -> None:
         SecDeltaNativeInventoryAuthorization.model_validate_json(json.dumps(payload))
 
 
-def test_old_plan_schema_requires_replanning_and_preserves_old_artifact(tmp_path: Path) -> None:
+def test_old_plan_schema_is_rejected_without_changing_old_artifact(tmp_path: Path) -> None:
     db = tmp_path / "snapshot.db"
     _create_db(db)
     plan_path, raw_plan, task_id = _write_plan(tmp_path, db)

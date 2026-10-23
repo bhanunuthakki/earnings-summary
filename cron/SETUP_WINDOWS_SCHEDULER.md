@@ -156,9 +156,11 @@ The failing-only rescan is the cheap mid-week companion to the Sunday full sweep
 ### Prototype scheduler status
 
 `task_manifest.json` remains the sole authority for installed operations; no
-parallel prototype scheduler exists. SEC-delta planning is
-**planned/dormant**: their implementation remains available for manual development
-and validation, but neither is registered. Podcast RSS/takeaway is **retired**:
+parallel prototype scheduler exists. New SEC-delta plan creation is **retired**
+by owner decision on 2026-10-23. Saved-plan models, seals and existing admission
+checks remain at their current import paths; old plans do not become newly
+admissible. Standard SEC acquisition remains independent. No SEC-delta task is
+registered. Podcast RSS/takeaway is **retired**:
 its executable, eval, model budget, and rendered Diet paths are removed, while
 historical migrations, logs, and persisted rows remain evidence. Re-activation is
 a separate product and operations decision, not a scheduler toggle.
