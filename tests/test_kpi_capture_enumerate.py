@@ -870,3 +870,75 @@ def test_boundary_wire_numeric_envelopes(quote: str, token: str, value: str, val
     else:
         with pytest.raises(ValueError, match="numeric token must occur"):
             getattr(kes, "_validated_enumerated_rows")([row], source_scope="direct_pdf_rich")
+
+
+def test_direct_prompt_examples_obey_numeric_wire_on_primary_and_repair() -> None:
+    """The model sees executable format examples, not contradictory scale advice."""
+    continuation = kes.ir_supplement_capture
+    primary = getattr(kes, "_enumerate_prompt")(
+        "TEST", "2026-06-30", "source", 200, source_scope="direct_pdf_rich"
+    )
+    repaired = continuation.repair_supplement_prompt(
+        primary, "direct IR PDF numeric token must occur in its exact source quote"
+    )
+    marker = "Synthetic format examples only; these are not issuer facts:\n"
+    for prompt in (primary, repaired):
+        examples = json.loads(prompt.split(marker)[-1].split("\nEnd synthetic format examples.")[0])
+        assert len(examples) == 3
+        for example in examples:
+            row = json.loads(_ENUMERATE_JSON)[0] | example
+            validated = getattr(kes, "_validated_enumerated_rows")(
+                [row], source_scope="direct_pdf_rich"
+            )
+            assert validated[0].value == Decimal(str(example["value"]))
+            broken = row | {"value": str(Decimal(str(row["value"])) / 1000)}
+            with pytest.raises(ValueError, match="conflicts with its source token and scale"):
+                getattr(kes, "_validated_enumerated_rows")([broken], source_scope="direct_pdf_rich")
+
+
+@pytest.mark.parametrize(
+    ("quote", "token", "value", "unit", "scale", "error"),
+    [
+        (
+            "Revenue $ 60,801 $ 47,516  28 %",
+            "28",
+            "28",
+            "percent",
+            "none",
+            "numeric token must occur",
+        ),
+        (
+            "Income from operations $ 18,775 $ 20,441  (8) %",
+            "(8)",
+            "-8",
+            "percent",
+            "none",
+            "numeric token must occur",
+        ),
+        (
+            "Revenue $ 60,801 $ 47,516  28 %",
+            "60,801",
+            "60801",
+            "actual",
+            "millions",
+            "conflicts with its source token and scale",
+        ),
+    ],
+)
+def test_retained_attempt5_rejections_remain_strict(
+    quote: str, token: str, value: str, unit: str, scale: str, error: str
+) -> None:
+    row = json.loads(_ENUMERATE_JSON)[0] | {
+        "source_excerpt": quote,
+        "source_value_text": token,
+        "value": value,
+        "unit": unit,
+        "source_unit_scale": scale,
+    }
+    validate = getattr(kes, "_validated_enumerated_rows")
+    with pytest.raises(ValueError, match=error):
+        validate([row], source_scope="direct_pdf_rich")
+    corrected = row | (
+        {"source_value_text": token + " %"} if unit == "percent" else {"value": "60801000000"}
+    )
+    assert validate([corrected], source_scope="direct_pdf_rich")

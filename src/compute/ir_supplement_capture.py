@@ -50,6 +50,16 @@ class SupplementExchange(BaseModel):
     run_id: str = Field(min_length=1)
 
 
+SUPPLEMENT_NUMERIC_FIELD_INSTRUCTIONS = """Keep these three fields separate:
+- value is the numeric full-unit figure. Remove currency/percent symbols only from value. Never divide value by source_unit_scale.
+- source_value_text is one complete verbatim numeric token from source_excerpt, before scale expansion. Preserve its sign, parentheses, percent suffix and all internal whitespace. Do not append words such as million or billion to this token. A leading currency symbol may be retained or omitted; never omit a sign or parentheses.
+- source_unit_scale records the source presentation scale; it does not change the full-unit value convention.
+Synthetic format examples only; these are not issuer facts:
+[{"source_excerpt":"Revenue $2,500 million","source_value_text":"2,500","value":2500000000,"unit":"actual","currency":"USD","source_unit_scale":"millions"},{"source_excerpt":"Change (7) %","source_value_text":"(7) %","value":-7,"unit":"percent","source_unit_scale":"none"},{"source_excerpt":"Users 3.25 billion","source_value_text":"3.25","value":3250000000,"unit":"count","source_unit_scale":"billions"}]
+End synthetic format examples.
+"""
+
+
 _SUPPLEMENT_REPAIR_FEEDBACK = {
     "": "The response failed JSON, row schema or source validation.",
     "direct IR PDF numeric token must occur in its exact source quote": "direct IR PDF numeric token must occur in its exact source quote",
@@ -70,7 +80,8 @@ def repair_supplement_prompt(prompt: str, error: str = "") -> str:
         "Each source_excerpt must occur verbatim in EXTRACT ONLY FROM THIS SOURCE SECTION "
         "(or the supplied page when no section marker exists). Do not repair spelling, "
         "spacing, punctuation or context. "
-        "source_value_text must be a literal substring of source_excerpt, not a formatted value. "
+        + SUPPLEMENT_NUMERIC_FIELD_INSTRUCTIONS
+        + "source_value_text must not be a formatted or scale-expanded value. "
         "For a range, do not add a currency or percent symbol absent from that endpoint. "
         "Synthetic examples: $10-20 permits literal tokens 10 and 20, not $20; "
         "3-5% permits literal tokens 3 and 5%, not 3%. "
@@ -393,7 +404,7 @@ class SupplementCapture:
             prompt,
             *[repair_supplement_prompt(prompt, error) for error in _SUPPLEMENT_REPAIR_FEEDBACK],
         ]
-        version = "ir-supplement-native-continuation-v10-closed-numeric-boundaries"
+        version = "ir-supplement-native-continuation-v11-explicit-numeric-fields"
         scope = f"ir_supplement:{self.document_id}:page:{page}:section:{start}:{len(body)}"
         expected_sha = compute_input_sha256(prompt_version=version, cache_inputs=inputs)
         artifact = read_current(

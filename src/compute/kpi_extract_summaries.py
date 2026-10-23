@@ -1310,6 +1310,11 @@ def _enumerate_prompt(
         if source_scope == "direct_pdf_rich"
         else ""
     )
+    numeric_field_rule = (
+        ir_supplement_capture.SUPPLEMENT_NUMERIC_FIELD_INSTRUCTIONS
+        if source_scope == "direct_pdf_rich"
+        else ""
+    )
     scope_rule = (
         "  - THIS-period reported actuals only. Skip guidance/outlook for a future period and explicit prior-period comparatives. Classify period_role before deciding; never relabel a comparator as current."
         if source_scope == "summary_current"
@@ -1350,6 +1355,7 @@ Unit conventions (identical to our standard):
   - "ratio"   — unitless multiples reported with an "x" (coverage 1.8x -> 1.8).
   - "bps"     — only when the document states the metric in basis points.
 
+{numeric_field_rule}
 Rules:
 {scope_rule}{range_rule}
   - For continuation inputs with CONTEXT ONLY and EXTRACT ONLY FROM THIS SOURCE SECTION blocks, use context for headers, currency, units, period, accounting basis, scope and source definitions only. Enumerate and quote facts only from the source section.
@@ -2023,13 +2029,13 @@ def retain_and_publish_reviewed_ir_source(
     retained_exchanges = {response.llm_call_id: response for response in responses}
     capture_versions = [
         ir_supplement_capture.historical_capture_version(conn, exchange, source_sha256)
-        or "v10-closed-numeric-boundaries"
+        or "v11-explicit-numeric-fields"
         for exchange in exchanges
     ]
     if len(set(capture_versions)) > 1:
         raise ValueError("IR governed exchanges mix producing capture versions")
-    capture_version = capture_versions[0] if capture_versions else "v10-closed-numeric-boundaries"
-    historical = capture_version != "v10-closed-numeric-boundaries"
+    capture_version = capture_versions[0] if capture_versions else "v11-explicit-numeric-fields"
+    historical = capture_version != "v11-explicit-numeric-fields"
 
     def retained_rows(raw: object) -> list[_EnumeratedKpi]:
         if historical:
@@ -2399,7 +2405,7 @@ def capture_for_ir_pdf_docs(
                     "source_scope": "direct_pdf_rich",
                     "max_chunks": max_chunks,
                     "max_structured_calls": max_structured_calls,
-                    "continuation_version": "ir-supplement-native-continuation-v10-closed-numeric-boundaries",
+                    "continuation_version": "ir-supplement-native-continuation-v11-explicit-numeric-fields",
                     "prompt_sha256": prompt_sha256,
                     "schema_sha256": schema_sha256,
                     "projection_identity": projection_identity,
