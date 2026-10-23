@@ -363,6 +363,31 @@ claim about provider health. Missing, stale and failed receipts cannot render a
 verified empty calendar. `tests/test_ir_events_ingestion.py` and
 `tests/test_ir_events_cli_unavailable.py` cover these boundaries and disabled apply.
 
+### IR acquisition batch
+
+The weekly IR discovery batch now treats an empty crawl, failed URL download,
+or failed registration as a failed ticker. The failing-crawler retry includes
+both zero-document names and names with a failed last crawl despite older
+registered documents. The source status and batch exit code expose these cases;
+no new scheduler task or operator action was added. The batch requires an
+existing configured database and rejects the checkout-default database before
+opening a source. A successful batch still means acquisition and optional
+narrative processing only; it does not certify fact-extraction completeness.
+Hybrid and list discovery now use the same inventory crawler. Partial crawls
+retain available documents, expose page diagnostics, and retry discovery.
+Categorizer exit zero must also reconcile every downloaded source URL with
+registered documents. The batch invokes the existing bounded document-evidence
+continuation before derived views, including when downloads are unchanged.
+Its existing selector accepts an optional source-type filter; the IR batch uses
+`ir_doc` so unrelated stored source formats do not block IR work. The existing
+resume receipt binds that filter. It adds no second cursor or evidence writer. Failed or unfinished extraction
+defers views. Missing inventory remains degraded but does not block views of
+current extracted documents. Summary and narrative views share the full-text
+owner's source-text projection. Financial admission remains with existing owners.
+Official HTML earnings releases use the existing download, classification,
+registration, and source-URL operation. Failed HTML classification remains an
+acquisition failure. No new operation, listener, or scheduled LLM leg was added.
+
 ### Legacy evidence backfill and managed IR byte admission
 
 `execution/backfill_evidence_ledger.py` remains an explicit, bounded manual operation;

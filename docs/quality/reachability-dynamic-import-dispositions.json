@@ -178,8 +178,8 @@
     {
       "disposition": "internal_target",
       "evidence": "_ADAPTERS is a fixed registry whose mz entry resolves to this checked-in adapter.",
-      "fingerprint": "2c70099e25d4296ee0dcb5770fc426e3eb391c1dae1614da864b1b152d8eaaff",
-      "line": 40,
+      "fingerprint": "fd2cf31ac57e1fde4f51f342c581e912f9d7063b76c458edd3d3771187b69145",
+      "line": 45,
       "path": "src/ir_pipeline/discover/__init__.py",
       "targets": [
         "src/ir_pipeline/discover/mz.py"
@@ -297,7 +297,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "7265fa0dd99d01199b3fc1b3544d34a34b02c9cff6bb249da8e16b53f1c77776",
+      "source_sha256": "8addd575b180c74f2b4498cb1054db3959c362c22998655709a39693061bf9ec",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

@@ -1,16 +1,16 @@
 @echo off
 REM Twice-weekly (Wednesday + Saturday 02:30) — failing-crawler rescan.
 REM
-REM Re-attempts ONLY the portfolio/evaluation names that currently have ZERO
-REM registered IR documents:
+REM Re-attempts admitted names with ZERO registered IR documents or a failed
+REM last crawl even when older documents are present:
 REM   python execution/discover_ir_documents_all.py --only-failing
 REM
 REM --only-failing reads the live document store (documents.source_type='ir_doc'),
-REM computes the roster names with no auto-fetched IR docs, and runs just those
+REM computes the zero-document and failed-last-crawl roster names, and runs those
 REM through the normal discover -> fetch+register -> process chain. So a name that
 REM was bot-protected (HTTP 403), HTTP/2-broken, or stalled on a headless load is
 REM retried in case the IR site starts cooperating — picked up days sooner than
-REM the weekly full sweep, at a fraction of the cost (only the gaps, not all 32).
+REM the weekly full sweep, at a fraction of the cost.
 REM
 REM Complements cron\discover_ir_documents.task.xml (the Sunday 01:30 FULL sweep
 REM over every name). A name that succeeds here drops out of the gap set and is no

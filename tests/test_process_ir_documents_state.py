@@ -29,7 +29,7 @@ class _FakeProcessor:
     def __init__(self) -> None:
         self.seen_argv: list[str] = []
 
-    def main(self) -> None:
+    def main(self) -> int | None:
         self.seen_argv = list(sys.argv)
 
 
@@ -75,5 +75,27 @@ def test_main_binds_state_and_forwards_only_legacy_ticker_args(
         assert tmp_path == processor.PROJECT_ROOT
         assert fake_processor.seen_argv == ["process_ir_documents.py", "--ticker", "NU"]
         assert sys.argv == original_argv
+    finally:
+        db.set_db_path(original_db_path)
+
+
+@pytest.mark.parametrize("status", [0, 1])
+def test_adapter_propagates_processor_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    class StatusProcessor(_FakeProcessor):
+        def main(self) -> int:
+            return status
+
+    processor = cast("adapter.ProcessIrDocuments", StatusProcessor())
+    database = tmp_path / "authority.sqlite"
+    database.touch()
+    original_db_path = db.DB_PATH
+    monkeypatch.setattr(adapter, "_load_processor", lambda: processor)
+    try:
+        assert (
+            adapter.main(["--ticker", "NU", "--repo-root", str(tmp_path), "--db", str(database)])
+            == status
+        )
     finally:
         db.set_db_path(original_db_path)

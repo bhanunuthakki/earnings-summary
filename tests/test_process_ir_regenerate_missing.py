@@ -20,11 +20,7 @@ from typing import cast
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import process_ir_documents as pir  # noqa: E402
+from execution import process_ir_documents as pir
 
 # --- typed test doubles (pyright-strict friendly; no bare untyped lambdas) ----
 
@@ -124,8 +120,8 @@ def test_regenerate_missing_skips_doc_with_existing_cache(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, patched: _Patched
 ) -> None:
     doc = _transcript_doc(tmp_path)
-    # Pre-existing summary → must be skipped, never re-billed.
-    (patched.cache_dir / "UBER_Q1_2026_summary.txt").write_text("PRIOR SUMMARY", encoding="utf-8")
+    assert pir.process_document(doc)
+    patched.llm_calls.clear()
 
     def fake_all(_ticker: str) -> list[dict[str, object]]:
         return [doc]
@@ -135,9 +131,11 @@ def test_regenerate_missing_skips_doc_with_existing_cache(
     pir.run_for_ticker("UBER", regenerate_missing=True)
 
     assert patched.llm_calls == [], "a doc that already has a summary must not be re-summarized"
-    assert (patched.cache_dir / "UBER_Q1_2026_summary.txt").read_text(
-        encoding="utf-8"
-    ) == "PRIOR SUMMARY"
+    assert (
+        (patched.cache_dir / "UBER_Q1_2026_summary.txt")
+        .read_text(encoding="utf-8")
+        .startswith("SUMMARY:")
+    )
 
 
 def test_default_path_skips_processed_doc(
@@ -184,3 +182,108 @@ def test_regenerate_missing_excludes_events(
     # on its missing quarter/year).
     assert patched.llm_calls == ["transcript body"]
     assert (patched.cache_dir / "UBER_Q1_2026_summary.txt").exists()
+
+
+def test_extract_text_rejects_unsupported_binary_inputs(tmp_path: Path) -> None:
+    for suffix in (".xlsx", ".zip"):
+        source = tmp_path / ("source" + suffix)
+        source.write_bytes(b"unsupported binary")
+        with pytest.raises(ValueError, match="unsupported_source_text_format"):
+            pir.extract_text(str(source))
+
+
+@pytest.mark.parametrize("doc_type", ["press_release", "transcript"])
+def test_ir_summary_cache_tracks_source_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, patched: _Patched, doc_type: str
+) -> None:
+    doc = _transcript_doc(tmp_path)
+    doc["doc_type"] = doc_type
+    monkeypatch.setitem(
+        pir.DOC_TYPE_CONFIG["press_release"], "llm_fn", pir.DOC_TYPE_CONFIG["transcript"]["llm_fn"]
+    )
+    cache = pir.cache_path_for(doc)
+    cache.write_text("unverified legacy summary")
+    assert pir.process_document(doc)
+    assert len(patched.llm_calls) == 1
+    assert pir.process_document(doc)
+    assert len(patched.llm_calls) == 1
+    Path(str(doc["local_path"])).write_text("revised source")
+    assert pir.process_document(doc)
+    assert len(patched.llm_calls) == 2
+
+
+@pytest.mark.parametrize("suffix", [".html", ".htm"])
+def test_html_text_excludes_noncontent(tmp_path: Path, suffix: str) -> None:
+    source = tmp_path / ("release" + suffix)
+    source.write_text(
+        "<html><style>style noise</style><script>script noise</script>"
+        "<body><h1>Quarter results</h1><p>Revenue $100 million</p>"
+        "</body></html>"
+    )
+    text = pir.extract_text(str(source))
+    assert "Quarter results" in text
+    assert "Revenue $100 million" in text
+    assert "noise" not in text
+
+
+@pytest.mark.parametrize("succeeds", [False, True])
+def test_run_status_tracks_document_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, succeeds: bool
+) -> None:
+    doc = _transcript_doc(tmp_path)
+
+    def documents(*args: object) -> list[dict[str, object]]:
+        return [doc]
+
+    def no_events(*args: object) -> list[dict[str, object]]:
+        return []
+
+    def process(*args: object, **kwargs: object) -> bool:
+        return succeeds
+
+    monkeypatch.setattr(pir.index_manager, "get_unprocessed_documents", documents)
+    monkeypatch.setattr(pir.index_manager, "get_unprocessed_events", no_events)
+    monkeypatch.setattr(pir, "process_document", process)
+    assert pir.run_for_ticker("UBER") == int(not succeeds)
+
+
+def test_no_documents_is_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    def empty(*args: object) -> list[dict[str, object]]:
+        return []
+
+    monkeypatch.setattr(pir.index_manager, "get_unprocessed_documents", empty)
+    monkeypatch.setattr(pir.index_manager, "get_unprocessed_events", empty)
+    assert pir.run_for_ticker("UBER") == 0
+
+
+def test_main_all_retains_failure_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    def documents(*args: object) -> list[dict[str, object]]:
+        return [{"ticker": "AAA"}, {"ticker": "ZZZ"}]
+
+    def empty(*args: object) -> list[dict[str, object]]:
+        return []
+
+    def run(ticker: str, *args: object) -> int:
+        return int(ticker == "AAA")
+
+    monkeypatch.setattr(sys, "argv", ["process_ir_documents.py", "--all"])
+    monkeypatch.setattr(pir.index_manager, "get_unprocessed_documents", documents)
+    monkeypatch.setattr(pir.index_manager, "get_unprocessed_events", empty)
+    monkeypatch.setattr(pir, "run_for_ticker", run)
+    assert pir.main() == 1
+
+
+def test_projection_identity_change_invalidates_summary_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, patched: _Patched
+) -> None:
+    doc = _transcript_doc(tmp_path)
+    assert pir.process_document(doc)
+    assert pir.process_document(doc)
+    assert len(patched.llm_calls) == 1
+
+    def changed_identity(_source_ref: str) -> str:
+        return "new-projection-identity"
+
+    monkeypatch.setattr(pir, "source_text_projection_identity", changed_identity)
+    assert pir.process_document(doc)
+    assert len(patched.llm_calls) == 2

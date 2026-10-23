@@ -118,15 +118,16 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "Replace prior process_ir_documents.py target with process_ir_documents_state.py: _run_child accepts only argv assembled by this module fixed discovery/fetch and opt-in narrative/summary call sites, then ensure_managed_python_argv. The summary adapter is the existing state-root-aware owner; ticker/repo-root are arguments, never script identity. Opt-in narrative remains unchanged in authority.",
-      "fingerprint": "b3fd310b2a1280a1246bb8fa37a35861190e218e72a9c59b9bad143ca1559fa3",
-      "line": 258,
+      "evidence": "_run_child accepts only argv assembled by this module fixed discovery, fetch, canonical document-evidence, narrative and summary-adapter call sites, then ensure_managed_python_argv. process_document_evidence.py is the existing byte-capture/extraction/coverage owner; source type ir_doc, ticker, explicit database and state root are arguments, never script identity. Narrative and summaries remain derived views; this disposition grants no collection or persistence authority.",
+      "fingerprint": "9d269109d5fbc63a7775d07583881b44cbd9138c1d37d28078adf59f8b31aee6",
+      "line": 266,
       "path": "execution/discover_ir_documents_all.py",
       "targets": [
         "execution/discover_ir_documents.py",
         "execution/fetch_ir_documents.py",
         "src/compute/ir_narrative.py",
-        "execution/process_ir_documents_state.py"
+        "execution/process_ir_documents_state.py",
+        "execution/process_document_evidence.py"
       ]
     },
     {
@@ -144,8 +145,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_categorize invokes the fixed _CATEGORIZER script via managed_python_prefix.",
-      "fingerprint": "31c1d250e92b6f908a4fab20feb9db246df66886afe34f8ca1b2f3749f8bcf7b",
-      "line": 577,
+      "fingerprint": "deabedc12f5483af5bb9081af290fd1959638791509db250ab44a093e322007a",
+      "line": 598,
       "path": "execution/fetch_ir_documents.py",
       "targets": [
         "execution/categorize_ir_uploads.py"
@@ -1019,7 +1020,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "7265fa0dd99d01199b3fc1b3544d34a34b02c9cff6bb249da8e16b53f1c77776",
+      "source_sha256": "8addd575b180c74f2b4498cb1054db3959c362c22998655709a39693061bf9ec",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

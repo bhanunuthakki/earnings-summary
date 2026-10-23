@@ -4,7 +4,7 @@ Only the ``mz`` adapter is precise; this generic crawler handles q4cdn-hosted
 issuers and other issuers without a precise adapter. It renders ANY issuer's IR
 page with Playwright, harvests every document link (.pdf / .xlsx / CDN /
 filemanager), follows obvious "quarterly results / financial reports / archive"
-sub-links one hop to reach historical quarters, and returns up to ``max_quarters``
+sub-links within fixed page, depth, and time limits to reach historical quarters, and returns up to ``max_quarters``
 of :class:`CandidateDoc` rows.
 
 It is **best-effort**: a login wall, a JS-only download widget, or a site with no
@@ -27,7 +27,7 @@ import urllib.request
 import urllib.robotparser
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast
+from typing import Literal, cast
 
 from ir_pipeline._net import (
     PLAYWRIGHT_NETWORK_LOCKDOWN_ARG,
@@ -146,8 +146,13 @@ def discover_document_inventory(
     time_budget_s: float = _DEFAULT_TIME_BUDGET_S,
     max_pages: int = _MAX_PAGES,
     publisher_file_rules: tuple[PublisherEndpointRule, ...] = (),
+    candidate_link_scope: Literal["publisher", "observed_binary"] = "publisher",
 ) -> DocumentDiscoveryInventory:
-    """Crawl the bounded publisher graph without truncating the source inventory."""
+    """Crawl once, with strict publisher links unless candidate-only scope is explicit.
+
+    ``observed_binary`` retains public external binary URLs found on the issuer
+    page as untrusted candidates. It grants no publisher or fact authority.
+    """
 
     if not ir_url:
         return DocumentDiscoveryInventory((), (), False, "empty_ir_url")
@@ -216,6 +221,7 @@ def discover_document_inventory(
                     text,
                     publisher_host=base_host,
                     publisher_file_rules=publisher_file_rules,
+                    candidate_link_scope=candidate_link_scope,
                 )
                 and target not in candidates
             ):
@@ -228,6 +234,7 @@ def discover_document_inventory(
                     text,
                     publisher_host=base_host,
                     publisher_file_rules=publisher_file_rules,
+                    candidate_link_scope=candidate_link_scope,
                 ):
                     continue
                 if not _HISTORY_NAV_RX.search(f"{href} {text}"):
@@ -257,79 +264,24 @@ def discover_document_history(
     check_robots: bool = True,
     time_budget_s: float = _DEFAULT_TIME_BUDGET_S,
 ) -> list[CandidateDoc]:
-    """Crawl ``ir_url`` (+ one hop of history links); return up to ``max_quarters`` of docs.
+    """Project the bounded inventory crawl into the legacy quarter-limited list.
 
-    ``render`` is injectable for tests (default: the lazy-Playwright renderer).
-    Never raises on a dead page / empty site — returns whatever it found (``[]``
-    is a valid, expected result). Candidates are deduped by URL (first win). Stops
-    following nav links once ``time_budget_s`` elapses, so a slow site returns the
-    docs found so far instead of timing the subprocess out to a null result.
+    The inventory owner handles page traversal, source boundaries, failures,
+    robots rules, and limits. This compatibility view preserves found candidates
+    but omits the receipt. Use ``discover_document_inventory`` for diagnostics.
+    Authentication denial still raises.
     """
-    if not ir_url:
-        return []
-    t0 = time.monotonic()
-    do_render = render or _playwright_render
-    do_fetch = fetch_filename or _safe_filename_for_url
-    allows, robots_delay = robots_policy(ir_url) if check_robots else (_allow_all, 0.0)
-    effective_delay = max(rate_limit_s, robots_delay)  # honor robots Crawl-delay
-
-    visited: set[str] = set()
-    candidates: dict[str, CandidateDoc] = {}
-
-    def harvest(page_url: str) -> list[Anchor]:
-        if page_url in visited or not allows(page_url):
-            return []
-        visited.add(page_url)
-        try:
-            anchors = do_render(page_url, timeout_ms)
-        except IrDiscoveryAuthenticationDeniedError:
-            raise
-        except Exception:  # one page's browser/network failure is non-fatal
-            return []
-        for href, text in anchors:
-            target = _document_url(urllib.parse.urljoin(page_url, href))
-            if href and _DOC_HREF_RX.search(target) and target not in candidates:
-                candidates[target] = _to_candidate(target, text, page_url, do_fetch)
-        if effective_delay > 0:
-            time.sleep(effective_delay)
-        return anchors
-
-    def _distinct_periods() -> int:
-        return len({(c.year_guess, c.quarter_guess) for c in candidates.values() if c.year_guess})
-
-    # Bounded breadth-first walk: render the seed, then follow same-host nav links
-    # (Financials / Quarterly / Earnings / Investor Relations / …) up to _MAX_DEPTH
-    # hops to reach the doc-bearing page — handles IR landing pages AND company
-    # homepages (so a homepage seed can navigate Home → Investors → Financials).
-    # Stops early once enough history is found, the page budget is hit, or the time
-    # budget elapses (a slow site returns partials instead of timing out to null).
-    base_host = _host(ir_url)
-    frontier: list[tuple[str, int]] = [(ir_url, 0)]
-    rendered = 0
-    while frontier:
-        if (
-            rendered >= _MAX_PAGES
-            or _distinct_periods() >= max_quarters
-            or (time.monotonic() - t0) > time_budget_s
-        ):
-            break
-        page_url, depth = frontier.pop(0)
-        if page_url in visited or not allows(page_url):
-            continue
-        anchors = harvest(page_url)
-        rendered += 1
-        if depth >= _MAX_DEPTH:
-            continue
-        for href, text in anchors:
-            if not href or _DOC_HREF_RX.search(href):
-                continue
-            if not _HISTORY_NAV_RX.search(f"{href} {text}"):
-                continue
-            target = urllib.parse.urljoin(page_url, href)
-            if _host(target) == base_host and target not in visited:
-                frontier.append((target, depth + 1))
-
-    return _truncate_to_quarters(list(candidates.values()), max_quarters)
+    inventory = discover_document_inventory(
+        ir_url=ir_url,
+        timeout_ms=timeout_ms,
+        render=render,
+        fetch_filename=fetch_filename,
+        rate_limit_s=rate_limit_s,
+        check_robots=check_robots,
+        time_budget_s=time_budget_s,
+        candidate_link_scope="observed_binary",
+    )
+    return truncate_to_quarters(list(inventory.candidates), max_quarters)
 
 
 def precise_to_candidates(precise: dict[str, str], source_page: str) -> list[CandidateDoc]:
@@ -406,7 +358,7 @@ def _guess_period(text: str) -> tuple[int | None, int | None]:
     return None, None
 
 
-def _truncate_to_quarters(cands: list[CandidateDoc], max_quarters: int) -> list[CandidateDoc]:
+def truncate_to_quarters(cands: list[CandidateDoc], max_quarters: int) -> list[CandidateDoc]:
     """Keep period-dated candidates in the newest ``max_quarters`` distinct quarters.
 
     Candidates the crawler couldn't date (``year_guess is None``) are kept too —
@@ -444,6 +396,7 @@ def _is_document_anchor(
     *,
     publisher_host: str,
     publisher_file_rules: tuple[PublisherEndpointRule, ...],
+    candidate_link_scope: Literal["publisher", "observed_binary"] = "publisher",
 ) -> bool:
     parsed = urllib.parse.urlparse(url)
     if (
@@ -458,7 +411,15 @@ def _is_document_anchor(
         rule.allows(url) for rule in publisher_file_rules
     )
     if not authorized:
-        return False
+        # Observed binary links are discovery candidates only. They never attest
+        # publisher authority. The strict evidence-inventory default stays closed.
+        if candidate_link_scope != "observed_binary" or not _has_doc_ext(parsed.path):
+            return False
+        try:
+            ensure_safe_public_url(url)
+        except (UnsafeURLError, OSError, ValueError):
+            return False
+        return True
     combined = f"{parsed.path} {text}"
     year, quarter = _guess_period(combined)
     if (
@@ -478,10 +439,6 @@ def _is_document_anchor(
 def _norm_year(s: str) -> int:
     n = int(s)
     return 2000 + n if n < 100 else n
-
-
-def _host(url: str) -> str:
-    return urllib.parse.urlparse(url).netloc.lower()
 
 
 def _hostname(url: str) -> str:

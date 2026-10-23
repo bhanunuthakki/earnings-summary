@@ -53,7 +53,6 @@ from pydantic import (
     model_validator,
 )
 
-import parser  # first-party src/parser.py (untyped legacy module — read PDFs via _read_pdf_text)
 from compute.kpi_resolver import normalize_kpi_name
 from llm.structured import call_llm_structured
 from llm.untrusted import spotlight
@@ -91,6 +90,7 @@ from pipeline.run_accounting import (
     end_run,
     start_run,
 )
+from provenance.fulltext_backfill import project_source_text
 from provenance.llm_extracted_parent import resolve_parent
 
 # Named `logger` (not `log`) to avoid colliding with the `TickerExtractionLog`
@@ -1023,8 +1023,11 @@ Document text:
         expect="array",
         schema=TypeAdapter(list[_EnumeratedKpi]),
     )
+    validated = TypeAdapter(list[_EnumeratedKpi]).validate_python(parsed)
+    if len(validated) >= max_facts:
+        raise ValueError("IR capture reached its fact limit; document coverage is unknown")
     out: list[dict[str, object]] = []
-    for item in TypeAdapter(list[_EnumeratedKpi]).validate_python(parsed):
+    for item in validated:
         out.append(item.model_dump(mode="python"))
         if len(out) >= max_facts:
             break
@@ -1135,8 +1138,11 @@ def _build_capture_manifest(
 
 
 def _doc_already_captured(conn: sqlite3.Connection, doc_id: int) -> bool:
-    """True iff any kpi_fact already cites this source doc — lets the enumerate
-    pass skip the (costly) LLM call on a doc it has already processed."""
+    """Avoid rebilling documents that already have captured facts.
+
+    This legacy idempotency check does not prove extraction completeness.
+    Partial and older capped captures remain unknown until explicitly refreshed.
+    """
     row = conn.execute(
         "SELECT 1 FROM kpi_facts WHERE source_doc_id = ? LIMIT 1", (doc_id,)
     ).fetchone()
@@ -1186,7 +1192,7 @@ def capture_for_ticker(
             if not refresh and _doc_already_captured(conn, doc_id):
                 log.quarters_skipped_no_missing.append(period_label)
                 continue
-            text = source_path.read_text(encoding="utf-8")[:max_input_chars]
+            text = _complete_capture_text(source_path.read_text(encoding="utf-8"), max_input_chars)
             rows = _llm_extract_enumerate(ticker, period_label, text, max_facts=max_facts_per_doc)
             if not rows:
                 continue
@@ -1266,11 +1272,21 @@ def capture_for_ticker(
 _IR_CAPTURE_PDF_DOC_TYPES: tuple[str, ...] = ("ir_supplement",)
 
 
+def _complete_capture_text(text: str, max_input_chars: int) -> str:
+    """Reject incomplete inputs before capture can be marked as complete."""
+    if not text.strip():
+        raise ValueError("IR capture source has no extractable text; OCR may be required")
+    if len(text) > max_input_chars:
+        raise ValueError(
+            f"IR capture source exceeds input limit ({len(text)} > {max_input_chars}); "
+            "full-document capture requires a larger approved budget or chunked extraction"
+        )
+    return text
+
+
 def _read_pdf_text(path: str) -> str:
-    """Single seam over ``parser.extract_text_from_pdf`` (a `from`-import of the
-    untyped legacy module trips pyright; the module-qualified call is clean and
-    its return is already ``str``). Isolated so tests can stub PDF reads here."""
-    return parser.extract_text_from_pdf(path)
+    """Use the full-text owner's source projection for KPI candidates."""
+    return project_source_text(Path(path).read_bytes(), path, "application/pdf")
 
 
 def _fiscal_period_type_for(ticker: str, period_end: datetime) -> FiscalPeriodType:
@@ -1468,8 +1484,8 @@ def capture_for_ir_pdf_docs(
     (there's no allowlist). Idempotent: an already-captured doc is skipped without
     an LLM call unless ``refresh``. Requires ``conn.row_factory = sqlite3.Row``.
 
-    A missing file on disk is skipped (non-fatal): IR PDFs live in the MAIN
-    checkout, so a worktree run may not see them.
+    Missing, empty, and over-budget sources produce an explicit run error.
+    They cannot be marked as fully captured from a partial input.
     """
     ticker = ticker.upper()
     log = TickerExtractionLog(ticker=ticker, stage="stage_b_capture_ir_supplement")
@@ -1489,8 +1505,8 @@ def capture_for_ir_pdf_docs(
                 logger.info(
                     {"event": "ir_supplement_pdf_missing", "ticker": ticker, "path": str(pdf_path)}
                 )
-                continue
-            text = _read_pdf_text(str(pdf_path))[:max_input_chars]
+                raise FileNotFoundError("IR capture source is missing")
+            text = _complete_capture_text(_read_pdf_text(str(pdf_path)), max_input_chars)
             rows = _llm_extract_enumerate(ticker, period_label, text, max_facts=max_facts_per_doc)
             if not rows:
                 continue
