@@ -8,8 +8,10 @@ crawler + the mz precise fast-path), and merges the discovered document URLs int
 
 Best-effort by design: a ticker with no resolvable IR URL prints status
 ``no_ir_url`` and exits 0 (NOT a failure); a crawl that finds nothing prints
-``no_docs``. The live crawl needs the optional ``ir`` extra (headless browser);
-a missing extra surfaces as a non-zero exit with the ImportError in stderr.
+``no_docs`` only when the bounded crawl completes. Failed pages or crawl limits
+produce ``partial`` with retained candidates and page diagnostics. Technical
+crawl closure does not prove publisher authority or archive completeness.
+The live crawl needs the optional ``ir`` extra (headless browser).
 
 Usage:
     python execution/discover_ir_documents.py --ticker NU
@@ -26,25 +28,28 @@ import sys
 from pathlib import Path
 from typing import cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from ir_pipeline.config import get_config  # noqa: E402
-from ir_pipeline.discover import (  # noqa: E402
+from ir_pipeline.config import get_config
+from ir_pipeline.discover import (
     IrDiscoveryAuthenticationDeniedError,
-    discover_history_hybrid,
+    discover_inventory_hybrid,
 )
-from ir_pipeline.discover._docmeta import CandidateDoc  # noqa: E402
-from ir_pipeline.ir_url_overrides import resolve_ir_url  # noqa: E402
-from ir_pipeline.manifest import ManifestEntry, manifest_path, merge_write  # noqa: E402
-from pipeline.source_policy import (  # noqa: E402
+from ir_pipeline.discover._docmeta import CandidateDoc
+from ir_pipeline.discover.generic import truncate_to_quarters
+from ir_pipeline.ir_url_overrides import resolve_ir_url
+from ir_pipeline.manifest import ManifestEntry, manifest_path, merge_write
+from pipeline.source_policy import (
     SOURCE_POLICY_CONFIG,
     ArtifactKind,
     CollectionSource,
     StoredCollectionAuthorization,
     authorize_stored_collection_target,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 def _db_ir_url(db_path: Path, ticker: str) -> str | None:
@@ -134,10 +139,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        cands = discover_history_hybrid(
+        inventory = discover_inventory_hybrid(
             ir_url=crawl_url,
             config=cfg,
-            max_quarters=cast("int", args.max_quarters),
             timeout_ms=cast("int", args.timeout),
         )
     except IrDiscoveryAuthenticationDeniedError as exc:
@@ -153,12 +157,30 @@ def main(argv: list[str] | None = None) -> int:
             + "\n"
         )
         return 10
+    cands = truncate_to_quarters(list(inventory.candidates), cast("int", args.max_quarters))
     added, total = merge_write(repo_root, ticker, _to_entries(ticker, cands))
     print(
         json.dumps(
             {
                 "ticker": ticker,
-                "status": "done" if cands else "no_docs",
+                "status": ("done" if cands else "no_docs")
+                if inventory.crawl_complete
+                else "partial",
+                "crawl_complete": inventory.crawl_complete,
+                "crawl_stop_reason": inventory.crawl_stop_reason,
+                "authority_complete": inventory.authority_complete,
+                "authority_reason": inventory.authority_reason,
+                "archive_complete": False,
+                "inventory_discovered": len(inventory.candidates),
+                "pages": [
+                    {
+                        "page_url": page.page_url,
+                        "outcome": page.outcome,
+                        "anchor_count": page.anchor_count,
+                        "failure_reason": page.failure_reason,
+                    }
+                    for page in inventory.pages
+                ],
                 "ir_url": crawl_url,
                 "discovered": len(cands),
                 "added": added,

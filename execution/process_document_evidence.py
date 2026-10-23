@@ -21,6 +21,7 @@ else:
     from _lib import PROJECT_ROOT, command_parser
 from pydantic import BaseModel, ConfigDict, Field
 
+from models.documents import SourceType
 from operations.paths import configured_product_state_root, operations_runtime_directory
 from provenance.document_evidence_pipeline import (
     DocumentEvidenceRequest,
@@ -44,6 +45,7 @@ class DocumentEvidenceResumeReceipt(BaseModel):
     database_path: str
     repo_root: str
     ticker: str | None
+    source_type: SourceType | None = None
     content_roots: tuple[str, ...]
     next_before_document_id: int = Field(ge=0)
     newest_document_id_seen: int = Field(ge=0)
@@ -56,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", type=Path, required=True)
     parser.add_argument("--repo-root", type=Path)
     parser.add_argument("--ticker")
+    parser.add_argument("--source-type", type=SourceType, choices=list(SourceType))
     parser.add_argument("--document-id", type=int)
     parser.add_argument("--before-document-id", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=25)
@@ -80,6 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     request = DocumentEvidenceRequest(
         repo_root=root,
         ticker=args.ticker,
+        source_type=args.source_type,
         document_id=args.document_id,
         before_document_id=args.before_document_id,
         batch_size=args.batch_size,
@@ -128,6 +132,7 @@ def _run(
             previous.database_path != str(db_path.resolve())
             or previous.repo_root != str(request.repo_root.resolve())
             or previous.ticker != request.ticker
+            or previous.source_type != request.source_type
             or previous.content_roots
             != tuple(str(root.resolve()) for root in request.content_roots)
         ):
@@ -194,6 +199,7 @@ def _run(
             database_path=str(db_path.resolve()),
             repo_root=str(request.repo_root.resolve()),
             ticker=request.ticker,
+            source_type=request.source_type,
             content_roots=tuple(str(root.resolve()) for root in request.content_roots),
             next_before_document_id=cursor,
             newest_document_id_seen=newest_seen,

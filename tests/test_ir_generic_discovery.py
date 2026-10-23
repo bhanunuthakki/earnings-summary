@@ -2,29 +2,27 @@
 
 The Playwright call is injected (no browser): a fake renderer maps a page URL to
 its ``[(href, text)]`` anchors. These lock the link harvest (doc-like links
-only), one-hop same-host history following, Tier-1 period / doc-type attribution,
+only), bounded same-host history following, Tier-1 period / doc-type attribution,
 ``max_quarters`` truncation, resilience (dead/empty page → ``[]``), and the
 hybrid merge with a precise adapter.
 """
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from ir_pipeline.authority import PublisherEndpointRule  # noqa: E402
-from ir_pipeline.config import IrConfig  # noqa: E402
-from ir_pipeline.discover import (  # noqa: E402
+import ir_pipeline.discover as discovery
+from ir_pipeline.authority import PublisherEndpointRule
+from ir_pipeline.config import IrConfig
+from ir_pipeline.discover import (
     IrDiscoveryAuthenticationDeniedError,
     discover_history_hybrid,
+    generic,
 )
-from ir_pipeline.discover._docmeta import CandidateDoc  # noqa: E402
-from ir_pipeline.discover.generic import (  # noqa: E402
+from ir_pipeline.discover._docmeta import CandidateDoc
+from ir_pipeline.discover.generic import (
+    CrawlPageOutcome,
+    DocumentDiscoveryInventory,
     discover_document_history,
     discover_document_inventory,
     precise_to_candidates,
@@ -65,7 +63,11 @@ def _run(
     return docs, r
 
 
-def test_harvests_only_document_links() -> None:
+def test_harvests_only_document_links(monkeypatch: pytest.MonkeyPatch) -> None:
+    def public_url(url: str) -> str:
+        return url
+
+    monkeypatch.setattr("ir_pipeline.discover.generic.ensure_safe_public_url", public_url)
     pages = {
         "https://ir.x/": [
             ("https://ir.x/q3-2025-press-release.pdf", "Q3 2025 Press Release"),
@@ -121,7 +123,7 @@ def test_period_attribution_formats(text: str, year: int | None, quarter: int | 
     assert (d.year_guess, d.quarter_guess) == (year, quarter)
 
 
-def test_follows_same_host_history_nav_one_hop() -> None:
+def test_follows_same_host_history_navigation() -> None:
     pages = {
         "https://ir.x/": [
             ("https://ir.x/quarterly-results", "Quarterly Results"),
@@ -272,14 +274,19 @@ def test_hybrid_merges_precise_without_dup(monkeypatch: pytest.MonkeyPatch) -> N
     from ir_pipeline.discover import generic
 
     def _fake_generic(
-        *, ir_url: str, max_quarters: int = 8, timeout_ms: int = 60_000
-    ) -> list[CandidateDoc]:
-        return [CandidateDoc("u1", "", "f", "press_release", 2025, 3, ir_url)]
+        *, ir_url: str, timeout_ms: int = 60_000, **kwargs: object
+    ) -> DocumentDiscoveryInventory:
+        return DocumentDiscoveryInventory(
+            (CandidateDoc("u1", "", "f", "press_release", 2025, 3, ir_url),),
+            (),
+            True,
+            "frontier_exhausted",
+        )
 
     def _fake_precise(config: IrConfig) -> dict[str, str]:
         return {"deck": "u2", "press_release": "u1"}  # u1 is a dup of generic's
 
-    monkeypatch.setattr(generic, "discover_document_history", _fake_generic)
+    monkeypatch.setattr(generic, "discover_document_inventory", _fake_generic)
     monkeypatch.setattr(disc, "discover_documents", _fake_precise)
 
     cfg = IrConfig(ticker="NU", platform="mz", results_center_url="rc")
@@ -291,11 +298,13 @@ def test_hybrid_generic_only_when_no_mz_config(monkeypatch: pytest.MonkeyPatch) 
     from ir_pipeline.discover import generic
 
     def _fake_generic(
-        *, ir_url: str, max_quarters: int = 8, timeout_ms: int = 60_000
-    ) -> list[CandidateDoc]:
-        return [CandidateDoc("u1", "", "f", None, None, None, ir_url)]
+        *, ir_url: str, timeout_ms: int = 60_000, **kwargs: object
+    ) -> DocumentDiscoveryInventory:
+        return DocumentDiscoveryInventory(
+            (CandidateDoc("u1", "", "f", None, None, None, ir_url),), (), True, "frontier_exhausted"
+        )
 
-    monkeypatch.setattr(generic, "discover_document_history", _fake_generic)
+    monkeypatch.setattr(generic, "discover_document_inventory", _fake_generic)
     docs = discover_history_hybrid(ir_url="https://ir.x/", config=None)
     assert {d.url for d in docs} == {"u1"}
 
@@ -332,13 +341,13 @@ def test_hybrid_does_not_swallow_mz_auth_denial(monkeypatch: pytest.MonkeyPatch)
         results_center_url="https://ir.example/",
     )
 
-    def no_generic_history(**_kwargs: object) -> list[object]:
-        return []
+    def no_generic_history(**_kwargs: object) -> DocumentDiscoveryInventory:
+        return DocumentDiscoveryInventory((), (), True, "frontier_exhausted")
 
     def denied_mz(_cfg: IrConfig) -> dict[str, str]:
         raise IrDiscoveryAuthenticationDeniedError(403)
 
-    monkeypatch.setattr(generic, "discover_document_history", no_generic_history)
+    monkeypatch.setattr(generic, "discover_document_inventory", no_generic_history)
     monkeypatch.setattr(
         "ir_pipeline.discover.discover_documents",
         denied_mz,
@@ -346,3 +355,197 @@ def test_hybrid_does_not_swallow_mz_auth_denial(monkeypatch: pytest.MonkeyPatch)
 
     with pytest.raises(IrDiscoveryAuthenticationDeniedError):
         discover_history_hybrid(ir_url="https://ir.example/", config=cfg)
+
+
+def test_legacy_history_retains_official_html_release() -> None:
+    url = "https://ir.x/news/q3-2025-earnings-release"
+    docs, renderer = _run({"https://ir.x/": [(url, "Q3 2025 Earnings Release")]})
+    assert [candidate.url for candidate in docs] == [url]
+    assert docs[0].doc_type_guess == "press_release"
+    assert renderer.calls == ["https://ir.x/"]
+
+
+def test_legacy_history_calls_inventory_once_and_forwards_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ir_pipeline.discover import generic
+
+    calls: list[dict[str, object]] = []
+    renderer = _Renderer({})
+
+    def inventory(**kwargs: object) -> DocumentDiscoveryInventory:
+        calls.append(kwargs)
+        return DocumentDiscoveryInventory((), (), False, "time_budget_exhausted")
+
+    monkeypatch.setattr(generic, "discover_document_inventory", inventory)
+    assert (
+        generic.discover_document_history(
+            ir_url="https://ir.x/",
+            max_quarters=1,
+            timeout_ms=123,
+            render=renderer,
+            fetch_filename=_no_fetch,
+            rate_limit_s=0.2,
+            check_robots=False,
+            time_budget_s=2.5,
+        )
+        == []
+    )
+    assert calls == [
+        {
+            "ir_url": "https://ir.x/",
+            "timeout_ms": 123,
+            "render": renderer,
+            "fetch_filename": _no_fetch,
+            "rate_limit_s": 0.2,
+            "check_robots": False,
+            "time_budget_s": 2.5,
+            "candidate_link_scope": "observed_binary",
+        }
+    ]
+
+
+def test_strict_inventory_excludes_unapproved_external_documents() -> None:
+    renderer = _Renderer({"https://ir.x/": [("https://cdn.x/results.pdf", "Q3 2025 Results")]})
+    inventory = discover_document_inventory(
+        ir_url="https://ir.x/",
+        render=renderer,
+        fetch_filename=_no_fetch,
+        check_robots=False,
+        rate_limit_s=0,
+    )
+    assert inventory.candidates == ()
+    assert inventory.authority_complete is False
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "http://cdn.x/results.pdf",
+        "https://user:pass@cdn.x/results.pdf",  # pragma: allowlist secret
+        "https://cdn.x/news/q3-2025-earnings-release",
+        "https://127.0.0.1/results.pdf",
+    ],
+)
+def test_observed_candidate_scope_rejects_unsafe_or_external_html(target: str) -> None:
+    docs, renderer = _run({"https://ir.x/": [(target, "Q3 2025 Earnings Release")]})
+    assert docs == []
+    assert renderer.calls == ["https://ir.x/"]
+
+
+def test_compatibility_wrapper_uses_inventory_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    candidates = (
+        CandidateDoc("https://x/new.pdf", "", "new.pdf", "press_release", 2025, 3, "https://x/"),
+        CandidateDoc("https://x/old.pdf", "", "old.pdf", "press_release", 2024, 3, "https://x/"),
+    )
+    calls: list[dict[str, object]] = []
+
+    def inventory(**kwargs: object) -> DocumentDiscoveryInventory:
+        calls.append(kwargs)
+        return DocumentDiscoveryInventory(candidates, (), False, "page_budget_exhausted")
+
+    monkeypatch.setattr(generic, "discover_document_inventory", inventory)
+
+    def legacy(**kwargs: object) -> list[CandidateDoc]:
+        pytest.fail("legacy crawler called")
+
+    monkeypatch.setattr(generic, "discover_document_history", legacy)
+    assert discovery.discover_history_hybrid(ir_url="https://x/", max_quarters=1) == [candidates[0]]
+    assert len(calls) == 1
+
+
+def test_precise_failure_keeps_candidates_and_marks_incomplete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = CandidateDoc("https://x/a.pdf", "", "a.pdf", "press_release", 2025, 3, "https://x/")
+    original = DocumentDiscoveryInventory(
+        (candidate,), (CrawlPageOutcome("https://x/", "succeeded", 1),), True, "frontier_exhausted"
+    )
+
+    def inventory(**kwargs: object) -> DocumentDiscoveryInventory:
+        return original
+
+    monkeypatch.setattr(generic, "discover_document_inventory", inventory)
+
+    def fail(config: IrConfig) -> dict[str, str]:
+        raise TimeoutError("not retained")
+
+    monkeypatch.setattr(discovery, "discover_documents", fail)
+    config = IrConfig(ticker="NU", platform="mz", results_center_url="https://x/")
+    result = discovery.discover_inventory_hybrid(ir_url="https://x/", config=config)
+    assert result.candidates == (candidate,)
+    assert result.crawl_complete is False
+    assert result.pages[-1].failure_reason == "precise_adapter:TimeoutError"
+
+
+def test_precise_merge_preserves_generic_failure_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
+    candidate = CandidateDoc("https://x/a.pdf", "", "a.pdf", "press_release", 2025, 3, "https://x/")
+    original = DocumentDiscoveryInventory((candidate,), (), False, "page_budget_exhausted")
+
+    def inventory(**kwargs: object) -> DocumentDiscoveryInventory:
+        return original
+
+    monkeypatch.setattr(generic, "discover_document_inventory", inventory)
+
+    def precise(config: IrConfig) -> dict[str, str]:
+        return {"press_release": candidate.url, "deck": "https://x/deck.pdf"}
+
+    monkeypatch.setattr(discovery, "discover_documents", precise)
+    config = IrConfig(ticker="NU", platform="mz", results_center_url="https://x/")
+    result = discovery.discover_inventory_hybrid(ir_url="https://x/", config=config)
+    assert {item.url for item in result.candidates} == {candidate.url, "https://x/deck.pdf"}
+    assert result.crawl_stop_reason == "page_budget_exhausted"
+    assert result.crawl_complete is False
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_precise_authentication_denial_remains_loud(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    def inventory(**kwargs: object) -> DocumentDiscoveryInventory:
+        return DocumentDiscoveryInventory((), (), True, "frontier_exhausted")
+
+    monkeypatch.setattr(generic, "discover_document_inventory", inventory)
+
+    def deny(config: IrConfig) -> dict[str, str]:
+        raise discovery.IrDiscoveryAuthenticationDeniedError(status)
+
+    monkeypatch.setattr(discovery, "discover_documents", deny)
+    config = IrConfig(ticker="NU", platform="mz", results_center_url="https://x/")
+    with pytest.raises(discovery.IrDiscoveryAuthenticationDeniedError):
+        discovery.discover_inventory_hybrid(ir_url="https://x/", config=config)
+
+
+def test_hybrid_retains_observed_cdn_binary_without_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = generic.discover_document_inventory
+    calls: list[dict[str, object]] = []
+
+    def public_url(url: str) -> str:
+        return url
+
+    monkeypatch.setattr(generic, "ensure_safe_public_url", public_url)
+
+    def render(url: str, timeout_ms: int) -> list[tuple[str, str]]:
+        return [
+            ("https://cdn.x/q3-2025.pdf", "Q3 2025 Press Release"),
+            ("https://cdn.x/news/q3-2025-earnings-release", "Q3 2025 Earnings Release"),
+        ]
+
+    def inventory(**kwargs: object) -> DocumentDiscoveryInventory:
+        calls.append(kwargs)
+        return original(
+            ir_url="https://ir.x/",
+            render=render,
+            check_robots=False,
+            rate_limit_s=0,
+            candidate_link_scope="observed_binary",
+        )
+
+    monkeypatch.setattr(generic, "discover_document_inventory", inventory)
+    result = discovery.discover_inventory_hybrid(ir_url="https://ir.x/")
+    assert [candidate.url for candidate in result.candidates] == ["https://cdn.x/q3-2025.pdf"]
+    assert result.authority_complete is False
+    assert len(calls) == 1
+    assert calls[0]["candidate_link_scope"] == "observed_binary"
