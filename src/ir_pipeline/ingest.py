@@ -69,11 +69,13 @@ def _fiscal_period_type(period_end: _dt.datetime) -> FiscalPeriodType:
 def _ensure_spreadsheet_document(
     conn: sqlite3.Connection, ticker: str, path: Path, *, raw: bytes | None = None
 ) -> int:
-    """Insert (idempotently, sha256-keyed) the documents row for the spreadsheet."""
+    """Reuse exact spreadsheet bytes only within their registered issuer."""
     raw = path.read_bytes() if raw is None else raw
     sha = hashlib.sha256(raw).hexdigest()
-    existing = conn.execute("SELECT id FROM documents WHERE sha256 = ?", (sha,)).fetchone()
+    existing = conn.execute("SELECT id, ticker FROM documents WHERE sha256 = ?", (sha,)).fetchone()
     if existing is not None:
+        if str(existing["ticker"]).upper() != ticker.upper():
+            raise ValueError("spreadsheet document hash is already registered to another issuer")
         return int(existing["id"])
     common = (
         ticker.upper(),

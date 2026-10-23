@@ -457,6 +457,74 @@ def test_post_cutover_ingest_dual_writes_evidence_and_preserves_history(
         assert locator["spreadsheet_cell"] == {"sheet_name": "Indicators", "cell_address": "E6"}
 
 
+@pytest.mark.parametrize("source_backed", [False, True], ids=["numeric", "typed"])
+def test_identical_workbook_bytes_cannot_reuse_another_issuer_document(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    source_backed: bool,
+) -> None:
+    from pipeline.run_accounting import PipelineRunSuppressedError
+
+    repo_root = tmp_path / "repo"
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    first_path = repo_root / "data" / "ir_spreadsheets" / "CO" / "history.xlsx"
+    other_path = repo_root / "data" / "ir_spreadsheets" / "NN" / "history.xlsx"
+    first_path.parent.mkdir(parents=True)
+    other_path.parent.mkdir(parents=True)
+    _write_sheet(first_path)
+    workbook_bytes = first_path.read_bytes()
+    other_path.write_bytes(workbook_bytes)
+    configs = {
+        ticker: IrConfig(
+            ticker=ticker,
+            platform="mz",
+            results_center_url="https://example.invalid/results",
+            spreadsheet_kpis=(SheetKpi("NII", "Indicators", "NII", "actual", currency="USD"),),
+        )
+        for ticker in ("CO", "NN")
+    }
+    first_parsed = parse_spreadsheet_source(first_path, configs["CO"], max_quarters=1)
+    other_parsed = parse_spreadsheet_source(other_path, configs["NN"], max_quarters=1)
+    assert first_parsed.workbook_sha256 == other_parsed.workbook_sha256
+    first_input = first_parsed if source_backed else first_parsed.numeric_projection()
+    other_input = other_parsed if source_backed else other_parsed.numeric_projection()
+
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        inserted, document_id = ingest_spreadsheet_kpis(
+            conn, "CO", configs["CO"], first_input, first_path, repo_root=repo_root
+        )
+        assert inserted == 1
+        with pytest.raises(PipelineRunSuppressedError):
+            ingest_spreadsheet_kpis(
+                conn, "CO", configs["CO"], first_input, first_path, repo_root=repo_root
+            )
+        changes_before_conflict = conn.total_changes
+        with pytest.raises(ValueError, match=r"spreadsheet document hash.*another issuer"):
+            ingest_spreadsheet_kpis(
+                conn, "NN", configs["NN"], other_input, other_path, repo_root=repo_root
+            )
+        assert conn.total_changes == changes_before_conflict
+        documents = conn.execute("SELECT id, ticker, sha256 FROM documents").fetchall()
+        assert [tuple(row) for row in documents] == [
+            (document_id, "CO", first_parsed.workbook_sha256)
+        ]
+        facts = conn.execute(
+            "SELECT f.ticker, d.ticker, f.source_doc_id FROM kpi_facts f "
+            "JOIN documents d ON d.id = f.source_doc_id ORDER BY f.id"
+        ).fetchall()
+        assert [tuple(row) for row in facts] == [("CO", "CO", document_id)]
+        evidence = conn.execute(
+            "SELECT ticker FROM evidence_document_versions WHERE legacy_document_id = ?",
+            (document_id,),
+        ).fetchall()
+        assert [tuple(row) for row in evidence] == [("CO",)]
+        assert first_path.read_bytes() == other_path.read_bytes() == workbook_bytes
+    finally:
+        conn.close()
+
+
 @pytest.mark.parametrize("reported_label", ["NII", "Net Interest Income"])
 def test_typed_handoff_preserves_numeric_writer_semantics_and_reader_lane(
     tmp_path: Path,
