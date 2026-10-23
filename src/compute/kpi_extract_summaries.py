@@ -2411,7 +2411,9 @@ def capture_for_ir_pdf_docs(
                     "source_scope": "direct_pdf_rich",
                     "max_chunks": max_chunks,
                     "max_structured_calls": max_structured_calls,
-                    "continuation_version": "v14-page-bounded-sections-or-v15-reviewed-pages",
+                    "continuation_version": (
+                        "v16-table-cell-boundaries-or-v17-reviewed-pages-table-cell-boundaries"
+                    ),
                     "prompt_sha256": prompt_sha256,
                     "schema_sha256": schema_sha256,
                     "projection_identity": projection_identity,

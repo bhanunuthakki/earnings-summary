@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 from alembic import op
 
 revision = "0062_reviewed_pdf_pages"
@@ -10,7 +12,21 @@ branch_labels = None
 depends_on = None
 
 
+def _begin_sqlite_ddl_transaction() -> None:
+    bind = op.get_bind()
+    if bind.dialect.name == "sqlite":
+        raw = bind.connection.driver_connection
+        if not isinstance(raw, sqlite3.Connection):
+            raise RuntimeError("reviewed PDF page DDL requires the SQLite driver")
+        if not raw.in_transaction:
+            # Alembic's logical transaction does not start a physical SQLite
+            # transaction for DDL. The outer owner commits the revision or
+            # rolls back all page-review objects together on failure.
+            bind.exec_driver_sql("BEGIN IMMEDIATE")
+
+
 def upgrade() -> None:
+    _begin_sqlite_ddl_transaction()
     op.execute(
         "CREATE TABLE IF NOT EXISTS reviewed_pdf_page_revisions ("
         "review_id TEXT PRIMARY KEY,"
@@ -89,6 +105,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    _begin_sqlite_ddl_transaction()
     row = (
         op.get_bind()
         .exec_driver_sql("SELECT 1 FROM reviewed_pdf_page_revisions LIMIT 1")

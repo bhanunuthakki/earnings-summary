@@ -389,7 +389,16 @@ def _bind_producing_artifact(
     conn.row_factory = prior_factory
 
 
-@pytest.mark.parametrize("version", ["v13-complete-numeric-prose-end", "v14-page-bounded-sections"])
+@pytest.mark.parametrize(
+    "version",
+    [
+        "v13-complete-numeric-prose-end",
+        "v14-page-bounded-sections",
+        "v15-reviewed-pages",
+        "v16-table-cell-boundaries",
+        "v17-reviewed-pages-table-cell-boundaries",
+    ],
+)
 def test_exact_producing_version_survives_retention(
     conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, version: str
 ) -> None:

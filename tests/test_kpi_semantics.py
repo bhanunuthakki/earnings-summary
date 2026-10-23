@@ -745,3 +745,33 @@ def test_numeric_envelope_prose_end_preserves_closed_start_and_sign(
     from pipeline.kpi_semantics import source_numeric_token_occurs
 
     assert source_numeric_token_occurs(token, quote) is valid
+
+
+@pytest.mark.parametrize(
+    ("quote", "token", "valid"),
+    [
+        ("Repurchases  —  (10,167)  —  (22,921)", "(10,167)", True),
+        ("Proceeds  24,910  —  24,910  —", "24,910", True),
+        ("Exchange  (7)  131  —  243", "131", True),
+        ("—  20", "20", True),
+        ("20  —", "20", True),
+        ("20\t—\t30", "20", False),
+        ("20\n—\n30", "20", False),
+        ("Repurchases  —  (10,167)", "10,167", False),
+        ("Proceeds  —  24,910", "0", False),
+        ("Proceeds  —24,910", "24,910", False),
+        ("Proceeds  24,910—", "24,910", False),
+        ("Outlook 10 — 20", "10", False),
+        ("Outlook 10—20", "20", False),
+        ("Loss  \u2212  20", "20", False),
+        ("Loss  \u2013  20", "20", False),
+        ("Loss  —  1,23", "23", False),
+        ("Loss  —  1e3", "3", False),
+    ],
+)
+def test_table_empty_em_dash_cell_preserves_neighboring_tokens(
+    quote: str, token: str, valid: bool
+) -> None:
+    from pipeline.kpi_semantics import source_numeric_token_occurs
+
+    assert source_numeric_token_occurs(token, quote) is valid

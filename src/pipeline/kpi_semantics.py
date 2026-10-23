@@ -165,6 +165,14 @@ def source_numeric_token_occurs(token: str, quote: str) -> bool:
 
     def delimiter(index: int, envelope_start: int | None = None) -> bool:
         char = quote[index]
+        # A standalone em dash between table column gaps is an empty cell,
+        # never a sign. Single spaces and attached dashes remain opaque.
+        if (
+            char == "—"
+            and (index == 0 or quote[max(0, index - 2) : index] == "  ")
+            and (index == len(quote) - 1 or quote[index + 1 : index + 3] == "  ")
+        ):
+            return True
         if (
             char.isspace()
             or char in quotes
@@ -271,7 +279,11 @@ def source_numeric_token_occurs(token: str, quote: str) -> bool:
                 following = quote[suffix : suffix + 1]
                 if following and (
                     following == "%"
-                    or (opaque_symbol(following) and following not in "+-=")
+                    or (
+                        opaque_symbol(following)
+                        and following not in "+-="
+                        and not delimiter(suffix)
+                    )
                     or (exponent_seen and (following.isdigit() or following in "+-"))
                 ):
                     cursor = suffix

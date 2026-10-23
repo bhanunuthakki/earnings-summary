@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "a4ad40b3bc7b1d941344c1befaf11432e449acc4",
+  "scoped_commit": "9aa2f7a4e6fe22e9862ffe64df22a3ba9128d023",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "7fe75dd18f4eff92037239c9dc1c6b300c51813d5aef320ceea3e16978769a70",
+  "source_sha256": "a6d4bba1dfcdace6c186a626392c0ae21f5439c7847ffdeda2182d9d009f5d85",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,8 +22,8 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1476,
-    "total_noncomment_loc": 567887,
+    "executable_modules": 1477,
+    "total_noncomment_loc": 568545,
     "modules_over_1000_loc": 110,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
@@ -358,9 +358,9 @@
         "path": "execution/audit_evidence_integrity.py",
         "module": "execution.audit_evidence_integrity",
         "lines": {
-          "physical": 103,
-          "nonblank": 91,
-          "noncomment": 91
+          "physical": 116,
+          "nonblank": 104,
+          "noncomment": 103
         },
         "internal_fan_out": 2,
         "responsibilities": [
@@ -6706,13 +6706,14 @@
         "path": "execution/upgrade_database.py",
         "module": "execution.upgrade_database",
         "lines": {
-          "physical": 625,
-          "nonblank": 551,
-          "noncomment": 520
+          "physical": 689,
+          "nonblank": 612,
+          "noncomment": 581
         },
         "internal_fan_out": 4,
         "responsibilities": [
           "database",
+          "filesystem",
           "network"
         ],
         "public_functions": 5,
@@ -8416,11 +8417,11 @@
         "path": "src/compute/ir_supplement_capture.py",
         "module": "compute.ir_supplement_capture",
         "lines": {
-          "physical": 646,
-          "nonblank": 597,
-          "noncomment": 587
+          "physical": 720,
+          "nonblank": 670,
+          "noncomment": 660
         },
-        "internal_fan_out": 6,
+        "internal_fan_out": 7,
         "responsibilities": [
           "database",
           "network"
@@ -8464,9 +8465,9 @@
         "path": "src/compute/kpi_extract_summaries.py",
         "module": "compute.kpi_extract_summaries",
         "lines": {
-          "physical": 2527,
-          "nonblank": 2359,
-          "noncomment": 2248
+          "physical": 2547,
+          "nonblank": 2377,
+          "noncomment": 2266
         },
         "internal_fan_out": 33,
         "responsibilities": [
@@ -14453,9 +14454,9 @@
         "path": "src/pipeline/kpi_semantics.py",
         "module": "pipeline.kpi_semantics",
         "lines": {
-          "physical": 1008,
-          "nonblank": 927,
-          "noncomment": 914
+          "physical": 1020,
+          "nonblank": 939,
+          "noncomment": 924
         },
         "internal_fan_out": 3,
         "responsibilities": [
@@ -16307,9 +16308,9 @@
         "path": "src/provenance/financial_fact_resolution.py",
         "module": "provenance.financial_fact_resolution",
         "lines": {
-          "physical": 2310,
-          "nonblank": 2123,
-          "noncomment": 2112
+          "physical": 2517,
+          "nonblank": 2315,
+          "noncomment": 2304
         },
         "internal_fan_out": 8,
         "responsibilities": [
@@ -16317,8 +16318,8 @@
           "filesystem",
           "network"
         ],
-        "public_functions": 13,
-        "fully_annotated_public_functions": 13
+        "public_functions": 14,
+        "fully_annotated_public_functions": 14
       },
       {
         "path": "src/provenance/financial_statement_admission.py",
@@ -16456,11 +16457,11 @@
         "path": "src/provenance/integrity_audit.py",
         "module": "provenance.integrity_audit",
         "lines": {
-          "physical": 6777,
-          "nonblank": 6517,
-          "noncomment": 6508
+          "physical": 6912,
+          "nonblank": 6642,
+          "noncomment": 6633
         },
-        "internal_fan_out": 17,
+        "internal_fan_out": 18,
         "responsibilities": [
           "database",
           "filesystem",
@@ -16704,6 +16705,21 @@
         ],
         "public_functions": 3,
         "fully_annotated_public_functions": 3
+      },
+      {
+        "path": "src/provenance/ocr_page_review.py",
+        "module": "provenance.ocr_page_review",
+        "lines": {
+          "physical": 189,
+          "nonblank": 167,
+          "noncomment": 167
+        },
+        "internal_fan_out": 1,
+        "responsibilities": [
+          "database"
+        ],
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
       },
       {
         "path": "src/provenance/ooxml_extraction.py",

@@ -156,8 +156,10 @@ LEGACY_RELAXED_CAPTURE_VERSIONS = frozenset(
         "v6-native-hyphen-wrap",
     }
 )
-CURRENT_CAPTURE_VERSION = "ir-supplement-native-continuation-v15-reviewed-pages"
-UNREVIEWED_CAPTURE_VERSION = "ir-supplement-native-continuation-v14-page-bounded-sections"
+CURRENT_CAPTURE_VERSION = (
+    "ir-supplement-native-continuation-v17-reviewed-pages-table-cell-boundaries"
+)
+UNREVIEWED_CAPTURE_VERSION = "ir-supplement-native-continuation-v16-table-cell-boundaries"
 
 
 def producing_capture_version(
@@ -175,6 +177,8 @@ def producing_capture_version(
         "ir-supplement-native-continuation-v5-literal-endpoint-repair",
         "ir-supplement-native-continuation-v6-native-hyphen-wrap",
         "ir-supplement-native-continuation-v13-complete-numeric-prose-end",
+        "ir-supplement-native-continuation-v14-page-bounded-sections",
+        "ir-supplement-native-continuation-v15-reviewed-pages",
         UNREVIEWED_CAPTURE_VERSION,
         CURRENT_CAPTURE_VERSION,
     }
