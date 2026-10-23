@@ -197,7 +197,7 @@ def _resolve_tickers(
         )
 
     def reject_company(rejection: TrackedCompanyRejection) -> None:
-        if requested_ticker is not None and rejection.ticker != requested_ticker:
+        if requested_ticker is not None and (rejection.ticker or "").upper() != requested_ticker:
             return
         record_issue(
             {
@@ -340,7 +340,10 @@ def main() -> int:
         try:
             run_id = start_run(conn, directive="fetch_sec_xbrl", ticker_scope=tickers)
         except PipelineRunSuppressedError as exc:
-            print(json.dumps({**suppression_payload(exc), "scope_issues": scope_issues}))
+            payload: dict[str, object] = dict(suppression_payload(exc))
+            if scope_issues:
+                payload["scope_issues"] = scope_issues
+            print(json.dumps(payload))
             return 1 if scope_issues else 0
         rows: list[dict[str, object]] = []
         failed = 0

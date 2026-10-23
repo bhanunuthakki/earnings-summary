@@ -166,3 +166,21 @@ def test_cli_scope_gap_cannot_be_reported_as_success(
         assert statuses == [StageStatus.OK if mode == "empty" else StageStatus.FAILED]
         assert result["failed"] == 0
         assert result["status"] == (StageStatus.OK if mode == "empty" else StageStatus.FAILED).value
+
+
+@pytest.mark.parametrize("stored,requested", [("meta", "META"), ("MeTa", "META"), ("meta", "mEtA")])
+def test_explicit_rejected_identity_is_case_insensitive_but_keeps_raw_ticker(
+    roster: sqlite3.Connection, capsys: pytest.CaptureFixture[str], stored: str, requested: str
+) -> None:
+    roster.execute("DELETE FROM tracked_companies WHERE id != 1")
+    roster.execute("UPDATE tracked_companies SET ticker=? WHERE id=1", (stored,))
+    assert resolve_tickers(argparse.Namespace(ticker=requested), roster) == []
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    issues = [event for event in events if event.get("event") == "sec_xbrl_scope_rejected"]
+    assert len(issues) == 1
+    issue = issues[0]
+    assert issue["reason_code"] == "tracked_company_invalid"
+    assert issue["ticker"] == stored
+    assert issue["row_id"] == 1
+    assert issue["fields"] == ["instrument_type"]
+    assert roster.execute("SELECT ticker FROM tracked_companies WHERE id=1").fetchone()[0] == stored

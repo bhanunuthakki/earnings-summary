@@ -1011,8 +1011,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "The private test helper launches the fixed third-party detect_secrets.pre_commit_hook.main entrypoint. Its optional --filter argument loads this fixed repository callback, so retain that local-code edge. Other arguments are test-controlled scanner flags/fixture paths; --no-verify disables provider verification.",
-      "fingerprint": "f52331a36db470b9436564c410dda7cb1e5ed31e3dd40a6f16dd3ac78939e9a9",
-      "line": 212,
+      "fingerprint": "8a4efa34a6b3c7e4e174c012df24c87de23eb0fca6ece1e52ac492c1dd351040",
+      "line": 217,
       "path": "tests/test_quality_hash_filter.py",
       "targets": [
         ".github/scripts/quality_hash_filter.py"
@@ -1053,7 +1053,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "80d957aea11ded2953bb38109699fc87302811ef534e8a29d77bcc2a7fb80f67",
+      "source_sha256": "a3506153f9b18dd6b7e58343e234dd27633a168b44100adb74c94ce23b853d58",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
