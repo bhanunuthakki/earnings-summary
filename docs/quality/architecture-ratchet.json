@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "93703523577c96a2a62b15be528b1dba6401afdc",
+  "scoped_commit": "231b42c024064479bbb16982fd2eabe9443c8543",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "36f15c7185c2f6d0b2791376e6e8d28181383d2754a34de5b006f593ec3cc331",
+  "source_sha256": "6679543c00c124368bc7e89f3f6b3d032fb6825e8caf9538c9ae2354a033d9bf",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1468,
-    "total_noncomment_loc": 562719,
+    "total_noncomment_loc": 562718,
     "modules_over_1000_loc": 108,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -11858,9 +11858,9 @@
         "path": "src/llm/anchors.py",
         "module": "llm.anchors",
         "lines": {
-          "physical": 816,
-          "nonblank": 704,
-          "noncomment": 647
+          "physical": 815,
+          "nonblank": 703,
+          "noncomment": 646
         },
         "internal_fan_out": 8,
         "responsibilities": [
