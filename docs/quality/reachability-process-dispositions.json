@@ -1035,6 +1035,17 @@
         "execution/sqlite_bootstrap.py",
         "src/compute/kpi_extract_summaries.py"
       ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "Synthetic export regression invokes only the fixed managed SQLite bootstrap and checked-in shareable-report CLI through sys.executable. Input and destination are pytest-owned synthetic files; neither executable target is supplied by report content.",
+      "fingerprint": "4ffea625a31b5b62431db948e677e0e7b7543f309b66ade3e53277627b211813",
+      "line": 196,
+      "path": "tests/test_shareable_report.py",
+      "targets": [
+        "execution/sqlite_bootstrap.py",
+        "execution/export_shareable_report.py"
+      ]
     }
   ],
   "graph_provenance": {
@@ -1042,7 +1053,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "5da86a16cead5101be015f53877f0dd5e03a66284fd177d478488c2ca94a63d6",
+      "source_sha256": "cf86afb552a24e397edc83eb38d1f02178e28474f3b75a7d63c91e1544f50e1c",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

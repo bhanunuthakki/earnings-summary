@@ -215,11 +215,44 @@ def _public_refs(repo_root: Path) -> list[str]:
 def audit_public_refs(repo_root: Path) -> dict[str, dict[str, int]]:
     """Summarize private path/content categories across fetched public branch refs."""
 
+    return _audit_trees(repo_root, _public_refs(repo_root))
+
+
+def audit_outgoing_history(repo_root: Path, base: str) -> dict[str, dict[str, int]]:
+    """Check every outgoing tree, including private content later removed."""
+
+    resolved = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo_root),
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            f"{base}^{{commit}}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=_clean_git_env(),
+    ).stdout.strip()
+    commits = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-list", f"{resolved}..HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=_clean_git_env(),
+    ).stdout.splitlines()
+    return _audit_trees(repo_root, commits)
+
+
+def _audit_trees(repo_root: Path, refs: list[str]) -> dict[str, dict[str, int]]:
+
     file_counts: Counter[str] = Counter()
     ref_counts: Counter[str] = Counter()
     ref_entries: dict[str, list[tuple[str, str]]] = {}
     blob_oids: set[str] = set()
-    for ref in _public_refs(repo_root):
+    for ref in refs:
         result = subprocess.run(
             ["git", "-C", str(repo_root), "ls-tree", "-r", "-z", ref],
             check=True,
@@ -318,10 +351,23 @@ def main() -> int:
         action="store_true",
         help="audit fetched origin branches by path category without printing paths",
     )
+    parser.add_argument(
+        "--outgoing", metavar="BASE", help="audit every commit after BASE before publication"
+    )
     args = parser.parse_args()
+    if args.all_refs and args.outgoing:
+        parser.error("--all-refs and --outgoing are mutually exclusive")
     repo_root = Path(__file__).resolve().parents[1]
-    if args.all_refs:
-        summary = audit_public_refs(repo_root)
+    if args.all_refs or args.outgoing:
+        try:
+            summary = (
+                audit_outgoing_history(repo_root, args.outgoing)
+                if args.outgoing
+                else audit_public_refs(repo_root)
+            )
+        except subprocess.CalledProcessError:
+            print("Public history could not be verified; publication blocked.")
+            return 1
         if summary:
             print("Public-ref path audit failed:")
             for category, counts in summary.items():

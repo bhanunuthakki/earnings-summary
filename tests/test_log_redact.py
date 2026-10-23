@@ -2,15 +2,59 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+import json
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from log_redact import redact, redact_payload, sanitize_operational_text
 
-from log_redact import redact, sanitize_operational_text  # noqa: E402
+
+@pytest.mark.parametrize("path", ["bot", "file/bot"])
+def test_telegram_url_path_credentials_masked(path: str) -> None:
+    marker = "123456:SYNTHETIC-TELEGRAM-CREDENTIAL"
+    output = redact(f"failed https://api.telegram.org/{path}{marker}/getFile?offset=2")
+    assert marker not in output
+    assert f"https://api.telegram.org/{path}" in output
+    assert "/getFile?offset=2" in output
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "OPENROUTER_API_KEY",
+        "fmp_apikey",
+        "telegram_bot_token",
+        "GOOGLE_CLIENT_SECRET",
+        "SMTP_PASSWORD",
+        "aws-secret-access-key",
+    ],
+)
+def test_provider_prefixed_credentials_masked_in_all_diagnostic_forms(key: str) -> None:
+    marker = 'SYNTHETIC-CREDENTIAL-"-WITH-ESCAPE'
+    assignment = redact(f"{key} = {json.dumps(marker)}; next=visible")
+    assert "SYNTHETIC-CREDENTIAL" not in assignment
+    assert key in assignment
+    assert "next=visible" in assignment
+
+    output = json.loads(redact(json.dumps({key: marker, "status": "visible"})))
+    assert marker not in output.values()
+    assert key in output
+    assert output["status"] == "visible"
+
+    payload = redact_payload({"nested": [{key: marker, "count": 2}], "ok": True})
+    assert isinstance(payload, dict)
+    assert "SYNTHETIC-CREDENTIAL" not in json.dumps(payload)
+    assert payload["ok"] is True
+    assert key in json.dumps(payload)
+
+
+def test_normal_diagnostic_strings_and_json_preserved() -> None:
+    for raw in (
+        "https://api.telegram.org/docs/bots",
+        "provider_status=ready; monkey=banana",
+        json.dumps({"provider_status": "ready", "monkey": "banana", "count": 2}),
+    ):
+        assert redact(raw) == raw
 
 
 @pytest.mark.parametrize(
