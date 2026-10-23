@@ -110,6 +110,7 @@ class ForeignProcessorRuntime(_Frozen):
     runtime_root: Path
     bundle_python: Path
     sandbox_launcher: Path
+    sandbox_state_root: Path | None = None
     offline_artifacts: tuple[ProcessorPackageMember, ...] = ()
 
 
@@ -462,6 +463,7 @@ def normalize_foreign_sources(
                             runtime_root=runtime.runtime_root,
                             bundle_python=runtime.bundle_python,
                             sandbox_launcher=runtime.sandbox_launcher,
+                            sandbox_state_root=runtime.sandbox_state_root,
                             recorded_at=manifest.recorded_at,
                             offline_artifacts=runtime.offline_artifacts,
                             apply=apply,

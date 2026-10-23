@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "de5aa809c014608c8a058535098e45df42a8533c",
+  "scoped_commit": "d97be09311fa21667fa7e537609831ce32340f93",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "cba4dec9606cd52237ecfef1b6bac7d6f2f6dacd4c827692a9347b5122dc2009",
+  "source_sha256": "8a2ec01e54c0605458691630ab5abfb2eb004f93758af42cef14c9db4d0952c6",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,9 +22,9 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1476,
-    "total_noncomment_loc": 567452,
-    "modules_over_1000_loc": 110,
+    "executable_modules": 1479,
+    "total_noncomment_loc": 569356,
+    "modules_over_1000_loc": 111,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
     "max_internal_fan_out": 40,
@@ -1174,9 +1174,9 @@
         "path": "execution/build_filing_xbrl_processor_bundle.py",
         "module": "execution.build_filing_xbrl_processor_bundle",
         "lines": {
-          "physical": 243,
-          "nonblank": 220,
-          "noncomment": 220
+          "physical": 284,
+          "nonblank": 261,
+          "noncomment": 261
         },
         "internal_fan_out": 3,
         "responsibilities": [],
@@ -3587,12 +3587,25 @@
         "fully_annotated_public_functions": 1
       },
       {
+        "path": "execution/filing_xbrl_appcontainer_launcher.py",
+        "module": "execution.filing_xbrl_appcontainer_launcher",
+        "lines": {
+          "physical": 160,
+          "nonblank": 146,
+          "noncomment": 144
+        },
+        "internal_fan_out": 0,
+        "responsibilities": [],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
+      },
+      {
         "path": "execution/filing_xbrl_bridge.py",
         "module": "execution.filing_xbrl_bridge",
         "lines": {
-          "physical": 1025,
-          "nonblank": 921,
-          "noncomment": 921
+          "physical": 1058,
+          "nonblank": 951,
+          "noncomment": 950
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -3912,9 +3925,9 @@
         "path": "execution/ingest_sec_filing_xbrl.py",
         "module": "execution.ingest_sec_filing_xbrl",
         "lines": {
-          "physical": 238,
-          "nonblank": 221,
-          "noncomment": 221
+          "physical": 245,
+          "nonblank": 228,
+          "noncomment": 228
         },
         "internal_fan_out": 7,
         "responsibilities": [
@@ -10962,18 +10975,18 @@
         "path": "src/filings/inline_xbrl_processor.py",
         "module": "filings.inline_xbrl_processor",
         "lines": {
-          "physical": 1840,
-          "nonblank": 1664,
-          "noncomment": 1655
+          "physical": 1963,
+          "nonblank": 1779,
+          "noncomment": 1770
         },
-        "internal_fan_out": 2,
+        "internal_fan_out": 4,
         "responsibilities": [
           "filesystem",
           "network",
           "process"
         ],
-        "public_functions": 12,
-        "fully_annotated_public_functions": 12
+        "public_functions": 13,
+        "fully_annotated_public_functions": 13
       },
       {
         "path": "src/filings/item_diff.py",
@@ -11053,9 +11066,9 @@
         "path": "src/filings/processor_installation.py",
         "module": "filings.processor_installation",
         "lines": {
-          "physical": 118,
-          "nonblank": 104,
-          "noncomment": 104
+          "physical": 140,
+          "nonblank": 126,
+          "noncomment": 126
         },
         "internal_fan_out": 3,
         "responsibilities": [
@@ -16373,9 +16386,9 @@
         "path": "src/provenance/fulltext_extractor_identity.py",
         "module": "provenance.fulltext_extractor_identity",
         "lines": {
-          "physical": 249,
-          "nonblank": 225,
-          "noncomment": 220
+          "physical": 262,
+          "nonblank": 238,
+          "noncomment": 231
         },
         "internal_fan_out": 2,
         "responsibilities": [
@@ -17099,9 +17112,9 @@
         "path": "src/provenance/sec_filing_xbrl_ingest.py",
         "module": "provenance.sec_filing_xbrl_ingest",
         "lines": {
-          "physical": 992,
-          "nonblank": 935,
-          "noncomment": 932
+          "physical": 994,
+          "nonblank": 937,
+          "noncomment": 934
         },
         "internal_fan_out": 10,
         "responsibilities": [
@@ -19258,11 +19271,11 @@
         "path": "src/report/windows_appcontainer.py",
         "module": "report.windows_appcontainer",
         "lines": {
-          "physical": 712,
-          "nonblank": 656,
-          "noncomment": 656
+          "physical": 634,
+          "nonblank": 592,
+          "noncomment": 592
         },
-        "internal_fan_out": 2,
+        "internal_fan_out": 3,
         "responsibilities": [
           "filesystem",
           "network",
@@ -19940,9 +19953,9 @@
         "path": "src/runtime/job_runtime.py",
         "module": "runtime.job_runtime",
         "lines": {
-          "physical": 1979,
-          "nonblank": 1787,
-          "noncomment": 1731
+          "physical": 2025,
+          "nonblank": 1828,
+          "noncomment": 1771
         },
         "internal_fan_out": 12,
         "responsibilities": [
@@ -20026,6 +20039,38 @@
         ],
         "public_functions": 2,
         "fully_annotated_public_functions": 2
+      },
+      {
+        "path": "src/runtime/windows_appcontainer.py",
+        "module": "runtime.windows_appcontainer",
+        "lines": {
+          "physical": 1190,
+          "nonblank": 1098,
+          "noncomment": 1089
+        },
+        "internal_fan_out": 0,
+        "responsibilities": [
+          "process"
+        ],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
+      },
+      {
+        "path": "src/runtime/windows_appcontainer_supervisor.py",
+        "module": "runtime.windows_appcontainer_supervisor",
+        "lines": {
+          "physical": 513,
+          "nonblank": 471,
+          "noncomment": 466
+        },
+        "internal_fan_out": 2,
+        "responsibilities": [
+          "filesystem",
+          "network",
+          "process"
+        ],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
       },
       {
         "path": "src/scheduler_manifest.py",
@@ -20629,9 +20674,9 @@
         "path": "src/sources/foreign_normalization_run.py",
         "module": "sources.foreign_normalization_run",
         "lines": {
-          "physical": 579,
-          "nonblank": 543,
-          "noncomment": 541
+          "physical": 581,
+          "nonblank": 545,
+          "noncomment": 543
         },
         "internal_fan_out": 9,
         "responsibilities": [

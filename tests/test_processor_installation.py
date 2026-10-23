@@ -215,3 +215,58 @@ def test_preflight_rejects_host_unit_source_drift_against_seal(
     monkeypatch.setattr(processor, "_PROJECT_ROOT", reviewed_root)
     assert cli.main(["--preflight", "--installation", str(installed_descriptor)]) == 3
     assert json.loads(capsys.readouterr().out)["reason_code"] == "bundle_reviewed_source_changed"
+
+
+def test_installation_state_root_must_be_absolute() -> None:
+    with pytest.raises(ValueError, match="sandbox state root"):
+        installation_module.FilingXbrlInstallation.model_validate(
+            {
+                "schema_version": "filing-xbrl-installation/v1",
+                "bundle_manifest": str(Path.cwd() / "bundle.json"),
+                "runtime_root": str(Path.cwd() / "runtime"),
+                "sandbox_launcher": str(Path.cwd() / "launcher.py"),
+                "sandbox_state_root": "relative/state",
+            }
+        )
+
+
+def test_source_installation_requires_descriptor_state_authority(
+    installed_descriptor: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    original = installation_module.load_approved_processor_bundle_manifest
+
+    def source_loader(path: Path) -> processor.ApprovedProcessorBundle:
+        approved = original(path)
+        execution = approved.manifest.execution.model_copy(
+            update={"launcher_kind": "python_source"}
+        )
+        return replace(
+            approved, manifest=approved.manifest.model_copy(update={"execution": execution})
+        )
+
+    monkeypatch.setattr(
+        installation_module, "load_approved_processor_bundle_manifest", source_loader
+    )
+    with pytest.raises(processor.InlineXbrlProcessorError, match="explicit sandbox state root"):
+        resolve_processor_installation(
+            project_root=installed_descriptor.parent, installation_path=installed_descriptor
+        )
+    with pytest.raises(processor.InlineXbrlProcessorError, match="authority must come from"):
+        resolve_processor_installation(
+            project_root=installed_descriptor.parent,
+            installation_path=installed_descriptor,
+            sandbox_state_root=installed_descriptor.parent / "state",
+        )
+
+
+def test_state_only_argument_cannot_override_configured_descriptor(
+    installed_descriptor: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(installation_module.INSTALLATION_ENV, str(installed_descriptor))
+    with pytest.raises(processor.InlineXbrlProcessorError, match="state authority must come from"):
+        resolve_processor_installation(
+            project_root=installed_descriptor.parent,
+            sandbox_state_root=installed_descriptor.parent / "other-state",
+        )
