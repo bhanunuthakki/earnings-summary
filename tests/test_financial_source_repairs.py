@@ -30,6 +30,79 @@ from tests.test_report_canonical_financials import database as database
 REVIEW_AT = STAMP + timedelta(seconds=1)
 
 
+@pytest.mark.parametrize("cadence", [FinancialCadence.QUARTERLY, FinancialCadence.ANNUAL])
+def test_consumer_reuses_source_and_quarterly_population(
+    database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, cadence: FinancialCadence
+) -> None:
+    from provenance.canonical_fact_resolution import CanonicalFactRead
+    from provenance.fact_read_model import FactReadModel, ProvenanceBundleRead
+    from sources import canonical_financial_series as owner
+
+    rows = (
+        [
+            ("revenue", "2025-01-01", "2025-03-31", "Q1", "100", "USD"),
+            ("revenue", "2025-04-01", "2025-06-30", "Q2", "120", "USD"),
+        ]
+        if cadence is owner.FinancialCadence.QUARTERLY
+        else [
+            ("revenue", "2024-01-01", "2024-12-31", "FY", "100", "USD"),
+            ("revenue", "2025-01-01", "2025-12-31", "FY", "120", "USD"),
+        ]
+    )
+    seed_table(database, rows)
+    source_calls: list[str] = []
+    canonical_calls: list[tuple[str, ...]] = []
+    bundle_calls: list[tuple[str, ...]] = []
+    source: Callable[..., list[sqlite3.Row]] = getattr(
+        owner.CanonicalFinancialSeriesReader, "_source_rows"
+    )
+    canonical = CanonicalFactResolutionEngine.read_as_known_outcomes
+    materialize = FactReadModel.provenance_bundles
+
+    def source_rows(reader: CanonicalFinancialSeriesReader, metric: str) -> list[sqlite3.Row]:
+        source_calls.append(metric)
+        return source(reader, metric)
+
+    def outcomes(
+        resolver: CanonicalFactResolutionEngine,
+        cell_ids: tuple[str, ...],
+        cutoff: datetime,
+        *,
+        observed_through: datetime | None = None,
+    ) -> tuple[CanonicalFactRead, ...]:
+        canonical_calls.append(cell_ids)
+        return canonical(resolver, cell_ids, cutoff, observed_through=observed_through)
+
+    def bundles(
+        reader: FactReadModel, observation_ids: tuple[str, ...], *, cutoff: datetime
+    ) -> tuple[ProvenanceBundleRead, ...]:
+        bundle_calls.append(observation_ids)
+        return materialize(reader, observation_ids, cutoff=cutoff)
+
+    def scalar(*args: object, **kwargs: object) -> None:
+        pytest.fail("consumer must use the ordered population, not scalar selection")
+
+    monkeypatch.setattr(owner.CanonicalFinancialSeriesReader, "_source_rows", source_rows)
+    monkeypatch.setattr(CanonicalFactResolutionEngine, "read_as_known_outcomes", outcomes)
+    monkeypatch.setattr(CanonicalFactResolutionEngine, "read_as_known", scalar)
+    monkeypatch.setattr(FactReadModel, "provenance_bundles", bundles)
+    first = owner.read_financial_consumer_series(
+        database, "SYNTH", "revenue", cutoff=STAMP, cadence=cadence
+    )
+    assert first.series.status == "available", first.series.reason_code
+    assert len(first.points) == 2
+    populations = 1 if cadence is owner.FinancialCadence.QUARTERLY else 2
+    assert source_calls == ["revenue"]
+    assert len(canonical_calls) == len(bundle_calls) == populations
+    assert all(len(ids) == 2 for ids in canonical_calls)
+    second = owner.read_financial_consumer_series(
+        database, "SYNTH", "revenue", cutoff=STAMP, cadence=cadence
+    )
+    assert second.model_dump(mode="json") == first.model_dump(mode="json")
+    assert source_calls == ["revenue", "revenue"]
+    assert len(canonical_calls) == len(bundle_calls) == 2 * populations
+
+
 @pytest.mark.parametrize("projection", [False, True])
 @pytest.mark.parametrize("cadence", [FinancialCadence.QUARTERLY, FinancialCadence.ANNUAL])
 def test_series_reader_uses_one_ordered_canonical_population(

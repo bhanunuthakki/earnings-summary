@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from itertools import pairwise
-from typing import Literal, cast
+from typing import Literal, TypeAlias, cast
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -27,6 +27,10 @@ FINANCIAL_CONCEPT_NAMESPACE = "urn:earnings-summary:legacy:financial"
 _QUARTER_DAYS = (70, 105)
 _SEMIANNUAL_DAYS = (175, 200)
 _REPORTED_TTM_DAYS = (345, 385)
+_FinancialPreparation: TypeAlias = (
+    tuple[list[tuple[object, ...]], dict[str, BindingRevision | None], dict[str, CanonicalFactRead]]
+    | str
+)
 
 
 class CanonicalFinancialReadError(RuntimeError):
@@ -461,7 +465,7 @@ class CanonicalFinancialSeriesReader:
         cached = self._cache.get(key)
         if cached is not None:
             return cached
-        result = self._read_uncached(metric, cadence, continuity)
+        result = self._read_uncached(metric, cadence, continuity, self._prepare(metric, cadence))
         self._cache[key] = result
         return result
 
@@ -476,7 +480,7 @@ class CanonicalFinancialSeriesReader:
         cached = self._coordinate_cache.get(key)
         if cached is not None:
             return cached
-        result = self._project_coordinates_uncached(metric, cadence)
+        result = self._project_coordinates_uncached(metric, cadence, self._prepare(metric, cadence))
         self._coordinate_cache[key] = result
         return result
 
@@ -530,19 +534,13 @@ class CanonicalFinancialSeriesReader:
             (self._ticker, self._ticker, FINANCIAL_CONCEPT_NAMESPACE, metric, metric),
         ).fetchall()
 
-    def _project_coordinates_uncached(
-        self,
-        metric: str,
-        cadence: FinancialCadence,
-    ) -> CanonicalFinancialCoordinateProjection:
+    def _prepare(self, metric: str, cadence: FinancialCadence) -> _FinancialPreparation:
         if not metric:
-            return self._projection_unavailable(metric, cadence, "empty_exact_financial_metric")
+            return "empty_exact_financial_metric"
         try:
             source_rows = self._source_rows(metric)
         except sqlite3.Error:
-            return self._projection_unavailable(
-                metric, cadence, "canonical_financial_schema_unavailable"
-            )
+            return "canonical_financial_schema_unavailable"
         relevant: list[tuple[object, ...]] = []
         try:
             for row in source_rows:
@@ -551,9 +549,7 @@ class CanonicalFinancialSeriesReader:
                 if _label_matches(cadence, row[6]):
                     relevant.append(tuple(row))
         except (TypeError, ValueError):
-            return self._projection_unavailable(
-                metric, cadence, "canonical_financial_clock_invalid"
-            )
+            return "canonical_financial_clock_invalid"
         bindings: dict[str, BindingRevision | None] = {}
         reads: dict[str, CanonicalFactRead] = {}
         if cadence is FinancialCadence.QUARTERLY:
@@ -583,6 +579,25 @@ class CanonicalFinancialSeriesReader:
                 if str(row[0]) not in covered
                 or _duration_matches(cadence, _duration_days(row[3], row[4]))
             ]
+        return relevant, bindings, reads
+
+    def read_with_coordinates(
+        self, metric: str, cadence: FinancialCadence, continuity: SeriesContinuity
+    ) -> tuple[CanonicalFinancialSeries, CanonicalFinancialCoordinateProjection]:
+        """Apply series then coordinate policy to one operation-local population."""
+        preparation = self._prepare(metric, cadence)
+        series = self._read_uncached(metric, cadence, continuity, preparation)
+        return series, self._project_coordinates_uncached(metric, cadence, preparation)
+
+    def _project_coordinates_uncached(
+        self,
+        metric: str,
+        cadence: FinancialCadence,
+        preparation: _FinancialPreparation,
+    ) -> CanonicalFinancialCoordinateProjection:
+        if isinstance(preparation, str):
+            return self._projection_unavailable(metric, cadence, preparation)
+        relevant, bindings, reads = preparation
         grouped: dict[tuple[datetime, int | None, str], list[tuple[object, ...]]] = {}
         try:
             for row in relevant:
@@ -807,55 +822,11 @@ class CanonicalFinancialSeriesReader:
         metric: str,
         cadence: FinancialCadence,
         continuity: SeriesContinuity,
+        preparation: _FinancialPreparation,
     ) -> CanonicalFinancialSeries:
-        if not metric:
-            return self._unavailable(metric, cadence, continuity, "empty_exact_financial_metric")
-        try:
-            source_rows = self._source_rows(metric)
-        except sqlite3.Error:
-            return self._unavailable(
-                metric, cadence, continuity, "canonical_financial_schema_unavailable"
-            )
-        relevant: list[tuple[object, ...]] = []
-        try:
-            for row in source_rows:
-                if not all(_clock(row[index]) <= self._cutoff for index in range(11, 16)):
-                    continue
-                if _label_matches(cadence, row[6]):
-                    relevant.append(tuple(row))
-        except (TypeError, ValueError):
-            return self._unavailable(
-                metric, cadence, continuity, "canonical_financial_clock_invalid"
-            )
-        bindings: dict[str, BindingRevision | None] = {}
-        reads: dict[str, CanonicalFactRead] = {}
-        if cadence is FinancialCadence.QUARTERLY:
-            supported = {
-                str(row[0])
-                for row in relevant
-                if _duration_matches(cadence, _duration_days(row[3], row[4]))
-            }
-            bindings = {
-                str(row[0]): self._ontology.binding_as_known(str(row[0]), self._cutoff)
-                for row in relevant
-                if str(row[0]) in supported
-            }
-            reads = self._canonical_reads(
-                tuple(
-                    binding.canonical_metric_cell_id
-                    for binding in bindings.values()
-                    if binding is not None
-                    and binding.binding_status == "bound"
-                    and binding.canonical_metric_cell_id is not None
-                )
-            )
-            covered = self._cumulative_coverage(bindings, reads)
-            relevant = [
-                row
-                for row in relevant
-                if str(row[0]) not in covered
-                or _duration_matches(cadence, _duration_days(row[3], row[4]))
-            ]
+        if isinstance(preparation, str):
+            return self._unavailable(metric, cadence, continuity, preparation)
+        relevant, bindings, reads = preparation
         if not relevant:
             return self._unavailable(
                 metric, cadence, continuity, "exact_financial_concept_unavailable"
@@ -1338,8 +1309,7 @@ def read_financial_consumer_series(
         conn.row_factory = sqlite3.Row
         with publication_verification_scope(conn):
             reader = CanonicalFinancialSeriesReader(conn, ticker, cutoff=cutoff)
-            series = reader.read(metric, cadence=cadence, continuity=continuity)
-            coordinates = reader.project_coordinates(metric, cadence=cadence)
+            series, coordinates = reader.read_with_coordinates(metric, cadence, continuity)
             reason = None
             override_reason = _financial_override_reason(conn, ticker, metric, cutoff)
             if override_reason is not None:
