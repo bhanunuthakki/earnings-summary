@@ -5,23 +5,71 @@ roadmap at 83/100. This replacement has not been graded. The owner requires abov
 90/100 and no blockers before implementation, then independent review of each key
 finished change. No application change from this roadmap has started.
 
-## Goal and architecture decision
+## Program overview
 
-Make financial research simpler by removing repeated representations and procedures.
-Preserve analytical depth, original evidence, admission, history, and explicit gaps.
-Use the existing owners: `SourceFactRepository` publishes source facts,
-`FactReadModel` reads their provenance, and `CanonicalFactResolutionEngine` selects
-facts and returns `CanonicalFactRead` containing the selection and its bundle.
-Consumers retain their distinct presentation and eligibility policies. Add no new
-store, cache service, generic framework, or fact-shaped model. Discovery serves
-growth, peers, valuation and DCF readiness; reports serve financial/evaluation views.
+The application serves earnings briefs, deep research/Q&A, and portfolio decisions
+through one evidence flow:
 
-The next change removes duplicate evidence work in discovery and reports.
-It is a useful shared-reader cut, not a claim that the durable data model is already
-simple. Later stages remove repeated semantic checks and select a competing write
-procedure for consolidation. Historical tables need not disappear for runtime
-models and procedures to become simpler. Feature cuts follow this structural work.
-Sol implements; Astra judges architecture; root integrates evidence and delivery.
+**Source bytes → extraction with exact context → admitted observations → selected
+facts and reusable calculations → analytical sections → views and exports.**
+
+Each stage has one owner. Existing owner profile, thesis, holdings, thresholds and
+valuation assumptions supply personal context; reported evidence retains its own
+identity. Pre-earnings questions, post-earnings interpretation and investment
+decisions keep their distinct analytical work. All reading depths retain the same
+financial accuracy and access to full analysis. Expansion first uses held evidence;
+new collection requires owner approval.
+Retain novel, one-off and unclassified observations with explicit dispositions and
+source links throughout consolidation.
+
+| Workstream | Concrete change and removal target | Result and acceptance |
+|---|---|---|
+| Financial data reads | Use `CanonicalFactResolutionEngine` selections and their existing bundles. Share repeated definition/binding checks in the ontology owner and document metadata reads in the provenance owner. Delete superseded consumer copies. | Briefs, research, valuation and readiness use the same facts and evidence checks. Compare full outputs, gaps, clocks, query counts and verification calls. The first reader cut is ready for independent approval. |
+| Acquisition, parsing and publication | Route discovered and explicit URLs through managed document registration. Replace the spreadsheet value-only handoff with source-preserving typed values and locators. Converge eligible publication on `SourceFactRepository`, retaining necessary compatibility projections. | Remove competing registration/completion, conversions and producer-specific write procedures once their replacements preserve admission, replay, corrections and recovery. Specialized source parsers remain where document formats differ. Writer replacement is not yet qualified. |
+| Backend/frontend boundary | Build structured analytical sections under their existing section owners. Move panel loading and enrichment out of rendering; replace data → Markdown → data round trips with prepared rows. | Renderers display prepared results. HTML, Markdown and JSON share their analytical inputs. First qualify the Say/Do and panel-loading paths; do not infer structured facts from generated prose. This is a source-supported proposal, not an implemented change. |
+| Frontend reuse | Use existing controls, source chips, tables/charts and styles for compact views, detailed reading and exact evidence. Carry the selected company, fiscal period, cutoff and report identity between views. | Demonstrate one company section at multiple depths with consistent values and source links. Reuse the existing durable Copilot handoff. Preserve exports and full analysis. No frontend consolidation has been implemented in this cleanup. |
+| Tests, setup and later feature cuts | Share existing fixture builders and the migrated database template. Keep invariant tests with their business owner and a small set of cross-surface task checks. Review feature usage and dependencies after initial pruning. | Remove repeated setup and redundant wrappers with their superseded procedures. Keep unique corruption, clock, financial and recovery coverage. Remove an unused feature's route, UI and backend together after its evidence and replacement are clear. |
+
+The model work separates repeated representations from distinct information.
+Source documents, observations, metric meaning/admission, calculated results,
+research artifacts and personal investment state already have different roles.
+Use their existing records and stable IDs. Reduce competing writes and repeated
+read/presentation objects before considering physical table retirement. No new
+store, universal fact model or generic orchestration framework is proposed.
+
+## Delivery sequence and visible MVPs
+
+1. **Shared financial reads:** remove the proven extra evidence fetches and default-
+   clock checks; show identical results with measured query/verification reductions.
+   Share semantic checks and metadata through existing owners in bounded follow-ups.
+2. **One prepared research section:** qualify and implement a structured section
+   that removes a Markdown parsing round trip and render-time loading. Show the
+   compact view, complete analysis and exact evidence in the same frontend MVP.
+3. **One source-processing cluster:** converge registration and source handoff,
+   then replace and remove a qualifying competing publication procedure. Demonstrate
+   replay, changed-source handling and failure recovery on the same inputs.
+4. **Feature pruning:** use observed use and core-task coverage to remove redundant
+   surfaces and their backend procedures. Initial structural work must not become
+   an indefinite prerequisite; the bounded matrix below supplies an owner-decision
+   exit when a larger consolidation lacks required capabilities.
+
+Fixture/setup simplification accompanies each MVP. NU PRE/POST and MELI supply
+protected comparison cases for analysis depth: thesis implications, historical
+context, assumptions, scenarios, sensitivities and workbook detail. Retained artifact
+bytes were reconciled; native and semantic acceptance still need their own proof.
+
+Already committed locally: shared fiscal calendars, removal of two unused parser
+helpers, one summary database authority, and source-aware completion/correction
+handling. Several of these are correctness improvements rather than size cuts.
+The broader data-plane and frontend consolidation remains proposed. Measure each
+MVP by removed competing procedures, fewer reads/conversions, simpler setup,
+preserved financial meaning and demonstrated user behavior. No overall deletion
+percentage or production speedup is established.
+
+Sol implements; Astra judges consequential architecture; root integrates and
+reports. Independent Opus above 90 and applicable checks remain required. The
+following sections specify the first cut and the limits of later changes.
+
 ## Next change: use the evidence already selected
 
 In `src/sources/discovery_financials.py::read_financial_history`, replace each
