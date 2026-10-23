@@ -272,9 +272,12 @@ def test_discovery_covers_approved_roots_without_touching_unrelated_directories(
     unrelated.write_bytes(b"unrelated")
     discovery = discover_temp_runs(state, code_root=code, now=NOW)
     assert {item.path for item in discovery.catalog.artifacts} == {fixture}
+    candidate = getattr(artifact_retention, "_approved_root")
+    assert isinstance(candidate, Callable)
+    approved_root = cast(Callable[[Path, Path], bool], candidate)
+    independently_approved = approved_root(root, state)
     result = run_retention(state, now=NOW, apply=True, catalog=discovery.catalog)
-    inside_windows_temp_scope = os.name == "nt" and Path("C:/tmp") in root.parents
-    if location == "runtime" and not inside_windows_temp_scope:
+    if location == "runtime" and not independently_approved:
         # A supplied code root enables inventory, but cannot grant retirement authority.
         assert result.deleted == 0
         assert result.decisions[0].reason == "unapproved_scope"

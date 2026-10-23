@@ -26,6 +26,20 @@ config = getattr(upgrade_module, "_config")
 seed_corpus: Callable[..., None] = getattr(corpus, "_seed")
 
 
+@pytest.fixture(autouse=True)
+def isolated_authoritative_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = (tmp_path / "authoritative-runtime").resolve()
+
+    def authoritative_root() -> Path:
+        return runtime
+
+    def configured_database(_runtime_root: Path) -> Path:
+        return runtime / "data" / "portfolio.db"
+
+    monkeypatch.setattr(upgrade_module, "authoritative_managed_runtime_root", authoritative_root)
+    monkeypatch.setattr(upgrade_module, "portfolio_db_path", configured_database)
+
+
 @pytest.fixture
 def legacy_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     path = migrated_db(tmp_path / "legacy.db", target=PRIOR)

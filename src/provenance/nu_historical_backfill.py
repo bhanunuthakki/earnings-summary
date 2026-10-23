@@ -42,8 +42,8 @@ from provenance.source_fact_repository import (
 )
 from runtime.deterministic import parse_instant, sha256_text
 
-WORKBOOK_SHA = "1f8f1fe5e3859bc09526c44102ff66a3608a5a40026b8539dcf0794f5ed62594"
-DECK_SHA = "96748fa5c8fff32dd1e784d79e24e92c1f382f5fb49d3ac86eef1bc7e6f41bf0"
+WORKBOOK_SHA = "1f8f1fe5e3859bc09526c44102ff66a3608a5a40026b8539dcf0794f5ed62594"  # pragma: allowlist secret -- public source SHA-256
+DECK_SHA = "96748fa5c8fff32dd1e784d79e24e92c1f382f5fb49d3ac86eef1bc7e6f41bf0"  # pragma: allowlist secret -- public source SHA-256
 _URL_ROOT = "https://api.mziq.com/mzfilemanager/v2/d/59a081d2-0d63-4bb5-b786-4c07ae26bc74/"
 WORKBOOK_URL = _URL_ROOT + "5c818a2c-27a4-80cd-ea93-202347860b1e?origin=2"
 DECK_URL = _URL_ROOT + "94e05ef8-27f0-a330-8bf9-0c005fc24c3e?origin=2"
