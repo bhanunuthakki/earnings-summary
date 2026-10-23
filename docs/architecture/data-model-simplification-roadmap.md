@@ -1,11 +1,14 @@
 # Research platform: backend and ingestion retirement roadmap
 
 Status: **Revised after three independent Sol reviews; Opus acceptance pending.**
-Source baseline: `d19bc3e38dc5c13f27d78555ae69947bc2d9aee9`.
+Application/test source is unchanged between inventory baseline `d19bc3e3` and
+current review baseline `569b0499`.
 This version supersedes the helper-first sequence. Three fresh GPT-6.1 Sol judges
 reviewed the previous version; all requested revision. Their original scores and
 findings remain in the [panel receipt](../quality/backend-streamlining-panel-20261022.json).
-This revision has not been independently regraded. Opus 5.5 must then score the
+The first revised review scored ambition 94/effectiveness 90, REVISE: its R4 slice
+did not overlap the summary-number lane. The corrected R4 below awaits review.
+Opus 5.5 must then score the
 roadmap and each key finished implementation strictly above 90 with no blockers.
 The owner chose subscription-only review after its reset; no paid fallback.
 
@@ -31,6 +34,26 @@ Success requires old active procedures to disappear in the same bounded change a
 their replacement. A shared helper alone does not complete a retirement unit.
 Existing owners can gain a coherent operation; a new generic workflow engine,
 attempt store, cache service or universal fact model is unnecessary.
+
+### Data-model reduction and ownership
+
+Reduce competing representations and decisions before deleting historical tables.
+These are existing concepts and owners, not proposed new entity tables:
+
+| Concept | Retained authority | Representation/procedure to remove |
+|---|---|---|
+| Registered original and acquisition inventory | Managed IR publication and existing document/evidence records | Loose sidecar/categorizer registration decisions for each migrated input family. Discovery and downloads remain adapters. |
+| Extracted source content and observations | Existing fulltext/extractor and financial provenance owners | Re-extraction when exact source/parser identity already proves usable content; numeric extraction from generated summaries after original-source parity. |
+| Generated research product | `llm_artifact_store`, with attempts in `pipeline.run_accounting` | File existence and JSON `processed` as competing completion authorities after the R3 contract qualifies. Text files become projections. |
+| Selected financial fact and evidence | `CanonicalFactResolutionEngine`, `CanonicalFactRead` and provenance bundles | Consumer-specific selection/bundle rereads and copied verification logic. Keep distinct metric, period, unit, basis, scope and knowledge/observation clocks. |
+| Prepared analysis and presentation | Existing typed report sections, starting with `SayDoSection` | Markdown-to-row parsing, render-time enrichment and duplicate context/filter caches for migrated sections. Export and UI consume the same prepared argument. |
+
+Carry existing stable references through boundaries. Do not rebuild loose copies of
+identity/context dictionaries or derive a financial value from presentation text.
+Purpose-specific calculations and presentation rows may remain when they encode
+different information; they must not become independent source or selection owners.
+Holdings, thesis, personal thresholds and scenario assumptions retain their existing
+owners. This roadmap adds no account, tenant or synchronization model.
 
 ## Seven retirement units
 
@@ -79,6 +102,9 @@ local-upload categorization stays until its separate input contract is supported
 one registration owner. Compare already-present inputs, changed bytes, partial
 failure, classification failure and denied collection. Delete the superseded
 registration/success branches, not merely add managed publication alongside them.
+Start with PDF `ir_presentation` inputs, using the existing synthetic MELI managed-
+publication fixtures. Exercise discovered and explicit URLs without network access.
+Other document families stay on their current supported route until qualified.
 
 ### R3 — Explicit-state execution, then qualified product completion
 
@@ -150,6 +176,28 @@ numeric population, with exact original-source anchors and explicit exclusions.
 Reroute refresh/comment callers and remove that class's summary-number procedure.
 Measure model calls and latency; narrative output remains required, so total call
 reduction is not assumed. Missing parity blocks that class, not other retirement units.
+**First retirement class: `ir_presentation` → `ir_presentation_brief`.** This class
+actually enters both summary-number jobs through `_IR_PRESENTATION_SOURCE`.
+Qualify original-PDF extraction on one held presentation and its matching retained
+brief, bound to the same issuer, exact source version and fiscal period. Extend
+the existing direct-source path for that class, including the configured allowlist
+and long-tail/novel population; a document-type argument alone proves no coverage.
+Compare source-supported numbers, definitions, units, anchors and dispositions,
+with explicit exclusions and partial/truncated states. Then migrate its actual
+refresh/comment callers and remove that class from both summary-number jobs.
+Keep the presentation brief for narrative consumers.
+
+No matching presentation brief was found in either development checkout's top-level
+`.tmp/` cache. A held original/brief pair is therefore **not yet established**; this
+does not show absence on the canonical host. Wave 2 must locate and bind that pair
+through approved existing artifacts/snapshots before this class can qualify. If
+unavailable, present the exact missing input and bounded owner choice; do not fetch
+or generate it implicitly. R1/R6 and other qualified units continue independently.
+
+`ir_supplement` PDFs already use direct capture and have no summary-brief handler.
+They can qualify shared extractor mechanics but cannot demonstrate summary-lane
+parity or count as an R4 retirement. Their 200-fact/80,000-character limits and
+partial states remain explicit. Presentation parity does not qualify transcripts.
 
 ### R5 — One publication authority for each migrated producer
 
@@ -178,6 +226,11 @@ retention, exact replay/conflict and supersession results, and tested mid-period
 failure/recovery. Specify the new transaction boundary explicitly; current per-period
 commits differ from native graph atomicity. Then remove that producer's competing
 publication sequence. Current audit does not yet qualify this switch.
+Begin qualification with the existing synthetic CO/NII two-workbook supersession
+case in `test_ir_spreadsheet_ingest.py`, extended through the actual parser and
+including unknown/rejected rows. This is a test slice, not production issuer
+qualification. Select a real supported producer only after its exact source,
+definition and capture contracts pass; do not infer NU readiness from this fixture.
 
 ### R6 — One bounded multi-cell financial read per consumer operation
 
@@ -244,6 +297,13 @@ The existing durable Copilot handoff stays; no duplicate chat system is proposed
 - **Wave 3:** migrate R4 original-source numeric extraction and R5 publication one
   qualified producer/class at a time. Do not require a whole-platform cutover.
 
+After Wave 1, show a cumulative before/after owner map and open feature-pruning
+assessment in parallel with later qualified cuts. Record each candidate's core-task
+use, actual route/scheduler/import dependencies, retained data and replacement.
+Bring concrete feature-removal choices to the owner; static non-reachability alone
+does not prove operational non-use. After an approved cut, remove its UI, route,
+backend and redundant tests together. Preserve unique invariant coverage.
+
 Each change records old procedure → owner, actual callers, old definitions removed,
 new abstractions added, and the remaining compatibility path with an explicit removal
 condition. Maintain one cumulative acquisition/processing/publication/read owner map
@@ -295,6 +355,11 @@ corruption, clocks, admission and recovery assertions. Use existing migrated_db;
 no new fixture framework or schema rebuilt per test. Run focused serial tests and
 applicable static, architecture, reachability and make check-fast gates. The known
 full-suite teardown failure remains an unresolved release obligation.
+Root owns this delivery gate and must reconcile the existing storage/teardown work
+before claiming full validation. Retain the existing failure log/sample; do not
+repeat the same full run while its cause is unchanged. After a qualified fix, run
+one complete applicable gate and report its actual result. Focused passing checks
+permit bounded implementation evidence, not an exception to the release gate.
 
 For a blocked unit, name the exact missing capability and move to another qualified
 unit. After one bounded feasibility decision, bring the unresolved choice to the

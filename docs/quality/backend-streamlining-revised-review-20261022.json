@@ -1,0 +1,129 @@
+{
+  "receipt_version": 1,
+  "date": "2026-10-22",
+  "timezone": "America/Los_Angeles",
+  "purpose": "Fresh independent reassessment of specific revised backend/ingestion roadmap",
+  "method": {
+    "transport": "native_subagent",
+    "dispatch_model": "gpt-6.1-sol",
+    "effort": "high",
+    "fresh_context": true,
+    "other_judge_receipts_read": false,
+    "implementer_preferred_verdict_supplied": false,
+    "substantive_reassessment": "Same independent judge assessed the R4 correction after identifying the class mismatch; prior scores retained."
+  },
+  "final_proposal": {
+    "path": "docs/architecture/data-model-simplification-roadmap.md",
+    "sha256": "a493e15f40f854cfd07992c734948153d189f522e512fe3b576998d9a25012f1",
+    "application_test_baseline": "569b0499"
+  },
+  "reviews": [
+    {
+      "proposal_sha256": "584edde923f5ee36a8381218a30b0a1f39e6ebfe1b5c8d9ef39d14c0e5c4d8dd",
+      "model": "gpt-6.1-sol",
+      "verdict": "REVISE",
+      "ambition_score": 94,
+      "effectiveness_score": 90,
+      "confidence": "high for the bounded planning finding; moderate for whole-roadmap feasibility",
+      "strengths": [
+        "The endpoint is substantial structural subtraction across acquisition, extraction, completion, publication, reads and rendering. Each unit names an old procedure to remove. Existing owners absorb the work; no generic engine or additional state authority is proposed.",
+        "R1 targets a demonstrated defect as well as duplication: src/pipeline/quarterly_refresh.py:184-195 converts parse errors to zero, while :344-360 classifies nonnegative returns as success. The proposal preserves dependency order and separates refresh_cache's caller-owned commit=False path.",
+        "R3 correctly treats completion as a proposed extension. src/llm_artifact_store.py:385-519 currently opens and commits its own connection, returns (None, False) on failure, and selects the current artifact by ticker/scope/purpose/period. The roadmap explicitly gates connection ownership, exact document identity, complete checksums, crash recovery and projection repair before retiring processed flags.",
+        "R5 does not mistake native types for publication parity. src/ir_pipeline/spreadsheet.py:120-165 loses cell provenance and scales into floats; src/ir_pipeline/ingest.py:187-285 persists per period and ends failures without a prior rollback. The roadmap makes capture/disposition ownership and transaction recovery explicit design gates before a producer cutover.",
+        "R6 addresses measured repeated verification while preserving snapshot and clock boundaries. src/provenance/canonical_fact_resolution.py:497-559 confirms the existing batch owner and its fail-whole-call behavior. The proposal correctly requires a cell-isolating report operation, positive derived output, recursive counts and measured latency rather than claiming gains already exist.",
+        "R7 recognizes that existing SayDoSection historical rows do not cover all narrative commitments. src/report/models.py:908-961 and src/report/renderers/workspace_data.py:160-224 support the need to preserve narrative selection and owner-context invalidation while removing render-time interpretation.",
+        "The delivery plan starts with independent structural cuts, opens owner feature assessment after Wave 1, preserves held-evidence authority, and explicitly retains NU PRE/POST, MELI workbook depth, selected-report Q&A and portfolio decisions. It does not use unchanged artifact bytes as semantic proof. The unresolved full-suite gate remains a release obligation."
+      ],
+      "blocking_findings": [
+        {
+          "title": "R4's first source class cannot retire the lane named by its MVP",
+          "evidence": "Frozen proposal R4 says to start with original ir_supplement PDFs, compare against the retained summary path, reroute callers and remove that class's summary-number procedure. However src/compute/kpi_extract_summaries.py:256-267 limits summary inputs to earnings_summary, ir_press_release_summary and ir_presentation_brief. Its :1364-1374 explicitly states that ir_supplement has no brief handler and is never seen by brief-driven capture; :1380 makes it the existing direct-PDF default. Thus supplement qualification has no same-class summary population or summary branch to remove. It cannot supply the proposed first end-to-end retirement proof, and the Wave 2 feasibility decision can complete without testing the major lane cut.",
+          "smallest_fix": "Keep supplement work as bounded extractor qualification, but do not count it as R4 retirement or summary-path parity. Name one actual overlapping first class, preferably ir_presentation alongside R2, and require a held original plus its matching retained brief. Compare configured and novel observations, explicit exclusions, anchors and dispositions on that same source population; then remove that class from both summary jobs and reroute its callers. If no held pair exists, record that exact local block and ask the owner for the bounded choice while R1/R6 and other qualified units proceed. No implementation or whole-platform parity is required to correct the roadmap."
+        }
+      ],
+      "required_changes": [
+        "Separate R4 supplement extractor feasibility from the first actual summary-lane retirement. Add the overlapping source class and same-source original/summary acceptance inputs to the Wave 2 decision and Wave 3 cut."
+      ],
+      "optional_changes": [
+        "At each wave's owner checkpoint, show the cumulative number of active owning procedures and compatibility paths removed. The proposed per-change scorecard already supplies the data; a cumulative view will make drift toward helper-only work visible.",
+        "When the roadmap is accepted, restamp its source baseline against the frozen manifest's 569b0499 baseline or explain the older d19bc3e source equivalence. This is traceability cleanup, not a demonstrated application mismatch."
+      ],
+      "limitations": [
+        "Advisory independent review only; this is not a qualified blocking Judge receipt or implementation approval.",
+        "Verified the frozen proposal SHA-256 and HEAD 569b0499fadaeb029bc4af8a4677977c48f1b63e. Git showed only the roadmap modified before this receipt, with no application/test diff.",
+        "Inspected source, the retirement inventory, reader initialization evidence, spreadsheet parity audit and retained reader comparison data. Did not read other judge receipts or agent outputs.",
+        "No tests, providers, network, live database access or implementation changes were performed. Retained measurements and prior test results were inspected, not reproduced.",
+        "Scores assess planned ambition and likely effectiveness. No retirement, speedup, native publication parity, NU/MELI semantic acceptance or release gate is claimed as achieved. R3/R5 open capabilities and R6 targets remain implementation gates, not additional blockers merely because they are unfinished."
+      ]
+    },
+    {
+      "proposal_sha256": "a493e15f40f854cfd07992c734948153d189f522e512fe3b576998d9a25012f1",
+      "model": "gpt-6.1-sol",
+      "verdict": "PASS",
+      "ambition_score": 94,
+      "effectiveness_score": 92,
+      "confidence": "high for planning coherence; moderate for eventual implementation feasibility",
+      "strengths": [
+        "The seven units target real overlapping procedures across acquisition, extraction, completion, publication, reads and rendering. Success requires removal of each replaced active owner in the same bounded change. Existing owners absorb the operations; no generic engine or additional independent store is proposed.",
+        "R4 now resolves the prior blocker substantively. src/compute/kpi_extract_summaries.py:256-267 includes _IR_PRESENTATION_SOURCE in the IR group; extract_for_ticker at :338-339 and capture_for_ticker at :1286 both enumerate that group. The corrected first class therefore overlaps both active summary jobs. Exact issuer/source-version/period pairing, configured and novel populations, dispositions, caller migration and removal from both jobs are explicit acceptance conditions. Supplements are correctly excluded from retirement credit, consistent with :1364-1380.",
+        "R4 does not assert that a matching held pair exists. Wave 2 must locate approved existing evidence or bring the precise missing-input choice to the owner. No implicit collection or generation is authorized. This makes the missing pair a bounded class-local feasibility gate while independent structural cuts continue.",
+        "R1 addresses demonstrated duplication and false success: src/pipeline/quarterly_refresh.py:184-195 converts parse errors to zero and its extraction stage treats nonnegative returns as success. The plan retains dependency order, completed-document recovery and refresh_cache's caller-owned transaction path rather than promising unsupported atomicity.",
+        "R3 explicitly proposes a capability extension within existing owners. src/llm_artifact_store.py:385-519 currently owns its connection/commit, has a best-effort failure return and a ticker/scope/purpose/period current-row lookup. The roadmap gates fail-closed connection ownership, exact document identity, input/output integrity and projection repair before retiring competing completion signals. It does not present the current writer as already sufficient.",
+        "R5 preserves the real unresolved semantic boundary. src/ir_pipeline/spreadsheet.py:120-165 drops cell lineage and scales to floats; src/ir_pipeline/ingest.py:187-285 publishes per period through legacy persistence. The roadmap requires lossless capture/disposition ownership, parser-to-publication equality and tested transaction/recovery policy before any producer switch. Synthetic CO/NII is explicitly not NU qualification.",
+        "R6 uses the existing batch resolution owner while acknowledging its fail-whole-call behavior, visible in src/provenance/canonical_fact_resolution.py:497-559. It requires cell isolation, snapshot/clock parity, positive derived output and recursive verification accounting. SELECT and latency thresholds are proposed acceptance targets, not claimed gains.",
+        "R7 retains narrative depth and owner-context selection while removing render-time interpretation. This fits the gap between src/report/models.py:908-961 and src/report/renderers/workspace_data.py:160-224. The broader acceptance also protects NU PRE/POST, MELI scenarios/workbook formulas, immutable selected-report Q&A and portfolio conditions. Feature pruning follows initial structural cuts and owner assessment; physical retirement and full release validation retain separate gates."
+      ],
+      "blocking_findings": [],
+      "required_changes": [],
+      "optional_changes": [
+        "Use the proposed cumulative owner map at each wave checkpoint to show active procedures and compatibility paths removed. This will make helper-only progress or accumulating adapters visible without adding another reporting system.",
+        "When binding the R4 pair, record the exact original and brief identities beside the acceptance result and distinguish summary-only unsupported values from source-supported retained values. The roadmap already requires source-supported parity; this makes that decision easy to review."
+      ],
+      "limitations": [
+        "This is an advisory planning PASS under the requested score rubric, not a qualified blocking Judge receipt, Opus sign-off, implementation approval or release approval.",
+        "Verified the frozen proposal SHA-256 and HEAD 569b0499fadaeb029bc4af8a4677977c48f1b63e. Git showed no src/execution/tests changes from inventory baseline d19bc3e3 to HEAD and no working application/test diff. The source-baseline clarification is supported.",
+        "Reassessed the full revised artifact against source and the previously inspected retirement inventory, reader evidence and spreadsheet audit. Did not read other judge receipts or agent outputs. The reported development-cache search was not independently repeated and does not establish canonical-host absence.",
+        "No tests, providers, network, live state access or implementation changes were performed. Retained measurements were not reproduced. No retirement, production speedup, financial parity or NU/MELI semantic acceptance is claimed as achieved.",
+        "The R4 held pair, R3 persistence/key qualification, R5 capture/disposition decision, R6 measured targets and the existing full-suite teardown obligation remain open gates. Their explicit bounded treatment supports this roadmap verdict; it does not establish that those gates will pass."
+      ]
+    }
+  ],
+  "root_disposition": {
+    "advisory_acceptance": "PASS",
+    "criterion": "Ambition and effectiveness each strictly above 90 and no blocking findings",
+    "implementation_gate": "PENDING exact independent Claude Opus 5.5 subscription review; no implementation started",
+    "change": "R4 first retirement is presentation originals with matching presentation briefs, not supplements that never enter the old lane. Pair qualification remains required and is not claimed complete.",
+    "unchanged_obligations": [
+      "R3 durable completion contract qualification",
+      "R4 same-source configured and novel numeric coverage",
+      "R5 lossless unknown/rejected capture and recovery",
+      "R6 positive derived report, clocks/cell isolation, measured query/verification/latency targets",
+      "NU/MELI/Q&A/portfolio retained-task acceptance",
+      "Unresolved full-suite teardown release gate"
+    ]
+  },
+  "prior_proposal_reconstruction": {
+    "base": "final_proposal",
+    "prior_sha256": "584edde923f5ee36a8381218a30b0a1f39e6ebfe1b5c8d9ef39d14c0e5c4d8dd",
+    "unified_patch_from_final": "--- final-proposal.md\n+++ prior-proposal.md\n@@ -1,14 +1,11 @@\n # Research platform: backend and ingestion retirement roadmap\n \n Status: **Revised after three independent Sol reviews; Opus acceptance pending.**\n-Application/test source is unchanged between inventory baseline `d19bc3e3` and\n-current review baseline `569b0499`.\n+Source baseline: `d19bc3e38dc5c13f27d78555ae69947bc2d9aee9`.\n This version supersedes the helper-first sequence. Three fresh GPT-6.1 Sol judges\n reviewed the previous version; all requested revision. Their original scores and\n findings remain in the [panel receipt](../quality/backend-streamlining-panel-20261022.json).\n-The first revised review scored ambition 94/effectiveness 90, REVISE: its R4 slice\n-did not overlap the summary-number lane. The corrected R4 below awaits review.\n-Opus 5.5 must then score the\n+This revision has not been independently regraded. Opus 5.5 must then score the\n roadmap and each key finished implementation strictly above 90 with no blockers.\n The owner chose subscription-only review after its reset; no paid fallback.\n \n@@ -176,28 +173,10 @@\n Reroute refresh/comment callers and remove that class's summary-number procedure.\n Measure model calls and latency; narrative output remains required, so total call\n reduction is not assumed. Missing parity blocks that class, not other retirement units.\n-**First retirement class: `ir_presentation` \u2192 `ir_presentation_brief`.** This class\n-actually enters both summary-number jobs through `_IR_PRESENTATION_SOURCE`.\n-Qualify original-PDF extraction on one held presentation and its matching retained\n-brief, bound to the same issuer, exact source version and fiscal period. Extend\n-the existing direct-source path for that class, including the configured allowlist\n-and long-tail/novel population; a document-type argument alone proves no coverage.\n-Compare source-supported numbers, definitions, units, anchors and dispositions,\n-with explicit exclusions and partial/truncated states. Then migrate its actual\n-refresh/comment callers and remove that class from both summary-number jobs.\n-Keep the presentation brief for narrative consumers.\n-\n-No matching presentation brief was found in either development checkout's top-level\n-`.tmp/` cache. A held original/brief pair is therefore **not yet established**; this\n-does not show absence on the canonical host. Wave 2 must locate and bind that pair\n-through approved existing artifacts/snapshots before this class can qualify. If\n-unavailable, present the exact missing input and bounded owner choice; do not fetch\n-or generate it implicitly. R1/R6 and other qualified units continue independently.\n-\n-`ir_supplement` PDFs already use direct capture and have no summary-brief handler.\n-They can qualify shared extractor mechanics but cannot demonstrate summary-lane\n-parity or count as an R4 retirement. Their 200-fact/80,000-character limits and\n-partial states remain explicit. Presentation parity does not qualify transcripts.\n+Start with original `ir_supplement` PDFs already supported by automated capture.\n+The first feasibility result enumerates configured, long-tail and novel observations\n+against the retained summary path; current caps/truncation must produce an explicit\n+partial result. A successful bounded supplement does not qualify transcripts.\n \n ### R5 \u2014 One publication authority for each migrated producer\n \n"
+  },
+  "evidence_limits": {
+    "application_or_test_edits": false,
+    "runtime_or_test_checks_run": false,
+    "performance_gains_measured": false,
+    "document_checks": [
+      "Frozen proposal SHA256 verified before each review",
+      "Final receipt SHA256 matches current roadmap",
+      "git diff --check passed"
+    ],
+    "live_state_operations": false,
+    "source_collection": false,
+    "application_model_calls": false,
+    "metered_api_fallback": false
+  },
+  "task_artifacts": {
+    "retained": ".tmp/roadmap-revised-review source fragments, frozen proposals, manifests and exact-model Opus prompt; existing bounded reader baselines",
+    "reason": "Pending exact Opus review and later paired implementation proof",
+    "release_condition": "Retire superseded review-packet copies after Opus disposition is durably captured; retain smallest unresolved reproduction and paired baselines until the affected implementation proof is complete."
+  }
+}
