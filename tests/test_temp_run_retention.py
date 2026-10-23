@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -20,6 +21,185 @@ from src.operations.temp_run_retention import begin_temp_run, discover_temp_runs
 
 NOW = datetime(2026, 10, 8, tzinfo=UTC)
 MANIFEST_NAME = ".earnings-temp-run.json"
+
+
+@pytest.fixture
+def under_hold() -> Callable[[Path, Path, frozenset[Path]], bool]:
+    candidate = getattr(temp_run, "_under_hold")
+    assert isinstance(candidate, Callable)
+    return cast(Callable[[Path, Path, frozenset[Path]], bool], candidate)
+
+
+def test_hold_membership_matches_original_path_and_ancestor_rule(
+    tmp_path: Path,
+    under_hold: Callable[[Path, Path, frozenset[Path]], bool],
+) -> None:
+    root = tmp_path / ".tmp" / "hold-predicate"
+    declarations = (
+        Path("."),
+        Path("held"),
+        Path("held/deep/file.bin"),
+        Path("held/file.bin/child"),
+        Path("held-other/file.bin"),
+        Path("other/held/file.bin"),
+        Path("unrelated.bin"),
+    )
+    for relatives in ((), ("held",), ("held/file.bin",), ("held", "held", "held/deep"), (".",)):
+        holds = [temp_run.TempRunHold(path=root / name, reason="synthetic") for name in relatives]
+        paths = frozenset(hold.path for hold in holds)
+        for relative in declarations:
+            absolute = root / relative
+            expected = any(absolute == hold.path or hold.path in absolute.parents for hold in holds)
+            assert under_hold(root, relative, paths) is expected
+            assert under_hold(root, absolute, paths) is expected
+
+
+def test_empty_holds_still_reject_parent_traversal(
+    tmp_path: Path,
+    under_hold: Callable[[Path, Path, frozenset[Path]], bool],
+) -> None:
+    with pytest.raises(ValueError, match="parent traversal"):
+        under_hold(tmp_path, Path("../outside.bin"), frozenset())
+
+
+def test_hold_lookup_normalizes_trusted_temp_alias_without_resolving_children(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    under_hold: Callable[[Path, Path, frozenset[Path]], bool],
+) -> None:
+    actual = tmp_path / "actual-temp"
+    actual.mkdir()
+    alias = tmp_path / "temp-alias"
+    external = tmp_path / "external"
+    external.mkdir()
+    root = actual / "run"
+    root.mkdir()
+    child = root / "linked-child"
+    try:
+        alias.symlink_to(actual, target_is_directory=True)
+        child.symlink_to(external, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation unavailable")
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(alias))
+    assert under_hold(alias / "run", Path("linked-child/file.bin"), frozenset({child}))
+    assert not under_hold(alias / "run", Path("linked-child/file.bin"), frozenset({external}))
+
+
+@pytest.mark.parametrize("operation", ["finish", "resolve", "register"])
+@pytest.mark.parametrize("file_count", [1, 64])
+def test_run_hold_scans_do_not_grow_with_declared_file_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    file_count: int,
+) -> None:
+    purpose = "synthetic hold lookup complexity"
+    root = tmp_path / ".tmp" / "hold-scan"
+    if operation == "register":
+        root.mkdir(parents=True)
+    else:
+        begin_temp_run(
+            root,
+            repo_root=tmp_path,
+            now=NOW,
+            disposable_class="isolated_test_fixture",
+            purpose=purpose,
+            min_free_bytes=0,
+        )
+    declared = [root / f"payload-{index}.bin" for index in range(file_count)]
+    for path in declared:
+        path.write_bytes(b"synthetic safe payload")
+    external = tmp_path / "external-hold-target"
+    external.mkdir()
+    sentinel = external / "sentinel.bin"
+    sentinel.write_bytes(b"retained external bytes")
+    link = root / "held"
+    try:
+        link.symlink_to(external, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation unavailable")
+    successful = tmp_path / ".tmp" / "successful-hold-scan"
+    if operation == "resolve":
+        finish_temp_run(root, repo_root=tmp_path, success=False, now=NOW)
+        begin_temp_run(
+            successful,
+            repo_root=tmp_path,
+            now=NOW,
+            disposable_class="isolated_test_fixture",
+            purpose=purpose,
+            min_free_bytes=0,
+        )
+        finish_temp_run(successful, repo_root=tmp_path, success=True, now=NOW)
+    original_manifest = (root / MANIFEST_NAME).read_bytes() if operation == "resolve" else None
+    scan = getattr(temp_run, "_fixture_tree_holds")
+    assert isinstance(scan, Callable)
+    scan_holds = cast(Callable[[Path], list[temp_run.TempRunHold]], scan)
+
+    class CountingHolds(list[temp_run.TempRunHold]):
+        iterations: int = 0
+
+        def __iter__(self) -> Iterator[temp_run.TempRunHold]:
+            self.iterations += 1
+            return super().__iter__()
+
+    snapshots: list[CountingHolds] = []
+
+    def counted_scan(path: Path) -> list[temp_run.TempRunHold]:
+        holds = CountingHolds(scan_holds(path))
+        snapshots.append(holds)
+        return holds
+
+    monkeypatch.setattr(temp_run, "_fixture_tree_holds", counted_scan)
+    if operation == "finish":
+        manifest = finish_temp_run(
+            root,
+            repo_root=tmp_path,
+            success=True,
+            disposable_paths=[*declared, link / "sentinel.bin"],
+            allow_partial=True,
+            now=NOW,
+        )
+        files = manifest.files
+        assert manifest.held_paths == [temp_run.TempRunHold(path=link, reason="linked_fixture")]
+    elif operation == "resolve":
+        resolution = temp_run.resolve_failed_temp_run(
+            root,
+            successful_root=successful,
+            repo_root=tmp_path,
+            disposable_paths=[*declared, link / "sentinel.bin"],
+            reason="successful synthetic rerun",
+            reviewed_by="synthetic reviewer",
+            now=NOW,
+        )
+        files = resolution.files
+        assert (root / MANIFEST_NAME).read_bytes() == original_manifest
+    else:
+        review = temp_run.TempRunReview(
+            run_root=root,
+            completed_at=NOW,
+            purpose=purpose,
+            reviewed_by="synthetic reviewer",
+            reason="exact synthetic files",
+            disposable_class="isolated_test_fixture",
+            fixture_origin="synthetic_generated",
+            files=[
+                temp_run.ReviewedTestFile(
+                    relative_path=path.relative_to(root),
+                    sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                    size=path.stat().st_size,
+                )
+                for path in declared
+            ],
+        )
+        review_path = tmp_path / "hold-review.json"
+        review_path.write_text(review.model_dump_json())
+        files = temp_run.register_reviewed_test_run(review_path, repo_root=tmp_path).files
+    assert [item.relative_path for item in files] == [path.relative_to(root) for path in declared]
+    assert len(snapshots) == 1
+    assert snapshots[0].iterations <= 2
+    assert link.is_symlink()
+    assert sentinel.read_bytes() == b"retained external bytes"
+    assert all(path.read_bytes() == b"synthetic safe payload" for path in declared)
 
 
 @pytest.fixture
