@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "c96bab5320fb5608c1fa4c949031779cf5a4bdc3",
+  "scoped_commit": "36735db5c1ff065cc85975d0de1727b27c7afed3",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "2d190e478ac0ca1d45297358218c49c05900be6c6ff211cab8c15c4b1be0c517",
+  "source_sha256": "5bfd7adc255f2eb0f3f43eba8ca0b95e2554d8db50398ad75a0eefc0cf1ff8f1",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,9 +22,9 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1468,
-    "total_noncomment_loc": 562294,
-    "modules_over_1000_loc": 108,
+    "executable_modules": 1469,
+    "total_noncomment_loc": 562282,
+    "modules_over_1000_loc": 107,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
     "max_internal_fan_out": 40,
@@ -612,11 +612,11 @@
         "path": "execution/backfill_fiscal_period_stamps.py",
         "module": "execution.backfill_fiscal_period_stamps",
         "lines": {
-          "physical": 173,
-          "nonblank": 149,
-          "noncomment": 140
+          "physical": 163,
+          "nonblank": 140,
+          "noncomment": 136
         },
-        "internal_fan_out": 2,
+        "internal_fan_out": 3,
         "responsibilities": [
           "database"
         ],
@@ -8320,6 +8320,21 @@
         "fully_annotated_public_functions": 5
       },
       {
+        "path": "src/compute/fiscal_calendar.py",
+        "module": "compute.fiscal_calendar",
+        "lines": {
+          "physical": 128,
+          "nonblank": 112,
+          "noncomment": 100
+        },
+        "internal_fan_out": 0,
+        "responsibilities": [
+          "network"
+        ],
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
+      },
+      {
         "path": "src/compute/fmp_derived_kpis.py",
         "module": "compute.fmp_derived_kpis",
         "lines": {
@@ -8418,11 +8433,11 @@
         "path": "src/compute/kpi_extract_summaries.py",
         "module": "compute.kpi_extract_summaries",
         "lines": {
-          "physical": 1734,
-          "nonblank": 1591,
-          "noncomment": 1490
+          "physical": 1670,
+          "nonblank": 1533,
+          "noncomment": 1458
         },
-        "internal_fan_out": 22,
+        "internal_fan_out": 23,
         "responsibilities": [
           "database",
           "filesystem",
@@ -8985,11 +9000,11 @@
         "path": "src/compute/transcript_ingest.py",
         "module": "compute.transcript_ingest",
         "lines": {
-          "physical": 1165,
-          "nonblank": 1048,
-          "noncomment": 1001
+          "physical": 1139,
+          "nonblank": 1025,
+          "noncomment": 980
         },
-        "internal_fan_out": 7,
+        "internal_fan_out": 8,
         "responsibilities": [
           "database",
           "filesystem",
@@ -11779,17 +11794,17 @@
         "path": "src/ir_uploads.py",
         "module": "ir_uploads",
         "lines": {
-          "physical": 1536,
-          "nonblank": 1367,
-          "noncomment": 1187
+          "physical": 1462,
+          "nonblank": 1300,
+          "noncomment": 1132
         },
-        "internal_fan_out": 2,
+        "internal_fan_out": 3,
         "responsibilities": [
           "filesystem",
           "network"
         ],
-        "public_functions": 12,
-        "fully_annotated_public_functions": 12
+        "public_functions": 11,
+        "fully_annotated_public_functions": 11
       },
       {
         "path": "src/issuer_registry.py",

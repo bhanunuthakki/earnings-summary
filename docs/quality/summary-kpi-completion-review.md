@@ -92,3 +92,57 @@ static gate passes with the same 2,872 retained files, 2,012 existing diagnostic
 1,838 suppressions. The directive manifest validates. The previously known full-suite
 teardown blocker remains open; no full-suite pass or production activation is claimed.
 The actual-head reachability closure test also passes.
+
+## Shared fiscal-calendar pruning
+
+Six duplicated compute date tables are removed. `compute.fiscal_calendar` now
+owns the existing IR endpoint math, filename membership and summary year-label
+adapter. Summary extraction and the retired backfill share that actual adapter;
+transcripts retain their ending-year label. Existing IR and summary import names
+remain available. No historical facts are restamped, and backfill writes remain
+rejected. The common owner uses only the standard library.
+
+Backfill uses the existing entrypoint bootstrap. Two manual-import lint
+suppressions and one private-usage suppression are removed. The execution ceiling
+is tightened from 841 to 838. The old summary tests are unchanged. The public-only
+calendar matrix has its own test file; it requires no test-only API or suppression.
+A separate transcript inverse-inference defect remains outside this refactor.
+
+Final owner tests pass: 360. `make check-fast` passes: 443 tests, architecture,
+format, lint, types and changed-file suppressions. These counts overlap.
+The whole static gate passes with 2,874 retained files, 2,012 existing diagnostics
+and 1,835 suppressions. Direct backfill `--help` exits successfully without opening
+a database. No runtime speedup is claimed. The full-suite fixture-sealing blocker
+remains unresolved; these checks do not establish release readiness.
+
+Astra found no architecture blocker in the final source. The unchanged scanner
+measures one added shared module (1,468 → 1,469) and 12 fewer noncomment production
+lines. The reviewed refresh changes only the module-count constraint; all other
+constraints remain or tighten. Architecture source identity: `5bfd7adc255f2eb0f3f43eba8ca0b95e2554d8db50398ad75a0eefc0cf1ff8f1`.
+All 203 reachability disposition source bodies, line fingerprints and targets
+remain unchanged before the aggregate input identity is rebound.
+
+Independent Opus 5.5 review: **ACCEPT, 91/100**, no blocking findings. The exact
+membership route resolved `claude-opus-5-5`; no model fallback was used. This meets
+the owner's strict score-above-90 rule for local implementation acceptance. It is
+an advisory review with an owner-imposed threshold, not a calibrated release
+qualification. The final whole-static result satisfies its stated condition.
+The previously unsupplied bootstrap was inspected and its direct invocation was
+smoke-tested. Review prompt SHA-256: `86af10853bcaa45b85476db9a14caf674ec99ffbd30a000cef466fd6d8d2122c`.
+
+Reviewed source SHA-256 values:
+
+- `execution/backfill_fiscal_period_stamps.py`: `704745c151acb67bad0236e1de23264224839b9229745fbc5d4a12aa60fdee12`
+- `src/compute/fiscal_calendar.py`: `f534cf3a229fa45661331c0835f59046dd407013ec3a8254a2e8535c068a0131`
+- `src/compute/kpi_extract_summaries.py`: `b042fa9e97e07fff2437edfb7acc42d7130b336d5ae513a9d77d626b5b9869dd`
+- `src/compute/transcript_ingest.py`: `63c6408aba7a2ee69558d6e148cadd3b901ef587633595d9a0a3ec3d72797c7c`
+- `src/ir_uploads.py`: `ea548506b3ffad212b9cb39f28978ec6dc5f68f3d76cd2bf2c40d46251891cb8`
+- `tests/test_fiscal_calendar.py`: `33c578e111af5bc74ea9b0408e69e775e6e37d1b7e1ce0624e8444e264deafa3`
+
+No live database, collection, application model call, service, push or deployment
+ran. The external calls were the owner's requested independent reviews. The
+implementation and its code-only rollback remain local.
+
+Final directive validation and actual-head reachability closure pass. No
+disposition decision or source body changed. The closure rerun follows tracking
+the final public-only test module and rebinding the resulting scanner input hash.

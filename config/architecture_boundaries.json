@@ -28,7 +28,6 @@
     "execution/backfill_document_accessions.py",
     "execution/backfill_earnings_surprises.py",
     "execution/backfill_financial_fact_resolutions.py",
-    "execution/backfill_fiscal_period_stamps.py",
     "execution/backfill_fulltext_evidence.py",
     "execution/backfill_image_ocr_evidence.py",
     "execution/backfill_insider_transactions.py",

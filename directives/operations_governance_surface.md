@@ -1,5 +1,21 @@
 # Operations & Governance Surface Impact
 
+### Shared fiscal-calendar calculation (2026-10-22)
+
+Disposition: **internal consolidation; no new operator action or schedule**.
+`compute.fiscal_calendar` owns the existing pure IR endpoint calculation and the four
+filename-calendar overrides. Six repeated compute tables are removed. Transcript
+and summary paths retain explicit year-label adapters; all other filename tickers
+keep their calendar fallback. IR helper imports remain available through aliases.
+The retired fiscal-stamp command uses the shared calendar membership and existing
+entrypoint bootstrap; its dry-run scope and rejection of writes remain unchanged. No data is migrated or restamped.
+
+The parity gate compares both filename conventions, all quarters, existing IR
+calendar families, leap years, fallback/error behavior and summary reverse matching.
+The separate tickerless transcript inverse-inference defect is outside this
+output-preserving change. Existing analysis depth, source lineage and collection
+authority remain unchanged.
+
 ### Summary anchor preflight (2026-10-22)
 
 Disposition: **existing extraction preflight; no new operator action or schedule**.

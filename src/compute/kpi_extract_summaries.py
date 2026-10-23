@@ -46,6 +46,8 @@ from pydantic import (
 )
 
 import parser
+from compute.fiscal_calendar import FILENAME_CALENDARS, period_end_for
+from compute.fiscal_calendar import summary_period_end as _period_end
 from compute.kpi_resolver import normalize_kpi_name
 from llm.resolver import resolve_model_and_backend, structured_capability_profile
 from llm.structured import call_llm_structured
@@ -262,46 +264,6 @@ _IR_PRESENTATION_SOURCE = _SourceSpec(
 _SOURCE_GROUPS: dict[str, tuple[_SourceSpec, ...]] = {
     "earnings": (_EARNINGS_SOURCE,),
     "ir": (_IR_PRESS_RELEASE_SOURCE, _IR_PRESENTATION_SOURCE),
-}
-
-# How filename Q + calendar year map to a period_end. Most tickers use the
-# calendar fiscal-year mapping; the per-ticker override map handles companies
-# whose fiscal year ends on a non-December month. NVO publishes H1 / 9M instead
-# of Q2 / Q3, but its period end-of-month dates still align to calendar
-# quarters, so no override needed.
-_QUARTER_PERIOD_END: dict[int, tuple[int, int]] = {
-    1: (3, 31),
-    2: (6, 30),
-    3: (9, 30),
-    4: (12, 31),
-}
-
-# (month, day, year_offset_from_filename_label) per fiscal quarter for tickers
-# with non-calendar fiscal years. year_offset is added to the filename's year
-# label to get the calendar year of period_end — NOT inferred from the month,
-# because that inference (the previous implementation: "month <= 2 implies the
-# label year + 1") silently breaks for Oct-FYE tickers (see below). This table
-# is specific to THIS module's own `.tmp/<TICKER>_Q<N>_<YYYY>_*.txt` filename
-# labels, which `_list_sources` parses straight off disk — those labels are
-# generated independently of (and are NOT always numerically identical to)
-# `compute/transcript_ingest.py`'s fiscal-year labels for the same calendar
-# quarter; see directives/data_provenance.md, "Fiscal-period stamping drift"
-# for the cross-module label-drift this caused for VEEV.
-#
-# Jan-FYE (RBRK, VEEV): Q1-Q3 fall in the calendar year matching the filename
-# label (VEEV_Q1_2026 ends 2026-04-30); Q4 rolls into label year + 1
-# (VEEV_Q4_2025 ends 2026-01-31, VEEV_Q4_2026 ends 2027-01-31) — Q4's month is
-# January, one calendar year ahead of the Q1-Q3 quarters of the same label.
-# Oct-FYE (AMAT, TOL): all four quarters fall in the label year with NO offset
-# (AMAT_Q4_2025 ends 2025-10-31, AMAT_Q1_2026 ends 2026-01-31) — critically,
-# Q1's month is also January here, but must NOT roll over the way Jan-FYE's Q4
-# does. A shared "month <= 2 implies +1" rule cannot represent both
-# conventions at once; the explicit year_offset can.
-_TICKER_QUARTER_PERIOD_END: dict[str, dict[int, tuple[int, int, int]]] = {
-    "RBRK": {1: (4, 30, 0), 2: (7, 31, 0), 3: (10, 31, 0), 4: (1, 31, 1)},
-    "VEEV": {1: (4, 30, 0), 2: (7, 31, 0), 3: (10, 31, 0), 4: (1, 31, 1)},
-    "AMAT": {1: (1, 31, 0), 2: (4, 30, 0), 3: (7, 31, 0), 4: (10, 31, 0)},
-    "TOL": {1: (1, 31, 0), 2: (4, 30, 0), 3: (7, 31, 0), 4: (10, 31, 0)},
 }
 
 
@@ -737,24 +699,6 @@ def _canonical_units_from_holdings(
             continue
         out[name] = unit
     return out
-
-
-def _period_end(ticker: str, quarter: int, year: int) -> datetime:
-    """Map a (filename year, fiscal quarter) pair to the actual period_end date.
-
-    Most tickers report on the calendar fiscal year (Q4 FY{year} ends
-    {year}-12-31). Tickers in `_TICKER_QUARTER_PERIOD_END` use a non-calendar
-    fiscal year — for those, the override's explicit `year_offset` determines
-    the calendar year (NOT an inference from the month: Jan-FYE's Q4 and
-    Oct-FYE's Q1 both land in January but roll over differently — see that
-    table's docstring).
-    """
-    overrides = _TICKER_QUARTER_PERIOD_END.get(ticker.upper())
-    if overrides and quarter in overrides:
-        month, day, year_offset = overrides[quarter]
-        return datetime(year + year_offset, month, day)
-    month, day = _QUARTER_PERIOD_END[quarter]
-    return datetime(year, month, day)
 
 
 def _ensure_summary_document_row(
@@ -1444,20 +1388,12 @@ def _read_pdf_text(path: str) -> str:
 
 
 def _fiscal_period_type_for(ticker: str, period_end: datetime) -> FiscalPeriodType:
-    """Fiscal quarter for a period-end date, honouring non-calendar fiscal years.
-
-    Most issuers are calendar-FY (Mar-31 = Q1 … Dec-31 = Q4). Tickers in
-    ``_TICKER_QUARTER_PERIOD_END`` (RBRK/VEEV Jan FYE, AMAT/TOL Oct FYE) report
-    a period-end that doesn't line up with the calendar-quarter mapping — so we
-    reverse that override map (matching on (month, day) only; year_offset is
-    irrelevant here since period_end's own year is already known) to recover
-    the fiscal label the analyst series already uses (a naive calendar mapping
-    would fork the supplement's values onto a different fiscal axis).
-    """
-    overrides = _TICKER_QUARTER_PERIOD_END.get(ticker.upper())
-    if overrides:
-        for quarter, (month, day, _year_offset) in overrides.items():
-            if period_end.month == month and period_end.day == day:
+    """Match known filename calendars exactly; retain the calendar-quarter fallback."""
+    calendar = FILENAME_CALENDARS.get(ticker.upper())
+    if calendar is not None:
+        for quarter in (1, 2, 3, 4):
+            endpoint = period_end_for(calendar, period_end.year, quarter)
+            if (period_end.month, period_end.day) == (endpoint.month, endpoint.day):
                 return FiscalPeriodType(f"Q{quarter}")
     return FiscalPeriodType(f"Q{(period_end.month - 1) // 3 + 1}")
 
