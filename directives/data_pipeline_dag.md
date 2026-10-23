@@ -117,6 +117,13 @@ membership and actual report use. Report review binds the independently declared
 source population to the existing analytical requirements. Review rationales are
 analyst judgments; a schema-valid page plan does not supply materiality approval.
 
+Direct IR supplement continuation has a separate, narrower reviewed-page rule.
+An OCR-flagged page can be omitted from native model input only after an exact
+append-only `no_financial_content` review binds its document, source bytes,
+assessment, page text and reviewed render. The detector still reports OCR
+required. Unknown pages and withdrawn reviews block capture. The default
+processing certificates and financial evidence requirements remain strict.
+
 Unrelated archive gaps remain visible. A complete selected analysis does not make
 the archive complete or establish financial-fact admission or model readiness.
 The scoped artifact has its own identity. Full-population verification does not

@@ -142,6 +142,7 @@ def test_more_than_80k_and_200_facts_last_page_and_replay(
 
     job = _capture(conn, monkeypatch, pages, extract)
     output = job.capture(b"original source")
+    assert job.capture_version == continuation.UNREVIEWED_CAPTURE_VERSION
     assert sum(len(rows) for _, rows in output) == 360
     assert output[-1][1][-1]["label"] == "Metric 2:119"
     assert len(calls) == 6
@@ -602,6 +603,129 @@ def test_retained_native_page_assessment_blocks_known_unresolved_pages(
     with pytest.raises(ValueError, match="existing native-page"):
         capture.capture(source.read_bytes())
     assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == 0
+
+
+def test_exact_reviewed_decorative_page_is_omitted_without_changing_ocr_flag(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from datetime import UTC, datetime
+
+    from provenance.ocr_page_review import ReviewedPdfPageRevision, record_reviewed_pdf_page
+
+    source, version = _retained_source(conn, tmp_path)
+    page_texts = ("Revenue 10\n", "")
+    source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+    conn.execute(
+        "INSERT INTO ocr_document_assessments "
+        "(assessment_id,idempotency_key,document_version_id,input_sha256,detector_name,"
+        "detector_config_sha256,detector_code_version,native_output_sha256,page_count,"
+        "outcome,reason_code,assessed_at) "
+        "VALUES ('review-assessment','review-assessment',?,?, 'fixture',?, 'fixture',?,2,"
+        "'ocr_required',NULL,'2026-10-23T00:00:00+00:00')",
+        (version, source_sha, "a" * 64, "b" * 64),
+    )
+    from provenance.ocr_extraction import normalize_extracted_text
+
+    for page, text in enumerate(page_texts, 1):
+        conn.execute(
+            "INSERT INTO ocr_preflight_pages "
+            "(assessment_id,page_number,native_character_count,native_text_sha256,requires_ocr) "
+            "VALUES ('review-assessment',?,?,?,?)",
+            (
+                page,
+                len(text.strip()),
+                hashlib.sha256(normalize_extracted_text(text).encode()).hexdigest(),
+                int(page == 2),
+            ),
+        )
+    conn.commit()
+    calls: list[str] = []
+    capture = _capture(conn, monkeypatch, page_texts, lambda prompt: calls.append(prompt) or [])
+    capture.document_version_id = version
+    with pytest.raises(ValueError, match="existing native-page"):
+        capture.capture(source.read_bytes())
+    assert not calls
+
+    now = datetime(2026, 10, 23, 1, tzinfo=UTC)
+    review = record_reviewed_pdf_page(
+        conn,
+        ReviewedPdfPageRevision(
+            document_version_id=version,
+            source_sha256=source_sha,
+            assessment_id="review-assessment",
+            page_number=2,
+            native_text_sha256=hashlib.sha256(b"").hexdigest(),
+            render_sha256="c" * 64,
+            disposition="no_financial_content",
+            reviewer="synthetic reviewer",
+            reviewed_at=now,
+            recorded_at=now,
+            rationale="Full synthetic page is only a logo end slide.",
+        ),
+    )
+    conn.commit()
+    capture = _capture(conn, monkeypatch, page_texts, lambda prompt: calls.append(prompt) or [])
+    capture.document_version_id = version
+    assert capture.capture(source.read_bytes()) == [(1, [])]
+    assert len(calls) == 1
+    assert review.review_id in calls[0]
+    assert '"page": 2' not in calls[0]
+    assert capture.reviewed_non_financial_pages == {2: review.review_id}
+    assert capture.native_assessment_id == "review-assessment"
+    assert (
+        conn.execute(
+            "SELECT requires_ocr FROM ocr_preflight_pages WHERE assessment_id='review-assessment' "
+            "AND page_number=2"
+        ).fetchone()[0]
+        == 1
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        conn.execute(
+            "UPDATE reviewed_pdf_page_revisions SET disposition='requires_ocr' WHERE review_id=?",
+            (review.review_id,),
+        )
+    with pytest.raises(ValueError, match="source binding"):
+        record_reviewed_pdf_page(
+            conn,
+            ReviewedPdfPageRevision(
+                document_version_id=version,
+                source_sha256="d" * 64,
+                assessment_id="review-assessment",
+                page_number=2,
+                native_text_sha256=hashlib.sha256(b"").hexdigest(),
+                render_sha256="c" * 64,
+                disposition="no_financial_content",
+                reviewer="synthetic reviewer",
+                reviewed_at=now,
+                recorded_at=now,
+                rationale="Wrong source cannot authorize this reviewed page.",
+                expected_prior_review_id=review.review_id,
+            ),
+        )
+    withdrawn = record_reviewed_pdf_page(
+        conn,
+        ReviewedPdfPageRevision(
+            document_version_id=version,
+            source_sha256=source_sha,
+            assessment_id="review-assessment",
+            page_number=2,
+            native_text_sha256=hashlib.sha256(b"").hexdigest(),
+            render_sha256="c" * 64,
+            disposition="requires_ocr",
+            reviewer="synthetic reviewer",
+            reviewed_at=now,
+            recorded_at=now,
+            rationale="A second inspection now requires explicit OCR work.",
+            expected_prior_review_id=review.review_id,
+        ),
+    )
+    assert withdrawn.supersedes_review_id == review.review_id
+    capture = _capture(conn, monkeypatch, page_texts, lambda prompt: calls.append(prompt) or [])
+    capture.document_version_id = version
+    with pytest.raises(ValueError, match="coverage unresolved"):
+        capture.capture(source.read_bytes())
+    assert len(calls) == 1
 
 
 def test_financial_manifest_late_failure_rolls_back_partial_write(
