@@ -123,6 +123,9 @@ _FILING_XBRL_HASH_KEYS = {
         "execution/build_filing_xbrl_processor_bundle.py": 64,
         "execution/filing_xbrl_bridge.py": 64,
         "execution/filing_xbrl_appcontainer_launcher.cs": 64,
+        "execution/filing_xbrl_appcontainer_launcher.py": 64,
+        "src/runtime/windows_appcontainer.py": 64,
+        "src/runtime/windows_appcontainer_supervisor.py": 64,
         "src/filings/xbrl_units.py": 64,
         "runtime_artifact_sha256": 64,
         "sandbox_launcher_sha256": 64,
@@ -137,6 +140,7 @@ _FILING_XBRL_HASH_KEYS = {
         "bridge_source_sha256": 64,
         "launcher_source_sha256": 64,
         "unit_source_sha256": 64,
+        "support_source_sha256": 64,
     },
 }
 _FILING_XBRL_HASH_MEMBER = re.compile(

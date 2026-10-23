@@ -1,26 +1,29 @@
 {
   "schema_version": "filing-xbrl-candidate-evidence/v1",
-  "status": "activation_preparation_pending_target_identity_qualification_and_Opus_signoff",
-  "installation_approved_by_owner_condition": "User requests full activation only after independent Opus5.5 signoff; production unchanged until final signoff.",
-  "supersedes_candidate_commit": "8a950da3970d7e9821b77c4cc9064b360a69dd1e",
+  "status": "source_launcher_candidate_pending_SYSTEM_qualification_and_activation_signoff",
+  "installation_approved_by_owner_condition": "Owner requests full activation after independent GPT-6.1 Sol sign-off and passing native/release gates. Candidate branch seal is prepared; production remains unchanged.",
+  "supersedes_candidate_commit": "eacf648f319ad048bd838adce153b84b56710529",
   "profile": "EarningsSummaryFilingXbrlV2",
   "preserved_profile": "EarningsSummaryFilingXbrlV1",
   "sources": {
-    "execution/build_filing_xbrl_processor_bundle.py": "0d33126e9680a6ec4a33e3383d6854da4efd62d271fc16db25ee0108825e9afc",
+    "execution/build_filing_xbrl_processor_bundle.py": "39470a07aadd970fa4a1d90562d025a529cbdd6ec67ce7f6162267a8dcd1cc25",
     "execution/filing_xbrl_bridge.py": "9e01a0e76cfbe1fc10c2b42c64523f0166dc7a9d0807e9370b51c2404917331e",
-    "execution/filing_xbrl_appcontainer_launcher.cs": "d45b73dc56cb9e06bd7ef885f46e7d105b690850114123cf6022048142925476",
+    "execution/filing_xbrl_appcontainer_launcher.py": "abf2ea07e0c8ae5b86f7c0476fbc5c998a9232d92ba3b4f2c1a1dfc02d0854a0",
+    "src/runtime/windows_appcontainer.py": "f9f9d8f14fd8bc331cf2876776fa69e251ade5c6a115dc88dca8718a20ab42b7",
+    "src/runtime/windows_appcontainer_supervisor.py": "97294d26247c1a2c4e9b6e462c6477cf4b1e6156c3b6498bb665f4afaab5a5a9",
     "src/filings/xbrl_units.py": "b9f2fc5fbac15f9d7ac2fdef339b36783479aa8730a1adedf10ec6f5c9a2281c"
   },
   "bundle": {
-    "runtime_artifact_sha256": "af4ae37b901d68b314a2a93b81ea7b3a26d55876682939066c5a4f7065586301",
-    "sandbox_launcher_sha256": "6a83b3faeae1a0b3f14ae86a1d28d59af1399a1d56f7e9044f8f63619a059ebe",
-    "timeout_seconds": 600
+    "runtime_artifact_sha256": "b4cbe328d895ec07ed7a8ae802ed0069720b9fb0a8aaeb7174efcf4e622d4247",
+    "sandbox_launcher_sha256": "abf2ea07e0c8ae5b86f7c0476fbc5c998a9232d92ba3b4f2c1a1dfc02d0854a0",
+    "timeout_seconds": 600,
+    "launcher_kind": "python_source"
   },
-  "manifest_sha256": "89655d6d8815317b2396c000a084bc255747b71a6c363aaba58339dceedf9449",
-  "manifest_artifact_sha256": "df3de318801337afbce1e94b8d560a4cfb47790c8be975751d0d54659c586115",
-  "runtime_members": 9596,
-  "runtime_bytes": 364920792,
-  "qualification": "Target identity tests and final activation review pending. Previous receipts apply only to the prior launcher and are preserved in commit8a950da3 and task evidence.",
+  "manifest_sha256": "735361957beb1bd5497de298ea5556c5f00c4a746f3eeffdcc62c859a503de9f",
+  "manifest_artifact_sha256": "57f98336cc5d521bb91817c39170bdd90d685d9509efd661c73226b1dfd24960",
+  "runtime_members": 9598,
+  "runtime_bytes": 364972420,
+  "qualification": "535 native Windows cases passed with no skips and proved process cleanup on identical product modules. SYSTEM source47 containment is running. Final production-bound postflight and independent activation review remain required.",
   "financial_admission": false,
   "production_deployment_changed": false,
   "previous_research_limits": [
