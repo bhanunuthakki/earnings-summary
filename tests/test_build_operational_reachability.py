@@ -262,9 +262,24 @@ def test_actual_head_is_supported() -> None:
             )
             for line in lines
         ]
-    # Retain the 170 existing test seams and the exact shared cutover fixture run.
+    # Retain the 171 existing test seams and the exact integrity-audit fixture run.
     # No production gap is admitted; the zero-production assertions stay above.
-    assert len(graph.unknown_edges) == 171
+    assert len(graph.unknown_edges) == 172
+    assert [
+        edge
+        for edge in graph.unknown_edges
+        if edge.source == "tests/test_kpi_definition_revisions.py"
+    ] == [
+        GraphEdge(
+            source="tests/test_kpi_definition_revisions.py",
+            target="<dynamic process entrypoint>",
+            kind="unknown",
+            evidence="subprocess/runpy expression",
+            confidence="low",
+            line=1203,
+            unknown=True,
+        )
+    ]
     assert [
         edge for edge in graph.unknown_edges if edge.source == "tests/test_db_writer_gate.py"
     ] == [

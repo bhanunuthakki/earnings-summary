@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1476,
-    "total_noncomment_loc": 567780,
+    "total_noncomment_loc": 567791,
     "modules_over_1000_loc": 110,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
