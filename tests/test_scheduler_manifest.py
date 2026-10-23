@@ -58,7 +58,7 @@ def test_manifest_rejects_duplicate_json_keys(tmp_path: Path) -> None:
 
 def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     manifest = load_manifest(MANIFEST_PATH)
-    assert len(manifest.tasks) == 45
+    assert len(manifest.tasks) == 44
     assert all(
         task.task_name != r"\earnings-summary\backfill_financial_fact_resolutions"
         for task in manifest.tasks
@@ -80,6 +80,11 @@ def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     assert collector_xml.index("<Repetition>") < collector_xml.index("<StartBoundary>")
     assert all(task.task_name != r"\earnings-summary\session_distill" for task in manifest.tasks)
     assert all(task.task_name != r"\earnings-summary\monthly_p3_refresh" for task in manifest.tasks)
+    assert all(
+        task.task_name != r"\earnings-summary\monthly_advisor_memos" for task in manifest.tasks
+    )
+    assert not (CRON_DIR / "monthly_advisor_memos.task.xml").exists()
+    assert not (CRON_DIR / "run_monthly_advisor_memos.bat").exists()
     semantic_review = next(
         task
         for task in manifest.tasks

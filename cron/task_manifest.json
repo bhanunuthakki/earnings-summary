@@ -305,36 +305,6 @@
    }
   },
   {
-   "task_name": "\\earnings-summary\\monthly_advisor_memos",
-   "xml": "monthly_advisor_memos.task.xml",
-   "wrapper": "run_monthly_advisor_memos.bat",
-   "schedule": {
-    "trigger": "CalendarTrigger",
-    "start_boundary": "2026-07-01T07:30:00",
-    "repetition_interval": null,
-    "days_interval": null,
-    "weeks_interval": null,
-    "days_of_week": [],
-    "days_of_month": [
-     1
-    ],
-    "months": [
-     "January",
-     "February",
-     "March",
-     "April",
-     "May",
-     "June",
-     "July",
-     "August",
-     "September",
-     "October",
-     "November",
-     "December"
-    ]
-   }
-  },
-  {
    "task_name": "\\earnings-summary\\monthly_calibration_scorecard",
    "xml": "monthly_calibration_scorecard.task.xml",
    "wrapper": "run_monthly_calibration_scorecard.bat",

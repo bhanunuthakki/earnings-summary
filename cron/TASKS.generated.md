@@ -23,7 +23,6 @@ Generated from `cron/task_manifest.json`; do not edit by hand.
 | `\earnings-summary\grade_calibration` | weekly Sunday at 10:30:00 | `grade_calibration.task.xml` | `run_grade_calibration.bat` | Task Scheduler |
 | `\earnings-summary\ledger_synthesis` | daily at 06:45:00 | `ledger_synthesis.task.xml` | `run_ledger_synthesis.bat` | Task Scheduler |
 | `\earnings-summary\model_eval_sweep` | weekly Saturday at 20:00:00 | `model_eval_sweep.task.xml` | `run_weekly_model_eval.bat` | Task Scheduler |
-| `\earnings-summary\monthly_advisor_memos` | monthly day 1 at 07:30:00 | `monthly_advisor_memos.task.xml` | `run_monthly_advisor_memos.bat` | Task Scheduler |
 | `\earnings-summary\monthly_calibration_scorecard` | monthly day 2 at 07:30:00 | `monthly_calibration_scorecard.task.xml` | `run_monthly_calibration_scorecard.bat` | Task Scheduler |
 | `\earnings-summary\onboard_pending` | daily from 00:17:00, repeats PT1H | `onboard_pending_tickers.task.xml` | `run_onboard_pending.bat` | Task Scheduler |
 | `\earnings-summary\portfolio_tracker_api` | BootTrigger | `portfolio_tracker_api.task.xml` | `run_portfolio_tracker_api.bat` | Task Scheduler |

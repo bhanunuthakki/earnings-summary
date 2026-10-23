@@ -97,10 +97,6 @@ $existing = Get-ScheduledTask -TaskName 'model_eval_sweep' -TaskPath '\earnings-
 if ($existing) { Export-ScheduledTask -TaskName 'model_eval_sweep' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'model_eval_sweep.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'model_eval_sweep' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'model_eval_sweep.task.xml')
 & $taskSecurityScript -TaskPath '\earnings-summary\model_eval_sweep' -RenderedXmlPath (Join-Path $renderDir 'model_eval_sweep.task.xml')
-$existing = Get-ScheduledTask -TaskName 'monthly_advisor_memos' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
-if ($existing) { Export-ScheduledTask -TaskName 'monthly_advisor_memos' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'monthly_advisor_memos.task.xml') -Encoding Unicode }
-Register-ManifestTask -TaskName 'monthly_advisor_memos' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'monthly_advisor_memos.task.xml')
-& $taskSecurityScript -TaskPath '\earnings-summary\monthly_advisor_memos' -RenderedXmlPath (Join-Path $renderDir 'monthly_advisor_memos.task.xml')
 $existing = Get-ScheduledTask -TaskName 'monthly_calibration_scorecard' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
 if ($existing) { Export-ScheduledTask -TaskName 'monthly_calibration_scorecard' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'monthly_calibration_scorecard.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'monthly_calibration_scorecard' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'monthly_calibration_scorecard.task.xml')

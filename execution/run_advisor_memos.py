@@ -4,9 +4,9 @@ The single entry point for every way a memo run starts:
 
 * **Dashboard button** — the Memos panel POSTs ``/actions/advisor-memo``,
   which streams this script through the jobs SSE machinery.
-* **Monthly cron** — ``cron/monthly_advisor_memos.task.xml`` runs
-  ``--kind all`` on the 1st of each month.
-* **Manual** — run it directly.
+* **Manual** — run it directly when the owner requests a memo.
+
+Advisor memos run on demand only; no monthly task is declared.
 
 Usage:
     python execution/run_advisor_memos.py --kind next_dollar

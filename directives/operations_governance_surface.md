@@ -539,19 +539,26 @@ Operations registry and its visible Jobs, Sources, Data, and Actions contracts t
 unchanged; manifest validation, transactionality, and durable coverage receipts stay owned by the
 ingestion boundary rather than the Operations workspace.
 
-### Streamlit analytics deep-dive sandbox
+### Retired optional analytics and automatic advisor cadence (2026-10-23)
 
-`explore-sandbox/analytics_deep_dive.py` is a local, optional-dependency analytics surface: an
-interactive composition of deterministic catalog → ViewSpec reads over an operator-named
-synthetic clone or restored snapshot. It adds no scheduled job, managed service, operator
-control, database write, or production access — the app opens every connection read-only,
-refuses a checkout-local `data/portfolio.db`, and every number comes from the shared
-provenance-aware resolver (`viewspec.engine`), never a sandbox-local query path. Theme and
-control parity with the cockpit is generated and drift-checked
-(`scripts/gen_streamlit_theme.py`; `tests/test_explore_sandbox_kit.py`), so no new visual
-contract exists to govern. The canonical Operations registry and its visible Jobs, Sources,
-Data, and Actions contracts therefore remain unchanged; the sandbox is not an operator
-workflow and never a production authority.
+Disposition: **owner-approved local surface and schedule retirement**.
+The separate Streamlit analytics shell, its toolkit, generated theme files,
+exclusive theme generator and optional dependency entry are retired. Main Explore,
+ViewSpec, the metric catalog, shared UI primitives and provenance-aware reads remain.
+No source data, stored research or shared dependency lock is removed. Existing
+synthetic Explore renders retain their exact bytes; interaction is not requalified
+by that comparison alone.
+
+Monthly automatic next-dollar/swap memo generation is retired from the project task
+configuration. Requested generation remains through the existing CLI and dashboard
+actions. Allocation calculations, model/prompt depth, budgets and saved memo history
+remain. The calibration task's description no longer claims a preceding automatic
+advisor run; its schedule and action remain unchanged.
+
+Removing a task declaration does not disable an already installed Windows task.
+The named monthly task's live disable/recovery action remains unexecuted and needs
+the separate owner approval reserved for that operation. No other task, service,
+source collection or live data changes follow from this local retirement.
 
 ### KPI definition-revision shadow census
 

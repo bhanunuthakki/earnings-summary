@@ -9,7 +9,7 @@ under the `\earnings-summary\` namespace.
 
 ## Active crons
 
-45 operational declarations total — 44 Task Scheduler registrations and one
+44 operational declarations total — 43 Task Scheduler registrations and one
 separately managed Windows service. The authoritative set is
 `cron/task_manifest.json`; `cron/TASKS.generated.md` is its deterministic
 human-readable inventory. Run
@@ -163,6 +163,13 @@ its executable, eval, model budget, and rendered Diet paths are removed, while
 historical migrations, logs, and persisted rows remain evidence. Re-activation is
 a separate product and operations decision, not a scheduler toggle.
 
+### Advisor memos: on demand only
+
+The Memos dashboard button and `execution/run_advisor_memos.py --kind all` remain
+available when the owner requests a memo. No automatic advisor-memo task is
+declared. This source change does not disable an existing live Windows task;
+that is a separate approved scheduler action. Memo history and grading remain.
+
 ### Additional standalone + analytics tasks
 
 These run off the daily chain. They were present on disk but previously undocumented here; this table closes that gap (and they are now in the Install list below).
@@ -175,7 +182,6 @@ These run off the daily chain. They were present on disk but previously undocume
 | `earnings-summary\weekly_validation` | Weekly, Sunday 03:00 | `weekly_validation.task.xml` | `run_weekly_validation.bat` | **Confidence backfill.** Rescores `financial_facts`/`kpi_facts` confidence `--apply`, folding fresh validation-issue penalties into per-fact scores (idempotent). The validation-engine SCAN runs DAILY in `run_morning_pipeline` (stage 3), so it is **not** repeated here (#679 dropped the duplicate weekly scan — the backfill reads the issues the daily run already inserted). Recorded in `ingestion_runs` for the cron-health panel. |
 | `earnings-summary\weekly_cleanup` | Weekly, Sunday 13:00 | `weekly_cleanup.task.xml` | `run_weekly_cleanup.bat` | Runs `run_weekly_cleanup.py --apply` against the allowlist in `directives/weekly_cleanup.md`, then `expire_stale_research.py --apply`. It has no network dependency, stops after 15 minutes, resumes missed starts when available, and retries a failed run once after 30 minutes. Filesystem cleanup uses `filesystem-maintenance`; research expiry uses `portfolio-db`. A cleanup failure prevents research expiry. |
 | `earnings-summary\weekly_score_stances` | Weekly, Sunday 06:30 | `weekly_score_stances.task.xml` | `run_weekly_score_stances.bat` | Grades matured advisor memos/stances (master build P2.5): Socratic stances vs price (SPY-relative via the tracker) + swap checks vs realized pair margin. Deferrals (immature horizons / price-cache gaps) are normal; idempotent over the pending set. |
-| `earnings-summary\monthly_advisor_memos` | Monthly, 1st @ 07:30 | `monthly_advisor_memos.task.xml` | `run_monthly_advisor_memos.bat` | Advisor memo run (master build P2.3): the next-dollar allocation memo + swap-discipline checks. Runs after the morning pipeline so FMP prices/DCFs are fresh; degrades gracefully if the tracker is offline. Each memo persists to `advisor_memos` + an analyst note (+ ledger entry when ticker-scoped). |
 | `earnings-summary\monthly_calibration_scorecard` | Monthly, 2nd @ 07:30 | `monthly_calibration_scorecard.task.xml` | `run_monthly_calibration_scorecard.bat` | Calibration scorecard (close_the_loops L8): the compounding loop's personal readout — deterministic hit-rate/skill split + eval-gated coach prose (named biases + a falsifiable experiment), grounded only in the owner's graded history. Below the min-n floor it renders the substrate with a "too thin to coach yet" note and makes no LLM call. Persists to `data/calibration_scorecard/<period>.json`. |
 
 ### Disaster-recovery drill

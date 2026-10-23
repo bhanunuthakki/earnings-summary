@@ -16,7 +16,6 @@ remote publication, deletion of source evidence or an application redesign.
 | `mockups/portfolio_copilot_mockup.html`, `performance_risk_mockup.html` | Tested historical references | Preserve quick-response, policy, correlation and truth-label assertions until their production replacements are demonstrated. |
 | `mockups/company_research_experience.html`, `copilot_conversation_prototype.html`, `evaluation_investment_profile_mockup.html` | Tested future contracts, retained | Thesis review, exact-diff approval and investor-profile ratification remain explicit requirements; matching production names do not prove complete adoption. |
 | `design-system/`, `.design-sync/` | Supported prototyping package; generated kit assets | Python `src/ui/` owns tokens and controls. Current README/generators replace historical hand-port guidance. No upload is part of this cleanup. |
-| `explore-sandbox/` | Supported optional analytics surface | Explicit synthetic or provenance-bearing restored database only. Generated theme and optional dependencies remain governed together. |
 | Ignored early IA drafts, screenshots and saved fieldbook/report exports | Private owner artifacts, retained outside tracked cleanup | Ignored status is not a retirement decision. Preserve source/privacy class, raw reports, approval notes and recovery before any later move. Git alone cannot recover ignored files. |
 
 The review found no unconditional mockup deletion candidate. Retention closes this code
