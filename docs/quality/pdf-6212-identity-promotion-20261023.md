@@ -23,3 +23,12 @@ Validation uses the exact reviewed 6.21.2 wheel from requirements.lock. Old code
 identities and run/evidence namespaces remain pinned. Tests cover incomplete middle
 and newest runs, cutoff-ineligible runs, retained seals, coverage and native transcript
 readers. No old node is relabelled and no live data is written.
+
+The normal push hook also detected three stale reachability provenance bindings.
+The existing `quality.reachability.build_graph` producer measured source-scope hash
+`1426978a149a9db28b1f24a31b1b31892493a5d583b4ad37521b54a864c18c75`.
+Only that provenance field changes in the existing dynamic-import, getattr and
+process disposition receipts. Every reviewed entry, fingerprint, target and reason
+is unchanged. The scanner and parser are unchanged. The fresh graph is COMPLETE
+and PASS, with no diagnostics and zero unknown production edges. The original
+refusal remains in the task log; no hook or closure rule was bypassed.
