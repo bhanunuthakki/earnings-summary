@@ -87,7 +87,15 @@ def _wire(
     conn: sqlite3.Connection,
     page_rows: list[tuple[int, list[dict[str, object]]]],
     exchanges: list[SupplementExchange],
+    *,
+    bind_current: bool = True,
 ) -> None:
+    if bind_current:
+        for exchange in exchanges:
+            if not conn.execute(
+                "SELECT 1 FROM llm_artifacts WHERE llm_call_id=?", (exchange.llm_call_id,)
+            ).fetchone():
+                _bind_producing_artifact(conn, exchange)
     retain_and_publish_reviewed_ir_source(
         conn,
         document_version_id="ir-document-v1",
@@ -272,8 +280,8 @@ def test_historical_scaled_wire_rehydrates_only_from_exact_old_producing_artifac
     monkeypatch.setattr("provenance.ir_reported_facts.project_pdf_page_texts", native_pages)
     monkeypatch.setattr("compute.ir_supplement_capture.project_pdf_page_texts", native_pages)
     # A caller cannot select legacy behavior; unbound bodies stay current/strict.
-    with pytest.raises(ValueError, match="source token and scale"):
-        _wire(conn, [(1, [raw])], [exchange])
+    with pytest.raises(ValueError, match="unknown or unbound"):
+        _wire(conn, [(1, [raw])], [exchange], bind_current=False)
     conn.execute(
         "INSERT INTO documents (ticker,source_type,doc_type,file_path,sha256,fetched_at,fetch_status,raw_bytes_size) VALUES ('TEST','ir_doc','ir_supplement','/synthetic/historical.pdf',?,'2026-10-23T00:00:00Z','ok',1)",
         (sha(PDF_BYTES),),
@@ -301,7 +309,7 @@ def test_historical_scaled_wire_rehydrates_only_from_exact_old_producing_artifac
     )
     conn.commit()
     assert artifact_id is not None
-    _wire(conn, [(1, [raw])], [exchange])
+    _wire(conn, [(1, [raw])], [exchange], bind_current=False)
     payload = json.loads(
         conn.execute(
             "SELECT text FROM evidence_nodes WHERE node_id LIKE 'ir-pdf-candidate:%'"
@@ -323,5 +331,157 @@ def test_historical_scaled_wire_rehydrates_only_from_exact_old_producing_artifac
             "response_sha256": sha(exchange.raw_response + " "),
         }
     )
+    with pytest.raises(ValueError, match="unknown or unbound"):
+        _wire(conn, [(1, [raw])], [other], bind_current=False)
+
+
+def _bind_producing_artifact(
+    conn: sqlite3.Connection,
+    exchange: SupplementExchange,
+    version: str = "v14-page-bounded-sections",
+    *,
+    source_sha256: str | None = None,
+) -> None:
+    from llm_artifact_store import UpsertRequest, upsert
+
+    conn.execute(
+        "INSERT OR IGNORE INTO llm_calls (id,called_at,model,prompt_sha256,prompt_chars,elapsed_ms,purpose,response_sha256,response_chars,provider,transport,outcome,run_id) "
+        "VALUES (?,'2026-10-23',?,?,0,0,'kpi_summary_enumerate',?,0,?,?,'success',?)",
+        (
+            exchange.llm_call_id,
+            exchange.model,
+            exchange.prompt_sha256,
+            exchange.response_sha256,
+            exchange.provider,
+            exchange.transport,
+            exchange.run_id,
+        ),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO documents (ticker,source_type,doc_type,file_path,sha256,fetched_at,fetch_status,raw_bytes_size) "
+        "VALUES ('TEST','ir_doc','ir_supplement','/synthetic/producing.pdf',?,'2026-10-23','ok',1)",
+        (source_sha256 or sha(PDF_BYTES),),
+    )
+    doc = conn.execute(
+        "SELECT id FROM documents WHERE sha256=?", (source_sha256 or sha(PDF_BYTES),)
+    ).fetchone()[0]
+    prior_factory = conn.row_factory
+    upsert(
+        UpsertRequest(
+            ticker="TEST",
+            purpose="kpi_summary_enumerate",
+            scope=f"ir_supplement:{doc}:page:1:section:0:14:call:{exchange.llm_call_id}",
+            prompt_version=f"ir-supplement-native-continuation-{version}",
+            model=exchange.model,
+            llm_call_id=exchange.llm_call_id,
+            source_doc_ids=[doc],
+            cache_inputs=["synthetic identity"],
+            content_json={
+                "status": "processed",
+                "rows": json.loads(exchange.raw_response),
+                "exchange": exchange.model_dump(mode="json"),
+                "attempts": [exchange.model_dump(mode="json")],
+            },
+        ),
+        conn=conn,
+    )
+    conn.commit()
+    conn.row_factory = prior_factory
+
+
+@pytest.mark.parametrize("version", ["v13-complete-numeric-prose-end", "v14-page-bounded-sections"])
+def test_exact_producing_version_survives_retention(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, version: str
+) -> None:
+    monkeypatch.setattr("provenance.ir_reported_facts.project_pdf_page_texts", page_texts)
+    monkeypatch.setattr("compute.ir_supplement_capture.project_pdf_page_texts", page_texts)
+    rows, exchanges = _capture_inputs()
+    _bind_producing_artifact(conn, exchanges[0], version)
+    _wire(conn, rows, exchanges, bind_current=False)
+    assert (
+        conn.execute(
+            "SELECT extractor_code_version FROM evidence_extraction_runs WHERE extractor_name='ir-supplement-native-continuation'"
+        ).fetchone()[0]
+        == version
+    )
+    assert conn.execute("SELECT COUNT(*) FROM fact_cells_v2").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("failure", ["unknown", "ambiguous", "source", "call"])
+def test_producing_version_fails_closed_on_unbound_or_conflicting_identity(
+    conn: sqlite3.Connection, failure: str
+) -> None:
+    from compute.ir_supplement_capture import producing_capture_version
+
+    _, exchanges = _capture_inputs()
+    exchange = exchanges[0]
+    _bind_producing_artifact(
+        conn,
+        exchange,
+        "v999-unknown" if failure == "unknown" else "v13-complete-numeric-prose-end",
+        source_sha256="0" * 64 if failure == "source" else None,
+    )
+    if failure == "ambiguous":
+        _bind_producing_artifact(conn, exchange)
+    if failure == "call":
+        conn.execute("UPDATE llm_calls SET provider='forged' WHERE id=?", (exchange.llm_call_id,))
+        conn.commit()
+    with pytest.raises(ValueError, match=r"unknown or unbound|ambiguous|metadata differs"):
+        producing_capture_version(conn, exchange, sha(PDF_BYTES))
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM evidence_nodes WHERE node_id LIKE 'ir-pdf-candidate:%'"
+        ).fetchone()[0]
+        == 0
+    )
+
+
+def test_v13_identity_does_not_authorize_relaxed_numeric_wire(
+    conn: sqlite3.Connection,
+) -> None:
+    rows, exchanges = _capture_inputs()
+    raw = {
+        **rows[0][1][0],
+        "value": "60801",
+        "currency": "USD",
+        "unit": "actual",
+        "source_value_text": "60,801",
+        "source_excerpt": "Revenue 60,801",
+        "source_unit_scale": "millions",
+    }
+    body = json.dumps([raw])
+    exchange = exchanges[0].model_copy(update={"raw_response": body, "response_sha256": sha(body)})
+    _bind_producing_artifact(conn, exchange, "v13-complete-numeric-prose-end")
     with pytest.raises(ValueError, match="source token and scale"):
-        _wire(conn, [(1, [raw])], [other])
+        _wire(conn, [(1, [raw])], [exchange], bind_current=False)
+
+
+def test_mixed_v13_v14_exchanges_cannot_share_retained_population(conn: sqlite3.Connection) -> None:
+    rows, exchanges = _capture_inputs()
+    first = exchanges[0]
+    second = first.model_copy(update={"llm_call_id": 2})
+    _bind_producing_artifact(conn, first, "v13-complete-numeric-prose-end")
+    _bind_producing_artifact(conn, second)
+    with pytest.raises(ValueError, match="mix producing capture versions"):
+        _wire(conn, rows, [first, second], bind_current=False)
+
+
+@pytest.mark.parametrize("change", ["body", "prompt", "run"])
+def test_producing_version_rejects_forged_exchange_metadata(
+    conn: sqlite3.Connection, change: str
+) -> None:
+    from compute.ir_supplement_capture import producing_capture_version
+
+    _, exchanges = _capture_inputs()
+    exchange = exchanges[0]
+    _bind_producing_artifact(conn, exchange)
+    updates = {
+        "body": {
+            "raw_response": exchange.raw_response + " ",
+            "response_sha256": sha(exchange.raw_response + " "),
+        },
+        "prompt": {"prompt_sha256": "0" * 64},
+        "run": {"run_id": "forged"},
+    }[change]
+    with pytest.raises(ValueError, match="unknown or unbound"):
+        producing_capture_version(conn, exchange.model_copy(update=updates), sha(PDF_BYTES))

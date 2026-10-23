@@ -2029,14 +2029,15 @@ def retain_and_publish_reviewed_ir_source(
     )
     retained_exchanges = {response.llm_call_id: response for response in responses}
     capture_versions = [
-        ir_supplement_capture.historical_capture_version(conn, exchange, source_sha256)
-        or "v13-complete-numeric-prose-end"
+        ir_supplement_capture.producing_capture_version(conn, exchange, source_sha256)
         for exchange in exchanges
     ]
     if len(set(capture_versions)) > 1:
         raise ValueError("IR governed exchanges mix producing capture versions")
-    capture_version = capture_versions[0] if capture_versions else "v13-complete-numeric-prose-end"
-    historical = capture_version != "v13-complete-numeric-prose-end"
+    if not capture_versions:
+        raise ValueError("IR producing capture version is unbound")
+    capture_version = capture_versions[0]
+    historical = capture_version in ir_supplement_capture.LEGACY_RELAXED_CAPTURE_VERSIONS
 
     def retained_rows(raw: object) -> list[_EnumeratedKpi]:
         if historical:
@@ -2406,7 +2407,7 @@ def capture_for_ir_pdf_docs(
                     "source_scope": "direct_pdf_rich",
                     "max_chunks": max_chunks,
                     "max_structured_calls": max_structured_calls,
-                    "continuation_version": "ir-supplement-native-continuation-v13-complete-numeric-prose-end",
+                    "continuation_version": "ir-supplement-native-continuation-v14-page-bounded-sections",
                     "prompt_sha256": prompt_sha256,
                     "schema_sha256": schema_sha256,
                     "projection_identity": projection_identity,

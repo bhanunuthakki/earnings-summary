@@ -188,8 +188,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Wrapper loads codex_cli from the external snippets directory.",
-      "fingerprint": "b42694dd000d71a07ea99a9e5e094557736dd7149c5eab7e5419921e9d13f1dc",
-      "line": 136,
+      "fingerprint": "908717313c52680749529ab67bcb8e5fc675bd8719b5ee719b3dbb2524bd4d2b",
+      "line": 138,
       "path": "src/llm/codex_backend.py",
       "targets": [
         "codex_cli"
@@ -198,8 +198,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Auth probe loads the same external codex_cli module.",
-      "fingerprint": "a897c3daef10d6d6126799b0655817949347ca7a70fc9b3c68e5412a5c4db838",
-      "line": 150,
+      "fingerprint": "649d3aae91b5f5042aa4de22c72b58bc679ad21560d57f549746b723343310ed",
+      "line": 152,
       "path": "src/llm/codex_backend.py",
       "targets": [
         "codex_cli"
@@ -297,7 +297,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "a3506153f9b18dd6b7e58343e234dd27633a168b44100adb74c94ce23b853d58",
+      "source_sha256": "058a81cac2e06670faecabf84470a1d2aace862ed99907408cf0ddc86f4d90c9",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

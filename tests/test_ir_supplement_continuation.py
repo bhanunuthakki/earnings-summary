@@ -144,9 +144,9 @@ def test_more_than_80k_and_200_facts_last_page_and_replay(
     output = job.capture(b"original source")
     assert sum(len(rows) for _, rows in output) == 360
     assert output[-1][1][-1]["label"] == "Metric 2:119"
-    assert len(calls) == 15
+    assert len(calls) == 6
     assert _capture(conn, monkeypatch, pages, extract).capture(b"original source") == output
-    assert len(calls) == 15
+    assert len(calls) == 6
 
 
 def test_failed_later_page_replays_earlier_page(
@@ -880,18 +880,31 @@ def test_numeric_repair_feedback_is_specific_bounded_and_primary_unchanged() -> 
     )
 
 
-def test_short_dense_native_page_uses_bounded_lines(
+def test_native_table_final_row_stays_in_one_bounded_page(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    page = "Statement header\n" + "".join(f"Row {i}: {i}\n" for i in range(24))
+    supplied: list[str] = []
+
+    def extract(text: str) -> list[dict[str, object]]:
+        supplied.append(text)
+        return [{"source_excerpt": "Row 23: 23"}]
+
+    capture = _capture(conn, monkeypatch, (page,), extract)
+    assert capture.capture(b"original source") == [(1, [{"source_excerpt": "Row 23: 23"}])]
+    assert len(supplied) == 1
+    assert supplied[0].split("EXTRACT ONLY FROM THIS SOURCE SECTION:\n")[-1] == page
+
+
+def test_short_dense_native_page_preserves_native_page_boundary(
     conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     page = "Header\n" + "".join(f"Item {i}: {i}\n" for i in range(48))
     supplied: list[str] = []
     capture = _capture(conn, monkeypatch, (page,), lambda text: supplied.append(text) or [])
     capture.capture(b"original source")
-    assert len(supplied) == 3
-    assert all(
-        len(text.split("EXTRACT ONLY FROM THIS SOURCE SECTION:\n")[-1].splitlines()) <= 24
-        for text in supplied
-    )
+    assert len(supplied) == 1
+    assert supplied[0].split("EXTRACT ONLY FROM THIS SOURCE SECTION:\n")[-1] == page
     assert all("DOCUMENT CONTEXT" in text and capture.source_sha256 in text for text in supplied)
 
 
@@ -902,7 +915,7 @@ def test_dense_line_plan_checks_global_budget_before_calls(
     capture = _capture(
         conn,
         monkeypatch,
-        ("row\n" * 49,),
+        (("row " + "x" * 2000 + "\n") * 49,),
         lambda text: called.append(text) or [],
         max_structured_calls=4,
     )

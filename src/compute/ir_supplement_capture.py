@@ -147,23 +147,36 @@ class _ChunkResult(BaseModel):
     validation_error: str | None = None
 
 
-def historical_capture_version(
-    conn: sqlite3.Connection, exchange: SupplementExchange, source_sha256: str
-) -> str | None:
-    """Recognize exact old producing artifacts; never accept a caller legacy flag.
+LEGACY_RELAXED_CAPTURE_VERSIONS = frozenset(
+    {
+        "v3-semantic-repair",
+        "v4-native-spans",
+        "v5-literal-endpoint-repair",
+        "v6-native-hyphen-wrap",
+    }
+)
 
-    This authorizes raw evidence rehydration only, not current extraction reuse or
+
+def producing_capture_version(
+    conn: sqlite3.Connection, exchange: SupplementExchange, source_sha256: str
+) -> str:
+    """Resolve exact producing identity independently of wire compatibility.
+
+    This establishes lineage only, not relaxed wire validation, cache reuse or
     financial admission. The artifact owner verifies the complete stored body.
+    V7–V12 have no proven producing-artifact support here and fail closed.
     """
     versions = {
         "ir-supplement-native-continuation-v3-semantic-repair",
         "ir-supplement-native-continuation-v4-native-spans",
         "ir-supplement-native-continuation-v5-literal-endpoint-repair",
         "ir-supplement-native-continuation-v6-native-hyphen-wrap",
+        "ir-supplement-native-continuation-v13-complete-numeric-prose-end",
+        "ir-supplement-native-continuation-v14-page-bounded-sections",
     }
     db_path = str(conn.execute("PRAGMA database_list").fetchone()[2])
     if not db_path:
-        return None
+        raise ValueError("IR producing capture version is unbound")
     rows = conn.execute(
         "SELECT id FROM llm_artifacts WHERE llm_call_id=? AND purpose='kpi_summary_enumerate'",
         (exchange.llm_call_id,),
@@ -171,11 +184,11 @@ def historical_capture_version(
     matched: set[str] = set()
     for row in rows:
         artifact = read_artifact(int(row[0]), db_path=db_path)
-        if artifact is None or artifact.dirty or artifact.prompt_version not in versions:
+        if artifact is None or artifact.dirty:
             continue
         result = _ChunkResult.model_validate(artifact.content_json)
         if (
-            result.status != "processed"
+            result.status not in {"processed", "saturated"}
             or result.exchange != exchange
             or artifact.model != exchange.model
         ):
@@ -210,10 +223,17 @@ def historical_capture_version(
             raise ValueError("IR historical producing governed call metadata differs")
         if hashlib.sha256(exchange.raw_response.encode()).hexdigest() != exchange.response_sha256:
             raise ValueError("IR historical governed response bytes differ")
-        matched.add(artifact.prompt_version.removeprefix("ir-supplement-native-continuation-"))
+        if artifact.prompt_version not in versions:
+            raise ValueError("IR producing capture version is unknown or unbound")
+        capture_version = artifact.prompt_version.removeprefix("ir-supplement-native-continuation-")
+        if capture_version in LEGACY_RELAXED_CAPTURE_VERSIONS and result.status != "processed":
+            raise ValueError("IR historical producing capture is not processed")
+        matched.add(capture_version)
     if len(matched) > 1:
         raise ValueError("IR historical producing capture version is ambiguous")
-    return next(iter(matched), None)
+    if not matched:
+        raise ValueError("IR producing capture version is unknown or unbound")
+    return next(iter(matched))
 
 
 @dataclass
@@ -297,7 +317,9 @@ class SupplementCapture:
         )
         planned: list[tuple[int, int, str]] = []
         for page, text in enumerate(pages, 1):
-            if len(text) <= self.max_input_chars // 4 and len(text.splitlines()) <= 24:
+            # Keep bounded native tables together. Dense pages use the existing
+            # fact-saturation continuation rather than an arbitrary line cutoff.
+            if len(text) <= self.max_input_chars // 4:
                 planned.append((page, 0, text))
                 continue
             # Keep source lines intact. A line too large for a bounded section
@@ -305,17 +327,14 @@ class SupplementCapture:
             capacity = self.max_input_chars // 4
             start = 0
             body = ""
-            line_count = 0
             for line in text.splitlines(keepends=True):
                 if len(line) > capacity:
                     raise ValueError(f"IR native source line exceeds section budget at page {page}")
-                if body and (len(body) + len(line) > capacity or line_count >= 24):
+                if body and len(body) + len(line) > capacity:
                     planned.append((page, start, body))
                     start += len(body)
                     body = ""
-                    line_count = 0
                 body += line
-                line_count += 1
             if body:
                 planned.append((page, start, body))
         # The structured owner can make a primary request plus one repair.
@@ -439,7 +458,7 @@ class SupplementCapture:
             prompt,
             *[repair_supplement_prompt(prompt, error) for error in _SUPPLEMENT_REPAIR_FEEDBACK],
         ]
-        version = "ir-supplement-native-continuation-v13-complete-numeric-prose-end"
+        version = "ir-supplement-native-continuation-v14-page-bounded-sections"
         scope = f"ir_supplement:{self.document_id}:page:{page}:section:{start}:{len(body)}"
         expected_sha = compute_input_sha256(prompt_version=version, cache_inputs=inputs)
         artifact = read_current(

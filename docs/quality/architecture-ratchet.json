@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "de5aa809c014608c8a058535098e45df42a8533c",
+  "scoped_commit": "9317d0a36d9e776f1c357421d423bb7ca715b375",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "cba4dec9606cd52237ecfef1b6bac7d6f2f6dacd4c827692a9347b5122dc2009",
+  "source_sha256": "6e15c94493e3a6555fab0225de14eb6222df80f1c72125728f2a0cccd7503dad",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1476,
-    "total_noncomment_loc": 567452,
+    "total_noncomment_loc": 567876,
     "modules_over_1000_loc": 110,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
@@ -8416,17 +8416,17 @@
         "path": "src/compute/ir_supplement_capture.py",
         "module": "compute.ir_supplement_capture",
         "lines": {
-          "physical": 425,
-          "nonblank": 392,
-          "noncomment": 387
+          "physical": 646,
+          "nonblank": 597,
+          "noncomment": 587
         },
         "internal_fan_out": 6,
         "responsibilities": [
           "database",
           "network"
         ],
-        "public_functions": 2,
-        "fully_annotated_public_functions": 2
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
       },
       {
         "path": "src/compute/key_metrics.py",
@@ -8464,9 +8464,9 @@
         "path": "src/compute/kpi_extract_summaries.py",
         "module": "compute.kpi_extract_summaries",
         "lines": {
-          "physical": 2458,
-          "nonblank": 2292,
-          "noncomment": 2186
+          "physical": 2527,
+          "nonblank": 2359,
+          "noncomment": 2248
         },
         "internal_fan_out": 33,
         "responsibilities": [
@@ -11998,9 +11998,9 @@
         "path": "src/llm/codex_backend.py",
         "module": "llm.codex_backend",
         "lines": {
-          "physical": 288,
-          "nonblank": 256,
-          "noncomment": 237
+          "physical": 290,
+          "nonblank": 258,
+          "noncomment": 238
         },
         "internal_fan_out": 4,
         "responsibilities": [
@@ -12352,9 +12352,9 @@
         "path": "src/llm/resolver.py",
         "module": "llm.resolver",
         "lines": {
-          "physical": 298,
-          "nonblank": 248,
-          "noncomment": 239
+          "physical": 302,
+          "nonblank": 252,
+          "noncomment": 242
         },
         "internal_fan_out": 3,
         "responsibilities": [
@@ -13284,9 +13284,9 @@
         "path": "src/operations/storage_reservation.py",
         "module": "operations.storage_reservation",
         "lines": {
-          "physical": 222,
-          "nonblank": 195,
-          "noncomment": 191
+          "physical": 220,
+          "nonblank": 193,
+          "noncomment": 188
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -14453,17 +14453,17 @@
         "path": "src/pipeline/kpi_semantics.py",
         "module": "pipeline.kpi_semantics",
         "lines": {
-          "physical": 832,
-          "nonblank": 757,
-          "noncomment": 752
+          "physical": 1008,
+          "nonblank": 927,
+          "noncomment": 914
         },
         "internal_fan_out": 3,
         "responsibilities": [
           "database",
           "network"
         ],
-        "public_functions": 7,
-        "fully_annotated_public_functions": 7
+        "public_functions": 8,
+        "fully_annotated_public_functions": 8
       },
       {
         "path": "src/pipeline/kpi_source_review.py",
@@ -16488,9 +16488,9 @@
         "path": "src/provenance/ir_reported_facts.py",
         "module": "provenance.ir_reported_facts",
         "lines": {
-          "physical": 1171,
-          "nonblank": 1092,
-          "noncomment": 1092
+          "physical": 1170,
+          "nonblank": 1091,
+          "noncomment": 1091
         },
         "internal_fan_out": 12,
         "responsibilities": [
