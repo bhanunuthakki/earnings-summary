@@ -13,6 +13,7 @@ cat >"$bin_dir/git" <<'EOF'
 #!/bin/sh
 case "$*" in
   "rev-parse --show-toplevel") printf '%s\n' "$TEST_REPO_ROOT" ;;
+  "rev-parse HEAD") printf '%s\n' checked-head ;;
   "merge-base HEAD origin/main") printf '%s\n' base ;;
   *"diff --name-only"*"instruction_tests/test_*.py"*) printf '%s\n' instruction_tests/test_instruction_contracts.py ;;
   *"diff --name-only"*) printf '%s\n' src/models/documents.py ;;
@@ -37,6 +38,19 @@ run_hook() {
     "$hook" >/dev/null 2>"$tmp_dir/stderr"
 }
 
+if printf '%s\n' 'refs/heads/other unchecked-head refs/heads/other old-head' | run_hook; then
+  printf 'expected unchecked outgoing ref to fail\n' >&2
+  exit 1
+fi
+grep -q 'checkout the commit being pushed' "$tmp_dir/stderr"
+if printf '%s\n' \
+  'refs/heads/main checked-head refs/heads/main old-head' \
+  'refs/heads/other unchecked-head refs/heads/other old-head' | run_hook; then
+  printf 'expected unchecked second outgoing ref to fail\n' >&2
+  exit 1
+fi
+grep -q 'checkout the commit being pushed' "$tmp_dir/stderr"
+
 if TEST_REPO_ROOT="$repo_root" TEST_PYTHON_LOG="$log" \
   PATH="$bin_dir:/usr/bin:/bin" PYTHON_BIN="$tmp_dir/missing-python" \
   "$hook" >/dev/null 2>"$tmp_dir/stderr"; then
@@ -54,8 +68,9 @@ fi
 grep -q 'PRE-PUSH FAILED at:.*-m pytest --version' "$tmp_dir/stderr"
 
 : >"$log"
-FAST_PUSH=1 run_hook
+printf '%s\n' 'refs/heads/main checked-head refs/heads/main old-head' | FAST_PUSH=1 run_hook
 grep -qx -- 'execution/verify_public_tree.py' "$log"
+grep -qx -- 'execution/verify_public_tree.py --outgoing base' "$log"
 grep -qx -- 'execution/validate_directive_manifest.py' "$log"
 grep -qx -- 'execution/validate_folder_contract.py' "$log"
 grep -qx -- '-m quality.check_changed --base base --mode committed --check tests' "$log"
@@ -65,6 +80,7 @@ unset FAST_PUSH
 : >"$log"
 run_hook
 grep -qx -- 'execution/verify_public_tree.py' "$log"
+grep -qx -- 'execution/verify_public_tree.py --outgoing base' "$log"
 grep -qx -- '-m quality.check_changed --base base --mode committed --check full-tests' "$log"
 
 printf 'pre-push-tests: ok\n'

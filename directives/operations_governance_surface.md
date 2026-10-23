@@ -2174,3 +2174,13 @@ an exact-new-receipt population claim. `ingest_transcripts_state.py --dry-run`
 forwards the existing child mode. It does not promise byte-unchanged SQLite files:
 the legacy connection owner can still apply its normal journal policy. No new
 collector, ingester, schedule, provider route or financial schema is introduced.
+
+## Private report export
+
+`execution/export_shareable_report.py` creates a separate offline reading copy of a
+recognized standalone workspace report. It never overwrites the source or an existing
+destination. It removes application capabilities, hidden stored comments and application
+connections; visible report content remains subject to the owner's sharing decision.
+The private report and live dashboard retain their existing behavior. This local,
+explicit file operation adds no dashboard action, scheduler, provider call or database
+write. See `docs/security/information-boundaries.md` for the invocation and boundaries.
