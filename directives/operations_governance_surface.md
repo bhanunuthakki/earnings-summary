@@ -1958,3 +1958,21 @@ Selected legacy PRE baselines do not acquire verified binding. Scheduled generat
 and financial state remain unchanged. There are no provider calls or new routes.
 Evidence: `tests/test_report_contract.py`, `tests/test_report_preview.py`, existing
 artifact-index and PRE/POST regressions, and isolated rendered preview receipts.
+
+### Explicit cohort rollout census — 2026-10-22
+
+Disposition: **manual read-only CLI; no dashboard or scheduler change**. Run
+`execution/sqlite_bootstrap.py execution/audit_cohort_readiness.py` with a required
+`--db-path`, one or more `--issuer-id` selectors, `--knowledge-cutoff`, and
+`--observed-through`. The command reads one SQLite transaction through the
+read-only role. It emits acquisition, processing, semantic/publication, and
+global consumer-receipt evidence counts. Missing schema is unknown, not zero.
+It performs no collection, writes, provider calls, or consumer audit. It creates
+no persisted state and adds no scheduler or dashboard control. Evidence census
+clock comparisons have whole-second precision under the existing reporting
+selector; receipt clock equality preserves microseconds. Both limits appear in
+the JSON output. Counts do not certify completeness or readiness.
+`execution/audit_data_cutover_readiness.py` and the existing population cutover
+evaluator remain the verification authorities. See
+`docs/architecture/cohort-rollout-readiness.md` for invocation, representative
+cohort criteria, and the bounded population sequence.
