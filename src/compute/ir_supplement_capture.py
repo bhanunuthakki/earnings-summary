@@ -24,6 +24,7 @@ from llm_artifact_store import (
     upsert,
 )
 from log_redact import redact
+from pipeline.locators import locate_char_span
 from provenance.fulltext_backfill import project_pdf_page_texts
 from provenance.ocr_extraction import PDFPreflight, normalize_extracted_text
 
@@ -48,20 +49,42 @@ class SupplementExchange(BaseModel):
     run_id: str = Field(min_length=1)
 
 
-def repair_supplement_prompt(prompt: str) -> str:
-    """Controlled repair-only source feedback; the primary prompt stays exact."""
+_SUPPLEMENT_REPAIR_FEEDBACK = {
+    "": "The response failed JSON, row schema or source validation.",
+    "direct IR PDF numeric token must occur in its exact source quote": "direct IR PDF numeric token must occur in its exact source quote",
+    "source numeric token must occur in source_excerpt": "source numeric token must occur in source_excerpt",
+    "IR extracted quote does not occur in its native source section": "IR extracted quote does not occur in its native source section",
+    "direct IR PDF guidance range repeats an endpoint": "direct IR PDF guidance range repeats an endpoint",
+    "direct IR PDF guidance range requires both exact endpoints": "direct IR PDF guidance range requires both exact endpoints",
+}
+
+
+def repair_supplement_prompt(prompt: str, error: str = "") -> str:
+    """Controlled repair-only feedback; never interpolate unknown error text."""
+    feedback = _SUPPLEMENT_REPAIR_FEEDBACK.get(error, _SUPPLEMENT_REPAIR_FEEDBACK[""])
     return repair_structured_prompt(prompt) + (
-        "\nSOURCE VALIDATION: The previous result did not satisfy the source contract. "
+        "\nSOURCE VALIDATION: " + feedback + ". "
         "Each source_excerpt must occur verbatim in EXTRACT ONLY FROM THIS SOURCE SECTION "
         "(or the supplied page when no section marker exists). Do not repair spelling, "
-        "spacing, punctuation or context. Omit any row you cannot support exactly."
+        "spacing, punctuation or context. "
+        "source_value_text must be a literal substring of source_excerpt, not a formatted value. "
+        "For a range, do not add a currency or percent symbol absent from that endpoint. "
+        "Synthetic examples: $10-20 permits literal tokens 10 and 20, not $20; "
+        "3-5% permits literal tokens 3 and 5%, not 3%. "
+        "Keep currency, unit and scale in their separate fields and each numeric value in "
+        "the required full-unit convention. Keep both endpoints as separate rows with "
+        "the same source_excerpt and label. Omit any row you cannot support exactly."
     )
 
 
 def require_native_source_quotes(rows: list[dict[str, object]], body: str) -> None:
     for row in rows:
         quote = row.get("source_excerpt")
-        if not isinstance(quote, str) or not quote or quote not in body:
+        if (
+            not isinstance(quote, str)
+            or not quote
+            or locate_char_span(quote, body, whitespace_only=True) is None
+        ):
             raise ValueError("IR extracted quote does not occur in its native source section")
 
 
@@ -240,9 +263,9 @@ class SupplementCapture:
             str(self.max_facts),
             str(self.max_input_chars),
             prompt,
-            repair_supplement_prompt(prompt),
+            *[repair_supplement_prompt(prompt, error) for error in _SUPPLEMENT_REPAIR_FEEDBACK],
         ]
-        version = "ir-supplement-native-continuation-v3-semantic-repair"
+        version = "ir-supplement-native-continuation-v5-literal-endpoint-repair"
         scope = f"ir_supplement:{self.document_id}:page:{page}:section:{start}:{len(body)}"
         expected_sha = compute_input_sha256(prompt_version=version, cache_inputs=inputs)
         artifact = read_current(
@@ -359,7 +382,7 @@ class SupplementCapture:
         if exchange.submitted_prompt not in {
             prompt,
             repair_structured_prompt(prompt),
-            repair_supplement_prompt(prompt),
+            *[repair_supplement_prompt(prompt, error) for error in _SUPPLEMENT_REPAIR_FEEDBACK],
         }:
             raise ValueError("IR final submitted prompt does not match the source section")
         effective = self.effective_prompt(exchange.submitted_prompt)

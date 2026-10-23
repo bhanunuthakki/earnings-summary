@@ -438,3 +438,48 @@ def test_kpi_value_rejects_unknown_locator_type() -> None:
                 "locator": {"pdf_page": "seven"},
             }
         )
+
+
+def test_whitespace_only_span_preserves_native_offsets_and_rejects_changed_text():
+    from pipeline.locators import locate_char_span
+
+    source = "Header. Revenue on a constant currency basis would have increased by\n27% year-over-year. Footer."
+    quote = "Revenue on a constant currency basis would have increased by 27% year-over-year."
+    span = locate_char_span(quote, source, whitespace_only=True)
+    assert span is not None
+    assert source[slice(*span)] == quote.replace(" 27%", "\n27%")
+    assert locate_char_span(quote, source) is None
+    for changed in (
+        quote.replace("27%", "28%"),
+        quote.replace("27%", "-27%"),
+        quote.replace("Revenue", "revenue"),
+        quote.replace("increased", "decreased"),
+        quote.replace("year-over-year.", "year over year."),
+        quote[:-1] + ",",
+        quote.replace("-", "\u2013"),
+    ):
+        assert locate_char_span(changed, source, whitespace_only=True) is None
+    assert locate_char_span(quote, source + source, whitespace_only=True) is None
+
+
+@pytest.mark.parametrize(
+    "native",
+    [
+        "Revenue on a constant currency basis would \nhave increased by 27% year-over-year.",
+        "This includes \n$2.40 billion of charges related to legal proceedings",
+        "$1.18 billion of severance expenses in connection with the May \n2026 headcount reduction.",
+        "Cash, cash equivalents, and marketable securities were \n$90.26 billion as of June 30, 2026.",
+        "Our reported headcount \nincludes approximately 8,000 employees impacted by the May 2026 headcount reduction",
+    ],
+)
+def test_retained_meta_page1_quotes_resolve_to_exact_native_span(native: str) -> None:
+    # Actual distinct excerpts from attempt2, source SHA b3b181046d78b553...:
+    # all eight rejected rows across primary/repair reduce to these five spans.
+    from pipeline.locators import locate_char_span
+
+    model_quote = " ".join(native.split())
+    source = "SOURCE HEADER\n" + native + "\nSOURCE FOOTER"
+    span = locate_char_span(model_quote, source, whitespace_only=True)
+    assert span is not None
+    assert span == (len("SOURCE HEADER\n"), len("SOURCE HEADER\n") + len(native))
+    assert source[slice(*span)] == native

@@ -1,0 +1,263 @@
+{
+  "scope": "portfolio_financial_quarantine_consumer_fiscal_and_ir_span_growth",
+  "status": "root_reviewed_exact_source_growth_local_gates_passed_full_ci_pending",
+  "source_commit": "4363247079169ce0b6c3b7dcc0475ad5ab9fcfeb",
+  "source_sha256": "a105839c11815570911b16bb2827e86d561aefa6655b82b9298c1e4ba14a7e67",
+  "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
+  "scanner_changed": false,
+  "baseline_before_sha256": "b3ddb4b73718b4bfe82b0347f251b4d8e8e57db85ec8f4256e6e0abe966dda60",
+  "baseline_candidate_sha256": "52c8efe0327027aeede3e8af1479f6aae8d579df69cb58bd89b1d9b4bcd4f37f",
+  "changed_metrics": {
+    "total_noncomment_loc": {
+      "before": 566614,
+      "after": 567367
+    },
+    "modules_over_1000_loc": {
+      "before": 109,
+      "after": 110
+    }
+  },
+  "unchanged_metrics": [
+    "executable_modules",
+    "modules_over_2000_loc",
+    "modules_at_least_3000_loc",
+    "max_internal_fan_out",
+    "scc_count",
+    "scc_module_count",
+    "largest_scc",
+    "composition_root_loc",
+    "composition_root_fan_out",
+    "facade_violations"
+  ],
+  "module_noncomment_loc_deltas": [
+    {
+      "path": "src/compute/fmp_derived_kpis.py",
+      "before": 1337,
+      "after": 1338,
+      "delta": 1,
+      "reason": "Route derived KPI inputs through the shared canonical fact relation."
+    },
+    {
+      "path": "src/compute/ir_supplement_capture.py",
+      "before": 311,
+      "after": 387,
+      "delta": 76,
+      "reason": "Retain exact IR source context, deterministic quote spans, and bounded literal endpoint repair feedback."
+    },
+    {
+      "path": "src/compute/kpi_definition_units.py",
+      "before": 94,
+      "after": 96,
+      "delta": 2,
+      "reason": "Resolve source units through the canonical fact relation."
+    },
+    {
+      "path": "src/compute/kpi_extract_summaries.py",
+      "before": 2146,
+      "after": 2186,
+      "delta": 40,
+      "reason": "Validate and retain IR quote spans in extracted summaries."
+    },
+    {
+      "path": "src/compute/metrics_engine/io.py",
+      "before": 1856,
+      "after": 1858,
+      "delta": 2,
+      "reason": "Use canonical admission for calculation inputs and derived output reads."
+    },
+    {
+      "path": "src/compute/segment_q4_derive.py",
+      "before": 579,
+      "after": 581,
+      "delta": 2,
+      "reason": "Use canonical admission for segment derivation inputs."
+    },
+    {
+      "path": "src/compute/segment_quarterly_10q.py",
+      "before": 863,
+      "after": 865,
+      "delta": 2,
+      "reason": "Use canonical admission for quarterly segment inputs."
+    },
+    {
+      "path": "src/compute/segments.py",
+      "before": 257,
+      "after": 259,
+      "delta": 2,
+      "reason": "Use canonical admission for segment financial reads."
+    },
+    {
+      "path": "src/dcf/fact_drivers.py",
+      "before": 480,
+      "after": 483,
+      "delta": 3,
+      "reason": "Use canonical admission for model driver source names."
+    },
+    {
+      "path": "src/llm/structured.py",
+      "before": 343,
+      "after": 359,
+      "delta": 16,
+      "reason": "Retain raw structured responses before validation and share one repair budget with source guardrails."
+    },
+    {
+      "path": "src/pipeline/issuer_document_inventory.py",
+      "before": 906,
+      "after": 1042,
+      "delta": 136,
+      "reason": "Bind fiscal-period evidence in the existing issuer document inventory owner."
+    },
+    {
+      "path": "src/pipeline/locators.py",
+      "before": 313,
+      "after": 326,
+      "delta": 13,
+      "reason": "Map native line breaks to exact IR quote spans."
+    },
+    {
+      "path": "src/pipeline/managed_ir_sources.py",
+      "before": 1725,
+      "after": 1761,
+      "delta": 36,
+      "reason": "Retain managed IR source routing and capture evidence."
+    },
+    {
+      "path": "src/pipeline/source_policy.py",
+      "before": 732,
+      "after": 746,
+      "delta": 14,
+      "reason": "Bind source policy to exact issuer and period evidence."
+    },
+    {
+      "path": "src/provenance/fact_read_model.py",
+      "before": 1109,
+      "after": 1203,
+      "delta": 94,
+      "reason": "Admit every declared native derived input at the request clock."
+    },
+    {
+      "path": "src/provenance/financial_fact_resolution.py",
+      "before": 2019,
+      "after": 2106,
+      "delta": 87,
+      "reason": "Apply shared semantic quarantine to current and historical canonical selections and legacy derivations."
+    },
+    {
+      "path": "src/provenance/ir_reported_facts.py",
+      "before": 1064,
+      "after": 1092,
+      "delta": 28,
+      "reason": "Keep exact IR quote-span locators with reported facts."
+    },
+    {
+      "path": "src/provenance/issuer_registry_bootstrap.py",
+      "before": 3380,
+      "after": 3475,
+      "delta": 95,
+      "reason": "Bind exact issuer reporting identities and fiscal evidence in the existing registry."
+    },
+    {
+      "path": "src/provenance/semantic_disposition.py",
+      "before": 271,
+      "after": 368,
+      "delta": 97,
+      "reason": "Select explicit document quarantine by knowledge and recording clocks."
+    },
+    {
+      "path": "src/report/metrics_view.py",
+      "before": 158,
+      "after": 160,
+      "delta": 2,
+      "reason": "Use shared canonical financial admission in report metric reads."
+    },
+    {
+      "path": "src/report/sections/financials.py",
+      "before": 1636,
+      "after": 1638,
+      "delta": 2,
+      "reason": "Use shared canonical financial admission in the financial report section."
+    },
+    {
+      "path": "src/table_extractors/generic_xbrl_capture.py",
+      "before": 405,
+      "after": 406,
+      "delta": 1,
+      "reason": "Expose the two existing shared section and fiscal-date helpers through public definitions; direct private assignments preserve legacy tests without duplicate logic."
+    },
+    {
+      "path": "src/timeseries/loaders.py",
+      "before": 1847,
+      "after": 1849,
+      "delta": 2,
+      "reason": "Use shared canonical financial admission in time-series reads."
+    }
+  ],
+  "only_module_crossing_1000_loc": "src/pipeline/issuer_document_inventory.py",
+  "duplicate_comparison": {
+    "baseline_changed": false,
+    "scanner_changed": false,
+    "exact_duplicated_loc": {
+      "before": 158,
+      "after": 158
+    },
+    "near_miss_duplicated_loc": {
+      "before": 9867,
+      "after": 9790
+    },
+    "near_miss_groups": {
+      "before": 147,
+      "after": 146
+    }
+  },
+  "decision": "Refresh only the architecture measurement to the exact frozen source. Retain the duplicate baseline and scanner rules. This records feature growth; it is not a code-size reduction or a new policy ceiling.",
+  "limits": [
+    "Full CI and native release qualification remain separate required gates.",
+    "Legacy nested-derived inputs remain an explicit data repair obligation; this receipt does not assert live reader eligibility.",
+    "Model fidelity, source completeness, production deployment and financial admission remain separate evidence."
+  ],
+  "public_helper_compatibility": "Two renamed public definitions are the canonical callables. Direct assignments preserve existing private-helper test names. The prior module-wide Pyright suppression and old import suppressions were removed; no financial value behavior changed.",
+  "static_quality_ceiling_reductions": [
+    {
+      "metric": "pyright_diagnostics",
+      "scope": "src/compute",
+      "before": 37,
+      "after": 25
+    },
+    {
+      "metric": "pyright_diagnostics",
+      "scope": "tests",
+      "before": 1378,
+      "after": 1377
+    },
+    {
+      "metric": "suppressions",
+      "scope": "src/compute",
+      "before": 2,
+      "after": 1
+    },
+    {
+      "metric": "suppressions",
+      "scope": "src/table_extractors",
+      "before": 2,
+      "after": 0
+    }
+  ],
+  "legacy_raw_read_ratchet_disposition": {
+    "owner": "src/provenance/financial_fact_resolution.py",
+    "audited_count_before": 4,
+    "audited_count_after": 5,
+    "scanner_changed": false,
+    "focused_test": "tests/test_legacy_fact_access_architecture.py::test_no_new_legacy_fact_readers_before_canonical_cutover",
+    "audited_fifth_read": "Historical canonical selector checks the selected kpi_facts row by exact fact_row_id to validate declared derived inputs before admission. It does not select a competing fact or add a product consumer.",
+    "source_comparison": "The committed HEAD and current worktree each contain this exact resolver-owned SQL read. The audited count of four was stale; no additional reader was introduced by the final helper or IR edits.",
+    "final_stage_other_reader_counts_changed": false,
+    "branch_debt_vs_origin_main": {
+      "before": 111,
+      "after": 96,
+      "gross_removed": 16,
+      "resolver_internal_added_to_audit": 1,
+      "net_removed": 15
+    }
+  },
+  "root_reviewed_at": "2026-10-23T17:40:17.262447+00:00"
+}

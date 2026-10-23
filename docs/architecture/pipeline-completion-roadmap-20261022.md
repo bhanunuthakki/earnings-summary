@@ -159,15 +159,31 @@ when installed tools suffice. Do not add a second tracking or audit system.
   focused tests pass and independent code review scored 94/100. Actual model
   fidelity remains pending in a separate synthetic attempt; the first attempt
   remains unchanged.
-- The source-backed fiscal calendar and subject-binding repair passes 192
+- The source-backed fiscal calendar and subject-binding repair passes 193
   affected tests. Twelve new fiscal regressions fail against the predecessor
-  owners. Independent review is pending. This repairs acquisition eligibility;
+  owners. Independent review scored 94/100. The final tests also prove fixed
+  predecessor request bytes and a successful fiscal alias inventory path. This repairs acquisition eligibility;
   it does not establish that the required source population has been collected.
 - Financial source quarantine now reaches the direct financial consumers. Their
   independent reviews scored 94/100 and 95/100. A further persisted-calculation
   gap remains under repair: every required input must remain usable at the
   reader's cutoff. Preserve the saved calculation and reject its use when an
-  input is quarantined. No production quarantine was applied in this step.
+  input is quarantined. The completed guard passes 91 affected tests, 253
+  consumer tests and nine final semantic cases. Independent review scored
+  94/100. No production quarantine was applied in this step. The live impact
+  of ambiguous legacy calculation lineage remains under read-only assessment.
+- The second real PDF attempt retained both responses and rejected the first
+  page after two calls. The eight remaining pages were not captured, so no
+  recall score exists. The rejected quotations differ from the native source
+  only in whitespace around PDF line breaks. A narrow follow-up in the existing
+  locator and evidence owners will map such quotations to exact contiguous
+  native spans. Preserve the raw model row and reject changed words, numbers,
+  signs, punctuation and ambiguous matches. This is active work, not accepted
+  model fidelity.
+- The integrated code candidate includes the current security release. Its
+  initial fast gate stopped at the architecture ratchet. A measured growth
+  disposition and final source measurement are required before acceptance;
+  the scanner and duplicate ceilings remain unchanged.
 
 - Plan: independent review improved from 86/100 to 93/100 with no plan blockers.
   The exact reviewed plan hash and scope are in

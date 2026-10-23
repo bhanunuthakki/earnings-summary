@@ -1423,7 +1423,7 @@ def _llm_extract_enumerate(
             domain_guardrail=source_guardrail,
             raw_response_observer=raw_response_observer,
             repair_prompt=(
-                (lambda _error: ir_supplement_capture.repair_supplement_prompt(prompt))
+                (lambda error: ir_supplement_capture.repair_supplement_prompt(prompt, error))
                 if source_guardrail is not None
                 else None
             ),
@@ -1998,6 +1998,7 @@ def retain_and_publish_reviewed_ir_source(
             processed.append((exchange, cast("list[dict[str, object]]", parsed)))
     if len(processed) != len(page_rows):
         raise ValueError("IR page sections and governed responses do not match")
+    native_pages = ir_supplement_capture.project_pdf_page_texts(raw_pdf_bytes)
     raw_rows: list[IrRawRow] = []
     for (page, rows), (exchange, original) in zip(page_rows, processed, strict=True):
         validated = [
@@ -2006,16 +2007,26 @@ def retain_and_publish_reviewed_ir_source(
         ]
         if validated != rows:
             raise ValueError("IR page rows differ from their governed raw response")
-        raw_rows.extend(
-            IrRawRow(
-                page_number=page,
-                response_sha256=exchange.response_sha256,
-                exchange_sha256=retained_exchanges[exchange.llm_call_id].exchange_sha256,
-                response_row_ordinal=ordinal,
-                raw_row=original[ordinal],
+        for ordinal, original_row in enumerate(original):
+            quote = original_row.get("source_excerpt")
+            if not isinstance(quote, str) or page < 1 or page > len(native_pages):
+                raise ValueError("IR native quote or page is missing")
+            native_page = native_pages[page - 1]
+            span = locate_char_span(quote, native_page, whitespace_only=True)
+            if span is None:
+                raise ValueError("IR native quote span is missing or ambiguous")
+            raw_rows.append(
+                IrRawRow(
+                    page_number=page,
+                    response_sha256=exchange.response_sha256,
+                    exchange_sha256=retained_exchanges[exchange.llm_call_id].exchange_sha256,
+                    response_row_ordinal=ordinal,
+                    raw_row=original_row,
+                    native_source_quote=native_page[slice(*span)],
+                    native_char_start=span[0],
+                    native_char_end=span[1],
+                )
             )
-            for ordinal in range(len(original))
-        )
     completed_at = datetime.now(UTC)
     population = retain_ir_pdf_candidates(
         conn,
@@ -2023,7 +2034,7 @@ def retain_and_publish_reviewed_ir_source(
             document_version_id=document_version_id,
             source_sha256=source_sha256,
             extractor_name="ir-supplement-native-continuation",
-            extractor_code_version="v3-exchange-identity",
+            extractor_code_version="v4-native-spans",
             extractor_config_sha256=extractor_config_sha256,
             extraction_started_at=extraction_started_at,
             extraction_completed_at=completed_at,
@@ -2083,7 +2094,7 @@ def retain_and_publish_reviewed_ir_source(
             scope_security_id=subject.security_id,
             concept_namespace="issuer-ir-pdf-source:" + str(issuer_row[0]),
             extractor_name="ir-supplement-native-continuation",
-            extractor_code_version="v3-exchange-identity",
+            extractor_code_version="v4-native-spans",
             extractor_config_sha256=extractor_config_sha256,
             candidate_population_sha256=population.candidate_population_sha256,
             review_node_id=review_node_id,
@@ -2332,7 +2343,7 @@ def capture_for_ir_pdf_docs(
                     "source_scope": "direct_pdf_rich",
                     "max_chunks": max_chunks,
                     "max_structured_calls": max_structured_calls,
-                    "continuation_version": "ir-supplement-native-continuation-v3-semantic-repair",
+                    "continuation_version": "ir-supplement-native-continuation-v5-literal-endpoint-repair",
                     "prompt_sha256": prompt_sha256,
                     "schema_sha256": schema_sha256,
                     "projection_identity": projection_identity,

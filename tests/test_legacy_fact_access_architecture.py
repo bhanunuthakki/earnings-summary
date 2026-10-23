@@ -131,11 +131,11 @@ AUDITED_LEGACY_FACT_READS = {
     "src/pipeline/issuer_document_coverage.py": 3,
     "src/pipeline/restatements_panel.py": 4,
     "src/pipeline/validation_engine.py": 5,
-    # Canonical cutover resolution must inspect both exact legacy candidates
-    # and their available-at-cutoff supersession links before it can publish
-    # one immutable selected observation. These are resolver-boundary reads,
-    # not product-consumer fallbacks.
-    "src/provenance/financial_fact_resolution.py": 4,
+    # Canonical cutover resolution inspects exact legacy candidates and
+    # supersession links. Its historical selector also checks one exact KPI
+    # row's declared inputs before admitting the selected observation. These
+    # are resolver-boundary reads, not product-consumer fallbacks.
+    "src/provenance/financial_fact_resolution.py": 5,
     "src/provenance/integrity_audit.py": 1,
     "src/provenance/legacy_canonical_parity.py": 2,
     "src/synthesis/lenses/_shared.py": 1,

@@ -707,7 +707,17 @@ def test_full_entrypoint_two_empty_pages_retain_distinct_calls_and_cache_replay(
     assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
 
 
-@pytest.mark.parametrize("responses_kind", ["quote_then_valid", "quote_twice", "json_then_quote"])
+@pytest.mark.parametrize(
+    "responses_kind",
+    [
+        "quote_then_valid",
+        "quote_twice",
+        "json_then_quote",
+        "whitespace_primary",
+        "numeric_then_valid",
+        "json_then_numeric",
+    ],
+)
 def test_source_quote_repair_retains_every_raw_response_with_two_request_limit(
     conn: sqlite3.Connection,
     tmp_path: Path,
@@ -730,10 +740,39 @@ def test_source_quote_repair_retains_every_raw_response_with_two_request_limit(
         "dimensions": {"Geography": "North"},
         "source_unit_scale": "none",
     }
+    guidance_quote = (
+        "We expect third quarter 2026 total revenue to be in the range of $61-64 billion."
+    )
+    guidance = [
+        {
+            **valid,
+            "label": "Revenue guidance",
+            "value": value * 1_000_000_000,
+            "unit": "actual",
+            "currency": "USD",
+            "source_excerpt": guidance_quote,
+            "source_value_text": str(value),
+            "reported_period_end": "2026-09-30",
+            "period_role": "guidance",
+            "range_bound": bound,
+            "consolidation_scope": "consolidated",
+            "dimensions": {},
+            "source_unit_scale": "billions",
+        }
+        for value, bound in [(61, "lower"), (64, "upper")]
+    ]
+    bad_guidance = [guidance[0], {**guidance[1], "source_value_text": "$64"}]
     invalid = {**valid, "source_excerpt": "Margin South 10%"}
     bad = json.dumps([invalid])
     good = json.dumps([valid])
+    if responses_kind == "whitespace_primary":
+        monkeypatch.setattr(
+            __name__ + ".RICH_PAGE", RICH_PAGE.replace("Margin North 10%", "Margin\nNorth 10%")
+        )
     outputs = {
+        "numeric_then_valid": [json.dumps(bad_guidance), json.dumps(guidance)],
+        "json_then_numeric": ["not JSON", json.dumps(bad_guidance)],
+        "whitespace_primary": [good],
         "quote_then_valid": [bad, good],
         "quote_twice": [bad, bad],
         "json_then_quote": ["not JSON", bad],
@@ -764,11 +803,15 @@ def test_source_quote_repair_retains_every_raw_response_with_two_request_limit(
 
     monkeypatch.setattr(structured, "call_llm", governed_transport)
     first = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, max_structured_calls=2)
-    assert len(calls) == 2
-    if responses_kind == "quote_then_valid":
+    expected_calls = 1 if responses_kind == "whitespace_primary" else 2
+    assert len(calls) == expected_calls
+    if responses_kind in {"quote_then_valid", "whitespace_primary", "numeric_then_valid"}:
         assert first.error is None
     else:
         assert first.error is not None
+    if responses_kind == "numeric_then_valid":
+        assert "direct IR PDF numeric token must occur in its exact source quote" in calls[1][0]
+        assert "literal tokens 10 and 20" in calls[1][0]
     artifacts = [
         json.loads(str(row[0])) for row in conn.execute("SELECT content_json FROM llm_artifacts")
     ]
@@ -788,8 +831,81 @@ def test_source_quote_repair_retains_every_raw_response_with_two_request_limit(
     }
     assert ids == retained_ids
     second = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, max_structured_calls=2)
-    assert len(calls) == 2, "exact failed or repaired replay must not call a provider again"
+    assert len(calls) == expected_calls, (
+        "exact failed or repaired replay must not call a provider again"
+    )
     assert (second.error is None) == (first.error is None)
     assert conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM fact_observations_v2").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("quote", "invalid_token", "literal_token"),
+    [
+        (
+            "We expect third quarter 2026 total revenue to be in the range of $61-64 billion.",
+            "$64",
+            "64",
+        ),
+        (
+            "We now expect full year 2026 total expenses to be in the range of $165-169 billion.",
+            "$169",
+            "169",
+        ),
+        (
+            "We anticipate 2026 capital expenditures, including principal payments on finance leases, to be in the range of $130-145 billion,",
+            "$145",
+            "145",
+        ),
+        ("narrowed from our prior outlook of $125-145 billion.", "$145", "145"),
+        (
+            "we expect our tax rate for the remaining quarters of 2026 to be between 15-17%,",
+            "15%",
+            "15",
+        ),
+        ("an increase from our prior outlook of 13-16%.", "13%", "13"),
+    ],
+)
+def test_retained_page2_range_tokens_require_literal_endpoint(
+    conn: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    quote: str,
+    invalid_token: str,
+    literal_token: str,
+) -> None:
+    # Actual rejected primary/repair tokens; this synthetic fixture does not
+    # publish or qualify their financial context from quote membership alone.
+    _entrypoint_fixture(conn, tmp_path, monkeypatch, mock_enumerator=False)
+    monkeypatch.setattr(__name__ + ".RICH_PAGE", quote)
+    monetary = "$" in quote
+    row: dict[str, object] = {
+        "label": "Retained endpoint",
+        "value": int(literal_token) * (1_000_000_000 if monetary else 1),
+        "unit": "actual" if monetary else "percent",
+        "currency": "USD" if monetary else None,
+        "source_excerpt": quote,
+        "source_value_text": invalid_token,
+        "reported_period_end": "2026-12-31",
+        "period_role": "guidance",
+        "accounting_basis": "management",
+        "consolidation_scope": "consolidated",
+        "source_unit_scale": "billions" if monetary else "none",
+    }
+
+    def returned_row(prompt: str, **kwargs: object) -> object:
+        return [row]
+
+    monkeypatch.setattr(
+        summaries,
+        "call_llm_structured_with_raw",
+        partial(_recorded_governed_call, response=returned_row),
+    )
+    rejected = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn)
+    assert rejected.error and "numeric token must occur" in rejected.error
+    row["source_value_text"] = literal_token
+    accepted = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, refresh=True)
+    assert accepted.error is None
+    assert conn.execute("SELECT COUNT(*) FROM source_fact_publications").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM fact_observations_v2").fetchone()[0] == 0

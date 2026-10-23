@@ -2115,7 +2115,14 @@ prove successful capture. JSON repair and source-quote repair share two logical
 requests per section. Unresolved rejected replay stops without another model
 call. A retention failure stops before a repair request. The primary prompt and
 model route stay unchanged; repair feedback and cache identity are versioned.
-This cache does not confer acquisition, extraction completeness or semantic admission. Known OCR-required page assessments,
+Whitespace-only quotation differences can resolve to one exact contiguous native
+source span. The raw model row stays unchanged. The retained native quotation and
+page offsets must match the source again at review and publication. Changed text
+or an ambiguous span fails validation. Numeric source tokens remain literal;
+range endpoints cannot acquire currency or percent symbols absent from that
+endpoint. Repair feedback uses fixed known validation reasons and never copies
+arbitrary exception text into the prompt. This cache does not confer acquisition,
+extraction completeness or semantic admission. Known OCR-required page assessments,
 blank pages, unsupported quotes, failed sections and budget exhaustion remain
 unresolved. Nonblank page text can omit visual facts. Absent page assessments
 remain unknown. The exact raw source and its immutable binding must match before

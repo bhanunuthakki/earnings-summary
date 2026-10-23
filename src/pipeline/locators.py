@@ -350,10 +350,15 @@ def verify_quote_in_source(quote: str, source_text: str) -> bool:
     return _normalize(quote) in _normalize(source_text)
 
 
-def locate_char_span(quote: str, source_text: str) -> tuple[int, int] | None:
+def locate_char_span(
+    quote: str, source_text: str, *, whitespace_only: bool = False
+) -> tuple[int, int] | None:
     """Best-effort ``(char_start, char_end)`` of ``quote`` inside ``source_text``.
 
-    An EXACT (non-normalized) substring find -- the common case, since most
+    ``whitespace_only=True`` resolves a unique whitespace-equivalent native
+    span, with no case or other character changes. Ambiguous matches fail.
+
+    The default is an EXACT (non-normalized) substring find -- the common case, since most
     LLM-returned anchors reproduce the source's literal whitespace/case.
     Returns ``None`` when the quote only matches after
     ``verify_quote_in_source``'s whitespace/case normalization (or not at
@@ -362,6 +367,18 @@ def locate_char_span(quote: str, source_text: str) -> tuple[int, int] | None:
     a verified-but-unlocatable-by-exact-offset quote still carries the quote
     text itself, which is enough for the legacy-floor peek (§2.7) to show.
     """
+    if whitespace_only:
+        # Match only runs of whitespace. All other characters remain literal,
+        # including case, signs, punctuation and Unicode code points. Resolve
+        # to native offsets instead of returning normalized model wording.
+        tokens = quote.split()
+        if not tokens:
+            return None
+        pattern = r"\s+".join(re.escape(token) for token in tokens)
+        matches = list(re.finditer("(?=(" + pattern + "))", source_text))
+        if len(matches) != 1:
+            return None
+        return matches[0].span(1)
     if not quote:
         return None
     idx = source_text.find(quote)

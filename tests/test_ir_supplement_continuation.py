@@ -858,3 +858,17 @@ def test_capture_rejects_caller_transaction_before_source_preparation(
     assert conn.execute("SELECT COUNT(*) FROM pipeline_attempts").fetchone()[0] == 0
     conn.rollback()
     assert conn.execute("SELECT COUNT(*) FROM owner_work").fetchone()[0] == 0
+
+
+def test_numeric_repair_feedback_is_specific_bounded_and_primary_unchanged() -> None:
+    primary = "unchanged source prompt"
+    numeric_error = "direct IR PDF numeric token must occur in its exact source quote"
+    repaired = continuation.repair_supplement_prompt(primary, numeric_error)
+    assert numeric_error in repaired
+    assert "$10-20" in repaired and "3-5%" in repaired
+    assert "literal tokens 10 and 20" in repaired
+    assert "literal tokens 3 and 5%" in repaired
+    assert primary in repaired
+    assert "untrusted-secret-content" not in continuation.repair_supplement_prompt(
+        primary, "untrusted-secret-content"
+    )
