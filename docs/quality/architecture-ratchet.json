@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "ee2a3c136bedaff56c10995dae6539772e86aece",
+  "scoped_commit": "a641f3ba27063bfd1215b85ec2955662f2c8fad4",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "6ca4b995f281dc5902b994526179da1b778718a36e691cdbfceaffce09ab0fb1",
+  "source_sha256": "dfb531538152ff7c5be748a5726e2f25c7d566df24f0c5c49ce5b75b7d364de3",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1468,
-    "total_noncomment_loc": 561901,
+    "total_noncomment_loc": 561992,
     "modules_over_1000_loc": 108,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -13237,16 +13237,16 @@
         "path": "src/operations/storage_reservation.py",
         "module": "operations.storage_reservation",
         "lines": {
-          "physical": 203,
-          "nonblank": 179,
-          "noncomment": 175
+          "physical": 222,
+          "nonblank": 195,
+          "noncomment": 191
         },
         "internal_fan_out": 0,
         "responsibilities": [
           "filesystem"
         ],
-        "public_functions": 3,
-        "fully_annotated_public_functions": 3
+        "public_functions": 4,
+        "fully_annotated_public_functions": 4
       },
       {
         "path": "src/operations/temp_coverage.py",
@@ -13268,17 +13268,17 @@
         "path": "src/operations/temp_run_retention.py",
         "module": "operations.temp_run_retention",
         "lines": {
-          "physical": 887,
-          "nonblank": 815,
-          "noncomment": 809
+          "physical": 976,
+          "nonblank": 894,
+          "noncomment": 884
         },
         "internal_fan_out": 0,
         "responsibilities": [
           "filesystem",
           "network"
         ],
-        "public_functions": 6,
-        "fully_annotated_public_functions": 6
+        "public_functions": 7,
+        "fully_annotated_public_functions": 7
       },
       {
         "path": "src/owner_profile/__init__.py",

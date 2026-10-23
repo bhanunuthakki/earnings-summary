@@ -189,6 +189,25 @@ def reserve_peak(
         return token
 
 
+def live_lease_roots(volume: Path, *, store: Path | None = None) -> frozenset[Path]:
+    """Roots whose lease holder may still run.
+
+    An unreadable lease raises: while ownership is unknown, no root may be
+    treated as abandoned.
+    """
+    directory = store or _store(volume)
+    if not directory.exists():
+        return frozenset()
+    roots: set[Path] = set()
+    with _locked(directory):
+        for path in directory.glob("*.json"):
+            _safe_path(path)
+            lease = _Lease.model_validate_json(path.read_bytes())
+            if holder_alive(lease.pid):
+                roots.add(Path(lease.root))
+    return frozenset(roots)
+
+
 def release_peak(root: Path, token: str, *, store: Path | None = None) -> None:
     """Release only the exact root-bound lease at producer closure, passed or failed."""
     if len(token) != 32 or any(c not in "0123456789abcdef" for c in token):

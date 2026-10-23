@@ -108,7 +108,26 @@ def _begin_collection_temp_run() -> None:
     )
 
 
+def _prune_abandoned_test_runs() -> None:
+    """Remove earlier sessions' runs whose owner is gone, once per session."""
+    if _worker_id != "controller" or not _managed_test_temps:
+        return
+    from src.operations.temp_run_retention import prune_abandoned_test_runs
+
+    try:
+        prune_abandoned_test_runs()
+    except (OSError, ValueError):
+        import warnings
+
+        warnings.warn(
+            "Earlier test runs were not pruned; their manifests keep them for review.",
+            RuntimeWarning,
+            stacklevel=1,
+        )
+
+
 _begin_collection_temp_run()
+_prune_abandoned_test_runs()
 _test_db_path = _test_db_dir / f"portfolio-{os.getpid()}.db"
 _db_original_marker = "_EARNINGS_SUMMARY_PYTEST_ORIGINAL_DB_PATH"
 _db_path_absent = "__pytest_db_path_was_absent__"

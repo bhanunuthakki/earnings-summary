@@ -206,12 +206,23 @@ at completion, not creation. Pytest stores its default fixtures in that owned ru
 root on Windows and seals it through its session-finish hook. Other hosts retain
 pytest's existing fixture cleanup; tests can opt in through
 `EARNINGS_SUMMARY_MANAGED_TEST_TEMPS=1`. Failed or interrupted sessions
-remain protected. A run's peak storage lease covers only its live producer: the
+remain protected for their seven-day review window. A run's peak storage lease covers only its live producer: the
 seal releases it after a pass or a failure, and the next admission on the same
 host reclaims a lease whose holder process no longer exists. Retained failed
 bytes still count against the free-space headroom. A reviewed resolution can
 bind to a passed rerun whose only holds are retained links or multiply linked
 files. Explicit user `--basetemp` paths are not claimed by this hook.
+
+At session start, the pytest controller prunes earlier session roots in the
+system temp directory (`prune_abandoned_test_runs`). It considers only roots the
+harness names (`earnings-summary-pytest-<controller|gwN>-*`). It never touches
+the shared `earnings-summary-pytest-secrets*` folders, links, roots with an
+unreadable manifest, or any root whose lease holder may still run. Completed
+roots and roots without a manifest are removed one day after completion or last
+change. Failed roots, and active roots whose holder is gone, are removed after
+the seven-day review window. Owner decision, 2026-10-22: no host runs a cleaner
+for these local roots, so a failed pytest session's local evidence expires after
+seven days instead of waiting indefinitely for a reviewed resolution.
 The existing weekly cleaner discovers these receipts in both configured state
 and runtime `.tmp` roots, plus narrowly named `earnings-summary-*` runs under
 the Windows/user temporary roots. Unknown paths are inventoried, not registered
@@ -253,7 +264,8 @@ unclassified files, source evidence or recovery holds.
 
 `execution/run_weekly_cleanup.py` and `execution/db_gc.py` are the executable
 allowlists and exact cutoff implementations. Their already-registered weekly jobs are
-the only cleanup writers; this lifecycle does not authorize a new operation, schedule,
+the only cleanup writers, apart from the pytest session-start pruning of its own
+earlier session roots above; this lifecycle does not authorize a new operation, schedule,
 or generic directory sweep. A retention change belongs here first, followed by its
 executable constant and focused tests.
 
