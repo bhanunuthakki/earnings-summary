@@ -143,7 +143,7 @@ def test_more_than_80k_and_200_facts_last_page_and_replay(
     job = _capture(conn, monkeypatch, pages, extract)
     output = job.capture(b"original source")
     assert job.capture_version == continuation.UNREVIEWED_CAPTURE_VERSION
-    assert job.capture_version == "ir-supplement-native-continuation-v16-table-cell-boundaries"
+    assert job.capture_version == "ir-supplement-native-continuation-v18-percent-cell-boundaries"
     assert sum(len(rows) for _, rows in output) == 360
     assert output[-1][1][-1]["label"] == "Metric 2:119"
     assert len(calls) == 6
@@ -671,7 +671,7 @@ def test_exact_reviewed_decorative_page_is_omitted_without_changing_ocr_flag(
     assert capture.capture_version == continuation.CURRENT_CAPTURE_VERSION
     assert (
         capture.capture_version
-        == "ir-supplement-native-continuation-v17-reviewed-pages-table-cell-boundaries"
+        == "ir-supplement-native-continuation-v19-reviewed-pages-percent-cell-boundaries"
     )
     assert len(calls) == 1
     assert review.review_id in calls[0]

@@ -121,7 +121,9 @@ class IrReportedCandidate(BaseModel):
             != self.numeric_value
         ):
             raise ValueError("numeric value must equal the source token after its reviewed scale")
-        if not source_numeric_token_occurs(self.source_value_text, self.source_quote):
+        if not source_numeric_token_occurs(
+            self.source_value_text, self.source_quote, row_label=self.raw_label
+        ):
             raise ValueError("source numeric token is absent from its quote")
         if self.full_wording not in self.source_quote:
             raise ValueError("full management wording must occur in the source quote")

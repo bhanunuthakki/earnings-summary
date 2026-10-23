@@ -775,3 +775,65 @@ def test_table_empty_em_dash_cell_preserves_neighboring_tokens(
     from pipeline.kpi_semantics import source_numeric_token_occurs
 
     assert source_numeric_token_occurs(token, quote) is valid
+
+
+@pytest.mark.parametrize(
+    ("label", "quote", "token"),
+    [
+        (
+            "GAAP revenue year-over-year change %",
+            "GAAP revenue year-over-year change %  28 %  30 %",
+            "28 %",
+        ),
+        (
+            "Revenue excluding foreign exchange effect year-over-year change \n%",
+            "Revenue excluding foreign exchange effect year-over-year change \n%  27 %  28 %",
+            "27 %",
+        ),
+        (
+            "GAAP advertising revenue year-over-year change %",
+            "GAAP advertising revenue year-over-year change %  27 %  30 %",
+            "27 %",
+        ),
+        (
+            "Advertising revenue excluding foreign exchange effect year-over-\nyear change %",
+            "Advertising revenue excluding foreign exchange effect year-over-\nyear change %  26 %  27 %",
+            "26 %",
+        ),
+    ],
+)
+def test_actual_trial11_percent_row_label_is_separate_from_first_cell(
+    label: str, quote: str, token: str
+) -> None:
+    from pipeline.kpi_semantics import source_numeric_token_occurs
+
+    assert source_numeric_token_occurs(token, quote, row_label=label)
+
+
+@pytest.mark.parametrize(
+    ("quote", "label", "token", "valid"),
+    [
+        ("Growth %  28 %  30 %", "Growth %", "28 %", True),
+        ("Growth %  28 %  30 %", None, "28 %", False),
+        ("Growth %  28 %  30 %", "Other %", "28 %", False),
+        ("@Growth %  28 %", "Growth %", "28 %", False),
+        ("@Growth %  28 %", "@Growth %", "28 %", False),
+        ("Growth 1e3 %  28 %", "Growth 1e3 %", "28 %", False),
+        ("Growth 1,23 %  28 %", "Growth 1,23 %", "28 %", False),
+        ("%  28 %", "%", "28 %", False),
+        ("Growth % 28 %", "Growth %", "28 %", False),
+        ("Growth %28 %", "Growth %", "28 %", False),
+        ("Growth %%  28 %", "Growth %%", "28 %", False),
+        ("Growth -%  28 %", "Growth -%", "28 %", False),
+        ("Growth \u2212%  28 %", "Growth \u2212%", "28 %", False),
+        ("Growth %  2\u200b8 %", "Growth %", "28 %", False),
+        ("Growth %  0 %", "Growth %", "0 %", True),
+        ("Growth %  28 %", "Growth %", "0", False),
+    ],
+)
+def test_percent_row_label_boundary_requires_exact_safe_label_and_table_gap(
+    quote: str, label: str | None, token: str, valid: bool
+) -> None:
+    from pipeline.kpi_semantics import source_numeric_token_occurs
+
+    assert source_numeric_token_occurs(token, quote, row_label=label) is valid

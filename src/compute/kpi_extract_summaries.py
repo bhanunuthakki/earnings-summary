@@ -1384,7 +1384,7 @@ def _validated_enumerated_rows(
     ranges: dict[tuple[object, ...], dict[str, Decimal]] = {}
     for row in rows:
         if row.source_value_text is None or not source_numeric_token_occurs(
-            row.source_value_text, row.source_excerpt
+            row.source_value_text, row.source_excerpt, row_label=row.source_row_label
         ):
             raise ValueError("direct IR PDF numeric token must occur in its exact source quote")
         source_number = parse_source_numeric(row.source_value_text)
@@ -2412,7 +2412,7 @@ def capture_for_ir_pdf_docs(
                     "max_chunks": max_chunks,
                     "max_structured_calls": max_structured_calls,
                     "continuation_version": (
-                        "v16-table-cell-boundaries-or-v17-reviewed-pages-table-cell-boundaries"
+                        "v18-percent-cell-boundaries-or-v19-reviewed-pages-percent-cell-boundaries"
                     ),
                     "prompt_sha256": prompt_sha256,
                     "schema_sha256": schema_sha256,

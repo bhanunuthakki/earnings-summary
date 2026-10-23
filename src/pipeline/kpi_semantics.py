@@ -146,7 +146,7 @@ def normalize_source_numeric(value: Decimal, *, unit: Unit, unit_scale: KpiUnitS
     return value * _COUNT_SOURCE_SCALE_MULTIPLIERS[unit_scale]
 
 
-def source_numeric_token_occurs(token: str, quote: str) -> bool:
+def source_numeric_token_occurs(token: str, quote: str, *, row_label: str | None = None) -> bool:
     """Scan opaque numeric envelopes between closed, known-safe delimiters.
 
     Unknown punctuation, Unicode signs and controls stay attached until the
@@ -154,6 +154,17 @@ def source_numeric_token_occurs(token: str, quote: str) -> bool:
     """
     quotes = "\"'\u2018\u2019\u201c\u201d"
     wrappers = {"(": ")", "[": "]", "{": "}"}
+    percent_label_is_exact = bool(
+        row_label is not None and row_label.endswith("%") and quote.startswith(row_label)
+    )
+    safe_percent_label = bool(
+        percent_label_is_exact
+        and row_label is not None
+        and re.fullmatch(r"[A-Za-z][A-Za-z \n-]*[ \n]%", row_label) is not None
+    )
+    if percent_label_is_exact and not safe_percent_label:
+        # Do not recover a later cell from a malformed numeric row label.
+        return False
 
     def opaque_symbol(char: str) -> bool:
         category = unicodedata.category(char)
@@ -165,6 +176,18 @@ def source_numeric_token_occurs(token: str, quote: str) -> bool:
 
     def delimiter(index: int, envelope_start: int | None = None) -> bool:
         char = quote[index]
+        # The source row label can end with a standalone percent marker. Only
+        # its exact, closed label and two-space table gap separate the next cell.
+        if (
+            char == "%"
+            and safe_percent_label
+            and row_label is not None
+            and index == len(row_label) - 1
+            and quote[index + 1 : index + 3] == "  "
+            and index + 3 < len(quote)
+            and quote[index + 3] in "0123456789"
+        ):
+            return True
         # A standalone em dash between table column gaps is an empty cell,
         # never a sign. Single spaces and attached dashes remain opaque.
         if (

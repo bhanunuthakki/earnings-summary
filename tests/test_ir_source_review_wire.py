@@ -397,6 +397,8 @@ def _bind_producing_artifact(
         "v15-reviewed-pages",
         "v16-table-cell-boundaries",
         "v17-reviewed-pages-table-cell-boundaries",
+        "v18-percent-cell-boundaries",
+        "v19-reviewed-pages-percent-cell-boundaries",
     ],
 )
 def test_exact_producing_version_survives_retention(

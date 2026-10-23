@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "8faec594fdd258c98dd9a5c5f7cdc8fc189be26e",
+  "scoped_commit": "b09eac31467389025c4f53ee2f4ce818d83685e3",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "297f79d4d938305f502d3348baaa8337f6a5958c9e83b5759b4940a19cfec1e4",
+  "source_sha256": "ead905d50b659a31cea25aaff4428698d96d788c74c86805f268ade9f386510b",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1480,
-    "total_noncomment_loc": 570433,
+    "total_noncomment_loc": 570457,
     "modules_over_1000_loc": 111,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
@@ -8430,9 +8430,9 @@
         "path": "src/compute/ir_supplement_capture.py",
         "module": "compute.ir_supplement_capture",
         "lines": {
-          "physical": 720,
-          "nonblank": 670,
-          "noncomment": 660
+          "physical": 722,
+          "nonblank": 672,
+          "noncomment": 662
         },
         "internal_fan_out": 7,
         "responsibilities": [
@@ -14467,9 +14467,9 @@
         "path": "src/pipeline/kpi_semantics.py",
         "module": "pipeline.kpi_semantics",
         "lines": {
-          "physical": 1020,
-          "nonblank": 939,
-          "noncomment": 924
+          "physical": 1043,
+          "nonblank": 962,
+          "noncomment": 944
         },
         "internal_fan_out": 3,
         "responsibilities": [
@@ -16502,9 +16502,9 @@
         "path": "src/provenance/ir_reported_facts.py",
         "module": "provenance.ir_reported_facts",
         "lines": {
-          "physical": 1170,
-          "nonblank": 1091,
-          "noncomment": 1091
+          "physical": 1172,
+          "nonblank": 1093,
+          "noncomment": 1093
         },
         "internal_fan_out": 12,
         "responsibilities": [
