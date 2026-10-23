@@ -463,3 +463,84 @@ def test_actual_detector_preserves_adjacent_secrets_at_reconciliation_paths(
     other.parent.mkdir(parents=True)
     other.write_text(original, encoding="utf-8")
     assert _run_detect_secrets(tmp_path, unrelated, filtered=True).returncode == 1
+
+
+FILING_XBRL_HASH_KEYS = {
+    "docs/quality/filing-xbrl-architecture-review.json": {"integrated_main": 40},
+    "docs/quality/filing-xbrl-v2-candidate.json": {
+        "supersedes_candidate_commit": 40,
+        "execution/build_filing_xbrl_processor_bundle.py": 64,
+        "execution/filing_xbrl_bridge.py": 64,
+        "execution/filing_xbrl_appcontainer_launcher.cs": 64,
+        "src/filings/xbrl_units.py": 64,
+        "runtime_artifact_sha256": 64,
+        "sandbox_launcher_sha256": 64,
+        "manifest_sha256": 64,
+        "manifest_artifact_sha256": 64,
+    },
+    "docs/quality/filing-xbrl-v2-approval-proposal.json": {
+        "manifest_sha256": 64,
+        "manifest_artifact_sha256": 64,
+        "runtime_artifact_sha256": 64,
+        "sandbox_launcher_sha256": 64,
+        "bridge_source_sha256": 64,
+        "launcher_source_sha256": 64,
+        "unit_source_sha256": 64,
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("filename", "key", "length"),
+    [
+        (filename, key, length)
+        for filename, keys in FILING_XBRL_HASH_KEYS.items()
+        for key, length in keys.items()
+    ],
+)
+@pytest.mark.parametrize("delimiter", (":", "="))
+def test_filing_xbrl_hashes_require_exact_path_key_and_value(
+    filename: str, key: str, length: int, delimiter: str
+) -> None:
+    digest = hashlib.sha256(b"public filing XBRL scanner fixture").hexdigest()[:length]
+    line = f'  "{key}" {delimiter} "{digest}",\n'
+    assert FILTER.is_quality_evidence_hash(filename, line)
+    for prefix in ("other/", "./", "/", "docs/../"):
+        assert not FILTER.is_quality_evidence_hash(prefix + filename, line)
+    for other, keys in FILING_XBRL_HASH_KEYS.items():
+        if key not in keys:
+            assert not FILTER.is_quality_evidence_hash(other, line)
+    for value in (digest.upper(), digest[:-1], digest + "a", "g" + digest[1:]):
+        assert not FILTER.is_quality_evidence_hash(filename, f'"{key}" {delimiter} "{value}"')
+    for malformed in (
+        line.replace(key, "unknown_sha256"),
+        line.replace(key, "execution/other.py"),
+        line.replace(key, SCANNER_FIELD_NAME),
+        line.replace(digest, "ghp_" + digest[:36]),
+        "prefix " + line,
+        line.rstrip() + ' "token": "secret"',
+        line.rstrip() + " // generated",
+    ):
+        assert not FILTER.is_quality_evidence_hash(filename, malformed)
+
+
+@pytest.mark.parametrize("filename", FILING_XBRL_HASH_KEYS)
+def test_actual_detector_keeps_secrets_visible_in_filing_xbrl_evidence(
+    tmp_path: Path, filename: str
+) -> None:
+    original = (ROOT / filename).read_text(encoding="utf-8")
+    fixture = tmp_path / filename
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(original, encoding="utf-8")
+    assert _run_detect_secrets(tmp_path, filename, filtered=False).returncode == 1
+    assert _run_detect_secrets(tmp_path, filename, filtered=True).returncode == 0
+    digest = hashlib.sha256(b"public adjacent XBRL scanner fixture").hexdigest()
+    for key, value in (
+        (SCANNER_FIELD_NAME, "ghp_" + digest[:36]),
+        (UNRECOGNIZED_MEMBER, digest),
+        ("private_key", "-----BEGIN " + "PRIVATE KEY----- synthetic-fixture"),
+    ):
+        payload = json.loads(original)
+        payload[key] = value
+        fixture.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        assert _run_detect_secrets(tmp_path, filename, filtered=True).returncode == 1
