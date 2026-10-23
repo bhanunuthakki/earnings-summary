@@ -93,7 +93,10 @@ def comparable_quarter_window(
     # Reuse the existing 365 +/- 20-day annual comparison tolerance below.
     if count == 4 and abs((selected[0].period_end - selected[-1].period_start).days + 1 - 365) > 20:
         return "four_quarter_duration_not_annual"
-    if any(key == concept and end >= selected[-1].period_end for key, end in history.unresolved):
+    if any(
+        key == concept and (end is None or end >= selected[-1].period_end)
+        for key, end in history.unresolved
+    ):
         return "unresolved_canonical_period"
     if (history.as_of - selected[0].period_end).days > 400:
         return "stale_latest_reporting_period"

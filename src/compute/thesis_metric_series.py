@@ -32,6 +32,7 @@ from pipeline.kpi_semantics import (
 )
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import KPI, active_scalar_override_map
+from provenance.source_fact_publication import publication_verification_scope
 from sources.canonical_financial_series import (
     CanonicalFinancialSeriesReader,
     FinancialCadence,
@@ -559,30 +560,30 @@ def calculate_metric_series(
     if known_at.tzinfo is None:
         raise ValueError("metric cutoff requires a timezone-aware clock")
     known_at = known_at.astimezone(UTC)
-    owns_snapshot = not conn.in_transaction
-    if owns_snapshot:
-        conn.execute("BEGIN")
+    original_factory = conn.row_factory
     try:
-        reader = CanonicalFinancialSeriesReader(conn, ticker, cutoff=known_at)
-        result = _calculate(conn, ticker, expression, reader, known_at)
-        return result.model_copy(
-            update={
-                "source_manifests": {
-                    **result.source_manifests,
-                    "expression": expression.model_dump(mode="json", exclude_none=True),
-                    "knowledge_cutoff": known_at.isoformat(),
-                }
-            }
-        )
-    except (sqlite3.Error, ValueError) as exc:
-        return _unavailable(
-            "metric_source_schema_or_value_unavailable",
-            {
-                "expression": expression.model_dump(mode="json", exclude_none=True),
-                "error_type": type(exc).__name__,
-                "knowledge_cutoff": known_at.isoformat(),
-            },
-        )
+        conn.row_factory = sqlite3.Row
+        with publication_verification_scope(conn):
+            try:
+                reader = CanonicalFinancialSeriesReader(conn, ticker, cutoff=known_at)
+                result = _calculate(conn, ticker, expression, reader, known_at)
+                return result.model_copy(
+                    update={
+                        "source_manifests": {
+                            **result.source_manifests,
+                            "expression": expression.model_dump(mode="json", exclude_none=True),
+                            "knowledge_cutoff": known_at.isoformat(),
+                        }
+                    }
+                )
+            except (sqlite3.Error, ValueError) as exc:
+                return _unavailable(
+                    "metric_source_schema_or_value_unavailable",
+                    {
+                        "expression": expression.model_dump(mode="json", exclude_none=True),
+                        "error_type": type(exc).__name__,
+                        "knowledge_cutoff": known_at.isoformat(),
+                    },
+                )
     finally:
-        if owns_snapshot and conn.in_transaction:
-            conn.rollback()
+        conn.row_factory = original_factory

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from provenance.fact_plane_v2 import (
     CanonicalJSONObject,
@@ -16,12 +16,14 @@ from provenance.fact_plane_v2 import (
     FactCellV2,
     FactDimensionV2,
     FactObservationV2,
+    FactPlaneDecodeError,
     FactPlaneV2,
     ReportedFactObservationV2,
 )
 from provenance.source_fact_publication import (
     PublicationMemberKind,
     PublicationVerificationError,
+    publication_verification_scope,
     verify_source_fact_publication,
 )
 from runtime.deterministic import as_utc as _utc
@@ -45,6 +47,10 @@ class FactAdmissionError(RuntimeError):
         self.record_id: str = record_id
         self.disposition: AdmissionDisposition = disposition
         super().__init__(f"{reason_code}: {record_kind} {record_id!r} is not admissible")
+
+
+class FactEvidenceIntegrityError(ValueError):
+    """A stored fact lacks its required committed evidence."""
 
 
 class ObservationUnavailableError(ValueError):
@@ -254,7 +260,7 @@ class FactReadModel:
             (fact_cell_id,),
         )
         if row is None:
-            raise ValueError(f"fact cell {fact_cell_id!r} does not exist")
+            raise FactEvidenceIntegrityError(f"fact cell {fact_cell_id!r} does not exist")
         if any(
             _utc(self._datetime(row[column])) > _utc(cutoff)
             for column in ("knowledge_at", "recorded_at")
@@ -266,7 +272,10 @@ class FactReadModel:
                 disposition="missing_provenance",
             )
         self._admit_record("fact_cell", fact_cell_id, cutoff=cutoff)
-        return self._plane.as_reported(fact_cell_id).cell
+        try:
+            return self._plane.as_reported(fact_cell_id).cell
+        except (FactPlaneDecodeError, ValidationError) as exc:
+            raise FactEvidenceIntegrityError("stored fact cell cannot be decoded") from exc
 
     def as_reported(
         self,
@@ -288,7 +297,10 @@ class FactReadModel:
         return tuple(self._value_record(observation, cell) for observation in observations)
 
     def as_known(self, fact_cell_id: str, cutoff: datetime) -> FactSnapshot:
-        known = self._plane.as_known(fact_cell_id, cutoff)
+        try:
+            known = self._plane.as_known(fact_cell_id, cutoff)
+        except (FactPlaneDecodeError, ValidationError) as exc:
+            raise FactEvidenceIntegrityError("stored fact snapshot cannot be decoded") from exc
         self._admit_record("fact_cell", fact_cell_id, cutoff=cutoff)
         if known.resolution is not None:
             self._admit_record(
@@ -525,21 +537,11 @@ class FactReadModel:
 
         if not observation_ids:
             return ()
-        initial_changes = self._conn.total_changes
-        initial_factory = self._conn.row_factory
-        caller_transaction = self._conn.in_transaction
-        savepoint_active = False
-        completed = False
-        try:
-            if not caller_transaction:
-                self._conn.execute("BEGIN")
-            self._conn.execute("SAVEPOINT fact_read_model_batch_guard")
-            savepoint_active = True
-            reader = _BatchFactReadModel(self._conn)
+        with publication_verification_scope(self._conn):
             results: list[ProvenanceBundleRead] = []
             for observation_id in observation_ids:
                 try:
-                    bundle = reader.provenance_bundle(observation_id, cutoff=cutoff)
+                    bundle = self.provenance_bundle(observation_id, cutoff=cutoff)
                 except FactAdmissionError as exc:
                     results.append(
                         ProvenanceBundleRead(
@@ -549,6 +551,18 @@ class FactReadModel:
                                 record_kind=exc.record_kind,
                                 record_id=exc.record_id,
                                 disposition=exc.disposition,
+                            ),
+                        )
+                    )
+                except (FactEvidenceIntegrityError, ValidationError):
+                    results.append(
+                        ProvenanceBundleRead(
+                            observation_id=observation_id,
+                            failure=ProvenanceBundleFailure(
+                                reason_code="fact_evidence_malformed",
+                                record_kind="fact_observation",
+                                record_id=observation_id,
+                                disposition="quarantined",
                             ),
                         )
                     )
@@ -571,54 +585,7 @@ class FactReadModel:
                             bundle=bundle,
                         )
                     )
-            self._assert_batch_read_state(
-                initial_changes=initial_changes,
-                initial_factory=initial_factory,
-            )
-            try:
-                self._conn.execute("RELEASE SAVEPOINT fact_read_model_batch_guard")
-            except sqlite3.OperationalError as exc:
-                raise RuntimeError("batch provenance read changed transaction state") from exc
-            savepoint_active = False
-            completed = True
             return tuple(results)
-        finally:
-            state_error: RuntimeError | None = None
-            if caller_transaction:
-                if savepoint_active:
-                    try:
-                        self._conn.execute("ROLLBACK TO SAVEPOINT fact_read_model_batch_guard")
-                        self._conn.execute("RELEASE SAVEPOINT fact_read_model_batch_guard")
-                    except sqlite3.OperationalError:
-                        state_error = RuntimeError(
-                            "batch provenance read changed caller transaction"
-                        )
-                elif not self._conn.in_transaction:
-                    state_error = RuntimeError("batch provenance read changed caller transaction")
-            elif self._conn.in_transaction:
-                self._conn.rollback()
-            else:
-                state_error = RuntimeError("batch provenance read closed its read snapshot")
-            if self._conn.total_changes != initial_changes:
-                state_error = RuntimeError("batch provenance read changed database state")
-            if self._conn.row_factory is not initial_factory:
-                self._conn.row_factory = initial_factory
-                state_error = RuntimeError("batch provenance read changed row factory")
-            if state_error is not None and completed:
-                raise state_error
-
-    def _assert_batch_read_state(
-        self,
-        *,
-        initial_changes: int,
-        initial_factory: object,
-    ) -> None:
-        if self._conn.total_changes != initial_changes:
-            raise RuntimeError("batch provenance read changed database state")
-        if self._conn.row_factory is not initial_factory:
-            raise RuntimeError("batch provenance read changed row factory")
-        if self._conn.in_transaction is not True:
-            raise RuntimeError("batch provenance read changed transaction state")
 
     def _admit_observation_graph(
         self,
@@ -692,27 +659,19 @@ class FactReadModel:
         *,
         cutoff: datetime,
     ) -> None:
-        try:
-            rows = self._fetchall(
-                "SELECT DISTINCT publication.publication_id "
-                "FROM source_fact_publication_members AS member "
-                "JOIN source_fact_publications AS publication "
-                "ON publication.publication_id = member.publication_id "
-                "JOIN source_fact_publication_seals AS seal "
-                "ON seal.publication_id = publication.publication_id "
-                "WHERE member.record_kind = ? AND member.record_id = ? "
-                "AND member.recorded_at <= ? "
-                "AND publication.recorded_at <= ? AND seal.sealed_at <= ? "
-                "ORDER BY publication.recorded_at,publication.publication_id",
-                (record_kind, record_id, cutoff, cutoff, cutoff),
-            )
-        except sqlite3.OperationalError as exc:
-            raise FactAdmissionError(
-                "publication_ledger_unavailable",
-                record_kind=record_kind,
-                record_id=record_id,
-                disposition="missing_provenance",
-            ) from exc
+        rows = self._fetchall(
+            "SELECT DISTINCT publication.publication_id "
+            "FROM source_fact_publication_members AS member "
+            "JOIN source_fact_publications AS publication "
+            "ON publication.publication_id = member.publication_id "
+            "JOIN source_fact_publication_seals AS seal "
+            "ON seal.publication_id = publication.publication_id "
+            "WHERE member.record_kind = ? AND member.record_id = ? "
+            "AND member.recorded_at <= ? "
+            "AND publication.recorded_at <= ? AND seal.sealed_at <= ? "
+            "ORDER BY publication.recorded_at,publication.publication_id",
+            (record_kind, record_id, cutoff, cutoff, cutoff),
+        )
         if not rows:
             raise FactAdmissionError(
                 "record_not_in_sealed_publication",
@@ -817,7 +776,7 @@ class FactReadModel:
             (observation.observation_id,),
         )
         if payload is None:
-            raise ValueError("raw observation lacks a hardened payload commitment")
+            raise FactEvidenceIntegrityError("raw observation lacks a hardened payload commitment")
         evidence = (
             self._evidence_reference(observation.observation_id)
             if isinstance(observation, ReportedFactObservationV2)
@@ -834,7 +793,9 @@ class FactReadModel:
             observation_kind=observation.observation_kind,
             value_kind=observation.value_kind,
             decimal_value=(
-                None if observation.numeric_value is None else Decimal(observation.numeric_value)
+                None
+                if observation.numeric_value is None
+                else self._decimal(observation.numeric_value)
             ),
             text_value=observation.text_value,
             is_nil=observation.is_nil,
@@ -890,7 +851,7 @@ class FactReadModel:
             (observation_id,),
         )
         if row is None:
-            raise ValueError("reported observation lacks exact evidence provenance")
+            raise FactEvidenceIntegrityError("reported observation lacks exact evidence provenance")
         return ExactEvidenceReference(
             document_version_id=str(row["document_version_id"]),
             evidence_node_id=str(row["evidence_node_id"]),
@@ -931,10 +892,10 @@ class FactReadModel:
             (observation_id,),
         )
         if row is None:
-            raise ValueError("derived observation lacks a sealed derivation basis")
+            raise FactEvidenceIntegrityError("derived observation lacks a sealed derivation basis")
         input_basis = str(row["input_basis"])
         if input_basis not in {"as_reported", "as_known"}:
-            raise ValueError("derived observation has an invalid input basis")
+            raise FactEvidenceIntegrityError("derived observation has an invalid input basis")
         has_canonical_resolution = self._has_column(
             "fact_derivation_input_edges_v2",
             "input_canonical_resolution_revision_id",
@@ -1018,7 +979,7 @@ class FactReadModel:
                 (str(row["observation_id"]),),
             )
             if anchor is None:
-                raise ValueError("reported observation has no exact anchor")
+                raise FactEvidenceIntegrityError("reported observation has no exact anchor")
             return ReportedFactObservationV2.model_validate(
                 {
                     **common,
@@ -1145,44 +1106,17 @@ class FactReadModel:
 
     @staticmethod
     def _datetime(value: object) -> datetime:
-        return datetime.fromisoformat(str(value))
+        try:
+            return datetime.fromisoformat(str(value))
+        except ValueError as exc:
+            raise FactEvidenceIntegrityError("stored fact clock is malformed") from exc
 
-
-class _BatchFactReadModel(FactReadModel):
-    """Throwaway reader that memoizes full publication validation for one batch."""
-
-    def __init__(self, conn: sqlite3.Connection) -> None:
-        super().__init__(conn)
-        self._publication_verifications: dict[
-            tuple[str, datetime], PublicationVerificationError | None
-        ] = {}
-
-    def _verify_publication(
-        self,
-        publication_id: str,
-        *,
-        cutoff: datetime,
-        requested_kind: PublicationMemberKind,
-        requested_id: str,
-    ) -> None:
-        key = (publication_id, _utc(cutoff))
-        cached = self._publication_verifications.get(key)
-        if key not in self._publication_verifications:
-            try:
-                verify_source_fact_publication(
-                    self._conn,
-                    publication_id=publication_id,
-                    cutoff=cutoff,
-                )
-            except PublicationVerificationError as exc:
-                cached = exc
-            else:
-                cached = None
-            self._publication_verifications[key] = cached
-        if cached is not None:
-            raise FactAdmissionError(
-                cached.reason_code,
-                record_kind=requested_kind,
-                record_id=requested_id,
-                disposition=cached.disposition,
-            ) from cached
+    @staticmethod
+    def _decimal(value: str) -> Decimal:
+        try:
+            parsed = Decimal(value)
+        except InvalidOperation as exc:
+            raise FactEvidenceIntegrityError("stored fact numeric value is malformed") from exc
+        if not parsed.is_finite():
+            raise FactEvidenceIntegrityError("stored fact numeric value is not finite")
+        return parsed

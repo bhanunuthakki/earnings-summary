@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -621,3 +622,216 @@ def test_financial_trigger_freshness_and_signature_keep_exact_source(
             "condition_index": 0,
             "period_end": "2025-06-30",
         }
+
+
+_SNAPSHOT_BOUNDARIES = (
+    "consumer_series",
+    "dcf_statements",
+    "thesis_metric",
+    "soft_rules",
+    "cockpit_snapshot",
+    "cockpit_materialize",
+    "condition_read",
+    "condition_stamp",
+)
+
+
+def _invoke_snapshot_boundary(database: sqlite3.Connection, root: Path, boundary: str) -> object:
+    from cockpit_fundamentals import compute_snapshot, materialize_fundamentals
+    from compute.soft_rule_evaluator import evaluate_soft_rules, load_soft_rules
+    from compute.thesis_metric_series import MetricExpression, calculate_metric_series
+    from decision_conditions import read_financial_condition
+    from sources.dcf_statements import read_dcf_statements
+
+    if boundary == "consumer_series":
+        return read_financial_consumer_series(
+            database, "SYNTH", "revenue", cutoff=STAMP, cadence=FinancialCadence.QUARTERLY
+        )
+    if boundary == "dcf_statements":
+        return read_dcf_statements(database, "SYNTH", as_of=STAMP)
+    if boundary == "thesis_metric":
+        return calculate_metric_series(
+            database,
+            "SYNTH",
+            MetricExpression(operation="level", source="financial", name="revenue"),
+            cutoff=STAMP,
+        )
+    if boundary == "soft_rules":
+        rules = load_soft_rules(
+            [
+                {
+                    "name": "synthetic_floor",
+                    "predicate": {
+                        "type": "series_below",
+                        "params": {
+                            "metric": "revenue",
+                            "source": "financial",
+                            "threshold": 200,
+                            "periods": 1,
+                        },
+                    },
+                }
+            ]
+        )
+        assert len(rules) == 1
+        return evaluate_soft_rules("SYNTH", rules, database)
+    if boundary == "cockpit_snapshot":
+        return compute_snapshot(database, cutoff=STAMP)
+    if boundary == "cockpit_materialize":
+        return materialize_fundamentals(database, root, cutoff=STAMP)
+    condition = parse_condition(
+        {
+            "metric": "revenue",
+            "metric_source": "financial",
+            "op": "gt",
+            "threshold": 200,
+            "unit": "actual",
+            "for_periods": 1,
+            "financial_cadence": "quarterly",
+        }
+    )
+    assert condition is not None
+    if boundary == "condition_read":
+        return read_financial_condition(database, "SYNTH", condition, cutoff=STAMP)
+    assert boundary == "condition_stamp"
+    return stamp_condition_baselines(database, "SYNTH", [condition])
+
+
+@pytest.mark.parametrize("boundary", _SNAPSHOT_BOUNDARIES)
+@pytest.mark.parametrize("replacement_write", [False, True])
+def test_live_read_boundary_preserves_replacement_snapshot_and_pending_write(
+    database: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+    replacement_write: bool,
+) -> None:
+    from provenance import source_fact_publication as publication
+
+    seed_table(database, [("revenue", "2025-01-01", "2025-03-31", "Q1", "100", "USD")])
+    database.row_factory = sqlite3.Row
+    database.execute("CREATE TEMP TABLE replacement_boundary_write (value INTEGER)")
+    cache = tmp_path / "data" / "cockpit_fundamentals.json"
+    cache.parent.mkdir(exist_ok=True)
+    cache.write_bytes(b"existing cache must survive invalid snapshot")
+    before_cache = cache.read_bytes()
+    original: Callable[..., publication.VerifiedSourceFactPublication] = getattr(
+        publication, "_verify_source_fact_publication"
+    )
+    mutations: list[str] = []
+
+    def replace_snapshot(
+        connection: sqlite3.Connection,
+        *,
+        publication_id: str,
+        cutoff: datetime,
+        observed_through: datetime | None = None,
+    ) -> publication.VerifiedSourceFactPublication:
+        verified = original(
+            connection,
+            publication_id=publication_id,
+            cutoff=cutoff,
+            observed_through=observed_through,
+        )
+        if not mutations:
+            mutations.append(publication_id)
+            connection.commit()
+            connection.execute("BEGIN")
+            if replacement_write:
+                connection.execute("INSERT INTO replacement_boundary_write VALUES (7)")
+        return verified
+
+    factory = database.row_factory
+    monkeypatch.setattr(publication, "_verify_source_fact_publication", replace_snapshot)
+    with pytest.raises(RuntimeError, match=r"changed .* (state|snapshot)"):
+        _invoke_snapshot_boundary(database, tmp_path, boundary)
+    assert mutations
+    assert database.row_factory is factory
+    assert database.in_transaction
+    assert [
+        tuple(row) for row in database.execute("SELECT value FROM replacement_boundary_write")
+    ] == ([(7,)] if replacement_write else [])
+    assert cache.read_bytes() == before_cache
+    database.rollback()
+
+
+@pytest.mark.parametrize("boundary", _SNAPSHOT_BOUNDARIES)
+@pytest.mark.parametrize("caller_pending", [False, True])
+def test_live_read_boundary_cleans_owned_snapshot_and_preserves_caller_work(
+    database: sqlite3.Connection,
+    tmp_path: Path,
+    boundary: str,
+    caller_pending: bool,
+) -> None:
+    seed_table(database, [("revenue", "2025-01-01", "2025-03-31", "Q1", "100", "USD")])
+    database.row_factory = sqlite3.Row
+    database.execute("CREATE TEMP TABLE caller_boundary_write (value INTEGER)")
+    if caller_pending:
+        database.execute("INSERT INTO caller_boundary_write VALUES (9)")
+    factory = database.row_factory
+    if boundary == "cockpit_materialize" and caller_pending:
+        with pytest.raises(ValueError, match="committed state"):
+            _invoke_snapshot_boundary(database, tmp_path, boundary)
+        assert not (tmp_path / "data" / "cockpit_fundamentals.json").exists()
+    else:
+        assert _invoke_snapshot_boundary(database, tmp_path, boundary) is not None
+    assert database.row_factory is factory
+    assert database.in_transaction is caller_pending
+    assert [tuple(row) for row in database.execute("SELECT value FROM caller_boundary_write")] == (
+        [(9,)] if caller_pending else []
+    )
+    if caller_pending:
+        database.rollback()
+
+
+@pytest.mark.parametrize(
+    ("boundary", "caller_pending"),
+    [
+        (boundary, pending)
+        for boundary in _SNAPSHOT_BOUNDARIES
+        for pending in (False, True)
+        if boundary != "cockpit_materialize" or not pending
+    ],
+)
+def test_live_read_boundary_cancellation_preserves_prior_caller_work(
+    database: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+    caller_pending: bool,
+) -> None:
+    from provenance import source_fact_publication as publication
+
+    seed_table(database, [("revenue", "2025-01-01", "2025-03-31", "Q1", "100", "USD")])
+    database.row_factory = sqlite3.Row
+    database.execute("CREATE TEMP TABLE cancelled_boundary_write (value INTEGER)")
+    if caller_pending:
+        database.execute("INSERT INTO cancelled_boundary_write VALUES (9)")
+    cache = tmp_path / "data" / "cockpit_fundamentals.json"
+    cache.parent.mkdir(exist_ok=True)
+    cache.write_bytes(b"cache before cancelled read")
+    cancelled: list[str] = []
+
+    def cancel_read(
+        connection: sqlite3.Connection,
+        *,
+        publication_id: str,
+        cutoff: datetime,
+        observed_through: datetime | None = None,
+    ) -> publication.VerifiedSourceFactPublication:
+        cancelled.append(publication_id)
+        raise KeyboardInterrupt("synthetic read cancellation")
+
+    factory = database.row_factory
+    monkeypatch.setattr(publication, "_verify_source_fact_publication", cancel_read)
+    with pytest.raises(KeyboardInterrupt, match="synthetic read cancellation"):
+        _invoke_snapshot_boundary(database, tmp_path, boundary)
+    assert cancelled
+    assert database.row_factory is factory
+    assert database.in_transaction is caller_pending
+    assert [
+        tuple(row) for row in database.execute("SELECT value FROM cancelled_boundary_write")
+    ] == ([(9,)] if caller_pending else [])
+    assert cache.read_bytes() == b"cache before cancelled read"
+    if caller_pending:
+        database.rollback()

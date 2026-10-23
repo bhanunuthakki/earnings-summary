@@ -542,26 +542,24 @@ def compute_snapshot(
     if cutoff_at.tzinfo is None:
         raise ValueError("cockpit fundamentals cutoff must be timezone-aware")
     cutoff_at = cutoff_at.astimezone(UTC)
-    owns_snapshot = not conn.in_transaction
+    original_factory = conn.row_factory
     try:
-        if owns_snapshot:
-            conn.execute("BEGIN")
-        tickers = discover_canonical_financial_tickers(
-            conn,
-            metrics=_METRICS,
-            cadences=_CADENCES,
-            cutoff=cutoff_at,
-        )
+        conn.row_factory = sqlite3.Row
         with publication_verification_scope(conn):
+            tickers = discover_canonical_financial_tickers(
+                conn,
+                metrics=_METRICS,
+                cadences=_CADENCES,
+                cutoff=cutoff_at,
+            )
             fundamentals = {ticker: _compute_ticker(conn, ticker, cutoff_at) for ticker in tickers}
-        return CockpitFundamentalsSnapshot(
-            cutoff=cutoff_at,
-            ticker_universe=tickers,
-            fundamentals=fundamentals,
-        )
+            return CockpitFundamentalsSnapshot(
+                cutoff=cutoff_at,
+                ticker_universe=tickers,
+                fundamentals=fundamentals,
+            )
     finally:
-        if owns_snapshot and conn.in_transaction:
-            conn.rollback()
+        conn.row_factory = original_factory
 
 
 def compute_from_db(
@@ -591,13 +589,14 @@ def materialize_fundamentals(
     """
     if conn.in_transaction:
         raise ValueError("cockpit fundamentals must be materialized from committed state")
+    original_factory = conn.row_factory
     try:
-        conn.execute("BEGIN")
-        source_revision = list(canonical_financial_revision(conn))
-        snapshot = compute_snapshot(conn, cutoff=cutoff)
+        conn.row_factory = sqlite3.Row
+        with publication_verification_scope(conn):
+            source_revision = list(canonical_financial_revision(conn))
+            snapshot = compute_snapshot(conn, cutoff=cutoff)
     finally:
-        if conn.in_transaction:
-            conn.rollback()
+        conn.row_factory = original_factory
     payload: dict[str, object] = {
         **cache_metadata(_CACHE_SCHEMA, now=snapshot.cutoff),
         "source_revision": source_revision,

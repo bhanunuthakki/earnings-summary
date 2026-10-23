@@ -509,18 +509,27 @@ def test_publication_scope_keeps_clocks_and_connections_separate(
     _publish(conn, _quarter_rows())
     conn.execute("BEGIN")
     with publication_verification_scope(conn):
-        verify_source_fact_publication(conn, publication_id="report-publication", cutoff=STAMP)
+        valid = verify_source_fact_publication(
+            conn, publication_id="report-publication", cutoff=STAMP
+        )
         with pytest.raises(PublicationVerificationError):
             verify_source_fact_publication(
                 conn, publication_id="report-publication", cutoff=STAMP - timedelta(days=3650)
             )
-        with pytest.raises(PublicationVerificationError, match="publication_ledger_malformed"):
+        # Invalid caller clock order is distinct from corrupt retained ledger evidence.
+        with pytest.raises(ValueError, match=r"^observed_through must not precede cutoff$"):
             verify_source_fact_publication(
                 conn,
                 publication_id="report-publication",
                 cutoff=STAMP,
                 observed_through=STAMP - timedelta(seconds=1),
             )
+        assert (
+            verify_source_fact_publication(
+                conn, publication_id="report-publication", cutoff=STAMP, observed_through=STAMP
+            )
+            == valid
+        )
         with sqlite3.connect(head_template) as other, pytest.raises(PublicationVerificationError):
             verify_source_fact_publication(other, publication_id="report-publication", cutoff=STAMP)
     conn.rollback()

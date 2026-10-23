@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -1254,3 +1255,161 @@ def test_selected_source_corruption_preserves_precise_admission_failure(
         "publication_member_set_tampered",
     }
     assert failure.value.disposition == "quarantined"
+
+
+def test_report_admits_real_fy_minus_q3_derived_quarter(
+    database: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import provenance.source_fact_publication as publication_verification
+    from provenance.financial_derivations import QuarterDerivationRequest, publish_discrete_quarter
+    from sources.report_financials import read_financial_table
+
+    facts = seed_table(
+        database,
+        [
+            (
+                "NetCashProvidedByOperatingActivities",
+                "2025-01-01",
+                "2025-09-30",
+                "Q3",
+                "900",
+                "USD",
+            ),
+            (
+                "NetCashProvidedByOperatingActivities",
+                "2025-01-01",
+                "2025-12-31",
+                "FY",
+                "1300",
+                "USD",
+            ),
+        ],
+        concept_namespace="http://fasb.org/us-gaap/2025",
+    )
+    for fact in facts:
+        reviewed_binding(database, fact, "operating_cash_flow")
+    derived, _ = publish_discrete_quarter(
+        database,
+        QuarterDerivationRequest(
+            cumulative_observation_id=facts[1].observation.observation_id,
+            prior_cumulative_observation_id=facts[0].observation.observation_id,
+            knowledge_cutoff=REVIEW_AT,
+            recorded_at=REVIEW_AT,
+        ),
+    )
+    cell_id = _bind_derived(database, derived, "operating_cash_flow")
+    original: Callable[..., publication_verification.VerifiedSourceFactPublication] = getattr(
+        publication_verification, "_verify_source_fact_publication"
+    )
+    keys: list[tuple[str, datetime, datetime | None]] = []
+
+    def counted(
+        connection: sqlite3.Connection,
+        *,
+        publication_id: str,
+        cutoff: datetime,
+        observed_through: datetime | None = None,
+    ) -> publication_verification.VerifiedSourceFactPublication:
+        keys.append((publication_id, cutoff, observed_through or cutoff))
+        return original(
+            connection,
+            publication_id=publication_id,
+            cutoff=cutoff,
+            observed_through=observed_through,
+        )
+
+    monkeypatch.setattr(publication_verification, "_verify_source_fact_publication", counted)
+    for observed in (None, REVIEW_AT, REVIEW_AT + timedelta(seconds=1)):
+        keys.clear()
+        table = read_financial_table(
+            database, "SYNTH", as_of=REVIEW_AT, resolution_observed_through=observed
+        )
+        cell = next(item for item in table.cells if item.canonical_metric_cell_id == cell_id)
+        assert cell.available, cell.reason_codes
+        assert cell.display_value == Decimal("0.0004")
+        assert cell.display_coordinate == "2025 Q4"
+        assert cell.provenance is not None and cell.provenance.derivation is not None
+        assert cell.provenance.observation.decimal_value == Decimal(400)
+        assert len(keys) == len(set(keys))
+
+
+def test_legacy_discovery_mapping_without_source_currency_retains_admission(
+    database: sqlite3.Connection,
+) -> None:
+    from sources.discovery_financials import read_financial_history
+
+    fact = seed_table(database, [("revenue", "2025-01-01", "2025-03-31", "Q1", "100", "USD")])[0]
+    ontology = MetricOntology(database)
+    binding = ontology.binding_as_known(fact.observation.observation_id, STAMP)
+    assert binding is not None and binding.source_component_id is not None
+    mapping = ontology.mapping_as_known(binding.source_component_id, STAMP)
+    assert mapping is not None and mapping.policy_name != "reviewed_financial_metric"
+    assert "source_currency" not in mapping.constraints
+    assert fact.cell.concept_namespace == "urn:earnings-summary:legacy:financial"
+    history = read_financial_history(database, "SYNTH", as_of=STAMP.date(), concepts=("revenue",))
+    assert not history.unresolved and len(history.references) == 1
+    reference = history.references[0]
+    assert reference.observation_id == fact.observation.observation_id
+    assert reference.value == Decimal(100) and reference.currency == "USD"
+
+
+@pytest.mark.parametrize("source_currency", [None, "EUR"])
+def test_discovery_reviewed_mapping_requires_its_committed_source_currency(
+    database: sqlite3.Connection,
+    source_currency: str | None,
+) -> None:
+    from sources.discovery_financials import read_financial_history
+
+    fact = seed_table(database, [("revenue", "2025-01-01", "2025-03-31", "Q1", "100", "USD")])[0]
+    reviewed_binding(database, fact, "revenue")
+    before = read_financial_history(
+        database, "SYNTH", as_of=REVIEW_AT.date(), concepts=("revenue",)
+    )
+    assert len(before.references) == 1 and before.references[0].currency == "USD"
+    ontology = MetricOntology(database)
+    prior = ontology.binding_as_known(fact.observation.observation_id, REVIEW_AT)
+    assert prior is not None and prior.source_component_id is not None
+    mapping = ontology.mapping_as_known(prior.source_component_id, REVIEW_AT)
+    assert mapping is not None and mapping.constraints["source_currency"] == "USD"
+    constraints = dict(mapping.constraints)
+    if source_currency is None:
+        constraints.pop("source_currency")
+    else:
+        constraints["source_currency"] = source_currency
+    later = REVIEW_AT + timedelta(seconds=1)
+    changed_mapping = mapping.model_copy(
+        update={
+            "mapping_revision_id": "changed-review-currency",
+            "idempotency_key": "changed-review-currency",
+            "revision": mapping.revision + 1,
+            "supersedes_mapping_revision_id": mapping.mapping_revision_id,
+            "constraints": constraints,
+            "knowledge_at": later,
+            "recorded_at": later,
+        }
+    )
+    ontology.persist_mapping(changed_mapping)
+    ontology.persist_binding(
+        prior.model_copy(
+            update={
+                "binding_revision_id": "changed-review-binding",
+                "idempotency_key": "changed-review-binding",
+                "revision": prior.revision + 1,
+                "supersedes_binding_revision_id": prior.binding_revision_id,
+                "mapping_revision_id": changed_mapping.mapping_revision_id,
+                "knowledge_at": later,
+                "recorded_at": later,
+            }
+        )
+    )
+    assert prior.canonical_metric_cell_id is not None
+    CanonicalFactResolutionEngine(database).resolve(
+        prior.canonical_metric_cell_id,
+        later,
+        ResolutionPolicy(name="fixture", version="1", config={}),
+        recorded_at=later,
+    )
+    database.commit()
+    after = read_financial_history(database, "SYNTH", as_of=later.date(), concepts=("revenue",))
+    assert after.references == () and after.unresolved

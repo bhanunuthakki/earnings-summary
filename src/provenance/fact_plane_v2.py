@@ -32,6 +32,11 @@ from runtime.deterministic import as_utc as _utc
 from runtime.deterministic import canonical_json_model as _canonical_json
 from runtime.deterministic import sha256_text as _digest
 
+
+class FactPlaneDecodeError(ValueError):
+    """A stored primitive cannot be decoded into the fact-plane schema."""
+
+
 PeriodKind = Literal["instant", "duration"]
 RelationKind = Literal[
     "exact_duplicate_of",
@@ -2043,7 +2048,7 @@ class FactPlaneV2:
             (fact_cell_id,),
         )
         if row is None:
-            raise ValueError(f"hardened fact cell {fact_cell_id!r} does not exist")
+            raise FactPlaneDecodeError(f"hardened fact cell {fact_cell_id!r} does not exist")
         dimension_rows = self._fetchall(
             "SELECT * FROM fact_dimensions_normalized_v2 "
             "WHERE fact_cell_id = ? ORDER BY dimension_ordinal",
@@ -2071,6 +2076,9 @@ class FactPlaneV2:
             )
             for item in dimension_rows
         )
+        fiscal_year = (
+            None if row["fiscal_year"] is None else self._stored_integer(row["fiscal_year"])
+        )
         return FactCellV2.model_validate(
             {
                 "fact_cell_id": str(row["fact_cell_id"]),
@@ -2088,9 +2096,7 @@ class FactPlaneV2:
                 "period_kind": str(row["period_kind"]),
                 "period_start": self._as_datetime(row["period_start"]),
                 "period_end": self._required_datetime(row["period_end"]),
-                "fiscal_year": (
-                    None if row["fiscal_year"] is None else int(str(row["fiscal_year"]))
-                ),
+                "fiscal_year": fiscal_year,
                 "fiscal_period": row["fiscal_period"],
                 "dimensions": dimensions,
                 "unit_key": str(row["unit_key"]),
@@ -2130,7 +2136,7 @@ class FactPlaneV2:
                 (str(row["observation_id"]),),
             )
             if anchor is None:
-                raise ValueError("reported observation has no exact anchor")
+                raise FactPlaneDecodeError("reported observation has no exact anchor")
             common.update(
                 {
                     "document_version_id": str(row["document_version_id"]),
@@ -2175,7 +2181,7 @@ class FactPlaneV2:
                     "candidate_set_id": str(candidate["candidate_set_id"]),
                     "fact_cell_id": str(candidate["fact_cell_id"]),
                     "observation_id": str(candidate["observation_id"]),
-                    "candidate_ordinal": int(str(candidate["candidate_ordinal"])),
+                    "candidate_ordinal": self._stored_integer(candidate["candidate_ordinal"]),
                     "eligibility": str(candidate["eligibility"]),
                     "reason_code": str(candidate["reason_code"]),
                     "reason_details": (
@@ -2194,7 +2200,7 @@ class FactPlaneV2:
                 "resolution_revision_id": str(row["resolution_revision_id"]),
                 "idempotency_key": str(row["idempotency_key"]),
                 "fact_cell_id": str(row["fact_cell_id"]),
-                "revision": int(str(row["revision"])),
+                "revision": self._stored_integer(row["revision"]),
                 "status": str(row["status"]),
                 "candidate_set_id": str(row["candidate_set_id"]),
                 "candidates": candidates,
@@ -2235,14 +2241,24 @@ class FactPlaneV2:
         return tuple(dict(zip(names, tuple(row), strict=True)) for row in cursor.fetchall())
 
     @staticmethod
+    def _stored_integer(value: object) -> int:
+        try:
+            return int(str(value))
+        except ValueError as exc:
+            raise FactPlaneDecodeError("stored fact-plane integer is malformed") from exc
+
+    @staticmethod
     def _as_datetime(value: object) -> datetime | None:
         if value is None:
             return None
-        return datetime.fromisoformat(str(value))
+        try:
+            return datetime.fromisoformat(str(value))
+        except ValueError as exc:
+            raise FactPlaneDecodeError("stored fact-plane clock is malformed") from exc
 
     @classmethod
     def _required_datetime(cls, value: object) -> datetime:
         parsed = cls._as_datetime(value)
         if parsed is None:
-            raise ValueError("required database clock is NULL")
+            raise FactPlaneDecodeError("required database clock is NULL")
         return parsed

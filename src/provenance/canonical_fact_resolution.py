@@ -15,10 +15,20 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from provenance.fact_read_model import FactAdmissionError, FactReadModel, ProvenanceBundle
-from provenance.source_fact_publication import verify_source_fact_publication
+from provenance.fact_read_model import (
+    FactAdmissionError,
+    FactEvidenceIntegrityError,
+    FactReadModel,
+    ObservationUnavailableError,
+    ProvenanceBundle,
+    ProvenanceBundleFailure,
+)
+from provenance.source_fact_publication import (
+    publication_verification_scope,
+    verify_source_fact_publication,
+)
 
 Status = Literal["resolved", "unresolved", "retired"]
 MAX_CANDIDATES_PER_CANONICAL_CELL = 500
@@ -35,6 +45,13 @@ def _json(value: object) -> str:
 
 def _sha(value: object) -> str:
     return hashlib.sha256((value if isinstance(value, str) else _json(value)).encode()).hexdigest()
+
+
+def _committed_json(value: str) -> object:
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise CanonicalCommitmentIntegrityError("canonical JSON commitment is malformed") from exc
 
 
 def _sqlite_sha(value: object) -> str:
@@ -75,6 +92,10 @@ class ResolutionReceipt(BaseModel):
     exact_replay: bool
 
 
+class CanonicalCommitmentIntegrityError(ValueError):
+    """Stored canonical evidence does not match its immutable commitment."""
+
+
 @dataclass(frozen=True)
 class CanonicalFactRead:
     """One exact canonical selection and its admitted source context."""
@@ -82,6 +103,10 @@ class CanonicalFactRead:
     canonical_metric_cell_id: str
     resolution: ResolutionReceipt | None
     bundle: ProvenanceBundle | None
+    failure: ProvenanceBundleFailure | None = None
+    unavailable_reason: (
+        Literal["canonical_commitment_invalid", "derived_operand_selection_changed"] | None
+    ) = None
 
 
 class ResolutionPlan(BaseModel):
@@ -475,7 +500,13 @@ class CanonicalFactResolutionEngine:
                             break
                 verified[current_id] = result
                 return result
-            except (ValueError, FactAdmissionError):
+            except (
+                CanonicalCommitmentIntegrityError,
+                ObservationUnavailableError,
+                FactAdmissionError,
+                FactEvidenceIntegrityError,
+                ValidationError,
+            ):
                 verified[current_id] = False
                 return False
             finally:
@@ -501,18 +532,55 @@ class CanonicalFactResolutionEngine:
         *,
         observed_through: datetime | None = None,
     ) -> tuple[CanonicalFactRead, ...]:
-        """Read exact selections and sources together under one read snapshot.
+        """Strict source-at-K adapter over ordered canonical outcomes.
 
-        Every resolution retains its existing graph checks. Full publication
-        verification is reused only within this bounded call at the same cutoff.
-        Broken selected evidence raises; it never becomes an absent resolution.
+        O permits later physical canonical resolutions. It never widens source
+        admission or operand currentness beyond K, including when O equals K.
         """
-        self._conn.execute("SAVEPOINT canonical_resolution_read_batch")
-        try:
-            receipts = tuple(
-                self._stored_as_known(cell_id, cutoff_at, observed_through=observed_through)
-                for cell_id in canonical_metric_cell_ids
-            )
+        reads = self.read_as_known_outcomes(
+            canonical_metric_cell_ids, cutoff_at, observed_through=observed_through
+        )
+        for read in reads:
+            if read.unavailable_reason == "canonical_commitment_invalid":
+                raise CanonicalCommitmentIntegrityError("canonical commitment is invalid")
+            if read.failure is not None:
+                failure = read.failure
+                if failure.reason_code == "observation_unavailable_at_cutoff":
+                    raise ObservationUnavailableError(failure.record_id)
+                raise FactAdmissionError(
+                    failure.reason_code,
+                    record_kind=failure.record_kind,
+                    record_id=failure.record_id,
+                    disposition=failure.disposition,
+                )
+        return reads
+
+    def read_as_known_outcomes(
+        self,
+        canonical_metric_cell_ids: tuple[str, ...],
+        cutoff_at: datetime,
+        *,
+        observed_through: datetime | None = None,
+    ) -> tuple[CanonicalFactRead, ...]:
+        """Read ordered selections at K/O and source admission at K in one snapshot.
+
+        A corrupt cell remains local. Database, snapshot, and programmer errors
+        abort the operation. Duplicate and absent coordinates retain their positions.
+        """
+        cutoff = _utc(cutoff_at)
+        observed = cutoff if observed_through is None else _utc(observed_through)
+        if observed < cutoff:
+            raise ValueError("observed_through must not precede cutoff_at")
+        with publication_verification_scope(self._conn):
+            receipts: list[ResolutionReceipt | None] = []
+            corrupt: set[int] = set()
+            for index, cell_id in enumerate(canonical_metric_cell_ids):
+                try:
+                    receipt = self._stored_as_known(cell_id, cutoff, observed_through=observed)
+                except CanonicalCommitmentIntegrityError:
+                    receipt = None
+                    corrupt.add(index)
+                receipts.append(receipt)
             observation_ids = tuple(
                 dict.fromkeys(
                     receipt.selected_observation_id
@@ -522,41 +590,40 @@ class CanonicalFactResolutionEngine:
                     and receipt.selected_observation_id is not None
                 )
             )
-            observed = cutoff_at if observed_through is None else observed_through
             bundles = {
-                bundle.observation.observation_id: bundle
-                for bundle in FactReadModel(self._conn).required_provenance_bundles(
-                    observation_ids, cutoff=_utc(observed)
+                read.observation_id: read
+                for read in FactReadModel(self._conn).provenance_bundles(
+                    observation_ids, cutoff=cutoff
                 )
             }
             result: list[CanonicalFactRead] = []
-            for cell_id, receipt in zip(canonical_metric_cell_ids, receipts, strict=True):
-                bundle = (
+            for index, (cell_id, receipt) in enumerate(
+                zip(canonical_metric_cell_ids, receipts, strict=True)
+            ):
+                read = (
                     bundles[receipt.selected_observation_id]
                     if receipt is not None
                     and receipt.status == "resolved"
                     and receipt.selected_observation_id is not None
                     else None
                 )
+                bundle = read.bundle if read else None
+                unavailable = "canonical_commitment_invalid" if index in corrupt else None
                 if (
                     bundle is not None
                     and bundle.derivation is not None
-                    and receipt is not None
-                    and not self.observation_lineage_current(
-                        bundle.observation.observation_id,
-                        cutoff_at,
-                        observed_through=observed_through,
+                    and not (
+                        self.observation_lineage_current(bundle.observation.observation_id, cutoff)
                     )
                 ):
                     receipt, bundle = None, None
-                result.append(CanonicalFactRead(cell_id, receipt, bundle))
-            self._conn.execute("RELEASE SAVEPOINT canonical_resolution_read_batch")
+                    unavailable = "derived_operand_selection_changed"
+                result.append(
+                    CanonicalFactRead(
+                        cell_id, receipt, bundle, read.failure if read else None, unavailable
+                    )
+                )
             return tuple(result)
-        except BaseException:
-            with suppress(sqlite3.Error):
-                self._conn.execute("ROLLBACK TO SAVEPOINT canonical_resolution_read_batch")
-                self._conn.execute("RELEASE SAVEPOINT canonical_resolution_read_batch")
-            raise
 
     def _stored_as_known(
         self,
@@ -932,7 +999,9 @@ class CanonicalFactResolutionEngine:
             (resolution_id,),
         ).fetchone()
         if row is None or _sha(str(row[15])) != str(row[16]):
-            raise ValueError("canonical resolution commitment is missing or tampered")
+            raise CanonicalCommitmentIntegrityError(
+                "canonical resolution commitment is missing or tampered"
+            )
         payload = _json(
             {
                 "candidate_universe_id": row[2],
@@ -943,7 +1012,7 @@ class CanonicalFactResolutionEngine:
                 "policy_name": row[8],
                 "policy_version": row[9],
                 "reason_code": row[13],
-                "reason_details": json.loads(str(row[14])),
+                "reason_details": _committed_json(str(row[14])),
                 "relation_set_id": row[3],
                 "relation_set_seal_id": row[5],
                 "relation_set_sha256": row[7],
@@ -954,7 +1023,9 @@ class CanonicalFactResolutionEngine:
             }
         )
         if payload != str(row[15]):
-            raise ValueError("canonical resolution row does not match commitment")
+            raise CanonicalCommitmentIntegrityError(
+                "canonical resolution row does not match commitment"
+            )
         universe = self._conn.execute(
             "SELECT candidate_universe_seal_id,member_set_sha256 "
             "FROM canonical_fact_candidate_universe_seals "
@@ -972,7 +1043,9 @@ class CanonicalFactResolutionEngine:
             or tuple(universe) != (row[4], row[6])
             or tuple(relation) != (row[5], row[7])
         ):
-            raise ValueError("canonical resolution input seal linkage changed")
+            raise CanonicalCommitmentIntegrityError(
+                "canonical resolution input seal linkage changed"
+            )
         if int(row[1]) > 1:
             parent = self._conn.execute(
                 "SELECT canonical_resolution_revision_id "
@@ -981,7 +1054,9 @@ class CanonicalFactResolutionEngine:
                 (row[0], int(row[1]) - 1),
             ).fetchone()
             if parent is None or parent[0] != row[17]:
-                raise ValueError("canonical resolution parent chain is incomplete")
+                raise CanonicalCommitmentIntegrityError(
+                    "canonical resolution parent chain is incomplete"
+                )
 
     def _enumerate(
         self,
@@ -1625,11 +1700,15 @@ class CanonicalFactResolutionEngine:
             or _sha(row[1]) != row[2]
             or [r[0] for r in members] != list(range(len(members)))
         ):
-            raise ValueError("candidate universe is missing, non-contiguous, or tampered")
+            raise CanonicalCommitmentIntegrityError(
+                "candidate universe is missing, non-contiguous, or tampered"
+            )
         if expected is not None and [r[1] for r in members] != [
             candidate.observation_id for candidate in expected
         ]:
-            raise ValueError("candidate universe is not exhaustive at cutoff")
+            raise CanonicalCommitmentIntegrityError(
+                "candidate universe is not exhaustive at cutoff"
+            )
 
     def _verify_relation_set(
         self, relation_set_id: str, expected: list[dict[str, object]] | None
@@ -1656,7 +1735,7 @@ class CanonicalFactResolutionEngine:
                 "subject_observation_id": r[1],
                 "object_observation_id": r[3],
                 "relation_kind": r[4],
-                "evidence": json.loads(r[5]),
+                "evidence": _committed_json(r[5]),
             }
             for r in rows
         ]
@@ -1668,6 +1747,8 @@ class CanonicalFactResolutionEngine:
             or [r[0] for r in rows] != list(range(len(rows)))
             or any(_sha(r[5]) != r[6] for r in rows)
         ):
-            raise ValueError("relation set is missing, non-contiguous, or tampered")
+            raise CanonicalCommitmentIntegrityError(
+                "relation set is missing, non-contiguous, or tampered"
+            )
         if expected is not None and _json(payload) != _json(expected):
-            raise ValueError("relation set replay mismatch")
+            raise CanonicalCommitmentIntegrityError("relation set replay mismatch")

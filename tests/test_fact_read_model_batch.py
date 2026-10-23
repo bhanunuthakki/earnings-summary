@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import provenance.fact_read_model as fact_read_model
+import provenance.source_fact_publication as source_publication
 from provenance.fact_plane_v2 import (
     DerivationInputV2,
     DerivationSealV2,
@@ -146,7 +146,9 @@ def test_batch_reuses_full_verification_and_matches_single_reads(
     SourceFactRepository(conn).publish(publication)
     observation_ids = tuple(item.observation.observation_id for item in publication.reported_facts)
     verified: list[tuple[str, datetime]] = []
-    original = fact_read_model.verify_source_fact_publication
+    original: Callable[..., VerifiedSourceFactPublication] = getattr(
+        source_publication, "_verify_source_fact_publication"
+    )
 
     def counted(
         connection: sqlite3.Connection,
@@ -163,7 +165,7 @@ def test_batch_reuses_full_verification_and_matches_single_reads(
             observed_through=observed_through,
         )
 
-    monkeypatch.setattr(fact_read_model, "verify_source_fact_publication", counted)
+    monkeypatch.setattr(source_publication, "_verify_source_fact_publication", counted)
     results = FactReadModel(conn).provenance_bundles(observation_ids, cutoff=STAMP)
 
     assert [item.observation_id for item in results] == list(observation_ids)
@@ -182,7 +184,9 @@ def test_large_publication_is_fully_verified_once_per_batch(
     publication = _large_publication(24)
     SourceFactRepository(conn).publish(publication)
     verified: list[str] = []
-    original = fact_read_model.verify_source_fact_publication
+    original: Callable[..., VerifiedSourceFactPublication] = getattr(
+        source_publication, "_verify_source_fact_publication"
+    )
 
     def counted(
         connection: sqlite3.Connection,
@@ -199,7 +203,7 @@ def test_large_publication_is_fully_verified_once_per_batch(
             observed_through=observed_through,
         )
 
-    monkeypatch.setattr(fact_read_model, "verify_source_fact_publication", counted)
+    monkeypatch.setattr(source_publication, "_verify_source_fact_publication", counted)
     results = FactReadModel(conn).provenance_bundles(
         tuple(item.observation.observation_id for item in publication.reported_facts),
         cutoff=STAMP,
@@ -268,7 +272,9 @@ def test_batch_preserves_valid_publications_and_revalidates_each_call(
     )
     conn.commit()
     verified: list[str] = []
-    original = fact_read_model.verify_source_fact_publication
+    original: Callable[..., VerifiedSourceFactPublication] = getattr(
+        source_publication, "_verify_source_fact_publication"
+    )
 
     def counted(
         connection: sqlite3.Connection,
@@ -285,7 +291,7 @@ def test_batch_preserves_valid_publications_and_revalidates_each_call(
             observed_through=observed_through,
         )
 
-    monkeypatch.setattr(fact_read_model, "verify_source_fact_publication", counted)
+    monkeypatch.setattr(source_publication, "_verify_source_fact_publication", counted)
     first = FactReadModel(conn).provenance_bundles(
         (
             corrupt.reported_facts[0].observation.observation_id,
@@ -312,7 +318,9 @@ def test_batch_revalidates_after_a_committed_publication_mutation(
     SourceFactRepository(conn).publish(publication)
     conn.commit()
     verified: list[str] = []
-    original = fact_read_model.verify_source_fact_publication
+    original: Callable[..., VerifiedSourceFactPublication] = getattr(
+        source_publication, "_verify_source_fact_publication"
+    )
 
     def counted(
         connection: sqlite3.Connection,
@@ -329,7 +337,7 @@ def test_batch_revalidates_after_a_committed_publication_mutation(
             observed_through=observed_through,
         )
 
-    monkeypatch.setattr(fact_read_model, "verify_source_fact_publication", counted)
+    monkeypatch.setattr(source_publication, "_verify_source_fact_publication", counted)
     observation_id = publication.reported_facts[0].observation.observation_id
     assert FactReadModel(conn).provenance_bundles((observation_id,), cutoff=STAMP)[0].bundle
     conn.execute("DROP TRIGGER trg_source_fact_publication_members_append_only")
@@ -364,13 +372,19 @@ def test_batch_preserves_caller_transaction_and_row_factory(
     conn.rollback()
 
 
+@pytest.mark.parametrize("replacement_write", [False, True])
 def test_batch_rejects_commit_and_rebegin_that_replaces_its_snapshot(
     conn: sqlite3.Connection,
     monkeypatch: pytest.MonkeyPatch,
+    replacement_write: bool,
 ) -> None:
     publication = _two_observation_publication()
     SourceFactRepository(conn).publish(publication)
-    original = fact_read_model.verify_source_fact_publication
+    conn.commit()
+    conn.execute("CREATE TEMP TABLE replacement_caller_write (value INTEGER)")
+    original: Callable[..., VerifiedSourceFactPublication] = getattr(
+        source_publication, "_verify_source_fact_publication"
+    )
 
     def replace_snapshot(
         connection: sqlite3.Connection,
@@ -387,15 +401,22 @@ def test_batch_rejects_commit_and_rebegin_that_replaces_its_snapshot(
         )
         connection.commit()
         connection.execute("BEGIN")
+        if replacement_write:
+            connection.execute("INSERT INTO replacement_caller_write VALUES (7)")
         return verified
 
-    monkeypatch.setattr(fact_read_model, "verify_source_fact_publication", replace_snapshot)
-    with pytest.raises(RuntimeError, match="changed transaction state"):
+    monkeypatch.setattr(source_publication, "_verify_source_fact_publication", replace_snapshot)
+    with pytest.raises(RuntimeError, match=r"changed .* state"):
         FactReadModel(conn).provenance_bundles(
             (publication.reported_facts[0].observation.observation_id,), cutoff=STAMP
         )
 
-    assert not conn.in_transaction
+    # The replaced transaction is not the read operation's transaction to undo.
+    assert conn.in_transaction
+    assert conn.execute("SELECT value FROM replacement_caller_write").fetchall() == (
+        [(7,)] if replacement_write else []
+    )
+    conn.rollback()
 
 
 def test_batch_rejects_an_internal_write(
@@ -408,7 +429,9 @@ def test_batch_rejects_an_internal_write(
     conn.execute("CREATE TEMP TABLE caller_write_guard (value INTEGER)")
     conn.execute("BEGIN")
     conn.execute("INSERT INTO caller_write_guard VALUES (1)")
-    original = fact_read_model.verify_source_fact_publication
+    original: Callable[..., VerifiedSourceFactPublication] = getattr(
+        source_publication, "_verify_source_fact_publication"
+    )
 
     def writes_during_verification(
         connection: sqlite3.Connection,
@@ -428,8 +451,8 @@ def test_batch_rejects_an_internal_write(
         return verified
 
     monkeypatch.setattr(
-        fact_read_model,
-        "verify_source_fact_publication",
+        source_publication,
+        "_verify_source_fact_publication",
         writes_during_verification,
     )
     with pytest.raises(RuntimeError, match="changed database state"):
@@ -460,7 +483,9 @@ def test_batch_keeps_one_wal_snapshot_across_a_concurrent_commit(
     database_path = str(database_row[2])
     assert conn.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
     writer = sqlite3.connect(database_path, timeout=1)
-    original = fact_read_model.verify_source_fact_publication
+    original: Callable[..., VerifiedSourceFactPublication] = getattr(
+        source_publication, "_verify_source_fact_publication"
+    )
     committed = False
 
     def commit_tamper_after_first_verify(
@@ -489,8 +514,8 @@ def test_batch_keeps_one_wal_snapshot_across_a_concurrent_commit(
         return verified
 
     monkeypatch.setattr(
-        fact_read_model,
-        "verify_source_fact_publication",
+        source_publication,
+        "_verify_source_fact_publication",
         commit_tamper_after_first_verify,
     )
     try:
@@ -507,3 +532,236 @@ def test_batch_keeps_one_wal_snapshot_across_a_concurrent_commit(
     )
     assert after_commit[0].failure is not None
     assert after_commit[0].failure.reason_code == "publication_member_tampered"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ValueError("programmer failure"),
+        TypeError("programmer failure"),
+        KeyError("programmer failure"),
+        RuntimeError("programmer failure"),
+    ],
+)
+def test_batch_propagates_programmer_errors(
+    conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
+    publication = make_publication()
+    SourceFactRepository(conn).publish(publication)
+
+    def broken(*args: object, **kwargs: object) -> object:
+        raise error
+
+    monkeypatch.setattr(source_publication, "_verify_source_fact_publication", broken)
+    with pytest.raises(type(error), match="programmer failure"):
+        FactReadModel(conn).provenance_bundles(
+            (publication.reported_facts[0].observation.observation_id,), cutoff=STAMP
+        )
+
+
+def test_batch_preserves_operation_database_error(conn: sqlite3.Connection) -> None:
+    publication = make_publication()
+    SourceFactRepository(conn).publish(publication)
+    conn.execute(
+        "ALTER TABLE source_fact_publication_members RENAME TO missing_publication_members"
+    )
+    with pytest.raises(sqlite3.OperationalError):
+        FactReadModel(conn).provenance_bundles(
+            (publication.reported_facts[0].observation.observation_id,), cutoff=STAMP
+        )
+
+
+def test_nested_verification_scope_uses_complete_normalized_clock_keys(
+    conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publication = make_publication()
+    SourceFactRepository(conn).publish(publication)
+    original: Callable[..., VerifiedSourceFactPublication] = getattr(
+        source_publication, "_verify_source_fact_publication"
+    )
+    keys: list[tuple[str, datetime, datetime]] = []
+
+    def counted(
+        connection: sqlite3.Connection,
+        *,
+        publication_id: str,
+        cutoff: datetime,
+        observed_through: datetime | None = None,
+    ) -> VerifiedSourceFactPublication:
+        keys.append((publication_id, cutoff, observed_through or cutoff))
+        return original(
+            connection,
+            publication_id=publication_id,
+            cutoff=cutoff,
+            observed_through=observed_through,
+        )
+
+    monkeypatch.setattr(source_publication, "_verify_source_fact_publication", counted)
+    later = STAMP + timedelta(seconds=1)
+    with source_publication.publication_verification_scope(conn):
+        for observed in (None, STAMP, later, STAMP):
+            with source_publication.publication_verification_scope(conn):
+                source_publication.verify_source_fact_publication(
+                    conn,
+                    publication_id=publication.publication_id,
+                    cutoff=STAMP,
+                    observed_through=observed,
+                )
+    assert keys == [
+        (publication.publication_id, STAMP, STAMP),
+        (publication.publication_id, STAMP, later),
+    ]
+    source_publication.verify_source_fact_publication(
+        conn,
+        publication_id=publication.publication_id,
+        cutoff=STAMP,
+    )
+    assert len(keys) == 3
+
+
+def test_malformed_stored_observation_clock_is_typed_and_independent_publication_survives(
+    conn: sqlite3.Connection,
+) -> None:
+    from provenance.fact_read_model import FactEvidenceIntegrityError
+
+    broken = _two_observation_publication()
+    valid = _derived_publication(broken.reported_facts[0].observation.observation_id)
+    repository = SourceFactRepository(conn)
+    repository.publish(broken)
+    repository.publish(valid)
+    broken_id = broken.reported_facts[0].observation.observation_id
+    conn.execute("DROP TRIGGER trg_fact_observations_v2_append_only")
+    conn.execute(
+        "UPDATE fact_observations_v2 SET effective_at='0000-01-01T00:00:00+00:00' WHERE observation_id=?",
+        (broken_id,),
+    )
+    with pytest.raises(FactEvidenceIntegrityError, match="clock"):
+        FactReadModel(conn).provenance_bundle(broken_id, cutoff=STAMP)
+    reads = FactReadModel(conn).provenance_bundles(
+        (broken_id, valid.derived_facts[0].observation.observation_id),
+        cutoff=STAMP,
+    )
+    assert (
+        reads[0].failure is not None and reads[0].failure.reason_code == "fact_evidence_malformed"
+    )
+    assert reads[1].bundle is not None
+
+
+@pytest.mark.parametrize("primitive", ["plane_clock", "plane_integer", "numeric"])
+def test_stored_primitive_decode_failures_have_narrow_types(
+    conn: sqlite3.Connection,
+    primitive: str,
+) -> None:
+    from decimal import Decimal
+
+    from provenance.fact_plane_v2 import FactPlaneDecodeError, FactPlaneV2
+    from provenance.fact_read_model import FactEvidenceIntegrityError
+
+    if primitive == "plane_clock":
+        decode: Callable[[object], datetime | None] = getattr(FactPlaneV2, "_as_datetime")
+        with pytest.raises(FactPlaneDecodeError, match="clock"):
+            decode("malformed-clock")
+    elif primitive == "plane_integer":
+        integer: Callable[[object], int] = getattr(FactPlaneV2, "_stored_integer")
+        with pytest.raises(FactPlaneDecodeError, match="integer"):
+            integer("malformed-integer")
+    else:
+        numeric: Callable[[str], Decimal] = getattr(FactReadModel, "_decimal")
+        for raw in ("invalid-decimal", "NaN", "Infinity"):
+            with pytest.raises(FactEvidenceIntegrityError, match="numeric"):
+                numeric(raw)
+
+
+@pytest.mark.parametrize("error", ["decode", "programmer", "database"])
+def test_fact_plane_decode_boundary_preserves_operation_and_programmer_errors(
+    conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    error: str,
+) -> None:
+    from provenance.fact_plane_v2 import FactPlaneDecodeError, FactPlaneV2
+    from provenance.fact_read_model import FactEvidenceIntegrityError
+
+    publication = make_publication()
+    SourceFactRepository(conn).publish(publication)
+    failure = (
+        FactPlaneDecodeError("malformed stored primitive")
+        if error == "decode"
+        else ValueError("programmer failure")
+        if error == "programmer"
+        else sqlite3.OperationalError("database failure")
+    )
+
+    def broken(*args: object, **kwargs: object) -> object:
+        raise failure
+
+    monkeypatch.setattr(FactPlaneV2, "as_reported", broken)
+    expected = FactEvidenceIntegrityError if error == "decode" else type(failure)
+    with pytest.raises(expected):
+        FactReadModel(conn).cell(publication.reported_facts[0].cell.fact_cell_id, cutoff=STAMP)
+
+
+def test_verification_scope_refuses_new_keys_at_limit_without_evicting(
+    conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publication = make_publication()
+    SourceFactRepository(conn).publish(publication)
+    monkeypatch.setattr(
+        source_publication, "MAX_SCOPED_PUBLICATION_VERIFICATIONS", 2, raising=False
+    )
+    original: Callable[..., VerifiedSourceFactPublication] = getattr(
+        source_publication, "_verify_source_fact_publication"
+    )
+    calls: list[datetime] = []
+
+    def counted(
+        connection: sqlite3.Connection,
+        *,
+        publication_id: str,
+        cutoff: datetime,
+        observed_through: datetime | None = None,
+    ) -> VerifiedSourceFactPublication:
+        calls.append(cutoff)
+        return original(
+            connection,
+            publication_id=publication_id,
+            cutoff=cutoff,
+            observed_through=observed_through,
+        )
+
+    monkeypatch.setattr(source_publication, "_verify_source_fact_publication", counted)
+    with source_publication.publication_verification_scope(conn):
+        for cutoff in (STAMP, STAMP + timedelta(seconds=1), STAMP):
+            source_publication.verify_source_fact_publication(
+                conn, publication_id=publication.publication_id, cutoff=cutoff
+            )
+        with pytest.raises(RuntimeError, match=r"verification.*limit"):
+            source_publication.verify_source_fact_publication(
+                conn, publication_id=publication.publication_id, cutoff=STAMP + timedelta(seconds=2)
+            )
+        source_publication.verify_source_fact_publication(
+            conn, publication_id=publication.publication_id, cutoff=STAMP
+        )
+    assert calls == [STAMP, STAMP + timedelta(seconds=1)]
+
+
+def test_cached_publication_failure_reuses_metadata_without_reusing_tracebacks(
+    conn: sqlite3.Connection,
+) -> None:
+    from provenance.source_fact_publication import PublicationVerificationError
+
+    errors: list[PublicationVerificationError] = []
+    with source_publication.publication_verification_scope(conn):
+        for _ in range(32):
+            try:
+                source_publication.verify_source_fact_publication(
+                    conn, publication_id="missing-publication", cutoff=STAMP
+                )
+            except PublicationVerificationError as exc:
+                errors.append(exc)
+    assert len(errors) == 32
+    assert len({id(exc) for exc in errors}) == len(errors)
+    assert {exc.reason_code for exc in errors} == {"publication_graph_missing"}
