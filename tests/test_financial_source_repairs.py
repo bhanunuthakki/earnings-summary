@@ -22,12 +22,276 @@ from provenance.metric_ontology import (
     MetricOntology,
 )
 from provenance.source_fact_repository import ReportedSourceFact
-from sources.canonical_financial_series import CanonicalFinancialSeriesReader
+from sources.canonical_financial_series import CanonicalFinancialSeriesReader, FinancialCadence
 from tests.test_report_canonical_financials import STAMP, seed_table
 from tests.test_report_canonical_financials import database as database
 
 # A reviewed admission follows the source population and its retained ontology seal.
 REVIEW_AT = STAMP + timedelta(seconds=1)
+
+
+@pytest.mark.parametrize("projection", [False, True])
+@pytest.mark.parametrize("cadence", [FinancialCadence.QUARTERLY, FinancialCadence.ANNUAL])
+def test_series_reader_uses_one_ordered_canonical_population(
+    database: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    projection: bool,
+    cadence: FinancialCadence,
+) -> None:
+    from provenance.canonical_fact_resolution import CanonicalFactRead
+    from provenance.fact_read_model import FactReadModel, ProvenanceBundleRead
+
+    rows = (
+        [
+            ("revenue", "2025-01-01", "2025-03-31", "Q1", "100", "USD"),
+            ("revenue", "2025-04-01", "2025-06-30", "Q2", "120", "USD"),
+            ("revenue", "2025-07-01", "2025-09-30", "Q3", "130", "USD"),
+        ]
+        if cadence is FinancialCadence.QUARTERLY
+        else [
+            ("revenue", "2023-01-01", "2023-12-31", "FY", "100", "USD"),
+            ("revenue", "2024-01-01", "2024-12-31", "FY", "120", "USD"),
+            ("revenue", "2025-01-01", "2025-12-31", "FY", "130", "USD"),
+        ]
+    )
+    facts = seed_table(database, rows)
+    canonical_calls: list[tuple[str, ...]] = []
+    bundle_calls: list[tuple[str, ...]] = []
+    original_read = CanonicalFactResolutionEngine.read_as_known_outcomes
+    original_bundles = FactReadModel.provenance_bundles
+
+    def read(
+        engine: CanonicalFactResolutionEngine,
+        cell_ids: tuple[str, ...],
+        cutoff_at: datetime,
+        *,
+        observed_through: datetime | None = None,
+    ) -> tuple[CanonicalFactRead, ...]:
+        canonical_calls.append(cell_ids)
+        return original_read(engine, cell_ids, cutoff_at, observed_through=observed_through)
+
+    def bundles(
+        reader: FactReadModel, observation_ids: tuple[str, ...], *, cutoff: datetime
+    ) -> tuple[ProvenanceBundleRead, ...]:
+        bundle_calls.append(observation_ids)
+        return original_bundles(reader, observation_ids, cutoff=cutoff)
+
+    monkeypatch.setattr(CanonicalFactResolutionEngine, "read_as_known_outcomes", read)
+    monkeypatch.setattr(FactReadModel, "provenance_bundles", bundles)
+    reader = CanonicalFinancialSeriesReader(database, "SYNTH", cutoff=STAMP)
+    result = (
+        reader.project_coordinates("revenue", cadence=cadence)
+        if projection
+        else reader.read("revenue", cadence=cadence)
+    )
+    assert result.status == "available", result.reason_code
+    assert len(canonical_calls) == 1
+    assert len(canonical_calls[0]) == 3
+    assert len(bundle_calls) == 1
+    assert set(bundle_calls[0]) == {fact.observation.observation_id for fact in facts}
+    assert all(reader.provenance_for(fact.observation.observation_id) for fact in facts)
+
+
+@pytest.mark.parametrize("projection", [False, True])
+@pytest.mark.parametrize("rejection", ["unsupported_duration", "unbound"])
+def test_series_reader_keeps_annual_eligibility_before_strict_admission(
+    database: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    projection: bool,
+    rejection: str,
+) -> None:
+    seed_table(
+        database,
+        [
+            (
+                "revenue",
+                "2025-09-01" if rejection == "unsupported_duration" else "2025-01-01",
+                "2025-12-31",
+                "FY",
+                "100",
+                "USD",
+            )
+        ],
+        populate=rejection != "unbound",
+    )
+
+    def unexpected_admission(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("rejected annual candidate entered strict canonical admission")
+
+    monkeypatch.setattr(
+        CanonicalFactResolutionEngine, "read_as_known_outcomes", unexpected_admission
+    )
+    reader = CanonicalFinancialSeriesReader(database, "SYNTH", cutoff=STAMP)
+    result = (
+        reader.project_coordinates("revenue", cadence=FinancialCadence.ANNUAL).coordinates[0]
+        if projection
+        else reader.read("revenue", cadence=FinancialCadence.ANNUAL)
+    )
+    assert result.status == ("rejected" if projection else "unavailable")
+    assert result.reason_code == (
+        "unsupported_financial_cadence_or_duration"
+        if rejection == "unsupported_duration"
+        else "exact_financial_concept_not_admitted"
+    )
+
+
+@pytest.mark.parametrize("projection", [False, True])
+@pytest.mark.parametrize("cadence", [FinancialCadence.QUARTERLY, FinancialCadence.ANNUAL])
+@pytest.mark.parametrize("later_corrupt", [False, True])
+def test_series_reader_preserves_missing_selection_before_later_corruption(
+    database: sqlite3.Connection,
+    projection: bool,
+    cadence: FinancialCadence,
+    later_corrupt: bool,
+) -> None:
+    from provenance.canonical_fact_resolution import CanonicalCommitmentIntegrityError
+    from provenance.population_metric_ontology import (
+        MetricOntologyPopulationRequest,
+        populate_metric_ontology,
+    )
+
+    end, label = (
+        ("2025-03-31", "Q1") if cadence is FinancialCadence.QUARTERLY else ("2025-12-31", "FY")
+    )
+    facts = seed_table(
+        database,
+        [
+            ("revenue", "2025-01-01", end, label, "100", "USD"),
+            ("revenue", "2025-01-02", end, label, "120", "USD"),
+        ],
+        populate=False,
+    )
+    populate_metric_ontology(
+        database,
+        MetricOntologyPopulationRequest(
+            knowledge_cutoff=STAMP, operation_recorded_at=STAMP, apply=True
+        ),
+    )
+    # The first exact bound cell has no selection. Only the later cell is resolved.
+    ontology = MetricOntology(database)
+    last = ontology.binding_as_known(
+        sorted(facts, key=lambda fact: fact.observation.observation_id)[
+            1
+        ].observation.observation_id,
+        STAMP,
+    )
+    assert last is not None and last.canonical_metric_cell_id is not None
+    CanonicalFactResolutionEngine(database).resolve(
+        last.canonical_metric_cell_id,
+        STAMP,
+        ResolutionPolicy(name="fixture", version="1", config={}),
+        recorded_at=STAMP,
+    )
+    if later_corrupt:
+        database.execute("DROP TRIGGER trg_canonical_fact_resolution_revisions_update_append_only")
+        database.execute(
+            "UPDATE canonical_fact_resolution_revisions SET resolution_sha256=?",
+            ("0" * 64,),
+        )
+    database.commit()
+    reader = CanonicalFinancialSeriesReader(database, "SYNTH", cutoff=STAMP)
+    if cadence is FinancialCadence.QUARTERLY and later_corrupt:
+        # Quarterly cumulative coverage already visits every supported candidate.
+        with pytest.raises(CanonicalCommitmentIntegrityError):
+            if projection:
+                reader.project_coordinates("revenue", cadence=cadence)
+            else:
+                reader.read("revenue", cadence=cadence)
+    else:
+        result = (
+            reader.project_coordinates("revenue", cadence=cadence).coordinates[0]
+            if projection
+            else reader.read("revenue", cadence=cadence)
+        )
+        assert result.status == ("rejected" if projection else "unavailable")
+        assert result.reason_code == "canonical_financial_resolution_unavailable"
+        assert (reader.provenance_for(last.source_observation_id) is not None) is (
+            cadence is FinancialCadence.QUARTERLY
+        )
+
+
+def stale_reported_selection(
+    database: sqlite3.Connection, cadence: FinancialCadence
+) -> tuple[tuple[ReportedSourceFact, ...], datetime]:
+    """Two live cells retain one reported selection after an explicit rebinding."""
+    from provenance.financial_derivations import (
+        FinancialMetricBindingReview,
+        bind_reviewed_financial_observation,
+    )
+
+    end, label = (
+        ("2025-03-31", "Q1") if cadence is FinancialCadence.QUARTERLY else ("2025-12-31", "FY")
+    )
+    facts = seed_table(
+        database,
+        [
+            ("revenue", "2025-01-01", end, label, "100", "USD"),
+            ("SalesRevenueNet", "2025-01-01", end, label, "120", "USD"),
+        ],
+    )
+    ontology = MetricOntology(database)
+    resolver = CanonicalFactResolutionEngine(database)
+    targets: list[str] = []
+    cutoff = REVIEW_AT
+    for index, (fact, metric) in enumerate(
+        (
+            (facts[0], "reviewed-revenue"),
+            (facts[1], "reviewed-revenue"),
+            (facts[0], "rebound-revenue"),
+        )
+    ):
+        cutoff = REVIEW_AT + timedelta(seconds=index)
+        prior = ontology.binding_as_known(fact.observation.observation_id, cutoff)
+        assert prior is not None
+        target = bind_reviewed_financial_observation(
+            database,
+            FinancialMetricBindingReview(
+                observation_id=fact.observation.observation_id,
+                metric_id=metric,
+                canonical_name="alternative_revenue" if index == 2 else "revenue",
+                definition_text="Synthetic reviewed reported revenue",
+                reviewer_identity="synthetic-reviewer",
+                review_evidence={"fixture": True},
+                expected_prior_binding_revision_id=prior.binding_revision_id,
+                knowledge_cutoff=cutoff,
+                recorded_at=cutoff,
+            ),
+        )
+        if index != 1:
+            resolver.resolve(
+                target,
+                cutoff,
+                ResolutionPolicy(name="fixture", version="1", config={}),
+                recorded_at=cutoff,
+            )
+            targets.append(target)
+    reads = resolver.read_as_known(tuple(targets), cutoff)
+    assert len(reads) == 2 and targets[0] != targets[1]
+    assert all(
+        read.resolution is not None
+        and read.resolution.selected_observation_id == facts[0].observation.observation_id
+        for read in reads
+    )
+    database.commit()
+    return facts, cutoff
+
+
+@pytest.mark.parametrize("projection", [False, True])
+@pytest.mark.parametrize("cadence", [FinancialCadence.QUARTERLY, FinancialCadence.ANNUAL])
+def test_series_reader_rejects_duplicate_stale_reported_selections(
+    database: sqlite3.Connection, projection: bool, cadence: FinancialCadence
+) -> None:
+    facts, cutoff = stale_reported_selection(database, cadence)
+    reader = CanonicalFinancialSeriesReader(database, "SYNTH", cutoff=cutoff)
+    result = (
+        reader.project_coordinates("revenue", cadence=cadence).coordinates[0]
+        if projection
+        else reader.read("revenue", cadence=cadence)
+    )
+    assert result.status == "unavailable"
+    assert result.reason_code == "canonical_financial_provenance_unavailable"
+    assert reader.provenance_for(facts[0].observation.observation_id) is not None
+    assert reader.provenance_for(facts[1].observation.observation_id) is None
 
 
 def _verify_ontology_seals(conn: sqlite3.Connection) -> None:
@@ -899,7 +1163,9 @@ def test_derived_revision_preserves_predecessor_and_retired_operand_fails_closed
     bundle = FactReadModel(database).provenance_bundle(
         original.observation.observation_id, cutoff=later
     )
-    assert not reader.derivation_operands_current(bundle)
+    assert not CanonicalFactResolutionEngine(database).observation_lineage_current(
+        bundle.observation.observation_id, later
+    )
     rejected = CanonicalFactResolutionEngine(database).resolve(
         target,
         later,

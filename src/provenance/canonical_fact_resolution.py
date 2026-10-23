@@ -541,19 +541,24 @@ class CanonicalFactResolutionEngine:
             canonical_metric_cell_ids, cutoff_at, observed_through=observed_through
         )
         for read in reads:
-            if read.unavailable_reason == "canonical_commitment_invalid":
-                raise CanonicalCommitmentIntegrityError("canonical commitment is invalid")
-            if read.failure is not None:
-                failure = read.failure
-                if failure.reason_code == "observation_unavailable_at_cutoff":
-                    raise ObservationUnavailableError(failure.record_id)
-                raise FactAdmissionError(
-                    failure.reason_code,
-                    record_kind=failure.record_kind,
-                    record_id=failure.record_id,
-                    disposition=failure.disposition,
-                )
+            self.validate_as_known_read(read)
         return reads
+
+    @staticmethod
+    def validate_as_known_read(read: CanonicalFactRead) -> None:
+        """Apply strict failure policy to one already materialized ordered outcome."""
+        if read.unavailable_reason == "canonical_commitment_invalid":
+            raise CanonicalCommitmentIntegrityError("canonical commitment is invalid")
+        if read.failure is not None:
+            failure = read.failure
+            if failure.reason_code == "observation_unavailable_at_cutoff":
+                raise ObservationUnavailableError(failure.record_id)
+            raise FactAdmissionError(
+                failure.reason_code,
+                record_kind=failure.record_kind,
+                record_id=failure.record_id,
+                disposition=failure.disposition,
+            )
 
     def read_as_known_outcomes(
         self,

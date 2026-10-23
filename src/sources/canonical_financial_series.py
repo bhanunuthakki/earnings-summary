@@ -12,10 +12,14 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
+from provenance.canonical_fact_resolution import CanonicalFactRead, CanonicalFactResolutionEngine
 from provenance.fact_plane_v2 import FactDimensionV2
-from provenance.fact_read_model import FactReadModel, ProvenanceBundle, ProvenanceBundleRead
-from provenance.metric_ontology import CanonicalMetricDefinitionRevision, MetricOntology
+from provenance.fact_read_model import ProvenanceBundle
+from provenance.metric_ontology import (
+    BindingRevision,
+    CanonicalMetricDefinitionRevision,
+    MetricOntology,
+)
 from provenance.overrides import DEFAULT_USER_ID, FINANCIAL_FACT, chip_override_map, qualify_note
 from provenance.source_fact_publication import publication_verification_scope
 
@@ -306,9 +310,7 @@ class CanonicalFinancialSeriesReader:
         self._cutoff = cutoff.astimezone(UTC)
         self._resolver = CanonicalFactResolutionEngine(conn)
         self._ontology = MetricOntology(conn)
-        self._reader = FactReadModel(conn)
         self._bundles: dict[str, ProvenanceBundle] = {}
-        self._bundle_reads: dict[str, ProvenanceBundleRead] = {}
         self._cache: dict[
             tuple[str, FinancialCadence, SeriesContinuity], CanonicalFinancialSeries
         ] = {}
@@ -369,37 +371,72 @@ class CanonicalFinancialSeriesReader:
         )
         return definition, valid
 
-    def derivation_operands_current(self, bundle: ProvenanceBundle) -> bool:
-        return bundle.derivation is None or self._resolver.observation_lineage_current(
-            bundle.observation.observation_id, self._cutoff
-        )
-
-    def _covered_cumulative_ids(self, observation_ids: tuple[str, ...]) -> set[str]:
-        covered: set[str] = set()
+    def _bound_cells(
+        self,
+        observation_ids: tuple[str, ...],
+        bindings: dict[str, BindingRevision | None],
+    ) -> dict[str, str] | str:
+        cells: dict[str, str] = {}
         for observation_id in observation_ids:
-            binding = self._ontology.binding_as_known(observation_id, self._cutoff)
+            binding = bindings[observation_id]
+            if (
+                binding is None
+                or binding.binding_status != "bound"
+                or binding.canonical_metric_cell_id is None
+            ):
+                return "exact_financial_concept_not_admitted"
+            try:
+                row = self._conn.execute(
+                    "SELECT cell.metric_id,cell.knowledge_at,cell.recorded_at,"
+                    "metric.knowledge_at,metric.recorded_at "
+                    "FROM canonical_metric_cells AS cell "
+                    "JOIN canonical_metrics AS metric ON metric.metric_id=cell.metric_id "
+                    "WHERE cell.canonical_metric_cell_id=?",
+                    (binding.canonical_metric_cell_id,),
+                ).fetchone()
+            except sqlite3.Error:
+                return "canonical_financial_schema_unavailable"
+            try:
+                unavailable = row is None or any(
+                    _clock(row[index]) > self._cutoff for index in range(1, 5)
+                )
+            except (TypeError, ValueError):
+                unavailable = True
+            if unavailable or row is None:
+                return "exact_canonical_metric_binding_unavailable"
+            cells[binding.canonical_metric_cell_id] = str(row[0])
+        return cells
+
+    def _canonical_reads(self, cell_ids: tuple[str, ...]) -> dict[str, CanonicalFactRead]:
+        if not cell_ids:
+            return {}
+        return {
+            read.canonical_metric_cell_id: read
+            for read in self._resolver.read_as_known_outcomes(
+                tuple(dict.fromkeys(cell_ids)), self._cutoff
+            )
+        }
+
+    def _cumulative_coverage(
+        self,
+        bindings: dict[str, BindingRevision | None],
+        reads: dict[str, CanonicalFactRead],
+    ) -> set[str]:
+        covered: set[str] = set()
+        for observation_id, binding in bindings.items():
             if (
                 binding is None
                 or binding.binding_status != "bound"
                 or not binding.canonical_metric_cell_id
             ):
                 continue
-            resolution = self._resolver.as_known(binding.canonical_metric_cell_id, self._cutoff)
-            if (
-                resolution is None
-                or resolution.status != "resolved"
-                or resolution.selected_observation_id != observation_id
-            ):
+            read = reads[binding.canonical_metric_cell_id]
+            self._resolver.validate_as_known_read(read)
+            if read.bundle is None or read.bundle.observation.observation_id != observation_id:
                 continue
-            reads = self._provenance_bundles((observation_id,))
-            bundle = reads[0].bundle
-            if (
-                bundle is None
-                or bundle.derivation is None
-                or not self.derivation_operands_current(bundle)
-            ):
-                continue
-            covered.update(bundle.derivation.input_observation_ids)
+            self._bundles[observation_id] = read.bundle
+            if read.bundle.derivation is not None:
+                covered.update(read.bundle.derivation.input_observation_ids)
         return covered
 
     def _metric_name_matches(self, metric_id: str, metric: str) -> bool:
@@ -408,17 +445,6 @@ class CanonicalFinancialSeriesReader:
             (metric_id,),
         ).fetchone()
         return row is not None and str(row[0]) == metric
-
-    def _provenance_bundles(
-        self, observation_ids: tuple[str, ...]
-    ) -> tuple[ProvenanceBundleRead, ...]:
-        missing = tuple(item for item in observation_ids if item not in self._bundle_reads)
-        if missing:
-            for item in self._reader.provenance_bundles(missing, cutoff=self._cutoff):
-                self._bundle_reads[item.observation_id] = item
-                if item.bundle is not None:
-                    self._bundles[item.observation_id] = item.bundle
-        return tuple(self._bundle_reads[item] for item in observation_ids)
 
     def provenance_for(self, observation_id: str) -> ProvenanceBundle | None:
         """Return evidence already admitted in this reader's caller-owned snapshot."""
@@ -469,6 +495,41 @@ class CanonicalFinancialSeriesReader:
             reason_code=reason,
         )
 
+    def _source_rows(self, metric: str) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            """
+            SELECT observation.observation_id,source.fact_cell_id,
+                   source.reporting_entity_id,source.period_start,source.period_end,
+                   source.fiscal_year,source.fiscal_period,source.currency,source.unit_key,
+                   source.accounting_basis,source.consolidation_scope,
+                   source.knowledge_at,source.recorded_at,
+                   observation.knowledge_at,observation.recorded_at,
+                   COALESCE(document.recorded_at,observation.recorded_at),source.scope_security_id
+            FROM fact_cells_v2 AS source
+            JOIN fact_observations_v2 AS observation
+              ON observation.fact_cell_id=source.fact_cell_id
+            LEFT JOIN evidence_document_versions AS document
+              ON document.document_version_id=observation.document_version_id
+            WHERE (upper(document.ticker)=? OR (
+              observation.observation_kind='derived' AND EXISTS (
+                SELECT 1 FROM fact_cells_v2 input_cell
+                JOIN fact_observations_v2 input_observation ON input_observation.fact_cell_id=input_cell.fact_cell_id
+                JOIN evidence_document_versions input_document ON input_document.document_version_id=input_observation.document_version_id
+                WHERE input_cell.reporting_entity_id=source.reporting_entity_id AND upper(input_document.ticker)=?)))
+              AND ((source.concept_namespace=? AND source.concept_name=?)
+                OR EXISTS (
+                  SELECT 1 FROM fact_cell_canonical_binding_revisions binding
+                  JOIN canonical_metric_cells target
+                    ON target.canonical_metric_cell_id=binding.canonical_metric_cell_id
+                  JOIN canonical_metrics metric ON metric.metric_id=target.metric_id
+                  WHERE binding.source_observation_id=observation.observation_id
+                    AND binding.binding_status='bound' AND metric.canonical_name=?))
+              AND source.period_kind='duration'
+            ORDER BY source.period_end,observation.observation_id
+            """,
+            (self._ticker, self._ticker, FINANCIAL_CONCEPT_NAMESPACE, metric, metric),
+        ).fetchall()
+
     def _project_coordinates_uncached(
         self,
         metric: str,
@@ -477,40 +538,7 @@ class CanonicalFinancialSeriesReader:
         if not metric:
             return self._projection_unavailable(metric, cadence, "empty_exact_financial_metric")
         try:
-            source_rows = self._conn.execute(
-                """
-                SELECT observation.observation_id,source.fact_cell_id,
-                       source.reporting_entity_id,source.scope_security_id,
-                       source.period_start,source.period_end,
-                       source.fiscal_year,source.fiscal_period,source.currency,source.unit_key,
-                       source.accounting_basis,source.consolidation_scope,
-                       source.knowledge_at,source.recorded_at,
-                       observation.knowledge_at,observation.recorded_at,
-                       COALESCE(document.recorded_at,observation.recorded_at),source.scope_security_id
-                FROM fact_cells_v2 AS source
-                JOIN fact_observations_v2 AS observation
-                  ON observation.fact_cell_id=source.fact_cell_id
-                LEFT JOIN evidence_document_versions AS document
-                  ON document.document_version_id=observation.document_version_id
-                WHERE (upper(document.ticker)=? OR (
-                  observation.observation_kind='derived' AND EXISTS (
-                    SELECT 1 FROM fact_cells_v2 input_cell
-                    JOIN fact_observations_v2 input_observation ON input_observation.fact_cell_id=input_cell.fact_cell_id
-                    JOIN evidence_document_versions input_document ON input_document.document_version_id=input_observation.document_version_id
-                    WHERE input_cell.reporting_entity_id=source.reporting_entity_id AND upper(input_document.ticker)=?)))
-                  AND ((source.concept_namespace=? AND source.concept_name=?)
-                    OR EXISTS (
-                      SELECT 1 FROM fact_cell_canonical_binding_revisions binding
-                      JOIN canonical_metric_cells target
-                        ON target.canonical_metric_cell_id=binding.canonical_metric_cell_id
-                      JOIN canonical_metrics metric ON metric.metric_id=target.metric_id
-                      WHERE binding.source_observation_id=observation.observation_id
-                        AND binding.binding_status='bound' AND metric.canonical_name=?))
-                  AND source.period_kind='duration'
-                ORDER BY source.period_end,observation.observation_id
-                """,
-                (self._ticker, self._ticker, FINANCIAL_CONCEPT_NAMESPACE, metric, metric),
-            ).fetchall()
+            source_rows = self._source_rows(metric)
         except sqlite3.Error:
             return self._projection_unavailable(
                 metric, cadence, "canonical_financial_schema_unavailable"
@@ -518,42 +546,86 @@ class CanonicalFinancialSeriesReader:
         relevant: list[tuple[object, ...]] = []
         try:
             for row in source_rows:
-                if not all(_clock(row[index]) <= self._cutoff for index in range(12, 17)):
+                if not all(_clock(row[index]) <= self._cutoff for index in range(11, 16)):
                     continue
-                if _label_matches(cadence, row[7]):
+                if _label_matches(cadence, row[6]):
                     relevant.append(tuple(row))
         except (TypeError, ValueError):
             return self._projection_unavailable(
                 metric, cadence, "canonical_financial_clock_invalid"
             )
+        bindings: dict[str, BindingRevision | None] = {}
+        reads: dict[str, CanonicalFactRead] = {}
         if cadence is FinancialCadence.QUARTERLY:
-            supported = tuple(
+            supported = {
                 str(row[0])
                 for row in relevant
-                if _duration_matches(cadence, _duration_days(row[4], row[5]))
+                if _duration_matches(cadence, _duration_days(row[3], row[4]))
+            }
+            bindings = {
+                str(row[0]): self._ontology.binding_as_known(str(row[0]), self._cutoff)
+                for row in relevant
+                if str(row[0]) in supported
+            }
+            reads = self._canonical_reads(
+                tuple(
+                    binding.canonical_metric_cell_id
+                    for binding in bindings.values()
+                    if binding is not None
+                    and binding.binding_status == "bound"
+                    and binding.canonical_metric_cell_id is not None
+                )
             )
-            covered = self._covered_cumulative_ids(supported)
+            covered = self._cumulative_coverage(bindings, reads)
             relevant = [
                 row
                 for row in relevant
                 if str(row[0]) not in covered
-                or _duration_matches(cadence, _duration_days(row[4], row[5]))
+                or _duration_matches(cadence, _duration_days(row[3], row[4]))
             ]
         grouped: dict[tuple[datetime, int | None, str], list[tuple[object, ...]]] = {}
         try:
             for row in relevant:
                 coordinate = (
-                    _clock(row[5]),
-                    None if row[6] is None else int(str(row[6])),
-                    str(row[7]),
+                    _clock(row[4]),
+                    None if row[5] is None else int(str(row[5])),
+                    str(row[6]),
                 )
                 grouped.setdefault(coordinate, []).append(row)
         except (TypeError, ValueError):
             return self._projection_unavailable(
                 metric, cadence, "canonical_financial_coordinate_invalid"
             )
+        eligible = {
+            coordinate: tuple(str(row[0]) for row in rows)
+            for coordinate, rows in grouped.items()
+            if coordinate[0] <= self._cutoff
+            and coordinate[1] is not None
+            and all(_duration_matches(cadence, _duration_days(row[3], row[4])) for row in rows)
+        }
+        if cadence is not FinancialCadence.QUARTERLY:
+            bindings = {
+                observation_id: self._ontology.binding_as_known(observation_id, self._cutoff)
+                for observation_ids in eligible.values()
+                for observation_id in observation_ids
+            }
+        populations = {
+            coordinate: self._bound_cells(observation_ids, bindings)
+            for coordinate, observation_ids in eligible.items()
+        }
+        if cadence is not FinancialCadence.QUARTERLY:
+            reads = self._canonical_reads(
+                tuple(
+                    cell_id
+                    for cells in populations.values()
+                    if isinstance(cells, dict)
+                    for cell_id in cells
+                )
+            )
         coordinates = tuple(
-            self._project_coordinate(metric, cadence, coordinate, tuple(rows))
+            self._project_coordinate(
+                metric, cadence, coordinate, tuple(rows), populations.get(coordinate, {}), reads
+            )
             for coordinate, rows in sorted(grouped.items(), key=lambda item: item[0][0])
         )
         return CanonicalFinancialCoordinateProjection(
@@ -571,23 +643,25 @@ class CanonicalFinancialSeriesReader:
         cadence: FinancialCadence,
         coordinate: tuple[datetime, int | None, str],
         rows: tuple[tuple[object, ...], ...],
+        cells: dict[str, str] | str,
+        reads: dict[str, CanonicalFactRead],
     ) -> CanonicalFinancialCoordinate:
         candidates = tuple(
             CanonicalFinancialCandidate(
                 observation_id=str(row[0]),
                 fact_cell_id=str(row[1]),
                 reporting_entity_id=str(row[2]),
-                scope_security_id=None if row[3] is None else str(row[3]),
-                period_start=None if row[4] is None else _clock(row[4]),
-                period_end=_clock(row[5]),
-                fiscal_year=None if row[6] is None else int(str(row[6])),
-                fiscal_period=str(row[7]),
-                currency=None if row[8] is None else str(row[8]),
-                unit=str(row[9]),
-                accounting_basis=str(row[10]),
-                consolidation_scope=str(row[11]),
-                duration_days=_duration_days(row[4], row[5]),
-                cadence_supported=_duration_matches(cadence, _duration_days(row[4], row[5])),
+                scope_security_id=None if row[16] is None else str(row[16]),
+                period_start=None if row[3] is None else _clock(row[3]),
+                period_end=_clock(row[4]),
+                fiscal_year=None if row[5] is None else int(str(row[5])),
+                fiscal_period=str(row[6]),
+                currency=None if row[7] is None else str(row[7]),
+                unit=str(row[8]),
+                accounting_basis=str(row[9]),
+                consolidation_scope=str(row[10]),
+                duration_days=_duration_days(row[3], row[4]),
+                cadence_supported=_duration_matches(cadence, _duration_days(row[3], row[4])),
             )
             for row in rows
         )
@@ -611,67 +685,37 @@ class CanonicalFinancialSeriesReader:
         if any(not candidate.cadence_supported for candidate in candidates):
             return failed("rejected", "unsupported_financial_cadence_or_duration")
 
-        cells: dict[str, str] = {}
-        for candidate in candidates:
-            binding = self._ontology.binding_as_known(candidate.observation_id, self._cutoff)
-            if (
-                binding is None
-                or binding.binding_status != "bound"
-                or binding.canonical_metric_cell_id is None
-            ):
-                return failed("rejected", "exact_financial_concept_not_admitted")
-            try:
-                cell_row = self._conn.execute(
-                    "SELECT cell.metric_id,cell.knowledge_at,cell.recorded_at,"
-                    "metric.knowledge_at,metric.recorded_at "
-                    "FROM canonical_metric_cells AS cell "
-                    "JOIN canonical_metrics AS metric ON metric.metric_id=cell.metric_id "
-                    "WHERE cell.canonical_metric_cell_id=?",
-                    (binding.canonical_metric_cell_id,),
-                ).fetchone()
-            except sqlite3.Error:
-                return failed("unavailable", "canonical_financial_schema_unavailable")
-            try:
-                unavailable = cell_row is None or any(
-                    _clock(cell_row[index]) > self._cutoff for index in range(1, 5)
-                )
-            except (TypeError, ValueError):
-                unavailable = True
-            if unavailable or cell_row is None:
-                return failed("unavailable", "exact_canonical_metric_binding_unavailable")
-            cells[binding.canonical_metric_cell_id] = str(cell_row[0])
-
-        selected: list[tuple[str, str, str, str]] = []
+        if isinstance(cells, str):
+            status = (
+                "rejected" if cells == "exact_financial_concept_not_admitted" else "unavailable"
+            )
+            return failed(status, cells)
+        selected: list[tuple[str, str, str, ProvenanceBundle]] = []
         for cell_id, metric_id in cells.items():
-            resolution = self._resolver.as_known(cell_id, self._cutoff)
+            read = reads[cell_id]
+            self._resolver.validate_as_known_read(read)
+            resolution = read.resolution
             if (
                 resolution is None
                 or resolution.status != "resolved"
                 or resolution.selected_observation_id is None
             ):
                 return failed("rejected", "canonical_financial_resolution_unavailable")
+            if read.bundle is None:
+                return failed("unavailable", "canonical_financial_provenance_unavailable")
             selected.append(
-                (
-                    cell_id,
-                    metric_id,
-                    resolution.canonical_resolution_revision_id,
-                    resolution.selected_observation_id,
-                )
+                (cell_id, metric_id, resolution.canonical_resolution_revision_id, read.bundle)
             )
-        selected_ids = tuple(item[3] for item in selected)
-        try:
-            reads = self._provenance_bundles(selected_ids)
-        except (sqlite3.Error, ValueError):
+        self._bundles.update(
+            (bundle.observation.observation_id, bundle) for _, _, _, bundle in selected
+        )
+        if len({bundle.observation.observation_id for _, _, _, bundle in selected}) != len(
+            selected
+        ):
             return failed("unavailable", "canonical_financial_provenance_unavailable")
-        bundles = {item.observation_id: item.bundle for item in reads if item.bundle is not None}
-        if len(bundles) != len(selected_ids):
-            return failed("unavailable", "canonical_financial_provenance_unavailable")
-
         observations: list[CanonicalFinancialObservation] = []
-        for cell_id, metric_id, resolution_id, observation_id in selected:
-            bundle = bundles[observation_id]
-            if not self.derivation_operands_current(bundle):
-                return failed("rejected", "derived_operand_selection_changed")
+        for cell_id, metric_id, resolution_id, bundle in selected:
+            observation_id = bundle.observation.observation_id
             selected_binding = self._ontology.binding_as_known(observation_id, self._cutoff)
             if (
                 selected_binding is None
@@ -767,39 +811,7 @@ class CanonicalFinancialSeriesReader:
         if not metric:
             return self._unavailable(metric, cadence, continuity, "empty_exact_financial_metric")
         try:
-            source_rows = self._conn.execute(
-                """
-                SELECT observation.observation_id,source.fact_cell_id,
-                       source.reporting_entity_id,source.period_start,source.period_end,
-                       source.fiscal_year,source.fiscal_period,source.currency,source.unit_key,
-                       source.accounting_basis,source.consolidation_scope,
-                       source.knowledge_at,source.recorded_at,
-                       observation.knowledge_at,observation.recorded_at,
-                       COALESCE(document.recorded_at,observation.recorded_at),source.scope_security_id
-                FROM fact_cells_v2 AS source
-                JOIN fact_observations_v2 AS observation
-                  ON observation.fact_cell_id=source.fact_cell_id
-                LEFT JOIN evidence_document_versions AS document
-                  ON document.document_version_id=observation.document_version_id
-                WHERE (upper(document.ticker)=? OR (
-                  observation.observation_kind='derived' AND EXISTS (
-                    SELECT 1 FROM fact_cells_v2 input_cell
-                    JOIN fact_observations_v2 input_observation ON input_observation.fact_cell_id=input_cell.fact_cell_id
-                    JOIN evidence_document_versions input_document ON input_document.document_version_id=input_observation.document_version_id
-                    WHERE input_cell.reporting_entity_id=source.reporting_entity_id AND upper(input_document.ticker)=?)))
-                  AND ((source.concept_namespace=? AND source.concept_name=?)
-                    OR EXISTS (
-                      SELECT 1 FROM fact_cell_canonical_binding_revisions binding
-                      JOIN canonical_metric_cells target
-                        ON target.canonical_metric_cell_id=binding.canonical_metric_cell_id
-                      JOIN canonical_metrics metric ON metric.metric_id=target.metric_id
-                      WHERE binding.source_observation_id=observation.observation_id
-                        AND binding.binding_status='bound' AND metric.canonical_name=?))
-                  AND source.period_kind='duration'
-                ORDER BY source.period_end,observation.observation_id
-                """,
-                (self._ticker, self._ticker, FINANCIAL_CONCEPT_NAMESPACE, metric, metric),
-            ).fetchall()
+            source_rows = self._source_rows(metric)
         except sqlite3.Error:
             return self._unavailable(
                 metric, cadence, continuity, "canonical_financial_schema_unavailable"
@@ -815,13 +827,29 @@ class CanonicalFinancialSeriesReader:
             return self._unavailable(
                 metric, cadence, continuity, "canonical_financial_clock_invalid"
             )
+        bindings: dict[str, BindingRevision | None] = {}
+        reads: dict[str, CanonicalFactRead] = {}
         if cadence is FinancialCadence.QUARTERLY:
-            supported = tuple(
+            supported = {
                 str(row[0])
                 for row in relevant
                 if _duration_matches(cadence, _duration_days(row[3], row[4]))
+            }
+            bindings = {
+                str(row[0]): self._ontology.binding_as_known(str(row[0]), self._cutoff)
+                for row in relevant
+                if str(row[0]) in supported
+            }
+            reads = self._canonical_reads(
+                tuple(
+                    binding.canonical_metric_cell_id
+                    for binding in bindings.values()
+                    if binding is not None
+                    and binding.binding_status == "bound"
+                    and binding.canonical_metric_cell_id is not None
+                )
             )
-            covered = self._covered_cumulative_ids(supported)
+            covered = self._cumulative_coverage(bindings, reads)
             relevant = [
                 row
                 for row in relevant
@@ -894,59 +922,21 @@ class CanonicalFinancialSeriesReader:
             )
         observation_ids = tuple(str(row[0]) for row in valid)
 
-        cells: dict[str, str] = {}
-        for observation_id in observation_ids:
-            binding = self._ontology.binding_as_known(observation_id, self._cutoff)
-            if (
-                binding is None
-                or binding.binding_status != "bound"
-                or binding.canonical_metric_cell_id is None
-            ):
-                return self._unavailable(
-                    metric,
-                    cadence,
-                    continuity,
-                    "exact_financial_concept_not_admitted",
-                    candidates=candidates,
-                )
-            try:
-                cell_row = self._conn.execute(
-                    """
-                    SELECT cell.metric_id,cell.knowledge_at,cell.recorded_at,
-                           metric.knowledge_at,metric.recorded_at
-                    FROM canonical_metric_cells AS cell
-                    JOIN canonical_metrics AS metric ON metric.metric_id=cell.metric_id
-                    WHERE cell.canonical_metric_cell_id=?
-                    """,
-                    (binding.canonical_metric_cell_id,),
-                ).fetchone()
-            except sqlite3.Error:
-                return self._unavailable(
-                    metric,
-                    cadence,
-                    continuity,
-                    "canonical_financial_schema_unavailable",
-                    candidates=candidates,
-                )
-            try:
-                unavailable = cell_row is None or any(
-                    _clock(cell_row[index]) > self._cutoff for index in range(1, 5)
-                )
-            except (TypeError, ValueError):
-                unavailable = True
-            if unavailable or cell_row is None:
-                return self._unavailable(
-                    metric,
-                    cadence,
-                    continuity,
-                    "exact_canonical_metric_binding_unavailable",
-                    candidates=candidates,
-                )
-            cells[binding.canonical_metric_cell_id] = str(cell_row[0])
-
-        selected: list[tuple[str, str, str, str]] = []
+        if cadence is not FinancialCadence.QUARTERLY:
+            bindings = {
+                observation_id: self._ontology.binding_as_known(observation_id, self._cutoff)
+                for observation_id in observation_ids
+            }
+        cells = self._bound_cells(observation_ids, bindings)
+        if isinstance(cells, str):
+            return self._unavailable(metric, cadence, continuity, cells, candidates=candidates)
+        if cadence is not FinancialCadence.QUARTERLY:
+            reads = self._canonical_reads(tuple(cells))
+        selected: list[tuple[str, str, str, ProvenanceBundle]] = []
         for cell_id, metric_id in cells.items():
-            resolution = self._resolver.as_known(cell_id, self._cutoff)
+            read = reads[cell_id]
+            self._resolver.validate_as_known_read(read)
+            resolution = read.resolution
             if (
                 resolution is None
                 or resolution.status != "resolved"
@@ -959,49 +949,34 @@ class CanonicalFinancialSeriesReader:
                     "canonical_financial_resolution_unavailable",
                     candidates=candidates,
                 )
-            selected.append(
-                (
-                    cell_id,
-                    metric_id,
-                    resolution.canonical_resolution_revision_id,
-                    resolution.selected_observation_id,
-                )
-            )
-        selected_ids = tuple(item[3] for item in selected)
-        try:
-            reads = self._provenance_bundles(selected_ids)
-        except (sqlite3.Error, ValueError):
-            return self._unavailable(
-                metric,
-                cadence,
-                continuity,
-                "canonical_financial_provenance_unavailable",
-                candidates=candidates,
-            )
-        bundles = {item.observation_id: item.bundle for item in reads if item.bundle is not None}
-        if len(bundles) != len(selected_ids):
-            return self._unavailable(
-                metric,
-                cadence,
-                continuity,
-                "canonical_financial_provenance_unavailable",
-                candidates=candidates,
-            )
-
-        observations: list[CanonicalFinancialObservation] = []
-        admitted_definition_ids: set[str] = set()
-        for (cell_id, metric_id, resolution_id, _), observation_id in zip(
-            selected, selected_ids, strict=True
-        ):
-            bundle = bundles[observation_id]
-            if not self.derivation_operands_current(bundle):
+            if read.bundle is None:
                 return self._unavailable(
                     metric,
                     cadence,
                     continuity,
-                    "derived_operand_selection_changed",
+                    "canonical_financial_provenance_unavailable",
                     candidates=candidates,
                 )
+            selected.append(
+                (cell_id, metric_id, resolution.canonical_resolution_revision_id, read.bundle)
+            )
+        self._bundles.update(
+            (bundle.observation.observation_id, bundle) for _, _, _, bundle in selected
+        )
+        if len({bundle.observation.observation_id for _, _, _, bundle in selected}) != len(
+            selected
+        ):
+            return self._unavailable(
+                metric,
+                cadence,
+                continuity,
+                "canonical_financial_provenance_unavailable",
+                candidates=candidates,
+            )
+        observations: list[CanonicalFinancialObservation] = []
+        admitted_definition_ids: set[str] = set()
+        for cell_id, metric_id, resolution_id, bundle in selected:
+            observation_id = bundle.observation.observation_id
             selected_binding = self._ontology.binding_as_known(observation_id, self._cutoff)
             if (
                 selected_binding is None

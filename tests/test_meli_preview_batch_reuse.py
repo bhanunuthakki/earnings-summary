@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import sqlite3
 from collections import Counter
+from collections.abc import Callable
 from datetime import datetime
 
 import pytest
 
 from dcf import input_evidence, meli_inputs
 from dcf.meli_input_preview import preview_meli_inputs
-from provenance import fact_read_model
+from provenance import source_fact_publication
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.fact_read_model import (
     FactAdmissionError,
@@ -24,7 +25,9 @@ from tests.test_meli_input_evidence import source_context as source_context
 
 
 def _count_verifications(monkeypatch: pytest.MonkeyPatch) -> Counter[str]:
-    original = fact_read_model.verify_source_fact_publication
+    original: Callable[..., VerifiedSourceFactPublication] = getattr(
+        source_fact_publication, "_verify_source_fact_publication"
+    )
     calls: Counter[str] = Counter()
 
     def counted(
@@ -42,7 +45,7 @@ def _count_verifications(monkeypatch: pytest.MonkeyPatch) -> Counter[str]:
             observed_through=observed_through,
         )
 
-    monkeypatch.setattr(fact_read_model, "verify_source_fact_publication", counted)
+    monkeypatch.setattr(source_fact_publication, "_verify_source_fact_publication", counted)
     return calls
 
 
@@ -52,7 +55,7 @@ def test_preview_batches_native_publication_checks_per_independent_pass(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Source coverage is mocked by this fixture; this counter measures only
-    # native fact-reader publication checks, not complete snapshot verification.
+    # full recursive publication verification, not cache lookups or snapshot coverage.
     conn, request = shared_revenue_inputs
     calls = _count_verifications(monkeypatch)
     conn.execute("PRAGMA query_only=ON")
@@ -79,7 +82,7 @@ def test_model_input_verifier_batches_the_exact_required_observations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Source coverage is mocked by this fixture; this counter measures only
-    # native fact-reader publication checks, not complete snapshot verification.
+    # full recursive publication verification, not cache lookups or snapshot coverage.
     conn, request = shared_revenue_inputs
     calls = _count_verifications(monkeypatch)
     receipt = input_evidence.verify_model_inputs(
