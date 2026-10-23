@@ -3,13 +3,25 @@
   "review_kind": "ad_hoc_independent",
   "reviewer_model": "gpt-6.1-sol",
   "reviewer_task": "/root/bulk_stage_judge",
-  "base_commit": "65bda94ddb4be092a9c2122ae0d489cf9b66d2c5",
+  "base_commit": {
+    "subject_commit": "65bda94ddb4be092a9c2122ae0d489cf9b66d2c5"
+  },
   "artifacts": {
-    "execution/fmp_backpop.py": "9c84f50fd0ea38ab04c56b3dc434e340e50535f6623c0e4d17f76676525b0f45",
-    "execution/save_fmp_data.py": "d686d0a85f48396baf50b1cbd299a2394ab23a08c01869afee44ce4e9ee1933e",
-    "execution/extract_facts.py": "d0e11948743882193c8aa477011d2d4271589f72b8e88fa7167e98a94e2ee823",
-    "tests/test_fmp_backpop.py": "84991e76b8b09c458d29960d602d577066a57969400b3c5aab679e95c0420969",
-    "tests/test_fmp_bulk_receipts.py": "2ec1413f28d96a0638bf62cdc4deee619df938d459ce8aa6f798cf2008f52327"
+    "execution/fmp_backpop.py": {
+      "sha256": "9c84f50fd0ea38ab04c56b3dc434e340e50535f6623c0e4d17f76676525b0f45"
+    },
+    "execution/save_fmp_data.py": {
+      "sha256": "d686d0a85f48396baf50b1cbd299a2394ab23a08c01869afee44ce4e9ee1933e"
+    },
+    "execution/extract_facts.py": {
+      "sha256": "d0e11948743882193c8aa477011d2d4271589f72b8e88fa7167e98a94e2ee823"
+    },
+    "tests/test_fmp_backpop.py": {
+      "sha256": "84991e76b8b09c458d29960d602d577066a57969400b3c5aab679e95c0420969"
+    },
+    "tests/test_fmp_bulk_receipts.py": {
+      "sha256": "2ec1413f28d96a0638bf62cdc4deee619df938d459ce8aa6f798cf2008f52327"
+    }
   },
   "attempts": [
     {
@@ -50,5 +62,6 @@
     "architecture baseline refresh and root integration checks pending",
     "native qualification, commit, merge, deployment and corpus acceptance pending"
   ],
-  "calibrated_governance_receipt": false
+  "calibrated_governance_receipt": false,
+  "publication_digest_format": "Public digest values use named sha256 or subject_commit members. Original review bytes remain retained in task evidence; this is a display-only transformation."
 }

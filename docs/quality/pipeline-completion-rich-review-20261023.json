@@ -4,16 +4,34 @@
   "review_kind": "ad_hoc_independent_code_review_not_calibrated_certificate",
   "reviewer_model": "GPT-6.1-sol",
   "freeze_path": ".tmp/pipeline-completion/rich-range-saturation-freeze.json",
-  "freeze_sha256": "a83352549339c8a0d4b414657884dfe03db37544f299573be1649d7780c23c0d",
+  "freeze_sha256": {
+    "sha256": "a83352549339c8a0d4b414657884dfe03db37544f299573be1649d7780c23c0d"
+  },
   "artifact_sha256": {
-    "src/compute/kpi_extract_summaries.py": "644785f67ea3a54dc7fa8b431485d71057b2083c05c5f575049f462826151594",
-    "src/provenance/ir_reported_facts.py": "7aaa40a49e5b70a1895f337b013ef8ef5a8bf003b9d174d4738579d0cfabac5c",
-    "src/compute/ir_supplement_capture.py": "dd0cc14a51c622b6e9b50b7cc0fe0b72a3dd6176ba5bb9a0d3bdb09613b7208f",
-    "tests/test_ir_source_entrypoint.py": "eb9f738a4c5c1f022ba1e5f6fc5635628ce3a6bcc2fe3cd1dfc4af648ea509b7",
-    "tests/test_ir_reported_facts.py": "71316b68e27b4bb7af64605bb8891420c3a826804deb2c64a0e6271a513c0dff",
-    "tests/test_ir_source_review_wire.py": "6999716de4b2ba7f8525c17261a51e25886f337deee84f436ebd53087faca301",
-    "tests/test_ir_supplement_continuation.py": "4cb4359c7fc27b973a20ca97754ccc68414d4ddd32dc0b62da8049d57be2cc98",
-    "tests/test_kpi_capture_enumerate.py": "745e68b9b9d6d331dfbf4e73583d00aa3c9d703f9d56b7a4645571417b059cfa"
+    "src/compute/kpi_extract_summaries.py": {
+      "sha256": "644785f67ea3a54dc7fa8b431485d71057b2083c05c5f575049f462826151594"
+    },
+    "src/provenance/ir_reported_facts.py": {
+      "sha256": "7aaa40a49e5b70a1895f337b013ef8ef5a8bf003b9d174d4738579d0cfabac5c"
+    },
+    "src/compute/ir_supplement_capture.py": {
+      "sha256": "dd0cc14a51c622b6e9b50b7cc0fe0b72a3dd6176ba5bb9a0d3bdb09613b7208f"
+    },
+    "tests/test_ir_source_entrypoint.py": {
+      "sha256": "eb9f738a4c5c1f022ba1e5f6fc5635628ce3a6bcc2fe3cd1dfc4af648ea509b7"
+    },
+    "tests/test_ir_reported_facts.py": {
+      "sha256": "71316b68e27b4bb7af64605bb8891420c3a826804deb2c64a0e6271a513c0dff"
+    },
+    "tests/test_ir_source_review_wire.py": {
+      "sha256": "6999716de4b2ba7f8525c17261a51e25886f337deee84f436ebd53087faca301"
+    },
+    "tests/test_ir_supplement_continuation.py": {
+      "sha256": "4cb4359c7fc27b973a20ca97754ccc68414d4ddd32dc0b62da8049d57be2cc98"
+    },
+    "tests/test_kpi_capture_enumerate.py": {
+      "sha256": "745e68b9b9d6d331dfbf4e73583d00aa3c9d703f9d56b7a4645571417b059cfa"
+    }
   },
   "current_sha256_matches_frozen_reviewed_snapshot": {
     "src/compute/kpi_extract_summaries.py": true,
@@ -26,9 +44,15 @@
     "tests/test_kpi_capture_enumerate.py": true
   },
   "prior_review_receipts_unchanged": {
-    ".tmp/pipeline-completion/rich-source-review.json": "ed07f3b3795dfae37e2c1495d0f6d2dd554868ab64afbada7482b041c90f58e9",
-    ".tmp/pipeline-completion/rich-source-review-attempt-2.json": "ad5cc385fcb1b5296b22ea3a5acd00d3c03540bdbcaefb694aa6d1a0d408640e",
-    ".tmp/pipeline-completion/rich-source-review-attempt-3.json": "6d58bc1796115993a11acb10ef3ead278094799a48121de2fa68411364b77fe0"
+    ".tmp/pipeline-completion/rich-source-review.json": {
+      "sha256": "ed07f3b3795dfae37e2c1495d0f6d2dd554868ab64afbada7482b041c90f58e9"
+    },
+    ".tmp/pipeline-completion/rich-source-review-attempt-2.json": {
+      "sha256": "ad5cc385fcb1b5296b22ea3a5acd00d3c03540bdbcaefb694aa6d1a0d408640e"
+    },
+    ".tmp/pipeline-completion/rich-source-review-attempt-3.json": {
+      "sha256": "6d58bc1796115993a11acb10ef3ead278094799a48121de2fa68411364b77fe0"
+    }
   },
   "verdict": "HOLD",
   "verdict_reason": "Frozen code review passes. Final architecture remeasurement/baseline and complete applicable project gate are pending, so delivery acceptance is not established.",
@@ -162,5 +186,6 @@
     "No full repository audit or numerical architecture measurement run.",
     "Manual field witnesses require human semantic interpretation.",
     "Receipt binds exact frozen hashes. Further code changes need a new binding; final passing gate evidence can be attached in a separate delivery receipt without rewriting historical reviews."
-  ]
+  ],
+  "publication_digest_format": "Public digest values use named sha256 or subject_commit members. Original review bytes remain retained in task evidence; this is a display-only transformation."
 }

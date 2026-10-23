@@ -1,9 +1,15 @@
 {
   "scope": "final_bulk_pdf_rich_source_announcement_and_transcript_capability_growth",
   "status": "independently_reviewed_deliberate_baseline_refresh_final_gate_pending",
-  "baseline_before_sha256": "6de1798a9ea20b8fd4bfc5210b736e2561d77a153739f9a746c73526b48ff7f6",
-  "baseline_candidate_sha256": "407606b73b752eb16ab95d293b09a5b8c48cb552c89817b309105c0e56635634",
-  "source_sha256": "1844c4e7d667c7dbb88c8d62bc3515fc5f4f433e8e00a40e8ed06d3758cc7cf1",
+  "baseline_before_sha256": {
+    "sha256": "6de1798a9ea20b8fd4bfc5210b736e2561d77a153739f9a746c73526b48ff7f6"
+  },
+  "baseline_candidate_sha256": {
+    "sha256": "407606b73b752eb16ab95d293b09a5b8c48cb552c89817b309105c0e56635634"
+  },
+  "source_sha256": {
+    "sha256": "1844c4e7d667c7dbb88c8d62bc3515fc5f4f433e8e00a40e8ed06d3758cc7cf1"
+  },
   "scanner_changed": false,
   "duplicate_baseline_changed": false,
   "metrics": {
@@ -38,9 +44,15 @@
     "Model fidelity/recall and production deployment are separate evidence."
   ],
   "shared_interface_observation": {
-    "other_branch_head": "c978523d84a4efea07858e7029307dd588d2a841",
-    "extract_facts_git_blob": "c2162ac4e251876b4a46da3335e09e520f4e6ed7",
-    "fmp_batch_git_blob": "832c9044bdc928f3777534952a7067e365fe3e32",
+    "other_branch_head": {
+      "subject_commit": "c978523d84a4efea07858e7029307dd588d2a841"
+    },
+    "extract_facts_git_blob": {
+      "subject_commit": "c2162ac4e251876b4a46da3335e09e520f4e6ed7"
+    },
+    "fmp_batch_git_blob": {
+      "subject_commit": "832c9044bdc928f3777534952a7067e365fe3e32"
+    },
     "merged_into_main": false,
     "other_dirty_code_copied": false,
     "required_cli_interface": [
@@ -50,7 +62,9 @@
     ]
   },
   "review_score": 96,
-  "review_addendum_sha256": "3bce757baaaf548877d01a9650d6fb64af6c8a0b941873fc885a7069f7081e50",
+  "review_addendum_sha256": {
+    "sha256": "3bce757baaaf548877d01a9650d6fb64af6c8a0b941873fc885a7069f7081e50"
+  },
   "duplicate_comparison": {
     "status": "PASS",
     "scanner_changed": false,
@@ -58,5 +72,6 @@
     "regressions": [],
     "exact_duplicated_loc": 158,
     "near_miss_duplicated_loc": 9754
-  }
+  },
+  "publication_digest_format": "Public digest values use named sha256 or subject_commit members. Original review bytes remain retained in task evidence; this is a display-only transformation."
 }

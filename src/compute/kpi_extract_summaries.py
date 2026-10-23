@@ -1972,6 +1972,7 @@ def retain_and_publish_reviewed_ir_source(
         )
         for exchange in exchanges
     )
+    retained_exchanges = {response.llm_call_id: response for response in responses}
     processed: list[tuple[SupplementExchange, list[dict[str, object]]]] = []
     for exchange in exchanges:
         parsed: object = parse_json_payload(exchange.raw_response, expect="array")
@@ -2000,6 +2001,7 @@ def retain_and_publish_reviewed_ir_source(
             IrRawRow(
                 page_number=page,
                 response_sha256=exchange.response_sha256,
+                exchange_sha256=retained_exchanges[exchange.llm_call_id].exchange_sha256,
                 response_row_ordinal=ordinal,
                 raw_row=original[ordinal],
             )
@@ -2012,7 +2014,7 @@ def retain_and_publish_reviewed_ir_source(
             document_version_id=document_version_id,
             source_sha256=source_sha256,
             extractor_name="ir-supplement-native-continuation",
-            extractor_code_version="v2",
+            extractor_code_version="v3-exchange-identity",
             extractor_config_sha256=extractor_config_sha256,
             extraction_started_at=extraction_started_at,
             extraction_completed_at=completed_at,
@@ -2072,7 +2074,7 @@ def retain_and_publish_reviewed_ir_source(
             scope_security_id=subject.security_id,
             concept_namespace="issuer-ir-pdf-source:" + str(issuer_row[0]),
             extractor_name="ir-supplement-native-continuation",
-            extractor_code_version="v2",
+            extractor_code_version="v3-exchange-identity",
             extractor_config_sha256=extractor_config_sha256,
             candidate_population_sha256=population.candidate_population_sha256,
             review_node_id=review_node_id,

@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "65bda94ddb4be092a9c2122ae0d489cf9b66d2c5",
+  "scoped_commit": "cb2ee717047bba926beb36b819f29d79501fb3f8",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "c718ffa4c836fb7004e49fa8630334909216293d0147950eea853836fc04009f",
+  "source_sha256": "3ae500efec49689cd626b4dab86a7a62ab67f52e6b5c780b86ff54c6d85b19e6",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1474,
-    "total_noncomment_loc": 566282,
+    "total_noncomment_loc": 566310,
     "modules_over_1000_loc": 109,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
@@ -6134,9 +6134,9 @@
         "path": "execution/save_fmp_data.py",
         "module": "execution.save_fmp_data",
         "lines": {
-          "physical": 2094,
-          "nonblank": 1912,
-          "noncomment": 1749
+          "physical": 2097,
+          "nonblank": 1915,
+          "noncomment": 1752
         },
         "internal_fan_out": 13,
         "responsibilities": [
@@ -8451,9 +8451,9 @@
         "path": "src/compute/kpi_extract_summaries.py",
         "module": "compute.kpi_extract_summaries",
         "lines": {
-          "physical": 2410,
-          "nonblank": 2248,
-          "noncomment": 2144
+          "physical": 2412,
+          "nonblank": 2250,
+          "noncomment": 2146
         },
         "internal_fan_out": 33,
         "responsibilities": [
@@ -14085,9 +14085,9 @@
         "path": "src/pipeline/fmp_payload_validation.py",
         "module": "pipeline.fmp_payload_validation",
         "lines": {
-          "physical": 252,
-          "nonblank": 209,
-          "noncomment": 209
+          "physical": 257,
+          "nonblank": 213,
+          "noncomment": 213
         },
         "internal_fan_out": 1,
         "responsibilities": [
@@ -16475,11 +16475,11 @@
         "path": "src/provenance/ir_reported_facts.py",
         "module": "provenance.ir_reported_facts",
         "lines": {
-          "physical": 1125,
-          "nonblank": 1045,
-          "noncomment": 1045
+          "physical": 1141,
+          "nonblank": 1064,
+          "noncomment": 1064
         },
-        "internal_fan_out": 10,
+        "internal_fan_out": 11,
         "responsibilities": [
           "database",
           "network"

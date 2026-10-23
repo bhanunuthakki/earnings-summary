@@ -2,7 +2,7 @@
 
 Owner request: complete coverage and pipeline work, use Chisle and Sol workers,
 and obtain a fresh independent GPT-6.1 score above 90/100 after each major step.
-Status: implementation in progress; live population and release are not yet complete.
+Status: foundation release in validation; live population and the full roadmap remain open.
 Baseline: main 65bda94ddb4be092a9c2122ae0d489cf9b66d2c5.
 
 ## Scope and authority
@@ -141,7 +141,9 @@ when installed tools suffice. Do not add a second tracking or audit system.
 - Transcript routing: independent review 94/100; 69 focused tests plus 10 final edge cases passed. Native integration found one platform-specific path assertion. Its portable exact-path correction passed the fresh 151-case native integration run and independent review at 96/100.
 - Integrated native v2 qualification: 518 distinct cases passed with zero failures or skips across three serial runs: 151 integration, 327 continuation and 40 FMP. The complete source manifest matched before and after each run. This proof excludes the later inventory and CLI import changes. The immutable aggregate SHA-256 is `4c3f9b895a1787aeb4bd117afc8a3af3814893a3375f4be25360d44bf7b77db4`. It is deterministic pipeline evidence, not actual-model recall evidence.
 - Final local changed-test run: 180 passed. The deliberate architecture baseline refresh adds eight noncomment lines to the independently reviewed candidate; scanner and duplicate thresholds are unchanged. See `docs/quality/pipeline-completion-final-delta-review-20261023.json`.
-- Blind real-PDF corpus: 44 expected facts (23 critical, 21 optional), plus a negative announcement case, independently reviewed at 96/100. The isolated nine-page pilot is prepared with a 20-request and 900-second ceiling. It made zero model calls and published zero financial facts. Actual extraction and full-source extra-output adjudication remain pending because ordinary quota is exhausted and the approved runtime wrapper configuration is unavailable. No paid fallback was added.
+- Blind real-PDF corpus: 44 expected facts (23 critical, 21 optional), plus a negative announcement case, independently reviewed at 96/100. The isolated nine-page pilot is prepared with a 20-request and 900-second ceiling. It made zero model calls and published zero financial facts. At preparation, quota was exhausted and the approved runtime wrapper configuration was unavailable. Actual extraction and full-source extra-output adjudication remain pending. No paid fallback was added.
+- Final release corrections: integrated review found a repeated-response collision at 88/100. The fix binds each response and candidate to the actual governed call, prompt, body and producer. It passed 91 affected tests and independent review at 96/100. The same review accepted the optional `stock-peers/peers` empty-result rule; empty financial statements still fail the unchanged pre-write contract. All 40 FMP tests passed with existing expectations unchanged. Fresh native v4 qualification passed 274 affected cases without failures or skips. These component runs are separate evidence and are not combined into a single full-project test claim.
+- Release governance: preserve historical selector captures, lower suppression ceilings to observed counts, and refresh exact reachability edge records. Public review digests use named hash fields and nine exact existing-filter paths; other fields and files remain scanned. The real detector tests retain adjacent-secret and unrelated-path rejection. Final CI remains required before merge.
 - Stages 3–6: not completed.
 - Main includes PR1717–1721; deployed identity must be rechecked because another
   release owner is active. Earlier release697 and MELI12645 repair remain

@@ -210,6 +210,15 @@ def stage(
     ]
     raw_response = json.dumps(raw_rows)
     response_sha = sha(raw_response)
+    exchange = IrRawExchange(
+        raw_response=raw_response,
+        response_sha256=response_sha,
+        prompt_sha256=sha("prompt"),
+        model="fixture",
+        provider="fixture",
+        transport="fixture",
+        llm_call_id=llm_call_id,
+    )
     retention = IrCandidateRetentionRequest(
         document_version_id=document_version_id,
         source_sha256=source_sha256,
@@ -218,21 +227,12 @@ def stage(
         extractor_config_sha256=CONFIG_SHA,
         extraction_started_at=STAMP,
         extraction_completed_at=completed_at,
-        responses=(
-            IrRawExchange(
-                raw_response=raw_response,
-                response_sha256=response_sha,
-                prompt_sha256=sha("prompt"),
-                model="fixture",
-                provider="fixture",
-                transport="fixture",
-                llm_call_id=llm_call_id,
-            ),
-        ),
+        responses=(exchange,),
         rows=tuple(
             IrRawRow(
                 page_number=1,
                 response_sha256=response_sha,
+                exchange_sha256=exchange.exchange_sha256,
                 response_row_ordinal=index,
                 raw_row=row,
             )

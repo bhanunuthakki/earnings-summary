@@ -9,10 +9,18 @@
     "tests/test_split_root_legacy_adapters.py"
   ],
   "sha256_manifest": {
-    "execution/scan_ir_transcripts.py": "4d88e4e1751969442804ee4dba203c0da1d096ecf3179e8e96ae875af702b4fe",
-    "execution/ingest_transcripts_state.py": "ccbc1369fcc549753f7517d6a3cf8c5d3fb52ab88e172344105106fdcb494f5f",
-    "tests/test_scan_ir_transcripts.py": "602724be930264af7c9d86fc7f50be0774640b950bdf1e22dc3b132ac75028a4",
-    "tests/test_split_root_legacy_adapters.py": "28da5eaac0c5f531055c1b0a7ffe1038814a3d692674991c396fb264126fe523"
+    "execution/scan_ir_transcripts.py": {
+      "sha256": "4d88e4e1751969442804ee4dba203c0da1d096ecf3179e8e96ae875af702b4fe"
+    },
+    "execution/ingest_transcripts_state.py": {
+      "sha256": "ccbc1369fcc549753f7517d6a3cf8c5d3fb52ab88e172344105106fdcb494f5f"
+    },
+    "tests/test_scan_ir_transcripts.py": {
+      "sha256": "602724be930264af7c9d86fc7f50be0774640b950bdf1e22dc3b132ac75028a4"
+    },
+    "tests/test_split_root_legacy_adapters.py": {
+      "sha256": "28da5eaac0c5f531055c1b0a7ffe1038814a3d692674991c396fb264126fe523"
+    }
   },
   "verdict": "advisory_pass",
   "score": 94,
@@ -66,5 +74,6 @@
     "Existing ingestion open_db uses the shared WRITER connection policy, which can change WAL metadata or sidecars. The root confirmed that zero SQLite metadata mutation is outside the requested dry-run contract; no downloads, new document/raw capture or financial ingestion is the reviewed contract.",
     "No live host, production database or network operations were performed. Live behavior remains unverified."
   ],
-  "acceptance_boundary": "No actionable regression found in reviewed changes. Root must resolve validation and authorize any operational use; this advisory receipt grants no mutation or publication authority."
+  "acceptance_boundary": "No actionable regression found in reviewed changes. Root must resolve validation and authorize any operational use; this advisory receipt grants no mutation or publication authority.",
+  "publication_digest_format": "Public digest values use named sha256 or subject_commit members. Original review bytes remain retained in task evidence; this is a display-only transformation."
 }

@@ -43,16 +43,10 @@ from provenance.source_fact_repository import (
     SourceFactRepository,
 )
 from provenance.source_fact_stream import publication_event_for_publication
+from runtime.deterministic import canonical_json as _json
+from runtime.deterministic import content_sha256 as _sha
 
 _RECIPE = "ir-reported-facts.v1"
-
-
-def _json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
-def _sha(value: object) -> str:
-    return hashlib.sha256(_json(value).encode("utf-8")).hexdigest()
 
 
 def _time(value: object) -> datetime:
@@ -204,6 +198,20 @@ class IrRawExchange(BaseModel):
     transport: str = Field(min_length=1)
     llm_call_id: int = Field(gt=0)
 
+    @property
+    def exchange_sha256(self) -> str:
+        """Bind a governed call, not merely its potentially repeated response body."""
+        return _sha(
+            [
+                self.llm_call_id,
+                self.prompt_sha256,
+                self.response_sha256,
+                self.model,
+                self.provider,
+                self.transport,
+            ]
+        )
+
     @model_validator(mode="after")
     def _exact_response(self) -> Self:
         if hashlib.sha256(self.raw_response.encode()).hexdigest() != self.response_sha256:
@@ -218,6 +226,7 @@ class IrRawRow(BaseModel):
 
     page_number: int = Field(gt=0)
     response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    exchange_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     response_row_ordinal: int = Field(ge=0)
     raw_row: dict[str, object]
 
@@ -245,7 +254,7 @@ class IrCandidateRetentionRequest(BaseModel):
         if self.extraction_completed_at < self.extraction_started_at:
             raise ValueError("IR extraction completion precedes start")
         keys = [
-            (row.page_number, row.response_sha256, row.response_row_ordinal) for row in self.rows
+            (row.page_number, row.exchange_sha256, row.response_row_ordinal) for row in self.rows
         ]
         if len(keys) != len(set(keys)):
             raise ValueError("IR source row coordinates repeat")
@@ -376,6 +385,7 @@ def _retained_graph(
 ) -> tuple[str, str, tuple[tuple[str, str], ...]]:
     responses = tuple(
         (
+            response.exchange_sha256,
             response.response_sha256,
             response.model,
             response.provider,
@@ -399,12 +409,12 @@ def _retained_graph(
     nodes = tuple(
         (
             "ir-pdf-candidate:"
-            + _sha([run_id, row.page_number, row.response_sha256, row.response_row_ordinal]),
+            + _sha([run_id, row.page_number, row.exchange_sha256, row.response_row_ordinal]),
             _json(
                 {
-                    "schema_version": "ir-pdf-unreviewed-candidate.v1",
+                    "schema_version": "ir-pdf-unreviewed-candidate.v2",
                     "row": row.model_dump(mode="json"),
-                    "response_node_id": "ir-pdf-response:" + _sha([run_id, row.response_sha256]),
+                    "response_node_id": "ir-pdf-response:" + _sha([run_id, row.exchange_sha256]),
                     "recurrence": "unknown",
                     "promotion_status": "pending_review",
                 }
@@ -430,13 +440,15 @@ def retain_ir_pdf_candidates(
     if hashlib.sha256(raw_pdf_bytes).hexdigest() != request.source_sha256:
         raise ValueError("IR PDF raw source hash changed")
     pages = (page_projection or project_pdf_page_texts)(raw_pdf_bytes)
-    responses = {item.response_sha256: item for item in request.responses}
+    responses = {item.exchange_sha256: item for item in request.responses}
     if len(responses) != len(request.responses):
         raise ValueError("IR governed responses repeat")
     for row in request.rows:
-        response = responses.get(row.response_sha256)
+        response = responses.get(row.exchange_sha256)
         if response is None or row.page_number > len(pages):
             raise ValueError("IR candidate response or source page is missing")
+        if response.response_sha256 != row.response_sha256:
+            raise ValueError("IR candidate response body hash differs from exact exchange")
         parsed: object = parse_json_payload(response.raw_response, expect="array")
         if not isinstance(parsed, list):
             raise ValueError("IR candidate is absent from governed response")
@@ -471,7 +483,7 @@ def retain_ir_pdf_candidates(
             if (*tuple(run[:6]), run[8]) != expected:
                 raise ValueError("IR retained extraction replay differs from existing run")
             for response in request.responses:
-                response_node_id = "ir-pdf-response:" + _sha([run_id, response.response_sha256])
+                response_node_id = "ir-pdf-response:" + _sha([run_id, response.exchange_sha256])
                 prior_response = conn.execute(
                     "SELECT text FROM evidence_nodes WHERE node_id=?", (response_node_id,)
                 ).fetchone()
@@ -481,10 +493,11 @@ def retain_ir_pdf_candidates(
                 original = payload.get("response")
                 if (
                     not isinstance(original, dict)
-                    or payload.get("schema_version") != "ir-pdf-governed-response.v1"
+                    or payload.get("schema_version") != "ir-pdf-governed-response.v2"
                 ):
                     raise ValueError("IR retained governed response changed")
                 for field_name in (
+                    "llm_call_id",
                     "raw_response",
                     "response_sha256",
                     "prompt_sha256",
@@ -531,7 +544,7 @@ def retain_ir_pdf_candidates(
             )
         )
         for response in request.responses:
-            node_id = "ir-pdf-response:" + _sha([run_id, response.response_sha256])
+            node_id = "ir-pdf-response:" + _sha([run_id, response.exchange_sha256])
             ledger.persist(
                 EvidenceNode(
                     node_id=node_id,
@@ -541,7 +554,7 @@ def retain_ir_pdf_candidates(
                     node_kind="claim",
                     text=_json(
                         {
-                            "schema_version": "ir-pdf-governed-response.v1",
+                            "schema_version": "ir-pdf-governed-response.v2",
                             "response": response.model_dump(mode="json"),
                         }
                     ),
@@ -555,7 +568,7 @@ def retain_ir_pdf_candidates(
                     evidence_key=node_id,
                     revision=1,
                     extraction_run_id=run_id,
-                    parent_node_id="ir-pdf-response:" + _sha([run_id, row.response_sha256]),
+                    parent_node_id="ir-pdf-response:" + _sha([run_id, row.exchange_sha256]),
                     node_kind="claim",
                     text=text_value,
                     locator=EvidenceLocator(
@@ -594,21 +607,21 @@ def _review_candidate_rows(
         if row is None or row[0] != population.extraction_run_id:
             raise ValueError("IR reviewed candidate node is absent from exact extraction")
         payload = json.loads(str(row[1]))
-        if payload.get("schema_version") != "ir-pdf-unreviewed-candidate.v1":
+        if payload.get("schema_version") != "ir-pdf-unreviewed-candidate.v2":
             raise ValueError("IR review candidate node is not a retained raw candidate")
         raw = IrRawRow.model_validate(payload["row"])
         expected_node_id = "ir-pdf-candidate:" + _sha(
             [
                 population.extraction_run_id,
                 raw.page_number,
-                raw.response_sha256,
+                raw.exchange_sha256,
                 raw.response_row_ordinal,
             ]
         )
         if node_id != expected_node_id:
             raise ValueError("IR candidate node identity changed")
         expected_parent = "ir-pdf-response:" + _sha(
-            [population.extraction_run_id, raw.response_sha256]
+            [population.extraction_run_id, raw.exchange_sha256]
         )
         if row[2] != expected_parent or payload.get("response_node_id") != expected_parent:
             raise ValueError("IR candidate raw response binding changed")
@@ -619,11 +632,14 @@ def _review_candidate_rows(
         if response_row is None:
             raise ValueError("IR candidate raw response is absent")
         response_payload = json.loads(str(response_row[0]))
-        if response_payload.get("schema_version") != "ir-pdf-governed-response.v1":
+        if response_payload.get("schema_version") != "ir-pdf-governed-response.v2":
             raise ValueError("IR candidate raw response type changed")
         response = IrRawExchange.model_validate(response_payload["response"])
-        if response.response_sha256 != raw.response_sha256:
-            raise ValueError("IR candidate raw response hash changed")
+        if (
+            response.response_sha256 != raw.response_sha256
+            or response.exchange_sha256 != raw.exchange_sha256
+        ):
+            raise ValueError("IR candidate raw response exchange changed")
         parsed: object = parse_json_payload(response.raw_response, expect="array")
         if not isinstance(parsed, list):
             raise ValueError("IR candidate raw response is not an array")
@@ -666,7 +682,7 @@ def _validate_review(
         (population.extraction_run_id,),
     ):
         payload = json.loads(str(text_value))
-        if payload.get("schema_version") == "ir-pdf-unreviewed-candidate.v1":
+        if payload.get("schema_version") == "ir-pdf-unreviewed-candidate.v2":
             all_candidates.add(str(node_id))
     if all_candidates != set(raw_rows):
         raise ValueError("IR review population omits retained candidates")

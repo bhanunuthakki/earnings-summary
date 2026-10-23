@@ -3,9 +3,13 @@
   "review_kind": "ad_hoc_independent",
   "reviewer_model": "gpt-6.1-sol",
   "reviewer_task": "/root/roadmap_judge",
-  "base_commit": "65bda94ddb4be092a9c2122ae0d489cf9b66d2c5",
+  "base_commit": {
+    "subject_commit": "65bda94ddb4be092a9c2122ae0d489cf9b66d2c5"
+  },
   "artifact": "docs/architecture/pipeline-completion-roadmap-20261022.md",
-  "artifact_sha256": "26ba67a900ca3cc6cc4122eab7a82184f7224758424a5608fc1edd4025516cb1",
+  "artifact_sha256": {
+    "sha256": "26ba67a900ca3cc6cc4122eab7a82184f7224758424a5608fc1edd4025516cb1"
+  },
   "attempts": [
     {
       "score": 86,
@@ -33,5 +37,6 @@
     }
   ],
   "implementation_qualified": false,
-  "calibrated_governance_receipt": false
+  "calibrated_governance_receipt": false,
+  "publication_digest_format": "Public digest values use named sha256 or subject_commit members. Original review bytes remain retained in task evidence; this is a display-only transformation."
 }

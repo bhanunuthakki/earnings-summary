@@ -636,3 +636,57 @@ def test_source_changes_during_reviewed_publication_roll_back_financial_graph(
     assert conn.execute("SELECT COUNT(*) FROM source_fact_publications").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM fact_cells_v2").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
+
+
+def test_full_entrypoint_two_empty_pages_retain_distinct_calls_and_cache_replay(
+    conn: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _entrypoint_fixture(conn, tmp_path, monkeypatch, mock_enumerator=False)
+    pages = (
+        "First page has no financial observations.",
+        "Last page has no financial observations.",
+    )
+
+    def projected_pages(_raw: bytes) -> tuple[str, ...]:
+        return pages
+
+    def empty_response(_prompt: str, **_kwargs: object) -> object:
+        return []
+
+    monkeypatch.setattr(continuation, "project_pdf_page_texts", projected_pages)
+    monkeypatch.setattr(ir_facts, "project_pdf_page_texts", projected_pages)
+    monkeypatch.setattr(
+        summaries,
+        "call_llm_structured_with_raw",
+        partial(_recorded_governed_call, response=empty_response),
+    )
+    first = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn)
+    assert first.error is None
+    calls = conn.execute(
+        "SELECT id,prompt_sha256,response_sha256 FROM llm_calls ORDER BY id"
+    ).fetchall()
+    assert len(calls) == 2
+    assert calls[0]["prompt_sha256"] != calls[1]["prompt_sha256"]
+    assert calls[0]["response_sha256"] == calls[1]["response_sha256"] == sha("[]")
+    responses = conn.execute(
+        "SELECT text FROM evidence_nodes WHERE node_id LIKE 'ir-pdf-response:%' ORDER BY node_id"
+    ).fetchall()
+    assert len(responses) == 2
+    assert {json.loads(row[0])["response"]["llm_call_id"] for row in responses} == {
+        row["id"] for row in calls
+    }
+    nodes_before = [
+        tuple(row) for row in conn.execute("SELECT * FROM evidence_nodes ORDER BY node_id")
+    ]
+    clocks_before = [tuple(row) for row in conn.execute("SELECT * FROM evidence_extraction_runs")]
+    second = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn)
+    assert second.error is None
+    assert conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == 2
+    assert [
+        tuple(row) for row in conn.execute("SELECT * FROM evidence_nodes ORDER BY node_id")
+    ] == nodes_before
+    assert [
+        tuple(row) for row in conn.execute("SELECT * FROM evidence_extraction_runs")
+    ] == clocks_before
+    assert conn.execute("SELECT COUNT(*) FROM fact_cells_v2").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0

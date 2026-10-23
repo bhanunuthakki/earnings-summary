@@ -180,3 +180,62 @@ def test_wire_publishes_only_after_exact_review_node_exists(
     _wire(conn, page_rows, exchanges)
     assert conn.execute("SELECT COUNT(*) FROM fact_cells_v2").fetchone() == (1,)
     assert conn.execute("SELECT COUNT(*) FROM source_fact_publications").fetchone() == (1,)
+
+
+@pytest.mark.parametrize(
+    ("empty", "same_prompt", "page_numbers"),
+    [(True, False, (1, 2)), (False, False, (1, 2)), (False, True, (1, 1))],
+)
+def test_identical_response_bodies_preserve_each_governed_exchange_and_replay(
+    conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    empty: bool,
+    same_prompt: bool,
+    page_numbers: tuple[int, int],
+) -> None:
+    def repeated_pages(raw: bytes) -> tuple[str, ...]:
+        page = page_texts(raw)[0]
+        return (page, page)
+
+    monkeypatch.setattr("compute.ir_supplement_capture.project_pdf_page_texts", repeated_pages)
+    monkeypatch.setattr("provenance.ir_reported_facts.project_pdf_page_texts", repeated_pages)
+    first_rows, first_exchanges = _capture_inputs()
+    raw_rows = [] if empty else first_rows[0][1]
+    body = json.dumps(raw_rows)
+    exchanges = [
+        first_exchanges[0].model_copy(
+            update={
+                "raw_response": body,
+                "response_sha256": sha(body),
+                "submitted_prompt": "same prompt" if same_prompt else f"page prompt {index}",
+                "prompt_sha256": sha("same prompt" if same_prompt else f"page prompt {index}"),
+                "llm_call_id": index,
+            }
+        )
+        for index in (1, 2)
+    ]
+    _wire(conn, [(page, raw_rows) for page in page_numbers], exchanges)
+    responses = conn.execute(
+        "SELECT node_id,text FROM evidence_nodes WHERE node_id LIKE 'ir-pdf-response:%'"
+    ).fetchall()
+    assert len(responses) == 2
+    original_calls = {
+        node_id: json.loads(text)["response"]["llm_call_id"] for node_id, text in responses
+    }
+    assert set(original_calls.values()) == {1, 2}
+    candidates = conn.execute(
+        "SELECT text,parent_node_id FROM evidence_nodes WHERE node_id LIKE 'ir-pdf-candidate:%'"
+    ).fetchall()
+    assert len(candidates) == (0 if empty else 2)
+    if not empty:
+        assert {original_calls[parent] for _, parent in candidates} == {1, 2}
+        assert sorted(json.loads(text)["row"]["page_number"] for text, _ in candidates) == sorted(
+            page_numbers
+        )
+    before = conn.execute("SELECT * FROM evidence_nodes ORDER BY node_id").fetchall()
+    clocks = conn.execute("SELECT * FROM evidence_extraction_runs").fetchall()
+    _wire(conn, [(page, raw_rows) for page in page_numbers], exchanges)
+    assert conn.execute("SELECT * FROM evidence_nodes ORDER BY node_id").fetchall() == before
+    assert conn.execute("SELECT * FROM evidence_extraction_runs").fetchall() == clocks
+    assert conn.execute("SELECT COUNT(*) FROM fact_cells_v2").fetchone() == (0,)
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone() == (0,)

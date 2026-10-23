@@ -47,7 +47,9 @@ Default scope (no `--tickers`): portfolio + watchlist + evaluation (`ANALYZED_LI
 2. The orchestrator reconciles every manifest coordinate and verifies each success
    against retained bytes. Missing, duplicate, extra, stale, denied, failed and
    budget-not-attempted work cannot be inferred as success from exit code zero.
-   A verified HTTP-empty result remains an explicit unavailable gap. Failed
+   An empty result for the optional `stock-peers/peers` coordinate remains an
+   explicit unavailable gap. Empty financial envelopes fail the shared payload
+   contract before artifact or success writes. Failed
    prerequisites stop dependent stages.
 3. `index_fmp_files_for_ticker` registers retained FMP files only for selected
    tickers at the selected root. This includes valid previously retained files;

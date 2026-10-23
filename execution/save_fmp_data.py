@@ -1149,11 +1149,14 @@ def run_ticker(
             code, body, err, kind = fmp_call(endpoint, ticker, job["extra"])
         _call_ms = int((time.monotonic() - _call_started) * 1000)
 
-        # An empty record list is a valid unavailable response. It has no
-        # financial facts to admit through the nonempty payload validator.
+        # Only an explicitly optional coordinate can report empty availability.
+        # Financial envelopes still pass the shared nonempty contract below.
         if code == 200 and isinstance(body, list):
             body = cast("list[object]", body)
-            if not body:
+            if (
+                not body
+                and FmpPayloadCoordinate(endpoint=endpoint, suffix=suffix).permits_empty_unavailable
+            ):
                 body, err = None, "empty-list"
 
         if code == 200 and body is not None:
