@@ -1502,7 +1502,7 @@
       "canonical_extra": null,
       "canonical_target": null,
       "disposition": "retained",
-      "end_line": 268,
+      "end_line": 295,
       "family": "tickers",
       "file": "execution/fetch_sec_xbrl.py",
       "historical_captures": [
@@ -1563,6 +1563,134 @@
           "scope": "module",
           "source": "def _resolve_tickers(args: argparse.Namespace, conn: sqlite3.Connection) -> list[str]:\n    \"\"\"Automatic research-company scope, bounded by stored role and instrument.\"\"\"\n\n    try:\n        if args.ticker:\n            tracked = tracked_companies_for_user(conn, list_types=frozenset(ListType))\n        else:\n            tracked = tracked_companies_for_user(conn)\n    except sqlite3.Error:\n        # No governed roster means no authorized network scope.\n        return []\n    requested_ticker = args.ticker.upper() if args.ticker else None\n    candidates = [\n        CollectionTarget(\n            ticker=company.ticker,\n            coverage_role=company.list_type,\n            requested=requested_ticker is not None,\n        )\n        for company in tracked\n        if requested_ticker is None or company.ticker.upper() == requested_ticker\n    ]\n    if requested_ticker is not None and not candidates:\n        candidates = [\n            CollectionTarget(\n                ticker=requested_ticker,\n                coverage_role=ListType.NONE,\n                requested=True,\n            )\n        ]\n    selection = select_collection_targets(\n        tuple(candidates),\n        source=CollectionSource.SEC,\n        artifact_kind=ArtifactKind.COMPANY_FACTS,\n    )\n    for item in selection.denied:\n        sys.stderr.write(\n            json.dumps(\n                {\n                    \"event\": \"source_collection_policy_denied\",\n                    \"ticker\": item.target.ticker,\n                    \"coverage_role\": item.target.coverage_role.value,\n                    \"source\": CollectionSource.SEC.value,\n                    \"artifact_kind\": ArtifactKind.COMPANY_FACTS.value,\n                    \"reason\": item.decision.reason.value,\n                },\n                sort_keys=True,\n            )\n            + \"\\n\"\n        )\n    instruments = {company.ticker.upper(): company.instrument_type for company in tracked}\n    allowed: list[str] = []\n    for item in selection.allowed:\n        if instrument_allows_artifact(\n            instruments.get(item.target.ticker),\n            source=CollectionSource.SEC,\n            artifact_kind=ArtifactKind.COMPANY_FACTS,\n        ):\n            allowed.append(item.target.ticker)\n        else:\n            sys.stderr.write(\n                json.dumps(\n                    {\n                        \"event\": \"source_collection_instrument_denied\",\n                        \"ticker\": item.target.ticker,\n                        \"instrument_type\": instruments.get(item.target.ticker),\n                    },\n                    sort_keys=True,\n                )\n                + \"\\n\"\n            )\n    for ticker in allowed:\n        if ticker in NO_SEC_FILERS:\n            sys.stderr.write(\n                json.dumps(\n                    {\n                        \"event\": \"sec_no_filer_disposition\",\n                        \"ticker\": ticker,\n                        \"disposition\": \"documented_non_filer\",\n                    },\n                    sort_keys=True,\n                )\n                + \"\\n\"\n            )\n    uncovered = sorted(t for t in allowed if t not in CIK_MAP and t not in NO_SEC_FILERS)\n    if uncovered:\n        sys.stderr.write(\n            json.dumps({\"event\": \"sec_cik_map_stale\", \"tickers_missing_cik\": uncovered}) + \"\\n\"\n        )\n    return [ticker for ticker in allowed if ticker in CIK_MAP]",
           "unresolved": []
+        },
+        {
+          "canonical_extra": null,
+          "canonical_target": null,
+          "disposition": "retained",
+          "end_line": 268,
+          "family": "tickers",
+          "file": "execution/fetch_sec_xbrl.py",
+          "line": 183,
+          "name": "_resolve_tickers",
+          "referenced": {
+            "ArtifactKind": {
+              "import_module": "pipeline.source_policy",
+              "import_name": "ArtifactKind"
+            },
+            "CIK_MAP": {
+              "import_module": "pipeline.sec_xbrl",
+              "import_name": "CIK_MAP"
+            },
+            "CollectionSource": {
+              "import_module": "pipeline.source_policy",
+              "import_name": "CollectionSource"
+            },
+            "CollectionTarget": {
+              "import_module": "pipeline.source_policy",
+              "import_name": "CollectionTarget"
+            },
+            "ListType": {
+              "import_module": "models.companies",
+              "import_name": "ListType"
+            },
+            "NO_SEC_FILERS": {
+              "import_module": "pipeline.sec_xbrl",
+              "import_name": "NO_SEC_FILERS"
+            },
+            "instrument_allows_artifact": {
+              "import_module": "pipeline.source_policy",
+              "import_name": "instrument_allows_artifact"
+            },
+            "select_collection_targets": {
+              "import_module": "pipeline.source_policy",
+              "import_name": "select_collection_targets"
+            },
+            "sys": {
+              "import_module": "sys",
+              "import_name": "sys"
+            },
+            "tracked_companies_for_user": {
+              "import_module": "pipeline.queries",
+              "import_name": "tracked_companies_for_user"
+            }
+          },
+          "retained_reason": "Retain the SEC collection-authorization boundary: stored coverage role and instrument type determine allowed COMPANY_FACTS requests, explicit requests have their own policy, and documented NO_SEC_FILERS are excluded. Main now resolves canonical issuer identity during ingestion instead of rejecting authorized issuers absent from CIK_MAP. This is collection policy, not a generic roster helper; preserve the old static-map capture as history.",
+          "scope": "module",
+          "source": "def _resolve_tickers(args: argparse.Namespace, conn: sqlite3.Connection) -> list[str]:\n    \"\"\"Automatic research-company scope, bounded by stored role and instrument.\"\"\"\n\n    try:\n        if args.ticker:\n            tracked = tracked_companies_for_user(conn, list_types=frozenset(ListType))\n        else:\n            tracked = tracked_companies_for_user(conn)\n    except sqlite3.Error:\n        # No governed roster means no authorized network scope.\n        return []\n    requested_ticker = args.ticker.upper() if args.ticker else None\n    candidates = [\n        CollectionTarget(\n            ticker=company.ticker,\n            coverage_role=company.list_type,\n            requested=requested_ticker is not None,\n        )\n        for company in tracked\n        if requested_ticker is None or company.ticker.upper() == requested_ticker\n    ]\n    if requested_ticker is not None and not candidates:\n        candidates = [\n            CollectionTarget(\n                ticker=requested_ticker,\n                coverage_role=ListType.NONE,\n                requested=True,\n            )\n        ]\n    selection = select_collection_targets(\n        tuple(candidates),\n        source=CollectionSource.SEC,\n        artifact_kind=ArtifactKind.COMPANY_FACTS,\n    )\n    for item in selection.denied:\n        sys.stderr.write(\n            json.dumps(\n                {\n                    \"event\": \"source_collection_policy_denied\",\n                    \"ticker\": item.target.ticker,\n                    \"coverage_role\": item.target.coverage_role.value,\n                    \"source\": CollectionSource.SEC.value,\n                    \"artifact_kind\": ArtifactKind.COMPANY_FACTS.value,\n                    \"reason\": item.decision.reason.value,\n                },\n                sort_keys=True,\n            )\n            + \"\\n\"\n        )\n    instruments = {company.ticker.upper(): company.instrument_type for company in tracked}\n    allowed: list[str] = []\n    for item in selection.allowed:\n        if instrument_allows_artifact(\n            instruments.get(item.target.ticker),\n            source=CollectionSource.SEC,\n            artifact_kind=ArtifactKind.COMPANY_FACTS,\n        ):\n            allowed.append(item.target.ticker)\n        else:\n            sys.stderr.write(\n                json.dumps(\n                    {\n                        \"event\": \"source_collection_instrument_denied\",\n                        \"ticker\": item.target.ticker,\n                        \"instrument_type\": instruments.get(item.target.ticker),\n                    },\n                    sort_keys=True,\n                )\n                + \"\\n\"\n            )\n    for ticker in allowed:\n        if ticker in NO_SEC_FILERS:\n            sys.stderr.write(\n                json.dumps(\n                    {\n                        \"event\": \"sec_no_filer_disposition\",\n                        \"ticker\": ticker,\n                        \"disposition\": \"documented_non_filer\",\n                    },\n                    sort_keys=True,\n                )\n                + \"\\n\"\n            )\n    # Canonical issuer resolution occurs before HTTP inside ingestion. A missing\n    # historical static pin cannot silently discard an authorized new company.\n    return [ticker for ticker in allowed if ticker not in NO_SEC_FILERS]",
+          "unresolved": [],
+          "capture_commit": "7c4182a539a35e2be45f16adf0b02a6f6cb74228",
+          "capture_status": "Prior retained collection boundary before explicit invalid-roster scope-gap recovery; source preserved as historical evidence."
+        },
+        {
+          "canonical_extra": null,
+          "canonical_target": null,
+          "disposition": "retained",
+          "end_line": 295,
+          "family": "tickers",
+          "file": "execution/fetch_sec_xbrl.py",
+          "line": 183,
+          "name": "_resolve_tickers",
+          "referenced": {
+            "ArtifactKind": {
+              "import_module": "pipeline.source_policy",
+              "import_name": "ArtifactKind"
+            },
+            "CIK_MAP": {
+              "import_module": "pipeline.sec_xbrl",
+              "import_name": "CIK_MAP"
+            },
+            "CollectionSource": {
+              "import_module": "pipeline.source_policy",
+              "import_name": "CollectionSource"
+            },
+            "CollectionTarget": {
+              "import_module": "pipeline.source_policy",
+              "import_name": "CollectionTarget"
+            },
+            "ListType": {
+              "import_module": "models.companies",
+              "import_name": "ListType"
+            },
+            "NO_SEC_FILERS": {
+              "import_module": "pipeline.sec_xbrl",
+              "import_name": "NO_SEC_FILERS"
+            },
+            "instrument_allows_artifact": {
+              "import_module": "pipeline.source_policy",
+              "import_name": "instrument_allows_artifact"
+            },
+            "select_collection_targets": {
+              "import_module": "pipeline.source_policy",
+              "import_name": "select_collection_targets"
+            },
+            "sys": {
+              "import_module": "sys",
+              "import_name": "sys"
+            },
+            "tracked_companies_for_user": {
+              "import_module": "pipeline.queries",
+              "import_name": "tracked_companies_for_user"
+            },
+            "TrackedCompanyRejection": {
+              "import_module": "pipeline.queries",
+              "import_name": "TrackedCompanyRejection"
+            },
+            "sqlite3": {
+              "import_module": "sqlite3",
+              "import_name": "sqlite3"
+            },
+            "json": {
+              "import_module": "json",
+              "import_name": "json"
+            }
+          },
+          "retained_reason": "Retain the SEC collection-authorization boundary: stored coverage role and instrument type determine allowed COMPANY_FACTS requests, explicit requests have their own policy, and documented NO_SEC_FILERS are excluded. Main now resolves canonical issuer identity during ingestion instead of rejecting authorized issuers absent from CIK_MAP. This is collection policy, not a generic roster helper; preserve the old static-map capture as history. Explicit invalid-roster callbacks now retain typed rejected-row identities while validated authorized rows continue. Missing roster and rejected scope produce visible failed coverage; no values or source policy are repaired.",
+          "scope": "module",
+          "source": "def _resolve_tickers(\n    args: argparse.Namespace,\n    conn: sqlite3.Connection,\n    scope_issues: list[dict[str, object]] | None = None,\n) -> list[str]:\n    \"\"\"Automatic research-company scope, bounded by stored role and instrument.\"\"\"\n\n    requested_ticker = args.ticker.upper() if args.ticker else None\n\n    def record_issue(issue: dict[str, object]) -> None:\n        if scope_issues is not None:\n            scope_issues.append(issue)\n        sys.stderr.write(\n            json.dumps({\"event\": \"sec_xbrl_scope_rejected\", **issue}, sort_keys=True) + \"\\n\"\n        )\n\n    def reject_company(rejection: TrackedCompanyRejection) -> None:\n        if requested_ticker is not None and rejection.ticker != requested_ticker:\n            return\n        record_issue(\n            {\n                \"reason_code\": \"tracked_company_invalid\",\n                \"row_id\": rejection.row_id,\n                \"ticker\": rejection.ticker,\n                \"fields\": list(rejection.fields),\n            }\n        )\n\n    try:\n        if args.ticker:\n            tracked = tracked_companies_for_user(\n                conn, list_types=frozenset(ListType), on_invalid=reject_company\n            )\n        else:\n            tracked = tracked_companies_for_user(conn, on_invalid=reject_company)\n    except sqlite3.Error:\n        # No governed roster means no authorized network scope.\n        record_issue({\"reason_code\": \"tracked_roster_unavailable\"})\n        return []\n    candidates = [\n        CollectionTarget(\n            ticker=company.ticker,\n            coverage_role=company.list_type,\n            requested=requested_ticker is not None,\n        )\n        for company in tracked\n        if requested_ticker is None or company.ticker.upper() == requested_ticker\n    ]\n    if requested_ticker is not None and not candidates:\n        candidates = [\n            CollectionTarget(\n                ticker=requested_ticker,\n                coverage_role=ListType.NONE,\n                requested=True,\n            )\n        ]\n    selection = select_collection_targets(\n        tuple(candidates),\n        source=CollectionSource.SEC,\n        artifact_kind=ArtifactKind.COMPANY_FACTS,\n    )\n    for item in selection.denied:\n        sys.stderr.write(\n            json.dumps(\n                {\n                    \"event\": \"source_collection_policy_denied\",\n                    \"ticker\": item.target.ticker,\n                    \"coverage_role\": item.target.coverage_role.value,\n                    \"source\": CollectionSource.SEC.value,\n                    \"artifact_kind\": ArtifactKind.COMPANY_FACTS.value,\n                    \"reason\": item.decision.reason.value,\n                },\n                sort_keys=True,\n            )\n            + \"\\n\"\n        )\n    instruments = {company.ticker.upper(): company.instrument_type for company in tracked}\n    allowed: list[str] = []\n    for item in selection.allowed:\n        if instrument_allows_artifact(\n            instruments.get(item.target.ticker),\n            source=CollectionSource.SEC,\n            artifact_kind=ArtifactKind.COMPANY_FACTS,\n        ):\n            allowed.append(item.target.ticker)\n        else:\n            sys.stderr.write(\n                json.dumps(\n                    {\n                        \"event\": \"source_collection_instrument_denied\",\n                        \"ticker\": item.target.ticker,\n                        \"instrument_type\": instruments.get(item.target.ticker),\n                    },\n                    sort_keys=True,\n                )\n                + \"\\n\"\n            )\n    for ticker in allowed:\n        if ticker in NO_SEC_FILERS:\n            sys.stderr.write(\n                json.dumps(\n                    {\n                        \"event\": \"sec_no_filer_disposition\",\n                        \"ticker\": ticker,\n                        \"disposition\": \"documented_non_filer\",\n                    },\n                    sort_keys=True,\n                )\n                + \"\\n\"\n            )\n    # Canonical issuer resolution occurs before HTTP inside ingestion. A missing\n    # historical static pin cannot silently discard an authorized new company.\n    return [ticker for ticker in allowed if ticker not in NO_SEC_FILERS]",
+          "unresolved": [],
+          "capture_commit": "de5aa809c014608c8a058535098e45df42a8533c",
+          "capture_status": "Reviewed invalid-roster recovery before explicit rejected-ticker case-insensitive matching; raw-case source retained as history."
         }
       ],
       "line": 183,
@@ -1607,12 +1735,24 @@
         "tracked_companies_for_user": {
           "import_module": "pipeline.queries",
           "import_name": "tracked_companies_for_user"
+        },
+        "TrackedCompanyRejection": {
+          "import_module": "pipeline.queries",
+          "import_name": "TrackedCompanyRejection"
+        },
+        "sqlite3": {
+          "import_module": "sqlite3",
+          "import_name": "sqlite3"
+        },
+        "json": {
+          "import_module": "json",
+          "import_name": "json"
         }
       },
-      "retained_reason": "Retain the SEC collection-authorization boundary: stored coverage role and instrument type determine allowed COMPANY_FACTS requests, explicit requests have their own policy, and documented NO_SEC_FILERS are excluded. Main now resolves canonical issuer identity during ingestion instead of rejecting authorized issuers absent from CIK_MAP. This is collection policy, not a generic roster helper; preserve the old static-map capture as history.",
+      "retained_reason": "Retain the SEC collection-authorization boundary: stored coverage role and instrument type determine allowed COMPANY_FACTS requests, explicit requests have their own policy, and documented NO_SEC_FILERS are excluded. Main now resolves canonical issuer identity during ingestion instead of rejecting authorized issuers absent from CIK_MAP. This is collection policy, not a generic roster helper; preserve the old static-map capture as history. Explicit invalid-roster callbacks now retain typed rejected-row identities while validated authorized rows continue. Missing roster and rejected scope produce visible failed coverage; no values or source policy are repaired. Rejected explicit ticker matching is case-insensitive while the typed receipt preserves its exact raw stored ticker.",
       "scope": "module",
-      "source": "def _resolve_tickers(args: argparse.Namespace, conn: sqlite3.Connection) -> list[str]:\n    \"\"\"Automatic research-company scope, bounded by stored role and instrument.\"\"\"\n\n    try:\n        if args.ticker:\n            tracked = tracked_companies_for_user(conn, list_types=frozenset(ListType))\n        else:\n            tracked = tracked_companies_for_user(conn)\n    except sqlite3.Error:\n        # No governed roster means no authorized network scope.\n        return []\n    requested_ticker = args.ticker.upper() if args.ticker else None\n    candidates = [\n        CollectionTarget(\n            ticker=company.ticker,\n            coverage_role=company.list_type,\n            requested=requested_ticker is not None,\n        )\n        for company in tracked\n        if requested_ticker is None or company.ticker.upper() == requested_ticker\n    ]\n    if requested_ticker is not None and not candidates:\n        candidates = [\n            CollectionTarget(\n                ticker=requested_ticker,\n                coverage_role=ListType.NONE,\n                requested=True,\n            )\n        ]\n    selection = select_collection_targets(\n        tuple(candidates),\n        source=CollectionSource.SEC,\n        artifact_kind=ArtifactKind.COMPANY_FACTS,\n    )\n    for item in selection.denied:\n        sys.stderr.write(\n            json.dumps(\n                {\n                    \"event\": \"source_collection_policy_denied\",\n                    \"ticker\": item.target.ticker,\n                    \"coverage_role\": item.target.coverage_role.value,\n                    \"source\": CollectionSource.SEC.value,\n                    \"artifact_kind\": ArtifactKind.COMPANY_FACTS.value,\n                    \"reason\": item.decision.reason.value,\n                },\n                sort_keys=True,\n            )\n            + \"\\n\"\n        )\n    instruments = {company.ticker.upper(): company.instrument_type for company in tracked}\n    allowed: list[str] = []\n    for item in selection.allowed:\n        if instrument_allows_artifact(\n            instruments.get(item.target.ticker),\n            source=CollectionSource.SEC,\n            artifact_kind=ArtifactKind.COMPANY_FACTS,\n        ):\n            allowed.append(item.target.ticker)\n        else:\n            sys.stderr.write(\n                json.dumps(\n                    {\n                        \"event\": \"source_collection_instrument_denied\",\n                        \"ticker\": item.target.ticker,\n                        \"instrument_type\": instruments.get(item.target.ticker),\n                    },\n                    sort_keys=True,\n                )\n                + \"\\n\"\n            )\n    for ticker in allowed:\n        if ticker in NO_SEC_FILERS:\n            sys.stderr.write(\n                json.dumps(\n                    {\n                        \"event\": \"sec_no_filer_disposition\",\n                        \"ticker\": ticker,\n                        \"disposition\": \"documented_non_filer\",\n                    },\n                    sort_keys=True,\n                )\n                + \"\\n\"\n            )\n    # Canonical issuer resolution occurs before HTTP inside ingestion. A missing\n    # historical static pin cannot silently discard an authorized new company.\n    return [ticker for ticker in allowed if ticker not in NO_SEC_FILERS]",
-      "source_commit": "7c4182a539a35e2be45f16adf0b02a6f6cb74228",
+      "source": "def _resolve_tickers(\n    args: argparse.Namespace,\n    conn: sqlite3.Connection,\n    scope_issues: list[dict[str, object]] | None = None,\n) -> list[str]:\n    \"\"\"Automatic research-company scope, bounded by stored role and instrument.\"\"\"\n\n    requested_ticker = args.ticker.upper() if args.ticker else None\n\n    def record_issue(issue: dict[str, object]) -> None:\n        if scope_issues is not None:\n            scope_issues.append(issue)\n        sys.stderr.write(\n            json.dumps({\"event\": \"sec_xbrl_scope_rejected\", **issue}, sort_keys=True) + \"\\n\"\n        )\n\n    def reject_company(rejection: TrackedCompanyRejection) -> None:\n        if requested_ticker is not None and (rejection.ticker or \"\").upper() != requested_ticker:\n            return\n        record_issue(\n            {\n                \"reason_code\": \"tracked_company_invalid\",\n                \"row_id\": rejection.row_id,\n                \"ticker\": rejection.ticker,\n                \"fields\": list(rejection.fields),\n            }\n        )\n\n    try:\n        if args.ticker:\n            tracked = tracked_companies_for_user(\n                conn, list_types=frozenset(ListType), on_invalid=reject_company\n            )\n        else:\n            tracked = tracked_companies_for_user(conn, on_invalid=reject_company)\n    except sqlite3.Error:\n        # No governed roster means no authorized network scope.\n        record_issue({\"reason_code\": \"tracked_roster_unavailable\"})\n        return []\n    candidates = [\n        CollectionTarget(\n            ticker=company.ticker,\n            coverage_role=company.list_type,\n            requested=requested_ticker is not None,\n        )\n        for company in tracked\n        if requested_ticker is None or company.ticker.upper() == requested_ticker\n    ]\n    if requested_ticker is not None and not candidates:\n        candidates = [\n            CollectionTarget(\n                ticker=requested_ticker,\n                coverage_role=ListType.NONE,\n                requested=True,\n            )\n        ]\n    selection = select_collection_targets(\n        tuple(candidates),\n        source=CollectionSource.SEC,\n        artifact_kind=ArtifactKind.COMPANY_FACTS,\n    )\n    for item in selection.denied:\n        sys.stderr.write(\n            json.dumps(\n                {\n                    \"event\": \"source_collection_policy_denied\",\n                    \"ticker\": item.target.ticker,\n                    \"coverage_role\": item.target.coverage_role.value,\n                    \"source\": CollectionSource.SEC.value,\n                    \"artifact_kind\": ArtifactKind.COMPANY_FACTS.value,\n                    \"reason\": item.decision.reason.value,\n                },\n                sort_keys=True,\n            )\n            + \"\\n\"\n        )\n    instruments = {company.ticker.upper(): company.instrument_type for company in tracked}\n    allowed: list[str] = []\n    for item in selection.allowed:\n        if instrument_allows_artifact(\n            instruments.get(item.target.ticker),\n            source=CollectionSource.SEC,\n            artifact_kind=ArtifactKind.COMPANY_FACTS,\n        ):\n            allowed.append(item.target.ticker)\n        else:\n            sys.stderr.write(\n                json.dumps(\n                    {\n                        \"event\": \"source_collection_instrument_denied\",\n                        \"ticker\": item.target.ticker,\n                        \"instrument_type\": instruments.get(item.target.ticker),\n                    },\n                    sort_keys=True,\n                )\n                + \"\\n\"\n            )\n    for ticker in allowed:\n        if ticker in NO_SEC_FILERS:\n            sys.stderr.write(\n                json.dumps(\n                    {\n                        \"event\": \"sec_no_filer_disposition\",\n                        \"ticker\": ticker,\n                        \"disposition\": \"documented_non_filer\",\n                    },\n                    sort_keys=True,\n                )\n                + \"\\n\"\n            )\n    # Canonical issuer resolution occurs before HTTP inside ingestion. A missing\n    # historical static pin cannot silently discard an authorized new company.\n    return [ticker for ticker in allowed if ticker not in NO_SEC_FILERS]",
+      "source_commit": "de5aa809c014608c8a058535098e45df42a8533c",
       "unresolved": []
     },
     {

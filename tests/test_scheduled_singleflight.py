@@ -136,7 +136,7 @@ def _new_connection(*_args: object, **_kwargs: object) -> _Conn:
     return _Conn()
 
 
-def _selected_tickers(*_args: object) -> list[str]:
+def _selected_tickers(*_args: object, **_kwargs: object) -> list[str]:
     return ["NU"]
 
 
