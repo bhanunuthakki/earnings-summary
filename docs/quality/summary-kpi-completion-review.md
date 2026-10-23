@@ -194,3 +194,55 @@ executed and no database was copied. Retire them after that evidence is recorded
 Retain the latest roadmap prompt/proposal/receipt and the final calendar receipt;
 superseded bulk prompts/raw envelopes are disposable. Small failed-review findings
 remain as history. No worker, review process or test server remains active.
+
+## Revised approach and direct evidence
+
+The prior roadmap review loop did not resolve the work efficiently. The replacement
+roadmap limits the next implementation to selected-bundle reuse. Later schema and
+writer decisions have separate evidence boundaries and a bounded stopping point.
+This is a proposed implementation, not a completed cut.
+
+`reader-initialization-evidence.md` records the positive fresh-connection derived
+read: the early stored-resolution closure does not need the four fact-plane-only
+SQL functions. The owning read initializes them and returns the sealed value 3201.
+The existing synthetic test and runtime extension passed: **1 check in 3.14s**.
+
+The task-only paired harness passed **3 checks in 7.41s** with unchanged application
+source. It compares distinct baseline/candidate modules on the same committed
+synthetic population through separate connections. These checks establish the
+harness and baseline; they do not establish an implemented improvement. Two checks
+replace an existing test body to reuse its fixtures; the derived case also executes
+its original body. They are not three unchanged repository tests.
+
+| Baseline population | SELECTs | Direct consumer bundle rereads | Full publication-verifier calls |
+|---|---:|---:|---:|
+| WIX, 21 facts | 1660 | 21 | 105 |
+| SYNTH report, 8 available cells | 649 | 8 | 40 |
+| Existing derived report fixture | 545 | 3 | 39 |
+
+The derived report reaches one derived cell, which remains unavailable because of
+`ambiguous_table_coordinate`. Empty derived relations and that rejection remain
+explicit limitations. No speedup or query reduction has been achieved yet.
+
+`financial-reader-compatibility-matrix.md` records the bounded selector/document
+assessment. Report and series metadata already use the evidence ledger. DCF still
+needs legacy source-authority fields. Neither row supports legacy procedure
+retirement. Independently inspected bridge code also remains active:
+`foreign_normalization_run` uses population dry-run/apply for non-native documents;
+the population owner supplies eligibility, immutable input commitments, and per-run
+recovery that `SourceFactRepository.publish` alone does not replace. Its existing
+replay/eligibility tests were inspected, not rerun for this assessment.
+
+The replacement roadmap has **no new Opus verdict**. The membership command failed
+before generation. A separate minimal diagnostic reports the session limit resets
+at **2026-10-22 22:50 America/Los_Angeles**. No fallback or paid call ran. The owner
+declined the proposed $3-capped OpenRouter route and chose the subscription route;
+unused paid-route preparation was removed without resolving a key or sending a
+request. A one-time same-chat continuation is installed and read back for
+**22:51 Pacific**, after the reported reset. The strict above-90 rule remains unmet
+for this replacement; the earlier 83 score applies only to its prior proposal.
+
+Task-only comparison artifacts remain under `.tmp/` until candidate parity and
+review are recorded. No application/test edits, live state changes, collection,
+push, or deployment occurred during this resumed assessment. The known full-suite
+teardown failure remains open.
