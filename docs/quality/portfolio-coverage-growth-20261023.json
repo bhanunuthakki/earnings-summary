@@ -1,16 +1,20 @@
 {
   "scope": "portfolio_financial_quarantine_consumer_fiscal_and_ir_span_growth",
   "status": "root_reviewed_exact_source_growth_local_gates_passed_full_ci_pending",
-  "source_commit": "4363247079169ce0b6c3b7dcc0475ad5ab9fcfeb",
-  "source_sha256": "a105839c11815570911b16bb2827e86d561aefa6655b82b9298c1e4ba14a7e67",
+  "subject_commit": "4363247079169ce0b6c3b7dcc0475ad5ab9fcfeb",
+  "source_sha256": "599f7c44f175b76e854520f219d6a15a4aee299181cedbbdbded1c04433a53ec",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
   "scanner_changed": false,
-  "baseline_before_sha256": "b3ddb4b73718b4bfe82b0347f251b4d8e8e57db85ec8f4256e6e0abe966dda60",
-  "baseline_candidate_sha256": "52c8efe0327027aeede3e8af1479f6aae8d579df69cb58bd89b1d9b4bcd4f37f",
+  "baseline_before": {
+    "sha256": "b3ddb4b73718b4bfe82b0347f251b4d8e8e57db85ec8f4256e6e0abe966dda60"
+  },
+  "baseline_candidate": {
+    "sha256": "a4972cc9fe308741116207e903422ee130ad20f06291ef169662adec6ee45675"
+  },
   "changed_metrics": {
     "total_noncomment_loc": {
       "before": 566614,
-      "after": 567367
+      "after": 567384
     },
     "modules_over_1000_loc": {
       "before": 109,
@@ -68,15 +72,15 @@
     {
       "path": "src/compute/segment_q4_derive.py",
       "before": 579,
-      "after": 581,
-      "delta": 2,
+      "after": 578,
+      "delta": -1,
       "reason": "Use canonical admission for segment derivation inputs."
     },
     {
       "path": "src/compute/segment_quarterly_10q.py",
       "before": 863,
-      "after": 865,
-      "delta": 2,
+      "after": 862,
+      "delta": -1,
       "reason": "Use canonical admission for quarterly segment inputs."
     },
     {
@@ -110,8 +114,8 @@
     {
       "path": "src/pipeline/locators.py",
       "before": 313,
-      "after": 326,
-      "delta": 13,
+      "after": 341,
+      "delta": 28,
       "reason": "Map native line breaks to exact IR quote spans."
     },
     {
@@ -138,8 +142,8 @@
     {
       "path": "src/provenance/financial_fact_resolution.py",
       "before": 2019,
-      "after": 2106,
-      "delta": 87,
+      "after": 2112,
+      "delta": 93,
       "reason": "Apply shared semantic quarantine to current and historical canonical selections and legacy derivations."
     },
     {
@@ -159,8 +163,8 @@
     {
       "path": "src/provenance/semantic_disposition.py",
       "before": 271,
-      "after": 368,
-      "delta": 97,
+      "after": 370,
+      "delta": 99,
       "reason": "Select explicit document quarantine by knowledge and recording clocks."
     },
     {
@@ -259,5 +263,27 @@
       "net_removed": 15
     }
   },
-  "root_reviewed_at": "2026-10-23T17:40:17.262447+00:00"
+  "root_reviewed_at": "2026-10-23T17:40:17.262447+00:00",
+  "ci_followup": {
+    "source_growth_from_first_candidate": 17,
+    "reason": "Native word-hyphen spans, supported pre-disposition historical joins, and closed resolver SQL fragments. All other measured architecture counters are unchanged.",
+    "independent_advisory_scores": {
+      "native_hyphen_wrap": 96,
+      "ci_compatibility_security": 94
+    },
+    "test_oracle_correction": "A derived publication that depends on a tampered source publication must remain unavailable. The batch test now checks the transitive failure on each call; independent positive batch tests remain.",
+    "reachability": "Same scanner and disposition counts; rebind two identical statements at their new line numbers and refresh the exact consumed-source digest. No new production unknown or unresolved edges.",
+    "validation": {
+      "changed_file_format_lint_strict_types": "46 retained Python files pass",
+      "whole_tree_static_ceilings": "2896 retained files;1948 diagnostics;1796 suppressions; no ceiling increase",
+      "changed_tests": 1503,
+      "focused_ci_regressions": 281,
+      "quality_hash_filter_tests": 1172,
+      "bandit": "CI-equivalent baseline scan passes",
+      "scope": "Financial quality remains unqualified; no new provider or production admission claim.",
+      "final_reachability_and_fiscal_cases": 5
+    },
+    "test_helper_visibility": "Rename the existing shared test evidence binder to a public name. No duplicate helper or type suppression.",
+    "reachability_test_line": "Preserve the exact fixed capture-name fixture lookup at line854 instead of835; explicitly pin the one test-only shared cutover fixture run at line49. Replace an unnecessary dynamic JSON import with a static import. Production unknown/unresolved edges remain zero."
+  }
 }

@@ -96,17 +96,19 @@ def explicit_document_quarantine_sql(
 ) -> str:
     """Exclude malformed clocks or the latest visible explicit quarantine."""
 
+    if document_version_sql not in ("run.document_version_id", ":document_version_id"):
+        raise ValueError("unsupported document version SQL reference")
     decision_visible = _visible_clocks_sql("decision") if as_known else ""
     newer_visible = _visible_clocks_sql("newer") if as_known else ""
     return (
-        "(EXISTS (SELECT 1 FROM document_semantic_disposition_revisions AS malformed "
+        "(EXISTS (SELECT 1 FROM document_semantic_disposition_revisions AS malformed "  # nosec B608 -- checked SQL reference; values bound by caller
         f"WHERE malformed.document_version_id={document_version_sql} "
         f"AND ({_malformed_clock_sql('malformed')})) OR "
         "EXISTS (SELECT 1 FROM document_semantic_disposition_revisions AS decision "
         f"WHERE decision.document_version_id={document_version_sql} "
         "AND decision.semantic_status='quarantined' "
         + decision_visible
-        + "AND NOT EXISTS (SELECT 1 FROM document_semantic_disposition_revisions AS newer "
+        + "AND NOT EXISTS (SELECT 1 FROM document_semantic_disposition_revisions AS newer "  # nosec B608 -- fixed ledger table and alias
         "WHERE newer.document_version_id=decision.document_version_id "
         "AND newer.revision>decision.revision " + newer_visible + ")))"
     )

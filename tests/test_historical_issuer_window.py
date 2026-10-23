@@ -1,5 +1,6 @@
 """Historical intake changes an exact requested period, never global policy."""
 
+import json
 from datetime import date
 
 import pytest
@@ -104,7 +105,7 @@ def test_fiscal_reported_window_preserves_exact_calendar_and_legacy_wire() -> No
     base = request_fixture()
     legacy_payload = base.inventory_request.model_dump(mode="json")
     assert "fiscal_period_witness" not in legacy_payload
-    assert base.inventory_request.canonical_json == __import__("json").dumps(
+    assert base.inventory_request.canonical_json == json.dumps(
         legacy_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     )
     witness = FiscalPeriodWitness(

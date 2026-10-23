@@ -483,3 +483,29 @@ def test_retained_meta_page1_quotes_resolve_to_exact_native_span(native: str) ->
     assert span is not None
     assert span == (len("SOURCE HEADER\n"), len("SOURCE HEADER\n") + len(native))
     assert source[slice(*span)] == native
+
+
+def test_native_ascii_word_hyphen_wrap_preserves_every_nonwhitespace_character() -> None:
+    from pipeline.locators import locate_char_span
+
+    quote = (
+        "Advertising revenue excluding foreign exchange effect year-over-year change %  26 %  27 %"
+    )
+    native = "Advertising revenue excluding foreign exchange effect year-over-\nyear change %  26 %  27 %"
+    span = locate_char_span(quote, native, whitespace_only=True)
+    assert span == (0, len(native))
+    assert locate_char_span(quote, native) is None
+    adjacent = native.replace("-\nyear", "- \r\n\tyear")
+    assert locate_char_span(quote, adjacent, whitespace_only=True) == (0, len(adjacent))
+    assert locate_char_span(quote, native + "\n" + native, whitespace_only=True) is None
+    for unsupported in (
+        native.replace("year-over-\nyear", "year-over\nyear"),
+        native.replace("year-over-\nyear", "year-Over-\nyear"),
+        native.replace("26 %", "-26 %"),
+        native.replace("year-over-\nyear", "year-over- year"),
+        native.replace("year-over-\nyear", "year-over-\u2013year"),
+    ):
+        assert locate_char_span(quote, unsupported, whitespace_only=True) is None
+    assert locate_char_span("total revenue", "totalrevenue", whitespace_only=True) is None
+    assert locate_char_span("$10-20", "$10-\n20", whitespace_only=True) is None
+    assert locate_char_span("-10", "-\n10", whitespace_only=True) is None

@@ -354,7 +354,7 @@ def _resolve_kpi_load_name(conn: sqlite3.Connection, ticker: str, requested: str
         fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
         rows = conn.execute(
             "SELECT kd.name AS name, COUNT(*) AS n "
-            f"FROM {fact_relation} kf "
+            f"FROM {fact_relation} kf "  # nosec B608 -- canonical resolver owns relation; values bound
             "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
             "WHERE kf.ticker = ? GROUP BY kd.name",
             (ticker.upper(),),

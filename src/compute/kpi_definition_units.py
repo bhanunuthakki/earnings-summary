@@ -78,7 +78,7 @@ def dominant_fact_unit(connection: sqlite3.Connection, ticker: str, name: str) -
 
     fact_relation = canonical_fact_relation(connection, "kpi_facts").sql
     row = connection.execute(
-        f"SELECT f.unit FROM {fact_relation} f "
+        f"SELECT f.unit FROM {fact_relation} f "  # nosec B608 -- canonical resolver owns relation; values bound
         "JOIN kpi_definitions d ON d.id=f.kpi_definition_id "
         "WHERE d.ticker=? AND d.name=? AND f.unit IS NOT NULL "
         "GROUP BY f.unit ORDER BY COUNT(*) DESC, MAX(f.period_end) DESC LIMIT 1",

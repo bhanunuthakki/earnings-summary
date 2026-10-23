@@ -639,30 +639,43 @@ def test_review_rejects_missing_field_witness(
         )
 
 
+@pytest.mark.parametrize(
+    ("model_quote", "native_quote"),
+    [
+        ("Margin North 10%", "Margin\nNorth 10%"),
+        ("Year-over-year margin 10%", "Year-over-\nyear margin 10%"),
+    ],
+)
 def test_whitespace_quote_keeps_raw_response_and_native_review_witness(
     conn: sqlite3.Connection,
     monkeypatch: pytest.MonkeyPatch,
+    model_quote: str,
+    native_quote: str,
 ) -> None:
-    native = PAGE.replace("Margin North 10%", "Margin\nNorth 10%")
+    native = (
+        PAGE.replace(model_quote, native_quote)
+        if model_quote in PAGE
+        else PAGE + " " + native_quote
+    )
 
     def native_pages(raw: bytes) -> tuple[str, ...]:
         return (native,)
 
     monkeypatch.setattr("provenance.ir_reported_facts.project_pdf_page_texts", native_pages)
     monkeypatch.setattr(__name__ + ".PAGE", native)
-    fact = candidate("Margin\nNorth 10%", "10%", "10")
-    publication = reviewed_request(conn, fact, model_quote="Margin North 10%")
+    fact = candidate(native_quote, "10%", "10")
+    publication = reviewed_request(conn, fact, model_quote=model_quote)
     raw_node = conn.execute(
         "SELECT text,locator_json FROM evidence_nodes WHERE node_id LIKE 'ir-pdf-candidate:%'"
     ).fetchone()
     retained = json.loads(raw_node[0])["row"]
-    assert retained["raw_row"]["source_excerpt"] == "Margin North 10%"
-    assert retained["native_source_quote"] == "Margin\nNorth 10%"
+    assert retained["raw_row"]["source_excerpt"] == model_quote
+    assert retained["native_source_quote"] == native_quote
     locator = json.loads(raw_node[1])
-    assert native[locator["char_start"] : locator["char_end"]] == "Margin\nNorth 10%"
+    assert native[locator["char_start"] : locator["char_end"]] == native_quote
     receipt = publish_ir_reported_facts(conn, publication, raw_pdf_bytes=PDF_BYTES)
     assert len(receipt.cell_ids) == 1
-    assert publication.candidates[0].source_quote == "Margin\nNorth 10%"
+    assert publication.candidates[0].source_quote == native_quote
 
 
 def test_native_span_tamper_and_ambiguous_context_fail_before_retention(

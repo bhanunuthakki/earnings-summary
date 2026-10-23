@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "4363247079169ce0b6c3b7dcc0475ad5ab9fcfeb",
+  "scoped_commit": "f8ff15aac216b151cd93928cac3f78485fc71037",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "a105839c11815570911b16bb2827e86d561aefa6655b82b9298c1e4ba14a7e67",
+  "source_sha256": "599f7c44f175b76e854520f219d6a15a4aee299181cedbbdbded1c04433a53ec",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1476,
-    "total_noncomment_loc": 567367,
+    "total_noncomment_loc": 567384,
     "modules_over_1000_loc": 110,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
@@ -8825,9 +8825,9 @@
         "path": "src/compute/segment_q4_derive.py",
         "module": "compute.segment_q4_derive",
         "lines": {
-          "physical": 660,
-          "nonblank": 607,
-          "noncomment": 581
+          "physical": 657,
+          "nonblank": 604,
+          "noncomment": 578
         },
         "internal_fan_out": 6,
         "responsibilities": [
@@ -8841,9 +8841,9 @@
         "path": "src/compute/segment_quarterly_10q.py",
         "module": "compute.segment_quarterly_10q",
         "lines": {
-          "physical": 977,
-          "nonblank": 883,
-          "noncomment": 865
+          "physical": 974,
+          "nonblank": 880,
+          "noncomment": 862
         },
         "internal_fan_out": 10,
         "responsibilities": [
@@ -14528,9 +14528,9 @@
         "path": "src/pipeline/locators.py",
         "module": "pipeline.locators",
         "lines": {
-          "physical": 387,
-          "nonblank": 340,
-          "noncomment": 326
+          "physical": 404,
+          "nonblank": 357,
+          "noncomment": 341
         },
         "internal_fan_out": 4,
         "responsibilities": [
@@ -16307,11 +16307,11 @@
         "path": "src/provenance/financial_fact_resolution.py",
         "module": "provenance.financial_fact_resolution",
         "lines": {
-          "physical": 2303,
-          "nonblank": 2116,
-          "noncomment": 2106
+          "physical": 2310,
+          "nonblank": 2123,
+          "noncomment": 2112
         },
-        "internal_fan_out": 9,
+        "internal_fan_out": 8,
         "responsibilities": [
           "database",
           "filesystem",
@@ -17207,9 +17207,9 @@
         "path": "src/provenance/semantic_disposition.py",
         "module": "provenance.semantic_disposition",
         "lines": {
-          "physical": 420,
-          "nonblank": 368,
-          "noncomment": 368
+          "physical": 422,
+          "nonblank": 370,
+          "noncomment": 370
         },
         "internal_fan_out": 0,
         "responsibilities": [

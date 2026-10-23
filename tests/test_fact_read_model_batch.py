@@ -251,15 +251,17 @@ def test_batch_quarantines_each_request_from_a_tampered_publication(
     assert all(item.failure and item.failure.disposition == "quarantined" for item in results)
 
 
-def test_batch_preserves_valid_publications_and_revalidates_each_call(
+def test_batch_rejects_corrupt_descendants_and_revalidates_each_call(
     conn: sqlite3.Connection,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     corrupt = _two_observation_publication()
-    valid = _derived_publication(corrupt.reported_facts[0].observation.observation_id)
+    # This publication has its own valid seal but still depends on corrupt's
+    # observation. Shared admission must validate that descendant on each read.
+    dependent = _derived_publication(corrupt.reported_facts[0].observation.observation_id)
     repository = SourceFactRepository(conn)
     repository.publish(corrupt)
-    repository.publish(valid)
+    repository.publish(dependent)
     conn.execute("DROP TRIGGER trg_source_fact_publication_members_append_only")
     conn.execute(
         "UPDATE source_fact_publication_members SET record_commitment_sha256 = ? "
@@ -289,19 +291,24 @@ def test_batch_preserves_valid_publications_and_revalidates_each_call(
     first = FactReadModel(conn).provenance_bundles(
         (
             corrupt.reported_facts[0].observation.observation_id,
-            valid.derived_facts[0].observation.observation_id,
+            dependent.derived_facts[0].observation.observation_id,
         ),
         cutoff=STAMP,
     )
     second = FactReadModel(conn).provenance_bundles(
-        (valid.derived_facts[0].observation.observation_id,), cutoff=STAMP
+        (dependent.derived_facts[0].observation.observation_id,), cutoff=STAMP
     )
 
     assert first[0].failure is not None
-    assert first[1].bundle is not None
-    assert second[0].bundle is not None
-    assert verified.count(corrupt.publication_id) == 1
-    assert verified.count(valid.publication_id) == 2
+    assert first[1].bundle is None
+    assert second[0].bundle is None
+    assert first[1].failure is not None
+    assert second[0].failure is not None
+    assert first[1].failure.reason_code == "publication_member_tampered"
+    assert second[0].failure.reason_code == "publication_member_tampered"
+    assert first[1].failure.record_id == corrupt.reported_facts[0].observation.observation_id
+    assert verified.count(corrupt.publication_id) == 2
+    assert verified.count(dependent.publication_id) == 2
 
 
 def test_batch_revalidates_after_a_committed_publication_mutation(

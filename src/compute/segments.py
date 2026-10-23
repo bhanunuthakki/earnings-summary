@@ -107,7 +107,7 @@ def _lookup_period_revenue(
     """
     fact_relation = canonical_fact_relation(conn, "financial_facts").sql
     cur = conn.execute(
-        f"SELECT value FROM {fact_relation} "
+        f"SELECT value FROM {fact_relation} "  # nosec B608 -- canonical resolver owns relation; values bound
         "WHERE ticker = ? AND period_end = ? AND fiscal_period_type = ? "
         "AND line_item = 'revenue' LIMIT 1",
         (ticker.upper(), period_end, period_type.value),

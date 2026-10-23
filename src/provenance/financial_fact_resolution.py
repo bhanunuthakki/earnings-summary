@@ -30,7 +30,6 @@ from urllib.parse import unquote, urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from compute.metrics_engine.inputs import CanonicalConcept
 from models.documents import SourceType
 from models.facts import Unit
 from pipeline.kpi_definition_revisions import (
@@ -686,6 +685,8 @@ def fact_resolution_cutover_available(conn: sqlite3.Connection) -> bool:
 def _derived_source_quarantine_sql(fact_alias: str, *, as_known: bool) -> str:
     """Reject incomplete legacy lineage or any quarantined declared input."""
 
+    if fact_alias != "fact":
+        raise ValueError("unsupported derived fact SQL alias")
     safe_lineage = (
         f"CASE WHEN json_valid({fact_alias}.computed_from) "
         f"THEN {fact_alias}.computed_from ELSE '{{\"inputs\":[]}}' END"
@@ -693,12 +694,13 @@ def _derived_source_quarantine_sql(fact_alias: str, *, as_known: bool) -> str:
     safe_input = "CASE WHEN input.type='object' THEN input.value ELSE '{}' END"
     ref = f"json_extract({safe_input},'$.ref')"
     item = f"json_extract({safe_input},'$.item')"
-    market_inputs = "','".join((CanonicalConcept.PRICE.value, CanonicalConcept.MARKET_CAP.value))
+    # These are persisted computed_from wire values, independent of compute imports.
+    market_inputs = "'price','market_cap'"
     doc_id = f"json_extract({safe_input},'$.doc_id')"
     version_id = f"json_extract({safe_input},'$.document_version_id')"
     quarantine = explicit_document_quarantine_sql("run.document_version_id", as_known=as_known)
     return (
-        f"({fact_alias}.computed_from IS NULL AND "
+        f"({fact_alias}.computed_from IS NULL AND "  # nosec B608 -- fixed SQL alias; persisted wire literals below
         f"(instr(lower(coalesce({fact_alias}.extracted_by,'')),'derived')>0 "
         f"OR {fact_alias}.formula_id IS NOT NULL) "
         f"OR {fact_alias}.computed_from IS NOT NULL AND ("
@@ -713,7 +715,7 @@ def _derived_source_quarantine_sql(fact_alias: str, *, as_known: bool) -> str:
         f"OR {ref} IS NULL "
         f"OR {ref} NOT IN ('financial_fact','segment_fact','canonical_observation','vendor_field') "
         f"OR ({ref}='vendor_field' AND ("
-        f"{item} NOT IN ('{market_inputs}') OR {item} IS NULL "
+        f"{item} NOT IN ({market_inputs}) OR {item} IS NULL "
         f"OR {doc_id} IS NOT NULL OR {version_id} IS NOT NULL "
         f"OR coalesce(json_type({safe_input},'$.period_end'),'')!='text')) "
         f"OR ({ref} IN ('financial_fact','segment_fact') AND "
@@ -748,7 +750,7 @@ def canonical_fact_relation(
                 else ""
             )
             relation_sql = (
-                f"(SELECT fact.* FROM {view} AS fact "
+                f"(SELECT fact.* FROM {view} AS fact "  # nosec B608 -- view selected from two fixed resolver names
                 "WHERE NOT EXISTS (SELECT 1 FROM reported_observations AS observation "
                 "JOIN evidence_nodes AS node ON node.node_id=observation.evidence_node_id "
                 "JOIN evidence_extraction_runs AS run "
@@ -877,6 +879,13 @@ def canonical_fact_selections_as_known(
         if semantic_quarantine
         else "0 AS source_quarantined,"
     )
+    evidence_joins = (
+        "LEFT JOIN evidence_nodes AS node ON node.node_id=observation.evidence_node_id "
+        "LEFT JOIN evidence_extraction_runs AS run "
+        "ON run.extraction_run_id=node.extraction_run_id "
+        if semantic_quarantine
+        else ""
+    )
     parameters: dict[str, object] = {
         "fact_table": fact_table,
         "cutoff": cutoff,
@@ -905,10 +914,8 @@ def canonical_fact_selections_as_known(
         "ON link.observation_id=resolution.selected_observation_id "
         "JOIN reported_observations observation "
         "ON observation.observation_id=resolution.selected_observation_id "
-        "LEFT JOIN evidence_nodes AS node ON node.node_id=observation.evidence_node_id "
-        "LEFT JOIN evidence_extraction_runs AS run "
-        "ON run.extraction_run_id=node.extraction_run_id "
-        "WHERE link.fact_table=:fact_table "
+        + evidence_joins
+        + "WHERE link.fact_table=:fact_table "
         + concept_predicate
         + "AND datetime(observation.period_end)<=datetime(:effective_cutoff) "
         "AND datetime(resolution.knowledge_cutoff)<=datetime(:cutoff) "

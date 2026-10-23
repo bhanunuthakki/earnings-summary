@@ -265,7 +265,7 @@ class SupplementCapture:
             prompt,
             *[repair_supplement_prompt(prompt, error) for error in _SUPPLEMENT_REPAIR_FEEDBACK],
         ]
-        version = "ir-supplement-native-continuation-v5-literal-endpoint-repair"
+        version = "ir-supplement-native-continuation-v6-native-hyphen-wrap"
         scope = f"ir_supplement:{self.document_id}:page:{page}:section:{start}:{len(body)}"
         expected_sha = compute_input_sha256(prompt_version=version, cache_inputs=inputs)
         artifact = read_current(
