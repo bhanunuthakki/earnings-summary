@@ -378,3 +378,46 @@ def test_registration_financial_duty_requires_sec_authority(
         ).fetchone() == ("sec-financial:v1", "issuer_financial_statements")
     finally:
         conn.close()
+
+
+@pytest.mark.parametrize(
+    "document_type", ["ir_presentation", "investor_presentation", "presentation"]
+)
+def test_presentation_labels_bind_publisher_presentation_duty(
+    tmp_path: Path, migrated_db: Callable[..., Path], document_type: str
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    try:
+        values = list(
+            conn.execute(
+                "SELECT * FROM source_obligation_revisions WHERE obligation_revision_id='sec-periodic:v1'"
+            ).fetchone()
+        )
+        values[0:3] = [
+            "publisher-presentation:v1",
+            "publisher-presentation:v1",
+            "publisher-presentation",
+        ]
+        values[6:10] = ["issuer_publisher", "issuer_presentations", "optional", "manual_exception"]
+        conn.execute(
+            "INSERT INTO source_obligation_revisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            values,
+        )
+        ledger = SourceCoverageLedger(conn)
+        ledger.persist(_snapshot())
+        record = _expected().model_copy(
+            update={
+                "source_kind": "ir_document",
+                "document_type": document_type,
+                "form_type": "IR",
+                "accession_number": None,
+                "source_url": "https://ir.test/presentation.pdf",
+            }
+        )
+        ledger.persist(record)
+        assert conn.execute(
+            "SELECT source_obligation_revision_id,document_family FROM expected_document_obligation_bindings WHERE expected_document_id=?",
+            (record.expected_document_id,),
+        ).fetchone() == ("publisher-presentation:v1", "issuer_presentations")
+    finally:
+        conn.close()

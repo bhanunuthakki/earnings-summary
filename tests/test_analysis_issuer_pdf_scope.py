@@ -214,6 +214,7 @@ def pdf_scope(
             recorded_at=STAMP,
         )
     )
+    pdf_url = "https://cdn.acme.test/report.pdf" if failure.startswith("cdn") else PDF_URL
     expected = ExpectedDocument(
         expected_document_id="issuer-pdf",
         idempotency_key="issuer-pdf",
@@ -224,7 +225,7 @@ def pdf_scope(
         source_kind="ir_document",
         document_type="earnings_material",
         form_type="IR",
-        source_url=PDF_URL,
+        source_url=pdf_url,
         period_end=None
         if failure == "period"
         else datetime.combine(scope_request().required_period_ends[0], datetime.min.time(), UTC),
@@ -238,9 +239,9 @@ def pdf_scope(
         conn,
         tmp_path,
         "pdf-source",
-        PDF_URL + "&served=other" if failure == "url" else PDF_URL,
+        PDF_URL + "&served=other" if failure == "url" else pdf_url,
         pdf,
-        "ir_document",
+        "ir_doc" if failure == "cdn_legacy_kind" else "ir_document",
         future=failure == "pdf_clock",
     )
     EvidenceLedger(conn).persist(
@@ -294,6 +295,38 @@ def pdf_scope(
             else "ir-home",
         }
     ]
+    if failure.startswith("cdn"):
+        from runtime.deterministic import content_sha256_ascii
+
+        link = {
+            "href": pdf_url if failure != "cdn_target" else "https://cdn.acme.test/other.pdf",
+            "label": "Earnings Presentation",
+        }
+        publisher_raw = (
+            '<script id="__NORDIC_RENDERING_CTX__">_n.ctx.r='
+            + json.dumps({"links": [link]})
+            + ";</script>"
+        ).encode()
+        _source(
+            conn,
+            tmp_path,
+            "publisher-page",
+            "https://other.test/results" if failure == "cdn_publisher" else HOME + "results",
+            publisher_raw,
+            "ir_publisher_page",
+            future=failure == "cdn_future",
+        )
+        if failure != "cdn_missing":
+            selections = cast(list[dict[str, object]], payload["issuer_documents"])
+            selections[0]["publisher_link"] = {
+                "publisher_page_observation_id": "publisher-page",
+                "publisher_page_sha256": hashlib.sha256(publisher_raw).hexdigest(),
+                "json_path": ["links", 0],
+                "link_sha256": content_sha256_ascii(link),
+            }
+        if failure == "cdn_changed":
+            (tmp_path / "publisher-page").write_bytes(publisher_raw + b"changed")
+        conn.commit()
     try:
         yield conn, payload
     finally:
@@ -813,3 +846,32 @@ def test_historical_pdf_cannot_omit_public_day_policy_or_exceed_combined_cap(
     ]
     with pytest.raises(ValueError, match="at most 12 documents"):
         AnalysisScopeRequest.model_validate(value)
+
+
+@pytest.mark.parametrize("pdf_scope", ["cdn", "cdn_legacy_kind"], indirect=True)
+def test_cdn_document_requires_exact_retained_publisher_link(
+    pdf_scope: tuple[sqlite3.Connection, dict[str, object]],
+) -> None:
+    conn, payload = pdf_scope
+    scope = build_analysis_scope(
+        conn, AnalysisScopeRequest.model_validate_json(json.dumps(payload))
+    )
+    assert scope.schema_version == "analysis-evidence-scope/v8"
+    assert (
+        scope.issuer_document_witnesses[0].publisher_link
+        == scope.request.issuer_documents[0].publisher_link
+    )
+    verify_analysis_scope(conn, scope)
+
+
+@pytest.mark.parametrize(
+    "pdf_scope",
+    ["cdn_missing", "cdn_publisher", "cdn_target", "cdn_future", "cdn_changed"],
+    indirect=True,
+)
+def test_cdn_document_link_never_waives_publisher_bytes_identity_or_clocks(
+    pdf_scope: tuple[sqlite3.Connection, dict[str, object]],
+) -> None:
+    conn, payload = pdf_scope
+    with pytest.raises(ValueError):
+        build_analysis_scope(conn, AnalysisScopeRequest.model_validate_json(json.dumps(payload)))

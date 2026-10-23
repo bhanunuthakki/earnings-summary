@@ -731,3 +731,10 @@ original source bindings are reused; cash counterfactuals rerun the native bridg
 rather than patching net cash. Report selectors and workbook expectations read
 the same receipt calculations. Legacy contexts do not claim these diagnostics.
 Workbook edits do not renew financial qualification.
+
+
+### Explicit publisher links for CDN-hosted report documents
+
+A current `AnalysisIssuerDocumentSelection` can pin a `PublisherDocumentLink` when an issuer publishes its PDF on another HTTPS host. Scope v8 retains the exact publisher-page observation and byte hash, the selected Nordic JSON path and complete link-record hash, and the existing PDF capture and byte hash. The publisher page must use the verified issuer authority's host and must have no query or fragment. The verifier parses retained JSON data without executing JavaScript and requires an exact target URL. Missing, changed, foreign-publisher or future evidence fails closed. This proof does not establish historical availability or issuer-archive completeness.
+
+Scopes without a publisher link keep their existing versions and content commitments. A new v8 scope and research snapshot append the expanded population; they do not reopen or modify a retained seal. The `ir_presentation` document label maps to the existing presentation duty. The legacy `ir_doc` capture label is accepted for a report selection only when its explicit publisher link verifies. A coverage import can pin an existing source-obligation revision so a new acquisition revision retains an exact reporting-entity binding. Prior expectations and bindings remain immutable. Omitted pins preserve existing request commitments. Existing operator entrypoints remain unchanged; native scope and source checks cover this contract extension.

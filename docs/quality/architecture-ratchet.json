@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "f8ff15aac216b151cd93928cac3f78485fc71037",
+  "scoped_commit": "8caa3f1bed2d6e8ab5c57a7fc6b8c7bc605cdbf4",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "599f7c44f175b76e854520f219d6a15a4aee299181cedbbdbded1c04433a53ec",
+  "source_sha256": "74decedcb62d953d1bdddd1310c29687e0c1f388ab567c6ce6265be004c19a5d",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,8 +22,8 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1476,
-    "total_noncomment_loc": 567384,
+    "executable_modules": 1477,
+    "total_noncomment_loc": 567549,
     "modules_over_1000_loc": 110,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
@@ -15929,11 +15929,11 @@
         "path": "src/provenance/analysis_scope.py",
         "module": "provenance.analysis_scope",
         "lines": {
-          "physical": 1471,
-          "nonblank": 1390,
-          "noncomment": 1385
+          "physical": 1529,
+          "nonblank": 1446,
+          "noncomment": 1441
         },
-        "internal_fan_out": 9,
+        "internal_fan_out": 10,
         "responsibilities": [
           "database",
           "network"
@@ -16925,6 +16925,21 @@
         "fully_annotated_public_functions": 3
       },
       {
+        "path": "src/provenance/publisher_document_link.py",
+        "module": "provenance.publisher_document_link",
+        "lines": {
+          "physical": 117,
+          "nonblank": 100,
+          "noncomment": 100
+        },
+        "internal_fan_out": 1,
+        "responsibilities": [
+          "network"
+        ],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
+      },
+      {
         "path": "src/provenance/report_evidence_contract.py",
         "module": "provenance.report_evidence_contract",
         "lines": {
@@ -16941,9 +16956,9 @@
         "path": "src/provenance/reporting_document_scope.py",
         "module": "provenance.reporting_document_scope",
         "lines": {
-          "physical": 307,
-          "nonblank": 290,
-          "noncomment": 290
+          "physical": 308,
+          "nonblank": 291,
+          "noncomment": 291
         },
         "internal_fan_out": 2,
         "responsibilities": [
@@ -17222,9 +17237,9 @@
         "path": "src/provenance/source_coverage.py",
         "module": "provenance.source_coverage",
         "lines": {
-          "physical": 826,
-          "nonblank": 774,
-          "noncomment": 772
+          "physical": 827,
+          "nonblank": 775,
+          "noncomment": 773
         },
         "internal_fan_out": 5,
         "responsibilities": [
@@ -17238,9 +17253,9 @@
         "path": "src/provenance/source_coverage_reconcile.py",
         "module": "provenance.source_coverage_reconcile",
         "lines": {
-          "physical": 1249,
-          "nonblank": 1148,
-          "noncomment": 1139
+          "physical": 1256,
+          "nonblank": 1155,
+          "noncomment": 1146
         },
         "internal_fan_out": 5,
         "responsibilities": [
