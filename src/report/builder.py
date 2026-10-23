@@ -109,7 +109,8 @@ def build_report(
         force_budget_bypass=force_budget_bypass,
         conn=conn,
     )
-    saydo_section = saydo.build(ticker, repo_root, conn=conn)
+    # Only purpose-specific dirty regeneration bypasses the SayDo selection cache.
+    saydo_section = saydo.build(ticker, repo_root, conn=conn, enable_llm=enable_llm)
     ir_docs_section = ir_docs.build(ticker, repo_root, conn=conn)
     recent_developments_section = recent_developments.build(
         ticker=ticker,

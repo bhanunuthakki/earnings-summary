@@ -59,10 +59,6 @@ from report.models import ReportFlavor
 from report.renderers.etf_markdown import render as render_etf_markdown
 from report.renderers.markdown import render as render_markdown
 from report.renderers.sections_json import render as render_sections_json
-from report.renderers.workspace_data import (
-    filter_important_print_vs_guide,
-    parse_print_vs_guide,
-)
 from report.renderers.workspace_html import (
     render_report_body,
     render_standalone_report,
@@ -368,24 +364,14 @@ def _regenerate_native_purpose(
                 conn=conn,
             )
         elif purpose == "saydo_filter":
-            section = saydo.build(ticker, repo_root, conn=conn)
-            generated = 0
-            for card in section.cards:
-                rows = parse_print_vs_guide(card)
-                if not rows:
-                    continue
-                filter_important_print_vs_guide(
-                    ticker=ticker,
-                    repo_root=repo_root,
-                    card=card,
-                    rows=rows,
-                    enable_llm=True,
-                    force_refresh=True,
-                    strict_refresh=True,
-                )
-                generated += 1
-            if generated == 0:
-                raise RuntimeError(f"saydo_filter has no parseable commitments for {ticker}")
+            section = saydo.build(
+                ticker,
+                repo_root,
+                conn=conn,
+                enable_llm=True,
+                force_refresh=True,
+                strict_refresh=True,
+            )
         elif purpose == "exec_comp_alignment":
             section = exec_compensation.build(
                 ticker,

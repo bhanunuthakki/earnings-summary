@@ -8,11 +8,12 @@
         "tests/test_ir_spreadsheet_ingest.py": "9b4a27e23fc82982813392a0c8c03823dea516f7dcb66aab1602d53be80d8469",
         "tests/test_pipeline_suppression_boundaries.py": "d03e08d6ba4f44f4ef51e1b45fa3b15a8d60655d832ec0115351f40e408cdb7d"
       },
+      "commit": "e1bc7ba3ca381bcc56a1eef80ad57d956b841e69",
       "proof": "second reviewed candidate986changed-file tests and153transitive tests; R5focused15; R7focused212 incl comparison-mode goldens; no fullrelease claim",
       "review_prompt_sha256": "67f05f10b536e75227ab8bee20d6e91269bbf39dd0a79c1ca10955337b5ffb08",
       "scope": "Source-preserving spreadsheet parser to existing KPI writer handoff (native writer not retired)",
       "score": 92,
-      "status": "accepted source unchanged since second review; prepared for separate local commit"
+      "status": "accepted; committed locally unchanged"
     },
     "R7-SayDo": {
       "code_and_test_sha256": {

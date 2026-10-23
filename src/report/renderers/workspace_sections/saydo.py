@@ -10,16 +10,16 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from io import StringIO
-from pathlib import Path
 
-from report.models import ReportSpec, SayDoCard, SayDoHistoricalMetric, SayDoSection
+from report.models import (
+    PrintVsGuideRow,
+    SayDoCard,
+    SayDoHistoricalMetric,
+    SayDoSection,
+    SayDoVerdictRow,
+)
 from report.render_clock import render_today
 from report.renderers.workspace_charts import verdict_bar
-from report.renderers.workspace_data import (
-    PrintVsGuideRow,
-    filter_important_print_vs_guide,
-    parse_print_vs_guide,
-)
 from report.renderers.workspace_sections._shared import (
     _esc,
     _inline_md,
@@ -28,7 +28,6 @@ from report.renderers.workspace_sections._shared import (
     _quarter_selector,
     _render_markdown,
 )
-from report.sections.p3_data import SayDoVerdictRow
 from ui import living_grid as lg
 
 __all__ = [
@@ -46,10 +45,9 @@ __all__ = [
 def _saydo_tab(
     body: StringIO,
     section: SayDoSection,
-    spec: ReportSpec,
-    verdicts: list[SayDoVerdictRow] | None = None,
 ) -> None:
     cards = section.cards
+    verdicts = section.verdicts
     body.write('<div class="tab-body">')
     if not cards:
         _missing_panel(body, section.status, section.missing)
@@ -103,19 +101,14 @@ def _saydo_tab(
         body.write('<div class="saydo-meta-label">vs prior-quarter guide</div>')
         body.write("</div></div>")
 
-        pvg = parse_print_vs_guide(card)
-        if pvg:
-            # LLM-filter to drop trivial commitments (FX, tax, share-count noise)
-            # when --enable-llm; else show parsed rows verbatim. Both cache to disk.
-            filtered = filter_important_print_vs_guide(
-                ticker=spec.ticker,
-                repo_root=Path(spec.repo_root),
-                card=card,
-                rows=pvg,
-                enable_llm=spec.llm_enabled,
-            )
+        if card.print_vs_guide_rows:
+            selected = [card.print_vs_guide_rows[index] for index in card.selected_row_indices]
             _saydo_print_vs_guide(
-                body, card, filtered, total_parsed=len(pvg), llm_filtered=spec.llm_enabled
+                body,
+                card,
+                selected,
+                total_parsed=len(card.print_vs_guide_rows),
+                llm_filtered=card.selection_disposition in {"model", "cache"},
             )
         # (No parsed print-vs-guide table → no panel; the full narrative
         # below carries the comparison in prose. P4.2 hide-don't-stub.)

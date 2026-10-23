@@ -358,8 +358,11 @@ def render_report_body(spec: ReportSpec) -> RenderedReportBody:
     )
     _tabs(body, groups, ticker=spec.ticker)
     body.write('<div class="l1-root">')
-    _identity(body, spec, p3.saydo_verdicts)
-    if PanelAvailability.UNAVAILABLE in p3.availability.values():
+    _identity(body, spec, spec.saydo.verdicts)
+    if (
+        PanelAvailability.UNAVAILABLE in p3.availability.values()
+        or spec.saydo.verdicts_availability == "unavailable"
+    ):
         body.write(
             k_empty(
                 "Some supporting research data is unavailable for this report. Empty panels may be incomplete."
@@ -370,7 +373,7 @@ def render_report_body(spec: ReportSpec) -> RenderedReportBody:
     _reread_strip(body, spec.synthesis)
 
     # P3 panel data (macro sensitivities, strategic targets, customer
-    # concentrations, lease ladder, decision history, say-do verdicts,
+    # concentrations, lease ladder, decision history,
     # peer comp, open notes) — pre-loaded once; the open-notes strip leads
     # the page (P4.4: builds lead with the owner's standing watch-items)
     # and the rest threads into the tab definitions.
@@ -535,7 +538,7 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
             "saydo",
             "Say · Do",
             len(spec.saydo.cards),
-            lambda b: _saydo_tab(b, spec.saydo, spec, p3.saydo_verdicts),
+            lambda b: _saydo_tab(b, spec.saydo),
         ),
         (
             "financials",

@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import cast
 
 from macro_store import fetch_sensitivities
+from report.models import SayDoVerdictRow as SayDoVerdictRow
 from runtime.deterministic import table_exists as _table_exists
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -113,28 +114,6 @@ class DecisionHistorySummary:
     by_conviction: dict[str, int]
     win_rate_overall: float | None
     rows: list[DecisionRow]
-
-
-@dataclass(frozen=True)
-class SayDoVerdictRow:
-    """One management commitment + outcome — the P3-21 grading-overlay row.
-
-    Field names mirror the management_commitments columns (alembic 0017)
-    rather than inventing a new vocabulary: `period_made` is when management
-    said it, `period_target` is the period they were guiding for, `outcome`
-    is the post-match verdict.
-    """
-
-    period_made: datetime
-    period_target: datetime
-    kpi_name: str
-    comparator: str
-    target_value: float
-    unit: str
-    narrative: str
-    realized_value: float | None
-    outcome: str | None
-    evaluated_at: datetime | None
 
 
 # ---------------------------------------------------------------------------

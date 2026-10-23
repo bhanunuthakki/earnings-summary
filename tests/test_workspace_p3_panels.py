@@ -28,7 +28,6 @@ from report.models import (
     IrDocsSection,
     KpiLedgerRow,
     QuickCategorizationRow,
-    ReportSpec,
     SayDoCard,
     SayDoSection,
     SectionStatus,
@@ -1018,8 +1017,6 @@ def test_saydo_tab_includes_verdicts_panel() -> None:
             )
         ],
     )
-    # Tab needs a spec for .repo_root/.llm_enabled — minimal stub.
-    spec = _spec_for_saydo()
     verdicts = [
         SayDoVerdictRow(
             period_made=datetime(2025, 10, 30),
@@ -1035,7 +1032,8 @@ def test_saydo_tab_includes_verdicts_panel() -> None:
         ),
     ]
     out = StringIO()
-    _saydo_tab(out, section, spec, verdicts)
+    section.verdicts = verdicts
+    _saydo_tab(out, section)
     html = out.getvalue()
     assert "Say·Do verdict ledger" in html
     assert "Cloud growth" in html
@@ -1108,7 +1106,6 @@ def test_load_workspace_p3_panels_cold_repo(tmp_path: Path) -> None:
     assert p3.customer_concentrations == []
     assert p3.lease_ladder == []
     assert p3.decision_history.total == 0
-    assert p3.saydo_verdicts == []
     assert p3.peer_comp == []
 
 
@@ -1145,21 +1142,6 @@ def test_load_workspace_p3_panels_with_seeded_db(tmp_path: Path) -> None:
     assert p3.decision_history.total == 0
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _spec_for_saydo() -> ReportSpec:
-    """Minimal stand-in for ``ReportSpec`` carrying just the attrs ``_saydo_tab``
-    needs (``repo_root``, ``ticker``, ``llm_enabled``).
-
-    Construct only the fields read by this isolated renderer seam.
-    """
-
-    return ReportSpec.model_construct(repo_root="/tmp/synthetic", ticker="TEST", llm_enabled=False)
-
-
 def test_workspace_p3_panels_empty_factory() -> None:
     """`.empty()` classmethod provides a safe default instance."""
     empty = WorkspaceP3Panels.empty()
@@ -1169,7 +1151,6 @@ def test_workspace_p3_panels_empty_factory() -> None:
     assert empty.lease_ladder == []
     assert empty.decision_history.total == 0
     assert empty.decision_history.rows == []
-    assert empty.saydo_verdicts == []
     assert empty.peer_comp == []
     assert empty.open_notes == []
 

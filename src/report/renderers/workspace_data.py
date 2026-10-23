@@ -1,18 +1,11 @@
 """Data shapers for the workspace renderer.
 
-Four jobs:
+Two jobs:
 
-1. **Saydo parser** — pulls a "print vs guide" row list out of the
-   ``cards[].saydo_md`` markdown the LLM emits. The design has a structured
-   table slot; this parser bridges from the existing markdown contract
-   without requiring a new compute phase.
-2. **Saydo LLM filter** — when enable_llm is True, takes the parsed
-   print-vs-guide rows and asks Claude to pick the strategically important
-   ones (skipping FX trivia, tax-rate noise, etc.). Cached on disk.
-3. **News structurer** — re-shapes the free-markdown
+1. **News structurer** — re-shapes the free-markdown
    ``RecentDevelopmentsSection.content_md`` into the design's tile layout
    (date / tag / source / headline / gloss / tone).
-4. **KPI-strip picker** — selects up to N tier-1 KPI ledger rows that have
+2. **KPI-strip picker** — selects up to N tier-1 KPI ledger rows that have
    enough history for a sparkline, and normalizes their formatting.
 
 Everything degrades to an empty list when the source doesn't parse, so the
@@ -21,8 +14,6 @@ renderer can fall through to a stub panel instead of crashing.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import re
 import sqlite3
@@ -34,20 +25,9 @@ from pathlib import Path
 from typing import TypeVar, cast
 
 from advisor.store import count_memos
-from llm_client import (
-    compose_anchor_block,
-    generate_saydo_filter,
-    load_bear_anchor,
-    load_ir_anchor,
-    load_owner_profile_anchor,
-    load_priors_anchor,
-    load_thesis_anchor,
-    load_worldview_anchor,
-)
 from report.models import (
     KpiLedgerRow,
     RecentDevelopmentsSection,
-    SayDoCard,
 )
 from report.renderers.charts_v2 import fmt_compact
 from report.sections.comp_set_context import (
@@ -60,14 +40,12 @@ from report.sections.p3_data import (
     LeaseLadderRow,
     MacroSensitivityRow,
     PeerCompRow,
-    SayDoVerdictRow,
     StrategicTargetRow,
     load_customer_concentrations,
     load_decision_history,
     load_lease_ladder,
     load_macro_sensitivities,
     load_peer_comp,
-    load_saydo_verdicts,
     load_strategic_targets,
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -84,235 +62,6 @@ _TIMES = chr(0x00D7)  # multiplication sign, ratio multiplier
 _EMDASH = chr(0x2014)
 _ENDASH = chr(0x2013)
 _DASH_CHARS = _EMDASH + _ENDASH + "-"
-
-
-# ---------------------------------------------------------------------------
-# Print-vs-guide rows (Say-Do)
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class PrintVsGuideRow:
-    metric: str
-    guide: str
-    actual: str
-    verdict: str  # EXCEEDED / MET / MISSED / unknown
-
-
-# Header column we accept as the leading column of the print-vs-guide table.
-# LLM emits sometimes "Metric", sometimes "Commitment", sometimes "Item" —
-# all map to the same row shape (label first, then prior, then current,
-# then a verdict-ish trailing column).
-_HEADER_LEADERS = ("Metric", "Commitment", "Item", "Promise", "Topic")
-_DO_TABLE_HEADER_RX = re.compile(
-    r"^\|\s*(?P<leader>" + "|".join(_HEADER_LEADERS) + r")\s*\|(?P<rest>.+)\|\s*$",
-    re.MULTILINE | re.IGNORECASE,
-)
-_TABLE_ROW_RX = re.compile(r"^\|(.+)\|\s*$", re.MULTILINE)
-
-
-def parse_print_vs_guide(card: SayDoCard) -> list[PrintVsGuideRow]:
-    """Extract the most "print-vs-guide"-shaped pipe table from the SayDo md.
-
-    The LLM contract is loose: tables vary across cards
-    (Commitment / From Call / Checkable / Gap; Metric / Prior / Current / Direction;
-    Item / Guide / Actual / Verdict; etc). We accept any 4+ column pipe table
-    whose first header column is one of ``_HEADER_LEADERS`` and map the cells
-    to (label, prior-context, current-context, verdict-ish) row by row.
-    Returns an empty list on format mismatch so the renderer falls back to a
-    stub.
-    """
-    md = card.saydo_md or ""
-    if not md:
-        return []
-    header_match = _DO_TABLE_HEADER_RX.search(md)
-    if header_match is None:
-        return []
-    rest = md[header_match.end() :]
-    rows: list[PrintVsGuideRow] = []
-    skipped_separator = False
-    for row_match in _TABLE_ROW_RX.finditer(rest):
-        cells = [c.strip() for c in row_match.group(1).split("|")]
-        cells = [c for c in cells if c != ""]
-        if not skipped_separator:
-            if all(set(c) <= {"-", ":"} for c in cells):
-                skipped_separator = True
-                continue
-            break
-        if len(cells) < 3:
-            break
-        # Permissive mapping: label is always cells[0]; the verdict-like
-        # signal is always the LAST cell; "guide" and "actual" share the
-        # middle cells (collapse if there's only one).
-        label = cells[0]
-        verdict_cell = cells[-1]
-        if len(cells) >= 4:
-            guide = cells[1]
-            actual = " · ".join(cells[2:-1])
-        else:
-            guide = ""
-            actual = cells[1]
-        verdict = _direction_to_verdict(verdict_cell)
-        rows.append(PrintVsGuideRow(metric=label, guide=guide, actual=actual, verdict=verdict))
-    return rows
-
-
-def filter_important_print_vs_guide(
-    ticker: str,
-    repo_root: Path,
-    card: SayDoCard,
-    rows: list[PrintVsGuideRow],
-    enable_llm: bool,
-    *,
-    force_refresh: bool = False,
-    strict_refresh: bool = False,
-) -> list[PrintVsGuideRow]:
-    """LLM-judged filter: keep only the strategically important commitments.
-
-    Falls back to the full list (just truncated to 8) when ``enable_llm`` is
-    False or the LLM call fails. Cached under ``data/saydo_filter/<TICKER>.json``
-    keyed by sha256 of the payload + card identity.
-    """
-    if not rows:
-        return rows
-    if not enable_llm:
-        return rows[:8]
-    payload = [
-        {
-            "id": str(i),
-            "metric": r.metric,
-            "guide": r.guide,
-            "actual": r.actual,
-            "verdict": r.verdict,
-        }
-        for i, r in enumerate(rows)
-    ]
-    # Anchor block must be in the cache key so a fresh thesis edit, new bear
-    # case, new IR-deck cache, or a changed open analyst note invalidates
-    # stale filter decisions.
-    anchor_block = compose_anchor_block(
-        load_thesis_anchor(repo_root, ticker),
-        load_bear_anchor(repo_root, ticker),
-        load_ir_anchor(repo_root, ticker),
-        load_priors_anchor(repo_root, ticker),
-        load_worldview_anchor(repo_root),  # inert until LEDGER_WORLDVIEW_ANCHOR
-        load_owner_profile_anchor(repo_root),  # inert until a fact is affirmed
-    )
-    cache_key = _saydo_filter_cache_key(card, payload, anchor_block)
-    cached = None if force_refresh else _load_saydo_filter_cache(repo_root, ticker, cache_key)
-    if cached is None:
-        try:
-            quarter_label = f"{card.current_quarter} {card.current_year}"
-            raw = generate_saydo_filter(ticker, quarter_label, payload, anchor_block=anchor_block)
-            cached = _parse_saydo_filter_response(raw)
-            if strict_refresh:
-                valid_ids = {str(i) for i in range(len(rows))}
-                selected_ids = set(cached)
-                if not selected_ids or not selected_ids.issubset(valid_ids):
-                    raise ValueError("saydo_filter returned invalid commitment ids")
-            _save_saydo_filter_cache(repo_root, ticker, cache_key, cached)
-        except Exception:
-            if strict_refresh:
-                raise
-            # Soft-fail: show all rows (truncated) so the panel still renders.
-            return rows[:8]
-    kept_ids = set(cached)
-    kept = [r for i, r in enumerate(rows) if str(i) in kept_ids]
-    if not kept:
-        # LLM dropped everything (shouldn't happen, but be defensive).
-        return rows[:8]
-    return kept
-
-
-def _saydo_filter_cache_key(
-    card: SayDoCard, payload: list[dict[str, str]], anchor_block: str = ""
-) -> str:
-    h = hashlib.sha256()
-    h.update(f"{card.current_quarter}{card.current_year}".encode())
-    h.update(b"\x00")
-    h.update(json.dumps(payload, sort_keys=True).encode("utf-8"))
-    h.update(b"\x00")
-    h.update(anchor_block.encode("utf-8"))
-    return h.hexdigest()
-
-
-def _saydo_filter_cache_path(repo_root: Path, ticker: str) -> Path:
-    return repo_root / "data" / "saydo_filter" / f"{ticker.upper()}.json"
-
-
-def _load_saydo_filter_cache(repo_root: Path, ticker: str, cache_key: str) -> list[str] | None:
-    path = _saydo_filter_cache_path(repo_root, ticker)
-    if not path.exists():
-        return None
-    try:
-        payload = cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
-    except (OSError, json.JSONDecodeError):
-        return None
-    by_key_raw = payload.get("by_key")
-    if not isinstance(by_key_raw, dict):
-        return None
-    by_key = cast("dict[str, object]", by_key_raw)
-    entry_raw = by_key.get(cache_key)
-    if not isinstance(entry_raw, list):
-        return None
-    entry = cast("list[object]", entry_raw)
-    return [str(i) for i in entry]
-
-
-def _save_saydo_filter_cache(repo_root: Path, ticker: str, cache_key: str, ids: list[str]) -> None:
-    path = _saydo_filter_cache_path(repo_root, ticker)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    existing: dict[str, object] = {"by_key": {}}
-    if path.exists():
-        try:
-            loaded = cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
-            if isinstance(loaded.get("by_key"), dict):
-                existing = loaded
-        except (OSError, json.JSONDecodeError):
-            pass
-    by_key = cast("dict[str, object]", existing["by_key"])
-    by_key[cache_key] = ids
-    path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
-
-
-_JSON_ARRAY_RX = re.compile(r"\[[^\[\]]*\]", re.DOTALL)
-
-
-def _parse_saydo_filter_response(raw: str) -> list[str]:
-    """LLM sometimes appends a markdown rationale after the JSON array — extract
-    just the first top-level array. Tolerant of leading/trailing prose."""
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        # Find the first JSON-array-shaped substring and try again.
-        m = _JSON_ARRAY_RX.search(raw)
-        if m is None:
-            raise ValueError("saydo_filter response had no JSON array") from None
-        parsed = json.loads(m.group(0))
-    if not isinstance(parsed, list):
-        raise ValueError("saydo_filter response was not a JSON array")
-    return [str(value) for value in cast("list[object]", parsed)]
-
-
-def _direction_to_verdict(direction: str) -> str:
-    """Heuristic mapping of the 'Direction vs. Trajectory' cell to a verdict.
-
-    The LLM uses arrows and free text. We classify by symbol first, then by
-    a small keyword set. Unknown directions stay 'unknown' so the renderer
-    pill shows the muted/neutral variant.
-    """
-    text = direction.lower()
-    if "↑" in direction or "acceleration" in text or "expansion" in text or "beat" in text:
-        return "EXCEEDED"
-    if "↓" in direction or "miss" in text or "decel" in text or "contract" in text:
-        return "MISSED"
-    if "→" in direction or "in-line" in text or "in line" in text or "clean delivery" in text:
-        return "MET"
-    if "exceeded" in text:
-        return "EXCEEDED"
-    if "met" in text:
-        return "MET"
-    return "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -832,7 +581,6 @@ _DATABASE_PANELS = (
     "customer_concentrations",
     "lease_ladder",
     "decision_history",
-    "saydo_verdicts",
     "open_notes",
     "position_review_count",
     "standing_rules",
@@ -863,7 +611,6 @@ class WorkspaceP3Panels:
     customer_concentrations: list[CustomerConcentrationRow]
     lease_ladder: list[LeaseLadderRow]
     decision_history: DecisionHistorySummary
-    saydo_verdicts: list[SayDoVerdictRow]
     peer_comp: list[PeerCompRow]
     # P4.4: the owner's open analyst notes for this name — new builds lead
     # with the standing watch-items (the strip under the thesis lede).
@@ -904,7 +651,6 @@ class WorkspaceP3Panels:
                 win_rate_overall=None,
                 rows=[],
             ),
-            saydo_verdicts=[],
             peer_comp=[],
             open_notes=[],
             position_review_count=None,
@@ -1193,12 +939,6 @@ def load_workspace_p3_panels(
                 empty.decision_history,
                 lambda history: history.total > 0,
             ),
-            saydo_verdicts=read(
-                "saydo_verdicts",
-                "management_commitments",
-                lambda: load_saydo_verdicts(ticker, conn=db_conn),
-                [],
-            ),
             peer_comp=read(
                 "peer_comp",
                 "tracked_companies",
@@ -1239,14 +979,12 @@ __all__ = [
     "KpiStripTile",
     "NewsTile",
     "PanelAvailability",
-    "PrintVsGuideRow",
     "StandingRuleRow",
     "StandingRulesPanel",
     "WorkspaceP3Panels",
     "format_ledger_value",
     "load_standing_rules",
     "load_workspace_p3_panels",
-    "parse_print_vs_guide",
     "quarter_short",
     "select_kpi_strip",
     "structure_news",

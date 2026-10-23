@@ -130,6 +130,7 @@ from report.sections.p3_data import (
     SayDoVerdictRow,
     StrategicTargetRow,
 )
+from report.sections.saydo import prepare_cards
 from user_state.notes import AnalystNoteRow
 
 GOLDEN_DIR = Path(__file__).resolve().parent / "golden" / "workspace"
@@ -675,7 +676,7 @@ def _qa_roster() -> QARosterSection:
 
 
 def _saydo() -> SayDoSection:
-    return SayDoSection(
+    section = SayDoSection(
         status=SectionStatus.OK,
         cards=[
             SayDoCard(
@@ -734,6 +735,11 @@ def _saydo() -> SayDoSection:
             ),
         ],
     )
+
+    prepare_cards("ACME", Path("."), section.cards)
+    section.verdicts = _saydo_verdicts()
+    section.verdicts_availability = "present"
+    return section
 
 
 def _valuation_basis() -> ValuationBasisSection:
@@ -1185,6 +1191,35 @@ def _bear() -> BearCaseSection:
     )
 
 
+def _saydo_verdicts() -> list[SayDoVerdictRow]:
+    return [
+        SayDoVerdictRow(
+            period_made=datetime(2025, 11, 5),
+            period_target=datetime(2026, 3, 31),
+            kpi_name="Revenue",
+            comparator="gte",
+            target_value=1760.0,
+            unit="USD millions",
+            narrative="Q1 revenue of $1.76-1.79B.",
+            realized_value=1810.0,
+            outcome="met",
+            evaluated_at=_TS,
+        ),
+        SayDoVerdictRow(
+            period_made=datetime(2026, 2, 4),
+            period_target=datetime(2026, 6, 30),
+            kpi_name="Operating margin",
+            comparator="gte",
+            target_value=24.0,
+            unit="%",
+            narrative="Q2 margin at or above 24%.",
+            realized_value=None,
+            outcome=None,
+            evaluated_at=None,
+        ),
+    ]
+
+
 def _p3_rich() -> WorkspaceP3Panels:
     return WorkspaceP3Panels(
         macro_sensitivities=[
@@ -1299,32 +1334,6 @@ def _p3_rich() -> WorkspaceP3Panels:
                 ),
             ],
         ),
-        saydo_verdicts=[
-            SayDoVerdictRow(
-                period_made=datetime(2025, 11, 5),
-                period_target=datetime(2026, 3, 31),
-                kpi_name="Revenue",
-                comparator="gte",
-                target_value=1760.0,
-                unit="USD millions",
-                narrative="Q1 revenue of $1.76-1.79B.",
-                realized_value=1810.0,
-                outcome="met",
-                evaluated_at=_TS,
-            ),
-            SayDoVerdictRow(
-                period_made=datetime(2026, 2, 4),
-                period_target=datetime(2026, 6, 30),
-                kpi_name="Operating margin",
-                comparator="gte",
-                target_value=24.0,
-                unit="%",
-                narrative="Q2 margin at or above 24%.",
-                realized_value=None,
-                outcome=None,
-                evaluated_at=None,
-            ),
-        ],
         peer_comp=[
             PeerCompRow(
                 peer_ticker="RIVL",

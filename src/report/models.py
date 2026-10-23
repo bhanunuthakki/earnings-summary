@@ -8,6 +8,7 @@ section carries an explicit `status` so a downstream renderer can show a clear
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum, StrEnum
 from typing import Literal
@@ -905,6 +906,42 @@ class EarningsSection(BaseModel):
     themes_note: str | None = None
 
 
+class PrintVsGuideRow(BaseModel):
+    """One supported narrative commitment, preserved before strategic selection."""
+
+    metric: str
+    guide: str
+    actual: str
+    verdict: str
+
+
+SayDoSelectionDisposition = Literal[
+    "model", "cache", "non_llm_fallback", "failed_fallback", "no_parsable_rows"
+]
+
+
+@dataclass(frozen=True)
+class SayDoVerdictRow:
+    """One management commitment + outcome — the P3-21 grading-overlay row.
+
+    Field names mirror the management_commitments columns (alembic 0017)
+    rather than inventing a new vocabulary: `period_made` is when management
+    said it, `period_target` is the period they were guiding for, `outcome`
+    is the post-match verdict.
+    """
+
+    period_made: datetime
+    period_target: datetime
+    kpi_name: str
+    comparator: str
+    target_value: float
+    unit: str
+    narrative: str
+    realized_value: float | None
+    outcome: str | None
+    evaluated_at: datetime | None
+
+
 class SayDoCard(BaseModel):
     """One pairwise Say-Do analysis: prior-quarter guidance vs current-quarter results.
 
@@ -923,6 +960,9 @@ class SayDoCard(BaseModel):
         None  # "Bullish" / "Bearish" / "Neutral" (free text after "Thesis View:")
     )
     attribution: str | None = None  # one-line excerpt after "Attribution:"
+    print_vs_guide_rows: list[PrintVsGuideRow] = Field(default_factory=list[PrintVsGuideRow])
+    selected_row_indices: list[int] = Field(default_factory=list[int])
+    selection_disposition: SayDoSelectionDisposition = "no_parsable_rows"
 
 
 class SayDoHistoricalMetric(BaseModel):
@@ -951,6 +991,10 @@ class SayDoSection(BaseModel):
     status: SectionStatus
     missing: MissingReason | None = None
     cards: list[SayDoCard] = Field(default_factory=list[SayDoCard])
+    verdicts: list[SayDoVerdictRow] = Field(default_factory=list[SayDoVerdictRow])
+    verdicts_availability: Literal["present", "empty", "not_configured", "unavailable"] = (
+        "not_configured"
+    )
     historical_metrics: list[SayDoHistoricalMetric] = Field(
         default_factory=list[SayDoHistoricalMetric]
     )
