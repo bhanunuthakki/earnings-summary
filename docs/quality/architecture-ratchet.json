@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "8a950da3970d7e9821b77c4cc9064b360a69dd1e",
+  "scoped_commit": "2014fa280ba6c77d4554398189888c33e2e4707c",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "b4b370bd8fc3ec8e86b23172578bee0258a40937503a2aa4bf38db46f43faa8e",
+  "source_sha256": "6daeae5fb333408cf74803f8bb0cbe5657c78178fb6867bd4bcdec2d80afa5d1",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1468,
-    "total_noncomment_loc": 562371,
+    "total_noncomment_loc": 562747,
     "modules_over_1000_loc": 108,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -3012,11 +3012,11 @@
         "path": "execution/extract_kpis_from_summaries.py",
         "module": "execution.extract_kpis_from_summaries",
         "lines": {
-          "physical": 158,
-          "nonblank": 138,
-          "noncomment": 138
+          "physical": 165,
+          "nonblank": 146,
+          "noncomment": 146
         },
-        "internal_fan_out": 4,
+        "internal_fan_out": 6,
         "responsibilities": [
           "database"
         ],
@@ -8370,16 +8370,17 @@
         "path": "src/compute/ir_narrative.py",
         "module": "compute.ir_narrative",
         "lines": {
-          "physical": 307,
-          "nonblank": 261,
-          "noncomment": 256
+          "physical": 441,
+          "nonblank": 377,
+          "noncomment": 369
         },
-        "internal_fan_out": 1,
+        "internal_fan_out": 4,
         "responsibilities": [
-          "filesystem"
+          "filesystem",
+          "network"
         ],
-        "public_functions": 3,
-        "fully_annotated_public_functions": 3
+        "public_functions": 4,
+        "fully_annotated_public_functions": 4
       },
       {
         "path": "src/compute/key_metrics.py",
@@ -8417,11 +8418,11 @@
         "path": "src/compute/kpi_extract_summaries.py",
         "module": "compute.kpi_extract_summaries",
         "lines": {
-          "physical": 1580,
-          "nonblank": 1428,
-          "noncomment": 1326
+          "physical": 1748,
+          "nonblank": 1602,
+          "noncomment": 1501
         },
-        "internal_fan_out": 19,
+        "internal_fan_out": 22,
         "responsibilities": [
           "database",
           "filesystem",
@@ -11857,11 +11858,11 @@
         "path": "src/llm/anchors.py",
         "module": "llm.anchors",
         "lines": {
-          "physical": 850,
-          "nonblank": 732,
-          "noncomment": 671
+          "physical": 815,
+          "nonblank": 703,
+          "noncomment": 646
         },
-        "internal_fan_out": 7,
+        "internal_fan_out": 8,
         "responsibilities": [
           "database",
           "filesystem",
@@ -14309,9 +14310,9 @@
         "path": "src/pipeline/kpi_persistence.py",
         "module": "pipeline.kpi_persistence",
         "lines": {
-          "physical": 1022,
-          "nonblank": 931,
-          "noncomment": 828
+          "physical": 1039,
+          "nonblank": 948,
+          "noncomment": 842
         },
         "internal_fan_out": 12,
         "responsibilities": [
@@ -14952,9 +14953,9 @@
         "path": "src/pipeline/run_accounting.py",
         "module": "pipeline.run_accounting",
         "lines": {
-          "physical": 509,
-          "nonblank": 463,
-          "noncomment": 459
+          "physical": 512,
+          "nonblank": 466,
+          "noncomment": 462
         },
         "internal_fan_out": 3,
         "responsibilities": [
@@ -16473,16 +16474,16 @@
         "path": "src/provenance/legacy_document_evidence.py",
         "module": "provenance.legacy_document_evidence",
         "lines": {
-          "physical": 189,
-          "nonblank": 156,
-          "noncomment": 156
+          "physical": 282,
+          "nonblank": 244,
+          "noncomment": 244
         },
         "internal_fan_out": 2,
         "responsibilities": [
           "database"
         ],
-        "public_functions": 0,
-        "fully_annotated_public_functions": 0
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
       },
       {
         "path": "src/provenance/legacy_fact_evidence_match.py",

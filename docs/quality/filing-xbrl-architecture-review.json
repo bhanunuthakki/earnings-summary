@@ -8,8 +8,8 @@
       "current": 1468
     },
     "total_noncomment_loc": {
-      "prior": 562342,
-      "current": 562371
+      "prior": 562718,
+      "current": 562747
     },
     "modules_over_1000_loc": {
       "prior": 108,
@@ -32,5 +32,7 @@
       "current": 16
     }
   },
-  "baseline_update": "Complete unchanged-scanner receipt regenerated intentionally for reviewed feature growth. Full checks and Opus activation review remain required."
+  "baseline_update": "Complete unchanged-scanner receipt regenerated intentionally for reviewed feature growth. Full checks and Opus activation review remain required.",
+  "integrated_main": "6a5c7930056139f36c3b7a0296ca77a33ae74a5d",
+  "additional_noncomment_loc": 29
 }

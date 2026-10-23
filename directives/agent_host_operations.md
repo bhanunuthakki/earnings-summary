@@ -104,3 +104,19 @@ The existing application caller enforces the manifest's 600-second deadline and
 output caps through `run_capped_process`. Its Windows Job owns the launcher tree.
 The launcher stops its nested child Job before private UI cleanup. Direct
 unbounded launcher invocation is not an approved operational entrypoint.
+
+## Abandoned filing-XBRL global mutex
+
+An abandoned `Global\EarningsSummaryFilingXbrlLauncherV2` mutex causes a refusal.
+Keep this behavior. The previous invocation can have incomplete ACL cleanup.
+Hold its service and scheduler owners before recovery. Resolve the exact invoking
+user, immutable roots and owned Job receipts. Stop only verified owned children.
+Require zero active Job processes and close all remaining launcher handles.
+
+Compare immutable bytes and full ACL populations with the retained baseline.
+Remove only proven invocation-owned grants. Preserve V1 and every pre-existing
+V2 profile. Unknown ownership, changed bytes, a missing baseline or another live
+owner causes HOLD. Do not change the mutex owner, DACL or name to bypass the hold.
+After exact restoration, require one bounded acquire/release and contention check
+without an abandoned-state exception. Run configured byte preflight before one
+supervised replay. Do not retry an unchanged failure.
