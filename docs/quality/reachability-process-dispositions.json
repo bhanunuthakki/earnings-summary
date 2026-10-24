@@ -497,14 +497,13 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "_run_stage runs only the fixed refresh, lens, and dashboard scripts via managed_python_argv.",
-      "fingerprint": "00eb54b48b8951264cf055057daa8046a12e61e1fe32a623aaad6d5670a7210e",
-      "line": 228,
+      "evidence": "_run_stage runs only the fixed refresh and lens scripts via managed_python_argv; the standalone dashboard export stage is retired.",
+      "fingerprint": "f1a451950a69f34ef4f50c68205f7266eb39179cd256fa76556efe12b26679b3",
+      "line": 225,
       "path": "execution/run_weekly_synthesis.py",
       "targets": [
         "execution/refresh_dirty_artifacts.py",
-        "execution/run_lens.py",
-        "execution/build_analytical_dashboard.py"
+        "execution/run_lens.py"
       ]
     },
     {
@@ -1052,7 +1051,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "769426b0f0f3722b4341ba4682879a978a914874b0760d6fbe3601ce63bf6a5e",
+      "source_sha256": "9cd813c075f43c24d0188232e62d360f5292511332138ed898e9bbee25392a45",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

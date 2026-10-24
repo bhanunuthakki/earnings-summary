@@ -77,7 +77,7 @@ def test_weekly_synthesis_resumes_checkpoint_then_clears_it(
 
     monkeypatch.setattr(weekly.subprocess, "run", resumed)
     assert weekly.run(tmp_path) == 0
-    assert len(resumed_calls) == 3
+    assert len(resumed_calls) == 2
     receipt = json.loads(capsys.readouterr().out)
     assert receipt["status"] == "ok"
     assert receipt["resumed_stages"] == ["refresh_dirty_artifacts"]
@@ -106,7 +106,7 @@ def test_roster_change_invalidates_completed_ticker_stage(
 
     monkeypatch.setattr(weekly.subprocess, "run", record)
     assert weekly.run(tmp_path) == 0
-    assert len(calls) == 5
+    assert len(calls) == 4
 
 
 def test_empty_portfolio_fails_before_spawning(
@@ -188,3 +188,74 @@ def test_db_override_cannot_launch_repo_root_stages_against_another_database(
     assert receipt["db_path"] == str(database_a)
     assert str(database_b) in receipt["detail"]
     assert "cannot safely thread EARNINGS_SUMMARY_DB_PATH" in receipt["detail"]
+
+
+def test_successful_weekly_run_spawns_only_retained_stages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _install_roster(monkeypatch, ["META"])
+    calls: list[list[str]] = []
+
+    def record(argv: list[str], **_kwargs: object) -> _Completed:
+        calls.append(argv)
+        return _Completed(0)
+
+    monkeypatch.setattr(weekly.subprocess, "run", record)
+    assert weekly.run(tmp_path) == 0
+    capsys.readouterr()
+    scripts = [
+        next(Path(part).name for part in reversed(argv) if part.endswith(".py")) for argv in calls
+    ]
+    assert scripts == ["refresh_dirty_artifacts.py", "run_lens.py", "run_lens.py"]
+    assert "build_analytical_dashboard.py" not in " ".join(" ".join(argv) for argv in calls)
+
+
+@pytest.mark.parametrize(
+    ("extra_stage", "expected_code"),
+    [("analytical_dashboard", 0), ("arbitrary_unknown_stage", 1)],
+)
+def test_version2_checkpoint_accepts_retired_stage_and_rejects_unknown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    extra_stage: str,
+    expected_code: int,
+) -> None:
+    _install_roster(monkeypatch, ["META"])
+    returns = iter([0, 7])
+
+    def staged(*_args: object, **_kwargs: object) -> _Completed:
+        return _Completed(next(returns))
+
+    monkeypatch.setattr(weekly.subprocess, "run", staged)
+    assert weekly.run(tmp_path) == 7
+    capsys.readouterr()
+    checkpoint = tmp_path / ".tmp" / "weekly_synthesis" / "state.json"
+    state = json.loads(checkpoint.read_text(encoding="utf-8"))
+    state["completed_stages"] = [
+        "refresh_dirty_artifacts",
+        "ticker_lenses:META",
+        "cross_portfolio_synthesis",
+        extra_stage,
+    ]
+    checkpoint.write_text(json.dumps(state), encoding="utf-8")
+    before = checkpoint.read_bytes()
+
+    def must_not_spawn(*_args: object, **_kwargs: object) -> _Completed:
+        pytest.fail("must not spawn from a fully completed checkpoint")
+
+    monkeypatch.setattr(weekly.subprocess, "run", must_not_spawn)
+    code = weekly.run(tmp_path)
+    receipt = json.loads(capsys.readouterr().out)
+    assert code == expected_code
+    if expected_code == 0:
+        assert receipt["resumed_stages"] == [
+            "refresh_dirty_artifacts",
+            "ticker_lenses:META",
+            "cross_portfolio_synthesis",
+        ]
+        assert not checkpoint.exists()
+    else:
+        detail = receipt["detail"].lower()
+        assert "unknown" in detail and "stage" in detail
+        assert checkpoint.read_bytes() == before

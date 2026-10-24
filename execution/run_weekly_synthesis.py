@@ -24,12 +24,13 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from db_paths import configured_db_path  # noqa: E402
-from runtime.python_process import managed_python_argv  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from db_paths import configured_db_path
+from runtime.python_process import managed_python_argv
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 _CHECKPOINT_VERSION = 2
 
@@ -135,10 +136,11 @@ def _load_completed(repo_root: Path, scope: str, stage_keys: tuple[str, ...]) ->
         raise CheckpointError(f"invalid checkpoint {path}: {exc}") from exc
     if checkpoint.scope != scope:
         return set()
-    unknown = set(checkpoint.completed_stages).difference(stage_keys)
+    completed = set(checkpoint.completed_stages) - {"analytical_dashboard"}
+    unknown = completed.difference(stage_keys)
     if unknown:
         raise CheckpointError(f"checkpoint contains unknown stages: {sorted(unknown)}")
-    return set(checkpoint.completed_stages)
+    return completed
 
 
 def _record_completed(
@@ -202,11 +204,6 @@ def _stages(repo_root: Path, tickers: list[str]) -> tuple[_Stage, ...]:
             "cross_portfolio_synthesis",
             "execution/run_lens.py",
             (*root_args, "--lens", "cross_portfolio_synthesis"),
-        ),
-        _Stage(
-            "analytical_dashboard",
-            "execution/build_analytical_dashboard.py",
-            root_args,
         ),
     )
 

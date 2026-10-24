@@ -4618,5 +4618,57 @@
     },
     "check_fast": "FAIL existing architecture modules_over_2000_loc26 versus25; boundaries PASS; no waiver",
     "acceptance": ".tmp/cleanup-open-model-execution/etf-adapter-prune-final-acceptance.json"
+  },
+  "legacy_dashboard_retirement_20261024": {
+    "baseline": "d0660083a",
+    "owner": "Retire new export generation and old feed; preserve savedexports/currentCockpit/sources/sharedanalytics",
+    "status": "accepted local implementation; global architecture/release HOLD",
+    "PRD_score": 94,
+    "metadata_PRD_amendment": 96,
+    "implementation_score": 94,
+    "review": ".tmp/cleanup-open-model-execution/legacy-dashboard-retirement-sol-implementation-review.json",
+    "source_proof": ".tmp/cleanup-open-model-execution/legacy-dashboard-source-proof.json",
+    "parity_proof": ".tmp/cleanup-open-model-execution/legacy-dashboard-parity-proof.json",
+    "net_code_test_lines_removed": 700,
+    "DTO_fields_before": 7,
+    "DTO_fields_after": 4,
+    "retired_query_functions": 3,
+    "retired_legacy_classes": 4,
+    "retained": "trigger/rereads/synthesis/budget fragments; currentCockpit; source and decision/calibration history; savedHTMLexports",
+    "checkpoint": "version2same-scope ignores onlyanalytical_dashboard completion; otherunknownkeys fail; retainedcompletionkeys preserve",
+    "XML": "Description only; exactoutsidebytes/UTF16BOM/53CRLF/tree/triggers/settings/actions preserved",
+    "governance": "Remove exactlydeletedCLI sys.pathallowance; keepguards andotherallowances; retireonlyoneunneededfullpage dynamicvisualpin; HOW/QA/weeklyrunbook/operator docs corrected",
+    "limits": [
+      "Synthetic proof only, no live financial or canonicalhost verification",
+      "No live task registration or schedule change, no source collection",
+      "Architecture/release HOLD26>25; fullcurrentbranchgatepending"
+    ],
+    "owning_and_design_suite": {
+      "passed": 401,
+      "seconds": 196.31,
+      "log": ".tmp/cleanup-open-model-execution/legacy-dashboard-final-owning-and-design-suite.log"
+    },
+    "registry_suite": {
+      "passed": 14,
+      "seconds": 1.7
+    },
+    "final_import_proof": ".tmp/cleanup-open-model-execution/legacy-dashboard-final-import-proof.json",
+    "graph": {
+      "path": ".tmp/cleanup-open-model-execution/legacy-dashboard-current-graph.json",
+      "status": "COMPLETE/PASS",
+      "stats": {
+        "files": 3533,
+        "edges": 39436,
+        "unknown": 170,
+        "diagnostics": 0,
+        "production_unknown": 0,
+        "production_unresolved": 0
+      },
+      "attempted_hashes_verified": 3720,
+      "unchanged_sites": 207,
+      "reviewed_changed_site": 1,
+      "unchanged_targets": 88
+    },
+    "acceptance": ".tmp/cleanup-open-model-execution/legacy-dashboard-final-acceptance.json"
   }
 }

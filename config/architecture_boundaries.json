@@ -49,7 +49,6 @@
     "execution/bootstrap_sec_historical_issuer.py",
     "execution/build_alert_feed.py",
     "execution/build_all_redesigned_dcf.py",
-    "execution/build_analytical_dashboard.py",
     "execution/build_comparable_sets.py",
     "execution/build_confidence_observations.py",
     "execution/build_earnings_calendar.py",

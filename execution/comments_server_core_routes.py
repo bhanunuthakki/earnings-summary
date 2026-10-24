@@ -11,9 +11,7 @@ from comments_server_context import ServerContext
 from flask import Flask, Response, redirect, request, send_file
 
 from identity import DEFAULT_USER_ID
-from pipeline.analytical_dashboard import build_analytical_dashboard
 from pipeline.dashboard_status import build_dashboard_rows
-from pipeline.tier_runner import tier_coverage_summary
 from pipeline.work_os_shell import render_work_os_shell_result
 
 
@@ -312,19 +310,16 @@ def register_core_routes(app: Flask, ctx: ServerContext) -> None:
 
     @app.route("/api/overview", methods=["GET"])
     def overview_api():
-        """Cross-ticker analytical overview as JSON: trigger ladder, insider
-        activity, predictions, decisions ledger, and the (read-only) LLM
-        spend/budget panel, plus tier coverage. Same data the static export
-        (execution/build_analytical_dashboard.py) renders — one code path,
-        no divergence. (``GET /analytical`` itself is a 302 into the shell.)
+        """Retired analytical overview endpoint.
 
-        Budget WRITES are intentionally not here — dashboard-managed budgets
-        (editable caps + modes + override) are owned by the #215 track; this
-        surfaces spend/cap/headroom read-only."""
-        dash = build_analytical_dashboard(db_path)
-        payload = dash.to_dict()
-        payload["tier_coverage"] = tier_coverage_summary(repo_root)
-        return payload
+        The static/JSON analytical dashboard was retired; clients should use
+        the cockpit screen instead. (``GET /analytical`` itself is a 302 into
+        the shell.)"""
+        return (
+            {"error": "retired", "replacement": "/#screen-cockpit"},
+            410,
+            {"Cache-Control": "no-store"},
+        )
 
     @app.route("/api/source-calls", methods=["GET"])
     def source_calls_api():

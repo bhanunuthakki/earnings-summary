@@ -1,43 +1,28 @@
-"""PR A — shared overview module: AnalyticalDashboard.to_dict() + the relocated
-renderer + the live /api/overview and /analytical endpoints.
+"""Shared overview module: the relocated renderer + the live /api/overview and
+/analytical endpoints.
 
-The data layer (pipeline.analytical_dashboard) was already pure-read and shared;
-PR A adds a JSON view (`to_dict`) and moves the render layer into
-pipeline.analytical_dashboard_html so the static export and the live command
-center render from one code path. These tests lock that contract.
+The data layer (pipeline.analytical_dashboard) is pure-read and shared; the
+render layer lives in pipeline.analytical_dashboard_html so the live command
+center and panel fragments render from one code path. These tests lock that
+contract.
 """
 
 from __future__ import annotations
 
-import json
 import sqlite3
-import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from flask.testing import FlaskClient
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-from flask.testing import FlaskClient  # noqa: E402
-
-from pipeline.analytical_dashboard import (  # noqa: E402
+from dispatch_registry import Job, Registry
+from pipeline.analytical_dashboard import (
     AnalyticalDashboard,
     TriggerLadderRow,
     build_analytical_dashboard,
 )
-from pipeline.analytical_dashboard_html import render_html  # noqa: E402
-
-_EXPECTED_KEYS = {
-    "trigger_ladder",
-    "insider_events",
-    "prediction_outcomes",
-    "portfolio_synthesis_md",
-    "per_ticker_reread",
-    "decisions",
-    "llm_budgets",
-}
+from pipeline.analytical_dashboard_html import render_panel_fragment
 
 
 def _seed_db(db_path: Path) -> None:
@@ -166,54 +151,27 @@ def _seed_db(db_path: Path) -> None:
     conn.close()
 
 
-def test_to_dict_empty_round_trips() -> None:
-    payload = AnalyticalDashboard().to_dict()
-    assert set(payload.keys()) == _EXPECTED_KEYS
-    # JSON-serializable with no custom encoder (proves no Decimal/datetime leaks).
-    restored = json.loads(json.dumps(payload))
-    assert restored["trigger_ladder"] == []
-    assert restored["decisions"]["recent"] == []
-    assert restored["llm_budgets"]["rows"] == []
-
-
 def test_build_missing_db_returns_empty(tmp_path: Path) -> None:
     dash = build_analytical_dashboard(tmp_path / "does_not_exist.db")
-    payload = dash.to_dict()
-    assert set(payload.keys()) == _EXPECTED_KEYS
-    json.dumps(payload)  # must not raise
-
-
-def test_render_html_empty_has_all_panels() -> None:
-    html = render_html(
-        AnalyticalDashboard(),
-        generated_at=datetime(2026, 6, 1, tzinfo=UTC),
-    )
-    assert html.startswith("<!doctype html>")
-    assert html.rstrip().endswith("</body></html>")
-    # Every panel renders its header even when empty. (The budget <h2> uses a
-    # literal '&' in the source markup — match it verbatim, don't assume escaping.)
-    for marker in ("Trigger ladder", "LLM spend & budget", "Decisions", "Portfolio synthesis"):
-        assert marker in html
+    assert dash == AnalyticalDashboard()
 
 
 def test_empty_states_use_k_empty_with_cli_command_folded() -> None:
-    """D4 (surface_density_jit_redesign.md): every CLI-instruction empty state
-    on this page leads with ONE k_empty() owner-vocabulary line, with the raw
+    """Retained shared-fragment contract: every CLI-instruction empty state on
+    this panel leads with ONE k_empty() owner-vocabulary line, with the raw
     command folded behind a <details> — never a bare `<p class="muted">…
-    <pre class="cli-hint">` dump up front. No in-app doorway exists for any
-    of these (they're all `python execution/...` one-shots), so the CLI stays
-    — just demoted behind the fold per the task's explicit carve-out."""
-    html = render_html(
-        AnalyticalDashboard(),
-        generated_at=datetime(2026, 6, 1, tzinfo=UTC),
+    <pre class="cli-hint">` dump up front. The fragment renders empty states
+    only; there is no static page or in-app doorway for these one-shots."""
+    dash = AnalyticalDashboard()
+    html = "".join(
+        render_panel_fragment(dash, name) or ""
+        for name in ("portfolio", "prereads", "holdings", "budget")
     )
     commands = (
-        "python execution/record_decisions.py",
         "python -m alembic upgrade head",
         "python execution/run_lens.py --lens cross_portfolio_synthesis",
         "python execution/run_lens.py --tickers AMZN,GOOG,META --lens five_min_reread",
         "python execution/refresh_dcf.py --all-named",
-        "python execution/backfill_insider_transactions.py --since 2024-01-01",
     )
     assert html.count('<p class="k-empty">') == len(commands)
     assert html.count("<details><summary>run manually</summary>") == len(commands)
@@ -223,30 +181,10 @@ def test_empty_states_use_k_empty_with_cli_command_folded() -> None:
         assert f'<details><summary>run manually</summary><pre class="cli-hint">{cmd}' in html
     # No bare "muted paragraph immediately followed by the raw command" shape
     # survives (the pre-fix pattern this replaces).
-    assert '<p class="muted">No decisions recorded' not in html
     assert '<p class="muted">No budget data' not in html
     assert '<p class="muted">No cross-portfolio synthesis' not in html
     assert '<p class="muted">No per-holding rereads' not in html
     assert '<p class="muted">No DCF runs' not in html
-    assert '<p class="muted">No insider data' not in html
-
-
-def test_ticker_link_css_removed_from_the_standalone_page() -> None:
-    """.ticker-link collapse (design_language §5): this page's own 5
-    emissions all migrated to ticker_label() (a.k-tick-sym), so its
-    page-scoped `.ticker-link` CSS rule — dead weight now that nothing on
-    THIS page emits the class — was removed. (command_center_shell.py's
-    SHARED `.ticker-link` rule has since been removed too, once
-    portfolio_panel.py / allocation_decisions_panel.py / advisor_memos_panel.py
-    finished migrating — a different surface, out of this test's scope.)"""
-    html = render_html(
-        AnalyticalDashboard(),
-        generated_at=datetime(2026, 6, 1, tzinfo=UTC),
-    )
-    assert ".ticker-link" not in html
-    assert 'class="ticker-link"' not in html
-    # The kit's own ticker-symbol styling is what's left to render it.
-    assert ".k-tick-sym" in html
 
 
 def test_build_and_to_dict_with_seeded_db(tmp_path: Path) -> None:
@@ -257,22 +195,15 @@ def test_build_and_to_dict_with_seeded_db(tmp_path: Path) -> None:
     # Budget panel picked up the seeded cap + spend.
     assert [r.purpose for r in dash.llm_budgets.rows] == ["bear_case"]
     assert dash.llm_budgets.rows[0].current_spend_usd == pytest.approx(12.50)
-    # Decisions ledger picked up the seeded recommendation.
-    assert [d.ticker for d in dash.decisions.recent] == ["NU"]
     # Trigger ladder positioned NU as 'sell' (over_under 0.25 > 0.20).
     assert [r.trigger_status for r in dash.trigger_ladder] == ["sell"]
-
-    payload = dash.to_dict()
-    restored = json.loads(json.dumps(payload))  # round-trips cleanly
-    assert restored["llm_budgets"]["rows"][0]["purpose"] == "bear_case"
-    assert restored["decisions"]["recent"][0]["ticker"] == "NU"
 
 
 def test_render_html_with_seeded_db_shows_content(tmp_path: Path) -> None:
     db_path = tmp_path / "portfolio.db"
     _seed_db(db_path)
     dash = build_analytical_dashboard(db_path)
-    html = render_html(dash, generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    html = "".join(render_panel_fragment(dash, name) or "" for name in ("budget", "holdings"))
     assert "bear_case" in html
     assert "NU" in html
 
@@ -295,10 +226,7 @@ def test_trigger_ladder_null_price_row_is_well_formed() -> None:
         dcf_fair_value=167.0,
         verdict="Pending",
     )
-    html = render_html(
-        AnalyticalDashboard(trigger_ladder=[row]),
-        generated_at=datetime(2026, 6, 1, tzinfo=UTC),
-    )
+    html = render_panel_fragment(AnalyticalDashboard(trigger_ladder=[row]), "holdings") or ""
     # Isolate the data row (its opener was the casualty of the bug).
     section = html[html.index("Trigger ladder") :]
     rstart = section.index('<tr class="tone-muted">')
@@ -383,15 +311,13 @@ def test_trigger_ladder_list_types_scopes_to_evaluation(tmp_path: Path) -> None:
 def test_record_console_triggers_scope_and_stub_filter(tmp_path: Path) -> None:
     """The Record console's Triggers section renders portfolio + evaluation
     theses only — watchlist rows (real or stub) stay out of it."""
-    from pipeline.portfolio_console_panel import (
-        _render_triggers,  # pyright: ignore[reportPrivateUsage]  # scope contract under test
-    )
+    from pipeline.portfolio_console_panel import render_portfolio_record_fragment
 
     db_path = tmp_path / "portfolio.db"
     _seed_db(db_path)
     _seed_ladder_extras(db_path)
 
-    html = _render_triggers(db_path)
+    html = render_portfolio_record_fragment(db_path, "triggers")
     assert "NU" in html and "EVA" in html
     assert "STB" not in html
     assert "WLR" not in html  # watchlist scope removed from the console
@@ -415,18 +341,17 @@ def test_llm_budget_panel_by_ticker(tmp_path: Path) -> None:
     assert dash.llm_budgets.total_spend_mtd_usd == pytest.approx(12.50)
     assert sum(r.current_spend_usd for r in dash.llm_budgets.by_ticker) == pytest.approx(17.50)
 
-    # Renders a By-ticker table and survives the JSON round-trip used by /api/overview.
-    html = render_html(dash, generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    # Renders a By-ticker table in the budget panel fragment.
+    html = render_panel_fragment(dash, "budget") or ""
     assert "By ticker" in html
     assert "AMD" in html
-    json.loads(json.dumps(dash.to_dict()))
 
 
 # ----- live endpoints (wired into comments_server) -----
 
 
 @pytest.fixture
-def client(tmp_path: Path):
+def client(tmp_path: Path) -> FlaskClient:
     import comments_server
 
     data_dir = tmp_path / "data"
@@ -436,16 +361,21 @@ def client(tmp_path: Path):
     return app.test_client()
 
 
-def test_overview_api_returns_json(client) -> None:
+def test_overview_api_returns_json(client: FlaskClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    import pipeline.analytical_dashboard as ad
+
+    def _no_build(*args: object, **kwargs: object) -> None:
+        pytest.fail("retired /api/overview must not assemble the dashboard")
+
+    monkeypatch.setattr(ad, "build_analytical_dashboard", _no_build)
     resp = client.get("/api/overview")
-    assert resp.status_code == 200
-    payload = resp.get_json()
-    assert _EXPECTED_KEYS.issubset(payload.keys())
-    assert "tier_coverage" in payload
-    assert payload["llm_budgets"]["rows"][0]["purpose"] == "bear_case"
+    assert resp.status_code == 410
+    assert resp.headers["Cache-Control"] == "no-store"
+    body = resp.get_data(as_text=True)
+    assert "#screen-cockpit" in body
 
 
-def test_analytical_page_redirects_to_shell(client) -> None:
+def test_analytical_page_redirects_to_shell(client: FlaskClient) -> None:
     """/analytical is folded into the shell — it now 302-redirects to the
     Triggers tab deep link rather than rendering a standalone page."""
     resp = client.get("/analytical")
@@ -458,27 +388,26 @@ def test_analytical_page_redirects_to_shell(client) -> None:
 
 def test_build_with_section_selector(tmp_path: Path) -> None:
     """`sections=` builds only the requested panel; the rest stay empty. `None`
-    (default) still builds everything — the /api/overview + static-export path."""
+    (default) retains 4 built sections as the shared-fragment contract."""
     db_path = tmp_path / "portfolio.db"
     _seed_db(db_path)
 
     only_ladder = build_analytical_dashboard(db_path, sections={"trigger_ladder"})
     assert [r.trigger_status for r in only_ladder.trigger_ladder] == ["sell"]  # requested
     assert only_ladder.llm_budgets.rows == []  # not requested → default empty
-    assert only_ladder.decisions.recent == []
 
     full = build_analytical_dashboard(db_path)  # sections=None
     assert full.llm_budgets.rows  # everything built, as before
 
 
-def test_tickers_api(client) -> None:
+def test_tickers_api(client: FlaskClient) -> None:
     resp = client.get("/api/tickers")
     assert resp.status_code == 200
     tickers = resp.get_json()["tickers"]
     assert any(t["ticker"] == "NU" and t["list_type"] == "portfolio" for t in tickers)
 
 
-def test_dcf_route_404_then_serves(client, tmp_path: Path) -> None:
+def test_dcf_route_404_then_serves(client: FlaskClient, tmp_path: Path) -> None:
     # The client fixture roots the app at tmp_path; no workbook yet → 404.
     assert client.get("/dcf/NU").status_code == 404
     dcf_dir = tmp_path / "dcf"
@@ -491,7 +420,7 @@ def test_dcf_route_404_then_serves(client, tmp_path: Path) -> None:
 # ----- PR 5: panel fragment endpoints -----
 
 
-def test_panel_fragment_budget_is_headless(client) -> None:
+def test_panel_fragment_budget_is_headless(client: FlaskClient) -> None:
     resp = client.get("/api/panel/budget")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
@@ -499,11 +428,11 @@ def test_panel_fragment_budget_is_headless(client) -> None:
     assert "bear_case" in body  # the seeded budget row rendered
 
 
-def test_panel_fragment_unknown_404(client) -> None:
+def test_panel_fragment_unknown_404(client: FlaskClient) -> None:
     assert client.get("/api/panel/nope").status_code == 404
 
 
-def test_panel_fragment_prereads_ticker_filter(client) -> None:
+def test_panel_fragment_prereads_ticker_filter(client: FlaskClient) -> None:
     # The seed has one NU reread; the full panel shows its card.
     all_body = client.get("/api/panel/prereads").get_data(as_text=True)
     assert 'class="reread-card"' in all_body
@@ -514,18 +443,19 @@ def test_panel_fragment_prereads_ticker_filter(client) -> None:
     assert 'class="reread-card"' not in amd_body
 
 
-def test_retired_panel_fragments_404(client) -> None:
+def test_retired_panel_fragments_404(client: FlaskClient) -> None:
     """P6.1: the theme migration's dead fragment endpoints are retired —
     insiders / predictions were killed from the nav (P1.1) with no remaining
     fetchers, and "decisions" was superseded by the Decisions record (P2.2,
-    /api/panel/decisions_record). Their sections still render inside the
-    full static export page (render_html)."""
+    /api/panel/decisions_record)."""
     assert client.get("/api/panel/insiders?ticker=NU").status_code == 404
     assert client.get("/api/panel/predictions").status_code == 404
     assert client.get("/api/panel/decisions").status_code == 404
 
 
-def test_panel_fragment_portfolio_degrades_without_tracker(client, monkeypatch) -> None:
+def test_panel_fragment_portfolio_degrades_without_tracker(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The Performance panel is the tracker view. With the tracker offline
     (dead URL) it must still render head/foot-less: the live section shows the
     offline note. The synthesis layer lives on its own panel now — none of it
@@ -613,7 +543,10 @@ def test_panel_fragment_portfolio_window_args_flow_to_the_tracker_fetch(
 
     # Wave B (B4b): a liveness probe now gates the data walk — mark it up so
     # the patched fetchers are reached.
-    monkeypatch.setattr(pp, "probe_tracker", lambda api_url=None: (True, "http://x"))
+    def _probe(api_url: str | None = None) -> tuple[bool, str]:
+        return True, "http://x"
+
+    monkeypatch.setattr(pp, "probe_tracker", _probe)
     monkeypatch.setattr(pp, "fetch_portfolio_analytics", _fake_analytics)
     monkeypatch.setattr(pp, "fetch_live_portfolio", _fake_live)
     resp = client.get(
@@ -660,33 +593,6 @@ def test_panel_fragment_portfolio_risk_offline(
     assert "live portfolio tracker" in body  # the tracker-fed offline note
 
 
-class _StubJob:
-    def __init__(self, ticker: str, kind: str, argv: list[str]) -> None:
-        self.job_id = "job_test"
-        self.ticker = ticker
-        self.kind = kind
-        self.argv = argv
-        self.started_at = datetime(2026, 6, 13, tzinfo=UTC)
-
-
-class _StubRegistry:
-    def __init__(self) -> None:
-        self.calls: list[_StubJob] = []
-
-    def start(
-        self,
-        *,
-        ticker: str,
-        kind: str,
-        argv: list[str],
-        spawn: bool = True,
-        cwd: str | None = None,
-    ) -> _StubJob:
-        job = _StubJob(ticker, kind, argv)
-        self.calls.append(job)
-        return job
-
-
 def test_run_scenario_route_rejects_unknown_scenario(client: FlaskClient) -> None:
     resp = client.post("/actions/run-scenario", json={"scenario": "not_a_scenario"})
     assert resp.status_code == 400
@@ -695,17 +601,33 @@ def test_run_scenario_route_rejects_unknown_scenario(client: FlaskClient) -> Non
     assert client.post("/actions/run-scenario", json={}).status_code == 400
 
 
-def test_run_scenario_route_dispatches_valid_scenario(tmp_path: Path) -> None:
+def test_run_scenario_route_dispatches_valid_scenario(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import comments_server
 
     (tmp_path / "data").mkdir()
-    stub = _StubRegistry()
-    app = comments_server.create_app(tmp_path, registry=stub)  # type: ignore[arg-type]
+    stub = Registry()
+    calls: list[Job] = []
+
+    def start(*, ticker: str, kind: str, argv: list[str]) -> Job:
+        job = Job(
+            job_id="job_test",
+            ticker=ticker,
+            kind=kind,
+            argv=argv,
+            started_at=datetime(2026, 6, 13, tzinfo=UTC),
+        )
+        calls.append(job)
+        return job
+
+    monkeypatch.setattr(stub, "start", start)
+    app = comments_server.create_app(tmp_path, registry=stub)
     resp = app.test_client().post("/actions/run-scenario", json={"scenario": "fed_cuts_50bps"})
     assert resp.status_code == 201
     assert resp.get_json()["stream_url"] == "/actions/stream/job_test"
-    assert len(stub.calls) == 1
-    job = stub.calls[0]
+    assert len(calls) == 1
+    job = calls[0]
     assert job.kind == "run-scenario"
     assert any(argument.endswith("run_scenario.py") for argument in job.argv)
     assert "--scenario" in job.argv and "fed_cuts_50bps" in job.argv
@@ -766,10 +688,7 @@ def test_trigger_ladder_groups_by_list_and_lifts_constant_status() -> None:
         _ladder_row("EVA", "evaluation", "unreviewed"),
         _ladder_row("NU", "portfolio", "unreviewed"),
     ]
-    html = render_html(
-        AnalyticalDashboard(trigger_ladder=rows),
-        generated_at=datetime(2026, 6, 1, tzinfo=UTC),
-    )
+    html = render_panel_fragment(AnalyticalDashboard(trigger_ladder=rows), "holdings") or ""
     section = html[html.index("Trigger ladder") :]
     # Header pill carries the lifted status; the per-row column is gone.
     assert "all unreviewed" in section
@@ -789,10 +708,7 @@ def test_trigger_ladder_mixed_statuses_keep_the_column() -> None:
         _ladder_row("NU", "portfolio", "sell"),
         _ladder_row("EVA", "evaluation", "hold"),
     ]
-    html = render_html(
-        AnalyticalDashboard(trigger_ladder=rows),
-        generated_at=datetime(2026, 6, 1, tzinfo=UTC),
-    )
+    html = render_panel_fragment(AnalyticalDashboard(trigger_ladder=rows), "holdings") or ""
     section = html[html.index("Trigger ladder") :]
     assert "<th>Trigger</th>" in section
     assert section.count('class="trigger-cell"') == 2

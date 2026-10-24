@@ -43,11 +43,11 @@ is a click or a `POST`.
 
 | Page | What it shows |
 |---|---|
-| `/` | Portfolio + evaluation status — last FMP pull, last transcript, last build, open-comment count, breach badge. Each ticker links to its drill-down; **Open↗** opens the latest brief. Includes the IR-KPI refresh control. |
-| `/analytical` | Cross-ticker overview, **live**: LLM **budget** (read-only here), the **decisions** ledger + calibration, the DCF **trigger ladder**, insider activity, prediction outcomes. Byte-identical to the static `build_analytical_dashboard.py` export — same renderer, always fresh from the DB. |
-| `/ticker/<T>` | **Per-ticker command center**: identity + freshness; an **artifacts inventory** (every brief / DCF / holdings / transcript / IR / FMP / LLM-cache file with mtime + size); the **analyses-ran** log (thesis eval · time-series signals · trigger alerts · queued actions · Say-Do · DCF · LLM-call cost (30d) · brief renders); recent decisions; the read-only **thesis** (tier-1 KPIs + break rules + breakers); and your live **position** + an **Open in Portfolio Tracker ↗** deep link. |
+| `/` | Unified Cockpit for portfolio decisions, research and data operations. Company Desk opens the selected company and its briefs. |
+| `/analytical` | Legacy bookmark that redirects into the unified shell. The separate portfolio-dashboard export is retired. |
+| `/ticker/<T>` | Legacy bookmark that redirects to Company Desk. Shared artifacts, analysis history, reports, Ops and Notes remain there. |
 
-JSON siblings for scripting: `GET /api/overview`, `GET /api/ticker/<T>`, `GET /api/dashboard`.
+`GET /api/dashboard` remains the status feed. The retired `GET /api/overview` and `GET /api/ticker/<T>` feeds return HTTP 410; use the Cockpit and Company Desk for the retained interface.
 
 ### Refreshes — with overrides
 

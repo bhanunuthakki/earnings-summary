@@ -1,5 +1,13 @@
 # Operations & Governance Surface Impact
 
+### Standalone portfolio dashboard and old overview feed retired (2026-10-24)
+
+The owner approved retiring new standalone weekly portfolio-dashboard HTML exports and `/api/overview`. The feed returns HTTP 410 with `error=retired`, a Cockpit replacement URL and `Cache-Control: no-store`, without assembling analytics. `/analytical` remains a shell redirect. Saved exports, current Cockpit panels, source records, decision history, outcome scoring and shared trigger, reread, synthesis and budget components stay. The exclusive CLI, page renderer, legacy dashboard data fields and queries are removed.
+
+The weekly code no longer launches the export CLI. Dirty refresh, holding lenses and cross-portfolio synthesis retain their sequence, failure and resume contracts. Version-2 same-scope checkpoints may contain the exact retired `analytical_dashboard` completion key; it is ignored while other unknown keys still fail. No checkpoint version or database schema changes.
+
+Tracked XML changes only the Description text. Its UTF-16 BOM, CRLF, triggers, settings, principal and actions stay byte-identical outside that text span. The wrapper, manifest, schedule and registration remain unchanged. No live task, service or database was inspected or changed. Installation on the canonical host remains a separate action. Evidence is in the bounded legacy-dashboard acceptance receipt and its XML description proof.
+
 ### Legacy company feed and standalone page retired (2026-10-24)
 
 The owner approved retiring the unused `/api/ticker/<ticker>` JSON feed and

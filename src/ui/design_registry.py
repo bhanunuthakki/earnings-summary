@@ -1095,7 +1095,6 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         # panel capture: zero diff).
         "pipeline/advisor_memos_panel.py": "e0eab65a8729ce3215ea8fc8dc04a6b0571651398d3f425e07ed96b829f882d0",  # pragma: allowlist secret
         "pipeline/allocation_decisions_panel.py": "d6d9f74f8d6282f475b9250a1949ead4bb7a5a9966ad1fd3bf3772f1f562fc4b",  # pragma: allowlist secret
-        "pipeline/analytical_dashboard_html.py": "9777e9c61dad855011479eecf7760f7bfd7d2269155f9d5fb708cf616bade37b",  # pragma: allowlist secret
         "pipeline/calibration_scorecard_panel.py": "1edfbfb1291c38be645133eaab45f78343920da72bf42b3e96c1a36e60a91eac",  # pragma: allowlist secret
         # Composite section loading reads governed panel HTML. Its fallback
         # mount preserves server-owned markup; status and Retry use kit classes.
