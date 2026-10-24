@@ -128,6 +128,26 @@ identities in its versioned prompt and source configuration. Unreviewed image
 pages still block capture. This review does not satisfy default OCR processing,
 financial completeness, semantic admission or decision-grade evidence.
 
+Governed PDF OCR can retain a `tesseract-tsv-raster@1` layout child beside each
+accepted page node. The child commits the exact raw TSV and rendered PNG hashes,
+page media box, rotation, DPI, raster dimensions, checked raster-to-PDF
+transform, and each recognized word's raster rectangle, order, confidence and
+text offsets. Projected word text uses the existing NFKC extraction
+normalization. Exact management wording remains in the retained raw TSV.
+The writer and reader reconstruct the projected text, word offsets, and mean
+confidence from those bytes. The bytes are immutable `ContentBlob` records
+under the durable `data/ocr_evidence/` source cache. The new
+`governed-pdf-ocr@2-layout` run
+identity commits each present layout child in its output hash. A text-only
+provider result can retain a processing seal, but cannot enter the word-backed
+projection. Existing text-only OCR receipts keep their original identity and
+remain unavailable for word-backed financial capture. A read-only projection requires an exact document/source
+hash, processing seal, extraction run, complete OCR page-result set and cutoff.
+It rechecks retained bytes and reconstructs every word from TSV. The projection
+is tagged `governed_ocr`; its offsets are not native PDF text offsets. OCR
+acceptance and layout proof do not grant financial candidate retention,
+semantic admission, or publication.
+
 ### Progressive proof and legacy repair (2026-09-19)
 
 Capture, extraction, source coverage, semantic admission, and reader parity are
