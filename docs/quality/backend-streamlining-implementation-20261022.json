@@ -94,6 +94,21 @@
       "review_receipt": ".tmp/dcf-mapping-independent-review.json",
       "review_sha256": "bbb867616402f6c6fdaa767f5fed669c107861952adbad465d0b1822972b0fb4",
       "local_commit_receipt": ".tmp/dcf-mapping-final/local-commit.json"
+    },
+    "R4-source-context": {
+      "score": 95,
+      "verdict": "ACCEPT",
+      "scope": "Deterministic metadata-handling precondition only; no producer retirement or model qualification",
+      "code_and_test_sha256": {
+        "src/compute/kpi_extract_summaries.py": "46bbb1a167ea02c4f7f1e85444ca1c98b56e596fbb1ec8d1e1ac9d5425f8db2e",
+        "tests/test_kpi_source_precision.py": "2678d525d084a1c23512a436c51ea72b374829fede5f4977341b86d86a006ea8",
+        "tests/test_summary_kpi_completion.py": "86cebe7441f0ba87317a9072b20c0f16f60e5824814857c7b6294e553beb7ac4",
+        "docs/quality/reachability-dynamic-import-dispositions.json": "e71d95c671e4ffec3fde9feb6b5adf31ec38f72d6528d23022e9d14b95da96a4",
+        "docs/quality/reachability-getattr-dispositions.json": "0c3b24223e25d38e19768d8fe9d919b595cf86ebed5c2e784e23447ac4cbf6b1",
+        "docs/quality/reachability-process-dispositions.json": "8654fbfdedec87cfd3313eee3d6977c5e37c4cf205fa09d468e0cffa71af2adb"
+      },
+      "proof": ".tmp/r4-source-context-final/checkpoint-data.json",
+      "review": ".tmp/r4-source-context-independent-review.json"
     }
   },
   "authority": {
@@ -877,7 +892,7 @@
     "transport": "claude_membership"
   },
   "static_count_clarification": "Old2012/1835 values are previous configured ceilings, not a paired prechange measurement of actual diagnostics/suppressions. Revised measured1826/1811 values tighten those ceilings.",
-  "status": "LOCAL_DCF_MAPPING_RETIREMENT_ACCEPTED; Sol advisory97; original architecture FAIL and wider roadmap open",
+  "status": "LOCAL_SOURCE_CONTEXT_PRECONDITION_ACCEPTED; Sol advisory95; original architecture FAIL and wider roadmap open",
   "third_independent_sol_proxy_review": {
     "binding_sha256": "53493b3675b5a59400c3527a8954914d8a50ea0ae9d09a819d27d854d8c897d0",
     "effort": "high",
@@ -3878,5 +3893,48 @@
     "source_noncomment_lines": 560290,
     "reduction_from_original": 1992,
     "broader_branch": "HOLD25oversizedvs24; native/fullqualificationopen"
+  },
+  "r4_source_context_checkpoint": {
+    "status": "LOCAL_DETERMINISTIC_PRECONDITION_ACCEPTED; WHOLE_BRANCH_HOLD",
+    "score": 95,
+    "baseline_commit": "67175ff127a2f68e6963ccc2e472bb55e2dc8685",
+    "review": ".tmp/r4-source-context-independent-review.json",
+    "review_sha256": "316125d6f43cd244ece6f7666306447259263d7466fbf324aaaa570bf61ad1d5",
+    "freeze": ".tmp/r4-source-context-final/freeze.json",
+    "freeze_sha256": "ff79a03a37dc261d9d941918e209bb6560730d3dd8ecd08f0028683e89d35dd3",
+    "bindings": {
+      "src/compute/kpi_extract_summaries.py": "46bbb1a167ea02c4f7f1e85444ca1c98b56e596fbb1ec8d1e1ac9d5425f8db2e",
+      "tests/test_kpi_source_precision.py": "2678d525d084a1c23512a436c51ea72b374829fede5f4977341b86d86a006ea8",
+      "tests/test_summary_kpi_completion.py": "86cebe7441f0ba87317a9072b20c0f16f60e5824814857c7b6294e553beb7ac4",
+      "docs/quality/reachability-dynamic-import-dispositions.json": "e71d95c671e4ffec3fde9feb6b5adf31ec38f72d6528d23022e9d14b95da96a4",
+      "docs/quality/reachability-getattr-dispositions.json": "0c3b24223e25d38e19768d8fe9d919b595cf86ebed5c2e784e23447ac4cbf6b1",
+      "docs/quality/reachability-process-dispositions.json": "8654fbfdedec87cfd3313eee3d6977c5e37c4cf205fa09d468e0cffa71af2adb"
+    },
+    "effect": "Preserve supplied optional duration/precision through existing payloads and shared builder. Newly producer-supplied exact claims retain metadata but require review; existing reviewed history is unchanged.",
+    "deletion_credit": 0,
+    "physical_source_delta": 15,
+    "physical_test_delta": 349,
+    "checks": {
+      "retained_tests": "84 passed in10.21s; no skips",
+      "reviewed_exact_positive": "1 passed in1.11s",
+      "absent_metadata_exact_pairs": 4800,
+      "changed_files": 133,
+      "whole_static": ".tmp/streamlining-static-checkpoint19.json",
+      "production_source_sha256": "21b2865d176eead78facf08a043b8bb4ef3d0bc935fb63eb7b72bee70e11ed2a",
+      "reachability": ".tmp/r4-source-context-final/reachability.json",
+      "graph_source_sha256": "4b6420abe42bb30115f64298e60d216c11a3e6fe5541645a6d32b9655efb51ab",
+      "reachability_status": "COMPLETE/PASS; zero production gaps/diagnostics;3685 current input hashes",
+      "static_ceilings": "1825 diagnostics and1803 suppressions unchanged",
+      "original_architecture": "FAIL;25vs24 oversized modules unwaived",
+      "whole_tree_noncomment_loc": 560305,
+      "noncomment_reduction_vs_original": 1977
+    },
+    "limits": [
+      "No prompt change or prompt-quality qualification; both prompt functions and version owner remain byte-identical.",
+      "No source-class activation, decision-grade/native qualification, schema migration or new procedure/store.",
+      "Full project matrix not rerun; whole roadmap remains HOLD.",
+      "No collection, model call, production mutation, push, merge or deployment. Separate held-source inspection is read-only planning evidence."
+    ],
+    "local_commit_receipt": ".tmp/r4-source-context-final/local-commit.json"
   }
 }

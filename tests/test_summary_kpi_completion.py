@@ -13,6 +13,11 @@ import pytest
 
 from compute import kpi_extract_summaries as summaries
 from models.runs import StageName, StageStatus
+from pipeline.kpi_semantics import (
+    KpiSemanticStatus,
+    KpiSourcePrecision,
+    current_kpi_semantic_context,
+)
 from pipeline.run_accounting import JsonValue, PipelineRunSuppressedError
 from provenance.evidence_ledger import (
     ContentBlob,
@@ -186,6 +191,95 @@ def _register_summary(
         )
     conn.commit()
     return doc_id
+
+
+@pytest.mark.parametrize(
+    "case,error",
+    [
+        ("supplied", None),
+        ("absent", None),
+        ("comparator", None),
+        ("guidance", None),
+        ("invalid_duration", "matching later period end"),
+        ("invalid_precision", "requires source qualifiers"),
+        ("conflicting_exact", "cannot carry uncertainty qualifiers"),
+    ],
+)
+def test_public_extraction_preserves_only_supplied_source_context(
+    workspace: tuple[Path, sqlite3.Connection],
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+    error: str | None,
+) -> None:
+    root, conn = workspace
+    qualifier = "Percentages are rounded."
+    text = (
+        "Reporting period: 2025-01-01 through 2025-03-31. "
+        f"Net interest margin was 17.8%. {qualifier}"
+    )
+    source = root / ".tmp" / "NU_Q1_2025_summary.txt"
+    doc_id = _register_summary(conn, source, text)
+    payload: dict[str, object] = {
+        "value": 17.8,
+        "unit": "percent",
+        "confidence": 0.9,
+        "source_excerpt": "Net interest margin was 17.8%.",
+        "reported_period_start": "2025-01-01",
+        "reported_period_end": "2025-03-31",
+        "period_role": "current",
+        "accounting_basis": "management",
+        "consolidation_scope": "consolidated",
+        "source_unit_scale": "none",
+        "source_precision": {"kind": "approximate", "qualifiers": [qualifier]},
+    }
+    if case == "absent":
+        payload.pop("reported_period_start")
+        payload.pop("source_precision")
+    elif case == "comparator":
+        payload["period_role"] = "prior_period_comparator"
+    elif case == "guidance":
+        payload["period_role"] = "guidance"
+    elif case == "invalid_duration":
+        payload["reported_period_start"] = "2025-04-01"
+    elif case == "invalid_precision":
+        payload["source_precision"] = {"kind": "approximate", "qualifiers": []}
+    elif case == "conflicting_exact":
+        payload["source_precision"] = {"kind": "exact", "qualifiers": [qualifier]}
+
+    def model_response(prompt: str, **kwargs: object) -> object:
+        assert text in prompt
+        assert kwargs["purpose"] == "kpi_summary_extract"
+        return {"Net interest margin": payload}
+
+    monkeypatch.setattr(summaries, "call_llm_structured", model_response)
+    result = summaries.extract_for_ticker("NU", root, conn)
+    if error is not None:
+        assert result.error is not None
+        assert error in result.error
+        assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
+        return
+    assert result.error is None
+    assert result.kpis_inserted_total == 1
+    row = conn.execute("SELECT id,source_doc_id,locator FROM kpi_facts").fetchone()
+    assert row is not None and row[1] == doc_id
+    assert row[2] is not None
+    stored = current_kpi_semantic_context(conn, kpi_fact_id=int(row[0]))
+    assert stored is not None
+    context = stored.context
+    assert context.status is KpiSemanticStatus.QUARANTINED
+    assert context.reason_code == "synthesized_source_requires_primary_review"
+    assert context.period_role.value == payload["period_role"]
+    if case == "absent":
+        assert context.reported_period_start is None
+        assert context.source_precision is None
+        serialized = context.model_dump(mode="json")
+        assert "reported_period_start" not in serialized
+        assert "source_precision" not in serialized
+    else:
+        assert context.reported_period_start == datetime(2025, 1, 1).date()
+        assert context.source_precision == KpiSourcePrecision(
+            kind="approximate", qualifiers=(qualifier,)
+        )
 
 
 def test_changed_summary_is_processed_despite_existing_period_metric(

@@ -1,6 +1,6 @@
 # Backend streamlining: implementation checkpoints
 
-Status: **metric-to-DCF mapping retired locally at 97/100; broader release HOLD**.
+Status: **DCF mapping retired at 97/100; source-context precondition accepted at 95/100; broader release HOLD**.
 Production source is below the original baseline. One large-module-count gate still fails.
 Started 2026-10-22; revised 2026-10-23 Pacific. Base: `c978523d`.
 Branch: `codex/research-procedure-cleanup`. R1 corrections are at `3065638a`,
@@ -682,6 +682,33 @@ and `.tmp/dcf-mapping-independent-review.json`. The commit receipt is
 The next core data-plane work uses the existing R4 held-pair inventory and
 qualification brief. The larger presentation-summary number path stays until
 original-source, novel-coverage and historical-preservation proofs qualify it.
+
+## Source-context preservation precondition — 2026-10-23
+
+Existing extraction payloads now retain supplied duration start and source
+precision through the shared builder. New producer claims of exact precision
+remain visible but are quarantined until reviewed. Unknown fields stay unknown;
+existing reviewed contexts and history remain unchanged. Both prompt functions
+and the prompt-version owner retain their exact prior bytes. This is a deterministic
+precondition, not improved model recall or presentation-producer retirement.
+
+Independent Sol advisory review accepts this unit at **95/100**, with no scoped
+blockers. The public-path/retained suites pass **84 cases**, and the existing
+reviewed-exact positive case passes separately. All **4,800** paired absent-field
+cases match prior output or refusal. All 133 changed files pass format, lint,
+strict typing and suppression checks. Whole static checking passes with unchanged
+ceilings. Dependency closure is COMPLETE/PASS, with zero production gaps or
+diagnostics and 3,685 current input hashes. The original capture suite, 30 retained
+test bodies and 11 protected owners are preserved. No new table, parser or procedure
+is added. This step adds 15 source lines and 349 test lines; deletion credit is zero.
+
+Source totals 560,305 noncomment lines, 1,977 below the original baseline. The
+original oversized-module failure stays **25 versus 24**, unwaived. Full-matrix,
+native and live financial acceptance remain open. Proof:
+`.tmp/r4-source-context-final/checkpoint-data.json` and
+`.tmp/r4-source-context-independent-review.json`. Separate held-NU reconciliation
+is planning evidence; historical source/correction differences do not establish
+that current corrected MVPs have the same defects. No production data changed.
 
 ## Gates that remain open
 

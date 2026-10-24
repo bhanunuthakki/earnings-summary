@@ -76,6 +76,7 @@ from pipeline.kpi_semantics import (
     KpiPublicationLane,
     KpiSemanticContext,
     KpiSemanticStatus,
+    KpiSourcePrecision,
     KpiUnitScale,
 )
 from pipeline.locators import html_span_locator, locate_char_span, verify_quote_in_source
@@ -135,6 +136,8 @@ class _KpiSummaryValue(BaseModel):
     source_excerpt: str | None = Field(default=None, max_length=200)
     source_value_text: str | None = Field(default=None, min_length=1, max_length=80)
     reported_period_end: date
+    reported_period_start: date | None = None
+    source_precision: KpiSourcePrecision | None = None
     period_role: KpiPeriodRole
     accounting_basis: KpiAccountingBasis
     consolidation_scope: KpiConsolidationScope
@@ -171,6 +174,8 @@ class _EnumeratedKpi(BaseModel):
     source_excerpt: str = Field(min_length=1, max_length=200)
     source_value_text: str | None = Field(default=None, min_length=1, max_length=80)
     reported_period_end: date
+    reported_period_start: date | None = None
+    source_precision: KpiSourcePrecision | None = None
     period_role: KpiPeriodRole
     accounting_basis: KpiAccountingBasis
     consolidation_scope: KpiConsolidationScope
@@ -293,7 +298,7 @@ _GROUP_TO_STAGE: dict[str, str] = {
 
 
 # Bump when prompt, schema, conversion, or admission behavior changes.
-_ALLOWLIST_EXTRACTOR_CONTRACT = "summary-allowlist-completion-v1"
+_ALLOWLIST_EXTRACTOR_CONTRACT = "summary-allowlist-completion-v2-source-context"
 _ALLOWLIST_PURPOSE = "kpi_summary_extract"
 
 
@@ -1383,6 +1388,12 @@ def _semantic_context_for_payload(
             reported_end = None
     else:
         reported_end = None
+    raw_start = payload.get("reported_period_start")
+    reported_start = None if raw_start is None else TypeAdapter(date).validate_python(raw_start)
+    raw_precision = payload.get("source_precision")
+    source_precision = (
+        None if raw_precision is None else KpiSourcePrecision.model_validate(raw_precision)
+    )
     try:
         period_role = KpiPeriodRole(str(payload.get("period_role") or "unknown"))
     except ValueError:
@@ -1431,10 +1442,14 @@ def _semantic_context_for_payload(
         and not dimensions
     ):
         reason = "scope_dimensions_missing"
+    elif source_precision is not None and source_precision.kind == "exact":
+        reason = "source_precision_requires_review"
     status = KpiSemanticStatus.ADMITTED if reason is None else KpiSemanticStatus.QUARANTINED
     return KpiSemanticContext(
         metric_name_as_reported=name,
         reported_period_end=reported_end,
+        reported_period_start=reported_start,
+        source_precision=source_precision,
         period_role=period_role,
         publication_lane={
             KpiPeriodRole.CURRENT: KpiPublicationLane.CURRENT_ACTUAL,
