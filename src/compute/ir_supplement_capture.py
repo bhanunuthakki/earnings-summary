@@ -11,9 +11,12 @@ import json
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
+from itertools import pairwise
+from pathlib import Path
 from typing import Literal, cast, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from llm.structured import parse_json_payload, repair_structured_prompt
 from llm_artifact_store import (
@@ -26,8 +29,13 @@ from llm_artifact_store import (
 )
 from log_redact import redact
 from pipeline.locators import locate_char_span
+from provenance.document_processing_evidence import (
+    GovernedOCRPageProjection,
+    resolve_governed_ocr_pages,
+)
 from provenance.fulltext_backfill import project_pdf_page_texts
 from provenance.ocr_extraction import PDFPreflight, normalize_extracted_text
+from provenance.ocr_layout import OCRPageLayout
 from provenance.ocr_page_review import current_reviewed_pdf_page
 
 SupplementContextField = Literal[
@@ -130,13 +138,18 @@ _SUPPLEMENT_REPAIR_FEEDBACK = {
 def repair_supplement_prompt(prompt: str, error: str = "") -> str:
     """Controlled repair-only feedback; never interpolate unknown error text."""
     feedback = _SUPPLEMENT_REPAIR_FEEDBACK.get(error, _SUPPLEMENT_REPAIR_FEEDBACK[""])
+    context_instructions = SUPPLEMENT_CONTEXT_WITNESS_INSTRUCTIONS
+    if "OCR SOURCE RULE:" in prompt:
+        context_instructions = context_instructions.replace(
+            "supplied native page", "page with its declared source representation"
+        )
     return repair_structured_prompt(prompt) + (
         "\nSOURCE VALIDATION: " + feedback + ". "
         "Each source_excerpt must occur verbatim in EXTRACT ONLY FROM THIS SOURCE SECTION "
         "(or the supplied page when no section marker exists). Do not repair spelling, "
         "spacing, punctuation or context. "
         + SUPPLEMENT_NUMERIC_FIELD_INSTRUCTIONS
-        + SUPPLEMENT_CONTEXT_WITNESS_INSTRUCTIONS
+        + context_instructions
         + "source_value_text must not be a formatted or scale-expanded value. "
         "For a range, do not add a currency or percent symbol absent from that endpoint. "
         "Synthetic examples: $10-20 permits literal tokens 10 and 20, not $20; "
@@ -178,10 +191,36 @@ LEGACY_RELAXED_CAPTURE_VERSIONS = frozenset(
 )
 CURRENT_CAPTURE_VERSION = "ir-supplement-native-continuation-v21-reviewed-pages-reporting-scope"
 UNREVIEWED_CAPTURE_VERSION = "ir-supplement-native-continuation-v20-reporting-scope"
+OCR_CAPTURE_VERSION = "ir-supplement-ocr-continuation-v1-candidates"
+
+
+class OCRCaptureSelection(BaseModel):
+    """One operator-pinned OCR run for one exact supplement document."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    document_id: int = Field(gt=0)
+    document_version_id: str = Field(min_length=1, max_length=128)
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence_seal_id: str = Field(min_length=1, max_length=128)
+    extraction_run_id: str = Field(min_length=1, max_length=128)
+    page_result_ids: tuple[str, ...] = Field(min_length=1)
+    cutoff_at: datetime
+
+    @field_validator("cutoff_at")
+    @classmethod
+    def _aware_cutoff(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("OCR capture cutoff must include a timezone")
+        return value
 
 
 def producing_capture_version(
-    conn: sqlite3.Connection, exchange: SupplementExchange, source_sha256: str
+    conn: sqlite3.Connection,
+    exchange: SupplementExchange,
+    source_sha256: str,
+    *,
+    expected_ocr_input_sha256: str | None = None,
 ) -> str:
     """Resolve exact producing identity independently of wire compatibility.
 
@@ -203,6 +242,7 @@ def producing_capture_version(
         "ir-supplement-native-continuation-v19-reviewed-pages-percent-cell-boundaries",
         UNREVIEWED_CAPTURE_VERSION,
         CURRENT_CAPTURE_VERSION,
+        OCR_CAPTURE_VERSION,
     }
     db_path = str(conn.execute("PRAGMA database_list").fetchone()[2])
     if not db_path:
@@ -223,6 +263,14 @@ def producing_capture_version(
             or artifact.model != exchange.model
         ):
             continue
+        if artifact.prompt_version == OCR_CAPTURE_VERSION:
+            if (
+                expected_ocr_input_sha256 is None
+                or artifact.input_sha256 != expected_ocr_input_sha256
+            ):
+                raise ValueError("IR OCR producing artifact input commitment differs")
+        elif expected_ocr_input_sha256 is not None:
+            raise ValueError("IR OCR exchange was produced by a native artifact")
         if len(artifact.source_doc_ids) != 1:
             continue
         doc_id = artifact.source_doc_ids[0]
@@ -255,7 +303,11 @@ def producing_capture_version(
             raise ValueError("IR historical governed response bytes differ")
         if artifact.prompt_version not in versions:
             raise ValueError("IR producing capture version is unknown or unbound")
-        capture_version = artifact.prompt_version.removeprefix("ir-supplement-native-continuation-")
+        capture_version = (
+            OCR_CAPTURE_VERSION
+            if artifact.prompt_version == OCR_CAPTURE_VERSION
+            else artifact.prompt_version.removeprefix("ir-supplement-native-continuation-")
+        )
         if capture_version in LEGACY_RELAXED_CAPTURE_VERSIONS and result.status != "processed":
             raise ValueError("IR historical producing capture is not processed")
         matched.add(capture_version)
@@ -290,6 +342,13 @@ class SupplementCapture:
     schema_sha256: str = ""
     projection_identity: str = ""
     document_version_id: str | None = None
+    repo_root: Path | None = None
+    ocr_selection: OCRCaptureSelection | None = None
+    ocr_prompt: Callable[[str], str] | None = None
+    extract_ocr: (
+        Callable[[int, int, str, str, Callable[[SupplementExchange], None]], SupplementExchange]
+        | None
+    ) = None
     native_assessment_id: str | None = field(default=None, init=False)
     reviewed_non_financial_pages: dict[int, str] = field(default_factory=dict[int, str], init=False)
     review_scope_sha256: str = field(default="", init=False)
@@ -301,8 +360,16 @@ class SupplementCapture:
     structured_calls_reserved: int = field(default=0, init=False)
     chunks_processed: int = field(default=0, init=False)
     _pages: tuple[str, ...] = field(default=(), init=False)
+    _capture_pages: tuple[str, ...] = field(default=(), init=False)
+    _ocr_pages: dict[int, GovernedOCRPageProjection] = field(
+        default_factory=dict[int, GovernedOCRPageProjection], init=False
+    )
     _document_context: str = field(default="", init=False)
     _context_pages: set[int] = field(default_factory=set[int], init=False)
+    exchange_input_sha256: dict[int, str] = field(default_factory=dict[int, str], init=False)
+    exchange_sections: dict[int, tuple[int, int, str]] = field(
+        default_factory=dict[int, tuple[int, int, str]], init=False
+    )
 
     @property
     def page_count(self) -> int:
@@ -329,15 +396,22 @@ class SupplementCapture:
         pages = project_pdf_page_texts(raw_bytes)
         if not pages:
             raise ValueError("IR native pages unresolved (empty or image-only): none")
+        self._ocr_pages = self._resolve_ocr_pages()
         self._existing_page_preflight(pages)
         self.capture_version = (
-            CURRENT_CAPTURE_VERSION
+            OCR_CAPTURE_VERSION
+            if self._ocr_pages
+            else CURRENT_CAPTURE_VERSION
             if self.reviewed_non_financial_pages
             else UNREVIEWED_CAPTURE_VERSION
         )
+        self._capture_pages = tuple(
+            self._ocr_pages[page].text if page in self._ocr_pages else text
+            for page, text in enumerate(pages, 1)
+        )
         unresolved = [
             str(index)
-            for index, page_text in enumerate(pages, 1)
+            for index, page_text in enumerate(self._capture_pages, 1)
             if not page_text.strip() and index not in self.reviewed_non_financial_pages
         ]
         if unresolved:
@@ -351,7 +425,7 @@ class SupplementCapture:
         context_pages: list[dict[str, object]] = []
         used = 0
         self._context_pages = set()
-        for page, text in enumerate(pages, 1):
+        for page, text in enumerate(self._capture_pages, 1):
             if page in self.reviewed_non_financial_pages:
                 continue
             entry: dict[str, object] = {
@@ -361,6 +435,9 @@ class SupplementCapture:
                 "text_sha256": hashlib.sha256(text.encode()).hexdigest(),
                 "text": text,
             }
+            if page in self._ocr_pages:
+                entry["source_representation"] = "governed_ocr"
+                entry["ocr_page"] = self.ocr_page_manifest(page)
             size = len(json.dumps(entry, ensure_ascii=False))
             if used + size <= max(0, context_budget - 500):
                 context_pages.append(entry)
@@ -375,11 +452,13 @@ class SupplementCapture:
             context["reviewed_non_financial_pages"] = self.reviewed_non_financial_pages
             context["review_scope_sha256"] = self.review_scope_sha256
         context["coverage"] = (
-            "native context only; visual/table coverage and financial recall unknown"
+            "tagged native/OCR context; visual/table associations and financial recall unknown"
+            if self._ocr_pages
+            else "native context only; visual/table coverage and financial recall unknown"
         )
         self._document_context = json.dumps(context, ensure_ascii=False)
         planned: list[tuple[int, int, str]] = []
-        for page, text in enumerate(pages, 1):
+        for page, text in enumerate(self._capture_pages, 1):
             if page in self.reviewed_non_financial_pages:
                 continue
             # Keep bounded native tables together. Dense pages use the existing
@@ -414,6 +493,89 @@ class SupplementCapture:
             self.section_text(page, start, body)
         return planned
 
+    def _resolve_ocr_pages(self) -> dict[int, GovernedOCRPageProjection]:
+        selection = self.ocr_selection
+        if selection is None:
+            return {}
+        if (
+            self.repo_root is None
+            or selection.document_id != self.document_id
+            or selection.document_version_id != self.document_version_id
+            or selection.source_sha256 != self.source_sha256
+        ):
+            raise ValueError("IR OCR selection does not match the exact source document")
+        pages = resolve_governed_ocr_pages(
+            self.conn,
+            repo_root=self.repo_root,
+            document_version_id=selection.document_version_id,
+            source_sha256=selection.source_sha256,
+            evidence_seal_id=selection.evidence_seal_id,
+            extraction_run_id=selection.extraction_run_id,
+            page_result_ids=selection.page_result_ids,
+            cutoff_at=selection.cutoff_at,
+        )
+        if not pages or len({page.page_number for page in pages}) != len(pages):
+            raise ValueError("IR OCR selected page population is empty or repeated")
+        return {page.page_number: page for page in pages}
+
+    def ocr_page_manifest(self, page: int) -> dict[str, object]:
+        projection = self._ocr_pages[page]
+        layout = OCRPageLayout.model_validate_json(projection.layout_json)
+        return {
+            "source_representation": "governed_ocr",
+            "document_version_id": projection.document_version_id,
+            "source_sha256": projection.source_sha256,
+            "evidence_seal_id": projection.evidence_seal_id,
+            "extraction_run_id": projection.extraction_run_id,
+            "page_result_id": projection.page_result_id,
+            "page_node_id": projection.page_node_id,
+            "layout_node_id": projection.layout_node_id,
+            "layout_sha256": projection.layout_sha256,
+            "text_sha256": projection.text_sha256,
+            "engine_config_sha256": projection.engine_config_sha256,
+            "tsv_sha256": layout.tsv_sha256,
+            "render_sha256": layout.render_sha256,
+            "coordinate_space": layout.version,
+            "cutoff_at": self.ocr_selection.cutoff_at.isoformat() if self.ocr_selection else None,
+        }
+
+    def ocr_projections(self) -> tuple[GovernedOCRPageProjection, ...]:
+        return tuple(self._ocr_pages[page] for page in sorted(self._ocr_pages))
+
+    def verified_ocr_projections(self) -> tuple[GovernedOCRPageProjection, ...]:
+        current = self._resolve_ocr_pages()
+        if current != self._ocr_pages:
+            raise ValueError("IR OCR selected page evidence changed during capture")
+        return tuple(current[page] for page in sorted(current))
+
+    def is_ocr_page(self, page: int) -> bool:
+        return page in self._ocr_pages
+
+    def ocr_quote_words(
+        self, page: int, quote: str, *, start: int = 0, body: str | None = None
+    ) -> tuple[int, int, tuple[int, ...]]:
+        """Locate one exact, word-bounded quote in a pinned OCR section or page."""
+        projection = self._ocr_pages[page]
+        section = projection.text if body is None else body
+        offset = section.find(quote)
+        if not quote or offset < 0 or section.find(quote, offset + 1) >= 0:
+            raise ValueError("IR OCR quote is missing or ambiguous in its source section")
+        char_start, char_end = start + offset, start + offset + len(quote)
+        if projection.text[char_start:char_end] != quote:
+            raise ValueError("IR OCR quote differs from pinned page text")
+        words = OCRPageLayout.model_validate_json(projection.layout_json).words
+        selected = tuple(
+            word for word in words if word.char_start < char_end and word.char_end > char_start
+        )
+        if (
+            not selected
+            or selected[0].char_start != char_start
+            or selected[-1].char_end != char_end
+            or any(right.ordinal != left.ordinal + 1 for left, right in pairwise(selected))
+        ):
+            raise ValueError("IR OCR quote does not align with exact retained words")
+        return char_start, char_end, tuple(word.ordinal for word in selected)
+
     def _existing_page_preflight(self, pages: tuple[str, ...]) -> None:
         """Honor retained OCR dispositions; native text can include only a footer.
 
@@ -432,6 +594,8 @@ class SupplementCapture:
             (self.document_version_id,),
         ).fetchone()
         if assessment is None:
+            if self._ocr_pages:
+                raise ValueError("IR OCR selection has no current native-page assessment")
             self.review_scope_sha256 = hashlib.sha256(b"no-retained-page-assessment").hexdigest()
             return
         if assessment["input_sha256"] != self.source_sha256:
@@ -456,6 +620,13 @@ class SupplementCapture:
             raise ValueError("IR existing native-page assessment page count mismatch")
         if tuple(page.page_number for page in preflight.pages) != tuple(range(1, len(pages) + 1)):
             raise ValueError("IR existing native-page assessment page set incomplete")
+        if self._ocr_pages:
+            selected_assessment = self.conn.execute(
+                "SELECT assessment_id FROM ocr_extraction_governance WHERE extraction_run_id=?",
+                (self.ocr_selection.extraction_run_id if self.ocr_selection else "",),
+            ).fetchone()
+            if selected_assessment is None or selected_assessment[0] != assessment["assessment_id"]:
+                raise ValueError("IR OCR seal and current native-page assessment differ")
         reviewed: dict[int, str] = {}
         for page, text in zip(preflight.pages, pages, strict=True):
             digest = hashlib.sha256(normalize_extracted_text(text).encode()).hexdigest()
@@ -464,6 +635,18 @@ class SupplementCapture:
                     f"IR existing native-page assessment text mismatch at page {page.page_number}"
                 )
             if page.requires_ocr:
+                if page.page_number in self._ocr_pages:
+                    if (
+                        current_reviewed_pdf_page(
+                            self.conn,
+                            document_version_id=self.document_version_id,
+                            assessment_id=str(assessment["assessment_id"]),
+                            page_number=page.page_number,
+                        )
+                        is not None
+                    ):
+                        raise ValueError("IR OCR selection conflicts with an existing page review")
+                    continue
                 review = current_reviewed_pdf_page(
                     self.conn,
                     document_version_id=self.document_version_id,
@@ -480,6 +663,8 @@ class SupplementCapture:
                         f"IR existing native-page coverage unresolved: page {page.page_number}"
                     )
                 reviewed[page.page_number] = review.review_id
+            elif page.page_number in self._ocr_pages:
+                raise ValueError("IR OCR selection includes a native-sufficient page")
         self.native_assessment_id = str(assessment["assessment_id"])
         self.reviewed_non_financial_pages = reviewed
         self.review_scope_sha256 = hashlib.sha256(
@@ -490,6 +675,15 @@ class SupplementCapture:
                     "page_count": len(pages),
                     "reviewed_non_financial_pages": reviewed,
                     "source_sha256": self.source_sha256,
+                    **(
+                        {
+                            "ocr_pages": [
+                                self.ocr_page_manifest(page) for page in sorted(self._ocr_pages)
+                            ]
+                        }
+                        if self._ocr_pages
+                        else {}
+                    ),
                 },
                 sort_keys=True,
                 separators=(",", ":"),
@@ -499,30 +693,50 @@ class SupplementCapture:
     def assert_review_scope_unchanged(self) -> None:
         """Recheck the exact assessed/reviewed page set before persistence."""
         old = (self.native_assessment_id, self.review_scope_sha256)
+        self.verified_ocr_projections()
         self._existing_page_preflight(self._pages)
         if old != (self.native_assessment_id, self.review_scope_sha256):
             raise ValueError("IR reviewed page scope changed during capture")
 
     def section_text(self, page: int, start: int, body: str) -> str:
         """Serialize the exact section and bounded native context for preflight/replay."""
-        source_page = self._pages[page - 1]
+        source_page = self._capture_pages[page - 1]
         context_size = min(1200, self.max_input_chars // 16)
         local_context = (
             source_page[:context_size] + source_page[max(0, start - context_size) : start]
         )
-        manifest = json.dumps(
-            {
-                "page": page,
-                "char_start": start,
-                "char_end": start + len(body),
-                "line_start": source_page[:start].count("\n") + 1,
-                "source_sha256": self.source_sha256,
-                "section_sha256": hashlib.sha256(body.encode()).hexdigest(),
-            },
-            sort_keys=True,
-        )
+        manifest_payload: dict[str, object] = {
+            "page": page,
+            "char_start": start,
+            "char_end": start + len(body),
+            "line_start": source_page[:start].count("\n") + 1,
+            "source_sha256": self.source_sha256,
+            "section_sha256": hashlib.sha256(body.encode()).hexdigest(),
+        }
+        if page in self._ocr_pages:
+            layout = OCRPageLayout.model_validate_json(self._ocr_pages[page].layout_json)
+            manifest_payload["ocr_page"] = self.ocr_page_manifest(page)
+            manifest_payload["raster_words"] = [
+                {
+                    "ordinal": word.ordinal,
+                    "text": word.text,
+                    "char_start": word.char_start,
+                    "char_end": word.char_end,
+                    "left": word.left,
+                    "top": word.top,
+                    "width": word.width,
+                    "height": word.height,
+                }
+                for word in layout.words
+                if word.char_start < start + len(body) and word.char_end > start
+            ]
+        manifest = json.dumps(manifest_payload, sort_keys=True)
         model_text = (
-            "CONTEXT ONLY — DOCUMENT CONTEXT (unreviewed native source):\n"
+            (
+                "CONTEXT ONLY — DOCUMENT CONTEXT (tagged native/OCR source; OCR is unreviewed):\n"
+                if self._ocr_pages
+                else "CONTEXT ONLY — DOCUMENT CONTEXT (unreviewed native source):\n"
+            )
             + self._document_context
             + "\nCONTEXT ONLY (page header and preceding source text):\n"
             + local_context
@@ -544,7 +758,10 @@ class SupplementCapture:
             )
         self.chunks_processed += 1
         model_text = self.section_text(page, start, body)
-        prompt = self.prompt(model_text)
+        prompt_builder = self.ocr_prompt if page in self._ocr_pages else self.prompt
+        if prompt_builder is None:
+            raise ValueError("IR OCR prompt builder is unavailable")
+        prompt = prompt_builder(model_text)
         override_identity = self.override_identity()
         effective_prompt = self.effective_prompt(prompt)
         inputs = self.section_inputs(
@@ -571,7 +788,7 @@ class SupplementCapture:
                 )
             if artifact_is_reusable(artifact, input_sha256=expected_sha):
                 result = cached_result
-                self.validate_result(result, body, prompt)
+                self.validate_result(result, body, prompt, page=page, start=start)
                 if (
                     artifact.model != result.exchange.model
                     or artifact.llm_call_id != result.exchange.llm_call_id
@@ -620,7 +837,12 @@ class SupplementCapture:
                 store(ChunkResult(status="pending", rows=[], exchange=exchange, attempts=attempts))
 
             try:
-                exchange = self.extract(model_text, body, retain_raw)
+                if page in self._ocr_pages:
+                    if self.extract_ocr is None:
+                        raise ValueError("IR OCR structured-call route is unavailable")
+                    exchange = self.extract_ocr(page, start, model_text, body, retain_raw)
+                else:
+                    exchange = self.extract(model_text, body, retain_raw)
                 retain_raw(exchange)
                 if self.override_identity() != override_identity:
                     raise ValueError("IR prompt override changed during extraction")
@@ -632,7 +854,7 @@ class SupplementCapture:
                     exchange=exchange,
                     attempts=attempts,
                 )
-                self.validate_result(result, body, prompt)
+                self.validate_result(result, body, prompt, page=page, start=start)
             except Exception as error:
                 if attempts:
                     store(
@@ -647,6 +869,16 @@ class SupplementCapture:
                 raise
             store(result)
         self.exchanges.append(result.exchange)
+        prior_input = self.exchange_input_sha256.setdefault(
+            result.exchange.llm_call_id, expected_sha
+        )
+        if prior_input != expected_sha:
+            raise ValueError("IR producing call is reused for different section inputs")
+        prior_section = self.exchange_sections.setdefault(
+            result.exchange.llm_call_id, (page, start, body)
+        )
+        if prior_section != (page, start, body):
+            raise ValueError("IR producing call is reused for different source sections")
         if result.status == "processed":
             self.processed_models.add(result.exchange.model)
             return [(page, result.rows)]
@@ -675,7 +907,7 @@ class SupplementCapture:
             override_identity = self.override_identity()
         if effective_prompt is None:
             effective_prompt = self.effective_prompt(prompt)
-        return [
+        inputs: list[bytes | str] = [
             override_identity,
             effective_prompt,
             self.source_sha256,
@@ -691,6 +923,9 @@ class SupplementCapture:
             prompt,
             *[repair_supplement_prompt(prompt, error) for error in _SUPPLEMENT_REPAIR_FEEDBACK],
         ]
+        if page in self._ocr_pages:
+            inputs.append(json.dumps(self.ocr_page_manifest(page), sort_keys=True))
+        return inputs
 
     def validated_attempts(self, result: ChunkResult, prompt: str) -> None:
         if result.exchange != result.attempts[-1]:
@@ -746,29 +981,66 @@ class SupplementCapture:
                     ) from None
                 if (
                     item.page not in self._context_pages
-                    or locate_char_span(
-                        item.quote, self._pages[item.page - 1], whitespace_only=True
+                    or (
+                        item.page in self._ocr_pages
+                        and self._capture_pages[item.page - 1].count(item.quote) != 1
                     )
-                    is None
+                    or (
+                        item.page not in self._ocr_pages
+                        and locate_char_span(
+                            item.quote, self._pages[item.page - 1], whitespace_only=True
+                        )
+                        is None
+                    )
                 ):
                     raise ValueError(
                         "IR context witness is not supported by supplied native context"
                     )
+                if item.page in self._ocr_pages:
+                    try:
+                        self.ocr_quote_words(item.page, item.quote)
+                    except ValueError:
+                        raise ValueError(
+                            "IR context witness is not supported by supplied OCR words"
+                        ) from None
                 reporting_scope = row.get("reporting_consolidation_scope", "unknown")
                 if (
                     reporting_scope != "unknown"
                     and "consolidation_scope" in item.fields
-                    and not supports_reporting_scope_heading(
-                        str(reporting_scope), item.quote, self._pages[item.page - 1]
+                    and (
+                        item.page in self._ocr_pages
+                        or not supports_reporting_scope_heading(
+                            str(reporting_scope), item.quote, self._pages[item.page - 1]
+                        )
                     )
                 ):
                     raise ValueError("IR reporting boundary lacks a full positive source heading")
 
-    def validate_result(self, result: ChunkResult, body: str, prompt: str) -> None:
+    def require_source_quotes(
+        self, rows: list[dict[str, object]], body: str, *, page: int | None, start: int
+    ) -> None:
+        if page not in self._ocr_pages:
+            require_native_source_quotes(rows, body)
+            return
+        for row in rows:
+            quote = row.get("source_excerpt")
+            if not isinstance(quote, str):
+                raise ValueError("IR OCR quote is absent from the source section")
+            self.ocr_quote_words(page, quote, start=start, body=body)
+
+    def validate_result(
+        self,
+        result: ChunkResult,
+        body: str,
+        prompt: str,
+        *,
+        page: int | None = None,
+        start: int = 0,
+    ) -> None:
         self.validated_attempts(result, prompt)
         exchange = result.exchange
         source_rows = self.validate_rows(parse_json_payload(exchange.raw_response, expect="array"))
-        require_native_source_quotes(source_rows, body)
+        self.require_source_quotes(source_rows, body, page=page, start=start)
         self.require_context_witnesses(source_rows)
         if result.status == "saturated":
             if result.rows or len(source_rows) < self.max_facts:
@@ -779,4 +1051,4 @@ class SupplementCapture:
             source_rows, sort_keys=True
         ) != json.dumps(result.rows, sort_keys=True):
             raise ValueError("IR cached rows do not match the final governed response")
-        require_native_source_quotes(result.rows, body)
+        self.require_source_quotes(result.rows, body, page=page, start=start)

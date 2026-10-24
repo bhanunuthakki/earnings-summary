@@ -12,6 +12,8 @@ import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
+from itertools import pairwise
+from pathlib import Path
 from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -26,6 +28,10 @@ from pipeline.kpi_semantics import (
     validate_admitted_unit_scale,
 )
 from pipeline.locators import locate_char_span
+from provenance.document_processing_evidence import (
+    GovernedOCRPageProjection,
+    resolve_governed_ocr_pages,
+)
 from provenance.evidence_ledger import EvidenceLedger, EvidenceLocator, EvidenceNode, ExtractionRun
 from provenance.fact_plane_v2 import (
     CanonicalJSONObject,
@@ -35,6 +41,7 @@ from provenance.fact_plane_v2 import (
     ReportedFactObservationV2,
 )
 from provenance.fulltext_backfill import project_pdf_page_texts
+from provenance.ocr_layout import OCRPageLayout, OCRWord
 from provenance.reporting_entity_registry import ReportingEntityRegistry
 from provenance.source_fact_publication import verify_source_fact_publication
 from provenance.source_fact_repository import (
@@ -236,6 +243,68 @@ class IrRawRow(BaseModel):
     native_char_end: int = Field(gt=0)
 
 
+class IrOCRContextRegion(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_representation: Literal["governed_ocr"] = "governed_ocr"
+    page_number: int = Field(gt=0)
+    exact_quote: str = Field(min_length=1)
+    field_names: tuple[str, ...]
+    char_start: int = Field(ge=0)
+    char_end: int = Field(gt=0)
+    words: tuple[OCRWord, ...] = Field(min_length=1)
+
+
+class IrNativeContextRegion(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_representation: Literal["native_pdf_text"] = "native_pdf_text"
+    page_number: int = Field(gt=0)
+    exact_quote: str = Field(min_length=1)
+    field_names: tuple[str, ...]
+    char_start: int = Field(ge=0)
+    char_end: int = Field(gt=0)
+
+
+class IrOCRRawRow(BaseModel):
+    """Candidate-only source region on an exact retained OCR raster."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_representation: Literal["governed_ocr"] = "governed_ocr"
+    page_number: int = Field(gt=0)
+    response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    exchange_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    response_row_ordinal: int = Field(ge=0)
+    raw_row: dict[str, object]
+    ocr_source_quote: str = Field(min_length=1)
+    ocr_char_start: int = Field(ge=0)
+    ocr_char_end: int = Field(gt=0)
+    words: tuple[OCRWord, ...] = Field(min_length=1)
+    ocr_page_manifest: dict[str, object]
+    context_regions: tuple[IrOCRContextRegion | IrNativeContextRegion, ...] = ()
+
+
+class IrOCRRetentionSelection(BaseModel):
+    """Exact as-known OCR evidence coordinates for this candidate population."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    document_version_id: str = Field(min_length=1, max_length=128)
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence_seal_id: str = Field(min_length=1, max_length=128)
+    extraction_run_id: str = Field(min_length=1, max_length=128)
+    page_result_ids: tuple[str, ...] = Field(min_length=1)
+    cutoff_at: datetime
+
+    @field_validator("cutoff_at")
+    @classmethod
+    def _aware_cutoff(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("IR OCR candidate cutoff must include a timezone")
+        return value
+
+
 class IrCandidateRetentionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -247,7 +316,7 @@ class IrCandidateRetentionRequest(BaseModel):
     extraction_started_at: datetime
     extraction_completed_at: datetime
     responses: tuple[IrRawExchange, ...] = Field(min_length=1)
-    rows: tuple[IrRawRow, ...]
+    rows: tuple[IrRawRow | IrOCRRawRow, ...]
 
     @model_validator(mode="after")
     def _complete(self) -> Self:
@@ -429,7 +498,11 @@ def _retained_graph(
             + _sha([run_id, row.page_number, row.exchange_sha256, row.response_row_ordinal]),
             _json(
                 {
-                    "schema_version": "ir-pdf-unreviewed-candidate.v3",
+                    "schema_version": (
+                        "ir-pdf-unreviewed-ocr-candidate.v1"
+                        if isinstance(row, IrOCRRawRow)
+                        else "ir-pdf-unreviewed-candidate.v3"
+                    ),
                     "row": row.model_dump(mode="json"),
                     "response_node_id": "ir-pdf-response:" + _sha([run_id, row.exchange_sha256]),
                     "recurrence": "unknown",
@@ -454,6 +527,150 @@ def _validate_native_span(row: IrRawRow, page_text: str) -> None:
         raise ValueError("IR native quote span is missing, ambiguous, or changed")
 
 
+def _exact_ocr_words(
+    projection: GovernedOCRPageProjection, quote: str, start: int, end: int
+) -> tuple[OCRWord, ...]:
+    if not quote or projection.text[start:end] != quote:
+        raise ValueError("IR OCR quote is missing, ambiguous, or changed")
+    words = OCRPageLayout.model_validate_json(projection.layout_json).words
+    selected = tuple(word for word in words if word.char_start < end and word.char_end > start)
+    if (
+        not selected
+        or selected[0].char_start != start
+        or selected[-1].char_end != end
+        or any(right.ordinal != left.ordinal + 1 for left, right in pairwise(selected))
+    ):
+        raise ValueError("IR OCR quote is not an exact word-bounded region")
+    return selected
+
+
+def _validate_ocr_span(
+    row: IrOCRRawRow,
+    pages: dict[int, GovernedOCRPageProjection],
+    native_pages: tuple[str, ...],
+    selection: IrOCRRetentionSelection,
+) -> None:
+    projection = pages.get(row.page_number)
+    if projection is None:
+        raise ValueError("IR OCR candidate page is absent from selected projection")
+    quote = row.raw_row.get("source_excerpt")
+    if quote != row.ocr_source_quote or row.words != _exact_ocr_words(
+        projection, row.ocr_source_quote, row.ocr_char_start, row.ocr_char_end
+    ):
+        raise ValueError("IR OCR candidate word region differs from its retained layout")
+    layout = OCRPageLayout.model_validate_json(projection.layout_json)
+    manifest = row.ocr_page_manifest
+    expected = {
+        "source_representation": "governed_ocr",
+        "document_version_id": projection.document_version_id,
+        "source_sha256": projection.source_sha256,
+        "evidence_seal_id": projection.evidence_seal_id,
+        "extraction_run_id": projection.extraction_run_id,
+        "page_result_id": projection.page_result_id,
+        "page_node_id": projection.page_node_id,
+        "layout_node_id": projection.layout_node_id,
+        "layout_sha256": projection.layout_sha256,
+        "text_sha256": projection.text_sha256,
+        "engine_config_sha256": projection.engine_config_sha256,
+        "tsv_sha256": layout.tsv_sha256,
+        "render_sha256": layout.render_sha256,
+        "coordinate_space": layout.version,
+        "cutoff_at": selection.cutoff_at.isoformat(),
+    }
+    if manifest != expected:
+        raise ValueError("IR OCR candidate manifest differs from selected projection")
+    raw_witnesses = row.raw_row.get("context_witnesses", [])
+    if not isinstance(raw_witnesses, list):
+        raise ValueError("IR OCR candidate context witness population differs")
+    witness_list = cast("list[object]", raw_witnesses)
+    if len(witness_list) != len(row.context_regions):
+        raise ValueError("IR OCR candidate context witness population differs")
+    for raw, region in zip(witness_list, row.context_regions, strict=True):
+        if not isinstance(raw, dict):
+            raise ValueError("IR OCR candidate context witness differs from raw response")
+        raw_object = cast("dict[str, object]", raw)
+        raw_fields = raw_object.get("fields")
+        if (
+            raw_object.get("page") != region.page_number
+            or raw_object.get("quote") != region.exact_quote
+            or not isinstance(raw_fields, list)
+            or tuple(cast("list[object]", raw_fields)) != region.field_names
+        ):
+            raise ValueError("IR OCR candidate context witness differs from raw response")
+        if isinstance(region, IrOCRContextRegion):
+            context_page = pages.get(region.page_number)
+            if context_page is None or region.words != _exact_ocr_words(
+                context_page, region.exact_quote, region.char_start, region.char_end
+            ):
+                raise ValueError("IR OCR candidate context region differs from retained layout")
+        elif (
+            region.page_number in pages
+            or region.page_number > len(native_pages)
+            or locate_char_span(
+                region.exact_quote, native_pages[region.page_number - 1], whitespace_only=True
+            )
+            != (region.char_start, region.char_end)
+        ):
+            raise ValueError("IR OCR candidate native context region differs from source PDF")
+
+
+def _candidate_locator(document_version_id: str, row: IrRawRow | IrOCRRawRow) -> EvidenceLocator:
+    if isinstance(row, IrOCRRawRow):
+        return EvidenceLocator(source_ref=document_version_id, page_number=row.page_number)
+    return EvidenceLocator(
+        source_ref=document_version_id,
+        page_number=row.page_number,
+        char_start=row.native_char_start,
+        char_end=row.native_char_end,
+    )
+
+
+def _selected_ocr_candidate_pages(
+    conn: sqlite3.Connection,
+    request: IrCandidateRetentionRequest,
+    native_page_count: int,
+    *,
+    repo_root: Path | None,
+    selection: IrOCRRetentionSelection | None,
+) -> tuple[GovernedOCRPageProjection, ...]:
+    if selection is None:
+        if any(isinstance(row, IrOCRRawRow) for row in request.rows):
+            raise ValueError("IR OCR candidate requires exact governed selection")
+        return ()
+    if (
+        repo_root is None
+        or selection.document_version_id != request.document_version_id
+        or selection.source_sha256 != request.source_sha256
+        or len(set(selection.page_result_ids)) != len(selection.page_result_ids)
+    ):
+        raise ValueError("IR OCR selection differs from candidate source or page population")
+    pages = resolve_governed_ocr_pages(
+        conn,
+        repo_root=repo_root,
+        document_version_id=selection.document_version_id,
+        source_sha256=selection.source_sha256,
+        evidence_seal_id=selection.evidence_seal_id,
+        extraction_run_id=selection.extraction_run_id,
+        page_result_ids=selection.page_result_ids,
+        cutoff_at=selection.cutoff_at,
+    )
+    if (
+        not pages
+        or tuple(page.page_result_id for page in pages) != selection.page_result_ids
+        or len({page.page_number for page in pages}) != len(pages)
+        or any(
+            page.page_number > native_page_count
+            or page.document_version_id != request.document_version_id
+            or page.source_sha256 != request.source_sha256
+            or page.evidence_seal_id != selection.evidence_seal_id
+            or page.extraction_run_id != selection.extraction_run_id
+            for page in pages
+        )
+    ):
+        raise ValueError("IR OCR resolved pages differ from candidate source or selection")
+    return pages
+
+
 def retain_ir_pdf_candidates(
     conn: sqlite3.Connection,
     request: IrCandidateRetentionRequest,
@@ -464,14 +681,26 @@ def retain_ir_pdf_candidates(
     caller_transaction: bool = False,
     require_existing: bool = False,
     historical_revalidation: bool = False,
+    ocr_repo_root: Path | None = None,
+    ocr_selection: IrOCRRetentionSelection | None = None,
 ) -> IrCandidatePopulation:
     """Retain exact unreviewed PDF candidates; never create financial facts."""
     if conn.in_transaction != caller_transaction:
         raise ValueError("IR candidate retention transaction ownership differs")
     request = IrCandidateRetentionRequest.model_validate(request.model_dump(mode="python"))
+    if ocr_selection is not None:
+        ocr_selection = IrOCRRetentionSelection.model_validate(
+            ocr_selection.model_dump(mode="python")
+        )
     if hashlib.sha256(raw_pdf_bytes).hexdigest() != request.source_sha256:
         raise ValueError("IR PDF raw source hash changed")
     pages = (page_projection or project_pdf_page_texts)(raw_pdf_bytes)
+    ocr_pages = _selected_ocr_candidate_pages(
+        conn, request, len(pages), repo_root=ocr_repo_root, selection=ocr_selection
+    )
+    ocr_by_page = {page.page_number: page for page in ocr_pages}
+    if len(ocr_by_page) != len(ocr_pages):
+        raise ValueError("IR OCR selected pages repeat")
     responses = {item.exchange_sha256: item for item in request.responses}
     if len(responses) != len(request.responses):
         raise ValueError("IR governed responses repeat")
@@ -489,7 +718,14 @@ def retain_ir_pdf_candidates(
             raise ValueError("IR candidate is absent from governed response")
         if _json(parsed_rows[row.response_row_ordinal]) != _json(row.raw_row):
             raise ValueError("IR candidate differs from its governed response")
-        _validate_native_span(row, pages[row.page_number - 1])
+        if isinstance(row, IrOCRRawRow):
+            if ocr_selection is None:
+                raise ValueError("IR OCR candidate selection is unavailable")
+            _validate_ocr_span(row, ocr_by_page, pages, ocr_selection)
+        else:
+            if row.page_number in ocr_by_page:
+                raise ValueError("IR native candidate masks a selected OCR page")
+            _validate_native_span(row, pages[row.page_number - 1])
     run_id, output_sha, nodes = _retained_graph(request)
     if not caller_transaction:
         conn.execute("BEGIN")
@@ -547,14 +783,18 @@ def retain_ir_pdf_candidates(
                 prior = conn.execute(
                     "SELECT text,locator_json FROM evidence_nodes WHERE node_id=?", (node_id,)
                 ).fetchone()
-                locator = EvidenceLocator(
-                    source_ref=request.document_version_id,
-                    page_number=row.page_number,
-                    char_start=row.native_char_start,
-                    char_end=row.native_char_end,
-                )
+                locator = _candidate_locator(request.document_version_id, row)
                 if prior is None or prior[0] != text_value or prior[1] != locator.canonical_json:
                     raise ValueError("IR retained candidate replay differs from existing evidence")
+            if precommit_validation is not None:
+                precommit_validation()
+            if (
+                _selected_ocr_candidate_pages(
+                    conn, request, len(pages), repo_root=ocr_repo_root, selection=ocr_selection
+                )
+                != ocr_pages
+            ):
+                raise ValueError("IR OCR candidate replay projection changed")
             if not caller_transaction:
                 conn.rollback()
             return IrCandidatePopulation(
@@ -613,17 +853,24 @@ def retain_ir_pdf_candidates(
                     parent_node_id="ir-pdf-response:" + _sha([run_id, row.exchange_sha256]),
                     node_kind="claim",
                     text=text_value,
-                    locator=EvidenceLocator(
-                        source_ref=request.document_version_id,
-                        page_number=row.page_number,
-                        char_start=row.native_char_start,
-                        char_end=row.native_char_end,
-                    ),
+                    locator=_candidate_locator(request.document_version_id, row),
                     recorded_at=request.extraction_completed_at,
                 )
             )
         if precommit_validation is not None:
             precommit_validation()
+        if (
+            _selected_ocr_candidate_pages(
+                conn, request, len(pages), repo_root=ocr_repo_root, selection=ocr_selection
+            )
+            != ocr_pages
+        ):
+            raise ValueError("IR OCR candidate projection changed before commit")
+        for row in request.rows:
+            if isinstance(row, IrOCRRawRow):
+                if ocr_selection is None:
+                    raise ValueError("IR OCR candidate selection is unavailable")
+                _validate_ocr_span(row, ocr_by_page, pages, ocr_selection)
         if not caller_transaction:
             conn.commit()
         return IrCandidatePopulation(

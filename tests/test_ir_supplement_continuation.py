@@ -7,6 +7,7 @@ import json
 import sqlite3
 import uuid
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
@@ -29,7 +30,9 @@ from llm_artifact_store import (
 )
 from models.runs import StageStatus
 from pipeline.run_accounting import end_run, start_run
+from provenance.document_processing_evidence import GovernedOCRPageProjection
 from provenance.fulltext_backfill import project_pdf_page_texts
+from tests.test_ir_source_review_wire import ocr_candidate_fixture
 
 
 @pytest.fixture
@@ -871,6 +874,133 @@ def test_retained_native_page_assessment_blocks_known_unresolved_pages(
     capture.document_version_id = version
     with pytest.raises(ValueError, match="existing native-page"):
         capture.capture(source.read_bytes())
+    assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == 0
+
+
+def test_selected_ocr_page_uses_tagged_section_and_existing_cache(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, original_projection = ocr_candidate_fixture()
+    source_sha = hashlib.sha256(b"original source").hexdigest()
+    projection = original_projection.model_copy(
+        update={"source_sha256": source_sha, "document_version_id": "fixture-ocr-document"}
+    )
+
+    def selected_projection(
+        *_args: object, **_kwargs: object
+    ) -> tuple[GovernedOCRPageProjection, ...]:
+        return (projection,)
+
+    monkeypatch.setattr(continuation, "resolve_governed_ocr_pages", selected_projection)
+    capture = _capture(
+        conn,
+        monkeypatch,
+        (projection.text, "Other 2%"),
+        lambda _text: [],
+    )
+    capture.document_version_id = projection.document_version_id
+    capture.repo_root = tmp_path
+    capture.ocr_prompt = capture.prompt
+    capture.ocr_selection = continuation.OCRCaptureSelection(
+        document_id=capture.document_id,
+        document_version_id=projection.document_version_id,
+        source_sha256=source_sha,
+        evidence_seal_id=projection.evidence_seal_id,
+        extraction_run_id=projection.extraction_run_id,
+        page_result_ids=(projection.page_result_id,),
+        cutoff_at=datetime(2026, 10, 23, tzinfo=UTC),
+    )
+
+    def no_preflight(_pages: tuple[str, ...]) -> None:
+        return
+
+    monkeypatch.setattr(capture, "_existing_page_preflight", no_preflight)
+    submitted: list[str] = []
+
+    def ocr_extract(
+        _page: int,
+        _start: int,
+        text: str,
+        _body: str,
+        retain_raw: Callable[[SupplementExchange], None],
+    ) -> SupplementExchange:
+        submitted.append(text)
+        exchange = _synthetic_exchange(
+            conn,
+            capture.prompt(text),
+            [{"source_excerpt": projection.text}],
+        )
+        retain_raw(exchange)
+        return exchange
+
+    capture.extract_ocr = ocr_extract
+    assert capture.capture(b"original source") == [
+        (1, [{"source_excerpt": projection.text}]),
+        (2, []),
+    ]
+    assert capture.capture_version == continuation.OCR_CAPTURE_VERSION
+    assert len(submitted) == 1 and '"source_representation": "governed_ocr"' in submitted[0]
+    assert len(capture.exchange_input_sha256) == 2
+
+    def fail_ocr(
+        _page: int,
+        _start: int,
+        _text: str,
+        _body: str,
+        _retain: Callable[[SupplementExchange], None],
+    ) -> SupplementExchange:
+        pytest.fail("OCR cache replay called provider")
+
+    def fail_native(
+        _text: str, _body: str, _retain: Callable[[SupplementExchange], None]
+    ) -> SupplementExchange:
+        pytest.fail("native cache replay called provider")
+
+    capture.extract_ocr = fail_ocr
+    capture.extract = fail_native
+    assert len(capture.capture(b"original source")) == 2
+
+
+def test_selected_ocr_page_does_not_hide_another_empty_page(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, original_projection = ocr_candidate_fixture()
+    source_sha = hashlib.sha256(b"original source").hexdigest()
+    projection = original_projection.model_copy(
+        update={"source_sha256": source_sha, "document_version_id": "fixture-ocr-document"}
+    )
+
+    def selected_projection(
+        *_args: object, **_kwargs: object
+    ) -> tuple[GovernedOCRPageProjection, ...]:
+        return (projection,)
+
+    monkeypatch.setattr(continuation, "resolve_governed_ocr_pages", selected_projection)
+    capture = _capture(
+        conn,
+        monkeypatch,
+        (projection.text, ""),
+        lambda _text: pytest.fail("unresolved page reached provider"),
+    )
+    capture.document_version_id = projection.document_version_id
+    capture.repo_root = tmp_path
+    capture.ocr_prompt = capture.prompt
+    capture.ocr_selection = continuation.OCRCaptureSelection(
+        document_id=capture.document_id,
+        document_version_id=projection.document_version_id,
+        source_sha256=source_sha,
+        evidence_seal_id=projection.evidence_seal_id,
+        extraction_run_id=projection.extraction_run_id,
+        page_result_ids=(projection.page_result_id,),
+        cutoff_at=datetime(2026, 10, 23, tzinfo=UTC),
+    )
+
+    def no_preflight(_pages: tuple[str, ...]) -> None:
+        return
+
+    monkeypatch.setattr(capture, "_existing_page_preflight", no_preflight)
+    with pytest.raises(ValueError, match="native pages unresolved"):
+        capture.capture(b"original source")
     assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == 0
 
 

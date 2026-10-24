@@ -50,6 +50,7 @@ from pydantic import (
 
 from compute import ir_supplement_capture, ir_supplement_revalidation
 from compute.ir_supplement_capture import (
+    OCRCaptureSelection,
     SupplementCapture,
     SupplementExchange,
     SupplementSaturatedError,
@@ -120,6 +121,10 @@ from provenance.immutable_artifact import (
 )
 from provenance.ir_reported_facts import (
     IrCandidateRetentionRequest,
+    IrNativeContextRegion,
+    IrOCRContextRegion,
+    IrOCRRawRow,
+    IrOCRRetentionSelection,
     IrRawExchange,
     IrRawRow,
     IrReportedPublicationRequest,
@@ -129,6 +134,7 @@ from provenance.ir_reported_facts import (
 )
 from provenance.legacy_document_evidence import require_legacy_document_evidence
 from provenance.llm_extracted_parent import resolve_parent
+from provenance.ocr_layout import OCRPageLayout
 from provenance.reporting_entity_registry import ReportingEntityRegistry
 from run_lock import hold_run_lock
 from runtime.job_runtime import current_lock_claim, inherited_lock_is_valid
@@ -1414,6 +1420,18 @@ def _enumerate_direct_prompt_v20(ticker: str, period_label: str, text: str, max_
     )
 
 
+def _enumerate_direct_prompt_ocr(ticker: str, period_label: str, text: str, max_facts: int) -> str:
+    """Keep the governed direct schema while marking OCR as candidate evidence."""
+    prompt = _enumerate_direct_prompt_v20(ticker, period_label, text, max_facts)
+    return prompt + (
+        "\nOCR SOURCE RULE: The source section is a governed OCR raster transcription. "
+        "Each context page has its own source representation tag. "
+        "Quote exact source-section words only. Do not infer financial facts from chart geometry, "
+        "bar sizes, or unlabeled cells. OCR words alone cannot establish a consolidated "
+        "statement heading. Every output is an unreviewed candidate."
+    )
+
+
 def _validated_enumerated_rows(
     raw: object,
     *,
@@ -1497,6 +1515,7 @@ def _llm_extract_enumerate(
     source_guardrail: Callable[[object], tuple[bool, str]] | None = None,
     raw_response_observer: Callable[[str, str], None] | None = None,
     prospective_direct: bool = False,
+    prompt_builder: Callable[[str, str, str, int], str] | None = None,
 ) -> list[dict[str, object]]:
     """One governed structured call — enumerate labeled this-period numeric facts (no
     allowlist). Returns a list of ``{label, value, unit, source_excerpt}`` dicts.
@@ -1512,7 +1531,7 @@ def _llm_extract_enumerate(
     # markers marks it as DATA, not instructions (sec-llm; the enumerate path is a
     # no-allowlist capture so the doc text reaches the model verbatim).
     prompt = (
-        _enumerate_direct_prompt_v20(ticker, period_label, text, max_facts)
+        (prompt_builder or _enumerate_direct_prompt_v20)(ticker, period_label, text, max_facts)
         if prospective_direct
         else _enumerate_prompt(ticker, period_label, text, max_facts, source_scope=source_scope)
     )
@@ -2088,6 +2107,7 @@ def retain_and_publish_reviewed_ir_source(
     | None = None,
     caller_transaction: bool = False,
     require_existing: bool = False,
+    ocr_capture: SupplementCapture | None = None,
 ) -> None:
     """Retain every raw candidate; publish only a pre-existing exact review."""
     revalidated = (
@@ -2118,6 +2138,8 @@ def retain_and_publish_reviewed_ir_source(
         for exchange in exchanges
     )
     retained_exchanges = {response.llm_call_id: response for response in responses}
+    if ocr_capture is not None and revalidated is not None:
+        raise ValueError("IR OCR candidates cannot use native historical revalidation")
     capture_versions = (
         [
             ir_supplement_revalidation.REVALIDATION_PRODUCER_VERSION.removeprefix(
@@ -2127,7 +2149,16 @@ def retain_and_publish_reviewed_ir_source(
         * len(exchanges)
         if revalidated is not None
         else [
-            ir_supplement_capture.producing_capture_version(conn, exchange, source_sha256)
+            ir_supplement_capture.producing_capture_version(
+                conn,
+                exchange,
+                source_sha256,
+                expected_ocr_input_sha256=(
+                    ocr_capture.exchange_input_sha256[exchange.llm_call_id]
+                    if ocr_capture is not None
+                    else None
+                ),
+            )
             for exchange in exchanges
         ]
     )
@@ -2136,6 +2167,8 @@ def retain_and_publish_reviewed_ir_source(
     if not capture_versions:
         raise ValueError("IR producing capture version is unbound")
     capture_version = capture_versions[0]
+    if ocr_capture is not None and capture_version != ir_supplement_capture.OCR_CAPTURE_VERSION:
+        raise ValueError("IR OCR candidate producer identity differs")
     historical = capture_version in ir_supplement_capture.LEGACY_RELAXED_CAPTURE_VERSIONS
 
     def retained_rows(raw: object) -> list[_EnumeratedKpi]:
@@ -2148,7 +2181,11 @@ def retain_and_publish_reviewed_ir_source(
             source_scope="direct_pdf_rich",
             saturation_limit=max_facts_per_doc,
             prospective_direct=capture_version
-            in {"v20-reporting-scope", "v21-reviewed-pages-reporting-scope"},
+            in {
+                "v20-reporting-scope",
+                "v21-reviewed-pages-reporting-scope",
+                ir_supplement_capture.OCR_CAPTURE_VERSION,
+            },
         )
 
     processed: list[tuple[SupplementExchange, list[dict[str, object]]]] = []
@@ -2164,7 +2201,7 @@ def retain_and_publish_reviewed_ir_source(
     if len(processed) != len(page_rows):
         raise ValueError("IR page sections and governed responses do not match")
     native_pages = ir_supplement_capture.project_pdf_page_texts(raw_pdf_bytes)
-    raw_rows: list[IrRawRow] = []
+    raw_rows: list[IrRawRow | IrOCRRawRow] = []
     for (page, rows), (exchange, original) in zip(page_rows, processed, strict=True):
         validated = [item.model_dump(mode="json") for item in retained_rows(original)]
         normalized_rows = [item.model_dump(mode="json") for item in retained_rows(rows)]
@@ -2173,7 +2210,89 @@ def retain_and_publish_reviewed_ir_source(
         for ordinal, original_row in enumerate(original):
             quote = original_row.get("source_excerpt")
             if not isinstance(quote, str) or page < 1 or page > len(native_pages):
-                raise ValueError("IR native quote or page is missing")
+                raise ValueError("IR candidate quote or page is missing")
+            if ocr_capture is not None and ocr_capture.is_ocr_page(page):
+                source_page, source_start, source_body = ocr_capture.exchange_sections[
+                    exchange.llm_call_id
+                ]
+                if source_page != page:
+                    raise ValueError("IR OCR producing section page differs from candidate")
+                start, end, ordinals = ocr_capture.ocr_quote_words(
+                    page, quote, start=source_start, body=source_body
+                )
+                projection = next(
+                    item for item in ocr_capture.ocr_projections() if item.page_number == page
+                )
+                words_by_ordinal = {
+                    word.ordinal: word
+                    for word in OCRPageLayout.model_validate_json(projection.layout_json).words
+                }
+                context_regions: list[IrOCRContextRegion | IrNativeContextRegion] = []
+                raw_witnesses = original_row.get("context_witnesses", [])
+                if not isinstance(raw_witnesses, list):
+                    raise ValueError("IR OCR candidate context witnesses are invalid")
+                for raw_witness in cast("list[object]", raw_witnesses):
+                    item = ir_supplement_capture.SupplementContextWitness.model_validate(
+                        raw_witness
+                    )
+                    if ocr_capture.is_ocr_page(item.page):
+                        witness_start, witness_end, witness_ordinals = ocr_capture.ocr_quote_words(
+                            item.page, item.quote
+                        )
+                        witness_projection = next(
+                            value
+                            for value in ocr_capture.ocr_projections()
+                            if value.page_number == item.page
+                        )
+                        witness_words = {
+                            word.ordinal: word
+                            for word in OCRPageLayout.model_validate_json(
+                                witness_projection.layout_json
+                            ).words
+                        }
+                        context_regions.append(
+                            IrOCRContextRegion(
+                                page_number=item.page,
+                                exact_quote=item.quote,
+                                field_names=tuple(item.fields),
+                                char_start=witness_start,
+                                char_end=witness_end,
+                                words=tuple(witness_words[number] for number in witness_ordinals),
+                            )
+                        )
+                    else:
+                        if item.page > len(native_pages):
+                            raise ValueError("IR OCR candidate context page is missing")
+                        witness_span = locate_char_span(
+                            item.quote, native_pages[item.page - 1], whitespace_only=True
+                        )
+                        if witness_span is None:
+                            raise ValueError("IR OCR candidate native context is missing")
+                        context_regions.append(
+                            IrNativeContextRegion(
+                                page_number=item.page,
+                                exact_quote=item.quote,
+                                field_names=tuple(item.fields),
+                                char_start=witness_span[0],
+                                char_end=witness_span[1],
+                            )
+                        )
+                raw_rows.append(
+                    IrOCRRawRow(
+                        page_number=page,
+                        response_sha256=exchange.response_sha256,
+                        exchange_sha256=retained_exchanges[exchange.llm_call_id].exchange_sha256,
+                        response_row_ordinal=ordinal,
+                        raw_row=original_row,
+                        ocr_source_quote=quote,
+                        ocr_char_start=start,
+                        ocr_char_end=end,
+                        words=tuple(words_by_ordinal[number] for number in ordinals),
+                        ocr_page_manifest=ocr_capture.ocr_page_manifest(page),
+                        context_regions=tuple(context_regions),
+                    )
+                )
+                continue
             native_page = native_pages[page - 1]
             span = locate_char_span(quote, native_page, whitespace_only=True)
             if span is None:
@@ -2196,7 +2315,11 @@ def retain_and_publish_reviewed_ir_source(
         IrCandidateRetentionRequest(
             document_version_id=document_version_id,
             source_sha256=source_sha256,
-            extractor_name="ir-supplement-native-continuation",
+            extractor_name=(
+                "ir-supplement-ocr-continuation"
+                if ocr_capture is not None
+                else "ir-supplement-native-continuation"
+            ),
             extractor_code_version=capture_version,
             extractor_config_sha256=extractor_config_sha256,
             extraction_started_at=extraction_started_at,
@@ -2210,7 +2333,26 @@ def retain_and_publish_reviewed_ir_source(
         caller_transaction=caller_transaction,
         require_existing=require_existing,
         historical_revalidation=revalidated is not None,
+        ocr_repo_root=ocr_capture.repo_root if ocr_capture is not None else None,
+        ocr_selection=(
+            IrOCRRetentionSelection.model_validate(
+                ocr_capture.ocr_selection.model_dump(exclude={"document_id"})
+            )
+            if ocr_capture is not None and ocr_capture.ocr_selection is not None
+            else None
+        ),
     )
+    if ocr_capture is not None:
+        logger.info(
+            {
+                "event": "ir_source_candidate_disposition",
+                "document_version_id": document_version_id,
+                "candidate_count": len(population.candidate_node_ids),
+                "source_publication_count": 0,
+                "disposition": "pending_source_context_review_ocr",
+            }
+        )
+        return
     if revalidated is not None:
         logger.info(
             {
@@ -2309,6 +2451,7 @@ def capture_for_ir_pdf_docs(
     max_input_chars: int = _CAPTURE_MAX_INPUT_CHARS,
     max_chunks: int = 256,
     max_structured_calls: int = 256,
+    ocr_selection: OCRCaptureSelection | None = None,
 ) -> TickerExtractionLog:
     """Process bounded native-page sections from registered supplement PDFs.
 
@@ -2328,9 +2471,13 @@ def capture_for_ir_pdf_docs(
         log.error = "KPI capture requires an owned transaction boundary before source preparation"
         return _close_log(log, t0)
 
-    for doc_id, pdf_path, period_end in _list_ir_capture_pdf_docs(
-        conn, repo_root, ticker, doc_types
-    ):
+    capture_docs = _list_ir_capture_pdf_docs(conn, repo_root, ticker, doc_types)
+    if ocr_selection is not None:
+        capture_docs = [item for item in capture_docs if item[0] == ocr_selection.document_id]
+        if len(capture_docs) != 1:
+            log.error = "IR OCR selected document is not capture eligible for this ticker"
+            return _close_log(log, t0)
+    for doc_id, pdf_path, period_end in capture_docs:
         period_label = f"{period_end.date().isoformat()} [ir_supplement]"
         log.quarters_attempted.append(period_label)
         extraction_run_id: str | None = None
@@ -2355,6 +2502,11 @@ def capture_for_ir_pdf_docs(
                 period_end=period_end,
                 source_sha256=snapshot.file_sha256,
             )
+            if ocr_selection is not None and (
+                ocr_selection.document_version_id != evidence.document_version_id
+                or ocr_selection.source_sha256 != snapshot.file_sha256
+            ):
+                raise ValueError("IR OCR selection differs from exact registered source")
             db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
             model, backend = resolve_model_and_backend(
                 "kpi_summary_enumerate",
@@ -2381,6 +2533,8 @@ def capture_for_ir_pdf_docs(
                 period_label: str = period_label,
                 run_id: str,
                 context_guardrail: Callable[[list[dict[str, object]]], None] | None = None,
+                quote_guardrail: Callable[[list[dict[str, object]], str], None] | None = None,
+                prompt_builder: Callable[[str, str, str, int], str] | None = None,
             ) -> SupplementExchange:
                 if (model, backend) != resolve_model_and_backend(
                     "kpi_summary_enumerate",
@@ -2459,7 +2613,7 @@ def capture_for_ir_pdf_docs(
                                 saturation_limit=max_facts_per_doc,
                                 prospective_direct=True,
                             )
-                            ir_supplement_capture.require_native_source_quotes(
+                            (quote_guardrail or ir_supplement_capture.require_native_source_quotes)(
                                 [row.model_dump(mode="json") for row in rows], source_body
                             )
                             if context_guardrail is None:
@@ -2484,6 +2638,7 @@ def capture_for_ir_pdf_docs(
                             source_guardrail=source_guardrail,
                             raw_response_observer=observe_raw,
                             prospective_direct=True,
+                            prompt_builder=prompt_builder,
                         )
                     if exchange is None:
                         raise ValueError("IR governed structured exchange is unavailable")
@@ -2508,12 +2663,24 @@ def capture_for_ir_pdf_docs(
                     max_facts_per_doc,
                 ).encode()
             ).hexdigest()
+            ocr_prompt_sha256 = (
+                hashlib.sha256(
+                    _enumerate_direct_prompt_ocr(
+                        ticker, period_label, "", max_facts_per_doc
+                    ).encode()
+                ).hexdigest()
+                if ocr_selection is not None
+                else None
+            )
             schema_sha256 = hashlib.sha256(
                 json.dumps(
                     TypeAdapter(list[_DirectEnumeratedKpiV20]).json_schema(), sort_keys=True
                 ).encode()
             ).hexdigest()
             projection_identity = source_text_projection_identity(str(pdf_path), "application/pdf")
+            ocr_manifest = (
+                ocr_selection.model_dump(mode="json") if ocr_selection is not None else None
+            )
             extraction_run_id = start_run(
                 conn,
                 directive="capture_ir_supplement_sections",
@@ -2539,8 +2706,14 @@ def capture_for_ir_pdf_docs(
                         )
                     ),
                     "prompt_sha256": prompt_sha256,
+                    **(
+                        {"ocr_prompt_sha256": ocr_prompt_sha256}
+                        if ocr_prompt_sha256 is not None
+                        else {}
+                    ),
                     "schema_sha256": schema_sha256,
                     "projection_identity": projection_identity,
+                    **({"ocr_selection": ocr_manifest} if ocr_manifest is not None else {}),
                 },
             )
             continuation = SupplementCapture(
@@ -2561,6 +2734,16 @@ def capture_for_ir_pdf_docs(
                     period_label,
                     max_facts=max_facts_per_doc,
                 ),
+                ocr_prompt=(
+                    partial(
+                        _enumerate_direct_prompt_ocr,
+                        ticker,
+                        period_label,
+                        max_facts=max_facts_per_doc,
+                    )
+                    if ocr_selection is not None
+                    else None
+                ),
                 extract=partial(extract_section, run_id=extraction_run_id),
                 effective_prompt=effective_prompt,
                 override_identity=override_identity,
@@ -2569,12 +2752,40 @@ def capture_for_ir_pdf_docs(
                 schema_sha256=schema_sha256,
                 projection_identity=projection_identity,
                 document_version_id=evidence.document_version_id,
+                repo_root=repo_root if ocr_selection is not None else None,
+                ocr_selection=ocr_selection,
             )
             continuation.extract = partial(
                 extract_section,
                 run_id=extraction_run_id,
                 context_guardrail=continuation.require_context_witnesses,
             )
+            if ocr_selection is not None:
+                capture_run_id = extraction_run_id
+
+                def extract_ocr_section(
+                    page: int,
+                    start: int,
+                    text: str,
+                    source_body: str,
+                    retain_raw: Callable[[SupplementExchange], None],
+                    *,
+                    _continuation: SupplementCapture = continuation,
+                    _run_id: str = capture_run_id,
+                ) -> SupplementExchange:
+                    return extract_section(
+                        text,
+                        source_body,
+                        retain_raw,
+                        run_id=_run_id,
+                        context_guardrail=_continuation.require_context_witnesses,
+                        quote_guardrail=lambda rows, body: _continuation.require_source_quotes(
+                            rows, body, page=page, start=start
+                        ),
+                        prompt_builder=_enumerate_direct_prompt_ocr,
+                    )
+
+                continuation.extract_ocr = extract_ocr_section
             source_started_at = datetime.now(UTC)
             page_rows = continuation.capture(raw_bytes)
             assert_artifact_unchanged(snapshot)
@@ -2585,6 +2796,11 @@ def capture_for_ir_pdf_docs(
                         "model": model,
                         "backend": backend,
                         "prompt_sha256": prompt_sha256,
+                        **(
+                            {"ocr_prompt_sha256": ocr_prompt_sha256}
+                            if ocr_prompt_sha256 is not None
+                            else {}
+                        ),
                         "schema_sha256": schema_sha256,
                         "projection_identity": projection_identity,
                         "prompt_override_identity": override_identity(),
@@ -2594,6 +2810,14 @@ def capture_for_ir_pdf_docs(
                         **(
                             {"review_scope_sha256": continuation.review_scope_sha256}
                             if continuation.reviewed_non_financial_pages
+                            else {}
+                        ),
+                        **(
+                            {
+                                "ocr_selection": ocr_manifest,
+                                "ocr_review_scope_sha256": continuation.review_scope_sha256,
+                            }
+                            if ocr_manifest is not None
                             else {}
                         ),
                     },
@@ -2619,6 +2843,7 @@ def capture_for_ir_pdf_docs(
                 extractor_config_sha256=source_config_sha256,
                 extraction_started_at=source_started_at,
                 precommit_validation=validate_capture_source,
+                ocr_capture=continuation if ocr_selection is not None else None,
             )
             assert_artifact_unchanged(snapshot)
             end_run(conn, extraction_run_id, StageStatus.OK)
