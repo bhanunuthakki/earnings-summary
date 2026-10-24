@@ -2249,6 +2249,50 @@ spreadsheet, presentation and transcript hints. Supporting HTML notices do not
 loosen the existing financial-release HTML boundary. This classification change
 does not rewrite historical document metadata or activate a new collection job.
 
+### Source-reviewed reported-quarter selection
+
+`manage_issuer_document_sources.py review-period` is a supervised local operator
+phase on the configured canonical database. It accepts one closed source-review
+request and appends one immutable EvidenceLedger run and located node for the
+captured publisher PDF. The request names the actual analyst reviewer and method;
+it does not assert owner approval. The phase verifies exact source bytes, native
+first-page wording for a current reported actual quarter, issuer identity,
+selected subject, active SEC-source fiscal profile, source clocks, and replay.
+Changed reviews require a new source/version process; an exact replay creates no
+new evidence. Failure rolls back the review. The JSON result identifies the
+review node; it is evidence, not a financial fact or completeness seal.
+
+Current IR collection retains bounded candidates when reported-period selection
+is pending. Its output uses `period_selection_pending`, includes retained and
+deferred counts, and does not run categorization or claim complete coverage.
+The explicit-URL fallback uses the same bounded fetch path while selection is
+pending. It keeps raw bytes and the URL manifest, but does not mark the brief
+dirty, record a completed `ir_fetch_status`, or start categorization.
+The existing `.tmp/ir_incoming_urls.json` sidecar also records a per-ticker retry
+cursor and exact SHA-256 and byte size for staged raw files. A replay checks
+those bytes before skipping a download. Failed URLs consume an attempt slot,
+then the cursor advances so later manifest URLs get a bounded attempt. This
+sidecar proves retained bytes, not catalog registration or financial coverage.
+One fetch process owns this shared sidecar write set at a time. The cursor and
+retained-byte map are scoped by ticker and by the selected content root; the
+existing filename-to-URL map remains readable by the categorizer.
+The source selector can exclude a quarter only after all current inventory and
+captured-period proof checks pass. Current incomplete populations for the eleven
+portfolio issuers remain visible pending; this change does not run collection or
+activate a schedule. Operator evidence is the CLI JSON and existing source and
+coverage receipts. No cockpit control changes in this code path.
+
+Current transcript acquisition uses a version 2 authorization receipt with the
+same source window. A pending source window returns a distinct pending reason;
+it is not an out-of-window or provider-miss finding. The active backfill JSON
+reports `period_selection_status`, `period_selection_reason`, and the pending
+ticker count. Pending tickers keep existing raw artifacts and do not run transcript
+fact ingest or commitment scan. Historical version 1 receipts still validate
+under their original calendar rule. An exact stored version 2 receipt can be
+reconstructed after later source revisions while its receipt and transcript
+bytes remain unchanged. Active acquisition and ingest still require current
+source proof.
+
 
 ### Transcript scan database and retained-input scope
 

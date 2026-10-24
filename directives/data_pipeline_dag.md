@@ -19,6 +19,31 @@ watchlist, then permitted index screening. Automatic work records `requested=fal
 an explicit request records its actual invocation identity. A scheduler run ID
 must not be fabricated into owner authorization to satisfy an obsolete role rule.
 
+The reported-quarter selector under `src/pipeline/reported_period_inventory.py` returns a closed
+five-period window only after current SEC and IR inventories, complete seals,
+captured document versions, exact retained bytes, a selected issuer/profile, and
+source-located current-period reviews agree. An expected row, a quarter label, or
+a calendar end is not period proof. Unknown, stale, and ambiguous selection permit
+bounded authorized discovery and raw candidate retention. They do not permit a
+final out-of-window exclusion, fifth-quarter eviction, financial publication, or
+full-coverage claim. Annual 10-K, 20-F, and 40-F period ends do not establish a
+quarterly result by themselves. Historical exact-window receipts keep their
+versioned replay meaning.
+
+Current transcript acquisition uses `transcript-acquisition-request@2` and
+`transcript-acquisition-authorization@2`. The receipt carries the source window
+and exact snapshot IDs, coverage-proof digest, and fiscal profile. The existing
+receipt table preserves historical version 1 shape and requires the exact
+version 2 pair. Unknown, stale, or
+ambiguous selection becomes
+`reported_quarter_window_pending`; it cannot authorize staging, document ingest,
+or commitment-scan completion. Version 1 transcript receipts retain their
+calendar-based historical reconstruction rule by receipt ID. An exact stored version 2 receipt remains readable
+after later source revisions when its receipt identity and artifact bytes still
+verify. New fetch, active replay, and canonical ingest recheck current source
+proof. The active backfill reports each ticker's pending
+selection reason and does not write financial coverage for that ticker.
+
 Apply scrutiny at the boundary that can establish the claimed property:
 
 | Boundary | Required check | What may proceed |

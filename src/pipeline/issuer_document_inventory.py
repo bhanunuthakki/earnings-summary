@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path, PurePosixPath
 from typing import Literal, Self, TypeAlias, cast, overload
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from pydantic import (
     BaseModel,
@@ -26,12 +26,25 @@ from pydantic import (
 )
 
 from pipeline.source_policy import fiscal_quarter_end
+from provenance.evidence_ledger import EvidenceLedger, EvidenceLocator, EvidenceNode, ExtractionRun
 from provenance.verifier_identity import verifier_source_artifact_sha256
 from runtime.deterministic import canonical_json as _canonical_json
 from runtime.deterministic import sha256_text as _sha256_text
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _TICKER = re.compile(r"^[A-Z0-9][A-Z0-9.-]{0,15}$")
+_CURRENT_RESULT_WORDING = re.compile(
+    r"\b(?:reports?|reported|announces?|announced)\b.{0,100}"
+    r"\b(?:quarter|q[1-4])\b.{0,70}\b(?:results|earnings)\b"
+    r"|\b(?:quarter|q[1-4])\b.{0,70}\b(?:results|earnings)\b.{0,100}"
+    r"\b(?:reports?|reported|announces?|announced)\b",
+    re.IGNORECASE,
+)
+_FORWARD_OR_COMPARATIVE = re.compile(
+    r"\b(?:guidance|outlook|forecast|expects?|anticipated?|prior|previous|"
+    r"comparable|compared|versus|year.ago)\b",
+    re.IGNORECASE,
+)
 _REQUIRED_DOCUMENT_COLUMNS = frozenset(
     {
         "id",
@@ -98,6 +111,70 @@ class FiscalPeriodWitness(_ClosedModel):
             raise ValueError("fiscal witness observation cutoff precedes knowledge cutoff")
         fiscal_quarter_end(fiscal_year=2000, fiscal_quarter=4, fiscal_year_end=self.fiscal_year_end)
         return self
+
+
+class CurrentReportedPeriodReview(_ClosedModel):
+    """An analyst's exact first-page source judgment, bound to retained bytes."""
+
+    schema_version: Literal["current-reported-period-review@1"] = "current-reported-period-review@1"
+    document_version_id: str = Field(min_length=1, max_length=128)
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    issuer_id: str = Field(min_length=1, max_length=128)
+    ticker: str = Field(pattern=r"^[A-Z0-9][A-Z0-9.-]{0,15}$")
+    profile_revision_id: str = Field(min_length=1, max_length=128)
+    subject_binding_revision_id: str = Field(min_length=1, max_length=128)
+    fiscal_year: int = Field(ge=1900, le=2200)
+    fiscal_quarter: int = Field(ge=1, le=4)
+    period_end: date
+    page_number: Literal[1] = 1
+    char_start: int = Field(ge=0)
+    char_end: int = Field(gt=0)
+    exact_quote: str = Field(min_length=20, max_length=800)
+    period_role: Literal["current_reported_actual"] = "current_reported_actual"
+    reviewer_identity: str = Field(min_length=3, max_length=128)
+    review_method: Literal["agent_analyst_source_review"] = "agent_analyst_source_review"
+    review_evidence: str = Field(min_length=20, max_length=1000)
+    knowledge_cutoff: datetime
+    observed_through: datetime
+    reviewed_at: datetime
+
+    @model_validator(mode="after")
+    def _review_contract(self) -> Self:
+        if (
+            any(
+                value.tzinfo is None
+                for value in (self.knowledge_cutoff, self.observed_through, self.reviewed_at)
+            )
+            or not self.reviewed_at <= self.knowledge_cutoff <= self.observed_through
+        ):
+            raise ValueError("reported-period review clocks are inconsistent")
+        if self.char_end - self.char_start != len(self.exact_quote):
+            raise ValueError("reported-period quote coordinates differ")
+        wording = " ".join(self.exact_quote.split())
+        if (
+            _CURRENT_RESULT_WORDING.search(wording) is None
+            or _FORWARD_OR_COMPARATIVE.search(wording) is not None
+            or str(self.fiscal_year) not in wording
+            or re.search(
+                rf"\b(?:q{self.fiscal_quarter}|"
+                rf"{('first', 'second', 'third', 'fourth')[self.fiscal_quarter - 1]})\b",
+                wording,
+                re.IGNORECASE,
+            )
+            is None
+        ):
+            raise ValueError("quote does not state this current reported actual quarter")
+        return self
+
+
+def current_reported_period_review_identity(
+    review: CurrentReportedPeriodReview,
+) -> tuple[str, str]:
+    """Stable node and content identity used by inventory and coverage proofs."""
+    return (
+        "ir-current-period-review:" + _sha256_text(review.document_version_id),
+        _sha256_text(_canonical_json(review.model_dump(mode="json"))),
+    )
 
 
 class _FiscalRequest(_ClosedModel):
@@ -916,7 +993,8 @@ def validate_fiscal_period_witness(
         conn, "evidence_source_observations", "observation_id", str(version["observation_id"])
     )
     subject = conn.execute(
-        "SELECT issuer_id,outcome,material_dissent,knowledge_at,recorded_at,effective_at "
+        "SELECT issuer_id,outcome,material_dissent,knowledge_at,recorded_at,effective_at,"
+        "binding_revision_id "
         "FROM recorded_subject_binding_revisions "
         "WHERE recorded_issuer_id=? ORDER BY revision DESC LIMIT 1",
         (f"legacy-ticker:{request.ticker}",),
@@ -926,6 +1004,12 @@ def validate_fiscal_period_witness(
     _alias_clock(subject[3], witness.knowledge_cutoff)
     _alias_clock(subject[4], witness.observed_through)
     _alias_clock(subject[5], witness.knowledge_cutoff)
+    reviewed_period = verified_current_reported_period_review(
+        conn,
+        document_version_id=witness.document_version_id,
+        source_sha256=witness.document_sha256,
+        period_end=request.period_end,
+    )
     if (
         profile["issuer_id"] != witness.issuer_id
         or profile["status"] != "active"
@@ -937,10 +1021,23 @@ def validate_fiscal_period_witness(
         or version["issuer_id"] not in (witness.issuer_id, f"legacy-ticker:{request.ticker}")
         or version["ticker"] != request.ticker
         or version["blob_sha256"] != witness.document_sha256
-        or version["period_end"] is None
-        or datetime.fromisoformat(str(version["period_end"])).date() != request.period_end
+        or (
+            datetime.fromisoformat(str(version["period_end"])).date() != request.period_end
+            if version["period_end"] is not None
+            else reviewed_period is None
+        )
     ):
         raise IssuerDocumentInventoryError("fiscal_witness_identity_mismatch")
+    if reviewed_period is not None and (
+        reviewed_period.issuer_id != witness.issuer_id
+        or reviewed_period.ticker != request.ticker
+        or reviewed_period.profile_revision_id != witness.profile_revision_id
+        or reviewed_period.subject_binding_revision_id != subject[6]
+        or reviewed_period.knowledge_cutoff > witness.knowledge_cutoff
+        or reviewed_period.observed_through > witness.observed_through
+        or reviewed_period.reviewed_at > witness.knowledge_cutoff
+    ):
+        raise IssuerDocumentInventoryError("fiscal_review_binding_mismatch")
     for row, field, cutoff in (
         (profile, "knowledge_at", witness.knowledge_cutoff),
         (profile, "effective_at", witness.knowledge_cutoff),
@@ -963,6 +1060,351 @@ def validate_fiscal_period_witness(
         for row in newer
     ):
         raise IssuerDocumentInventoryError("fiscal_profile_superseded")
+
+
+def _review_pdf_bytes(
+    conn: sqlite3.Connection, document_version_id: str
+) -> tuple[dict[str, JsonValue], bytes]:
+    version = _alias_row(
+        conn, "evidence_document_versions", "document_version_id", document_version_id
+    )
+    source = _alias_row(
+        conn, "evidence_source_observations", "observation_id", str(version["observation_id"])
+    )
+    blob = _alias_row(conn, "evidence_content_blobs", "sha256", str(version["blob_sha256"]))
+    locations = conn.execute(
+        "SELECT availability_state,verified_sha256,verified_byte_size FROM "
+        "evidence_blob_location_observations WHERE blob_sha256=? AND storage_uri=? "
+        "ORDER BY location_sequence DESC LIMIT 1",
+        (version["blob_sha256"], blob["storage_uri"]),
+    ).fetchall()
+    uri = urlsplit(str(blob["storage_uri"]))
+    if (
+        len(locations) != 1
+        or tuple(locations[0]) != ("present", version["blob_sha256"], blob["byte_size"])
+        or uri.scheme != "file"
+        or uri.netloc not in {"", "localhost"}
+        or source["blob_sha256"] != version["blob_sha256"]
+        or source["source_kind"] != "ir_document"
+        or blob["media_type"] != "application/pdf"
+    ):
+        raise IssuerDocumentInventoryError("reported_period_source_identity_mismatch")
+    try:
+        raw = Path(unquote(uri.path)).read_bytes()
+    except OSError as exc:
+        raise IssuerDocumentInventoryError("reported_period_source_unavailable") from exc
+    blob_size = blob["byte_size"]
+    if (
+        not raw.startswith(b"%PDF-")
+        or type(blob_size) is not int
+        or len(raw) != blob_size
+        or hashlib.sha256(raw).hexdigest() != version["blob_sha256"]
+    ):
+        raise IssuerDocumentInventoryError("reported_period_source_hash_mismatch")
+    return version, raw
+
+
+def verified_current_reported_period_review(
+    conn: sqlite3.Connection,
+    *,
+    document_version_id: str,
+    source_sha256: str,
+    period_end: date,
+) -> CurrentReportedPeriodReview | None:
+    """Replay the sole reviewed quarter against immutable native PDF text."""
+    rows = conn.execute(
+        "SELECT node.text,node.locator_json,node.locator_sha256,run.input_sha256,"
+        "run.output_sha256,run.outcome,node.node_id,node.evidence_key,node.revision,"
+        "node.node_kind,node.recorded_at,run.extraction_run_id,run.extractor_config_sha256,"
+        "run.extractor_code_version,run.completed_at FROM evidence_nodes node "
+        "JOIN evidence_extraction_runs run ON run.extraction_run_id=node.extraction_run_id "
+        "WHERE run.document_version_id=? AND run.extractor_name='ir-current-reported-period'",
+        (document_version_id,),
+    ).fetchall()
+    if len(rows) != 1:
+        return None
+    (
+        text,
+        locator_json,
+        locator_sha,
+        input_sha,
+        output_sha,
+        outcome,
+        node_id,
+        evidence_key,
+        revision,
+        node_kind,
+        node_recorded_at,
+        run_id,
+        config_sha,
+        code_version,
+        completed_at,
+    ) = rows[0]
+    try:
+        review = CurrentReportedPeriodReview.model_validate_json(str(text))
+        locator = EvidenceLocator.model_validate_json(str(locator_json))
+        version, raw = _review_pdf_bytes(conn, document_version_id)
+        from provenance.fulltext_backfill import project_pdf_page_texts
+
+        page = project_pdf_page_texts(raw)[0]
+        node_recorded = datetime.fromisoformat(str(node_recorded_at))
+        run_completed = datetime.fromisoformat(str(completed_at))
+    except Exception:  # Native PDF parsing is optional; an unverified source stays pending.
+        return None
+    if (
+        review.document_version_id != document_version_id
+        or review.source_sha256 != source_sha256
+        or review.period_end != period_end
+        or version["blob_sha256"] != source_sha256
+        or input_sha != source_sha256
+        or output_sha != _sha256_text(str(text))
+        or outcome != "succeeded"
+        or node_id != current_reported_period_review_identity(review)[0]
+        or evidence_key != node_id
+        or revision != 1
+        or node_kind != "claim"
+        or node_recorded != review.reviewed_at
+        or run_id != "ir-current-period-run:" + _sha256_text(document_version_id)
+        or config_sha != _sha256_text("ir-current-reported-period@1")
+        or code_version != "ir-current-reported-period@1"
+        or run_completed != review.reviewed_at
+        or locator.canonical_sha256 != locator_sha
+        or locator.source_ref != document_version_id
+        or locator.page_number != review.page_number
+        or locator.char_start != review.char_start
+        or locator.char_end != review.char_end
+        or page[review.char_start : review.char_end] != review.exact_quote
+    ):
+        return None
+    return review
+
+
+def reviewed_current_period_for_url(
+    conn: sqlite3.Connection,
+    *,
+    issuer_id: str,
+    ticker: str,
+    source_url: str,
+    observed_through: datetime,
+) -> CurrentReportedPeriodReview | None:
+    """Resolve one exact publisher URL; conflicting versions remain unqualified."""
+    rows = conn.execute(
+        "SELECT DISTINCT version.document_version_id,version.blob_sha256,version.recorded_at "
+        "FROM evidence_document_versions version "
+        "JOIN evidence_source_observations source ON source.observation_id=version.observation_id "
+        "WHERE version.issuer_id=? AND version.ticker=? AND source.source_url=? "
+        "AND version.document_type IN ('ir_document','earnings_release') "
+        "AND version.recorded_at<=? AND source.retrieved_at<=? "
+        "ORDER BY version.recorded_at DESC",
+        (issuer_id, ticker, source_url, observed_through, observed_through),
+    ).fetchall()
+    if not rows or sum(row[2] == rows[0][2] for row in rows) != 1:
+        return None
+    valid: list[CurrentReportedPeriodReview] = []
+    for version_id, digest, _ in rows[:1]:
+        node = conn.execute(
+            "SELECT node.text FROM evidence_nodes node "
+            "JOIN evidence_extraction_runs run ON run.extraction_run_id=node.extraction_run_id "
+            "WHERE run.document_version_id=? AND run.extractor_name='ir-current-reported-period'",
+            (version_id,),
+        ).fetchall()
+        if len(node) != 1:
+            continue
+        try:
+            claim = CurrentReportedPeriodReview.model_validate_json(str(node[0][0]))
+        except ValueError:
+            continue
+        if (
+            claim.issuer_id == issuer_id
+            and claim.ticker == ticker
+            and claim.reviewed_at <= observed_through
+            and claim.knowledge_cutoff <= observed_through
+            and claim.observed_through <= observed_through
+            and verified_current_reported_period_review(
+                conn,
+                document_version_id=str(version_id),
+                source_sha256=str(digest),
+                period_end=claim.period_end,
+            )
+            == claim
+        ):
+            try:
+                profile = _alias_row(
+                    conn,
+                    "issuer_profile_revisions",
+                    "profile_revision_id",
+                    claim.profile_revision_id,
+                )
+                validate_fiscal_period_witness(
+                    conn,
+                    request=IssuerDocumentInventoryRequest(
+                        ticker=ticker,
+                        fiscal_year=claim.fiscal_year,
+                        fiscal_quarter=claim.fiscal_quarter,
+                        period_end=claim.period_end,
+                        expected_documents=(
+                            ExpectedIssuerDocument(
+                                source_url=source_url, document_type="earnings_release"
+                            ),
+                        ),
+                        fiscal_period_witness=FiscalPeriodWitness(
+                            issuer_id=issuer_id,
+                            profile_revision_id=claim.profile_revision_id,
+                            fiscal_year_end=str(profile["fiscal_year_end"]),
+                            document_version_id=str(version_id),
+                            document_sha256=str(digest),
+                            knowledge_cutoff=observed_through,
+                            observed_through=observed_through,
+                        ),
+                    ),
+                )
+            except (IssuerDocumentInventoryError, ValueError, sqlite3.Error):
+                continue
+            valid.append(claim)
+    return valid[0] if len(valid) == 1 else None
+
+
+def persist_current_reported_period_review(
+    conn: sqlite3.Connection, review: CurrentReportedPeriodReview
+) -> str:
+    """Append an exact analyst period judgment; changed replays fail atomically."""
+    if conn.in_transaction:
+        raise IssuerDocumentInventoryError("reported_period_writer_busy")
+    review = CurrentReportedPeriodReview.model_validate(review.model_dump(mode="python"))
+    version, raw = _review_pdf_bytes(conn, review.document_version_id)
+    if (
+        version["issuer_id"] != review.issuer_id
+        or version["ticker"] != review.ticker
+        or version["blob_sha256"] != review.source_sha256
+        or version["document_type"] not in {"ir_document", "earnings_release"}
+        or (
+            version["period_end"] is not None
+            and datetime.fromisoformat(str(version["period_end"])).date() != review.period_end
+        )
+    ):
+        raise IssuerDocumentInventoryError("reported_period_document_identity_mismatch")
+    from provenance.fulltext_backfill import project_pdf_page_texts
+
+    try:
+        page = project_pdf_page_texts(raw)[0]
+    except Exception as exc:  # Native parser failures must not create a period witness.
+        raise IssuerDocumentInventoryError("reported_period_native_text_unavailable") from exc
+    if page[review.char_start : review.char_end] != review.exact_quote:
+        raise IssuerDocumentInventoryError("reported_period_quote_mismatch")
+    subject = _alias_row(
+        conn,
+        "recorded_subject_binding_revisions",
+        "binding_revision_id",
+        review.subject_binding_revision_id,
+    )
+    if (
+        subject["issuer_id"] != review.issuer_id
+        or subject["recorded_issuer_id"] != f"legacy-ticker:{review.ticker}"
+        or subject["outcome"] != "selected"
+        or subject["material_dissent"] != 0
+    ):
+        raise IssuerDocumentInventoryError("reported_period_subject_mismatch")
+    latest_subject = conn.execute(
+        "SELECT binding_revision_id FROM recorded_subject_binding_revisions "
+        "WHERE recorded_issuer_id=? ORDER BY revision DESC LIMIT 1",
+        (f"legacy-ticker:{review.ticker}",),
+    ).fetchone()
+    if latest_subject is None or latest_subject[0] != review.subject_binding_revision_id:
+        raise IssuerDocumentInventoryError("reported_period_subject_superseded")
+    profile = _alias_row(
+        conn, "issuer_profile_revisions", "profile_revision_id", review.profile_revision_id
+    )
+    if (
+        profile["issuer_id"] != review.issuer_id
+        or profile["status"] != "active"
+        or fiscal_quarter_end(
+            fiscal_year=review.fiscal_year,
+            fiscal_quarter=review.fiscal_quarter,
+            fiscal_year_end=str(profile["fiscal_year_end"]),
+        )
+        != review.period_end
+    ):
+        raise IssuerDocumentInventoryError("reported_period_profile_mismatch")
+    run_id = "ir-current-period-run:" + _sha256_text(review.document_version_id)
+    node_id = "ir-current-period-review:" + _sha256_text(review.document_version_id)
+    payload = _canonical_json(review.model_dump(mode="json"))
+    config = _sha256_text("ir-current-reported-period@1")
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        ledger = EvidenceLedger(conn)
+        ledger.persist(
+            ExtractionRun(
+                extraction_run_id=run_id,
+                idempotency_key=run_id,
+                document_version_id=review.document_version_id,
+                input_sha256=review.source_sha256,
+                extractor_name="ir-current-reported-period",
+                extractor_config_sha256=config,
+                extractor_code_version="ir-current-reported-period@1",
+                output_sha256=_sha256_text(payload),
+                started_at=review.reviewed_at,
+                completed_at=review.reviewed_at,
+                outcome="succeeded",
+            )
+        )
+        ledger.persist(
+            EvidenceNode(
+                node_id=node_id,
+                evidence_key=node_id,
+                revision=1,
+                extraction_run_id=run_id,
+                node_kind="claim",
+                text=payload,
+                locator=EvidenceLocator(
+                    source_ref=review.document_version_id,
+                    page_number=review.page_number,
+                    char_start=review.char_start,
+                    char_end=review.char_end,
+                ),
+                recorded_at=review.reviewed_at,
+            )
+        )
+        if (
+            verified_current_reported_period_review(
+                conn,
+                document_version_id=review.document_version_id,
+                source_sha256=review.source_sha256,
+                period_end=review.period_end,
+            )
+            != review
+        ):
+            raise IssuerDocumentInventoryError("reported_period_review_replay_mismatch")
+        witness = FiscalPeriodWitness(
+            issuer_id=review.issuer_id,
+            profile_revision_id=review.profile_revision_id,
+            fiscal_year_end=str(profile["fiscal_year_end"]),
+            document_version_id=review.document_version_id,
+            document_sha256=review.source_sha256,
+            knowledge_cutoff=review.knowledge_cutoff,
+            observed_through=review.observed_through,
+        )
+        source = _alias_row(
+            conn, "evidence_source_observations", "observation_id", str(version["observation_id"])
+        )
+        _alias_clock(source["retrieved_at"], review.reviewed_at)
+        request = IssuerDocumentInventoryRequest(
+            ticker=review.ticker,
+            fiscal_year=review.fiscal_year,
+            fiscal_quarter=review.fiscal_quarter,
+            period_end=review.period_end,
+            expected_documents=(
+                ExpectedIssuerDocument(
+                    source_url=str(source["source_url"]), document_type="earnings_release"
+                ),
+            ),
+            fiscal_period_witness=witness,
+        )
+        validate_fiscal_period_witness(conn, request=request)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return node_id
 
 
 def _database_binding(conn: sqlite3.Connection, bundle: _DatabaseBundle) -> DatabaseBinding:

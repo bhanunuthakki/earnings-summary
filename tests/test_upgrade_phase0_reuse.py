@@ -19,6 +19,7 @@ from sqlite_snapshot import SnapshotRequest, create_snapshot
 ROOT = Path(__file__).resolve().parents[1]
 OLD = "0061_bulk_lexical_projection_coverage"
 NEW = "0062_reviewed_pdf_pages"
+HEAD = "0063_transcript_reported_period_receipts"
 
 
 def setup_live(
@@ -74,7 +75,7 @@ def test_reuse_phase0_does_not_allocate_second_snapshot(
         phase0_backup_restore_receipt=receipt,
         reuse_phase0_snapshot=True,
     )
-    assert result.to_revision == NEW
+    assert result.to_revision == HEAD
     assert result.backup_reused is True
     assert result.backup_path == str(snapshot.resolve())
     assert result.backup_restore_evidence_id == json.loads(receipt.read_text())["evidence_id"]

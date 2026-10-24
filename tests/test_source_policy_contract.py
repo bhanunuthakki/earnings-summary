@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,7 @@ from pipeline.source_policy import (
     StoredIdentityStatus,
     authorize_collection_target_in_connection,
     build_issuer_registry,
+    current_utc_date,
     decision_for,
     issuer_policy,
     mode_for_role,
@@ -32,6 +34,25 @@ from pipeline.source_policy import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_current_source_day_uses_utc_at_pacific_evening(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pipeline import source_policy
+
+    class PacificEveningUtcClock(datetime):
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:
+            assert tz is UTC
+            return datetime(2026, 10, 24, 3, 40, tzinfo=UTC)
+
+    monkeypatch.setattr(source_policy, "datetime", PacificEveningUtcClock)
+    as_of = current_utc_date()
+    assert as_of == date(2026, 10, 24)
+    captured_at = datetime(2026, 10, 24, 3, 39, tzinfo=UTC)
+    assert captured_at < datetime.combine(as_of + timedelta(days=1), time.min, tzinfo=UTC)
+    assert captured_at >= datetime.combine(date(2026, 10, 24), time.min, tzinfo=UTC)
 
 
 def test_typed_collection_selector_orders_all_active_research_roles_by_priority() -> None:

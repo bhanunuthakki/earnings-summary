@@ -28,6 +28,33 @@ from transcripts.acquisition_semantics import (
 from transcripts.immutable_staging import StagedTranscriptArtifact, TranscriptStagingError
 
 
+@pytest.fixture(autouse=True)
+def qualified_window_for_transport_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep transport tests on an explicit current receipt; source replay has its own fixture."""
+    from pipeline import transcript_acquisition
+    from pipeline.source_policy import ReportedPeriodStatus, ReportedPeriodWindow
+
+    def qualified_window(*_args: object, **_kwargs: object) -> ReportedPeriodWindow:
+        return ReportedPeriodWindow(
+            status=ReportedPeriodStatus.COMPLETE,
+            period_ends=(
+                date(2026, 6, 30),
+                date(2026, 3, 31),
+                date(2025, 12, 31),
+                date(2025, 9, 30),
+                date(2025, 6, 30),
+            ),
+            snapshot_ids=("synthetic-sec", "synthetic-ir"),
+            fiscal_year_end="12-31",
+            proof_sha256="a" * 64,
+            reason="transport_fixture_qualified_source_window",
+        )
+
+    monkeypatch.setattr(
+        transcript_acquisition, "reported_period_window_from_inventory", qualified_window
+    )
+
+
 @pytest.fixture
 def darwin_staging_double(monkeypatch: pytest.MonkeyPatch) -> Callable[[Any], None]:
     """Replace unavailable Darwin staging with a typed, read-only test seam."""
@@ -703,7 +730,7 @@ def test_fetch_replay_does_not_cross_quarterly_refresh_entrypoint(
     db_path = migrated_db(repo_root / "data" / "portfolio.db")
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        register_transcript_receipt_sqlite_functions(conn, database_path=db_path)
+        register_transcript_receipt_sqlite_functions(conn, project_root=repo_root)
         conn.execute(
             "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
             "VALUES ('ACME','Acme','portfolio','12-31','equity')"
@@ -1742,6 +1769,7 @@ def test_new_receipt_rejects_latent_or_changed_stored_target(
     darwin_staging_double: None,
 ) -> None:
     from pipeline.transcript_acquisition import (
+        register_transcript_receipt_sqlite_functions,
         require_authorized_transcript_request,
         stage_authorized_payload,
     )
@@ -1766,6 +1794,7 @@ def test_new_receipt_rejects_latent_or_changed_stored_target(
 
     with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=False) as conn:
         request = TranscriptAcquisitionRequest(
+            schema_version="transcript-acquisition-request@2",
             entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
             canonical_ticker="ACME",
             fiscal_year=2026,
@@ -1797,6 +1826,7 @@ def test_new_receipt_rejects_latent_or_changed_stored_target(
         artifact_payload["canonical_document_path"] = artifact.canonical_document_path.as_posix()
         artifact_json = json.dumps(artifact_payload, sort_keys=True, separators=(",", ":"))
         receipt_id = hashlib.sha256(artifact_json.encode("utf-8")).hexdigest()
+        register_transcript_receipt_sqlite_functions(conn, project_root=repo_root)
         conn.execute("DELETE FROM tracked_companies WHERE ticker='ACME'")
         with pytest.raises(sqlite3.IntegrityError, match="stored target"):
             conn.execute(
