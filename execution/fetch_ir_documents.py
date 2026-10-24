@@ -76,12 +76,12 @@ from pipeline.managed_ir_sources import (
     verifier_code_identity,
 )
 from pipeline.source_policy import (
-    SOURCE_POLICY_CONFIG,
     ArtifactKind,
     CollectionSource,
     StoredCollectionAuthorization,
     authorize_stored_collection_target,
-    reported_quarter_is_in_window,
+    reported_quarter_selection,
+    reported_quarter_selection_in_connection,
 )
 from provenance.immutable_artifact import (
     ImmutableArtifactConflictError,
@@ -137,6 +137,7 @@ _RATE_LIMIT_S = 0.5
 _CATEGORIZER = SCRIPT_DIR / "categorize_ir_uploads.py"
 _MAX_REDIRECTS = 5
 _QUARTER = re.compile(r"^Q([1-4])$")
+_MAX_MANIFEST_ATTEMPTS = 100
 
 
 class SourceAuthenticationDeniedError(RuntimeError):
@@ -191,22 +192,6 @@ def _reported_quarter(entry: dict[str, object]) -> tuple[int, int] | None:
     if not isinstance(year, int) or match is None:
         return None
     return year, int(match.group(1))
-
-
-def _bounded_manifest_entries(
-    entries: list[dict[str, object]],
-    *,
-    max_quarters: int,
-) -> tuple[list[dict[str, object]], int]:
-    """Admit only entries in the newest typed reported-quarter window."""
-
-    periods = sorted(
-        {period for entry in entries if (period := _reported_quarter(entry)) is not None},
-        reverse=True,
-    )
-    admitted_periods = frozenset(periods[:max_quarters])
-    admitted = [entry for entry in entries if _reported_quarter(entry) in admitted_periods]
-    return admitted, len(entries) - len(admitted)
 
 
 def _emit_policy_denial(ticker: str, authorization: StoredCollectionAuthorization) -> None:
@@ -617,14 +602,13 @@ def prepare_issuer_document_sources(
         artifact_kind=ArtifactKind.IR_DOCUMENT,
     )
     if request.historical_window is None:
-        in_window = (
-            authorization.fiscal_year_end_month is not None
-            and reported_quarter_is_in_window(
-                fiscal_year=inventory.fiscal_year,
-                fiscal_quarter=inventory.fiscal_quarter,
-                fiscal_year_end_month=authorization.fiscal_year_end_month,
-                as_of=date.today(),
-            )
+        in_window: bool | None = reported_quarter_selection(
+            db_path,
+            ticker=inventory.ticker,
+            fiscal_year=inventory.fiscal_year,
+            fiscal_quarter=inventory.fiscal_quarter,
+            fiscal_year_end_month=authorization.fiscal_year_end_month,
+            as_of=date.today(),
         )
     else:
         from pipeline.managed_ir_sources import issuer_request_period_is_allowed
@@ -634,7 +618,7 @@ def prepare_issuer_document_sources(
         )
     if not authorization.allowed:
         raise IssuerDocumentPreparationError("source_policy_denied")
-    if not in_window:
+    if in_window is False:
         raise IssuerDocumentPreparationError("reported_quarter_window_denied")
     staging = root / ".tmp" / "managed_ir_staging" / request.attempt_id
     receipt_path = staging / "staging_receipt.json"
@@ -645,7 +629,9 @@ def prepare_issuer_document_sources(
     if receipt_path.exists():
         with JobLock(root, "managed-ir-stage-replay", ["ir-discovery"], wait_s=0):
             try:
-                return validate_prepared_staging(request, state_root=root, db_path=db_path)
+                return validate_prepared_staging(
+                    request, state_root=root, db_path=db_path, permit_pending=True
+                )
             except PreparedIssuerDocumentPublisherError as exc:
                 raise _preparation_failure(
                     "staging_replay_invalid",
@@ -770,7 +756,9 @@ def prepare_issuer_document_sources(
             ) from exc
         try:
             _publish_attempt_text(receipt_path, receipt.canonical_json)
-            return validate_prepared_staging(request, state_root=root, db_path=db_path)
+            return validate_prepared_staging(
+                request, state_root=root, db_path=db_path, permit_pending=True
+            )
         except IssuerDocumentPreparationError as exc:
             raise _preparation_failure(
                 exc.code,
@@ -839,10 +827,37 @@ def process_ticker(
         }
         print(json.dumps(empty))
         return empty
-    entries, policy_skipped = _bounded_manifest_entries(
-        entries,
-        max_quarters=SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters,
-    )
+    # Manifest labels are discovery guesses. Do not evict an older actual
+    # reported quarter before the complete source population is proved.
+    policy_skipped = 0
+    pending_period_selection = False
+    selected: list[dict[str, object]] = []
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    try:
+        for entry in entries:
+            period = _reported_quarter(entry)
+            decision = (
+                None
+                if period is None
+                else reported_quarter_selection_in_connection(
+                    conn,
+                    ticker=ticker,
+                    fiscal_year=period[0],
+                    fiscal_quarter=period[1],
+                    fiscal_year_end_month=authorization.fiscal_year_end_month,
+                    as_of=date.today(),
+                )
+            )
+            if decision is False:
+                policy_skipped += 1
+                continue
+            pending_period_selection |= decision is None
+            selected.append(entry)
+    finally:
+        conn.close()
+    # Deferred URLs stay in the append-only manifest for a later bounded run.
+    deferred_count = max(0, len(selected) - _MAX_MANIFEST_ATTEMPTS)
+    entries = selected[:_MAX_MANIFEST_ATTEMPTS]
 
     already = _registered_source_urls(db_path, ticker)
     dest_dir = root / "ir_documents" / ticker
@@ -883,7 +898,7 @@ def process_ticker(
 
     cat_rc: int | None = None
     registration_missing: int | None = None
-    if categorize and not dry_run and downloaded:
+    if categorize and not dry_run and downloaded and not pending_period_selection:
         cat_rc = _run_categorize(ticker, root, db_path, calendar)
         if cat_rc == 0:
             # A zero exit can mean no eligible files or skipped duplicates.
@@ -891,7 +906,9 @@ def process_ticker(
             registered = _registered_source_urls(db_path, ticker)
             registration_missing = len(downloaded_urls - registered)
 
-    status = "done"
+    status = "period_selection_pending" if pending_period_selection else "done"
+    if deferred_count:
+        status = "partial"
     if failed:
         status = "partial" if downloaded or skipped else "failed"
     if cat_rc not in (None, 0) or registration_missing:
@@ -903,6 +920,8 @@ def process_ticker(
         "skipped": skipped,
         "failed": failed,
         "policy_skipped": policy_skipped,
+        "pending_period_selection": pending_period_selection,
+        "deferred": deferred_count,
         "categorize_rc": cat_rc,
         "registration_missing": registration_missing,
     }
@@ -956,7 +975,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 # Automatic sweeps may skip names outside collection policy.
                 # An admitted name with incomplete acquisition still fails the run.
-                if summary["status"] not in {"done", "policy_denied"}:
+                if summary["status"] not in {"done", "period_selection_pending", "policy_denied"}:
                     failed = True
         except SourceAuthenticationDeniedError:
             return 10
@@ -976,7 +995,7 @@ def main(argv: list[str] | None = None) -> int:
         return 10
     if summary["status"] == "policy_denied":
         return 2
-    return 0 if summary["status"] == "done" else 1
+    return 0 if summary["status"] in {"done", "period_selection_pending"} else 1
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:

@@ -39,6 +39,7 @@ from pipeline.source_policy import (
     authorize_stored_collection_target,
     fiscal_quarter_end,
     reported_quarter_is_in_window,
+    reported_quarter_selection,
 )
 from provenance.evidence_backfill import ensure_legacy_document_evidence
 from provenance.evidence_ledger import EvidenceLocator
@@ -568,7 +569,9 @@ def _configured(root: Path, db_path: Path) -> Path:
     return actual
 
 
-def _policy(request: IssuerDocumentStagingRequest, db_path: Path) -> None:
+def _policy(
+    request: IssuerDocumentStagingRequest, db_path: Path, *, permit_pending: bool = False
+) -> None:
     inv = request.inventory_request
     auth = authorize_stored_collection_target(
         db_path,
@@ -585,9 +588,24 @@ def _policy(request: IssuerDocumentStagingRequest, db_path: Path) -> None:
             validate_fiscal_period_witness(conn, request=inv)
         finally:
             conn.close()
-    if not issuer_request_period_is_allowed(
-        request, fiscal_year_end_month=auth.fiscal_year_end_month, as_of=date.today()
-    ):
+    if request.historical_window is not None:
+        decision: bool | None = issuer_request_period_is_allowed(
+            request, fiscal_year_end_month=auth.fiscal_year_end_month, as_of=date.today()
+        )
+    else:
+        decision = reported_quarter_selection(
+            db_path,
+            ticker=inv.ticker,
+            fiscal_year=inv.fiscal_year,
+            fiscal_quarter=inv.fiscal_quarter,
+            fiscal_year_end_month=auth.fiscal_year_end_month,
+            as_of=date.today(),
+        )
+    if decision is None and permit_pending:
+        return
+    if decision is None:
+        raise PreparedIssuerDocumentPublisherError("reported_period_selection_pending")
+    if not decision:
         raise PreparedIssuerDocumentPublisherError("reported_quarter_window_denied")
 
 
@@ -666,7 +684,11 @@ def _read_completed_receipt(
 
 
 def validate_prepared_staging(
-    request: IssuerDocumentStagingRequest, *, state_root: Path, db_path: Path
+    request: IssuerDocumentStagingRequest,
+    *,
+    state_root: Path,
+    db_path: Path,
+    permit_pending: bool = False,
 ) -> IssuerDocumentStagingReceipt:
     """Stable-read, reclassify and re-authorize a receipt; never publishes."""
     root = state_root.resolve(strict=True)
@@ -677,7 +699,7 @@ def validate_prepared_staging(
         or receipt.verifier_code_sha256 != verifier_code_identity()
     ):
         raise PreparedIssuerDocumentPublisherError("staging_code_identity_changed")
-    _policy(request, db_path)
+    _policy(request, db_path, permit_pending=permit_pending)
     staging = root / ".tmp" / "managed_ir_staging" / request.attempt_id
     require_no_reparse_points(staging)
     objects = staging / "objects"

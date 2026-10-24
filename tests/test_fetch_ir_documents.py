@@ -103,6 +103,11 @@ def _no_curl_resolve_entries(_url: str) -> list[str]:
     return []
 
 
+def _source_qualified_period(*_args: object, **_kwargs: object) -> bool:
+    """Transport tests start after the source-bound period gate."""
+    return True
+
+
 def test_downloader_sends_browser_user_agent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -282,7 +287,7 @@ def test_direct_ticker_and_all_cannot_bypass_stored_roles(
     }
 
 
-def test_fetch_boundary_skips_manifest_periods_outside_canonical_window(
+def test_fetch_boundary_retains_sixth_manifest_period_while_source_window_is_unknown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     db = tmp_path / "portfolio.db"
@@ -310,9 +315,10 @@ def test_fetch_boundary_skips_manifest_periods_outside_canonical_window(
 
     summary = fid.process_ticker("PORT", root=tmp_path, db_path=db)
 
-    assert len(calls) == 5
-    assert "https://issuer.example/2025Q1.pdf" not in calls
-    assert summary["policy_skipped"] == 1
+    assert len(calls) == 6
+    assert "https://issuer.example/2025Q1.pdf" in calls
+    assert summary["policy_skipped"] == 0
+    assert summary["pending_period_selection"] is True
 
 
 def test_staging_download_rejects_symlinked_objects_parent(
@@ -425,7 +431,7 @@ def test_final_preparation_reports_owned_receipt_after_post_rename_verification_
     (root / "data").mkdir(parents=True)
     request = _preparation_request()
     monkeypatch.setattr(fid, "authorize_stored_collection_target", _allow_preparation_policy)
-    monkeypatch.setattr(fid, "reported_quarter_is_in_window", _preparation_window)
+    monkeypatch.setattr(fid, "reported_quarter_selection", _preparation_window)
     monkeypatch.setattr(fid, "_download", _prepare_staged_object)
     monkeypatch.setattr(fid, "classify_ir_file", _classify_prepared_object)
 
@@ -521,7 +527,7 @@ def test_preparation_accepts_actual_xlsx_supplement(
     db_path = migrated_db(root / "data" / "portfolio.db")
     request = _supplement_preparation_request()
     monkeypatch.setattr(fid, "authorize_stored_collection_target", _allow_preparation_policy)
-    monkeypatch.setattr(fid, "reported_quarter_is_in_window", _preparation_window)
+    monkeypatch.setattr(fid, "reported_quarter_selection", _preparation_window)
     monkeypatch.setattr(fid, "_download", _prepare_staged_supplement)
     monkeypatch.setattr(fid, "classify_ir_file", _classify_supplement_prepared_object)
     monkeypatch.setattr("pipeline.managed_ir_sources._policy", _allow_managed_preparation_policy)
@@ -581,15 +587,7 @@ def _allow_preparation_policy(*_args: object, **_kwargs: object) -> object:
     return type("Allowed", (), {"allowed": True, "fiscal_year_end_month": 12})()
 
 
-def _preparation_window(
-    *,
-    fiscal_year: int,
-    fiscal_quarter: int,
-    fiscal_year_end_month: int,
-    as_of: date,
-    max_quarters: int = 5,
-) -> bool:
-    del fiscal_year, fiscal_quarter, fiscal_year_end_month, as_of, max_quarters
+def _preparation_window(*_args: object, **_kwargs: object) -> bool:
     return True
 
 
@@ -619,7 +617,7 @@ def test_final_preparation_errors_report_staged_objects_and_direct_residue(
     request = _preparation_request()
     objects = root / ".tmp" / "managed_ir_staging" / request.attempt_id / "objects"
     monkeypatch.setattr(fid, "authorize_stored_collection_target", _allow_preparation_policy)
-    monkeypatch.setattr(fid, "reported_quarter_is_in_window", _preparation_window)
+    monkeypatch.setattr(fid, "reported_quarter_selection", _preparation_window)
     monkeypatch.setattr(fid, "_download", _prepare_staged_object)
     monkeypatch.setattr(fid, "classify_ir_file", _classify_prepared_object)
     if failure == "receipt":
@@ -666,7 +664,7 @@ def test_staging_replay_error_reports_existing_objects_and_direct_residue(
     (staging / "staging_receipt.json").write_text("{}\n", encoding="utf-8")
     residue = objects / ".replay.retained.tmp"
     monkeypatch.setattr(fid, "authorize_stored_collection_target", _allow_preparation_policy)
-    monkeypatch.setattr(fid, "reported_quarter_is_in_window", _preparation_window)
+    monkeypatch.setattr(fid, "reported_quarter_selection", _preparation_window)
 
     def fail_replay(*_args: object, **_kwargs: object) -> object:
         raise fid.PreparedIssuerDocumentPublisherError(
@@ -736,7 +734,7 @@ def test_cli_all_continues_after_acquisition_failure(
     assert fid.main(["--all", "--repo-root", str(tmp_path), "--db", str(db)]) == 1
     assert len(calls) == 2
     summaries = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert [item["status"] for item in summaries] == ["failed", "done"]
+    assert [item["status"] for item in summaries] == ["failed", "period_selection_pending"]
 
 
 def test_cli_reports_registration_failure(
@@ -756,6 +754,7 @@ def test_cli_reports_registration_failure(
 
     monkeypatch.setattr(fid, "_download", download)
     monkeypatch.setattr(fid, "_run_categorize", categorize)
+    monkeypatch.setattr(fid, "reported_quarter_selection_in_connection", _source_qualified_period)
     monkeypatch.setattr(fid.time, "sleep", _no_sleep)
     assert (
         fid.main(
@@ -880,6 +879,7 @@ def test_categorizer_success_requires_downloaded_source_registration(
 
     monkeypatch.setattr(fid, "_download", download)
     monkeypatch.setattr(fid, "_run_categorize", categorize)
+    monkeypatch.setattr(fid, "reported_quarter_selection_in_connection", _source_qualified_period)
     monkeypatch.setattr(fid.time, "sleep", _no_sleep)
     argv = ["--ticker", "PORT", "--categorize", "--repo-root", str(tmp_path), "--db", str(db)]
     assert fid.main(argv) == (0 if register else 1)
@@ -926,6 +926,7 @@ def test_shared_staged_object_does_not_hide_unregistered_source(
 
     monkeypatch.setattr(fid, "_download", download)
     monkeypatch.setattr(fid, "_run_categorize", categorize)
+    monkeypatch.setattr(fid, "reported_quarter_selection_in_connection", _source_qualified_period)
     monkeypatch.setattr(fid.time, "sleep", _no_sleep)
     assert (
         fid.main(
