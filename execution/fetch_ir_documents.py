@@ -85,6 +85,7 @@ from pipeline.source_policy import (
 )
 from provenance.immutable_artifact import (
     ImmutableArtifactConflictError,
+    read_stable_artifact,
     require_no_reparse_points,
 )
 from provenance.secure_file_install import (
@@ -517,22 +518,67 @@ def _publisher_residue_names(exc: PreparedIssuerDocumentPublisherError) -> tuple
     )
 
 
-def _write_incoming_sidecar(root: Path, mapping: dict[str, str]) -> None:
-    """Merge ``{staging_filename: source_url}`` into ``.tmp/ir_incoming_urls.json``."""
-    if not mapping:
-        return
+_FETCH_PROGRESS_KEY = "__fetch_progress_v1__"
+
+
+def _load_incoming_sidecar(root: Path) -> dict[str, object]:
+    path = incoming_urls_path(root)
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return cast("dict[str, object]", loaded) if isinstance(loaded, dict) else {}
+
+
+def _retained_entry_is_valid(
+    root: Path, ticker: str, entry: dict[str, object], retained: object
+) -> bool:
+    if not isinstance(retained, dict):
+        return False
+    value = cast("dict[str, object]", retained)
+    name, digest, size = value.get("filename"), value.get("sha256"), value.get("size_bytes")
+    url = str(entry.get("url") or "")
+    base = _staging_base_name(
+        ticker, str(entry.get("doc_type") or ""), entry.get("year"), entry.get("quarter"), url
+    )
+    if (
+        not isinstance(name, str)
+        or Path(name).name != name
+        or not name.startswith(base + ".")
+        or not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        or type(size) is not int
+        or size <= 0
+    ):
+        return False
+    directory = root / "ir_documents" / ticker
+    try:
+        snapshot, _ = read_stable_artifact(directory / name, max_bytes=size, allowed_root=directory)
+    except (OSError, ValueError, ImmutableArtifactConflictError):
+        return False
+    return snapshot.size_bytes == size and snapshot.file_sha256 == digest
+
+
+def _write_incoming_sidecar(
+    root: Path,
+    mapping: dict[str, str],
+    *,
+    ticker: str,
+    next_index: int,
+    retained: dict[str, object],
+) -> None:
+    """Merge URL hints and bounded retry progress in the existing sidecar."""
     path = incoming_urls_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    existing: dict[str, str] = {}
-    if path.exists():
-        try:
-            loaded = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                existing = {str(k): str(v) for k, v in cast("dict[str, object]", loaded).items()}
-        except (json.JSONDecodeError, OSError):
-            existing = {}
+    existing = _load_incoming_sidecar(root)
     existing.update(mapping)
-    path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    progress_value = existing.get(_FETCH_PROGRESS_KEY)
+    progress = dict(progress_value) if isinstance(progress_value, dict) else {}
+    progress[ticker] = {"next_index": next_index, "retained": retained}
+    existing[_FETCH_PROGRESS_KEY] = progress
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    os.replace(temporary, path)
 
 
 def _publish_attempt_text(path: Path, text: str) -> None:
@@ -856,23 +902,49 @@ def process_ticker(
     finally:
         conn.close()
     already = _registered_source_urls(db_path, ticker)
+    sidecar_state = _load_incoming_sidecar(root)
+    all_progress = sidecar_state.get(_FETCH_PROGRESS_KEY)
+    ticker_progress = (
+        cast("dict[str, object]", all_progress).get(ticker)
+        if isinstance(all_progress, dict)
+        else None
+    )
+    progress = (
+        cast("dict[str, object]", ticker_progress) if isinstance(ticker_progress, dict) else {}
+    )
+    prior_retained = progress.get("retained")
+    retained = dict(prior_retained) if isinstance(prior_retained, dict) else {}
     # The attempt budget applies to unfinished URLs. A registered prefix must
     # not starve an unregistered URL on every replay of the same manifest.
     pending: list[dict[str, object]] = []
     seen_urls: set[str] = set()
     skipped = 0
+    retained_urls: set[str] = set()
     for entry in selected:
         url = str(entry.get("url") or "")
         if not url:
             continue
-        if url in already or url in seen_urls:
+        if url in already:
+            retained.pop(url, None)
+            skipped += 1
+            continue
+        if url in seen_urls:
             skipped += 1
             continue
         seen_urls.add(url)
+        if _retained_entry_is_valid(root, ticker, entry, retained.get(url)):
+            retained_urls.add(url)
+            skipped += 1
+            continue
+        retained.pop(url, None)
         pending.append(entry)
+    cursor = progress.get("next_index")
+    start = cursor % len(pending) if type(cursor) is int and cursor >= 0 and pending else 0
+    ordered = pending[start:] + pending[:start]
     # Deferred URLs stay in the append-only manifest for a later bounded run.
     deferred_count = max(0, len(pending) - _MAX_MANIFEST_ATTEMPTS)
-    entries = pending[:_MAX_MANIFEST_ATTEMPTS]
+    entries = ordered[:_MAX_MANIFEST_ATTEMPTS]
+    next_index = (start + len(entries)) % len(pending) if pending else 0
 
     dest_dir = root / "ir_documents" / ticker
     sidecar: dict[str, str] = {}
@@ -903,22 +975,39 @@ def process_ticker(
         if dest is None:
             failed += 1
             continue
+        try:
+            snapshot, _ = read_stable_artifact(dest, allowed_root=dest_dir)
+        except (OSError, ValueError, ImmutableArtifactConflictError):
+            failed += 1
+            continue
         sidecar[dest.name] = url
+        retained[url] = {
+            "filename": dest.name,
+            "sha256": snapshot.file_sha256,
+            "size_bytes": snapshot.size_bytes,
+        }
         downloaded_urls.add(url)
         downloaded += 1
 
     if not dry_run:
-        _write_incoming_sidecar(root, sidecar)
+        _write_incoming_sidecar(
+            root, sidecar, ticker=ticker, next_index=next_index, retained=retained
+        )
 
     cat_rc: int | None = None
     registration_missing: int | None = None
-    if categorize and not dry_run and downloaded and not pending_period_selection:
+    if (
+        categorize
+        and not dry_run
+        and (downloaded or retained_urls)
+        and not pending_period_selection
+    ):
         cat_rc = _run_categorize(ticker, root, db_path, calendar)
         if cat_rc == 0:
             # A zero exit can mean no eligible files or skipped duplicates.
             # Check each source, independently of the staging filename sidecar.
             registered = _registered_source_urls(db_path, ticker)
-            registration_missing = len(downloaded_urls - registered)
+            registration_missing = len((downloaded_urls | retained_urls) - registered)
 
     status = "period_selection_pending" if pending_period_selection else "done"
     if deferred_count:
@@ -932,6 +1021,7 @@ def process_ticker(
         "status": status,
         "downloaded": downloaded,
         "skipped": skipped,
+        "retained": len(retained_urls),
         "failed": failed,
         "policy_skipped": policy_skipped,
         "pending_period_selection": pending_period_selection,

@@ -1185,8 +1185,7 @@ def _reported_period_window_from_inventory_unpinned(
                     )
                 if (
                     kind == "sec_submissions"
-                    and (item.form_type or "").upper().removesuffix("/A")
-                    in {"10-Q", "10-K", "20-F", "40-F"}
+                    and (item.form_type or "").upper().removesuffix("/A") == "10-Q"
                 ) or (kind == "ir_crawl" and item.document_type == "earnings_release"):
                     reported.add(item.period_end.date())
     if len(reported) < max_quarters:

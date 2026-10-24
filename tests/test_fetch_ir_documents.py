@@ -70,6 +70,14 @@ def _no_registered_urls(*_a: object, **_k: object) -> set[str]:
     return set()
 
 
+def _staged_download(dest: Path, base: str) -> Path:
+    """Model a completed fetch with bytes inside the caller's staging root."""
+    dest.mkdir(parents=True, exist_ok=True)
+    path = dest / f"{base}.pdf"
+    path.write_bytes(b"%PDF-1.4\nsynthetic issuer document\n")
+    return path
+
+
 def _no_sleep(_seconds: float) -> None:
     return None
 
@@ -256,9 +264,9 @@ def test_direct_ticker_and_all_cannot_bypass_stored_roles(
         _write_manifest(tmp_path, ticker, f"https://issuer.example/{ticker}/2026Q1.pdf")
     calls: list[str] = []
 
-    def _record(url: str, _dest: Path, _base: str) -> Path:
+    def _record(url: str, dest: Path, base: str) -> Path:
         calls.append(url)
-        return tmp_path / "staged.pdf"
+        return _staged_download(dest, base)
 
     monkeypatch.setattr(fid, "_download", _record)
     monkeypatch.setattr(fid.time, "sleep", _no_sleep)
@@ -725,9 +733,9 @@ def test_cli_all_continues_after_acquisition_failure(
         _write_manifest(tmp_path, ticker, f"https://issuer.example/{ticker}/Q1-2026.pdf")
     calls: list[str] = []
 
-    def download(url: str, _dest: Path, _base: str) -> Path | None:
+    def download(url: str, dest: Path, base: str) -> Path | None:
         calls.append(url)
-        return None if "/AAA/" in url else tmp_path / "staged.pdf"
+        return None if "/AAA/" in url else _staged_download(dest, base)
 
     monkeypatch.setattr(fid, "_download", download)
     monkeypatch.setattr(fid.time, "sleep", _no_sleep)
@@ -746,8 +754,8 @@ def test_cli_reports_registration_failure(
     _make_policy_db(db, [("PORT", "portfolio")])
     _write_manifest(tmp_path, "PORT", "https://issuer.example/Q1-2026.pdf")
 
-    def download(_url: str, _dest: Path, _base: str) -> Path:
-        return tmp_path / "staged.pdf"
+    def download(_url: str, dest: Path, base: str) -> Path:
+        return _staged_download(dest, base)
 
     def categorize(_ticker: str, _root: Path, _db: Path, _calendar: str | None) -> int:
         return 3
@@ -794,8 +802,8 @@ def test_cli_retains_successful_documents_when_another_download_fails(
     )
     manifest.write_text(json.dumps(entries))
 
-    def download(url: str, _dest: Path, _base: str) -> Path | None:
-        return tmp_path / "staged.pdf" if url.endswith("good.pdf") else None
+    def download(url: str, dest: Path, base: str) -> Path | None:
+        return _staged_download(dest, base) if url.endswith("good.pdf") else None
 
     monkeypatch.setattr(fid, "_download", download)
     monkeypatch.setattr(fid.time, "sleep", _no_sleep)
@@ -804,7 +812,11 @@ def test_cli_retains_successful_documents_when_another_download_fails(
     assert summary["status"] == "partial"
     assert summary["downloaded"] == summary["failed"] == 1
     sidecar = json.loads(fid.incoming_urls_path(tmp_path).read_text())
-    assert sidecar == {"staged.pdf": "https://issuer.example/good.pdf"}
+    assert {key: value for key, value in sidecar.items() if key != "__fetch_progress_v1__"} == {
+        next(
+            (tmp_path / "ir_documents" / "PORT").glob("*.pdf")
+        ).name: "https://issuer.example/good.pdf"
+    }
 
 
 def test_cli_retains_html_release_bytes_with_source_url(
@@ -827,7 +839,8 @@ def test_cli_retains_html_release_bytes_with_source_url(
     staged = list((tmp_path / "ir_documents" / "PORT").glob("*.html"))
     assert len(staged) == 1
     assert staged[0].read_bytes() == raw
-    assert json.loads(fid.incoming_urls_path(tmp_path).read_text()) == {staged[0].name: url}
+    sidecar = json.loads(fid.incoming_urls_path(tmp_path).read_text())
+    assert sidecar[staged[0].name] == url
 
 
 @pytest.mark.parametrize(
@@ -868,8 +881,8 @@ def test_categorizer_success_requires_downloaded_source_registration(
     with sqlite3.connect(db) as conn:
         conn.execute("CREATE TABLE documents (ticker TEXT, source_url TEXT)")
 
-    def download(_url: str, _dest: Path, _base: str) -> Path:
-        return tmp_path / "staged.pdf"
+    def download(_url: str, dest: Path, base: str) -> Path:
+        return _staged_download(dest, base)
 
     def categorize(_ticker: str, _root: Path, _db: Path, _calendar: str | None) -> int:
         if register:
@@ -921,9 +934,12 @@ def test_registered_prefix_does_not_starve_manifest_entry_after_attempt_budget(
     monkeypatch.setattr(fid.time, "sleep", _no_sleep)
     downloaded: list[str] = []
 
-    def download(url: str, _dest: Path, _base: str, **_kwargs: object) -> Path:
+    def download(url: str, dest: Path, base: str, **_kwargs: object) -> Path:
         downloaded.append(url)
-        return tmp_path / "last.pdf"
+        dest.mkdir(parents=True, exist_ok=True)
+        path = dest / f"{base}.pdf"
+        path.write_bytes(b"%PDF-1.4\nlast")
+        return path
 
     monkeypatch.setattr(fid, "_download", download)
     result = fid.process_ticker("PORT", root=tmp_path, db_path=db)
@@ -931,6 +947,141 @@ def test_registered_prefix_does_not_starve_manifest_entry_after_attempt_budget(
     assert result["downloaded"] == 1
     assert result["skipped"] == 100
     assert result["deferred"] == 0
+
+
+def test_pending_retained_prefix_advances_and_replays_without_redownload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = tmp_path / "portfolio.db"
+    _make_policy_db(db, [("PORT", "portfolio")])
+    urls = [f"https://issuer.example/release-{index}.pdf" for index in range(101)]
+    manifest = fid.manifest_dir(tmp_path) / "PORT_urls.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        json.dumps(
+            [
+                {"url": url, "doc_type": "press_release", "year": 2026, "quarter": "Q1"}
+                for url in urls
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(fid, "reported_quarter_selection_in_connection", lambda *_a, **_k: None)
+    monkeypatch.setattr(fid, "_registered_source_urls", _no_registered_urls)
+    monkeypatch.setattr(fid.time, "sleep", _no_sleep)
+    calls: list[str] = []
+
+    def download(url: str, dest: Path, base: str, **_kwargs: object) -> Path:
+        calls.append(url)
+        dest.mkdir(parents=True, exist_ok=True)
+        path = dest / f"{base}.pdf"
+        path.write_bytes(f"%PDF-1.4\n{url}".encode())
+        return path
+
+    monkeypatch.setattr(fid, "_download", download)
+    first = fid.process_ticker("PORT", root=tmp_path, db_path=db)
+    assert first["pending_period_selection"] is True
+    assert first["downloaded"] == 100
+    assert first["deferred"] == 1
+    second = fid.process_ticker("PORT", root=tmp_path, db_path=db)
+    assert second["downloaded"] == 1
+    assert second["retained"] == 100
+    assert second["deferred"] == 0
+    assert calls == urls
+    third = fid.process_ticker("PORT", root=tmp_path, db_path=db)
+    assert third["downloaded"] == 0
+    assert third["retained"] == 101
+    assert calls == urls
+    retained_state = json.loads(fid.incoming_urls_path(tmp_path).read_text())[
+        "__fetch_progress_v1__"
+    ]["PORT"]["retained"]
+    first_path = tmp_path / "ir_documents" / "PORT" / retained_state[urls[0]]["filename"]
+    first_path.write_bytes(b"tampered raw bytes")
+    fourth = fid.process_ticker("PORT", root=tmp_path, db_path=db)
+    assert fourth["downloaded"] == 1
+    assert calls[-1] == urls[0]
+
+
+def test_failed_prefix_advances_retry_cursor_to_later_manifest_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = tmp_path / "portfolio.db"
+    _make_policy_db(db, [("PORT", "portfolio")])
+    urls = [f"https://issuer.example/release-{index}.pdf" for index in range(101)]
+    manifest = fid.manifest_dir(tmp_path) / "PORT_urls.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        json.dumps(
+            [
+                {"url": url, "doc_type": "press_release", "year": 2026, "quarter": "Q1"}
+                for url in urls
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(fid, "reported_quarter_selection_in_connection", _source_qualified_period)
+    monkeypatch.setattr(fid, "_registered_source_urls", _no_registered_urls)
+    monkeypatch.setattr(fid.time, "sleep", _no_sleep)
+    calls: list[str] = []
+
+    def download(url: str, dest: Path, base: str, **_kwargs: object) -> Path | None:
+        calls.append(url)
+        if url != urls[100]:
+            return None
+        dest.mkdir(parents=True, exist_ok=True)
+        path = dest / f"{base}.pdf"
+        path.write_bytes(b"%PDF-1.4\nlast")
+        return path
+
+    monkeypatch.setattr(fid, "_download", download)
+    first = fid.process_ticker("PORT", root=tmp_path, db_path=db)
+    assert first["downloaded"] == 0
+    assert first["failed"] == 100
+    assert first["deferred"] == 1
+    second = fid.process_ticker("PORT", root=tmp_path, db_path=db)
+    assert calls[100] == urls[100]
+    assert second["downloaded"] == 1
+
+
+def test_fetch_progress_keeps_legacy_url_map_and_separates_roots_and_issuers(
+    tmp_path: Path,
+) -> None:
+    from execution.categorize_ir_uploads import _load_url_overrides
+
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    fid._write_incoming_sidecar(
+        first_root,
+        {"port.pdf": "https://issuer.example/port.pdf"},
+        ticker="PORT",
+        next_index=7,
+        retained={"https://issuer.example/port.pdf": {"filename": "port.pdf"}},
+    )
+    fid._write_incoming_sidecar(
+        first_root,
+        {"nu.pdf": "https://issuer.example/nu.pdf"},
+        ticker="NU",
+        next_index=2,
+        retained={"https://issuer.example/nu.pdf": {"filename": "nu.pdf"}},
+    )
+    fid._write_incoming_sidecar(
+        second_root,
+        {"port.pdf": "https://other.example/port.pdf"},
+        ticker="PORT",
+        next_index=3,
+        retained={},
+    )
+    first_path = fid.incoming_urls_path(first_root)
+    first = json.loads(first_path.read_text(encoding="utf-8"))
+    second = json.loads(fid.incoming_urls_path(second_root).read_text(encoding="utf-8"))
+    assert _load_url_overrides(first_path) == {
+        "port.pdf": "https://issuer.example/port.pdf",
+        "nu.pdf": "https://issuer.example/nu.pdf",
+    }
+    assert first["__fetch_progress_v1__"]["PORT"]["next_index"] == 7
+    assert first["__fetch_progress_v1__"]["NU"]["next_index"] == 2
+    assert second["__fetch_progress_v1__"]["PORT"]["next_index"] == 3
+    assert second["port.pdf"] == "https://other.example/port.pdf"
 
 
 def test_shared_staged_object_does_not_hide_unregistered_source(
@@ -950,8 +1101,11 @@ def test_shared_staged_object_does_not_hide_unregistered_source(
     with sqlite3.connect(db) as conn:
         conn.execute("CREATE TABLE documents (ticker TEXT, source_url TEXT)")
 
-    def download(_url: str, _dest: Path, _base: str) -> Path:
-        return tmp_path / "same-bytes.pdf"
+    def download(_url: str, dest: Path, _base: str) -> Path:
+        dest.mkdir(parents=True, exist_ok=True)
+        path = dest / "same-bytes.pdf"
+        path.write_bytes(b"%PDF-1.4\nshared synthetic issuer document\n")
+        return path
 
     def categorize(_ticker: str, _root: Path, _db: Path, _calendar: str | None) -> int:
         with sqlite3.connect(db) as conn:
