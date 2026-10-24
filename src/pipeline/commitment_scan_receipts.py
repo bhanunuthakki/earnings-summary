@@ -17,6 +17,10 @@ from pipeline.data_coverage_dispositions import fiscal_quarter_period_end
 from provenance.selection import selected_transcripts_relation
 from runtime.deterministic import canonical_json_ascii as _canonical_json
 from runtime.deterministic import sha256_text as _sha256
+from transcripts.acquisition_semantics import (
+    TranscriptAcquisitionAuthorization,
+    validate_transcript_acquisition_authorization,
+)
 
 _TRANSCRIPT_NAME = re.compile(r"^(?P<ticker>[A-Z0-9.-]+)_Q(?P<quarter>[1-4])_(?P<year>[0-9]{4})$")
 _OBSERVATION_SCHEMA = "commitment-segment-observations@1"
@@ -488,7 +492,11 @@ def _validated_acquisition_receipt(
             or artifact.get("authorization") != authorization
             or staged.get("sha256") != artifact_sha256
             or staged.get("size_bytes") != artifact_size_bytes
-            or authorization.get("schema_version") != "transcript-acquisition-authorization@1"
+            or (
+                authorization.get("schema_version") != "transcript-acquisition-authorization@1"
+                and (authorization.get("schema_version"), request.get("schema_version"))
+                != ("transcript-acquisition-authorization@2", "transcript-acquisition-request@2")
+            )
             or authorization.get("status") != "authorized"
             or authorization.get("idempotency_key") != str(row["idempotency_key"])
             or not 1 <= fiscal_year_end_month <= 12
@@ -502,6 +510,10 @@ def _validated_acquisition_receipt(
             or source_regime.get("contract_sha256") != str(row["source_regime_contract_sha256"])
         ):
             return None
+        if authorization.get("schema_version") == "transcript-acquisition-authorization@2":
+            validate_transcript_acquisition_authorization(
+                TranscriptAcquisitionAuthorization.model_validate(authorization)
+            )
         return _AcquisitionReceiptIdentity(
             receipt_id=str(row["receipt_id"]),
             document_id=document_id,

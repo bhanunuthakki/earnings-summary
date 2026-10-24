@@ -3,10 +3,9 @@
 These derive a same-fiscal-quarter YoY *transform* (NIM YoY change in bps,
 Revenue YoY-growth deceleration, NPL YoY change in pp) over an existing
 kpi_facts LEVEL series, materializing the series a thesis break_rule references
-by name so the rule resolves to real observations instead of evaluating against
-nothing (the silent-OK / UNRESOLVED case). The end-to-end tests pin that a
-derived NIM-YoY series flips the NU break rule from "no observations" to a real
-BREACH / OK verdict carrying observations.
+by name so the rule resolves to real observations when its inputs have exact
+canonical identities. Legacy fixtures retain arithmetic but cannot admit an
+unproven derived series to a thesis break rule.
 """
 
 from __future__ import annotations
@@ -43,6 +42,7 @@ from pipeline.kpi_semantics import (
     KpiSemanticStatus,
     KpiUnitScale,
 )
+from provenance.financial_fact_resolution import HistoricalFactAuthorityUnavailableError
 from provenance.overrides import KPI, OverrideAction, record_override
 
 _NIM_BASE = "Risk-adjusted NIM (NIM minus cost of risk)"
@@ -464,10 +464,10 @@ def test_derive_kpi_transforms_materializes_nim_series(conn: sqlite3.Connection)
     assert all(r.unit is Unit.BPS for r in nim)
 
 
-def test_transform_reads_canonical_resolved_fact_not_highest_document_id(
+def test_transform_rejects_partial_canonical_authority(
     conn: sqlite3.Connection,
 ) -> None:
-    """The canonical view, not source_doc_id ordering, selects the transform input."""
+    """A canonical view without its immutable ledger cannot pin an input."""
     _seed_base_kpi(
         conn,
         "NU",
@@ -494,10 +494,8 @@ def test_transform_reads_canonical_resolved_fact_not_highest_document_id(
     )
     conn.commit()
 
-    rows = derive_kpi_transforms(conn, "NU")
-    nim = [row for row in rows if row.name == KPI_RISK_ADJ_NIM_YOY_BPS]
-    assert len(nim) == 1
-    assert nim[0].value == Decimal("-100")
+    with pytest.raises(HistoricalFactAuthorityUnavailableError):
+        derive_kpi_transforms(conn, "NU")
 
 
 def test_transform_fails_closed_on_unreviewed_override(
@@ -713,13 +711,10 @@ def _write_nim_holdings(tmp_path: Path) -> None:
     (tmp_path / "NU.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
-def test_break_rule_unresolved_before_derivation_then_breaches_after(
+def test_legacy_transform_remains_unresolved_after_derivation(
     conn: sqlite3.Connection, tmp_path: Path
 ) -> None:
-    """Regression + BREACH: before derivation the rule's kpi_name resolves to NO
-    kpi_facts definition, so it evaluates UNRESOLVED (the gap #271 surfaces, not a
-    silent OK). After derivation the materialized YoY series gives it real
-    observations and — the base contracting 10->9->8 YoY — a BREACH verdict."""
+    """Legacy arithmetic is retained, but no exact input pin admits the result."""
     _seed_base_kpi(
         conn,
         "NU",
@@ -732,21 +727,22 @@ def test_break_rule_unresolved_before_derivation_then_breaches_after(
     before_nim = before.rule_evaluations[0]
     assert before_nim.status is BreachStatus.UNRESOLVED
     assert before_nim.observations == ()
-    # After: the derived series resolves the rule to real, breaching observations.
     derive_for_ticker(conn, "NU")
     after = evaluate_ticker_thesis(conn, ticker="NU", holdings_dir=tmp_path)
     after_nim = after.rule_evaluations[0]
-    assert after.overall_status is BreachStatus.BREACH
-    assert after_nim.status is BreachStatus.BREACH
-    assert len(after_nim.observations) == 2
-    assert all(o.value == Decimal("-100") for o in after_nim.observations)
+    assert after_nim.status is BreachStatus.UNRESOLVED
+    assert after_nim.observations == ()
+    assert {
+        row.value
+        for row in derive_kpi_transforms(conn, "NU")
+        if row.name == KPI_RISK_ADJ_NIM_YOY_BPS
+    } == {Decimal("-100")}
 
 
-def test_derived_nim_series_warns_on_single_breaching_quarter(
+def test_legacy_single_breaching_quarter_stays_unresolved(
     conn: sqlite3.Connection, tmp_path: Path
 ) -> None:
-    """Most-recent YoY change positive but the prior one negative -> only 1 of 2
-    consecutive periods matches lt-0 -> WARN (not BREACH), still with observations."""
+    """An unpinned legacy series cannot issue a warning from its arithmetic."""
     # 10 -> 9 (YoY -100 bps, matches) -> 9.5 (YoY +50 bps vs 9, no match); newest +50.
     _seed_base_kpi(
         conn,
@@ -757,18 +753,13 @@ def test_derived_nim_series_warns_on_single_breaching_quarter(
     _write_nim_holdings(tmp_path)
     derive_for_ticker(conn, "NU")
     verdict = evaluate_ticker_thesis(conn, ticker="NU", holdings_dir=tmp_path)
-    assert verdict.overall_status is BreachStatus.WARN
     nim_eval = verdict.rule_evaluations[0]
-    assert nim_eval.status is BreachStatus.WARN
-    assert len(nim_eval.observations) == 2
+    assert nim_eval.status is BreachStatus.UNRESOLVED
+    assert nim_eval.observations == ()
 
 
-def test_derived_nim_series_evaluates_ok_with_observations(
-    conn: sqlite3.Connection, tmp_path: Path
-) -> None:
-    """A NIM base expanding YoY -> derived series -> the rule evaluates OK, but
-    crucially WITH observations: it resolved rather than silently defaulting to
-    the no-data OK a missing series would have produced."""
+def test_legacy_expanding_nim_stays_unresolved(conn: sqlite3.Connection, tmp_path: Path) -> None:
+    """An unpinned legacy series cannot assert an evaluated OK result."""
     _seed_base_kpi(
         conn,
         "NU",
@@ -778,8 +769,6 @@ def test_derived_nim_series_evaluates_ok_with_observations(
     _write_nim_holdings(tmp_path)
     derive_for_ticker(conn, "NU")
     verdict = evaluate_ticker_thesis(conn, ticker="NU", holdings_dir=tmp_path)
-    assert verdict.overall_status is BreachStatus.OK
     nim_eval = verdict.rule_evaluations[0]
-    assert nim_eval.status is BreachStatus.OK
-    assert len(nim_eval.observations) == 2  # OK *with* observations, not no-data
-    assert "no kpi_facts" not in nim_eval.detail
+    assert nim_eval.status is BreachStatus.UNRESOLVED
+    assert nim_eval.observations == ()

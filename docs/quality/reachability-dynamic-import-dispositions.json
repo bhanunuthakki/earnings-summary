@@ -168,8 +168,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Browser capture lazily loads the optional playwright.sync_api runtime.",
-      "fingerprint": "ca88782d272e501a1ffc1eed5b5e25cb6fc76b1538eb1c0a32488629675993e5",
-      "line": 341,
+      "fingerprint": "af6b69fe88072188405c26d22def8a0ab5ae697f05c8d86263d3d4d9c2ca5a56",
+      "line": 514,
       "path": "src/ir_pipeline/approved_ir_observation_capture.py",
       "targets": [
         "playwright.sync_api"
@@ -188,8 +188,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Wrapper loads codex_cli from the external snippets directory.",
-      "fingerprint": "b42694dd000d71a07ea99a9e5e094557736dd7149c5eab7e5419921e9d13f1dc",
-      "line": 136,
+      "fingerprint": "908717313c52680749529ab67bcb8e5fc675bd8719b5ee719b3dbb2524bd4d2b",
+      "line": 138,
       "path": "src/llm/codex_backend.py",
       "targets": [
         "codex_cli"
@@ -198,8 +198,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Auth probe loads the same external codex_cli module.",
-      "fingerprint": "a897c3daef10d6d6126799b0655817949347ca7a70fc9b3c68e5412a5c4db838",
-      "line": 150,
+      "fingerprint": "649d3aae91b5f5042aa4de22c72b58bc679ad21560d57f549746b723343310ed",
+      "line": 152,
       "path": "src/llm/codex_backend.py",
       "targets": [
         "codex_cli"
@@ -297,7 +297,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "c8b069a36ff6a1dec23556a2243fe83d11f4a6b6c6a3b04478eb56095751b352",
+      "source_sha256": "72dd77d04417f621b29883c88affe3834f262dac4700ac1c2c2f34bbbf96c457",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

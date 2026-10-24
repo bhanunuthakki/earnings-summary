@@ -36,20 +36,21 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
-SRC_DIR = PROJECT_ROOT / "src"
-sys.path.append(str(SRC_DIR))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-import db  # noqa: E402
-import index_manager  # noqa: E402
-from aggregator_sources import (  # noqa: E402
+import db
+import index_manager
+from aggregator_sources import (
     SOURCES,
     AggregatorHit,
     AggregatorSource,
 )
-from alias_manager import resolve_ticker  # noqa: E402
-from pipeline.transcript_acquisition import (  # noqa: E402
+from alias_manager import resolve_ticker
+from pipeline.source_policy import current_utc_date
+from pipeline.transcript_acquisition import (
     COMBINED_SOURCE_REGIME_IDENTITY,
     AuthorizedTranscriptArtifact,
     TranscriptAcquisitionDeniedError,
@@ -62,27 +63,28 @@ from pipeline.transcript_acquisition import (  # noqa: E402
     stage_authorized_payload,
     transcript_acquisition_receipt_id,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
-from transcript_qa import (  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from transcript_qa import (
     validate_synthesized_transcript,
 )
-from transcripts.acquisition_semantics import (  # noqa: E402
+from transcripts.acquisition_semantics import (
     TRANSCRIPT_ACQUISITION_POLICY_VERSION,
     ExistingArtifactBehavior,
     TranscriptAcquisitionAuthorization,
     TranscriptAcquisitionEntrypoint,
     TranscriptAcquisitionRequest,
+    TranscriptAuthorizationReason,
     TranscriptAuthorizationStatus,
     TranscriptProvider,
 )
-from transcripts.immutable_staging import install_transcript_output  # noqa: E402
+from transcripts.immutable_staging import install_transcript_output
 
 RAW_DIR = PROJECT_ROOT / "transcripts" / "raw"
 STAGING_DIR = PROJECT_ROOT / ".tmp" / "transcript-acquisition"
 
 
 def _policy_today() -> date:
-    return date.today()
+    return current_utc_date()
 
 
 class FetchQaSpec(BaseModel):
@@ -111,6 +113,7 @@ class FetchQaResult:
 
 class FetchQaAttemptStatus(StrEnum):
     DENIED = "denied"
+    PENDING = "period_selection_pending"
     PROVIDER_MISS = "provider_miss"
     ACQUIRED = "acquired"
     IDEMPOTENT_REPLAY = "idempotent_replay"
@@ -118,6 +121,7 @@ class FetchQaAttemptStatus(StrEnum):
 
 class FetchQaStatus(StrEnum):
     DENIED = "denied"
+    PENDING = "period_selection_pending"
     PROVIDER_MISS = "provider_miss"
     ACQUIRED = "acquired"
     IDEMPOTENT_REPLAY = "idempotent_replay"
@@ -151,6 +155,7 @@ def _request_for_source(
         raise TypeError("source must be an AggregatorSource")
     canonical = resolve_ticker(spec.ticker)
     return TranscriptAcquisitionRequest(
+        schema_version="transcript-acquisition-request@2",
         entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
         canonical_ticker=canonical,
         fiscal_year=spec.year,
@@ -301,6 +306,14 @@ def fetch_qa(
             authorization = authorize_transcript_request(conn, request)
             last_key = authorization.idempotency_key
             if authorization.status is TranscriptAuthorizationStatus.DENIED:
+                if (
+                    authorization.reason
+                    is TranscriptAuthorizationReason.REPORTED_QUARTER_WINDOW_PENDING
+                ):
+                    attempts.append(
+                        FetchQaAttempt(source.name, FetchQaAttemptStatus.PENDING, last_key)
+                    )
+                    continue
                 _log_denial(authorization)
                 attempts.append(FetchQaAttempt(source.name, FetchQaAttemptStatus.DENIED, last_key))
                 continue
@@ -405,6 +418,22 @@ def fetch_qa(
         )
         return FetchQaOutcome(FetchQaStatus.ACQUIRED, last_key, tuple(attempts), result)
 
+    if any(item.status is FetchQaAttemptStatus.PENDING for item in attempts):
+        print(
+            json.dumps(
+                {
+                    "event": "reported_period_selection_pending",
+                    "ticker": canonical,
+                    "fiscal_year": spec.year,
+                    "fiscal_quarter": spec.quarter,
+                    "deferred_sources": sum(
+                        item.status is FetchQaAttemptStatus.PENDING for item in attempts
+                    ),
+                },
+                sort_keys=True,
+            )
+        )
+        return FetchQaOutcome(FetchQaStatus.PENDING, last_key, tuple(attempts))
     if attempts and all(item.status is FetchQaAttemptStatus.DENIED for item in attempts):
         return FetchQaOutcome(FetchQaStatus.DENIED, last_key, tuple(attempts))
     tried = [attempt.provider for attempt in attempts]

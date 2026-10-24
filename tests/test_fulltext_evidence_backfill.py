@@ -2095,3 +2095,21 @@ def test_source_text_projection_rejects_empty_pdf(monkeypatch: pytest.MonkeyPatc
     with pytest.raises(fulltext_backfill_module.SourceTextProjectionError) as caught:
         fulltext_backfill_module.project_source_text(b"PDF fixture", "release.pdf")
     assert caught.value.reason == "no_substantive_text"
+
+
+def test_retained_6_21_1_identity_preserves_prior_runtime_lineage() -> None:
+    from provenance.fulltext_extractor_identity import readable_fulltext_extractor_identities
+
+    retained = RETAINED_PDF_FULLTEXT_EXTRACTOR_6_21_1
+    assert retained.code_version == "fulltext-evidence-backfill@6-pdf-public-access;pypdf=6.21.1"
+    assert (
+        retained.config_sha256
+        == hashlib.sha256(
+            b"fulltext-evidence-backfill-config-v6-pdf:pdf-pages,empty-opening-password,"
+            b"verify-permissions,pypdf=6.21.1"
+        ).hexdigest()
+    )
+    assert retained.idempotency_namespace == "fulltext-pdf-v6-pypdf-6.21.1"
+    assert retained in readable_fulltext_extractor_identities(PDF_FULLTEXT_EXTRACTOR)
+    assert retained.config_sha256 != PDF_FULLTEXT_EXTRACTOR.config_sha256
+    assert retained.idempotency_namespace != PDF_FULLTEXT_EXTRACTOR.idempotency_namespace

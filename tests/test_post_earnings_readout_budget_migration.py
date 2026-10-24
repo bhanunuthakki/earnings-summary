@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 from alembic.config import Config
@@ -22,10 +23,10 @@ def _config(path: Path) -> Config:
 
 def test_current_head_seeds_skip_mode_budget_and_downgrade_preserves_it(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    db = tmp_path / "readout-budget.db"
+    db = migrated_db(tmp_path / "readout-budget.db")
     config = _config(db)
-    command.upgrade(config, "head")
 
     with sqlite3.connect(db) as conn:
         revision = conn.execute("SELECT version_num FROM alembic_version").fetchone()

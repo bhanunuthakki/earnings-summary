@@ -25,6 +25,7 @@ from provenance.source_fact_publication import (
     PublicationVerificationError,
     verify_source_fact_publication,
 )
+from provenance.source_read_context import SourceReadContext
 from runtime.deterministic import as_utc as _utc
 
 AdmissionDisposition = Literal["missing_provenance", "quarantined"]
@@ -245,9 +246,12 @@ class ProvenanceBundleRead(_FrozenModel):
 class FactReadModel:
     """Only typed read boundary for hardened facts; never consults legacy rows."""
 
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(
+        self, conn: sqlite3.Connection, *, source_context: SourceReadContext | None = None
+    ) -> None:
         self._conn = conn
         self._plane = FactPlaneV2(conn)
+        self._source_context = source_context
 
     def cell(self, fact_cell_id: str, *, cutoff: datetime) -> FactCellV2:
         row = self._fetchone(
@@ -482,6 +486,82 @@ class FactReadModel:
             relations=self.relations(observation_id, cutoff=cutoff),
         )
 
+    def admitted_derived_output(
+        self,
+        observation_id: str,
+        *,
+        cutoff: datetime,
+        formula_id: str,
+        formula_version: str,
+        concept_namespace: str,
+        taxonomy_name: str,
+        unit_key: str,
+    ) -> ProvenanceBundle | None:
+        """Verify one derived output's sealed graph and current resolution."""
+        try:
+            bundle = self.provenance_bundle(observation_id, cutoff=cutoff)
+        except (FactAdmissionError, ValueError, sqlite3.Error):
+            return None
+        derivation = bundle.derivation
+        if (
+            bundle.observation.observation_kind != "derived"
+            or bundle.observation.value_kind != "numeric"
+            or bundle.observation.decimal_value is None
+            or derivation is None
+            or derivation.formula_id != formula_id
+            or derivation.formula_version != formula_version
+            or bundle.cell.concept_namespace != concept_namespace
+            or bundle.cell.concept_name != formula_id
+            or bundle.cell.taxonomy_name != taxonomy_name
+            or bundle.cell.taxonomy_version != f"formula-v{formula_version}"
+            or bundle.cell.unit_key != unit_key
+            or bundle.cell.currency is not None
+        ):
+            return None
+        snapshot = self.current_resolved(bundle.cell.fact_cell_id, cutoff=cutoff)
+        if (
+            snapshot is None
+            or snapshot.resolution is None
+            or snapshot.resolution.status != "resolved"
+            or snapshot.resolution.selected_observation_id != observation_id
+        ):
+            return None
+        return bundle
+
+    def reported_source_leaves(
+        self,
+        observation_ids: tuple[str, ...],
+        *,
+        cutoff: datetime,
+    ) -> tuple[ProvenanceBundle, ...]:
+        """Return admitted reported leaves of a bounded derived input graph."""
+        if not observation_ids:
+            raise ValueError("source graph requires an observation")
+        frontier = observation_ids
+        seen: set[str] = set()
+        leaves: list[ProvenanceBundle] = []
+        for _ in range(32):
+            next_frontier: list[str] = []
+            for bundle in self.required_provenance_bundles(frontier, cutoff=cutoff):
+                observation_id = bundle.observation.observation_id
+                if observation_id in seen:
+                    continue
+                seen.add(observation_id)
+                if len(seen) > 500:
+                    raise ValueError("source graph exceeds admission bound")
+                if bundle.evidence is not None:
+                    leaves.append(bundle)
+                elif bundle.derivation is not None:
+                    next_frontier.extend(bundle.derivation.input_observation_ids)
+                else:
+                    raise ValueError("source graph has no reported evidence")
+            if not next_frontier:
+                if not leaves:
+                    raise ValueError("source graph has no reported evidence")
+                return tuple(leaves)
+            frontier = tuple(next_frontier)
+        raise ValueError("source graph exceeds admission depth")
+
     def required_provenance_bundles(
         self,
         observation_ids: tuple[str, ...],
@@ -536,7 +616,7 @@ class FactReadModel:
                 self._conn.execute("BEGIN")
             self._conn.execute("SAVEPOINT fact_read_model_batch_guard")
             savepoint_active = True
-            reader = _BatchFactReadModel(self._conn)
+            reader = _BatchFactReadModel(self._conn, source_context=self._source_context)
             results: list[ProvenanceBundleRead] = []
             for observation_id in observation_ids:
                 try:
@@ -627,11 +707,11 @@ class FactReadModel:
         *,
         cutoff: datetime,
         _path: set[str] | None = None,
-        _admitted: set[str] | None = None,
-    ) -> None:
+        _admitted: dict[str, int] | None = None,
+    ) -> int:
         observation_id = observation.observation_id
         path: set[str] = set() if _path is None else _path
-        admitted: set[str] = set() if _admitted is None else _admitted
+        admitted: dict[str, int] = {} if _admitted is None else _admitted
         if observation_id in path:
             raise FactAdmissionError(
                 "derived_input_graph_unbounded",
@@ -640,8 +720,16 @@ class FactReadModel:
                 disposition="missing_provenance",
             )
         if observation_id in admitted:
-            return
-        if len(path) >= 32 or len(admitted) >= 256:
+            height = admitted[observation_id]
+            if len(path) + height > 32:
+                raise FactAdmissionError(
+                    "derived_input_graph_unbounded",
+                    record_kind="fact_observation",
+                    record_id=observation_id,
+                    disposition="missing_provenance",
+                )
+            return height
+        if len(path) >= 32 or len(admitted) >= 500:
             raise FactAdmissionError(
                 "derived_input_graph_unbounded",
                 record_kind="fact_observation",
@@ -650,10 +738,18 @@ class FactReadModel:
             )
         path.add(observation_id)
         try:
-            self._admit_observation_and_inputs(
+            height = self._admit_observation_and_inputs(
                 observation, cutoff=cutoff, path=path, admitted=admitted
             )
-            admitted.add(observation_id)
+            if len(admitted) >= 500:
+                raise FactAdmissionError(
+                    "derived_input_graph_unbounded",
+                    record_kind="fact_observation",
+                    record_id=observation_id,
+                    disposition="missing_provenance",
+                )
+            admitted[observation_id] = height
+            return height
         finally:
             path.remove(observation_id)
 
@@ -663,9 +759,10 @@ class FactReadModel:
         *,
         cutoff: datetime,
         path: set[str],
-        admitted: set[str],
-    ) -> None:
+        admitted: dict[str, int],
+    ) -> int:
         observation_id = observation.observation_id
+        height = 1
         self._admit_record(
             "fact_observation",
             observation_id,
@@ -705,6 +802,34 @@ class FactReadModel:
                 str(extraction["extraction_seal_id"]),
                 cutoff=cutoff,
             )
+            locator = observation.source_locator.root
+            if (
+                observation.source_taxonomy_version == "ir-reported-facts-ocr.v1"
+                or observation.evidence_node_id.startswith("ir-pdf-review-ocr:")
+                or locator.get("source_representation") == "governed_ocr"
+            ):
+                from provenance.ir_reported_facts import verify_ir_ocr_observation_source
+
+                try:
+                    verify_ir_ocr_observation_source(
+                        self._conn,
+                        observation,
+                        context=self._source_context,
+                        cutoff=cutoff,
+                    )
+                except (ValueError, RuntimeError, sqlite3.Error) as exc:
+                    reason = (
+                        "ir_ocr_source_context_unavailable"
+                        if self._source_context is None
+                        or self._source_context.ocr_state_root is None
+                        else "ir_ocr_source_reconstruction_failed"
+                    )
+                    raise FactAdmissionError(
+                        reason,
+                        record_kind="fact_observation",
+                        record_id=observation_id,
+                        disposition="missing_provenance",
+                    ) from exc
         else:
             derivation = self._fetchone(
                 "SELECT derivation_seal_id,input_count "
@@ -729,7 +854,7 @@ class FactReadModel:
                 inputs = self._fetchall(
                     "SELECT input_observation_id FROM fact_derivation_input_edges_v2 "
                     "WHERE output_observation_id=? AND recorded_at<=? "
-                    "ORDER BY input_ordinal LIMIT 257",
+                    "ORDER BY input_ordinal LIMIT 501",
                     (observation_id, cutoff),
                 )
             except sqlite3.Error as exc:
@@ -742,7 +867,7 @@ class FactReadModel:
             if (
                 not inputs
                 or len(inputs) != int(str(derivation["input_count"]))
-                or len(inputs) > 256
+                or len(inputs) > 500
             ):
                 raise FactAdmissionError(
                     "derived_input_graph_incomplete",
@@ -764,12 +889,13 @@ class FactReadModel:
                         record_id=input_id,
                         disposition="missing_provenance",
                     )
-                self._admit_observation_graph(
+                child_height = self._admit_observation_graph(
                     self._load_observation(source),
                     cutoff=cutoff,
                     _path=path,
                     _admitted=admitted,
                 )
+                height = max(height, child_height + 1)
         for relation in self._bounded_relation_rows(
             observation_id,
             cutoff=cutoff,
@@ -779,6 +905,7 @@ class FactReadModel:
                 str(relation["relation_id"]),
                 cutoff=cutoff,
             )
+        return height
 
     def _admit_record(
         self,
@@ -1246,8 +1373,10 @@ class FactReadModel:
 class _BatchFactReadModel(FactReadModel):
     """Throwaway reader that memoizes full publication validation for one batch."""
 
-    def __init__(self, conn: sqlite3.Connection) -> None:
-        super().__init__(conn)
+    def __init__(
+        self, conn: sqlite3.Connection, *, source_context: SourceReadContext | None = None
+    ) -> None:
+        super().__init__(conn, source_context=source_context)
         self._publication_verifications: dict[
             tuple[str, datetime], PublicationVerificationError | None
         ] = {}

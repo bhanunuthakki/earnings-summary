@@ -1,7 +1,7 @@
 """Narrow detect-secrets filter for generated quality-evidence hashes.
 
 This suppresses scanner false positives for schema-defined digest members and
-one named compatibility-test digest assignment.
+named compatibility-test digest assignments.
 detect-secrets may normalize a JSON colon to an equals sign during its eager
 second scan; that exact equivalent is accepted solely for the same JSON paths.
 This filter neither validates evidence integrity nor authorizes credentials or
@@ -117,7 +117,19 @@ _CANONICAL_HELPERS_COMMIT_MEMBER = re.compile(
 _GROUNDED_SEARCH_DIGEST_ASSIGNMENT = re.compile(
     r'[ \t]*expected_bundle_sha256[ \t]*=[ \t]*"[0-9a-f]{64}"[ \t]*(?:\r?\n)?\Z'
 )
+_IR_AUTHORITY_DIGEST_ASSIGNMENT = re.compile(
+    r'[ \t]*expected_ir_sha256[ \t]*=[ \t]*"[0-9a-f]{64}"[ \t]*(?:\r?\n)?\Z'
+)
 _PATH_HASH_KEYS = {
+    "docs/quality/ocr-reviewed-facts-growth-20261024.json": {
+        "source_commit": 40,
+        "independent_review_sha256": 64,
+        "baseline_before_sha256": 64,
+        "measurement_source_sha256": 64,
+        "reachability_parser_source_sha256": 64,
+        "old_fingerprint": 64,
+        "new_fingerprint": 64,
+    },
     "docs/quality/pdf-6212-architecture-growth-20261023.json": {
         "scoped_commit": 40,
         "baseline_commit": 40,
@@ -172,6 +184,8 @@ def is_quality_evidence_hash(filename: str, line: str) -> bool:
         return _CANONICAL_HELPERS_COMMIT_MEMBER.fullmatch(line) is not None
     if canonical_path == "tests/test_grounded_search_foundation.py":
         return _GROUNDED_SEARCH_DIGEST_ASSIGNMENT.fullmatch(line) is not None
+    if canonical_path == "tests/test_ir_authority_capture.py":
+        return _IR_AUTHORITY_DIGEST_ASSIGNMENT.fullmatch(line) is not None
     if canonical_path not in _CANONICAL_PATHS:
         return False
     if _HASH40_MEMBER.fullmatch(line) is not None or _HASH64_MEMBER.fullmatch(line) is not None:

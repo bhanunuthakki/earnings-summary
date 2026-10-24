@@ -73,7 +73,7 @@ is deliberately out of scope. Re-validate periodically — sites change their pr
 | WIX | https://investors.wix.com/financial-information/quarterly-results | Calendar year |
 | RBRK | https://ir.rubrik.com/financial-information/quarterly-results | Jan FY-end; IPO May 2024; best-effort for pre-IPO quarters |
 | VEEV | https://ir.veeva.com/ | Jan FY-end; map FY quarters to calendar year |
-| BN | https://bam.brookfield.com/investors | Brookfield Corp; supplemental packages |
+| BN | https://bn.brookfield.com/reports-filings | Brookfield Corp; supplemental packages |
 | LLY | https://investor.lilly.com/financial-information | Automatic acquisition when stored identity is authorized; historical crawl failure needs a current disposition. |
 
 ## Fiscal Calendar Notes

@@ -25,6 +25,7 @@ from pipeline.kpi_semantics import (
     current_kpi_semantic_context,
     persist_kpi_semantic_context,
 )
+from provenance.financial_fact_resolution import resolve_fact_row
 from tests.test_research_cockpit import NOW
 from tests.test_research_cockpit import conn as conn
 from tests.test_research_cockpit import head_template as head_template
@@ -39,15 +40,20 @@ def _no_evidence(*_args: object, **_kwargs: object) -> str:
 
 
 def _selected_rows(connection: sqlite3.Connection) -> list[sqlite3.Row]:
-    return connection.execute(
-        "SELECT id,source_doc_id,value FROM kpi_facts WHERE ticker='NU' "
+    rows = connection.execute(
+        "SELECT id,source_doc_id,value,reported_observation_id,resolution_id "
+        "FROM v_kpi_facts_resolved_current WHERE ticker='NU' "
         "AND kpi_definition_id=(SELECT id FROM kpi_definitions "
         "WHERE ticker='NU' AND name='Monthly ARPAC (USD)') "
         "AND value IN (12.4,11.2) ORDER BY period_end DESC"
     ).fetchall()
+    assert len(rows) == 2
+    assert all(row["reported_observation_id"] and row["resolution_id"] for row in rows)
+    return rows
 
 
 def _use_actual_unit(conn: sqlite3.Connection) -> None:
+    selected = _selected_rows(conn)
     definition = conn.execute(
         "SELECT id FROM kpi_definitions WHERE ticker='NU' AND name='Monthly ARPAC (USD)'"
     ).fetchone()
@@ -57,7 +63,7 @@ def _use_actual_unit(conn: sqlite3.Connection) -> None:
     # The reused cockpit fixture retains a legacy naive knowledge clock. Add
     # an explicit aware revision for this test's known synthetic metadata.
     # The original head remains immutable; later edits use the public owner.
-    for fact in _selected_rows(conn):
+    for fact in selected:
         prior = conn.execute(
             "SELECT * FROM kpi_fact_semantic_contexts WHERE kpi_fact_id=? ORDER BY revision DESC LIMIT 1",
             (fact["id"],),
@@ -90,6 +96,8 @@ def _use_actual_unit(conn: sqlite3.Connection) -> None:
             "kpi_definition_revision_id FROM kpi_fact_semantic_contexts WHERE id=?",
             (NOW.isoformat(), prior["id"]),
         )
+        resolution = resolve_fact_row(conn, fact_table="kpi_facts", fact_row_id=int(fact["id"]))
+        assert resolution is not None and resolution.resolution_status == "resolved"
     conn.commit()
 
 
@@ -354,12 +362,12 @@ def test_adjacent_quarter_plain_annotation_preserves_existing_null_episode_proje
     annotated = evaluate_ticker_thesis(conn, ticker="NU", holdings_dir=holdings)
     evaluation = annotated.rule_evaluations[0]
     assert evaluation.rule.require_adjacent_quarters and evaluation.source_manifest is not None
-    # The reused current-view fixture includes its old 99 row. Preserve the
-    # evaluator's existing selected value; this test changes only evidence.
-    assert str(evaluation.observations[0].value) == "99"
-    assert evaluation.status.value == "ok"
+    # The current view excludes the superseded 99 mis-extraction. Preserve
+    # the evaluator's selected value while testing episode annotation parity.
+    assert str(evaluation.observations[0].value) == "12.4"
+    assert evaluation.status.value == "breach"
     assert evaluation.observations[0].input_reference is not None
-    assert evaluation.observations[0].input_reference.original_value == "99"
+    assert evaluation.observations[0].input_reference.original_value == "12.4"
     legacy = replace(annotated, rule_evaluations=(replace(evaluation, source_manifest=None),))
     before: tuple[str, str] | None = None
     for run, verdict in (("adjacent-legacy", legacy), ("adjacent-annotated", annotated)):

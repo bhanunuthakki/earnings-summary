@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from compute.kpi_resolver import normalize_kpi_name
+from models.documents import reader_source_order_sql
 from models.facts import Currency, Unit
 from provenance.source_coverage import (
     IssuerFactCoverageReceiptRecord,
@@ -29,7 +30,6 @@ from provenance.source_coverage import (
     SourceCoverageLedger,
 )
 from runtime import deterministic
-from timeseries.loaders import reader_source_order_sql
 
 if TYPE_CHECKING:
     from pipeline.issuer_fact_manifest import IssuerFactManifestAny
@@ -480,7 +480,7 @@ def _source_preference_sql(source_type_column: str) -> str:
     # Kept as a private compatibility seam for callers outside this module.
     # New readers use ``reader_source_order_sql`` so tier-first policy has one
     # canonical implementation.
-    from timeseries.loaders import issuer_origin_rank_sql
+    from models.documents import issuer_origin_rank_sql
 
     return issuer_origin_rank_sql(source_type_column)
 

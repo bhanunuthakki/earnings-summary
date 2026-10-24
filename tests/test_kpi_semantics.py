@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
+import unicodedata
 from collections.abc import Callable
 from datetime import date
 from decimal import Decimal
@@ -496,3 +498,377 @@ def test_active_migration_head_installs_append_only_report_reference_disposition
             conn.execute("DELETE FROM kpi_semantic_disposition_commits")
     finally:
         conn.close()
+
+
+@pytest.mark.parametrize(
+    ("token", "quote", "valid"),
+    [
+        ("60", "Revenue 60,801", False),
+        ("801", "Revenue 60,801", False),
+        ("60,801", "Revenue 60,801", True),
+        ("12", "Loss (12)", False),
+        ("(12)", "Loss (12)", True),
+        ("12", "Loss -12", False),
+        ("12", "Loss \u221212", False),
+        ("12", "Loss - 12", False),
+        ("12", "Count (12 million shares)", False),
+        ("12", "Count 12, compared with 10", True),
+        ("-12", "Loss -12", True),
+        ("1", "Revenue 1.23", False),
+        ("23", "Revenue 1.23", False),
+        ("1.23", "Revenue $1.23", True),
+        ("10", "Outlook $10-20", True),
+        ("20", "Outlook $10-20", True),
+        ("$20", "Outlook $10-20", False),
+        ("3", "Outlook 3-5%", True),
+        ("5%", "Outlook 3-5%", True),
+        ("5", "Outlook 3-5%", False),
+    ],
+)
+def test_complete_source_numeric_token(token: str, quote: str, valid: bool) -> None:
+    from pipeline.kpi_semantics import source_numeric_token_occurs
+
+    assert source_numeric_token_occurs(token, quote) is valid
+
+
+@pytest.mark.parametrize(
+    ("quote", "token", "valid"),
+    [
+        ("Outlook 10 -20", "20", True),
+        ("Outlook 10 -20", "-20", False),
+        ("Outlook 10 - 20", "20", True),
+        ("Outlook 10 - 20", "- 20", False),
+        ("Outlook 3 -5%", "5%", True),
+        ("Outlook 3 -5%", "-5%", False),
+        ("Outlook $10 - $20", "$20", True),
+        ("Outlook $10 - $20", "20", True),
+        ("Outlook $10 - $20", "- $20", False),
+        ("Outlook 1,000.25 -2,000.75", "2,000.75", True),
+        ("Outlook 1,000.25 -2,000.75", "-2,000.75", False),
+        ("Outlook -10 - -5", "-5", True),
+        ("Outlook -10 - -5", "5", False),
+        ("Outlook (10) - (5)", "(5)", True),
+        ("Outlook (10) - (5)", "5", False),
+        ("Loss -20", "-20", True),
+        ("Loss -20", "20", False),
+        ("Q2 -20", "-20", True),
+        ("Q2 -20", "20", False),
+        ("Item X10 -20", "-20", True),
+        ("Item X10 -20", "20", False),
+    ],
+)
+def test_spaced_range_and_standalone_negative_tokens(quote: str, token: str, valid: bool) -> None:
+    from pipeline.kpi_semantics import source_numeric_token_occurs
+
+    assert source_numeric_token_occurs(token, quote) is valid
+
+
+@pytest.mark.parametrize(
+    ("quote", "token", "valid"),
+    [
+        ("Revenue -$ 20", "20", False),
+        ("Revenue -$ 20", "-$ 20", True),
+        ("Revenue - $20", "$20", False),
+        ("Revenue - $20", "- $20", True),
+        ("Revenue $- 20", "20", False),
+        ("Revenue $- 20", "$- 20", True),
+        ("Revenue $- 20", "- 20", True),
+        ("Revenue ($ 20)", "20", False),
+        ("Revenue ($ 20)", "($ 20)", True),
+        ("Revenue ($20)%", "($20)%", True),
+        ("Revenue ($20)%", "20", False),
+        ("Revenue \u2212 $ 20", "20", False),
+        ("Revenue $ \u2212 20", "20", False),
+        ("Revenue \u2212 $ 20", "\u2212 $ 20", False),
+        ("Revenue 1e3", "1", False),
+        ("Revenue 1e3", "3", False),
+        ("Revenue 1e3", "1e3", False),
+        ("Revenue 1E-3", "1", False),
+        ("Revenue 1E-3", "-3", False),
+        ("Revenue 1e+3", "+3", False),
+        ("Revenue 1e--3", "3", False),
+        ("Revenue 1.2.3", "1.2", False),
+        ("Revenue 1.2.3", "3", False),
+        ("Revenue 1,23", "1", False),
+        ("Revenue 1,23", "23", False),
+        ("Revenue 1,,234", "234", False),
+        ("Revenue 20%%", "20", False),
+        ("Count (12 million shares)", "12", False),
+        ("Count 12, compared with 10", "12", True),
+        ("Outlook $10 - $20", "20", True),
+        ("Outlook 10 - 20", "20", True),
+        ("Outlook -10 - -5", "-5", True),
+        ("Outlook (10) - (5)", "(5)", True),
+        ("Outlook 1,000.25 -2,000.75", "2,000.75", True),
+        ("Q2 -20", "-20", True),
+        ("Q2 -20", "20", False),
+        ("2Q -20", "-20", True),
+        ("2Q -20", "20", False),
+        ("Revenue 1e3 then 20", "20", True),
+    ],
+)
+def test_closed_scan_numeric_envelopes(quote: str, token: str, valid: bool) -> None:
+    from pipeline.kpi_semantics import source_numeric_token_occurs
+
+    assert source_numeric_token_occurs(token, quote) is valid
+
+
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        ("-$ 20", "-20"),
+        ("- $20", "-20"),
+        ("$- 20", "-20"),
+        ("($ 20)", "-20"),
+        ("($20)%", "-20"),
+        ("(20%)", "-20"),
+        ("+ $ 1,000.25", "1000.25"),
+        (".5", "0.5"),
+        ("20 %", "20"),
+    ],
+)
+def test_closed_parse_supported_envelopes(token: str, expected: str) -> None:
+    from pipeline.kpi_semantics import parse_source_numeric
+
+    assert parse_source_numeric(token) == Decimal(expected)
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "1e3",
+        "1E-3",
+        "1e--3",
+        "1,23",
+        "1.2.3",
+        "20%%",
+        "--20",
+        "$$20",
+        "(-20)",
+        "$ (20)",
+        "(12 million shares)",
+        "\u2212 $20",
+    ],
+)
+def test_closed_parse_unsupported_envelopes(token: str) -> None:
+    from pipeline.kpi_semantics import parse_source_numeric
+
+    with pytest.raises(ValueError, match="not numeric"):
+        parse_source_numeric(token)
+
+
+@pytest.mark.parametrize(
+    "sign",
+    [
+        char
+        for char in map(chr, range(sys.maxunicode + 1))
+        if char not in "+-"
+        and (
+            unicodedata.category(char) == "Pd"
+            or (unicodedata.category(char) == "Sm" and "MINUS" in unicodedata.name(char, ""))
+            or unicodedata.normalize("NFKC", char) in {"+", "-"}
+        )
+    ],
+)
+def test_closed_boundary_unicode_sign_catalog(sign: str) -> None:
+    from pipeline.kpi_semantics import source_numeric_token_occurs
+
+    for quote in (f"Revenue {sign}20", f"Revenue {sign} $20", f'Revenue: "{sign}20"'):
+        assert not source_numeric_token_occurs("20", quote), repr(quote)
+    assert not source_numeric_token_occurs("1", f"Revenue 1{sign}20")
+
+
+@pytest.mark.parametrize(
+    "control",
+    [
+        char
+        for char in map(chr, range(sys.maxunicode + 1))
+        if unicodedata.category(char) == "Cf"
+        or (unicodedata.category(char) == "Cc" and not char.isspace())
+    ],
+)
+def test_closed_boundary_format_control_catalog(control: str) -> None:
+    from pipeline.kpi_semantics import source_numeric_token_occurs
+
+    for quote in (f"Revenue {control}-20", f"Revenue -{control}20", f"Revenue 20{control}"):
+        assert not source_numeric_token_occurs("20", quote), repr(quote)
+    assert not source_numeric_token_occurs("2", f"Revenue 2{control}0")
+    assert not source_numeric_token_occurs("0", f"Revenue 2{control}0")
+
+
+@pytest.mark.parametrize(
+    ("quote", "token", "valid"),
+    [
+        ("Revenue ..20", ".20", False),
+        ("Revenue ,20", "20", False),
+        ("Revenue ,,20", "20", False),
+        ("Revenue .,.20", ".20", False),
+        ("Revenue 1..20", "1", False),
+        ("Revenue .20", ".20", True),
+        ('"Revenue": 20', "20", True),
+        ("'Revenue';20", "20", True),
+        ("Revenue, 20", "20", True),
+        ("Revenue. 20", "20", True),
+        ("Revenue =20", "20", True),
+        ("Revenue [Q2]: -20", "-20", True),
+        ("Revenue [20]", "20", False),
+        ("Revenue {20}", "20", False),
+        ("Revenue -:20", "20", False),
+        ("Q2.20 -20", ".20", False),
+        ("Revenue - $20", "- $20", True),
+        ("Outlook $10 - $20", "20", True),
+        ("Outlook -10 - -5", "-5", True),
+        ("Outlook (10) - (5)", "(5)", True),
+    ],
+)
+def test_closed_boundary_delimiters(quote: str, token: str, valid: bool) -> None:
+    from pipeline.kpi_semantics import source_numeric_token_occurs
+
+    assert source_numeric_token_occurs(token, quote) is valid
+
+
+@pytest.mark.parametrize(
+    ("quote", "token"),
+    [
+        ("tax rate between 15-17%, an increase", "17%"),
+        ("prior outlook of 13-16%.", "16%"),
+    ],
+)
+def test_trial8_percent_range_upper_endpoint_before_prose_punctuation(
+    quote: str, token: str
+) -> None:
+    from pipeline.kpi_semantics import source_numeric_token_occurs
+
+    assert source_numeric_token_occurs(token, quote)
+
+
+@pytest.mark.parametrize(
+    ("quote", "token", "valid"),
+    [
+        ("Rate 17%, another value", "17%", True),
+        ("Rate 17%.", "17%", True),
+        ("Loss (17), another value", "(17)", True),
+        ("Loss (17).", "(17)", True),
+        ("Loss (17) %, another value", "(17) %", True),
+        ("Loss -$ 17%, another value", "-$ 17%", True),
+        ("Rate 17%, 20%.", "20%", True),
+        ("Rate 17%, -20%.", "-20%", True),
+        ("Rate 17%, -20%.", "20%", False),
+        ("Rate 17%..", "17%", False),
+        ("Rate 17%,,", "17%", False),
+        ("Rate 17%.20", "17%", False),
+        ("Rate 17%.20", ".20", False),
+        ("Rate 17%,20", "17%", False),
+        ("Rate 17%,20", "20", False),
+        ("Rate ,17%.", "17%", False),
+        ("Rate ..17%.", ".17%", False),
+        ("Rate 1,23%.", "23%", False),
+        ("Rate 1e3%.", "3%", False),
+        ("Rate \u221217%.", "17%", False),
+        ("Rate \ufe6317%.", "17%", False),
+        ("Rate -\u200b17%.", "17%", False),
+        ("Rate 17\u200b%.", "17%", False),
+        ("Rate (17)%.", "17%", False),
+        ("Rate (17)%.", "(17)%", True),
+        ("Rate (17%%).", "17%", False),
+        ("Rate (17%%).", "(17%%)", False),
+    ],
+)
+def test_numeric_envelope_prose_end_preserves_closed_start_and_sign(
+    quote: str, token: str, valid: bool
+) -> None:
+    from pipeline.kpi_semantics import source_numeric_token_occurs
+
+    assert source_numeric_token_occurs(token, quote) is valid
+
+
+@pytest.mark.parametrize(
+    ("quote", "token", "valid"),
+    [
+        ("Repurchases  —  (10,167)  —  (22,921)", "(10,167)", True),
+        ("Proceeds  24,910  —  24,910  —", "24,910", True),
+        ("Exchange  (7)  131  —  243", "131", True),
+        ("—  20", "20", True),
+        ("20  —", "20", True),
+        ("20\t—\t30", "20", False),
+        ("20\n—\n30", "20", False),
+        ("Repurchases  —  (10,167)", "10,167", False),
+        ("Proceeds  —  24,910", "0", False),
+        ("Proceeds  —24,910", "24,910", False),
+        ("Proceeds  24,910—", "24,910", False),
+        ("Outlook 10 — 20", "10", False),
+        ("Outlook 10—20", "20", False),
+        ("Loss  \u2212  20", "20", False),
+        ("Loss  \u2013  20", "20", False),
+        ("Loss  —  1,23", "23", False),
+        ("Loss  —  1e3", "3", False),
+    ],
+)
+def test_table_empty_em_dash_cell_preserves_neighboring_tokens(
+    quote: str, token: str, valid: bool
+) -> None:
+    from pipeline.kpi_semantics import source_numeric_token_occurs
+
+    assert source_numeric_token_occurs(token, quote) is valid
+
+
+@pytest.mark.parametrize(
+    ("label", "quote", "token"),
+    [
+        (
+            "GAAP revenue year-over-year change %",
+            "GAAP revenue year-over-year change %  28 %  30 %",
+            "28 %",
+        ),
+        (
+            "Revenue excluding foreign exchange effect year-over-year change \n%",
+            "Revenue excluding foreign exchange effect year-over-year change \n%  27 %  28 %",
+            "27 %",
+        ),
+        (
+            "GAAP advertising revenue year-over-year change %",
+            "GAAP advertising revenue year-over-year change %  27 %  30 %",
+            "27 %",
+        ),
+        (
+            "Advertising revenue excluding foreign exchange effect year-over-\nyear change %",
+            "Advertising revenue excluding foreign exchange effect year-over-\nyear change %  26 %  27 %",
+            "26 %",
+        ),
+    ],
+)
+def test_actual_trial11_percent_row_label_is_separate_from_first_cell(
+    label: str, quote: str, token: str
+) -> None:
+    from pipeline.kpi_semantics import source_numeric_token_occurs
+
+    assert source_numeric_token_occurs(token, quote, row_label=label)
+
+
+@pytest.mark.parametrize(
+    ("quote", "label", "token", "valid"),
+    [
+        ("Growth %  28 %  30 %", "Growth %", "28 %", True),
+        ("Growth %  28 %  30 %", None, "28 %", False),
+        ("Growth %  28 %  30 %", "Other %", "28 %", False),
+        ("@Growth %  28 %", "Growth %", "28 %", False),
+        ("@Growth %  28 %", "@Growth %", "28 %", False),
+        ("Growth 1e3 %  28 %", "Growth 1e3 %", "28 %", False),
+        ("Growth 1,23 %  28 %", "Growth 1,23 %", "28 %", False),
+        ("%  28 %", "%", "28 %", False),
+        ("Growth % 28 %", "Growth %", "28 %", False),
+        ("Growth %28 %", "Growth %", "28 %", False),
+        ("Growth %%  28 %", "Growth %%", "28 %", False),
+        ("Growth -%  28 %", "Growth -%", "28 %", False),
+        ("Growth \u2212%  28 %", "Growth \u2212%", "28 %", False),
+        ("Growth %  2\u200b8 %", "Growth %", "28 %", False),
+        ("Growth %  0 %", "Growth %", "0 %", True),
+        ("Growth %  28 %", "Growth %", "0", False),
+    ],
+)
+def test_percent_row_label_boundary_requires_exact_safe_label_and_table_gap(
+    quote: str, label: str | None, token: str, valid: bool
+) -> None:
+    from pipeline.kpi_semantics import source_numeric_token_occurs
+
+    assert source_numeric_token_occurs(token, quote, row_label=label) is valid

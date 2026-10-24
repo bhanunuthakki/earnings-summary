@@ -70,7 +70,7 @@ from provenance.fact_plane_v2 import (
     FactResolutionCandidateV2,
     FactResolutionRevisionV2,
 )
-from provenance.fact_read_model import FactAdmissionError, FactReadModel, ProvenanceBundle
+from provenance.fact_read_model import FactReadModel, ProvenanceBundle
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.source_fact_repository import (
     DerivedSourceFact,
@@ -1326,37 +1326,15 @@ def _read_derived_output(
     *,
     cutoff: datetime,
 ) -> ProvenanceBundle | None:
-    try:
-        bundle = FactReadModel(conn).provenance_bundle(observation_id, cutoff=_aware(cutoff))
-    except (FactAdmissionError, ValueError, sqlite3.Error):
-        return None
-    derivation = bundle.derivation
-    if (
-        bundle.observation.observation_kind != "derived"
-        or bundle.observation.value_kind != "numeric"
-        or bundle.observation.decimal_value is None
-        or derivation is None
-        or derivation.formula_id != formula.formula_key
-        or derivation.formula_version != str(formula.version)
-        or bundle.cell.concept_namespace != _DERIVED_METRIC_NAMESPACE
-        or bundle.cell.concept_name != formula.formula_key
-        or bundle.cell.taxonomy_name != _DERIVED_METRIC_TAXONOMY
-        or bundle.cell.taxonomy_version != f"formula-v{formula.version}"
-        or bundle.cell.unit_key != Unit.PERCENT.value
-        or bundle.cell.currency is not None
-    ):
-        return None
-    snapshot = FactReadModel(conn).current_resolved(bundle.cell.fact_cell_id, cutoff=_aware(cutoff))
-    if snapshot is None:
-        return None
-    resolution = snapshot.resolution
-    if (
-        resolution is None
-        or resolution.status != "resolved"
-        or resolution.selected_observation_id != observation_id
-    ):
-        return None
-    return bundle
+    return FactReadModel(conn).admitted_derived_output(
+        observation_id,
+        cutoff=_aware(cutoff),
+        formula_id=formula.formula_key,
+        formula_version=str(formula.version),
+        concept_namespace=_DERIVED_METRIC_NAMESPACE,
+        taxonomy_name=_DERIVED_METRIC_TAXONOMY,
+        unit_key=Unit.PERCENT.value,
+    )
 
 
 def _legacy_document_bridge(

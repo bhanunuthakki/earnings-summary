@@ -37,6 +37,11 @@ from pipeline.work_os_briefs import (
 )
 from pipeline.work_os_company import build_company_desk
 from pipeline.work_os_decisions import build_decision_projection
+from provenance.evidence_native_candidates import (
+    read_verified_local_evidence_bytes,
+    select_evidence_native_candidates_by_id,
+)
+from provenance.source_read_context import SourceReadContext
 from report.artifacts import load_report_artifact_index
 
 
@@ -64,6 +69,7 @@ class ContentRouteContext:
     probe_tracker: Callable[[], tuple[bool, str]]
     fetch_live_portfolio: Callable[[], LivePortfolio]
     default_user_id: str
+    source_context: SourceReadContext | None = None
 
 
 def _parse_bbox_param(raw: str | None) -> tuple[float, float, float, float] | None:
@@ -80,11 +86,54 @@ def _parse_bbox_param(raw: str | None) -> tuple[float, float, float, float] | No
     return (x0, y0, x1, y1)
 
 
+def _pinned_ocr_pdf_bytes(
+    context: ContentRouteContext, doc_id: int, version_id: str, source_sha256: str
+) -> bytes:
+    authority = context.source_context
+    if authority is None or authority.ocr_state_root is None:
+        raise ValueError("OCR PDF source authority is unavailable")
+    if len(version_id) > 128 or len(source_sha256) != 64:
+        raise ValueError("OCR PDF source identity is invalid")
+    conn = context.get_read_db()
+    row = conn.execute(
+        "SELECT version.blob_sha256,document.sha256 FROM evidence_document_versions version "
+        "JOIN documents document ON document.id=version.legacy_document_id "
+        "WHERE version.document_version_id=? AND version.legacy_document_id=? "
+        "AND version.document_type='ir_supplement'",
+        (version_id, doc_id),
+    ).fetchone()
+    if row is None or row[0] != source_sha256 or row[1] != source_sha256:
+        raise ValueError("OCR PDF source document identity changed")
+    candidates = select_evidence_native_candidates_by_id(
+        conn, document_version_ids=(version_id,), include_legacy=True
+    )
+    if len(candidates) != 1 or candidates[0].media_type != "application/pdf":
+        raise ValueError("OCR PDF source bytes are unavailable")
+    candidate = candidates[0]
+    if (
+        candidate.blob_sha256 != source_sha256
+        or candidate.byte_size > authority.max_document_bytes
+        or candidate.byte_size > authority.max_total_bytes
+    ):
+        raise ValueError("OCR PDF source byte bound changed")
+    return read_verified_local_evidence_bytes(
+        conn,
+        storage_uri=candidate.storage_uri,
+        expected_sha256=source_sha256,
+        expected_byte_size=candidate.byte_size,
+        allowed_roots=authority.content_roots,
+        document_version_id=version_id,
+    ).raw_bytes
+
+
 def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
     from comments_server_financial_evidence_routes import register_growth_evidence_routes
 
     register_growth_evidence_routes(
-        app, get_read_db=context.get_read_db, safe_ticker=context.safe_ticker
+        app,
+        get_read_db=context.get_read_db,
+        safe_ticker=context.safe_ticker,
+        source_context=context.source_context,
     )
     """Register read-only content routes without changing Flask contracts."""
     repo_root = context.repo_root
@@ -149,6 +198,32 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             render_statement_json_page,
             render_transcript_page,
         )
+
+        version_id = request.args.get("version")
+        source_sha256 = request.args.get("sha256")
+        if version_id is not None or source_sha256 is not None:
+            if version_id is None or source_sha256 is None:
+                abort(404)
+            try:
+                pinned_bytes = _pinned_ocr_pdf_bytes(context, doc_id, version_id, source_sha256)
+                pinned_query = urlencode({"version": version_id, "sha256": source_sha256})
+                pinned_html = render_pdf_page_view(
+                    repo_root,
+                    db_path,
+                    doc_id,
+                    request.args.get("page", type=int),
+                    bbox=_parse_bbox_param(request.args.get("bbox")),
+                    fragment=request.args.get("fragment") == "1",
+                    raw_bytes=pinned_bytes,
+                    pinned_query=pinned_query,
+                )
+            except (OSError, RuntimeError, ValueError, sqlite3.Error):
+                abort(404)
+            if pinned_html is None:
+                abort(404)
+            return Response(
+                pinned_html, mimetype="text/html", headers={"Cache-Control": "no-store"}
+            )
 
         fragment = request.args.get("fragment") == "1"
         html = render_transcript_page(repo_root, db_path, doc_id, fragment=fragment)
@@ -218,8 +293,22 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
     @app.route("/source/<int:doc_id>/page/<int:page>.png", methods=["GET"])
     def source_pdf_page_image(doc_id: int, page: int):
         """Serve one lazily rendered, content-addressed PDF page image."""
-        from pipeline.pdf_render import render_page_image
+        from pipeline.pdf_render import render_page_image, render_verified_page_bytes
         from pipeline.source_viewers import load_document
+
+        version_id = request.args.get("version")
+        source_sha256 = request.args.get("sha256")
+        if version_id is not None or source_sha256 is not None:
+            if version_id is None or source_sha256 is None:
+                abort(404)
+            try:
+                pinned_bytes = _pinned_ocr_pdf_bytes(context, doc_id, version_id, source_sha256)
+                rendered = render_verified_page_bytes(pinned_bytes, page=page)
+            except (OSError, RuntimeError, ValueError, sqlite3.Error):
+                abort(404)
+            if rendered is None:
+                abort(404)
+            return Response(rendered, mimetype="image/png", headers={"Cache-Control": "no-store"})
 
         doc = load_document(db_path, doc_id)
         if doc is None or not doc.file_path.lower().endswith(".pdf") or not doc.sha256:
@@ -483,7 +572,7 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
 
     @app.route("/api/peek/canonical-financial", methods=["GET"])
     def peek_canonical_financial():
-        from pipeline.peeks import render_canonical_financial_peek
+        from pipeline.peeks import ocr_pdf_document_id, render_canonical_financial_peek
         from pipeline.source_viewers import render_record_view
         from sources.report_financials import FinancialEvidenceReference, read_financial_evidence
 
@@ -504,9 +593,12 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
         # The reference selects its complete table or series admission owner.
         # Both preserve the request read snapshot and perform no writes.
         try:
-            cell = read_financial_evidence(context.get_read_db(), reference)
+            conn = context.get_read_db()
+            cell = read_financial_evidence(conn, reference, source_context=context.source_context)
+            source_doc_id = ocr_pdf_document_id(conn, cell) if cell is not None else None
         except (OSError, RuntimeError, sqlite3.Error):
             cell = None
+            source_doc_id = None
         if cell is None:
             return Response(
                 render_record_view(
@@ -520,7 +612,7 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
         response = Response(
             render_record_view(
                 "Evidence for the selected value",
-                render_canonical_financial_peek(cell, reference),
+                render_canonical_financial_peek(cell, reference, ocr_pdf_document_id=source_doc_id),
                 fragment=request.args.get("fragment") == "1",
             ),
             mimetype="text/html",

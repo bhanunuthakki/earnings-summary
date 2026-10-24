@@ -31,6 +31,7 @@ from provenance.financial_statement_admission import (
     verify_reviewed_financial_role,
 )
 from provenance.metric_ontology import MetricOntology
+from provenance.source_read_context import SourceReadContext
 from sources.canonical_financial_series import (
     CanonicalFinancialSeriesReader,
     FinancialCadence,
@@ -359,6 +360,7 @@ def read_financial_table(
     *,
     as_of: datetime,
     resolution_observed_through: datetime | None = None,
+    source_context: SourceReadContext | None = None,
 ) -> FinancialTableProjection:
     """Read facts at K, with an optional later resolution-materialization clock.
 
@@ -415,8 +417,8 @@ def read_financial_table(
             ),
         ).fetchall()
         resolver, reader, ontology = (
-            CanonicalFactResolutionEngine(conn),
-            FactReadModel(conn),
+            CanonicalFactResolutionEngine(conn, source_context=source_context),
+            FactReadModel(conn, source_context=source_context),
             MetricOntology(conn),
         )
         for cell_id, concept, metric_id in rows:
@@ -479,7 +481,10 @@ def read_financial_table(
 
 
 def read_financial_evidence(
-    conn: sqlite3.Connection, reference: FinancialEvidenceReference
+    conn: sqlite3.Connection,
+    reference: FinancialEvidenceReference,
+    *,
+    source_context: SourceReadContext | None = None,
 ) -> FinancialTableCell | FinancialConsumerPoint | None:
     """Re-admit the exact report selection without a current or legacy fallback.
 
@@ -496,6 +501,7 @@ def read_financial_evidence(
             cutoff=reference.as_of,
             cadence=reference.cadence,
             continuity=reference.continuity,
+            source_context=source_context,
         )
         for point in result.points:
             item = point.observation
@@ -513,6 +519,7 @@ def read_financial_evidence(
         reference.ticker,
         as_of=reference.as_of,
         resolution_observed_through=reference.resolution_observed_through,
+        source_context=source_context,
     )
     for cell in projection.cells:
         if (

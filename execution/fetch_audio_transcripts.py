@@ -28,7 +28,7 @@ import re
 import sys
 from dataclasses import dataclass
 from datetime import date
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, NoReturn, cast
 from urllib.parse import urlparse
@@ -37,27 +37,28 @@ import yt_dlp
 from faster_whisper import WhisperModel
 from pydantic import BaseModel, Field, HttpUrl, ValidationError, field_validator
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
-SRC_DIR = PROJECT_ROOT / "src"
-sys.path.append(str(SRC_DIR))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-import index_manager  # noqa: E402
-from alias_manager import resolve_ticker  # noqa: E402
-from compute.transcript_ingest import (  # noqa: E402
+import index_manager
+from alias_manager import resolve_ticker
+from compute.transcript_ingest import (
     QASectionStatus,
     detect_qa_section,
 )
-from ir_pipeline._net import UnsafeURLError, ensure_safe_public_url  # noqa: E402
-from log_redact import redact  # noqa: E402
-from models.documents import DocType, SourceType  # noqa: E402
-from pipeline.transcript_acquisition import (  # noqa: E402
+from ir_pipeline._net import UnsafeURLError, ensure_safe_public_url
+from log_redact import redact
+from models.documents import DocType, SourceType
+from pipeline.source_policy import current_utc_date
+from pipeline.transcript_acquisition import (
     COMBINED_SOURCE_REGIME_IDENTITY,
     authorize_transcript_request,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
-from transcript_qa import validate_transcript  # noqa: E402
-from transcripts.acquisition_semantics import (  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from transcript_qa import validate_transcript
+from transcripts.acquisition_semantics import (
     TRANSCRIPT_ACQUISITION_POLICY_VERSION,
     ExistingArtifactBehavior,
     TranscriptAcquisitionAuthorization,
@@ -128,10 +129,15 @@ _URL_IN_MESSAGE_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
 # ---------------------------------------------------------------------------
 
 
-class TranscriptSource(str, Enum):  # noqa: UP042 - preserve legacy str(Enum) behavior
+class TranscriptSource(StrEnum):
     YT_DLP_WHISPER_URL = "yt_dlp_whisper_url"  # explicit URL provided
     YT_DLP_WHISPER_SEARCH = "yt_dlp_whisper_search"  # picked via smart search
     YT_DLP_WHISPER_LINKS = "yt_dlp_whisper_links"  # picked from links file
+
+    def __str__(self) -> str:
+        """Retain the original named-enum string representation for callers."""
+
+        return f"{type(self).__name__}.{self.name}"
 
 
 class FetchSpec(BaseModel):
@@ -527,11 +533,12 @@ def fetch_and_transcribe(
     canonical_ticker = resolve_ticker(spec.ticker)
     effective_db = PROJECT_ROOT / "data" / "portfolio.db" if db_path is None else db_path
     request = TranscriptAcquisitionRequest(
+        schema_version="transcript-acquisition-request@2",
         entrypoint=TranscriptAcquisitionEntrypoint.FETCH_AUDIO_TRANSCRIPTS,
         canonical_ticker=canonical_ticker,
         fiscal_year=spec.year,
         fiscal_quarter=spec.quarter,
-        as_of=date.today() if as_of is None else as_of,
+        as_of=current_utc_date() if as_of is None else as_of,
         source_type=SourceType.TRANSCRIPT_AUDIO,
         document_type=DocType.EARNINGS_CALL_AUDIO,
         provider=TranscriptProvider.YOUTUBE_AUDIO,

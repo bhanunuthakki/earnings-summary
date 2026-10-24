@@ -24,34 +24,35 @@ import argparse
 import json
 import sqlite3
 import sys
-from datetime import date
-from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from log_redact import redact  # noqa: E402
-from models.runs import StageStatus as RunStageStatus  # noqa: E402
-from pipeline.quarterly_refresh import (  # noqa: E402
+from log_redact import redact
+from models.runs import StageStatus as RunStageStatus
+from pipeline.quarterly_refresh import (
     RefreshReport,
     TickerExecutionStatus,
     TickerRefreshReport,
     refresh_portfolio,
 )
-from pipeline.quarterly_refresh import StageStatus as RefreshStageStatus  # noqa: E402
-from pipeline.queries import open_db, tracked_companies_for_user  # noqa: E402
-from pipeline.run_accounting import (  # noqa: E402
+from pipeline.quarterly_refresh import StageStatus as RefreshStageStatus
+from pipeline.queries import open_db, tracked_companies_for_user
+from pipeline.run_accounting import (
     PipelineRunSuppressedError,
     end_run,
     start_run,
     suppression_payload,
 )
-from pipeline.transcript_acquisition import (  # noqa: E402
+from pipeline.source_policy import current_utc_date
+from pipeline.transcript_acquisition import (
     persist_authorized_transcript_artifact,
     read_authorized_transcript,
     stage_pending_issuer_transcripts,
 )
-from transcripts.acquisition_semantics import TranscriptAcquisitionEntrypoint  # noqa: E402
+from transcripts.acquisition_semantics import TranscriptAcquisitionEntrypoint
 
 _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
 
@@ -254,7 +255,12 @@ def main(argv: list[str] | None = None) -> int:
             project_root=PROJECT_ROOT,
             private_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
             entrypoint=TranscriptAcquisitionEntrypoint.QUARTERLY_REFRESH,
-            as_of=date.today(),
+            as_of=current_utc_date(),
+            pending_callback=lambda ids: print(
+                json.dumps(
+                    {"event": "reported_period_selection_pending", "deferred_document_ids": ids}
+                )
+            ),
         )
         for artifact in transcript_artifacts.values():
             persist_authorized_transcript_artifact(
