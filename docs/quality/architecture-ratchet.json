@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "4d32fd484456c6df922b0775f1e8b1b78efda4a9",
+  "scoped_commit": "d00552c092e11fd5114379794216255edd7705f1",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "4476b3e9cfaf2e7ba4b5372049669e8c07cd9e9aa3bd7429b73524998db66317",
+  "source_sha256": "05f9550e9901049df602247b3cc4ea1cfbdb7d9e74c975d18bd0fae202016a3b",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1484,
-    "total_noncomment_loc": 577341,
+    "total_noncomment_loc": 577651,
     "modules_over_1000_loc": 113,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
@@ -8618,9 +8618,9 @@
         "path": "src/compute/metrics_engine/io.py",
         "module": "compute.metrics_engine.io",
         "lines": {
-          "physical": 2135,
-          "nonblank": 1975,
-          "noncomment": 1858
+          "physical": 2113,
+          "nonblank": 1953,
+          "noncomment": 1836
         },
         "internal_fan_out": 23,
         "responsibilities": [
@@ -12399,14 +12399,14 @@
         "path": "src/llm/structured.py",
         "module": "llm.structured",
         "lines": {
-          "physical": 410,
-          "nonblank": 371,
-          "noncomment": 359
+          "physical": 365,
+          "nonblank": 330,
+          "noncomment": 324
         },
-        "internal_fan_out": 3,
+        "internal_fan_out": 4,
         "responsibilities": [],
-        "public_functions": 4,
-        "fully_annotated_public_functions": 4
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
       },
       {
         "path": "src/llm/style.py",
@@ -12764,14 +12764,16 @@
         "path": "src/models/documents.py",
         "module": "models.documents",
         "lines": {
-          "physical": 195,
-          "nonblank": 168,
-          "noncomment": 141
+          "physical": 311,
+          "nonblank": 263,
+          "noncomment": 236
         },
         "internal_fan_out": 0,
-        "responsibilities": [],
-        "public_functions": 1,
-        "fully_annotated_public_functions": 1
+        "responsibilities": [
+          "database"
+        ],
+        "public_functions": 6,
+        "fully_annotated_public_functions": 6
       },
       {
         "path": "src/models/facts.py",
@@ -16282,9 +16284,9 @@
         "path": "src/provenance/fact_read_model.py",
         "module": "provenance.fact_read_model",
         "lines": {
-          "physical": 1336,
-          "nonblank": 1255,
-          "noncomment": 1255
+          "physical": 1412,
+          "nonblank": 1329,
+          "noncomment": 1329
         },
         "internal_fan_out": 6,
         "responsibilities": [
@@ -16358,9 +16360,9 @@
         "path": "src/provenance/financial_fact_resolution.py",
         "module": "provenance.financial_fact_resolution",
         "lines": {
-          "physical": 2929,
-          "nonblank": 2712,
-          "noncomment": 2699
+          "physical": 2933,
+          "nonblank": 2716,
+          "noncomment": 2700
         },
         "internal_fan_out": 9,
         "responsibilities": [
@@ -16543,7 +16545,7 @@
           "nonblank": 1851,
           "noncomment": 1851
         },
-        "internal_fan_out": 16,
+        "internal_fan_out": 15,
         "responsibilities": [
           "database",
           "network"
@@ -20017,17 +20019,17 @@
         "path": "src/runtime/deterministic.py",
         "module": "runtime.deterministic",
         "lines": {
-          "physical": 320,
-          "nonblank": 238,
-          "noncomment": 223
+          "physical": 381,
+          "nonblank": 292,
+          "noncomment": 271
         },
         "internal_fan_out": 0,
         "responsibilities": [
           "database",
           "filesystem"
         ],
-        "public_functions": 32,
-        "fully_annotated_public_functions": 32
+        "public_functions": 34,
+        "fully_annotated_public_functions": 34
       },
       {
         "path": "src/runtime/job_runtime.py",
@@ -21851,17 +21853,17 @@
         "path": "src/timeseries/loaders.py",
         "module": "timeseries.loaders",
         "lines": {
-          "physical": 2020,
-          "nonblank": 1879,
-          "noncomment": 1849
+          "physical": 2158,
+          "nonblank": 2030,
+          "noncomment": 1998
         },
-        "internal_fan_out": 12,
+        "internal_fan_out": 15,
         "responsibilities": [
           "database",
           "network"
         ],
-        "public_functions": 15,
-        "fully_annotated_public_functions": 15
+        "public_functions": 10,
+        "fully_annotated_public_functions": 10
       },
       {
         "path": "src/timeseries/primitives.py",

@@ -31,14 +31,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sqlite3
 import unicodedata
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import Literal, cast
 
 from pydantic import BaseModel
 
 __all__ = [
+    "JSON_FENCE_RX",
     "as_utc",
     "canonical_json",
     "canonical_json_ascii",
@@ -55,12 +58,14 @@ __all__ = [
     "content_sha256_model_or_text",
     "content_sha256_no_nan",
     "content_sha256_or_text",
+    "first_json_value",
     "normalize_extracted_text",
     "parse_date_text_or_none",
     "parse_instant",
     "parse_iso8601_cli",
     "parse_iso8601_named",
     "parse_iso8601_utc",
+    "parse_json_payload",
     "require_sha256",
     "require_sha256_exact",
     "sha256_bytes",
@@ -77,6 +82,62 @@ __all__ = [
 # --------------------------------------------------------------------------
 # Stable JSON — one named function per byte-distinct legacy variant.
 # --------------------------------------------------------------------------
+
+
+JSON_FENCE_RX = re.compile(r"^```(?:json)?\s*|\s*```$")
+
+
+def first_json_value(text: str, expect: Literal["object", "array"]) -> object:
+    """Decode the first complete JSON value of the expected shape from ``text``,
+    ignoring any trailing prose/fences the model appended after it.
+
+    ``raw_decode`` parses one value and reports where it ended, so a chatty
+    ``[]\\n```\\n\\n<explanation>`` yields ``[]``. Raises ValueError (naming the
+    problem) when no plausible opener is present or the value won't decode — the
+    loud contract is preserved."""
+    opener = "{" if expect == "object" else "["
+    idx = text.find(opener)
+    if idx == -1:
+        raise ValueError(f"not valid JSON: no {expect} opener found in response")
+    try:
+        payload, _ = json.JSONDecoder().raw_decode(text[idx:])
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"not valid JSON: {exc}") from exc
+    return payload
+
+
+def parse_json_payload(
+    raw: str,
+    *,
+    expect: Literal["object", "array"] = "object",
+    required_keys: tuple[str, ...] = (),
+) -> object:
+    """Fence-tolerant strict parse. Raises ValueError naming the problem when
+    the text isn't the expected JSON shape or misses a required key."""
+    text = raw.strip()
+    if text.startswith("```"):
+        text = JSON_FENCE_RX.sub("", text).strip()
+    try:
+        payload: object = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        # Tolerate trailing prose/fences after an otherwise-valid JSON value: a
+        # chatty model emits ``[]\n```\n\nThe section describes ...`` which
+        # json.loads rejects as "Extra data". Decode just the first complete
+        # value from the expected opener and ignore whatever follows. Genuine
+        # garbage (no opener, or an undecodable value) still raises loudly so the
+        # retry-with-feedback layer fires.
+        payload = first_json_value(text, expect)
+    if expect == "object":
+        if not isinstance(payload, dict):
+            raise ValueError(f"expected a JSON object, got {type(payload).__name__}")
+        obj = cast("dict[str, object]", payload)
+        missing = [k for k in required_keys if k not in obj]
+        if missing:
+            raise ValueError(f"JSON object missing required key(s): {missing}")
+        return obj
+    if not isinstance(payload, list):
+        raise ValueError(f"expected a JSON array, got {type(payload).__name__}")
+    return cast("list[object]", payload)
 
 
 def normalize_extracted_text(text: str) -> str:

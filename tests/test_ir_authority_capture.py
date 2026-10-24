@@ -28,6 +28,7 @@ from ir_pipeline.authority_capture import (
 from ir_pipeline.discover import generic
 from ir_pipeline.discover._docmeta import CandidateDoc
 from ir_pipeline.discover.generic import CrawlPageOutcome, DocumentDiscoveryInventory
+from ir_pipeline.discover.mz import catalog_post_body
 from ir_pipeline.source_inventory import source_inventory_request, sync_ir_source_inventory
 from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
 from provenance.evidence_native_candidates import resolve_local_storage_uri
@@ -222,6 +223,43 @@ MZ_PAGE = (
     b"<script>const fmId='issuer-id';const fmBase='https://api.mziq.com/mzfilemanager';"
     b"categories.push({internal_name:'release_resultados'});</script>"
 )
+
+
+def test_mz_catalog_retains_accented_publisher_category_bytes() -> None:
+    category = "videoconferência"
+    post = MZCatalogPost(results_surface_key="results", categories=(category,), year=2026)
+    assert post.categories == (category,)
+    assert catalog_post_body(post.categories, year=None) == (
+        b'{"categoryInternalNames": ["videoconfer\\u00eancia"], "language_code": "en_US"}'
+    )
+    assert catalog_post_body(post.categories, year=2026) == (
+        b'{"year": "2026", "categories": ["videoconfer\\u00eancia"], '
+        b'"language": "en_US", "published": true}'
+    )
+
+
+@pytest.mark.parametrize(
+    "category",
+    [
+        "bad category",
+        "bad/category",
+        "bad-category",
+        "bad\ncategory",
+        "bad\u202ecategory",
+        "bad\u200dcategory",
+        "x" * 129,
+    ],
+)
+def test_mz_catalog_rejects_unsafe_publisher_categories(category: str) -> None:
+    with pytest.raises(ValueError, match="MZ categories"):
+        MZCatalogPost(results_surface_key="results", categories=(category,))
+
+
+def test_mz_catalog_rejects_duplicate_publisher_category() -> None:
+    with pytest.raises(ValueError, match="MZ categories"):
+        MZCatalogPost(
+            results_surface_key="results", categories=("videoconferência", "videoconferência")
+        )
 
 
 def _mz_request(*, years: tuple[int, ...] = (2025, 2026)) -> IRAuthorityCaptureRequest:
@@ -762,9 +800,9 @@ def test_historical_get_capture_identity_remains_byte_identical(
             session=FakeSession([FakeResponse()]),
         )
         assert result.authority_evidence is not None
+        expected_ir_sha256 = "bc7587b66da3efb6bb12ea4e3a3c0ec45eb850cc3f3133ff9c3105c302e9a2ff"
         assert result.authority_evidence.surfaces[0].source_observation_id == (
-            "ir-authority-observation:"
-            "bc7587b66da3efb6bb12ea4e3a3c0ec45eb850cc3f3133ff9c3105c302e9a2ff"
+            "ir-authority-observation:" + expected_ir_sha256
         )
     finally:
         conn.close()

@@ -149,7 +149,7 @@ class MZCatalogPost(_ClosedModel):
     @classmethod
     def _categories(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         if len(value) != len(set(value)) or any(
-            re.fullmatch(r"[A-Za-z0-9_]{1,128}", item) is None for item in value
+            re.fullmatch(r"\w{1,128}", item) is None for item in value
         ):
             raise ValueError("MZ categories must be unique publisher category names")
         return value

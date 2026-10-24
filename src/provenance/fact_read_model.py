@@ -486,6 +486,82 @@ class FactReadModel:
             relations=self.relations(observation_id, cutoff=cutoff),
         )
 
+    def admitted_derived_output(
+        self,
+        observation_id: str,
+        *,
+        cutoff: datetime,
+        formula_id: str,
+        formula_version: str,
+        concept_namespace: str,
+        taxonomy_name: str,
+        unit_key: str,
+    ) -> ProvenanceBundle | None:
+        """Verify one derived output's sealed graph and current resolution."""
+        try:
+            bundle = self.provenance_bundle(observation_id, cutoff=cutoff)
+        except (FactAdmissionError, ValueError, sqlite3.Error):
+            return None
+        derivation = bundle.derivation
+        if (
+            bundle.observation.observation_kind != "derived"
+            or bundle.observation.value_kind != "numeric"
+            or bundle.observation.decimal_value is None
+            or derivation is None
+            or derivation.formula_id != formula_id
+            or derivation.formula_version != formula_version
+            or bundle.cell.concept_namespace != concept_namespace
+            or bundle.cell.concept_name != formula_id
+            or bundle.cell.taxonomy_name != taxonomy_name
+            or bundle.cell.taxonomy_version != f"formula-v{formula_version}"
+            or bundle.cell.unit_key != unit_key
+            or bundle.cell.currency is not None
+        ):
+            return None
+        snapshot = self.current_resolved(bundle.cell.fact_cell_id, cutoff=cutoff)
+        if (
+            snapshot is None
+            or snapshot.resolution is None
+            or snapshot.resolution.status != "resolved"
+            or snapshot.resolution.selected_observation_id != observation_id
+        ):
+            return None
+        return bundle
+
+    def reported_source_leaves(
+        self,
+        observation_ids: tuple[str, ...],
+        *,
+        cutoff: datetime,
+    ) -> tuple[ProvenanceBundle, ...]:
+        """Return admitted reported leaves of a bounded derived input graph."""
+        if not observation_ids:
+            raise ValueError("source graph requires an observation")
+        frontier = observation_ids
+        seen: set[str] = set()
+        leaves: list[ProvenanceBundle] = []
+        for _ in range(32):
+            next_frontier: list[str] = []
+            for bundle in self.required_provenance_bundles(frontier, cutoff=cutoff):
+                observation_id = bundle.observation.observation_id
+                if observation_id in seen:
+                    continue
+                seen.add(observation_id)
+                if len(seen) > 500:
+                    raise ValueError("source graph exceeds admission bound")
+                if bundle.evidence is not None:
+                    leaves.append(bundle)
+                elif bundle.derivation is not None:
+                    next_frontier.extend(bundle.derivation.input_observation_ids)
+                else:
+                    raise ValueError("source graph has no reported evidence")
+            if not next_frontier:
+                if not leaves:
+                    raise ValueError("source graph has no reported evidence")
+                return tuple(leaves)
+            frontier = tuple(next_frontier)
+        raise ValueError("source graph exceeds admission depth")
+
     def required_provenance_bundles(
         self,
         observation_ids: tuple[str, ...],

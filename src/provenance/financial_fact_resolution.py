@@ -726,7 +726,7 @@ def _v1_input_shape_sql(safe_input: str) -> str:
             f"json_type({safe_input},'$.{key}')='text' AND json_extract({safe_input},'$.{key}')!=''"
             for key in ("observation_id", "resolution_id", "document_version_id", "item")
         )
-        + f" AND NOT EXISTS (SELECT 1 FROM json_each({safe_input}) AS field "
+        + f" AND NOT EXISTS (SELECT 1 FROM json_each({safe_input}) AS field "  # nosec B608 -- closed internal SQL fragments; input data remains JSON values
         "WHERE field.key NOT IN ('ref','fact_table','fact_id','fact_revision',"
         "'observation_id','resolution_id','resolution_revision','doc_id',"
         "'document_version_id','item','period_end','tier'))"
@@ -828,7 +828,7 @@ def _derived_current_graph_invalid_sql(
         else ""
     )
     context_head = (
-        f"AND {_as_known_clock_sql('context.knowledge_at')} "
+        f"AND {_as_known_clock_sql('context.knowledge_at')} "  # nosec B608 -- closed internal SQL fragments; input data remains JSON values
         f"AND {_as_known_clock_sql('context.created_at')} "
         "AND NOT EXISTS (SELECT 1 FROM kpi_fact_semantic_contexts AS newer "
         "WHERE newer.kpi_fact_id=context.kpi_fact_id AND newer.revision>context.revision "
@@ -872,7 +872,7 @@ def _derived_current_graph_invalid_sql(
         "run.document_version_id", as_known=as_known
     )
     definition = (
-        "EXISTS (SELECT 1 FROM kpi_definition_revisions AS definition "
+        "EXISTS (SELECT 1 FROM kpi_definition_revisions AS definition "  # nosec B608 -- closed internal SQL fragments; input data remains JSON values
         "JOIN reporting_entities AS entity "
         "ON entity.reporting_entity_id=definition.reporting_entity_id "
         "JOIN evidence_document_versions AS run "
@@ -893,10 +893,10 @@ def _derived_current_graph_invalid_sql(
         "AND definition_run.input_sha256=run.blob_sha256 "
         f"AND NOT {definition_quarantine} "
         + definition_source_visibility
-        + "AND definition.status='admitted' AND definition.lifecycle='active' "
+        + "AND definition.status='admitted' AND definition.lifecycle='active' "  # nosec B608 -- closed internal SQL fragments; input data remains JSON values
         "AND datetime(definition.effective_at)<=datetime(kpi.period_end) "
         + definition_visibility
-        + " AND definition.kpi_definition_revision_id=("
+        + " AND definition.kpi_definition_revision_id=("  # nosec B608 -- closed internal SQL fragments; input data remains JSON values
         "SELECT selected.kpi_definition_revision_id FROM kpi_definition_revisions AS selected "
         "WHERE selected.kpi_definition_id=kpi.kpi_definition_id "
         "AND datetime(selected.effective_at)<=datetime(kpi.period_end) "
@@ -914,19 +914,19 @@ def _derived_current_graph_invalid_sql(
         else "0"
     )
     semantic = (
-        "EXISTS (SELECT 1 FROM kpi_fact_semantic_contexts AS context "
+        "EXISTS (SELECT 1 FROM kpi_fact_semantic_contexts AS context "  # nosec B608 -- closed internal SQL fragments; input data remains JSON values
         "WHERE context.kpi_fact_id=kpi.id AND context.status='admitted' "
         f"AND {item}=context.metric_name_as_reported "
         "AND context.publication_lane='current_actual' AND context.period_role='current' "
         + context_head
-        + "AND EXISTS (SELECT 1 FROM json_each(observation.dimensions_json) AS dimension "
+        + "AND EXISTS (SELECT 1 FROM json_each(observation.dimensions_json) AS dimension "  # nosec B608 -- closed internal SQL fragments; input data remains JSON values
         "WHERE json_extract(dimension.value,'$.key')='kpi_definition_id' "
         "AND json_extract(dimension.value,'$.value')=CAST(kpi.kpi_definition_id AS TEXT)) "
         # The legacy fact insert trigger captures only the definition id. Later
         # source-bound semantic revisions can still qualify at this read cutoff.
          + "AND (json_array_length(observation.dimensions_json)=1 OR ("
         "json_array_length(observation.dimensions_json)>1 "
-        + "AND EXISTS (SELECT 1 FROM json_each(observation.dimensions_json) AS dimension "
+        + "AND EXISTS (SELECT 1 FROM json_each(observation.dimensions_json) AS dimension "  # nosec B608 -- closed internal SQL fragments; input data remains JSON values
         "WHERE json_extract(dimension.value,'$.key')='semantic_status' "
         "AND json_extract(dimension.value,'$.value')='admitted') "
         "AND EXISTS (SELECT 1 FROM json_each(observation.dimensions_json) AS dimension "
@@ -959,7 +959,7 @@ def _derived_current_graph_invalid_sql(
         f"AND {definition})"
     )
     valid_v1 = (
-        f"coalesce(({_v1_input_shape_sql(safe_input)}),0)=1 "
+        f"coalesce(({_v1_input_shape_sql(safe_input)}),0)=1 "  # nosec B608 -- closed internal SQL fragments; input data remains JSON values
         f"AND {child} IS NOT NULL AND link.observation_id={observation_id} "
         f"AND link.source_document_id={doc_id} "
         f"AND resolution.resolution_id={resolution_id} "
@@ -1004,7 +1004,7 @@ def _derived_current_graph_invalid_sql(
         f"AND {doc_id} IS NULL AND {version_id} IS NULL"
     )
     return (
-        "EXISTS (WITH RECURSIVE graph(depth,observation_id,computed_from,extracted_by,formula_id,invalid) AS ("
+        "EXISTS (WITH RECURSIVE graph(depth,observation_id,computed_from,extracted_by,formula_id,invalid) AS ("  # nosec B608 -- closed internal SQL fragments; input data remains JSON values
         "SELECT 1,fact.reported_observation_id,fact.computed_from,fact.extracted_by,fact.formula_id,0 "
         "UNION SELECT graph.depth+1,"
         f"CASE WHEN {ref}='legacy_canonical_fact' THEN {observation_id} ELSE '' END,"
@@ -1043,7 +1043,7 @@ def _derived_current_graph_invalid_sql(
         "LEFT JOIN evidence_document_versions AS run "
         "ON run.document_version_id=version.document_version_id "
         "WHERE graph.invalid=0 AND graph.depth<=32 "
-        "AND json_array_length(" + safe_lineage + ",'$.inputs')<=500) "
+        "AND json_array_length(" + safe_lineage + ",'$.inputs')<=500) "  # nosec B608 -- closed internal SQL fragments; input data remains JSON values
         "SELECT 1 AS graph_group FROM graph GROUP BY graph_group "
         "HAVING MAX(invalid)=1 OR MAX(depth)>32 "
         "OR COUNT(DISTINCT NULLIF(observation_id,''))>500 "
@@ -1097,7 +1097,7 @@ def _historical_derived_valid_ids(
             else "v_financial_facts_resolved_current"
         )
         views.append(
-            f"{view} AS MATERIALIZED (SELECT fact.*,link.observation_id AS reported_observation_id, "
+            f"{view} AS MATERIALIZED (SELECT fact.*,link.observation_id AS reported_observation_id, "  # nosec B608 -- fixed internal views and expressions; IDs and clocks remain bound
             "resolution.resolution_id FROM "
             f"{table} AS fact JOIN historical_links AS link "
             f"ON link.fact_table='{table}' AND link.fact_row_id=fact.id AND link.row_rank=1 "
@@ -1116,12 +1116,12 @@ def _historical_derived_valid_ids(
         definition_available=_object_exists(conn, "kpi_definition_revisions", object_type="table"),
     )
     rows = conn.execute(
-        "WITH historical_links AS MATERIALIZED ("
+        "WITH historical_links AS MATERIALIZED ("  # nosec B608 -- fixed internal views and expressions; IDs and clocks remain bound
         "SELECT link.*,ROW_NUMBER() OVER (PARTITION BY link.fact_table,link.fact_row_id "
         "ORDER BY link.fact_revision DESC) AS row_rank "
         "FROM fact_observation_revisions AS link WHERE "
         + latest_link
-        + "), historical_resolutions AS MATERIALIZED ("
+        + "), historical_resolutions AS MATERIALIZED ("  # nosec B608 -- fixed internal views and expressions; IDs and clocks remain bound
         "SELECT resolution.*,outcome.resolution_status,"
         "ROW_NUMBER() OVER (PARTITION BY resolution.logical_key "
         "ORDER BY resolution.revision DESC) AS row_rank "
@@ -1129,12 +1129,12 @@ def _historical_derived_valid_ids(
         "JOIN fact_resolution_outcomes AS outcome "
         "ON outcome.resolution_id=resolution.resolution_id WHERE "
         + resolution_clocks
-        + " AND "
+        + " AND "  # nosec B608 -- fixed internal views and expressions; IDs and clocks remain bound
         + latest_outcome
-        + "), v_observation_resolution_current AS MATERIALIZED ("
+        + "), v_observation_resolution_current AS MATERIALIZED ("  # nosec B608 -- fixed internal views and expressions; IDs and clocks remain bound
         "SELECT resolution_id,revision FROM historical_resolutions WHERE row_rank=1), "
         + ", ".join(views)
-        + " SELECT fact.id FROM v_kpi_facts_resolved_current AS fact "
+        + " SELECT fact.id FROM v_kpi_facts_resolved_current AS fact "  # nosec B608 -- fixed internal views and expressions; IDs and clocks remain bound
         "JOIN json_each(:fact_ids) AS requested ON requested.value=fact.id "
         f"WHERE NOT ({direct} OR {graph})",
         {
@@ -1515,6 +1515,10 @@ def _canonical_fact_selections_as_known_snapshot(
             raise HistoricalFactAuthorityUnavailableError(
                 "selected compatibility fact row is unavailable"
             )
+        # An invalid mutable value is missing compatibility authority, not a
+        # measured numeric drift. The caller translates this safe error without
+        # exposing the stored value.
+        _decimal(fact["value"], field="value")
         comparisons = {
             "ticker": str(row["ticker"]).upper() == str(fact["ticker"]).upper(),
             "concept_key": str(row["concept_key"]) == _concept_key(fact_table, fact),

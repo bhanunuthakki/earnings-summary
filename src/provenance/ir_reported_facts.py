@@ -18,7 +18,6 @@ from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from llm.structured import parse_json_payload
 from models.facts import Currency, Unit
 from pipeline.kpi_semantics import (
     KpiUnitScale,
@@ -58,6 +57,7 @@ from provenance.source_fact_stream import publication_event_for_publication
 from provenance.source_read_context import SourceReadContext
 from runtime.deterministic import canonical_json as _json
 from runtime.deterministic import content_sha256 as _sha
+from runtime.deterministic import parse_json_payload
 
 _RECIPE = "ir-reported-facts.v1"
 _OCR_RECIPE = "ir-reported-facts-ocr.v1"

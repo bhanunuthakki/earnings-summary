@@ -24,6 +24,7 @@ import pytest
 from pipeline.dashboard_status import DashboardRow
 from pipeline.research_cockpit import (
     CockpitRow,
+    KpiDelta,
     attractiveness_breakdown,
     attractiveness_tone,
     build_cockpit_rows,
@@ -42,6 +43,7 @@ from provenance.evidence_ledger import (
     ExtractionRun,
     SourceObservation,
 )
+from provenance.financial_fact_resolution import resolve_fact_row
 from report.renderers.numfmt import fmt_date
 from tests import test_source_fact_repository as canonical_foundation
 from tests.test_report_canonical_financials import seed_table
@@ -331,16 +333,11 @@ def _seed(c: sqlite3.Connection) -> None:
             "VALUES ('bhanu', 'NU', 'kpi_inflection', ?, ?, '{}', ?)",
             (_iso(NOW - timedelta(hours=5)), status, f"sig-{n}"),
         )
-    # The consolidated baseline's production view requires cutover evidence
-    # rows that this focused cockpit fixture does not seed. Keep a canonical
-    # relation over the fixture facts so reader parity is exercised directly.
-    # Keep the view's cutover identity column even though these focused tests
-    # do not seed immutable observation revisions.
-    c.execute("DROP VIEW IF EXISTS v_kpi_facts_resolved_current")
-    c.execute(
-        "CREATE VIEW v_kpi_facts_resolved_current AS "
-        "SELECT *, NULL AS reported_observation_id FROM kpi_facts WHERE ticker = 'NU'"
-    )
+    # Resolve each captured fact through the real cutover ledger. A raw fact
+    # row alone cannot qualify for the current reader.
+    for (fact_id,) in c.execute("SELECT id FROM kpi_facts ORDER BY id").fetchall():
+        result = resolve_fact_row(c, fact_table="kpi_facts", fact_row_id=int(fact_id))
+        assert result is not None and result.resolution_status == "resolved"
     c.commit()
 
 
@@ -551,6 +548,24 @@ def test_tier1_kpi_query_does_not_scan_unrelated_fact_history(
     SQLite's progress handler gives this regression a deterministic VM-work
     budget without depending on wall-clock timing.
     """
+
+    def counted_deltas() -> tuple[dict[str, list[KpiDelta]], int]:
+        progress_callbacks = 0
+
+        def count_progress() -> int:
+            nonlocal progress_callbacks
+            progress_callbacks += 1
+            return 0
+
+        conn.set_progress_handler(count_progress, 100)
+        try:
+            deltas = tier1_kpi_deltas(conn, {"NU"}, as_of=NOW.date())
+        finally:
+            conn.set_progress_handler(None, 0)
+        return deltas, progress_callbacks
+
+    baseline_deltas, baseline_callbacks = counted_deltas()
+    assert "NU" in baseline_deltas
     conn.execute(
         "INSERT INTO kpi_definitions "
         "(ticker, name, unit, primary_source, threshold_tier) "
@@ -569,24 +584,13 @@ def test_tier1_kpi_query_does_not_scan_unrelated_fact_history(
         ),
     )
 
-    progress_callbacks = 0
-
-    def count_progress() -> int:
-        nonlocal progress_callbacks
-        progress_callbacks += 1
-        return 0
-
-    conn.set_progress_handler(count_progress, 100)
-    try:
-        deltas = tier1_kpi_deltas(conn, {"NU"}, as_of=NOW.date())
-    finally:
-        conn.set_progress_handler(None, 0)
-
+    deltas, progress_callbacks = counted_deltas()
     assert "NU" in deltas
-    # The canonical relation and fail-closed semantic identity predicate add a
-    # bounded fixed VM cost; the guard still rejects a full unrelated-history
-    # scan (which is orders of magnitude above this budget).
-    assert progress_callbacks < 350
+    # The real resolution view adds fixed work. Unrelated rows must not make
+    # the requested NU query scan their history.
+    assert baseline_callbacks < 550
+    assert progress_callbacks < 550
+    assert progress_callbacks - baseline_callbacks < 35
 
 
 def test_build_kpi_deltas_only_for_portfolio(rows: dict[str, list[CockpitRow]]) -> None:
@@ -632,6 +636,8 @@ def _add_tier1_pair(conn: sqlite3.Connection, *, name: str, prior: float, latest
             "'none', 'admitted', 'test', ?)",
             (fact_id, name, period[:10], _iso(NOW)),
         )
+        result = resolve_fact_row(conn, fact_table="kpi_facts", fact_row_id=fact_id)
+        assert result is not None and result.resolution_status == "resolved"
     conn.commit()
 
 
@@ -706,6 +712,8 @@ def test_tier1_future_period_facts_excluded(conn: sqlite3.Connection) -> None:
         "'consolidated', '{}', 'none', 'admitted', 'test', ?)",
         (future_fact_id, future, _iso(NOW)),
     )
+    result = resolve_fact_row(conn, fact_table="kpi_facts", fact_row_id=future_fact_id)
+    assert result is not None and result.resolution_status == "resolved"
     conn.commit()
     # No guard → the forward-dated row wins (proves it is present and would skew).
     ungated = {d.name: d for d in tier1_kpi_deltas(conn, {"NU"})["NU"]}
@@ -1731,6 +1739,13 @@ def test_tier1_delta_retains_both_exact_selected_input_rows(conn: sqlite3.Connec
         assert reference.fact_id == row["id"]
         assert reference.source_doc_id == row["source_doc_id"]
         assert reference.original_value == str(row["value"])
+        selection = conn.execute(
+            "SELECT reported_observation_id,resolution_id "
+            "FROM v_kpi_facts_resolved_current WHERE id=?",
+            (row["id"],),
+        ).fetchone()
+        assert selection is not None
+        assert selection["reported_observation_id"] and selection["resolution_id"]
 
 
 @pytest.mark.parametrize("cached", [False, True])
