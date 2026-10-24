@@ -260,6 +260,13 @@
     "author_affected_tests": 182,
     "financial_rows_written": 0,
     "independent_boundary": "Exact trigger representation parity on pinned SQLite 3.53.4; no universal binary immutability claim.",
-    "reachability_parser_source_sha256": "8a4691ecad69908e2f7a33e746eaf3a8412385267b675f2e4da4c09b201a9406"
+    "reachability_parser_source_sha256": "bf7de5fae6bbb7e3f2668085cec4e2df085dd8c8954c8dcf7dd16e0bee75aaa3",
+    "test_source_reference_move": {
+      "path": "tests/test_kpi_definition_revisions.py",
+      "old_line": 1203,
+      "new_line": 1273,
+      "behavior": "Unchanged subprocess call moved after new regressions; reachability test expectation follows actual source.",
+      "identical_Call_AST": true
+    }
   }
 }

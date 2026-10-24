@@ -278,7 +278,7 @@ def test_actual_head_is_supported() -> None:
             kind="unknown",
             evidence="subprocess/runpy expression",
             confidence="low",
-            line=1203,
+            line=1273,
             unknown=True,
         )
     ]
