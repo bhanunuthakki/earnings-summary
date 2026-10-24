@@ -263,9 +263,10 @@ def configure_artifact_runtime(repo_root: Path) -> None:
 def main() -> int:
     args = _parse_args()
     repo_root = args.repo_root.resolve()
+    source_state_root = getattr(args, "source_state_root", None)
     source_context = (
-        SourceReadContext.for_product_state_root(args.source_state_root)
-        if args.source_state_root is not None
+        SourceReadContext.for_product_state_root(source_state_root)
+        if source_state_root is not None
         else None
     )
     database_path = require_db_path(args.db_path)

@@ -527,8 +527,12 @@ def verify_source_coverage(
     when the old inventory is within that window. No FMP cache participates.
     """
     try:
-        admission = verify_research_snapshot(
-            conn, request.research_snapshot_id, source_context=source_context
+        admission = (
+            verify_research_snapshot(conn, request.research_snapshot_id)
+            if source_context is None
+            else verify_research_snapshot(
+                conn, request.research_snapshot_id, source_context=source_context
+            )
         )
     except ValueError as exc:
         # The snapshot owner uses ValueError for both absence and corruption.

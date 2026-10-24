@@ -835,8 +835,12 @@ def verify_memo_supporting_context(
     source_context: SourceReadContext | None = None,
 ) -> ResearchSnapshotRequest:
     """Keep the existing single-issuer universe and exact member seal intact."""
-    admission = verify_research_snapshot(
-        conn, context.research_snapshot_id, source_context=source_context
+    admission = (
+        verify_research_snapshot(conn, context.research_snapshot_id)
+        if source_context is None
+        else verify_research_snapshot(
+            conn, context.research_snapshot_id, source_context=source_context
+        )
     )
     row = conn.execute(
         "SELECT request_json FROM research_snapshot_headers WHERE research_snapshot_id=?",
@@ -1399,8 +1403,12 @@ def _assess_decision_brief(
         ):
             reasons.add("memo_claim_context_review_mismatch")
         try:
-            admission = verify_research_snapshot(
-                conn, context_review.research_snapshot_id, source_context=source_context
+            admission = (
+                verify_research_snapshot(conn, context_review.research_snapshot_id)
+                if source_context is None
+                else verify_research_snapshot(
+                    conn, context_review.research_snapshot_id, source_context=source_context
+                )
             )
             row = conn.execute(
                 "SELECT request_json FROM research_snapshot_headers WHERE research_snapshot_id=?",
@@ -1578,9 +1586,14 @@ def _assess_decision_brief(
             receipt = ModelInputReceipt.model_validate(receipt_raw)
             if snapshot_id != receipt.request.research_snapshot_id:
                 raise MemoEvidenceError("memo_model_source_universe_mismatch")
-            verified, verified_member_sha, _inventories = verify_source_coverage(
-                conn, receipt.request, cutoff, source_context=source_context
-            )
+            if source_context is None:
+                verified, verified_member_sha, _inventories = verify_source_coverage(
+                    conn, receipt.request, cutoff
+                )
+            else:
+                verified, verified_member_sha, _inventories = verify_source_coverage(
+                    conn, receipt.request, cutoff, source_context=source_context
+                )
             if verified_member_sha != member_sha:
                 raise MemoEvidenceError("memo_model_source_commitment_mismatch")
             for fact in receipt.request.facts.values():
