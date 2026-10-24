@@ -41,6 +41,14 @@ def _noop(*_a: object, **_k: object) -> None:
     return None
 
 
+def _qualified_period(*_args: object, **_kwargs: object) -> bool:
+    return True
+
+
+def _excluded_period(*_args: object, **_kwargs: object) -> bool:
+    return False
+
+
 def _install_fake_process(
     monkeypatch: pytest.MonkeyPatch, *, downloaded: int, captured: dict[str, object]
 ) -> None:
@@ -70,6 +78,7 @@ def test_register_urls_writes_manifest_registers_and_anchors(
     _make_db(db)
     captured: dict[str, object] = {}
     _install_fake_process(monkeypatch, downloaded=2, captured=captured)
+    monkeypatch.setattr(mod, "reported_quarter_selection_in_connection", _qualified_period)
     urls = [
         "https://s205.q4cdn.com/x/ER-Q1-FY26.pdf",
         "https://s205.q4cdn.com/x/ServiceNow-1Q26-Investor-Presentation.pdf",
@@ -103,6 +112,7 @@ def test_register_urls_no_downloads_marks_failed_and_skips_anchor(
     _make_db(db)
     captured: dict[str, object] = {}
     _install_fake_process(monkeypatch, downloaded=0, captured=captured)
+    monkeypatch.setattr(mod, "reported_quarter_selection_in_connection", _qualified_period)
 
     n = mod.register_urls(
         "NOW",
@@ -164,6 +174,28 @@ def test_approved_url_denial_never_crosses_network(
     assert not (tmp_path / ".tmp" / "ir_url_manifest" / "NOW_urls.json").exists()
 
 
+def test_pending_source_window_retains_raw_without_catalog_or_brief(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = tmp_path / "data" / "portfolio.db"
+    _make_db(db)
+    captured: dict[str, object] = {}
+    _install_fake_process(monkeypatch, downloaded=1, captured=captured)
+    url = "https://issuer.example/quarter.pdf"
+
+    assert (
+        mod.register_urls("NOW", [url], repo_root=tmp_path, db_path=db, year=2026, quarter=2) == 1
+    )
+    assert captured["categorize"] is False
+    assert captured["owner_requested"] is True
+    assert {entry.url for entry in load_manifest(tmp_path, "NOW")} == {url}
+    with sqlite3.connect(db) as conn:
+        assert conn.execute(
+            "SELECT brief_dirty FROM tracked_companies WHERE ticker='NOW'"
+        ).fetchone() == (0,)
+        assert conn.execute("SELECT COUNT(*) FROM ir_fetch_status").fetchone() == (0,)
+
+
 def test_approved_url_rejects_period_outside_five_quarter_window(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -175,6 +207,7 @@ def test_approved_url_rejects_period_outside_five_quarter_window(
         pytest.fail("network boundary crossed")
 
     monkeypatch.setattr(mod, "process_ticker", fail_network)
+    monkeypatch.setattr(mod, "reported_quarter_selection_in_connection", _excluded_period)
 
     assert (
         mod.register_urls(

@@ -213,6 +213,7 @@ def _legacy_inputs(
     cutoff: datetime,
     evidence: DcfGradeEvidence,
     reasons: list[str],
+    source_context: SourceReadContext | None = None,
 ) -> tuple[FinancialInputEvidence, ...]:
     references = _fact_references(evidence)
     canonical_inputs: dict[str, GrowthFactReference] = {}
@@ -231,8 +232,8 @@ def _legacy_inputs(
         )
         canonical_inputs = {item.observation_id: item for item in history.references}
         reasons.extend(history.reason_codes)
-    reader = FactReadModel(conn)
-    resolver = CanonicalFactResolutionEngine(conn)
+    reader = FactReadModel(conn, source_context=source_context)
+    resolver = CanonicalFactResolutionEngine(conn, source_context=source_context)
     ontology = MetricOntology(conn)
     inputs = tuple(
         _admit_input(reader, resolver, ontology, item, cutoff, canonical_inputs)
@@ -497,7 +498,9 @@ def _assess(
                 str(exc) if isinstance(exc, InputEvidenceError) else "model_input_receipt_invalid"
             )
     else:
-        inputs = _legacy_inputs(conn, ticker, cutoff, evidence, reasons)
+        inputs = _legacy_inputs(
+            conn, ticker, cutoff, evidence, reasons, source_context=source_context
+        )
     if not verified_population:
         reasons.extend(
             ("financial_input_completeness_unverified", "latest_reporting_period_unverified")

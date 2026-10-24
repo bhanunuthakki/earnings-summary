@@ -470,6 +470,8 @@ def render_pdf_page_view(
     bbox: tuple[float, float, float, float] | None = None,
     snippet: str | None = None,
     fragment: bool = False,
+    raw_bytes: bytes | None = None,
+    pinned_query: str | None = None,
 ) -> str | None:
     """One rendered PDF page as an image, with an optional bbox highlight.
 
@@ -489,20 +491,22 @@ def render_pdf_page_view(
     from pipeline.pdf_render import page_count, page_dimensions
 
     doc = load_document(db_path, doc_id)
-    if doc is None or not doc.file_path.lower().endswith(".pdf"):
+    if doc is None or (raw_bytes is None and not doc.file_path.lower().endswith(".pdf")):
         return None
     path = Path(doc.file_path)
     if not path.is_absolute():
         path = repo_root / path
-    n_pages = page_count(path)
+    n_pages = page_count(path, raw_bytes=raw_bytes)
     if n_pages is None or n_pages < 1:
         return None
     active = min(max(page if page is not None else 1, 1), n_pages)
 
     img_src = f"/source/{doc.id}/page/{active}.png"
+    if pinned_query is not None:
+        img_src += f"?{pinned_query}"
     overlay = ""
     if bbox is not None:
-        dims = page_dimensions(path, active)
+        dims = page_dimensions(path, active, raw_bytes=raw_bytes)
         if dims is not None and dims[0] > 0 and dims[1] > 0:
             w, h = dims
             x0, y0, x1, y1 = bbox
@@ -516,6 +520,8 @@ def render_pdf_page_view(
             )
 
     def _page_href(n: int) -> str:
+        if pinned_query is not None:
+            return f"/source/{doc.id}?page={n}&{pinned_query}"
         return f"/source/{doc.id}?page={n}" if fragment else f"?page={n}"
 
     pager_bits: list[str] = []

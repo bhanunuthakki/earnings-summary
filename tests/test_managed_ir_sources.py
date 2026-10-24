@@ -159,8 +159,14 @@ def _two_receipt(root: Path, request: IssuerDocumentStagingRequest) -> IssuerDoc
     return receipt
 
 
-def _no_policy(_request: IssuerDocumentStagingRequest, _db_path: Path) -> None:
-    return None
+def _no_policy(
+    _request: IssuerDocumentStagingRequest,
+    _db_path: Path,
+    *,
+    permit_pending: bool = False,
+) -> None:
+    del permit_pending
+    return
 
 
 def _classify(

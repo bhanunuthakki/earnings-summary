@@ -175,6 +175,7 @@ def register_viewspec_ask_routes(app: Flask, ctx: ServerContext) -> None:
                 repo_root=repo_root,
                 registry=job_registry,
                 retrieval_mode=ask_retrieval_mode(),
+                source_context=ctx.source_context,
             )
             engine_events = (
                 bind_ask_proposal_events(
@@ -232,6 +233,7 @@ def register_viewspec_ask_routes(app: Flask, ctx: ServerContext) -> None:
             db_path=db_path,
             repo_root=repo_root,
             registry=job_registry,
+            source_context=ctx.source_context,
         )
         result = fold_events(events)
         result["session_id"] = sess.id

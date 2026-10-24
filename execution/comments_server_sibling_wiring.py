@@ -143,6 +143,7 @@ def register_sibling_routes(app: Flask, ctx: ServerContext) -> None:
             probe_tracker=probe_tracker,
             fetch_live_portfolio=fetch_live_portfolio,
             default_user_id=DEFAULT_USER_ID,
+            source_context=ctx.source_context,
         ),
     )
 

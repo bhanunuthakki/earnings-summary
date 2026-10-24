@@ -25,6 +25,7 @@ from provenance.source_fact_publication import (
     PublicationVerificationError,
     verify_source_fact_publication,
 )
+from provenance.source_read_context import SourceReadContext
 from runtime.deterministic import as_utc as _utc
 
 AdmissionDisposition = Literal["missing_provenance", "quarantined"]
@@ -245,9 +246,12 @@ class ProvenanceBundleRead(_FrozenModel):
 class FactReadModel:
     """Only typed read boundary for hardened facts; never consults legacy rows."""
 
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(
+        self, conn: sqlite3.Connection, *, source_context: SourceReadContext | None = None
+    ) -> None:
         self._conn = conn
         self._plane = FactPlaneV2(conn)
+        self._source_context = source_context
 
     def cell(self, fact_cell_id: str, *, cutoff: datetime) -> FactCellV2:
         row = self._fetchone(
@@ -536,7 +540,7 @@ class FactReadModel:
                 self._conn.execute("BEGIN")
             self._conn.execute("SAVEPOINT fact_read_model_batch_guard")
             savepoint_active = True
-            reader = _BatchFactReadModel(self._conn)
+            reader = _BatchFactReadModel(self._conn, source_context=self._source_context)
             results: list[ProvenanceBundleRead] = []
             for observation_id in observation_ids:
                 try:
@@ -722,6 +726,34 @@ class FactReadModel:
                 str(extraction["extraction_seal_id"]),
                 cutoff=cutoff,
             )
+            locator = observation.source_locator.root
+            if (
+                observation.source_taxonomy_version == "ir-reported-facts-ocr.v1"
+                or observation.evidence_node_id.startswith("ir-pdf-review-ocr:")
+                or locator.get("source_representation") == "governed_ocr"
+            ):
+                from provenance.ir_reported_facts import verify_ir_ocr_observation_source
+
+                try:
+                    verify_ir_ocr_observation_source(
+                        self._conn,
+                        observation,
+                        context=self._source_context,
+                        cutoff=cutoff,
+                    )
+                except (ValueError, RuntimeError, sqlite3.Error) as exc:
+                    reason = (
+                        "ir_ocr_source_context_unavailable"
+                        if self._source_context is None
+                        or self._source_context.ocr_state_root is None
+                        else "ir_ocr_source_reconstruction_failed"
+                    )
+                    raise FactAdmissionError(
+                        reason,
+                        record_kind="fact_observation",
+                        record_id=observation_id,
+                        disposition="missing_provenance",
+                    ) from exc
         else:
             derivation = self._fetchone(
                 "SELECT derivation_seal_id,input_count "
@@ -1265,8 +1297,10 @@ class FactReadModel:
 class _BatchFactReadModel(FactReadModel):
     """Throwaway reader that memoizes full publication validation for one batch."""
 
-    def __init__(self, conn: sqlite3.Connection) -> None:
-        super().__init__(conn)
+    def __init__(
+        self, conn: sqlite3.Connection, *, source_context: SourceReadContext | None = None
+    ) -> None:
+        super().__init__(conn, source_context=source_context)
         self._publication_verifications: dict[
             tuple[str, datetime], PublicationVerificationError | None
         ] = {}

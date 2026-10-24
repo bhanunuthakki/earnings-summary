@@ -23,8 +23,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Fixed ingest_transcripts_state.py retained; adds selected --db while --repo-root, owner-requested and exact receipt IDs remain.",
-      "fingerprint": "f08c9ae3a71fa0425da13817bd4b4d8816a339d93f89e8b0f970c3bdd3ac796b",
-      "line": 786,
+      "fingerprint": "cae3bc3f56397fb13baf7a46b2b3f189c25ad552db76318dc66479aefafa57ec",
+      "line": 843,
       "path": "execution/backfill_transcripts.py",
       "targets": [
         "execution/ingest_transcripts_state.py"
@@ -33,8 +33,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Fixed extract_commitments_from_transcript.py retained; --auto/exact transcript ID remain; --db now uses db.DB_PATH rather than derived state-local portfolio.db.",
-      "fingerprint": "056ffa4f740ecec463ae86b574bbba0a406fb7950a140d07fa945fd821c68f27",
-      "line": 816,
+      "fingerprint": "513a89938d3585430cfc43d86489f15d7b00e79c05b0275caf94de84daae0d11",
+      "line": 873,
       "path": "execution/backfill_transcripts.py",
       "targets": [
         "execution/extract_commitments_from_transcript.py"
@@ -75,8 +75,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_TICKER_SPECIFIC_EXTRACTORS remains one NVO extract_nvo_patent_timeline_state.py entry; adds require_db_path() --db. Optional LLM gating is separate caller behavior.",
-      "fingerprint": "4426c7b711a819e92f879973e570a2f696f4e85964fe0d4d0602b14849c15935",
-      "line": 123,
+      "fingerprint": "da634d06ca668f4e9a047b489f9b721bd4beb41f98686f35fb545ba289253fdb",
+      "line": 124,
       "path": "execution/build_artifacts.py",
       "targets": [
         "execution/extract_nvo_patent_timeline_state.py"
@@ -145,8 +145,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_categorize invokes the fixed _CATEGORIZER script via managed_python_prefix.",
-      "fingerprint": "deabedc12f5483af5bb9081af290fd1959638791509db250ab44a093e322007a",
-      "line": 598,
+      "fingerprint": "7a58b14e9a5d2bcaac9eb42548d7f70bd4bd422d965e8c8d958fe37ea6c85fc4",
+      "line": 656,
       "path": "execution/fetch_ir_documents.py",
       "targets": [
         "execution/categorize_ir_uploads.py"
@@ -155,8 +155,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_narrative invokes the fixed src/compute/ir_narrative.py via managed_python_prefix.",
-      "fingerprint": "787ac30592c592b6293695149c0c2930f4ef481e1d34895b0426c61e97f30b19",
-      "line": 102,
+      "fingerprint": "ae9f7eda3b2e03ce7e79d0d15c729208cfaa6ad644b8e5cd60f08145436deaff",
+      "line": 104,
       "path": "execution/fetch_ir_from_urls.py",
       "targets": [
         "src/compute/ir_narrative.py"
@@ -228,8 +228,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_FMP_SCRIPT still names PROJECT_ROOT/execution/save_fmp_data.py; adds explicit state root/database.",
-      "fingerprint": "9f9ae83a24e93c895c7d3d86292da2b1a2e1485aa85ddb2e0e39d26b83b74452",
-      "line": 485,
+      "fingerprint": "efcae282419ea17e0860c6fac3e32f44d1ee5fef42f58470a336a7751c0133b8",
+      "line": 486,
       "path": "execution/onboard_ticker.py",
       "targets": [
         "execution/save_fmp_data.py"
@@ -238,8 +238,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_BACKFILL_SCRIPT still names PROJECT_ROOT/execution/backfill_transcripts.py; adds state/database and optional --skip-extract for skip_llm.",
-      "fingerprint": "56631d7ce4dcde43daa41a66bdaaa0bc7a6e168d58770e40bc7ed9428610a29c",
-      "line": 507,
+      "fingerprint": "9f777cd8c9ce0206671537608922e89724ed5632f5bfc70f74037e91588729f3",
+      "line": 508,
       "path": "execution/onboard_ticker.py",
       "targets": [
         "execution/backfill_transcripts.py"
@@ -248,8 +248,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "process_ir now names execution/process_ir_documents_state.py, replacing execution/process_ir_documents.py. Explicit state/database flags accompany the changed state adapter. Old target file existence cannot validate the old declaration.",
-      "fingerprint": "a9da13e4c5f70850d0477e2f45e4f7699215ee35eaec07eaa1b4f6dd949eb921",
-      "line": 576,
+      "fingerprint": "bf912bb4f7a7b1078a760ddb9fcfdcf13617da73b833a370cde8bf2d7eb0f76d",
+      "line": 577,
       "path": "execution/onboard_ticker.py",
       "targets": [
         "execution/process_ir_documents_state.py"
@@ -258,8 +258,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "build_saydo still names PROJECT_ROOT/execution/build_saydo_pairs.py; adds --repo-root. First-stage failure still prevents this stage.",
-      "fingerprint": "6f3804af00d65070f507c49c14c25869444754ee366883cd2df8e4eacb0ce821",
-      "line": 592,
+      "fingerprint": "61bfd758fd72b0ff3e83fb1d84c7b367ca6709f7e28df91fb89861ac4e95dce6",
+      "line": 593,
       "path": "execution/onboard_ticker.py",
       "targets": [
         "execution/build_saydo_pairs.py"
@@ -268,8 +268,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Literal build_etf_workup.py retained; adds --repo-root and --db-path. The LLM-capable ETF synthesis is not executed or provider-qualified here.",
-      "fingerprint": "4ac0faf4ec941af19765c0797b54435477dfd9bbd56020c0fc2e79ef62de7e5f",
-      "line": 654,
+      "fingerprint": "d86724dfd743a0e7fc3d23746c0b25faae86008fb942b044efc4717f845189eb",
+      "line": 655,
       "path": "execution/onboard_ticker.py",
       "targets": [
         "execution/build_etf_workup.py"
@@ -613,8 +613,8 @@
     {
       "disposition": "external_process",
       "evidence": "Windows ACL fence spawns the fixed powershell.exe fence script.",
-      "fingerprint": "daf592b3ddde954fdd08e31acc6901af082c104468fc81d72cee106d3ba01fa2",
-      "line": 1315,
+      "fingerprint": "25b37b8f03eb421f81ca10697046e5568905d9a61503a09f7a323aebc3c068ba",
+      "line": 1438,
       "path": "src/filings/inline_xbrl_processor.py",
       "targets": [
         "powershell.exe"
@@ -622,9 +622,9 @@
     },
     {
       "disposition": "external_process",
-      "evidence": "Processor runs the hash-pinned OS sandbox launcher executable.",
-      "fingerprint": "45e3f8b6c80c7f7e7a29d5f46efaa8b7c66567315e6ed0310e36f7bc24c24510",
-      "line": 1717,
+      "evidence": "Legacy native_executable branch runs only the approved hash-pinned launcher command assembled by _run_processor. The python_source branch instead uses SourceLauncherSupervisor.run with its separately reviewed process edge. Runtime and launcher bytes are checked within the write fences before either runner; this disposition does not establish Windows qualification.",
+      "fingerprint": "c1fd2317d620a56cd7eb7e8c5fb9aeafe769d8b44c5de03f71590c5624fe39f1",
+      "line": 1840,
       "path": "src/filings/inline_xbrl_processor.py",
       "targets": [
         "sandbox launcher"
@@ -724,8 +724,8 @@
     {
       "disposition": "external_process",
       "evidence": "Provider renders pages with its configured, resolved pdftoppm executable. The descriptor records the executable version and SHA256; this disposition classifies the external process and does not approve an executable pin.",
-      "fingerprint": "315ebd2eae1964b0e05f595e67194de1d3aaa0202c6e1607a10b9861fe0a46fa",
-      "line": 379,
+      "fingerprint": "9b2e7d18a61d559a756ed1bbab2a67cd865a41c5812d6a9914ee2345fe04345e",
+      "line": 419,
       "path": "src/provenance/ocr_extraction.py",
       "targets": [
         "pdftoppm"
@@ -734,8 +734,8 @@
     {
       "disposition": "external_process",
       "evidence": "Provider extracts text with its configured, resolved tesseract executable. The descriptor records the executable version and SHA256; this disposition classifies the external process and does not approve an executable pin.",
-      "fingerprint": "83cb3561425089f3670567ca499ecdb8e33a7cb8af72532cf711a97e2f996b71",
-      "line": 402,
+      "fingerprint": "3d2110e84d6d64df8300dd8a0aca6e6aea7c05a1c08ce02eec09b1af612bbf92",
+      "line": 470,
       "path": "src/provenance/ocr_extraction.py",
       "targets": [
         "tesseract"
@@ -744,8 +744,8 @@
     {
       "disposition": "external_process",
       "evidence": "_binary_version probes the configured, resolved OCR executable with the constructor's fixed version arguments. This is an external process identity probe, not an executable approval.",
-      "fingerprint": "047e33bca82660d15b0d651e87966ca67ccbffc2cb7c0524465964ca197ec4f7",
-      "line": 1409,
+      "fingerprint": "d1ed2be33cef232e14070b781a70d130852eabe8efcbdc4d277b562dff5a6a74",
+      "line": 1685,
       "path": "src/provenance/ocr_extraction.py",
       "targets": [
         "ocr executable"
@@ -856,8 +856,8 @@
     {
       "disposition": "external_process",
       "evidence": "_acl grants via the fixed icacls.exe executable.",
-      "fingerprint": "eea3cf25d04b87bb29b4bcfc064aaed54935b07061875d905fccaf6ffc841dbe",
-      "line": 255,
+      "fingerprint": "81f1862ea0cddc217e5bfc8a4dcd8ca5e507079af837635e6e1e159ce34c0d05",
+      "line": 177,
       "path": "src/report/windows_appcontainer.py",
       "targets": [
         "icacls.exe"
@@ -866,8 +866,8 @@
     {
       "disposition": "external_process",
       "evidence": "_acl inspects via the fixed icacls.exe executable.",
-      "fingerprint": "b9faf252f4f49f827b135c4ad0ab940503c3dbc5745e4b16d0eec914ba92f51c",
-      "line": 262,
+      "fingerprint": "5bedb07a5acc26f0f7a7007d375af65ea9c9beed67ef7389686bf820af980582",
+      "line": 184,
       "path": "src/report/windows_appcontainer.py",
       "targets": [
         "icacls.exe"
@@ -876,8 +876,8 @@
     {
       "disposition": "external_process",
       "evidence": "Loopback removal uses the fixed CheckNetIsolation.exe executable.",
-      "fingerprint": "84e1a391f5946530000c48d228bd1e6660c2dc50e76800180a349b9b93d67a3c",
-      "line": 293,
+      "fingerprint": "add5c185a4a2d8dc57626134c7a377d69f74910d63ecb4dde35a7c09607a5567",
+      "line": 215,
       "path": "src/report/windows_appcontainer.py",
       "targets": [
         "CheckNetIsolation.exe"
@@ -886,8 +886,8 @@
     {
       "disposition": "external_process",
       "evidence": "Loopback verification uses the fixed CheckNetIsolation.exe executable.",
-      "fingerprint": "c54aec184077de755fdec98a027e87ef5a90e40c0efe9accbbcb289caff64eb9",
-      "line": 302,
+      "fingerprint": "f8250c02bf346940d3cb8d55ec0f02f2cc4825038d178d905fceb2c64fecd63d",
+      "line": 224,
       "path": "src/report/windows_appcontainer.py",
       "targets": [
         "CheckNetIsolation.exe"
@@ -896,8 +896,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "Same operator-supplied command in no-owner/no-deadline branch; now forwards optional stdout/stderr. It is not a closed internal Python target.",
-      "fingerprint": "00545b2c7eb19fec1a4c727a7552d126a337b1b8203d7f6a6ab6632b1eeedbe5",
-      "line": 933,
+      "fingerprint": "a35b02c0cd396e75b8fd2bec72c3df34d42c63a57a424ef9307f9f76ae791c4c",
+      "line": 979,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -906,8 +906,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "Old single Popen becomes two branches: no redirection and stdout/stderr redirection. Both retain command/cwd/env/suspended-create flags and owned job-tree lifecycle; each requires a separate disposition.",
-      "fingerprint": "3b20c85ce792e38e8f59994c7cfe015cf6afbe2c29be27b77b8045f7c08e7be8",
-      "line": 940,
+      "fingerprint": "a8ae3375533d1317b835ba556ec65e00d6109fa0860bb85b24e1bc35d8a2f759",
+      "line": 986,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -916,8 +916,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "Old single Popen becomes two branches: no redirection and stdout/stderr redirection. Both retain command/cwd/env/suspended-create flags and owned job-tree lifecycle; each requires a separate disposition.",
-      "fingerprint": "0fd5cdeeb0413001003546e14023f1dbc2f039d4f3da74ae5f83af158d212676",
-      "line": 942,
+      "fingerprint": "ae966a0202fb0f863c2a872c9af8b1d537869c185a3e0cc9d02771adafbdc40a",
+      "line": 988,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -931,6 +931,26 @@
       "path": "src/runtime/portfolio_tracker.py",
       "targets": [
         "schtasks.exe"
+      ]
+    },
+    {
+      "disposition": "external_process",
+      "evidence": "The dedicated filing launcher resolves the Windows system directory with GetSystemDirectoryW and runs only its fixed CheckNetIsolation.exe with literal LoopbackExempt -s arguments. This bounded query lists exemptions without changing them; the supplied package SID is used only to reject an existing exemption. No caller-supplied executable or command is accepted here.",
+      "fingerprint": "b8c6d03f0d4b9f17850ab83015a5a61cd2181cce0000bbad6381ef96bbb91ea5",
+      "line": 1086,
+      "path": "src/runtime/windows_appcontainer.py",
+      "targets": [
+        "CheckNetIsolation.exe"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "The only production caller is _run_processor in src/filings/inline_xbrl_processor.py. Its python_source branch verifies the approved runtime closure, fixed earnings_summary_xbrl_launcher.py location and source identity, then supplies sealed bundle Python -I -S -B plus that exact launcher. The builder requires byte equality with execution/filing_xbrl_appcontainer_launcher.py. This supervisor inserts only bounded timeout/control handles and invocation/installation identities before the fixed separator, starts suspended, assigns the owned Job before resume, and retains a recovery hold without cleanup proof. This is a source-reachability disposition, not native or host-policy qualification.",
+      "fingerprint": "633d929c1d7793220be8805d90c2639d855b855e3ca9fb445e7d8cb879cc8a47",
+      "line": 397,
+      "path": "src/runtime/windows_appcontainer_supervisor.py",
+      "targets": [
+        "execution/filing_xbrl_appcontainer_launcher.py"
       ]
     },
     {
@@ -988,8 +1008,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "The synthetic HTML-release registration regression invokes only fixed execution/sqlite_bootstrap.py and fixed execution/categorize_ir_uploads.py through sys.executable. Its explicit database, source directory and relative root belong to pytest tmp_path. It verifies retained publisher bytes and source URL without live state, network collection or model calls. Arguments cannot select a different script.",
-      "fingerprint": "a9be80fc7e4580eed44692048ed179e1ec9fc8a7c082364755e39957aaa43129",
-      "line": 240,
+      "fingerprint": "d3be7ca8e9a14e5114819d7ebea9b46566178ac27726b24a199c33690e4b41c7",
+      "line": 270,
       "path": "tests/test_ir_autofetch_registration.py",
       "targets": [
         "execution/sqlite_bootstrap.py",
@@ -1011,8 +1031,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "The private test helper launches the fixed third-party detect_secrets.pre_commit_hook.main entrypoint. Its optional --filter argument loads this fixed repository callback, so retain that local-code edge. Other arguments are test-controlled scanner flags/fixture paths; --no-verify disables provider verification.",
-      "fingerprint": "f52331a36db470b9436564c410dda7cb1e5ed31e3dd40a6f16dd3ac78939e9a9",
-      "line": 212,
+      "fingerprint": "8a4efa34a6b3c7e4e174c012df24c87de23eb0fca6ece1e52ac492c1dd351040",
+      "line": 217,
       "path": "tests/test_quality_hash_filter.py",
       "targets": [
         ".github/scripts/quality_hash_filter.py"
@@ -1027,17 +1047,6 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "Fixed literal synthetic child runs the managed SQLite preload and compute.kpi_extract_summaries with its model call replaced by a local empty extractor. Arguments are exact disposable database and fixture-root paths. It proves real ancestor-lock inheritance versus contention; no command, module, provider or source URL comes from user data.",
-      "fingerprint": "636e58646821ee56f2ea5bbf13dbf4c8e4c68aec6b46b25f9b6bf55766ef1fd0",
-      "line": 900,
-      "path": "tests/test_summary_kpi_completion.py",
-      "targets": [
-        "execution/sqlite_bootstrap.py",
-        "src/compute/kpi_extract_summaries.py"
-      ]
-    },
-    {
-      "disposition": "internal_python_target",
       "evidence": "Synthetic export regression invokes only the fixed managed SQLite bootstrap and checked-in shareable-report CLI through sys.executable. Input and destination are pytest-owned synthetic files; neither executable target is supplied by report content.",
       "fingerprint": "4ffea625a31b5b62431db948e677e0e7b7543f309b66ade3e53277627b211813",
       "line": 196,
@@ -1046,6 +1055,17 @@
         "execution/sqlite_bootstrap.py",
         "execution/export_shareable_report.py"
       ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "Fixed literal synthetic child runs the managed SQLite preload and compute.kpi_extract_summaries with its model call replaced by a local empty extractor. Arguments are exact disposable database and fixture-root paths. It proves real ancestor-lock inheritance versus contention; no command, module, provider or source URL comes from user data.",
+      "fingerprint": "636e58646821ee56f2ea5bbf13dbf4c8e4c68aec6b46b25f9b6bf55766ef1fd0",
+      "line": 900,
+      "path": "tests/test_summary_kpi_completion.py",
+      "targets": [
+        "execution/sqlite_bootstrap.py",
+        "src/compute/kpi_extract_summaries.py"
+      ]
     }
   ],
   "graph_provenance": {
@@ -1053,7 +1073,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "80d957aea11ded2953bb38109699fc87302811ef534e8a29d77bcc2a7fb80f67",
+      "source_sha256": "8aee04337cfd7116a1d47e55dc33bbff6377b865060d02be1c4d63dd7485ed6a",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

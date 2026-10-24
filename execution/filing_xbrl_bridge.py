@@ -12,8 +12,10 @@ import importlib
 import json
 import os
 import re
+import shutil
 import socket
 import sys
+import tempfile
 from collections.abc import Callable, Generator, Iterable, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -49,6 +51,7 @@ _INLINE_NAMESPACES = frozenset(
     }
 )
 _INLINE_FACT_NAMES = frozenset({"fraction", "nonFraction", "nonNumeric"})
+_MAX_INCOMPLETE_MPL_CONFIGS = 4
 JsonValue: TypeAlias = bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"] | None
 
 
@@ -540,6 +543,9 @@ def _facts_from_model(
 ) -> tuple[ExtractedFact, ...]:
     raw_facts = cast("list[object] | set[object]", getattr(model, "factsInInstance", ()))
     ordered = sorted(raw_facts, key=_fact_sort_key)
+    keys = [_fact_sort_key(fact) for fact in ordered]
+    if len(set(keys)) != len(keys):
+        raise ValueError("Arelle facts have ambiguous source ordering identities")
     fiscal_year, fiscal_period, filing_period_end = _filing_focus(ordered)
     accounting_basis = _accounting_basis(ordered)
     return tuple(
@@ -905,7 +911,7 @@ def _element_path(fact: object, ordinal: int) -> str:
     return path
 
 
-def _fact_sort_key(fact: object) -> tuple[str, int, str, str, str, str]:
+def _fact_sort_key(fact: object) -> tuple[str, int, str, str, str, str, str, str]:
     document = getattr(fact, "modelDocument", None)
     qname = getattr(fact, "qname", None)
     return (
@@ -915,6 +921,9 @@ def _fact_sort_key(fact: object) -> tuple[str, int, str, str, str, str]:
         str(getattr(qname, "localName", "")),
         str(getattr(fact, "contextID", "")),
         str(getattr(fact, "value", "")),
+        # Minified filings contain distinct facts with every preceding key equal.
+        _element_path(fact, 0),
+        str(getattr(fact, "id", "") or ""),
     )
 
 
@@ -997,6 +1006,35 @@ def _configure_standard_streams() -> None:
         cast(Callable[..., None], reconfigure)(encoding="utf-8", errors="strict")
 
 
+@contextmanager
+def _matplotlib_configuration() -> Generator[Path, None, None]:
+    """Keep the renderer's configuration inside one disposable private directory."""
+
+    root = Path(os.environ["TEMP"]) if os.name == "nt" else Path(tempfile.gettempdir())
+    if not root.is_absolute() or not root.is_dir():
+        raise ValueError("processor temporary directory is unavailable")
+    prefix = "earnings-summary-xbrl-mpl-"
+    for count, _path in enumerate(root.glob(prefix + "*"), start=1):
+        if count >= _MAX_INCOMPLETE_MPL_CONFIGS:
+            raise ValueError("processor temporary configuration requires recovery")
+    directory = root / (prefix + os.urandom(16).hex())
+    # On Windows, inherit the AppContainer temporary directory's package grant.
+    directory.mkdir(mode=0o777 if os.name == "nt" else 0o700)
+    identity = directory.lstat()
+    try:
+        with patch.dict(os.environ, {"MPLCONFIGDIR": str(directory)}):
+            yield directory
+    finally:
+        current = directory.lstat()
+        if (
+            directory.is_symlink()
+            or getattr(current, "st_file_attributes", 0) & 0x400
+            or (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino)
+        ):
+            raise ValueError("processor temporary configuration identity changed")
+        shutil.rmtree(directory)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
@@ -1004,10 +1042,11 @@ def main(argv: list[str] | None = None) -> int:
         raw = json.load(sys.stdin)
         if not isinstance(raw, dict):
             raise ValueError("bridge request must be a JSON object")
-        result = process_request(
-            cast(dict[str, object], raw),
-            runtime_artifact_sha256=str(args.runtime_artifact_sha256),
-        )
+        with _matplotlib_configuration():
+            result = process_request(
+                cast(dict[str, object], raw),
+                runtime_artifact_sha256=str(args.runtime_artifact_sha256),
+            )
     except Exception as exc:
         sys.stderr.write(
             json.dumps(

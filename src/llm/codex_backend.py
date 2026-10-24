@@ -77,6 +77,8 @@ DEFAULT_TIMEOUT_SECONDS = 420
 # claim that ChatGPT membership calls incur per-call API charges.
 _CODEX_API_PRICES: dict[str, tuple[float, float, float]] = {
     # model: (uncached input, cached input, output)
+    # OpenAI GPT-6.1 Sol model page verified 2026-10-23; candidate only.
+    "gpt-6.1-sol": (2.00, 0.10, 10.00),
     "gpt-5.6-luna": (0.20, 0.02, 1.20),
     "gpt-5.6-terra": (2.00, 0.20, 12.00),
     "gpt-5.6-sol": (5.00, 0.50, 30.00),

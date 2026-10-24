@@ -70,7 +70,7 @@ def test_direct_aggregator_fetch_denies_stored_index_member_before_network(
     )
 
 
-def test_direct_aggregator_fetch_denies_quarter_outside_canonical_five_before_network(
+def test_direct_aggregator_fetch_denies_quarter_outside_source_reported_five_before_network(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -78,6 +78,28 @@ def test_direct_aggregator_fetch_denies_quarter_outside_canonical_five_before_ne
     db_path = tmp_path / "portfolio.db"
     _db(db_path, "portfolio")
     monkeypatch.setattr(mod, "_policy_today", lambda: date(2026, 8, 12))
+    from pipeline import transcript_acquisition
+    from pipeline.source_policy import ReportedPeriodStatus, ReportedPeriodWindow
+
+    def qualified_window(*_args: object, **_kwargs: object) -> ReportedPeriodWindow:
+        return ReportedPeriodWindow(
+            status=ReportedPeriodStatus.COMPLETE,
+            period_ends=(
+                date(2026, 6, 30),
+                date(2026, 3, 31),
+                date(2025, 12, 31),
+                date(2025, 9, 30),
+                date(2025, 6, 30),
+            ),
+            snapshot_ids=("synthetic-sec", "synthetic-ir"),
+            fiscal_year_end="12-31",
+            proof_sha256="a" * 64,
+            reason="transport_fixture_qualified_source_window",
+        )
+
+    monkeypatch.setattr(
+        transcript_acquisition, "reported_period_window_from_inventory", qualified_window
+    )
 
     def _unexpected_fetch(*_args: object) -> None:
         pytest.fail("network boundary was crossed")

@@ -11,14 +11,14 @@ while the persistence stays deterministic Python:
      persist into kpi_facts via src/pipeline/kpi_persistence.py, and emit
      validation_issues for any failed sanity check. Wrapped in a run_id.
 
-  3. `--capture`: capture-every-number mode for IR supplement / data-pack PDFs
-     (the doc kind with no LLM brief handler). Enumerates EVERY labeled number in
-     each supplement PDF — no allowlist — and persists at IR_DOC tier with
-     origin=CAPTURE (each label canonicalized on write via
-     compute.kpi_resolver.canonical_metric_name). Scopes to `--ticker` when given,
-     else every ticker with a supplement PDF. Idempotent; `--refresh` re-captures
-     docs already processed. This is the automated counterpart to the manual
-     `--list-pending`/`--apply` two-step for the PDF long tail.
+  3. `--capture`: enumerate bounded IR supplement PDF sections and retain exact
+     raw source candidates. Publication requires an exact source-context review.
+     `--ocr-projection-file` with `--ticker` selects one sealed OCR projection.
+     `--refresh` re-enumerates through the existing governed call route.
+
+  4. `--source-review-file`: validate and preview one visual OCR review. Add
+     `--apply-source-review` to persist its exact review node. A later exact
+     cached capture can publish accepted facts through the existing owner.
 
 Manifest JSON shape:
     {
@@ -68,29 +68,34 @@ import sys
 from pathlib import Path
 from typing import cast
 
+# Direct invocation imports the shared bootstrap before application modules.
+from _lib import PROJECT_ROOT
 from pydantic import BaseModel
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from compute.kpi_extract_summaries import capture_for_ir_pdf_docs, write_log  # noqa: E402
-from models.facts import FactLocator, LocatorKind  # noqa: E402
-from models.runs import StageName, StageStatus  # noqa: E402
-from pipeline.document_completeness import (  # noqa: E402
+from compute.ir_supplement_capture import OCRCaptureSelection
+from compute.ir_supplement_revalidation import RevalidationManifest
+from compute.kpi_extract_summaries import (
+    capture_for_ir_pdf_docs,
+    revalidate_ir_pdf_doc,
+    write_log,
+)
+from models.facts import FactLocator, LocatorKind
+from models.runs import StageName, StageStatus
+from pipeline.document_completeness import (
     DocumentCompletenessStatus,
     document_completeness,
 )
-from pipeline.invocation_fingerprint import files_fingerprint, payload_sha256  # noqa: E402
-from pipeline.kpi_persistence import (  # noqa: E402
+from pipeline.invocation_fingerprint import files_fingerprint, payload_sha256
+from pipeline.kpi_persistence import (
     KpiExtractionManifest,
     KpiValue,
     persist_manifest,
 )
-from pipeline.locators import pdf_slide_locator  # noqa: E402
-from pipeline.pdf_render import find_quote_bbox  # noqa: E402
-from pipeline.queries import open_db  # noqa: E402
-from pipeline.refresh_eval import refresh_for_tickers  # noqa: E402
-from pipeline.run_accounting import (  # noqa: E402
+from pipeline.locators import pdf_slide_locator
+from pipeline.pdf_render import find_quote_bbox
+from pipeline.queries import open_db
+from pipeline.refresh_eval import refresh_for_tickers
+from pipeline.run_accounting import (
     JsonValue,
     PipelineRunSuppressedError,
     end_run,
@@ -98,6 +103,19 @@ from pipeline.run_accounting import (  # noqa: E402
     start_run,
     suppression_payload,
 )
+from provenance.evidence_native_candidates import (
+    read_verified_local_evidence_bytes,
+    select_evidence_native_candidates_by_id,
+)
+from provenance.immutable_artifact import read_stable_artifact
+from provenance.ir_reported_facts import (
+    IrCandidatePopulation,
+    IrOCRSourceContextReview,
+    persist_ir_source_context_review,
+    validate_ir_source_context_review,
+)
+from provenance.source_read_context import SourceReadContext
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
 
@@ -352,12 +370,108 @@ def _tickers_with_capture_docs(conn: sqlite3.Connection) -> list[str]:
     return [str(r["ticker"]).upper() for r in rows]
 
 
+def _source_review_preview(
+    conn: sqlite3.Connection,
+    review: IrOCRSourceContextReview,
+    *,
+    source_context: SourceReadContext,
+    apply: bool,
+    ticker: str | None,
+) -> dict[str, object]:
+    if source_context.ocr_state_root is None:
+        raise ValueError("IR OCR source review requires explicit product state root")
+    row = conn.execute(
+        "SELECT document_version_id,input_sha256,extractor_config_sha256,output_sha256 "
+        "FROM evidence_extraction_runs WHERE extraction_run_id=?",
+        (review.extraction_run_id,),
+    ).fetchone()
+    if row is None or row[0] != review.document_version_id or row[1] != review.source_sha256:
+        raise ValueError("IR OCR review extraction run is absent or differs")
+    if ticker is not None:
+        registered = conn.execute(
+            "SELECT ticker FROM evidence_document_versions WHERE document_version_id=?",
+            (review.document_version_id,),
+        ).fetchone()
+        if registered is None or str(registered[0]).upper() != ticker.upper():
+            raise ValueError("IR OCR review ticker differs from source document")
+    node_ids = tuple(
+        str(node_id)
+        for node_id, text_value in conn.execute(
+            "SELECT node_id,text FROM evidence_nodes WHERE extraction_run_id=? ORDER BY node_id",
+            (review.extraction_run_id,),
+        )
+        if json.loads(str(text_value)).get("schema_version")
+        in {"ir-pdf-unreviewed-candidate.v3", "ir-pdf-unreviewed-ocr-candidate.v1"}
+    )
+    population = IrCandidatePopulation(
+        document_version_id=review.document_version_id,
+        source_sha256=review.source_sha256,
+        extraction_run_id=review.extraction_run_id,
+        extractor_config_sha256=str(row[2]),
+        candidate_population_sha256=str(row[3]),
+        candidate_node_ids=node_ids,
+        retained_node_count=0,
+        exact_replay=True,
+    )
+    candidates = select_evidence_native_candidates_by_id(
+        conn, document_version_ids=(review.document_version_id,), include_legacy=True
+    )
+    if len(candidates) != 1 or candidates[0].media_type != "application/pdf":
+        raise ValueError("IR OCR review source PDF is unavailable")
+    source = candidates[0]
+    if (
+        source.byte_size > source_context.max_document_bytes
+        or source.byte_size > source_context.max_total_bytes
+    ):
+        raise ValueError("IR OCR review source PDF exceeds read limit")
+    raw_pdf_bytes = read_verified_local_evidence_bytes(
+        conn,
+        storage_uri=source.storage_uri,
+        expected_sha256=review.source_sha256,
+        expected_byte_size=source.byte_size,
+        allowed_roots=source_context.content_roots,
+        document_version_id=review.document_version_id,
+    ).raw_bytes
+    validate_ir_source_context_review(
+        conn,
+        review,
+        population,
+        raw_pdf_bytes=raw_pdf_bytes,
+        ocr_repo_root=source_context.ocr_state_root,
+    )
+    review_node_id = "ir-pdf-review-ocr:" + review.review_sha256
+    if apply:
+        review_node_id = persist_ir_source_context_review(
+            conn,
+            review,
+            population,
+            raw_pdf_bytes=raw_pdf_bytes,
+            ocr_repo_root=source_context.ocr_state_root,
+        )
+    return {
+        "status": "review_persisted" if apply else "review_validated_preview",
+        "review_node_id": review_node_id,
+        "document_version_id": review.document_version_id,
+        "candidate_count": len(node_ids),
+        "accepted_count": sum(entry.disposition == "accepted" for entry in review.entries),
+        "rejected_count": sum(entry.disposition == "rejected" for entry in review.entries),
+        "financial_publication_count": 0,
+    }
+
+
 def _run_capture(
-    conn: sqlite3.Connection, *, ticker: str | None, refresh: bool
+    conn: sqlite3.Connection,
+    *,
+    ticker: str | None,
+    refresh: bool,
+    ocr_selection: OCRCaptureSelection | None = None,
 ) -> dict[str, object]:
     """Capture-every-number from IR supplement PDFs for one ticker (or all)."""
     tickers = [ticker.upper()] if ticker else _tickers_with_capture_docs(conn)
-    logs = [capture_for_ir_pdf_docs(t, PROJECT_ROOT, conn, refresh=refresh) for t in tickers]
+    logs = [
+        capture_for_ir_pdf_docs(t, PROJECT_ROOT, conn, refresh=refresh, ocr_selection=ocr_selection)
+        for t in tickers
+    ]
     write_log(PROJECT_ROOT, logs)
     return {
         "mode": "capture",
@@ -397,6 +511,16 @@ def main() -> int:
         "ir_supplement PDF (no allowlist) and persist at IR_DOC tier with "
         "origin=CAPTURE. Scopes to --ticker, else all tickers with supplement PDFs.",
     )
+    group.add_argument(
+        "--revalidate-only",
+        type=Path,
+        help="Revalidate one explicit complete V16 IR section manifest without model calls.",
+    )
+    group.add_argument(
+        "--source-review-file",
+        type=Path,
+        help="Validate and preview one exact visual OCR source review.",
+    )
     parser.add_argument("--ticker", help="Restrict --list-pending / --capture to a single ticker.")
     parser.add_argument(
         "--refresh",
@@ -404,8 +528,21 @@ def main() -> int:
         help="With --capture, re-enumerate supplement PDFs already captured.",
     )
     parser.add_argument(
-        "--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"), help="Path to portfolio.db"
+        "--ocr-projection-file",
+        type=Path,
+        help="With --capture and --ticker, pin one sealed OCR run for one exact document; retain candidates only.",
     )
+    parser.add_argument(
+        "--apply-source-review",
+        action="store_true",
+        help="With --source-review-file, persist the exact validated review node.",
+    )
+    parser.add_argument(
+        "--source-state-root",
+        type=Path,
+        help="Explicit product state root for source PDF and retained OCR byte reads.",
+    )
+    parser.add_argument("--db", help="Path to portfolio.db")
     parser.add_argument(
         "--with-eval",
         action="store_true",
@@ -418,7 +555,40 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    conn = open_db(args.db)
+    if args.ocr_projection_file is not None and (not args.capture or not args.ticker):
+        parser.error("--ocr-projection-file requires --capture and --ticker")
+    if args.apply_source_review and args.source_review_file is None:
+        parser.error("--apply-source-review requires --source-review-file")
+    if args.source_review_file is not None:
+        if args.db is None or args.source_state_root is None:
+            parser.error("--source-review-file requires explicit --db and --source-state-root")
+        if args.refresh or args.with_eval or args.force or args.ocr_projection_file:
+            parser.error("IR OCR review does not permit capture or evaluation modifiers")
+        source_context = SourceReadContext.for_product_state_root(args.source_state_root)
+        _, payload = read_stable_artifact(args.source_review_file, max_bytes=1_000_000)
+        review = IrOCRSourceContextReview.model_validate_json(payload)
+        review_conn = connect_sqlite(
+            args.db,
+            role=(
+                SQLiteConnectionRole.WRITER
+                if args.apply_source_review
+                else SQLiteConnectionRole.READ_ONLY
+            ),
+        )
+        try:
+            result = _source_review_preview(
+                review_conn,
+                review,
+                source_context=source_context,
+                apply=args.apply_source_review,
+                ticker=args.ticker,
+            )
+        finally:
+            review_conn.close()
+        print(json.dumps(result, indent=2))
+        return 0
+
+    conn = open_db(args.db or str(PROJECT_ROOT / "data" / "portfolio.db"))
     try:
         if args.list_pending:
             pending = list_pending_documents(conn, args.ticker)
@@ -426,8 +596,30 @@ def main() -> int:
             return 0
 
         try:
+            if args.revalidate_only:
+                manifest = RevalidationManifest.model_validate_json(
+                    args.revalidate_only.read_text(encoding="utf-8")
+                )
+                if args.ticker and args.ticker.upper() != manifest.ticker:
+                    raise ValueError("IR revalidation ticker differs from the manifest")
+                if args.refresh or args.with_eval or args.force:
+                    raise ValueError(
+                        "IR revalidation does not permit capture or evaluation modifiers"
+                    )
+                receipt = revalidate_ir_pdf_doc(manifest, PROJECT_ROOT, conn)
+                print(receipt.model_dump_json())
+                return 0
             if args.capture:
-                result = _run_capture(conn, ticker=args.ticker, refresh=args.refresh)
+                ocr_selection = (
+                    OCRCaptureSelection.model_validate_json(
+                        args.ocr_projection_file.read_text(encoding="utf-8")
+                    )
+                    if args.ocr_projection_file is not None
+                    else None
+                )
+                result = _run_capture(
+                    conn, ticker=args.ticker, refresh=args.refresh, ocr_selection=ocr_selection
+                )
                 print(json.dumps(result, indent=2, default=str))
                 return 0 if result["ok"] else 1
 

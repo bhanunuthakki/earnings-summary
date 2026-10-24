@@ -218,7 +218,7 @@ def test_actual_head_is_supported() -> None:
             line=line,
             unknown=True,
         )
-        for line in (123, 913)
+        for line in (124, 914)
     ]
     # Keep the exact managed-startup, shared-ledger admission, dead/live
     # lease-holder and harness session-start pruning test children. Reject any
@@ -226,6 +226,7 @@ def test_actual_head_is_supported() -> None:
     for source, lines in (
         ("tests/test_sqlite_bootstrap.py", (32, 108)),
         ("tests/test_weekly_cleanup.py", (190,)),
+        ("tests/test_filing_xbrl_appcontainer_launcher.py", (22, 34)),
         ("tests/test_storage_reservation.py", (61, 121, 139)),
         ("tests/test_temp_run_pruning.py", (166,)),
         ("tests/test_financial_source_semantic_quarantine.py", (49,)),
@@ -246,7 +247,7 @@ def test_actual_head_is_supported() -> None:
     # restoration of fixed state-path fields. Line 27 is an existing seam;
     # the other seven lookups accompany the new isolation/transaction tests.
     for source, lines in (
-        ("tests/test_ir_supplement_continuation.py", (854,)),
+        ("tests/test_ir_supplement_continuation.py", (1389,)),
         ("tests/test_scan_ir_transcripts.py", (422, 424, 484, 486)),
         ("tests/test_split_root_legacy_adapters.py", (27, 205, 215)),
     ):
@@ -262,9 +263,25 @@ def test_actual_head_is_supported() -> None:
             )
             for line in lines
         ]
-    # Retain the 170 existing test seams and the exact shared cutover fixture run.
+    # Retain the existing test seams, the integrity-audit fixture run, and
+    # both exact XBRL launcher process fixtures pinned above.
     # No production gap is admitted; the zero-production assertions stay above.
-    assert len(graph.unknown_edges) == 171
+    assert len(graph.unknown_edges) == 174
+    assert [
+        edge
+        for edge in graph.unknown_edges
+        if edge.source == "tests/test_kpi_definition_revisions.py"
+    ] == [
+        GraphEdge(
+            source="tests/test_kpi_definition_revisions.py",
+            target="<dynamic process entrypoint>",
+            kind="unknown",
+            evidence="subprocess/runpy expression",
+            confidence="low",
+            line=1273,
+            unknown=True,
+        )
+    ]
     assert [
         edge for edge in graph.unknown_edges if edge.source == "tests/test_db_writer_gate.py"
     ] == [

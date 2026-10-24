@@ -71,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     from llm.cli import is_hard_stop
 
     source_context = (
-        SourceReadContext.for_sec_state_root(args.state_root) if args.state_root else None
+        SourceReadContext.for_product_state_root(args.state_root) if args.state_root else None
     )
     user_id = args.user_id or DEFAULT_USER_ID
     failures = 0

@@ -54,14 +54,14 @@
     "src/ui": 0,
     "src/user_state": 0,
     "src/viewspec": 0,
-    "tests": 1377
+    "tests": 1344
   },
   "suppressions": {
     ".github": 0,
     "alembic": 1,
     "cron": 8,
     "evals": 0,
-    "execution": 825,
+    "execution": 751,
     "instruction_tests": 0,
     "scripts": 4,
     "src": 14,
@@ -94,7 +94,7 @@
     "src/provenance": 0,
     "src/quality": 0,
     "src/redteam": 0,
-    "src/report": 12,
+    "src/report": 7,
     "src/research": 2,
     "src/runtime": 0,
     "src/search": 0,
@@ -110,6 +110,6 @@
     "src/ui": 0,
     "src/user_state": 1,
     "src/viewspec": 0,
-    "tests": 896
+    "tests": 891
   }
 }

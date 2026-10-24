@@ -14,8 +14,8 @@ using System.Threading;
 internal static class FilingXbrlAppContainerLauncher
 {
     private const string Contract = "earnings-xbrl-os-sandbox.v1";
-    private const string ProfileName = "EarningsSummaryFilingXbrlV1";
-    private const string MutexName = "Local\\EarningsSummaryFilingXbrlLauncherV1";
+    private const string ProfileName = "EarningsSummaryFilingXbrlV2";
+    private const string MutexName = "Global\\EarningsSummaryFilingXbrlLauncherV2";
     private const int ErrorAlreadyExistsHresult = unchecked((int)0x800700B7);
     private const uint ExtendedStartupInfoPresent = 0x00080000;
     private const uint CreateNoWindow = 0x08000000;
@@ -274,7 +274,7 @@ internal static class FilingXbrlAppContainerLauncher
         try
         {
             Invocation invocation = Parse(args);
-            using (Mutex mutex = new Mutex(false, MutexName))
+            using (Mutex mutex = OpenInvocationMutex())
             {
                 if (!mutex.WaitOne(TimeSpan.FromMinutes(15)))
                 {
@@ -300,6 +300,46 @@ internal static class FilingXbrlAppContainerLauncher
                 (win32 == null ? 0 : win32.NativeErrorCode) +
                 ",\"stage\":\"" + (win32 == null ? "managed" : win32.Stage) + "\"}");
             return 125;
+        }
+    }
+
+    private static Mutex OpenInvocationMutex()
+    {
+        SecurityIdentifier system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+        SecurityIdentifier administrators = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+        MutexSecurity security = new MutexSecurity();
+        security.SetOwner(administrators);
+        security.SetAccessRuleProtection(true, false);
+        security.AddAccessRule(new MutexAccessRule(system, MutexRights.FullControl, AccessControlType.Allow));
+        security.AddAccessRule(new MutexAccessRule(administrators, MutexRights.FullControl, AccessControlType.Allow));
+        bool created;
+        Mutex mutex = new Mutex(false, MutexName, out created, security);
+        try
+        {
+            MutexSecurity actual = mutex.GetAccessControl();
+            SecurityIdentifier owner = (SecurityIdentifier)actual.GetOwner(typeof(SecurityIdentifier));
+            if (!actual.AreAccessRulesProtected || (owner != system && owner != administrators))
+                throw new InvalidOperationException("sandbox global mutex ownership changed");
+            HashSet<string> allowed = new HashSet<string>();
+            AuthorizationRuleCollection rules = actual.GetAccessRules(true, true, typeof(SecurityIdentifier));
+            if (rules.Count != 2)
+                throw new InvalidOperationException("sandbox global mutex grants changed");
+            foreach (MutexAccessRule rule in rules)
+            {
+                if (rule.AccessControlType != AccessControlType.Allow || rule.IsInherited ||
+                    rule.InheritanceFlags != InheritanceFlags.None || rule.PropagationFlags != PropagationFlags.None ||
+                    rule.MutexRights != MutexRights.FullControl)
+                    throw new InvalidOperationException("sandbox global mutex rights changed");
+                allowed.Add(rule.IdentityReference.Value);
+            }
+            if (!allowed.SetEquals(new string[] { system.Value, administrators.Value }))
+                throw new InvalidOperationException("sandbox global mutex principals changed");
+            return mutex;
+        }
+        catch
+        {
+            mutex.Dispose();
+            throw;
         }
     }
 
@@ -374,7 +414,10 @@ internal static class FilingXbrlAppContainerLauncher
             SecurityIdentifier identity = new SecurityIdentifier(sid);
             grants.Add(GrantDirectory(invocation.RuntimeRoot, identity));
             grants.Add(GrantDirectory(invocation.InputRoot, identity));
-            return StartChild(invocation, sid, payload);
+            using (PrivateDesktop desktop = PrivateDesktop.Create(identity))
+            {
+                return StartChild(invocation, sid, payload, desktop.Path);
+            }
         }
         finally
         {
@@ -484,7 +527,7 @@ internal static class FilingXbrlAppContainerLauncher
         Directory.SetAccessControl(grant.Path, security);
     }
 
-    private static int StartChild(Invocation invocation, IntPtr sid, byte[] payload)
+    private static int StartChild(Invocation invocation, IntPtr sid, byte[] payload, string privateDesktop)
     {
         IntPtr attributeList = IntPtr.Zero;
         IntPtr capabilitiesPointer = IntPtr.Zero;
@@ -577,6 +620,7 @@ internal static class FilingXbrlAppContainerLauncher
 
             StartupInfoEx startup = new StartupInfoEx();
             startup.StartupInfo.cb = Marshal.SizeOf(startup);
+            startup.StartupInfo.lpDesktop = privateDesktop;
             startup.StartupInfo.dwFlags = StartfUseStdHandles;
             startup.StartupInfo.hStdInput = childInput;
             startup.StartupInfo.hStdOutput = stdout;
@@ -640,6 +684,12 @@ internal static class FilingXbrlAppContainerLauncher
         }
         finally
         {
+            Exception treeCleanupFailure = null;
+            if (job != IntPtr.Zero)
+            {
+                try { StopPrivateChildJob(job); }
+                catch (Exception exception) { treeCleanupFailure = exception; }
+            }
             if (process.hProcess != IntPtr.Zero && !childTerminal)
             {
                 TerminateProcess(process.hProcess, 127);
@@ -683,7 +733,35 @@ internal static class FilingXbrlAppContainerLauncher
             {
                 CloseHandle(job);
             }
+            if (treeCleanupFailure != null)
+                throw new InvalidOperationException("private child tree stop was not proved", treeCleanupFailure);
         }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JobAccounting
+    {
+        internal long userTime, kernelTime, periodUserTime, periodKernelTime;
+        internal uint pageFaults, totalProcesses, activeProcesses, terminatedProcesses;
+    }
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool QueryInformationJobObject(IntPtr job, int kind, out JobAccounting info, int size, out int returned);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+    private static void StopPrivateChildJob(IntPtr job)
+    {
+        if (!TerminateJobObject(job, 127)) throw LastWin32("cannot terminate owned child job");
+        System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+        do
+        {
+            JobAccounting info;
+            int returned;
+            if (!QueryInformationJobObject(job, 1, out info, Marshal.SizeOf(typeof(JobAccounting)), out returned))
+                throw LastWin32("cannot query owned child job");
+            if (info.activeProcesses == 0) return;
+            Thread.Sleep(20);
+        } while (clock.ElapsedMilliseconds < 5000);
+        throw new InvalidOperationException("owned child job still has active processes");
     }
 
     private static bool IsAppContainer(IntPtr processHandle)
@@ -829,5 +907,186 @@ internal static class FilingXbrlAppContainerLauncher
     private static Exception LastWin32(string message)
     {
         return new LauncherWin32Exception(Marshal.GetLastWin32Error(), message);
+    }
+    // Every invocation owns fresh, noninteractive UI objects. Host objects are unchanged.
+    private sealed class PrivateDesktop : IDisposable
+    {
+        private IntPtr station;
+        private IntPtr desktop;
+        internal string Name;
+        internal string Path;
+        private string ownerSid;
+        private string packageSid;
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr CreateWindowStationW(string name, uint flags, uint access, ref SecurityAttributes security);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr CreateDesktopW(string name, IntPtr device, IntPtr mode, uint flags, uint access, ref SecurityAttributes security);
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr GetProcessWindowStation();
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetProcessWindowStation(IntPtr value);
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr GetThreadDesktop(uint tid);
+        [DllImport("kernel32.dll")]
+        private static extern uint GetCurrentThreadId();
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetThreadDesktop(IntPtr value);
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool CloseDesktop(IntPtr value);
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool CloseWindowStation(IntPtr value);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr OpenWindowStationW(string name, bool inherit, uint access);
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string text, uint revision, out IntPtr descriptor, out uint size);
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr LocalFree(IntPtr value);
+
+        [DllImport("advapi32.dll")]
+        private static extern uint GetSecurityInfo(IntPtr handle, int kind, uint requested, out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
+        [DllImport("advapi32.dll")]
+        private static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool GetUserObjectInformationW(IntPtr value, int index, byte[] buffer, uint size, out uint needed);
+
+        private void VerifyDacl(IntPtr handle, int packageMask)
+        {
+            byte[] bytes;
+            IntPtr owner, group, dacl, sacl, descriptor;
+            uint error = GetSecurityInfo(handle, 7, 0x17, out owner, out group, out dacl, out sacl, out descriptor);
+            if (error != 0) throw new LauncherWin32Exception((int)error, "cannot query effective private UI security");
+            if (descriptor == IntPtr.Zero)
+                throw new LauncherWin32Exception(0, "private UI security descriptor is missing");
+            try
+            {
+                uint size = GetSecurityDescriptorLength(descriptor);
+                if (size == 0 || size > 65536) throw new LauncherWin32Exception(0, "private security descriptor length invalid");
+                bytes = new byte[size];
+                Marshal.Copy(descriptor, bytes, 0, (int)size);
+            }
+            finally { LocalFree(descriptor); }
+            RawSecurityDescriptor value = new RawSecurityDescriptor(bytes, 0);
+            if (value.Owner.Value != ownerSid || value.DiscretionaryAcl == null || value.DiscretionaryAcl.Count != 2)
+                throw new LauncherWin32Exception(0,"private UI object owner or DACL changed");
+            HashSet<string> allowed = new HashSet<string>();
+            foreach (GenericAce entry in value.DiscretionaryAcl)
+            {
+                CommonAce ace = entry as CommonAce;
+                if (ace == null || ace.AceQualifier != AceQualifier.AccessAllowed || ace.AceFlags != AceFlags.None)
+                    throw new LauncherWin32Exception(0,"unexpected private UI object ACE");
+                if (ace.SecurityIdentifier.Value == packageSid && ace.AccessMask != packageMask)
+                    throw new LauncherWin32Exception(0,"private package rights changed");
+                allowed.Add(ace.SecurityIdentifier.Value);
+            }
+            if (!allowed.SetEquals(new string[] { ownerSid, packageSid }))
+                throw new LauncherWin32Exception(0,"private UI object grants changed");
+            if (!HasLowMandatoryLabel(value))
+                throw new LauncherWin32Exception(0, "private UI object low label changed");
+        }
+
+        private static bool HasLowMandatoryLabel(RawSecurityDescriptor value)
+        {
+            if (value.SystemAcl == null || value.SystemAcl.Count != 1) return false;
+            GenericAce ace = value.SystemAcl[0];
+            if ((int)ace.AceType != 0x11 || ace.AceFlags != AceFlags.None || ace.BinaryLength != 20) return false;
+            byte[] bytes = new byte[ace.BinaryLength];
+            ace.GetBinaryForm(bytes, 0);
+            return BitConverter.ToInt32(bytes, 4) == 1 && new SecurityIdentifier(bytes, 8).Value == "S-1-16-4096";
+        }
+
+        internal static PrivateDesktop Create(SecurityIdentifier package)
+        {
+            PrivateDesktop result = new PrivateDesktop();
+            result.ownerSid = WindowsIdentity.GetCurrent().User.Value;
+            result.packageSid = package.Value;
+            result.Name = "EarningsSummaryXbrl_" + Guid.NewGuid().ToString("N");
+            string desktopName = "Processor";
+            result.Path = result.Name + "\\" + desktopName;
+            IntPtr originalStation = GetProcessWindowStation();
+            IntPtr originalDesktop = GetThreadDesktop(GetCurrentThreadId());
+            if (originalStation == IntPtr.Zero || originalDesktop == IntPtr.Zero)
+                throw LastWin32("cannot preserve creator UI context");
+            IntPtr descriptor = IntPtr.Zero;
+
+            try
+            {
+                uint size;
+                string prefix = "O:" + result.ownerSid + "G:" + result.ownerSid +
+                    "D:P(A;;GA;;;" + result.ownerSid + ")(A;;";
+                string suffix = ";;;" + result.packageSid + ")S:(ML;;NW;;;LW)";
+                string sddl = prefix + "0x00020023" + suffix;
+                if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, out descriptor, out size))
+                    throw LastWin32("cannot form private UI object security");
+                SecurityAttributes security = new SecurityAttributes
+                {
+                    nLength = Marshal.SizeOf(typeof(SecurityAttributes)),
+                    lpSecurityDescriptor = descriptor,
+                    bInheritHandle = false,
+                };
+                // CWF_CREATE_ONLY rejects reuse. Never fall back to the logon station.
+                result.station = CreateWindowStationW(result.Name, 1, 0x0002000B, ref security);
+                if (result.station == IntPtr.Zero)
+                    throw LastWin32("cannot create private window station");
+                result.VerifyDacl(result.station, 0x00020023);
+                byte[] flags = new byte[12];
+                uint needed;
+                if (!GetUserObjectInformationW(result.station, 1, flags, 12, out needed) || BitConverter.ToUInt32(flags, 0) != 0 || BitConverter.ToUInt32(flags, 8) != 0)
+                    throw new LauncherWin32Exception(0,"private station is visible or flags unavailable");
+                if (!SetProcessWindowStation(result.station))
+                    throw LastWin32("cannot select creator private station");
+                LocalFree(descriptor); descriptor = IntPtr.Zero;
+                if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(prefix + "0x00020087" + suffix, 1, out descriptor, out size))
+                    throw LastWin32("cannot form private desktop security");
+                security.lpSecurityDescriptor = descriptor;
+                result.desktop = CreateDesktopW(desktopName, IntPtr.Zero, IntPtr.Zero, 0, 0x00020083, ref security);
+                if (result.desktop == IntPtr.Zero)
+                    throw LastWin32("cannot create private desktop");
+                result.VerifyDacl(result.desktop, 0x00020087);
+                if (!GetUserObjectInformationW(result.desktop, 1, flags, 12, out needed) || BitConverter.ToUInt32(flags, 0) != 0)
+                    throw new LauncherWin32Exception(0,"private desktop handle is inheritable or flags unavailable");
+                if (!SetProcessWindowStation(originalStation))
+                    throw LastWin32("cannot restore creator window station");
+                if (!SetThreadDesktop(originalDesktop) || GetProcessWindowStation() != originalStation || GetThreadDesktop(GetCurrentThreadId()) != originalDesktop)
+                    throw new LauncherWin32Exception(0,"creator UI context was not restored");
+                return result;
+            }
+            catch
+            {
+                if (GetProcessWindowStation() != originalStation && !SetProcessWindowStation(originalStation))
+                    throw LastWin32("cannot restore creator station after failure");
+                if (!SetThreadDesktop(originalDesktop))
+                    throw LastWin32("cannot restore creator desktop after failure");
+                result.Dispose();
+                throw;
+            }
+            finally
+            {
+                if (descriptor != IntPtr.Zero) LocalFree(descriptor);
+            }
+        }
+
+        public void Dispose()
+        {
+            if (desktop != IntPtr.Zero)
+            {
+                if (!CloseDesktop(desktop)) throw LastWin32("cannot close owned private desktop");
+                desktop = IntPtr.Zero;
+            }
+            if (station != IntPtr.Zero)
+            {
+                if (!CloseWindowStation(station)) throw LastWin32("cannot close owned private station");
+                station = IntPtr.Zero;
+                IntPtr unexpected = OpenWindowStationW(Name, false, 0x00020000);
+                int error = Marshal.GetLastWin32Error();
+                if (unexpected != IntPtr.Zero)
+                {
+                    CloseWindowStation(unexpected);
+                    throw new LauncherWin32Exception(0,"owned private station remains");
+                }
+                if (error != 2) throw new InvalidOperationException("private station absence is unproved: " + error);
+
+            }
+        }
     }
 }

@@ -44,6 +44,7 @@ from html import escape
 from io import StringIO
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, cast
+from urllib.parse import urlencode
 
 if TYPE_CHECKING:
     from earnings_readout import ReportedQuarter
@@ -67,6 +68,7 @@ from pipeline.source_viewers import (
 )
 from pipeline.source_viewers import SourceDocRow as _SourceDocRow
 from pipeline.you_said import render_you_said_strip
+from provenance.ocr_layout import OCRPageLayout
 from report.renderers.numfmt import fmt_date, fmt_pct, fmt_reltime
 from sources.canonical_financial_series import FinancialConsumerPoint
 from sources.report_financials import FinancialEvidenceReference, FinancialTableCell
@@ -76,6 +78,7 @@ from ui.prose import render_prose
 from ui.time import stamp_html
 
 __all__ = [
+    "ocr_pdf_document_id",
     "render_alert_peek",
     "render_alerts_list_peek",
     "render_canonical_financial_peek",
@@ -1547,8 +1550,35 @@ def _load_fact_row(
     )
 
 
+def ocr_pdf_document_id(
+    conn: sqlite3.Connection, cell: FinancialTableCell | FinancialConsumerPoint
+) -> int | None:
+    """Resolve a pinned OCR viewer only for the selected document and source bytes."""
+    bundle = cell.provenance
+    if bundle is None or bundle.evidence is None or cell.legacy_document_id is None:
+        return None
+    evidence = bundle.evidence
+    locator = evidence.source_locator.root
+    if locator.get("source_representation") != "governed_ocr":
+        return None
+    row = conn.execute(
+        "SELECT document.sha256 FROM evidence_document_versions version "
+        "JOIN documents document ON document.id=version.legacy_document_id "
+        "WHERE version.document_version_id=? AND version.legacy_document_id=?",
+        (evidence.document_version_id, cell.legacy_document_id),
+    ).fetchone()
+    return (
+        cell.legacy_document_id
+        if row is not None and row[0] == locator.get("source_sha256")
+        else None
+    )
+
+
 def render_canonical_financial_peek(
-    cell: FinancialTableCell | FinancialConsumerPoint, reference: FinancialEvidenceReference
+    cell: FinancialTableCell | FinancialConsumerPoint,
+    reference: FinancialEvidenceReference,
+    *,
+    ocr_pdf_document_id: int | None = None,
 ) -> str:
     """Render the admitted selection without re-reading mutable legacy facts."""
     bundle = cell.provenance
@@ -1587,10 +1617,63 @@ def render_canonical_financial_peek(
         for label, value in records
         if value is not None
     )
+    source_action = ""
+    locator = evidence.source_locator.root
+    if ocr_pdf_document_id is not None and locator.get("source_representation") == "governed_ocr":
+        try:
+            geometry = locator["ocr_page_geometry"]
+            manifest = locator["ocr_page_manifest"]
+            words = locator["ocr_words"]
+            if not isinstance(geometry, dict) or not isinstance(manifest, dict):
+                raise ValueError("OCR locator geometry is unavailable")
+            layout = OCRPageLayout.model_validate(
+                {
+                    **geometry,
+                    "tsv_sha256": manifest["tsv_sha256"],
+                    "render_sha256": manifest["render_sha256"],
+                    "words": words,
+                }
+            )
+            if not layout.words:
+                raise ValueError("OCR source word region is unavailable")
+            page_value = locator["page_number"]
+            if type(page_value) is not int or page_value < 1:
+                raise ValueError("OCR source page is invalid")
+            page = page_value
+            left = min(word.left for word in layout.words)
+            top = min(word.top for word in layout.words)
+            right = max(word.left + word.width for word in layout.words)
+            bottom = max(word.top + word.height for word in layout.words)
+            x0, y0, x1, y1 = layout.media_box
+            display_width, display_height = (
+                (y1 - y0, x1 - x0) if layout.rotation in (90, 270) else (x1 - x0, y1 - y0)
+            )
+            bbox = (
+                left / layout.width * display_width,
+                top / layout.height * display_height,
+                right / layout.width * display_width,
+                bottom / layout.height * display_height,
+            )
+            query = urlencode(
+                {
+                    "page": page,
+                    "bbox": ",".join(f"{value:.3f}" for value in bbox),
+                    "version": evidence.document_version_id,
+                    "sha256": locator["source_sha256"],
+                }
+            )
+            href = f"/source/{ocr_pdf_document_id}?{query}"
+            source_action = (
+                f'<p><a class="k-chip k-chip-btn" href="{escape(href, quote=True)}" '
+                'target="_blank" rel="noopener">Open cited PDF page</a></p>'
+            )
+        except (KeyError, TypeError, ValueError):
+            pass
     return (
         f"<p>{escape(reference.ticker)} · {escape(reference.concept)}</p>"
         f"<p>As known at {escape(reference.as_of.isoformat())}</p>"
         + content
+        + source_action
         + "<details><summary>Record details</summary>"
         + record_content
         + "</details><p>Retained evidence record. Raw document viewing is unavailable here.</p>"

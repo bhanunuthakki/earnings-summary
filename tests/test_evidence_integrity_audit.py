@@ -581,7 +581,13 @@ def test_partial_ocr_governance_schema_is_a_hard_stop(tmp_path: Path) -> None:
     finding = next(
         item for item in summary.findings if item.code == "OCR_GOVERNANCE_SCHEMA_PARTIAL"
     )
-    assert finding.count == 3
+    assert finding.count == 4
+    assert finding.samples == (
+        "ocr_extraction_governance",
+        "ocr_page_results",
+        "ocr_preflight_pages",
+        "reviewed_pdf_page_revisions",
+    )
     assert finding.remediation == "hard-stop"
 
 
