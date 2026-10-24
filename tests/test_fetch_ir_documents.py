@@ -10,6 +10,7 @@ downloaded, all 403). A blocked URL must still degrade to a skip, never a crash.
 from __future__ import annotations
 
 import email.message
+import hashlib
 import json
 import sqlite3
 import urllib.error
@@ -68,6 +69,39 @@ class _FakeOpener:
 def _no_registered_urls(*_a: object, **_k: object) -> set[str]:
     """Typed stand-in for _registered_source_urls (a bare lambda trips pyright)."""
     return set()
+
+
+def _document_registration_table(db: Path) -> None:
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE documents (ticker TEXT,source_url TEXT,source_type TEXT,"
+            "fetch_status TEXT,file_path TEXT,sha256 TEXT,raw_bytes_size INTEGER)"
+        )
+
+
+def _register_ir_document(
+    db: Path,
+    *,
+    root: Path,
+    ticker: str,
+    url: str,
+    path: Path,
+    status: str = "ok",
+) -> None:
+    payload = path.read_bytes()
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO documents VALUES (?,?,?,?,?,?,?)",
+            (
+                ticker,
+                url,
+                "ir_doc",
+                status,
+                path.relative_to(root).as_posix(),
+                hashlib.sha256(payload).hexdigest(),
+                len(payload),
+            ),
+        )
 
 
 def _staged_download(dest: Path, base: str) -> Path:
@@ -878,16 +912,19 @@ def test_categorizer_success_requires_downloaded_source_registration(
     _make_policy_db(db, [("PORT", "portfolio")])
     url = "https://issuer.example/Q1-2026.pdf"
     _write_manifest(tmp_path, "PORT", url)
-    with sqlite3.connect(db) as conn:
-        conn.execute("CREATE TABLE documents (ticker TEXT, source_url TEXT)")
+    _document_registration_table(db)
+    downloaded_path: list[Path] = []
 
     def download(_url: str, dest: Path, base: str) -> Path:
-        return _staged_download(dest, base)
+        path = _staged_download(dest, base)
+        downloaded_path.append(path)
+        return path
 
     def categorize(_ticker: str, _root: Path, _db: Path, _calendar: str | None) -> int:
         if register:
-            with sqlite3.connect(db) as conn:
-                conn.execute("INSERT INTO documents VALUES ('PORT', ?)", (url,))
+            _register_ir_document(
+                db, root=tmp_path, ticker="PORT", url=url, path=downloaded_path[-1]
+            )
         return 0
 
     monkeypatch.setattr(fid, "_download", download)
@@ -912,6 +949,53 @@ def test_categorizer_success_requires_downloaded_source_registration(
         assert replay["skipped"] == 1
 
 
+@pytest.mark.parametrize("registered_state", ["valid", "failed", "missing", "changed"])
+def test_registered_url_skips_only_verified_retained_ir_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    registered_state: str,
+) -> None:
+    db = tmp_path / "portfolio.db"
+    _make_policy_db(db, [("PORT", "portfolio")])
+    _document_registration_table(db)
+    url = "https://issuer.example/Q1-2026.pdf"
+    _write_manifest(tmp_path, "PORT", url)
+    canonical = tmp_path / "ir_documents" / "PORT" / "registered.pdf"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_bytes(b"%PDF-1.4\nregistered source")
+    _register_ir_document(
+        db,
+        root=tmp_path,
+        ticker="PORT",
+        url=url,
+        path=canonical,
+        status="failed" if registered_state == "failed" else "ok",
+    )
+    if registered_state == "missing":
+        canonical.unlink()
+    elif registered_state == "changed":
+        canonical.write_bytes(b"%PDF-1.4\nchanged source")
+
+    downloads: list[str] = []
+
+    def download(source_url: str, dest: Path, base: str) -> Path:
+        downloads.append(source_url)
+        return _staged_download(dest, base)
+
+    monkeypatch.setattr(fid, "_download", download)
+    monkeypatch.setattr(fid, "reported_quarter_selection_in_connection", _source_qualified_period)
+    monkeypatch.setattr(fid.time, "sleep", _no_sleep)
+    result = fid.process_ticker("PORT", root=tmp_path, db_path=db)
+    if registered_state == "valid":
+        assert downloads == []
+        assert result["skipped"] == 1
+        assert result["downloaded"] == 0
+    else:
+        assert downloads == [url]
+        assert result["downloaded"] == 1
+        assert result["skipped"] == 0
+
+
 def test_registered_prefix_does_not_starve_manifest_entry_after_attempt_budget(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -931,7 +1015,8 @@ def test_registered_prefix_does_not_starve_manifest_entry_after_attempt_budget(
     )
     monkeypatch.setattr(fid, "reported_quarter_selection_in_connection", _source_qualified_period)
 
-    def registered_prefix(_db: Path, _ticker: str) -> set[str]:
+    def registered_prefix(_db: Path, _ticker: str, *, root: Path) -> set[str]:
+        assert root == tmp_path
         return set(urls[:100])
 
     monkeypatch.setattr(fid, "_registered_source_urls", registered_prefix)
@@ -1102,18 +1187,20 @@ def test_shared_staged_object_does_not_hide_unregistered_source(
     entries = json.loads(manifest.read_text())
     entries.append({"url": second, "doc_type": "press_release", "year": 2026, "quarter": "Q1"})
     manifest.write_text(json.dumps(entries))
-    with sqlite3.connect(db) as conn:
-        conn.execute("CREATE TABLE documents (ticker TEXT, source_url TEXT)")
+    _document_registration_table(db)
+    downloaded_path: list[Path] = []
 
     def download(_url: str, dest: Path, _base: str) -> Path:
         dest.mkdir(parents=True, exist_ok=True)
         path = dest / "same-bytes.pdf"
         path.write_bytes(b"%PDF-1.4\nshared synthetic issuer document\n")
+        downloaded_path.append(path)
         return path
 
     def categorize(_ticker: str, _root: Path, _db: Path, _calendar: str | None) -> int:
-        with sqlite3.connect(db) as conn:
-            conn.execute("INSERT INTO documents VALUES ('PORT', ?)", (second,))
+        _register_ir_document(
+            db, root=tmp_path, ticker="PORT", url=second, path=downloaded_path[-1]
+        )
         return 0
 
     monkeypatch.setattr(fid, "_download", download)

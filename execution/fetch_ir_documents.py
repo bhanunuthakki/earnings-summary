@@ -247,22 +247,44 @@ def _ext_from_headers(url: str, content_disposition: str, content_type: str) -> 
     return ".pdf"
 
 
-def _registered_source_urls(db_path: Path, ticker: str) -> set[str]:
-    """source_urls already in the ``documents`` table for ``ticker`` (idempotency key)."""
+def _registered_source_urls(db_path: Path, ticker: str, *, root: Path) -> set[str]:
+    """Return URLs with an admitted IR row and matching retained source bytes."""
     if not db_path.exists():
         return set()
     try:
         conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         try:
             rows = conn.execute(
-                "SELECT source_url FROM documents WHERE ticker = ? AND source_url IS NOT NULL",
+                "SELECT source_url,source_type,fetch_status,file_path,sha256,raw_bytes_size "
+                "FROM documents WHERE ticker = ? AND source_url IS NOT NULL",
                 (ticker.upper(),),
             ).fetchall()
         finally:
             conn.close()
     except sqlite3.Error:
         return set()
-    return {str(r[0]) for r in rows if r[0]}
+    verified: set[str] = set()
+    for row in rows:
+        if row[1] != "ir_doc" or row[2] != "ok" or not row[0]:
+            continue
+        try:
+            relative = Path(str(row[3]))
+            size = int(row[5])
+            digest = str(row[4])
+            if (
+                relative.is_absolute()
+                or ".." in relative.parts
+                or "\\" in str(row[3])
+                or size <= 0
+                or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            ):
+                continue
+            snapshot, _ = read_stable_artifact(root / relative, max_bytes=size, allowed_root=root)
+        except (OSError, TypeError, ValueError, ImmutableArtifactConflictError):
+            continue
+        if snapshot.size_bytes == size and snapshot.file_sha256 == digest:
+            verified.add(str(row[0]))
+    return verified
 
 
 # curl_cffi impersonation target — the rolling "latest Chrome" alias replays a
@@ -908,7 +930,7 @@ def process_ticker(
             selected.append(entry)
     finally:
         conn.close()
-    already = _registered_source_urls(db_path, ticker)
+    already = _registered_source_urls(db_path, ticker, root=root)
     sidecar_state = _load_incoming_sidecar(root)
     all_progress = sidecar_state.get(_FETCH_PROGRESS_KEY)
     ticker_progress = (
@@ -1015,7 +1037,7 @@ def process_ticker(
         if cat_rc == 0:
             # A zero exit can mean no eligible files or skipped duplicates.
             # Check each source, independently of the staging filename sidecar.
-            registered = _registered_source_urls(db_path, ticker)
+            registered = _registered_source_urls(db_path, ticker, root=root)
             registration_missing = len((downloaded_urls | retained_urls) - registered)
 
     status = "period_selection_pending" if pending_period_selection else "done"
@@ -1046,7 +1068,7 @@ def verify_ticker(root: Path, db_path: Path, ticker: str) -> None:
     """Report which manifest URLs are registered in the ``documents`` table."""
     ticker = ticker.upper()
     entries = load_url_manifest(root, ticker)
-    registered = _registered_source_urls(db_path, ticker)
+    registered = _registered_source_urls(db_path, ticker, root=root)
     if not entries:
         print(f"[{ticker}] no manifest.")
         return
