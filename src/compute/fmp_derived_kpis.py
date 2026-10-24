@@ -1365,6 +1365,9 @@ def _fetch_full_kpi_series(
     return points
 
 
+fetch_selected_kpi_series = _fetch_full_kpi_series
+
+
 def derive_kpi_transforms(conn: sqlite3.Connection, ticker: str) -> list[DerivedKpiRow]:
     """Compute every configured YoY transform whose base series resolves.
 

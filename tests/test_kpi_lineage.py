@@ -27,19 +27,17 @@ from compute.fmp_derived_kpis import (
 )
 from models.facts import DerivedInputRef, FiscalPeriodType, Unit
 from pipeline.confidence import (
-    _ParsedIssue,  # pyright: ignore[reportPrivateUsage]
+    IssuesByTicker,
     display_issues_for_fact,
     load_unresolved_issues,
 )
 from pipeline.locators import derived_locator_from_computed_from
 from pipeline.restatement_detector import insert_kpi_with_restatement_detection
 from report.models import CellSource
-from report.sections.financials import (
-    _kpi_cell_sources_for,  # pyright: ignore[reportPrivateUsage]
-)
+from report.sections.financials import kpi_cell_sources_for
 from tests.kpi_semantic_support import admit_all_kpi_facts
 from ui.source_chip import source_chip_html
-from viewspec.engine import _cell_source  # pyright: ignore[reportPrivateUsage]
+from viewspec.engine import cell_source_from_provenance
 
 # ----------------------------------------------------------------------------
 # migration sanity — 0087 chains onto the current head
@@ -386,7 +384,7 @@ def test_persist_enriches_input_tiers() -> None:
 # ----------------------------------------------------------------------------
 
 
-def _signals(rows: list[tuple[str, str, str]]) -> dict[str, list[_ParsedIssue]]:
+def _signals(rows: list[tuple[str, str, str]]) -> IssuesByTicker:
     conn = sqlite3.connect(":memory:")
     conn.executescript(
         "CREATE TABLE validation_issues (id INTEGER PRIMARY KEY, run_id TEXT, "
@@ -539,7 +537,7 @@ def test_kpi_cell_sources_carry_lineage_and_issues() -> None:
     )
     admit_all_kpi_facts(conn)
     conn.commit()
-    out = _kpi_cell_sources_for(conn, "TST", "Operating Margin (GAAP)", ("Q1", "Q2", "Q3", "Q4"))
+    out = kpi_cell_sources_for(conn, "TST", "Operating Margin (GAAP)", ("Q1", "Q2", "Q3", "Q4"))
     conn.close()
     cell = out["2025-12-31"]
     assert cell.extracted_by == "fmp_derived"
@@ -548,7 +546,7 @@ def test_kpi_cell_sources_carry_lineage_and_issues() -> None:
 
 
 def test_viewspec_cell_source_maps_lineage_fields() -> None:
-    src = _cell_source(
+    src = cell_source_from_provenance(
         {
             "source": "fmp_normalized",
             "extracted_by": "fmp_derived",
@@ -593,6 +591,14 @@ def test_display_issue_value_format_edges() -> None:
     ],
 )
 def test_fmt_compact_value(raw: str, expected: str) -> None:
-    from pipeline.confidence import _fmt_compact_value  # pyright: ignore[reportPrivateUsage]
-
-    assert _fmt_compact_value(raw) == expected
+    signals = _signals(
+        [("warn", "source_disagreement", f"nim @ 2025-12-31: fmp=9.5 vs sec_xbrl={raw} (1.05%)")]
+    )
+    assert display_issues_for_fact(
+        signals,
+        ticker="TST",
+        item="nim",
+        period_end="2025-12-31",
+        value=9.5,
+        displayed_tier="fmp_normalized",
+    ) == [f"⚠ SEC says {expected}, 1.05% delta"]

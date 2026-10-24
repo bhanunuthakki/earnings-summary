@@ -4,27 +4,23 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-EXECUTION = Path(__file__).resolve().parents[1] / "execution"
-sys.path.insert(0, str(EXECUTION))
+import pytest
 
-import capture_approved_ir_document as capture_cli  # noqa: E402
-import collect_approved_ir_observations as collect_cli  # noqa: E402
-import import_visible_rubrik_observations as import_rubrik_cli  # noqa: E402
-import import_visible_wix_observations as import_wix_cli  # noqa: E402
-import materialize_ir_approval_candidates as materialize_cli  # noqa: E402
-import pytest  # noqa: E402
-
-from ir_pipeline.approved_ir_observation_capture import (  # noqa: E402
+from execution import capture_approved_ir_document as capture_cli
+from execution import collect_approved_ir_observations as collect_cli
+from execution import import_visible_rubrik_observations as import_rubrik_cli
+from execution import import_visible_wix_observations as import_wix_cli
+from execution import materialize_ir_approval_candidates as materialize_cli
+from ir_pipeline.approved_ir_observation_capture import (
     ReviewedIrPeriod,
     ReviewedIrPeriodSelection,
 )
-from pipeline.ir_approval_capture import ExactIrCaptureReceipt  # noqa: E402
+from pipeline.ir_approval_capture import ExactIrCaptureReceipt
 
 
 @contextmanager

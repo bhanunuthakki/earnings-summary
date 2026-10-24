@@ -2780,6 +2780,9 @@ def _dimensions(
     )
 
 
+fact_observation_dimensions = _dimensions
+
+
 def _observation_status(fact_table: FactTable, row: sqlite3.Row) -> Literal["reported", "derived"]:
     extracted_by = str(row["extracted_by"] or "").casefold()
     if "derived" in extracted_by:

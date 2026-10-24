@@ -17,9 +17,7 @@ import pytest
 from alembic.config import Config
 
 from alembic import command
-from compute.fmp_derived_kpis import (
-    _fetch_full_kpi_series,  # pyright: ignore[reportPrivateUsage] -- exact producer seam
-)
+from compute.fmp_derived_kpis import fetch_selected_kpi_series
 from execution import backfill_financial_fact_resolutions as cutover_cli
 from models.facts import Currency, Unit
 from pipeline.kpi_definition_revisions import (
@@ -44,10 +42,10 @@ from provenance.evidence_ledger import (
 from provenance.financial_fact_resolution import (
     FactCutoverRequest,
     HistoricalFactAuthorityUnavailableError,
-    _dimensions,  # pyright: ignore[reportPrivateUsage] -- current-head seam under test
     canonical_fact_relation,
     canonical_fact_selections_as_known,
     execute_fact_cutover,
+    fact_observation_dimensions,
     resolve_fact_logical_key,
     resolve_fact_row,
 )
@@ -137,7 +135,9 @@ def test_kpi_observation_dimensions_use_only_current_semantic_head() -> None:
         """
     )
     row = conn.execute("SELECT * FROM kpi_facts WHERE id=7").fetchone()
-    dimensions = {item.key: item.value for item in _dimensions(conn, "kpi_facts", row)}
+    dimensions = {
+        item.key: item.value for item in fact_observation_dimensions(conn, "kpi_facts", row)
+    }
     assert dimensions == {
         "accounting_basis": "management",
         "consolidation_scope": "consolidated",
@@ -435,7 +435,7 @@ def test_transform_series_carries_exact_selected_legacy_identity(
             )
             is not None
         )
-        points = _fetch_full_kpi_series(conn, "ACME", "Active customers", Unit.MILLIONS)
+        points = fetch_selected_kpi_series(conn, "ACME", "Active customers", Unit.MILLIONS)
         assert len(points) == 1 and points[0].selected_input is not None
         selected = points[0].selected_input
         link = conn.execute(
@@ -1684,7 +1684,7 @@ def test_typed_kpi_child_requires_source_bound_definition_revision(
         assert child_row is not None
         full_dimensions = [
             dimension.model_dump()
-            for dimension in _dimensions(
+            for dimension in fact_observation_dimensions(
                 conn,
                 "kpi_facts",
                 child_row,

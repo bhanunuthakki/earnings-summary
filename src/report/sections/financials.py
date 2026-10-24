@@ -556,6 +556,9 @@ def _kpi_cell_sources_for(
     )
 
 
+kpi_cell_sources_for = _kpi_cell_sources_for
+
+
 def _cell_sources_from_rows(
     conn: sqlite3.Connection,
     issue_signals: IssuesByTicker,

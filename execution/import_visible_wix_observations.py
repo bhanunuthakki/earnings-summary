@@ -10,16 +10,18 @@ import sys
 import tempfile
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+if __package__:
+    from ._lib import PROJECT_ROOT
+else:
+    from _lib import PROJECT_ROOT
 
-from ir_pipeline.approved_ir_observation_capture import (  # noqa: E402
+from ir_pipeline.approved_ir_observation_capture import (
     import_wix_visible_browser_export,
     load_reviewed_ir_period_selection,
 )
-from log_redact import redact  # noqa: E402
-from provenance.immutable_artifact import read_stable_artifact  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from log_redact import redact
+from provenance.immutable_artifact import read_stable_artifact
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 def _parser() -> argparse.ArgumentParser:
