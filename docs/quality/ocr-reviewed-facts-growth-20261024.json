@@ -247,5 +247,19 @@
     "measurement_source_sha256": "f2a19d2957dc8b76c7611138cd1d61bc1e4724ea2339f821327c4453325dcbfc",
     "reachability_parser_source_sha256": "9b1df53d045cd61964fe0944797e4f2e7a51fcf0938f6608bb9467301b5eb4bb"
   },
-  "full_CI_repair": "8686 fullCI found obsolete path exceptions and stalefixture/contracts. Removed7exceptions; cachedcurrentfixture avoidsnewbuilder; exactcatalog/recoveryfixtures fixed;25affectedtests+25rootbindingtests pass; fullCIretry pending."
+  "full_CI_repair": "8686 fullCI found obsolete path exceptions and stalefixture/contracts. Removed7exceptions; cachedcurrentfixture avoidsnewbuilder; exactcatalog/recoveryfixtures fixed;25affectedtests+25rootbindingtests pass; fullCIretry pending.",
+  "trigger_numeric_compatibility": {
+    "source_commit": "864c3923e7fe382d20af95e915a5e0eba546194a",
+    "independent_advisory_score": 96,
+    "independent_review_sha256": "8a79281622c649872d31531354b71fcec95ff0846b161839eaf6bfc1f7f90282",
+    "baseline_before_sha256": "fb6ace6ac156418c9c28201f5f7da5b186cbb7411d8dacc82690a56246faf278",
+    "measurement_source_sha256": "ec17306584a270e4bd93e164c7e9ba482e4a2eb9fa8a86ee08670dc20fc0298d",
+    "executable_module_growth": 0,
+    "noncomment_LOC_growth": 8,
+    "reason": "The existing resolver compares legacy trigger captures with exact SQLite CAST text from the same row. Other capture methods retain exact Decimal comparison. This corrects serialization false positives without a tolerance or financial data rewrite. Unit, source and locator comparisons remain strict.",
+    "author_affected_tests": 182,
+    "financial_rows_written": 0,
+    "independent_boundary": "Exact trigger representation parity on pinned SQLite 3.53.4; no universal binary immutability claim.",
+    "reachability_parser_source_sha256": "8a4691ecad69908e2f7a33e746eaf3a8412385267b675f2e4da4c09b201a9406"
+  }
 }

@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "8686e13d0fb45f67cd6e6790c126188bb3150d0c",
+  "scoped_commit": "864c3923e7fe382d20af95e915a5e0eba546194a",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "f2a19d2957dc8b76c7611138cd1d61bc1e4724ea2339f821327c4453325dcbfc",
+  "source_sha256": "ec17306584a270e4bd93e164c7e9ba482e4a2eb9fa8a86ee08670dc20fc0298d",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1484,
-    "total_noncomment_loc": 575761,
+    "total_noncomment_loc": 575769,
     "modules_over_1000_loc": 112,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
@@ -16355,9 +16355,9 @@
         "path": "src/provenance/financial_fact_resolution.py",
         "module": "provenance.financial_fact_resolution",
         "lines": {
-          "physical": 2518,
-          "nonblank": 2316,
-          "noncomment": 2305
+          "physical": 2526,
+          "nonblank": 2324,
+          "noncomment": 2313
         },
         "internal_fan_out": 8,
         "responsibilities": [
