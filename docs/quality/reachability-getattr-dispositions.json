@@ -802,8 +802,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Replay validation iterates only the seven literal IrRawExchange fields declared immediately above this call. It compares retained governed response metadata with the schema-validated producing exchange; no attribute name comes from source content or a model response.",
-      "fingerprint": "4975d2e84278c2f22386d6a0e555c2e22c0124604b202730fa5017c58dfb7300",
-      "line": 523,
+      "fingerprint": "53d468043a283e7649ab0cb43328567611d922f4fb578e10fa82d45229387873",
+      "line": 544,
       "path": "src/provenance/ir_reported_facts.py",
       "targets": [
         "llm_call_id",
@@ -1091,7 +1091,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "fab2d7e38df14de8a60038bcdae55d30d2bc55e889b84634a0370a3f699a6352",
+      "source_sha256": "b2caada64362bff452034cd24526711b6c1f46ee4a97d3d5f2a2a9d0b5f8fda0",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

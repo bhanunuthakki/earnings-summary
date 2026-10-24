@@ -371,7 +371,11 @@ class IrSourceContextReview(BaseModel):
 
 
 def _source_document(
-    conn: sqlite3.Connection, document_version_id: str, source_sha256: str
+    conn: sqlite3.Connection,
+    document_version_id: str,
+    source_sha256: str,
+    *,
+    historical_revalidation: bool = False,
 ) -> None:
     row = conn.execute(
         "SELECT version.blob_sha256,version.document_type,source.source_kind,blob.media_type "
@@ -381,7 +385,15 @@ def _source_document(
         "WHERE version.document_version_id=?",
         (document_version_id,),
     ).fetchone()
-    if row is None or tuple(row) != (source_sha256, "ir_supplement", "ir_doc", "application/pdf"):
+    allowed_types = (
+        {"ir_supplement", "ir_press_release"} if historical_revalidation else {"ir_supplement"}
+    )
+    if (
+        row is None
+        or row[0] != source_sha256
+        or row[1] not in allowed_types
+        or tuple(row[2:]) != ("ir_doc", "application/pdf")
+    ):
         raise ValueError("IR PDF document version, bytes, or source type is not exact")
 
 
@@ -449,10 +461,13 @@ def retain_ir_pdf_candidates(
     raw_pdf_bytes: bytes,
     page_projection: Callable[[bytes], tuple[str, ...]] | None = None,
     precommit_validation: Callable[[], None] | None = None,
+    caller_transaction: bool = False,
+    require_existing: bool = False,
+    historical_revalidation: bool = False,
 ) -> IrCandidatePopulation:
     """Retain exact unreviewed PDF candidates; never create financial facts."""
-    if conn.in_transaction:
-        raise ValueError("IR candidate retention requires an idle connection")
+    if conn.in_transaction != caller_transaction:
+        raise ValueError("IR candidate retention transaction ownership differs")
     request = IrCandidateRetentionRequest.model_validate(request.model_dump(mode="python"))
     if hashlib.sha256(raw_pdf_bytes).hexdigest() != request.source_sha256:
         raise ValueError("IR PDF raw source hash changed")
@@ -476,9 +491,15 @@ def retain_ir_pdf_candidates(
             raise ValueError("IR candidate differs from its governed response")
         _validate_native_span(row, pages[row.page_number - 1])
     run_id, output_sha, nodes = _retained_graph(request)
-    conn.execute("BEGIN")
+    if not caller_transaction:
+        conn.execute("BEGIN")
     try:
-        _source_document(conn, request.document_version_id, request.source_sha256)
+        _source_document(
+            conn,
+            request.document_version_id,
+            request.source_sha256,
+            historical_revalidation=historical_revalidation,
+        )
         run = conn.execute(
             "SELECT document_version_id,input_sha256,extractor_name,extractor_code_version,"
             "extractor_config_sha256,output_sha256,started_at,completed_at,outcome "
@@ -534,7 +555,8 @@ def retain_ir_pdf_candidates(
                 )
                 if prior is None or prior[0] != text_value or prior[1] != locator.canonical_json:
                     raise ValueError("IR retained candidate replay differs from existing evidence")
-            conn.rollback()
+            if not caller_transaction:
+                conn.rollback()
             return IrCandidatePopulation(
                 document_version_id=request.document_version_id,
                 source_sha256=request.source_sha256,
@@ -545,6 +567,8 @@ def retain_ir_pdf_candidates(
                 retained_node_count=len(responses) + len(nodes),
                 exact_replay=True,
             )
+        if require_existing:
+            raise ValueError("IR retained candidate population is unavailable")
         ledger = EvidenceLedger(conn)
         ledger.persist(
             ExtractionRun(
@@ -600,7 +624,8 @@ def retain_ir_pdf_candidates(
             )
         if precommit_validation is not None:
             precommit_validation()
-        conn.commit()
+        if not caller_transaction:
+            conn.commit()
         return IrCandidatePopulation(
             document_version_id=request.document_version_id,
             source_sha256=request.source_sha256,
@@ -612,7 +637,8 @@ def retain_ir_pdf_candidates(
             exact_replay=False,
         )
     except Exception:
-        conn.rollback()
+        if not caller_transaction:
+            conn.rollback()
         raise
 
 

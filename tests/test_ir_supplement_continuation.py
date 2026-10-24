@@ -13,12 +13,22 @@ from typing import cast
 import pytest
 
 import compute.ir_supplement_capture as continuation
+import compute.ir_supplement_revalidation as revalidation
 from compute.ir_supplement_capture import (
     SupplementCapture,
     SupplementExchange,
     SupplementSaturatedError,
 )
-from llm_artifact_store import UpsertRequest, read_current, upsert
+from compute.ir_supplement_revalidation import RevalidationManifest, RevalidationSection
+from llm_artifact_store import (
+    UpsertRequest,
+    compute_input_sha256,
+    read_current,
+    require_historical_artifact,
+    upsert,
+)
+from models.runs import StageStatus
+from pipeline.run_accounting import end_run, start_run
 from provenance.fulltext_backfill import project_pdf_page_texts
 
 
@@ -38,12 +48,13 @@ def _synthetic_exchange(
     *,
     model: str = "qualified-model",
     effective_prompt: str | None = None,
+    run_id: str | None = None,
 ) -> SupplementExchange:
     raw = json.dumps(rows)
     effective = effective_prompt if effective_prompt is not None else prompt
     prompt_sha = hashlib.sha256(effective.encode()).hexdigest()
     response_sha = hashlib.sha256(raw.encode()).hexdigest()
-    run_id = "fixture:" + uuid.uuid4().hex
+    run_id = run_id or "fixture:" + uuid.uuid4().hex
     cursor = conn.execute(
         "INSERT INTO llm_calls (called_at,model,prompt_sha256,prompt_chars,elapsed_ms,"
         "purpose,response_sha256,response_chars,provider,transport,outcome,run_id) "
@@ -123,6 +134,262 @@ def _capture(
     return capture
 
 
+def _historical_revalidation_fixture(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> tuple[SupplementCapture, RevalidationManifest]:
+    pages = ("Revenue 20%", "Margin 30%")
+    capture = _capture(
+        conn,
+        monkeypatch,
+        pages,
+        lambda _text: pytest.fail("historical revalidation called the provider"),
+    )
+    capture.document_version_id = "fixture-document-version"
+    capture.schema_sha256 = "a" * 64
+    capture.projection_identity = "fixture-projection"
+    prompt_sha = hashlib.sha256(capture.prompt("").encode()).hexdigest()
+    producer_inputs = {
+        "document_id": capture.document_id,
+        "source_sha256": capture.source_sha256,
+        "period_end": "2026-06-30",
+        "model": capture.model,
+        "backend": capture.backend,
+        "max_input_chars": capture.max_input_chars,
+        "max_facts_per_doc": capture.max_facts,
+        "source_scope": "direct_pdf_rich",
+        "max_chunks": capture.max_chunks,
+        "max_structured_calls": capture.max_structured_calls,
+        "continuation_version": "v16-table-cell-boundaries-or-v17-reviewed-pages-table-cell-boundaries",
+        "prompt_sha256": prompt_sha,
+        "schema_sha256": capture.schema_sha256,
+        "projection_identity": capture.projection_identity,
+    }
+    run_id = start_run(
+        conn, "capture_ir_supplement_sections", ["TEST"], invocation_inputs=producer_inputs
+    )
+    pins: list[RevalidationSection] = []
+    for page, start, body in capture.plan_sections(b"original source"):
+        prompt = capture.prompt(capture.section_text(page, start, body))
+        rows: list[dict[str, object]] = [{"source_excerpt": body, "label": body}]
+        exchange = _synthetic_exchange(
+            conn, prompt, rows, model="codex:qualified-model", run_id=run_id
+        )
+        status = "processed" if page == 1 else "rejected"
+        result = {
+            "status": status,
+            "rows": rows if page == 1 else [],
+            "exchange": exchange.model_dump(mode="json"),
+            "attempts": [exchange.model_dump(mode="json")],
+            "validation_error": "old scanner rejected" if page == 2 else None,
+        }
+        inputs = capture.section_inputs(page, start, prompt)
+        input_sha = compute_input_sha256(
+            prompt_version=revalidation.REVALIDATION_PRODUCER_VERSION, cache_inputs=inputs
+        )
+        scope = f"ir_supplement:1:page:{page}:section:{start}:{len(body)}"
+        artifact_id, _ = upsert(
+            UpsertRequest(
+                ticker="TEST",
+                purpose="kpi_summary_enumerate",
+                scope=scope,
+                content_json=result,
+                model=exchange.model,
+                llm_call_id=exchange.llm_call_id,
+                prompt_version=revalidation.REVALIDATION_PRODUCER_VERSION,
+                cache_inputs=inputs,
+                source_doc_ids=[1],
+            ),
+            conn=conn,
+        )
+        assert artifact_id is not None
+        conn.commit()
+        artifact = require_historical_artifact(conn, artifact_id)
+        assert artifact.output_sha256 is not None
+        pins.append(
+            RevalidationSection(
+                page=page,
+                start=start,
+                length=len(body),
+                artifact_id=artifact_id,
+                input_sha256=input_sha,
+                output_sha256=artifact.output_sha256,
+                llm_call_id=exchange.llm_call_id,
+                response_sha256=exchange.response_sha256,
+            )
+        )
+    end_run(conn, run_id, StageStatus.FAILED, error_summary="original failed attempt")
+    manifest = RevalidationManifest(
+        ticker="TEST",
+        document_id=1,
+        document_version_id="fixture-document-version",
+        source_sha256=capture.source_sha256,
+        failed_attempt_id=run_id,
+        requested_model=capture.model,
+        requested_backend=capture.backend,
+        period_end="2026-06-30",
+        max_input_chars=capture.max_input_chars,
+        max_facts_per_doc=capture.max_facts,
+        max_chunks=capture.max_chunks,
+        max_structured_calls=capture.max_structured_calls,
+        prompt_sha256=prompt_sha,
+        schema_sha256=capture.schema_sha256,
+        projection_identity=capture.projection_identity,
+        sections=pins,
+    )
+    return capture, manifest
+
+
+def test_revalidation_keeps_old_calls_and_artifacts_and_exactly_replays(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capture, manifest = _historical_revalidation_fixture(conn, monkeypatch)
+    before_calls = int(conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0])
+    before_facts = int(conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0])
+    first = revalidation.revalidate_historical_sections(
+        capture, b"original source", manifest, validator_code_sha256="a" * 64
+    )
+    assert first.section_count == first.page_count == 2
+    assert first.row_count == 2
+    assert first.producing_capture_version == revalidation.REVALIDATION_PRODUCER_VERSION
+    assert first.validator_version == revalidation.REVALIDATION_PROCESSOR_VERSION
+    assert first.provider_calls == first.financial_writes == 0
+    assert len(first.section_artifact_ids) == 2
+    inspected = revalidation.read_revalidated_capture(capture, b"original source", manifest, first)
+    assert [page for page, _ in inspected.page_rows] == [1, 2]
+    assert [exchange.llm_call_id for exchange in inspected.exchanges] == [
+        pin.llm_call_id for pin in manifest.sections
+    ]
+    assert capture.model == manifest.requested_model == "qualified-model"
+    assert {exchange.model for exchange in inspected.exchanges} == {"codex:qualified-model"}
+    assert inspected.receipt.producing_capture_version.endswith("v16-table-cell-boundaries")
+    assert inspected.receipt.validator_version.endswith("v18-percent-cell-boundaries")
+    assert conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == before_calls
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == before_facts
+    assert (
+        conn.execute(
+            "SELECT status FROM ingestion_runs WHERE run_id=?", (manifest.failed_attempt_id,)
+        ).fetchone()[0]
+        == "failed"
+    )
+    assert [
+        cast(dict[str, object], require_historical_artifact(conn, pin.artifact_id).content_json)[
+            "status"
+        ]
+        for pin in manifest.sections
+    ] == ["processed", "rejected"]
+    prior_count = int(conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0])
+    second = revalidation.revalidate_historical_sections(
+        capture, b"original source", manifest, validator_code_sha256="a" * 64
+    )
+    assert second == first
+    assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == prior_count
+
+
+def test_revalidation_missing_section_and_failure_injection_roll_back(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capture, manifest = _historical_revalidation_fixture(conn, monkeypatch)
+    missing = manifest.model_copy(update={"sections": manifest.sections[:1]})
+    with pytest.raises(ValueError, match="complete section population"):
+        revalidation.revalidate_historical_sections(
+            capture, b"original source", missing, validator_code_sha256="a" * 64
+        )
+
+    def fail_before_commit() -> None:
+        raise RuntimeError("injected failure")
+
+    with pytest.raises(RuntimeError, match="injected failure"):
+        revalidation.revalidate_historical_sections(
+            capture,
+            b"original source",
+            manifest,
+            validator_code_sha256="a" * 64,
+            before_commit=fail_before_commit,
+        )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM llm_artifacts WHERE purpose=?",
+            (revalidation.REVALIDATION_PURPOSE,),
+        ).fetchone()[0]
+        == 0
+    )
+    assert conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == 2
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "source",
+        "response",
+        "artifact",
+        "version",
+        "supersession",
+        "call",
+        "requested_model",
+        "actual_model",
+    ],
+)
+def test_revalidation_rejects_historical_identity_or_byte_drift(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    capture, manifest = _historical_revalidation_fixture(conn, monkeypatch)
+    first = manifest.sections[0]
+    if mutation == "source":
+        manifest = manifest.model_copy(update={"source_sha256": "b" * 64})
+    elif mutation == "response":
+        manifest = manifest.model_copy(
+            update={
+                "sections": [
+                    first.model_copy(update={"response_sha256": "b" * 64}),
+                    manifest.sections[1],
+                ]
+            }
+        )
+    elif mutation == "requested_model":
+        manifest = manifest.model_copy(update={"requested_model": "different-route"})
+    elif mutation == "actual_model":
+        conn.execute(
+            "UPDATE llm_artifacts SET model='different-actual-model' WHERE id=?",
+            (first.artifact_id,),
+        )
+        conn.commit()
+    elif mutation == "artifact":
+        conn.execute(
+            "UPDATE llm_artifacts SET content_json=? WHERE id=?",
+            ('{"raw_response":"private_marker"}', first.artifact_id),
+        )
+        conn.commit()
+    elif mutation == "version":
+        conn.execute(
+            "UPDATE llm_artifacts SET prompt_version=? WHERE id=?",
+            (continuation.UNREVIEWED_CAPTURE_VERSION, first.artifact_id),
+        )
+        conn.commit()
+    elif mutation == "supersession":
+        conn.execute(
+            "UPDATE llm_artifacts SET superseded_by_id=? WHERE id=?",
+            (first.artifact_id + 100, first.artifact_id),
+        )
+        conn.commit()
+    else:
+        conn.execute(
+            "UPDATE llm_calls SET provider='wrong-provider' WHERE id=?", (first.llm_call_id,)
+        )
+        conn.commit()
+    with pytest.raises(ValueError) as caught:
+        revalidation.revalidate_historical_sections(
+            capture, b"original source", manifest, validator_code_sha256="a" * 64
+        )
+    assert "private_marker" not in str(caught.value)
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM llm_artifacts WHERE purpose=?",
+            (revalidation.REVALIDATION_PURPOSE,),
+        ).fetchone()[0]
+        == 0
+    )
+
+
 def test_more_than_80k_and_200_facts_last_page_and_replay(
     conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -143,7 +410,7 @@ def test_more_than_80k_and_200_facts_last_page_and_replay(
     job = _capture(conn, monkeypatch, pages, extract)
     output = job.capture(b"original source")
     assert job.capture_version == continuation.UNREVIEWED_CAPTURE_VERSION
-    assert job.capture_version == "ir-supplement-native-continuation-v18-percent-cell-boundaries"
+    assert job.capture_version == "ir-supplement-native-continuation-v20-reporting-scope"
     assert sum(len(rows) for _, rows in output) == 360
     assert output[-1][1][-1]["label"] == "Metric 2:119"
     assert len(calls) == 6
@@ -454,6 +721,7 @@ def test_direct_capture_retains_distinct_candidates_without_legacy_projection(
                 else "prior_year_comparator",
                 "accounting_basis": "management",
                 "consolidation_scope": "geography",
+                "reporting_consolidation_scope": "unknown",
                 "dimensions": {"geography": "North" if north or distinct == "period" else "South"},
                 "source_unit_scale": "none",
             }
@@ -464,8 +732,8 @@ def test_direct_capture_retains_distinct_candidates_without_legacy_projection(
         from llm.ledger import record_llm_call
         from llm.structured import StructuredCallResult
 
-        prompt = getattr(summaries, "_enumerate_prompt")(
-            ticker, period, supplied_text, 200, source_scope="direct_pdf_rich"
+        prompt = getattr(summaries, "_enumerate_direct_prompt_v20")(
+            ticker, period, supplied_text, 200
         )
         raw = json.dumps(rows)
         record_llm_call(
@@ -671,7 +939,7 @@ def test_exact_reviewed_decorative_page_is_omitted_without_changing_ocr_flag(
     assert capture.capture_version == continuation.CURRENT_CAPTURE_VERSION
     assert (
         capture.capture_version
-        == "ir-supplement-native-continuation-v19-reviewed-pages-percent-cell-boundaries"
+        == "ir-supplement-native-continuation-v21-reviewed-pages-reporting-scope"
     )
     assert len(calls) == 1
     assert review.review_id in calls[0]
@@ -879,6 +1147,7 @@ def test_live_prompt_override_repair_and_fallback_metadata_bind_cache(
             "period_role": "current",
             "accounting_basis": "gaap",
             "consolidation_scope": "consolidated",
+            "reporting_consolidation_scope": "unknown",
             "source_unit_scale": "none",
         }
     ]

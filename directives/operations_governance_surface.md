@@ -226,6 +226,18 @@ Run this review when a change affects any of the following:
 
 Pure implementation refactors, test-only changes, prose-only changes, and internal CLIs that are not supported operator workflows may use `no surface change`, but the reason must name the preserved contract. Do not scan every Flask route or `execution/*.py` file and treat it as a product capability.
 
+The explicit IR `--revalidate-only` CLI is a manual, source-bound recovery action
+inside `execution/extract_kpis_from_ir.py`. Its owner is the existing IR capture
+stage. It requires a complete pinned V16 historical manifest and records a
+separate V18 processing attempt and artifact receipt. A failure leaves no partial
+processed-section or candidate population and marks only that new attempt failed.
+An exact replay requires both populations to remain intact. It makes
+no provider call and no financial publication. The Operations workspace has no
+control for this bounded action; the CLI receipt and `ingestion_runs` status are
+its operator evidence. Candidate retention does not mean source review or
+financial admission. Native execution requires the canonical-host operation
+boundary; local migrated-database tests do not authorize it.
+
 The bounded lock-filename repair has **no surface change**. Logical write-set keys,
 ownership proofs, mutex rights and cleanup remain under the existing runtime owner.
 Lock and transition-guard filenames of at most 255 filesystem-encoded bytes stay

@@ -248,6 +248,7 @@
         "src/compute/metrics_engine/engine.py",
         "src/compute/metrics_engine/io.py",
         "src/compute/kpi_extract_summaries.py",
+        "src/compute/ir_supplement_revalidation.py",
         "src/dcf/valuation.py",
         "execution/prepare_cashflow_dcf.py",
         "src/dcf/cashflow_inputs.py",

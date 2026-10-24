@@ -68,29 +68,33 @@ import sys
 from pathlib import Path
 from typing import cast
 
+# Direct invocation imports the shared bootstrap before application modules.
+from _lib import PROJECT_ROOT
 from pydantic import BaseModel
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from compute.kpi_extract_summaries import capture_for_ir_pdf_docs, write_log  # noqa: E402
-from models.facts import FactLocator, LocatorKind  # noqa: E402
-from models.runs import StageName, StageStatus  # noqa: E402
-from pipeline.document_completeness import (  # noqa: E402
+from compute.ir_supplement_revalidation import RevalidationManifest
+from compute.kpi_extract_summaries import (
+    capture_for_ir_pdf_docs,
+    revalidate_ir_pdf_doc,
+    write_log,
+)
+from models.facts import FactLocator, LocatorKind
+from models.runs import StageName, StageStatus
+from pipeline.document_completeness import (
     DocumentCompletenessStatus,
     document_completeness,
 )
-from pipeline.invocation_fingerprint import files_fingerprint, payload_sha256  # noqa: E402
-from pipeline.kpi_persistence import (  # noqa: E402
+from pipeline.invocation_fingerprint import files_fingerprint, payload_sha256
+from pipeline.kpi_persistence import (
     KpiExtractionManifest,
     KpiValue,
     persist_manifest,
 )
-from pipeline.locators import pdf_slide_locator  # noqa: E402
-from pipeline.pdf_render import find_quote_bbox  # noqa: E402
-from pipeline.queries import open_db  # noqa: E402
-from pipeline.refresh_eval import refresh_for_tickers  # noqa: E402
-from pipeline.run_accounting import (  # noqa: E402
+from pipeline.locators import pdf_slide_locator
+from pipeline.pdf_render import find_quote_bbox
+from pipeline.queries import open_db
+from pipeline.refresh_eval import refresh_for_tickers
+from pipeline.run_accounting import (
     JsonValue,
     PipelineRunSuppressedError,
     end_run,
@@ -397,6 +401,11 @@ def main() -> int:
         "ir_supplement PDF (no allowlist) and persist at IR_DOC tier with "
         "origin=CAPTURE. Scopes to --ticker, else all tickers with supplement PDFs.",
     )
+    group.add_argument(
+        "--revalidate-only",
+        type=Path,
+        help="Revalidate one explicit complete V16 IR section manifest without model calls.",
+    )
     parser.add_argument("--ticker", help="Restrict --list-pending / --capture to a single ticker.")
     parser.add_argument(
         "--refresh",
@@ -426,6 +435,19 @@ def main() -> int:
             return 0
 
         try:
+            if args.revalidate_only:
+                manifest = RevalidationManifest.model_validate_json(
+                    args.revalidate_only.read_text(encoding="utf-8")
+                )
+                if args.ticker and args.ticker.upper() != manifest.ticker:
+                    raise ValueError("IR revalidation ticker differs from the manifest")
+                if args.refresh or args.with_eval or args.force:
+                    raise ValueError(
+                        "IR revalidation does not permit capture or evaluation modifiers"
+                    )
+                receipt = revalidate_ir_pdf_doc(manifest, PROJECT_ROOT, conn)
+                print(receipt.model_dump_json())
+                return 0
             if args.capture:
                 result = _run_capture(conn, ticker=args.ticker, refresh=args.refresh)
                 print(json.dumps(result, indent=2, default=str))

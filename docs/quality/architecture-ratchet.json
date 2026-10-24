@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "b09eac31467389025c4f53ee2f4ce818d83685e3",
+  "scoped_commit": "483e826bad4adf6baeafb1497bc52c677d418d21",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "ead905d50b659a31cea25aaff4428698d96d788c74c86805f268ade9f386510b",
+  "source_sha256": "290f870fc7d06c35bb0b24184f42bd9ff119c8bce74df71c88c28bc84964868f",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,8 +22,8 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1480,
-    "total_noncomment_loc": 570457,
+    "executable_modules": 1481,
+    "total_noncomment_loc": 571345,
     "modules_over_1000_loc": 111,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
@@ -3023,11 +3023,11 @@
         "path": "execution/extract_kpis_from_ir.py",
         "module": "execution.extract_kpis_from_ir",
         "lines": {
-          "physical": 453,
-          "nonblank": 404,
-          "noncomment": 403
+          "physical": 475,
+          "nonblank": 427,
+          "noncomment": 425
         },
-        "internal_fan_out": 11,
+        "internal_fan_out": 12,
         "responsibilities": [
           "database",
           "filesystem",
@@ -8430,17 +8430,33 @@
         "path": "src/compute/ir_supplement_capture.py",
         "module": "compute.ir_supplement_capture",
         "lines": {
-          "physical": 722,
-          "nonblank": 672,
-          "noncomment": 662
+          "physical": 782,
+          "nonblank": 726,
+          "noncomment": 716
         },
         "internal_fan_out": 7,
         "responsibilities": [
           "database",
           "network"
         ],
-        "public_functions": 3,
-        "fully_annotated_public_functions": 3
+        "public_functions": 4,
+        "fully_annotated_public_functions": 4
+      },
+      {
+        "path": "src/compute/ir_supplement_revalidation.py",
+        "module": "compute.ir_supplement_revalidation",
+        "lines": {
+          "physical": 532,
+          "nonblank": 498,
+          "noncomment": 498
+        },
+        "internal_fan_out": 6,
+        "responsibilities": [
+          "database",
+          "network"
+        ],
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
       },
       {
         "path": "src/compute/key_metrics.py",
@@ -8478,18 +8494,18 @@
         "path": "src/compute/kpi_extract_summaries.py",
         "module": "compute.kpi_extract_summaries",
         "lines": {
-          "physical": 2547,
-          "nonblank": 2377,
-          "noncomment": 2266
+          "physical": 2830,
+          "nonblank": 2646,
+          "noncomment": 2533
         },
-        "internal_fan_out": 33,
+        "internal_fan_out": 35,
         "responsibilities": [
           "database",
           "filesystem",
           "network"
         ],
-        "public_functions": 6,
-        "fully_annotated_public_functions": 6
+        "public_functions": 7,
+        "fully_annotated_public_functions": 7
       },
       {
         "path": "src/compute/kpi_resolver.py",
@@ -12468,17 +12484,17 @@
         "path": "src/llm_artifact_store.py",
         "module": "llm_artifact_store",
         "lines": {
-          "physical": 982,
-          "nonblank": 900,
-          "noncomment": 788
+          "physical": 1006,
+          "nonblank": 921,
+          "noncomment": 809
         },
         "internal_fan_out": 4,
         "responsibilities": [
           "database",
           "network"
         ],
-        "public_functions": 13,
-        "fully_annotated_public_functions": 13
+        "public_functions": 14,
+        "fully_annotated_public_functions": 14
       },
       {
         "path": "src/llm_budget.py",
@@ -16502,9 +16518,9 @@
         "path": "src/provenance/ir_reported_facts.py",
         "module": "provenance.ir_reported_facts",
         "lines": {
-          "physical": 1172,
-          "nonblank": 1093,
-          "noncomment": 1093
+          "physical": 1198,
+          "nonblank": 1119,
+          "noncomment": 1119
         },
         "internal_fan_out": 12,
         "responsibilities": [

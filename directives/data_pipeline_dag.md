@@ -124,6 +124,23 @@ assessment, page text and reviewed render. The detector still reports OCR
 required. Unknown pages and withdrawn reviews block capture. The default
 processing certificates and financial evidence requirements remain strict.
 
+An explicit `extract_kpis_from_ir.py --revalidate-only <manifest>` can process a
+complete historical V16 native-section set with the current V18 validator. The
+manifest pins every old artifact, governed call, source byte hash, document
+version, and failed attempt. It cannot call a provider or repair old raw fields.
+One new attempt commits processed-section artifacts, candidate evidence, and its
+completion receipt in one transaction; an exact replay verifies both populations.
+Original V16 calls and the failed attempt
+remain unchanged. Candidate retention uses the existing evidence ledger with
+V16 as the producer and V18 as the processor, but it cannot publish financial
+facts or claim visual, semantic, or archive completeness. Missing or changed
+historical commitments make revalidation unavailable.
+Only exact registered `ir_supplement` and `ir_press_release` issuer PDFs can enter
+this historical action; normal automatic capture still selects supplements only.
+Prospective direct PDF captures use V20 or V21 with a separate, source-witnessed
+reporting entity boundary. The old `consolidation_scope` raw field remains intact.
+An unknown boundary remains unknown and no unreviewed row gains admission.
+
 Unrelated archive gaps remain visible. A complete selected analysis does not make
 the archive complete or establish financial-fact admission or model readiness.
 The scoped artifact has its own identity. Full-population verification does not

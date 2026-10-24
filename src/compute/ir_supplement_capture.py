@@ -46,6 +46,26 @@ SupplementContextField = Literal[
     "source_column_header",
 ]
 
+_CONSOLIDATED_STATEMENT_HEADINGS = frozenset(
+    f"{prefix}CONSOLIDATED {statement}"
+    for prefix in ("", "CONDENSED ")
+    for statement in (
+        "STATEMENTS OF INCOME",
+        "STATEMENTS OF OPERATIONS",
+        "STATEMENTS OF CASH FLOWS",
+        "BALANCE SHEETS",
+    )
+)
+
+
+def supports_reporting_scope_heading(
+    scope: str, quote: str, native_page: str | None = None
+) -> bool:
+    """Accept only a complete positive issuer statement heading, not a label fragment."""
+    if scope != "consolidated" or quote not in _CONSOLIDATED_STATEMENT_HEADINGS:
+        return False
+    return native_page is None or quote in native_page.splitlines()
+
 
 class SupplementContextWitness(BaseModel):
     """Prospective raw context evidence; never a reviewed publication witness."""
@@ -138,7 +158,7 @@ def require_native_source_quotes(rows: list[dict[str, object]], body: str) -> No
             raise ValueError("IR extracted quote does not occur in its native source section")
 
 
-class _ChunkResult(BaseModel):
+class ChunkResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: Literal["pending", "rejected", "processed", "saturated"]
@@ -156,10 +176,8 @@ LEGACY_RELAXED_CAPTURE_VERSIONS = frozenset(
         "v6-native-hyphen-wrap",
     }
 )
-CURRENT_CAPTURE_VERSION = (
-    "ir-supplement-native-continuation-v19-reviewed-pages-percent-cell-boundaries"
-)
-UNREVIEWED_CAPTURE_VERSION = "ir-supplement-native-continuation-v18-percent-cell-boundaries"
+CURRENT_CAPTURE_VERSION = "ir-supplement-native-continuation-v21-reviewed-pages-reporting-scope"
+UNREVIEWED_CAPTURE_VERSION = "ir-supplement-native-continuation-v20-reporting-scope"
 
 
 def producing_capture_version(
@@ -181,6 +199,8 @@ def producing_capture_version(
         "ir-supplement-native-continuation-v15-reviewed-pages",
         "ir-supplement-native-continuation-v16-table-cell-boundaries",
         "ir-supplement-native-continuation-v17-reviewed-pages-table-cell-boundaries",
+        "ir-supplement-native-continuation-v18-percent-cell-boundaries",
+        "ir-supplement-native-continuation-v19-reviewed-pages-percent-cell-boundaries",
         UNREVIEWED_CAPTURE_VERSION,
         CURRENT_CAPTURE_VERSION,
     }
@@ -196,7 +216,7 @@ def producing_capture_version(
         artifact = read_artifact(int(row[0]), db_path=db_path)
         if artifact is None or artifact.dirty:
             continue
-        result = _ChunkResult.model_validate(artifact.content_json)
+        result = ChunkResult.model_validate(artifact.content_json)
         if (
             result.status not in {"processed", "saturated"}
             or result.exchange != exchange
@@ -284,7 +304,21 @@ class SupplementCapture:
     _document_context: str = field(default="", init=False)
     _context_pages: set[int] = field(default_factory=set[int], init=False)
 
+    @property
+    def page_count(self) -> int:
+        return len(self._pages)
+
     def capture(self, raw_bytes: bytes) -> list[tuple[int, list[dict[str, object]]]]:
+        planned = self.plan_sections(raw_bytes)
+        if self.conn.in_transaction:
+            raise ValueError("IR continuation requires an owned transaction boundary")
+        output: list[tuple[int, list[dict[str, object]]]] = []
+        for page, start, body in planned:
+            output.extend(self._section(page, start, body))
+        return output
+
+    def plan_sections(self, raw_bytes: bytes) -> list[tuple[int, int, str]]:
+        """Produce the capture owner's exact native sections without model work."""
         if (
             min(self.max_input_chars, self.max_facts, self.max_chunks, self.max_structured_calls)
             < 2
@@ -375,15 +409,10 @@ class SupplementCapture:
             raise ValueError(
                 "IR continuation global chunk/structured-call budget exceeded before extraction"
             )
-        if self.conn.in_transaction:
-            raise ValueError("IR continuation requires an owned transaction boundary")
         # Validate every serialized section before any governed call.
         for page, start, body in planned:
-            self._section_text(page, start, body)
-        output: list[tuple[int, list[dict[str, object]]]] = []
-        for page, start, body in planned:
-            output.extend(self._section(page, start, body))
-        return output
+            self.section_text(page, start, body)
+        return planned
 
     def _existing_page_preflight(self, pages: tuple[str, ...]) -> None:
         """Honor retained OCR dispositions; native text can include only a footer.
@@ -474,7 +503,7 @@ class SupplementCapture:
         if old != (self.native_assessment_id, self.review_scope_sha256):
             raise ValueError("IR reviewed page scope changed during capture")
 
-    def _section_text(self, page: int, start: int, body: str) -> str:
+    def section_text(self, page: int, start: int, body: str) -> str:
         """Serialize the exact section and bounded native context for preflight/replay."""
         source_page = self._pages[page - 1]
         context_size = min(1200, self.max_input_chars // 16)
@@ -514,44 +543,35 @@ class SupplementCapture:
                 f"IR continuation chunk budget exhausted at page {page}, offset {start}"
             )
         self.chunks_processed += 1
-        model_text = self._section_text(page, start, body)
+        model_text = self.section_text(page, start, body)
         prompt = self.prompt(model_text)
         override_identity = self.override_identity()
         effective_prompt = self.effective_prompt(prompt)
-        inputs: list[bytes | str] = [
-            override_identity,
-            effective_prompt,
-            self.source_sha256,
-            self.schema_sha256,
-            self.projection_identity,
-            self.model,
-            self.backend,
-            self.period_label,
-            str(page),
-            str(start),
-            str(self.max_facts),
-            str(self.max_input_chars),
+        inputs = self.section_inputs(
+            page,
+            start,
             prompt,
-            *[repair_supplement_prompt(prompt, error) for error in _SUPPLEMENT_REPAIR_FEEDBACK],
-        ]
+            override_identity=override_identity,
+            effective_prompt=effective_prompt,
+        )
         version = self.capture_version
         scope = f"ir_supplement:{self.document_id}:page:{page}:section:{start}:{len(body)}"
         expected_sha = compute_input_sha256(prompt_version=version, cache_inputs=inputs)
         artifact = read_current(
             ticker=self.ticker, purpose="kpi_summary_enumerate", scope=scope, conn=self.conn
         )
-        result: _ChunkResult | None = None
+        result: ChunkResult | None = None
         if not self.refresh and artifact and artifact.input_sha256 == expected_sha:
-            cached_result = _ChunkResult.model_validate(artifact.content_json)
+            cached_result = ChunkResult.model_validate(artifact.content_json)
             if cached_result.status in {"pending", "rejected"}:
-                self._validated_attempts(cached_result, prompt)
+                self.validated_attempts(cached_result, prompt)
                 raise ValueError(
                     "IR cached section remains unresolved; explicit refresh is required: "
                     + (cached_result.validation_error or cached_result.status)
                 )
             if artifact_is_reusable(artifact, input_sha256=expected_sha):
                 result = cached_result
-                self._validated(result, body, prompt)
+                self.validate_result(result, body, prompt)
                 if (
                     artifact.model != result.exchange.model
                     or artifact.llm_call_id != result.exchange.llm_call_id
@@ -565,7 +585,7 @@ class SupplementCapture:
             self.structured_calls_reserved += 2
             attempts: list[SupplementExchange] = []
 
-            def store(value: _ChunkResult) -> None:
+            def store(value: ChunkResult) -> None:
                 artifact_id, _ = upsert(
                     UpsertRequest(
                         ticker=self.ticker,
@@ -597,7 +617,7 @@ class SupplementCapture:
                 if len(attempts) >= 2:
                     raise ValueError("IR section exceeds its two governed request slots")
                 attempts.append(exchange)
-                store(_ChunkResult(status="pending", rows=[], exchange=exchange, attempts=attempts))
+                store(ChunkResult(status="pending", rows=[], exchange=exchange, attempts=attempts))
 
             try:
                 exchange = self.extract(model_text, body, retain_raw)
@@ -606,17 +626,17 @@ class SupplementCapture:
                     raise ValueError("IR prompt override changed during extraction")
                 rows = self.validate_rows(parse_json_payload(exchange.raw_response, expect="array"))
                 saturated = len(rows) >= self.max_facts
-                result = _ChunkResult(
+                result = ChunkResult(
                     status="saturated" if saturated else "processed",
                     rows=[] if saturated else rows,
                     exchange=exchange,
                     attempts=attempts,
                 )
-                self._validated(result, body, prompt)
+                self.validate_result(result, body, prompt)
             except Exception as error:
                 if attempts:
                     store(
-                        _ChunkResult(
+                        ChunkResult(
                             status="rejected",
                             rows=[],
                             exchange=attempts[-1],
@@ -641,7 +661,38 @@ class SupplementCapture:
         cut = newline + 1
         return self._section(page, start, body[:cut]) + self._section(page, start + cut, body[cut:])
 
-    def _validated_attempts(self, result: _ChunkResult, prompt: str) -> None:
+    def section_inputs(
+        self,
+        page: int,
+        start: int,
+        prompt: str,
+        *,
+        override_identity: str | None = None,
+        effective_prompt: str | None = None,
+    ) -> list[bytes | str]:
+        """Return the exact historical section input-key components."""
+        if override_identity is None:
+            override_identity = self.override_identity()
+        if effective_prompt is None:
+            effective_prompt = self.effective_prompt(prompt)
+        return [
+            override_identity,
+            effective_prompt,
+            self.source_sha256,
+            self.schema_sha256,
+            self.projection_identity,
+            self.model,
+            self.backend,
+            self.period_label,
+            str(page),
+            str(start),
+            str(self.max_facts),
+            str(self.max_input_chars),
+            prompt,
+            *[repair_supplement_prompt(prompt, error) for error in _SUPPLEMENT_REPAIR_FEEDBACK],
+        ]
+
+    def validated_attempts(self, result: ChunkResult, prompt: str) -> None:
         if result.exchange != result.attempts[-1]:
             raise ValueError("IR final governed exchange differs from retained attempts")
         for exchange in result.attempts:
@@ -703,9 +754,18 @@ class SupplementCapture:
                     raise ValueError(
                         "IR context witness is not supported by supplied native context"
                     )
+                reporting_scope = row.get("reporting_consolidation_scope", "unknown")
+                if (
+                    reporting_scope != "unknown"
+                    and "consolidation_scope" in item.fields
+                    and not supports_reporting_scope_heading(
+                        str(reporting_scope), item.quote, self._pages[item.page - 1]
+                    )
+                ):
+                    raise ValueError("IR reporting boundary lacks a full positive source heading")
 
-    def _validated(self, result: _ChunkResult, body: str, prompt: str) -> None:
-        self._validated_attempts(result, prompt)
+    def validate_result(self, result: ChunkResult, body: str, prompt: str) -> None:
+        self.validated_attempts(result, prompt)
         exchange = result.exchange
         source_rows = self.validate_rows(parse_json_payload(exchange.raw_response, expect="array"))
         require_native_source_quotes(source_rows, body)

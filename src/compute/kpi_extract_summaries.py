@@ -48,7 +48,7 @@ from pydantic import (
     model_validator,
 )
 
-from compute import ir_supplement_capture
+from compute import ir_supplement_capture, ir_supplement_revalidation
 from compute.ir_supplement_capture import (
     SupplementCapture,
     SupplementExchange,
@@ -111,6 +111,7 @@ from pipeline.source_policy import (
     authorize_collection_target_in_connection,
 )
 from provenance.document_evidence_pipeline import DocumentEvidenceRequest, process_document_evidence
+from provenance.fact_plane_v2 import ConsolidationScope
 from provenance.fulltext_backfill import project_source_text, source_text_projection_identity
 from provenance.immutable_artifact import (
     ImmutableArtifactSnapshot,
@@ -253,6 +254,26 @@ class _EnumeratedKpi(BaseModel):
                 raise ValueError("source numeric token must occur in source_excerpt")
         if self.range_bound is not None and self.period_role is not KpiPeriodRole.GUIDANCE:
             raise ValueError("range endpoints require explicit guidance period role")
+        return self
+
+
+class _DirectEnumeratedKpiV20(_EnumeratedKpi):
+    """Prospective direct PDF reporting boundary; legacy raw fields stay intact."""
+
+    reporting_consolidation_scope: ConsolidationScope | Literal["unknown"]
+
+    @model_validator(mode="after")
+    def _require_reporting_boundary(self) -> _DirectEnumeratedKpiV20:
+        if self.reporting_consolidation_scope == "unknown":
+            return self
+        if not any(
+            "consolidation_scope" in witness.fields
+            and ir_supplement_capture.supports_reporting_scope_heading(
+                self.reporting_consolidation_scope, witness.quote
+            )
+            for witness in self.context_witnesses
+        ):
+            raise ValueError("direct IR reporting scope needs an explicit source boundary witness")
         return self
 
 
@@ -1372,13 +1393,39 @@ Document text:
 {spotlighted}"""
 
 
+def _enumerate_direct_prompt_v20(ticker: str, period_label: str, text: str, max_facts: int) -> str:
+    """Add a reporting boundary to direct PDFs without changing the V16 prompt."""
+    historical = _enumerate_prompt(
+        ticker, period_label, text, max_facts, source_scope="direct_pdf_rich"
+    )
+    old = (
+        '  "consolidation_scope": "consolidated | geography | segment | product | other | unknown",'
+    )
+    if historical.count(old) != 1:
+        raise ValueError("IR historical direct prompt boundary is unavailable")
+    return historical.replace(
+        old,
+        old
+        + '\n  "reporting_consolidation_scope": "consolidated | parent_only | subsidiary | segment | security_specific | other | unknown",',
+    ).replace(
+        "  - One row per distinct metric, reported period, accounting basis, scope and dimensions.",
+        "  - reporting_consolidation_scope is the reporting entity boundary, separate from product and geography dimensions. Use unknown unless DOCUMENT CONTEXT includes a complete positive consolidated financial-statement heading on one native line. Quote that whole heading in context_witnesses with field consolidation_scope. Product, geography, subsidiary, segment, negated, and cropped wording cannot establish a known boundary.\n"
+        "  - One row per distinct metric, reported period, accounting basis, scope and dimensions.",
+    )
+
+
 def _validated_enumerated_rows(
     raw: object,
     *,
     source_scope: Literal["summary_current", "direct_pdf_rich"],
     saturation_limit: int | None = None,
+    prospective_direct: bool = False,
 ) -> list[_EnumeratedKpi]:
-    rows = TypeAdapter(list[_EnumeratedKpi]).validate_python(raw)
+    rows: list[_EnumeratedKpi] = (
+        cast(list[_EnumeratedKpi], TypeAdapter(list[_DirectEnumeratedKpiV20]).validate_python(raw))
+        if prospective_direct
+        else TypeAdapter(list[_EnumeratedKpi]).validate_python(raw)
+    )
     if source_scope == "summary_current":
         return rows
     ranges: dict[tuple[object, ...], dict[str, Decimal]] = {}
@@ -1449,6 +1496,7 @@ def _llm_extract_enumerate(
     source_scope: Literal["summary_current", "direct_pdf_rich"] = "summary_current",
     source_guardrail: Callable[[object], tuple[bool, str]] | None = None,
     raw_response_observer: Callable[[str, str], None] | None = None,
+    prospective_direct: bool = False,
 ) -> list[dict[str, object]]:
     """One governed structured call — enumerate labeled this-period numeric facts (no
     allowlist). Returns a list of ``{label, value, unit, source_excerpt}`` dicts.
@@ -1463,13 +1511,22 @@ def _llm_extract_enumerate(
     # prose that can carry adversarial instructions. Wrapping it in tamper-evident
     # markers marks it as DATA, not instructions (sec-llm; the enumerate path is a
     # no-allowlist capture so the doc text reaches the model verbatim).
-    prompt = _enumerate_prompt(ticker, period_label, text, max_facts, source_scope=source_scope)
+    prompt = (
+        _enumerate_direct_prompt_v20(ticker, period_label, text, max_facts)
+        if prospective_direct
+        else _enumerate_prompt(ticker, period_label, text, max_facts, source_scope=source_scope)
+    )
+    schema: TypeAdapter[list[_EnumeratedKpi]] = (
+        cast(TypeAdapter[list[_EnumeratedKpi]], TypeAdapter(list[_DirectEnumeratedKpiV20]))
+        if prospective_direct
+        else TypeAdapter(list[_EnumeratedKpi])
+    )
     if exchange_observer is not None:
         exchange = call_llm_structured_with_raw(
             prompt,
             purpose="kpi_summary_enumerate",
             expect="array",
-            schema=TypeAdapter(list[_EnumeratedKpi]),
+            schema=schema,
             domain_guardrail=source_guardrail,
             raw_response_observer=raw_response_observer,
             repair_prompt=(
@@ -1493,10 +1550,13 @@ def _llm_extract_enumerate(
             backend=backend,
             db_path=db_path,
             expect="array",
-            schema=TypeAdapter(list[_EnumeratedKpi]),
+            schema=schema,
         )
     validated = _validated_enumerated_rows(
-        parsed, source_scope=source_scope, saturation_limit=max_facts
+        parsed,
+        source_scope=source_scope,
+        saturation_limit=max_facts,
+        prospective_direct=prospective_direct,
     )
     if len(validated) >= max_facts:
         raise SupplementSaturatedError(
@@ -1752,6 +1812,9 @@ def capture_for_ticker(
 
 # IR-doc kinds whose every labeled number we enumerate from the PDF itself.
 _IR_CAPTURE_PDF_DOC_TYPES: tuple[str, ...] = ("ir_supplement",)
+# Historical revalidation is selected by exact document and governed V16 run.
+# It can inspect an issuer press-release PDF captured by that prior explicit route.
+_IR_REVALIDATION_PDF_DOC_TYPES: tuple[str, ...] = ("ir_supplement", "ir_press_release")
 
 
 def _complete_capture_text(text: str, max_input_chars: int) -> str:
@@ -2017,8 +2080,31 @@ def retain_and_publish_reviewed_ir_source(
     extractor_config_sha256: str,
     extraction_started_at: datetime,
     precommit_validation: Callable[[], None] | None = None,
+    revalidation_source: tuple[
+        SupplementCapture,
+        ir_supplement_revalidation.RevalidationManifest,
+        ir_supplement_revalidation.RevalidationReceipt,
+    ]
+    | None = None,
+    caller_transaction: bool = False,
+    require_existing: bool = False,
 ) -> None:
     """Retain every raw candidate; publish only a pre-existing exact review."""
+    revalidated = (
+        ir_supplement_revalidation.read_revalidated_capture(
+            revalidation_source[0],
+            raw_pdf_bytes,
+            revalidation_source[1],
+            revalidation_source[2],
+            _in_progress=caller_transaction,
+        )
+        if revalidation_source is not None
+        else None
+    )
+    if revalidated is not None and (
+        page_rows != revalidated.page_rows or exchanges != revalidated.exchanges
+    ):
+        raise ValueError("IR revalidated candidate inputs differ from the processing receipt")
     responses = tuple(
         IrRawExchange(
             raw_response=exchange.raw_response,
@@ -2032,10 +2118,19 @@ def retain_and_publish_reviewed_ir_source(
         for exchange in exchanges
     )
     retained_exchanges = {response.llm_call_id: response for response in responses}
-    capture_versions = [
-        ir_supplement_capture.producing_capture_version(conn, exchange, source_sha256)
-        for exchange in exchanges
-    ]
+    capture_versions = (
+        [
+            ir_supplement_revalidation.REVALIDATION_PRODUCER_VERSION.removeprefix(
+                "ir-supplement-native-continuation-"
+            )
+        ]
+        * len(exchanges)
+        if revalidated is not None
+        else [
+            ir_supplement_capture.producing_capture_version(conn, exchange, source_sha256)
+            for exchange in exchanges
+        ]
+    )
     if len(set(capture_versions)) > 1:
         raise ValueError("IR governed exchanges mix producing capture versions")
     if not capture_versions:
@@ -2049,7 +2144,11 @@ def retain_and_publish_reviewed_ir_source(
             # admitted. Only immutable producing artifacts select this path.
             return TypeAdapter(list[_EnumeratedKpi]).validate_python(raw)
         return _validated_enumerated_rows(
-            raw, source_scope="direct_pdf_rich", saturation_limit=max_facts_per_doc
+            raw,
+            source_scope="direct_pdf_rich",
+            saturation_limit=max_facts_per_doc,
+            prospective_direct=capture_version
+            in {"v20-reporting-scope", "v21-reviewed-pages-reporting-scope"},
         )
 
     processed: list[tuple[SupplementExchange, list[dict[str, object]]]] = []
@@ -2108,7 +2207,22 @@ def retain_and_publish_reviewed_ir_source(
         raw_pdf_bytes=raw_pdf_bytes,
         page_projection=ir_supplement_capture.project_pdf_page_texts,
         precommit_validation=precommit_validation,
+        caller_transaction=caller_transaction,
+        require_existing=require_existing,
+        historical_revalidation=revalidated is not None,
     )
+    if revalidated is not None:
+        logger.info(
+            {
+                "event": "ir_source_candidate_disposition",
+                "document_version_id": document_version_id,
+                "candidate_count": len(population.candidate_node_ids),
+                "source_publication_count": 0,
+                "disposition": "revalidated_source_candidates_only",
+                "processing_artifact_id": revalidated.receipt.artifact_id,
+            }
+        )
+        return
     reviewed = find_exact_ir_source_review(conn, population, raw_pdf_bytes=raw_pdf_bytes)
     if reviewed is None:
         logger.info(
@@ -2343,6 +2457,7 @@ def capture_for_ir_pdf_docs(
                                 value,
                                 source_scope="direct_pdf_rich",
                                 saturation_limit=max_facts_per_doc,
+                                prospective_direct=True,
                             )
                             ir_supplement_capture.require_native_source_quotes(
                                 [row.model_dump(mode="json") for row in rows], source_body
@@ -2368,6 +2483,7 @@ def capture_for_ir_pdf_docs(
                             source_scope="direct_pdf_rich",
                             source_guardrail=source_guardrail,
                             raw_response_observer=observe_raw,
+                            prospective_direct=True,
                         )
                     if exchange is None:
                         raise ValueError("IR governed structured exchange is unavailable")
@@ -2380,20 +2496,22 @@ def capture_for_ir_pdf_docs(
                         raw,
                         source_scope="direct_pdf_rich",
                         saturation_limit=max_facts_per_doc,
+                        prospective_direct=True,
                     )
                 ]
 
             prompt_sha256 = hashlib.sha256(
-                _enumerate_prompt(
+                _enumerate_direct_prompt_v20(
                     ticker,
                     period_label,
                     "",
                     max_facts_per_doc,
-                    source_scope="direct_pdf_rich",
                 ).encode()
             ).hexdigest()
             schema_sha256 = hashlib.sha256(
-                json.dumps(TypeAdapter(list[_EnumeratedKpi]).json_schema(), sort_keys=True).encode()
+                json.dumps(
+                    TypeAdapter(list[_DirectEnumeratedKpiV20]).json_schema(), sort_keys=True
+                ).encode()
             ).hexdigest()
             projection_identity = source_text_projection_identity(str(pdf_path), "application/pdf")
             extraction_run_id = start_run(
@@ -2412,7 +2530,13 @@ def capture_for_ir_pdf_docs(
                     "max_chunks": max_chunks,
                     "max_structured_calls": max_structured_calls,
                     "continuation_version": (
-                        "v18-percent-cell-boundaries-or-v19-reviewed-pages-percent-cell-boundaries"
+                        ir_supplement_capture.UNREVIEWED_CAPTURE_VERSION.removeprefix(
+                            "ir-supplement-native-continuation-"
+                        )
+                        + "-or-"
+                        + ir_supplement_capture.CURRENT_CAPTURE_VERSION.removeprefix(
+                            "ir-supplement-native-continuation-"
+                        )
                     ),
                     "prompt_sha256": prompt_sha256,
                     "schema_sha256": schema_sha256,
@@ -2432,11 +2556,10 @@ def capture_for_ir_pdf_docs(
                 max_chunks=max_chunks,
                 max_structured_calls=max_structured_calls,
                 prompt=partial(
-                    _enumerate_prompt,
+                    _enumerate_direct_prompt_v20,
                     ticker,
                     period_label,
                     max_facts=max_facts_per_doc,
-                    source_scope="direct_pdf_rich",
                 ),
                 extract=partial(extract_section, run_id=extraction_run_id),
                 effective_prompt=effective_prompt,
@@ -2517,6 +2640,166 @@ def capture_for_ir_pdf_docs(
             break
 
     return _close_log(log, t0)
+
+
+def revalidate_ir_pdf_doc(
+    manifest: ir_supplement_revalidation.RevalidationManifest,
+    repo_root: Path,
+    conn: sqlite3.Connection,
+) -> ir_supplement_revalidation.RevalidationReceipt:
+    """Reprocess exact V16 responses with current strict validation and no model call."""
+    if conn.in_transaction:
+        raise ValueError("IR revalidation requires an owned transaction boundary")
+    matches = [
+        (path, period_end)
+        for doc_id, path, period_end in _list_ir_capture_pdf_docs(
+            conn, repo_root, manifest.ticker, _IR_REVALIDATION_PDF_DOC_TYPES
+        )
+        if doc_id == manifest.document_id
+    ]
+    if len(matches) != 1:
+        raise ValueError("IR revalidation registered source is unavailable")
+    pdf_path, period_end = matches[0]
+    snapshot, raw_bytes = read_stable_artifact(pdf_path)
+    if snapshot.file_sha256 != manifest.source_sha256:
+        raise ValueError("IR revalidation source SHA differs")
+    document = conn.execute(
+        "SELECT doc_type FROM documents WHERE id=?", (manifest.document_id,)
+    ).fetchone()
+    if document is None:
+        raise ValueError("IR revalidation source document is missing")
+    evidence = require_legacy_document_evidence(
+        conn,
+        document_id=manifest.document_id,
+        ticker=manifest.ticker,
+        source_type=SourceType.IR_DOC.value,
+        doc_type=str(document[0]),
+        period_end=period_end,
+        source_sha256=snapshot.file_sha256,
+    )
+    if evidence.document_version_id != manifest.document_version_id:
+        raise ValueError("IR revalidation document version differs")
+    if manifest.period_end != period_end.isoformat():
+        raise ValueError("IR revalidation reported period differs")
+
+    def forbidden_extract(
+        _text: str, _body: str, _retain: Callable[[SupplementExchange], None]
+    ) -> SupplementExchange:
+        raise AssertionError("IR revalidation cannot invoke a provider")
+
+    max_facts_per_doc = manifest.max_facts_per_doc
+    max_input_chars = manifest.max_input_chars
+    schema_sha256 = hashlib.sha256(
+        json.dumps(TypeAdapter(list[_EnumeratedKpi]).json_schema(), sort_keys=True).encode()
+    ).hexdigest()
+    capture = SupplementCapture(
+        conn=conn,
+        ticker=manifest.ticker,
+        document_id=manifest.document_id,
+        source_sha256=snapshot.file_sha256,
+        model=manifest.requested_model,
+        backend=manifest.requested_backend,
+        period_label=f"{period_end.date().isoformat()} [ir_supplement]",
+        max_input_chars=max_input_chars,
+        max_facts=max_facts_per_doc,
+        max_chunks=manifest.max_chunks,
+        max_structured_calls=manifest.max_structured_calls,
+        prompt=partial(
+            _enumerate_prompt,
+            manifest.ticker,
+            f"{period_end.date().isoformat()} [ir_supplement]",
+            max_facts=max_facts_per_doc,
+            source_scope="direct_pdf_rich",
+        ),
+        extract=forbidden_extract,
+        effective_prompt=lambda prompt: prompt,
+        override_identity=lambda: hashlib.sha256(b"[]").hexdigest(),
+        validate_rows=lambda raw: [
+            row.model_dump(mode="json")
+            for row in _validated_enumerated_rows(
+                raw, source_scope="direct_pdf_rich", saturation_limit=max_facts_per_doc
+            )
+        ],
+        schema_sha256=schema_sha256,
+        projection_identity=source_text_projection_identity(str(pdf_path), "application/pdf"),
+        document_version_id=evidence.document_version_id,
+    )
+    code_hash = hashlib.sha256()
+    for path in (
+        Path(ir_supplement_capture.__file__),
+        Path(ir_supplement_revalidation.__file__),
+        Path(__file__),
+        Path(__file__).parents[1] / "pipeline" / "kpi_semantics.py",
+    ):
+        data = path.read_bytes()
+        code_hash.update(len(data).to_bytes(8, "big"))
+        code_hash.update(data)
+    started_at = datetime.now(UTC)
+    retained_in_transaction = False
+
+    def retain_for_receipt(
+        receipt: ir_supplement_revalidation.RevalidationReceipt,
+        *,
+        caller_transaction: bool,
+        require_existing: bool,
+    ) -> None:
+        nonlocal retained_in_transaction
+        revalidated = ir_supplement_revalidation.read_revalidated_capture(
+            capture, raw_bytes, manifest, receipt, _in_progress=caller_transaction
+        )
+        config_sha = hashlib.sha256(
+            json.dumps(
+                {
+                    "processing_artifact_id": receipt.artifact_id,
+                    "validator_version": receipt.validator_version,
+                    "validator_code_sha256": receipt.validator_code_sha256,
+                    "producing_capture_version": receipt.producing_capture_version,
+                    "source_sha256": receipt.source_sha256,
+                    "projection_identity": capture.projection_identity,
+                    "schema_sha256": schema_sha256,
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+
+        def precommit_validation() -> None:
+            assert_artifact_unchanged(snapshot)
+            capture.assert_review_scope_unchanged()
+            ir_supplement_revalidation.read_revalidated_capture(
+                capture, raw_bytes, manifest, receipt, _in_progress=caller_transaction
+            )
+
+        retain_and_publish_reviewed_ir_source(
+            conn,
+            document_version_id=manifest.document_version_id,
+            source_sha256=manifest.source_sha256,
+            raw_pdf_bytes=raw_bytes,
+            page_rows=revalidated.page_rows,
+            exchanges=revalidated.exchanges,
+            max_facts_per_doc=max_facts_per_doc,
+            extractor_config_sha256=config_sha,
+            extraction_started_at=started_at,
+            precommit_validation=precommit_validation,
+            revalidation_source=(capture, manifest, receipt),
+            caller_transaction=caller_transaction,
+            require_existing=require_existing,
+        )
+        if caller_transaction:
+            retained_in_transaction = True
+
+    receipt = ir_supplement_revalidation.revalidate_historical_sections(
+        capture,
+        raw_bytes,
+        manifest,
+        validator_code_sha256=code_hash.hexdigest(),
+        before_commit=lambda: assert_artifact_unchanged(snapshot),
+        retain_candidates=lambda receipt: retain_for_receipt(
+            receipt, caller_transaction=True, require_existing=False
+        ),
+    )
+    if not retained_in_transaction:
+        retain_for_receipt(receipt, caller_transaction=False, require_existing=True)
+    return receipt
 
 
 def _now_iso_z() -> str:
