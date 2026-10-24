@@ -7,32 +7,42 @@ import json
 import sqlite3
 import sys
 from collections.abc import Callable
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
 from alembic.config import Config
 
 from alembic import command
+from models.companies import ListType
 from models.documents import DocType, SourceType
 from pipeline.source_policy import ReportedPeriodStatus, ReportedPeriodWindow
 from pipeline.transcript_acquisition import (
     COMBINED_SOURCE_REGIME_IDENTITY,
+    AuthorizedTranscriptArtifact,
     TranscriptAcquisitionDeniedError,
+    authorize_transcript_request,
     load_authorized_transcript_receipt,
     load_authorized_transcript_replay,
     persist_authorized_transcript_artifact,
     read_authorized_transcript,
     require_authorized_transcript_request,
+    require_persisted_authorized_transcript_artifact,
     stage_authorized_payload,
+    transcript_acquisition_receipt_id,
 )
+from runtime.deterministic import canonical_json_ascii
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from transcripts.acquisition_semantics import (
     TRANSCRIPT_ACQUISITION_POLICY_VERSION,
     ExistingArtifactBehavior,
+    StoredTargetStatus,
     TranscriptAcquisitionEntrypoint,
     TranscriptAcquisitionRequest,
     TranscriptProvider,
+    TranscriptReportingStatus,
+    TranscriptStoredTarget,
+    authorize_transcript_acquisition_request,
 )
 from transcripts.immutable_staging import StagedTranscriptArtifact
 
@@ -118,6 +128,87 @@ def _config(path: Path) -> Config:
     return config
 
 
+def _seed_historical_receipt(
+    conn: sqlite3.Connection,
+    *,
+    request: TranscriptAcquisitionRequest,
+    staging_root: Path,
+    payload: bytes,
+) -> AuthorizedTranscriptArtifact:
+    """Reconstruct a valid old receipt without invoking a current write API."""
+
+    from pipeline import transcript_acquisition as acquisition
+
+    assert request.schema_version == "transcript-acquisition-request@1"
+    target = TranscriptStoredTarget(
+        canonical_ticker=request.canonical_ticker,
+        fiscal_year=request.fiscal_year,
+        fiscal_quarter=request.fiscal_quarter,
+        as_of=request.as_of,
+        owner_requested=request.owner_requested,
+        coverage_role=ListType.PORTFOLIO,
+        fiscal_year_end_month=12,
+        source_policy_version=request.source_policy_version,
+        source_regime_identity=request.source_regime_identity,
+        status=StoredTargetStatus.AUTHORIZED,
+        reporting_status=TranscriptReportingStatus.ELIGIBLE,
+    )
+    authorization = authorize_transcript_acquisition_request(request, target)
+    staging_root.mkdir(parents=True, exist_ok=True)
+    source_path = staging_root.parent / "historical-source.transcript"
+    source_path.write_bytes(payload)
+    staged = acquisition.stage_transcript_artifact(
+        source_path,
+        staging_root,
+        expected_sha256=hashlib.sha256(payload).hexdigest(),
+        expected_size_bytes=len(payload),
+        max_bytes=acquisition.MAX_TRANSCRIPT_BYTES,
+    )
+    artifact = AuthorizedTranscriptArtifact(
+        authorization=authorization,
+        document_id=None,
+        source_url="https://issuer.example.invalid/transcript",
+        canonical_document_path=Path(
+            f"transcripts/raw/{request.canonical_ticker}_Q{request.fiscal_quarter}_"
+            f"{request.fiscal_year}.txt"
+        ),
+        source_path=staged.source_path,
+        staged=staged,
+    )
+    authorization_json = canonical_json_ascii(authorization.model_dump(mode="json"))
+    artifact_payload = artifact.model_dump(mode="json")
+    artifact_payload["canonical_document_path"] = artifact.canonical_document_path.as_posix()
+    artifact_json = canonical_json_ascii(artifact_payload)
+    conn.execute(
+        "INSERT INTO transcript_acquisition_receipts "
+        "(receipt_id,idempotency_key,document_id,canonical_ticker,fiscal_year,fiscal_quarter,"
+        "canonical_document_path,artifact_sha256,artifact_size_bytes,source_url,provider,"
+        "source_type,document_type,source_regime,source_regime_contract_sha256,"
+        "authorization_json,artifact_json,recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            transcript_acquisition_receipt_id(artifact),
+            authorization.idempotency_key,
+            artifact.document_id,
+            request.canonical_ticker,
+            request.fiscal_year,
+            request.fiscal_quarter,
+            artifact.canonical_document_path.as_posix(),
+            artifact.sha256,
+            artifact.size_bytes,
+            artifact.source_url,
+            request.provider.value,
+            request.source_type.value,
+            request.document_type.value,
+            request.source_regime_identity.regime.value,
+            request.source_regime_identity.contract_sha256,
+            authorization_json,
+            artifact_json,
+            datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+        ),
+    )
+    return artifact
+
+
 def test_0018_receipts_are_append_only_and_projection_bound(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
@@ -149,9 +240,9 @@ def test_0018_receipts_are_append_only_and_projection_bound(
             "INSERT INTO tracked_companies (ticker,name,list_type,instrument_type,fiscal_year_end) "
             "VALUES ('ACME','Acme','portfolio','equity','12-31')"
         )
-        authorization = require_authorized_transcript_request(
+        _seed_historical_receipt(
             connection,
-            TranscriptAcquisitionRequest(
+            request=TranscriptAcquisitionRequest(
                 entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
                 canonical_ticker="ACME",
                 fiscal_year=2026,
@@ -166,19 +257,8 @@ def test_0018_receipts_are_append_only_and_projection_bound(
                 source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
                 source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
             ),
-        )
-        artifact = stage_authorized_payload(
-            authorization,
+            staging_root=staging_root,
             payload=b"Operator\nQuestion?",
-            private_root=staging_root,
-            source_url="https://issuer.example.invalid/transcript",
-            canonical_document_path=Path("transcripts/raw/ACME_Q2_2026.txt"),
-        )
-        persist_authorized_transcript_artifact(
-            connection,
-            artifact,
-            project_root=repo_root,
-            trusted_staging_root=staging_root,
         )
         connection.commit()
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
@@ -289,19 +369,11 @@ def test_0063_preserves_historical_receipt_and_admits_current_receipt(
             "INSERT INTO tracked_companies (ticker,name,list_type,instrument_type,fiscal_year_end) "
             "VALUES ('ACME','Acme','portfolio','equity','12-31')"
         )
-        historical = require_authorized_transcript_request(conn, request)
-        historical_artifact = stage_authorized_payload(
-            historical,
-            payload=b"Operator\nHistorical question?",
-            private_root=staging_root,
-            source_url="https://issuer.example.invalid/transcript",
-            canonical_document_path=Path("transcripts/raw/ACME_Q2_2026.txt"),
-        )
-        persist_authorized_transcript_artifact(
+        historical_artifact = _seed_historical_receipt(
             conn,
-            historical_artifact,
-            project_root=repo_root,
-            trusted_staging_root=staging_root,
+            request=request,
+            staging_root=staging_root,
+            payload=b"Operator\nHistorical question?",
         )
         conn.commit()
         historical_row = dict(
@@ -317,6 +389,64 @@ def test_0063_preserves_historical_receipt_and_admits_current_receipt(
                 ).fetchone()
             )
             == historical_row
+        )
+        assert (
+            load_authorized_transcript_receipt(
+                conn,
+                receipt_id=str(historical_row["receipt_id"]),
+                project_root=repo_root,
+                trusted_staging_root=staging_root,
+            )
+            == historical_artifact
+        )
+        for fresh_request in (
+            request,
+            request.model_copy(update={"existing_artifact": True}),
+        ):
+            with pytest.raises(TranscriptAcquisitionDeniedError, match="request@2"):
+                authorize_transcript_request(conn, fresh_request)
+            with pytest.raises(TranscriptAcquisitionDeniedError, match="request@2"):
+                require_authorized_transcript_request(conn, fresh_request)
+            with pytest.raises(TranscriptAcquisitionDeniedError, match="request@2"):
+                load_authorized_transcript_replay(
+                    conn,
+                    request=fresh_request,
+                    project_root=repo_root,
+                    trusted_staging_root=staging_root,
+                )
+        denied_staging_root = repo_root / ".tmp" / "fresh-legacy-staging"
+        with pytest.raises(TranscriptAcquisitionDeniedError, match="request@2"):
+            stage_authorized_payload(
+                historical_artifact.authorization,
+                payload=b"new unqualified bytes",
+                private_root=denied_staging_root,
+                source_url="https://issuer.example.invalid/transcript",
+                canonical_document_path=Path("transcripts/raw/ACME_Q2_2026.txt"),
+            )
+        assert not denied_staging_root.exists()
+        with pytest.raises(TranscriptAcquisitionDeniedError, match="request@2"):
+            read_authorized_transcript(
+                conn,
+                historical_artifact,
+                project_root=repo_root,
+                trusted_staging_root=staging_root,
+            )
+        with pytest.raises(TranscriptAcquisitionDeniedError, match="request@2"):
+            persist_authorized_transcript_artifact(
+                conn,
+                historical_artifact,
+                project_root=repo_root,
+                trusted_staging_root=staging_root,
+            )
+        with pytest.raises(TranscriptAcquisitionDeniedError, match="request@2"):
+            require_persisted_authorized_transcript_artifact(
+                conn,
+                historical_artifact,
+                project_root=repo_root,
+                trusted_staging_root=staging_root,
+            )
+        assert (
+            conn.execute("SELECT COUNT(*) FROM transcript_acquisition_receipts").fetchone()[0] == 1
         )
 
         def qualified_window(*_args: object, **_kwargs: object) -> ReportedPeriodWindow:

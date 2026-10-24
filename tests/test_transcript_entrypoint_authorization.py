@@ -1793,6 +1793,7 @@ def test_new_receipt_rejects_latent_or_changed_stored_target(
 
     with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=False) as conn:
         request = TranscriptAcquisitionRequest(
+            schema_version="transcript-acquisition-request@2",
             entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
             canonical_ticker="ACME",
             fiscal_year=2026,

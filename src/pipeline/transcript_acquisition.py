@@ -36,7 +36,6 @@ from pipeline.source_policy import (
     ir_url_is_authorized,
     issuer_policy,
     reported_period_window_from_inventory,
-    reported_quarter_is_in_window,
 )
 from provenance.source_regime import SourceRegime, contract_for, receipt_identity
 from runtime.deterministic import canonical_json_ascii as _canonical_json
@@ -75,6 +74,15 @@ _UTC_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
 
 class TranscriptAcquisitionDeniedError(PermissionError):
     """The canonical transcript contract denied work before side effects."""
+
+
+def _require_current_source_request(request: TranscriptAcquisitionRequest) -> None:
+    """Keep legacy receipts readable without allowing new calendar-based work."""
+
+    if request.schema_version != "transcript-acquisition-request@2":
+        raise TranscriptAcquisitionDeniedError(
+            "current transcript acquisition requires a source-bound request@2"
+        )
 
 
 class AuthorizedTranscriptArtifact(BaseModel):
@@ -133,6 +141,7 @@ def _stored_target_for_request(
     conn: sqlite3.Connection,
     request: TranscriptAcquisitionRequest,
 ) -> TranscriptStoredTarget:
+    _require_current_source_request(request)
     stored = authorize_collection_target_in_connection(
         conn,
         request.canonical_ticker,
@@ -161,52 +170,40 @@ def _stored_target_for_request(
     fiscal_year_end: str | None = None
     if identity_authorized:
         status = StoredTargetStatus.AUTHORIZED
-        if request.schema_version == "transcript-acquisition-request@2":
-            try:
-                reported_window = reported_period_window_from_inventory(
-                    conn, ticker=request.canonical_ticker, as_of=request.as_of
-                )
-            except sqlite3.Error:
+        try:
+            reported_window = reported_period_window_from_inventory(
+                conn, ticker=request.canonical_ticker, as_of=request.as_of
+            )
+        except sqlite3.Error:
+            reported_window = ReportedPeriodWindow(
+                status=ReportedPeriodStatus.UNKNOWN, reason="source_inventory_unavailable"
+            )
+        if reported_window.status is ReportedPeriodStatus.COMPLETE:
+            fiscal_year_end = reported_window.fiscal_year_end
+            if (
+                fiscal_year_end is None
+                or stored.fiscal_year_end_month is None
+                or int(fiscal_year_end[:2]) != stored.fiscal_year_end_month
+            ):
                 reported_window = ReportedPeriodWindow(
-                    status=ReportedPeriodStatus.UNKNOWN, reason="source_inventory_unavailable"
+                    status=ReportedPeriodStatus.AMBIGUOUS,
+                    reason="fiscal_profile_mismatch",
+                    snapshot_ids=reported_window.snapshot_ids,
                 )
-            if reported_window.status is ReportedPeriodStatus.COMPLETE:
-                fiscal_year_end = reported_window.fiscal_year_end
-                if (
-                    fiscal_year_end is None
-                    or stored.fiscal_year_end_month is None
-                    or int(fiscal_year_end[:2]) != stored.fiscal_year_end_month
-                ):
-                    reported_window = ReportedPeriodWindow(
-                        status=ReportedPeriodStatus.AMBIGUOUS,
-                        reason="fiscal_profile_mismatch",
-                        snapshot_ids=reported_window.snapshot_ids,
-                    )
-                    fiscal_year_end = None
-            if fiscal_year_end is None:
-                reporting = TranscriptReportingStatus.PENDING
-            else:
-                target_end = fiscal_quarter_end(
-                    fiscal_year=request.fiscal_year,
-                    fiscal_quarter=request.fiscal_quarter,
-                    fiscal_year_end=fiscal_year_end,
-                )
-                reporting = (
-                    TranscriptReportingStatus.ELIGIBLE
-                    if reported_window.includes(target_end)
-                    else TranscriptReportingStatus.OUT_OF_WINDOW
-                )
-        elif stored.fiscal_year_end_month is None:
-            reporting = TranscriptReportingStatus.FISCAL_CALENDAR_UNAVAILABLE
-        elif reported_quarter_is_in_window(
-            fiscal_year=request.fiscal_year,
-            fiscal_quarter=request.fiscal_quarter,
-            fiscal_year_end_month=stored.fiscal_year_end_month,
-            as_of=request.as_of,
-        ):
-            reporting = TranscriptReportingStatus.ELIGIBLE
+                fiscal_year_end = None
+        if fiscal_year_end is None:
+            reporting = TranscriptReportingStatus.PENDING
         else:
-            reporting = TranscriptReportingStatus.OUT_OF_WINDOW
+            target_end = fiscal_quarter_end(
+                fiscal_year=request.fiscal_year,
+                fiscal_quarter=request.fiscal_quarter,
+                fiscal_year_end=fiscal_year_end,
+            )
+            reporting = (
+                TranscriptReportingStatus.ELIGIBLE
+                if reported_window.includes(target_end)
+                else TranscriptReportingStatus.OUT_OF_WINDOW
+            )
     else:
         status = StoredTargetStatus(stored.status.value)
         reporting = TranscriptReportingStatus.NOT_EVALUATED
@@ -233,6 +230,7 @@ def authorize_transcript_request(
 ) -> TranscriptAcquisitionAuthorization:
     """Project stored identity into the pure canonical contract without writes."""
 
+    _require_current_source_request(request)
     receipt = authorize_transcript_acquisition_request(
         request,
         _stored_target_for_request(conn, request),
@@ -264,6 +262,7 @@ def _stage_authorized_file(
     document_id: int | None,
 ) -> AuthorizedTranscriptArtifact:
     validated = validate_transcript_acquisition_authorization(authorization)
+    _require_current_source_request(validated.request)
     if validated.status is not TranscriptAuthorizationStatus.AUTHORIZED:
         raise TranscriptAcquisitionDeniedError("cannot stage a denied transcript acquisition")
     staged = stage_transcript_artifact(
@@ -294,6 +293,7 @@ def stage_authorized_payload(
     """Stage acquired response bytes only after the exact provider is authorized."""
 
     validated = validate_transcript_acquisition_authorization(authorization)
+    _require_current_source_request(validated.request)
     if validated.status is not TranscriptAuthorizationStatus.AUTHORIZED:
         raise TranscriptAcquisitionDeniedError("cannot stage a denied transcript acquisition")
     if len(payload) > MAX_TRANSCRIPT_BYTES:
@@ -644,6 +644,7 @@ def persist_authorized_transcript_artifact(
     """Append or exactly replay one durable artifact receipt."""
 
     validated = AuthorizedTranscriptArtifact.model_validate(artifact, strict=True)
+    _require_current_source_request(validated.authorization.request)
     payload = read_authorized_transcript(
         conn,
         validated,
