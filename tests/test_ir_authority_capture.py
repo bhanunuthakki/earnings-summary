@@ -15,7 +15,7 @@ from urllib.parse import urlunsplit
 import pytest
 
 from execution import capture_ir_authority_surfaces as cli
-from ir_pipeline.authority import SurfaceOutcome
+from ir_pipeline.authority import IRAuthorityEvidence, PublisherSurfaceEvidence, SurfaceOutcome
 from ir_pipeline.authority_capture import (
     IRAuthorityCaptureError,
     IRAuthorityCaptureIdentityError,
@@ -29,6 +29,7 @@ from ir_pipeline.discover import generic
 from ir_pipeline.discover._docmeta import CandidateDoc
 from ir_pipeline.discover.generic import CrawlPageOutcome, DocumentDiscoveryInventory
 from ir_pipeline.source_inventory import source_inventory_request, sync_ir_source_inventory
+from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
 from provenance.evidence_native_candidates import resolve_local_storage_uri
 from provenance.issuer_registry import (
     IssuerEntity,
@@ -794,6 +795,112 @@ def test_historical_authority_projection_accepts_tuple_and_row_results(
                     ticker="ACME",
                 )
                 is None
+            )
+    finally:
+        conn.close()
+
+
+def _collector_authority(
+    conn: sqlite3.Connection,
+    tmp_path: Path,
+    collectors: tuple[str | None, ...],
+) -> IRAuthorityEvidence:
+    ledger = EvidenceLedger(conn)
+    surfaces: list[PublisherSurfaceEvidence] = []
+    for ordinal, collector in enumerate(collectors):
+        observation_id = f"collector-probe-{ordinal}"
+        source_url = f"{URL}/{ordinal}"
+        raw = f"surface-{ordinal}".encode()
+        digest = hashlib.sha256(raw).hexdigest()
+        if collector is not None:
+            path = tmp_path / observation_id
+            path.write_bytes(raw)
+            ledger.persist(
+                ContentBlob(
+                    sha256=digest,
+                    byte_size=len(raw),
+                    media_type="text/html",
+                    storage_uri=path.as_uri(),
+                    recorded_at=STAMP,
+                )
+            )
+            ledger.persist(
+                SourceObservation(
+                    observation_id=observation_id,
+                    idempotency_key=observation_id,
+                    source_kind="ir_publisher_authority",
+                    source_url=source_url,
+                    blob_sha256=digest,
+                    source_published_at=None,
+                    filing_at=None,
+                    accepted_at=None,
+                    observed_at=STAMP,
+                    retrieved_at=STAMP,
+                    retrieval_config_sha256="a" * 64,
+                    collector_code_version=collector,
+                )
+            )
+        surfaces.append(
+            PublisherSurfaceEvidence(
+                surface_key=f"archive-{ordinal}",
+                surface_kind="archive",
+                source_url=source_url,
+                source_observation_id=observation_id,
+                raw_sha256=digest,
+                traversal_kind="pagination",
+                outcome="exhausted",
+                terminal_condition="next_link_absent",
+                observed_document_urls=(DOCUMENT_URL,),
+            )
+        )
+    return IRAuthorityEvidence(
+        authority_basis="publisher_archive", asserted_at=STAMP, surfaces=tuple(surfaces)
+    )
+
+
+def test_generic_authority_collectors_keep_existing_inventory_route(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _full_conn(tmp_path, migrated_db)
+    try:
+        authority = _collector_authority(
+            conn, tmp_path, ("synthetic@1", "ir-authority-surface-capture@1")
+        )
+        assert (
+            verified_mz_authority_documents(
+                conn, authority, blob_root=tmp_path, issuer_id="issuer-acme", ticker="ACME"
+            )
+            is None
+        )
+    finally:
+        conn.close()
+
+
+def test_mz_authority_rejects_mixed_collector_rows(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _full_conn(tmp_path, migrated_db)
+    try:
+        authority = _collector_authority(
+            conn, tmp_path, ("ir-authority-surface-capture@2-mz-catalog", "synthetic@1")
+        )
+        with pytest.raises(IRAuthorityCaptureError, match="mixes collector versions"):
+            verified_mz_authority_documents(
+                conn, authority, blob_root=tmp_path, issuer_id="issuer-acme", ticker="ACME"
+            )
+    finally:
+        conn.close()
+
+
+def test_authority_adapter_rejects_missing_surface_observation(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _full_conn(tmp_path, migrated_db)
+    try:
+        authority = _collector_authority(conn, tmp_path, ("synthetic@1", None))
+        with pytest.raises(IRAuthorityCaptureError, match="observation is absent"):
+            verified_mz_authority_documents(
+                conn, authority, blob_root=tmp_path, issuer_id="issuer-acme", ticker="ACME"
             )
     finally:
         conn.close()

@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "ac840c0e8b0f672bac0ca299ff9a773a4ce33514",
+  "scoped_commit": "4d32fd484456c6df922b0775f1e8b1b78efda4a9",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "3f1df39d818b24992063b1b18f275d2971f4f432ecb81ae9a1225cfddb6ea3ea",
+  "source_sha256": "4476b3e9cfaf2e7ba4b5372049669e8c07cd9e9aa3bd7429b73524998db66317",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1484,
-    "total_noncomment_loc": 577345,
+    "total_noncomment_loc": 577341,
     "modules_over_1000_loc": 113,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
@@ -11556,9 +11556,9 @@
         "path": "src/ir_pipeline/authority_capture.py",
         "module": "ir_pipeline.authority_capture",
         "lines": {
-          "physical": 1405,
-          "nonblank": 1312,
-          "noncomment": 1306
+          "physical": 1401,
+          "nonblank": 1308,
+          "noncomment": 1302
         },
         "internal_fan_out": 9,
         "responsibilities": [

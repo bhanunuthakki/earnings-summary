@@ -1121,31 +1121,27 @@ def verified_mz_authority_documents(
 ) -> tuple[tuple[str, str], ...] | None:
     """Reconstruct an @2 MZ document set from retained request and response bytes.
 
-    Return None for historical @1 authority, whose existing crawl comparison applies.
+    Return None when no surface uses the MZ collector; the generic crawl
+    comparison remains responsible for those authority claims.
     """
     authority = IRAuthorityEvidence.model_validate(authority.model_dump())
-    first = authority.surfaces[0]
-    row = conn.execute(
-        "SELECT retrieval_config_sha256, collector_code_version FROM evidence_source_observations "
-        "WHERE observation_id = ?",
-        (first.source_observation_id,),
-    ).fetchone()
-    if row is None:
-        raise IRAuthorityCaptureError("authority observation is absent")
-    collector = str(row[1])
-    if collector == _COLLECTOR:
-        for surface in authority.surfaces:
-            version = conn.execute(
-                "SELECT collector_code_version FROM evidence_source_observations "
-                "WHERE observation_id = ?",
-                (surface.source_observation_id,),
-            ).fetchone()
-            if version is None or str(version[0]) != _COLLECTOR:
-                raise IRAuthorityCaptureError("historical authority mixes collector versions")
+    configs: list[str] = []
+    collectors: list[str] = []
+    for surface in authority.surfaces:
+        row = conn.execute(
+            "SELECT retrieval_config_sha256, collector_code_version "
+            "FROM evidence_source_observations WHERE observation_id = ?",
+            (surface.source_observation_id,),
+        ).fetchone()
+        if row is None:
+            raise IRAuthorityCaptureError("authority observation is absent")
+        configs.append(str(row[0]))
+        collectors.append(str(row[1]))
+    if _MZ_COLLECTOR not in collectors:
         return None
-    if collector != _MZ_COLLECTOR:
-        raise IRAuthorityCaptureError("authority collector is not supported")
-    config_digest = str(row[0])
+    if any(collector != _MZ_COLLECTOR for collector in collectors):
+        raise IRAuthorityCaptureError("MZ authority mixes collector versions")
+    config_digest = configs[0]
     config_body = _read_retained_blob(
         conn, blob_root=blob_root, digest=config_digest, max_bytes=2_000_000
     )
