@@ -7,10 +7,13 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from etf_sources.ingest import apply_characteristics
 from etf_sources.issuer_registry import IssuerCharacteristics
-from execution.fetch_etf_data import parse_etf_info
+from execution.fetch_etf_data import ingest_live, parse_etf_holdings, parse_etf_info
 from instrument_store import get_etf_profile, upsert_etf_profile
+from net.client import FMP_CLIENT, HttpCallError, HttpErrorKind, HttpJsonResponse, JsonShape
 from pipeline.work_os_evaluation import build_etf_profile_inputs
 from research.investment_profile import EtfProfileInputs, derive_etf_label_evidence
 
@@ -181,3 +184,116 @@ def test_invalid_source_date_cannot_become_undated_admissible_evidence() -> None
 
     profile = parse_etf_info({"sector": "Energy", "asOfDate": "invalid"}, "VDE", datetime.now(UTC))
     assert not admitted_profile_fields(profile)
+
+
+@pytest.mark.parametrize("primary", [0, "0"])
+def test_etf_parsers_accept_zero(primary: object) -> None:
+    fetched_at = datetime(2024, 5, 1, tzinfo=UTC)
+    info = parse_etf_info(
+        {"aum": primary, "assetsUnderManagement": 1000000, "yield": primary, "dividendYield": 5},
+        "AAA",
+        fetched_at,
+    )
+    holdings = parse_etf_holdings(
+        [{"weightPercentage": primary, "weight": 7, "sharesNumber": primary, "shares": 99}],
+        "AAA",
+        fetched_at.date(),
+        fetched_at,
+    )
+    assert (
+        info.aum_usd_m,
+        info.distribution_yield,
+        holdings[0].weight_pct,
+        holdings[0].shares_held,
+    ) == (0.0, 0.0, 0.0, 0.0)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [None, "", "bad", False, True, float("nan"), float("inf"), float("-inf"), "NaN", 10**400],
+)
+def test_etf_parsers_fallback_for_invalid(bad: object) -> None:
+    fetched_at = datetime(2024, 5, 1, tzinfo=UTC)
+    info = parse_etf_info(
+        {
+            "aum": bad,
+            "assetsUnderManagement": 1000000,
+            "yield": bad,
+            "dividendYield": 5,
+            "nav": bad,
+            "price": bad,
+        },
+        "AAA",
+        fetched_at,
+    )
+    holdings = parse_etf_holdings(
+        [{"weightPercentage": bad, "weight": "7%", "sharesNumber": bad, "shares": 99}],
+        "AAA",
+        fetched_at.date(),
+        fetched_at,
+    )
+    assert (
+        info.aum_usd_m,
+        info.distribution_yield,
+        holdings[0].weight_pct,
+        holdings[0].shares_held,
+    ) == (1.0, 0.05, 0.07, 99.0)
+    assert info.nav is None
+    assert info.price is None
+
+
+def test_ingest_live_positive_two_calls(
+    tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def wire(url: str, **kwargs: object) -> HttpJsonResponse:
+        calls.append((url, kwargs))
+        if url.endswith("/stable/etf/info"):
+            return HttpJsonResponse(200, {"sector": "Energy"})
+        return HttpJsonResponse(200, [])
+
+    monkeypatch.setattr(FMP_CLIENT, "get_url_json", wire)
+    monkeypatch.setenv("FMP_API_KEY", "synthetic-key")
+    with sqlite3.connect(migrated_db(tmp_path / "test.db")) as conn:
+        conn.row_factory = sqlite3.Row
+        profile, count = ingest_live(conn, "ZZZ", tmp_path / "fmp")
+    assert profile.ticker == "ZZZ"
+    assert count == 0
+    assert len(calls) == 2
+    assert [c[0] for c in calls] == [
+        "https://financialmodelingprep.com/stable/etf/info",
+        "https://financialmodelingprep.com/stable/etf/holdings",
+    ]
+    for _, kw in calls:
+        assert kw["params"] == {"symbol": "ZZZ"}
+        assert kw["api_key"] == "synthetic-key"
+        assert kw["expected"] is JsonShape.ANY
+        assert kw["timeout"] == (10, 60)
+
+
+def test_ingest_live_network_error_no_fallback(
+    tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+
+    def wire(url: str, **kwargs: object) -> HttpJsonResponse:
+        calls.append(url)
+        raise HttpCallError(
+            kind=HttpErrorKind.NETWORK,
+            message="failure?apikey=synthetic-key",
+            retryable=True,
+        )
+
+    monkeypatch.setattr(FMP_CLIENT, "get_url_json", wire)
+    monkeypatch.setenv("FMP_API_KEY", "synthetic-key")
+    fmp_dir = tmp_path / "fmp"
+    with sqlite3.connect(migrated_db(tmp_path / "test.db")) as conn:
+        conn.row_factory = sqlite3.Row
+        with pytest.raises(RuntimeError) as excinfo:
+            ingest_live(conn, "ZZZ", fmp_dir)
+    assert len(calls) == 1
+    assert "synthetic-key" not in str(excinfo.value)
+    assert excinfo.value.__cause__ is None
+    assert excinfo.value.__suppress_context__ is True
+    assert not fmp_dir.exists()

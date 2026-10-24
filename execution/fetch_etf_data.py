@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sqlite3
 import sys
@@ -36,17 +37,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from etf_sources.profile_evidence import capture_profile_fields
 from instrument_store import upsert_etf_holdings, upsert_etf_profile
 from models.instruments import EtfHolding, EtfProfile
-from net.client import FMP_CLIENT, FMP_ORIGIN, HttpCallError, JsonShape
+from net.client import FMP_CLIENT, HttpCallError, JsonShape
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 FMP_DIR = PROJECT_ROOT / "data" / "historical" / "fmp"
-FMP_BASE = FMP_ORIGIN
-
-# Tier gate: on free FMP the /api/v3 fallback 403s (v3 deprecated 2025-08-31),
-# so skip it and hit /stable only when FMP_TIER=free. Mirrors the gate in
-# execution/save_fmp_data.py; a deliberate flip, not auto-detected.
-_STABLE_ONLY = os.environ.get("FMP_TIER", "").strip().lower() == "free"
 
 
 # ---------------------------------------------------------------------------
@@ -68,15 +63,19 @@ def parse_etf_info(payload: object, ticker: str, fetched_at: datetime) -> EtfPro
         name=_str(record.get("name")),
         issuer=_str(record.get("etfCompany")) or _str(record.get("issuer")),
         expense_ratio=_pct_to_decimal(record.get("expenseRatio")),
-        aum_usd_m=_aum_to_millions(record.get("aum"))
-        or _aum_to_millions(record.get("assetsUnderManagement")),
+        aum_usd_m=_first_valid_float(
+            _aum_to_millions(record.get("aum")),
+            _aum_to_millions(record.get("assetsUnderManagement")),
+        ),
         inception_date=_iso_date(record.get("inceptionDate")),
         asset_class=_str(record.get("assetClass")),
         benchmark_index=_str(record.get("etfIndex")) or _str(record.get("benchmark")),
         domicile=_str(record.get("domicile")),
         listed_exchange=_str(record.get("exchange")),
-        distribution_yield=_pct_to_decimal(record.get("yield"))
-        or _pct_to_decimal(record.get("dividendYield")),
+        distribution_yield=_first_valid_float(
+            _pct_to_decimal(record.get("yield")),
+            _pct_to_decimal(record.get("dividendYield")),
+        ),
         description=_str(record.get("description")),
         sector_label=_str(record.get("sectorsList")) or _str(record.get("sector")),
         nav=_float(record.get("nav")),
@@ -110,15 +109,20 @@ def parse_etf_holdings(
             continue
         record = cast("dict[str, object]", raw)
         constituent = _str(record.get("asset")) or _str(record.get("symbol"))
-        weight_pct_raw = record.get("weightPercentage") or record.get("weight")
         out.append(
             EtfHolding(
                 ticker=ticker.upper(),
                 as_of_date=as_of_date,
                 constituent_ticker=constituent.upper() if constituent else None,
                 name=_str(record.get("name")),
-                weight_pct=_pct_to_decimal(weight_pct_raw),
-                shares_held=_float(record.get("sharesNumber")) or _float(record.get("shares")),
+                weight_pct=_first_valid_float(
+                    _pct_to_decimal(record.get("weightPercentage")),
+                    _pct_to_decimal(record.get("weight")),
+                ),
+                shares_held=_first_valid_float(
+                    _float(record.get("sharesNumber")),
+                    _float(record.get("shares")),
+                ),
                 market_value_usd=_float(record.get("marketValue")),
                 sector=_str(record.get("sector")),
                 asset_class=_str(record.get("assetClass")),
@@ -225,29 +229,22 @@ def ingest_live(
 
 
 def _fmp_get(api_key: str, ticker: str, path: str) -> object:
-    """Try /stable (then /api/v3 unless stable-only); return first 200 JSON body."""
-    last_err: str | None = None
-    bases = [f"{FMP_BASE}/stable/{path}/{ticker}"]
-    if not _STABLE_ONLY:
-        bases.append(f"{FMP_BASE}/api/v3/{path.replace('/', '-')}/{ticker}")
-    for base in bases:
-        try:
-            response = FMP_CLIENT.get_url_json(
-                base,
-                api_key=api_key,
-                expected=JsonShape.ANY,
-                timeout=(10, 60),
-            )
-        except HttpCallError as exc:
-            # The shared client strips query strings and redacts transport
-            # exceptions before they can reach this caller.
-            last_err = f"{base}: {exc}"
-            continue
-        return response.payload
-    # `from None` drops the original RequestException context as defense-in-depth:
-    # its traceback also embeds the unredacted URL, so it must never be chained
-    # onto the RuntimeError (last_err itself is already redacted above).
-    raise RuntimeError(f"FMP fetch failed for {ticker} {path}: {last_err}") from None
+    """Fetch a FMP endpoint via the shared client; return the JSON payload.
+
+    The shared client strips query strings and redacts transport exceptions,
+    so the runtime error raised here never carries the raw URL or API key.
+    """
+    try:
+        response = FMP_CLIENT.get_json(
+            path,
+            params={"symbol": ticker},
+            api_key=api_key,
+            expected=JsonShape.ANY,
+            timeout=(10, 60),
+        )
+    except HttpCallError as exc:
+        raise RuntimeError(f"FMP fetch failed for {ticker} {path}: {exc}") from None
+    return response.payload
 
 
 # ---------------------------------------------------------------------------
@@ -262,13 +259,26 @@ def _str(v: object) -> str | None:
     return s or None
 
 
+def _first_valid_float(*values: float | None) -> float | None:
+    """Return the first non-None value in `values`, else None."""
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def _float(v: object) -> float | None:
-    if v is None or v == "":
+    if v is None or isinstance(v, bool):
+        return None
+    if not isinstance(v, (str, int, float)):
+        return None
+    if isinstance(v, str) and not v.strip():
         return None
     try:
-        return float(v) if isinstance(v, (str, int, float)) else None
-    except (TypeError, ValueError):
+        f = float(v)
+    except (TypeError, ValueError, OverflowError):
         return None
+    return f if math.isfinite(f) else None
 
 
 def _iso_date(v: object) -> date | None:

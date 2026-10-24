@@ -604,7 +604,7 @@
     "transaction_audit": "The only stage before FMP that can write is optional SEC ingest; ingest_for_ticker commits at its commit phase and rolls back a started transaction on failure. Segment cache validation is read-only. Supplied-record refresh_cache retains its separate commit=False caller-owned path. No cross-document atomicity claim."
   },
   "r1_pending_revision": "Resolved, accepted and committed3065638a; later checkpoint proxyR1 score96.",
-  "remaining_work": "Owner usage decision pending for new ETF Role in portfolio narratives only. Keep ETF evidence/workup/history/all portfolio analysis. R2/R7 current rewrite designs deferred. R6 code committed/accepted90,325 focused tests/224 equal comparisons. Architecture/release remain HOLD; fresh graph/full applicable gates required at next integration/CI boundary. No push, merge, deploy, live-state or collection authority.",
+  "remaining_work": "ETF Create/Refresh controls, explicit-request generation cache removal and full source/output grounding remain unfinished. R2/R7 designs remain deferred. Current combined architecture/release gate remains HOLD; latest complete suite binds17cfdd5f only. Retain all core evidence, depth and saved history; no live/collection/publish authority.",
   "review_kind": "Owner-selected independent GPT-6.1 Sol proxy; earlier exact Opus receipts preserved as history. No formal model-purpose qualification claimed.",
   "review_route_update": {
     "authority": "Owner latest steering allows independent6.1Sol proxies and no further Astra requirement.",
@@ -4576,5 +4576,47 @@
     "changed_files": 57,
     "removed_calls": 60,
     "skipped_files": 24
+  },
+  "etf_adapter_consolidation_20261024": {
+    "baseline": "28681bf4c",
+    "status": "accepted local implementation; global architecture/release HOLD",
+    "prd_score": 93,
+    "implementation_score": 95,
+    "prd_review": ".tmp/cleanup-open-model-execution/etf-adapter-prune-sol-prd-review.json",
+    "implementation_review": ".tmp/cleanup-open-model-execution/etf-adapter-prune-sol-implementation-review.json",
+    "source_proof": ".tmp/cleanup-open-model-execution/etf-adapter-prune-source-proof.json",
+    "selected_tests": {
+      "passed": 66,
+      "seconds": 6.8,
+      "log": ".tmp/cleanup-open-model-execution/etf-adapter-prune-selected-suite.log"
+    },
+    "fail_before": {
+      "failed": 12,
+      "passed": 2,
+      "seconds": 7.28
+    },
+    "strict_types": "2 files, zero errors",
+    "net_line_change": {
+      "application_added": 10,
+      "tests_added": 116
+    },
+    "operator_disposition": "No operator actions added or removed. Existing ETF ingest CLI/cache commands remain. Requests now use the canonical stable query route, without the adapter legacy fallback; mocked public ingest tests prove the request and error contracts. No live test performed.",
+    "limits": [
+      "AUM unit/currency heuristic unchanged and unqualified",
+      "ETF role on-demand and B1-B3/C1-C2 grounding remain incomplete",
+      "No provider calls or collection; no database/schema/dependency changes",
+      "No push/merge/deploy/full current-branch release claim"
+    ],
+    "graph": {
+      "path": ".tmp/cleanup-open-model-execution/etf-adapter-prune-current-graph.json",
+      "status": "COMPLETE/PASS",
+      "production_unknown": 0,
+      "production_unresolved": 0,
+      "attempted_inputs": 3721,
+      "unchanged_reviewed_sites": 208,
+      "unchanged_internal_targets": 89
+    },
+    "check_fast": "FAIL existing architecture modules_over_2000_loc26 versus25; boundaries PASS; no waiver",
+    "acceptance": ".tmp/cleanup-open-model-execution/etf-adapter-prune-final-acceptance.json"
   }
 }

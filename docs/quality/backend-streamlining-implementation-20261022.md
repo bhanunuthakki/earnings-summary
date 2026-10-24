@@ -948,3 +948,12 @@ Task-owned source closures, synthetic outputs and review packets remain for exac
 checkpoint reproduction. Release them through the existing temporary-artifact owner
 after the final receipt is durable and no recovery question remains. Failed-test
 proof is retained under that owner's policy. No production database was copied.
+
+
+## ETF ingestion adapter consolidation
+
+The ETF fetch adapter now uses the existing FMP client instead of a separate stable/legacy URL ladder and tier flag. It sends the symbol as a query parameter, as specified in the [ETF information documentation](https://site.financialmodelingprep.com/developer/docs/stable/information) and [ETF holdings documentation](https://site.financialmodelingprep.com/developer/docs). Mocked public ingestion tests verify both stable URLs and the failure path. No provider request was made. Existing operator commands, cache handling and transactions remain. This is an explicit tested no-change disposition for the operator action surface; the transport route correction is intentional.
+
+One numeric selector now preserves zero across AUM, yield, constituent weight and shares. Invalid, bool, nonfinite and overflowing inputs can use a valid alias. The existing AUM conversion function remains unchanged; its unit/currency assumptions remain unqualified. All old test functions and assertions remain. The new regressions detect 12 failures on old source; all 66 selected ETF and canonical-client tests pass on the candidate. Both changed files have zero strict type errors. Sol scored the PRD 93 and implementation 95. Source adds 10 application lines and 116 test lines, so this unit earns no deletion credit. ETF Role Create/Refresh and full financial grounding remain unfinished.
+
+Proof: `.tmp/cleanup-open-model-execution/etf-adapter-prune-source-proof.json`; independent review: `.tmp/cleanup-open-model-execution/etf-adapter-prune-sol-implementation-review.json`. Final graph and gate disposition are recorded in the acceptance receipt. No live database, schema, provider, scheduler or application model operation occurred.
