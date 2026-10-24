@@ -63,6 +63,11 @@ from provenance.source_regime import (
     classification_for_source_type,
     contract_for,
 )
+from sqlite_runtime import (
+    ensure_fact_capture_functions,
+    fact_capture_locator_matches,
+    fact_capture_numeric_matches,
+)
 
 log = logging.getLogger(__name__)
 
@@ -705,6 +710,38 @@ def fact_resolution_cutover_available(conn: sqlite3.Connection) -> bool:
     )
 
 
+def _v1_input_shape_sql(safe_input: str) -> str:
+    """The same closed V1 field grammar enforced by DerivedInputRef at writes."""
+    fact_table = f"json_extract({safe_input},'$.fact_table')"
+    return (
+        f"{fact_table} IN ('financial_facts','kpi_facts') "
+        + "AND "
+        + " AND ".join(
+            f"json_type({safe_input},'$.{key}')='integer' "
+            f"AND json_extract({safe_input},'$.{key}')>0"
+            for key in ("fact_id", "fact_revision", "resolution_revision", "doc_id")
+        )
+        + " AND "
+        + " AND ".join(
+            f"json_type({safe_input},'$.{key}')='text' AND json_extract({safe_input},'$.{key}')!=''"
+            for key in ("observation_id", "resolution_id", "document_version_id", "item")
+        )
+        + f" AND NOT EXISTS (SELECT 1 FROM json_each({safe_input}) AS field "
+        "WHERE field.key NOT IN ('ref','fact_table','fact_id','fact_revision',"
+        "'observation_id','resolution_id','resolution_revision','doc_id',"
+        "'document_version_id','item','period_end','tier'))"
+        + f" AND json_type({safe_input},'$.resolution_revision_id') IS NULL "
+        + f"AND json_type({safe_input},'$.fact_cell_id') IS NULL "
+        + f"AND json_type({safe_input},'$.metric_definition_revision_id') IS NULL "
+        + f"AND json_type({safe_input},'$.observation_payload_sha256') IS NULL "
+        + f"AND (json_type({safe_input},'$.period_end') IS NULL OR "
+        f"(json_type({safe_input},'$.period_end')='text' "
+        f"AND json_extract({safe_input},'$.period_end')!='')) "
+        + f"AND (json_type({safe_input},'$.tier') IS NULL OR "
+        f"json_type({safe_input},'$.tier') IN ('text','null')) "
+    )
+
+
 def _derived_source_quarantine_sql(fact_alias: str, *, as_known: bool) -> str:
     """Reject incomplete legacy lineage or any quarantined declared input."""
 
@@ -721,6 +758,7 @@ def _derived_source_quarantine_sql(fact_alias: str, *, as_known: bool) -> str:
     market_inputs = "'price','market_cap'"
     doc_id = f"json_extract({safe_input},'$.doc_id')"
     version_id = f"json_extract({safe_input},'$.document_version_id')"
+    valid_v1 = _v1_input_shape_sql(safe_input)
     quarantine = explicit_document_quarantine_sql("run.document_version_id", as_known=as_known)
     return (
         f"({fact_alias}.computed_from IS NULL AND "  # nosec B608 -- fixed SQL alias; persisted wire literals below
@@ -730,25 +768,382 @@ def _derived_source_quarantine_sql(fact_alias: str, *, as_known: bool) -> str:
         f"json_valid({fact_alias}.computed_from)=0 "
         f"OR coalesce(json_type({safe_lineage},'$.inputs'),'')!='array' "
         f"OR json_array_length({safe_lineage},'$.inputs')=0 "
+        f"OR json_array_length({safe_lineage},'$.inputs')>500 "
         "OR EXISTS (SELECT 1 FROM "
         f"json_each({safe_lineage},'$.inputs') AS input "
         "LEFT JOIN evidence_document_versions AS run "
-        f"ON run.legacy_document_id={doc_id} OR run.document_version_id={version_id} "
+        f"ON run.legacy_document_id={doc_id} AND run.document_version_id={version_id} "
         "WHERE input.type!='object' "
         f"OR {ref} IS NULL "
-        f"OR {ref} NOT IN ('financial_fact','segment_fact','canonical_observation','vendor_field') "
+        f"OR {ref} NOT IN ('legacy_canonical_fact','vendor_field') "
         f"OR ({ref}='vendor_field' AND ("
         f"{item} NOT IN ({market_inputs}) OR {item} IS NULL "
         f"OR {doc_id} IS NOT NULL OR {version_id} IS NOT NULL "
         f"OR coalesce(json_type({safe_input},'$.period_end'),'')!='text')) "
-        f"OR ({ref} IN ('financial_fact','segment_fact') AND "
-        f"(json_type({safe_input},'$.doc_id')!='integer' OR {doc_id}<=0)) "
-        f"OR ({ref}='canonical_observation' AND "
-        f"(json_type({safe_input},'$.document_version_id')!='text' OR {version_id}='')) "
+        f"OR ({ref}='legacy_canonical_fact' AND coalesce(({valid_v1}),0)=0) "
         f"OR ({ref}!='vendor_field' AND run.document_version_id IS NULL) "
         f"OR ({ref}!='vendor_field' AND {quarantine})"
         ")))"
     )
+
+
+def _derived_current_graph_invalid_sql(
+    *, as_known: bool = False, definition_available: bool = True
+) -> str:
+    """Validate every declared V1 descendant inside the caller's SQL snapshot."""
+
+    safe_lineage = (
+        "CASE WHEN json_valid(graph.computed_from) THEN graph.computed_from "
+        "ELSE '{\"inputs\":[]}' END"
+    )
+    safe_input = "CASE WHEN input.type='object' THEN input.value ELSE '{}' END"
+
+    def field(name: str) -> str:
+        return f"json_extract({safe_input},'$.{name}')"
+
+    ref = field("ref")
+    table = field("fact_table")
+    fact_id = field("fact_id")
+    observation_id = field("observation_id")
+    resolution_id = field("resolution_id")
+    doc_id = field("doc_id")
+    version_id = field("document_version_id")
+    item = field("item")
+    child = "COALESCE(kpi.id,financial.id)"
+    child_value = "COALESCE(kpi.value,financial.value)"
+    child_ticker = "COALESCE(kpi.ticker,financial.ticker)"
+    child_period = "COALESCE(kpi.period_end,financial.period_end)"
+    child_fiscal = "COALESCE(kpi.fiscal_period_type,financial.fiscal_period_type)"
+    child_unit = "COALESCE(kpi.unit,financial.unit)"
+    child_doc = "COALESCE(kpi.source_doc_id,financial.source_doc_id)"
+    child_locator = "COALESCE(kpi.locator,financial.locator)"
+    quarantine = explicit_document_quarantine_sql("run.document_version_id", as_known=as_known)
+    temporal_evidence = (
+        "AND "
+        + " AND ".join(
+            _as_known_clock_sql(column)
+            for column in ("version.recorded_at", "node.recorded_at", "extraction.completed_at")
+        )
+        if as_known
+        else ""
+    )
+    context_head = (
+        f"AND {_as_known_clock_sql('context.knowledge_at')} "
+        f"AND {_as_known_clock_sql('context.created_at')} "
+        "AND NOT EXISTS (SELECT 1 FROM kpi_fact_semantic_contexts AS newer "
+        "WHERE newer.kpi_fact_id=context.kpi_fact_id AND newer.revision>context.revision "
+        f"AND {_as_known_clock_sql('newer.knowledge_at')} "
+        f"AND {_as_known_clock_sql('newer.created_at')}) "
+        if as_known
+        else "AND NOT EXISTS (SELECT 1 FROM kpi_fact_semantic_contexts AS newer "
+        "WHERE newer.supersedes_context_id=context.id) "
+    )
+    definition_visibility = (
+        "AND "
+        + " AND ".join(
+            _as_known_clock_sql(f"definition.{field}") for field in ("knowledge_at", "recorded_at")
+        )
+        if as_known
+        else ""
+    )
+    selected_visibility = (
+        "AND "
+        + " AND ".join(
+            _as_known_clock_sql(f"selected.{field}") for field in ("knowledge_at", "recorded_at")
+        )
+        if as_known
+        else ""
+    )
+    definition_source_visibility = (
+        "AND "
+        + " AND ".join(
+            _as_known_clock_sql(column)
+            for column in (
+                "run.recorded_at",
+                "definition_node.recorded_at",
+                "definition_run.completed_at",
+                "definition_source.retrieved_at",
+            )
+        )
+        if as_known
+        else ""
+    )
+    definition_quarantine = explicit_document_quarantine_sql(
+        "run.document_version_id", as_known=as_known
+    )
+    definition = (
+        "EXISTS (SELECT 1 FROM kpi_definition_revisions AS definition "
+        "JOIN reporting_entities AS entity "
+        "ON entity.reporting_entity_id=definition.reporting_entity_id "
+        "JOIN evidence_document_versions AS run "
+        "ON run.document_version_id=definition.source_document_version_id "
+        "JOIN evidence_source_observations AS definition_source "
+        "ON definition_source.observation_id=run.observation_id "
+        "JOIN evidence_nodes AS definition_node "
+        "ON definition_node.node_id=definition.source_evidence_node_id "
+        "JOIN evidence_extraction_runs AS definition_run "
+        "ON definition_run.extraction_run_id=definition_node.extraction_run_id "
+        "AND definition_run.document_version_id=run.document_version_id "
+        "WHERE definition.kpi_definition_revision_id=context.kpi_definition_revision_id "
+        "AND definition.kpi_definition_id=kpi.kpi_definition_id "
+        "AND entity.issuer_id=observation.issuer_id "
+        "AND run.issuer_id=entity.issuer_id "
+        "AND definition_node.locator_sha256=definition.source_locator_sha256 "
+        "AND definition_run.outcome='succeeded' "
+        "AND definition_run.input_sha256=run.blob_sha256 "
+        f"AND NOT {definition_quarantine} "
+        + definition_source_visibility
+        + "AND definition.status='admitted' AND definition.lifecycle='active' "
+        "AND datetime(definition.effective_at)<=datetime(kpi.period_end) "
+        + definition_visibility
+        + " AND definition.kpi_definition_revision_id=("
+        "SELECT selected.kpi_definition_revision_id FROM kpi_definition_revisions AS selected "
+        "WHERE selected.kpi_definition_id=kpi.kpi_definition_id "
+        "AND datetime(selected.effective_at)<=datetime(kpi.period_end) "
+        + selected_visibility
+        + " ORDER BY datetime(selected.effective_at) DESC,"
+        "datetime(selected.knowledge_at) DESC,selected.revision DESC LIMIT 1) "
+        "AND definition.reported_label=context.metric_name_as_reported "
+        "AND definition.accounting_basis=context.accounting_basis "
+        "AND definition.consolidation_scope=context.consolidation_scope "
+        "AND json(definition.dimensions_json)=json(context.dimensions_json) "
+        "AND definition.unit_scale=context.unit_scale "
+        "AND definition.unit_key=kpi.unit "
+        "AND definition.currency IS kpi.currency)"
+        if definition_available
+        else "0"
+    )
+    semantic = (
+        "EXISTS (SELECT 1 FROM kpi_fact_semantic_contexts AS context "
+        "WHERE context.kpi_fact_id=kpi.id AND context.status='admitted' "
+        f"AND {item}=context.metric_name_as_reported "
+        "AND context.publication_lane='current_actual' AND context.period_role='current' "
+        + context_head
+        + "AND EXISTS (SELECT 1 FROM json_each(observation.dimensions_json) AS dimension "
+        "WHERE json_extract(dimension.value,'$.key')='kpi_definition_id' "
+        "AND json_extract(dimension.value,'$.value')=CAST(kpi.kpi_definition_id AS TEXT)) "
+        # The legacy fact insert trigger captures only the definition id. Later
+        # source-bound semantic revisions can still qualify at this read cutoff.
+         + "AND (json_array_length(observation.dimensions_json)=1 OR ("
+        "json_array_length(observation.dimensions_json)>1 "
+        + "AND EXISTS (SELECT 1 FROM json_each(observation.dimensions_json) AS dimension "
+        "WHERE json_extract(dimension.value,'$.key')='semantic_status' "
+        "AND json_extract(dimension.value,'$.value')='admitted') "
+        "AND EXISTS (SELECT 1 FROM json_each(observation.dimensions_json) AS dimension "
+        "WHERE json_extract(dimension.value,'$.key')='kpi_definition_id' "
+        "AND json_extract(dimension.value,'$.value')=CAST(kpi.kpi_definition_id AS TEXT)) "
+        "AND EXISTS (SELECT 1 FROM json_each(observation.dimensions_json) AS dimension "
+        "WHERE json_extract(dimension.value,'$.key')='period_role' "
+        "AND json_extract(dimension.value,'$.value')=context.period_role) "
+        "AND EXISTS (SELECT 1 FROM json_each(observation.dimensions_json) AS dimension "
+        "WHERE json_extract(dimension.value,'$.key')='publication_lane' "
+        "AND json_extract(dimension.value,'$.value')=context.publication_lane) "
+        "AND EXISTS (SELECT 1 FROM json_each(observation.dimensions_json) AS dimension "
+        "WHERE json_extract(dimension.value,'$.key')='accounting_basis' "
+        "AND json_extract(dimension.value,'$.value')=context.accounting_basis) "
+        "AND EXISTS (SELECT 1 FROM json_each(observation.dimensions_json) AS dimension "
+        "WHERE json_extract(dimension.value,'$.key')='consolidation_scope' "
+        "AND json_extract(dimension.value,'$.value')=context.consolidation_scope) "
+        "AND EXISTS (SELECT 1 FROM json_each(observation.dimensions_json) AS dimension "
+        "WHERE json_extract(dimension.value,'$.key')='unit_scale' "
+        "AND json_extract(dimension.value,'$.value')=context.unit_scale) "
+        "AND EXISTS (SELECT 1 FROM json_each(observation.dimensions_json) AS dimension "
+        "WHERE json_extract(dimension.value,'$.key')='metric_name_as_reported' "
+        "AND json_extract(dimension.value,'$.value')=context.metric_name_as_reported) "
+        "AND json_array_length(observation.dimensions_json)="
+        "8+(SELECT COUNT(*) FROM json_each(context.dimensions_json)) "
+        "AND NOT EXISTS (SELECT 1 FROM json_each(context.dimensions_json) AS scope "
+        "WHERE NOT EXISTS (SELECT 1 FROM json_each(observation.dimensions_json) AS dimension "
+        "WHERE json_extract(dimension.value,'$.key')='scope:'||scope.key "
+        "AND json_extract(dimension.value,'$.value')=CAST(scope.value AS TEXT))))) "
+        f"AND {definition})"
+    )
+    valid_v1 = (
+        f"coalesce(({_v1_input_shape_sql(safe_input)}),0)=1 "
+        f"AND {child} IS NOT NULL AND link.observation_id={observation_id} "
+        f"AND link.source_document_id={doc_id} "
+        f"AND resolution.resolution_id={resolution_id} "
+        "AND current_resolution.resolution_id=resolution.resolution_id "
+        "AND current_resolution.revision=resolution.revision "
+        "AND link.logical_key=resolution.logical_key "
+        "AND outcome.resolution_status='resolved' "
+        f"AND observation.ticker={child_ticker} "
+        "AND observation.issuer_id=version.issuer_id "
+        "AND observation.issuer_id=(SELECT output.issuer_id FROM reported_observations "
+        "AS output WHERE output.observation_id=fact.reported_observation_id) "
+        f"AND observation.concept_key=CASE WHEN {table}='kpi_facts' "
+        "THEN 'kpi_definition:'||kpi.kpi_definition_id ELSE financial.line_item END "
+        f"AND date(observation.period_end)=date({child_period}) "
+        f"AND observation.fiscal_period_type=CASE "
+        f"WHEN upper({child_fiscal}) IN ('Q1','Q2','Q3','Q4','QUARTER') THEN 'quarter' "
+        f"WHEN upper({child_fiscal}) IN ('FY','ANNUAL') THEN 'annual' "
+        f"WHEN upper({child_fiscal}) IN ('YTD','TTM','YEAR_TO_DATE') THEN 'year_to_date' "
+        f"WHEN upper({child_fiscal})='INSTANT' THEN 'instant' ELSE 'other' END "
+        f"AND fact_capture_numeric_matches(observation.method_version,"
+        f"observation.numeric_value,{child_value},CAST({child_value} AS TEXT))=1 "
+        f"AND observation.unit={child_unit} "
+        f"AND observation.currency IS CASE WHEN {table}='kpi_facts' "
+        "THEN kpi.currency ELSE financial.currency END "
+        f"AND {child_doc}={doc_id} "
+        f"AND fact_capture_locator_matches(link.locator_json,{child_locator})=1 "
+        f"AND {version_id}=run.document_version_id "
+        "AND version.legacy_document_id=link.source_document_id "
+        "AND extraction.outcome='succeeded' "
+        "AND extraction.document_version_id=version.document_version_id "
+        "AND extraction.input_sha256=version.blob_sha256 "
+        f"{temporal_evidence} "
+        f"AND NOT {quarantine} "
+        f"AND ({table}='financial_facts' OR ({semantic})) "
+        f"AND ({table}='kpi_facts' OR {item}=financial.line_item) "
+        f"AND (json_type({safe_input},'$.period_end') IS NULL "
+        f"OR {field('period_end')}=substr({child_period},1,10)) "
+    )
+    valid_vendor = (
+        f"{ref}='vendor_field' AND {item} IN ('price','market_cap') "
+        f"AND json_type({safe_input},'$.period_end')='text' "
+        f"AND {doc_id} IS NULL AND {version_id} IS NULL"
+    )
+    return (
+        "EXISTS (WITH RECURSIVE graph(depth,observation_id,computed_from,extracted_by,formula_id,invalid) AS ("
+        "SELECT 1,fact.reported_observation_id,fact.computed_from,fact.extracted_by,fact.formula_id,0 "
+        "UNION SELECT graph.depth+1,"
+        f"CASE WHEN {ref}='legacy_canonical_fact' THEN {observation_id} ELSE '' END,"
+        "CASE WHEN kpi.id IS NOT NULL THEN kpi.computed_from ELSE NULL END,"
+        "kpi.extracted_by,kpi.formula_id,"
+        f"CASE WHEN ({ref}='legacy_canonical_fact' AND {valid_v1}) "
+        f"OR ({valid_vendor}) THEN 0 ELSE 1 END "
+        "FROM graph JOIN json_each(" + safe_lineage + ",'$.inputs') AS input "
+        "LEFT JOIN v_kpi_facts_resolved_current AS kpi "
+        f"ON {table}='kpi_facts' AND kpi.id={fact_id} "
+        f"AND kpi.reported_observation_id={observation_id} "
+        f"AND kpi.resolution_id={resolution_id} "
+        "LEFT JOIN v_financial_facts_resolved_current AS financial "
+        f"ON {table}='financial_facts' AND financial.id={fact_id} "
+        f"AND financial.reported_observation_id={observation_id} "
+        f"AND financial.resolution_id={resolution_id} "
+        "LEFT JOIN fact_observation_revisions AS link "
+        f"ON link.fact_table={table} AND link.fact_row_id={fact_id} "
+        f"AND link.fact_revision={field('fact_revision')} "
+        f"AND link.observation_id={observation_id} "
+        "LEFT JOIN observation_resolution_revisions AS resolution "
+        f"ON resolution.resolution_id={resolution_id} "
+        f"AND resolution.revision={field('resolution_revision')} "
+        f"AND resolution.selected_observation_id={observation_id} "
+        "LEFT JOIN v_observation_resolution_current AS current_resolution "
+        "ON current_resolution.resolution_id=resolution.resolution_id "
+        "LEFT JOIN fact_resolution_outcomes AS outcome "
+        "ON outcome.resolution_id=resolution.resolution_id "
+        "LEFT JOIN reported_observations AS observation "
+        f"ON observation.observation_id={observation_id} "
+        "LEFT JOIN evidence_nodes AS node ON node.node_id=observation.evidence_node_id "
+        "LEFT JOIN evidence_extraction_runs AS extraction "
+        "ON extraction.extraction_run_id=node.extraction_run_id "
+        "LEFT JOIN evidence_document_versions AS version "
+        f"ON version.document_version_id={version_id} "
+        "LEFT JOIN evidence_document_versions AS run "
+        "ON run.document_version_id=version.document_version_id "
+        "WHERE graph.invalid=0 AND graph.depth<=32 "
+        "AND json_array_length(" + safe_lineage + ",'$.inputs')<=500) "
+        "SELECT 1 AS graph_group FROM graph GROUP BY graph_group "
+        "HAVING MAX(invalid)=1 OR MAX(depth)>32 "
+        "OR COUNT(DISTINCT NULLIF(observation_id,''))>500 "
+        "OR MAX(CASE WHEN computed_from IS NOT NULL AND "
+        "(json_valid(computed_from)=0 OR "
+        "coalesce(json_type(CASE WHEN json_valid(computed_from) THEN computed_from "
+        "ELSE '{\"inputs\":[]}' END,'$.inputs'),'')!='array' OR "
+        "json_array_length(CASE WHEN json_valid(computed_from) THEN computed_from "
+        "ELSE '{\"inputs\":[]}' END,'$.inputs') NOT BETWEEN 1 AND 500) THEN 1 "
+        "WHEN computed_from IS NULL AND (instr(lower(coalesce(extracted_by,'')),'derived')>0 "
+        "OR formula_id IS NOT NULL) THEN 1 ELSE 0 END)=1)"
+    )
+
+
+def _as_known_clock_sql(column: str) -> str:
+    """Compare the complete stored timestamp, including six fractional digits."""
+
+    seconds = f"strftime('%Y-%m-%dT%H:%M:%S',{column})"
+    cutoff_seconds = "strftime('%Y-%m-%dT%H:%M:%S',:cutoff)"
+    micros = f"CASE WHEN substr({column},20,1)='.' THEN substr({column},21,6) ELSE '000000' END"
+    cutoff_micros = "CASE WHEN substr(:cutoff,20,1)='.' THEN substr(:cutoff,21,6) ELSE '000000' END"
+    return (
+        f"({seconds}<{cutoff_seconds} OR "
+        f"({seconds}={cutoff_seconds} AND {micros}<={cutoff_micros}))"
+    )
+
+
+def _historical_derived_valid_ids(
+    conn: sqlite3.Connection, *, fact_ids: Sequence[int], cutoff: str, effective_cutoff: str
+) -> set[int]:
+    """Check requested KPI graphs in one SQL statement and one read snapshot."""
+
+    ensure_fact_capture_functions(conn)
+
+    if not fact_ids:
+        return set()
+    resolution_clocks = " AND ".join(
+        _as_known_clock_sql(f"resolution.{field}")
+        for field in ("knowledge_cutoff", "effective_at", "recorded_at")
+    )
+    observation_clocks = " AND ".join(
+        _as_known_clock_sql(f"observation.{field}") for field in ("available_at", "recorded_at")
+    )
+    latest_link = _as_known_clock_sql("link.captured_at")
+    latest_outcome = _as_known_clock_sql("outcome.recorded_at")
+    views: list[str] = []
+    for table in _TABLES:
+        view = (
+            "v_kpi_facts_resolved_current"
+            if table == "kpi_facts"
+            else "v_financial_facts_resolved_current"
+        )
+        views.append(
+            f"{view} AS MATERIALIZED (SELECT fact.*,link.observation_id AS reported_observation_id, "
+            "resolution.resolution_id FROM "
+            f"{table} AS fact JOIN historical_links AS link "
+            f"ON link.fact_table='{table}' AND link.fact_row_id=fact.id AND link.row_rank=1 "
+            "JOIN historical_resolutions AS resolution "
+            "ON resolution.selected_observation_id=link.observation_id "
+            "AND resolution.logical_key=link.logical_key AND resolution.row_rank=1 "
+            "JOIN reported_observations AS observation "
+            "ON observation.observation_id=link.observation_id "
+            "WHERE resolution.resolution_status='resolved' "
+            f"AND {observation_clocks} "
+            "AND datetime(observation.period_end)<=datetime(:effective_cutoff))"
+        )
+    direct = _derived_source_quarantine_sql("fact", as_known=True)
+    graph = _derived_current_graph_invalid_sql(
+        as_known=True,
+        definition_available=_object_exists(conn, "kpi_definition_revisions", object_type="table"),
+    )
+    rows = conn.execute(
+        "WITH historical_links AS MATERIALIZED ("
+        "SELECT link.*,ROW_NUMBER() OVER (PARTITION BY link.fact_table,link.fact_row_id "
+        "ORDER BY link.fact_revision DESC) AS row_rank "
+        "FROM fact_observation_revisions AS link WHERE "
+        + latest_link
+        + "), historical_resolutions AS MATERIALIZED ("
+        "SELECT resolution.*,outcome.resolution_status,"
+        "ROW_NUMBER() OVER (PARTITION BY resolution.logical_key "
+        "ORDER BY resolution.revision DESC) AS row_rank "
+        "FROM observation_resolution_revisions AS resolution "
+        "JOIN fact_resolution_outcomes AS outcome "
+        "ON outcome.resolution_id=resolution.resolution_id WHERE "
+        + resolution_clocks
+        + " AND "
+        + latest_outcome
+        + "), v_observation_resolution_current AS MATERIALIZED ("
+        "SELECT resolution_id,revision FROM historical_resolutions WHERE row_rank=1), "
+        + ", ".join(views)
+        + " SELECT fact.id FROM v_kpi_facts_resolved_current AS fact "
+        "JOIN json_each(:fact_ids) AS requested ON requested.value=fact.id "
+        f"WHERE NOT ({direct} OR {graph})",
+        {
+            "fact_ids": json.dumps(sorted(set(fact_ids))),
+            "cutoff": cutoff,
+            "effective_cutoff": effective_cutoff,
+        },
+    ).fetchall()
+    return {int(row[0]) for row in rows}
 
 
 def canonical_fact_relation(
@@ -758,6 +1153,7 @@ def canonical_fact_relation(
 
     if fact_table not in _TABLES:
         raise ValueError(f"unsupported fact table: {fact_table}")
+    ensure_fact_capture_functions(conn)
     view = (
         "v_financial_facts_resolved_current"
         if fact_table == "financial_facts"
@@ -768,7 +1164,8 @@ def canonical_fact_relation(
         if semantic_quarantine_available(conn):
             quarantine = explicit_document_quarantine_sql("run.document_version_id", as_known=False)
             derived_quarantine = (
-                f" AND NOT {_derived_source_quarantine_sql('fact', as_known=False)}"
+                f" AND NOT ({_derived_source_quarantine_sql('fact', as_known=False)} "
+                f"OR {_derived_current_graph_invalid_sql(definition_available=_object_exists(conn, 'kpi_definition_revisions', object_type='table'))})"
                 if fact_table == "kpi_facts"
                 else ""
             )
@@ -908,13 +1305,7 @@ def _canonical_fact_selections_as_known_snapshot(
     drift_counts: list[int] | None = None,
     sample_limit: int = 0,
 ) -> tuple[CanonicalFactSelectionAsKnown, ...]:
-    """Return exact fact, observation, and resolution identities as known.
-
-    This is the typed form of :func:`canonical_fact_row_ids_as_known`. It keeps
-    the same schema checks, temporal selection, and compatibility-row drift
-    validation while retaining the immutable identities needed by traced
-    readers.
-    """
+    """Select and validate all requested facts in one caller-visible read snapshot."""
 
     if fact_table not in _TABLES:
         raise ValueError(f"unsupported fact table: {fact_table}")
@@ -1102,6 +1493,15 @@ def _canonical_fact_selections_as_known_snapshot(
         eligible_rows = [
             row for row in eligible_rows if int(row["fact_row_id"]) not in quarantined_ids
         ]
+        valid_derived_ids = _historical_derived_valid_ids(
+            conn,
+            fact_ids=[int(row["fact_row_id"]) for row in eligible_rows],
+            cutoff=cutoff,
+            effective_cutoff=effective_at.isoformat(),
+        )
+        eligible_rows = [
+            row for row in eligible_rows if int(row["fact_row_id"]) in valid_derived_ids
+        ]
     if drift_counts is not None:
         drift_counts[1] = len(eligible_rows)
     facts_by_id = _fact_rows_by_ids(
@@ -1122,15 +1522,15 @@ def _canonical_fact_selections_as_known_snapshot(
             == _datetime(fact["period_end"], field="fact period_end"),
             "fiscal_period_type": str(row["fiscal_period_type"])
             == _observation_period_type(str(fact["fiscal_period_type"])),
-            "numeric_value": _canonical_decimal(row["numeric_value"])
-            == _canonical_decimal(
-                fact["sqlite_value_text"]
-                if row["method_version"] == "0231-trigger-v1"
-                else fact["value"]
+            "numeric_value": fact_capture_numeric_matches(
+                row["method_version"],
+                row["numeric_value"],
+                fact["value"],
+                fact["sqlite_value_text"],
             ),
             "unit": str(row["unit"]) == str(fact["unit"]),
             "source_document_id": int(row["source_document_id"]) == int(fact["source_doc_id"]),
-            "locator_json": _optional_text(row["locator_json"]) == _optional_text(fact["locator"]),
+            "locator_json": fact_capture_locator_matches(row["locator_json"], fact["locator"]),
         }
         if fact_table == "financial_facts":
             comparisons["currency"] = _optional_text(row["currency"]) == _optional_text(

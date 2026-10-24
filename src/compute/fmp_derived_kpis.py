@@ -37,7 +37,7 @@ import logging
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
@@ -46,7 +46,7 @@ from typing import cast
 from compute.kpi_resolver import resolve_kpi_definition_name, semantic_series_identity_sql
 from credibility.observations import KPI_FACTS, record_restatement_observation
 from models.documents import SourceQualityTier, SourceType
-from models.facts import Currency, FiscalPeriodType, Unit
+from models.facts import Currency, DerivedInputRef, FiscalPeriodType, Unit
 from pipeline.confidence import score_confidence
 from pipeline.kpi_persistence import find_or_create_kpi_definition
 from pipeline.kpi_semantics import (
@@ -63,7 +63,10 @@ from pipeline.kpi_semantics import (
     unclassified_kpi_context,
 )
 from pipeline.restatement_detector import insert_kpi_with_restatement_detection
-from provenance.financial_fact_resolution import canonical_fact_relation
+from provenance.financial_fact_resolution import (
+    canonical_fact_relation,
+    canonical_fact_selections_as_known,
+)
 from provenance.overrides import KPI as OVERRIDE_KPI
 from provenance.overrides import active_scalar_override_map
 from timeseries.loaders import reader_tier_rank_sql
@@ -989,6 +992,7 @@ class KpiSeriesPoint:
     source_doc_id: int
     semantic_context: KpiSemanticContext | None = None
     definition_id: int | None = None
+    selected_input: DerivedInputRef | None = None
 
 
 @dataclass(frozen=True)
@@ -1115,12 +1119,19 @@ def compute_yoy_transform(
             raise ValueError(f"Unhandled transform kind: {kind}")
         computed_from = None
         if base_label is not None:
+            current_input = (
+                p.selected_input.model_dump(exclude_none=True)
+                if p.selected_input is not None
+                else _input_ref("kpi_fact", base_label, p.period_end, p.source_doc_id)
+            )
+            prior_input = (
+                prior.selected_input.model_dump(exclude_none=True)
+                if prior.selected_input is not None
+                else _input_ref("kpi_fact", base_label, prior.period_end, prior.source_doc_id)
+            )
             computed_from = _lineage(
                 _TRANSFORM_DISPLAY[kind].format(base=base_label),
-                [
-                    _input_ref("kpi_fact", base_label, p.period_end, p.source_doc_id),
-                    _input_ref("kpi_fact", base_label, prior.period_end, prior.source_doc_id),
-                ],
+                [current_input, prior_input],
             )
         out.append(
             DerivedKpiRow(
@@ -1131,11 +1142,15 @@ def compute_yoy_transform(
                 unit=unit,
                 source_doc_id=p.source_doc_id,
                 computed_from=computed_from,
-                semantic_context=_transform_semantic_context(
-                    current=p,
-                    prior=prior,
-                    derived_name=name,
-                    derived_unit=unit,
+                semantic_context=(
+                    _transform_semantic_context(
+                        current=p,
+                        prior=prior,
+                        derived_name=name,
+                        derived_unit=unit,
+                    )
+                    if p.selected_input is not None and prior.selected_input is not None
+                    else None
                 ),
             )
         )
@@ -1193,7 +1208,7 @@ def _transform_semantic_context(
     )
 
 
-def _fetch_full_kpi_series(
+def _fetch_full_kpi_series_in_snapshot(
     conn: sqlite3.Connection,
     ticker: str,
     base_label: str,
@@ -1251,8 +1266,64 @@ def _fetch_full_kpi_series(
             f"AND {semantic_where} AND {semantic_identity} ORDER BY kf.period_end ASC"
         )
     cur = conn.execute(query, (ticker.upper(), resolved))
+    rows = cur.fetchall()
+    selected_inputs: dict[int, DerivedInputRef] = {}
+    if fact_relation.selection_mode == "resolved_view" and rows:
+        cutoff = datetime.now(UTC)
+        selections = canonical_fact_selections_as_known(
+            conn, fact_table="kpi_facts", effective_at=cutoff, known_at=cutoff
+        )
+        selected_by_id = {selection.fact_row_id: selection for selection in selections}
+        selected_ids = [int(row["id"]) for row in rows if int(row["id"]) in selected_by_id]
+        if selected_ids:
+            placeholders = ",".join("?" for _ in selected_ids)
+            evidence_rows = conn.execute(
+                "SELECT link.fact_row_id,link.fact_revision,link.observation_id,run.document_version_id "
+                "FROM fact_observation_revisions AS link "
+                "JOIN reported_observations AS observation "
+                "ON observation.observation_id=link.observation_id "
+                "JOIN evidence_nodes AS node ON node.node_id=observation.evidence_node_id "
+                "JOIN evidence_extraction_runs AS run ON run.extraction_run_id=node.extraction_run_id "
+                f"WHERE link.fact_table='kpi_facts' AND link.fact_row_id IN ({placeholders})",
+                selected_ids,
+            ).fetchall()
+            versions = {
+                (
+                    int(row["fact_row_id"]),
+                    int(row["fact_revision"]),
+                    str(row["observation_id"]),
+                ): str(row["document_version_id"])
+                for row in evidence_rows
+            }
+            for row in rows:
+                fact_id = int(row["id"])
+                selection = selected_by_id.get(fact_id)
+                version = (
+                    versions.get((fact_id, selection.fact_revision, selection.observation_id))
+                    if selection is not None
+                    else None
+                )
+                if (
+                    selection is None
+                    or not version
+                    or selection.source_document_id != int(row["source_doc_id"])
+                ):
+                    continue
+                selected_inputs[fact_id] = DerivedInputRef(
+                    ref="legacy_canonical_fact",
+                    fact_table="kpi_facts",
+                    fact_id=fact_id,
+                    fact_revision=selection.fact_revision,
+                    observation_id=selection.observation_id,
+                    resolution_id=selection.resolution_id,
+                    resolution_revision=selection.resolution_revision,
+                    doc_id=selection.source_document_id,
+                    document_version_id=version,
+                    item=base_label,
+                    period_end=str(row["period_end"])[:10],
+                )
     points: list[KpiSeriesPoint] = []
-    for row in cur.fetchall():
+    for row in rows:
         if base_unit is not None and Unit(row["unit"]) is not base_unit:
             continue
         pe = row["period_end"]
@@ -1270,8 +1341,27 @@ def _fetch_full_kpi_series(
                 source_doc_id=source_doc_id,
                 semantic_context=semantic_context,
                 definition_id=int(row["kpi_definition_id"]),
+                selected_input=selected_inputs.get(int(row["id"])),
             )
         )
+    return points
+
+
+def _fetch_full_kpi_series(
+    conn: sqlite3.Connection,
+    ticker: str,
+    base_label: str,
+    base_unit: Unit | None = Unit.PERCENT,
+) -> list[KpiSeriesPoint]:
+    """Read the base rows and their exact ledger pins in one SQLite snapshot."""
+    conn.execute("SAVEPOINT kpi_derived_series_read")
+    try:
+        points = _fetch_full_kpi_series_in_snapshot(conn, ticker, base_label, base_unit)
+    except BaseException:
+        conn.execute("ROLLBACK TO SAVEPOINT kpi_derived_series_read")
+        conn.execute("RELEASE SAVEPOINT kpi_derived_series_read")
+        raise
+    conn.execute("RELEASE SAVEPOINT kpi_derived_series_read")
     return points
 
 

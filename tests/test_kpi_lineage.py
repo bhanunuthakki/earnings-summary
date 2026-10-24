@@ -25,12 +25,13 @@ from compute.fmp_derived_kpis import (
     derive_for_facts,
     persist_derived_kpis,
 )
-from models.facts import FiscalPeriodType, Unit
+from models.facts import DerivedInputRef, FiscalPeriodType, Unit
 from pipeline.confidence import (
     _ParsedIssue,  # pyright: ignore[reportPrivateUsage]
     display_issues_for_fact,
     load_unresolved_issues,
 )
+from pipeline.locators import derived_locator_from_computed_from
 from pipeline.restatement_detector import insert_kpi_with_restatement_detection
 from report.models import CellSource
 from report.sections.financials import (
@@ -159,6 +160,113 @@ def test_compute_yoy_transform_lineage_and_legacy_none() -> None:
         points, kind=TransformKind.YOY_CHANGE_BPS, name="X", unit=Unit.BPS
     )
     assert legacy[0].computed_from is None
+
+
+def _canonical_input(**changes: object) -> dict[str, object]:
+    value: dict[str, object] = {
+        "ref": "legacy_canonical_fact",
+        "fact_table": "kpi_facts",
+        "fact_id": 17,
+        "fact_revision": 2,
+        "observation_id": "observation-17",
+        "resolution_id": "resolution-17",
+        "resolution_revision": 3,
+        "doc_id": 5,
+        "document_version_id": "version-5",
+        "item": "Base KPI",
+        "period_end": "2025-12-31",
+    }
+    value.update(changes)
+    return value
+
+
+def test_legacy_canonical_input_round_trips_through_locator_promotion() -> None:
+    original = _canonical_input()
+    locator = derived_locator_from_computed_from(
+        json.dumps({"display": "delta", "inputs": [original]}), formula_id=4
+    )
+    assert locator is not None and locator.derived is not None
+    assert locator.derived.inputs[0].model_dump(exclude_none=True) == original
+    assert locator.derived.formula_id == 4
+
+
+def test_transform_preserves_exact_selected_input_ids() -> None:
+    prior = _canonical_input(fact_id=16, observation_id="observation-16", period_end="2024-12-31")
+    current = _canonical_input()
+    points = [
+        KpiSeriesPoint(
+            datetime(2024, 12, 31),
+            FiscalPeriodType.Q4,
+            Decimal("10"),
+            5,
+            selected_input=DerivedInputRef.model_validate(prior),
+        ),
+        KpiSeriesPoint(
+            datetime(2025, 12, 31),
+            FiscalPeriodType.Q4,
+            Decimal("12"),
+            5,
+            selected_input=DerivedInputRef.model_validate(current),
+        ),
+    ]
+    rows = compute_yoy_transform(
+        points,
+        kind=TransformKind.YOY_CHANGE_BPS,
+        name="Change",
+        unit=Unit.BPS,
+        base_label="Base KPI",
+    )
+    assert len(rows) == 1 and rows[0].computed_from is not None
+    assert json.loads(rows[0].computed_from)["inputs"] == [current, prior]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"fact_id": True},
+        {"fact_revision": "2"},
+        {"resolution_revision": 0},
+        {"doc_id": False},
+        {"observation_id": 12},
+        {"resolution_id": ""},
+        {"document_version_id": None},
+        {"fact_table": "kpi_fact"},
+        {"resolution_revision_id": "native-resolution"},
+        {"fact_cell_id": "native-cell"},
+        {"unexpected_identity": 3},
+    ],
+)
+def test_legacy_canonical_input_rejects_bad_identity(change: dict[str, object]) -> None:
+    with pytest.raises(ValueError):
+        DerivedInputRef.model_validate(_canonical_input(**change))
+
+
+@pytest.mark.parametrize("missing_field", ["resolution_id", "item"])
+def test_legacy_canonical_input_requires_every_identity_field(missing_field: str) -> None:
+    missing = _canonical_input()
+    missing.pop(missing_field)
+    with pytest.raises(ValueError):
+        DerivedInputRef.model_validate(missing)
+
+
+def test_locator_promotion_rejects_one_bad_input_in_valid_graph() -> None:
+    bad = _canonical_input(fact_id=True)
+    payload = {"inputs": [_canonical_input(), bad]}
+    assert derived_locator_from_computed_from(json.dumps(payload)) is None
+
+
+def test_locator_promotion_rejects_missing_item_in_valid_graph() -> None:
+    missing = _canonical_input()
+    missing.pop("item")
+    payload = {"inputs": [_canonical_input(), missing]}
+    assert derived_locator_from_computed_from(json.dumps(payload)) is None
+
+
+def test_old_input_namespace_keeps_wire_shape() -> None:
+    payload = {"inputs": [{"ref": "kpi_fact", "fact_id": 17, "item": "Base KPI"}]}
+    locator = derived_locator_from_computed_from(json.dumps(payload))
+    assert locator is not None and locator.derived is not None
+    assert locator.derived.inputs[0].ref == "kpi_fact"
 
 
 # ----------------------------------------------------------------------------

@@ -631,11 +631,11 @@ class FactReadModel:
         *,
         cutoff: datetime,
         _path: set[str] | None = None,
-        _admitted: set[str] | None = None,
-    ) -> None:
+        _admitted: dict[str, int] | None = None,
+    ) -> int:
         observation_id = observation.observation_id
         path: set[str] = set() if _path is None else _path
-        admitted: set[str] = set() if _admitted is None else _admitted
+        admitted: dict[str, int] = {} if _admitted is None else _admitted
         if observation_id in path:
             raise FactAdmissionError(
                 "derived_input_graph_unbounded",
@@ -644,8 +644,16 @@ class FactReadModel:
                 disposition="missing_provenance",
             )
         if observation_id in admitted:
-            return
-        if len(path) >= 32 or len(admitted) >= 256:
+            height = admitted[observation_id]
+            if len(path) + height > 32:
+                raise FactAdmissionError(
+                    "derived_input_graph_unbounded",
+                    record_kind="fact_observation",
+                    record_id=observation_id,
+                    disposition="missing_provenance",
+                )
+            return height
+        if len(path) >= 32 or len(admitted) >= 500:
             raise FactAdmissionError(
                 "derived_input_graph_unbounded",
                 record_kind="fact_observation",
@@ -654,10 +662,18 @@ class FactReadModel:
             )
         path.add(observation_id)
         try:
-            self._admit_observation_and_inputs(
+            height = self._admit_observation_and_inputs(
                 observation, cutoff=cutoff, path=path, admitted=admitted
             )
-            admitted.add(observation_id)
+            if len(admitted) >= 500:
+                raise FactAdmissionError(
+                    "derived_input_graph_unbounded",
+                    record_kind="fact_observation",
+                    record_id=observation_id,
+                    disposition="missing_provenance",
+                )
+            admitted[observation_id] = height
+            return height
         finally:
             path.remove(observation_id)
 
@@ -667,9 +683,10 @@ class FactReadModel:
         *,
         cutoff: datetime,
         path: set[str],
-        admitted: set[str],
-    ) -> None:
+        admitted: dict[str, int],
+    ) -> int:
         observation_id = observation.observation_id
+        height = 1
         self._admit_record(
             "fact_observation",
             observation_id,
@@ -761,7 +778,7 @@ class FactReadModel:
                 inputs = self._fetchall(
                     "SELECT input_observation_id FROM fact_derivation_input_edges_v2 "
                     "WHERE output_observation_id=? AND recorded_at<=? "
-                    "ORDER BY input_ordinal LIMIT 257",
+                    "ORDER BY input_ordinal LIMIT 501",
                     (observation_id, cutoff),
                 )
             except sqlite3.Error as exc:
@@ -774,7 +791,7 @@ class FactReadModel:
             if (
                 not inputs
                 or len(inputs) != int(str(derivation["input_count"]))
-                or len(inputs) > 256
+                or len(inputs) > 500
             ):
                 raise FactAdmissionError(
                     "derived_input_graph_incomplete",
@@ -796,12 +813,13 @@ class FactReadModel:
                         record_id=input_id,
                         disposition="missing_provenance",
                     )
-                self._admit_observation_graph(
+                child_height = self._admit_observation_graph(
                     self._load_observation(source),
                     cutoff=cutoff,
                     _path=path,
                     _admitted=admitted,
                 )
+                height = max(height, child_height + 1)
         for relation in self._bounded_relation_rows(
             observation_id,
             cutoff=cutoff,
@@ -811,6 +829,7 @@ class FactReadModel:
                 str(relation["relation_id"]),
                 cutoff=cutoff,
             )
+        return height
 
     def _admit_record(
         self,
