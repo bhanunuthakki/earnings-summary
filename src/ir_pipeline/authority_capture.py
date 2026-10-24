@@ -1312,20 +1312,20 @@ def _persist_blob(
         )
     )
     created, replayed = _account(EvidenceLedger(conn).persist(blob).created, 0, 0)
+    current_locations = conn.execute(
+        "SELECT location_kind, availability_state, verified_sha256, verified_byte_size "
+        "FROM v_evidence_blob_locations_current "
+        "WHERE blob_sha256 = ? AND storage_uri = ?",
+        (digest, storage_uri),
+    ).fetchall()
+    if current_locations:
+        expected_location = ("local", "present", digest, len(body))
+        if len(current_locations) != 1 or tuple(current_locations[0]) != expected_location:
+            raise IRAuthorityCaptureError(
+                "current blob location is not reusable for authority capture"
+            )
+        return created, replayed + 1
     location_id = "ir-authority-location:" + _stable_digest(digest, storage_uri)
-    existing_location = conn.execute(
-        "SELECT verified_at, recorded_at FROM evidence_blob_location_observations "
-        "WHERE location_observation_id = ?",
-        (location_id,),
-    ).fetchone()
-    verified_at, first_recorded_at = (
-        (recorded_at, recorded_at)
-        if existing_location is None
-        else (
-            datetime.fromisoformat(str(existing_location[0])),
-            datetime.fromisoformat(str(existing_location[1])),
-        )
-    )
     created, replayed = _account(
         EvidenceLinkLedger(conn)
         .persist_location(
@@ -1337,10 +1337,10 @@ def _persist_blob(
                 location_kind="local",
                 availability_state="present",
                 location_sequence=1,
-                verified_at=verified_at,
+                verified_at=recorded_at,
                 verified_byte_size=len(body),
                 verified_sha256=digest,
-                recorded_at=first_recorded_at,
+                recorded_at=recorded_at,
             )
         )
         .created,

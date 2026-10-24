@@ -31,6 +31,7 @@ from ir_pipeline.discover.generic import CrawlPageOutcome, DocumentDiscoveryInve
 from ir_pipeline.discover.mz import catalog_post_body
 from ir_pipeline.source_inventory import source_inventory_request, sync_ir_source_inventory
 from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
+from provenance.evidence_links import BlobLocationObservation, EvidenceLinkLedger
 from provenance.evidence_native_candidates import resolve_local_storage_uri
 from provenance.issuer_registry import (
     IssuerEntity,
@@ -1582,5 +1583,161 @@ def test_cli_rejects_unconfigured_apply_before_checkout_fallback(
     conn = sqlite3.connect(db)
     try:
         assert conn.execute("SELECT COUNT(*) FROM evidence_source_observations").fetchone() == (0,)
+    finally:
+        conn.close()
+
+
+def _seed_authority_capture_home_location(
+    conn: sqlite3.Connection,
+    *,
+    blob_root: Path,
+    current_overrides: Mapping[str, object] | None = None,
+) -> str:
+    digest = hashlib.sha256(BODY).hexdigest()
+    path = blob_root / digest[:2] / digest
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(BODY)
+    storage_uri = path.resolve().as_uri()
+    EvidenceLedger(conn).persist(
+        ContentBlob(
+            sha256=digest,
+            byte_size=len(BODY),
+            media_type="text/html; charset=utf-8",
+            storage_uri=storage_uri,
+            recorded_at=STAMP,
+        )
+    )
+    EvidenceLinkLedger(conn).persist_location(
+        BlobLocationObservation(
+            location_observation_id="ir-home-location:test",
+            idempotency_key="ir-home-location:test",
+            blob_sha256=digest,
+            storage_uri=storage_uri,
+            location_kind="local",
+            availability_state="present",
+            location_sequence=1,
+            verified_at=STAMP,
+            verified_byte_size=len(BODY),
+            verified_sha256=digest,
+            recorded_at=STAMP,
+        )
+    )
+    if current_overrides is not None:
+        current_values: dict[str, object] = {
+            "location_observation_id": "ir-home-location:test:current",
+            "idempotency_key": "ir-home-location:test:current",
+            "blob_sha256": digest,
+            "storage_uri": storage_uri,
+            "location_kind": "local",
+            "availability_state": "present",
+            "location_sequence": 2,
+            "verified_at": STAMP + timedelta(seconds=1),
+            "verified_byte_size": len(BODY),
+            "verified_sha256": digest,
+            "supersedes_location_observation_id": "ir-home-location:test",
+            "recorded_at": STAMP + timedelta(seconds=1),
+        }
+        current_values.update(current_overrides)
+        EvidenceLinkLedger(conn).persist_location(
+            BlobLocationObservation.model_validate(current_values)
+        )
+    conn.commit()
+    return storage_uri
+
+
+def test_authority_capture_reuses_existing_local_home_location(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _full_conn(tmp_path, migrated_db)
+    blob_root = tmp_path / "blobs"
+    try:
+        _seed_authority_capture_home_location(conn, blob_root=blob_root)
+        locations_before = conn.execute(
+            "SELECT * FROM evidence_blob_location_observations ORDER BY location_observation_id"
+        ).fetchall()
+        blobs_before = conn.execute(
+            "SELECT * FROM evidence_content_blobs ORDER BY sha256"
+        ).fetchall()
+        first = capture_ir_authority_surfaces(
+            conn,
+            _request(outcome="observed"),
+            blob_root=blob_root,
+            apply=True,
+            session=FakeSession([FakeResponse()]),
+        )
+        assert first.records_created == 1
+        assert conn.execute("SELECT COUNT(*) FROM evidence_source_observations").fetchone() == (1,)
+        assert (
+            conn.execute(
+                "SELECT * FROM evidence_blob_location_observations ORDER BY location_observation_id"
+            ).fetchall()
+            == locations_before
+        )
+        assert (
+            conn.execute("SELECT * FROM evidence_content_blobs ORDER BY sha256").fetchall()
+            == blobs_before
+        )
+        locations_after_first = conn.execute(
+            "SELECT * FROM evidence_blob_location_observations ORDER BY location_observation_id"
+        ).fetchall()
+        replay = capture_ir_authority_surfaces(
+            conn,
+            _request(outcome="observed"),
+            blob_root=blob_root,
+            apply=True,
+            session=FakeSession([FakeResponse()]),
+        )
+        assert replay.records_created == 0
+        assert conn.execute("SELECT COUNT(*) FROM evidence_source_observations").fetchone() == (1,)
+        assert (
+            conn.execute(
+                "SELECT * FROM evidence_blob_location_observations ORDER BY location_observation_id"
+            ).fetchall()
+            == locations_after_first
+        )
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    "current_overrides",
+    [
+        {"availability_state": "missing"},
+        {"availability_state": "quarantined"},
+        {"location_kind": "archive"},
+        {"verified_byte_size": None},
+        {"verified_sha256": None},
+    ],
+)
+def test_authority_capture_rejects_nonreusable_current_location(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    current_overrides: Mapping[str, object],
+) -> None:
+    conn = _full_conn(tmp_path, migrated_db)
+    blob_root = tmp_path / "blobs"
+    try:
+        _seed_authority_capture_home_location(
+            conn, blob_root=blob_root, current_overrides=current_overrides
+        )
+        locations_before = conn.execute(
+            "SELECT * FROM evidence_blob_location_observations ORDER BY location_observation_id"
+        ).fetchall()
+        assert len(locations_before) == 2
+        with pytest.raises(IRAuthorityCaptureError):
+            capture_ir_authority_surfaces(
+                conn,
+                _request(outcome="observed"),
+                blob_root=blob_root,
+                apply=True,
+                session=FakeSession([FakeResponse()]),
+            )
+        assert conn.execute("SELECT COUNT(*) FROM evidence_source_observations").fetchone() == (0,)
+        assert (
+            conn.execute(
+                "SELECT * FROM evidence_blob_location_observations ORDER BY location_observation_id"
+            ).fetchall()
+            == locations_before
+        )
     finally:
         conn.close()
