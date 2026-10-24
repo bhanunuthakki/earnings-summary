@@ -131,6 +131,10 @@ MODEL_CAPABILITIES: dict[str, CapabilityProfile] = {
         min_context_length=1_000_000, requires_vision=True, requires_structured_output=True
     ),
     # Codex models
+    # Candidate registration only; no purpose promotion. OpenAI specs checked 2026-10-23.
+    "gpt-6.1-sol": CapabilityProfile(
+        min_context_length=1_050_000, requires_vision=True, requires_structured_output=True
+    ),
     "gpt-5.6-terra": CapabilityProfile(
         min_context_length=128_000, requires_vision=True, requires_structured_output=True
     ),

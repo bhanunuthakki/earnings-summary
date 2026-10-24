@@ -53,46 +53,14 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _MAX_BUNDLE_BYTES = 50_000_000
 _COLLECTOR_VERSION = "approved-ir-observation-candidate@1"
-_APPROVED_PERIOD_SHAPE: dict[AdapterKey, dict[date, tuple[DocType, ...]]] = {
-    AdapterKey.WIX_VISIBLE_QUARTER: {
-        date(2026, 6, 30): (
-            DocType.IR_PRESS_RELEASE,
-            DocType.IR_PRESENTATION,
-            DocType.IR_INVESTOR_UPDATE,
-            DocType.IR_TRANSCRIPT,
-        ),
-        date(2026, 3, 31): (
-            DocType.IR_PRESS_RELEASE,
-            DocType.IR_PRESENTATION,
-            DocType.IR_INVESTOR_UPDATE,
-            DocType.IR_TRANSCRIPT,
-        ),
-        date(2025, 12, 31): (
-            DocType.IR_PRESS_RELEASE,
-            DocType.IR_PRESENTATION,
-            DocType.IR_INVESTOR_UPDATE,
-            DocType.IR_TRANSCRIPT,
-        ),
-        date(2025, 9, 30): (
-            DocType.IR_PRESS_RELEASE,
-            DocType.IR_PRESENTATION,
-            DocType.IR_INVESTOR_UPDATE,
-            DocType.IR_TRANSCRIPT,
-        ),
-        date(2025, 6, 30): (
-            DocType.IR_PRESS_RELEASE,
-            DocType.IR_PRESENTATION,
-            DocType.IR_INVESTOR_UPDATE,
-            DocType.IR_TRANSCRIPT,
-        ),
-    },
-    AdapterKey.RUBRIK_QUARTER_TABLE: {
-        date(2026, 4, 30): (DocType.IR_PRESS_RELEASE, DocType.IR_PRESENTATION),
-        date(2026, 1, 31): (DocType.IR_PRESS_RELEASE, DocType.IR_PRESENTATION),
-        date(2025, 10, 31): (DocType.IR_PRESS_RELEASE, DocType.IR_PRESENTATION),
-        date(2025, 7, 31): (DocType.IR_PRESS_RELEASE, DocType.IR_PRESENTATION),
-        date(2025, 4, 30): (DocType.IR_PRESS_RELEASE, DocType.IR_PRESENTATION),
-    },
+_APPROVED_DOCUMENT_SHAPE: dict[AdapterKey, tuple[DocType, ...]] = {
+    AdapterKey.WIX_VISIBLE_QUARTER: (
+        DocType.IR_PRESS_RELEASE,
+        DocType.IR_PRESENTATION,
+        DocType.IR_INVESTOR_UPDATE,
+        DocType.IR_TRANSCRIPT,
+    ),
+    AdapterKey.RUBRIK_QUARTER_TABLE: (DocType.IR_PRESS_RELEASE, DocType.IR_PRESENTATION),
 }
 
 
@@ -206,11 +174,9 @@ def plan_ir_candidates(
     except (IrCatalogError, ValidationError, UnicodeDecodeError, ValueError) as exc:
         raise IrCandidateCallerError(f"sealed IR observation failed validation: {exc}") from None
 
-    approved_period_shape = _APPROVED_PERIOD_SHAPE[policy.ir.adapter_key]
-    if set(catalog.reported_quarters) != set(approved_period_shape):
-        raise IrCandidateCallerError(
-            "IR bundle does not contain the exact approved reporting periods"
-        )
+    approved_document_shape = _APPROVED_DOCUMENT_SHAPE[policy.ir.adapter_key]
+    if len(catalog.reported_quarters) != 5:
+        raise IrCandidateCallerError("IR bundle does not contain five source-reported periods")
     rendered_by_key = _rendered_artifacts_by_key(bundle)
     observation_by_key = {item.observation_key: item for item in catalog.observations}
     admitted: list[tuple[IrCatalogEntry, IrSourceObservation, SealedObservationArtifact]] = []
@@ -220,8 +186,10 @@ def plan_ir_candidates(
         if entry.disposition is CatalogDisposition.SEC_HANDOFF:
             sec_handoffs += 1
             continue
-        expected_types = approved_period_shape.get(entry.quarter_end, ())
-        if entry.doc_type not in expected_types:
+        if (
+            entry.quarter_end not in catalog.reported_quarters
+            or entry.doc_type not in approved_document_shape
+        ):
             excluded_out_of_scope += 1
             continue
         observation = observation_by_key.get(entry.observation_key)
@@ -234,15 +202,15 @@ def plan_ir_candidates(
         admitted.append((entry, observation, artifact))
 
     actual_shape: dict[date, Counter[DocType]] = {
-        quarter: Counter() for quarter in approved_period_shape
+        quarter: Counter() for quarter in catalog.reported_quarters
     }
     for entry, _observation, _artifact in admitted:
         if entry.doc_type is None:
             raise IrCandidateCallerError("approved IR candidate has no document type")
         actual_shape[entry.quarter_end][entry.doc_type] += 1
     if any(
-        actual_shape[quarter] != Counter(expected)
-        for quarter, expected in approved_period_shape.items()
+        actual_shape[quarter] != Counter(approved_document_shape)
+        for quarter in catalog.reported_quarters
     ):
         raise IrCandidateCallerError(
             "IR bundle does not match the approved per-period document shape"

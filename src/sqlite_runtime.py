@@ -622,7 +622,6 @@ def connect_sqlite(
     try:
         register_sqlite_integrity_functions(conn)
         _register_scope_identity_function(conn)
-        _register_transcript_receipt_function(conn, database_path=resolved)
         _apply_connection_policy(conn)
         if require_schema:
             # The compatibility probe is read-only despite its historical
@@ -671,16 +670,6 @@ def _register_scope_identity_function(conn: sqlite3.Connection) -> None:
         derive,
         deterministic=True,
     )
-
-
-def _register_transcript_receipt_function(
-    conn: sqlite3.Connection,
-    *,
-    database_path: str,
-) -> None:
-    from pipeline.transcript_acquisition import register_transcript_receipt_sqlite_functions
-
-    register_transcript_receipt_sqlite_functions(conn, database_path=database_path)
 
 
 def _read_only_uri(path: str, *, immutable: bool = False) -> str:

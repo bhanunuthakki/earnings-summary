@@ -118,6 +118,78 @@ population. Full/unprofiled evidence cannot consume a scoped table certificate.
 No detector identity, semantic admission, financial accuracy or full-letter table
 completion is inferred from a reviewed deferral.
 
+An explicit reviewed PDF page revision can mark one OCR-flagged IR supplement
+page as `no_financial_content` for native continuation. It binds the document
+version, raw PDF hash, retained OCR assessment, page and native-text hashes,
+reviewed render hash, reviewer, review time and rationale. A later revision can
+withdraw the decision. Detector flags and raw pages remain unchanged. Capture
+omits only current exact reviewed pages from model input and retains their
+identities in its versioned prompt and source configuration. Unreviewed image
+pages still block capture. This review does not satisfy default OCR processing,
+financial completeness, semantic admission or decision-grade evidence.
+
+Governed PDF OCR can retain a `tesseract-tsv-raster@1` layout child beside each
+accepted page node. The child commits the exact raw TSV and rendered PNG hashes,
+page media box, rotation, DPI, raster dimensions, checked raster-to-PDF
+transform, and each recognized word's raster rectangle, order, confidence and
+text offsets. Projected word text uses the existing NFKC extraction
+normalization. Exact management wording remains in the retained raw TSV.
+The writer and reader reconstruct the projected text, word offsets, and mean
+confidence from those bytes. The bytes are immutable `ContentBlob` records
+under the durable `data/ocr_evidence/` source cache. The new
+`governed-pdf-ocr@2-layout` run
+identity commits each present layout child in its output hash. A text-only
+provider result can retain a processing seal, but cannot enter the word-backed
+projection. Existing text-only OCR receipts keep their original identity and
+remain unavailable for word-backed financial capture. A read-only projection requires an exact document/source
+hash, processing seal, extraction run, complete OCR page-result set and cutoff.
+It rechecks retained bytes and reconstructs every word from TSV. The projection
+is tagged `governed_ocr`; its offsets are not native PDF text offsets. OCR
+acceptance and layout proof do not grant financial candidate retention,
+semantic admission, or publication.
+
+An explicit `--capture --ticker TICKER --ocr-projection-file MANIFEST` selection
+can use that projection for one exact IR supplement document. The manifest pins
+the document ID/version, raw PDF hash, processing seal, OCR run, complete ordered
+page-result IDs, and cutoff. Native pages retain native text; selected
+`requires_ocr` pages carry `governed_ocr` text and raster-word regions through
+the existing bounded structured-call route. Section prompts, cache inputs, and
+raw candidate nodes bind the selected OCR commitments. OCR candidate nodes use
+`ir-pdf-unreviewed-ocr-candidate.v1` and have no native character locator.
+They remain `pending_source_context_review_ocr`; the native source review and
+financial publication paths do not consume them without a separate OCR review.
+The versioned `ir-pdf-source-context-review-ocr.v1` record decides every retained
+candidate. It names the reviewer as a human owner, human analyst, or agent
+analyst. Each accepted OCR value has field-specific visual witnesses tied to
+retained OCR words or declared native context, including period, unit, scope,
+basis, definition, and any chart legend. A reviewer assertion is recorded as
+such; OCR confidence is not a financial accuracy score.
+
+An exact OCR review can enter the existing `SourceFactRepository` publication
+path. Its distinct OCR observation and seal identities preserve native review
+and publication hashes. The source locator binds the raw candidate, review,
+processing selection, page, raster words, and verified raster-to-PDF transform.
+The central fact reader requires an explicit `SourceReadContext` with a product
+state root. It reopens the exact PDF, TSV and render bytes, replays the review
+and processing seal at the requested cutoff, and withholds the OCR fact if any
+part is missing or changed. The same resolver serves reports, Ask, research,
+and DCF. A missing root does not fall back to a checkout or database parent.
+The OCR source chip opens the existing PDF reader with a pinned document
+version and source hash; that reader renders from verified bytes, not a mutable
+legacy PDF path. Review and source reconstruction do not establish document
+financial recall, comparability, or decision-grade completeness.
+
+A current reported-quarter review is an append-only `EvidenceNode` and
+`ExtractionRun` on one immutable issuer PDF `DocumentVersion`. It binds the
+reviewer's source judgment to exact native first-page wording, page offsets,
+raw SHA-256, issuer, selected subject, SEC-source fiscal profile, and knowledge
+cutoff. The generic raw `ir_document` version keeps its original type and
+empty period; a later expected earnings-release row may use the reviewed
+semantic alias only while the version, URL, node ID, review digest, captured
+bytes, coverage assessment, and inventory seal still agree. A review is period
+evidence. It is not a financial fact, extraction-completeness receipt, or
+owner approval.
+
 ### Progressive proof and legacy repair (2026-09-19)
 
 Capture, extraction, source coverage, semantic admission, and reader parity are

@@ -466,7 +466,7 @@ def test_prepared_valuation_preserves_supported_child_contract(
     source_root = state[0].parent / "source-authority"
     assert source_root not in (state[0], state[1].parent, request(state).code_root)
     expected_context = (
-        SourceReadContext.for_sec_state_root(source_root) if explicit_source else None
+        SourceReadContext.for_product_state_root(source_root) if explicit_source else None
     )
     seen: list[SourceReadContext | None] = []
     original_assess = workflow.assess_decision_brief

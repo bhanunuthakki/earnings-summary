@@ -696,3 +696,82 @@ def test_native_span_tamper_and_ambiguous_context_fail_before_retention(
     monkeypatch.setattr("provenance.ir_reported_facts.project_pdf_page_texts", duplicate_pages)
     with pytest.raises(ValueError, match="native quote span"):
         retain_ir_pdf_candidates(conn, retention, raw_pdf_bytes=PDF_BYTES)
+
+
+@pytest.mark.parametrize(
+    ("quote", "token", "value"),
+    [
+        ("Revenue 60,801", "60", "60"),
+        ("Loss (12)", "12", "12"),
+        ("Loss -12", "12", "12"),
+    ],
+)
+def test_manual_candidate_rejects_incomplete_numeric_lexeme(
+    quote: str, token: str, value: str
+) -> None:
+    with pytest.raises(ValueError, match="numeric token is absent"):
+        candidate(quote, token, value)
+
+
+@pytest.mark.parametrize(
+    ("quote", "token", "value", "valid"),
+    [
+        ("Outlook 10 -20", "20", "20", True),
+        ("Outlook 10 -20", "-20", "-20", False),
+        ("Outlook 3 -5%", "5%", "5", True),
+        ("Outlook 3 -5%", "-5%", "-5", False),
+        ("Q2 -20", "-20", "-20", True),
+        ("Q2 -20", "20", "20", False),
+        ("Outlook (10) - (5)", "(5)", "-5", True),
+    ],
+)
+def test_manual_candidate_spaced_range_token(
+    quote: str, token: str, value: str, valid: bool
+) -> None:
+    if valid:
+        assert candidate(quote, token, value)
+    else:
+        with pytest.raises(ValueError, match="numeric token is absent"):
+            candidate(quote, token, value)
+
+
+@pytest.mark.parametrize(
+    ("quote", "token", "value", "valid"),
+    [
+        ("Revenue -$ 20", "20", "20", False),
+        ("Revenue \u2212 $ 20", "20", "20", False),
+        ("Revenue ($ 20)", "20", "20", False),
+        ("Revenue 1e3", "1", "1", False),
+        ("Revenue 1E-3", "1", "1", False),
+        ("Revenue -$ 20", "-$ 20", "-20", True),
+        ("Revenue $- 20", "$- 20", "-20", True),
+        ("Revenue ($ 20)", "($ 20)", "-20", True),
+    ],
+)
+def test_closed_manual_numeric_envelopes(quote: str, token: str, value: str, valid: bool) -> None:
+    if valid:
+        assert candidate(quote, token, value, unit="actual", currency="USD", source_unit_text="USD")
+    else:
+        with pytest.raises(ValueError, match="numeric token is absent"):
+            candidate(quote, token, value, unit="actual", currency="USD", source_unit_text="USD")
+
+
+@pytest.mark.parametrize(
+    ("quote", "token", "value", "valid"),
+    [
+        ("Revenue \ufe6320", "20", "20", False),
+        ("Revenue \uff0d20", "20", "20", False),
+        ("Revenue ..20", ".20", ".20", False),
+        ("Revenue ,20", "20", "20", False),
+        ("Revenue 2\u200b0", "2", "2", False),
+        ("Revenue 20\u200f", "20", "20", False),
+        ('"Revenue":20', "20", "20", True),
+        ("Revenue -20", "-20", "-20", True),
+    ],
+)
+def test_boundary_manual_numeric_envelopes(quote: str, token: str, value: str, valid: bool) -> None:
+    if valid:
+        assert candidate(quote, token, value, unit="actual", currency="USD", source_unit_text="USD")
+    else:
+        with pytest.raises(ValueError, match="numeric token is absent"):
+            candidate(quote, token, value, unit="actual", currency="USD", source_unit_text="USD")

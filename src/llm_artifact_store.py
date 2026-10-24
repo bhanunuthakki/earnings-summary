@@ -338,6 +338,30 @@ def read_artifact(
         conn.close()
 
 
+def require_historical_artifact(conn: sqlite3.Connection, artifact_id: int) -> Artifact:
+    """Read exact historical bytes in the caller's transaction or fail closed.
+
+    Unlike the best-effort cache readers, this is for source-bound historical
+    processing. Missing, malformed, dirty, and checksum-drifted rows cannot
+    become an apparent cache miss.
+    """
+    previous_factory = conn.row_factory
+    try:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM llm_artifacts WHERE id=?", (artifact_id,)).fetchone()
+        if row is None:
+            raise ValueError("IR historical artifact is missing")
+        try:
+            artifact = _readable_artifact(row)
+        except (ValueError, TypeError, KeyError, IndexError):
+            raise ValueError("IR historical artifact is malformed") from None
+        if artifact is None or artifact.dirty or artifact.output_sha256 is None:
+            raise ValueError("IR historical artifact is unavailable")
+        return artifact
+    finally:
+        conn.row_factory = previous_factory
+
+
 @dataclass(frozen=True, slots=True)
 class HistoricalArtifactVersion:
     """An exact-key historical row, including an explicit decoding failure."""

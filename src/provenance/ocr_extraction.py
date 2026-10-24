@@ -13,7 +13,6 @@ CLI when the user explicitly applies an OCR batch.
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import io
 import json
@@ -22,15 +21,16 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-import unicodedata
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pypdf import PdfReader
 
 from provenance.evidence_ledger import (
+    ContentBlob,
     EvidenceLedger,
     EvidenceLocator,
     EvidenceNode,
@@ -43,11 +43,26 @@ from provenance.evidence_native_candidates import (
     select_evidence_native_candidates,
     select_evidence_native_candidates_by_id,
 )
+from provenance.immutable_artifact import (
+    ImmutableArtifactConflictError,
+    publish_bytes_no_clobber,
+    read_stable_artifact,
+)
+from provenance.ocr_layout import (
+    OCRLayoutError,
+    OCRPageLayout,
+    OCRPageOutput,
+    parse_tesseract_pdf_tsv,
+    png_dimensions,
+    verify_ocr_layout_bytes,
+)
+from provenance.pdf_table_extraction import PdfTableExtractionArtifact
 from runtime.deterministic import canonical_json as _canonical_json
+from runtime.deterministic import normalize_extracted_text as normalize_extracted_text
 from runtime.deterministic import sha256_text as _sha256_text
 
 _EXTRACTOR_NAME = "governed-pdf-ocr"
-_EXTRACTOR_CODE_VERSION = "governed-pdf-ocr@1"
+_EXTRACTOR_CODE_VERSION = "governed-pdf-ocr@2-layout"
 _DETECTOR_NAME = "pypdf-native-text-preflight"
 _DETECTOR_CODE_VERSION = "pypdf-native-text-preflight@2-public-access"
 _NORMALIZATION_VERSION = "nfkc-lines-v1"
@@ -69,6 +84,19 @@ def _validate_sha256(value: str) -> str:
     return normalized
 
 
+class OCRPageSelection(BaseModel):
+    """Operator-selected image page, bound to an existing verified table inventory."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    document_version_id: str = Field(min_length=1, max_length=128)
+    source_sha256: str = Field(pattern=_SHA256_PATTERN)
+    artifact_id: str = Field(min_length=1, max_length=128)
+    artifact_sha256: str = Field(pattern=_SHA256_PATTERN)
+    page_number: int = Field(gt=0)
+    page_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+
 class OCRBackfillRequest(BaseModel):
     """Validated controls for one bounded, dry-run-first OCR batch."""
 
@@ -81,6 +109,7 @@ class OCRBackfillRequest(BaseModel):
     source_lane: _SourceLane = "legacy"
     task_id: str = Field(default="ocr-evidence-backfill", pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
     document_version_ids: tuple[str, ...] = ()
+    page_selections: tuple[OCRPageSelection, ...] = Field(default=(), max_length=1_000)
     languages: tuple[str, ...] = ("eng",)
     minimum_native_characters: int = Field(default=32, ge=1, le=10_000)
     minimum_mean_confidence: float = Field(default=50.0, ge=0.0, le=100.0)
@@ -106,6 +135,18 @@ class OCRBackfillRequest(BaseModel):
             raise ValueError("explicit document versions require the evidence_native lane")
         if len(self.document_version_ids) > self.batch_size:
             raise ValueError("explicit document versions cannot exceed batch_size")
+        keys = [(page.document_version_id, page.page_number) for page in self.page_selections]
+        if len(keys) != len(set(keys)):
+            raise ValueError("OCR page selections must be unique")
+        if self.page_selections and (
+            self.source_lane != "evidence_native"
+            or not self.document_version_ids
+            or any(
+                page.document_version_id not in self.document_version_ids
+                for page in self.page_selections
+            )
+        ):
+            raise ValueError("OCR page selections require explicitly targeted evidence documents")
         return self
 
 
@@ -149,6 +190,7 @@ class OCRBackfillSummary(BaseModel):
     records_created: int = 0
     records_replayed: int = 0
     finding_counts: dict[str, int] = Field(default_factory=dict[str, int])
+    verified_page_selections: list[OCRPageSelection] = Field(default_factory=list[OCRPageSelection])
 
 
 class PDFPreflightPage(BaseModel):
@@ -223,14 +265,6 @@ class OCREngineDescriptor(BaseModel):
         if _canonical_sha256(self.model_artifacts) != self.model_manifest_sha256:
             raise ValueError("model_manifest_sha256 must hash canonical model_artifacts")
         return self
-
-
-class OCRPageOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    page_number: int = Field(gt=0)
-    text: str
-    mean_confidence: float = Field(ge=0.0, le=100.0)
 
 
 class PDFInspector(Protocol):
@@ -374,6 +408,12 @@ class TesseractCLIProvider:
                 temporary_root = Path(temporary)
                 pdf_path = temporary_root / "input.pdf"
                 pdf_path.write_bytes(raw_bytes)
+                source_reader = PdfReader(io.BytesIO(raw_bytes))
+                if source_reader.is_encrypted and (
+                    not source_reader.decrypt("") or source_reader.are_permissions_valid is not True
+                ):
+                    raise OCRProviderError("pdf_page_geometry_unavailable")
+                source_pages = source_reader.pages
                 for page_number in page_numbers:
                     prefix = temporary_root / f"page-{page_number}"
                     render = subprocess.run(
@@ -399,11 +439,39 @@ class TesseractCLIProvider:
                     image_path = prefix.with_suffix(".png")
                     if not image_path.is_file():
                         raise OCRProviderError("renderer_output_missing")
+                    try:
+                        _snapshot, render_png = read_stable_artifact(
+                            image_path, allowed_root=temporary_root, max_bytes=100_000_000
+                        )
+                    except (OSError, ImmutableArtifactConflictError):
+                        raise OCRProviderError("renderer_output_unavailable") from None
+                    width, height = png_dimensions(render_png)
+                    pdf_page = source_pages[page_number - 1]
+                    box = pdf_page.mediabox
+                    media_box = (
+                        float(box.left),
+                        float(box.bottom),
+                        float(box.right),
+                        float(box.top),
+                    )
+                    rotation = int(pdf_page.rotation) % 360
+                    if rotation not in (0, 90, 180, 270):
+                        raise OCRProviderError("unsupported_page_rotation")
+                    crop = pdf_page.cropbox
+                    if (
+                        tuple(
+                            float(value) for value in (crop.left, crop.bottom, crop.right, crop.top)
+                        )
+                        != media_box
+                        or float(pdf_page.get("/UserUnit", 1)) != 1.0
+                    ):
+                        raise OCRProviderError("unsupported_pdf_page_geometry")
+                    tsv_base = temporary_root / f"page-{page_number}-ocr"
                     ocr = subprocess.run(
                         [
                             str(self._tesseract),
                             str(image_path),
-                            "stdout",
+                            str(tsv_base),
                             "-l",
                             "+".join(languages),
                             "--tessdata-dir",
@@ -420,9 +488,30 @@ class TesseractCLIProvider:
                     )
                     if ocr.returncode != 0:
                         raise OCRProviderError("ocr_engine_failed")
-                    outputs.append(_parse_tesseract_tsv(page_number, ocr.stdout))
+                    try:
+                        _snapshot, raw_tsv = read_stable_artifact(
+                            tsv_base.with_suffix(".tsv"),
+                            allowed_root=temporary_root,
+                            max_bytes=20_000_000,
+                        )
+                    except (OSError, ImmutableArtifactConflictError):
+                        raise OCRProviderError("ocr_tsv_unavailable") from None
+                    outputs.append(
+                        parse_tesseract_pdf_tsv(
+                            page_number,
+                            raw_tsv,
+                            render_png=render_png,
+                            width=width,
+                            height=height,
+                            dpi=dpi,
+                            media_box=media_box,
+                            rotation=rotation,
+                        )
+                    )
         except subprocess.TimeoutExpired:
             raise OCRProviderError("engine_timeout") from None
+        except OCRLayoutError as error:
+            raise OCRProviderError(error.reason_code) from None
         except OSError:
             raise OCRProviderError("local_ocr_runtime_error") from None
         return outputs
@@ -453,6 +542,9 @@ class _PlannedPage(BaseModel):
     output_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
     mean_confidence: float | None = Field(default=None, ge=0.0, le=100.0)
     reason_code: str | None = Field(default=None, min_length=1, max_length=128)
+    layout: OCRPageLayout | None = None
+    raw_tsv: bytes | None = Field(default=None, exclude=True)
+    render_png: bytes | None = Field(default=None, exclude=True)
 
 
 class _CandidatePlan(BaseModel):
@@ -487,6 +579,8 @@ def backfill_ocr_evidence(
 ) -> OCRBackfillSummary:
     """Assess and optionally OCR one bounded batch with one writer transaction."""
 
+    if request.apply and request.page_selections and provider is None:
+        raise OCRProviderError("selected_ocr_requires_provider")
     _require_tables(conn, request.source_lane)
     root = request.repo_root.resolve()
     allowed_roots = _allowed_content_roots(request, root)
@@ -537,14 +631,17 @@ def backfill_ocr_evidence(
     if request.apply:
         if conn.in_transaction:
             raise RuntimeError("OCR backfill requires an idle SQLite connection")
+        published_blobs: list[Path] = []
         conn.execute("BEGIN IMMEDIATE")
         try:
             for plan in plans:
-                _persist_plan(conn, plan, request, provider, summary)
+                _persist_plan(conn, plan, request, provider, summary, published_blobs)
             conn.commit()
         except Exception:
             if conn.in_transaction:
                 conn.rollback()
+            for path in published_blobs:
+                path.unlink(missing_ok=True)
             raise
     if candidates:
         final_candidate = candidates[-1]
@@ -592,6 +689,64 @@ def backfill_ocr_evidence(
     return summary
 
 
+def _selected_page_preflight(
+    conn: sqlite3.Connection,
+    candidate: _DocumentCandidate,
+    request: OCRBackfillRequest,
+    preflight: PDFPreflight,
+) -> PDFPreflight:
+    selections = [
+        item
+        for item in request.page_selections
+        if item.document_version_id == candidate.document_version_id
+    ]
+    if not selections:
+        return preflight
+    # The full evidence verifier is needed only for explicit table-bound selections.
+    from provenance.document_processing_evidence import read_pdf_table_artifact
+
+    if preflight.outcome not in {"native_sufficient", "ocr_required"}:
+        raise OCRProviderError("selected_ocr_preflight_unreadable")
+    artifacts: dict[str, PdfTableExtractionArtifact] = {}
+    for item in selections:
+        if item.artifact_id not in artifacts:
+            artifacts[item.artifact_id] = read_pdf_table_artifact(
+                conn,
+                document_version_id=item.document_version_id,
+                artifact_id=item.artifact_id,
+                cutoff_at=datetime.now(UTC),
+            )
+        artifact = artifacts[item.artifact_id]
+        if (
+            item.source_sha256 != candidate.blob_sha256
+            or artifact.raw_pdf_sha256 != item.source_sha256
+            or _canonical_sha256(artifact.model_dump(mode="json")) != item.artifact_sha256
+            or artifact.pdf_page_count != preflight.page_count
+            or len(artifact.pages) != preflight.page_count
+            or item.page_number > preflight.page_count
+        ):
+            raise OCRProviderError("selected_ocr_artifact_mismatch")
+        page = artifact.pages[item.page_number - 1]
+        if (
+            _canonical_sha256(page.model_dump(mode="json")) != item.page_sha256
+            or page.disposition != "quarantined"
+            or page.quarantine_reason not in {"scanned_page", "image_only_page"}
+        ):
+            raise OCRProviderError("selected_ocr_page_mismatch")
+    selected = {item.page_number for item in selections}
+    return PDFPreflight(
+        outcome="ocr_required",
+        page_count=preflight.page_count,
+        pages=[
+            page.model_copy(
+                update={"requires_ocr": page.requires_ocr or page.page_number in selected}
+            )
+            for page in preflight.pages
+        ],
+        native_output_sha256=preflight.native_output_sha256,
+    )
+
+
 def _plan_candidate(
     conn: sqlite3.Connection,
     candidate: _DocumentCandidate,
@@ -614,6 +769,12 @@ def _plan_candidate(
         preflight = inspector.inspect(
             raw_bytes, minimum_native_characters=request.minimum_native_characters
         )
+    preflight = _selected_page_preflight(conn, candidate, request, preflight)
+    summary.verified_page_selections.extend(
+        item
+        for item in request.page_selections
+        if item.document_version_id == candidate.document_version_id
+    )
     summary.records_planned += 1 + len(preflight.pages)
     if preflight.outcome == "native_sufficient":
         summary.documents_native_sufficient += 1
@@ -695,9 +856,17 @@ def _plan_candidate(
             reason_code=error.reason_code,
             pages=pages,
         )
-    pages, failure_reason = _evaluate_outputs(
-        candidate.source_ref, required_pages, outputs, request
-    )
+    try:
+        pages, failure_reason = _evaluate_outputs(
+            candidate.source_ref, required_pages, outputs, request
+        )
+    except OCRProviderError as error:
+        pages = [
+            _failed_page(candidate.source_ref, page_number, error.reason_code)
+            for page_number in required_pages
+        ]
+        failure_reason = error.reason_code
+    summary.records_planned += 3 * sum(page.layout is not None for page in pages)
     if failure_reason is not None:
         _ocr_failure(summary, _candidate_ref(candidate), failure_reason)
         return _CandidatePlan(
@@ -726,6 +895,7 @@ def _persist_plan(
     request: OCRBackfillRequest,
     provider: OCRProvider | None,
     summary: OCRBackfillSummary,
+    published_blobs: list[Path],
 ) -> None:
     if plan.outcome == "unrecordable":
         return
@@ -799,7 +969,9 @@ def _persist_plan(
         return
     if provider is None or plan.config_sha256 is None:
         raise RuntimeError("planned OCR persistence requires provider governance")
-    _persist_ocr_run(conn, plan, request, provider.descriptor, assessment_id, summary)
+    _persist_ocr_run(
+        conn, plan, request, provider.descriptor, assessment_id, summary, published_blobs
+    )
 
 
 def _persist_ocr_run(
@@ -809,6 +981,7 @@ def _persist_ocr_run(
     descriptor: OCREngineDescriptor,
     assessment_id: str,
     summary: OCRBackfillSummary,
+    published_blobs: list[Path],
 ) -> None:
     document_version_id = _require_document_version(plan.candidate)
     config_sha256 = _require_config_sha256(plan)
@@ -823,6 +996,9 @@ def _persist_ocr_run(
                 "mean_confidence": page.mean_confidence,
                 "locator_sha256": page.locator.canonical_sha256,
                 "reason_code": page.reason_code,
+                "layout_sha256": None
+                if page.layout is None
+                else _canonical_sha256(page.layout.model_dump(mode="json")),
             }
             for page in plan.pages
         ]
@@ -917,6 +1093,39 @@ def _persist_ocr_run(
             )
             _account(EvidenceLedger(conn).persist(node).created, summary)
             nodes[page.page_number] = node
+            if page.layout is not None:
+                if page.raw_tsv is None or page.render_png is None:
+                    raise RuntimeError("accepted layout bytes are missing")
+                _persist_layout_blob(
+                    conn,
+                    request.repo_root,
+                    page.raw_tsv,
+                    "text/tab-separated-values",
+                    recorded_at,
+                    summary,
+                    published_blobs,
+                )
+                _persist_layout_blob(
+                    conn,
+                    request.repo_root,
+                    page.render_png,
+                    "image/png",
+                    recorded_at,
+                    summary,
+                    published_blobs,
+                )
+                layout_node = _new_node(
+                    conn,
+                    evidence_key=f"ocr-layout:{_stable_token(document_version_id)}:{page.page_number}",
+                    node_id=_node_id(run_id, f"page-{page.page_number}-layout"),
+                    extraction_run_id=run_id,
+                    parent_node_id=node.node_id,
+                    text=_canonical_json(page.layout.model_dump(mode="json")),
+                    locator=page.locator,
+                    recorded_at=recorded_at,
+                    node_kind="passage",
+                )
+                _account(EvidenceLedger(conn).persist(layout_node).created, summary)
     for page in plan.pages:
         node = nodes.get(page.page_number)
         _persist_exact(
@@ -973,6 +1182,20 @@ def _evaluate_outputs(
         output = by_page[page_number]
         text = normalize_extracted_text(output.text)
         locator = EvidenceLocator(source_ref=source_ref, page_number=page_number)
+        if output.layout is not None:
+            if output.raw_tsv is None or output.render_png is None:
+                raise OCRProviderError("ocr_layout_bytes_missing")
+            try:
+                reconstructed = verify_ocr_layout_bytes(
+                    output.layout, output.raw_tsv, output.render_png
+                )
+            except OCRLayoutError as exc:
+                raise OCRProviderError(exc.reason_code) from exc
+            if (
+                output.text != reconstructed.text
+                or output.mean_confidence != reconstructed.mean_confidence
+            ):
+                raise OCRProviderError("ocr_layout_output_mismatch")
         if not text:
             reason = "empty_ocr_output"
             failure_reason = failure_reason or reason
@@ -1011,6 +1234,9 @@ def _evaluate_outputs(
                     output_sha256=_sha256_text(text),
                     mean_confidence=output.mean_confidence,
                     reason_code=None,
+                    layout=output.layout,
+                    raw_tsv=output.raw_tsv,
+                    render_png=output.render_png,
                 )
             )
     if failure_reason is not None:
@@ -1091,8 +1317,24 @@ def _detector_config_sha256(request: OCRBackfillRequest) -> str:
             "detector_code_version": _DETECTOR_CODE_VERSION,
             "minimum_native_characters": request.minimum_native_characters,
             "normalization_version": _NORMALIZATION_VERSION,
+            **_page_selection_config(request),
         }
     )
+
+
+def _page_selection_config(request: OCRBackfillRequest) -> dict[str, object]:
+    if not request.page_selections:
+        return {}
+    return {
+        "page_selection_policy": "pinned-image-quarantine@1",
+        "page_selections": [
+            item.model_dump(mode="json")
+            for item in sorted(
+                request.page_selections,
+                key=lambda item: (item.document_version_id, item.page_number),
+            )
+        ],
+    }
 
 
 def _ocr_config_json(request: OCRBackfillRequest, descriptor: OCREngineDescriptor) -> str:
@@ -1104,8 +1346,10 @@ def _ocr_config_json(request: OCRBackfillRequest, descriptor: OCREngineDescripto
             "languages": list(request.languages),
             "minimum_mean_confidence": request.minimum_mean_confidence,
             "normalization_version": _NORMALIZATION_VERSION,
+            "layout_version": "tesseract-tsv-raster@1",
             "page_segmentation_mode": request.page_segmentation_mode,
             "timeout_seconds": request.timeout_seconds,
+            **_page_selection_config(request),
         }
     )
 
@@ -1191,7 +1435,7 @@ def _new_node(
     text: str,
     locator: EvidenceLocator,
     recorded_at: datetime,
-    node_kind: Literal["document", "pdf_page"],
+    node_kind: Literal["document", "pdf_page", "passage"],
 ) -> EvidenceNode:
     prior = conn.execute(
         "SELECT node_id, revision FROM evidence_nodes WHERE evidence_key = ? "
@@ -1209,6 +1453,44 @@ def _new_node(
         text=text,
         locator=locator,
         recorded_at=recorded_at,
+    )
+
+
+def _persist_layout_blob(
+    conn: sqlite3.Connection,
+    repo_root: Path,
+    raw: bytes,
+    media_type: str,
+    recorded_at: datetime,
+    summary: OCRBackfillSummary,
+    published_blobs: list[Path],
+) -> None:
+    digest = hashlib.sha256(raw).hexdigest()
+    path = repo_root.resolve() / "data" / "ocr_evidence" / digest[:2] / digest
+    if publish_bytes_no_clobber(path, raw):
+        published_blobs.append(path)
+    prior = conn.execute(
+        "SELECT byte_size,media_type,storage_uri FROM evidence_content_blobs WHERE sha256=?",
+        (digest,),
+    ).fetchone()
+    if prior is not None:
+        if tuple(prior) != (len(raw), media_type, path.as_uri()):
+            raise RuntimeError("OCR layout blob identity conflicts with retained content")
+        summary.records_replayed += 1
+        return
+    _account(
+        EvidenceLedger(conn)
+        .persist(
+            ContentBlob(
+                sha256=digest,
+                byte_size=len(raw),
+                media_type=media_type,
+                storage_uri=path.as_uri(),
+                recorded_at=recorded_at,
+            )
+        )
+        .created,
+        summary,
     )
 
 
@@ -1377,12 +1659,6 @@ def _canonical_sha256(value: object) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
-def normalize_extracted_text(text: str) -> str:
-    """Apply the shared nfkc-lines-v1 preflight and OCR text normalization."""
-    normalized = unicodedata.normalize("NFKC", text).replace("\r\n", "\n").replace("\r", "\n")
-    return "\n".join(line.rstrip() for line in normalized.split("\n")).strip()
-
-
 def _substantive_character_count(text: str) -> int:
     return sum(character.isalnum() for character in text)
 
@@ -1419,29 +1695,6 @@ def _binary_version(executable: Path, arguments: tuple[str, ...]) -> str:
     if result.returncode != 0 or not first_line:
         raise OCRProviderError("ocr_version_probe_failed")
     return first_line[:255]
-
-
-def _parse_tesseract_tsv(page_number: int, raw_tsv: bytes) -> OCRPageOutput:
-    try:
-        decoded = raw_tsv.decode("utf-8")
-        rows = csv.DictReader(io.StringIO(decoded), delimiter="\t")
-        words: list[str] = []
-        confidences: list[float] = []
-        for row in rows:
-            text = row["text"].strip()
-            confidence = float(row["conf"])
-            if text and confidence >= 0:
-                words.append(text)
-                confidences.append(confidence)
-    except (KeyError, TypeError, ValueError, UnicodeDecodeError):
-        raise OCRProviderError("invalid_ocr_output") from None
-    if not confidences:
-        return OCRPageOutput(page_number=page_number, text="", mean_confidence=0.0)
-    return OCRPageOutput(
-        page_number=page_number,
-        text=" ".join(words),
-        mean_confidence=sum(confidences) / len(confidences),
-    )
 
 
 def _unrecordable(

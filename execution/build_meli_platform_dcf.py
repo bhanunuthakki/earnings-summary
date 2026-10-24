@@ -623,7 +623,7 @@ def persist_dcf_run(
 def model_source_context() -> SourceReadContext | None:
     """Resolve only an explicitly injected product-state authority."""
     state_root = os.environ.get("DCF_SOURCE_STATE_ROOT")
-    return SourceReadContext.for_sec_state_root(Path(state_root)) if state_root else None
+    return SourceReadContext.for_product_state_root(Path(state_root)) if state_root else None
 
 
 def model_parameters(s: Assum, recipe: str = RECIPE) -> dict[str, Any]:

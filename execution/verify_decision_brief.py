@@ -68,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     source_root = args.source_state_root or os.environ.get("DCF_SOURCE_STATE_ROOT", "").strip()
     source_context = (
-        SourceReadContext.for_sec_state_root(Path(source_root)) if source_root else None
+        SourceReadContext.for_product_state_root(Path(source_root)) if source_root else None
     )
     conn = connect_sqlite(database, role=SQLiteConnectionRole.READ_ONLY)
     try:

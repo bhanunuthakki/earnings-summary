@@ -32,6 +32,7 @@ import argparse
 import hashlib
 import json
 import sqlite3
+import unicodedata
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -54,6 +55,7 @@ __all__ = [
     "content_sha256_model_or_text",
     "content_sha256_no_nan",
     "content_sha256_or_text",
+    "normalize_extracted_text",
     "parse_date_text_or_none",
     "parse_instant",
     "parse_iso8601_cli",
@@ -75,6 +77,12 @@ __all__ = [
 # --------------------------------------------------------------------------
 # Stable JSON — one named function per byte-distinct legacy variant.
 # --------------------------------------------------------------------------
+
+
+def normalize_extracted_text(text: str) -> str:
+    """Apply the shared nfkc-lines-v1 preflight and OCR text normalization."""
+    normalized = unicodedata.normalize("NFKC", text).replace("\r\n", "\n").replace("\r", "\n")
+    return "\n".join(line.rstrip() for line in normalized.split("\n")).strip()
 
 
 def canonical_json(value: object) -> str:
