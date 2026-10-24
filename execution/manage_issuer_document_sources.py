@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -119,7 +120,7 @@ def _emit_error(code: str, phase: str, **fields: object) -> None:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("phase", choices=("prepare", "validate", "publish"))
+    parser.add_argument("phase", choices=("prepare", "validate", "publish", "review-period"))
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--state-root", type=Path, required=True)
     parser.add_argument("--db", type=Path, required=True)
@@ -165,6 +166,49 @@ def main(argv: list[str] | None = None) -> int:
     except (ImportError, OSError, RuntimeError, ValueError):
         _emit_error("managed_runtime_required", args.phase)
         return 78
+
+    if args.phase == "review-period":
+        from pipeline.issuer_document_inventory import (
+            CurrentReportedPeriodReview,
+            IssuerDocumentInventoryError,
+            persist_current_reported_period_review,
+        )
+        from runtime.job_runtime import JobAlreadyRunningError, JobLock
+        from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+        try:
+            review = CurrentReportedPeriodReview.model_validate_json(
+                args.request.read_text(encoding="utf-8")
+            )
+            with (
+                JobLock(
+                    args.state_root,
+                    "managed-ir-period-review",
+                    [f"sqlite:{args.db.resolve()}"],
+                    wait_s=0,
+                ),
+                connect_sqlite(args.db, role=SQLiteConnectionRole.WRITER) as conn,
+            ):
+                node_id = persist_current_reported_period_review(conn, review)
+        except JobAlreadyRunningError:
+            _emit_error("managed_lock_contended", args.phase)
+            return 75
+        except (OSError, ValueError, IssuerDocumentInventoryError, sqlite3.Error):
+            _emit_error("reported_period_review_invalid", args.phase)
+            return 2
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "phase": args.phase,
+                    "document_version_id": review.document_version_id,
+                    "period_end": review.period_end.isoformat(),
+                    "review_node_id": node_id,
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        return 0
 
     seams = _load_seams()
     try:

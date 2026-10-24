@@ -34,6 +34,10 @@ from pipeline.ir_approval_store import (
     authorize_current_candidate,
     get_candidate,
 )
+from pipeline.issuer_document_inventory import (
+    current_reported_period_review_identity,
+    reviewed_current_period_for_url,
+)
 from provenance.evidence_ledger import (
     ContentBlob,
     EvidenceLedger,
@@ -600,16 +604,33 @@ def _expected_candidate(
         url=candidate.url,
         recorded_at=request.recorded_at,
     )
+    native = reviewed_current_period_for_url(
+        conn,
+        issuer_id=request.issuer_id,
+        ticker=request.ticker,
+        source_url=candidate.url,
+        observed_through=request.recorded_at,
+    )
+    if reviewed is not None and native is not None and reviewed.quarter_end != native.period_end:
+        reviewed = None
+        native = None
+    period_end = (
+        reviewed.quarter_end
+        if reviewed is not None
+        else (native.period_end if native is not None else None)
+    )
     return ExpectedDocumentImport(
         expected_document_key=f"{request.issuer_id}:ir:{url_sha}",
         source_kind="ir_document",
         document_type=(
-            reviewed_document_type(reviewed) if reviewed is not None else _DEFAULT_DOCUMENT_TYPE
+            reviewed_document_type(reviewed)
+            if reviewed is not None
+            else "earnings_release"
+            if native is not None
+            else _DEFAULT_DOCUMENT_TYPE
         ),
         source_url=candidate.url,
-        period_end=(
-            datetime.combine(reviewed.quarter_end, time.min) if reviewed is not None else None
-        ),
+        period_end=datetime.combine(period_end, time.min) if period_end is not None else None,
         expected_at=request.completed_at,
         expectation_basis="authoritative" if authoritative else "publisher_candidate",
         absence=ExplicitAbsence(
@@ -622,6 +643,21 @@ def _expected_candidate(
             + (
                 (("period_witness_candidate_id", reviewed.candidate_id),)
                 if reviewed is not None
+                else ()
+            )
+            + (
+                (
+                    ("native_period_document_version_id", native.document_version_id),
+                    (
+                        "native_period_review_node_id",
+                        current_reported_period_review_identity(native)[0],
+                    ),
+                    (
+                        "native_period_review_sha256",
+                        current_reported_period_review_identity(native)[1],
+                    ),
+                )
+                if native is not None
                 else ()
             ),
         ),

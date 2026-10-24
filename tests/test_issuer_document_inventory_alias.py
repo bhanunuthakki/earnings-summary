@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import sqlite3
 from collections.abc import Callable
@@ -10,8 +11,16 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from reportlab.pdfgen import canvas
 
 from execution import capture_issuer_document_inventory as cli
+from execution import manage_issuer_document_sources as manage_cli
+from ir_pipeline.source_inventory import (
+    IRDiscoverySnapshot,
+    IRDocumentCandidate,
+    IRSourceInventoryRequest,
+    _expected_candidate,
+)
 from pipeline import issuer_document_inventory as inventory
 from provenance.evidence_ledger import (
     ContentBlob,
@@ -19,19 +28,357 @@ from provenance.evidence_ledger import (
     EvidenceLedger,
     SourceObservation,
 )
-from provenance.evidence_links import DocumentObservationLink, EvidenceLinkLedger
+from provenance.evidence_links import (
+    BlobLocationObservation,
+    DocumentObservationLink,
+    EvidenceLinkLedger,
+)
 from provenance.issuer_registry import IssuerEntity, IssuerRegistry
+from provenance.issuer_registry_bootstrap import bootstrap_sec_submissions_issuer
 from provenance.reporting_entity_registry import (
     EvidenceSubjectBindingRevision,
     ReportingEntity,
     ReportingEntityRegistry,
 )
+from provenance.source_coverage_reconcile import _exact_document
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from tests.test_sec_submissions_issuer_bootstrap import _request as sec_profile_request
 
 CLOCK = datetime(2026, 8, 6, tzinfo=UTC)
 URL = "https://investor.example.test/bkng/release.pdf"
 OLD_URL = "reindex_subdir:release.pdf"
 PAYLOAD = b"%PDF-1.4\nsynthetic exact source bytes"
 SHA = hashlib.sha256(PAYLOAD).hexdigest()
+
+
+def _reviewed_period_fixture(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> tuple[sqlite3.Connection, inventory.CurrentReportedPeriodReview]:
+    db = migrated_db(tmp_path / "period-review.db")
+    conn = connect_sqlite(db, role=SQLiteConnectionRole.WRITER)
+    subject = bootstrap_sec_submissions_issuer(
+        conn,
+        request=sec_profile_request(
+            tmp_path,
+            apply=True,
+            raw_body=json.dumps(
+                {
+                    "cik": 1691493,
+                    "name": "Nu Holdings Ltd.",
+                    "entityType": "operating",
+                    "tickers": ["NU"],
+                    "exchanges": ["NYSE"],
+                    "fiscalYearEnd": "1231",
+                }
+            ).encode(),
+        ),
+    )
+    issuer_id = subject.canonical_issuer_id
+    profile_id = str(
+        conn.execute(
+            "SELECT profile_revision_id FROM issuer_profile_revisions WHERE issuer_id=?",
+            (issuer_id,),
+        ).fetchone()[0]
+    )
+    subject_id = str(
+        conn.execute(
+            "SELECT binding_revision_id FROM recorded_subject_binding_revisions "
+            "WHERE recorded_issuer_id='legacy-ticker:NU' ORDER BY revision DESC LIMIT 1"
+        ).fetchone()[0]
+    )
+    wording = "Nu Holdings Reports Second Quarter 2026 Financial Results"
+    stream = io.BytesIO()
+    pdf = canvas.Canvas(stream)
+    pdf.drawString(72, 730, wording)
+    pdf.showPage()
+    pdf.save()
+    raw = stream.getvalue()
+    from provenance.fulltext_backfill import project_pdf_page_texts
+
+    page = project_pdf_page_texts(raw)[0]
+    start = page.index(wording)
+    digest = hashlib.sha256(raw).hexdigest()
+    path = tmp_path / "current-quarter.pdf"
+    path.write_bytes(raw)
+    reviewed_at = datetime(2026, 10, 20, tzinfo=UTC)
+    ledger = EvidenceLedger(conn)
+    ledger.persist(
+        ContentBlob(
+            sha256=digest,
+            byte_size=len(raw),
+            media_type="application/pdf",
+            storage_uri=path.as_uri(),
+            recorded_at=reviewed_at,
+        )
+    )
+    ledger.persist(
+        SourceObservation(
+            observation_id="ir-current-source",
+            idempotency_key="ir-current-source",
+            source_kind="ir_document",
+            source_url="https://investors.nu/current.pdf",
+            blob_sha256=digest,
+            source_published_at=None,
+            filing_at=None,
+            accepted_at=None,
+            observed_at=reviewed_at,
+            retrieved_at=reviewed_at,
+            retrieval_config_sha256="a" * 64,
+            collector_code_version="synthetic@1",
+        )
+    )
+    ledger.persist(
+        DocumentVersion(
+            document_version_id="ir-current-version",
+            document_key="ir-current-key",
+            version_sequence=1,
+            observation_id="ir-current-source",
+            blob_sha256=digest,
+            issuer_id=issuer_id,
+            ticker="NU",
+            document_type="ir_document",
+            form_type="IR",
+            period_start=None,
+            period_end=None,
+            as_of_at=None,
+            language="en",
+            recorded_at=reviewed_at,
+        )
+    )
+    EvidenceLinkLedger(conn).persist_location(
+        BlobLocationObservation(
+            location_observation_id="ir-current-location",
+            idempotency_key="ir-current-location",
+            blob_sha256=digest,
+            storage_uri=path.as_uri(),
+            location_kind="local",
+            availability_state="present",
+            location_sequence=1,
+            verified_at=reviewed_at,
+            verified_byte_size=len(raw),
+            verified_sha256=digest,
+            recorded_at=reviewed_at,
+        )
+    )
+    conn.commit()
+    review = inventory.CurrentReportedPeriodReview(
+        document_version_id="ir-current-version",
+        source_sha256=digest,
+        issuer_id=issuer_id,
+        ticker="NU",
+        profile_revision_id=profile_id,
+        subject_binding_revision_id=subject_id,
+        fiscal_year=2026,
+        fiscal_quarter=2,
+        period_end=date(2026, 6, 30),
+        page_number=1,
+        char_start=start,
+        char_end=start + len(wording),
+        exact_quote=wording,
+        reviewer_identity="codex-agent:synthetic-reviewer",
+        review_evidence="First-page issuer headline states reported second-quarter results.",
+        knowledge_cutoff=datetime(2026, 10, 21, tzinfo=UTC),
+        observed_through=datetime(2026, 10, 21, tzinfo=UTC),
+        reviewed_at=reviewed_at,
+    )
+    return conn, review
+
+
+def test_current_reported_period_review_binds_native_quote_and_replays(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn, review = _reviewed_period_fixture(tmp_path, migrated_db)
+    try:
+        node_id = inventory.persist_current_reported_period_review(conn, review)
+        assert inventory.persist_current_reported_period_review(conn, review) == node_id
+        assert (
+            inventory.verified_current_reported_period_review(
+                conn,
+                document_version_id=review.document_version_id,
+                source_sha256=review.source_sha256,
+                period_end=review.period_end,
+            )
+            == review
+        )
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM evidence_extraction_runs WHERE extractor_name='ir-current-reported-period'"
+            ).fetchone()[0]
+            == 1
+        )
+    finally:
+        conn.close()
+
+
+def test_reviewed_generic_ir_document_bridges_inventory_without_metadata_rewrite(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn, review = _reviewed_period_fixture(tmp_path, migrated_db)
+    url = "https://investors.nu/current.pdf"
+    later = datetime(2026, 10, 22, tzinfo=UTC)
+    try:
+        inventory.persist_current_reported_period_review(conn, review)
+        request = IRSourceInventoryRequest(
+            issuer_id=review.issuer_id,
+            ticker="NU",
+            ir_url="https://investors.nu/",
+            revision=1,
+            discovery=IRDiscoverySnapshot(
+                pages=(), candidates=(), crawl_complete=True, crawl_stop_reason="frontier_exhausted"
+            ),
+            retrieval_config_sha256="a" * 64,
+            collector_code_version="synthetic@1",
+            started_at=later,
+            completed_at=later,
+            recorded_at=later,
+            reconciled_at=later,
+        )
+        expected = _expected_candidate(
+            conn,
+            request,
+            IRDocumentCandidate(
+                url=url,
+                link_text="Current quarter results",
+                filename_hint="current.pdf",
+                source_page="https://investors.nu/",
+            ),
+            authoritative=True,
+        )
+        assert expected.document_type == "earnings_release"
+        assert expected.period_end is not None
+        assert expected.period_end.date() == review.period_end
+        assert expected.absence is not None
+        details = dict(expected.absence.reason_details)
+        assert (
+            details["native_period_review_node_id"]
+            == inventory.current_reported_period_review_identity(review)[0]
+        )
+        assert (
+            details["native_period_review_sha256"]
+            == inventory.current_reported_period_review_identity(review)[1]
+        )
+        assert _exact_document(
+            conn, expected, issuer_id=review.issuer_id, ticker="NU", reconciled_at=later
+        ) == (review.document_version_id, 1)
+        assert (
+            inventory.reviewed_current_period_for_url(
+                conn,
+                issuer_id=review.issuer_id,
+                ticker="NU",
+                source_url="https://investors.nu/unrelated.pdf",
+                observed_through=later,
+            )
+            is None
+        )
+        assert (
+            _exact_document(
+                conn,
+                expected.model_copy(update={"source_url": "https://investors.nu/unrelated.pdf"}),
+                issuer_id=review.issuer_id,
+                ticker="NU",
+                reconciled_at=later,
+            )
+            is None
+        )
+        assert tuple(
+            conn.execute(
+                "SELECT document_type,period_end FROM evidence_document_versions WHERE document_version_id=?",
+                (review.document_version_id,),
+            ).fetchone()
+        ) == ("ir_document", None)
+        assert (
+            inventory.reviewed_current_period_for_url(
+                conn,
+                issuer_id=review.issuer_id,
+                ticker="NU",
+                source_url=url,
+                observed_through=review.reviewed_at,
+            )
+            is None
+        )
+        (tmp_path / "current-quarter.pdf").unlink()
+        assert (
+            inventory.reviewed_current_period_for_url(
+                conn,
+                issuer_id=review.issuer_id,
+                ticker="NU",
+                source_url=url,
+                observed_through=later,
+            )
+            is None
+        )
+        assert (
+            _exact_document(
+                conn, expected, issuer_id=review.issuer_id, ticker="NU", reconciled_at=later
+            )
+            is None
+        )
+    finally:
+        conn.close()
+
+
+def test_current_reported_period_review_uses_existing_managed_phase(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    conn, review = _reviewed_period_fixture(tmp_path, migrated_db)
+    db_path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
+    conn.close()
+    request = tmp_path / "review-request.json"
+    request.write_text(review.model_dump_json(), encoding="utf-8")
+    monkeypatch.setattr(manage_cli, "require_managed_sqlite_runtime", lambda: None)
+    assert (
+        manage_cli.main(
+            [
+                "review-period",
+                "--request",
+                str(request),
+                "--state-root",
+                str(tmp_path),
+                "--db",
+                str(db_path),
+            ]
+        )
+        == 0
+    )
+    result = json.loads(capsys.readouterr().out)
+    assert result["phase"] == "review-period"
+    assert result["period_end"] == "2026-06-30"
+    assert result["review_node_id"].startswith("ir-current-period-review:")
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"exact_quote": "Nu Holdings Expects Second Quarter 2026 Financial Results"},
+        {"exact_quote": "Nu Holdings Reports Prior Second Quarter 2026 Financial Results"},
+        {"fiscal_year": 2025},
+        {"period_end": date(2026, 9, 30)},
+        {"document_version_id": "unrelated-version"},
+        {"subject_binding_revision_id": "unrelated-subject"},
+        {"source_sha256": "0" * 64},
+        {"profile_revision_id": "missing-profile"},
+        {"knowledge_cutoff": datetime(2026, 10, 19, tzinfo=UTC)},
+    ],
+)
+def test_current_reported_period_review_rejects_false_or_unbound_claim(
+    tmp_path: Path, migrated_db: Callable[..., Path], change: dict[str, object]
+) -> None:
+    conn, review = _reviewed_period_fixture(tmp_path, migrated_db)
+    try:
+        with pytest.raises((ValueError, inventory.IssuerDocumentInventoryError)):
+            inventory.persist_current_reported_period_review(conn, review.model_copy(update=change))
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM evidence_extraction_runs WHERE extractor_name='ir-current-reported-period'"
+            ).fetchone()[0]
+            == 0
+        )
+    finally:
+        conn.close()
 
 
 def _fixture(

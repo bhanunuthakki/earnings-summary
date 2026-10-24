@@ -2249,6 +2249,28 @@ spreadsheet, presentation and transcript hints. Supporting HTML notices do not
 loosen the existing financial-release HTML boundary. This classification change
 does not rewrite historical document metadata or activate a new collection job.
 
+### Source-reviewed reported-quarter selection
+
+`manage_issuer_document_sources.py review-period` is a supervised local operator
+phase on the configured canonical database. It accepts one closed source-review
+request and appends one immutable EvidenceLedger run and located node for the
+captured publisher PDF. The request names the actual analyst reviewer and method;
+it does not assert owner approval. The phase verifies exact source bytes, native
+first-page wording for a current reported actual quarter, issuer identity,
+selected subject, active SEC-source fiscal profile, source clocks, and replay.
+Changed reviews require a new source/version process; an exact replay creates no
+new evidence. Failure rolls back the review. The JSON result identifies the
+review node; it is evidence, not a financial fact or completeness seal.
+
+Current IR collection retains bounded candidates when reported-period selection
+is pending. Its output uses `period_selection_pending`, includes retained and
+deferred counts, and does not run categorization or claim complete coverage.
+The source selector can exclude a quarter only after all current inventory and
+captured-period proof checks pass. Current incomplete populations for the eleven
+portfolio issuers remain visible pending; this change does not run collection or
+activate a schedule. Operator evidence is the CLI JSON and existing source and
+coverage receipts. No cockpit control changes in this code path.
+
 
 ### Transcript scan database and retained-input scope
 

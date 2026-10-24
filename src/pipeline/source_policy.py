@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import json
 import re
 import sqlite3
 from datetime import UTC, date, datetime, time, timedelta
@@ -780,7 +781,9 @@ def _captured_reported_period_proof(
         FiscalPeriodWitness,
         IssuerDocumentInventoryError,
         IssuerDocumentInventoryRequest,
+        current_reported_period_review_identity,
         validate_fiscal_period_witness,
+        verified_current_reported_period_review,
     )
     from provenance.source_coverage import ExpectedDocument
 
@@ -788,7 +791,7 @@ def _captured_reported_period_proof(
     if expected.period_end is None or expected.source_url is None:
         return False
     coverage = conn.execute(
-        "SELECT coverage_status,document_version_id FROM v_source_coverage_current "
+        "SELECT coverage_status,document_version_id,reason_details_json "
         "WHERE expected_document_id=?",
         (expected.expected_document_id,),
     ).fetchone()
@@ -806,10 +809,20 @@ def _captured_reported_period_proof(
     ).fetchone()
     if (
         version is None
-        or (version[1], version[2], version[3], version[4])
-        != (expected.issuer_id, ticker, expected.document_type, expected.form_type)
-        or version[7] is None
-        or datetime.fromisoformat(str(version[7])).date() != expected.period_end.date()
+        or (version[1], version[2], version[4]) != (expected.issuer_id, ticker, expected.form_type)
+        or (
+            version[3] != expected.document_type
+            and not (
+                expected.source_kind == "ir_document"
+                and expected.document_type == "earnings_release"
+                and version[3] == "ir_document"
+            )
+        )
+        or (
+            datetime.fromisoformat(str(version[7])).date() != expected.period_end.date()
+            if version[7] is not None
+            else expected.source_kind != "ir_document"
+        )
     ):
         return False
     observation = conn.execute(
@@ -895,34 +908,32 @@ def _captured_reported_period_proof(
     except (ValueError, IssuerDocumentInventoryError, sqlite3.Error):
         return False
 
-    if expected.source_kind == "ir_document":
-        # A reviewed URL or period-bearing version alone does not establish the
-        # current reported quarter in the PDF. The native quote must be retained.
-        witness = conn.execute(
-            "SELECT node.text,node.locator_json FROM evidence_nodes node "
-            "JOIN evidence_extraction_runs run ON run.extraction_run_id=node.extraction_run_id "
-            "WHERE run.document_version_id=? AND run.input_sha256=? "
-            "AND run.outcome='succeeded' AND run.extractor_name='ir-current-reported-period' "
-            "AND node.node_kind='passage'",
-            (version[0], version[5]),
-        ).fetchall()
-        if len(witness) != 1 or not raw.startswith(b"%PDF-"):
+    if expected.source_kind == "ir_document" and expected.document_type == "earnings_release":
+        review = verified_current_reported_period_review(
+            conn,
+            document_version_id=str(version[0]),
+            source_sha256=str(version[5]),
+            period_end=expected.period_end.date(),
+        )
+        if (
+            review is None
+            or review.issuer_id != expected.issuer_id
+            or review.ticker != ticker
+            or review.profile_revision_id != profile_id
+            or review.reviewed_at.date() > as_of
+            or review.knowledge_cutoff.date() > as_of
+            or review.observed_through.date() > as_of
+        ):
             return False
-        from provenance.evidence_ledger import EvidenceLocator
-        from provenance.fulltext_backfill import project_pdf_page_texts
-
+        node_id, review_sha = current_reported_period_review_identity(review)
         try:
-            locator = EvidenceLocator.model_validate_json(str(witness[0][1]))
-            pages = project_pdf_page_texts(raw)
-            page = pages[(locator.page_number or 0) - 1]
-        except Exception:  # A damaged or unsupported PDF leaves the period pending.
+            coverage_details = json.loads(str(coverage[2]))
+        except (TypeError, ValueError):
             return False
         if (
-            locator.source_ref != version[0]
-            or locator.page_number is None
-            or locator.char_start is None
-            or locator.char_end is None
-            or page[locator.char_start : locator.char_end] != witness[0][0]
+            coverage_details.get("imported_detail_native_period_document_version_id") != version[0]
+            or coverage_details.get("imported_detail_native_period_review_node_id") != node_id
+            or coverage_details.get("imported_detail_native_period_review_sha256") != review_sha
         ):
             return False
     return True
@@ -942,6 +953,7 @@ def reported_period_window_from_inventory(
     """
 
     from ir_pipeline.source_inventory import reviewed_document_type, reviewed_period_candidate
+    from pipeline.issuer_document_inventory import reviewed_current_period_for_url
     from provenance.source_coverage import ExpectedDocument, SourceInventorySnapshot
     from provenance.source_inventory_seal import (
         InventoryComponent,
@@ -1074,24 +1086,47 @@ def reported_period_window_from_inventory(
                 return ReportedPeriodWindow(
                     status=ReportedPeriodStatus.UNKNOWN, reason="ir_period_unqualified"
                 )
-            elif (
-                item.source_url is None
-                or (
-                    witness := reviewed_period_candidate(
-                        conn,
-                        issuer_id=snapshot.issuer_id,
-                        ticker=ticker.strip().upper(),
-                        url=item.source_url,
-                        recorded_at=snapshot.recorded_at,
+            else:
+                if item.source_url is None:
+                    return ReportedPeriodWindow(
+                        status=ReportedPeriodStatus.UNKNOWN, reason="ir_period_proof_missing"
                     )
+                witness = reviewed_period_candidate(
+                    conn,
+                    issuer_id=snapshot.issuer_id,
+                    ticker=ticker.strip().upper(),
+                    url=item.source_url,
+                    recorded_at=snapshot.recorded_at,
                 )
-                is None
-                or witness.quarter_end != item.period_end.date()
-                or reviewed_document_type(witness) != item.document_type
-            ):
-                return ReportedPeriodWindow(
-                    status=ReportedPeriodStatus.UNKNOWN, reason="ir_period_proof_missing"
+                native = reviewed_current_period_for_url(
+                    conn,
+                    issuer_id=snapshot.issuer_id,
+                    ticker=ticker.strip().upper(),
+                    source_url=item.source_url,
+                    observed_through=snapshot.recorded_at,
                 )
+                approved_matches = (
+                    witness is not None
+                    and witness.quarter_end == item.period_end.date()
+                    and reviewed_document_type(witness) == item.document_type
+                )
+                native_matches = (
+                    native is not None
+                    and native.period_end == item.period_end.date()
+                    and item.document_type == "earnings_release"
+                )
+                if not approved_matches and not native_matches:
+                    return ReportedPeriodWindow(
+                        status=ReportedPeriodStatus.UNKNOWN, reason="ir_period_proof_missing"
+                    )
+                if (
+                    witness is not None
+                    and native is not None
+                    and witness.quarter_end != native.period_end
+                ):
+                    return ReportedPeriodWindow(
+                        status=ReportedPeriodStatus.AMBIGUOUS, reason="ir_period_proof_conflict"
+                    )
             if item.period_end is not None and not _captured_reported_period_proof(
                 conn,
                 item=item,
@@ -1107,7 +1142,11 @@ def reported_period_window_from_inventory(
                     return ReportedPeriodWindow(
                         status=ReportedPeriodStatus.AMBIGUOUS, reason="future_reported_period"
                     )
-                reported.add(item.period_end.date())
+                if (
+                    kind == "sec_submissions"
+                    and (item.form_type or "").upper().removesuffix("/A") == "10-Q"
+                ) or (kind == "ir_crawl" and item.document_type == "earnings_release"):
+                    reported.add(item.period_end.date())
     if len(reported) < max_quarters:
         return ReportedPeriodWindow(
             status=ReportedPeriodStatus.UNKNOWN, reason="reported_period_population_short"

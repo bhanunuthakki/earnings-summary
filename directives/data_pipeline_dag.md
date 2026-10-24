@@ -19,6 +19,17 @@ watchlist, then permitted index screening. Automatic work records `requested=fal
 an explicit request records its actual invocation identity. A scheduler run ID
 must not be fabricated into owner authorization to satisfy an obsolete role rule.
 
+The reported-quarter selector under `src/pipeline/source_policy.py` returns a closed
+five-period window only after current SEC and IR inventories, complete seals,
+captured document versions, exact retained bytes, a selected issuer/profile, and
+source-located current-period reviews agree. An expected row, a quarter label, or
+a calendar end is not period proof. Unknown, stale, and ambiguous selection permit
+bounded authorized discovery and raw candidate retention. They do not permit a
+final out-of-window exclusion, fifth-quarter eviction, financial publication, or
+full-coverage claim. Annual 10-K, 20-F, and 40-F period ends do not establish a
+quarterly result by themselves. Historical exact-window receipts keep their
+versioned replay meaning.
+
 Apply scrutiny at the boundary that can establish the claimed property:
 
 | Boundary | Required check | What may proceed |

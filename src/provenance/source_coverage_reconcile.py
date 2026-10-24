@@ -805,6 +805,7 @@ def _assessment(
             conn,
             imported,
             issuer_id=request.issuer_id,
+            ticker=request.ticker or "",
             reconciled_at=request.reconciled_at,
         )
     )
@@ -918,6 +919,7 @@ def _exact_document(
     imported: ExpectedDocumentImport,
     *,
     issuer_id: str,
+    ticker: str,
     reconciled_at: datetime,
 ) -> tuple[str, int] | None:
     """Resolve one issuer-scoped logical document without collapsing ambiguity.
@@ -927,6 +929,34 @@ def _exact_document(
     a history, while multiple document keys are an identity ambiguity.  The
     latter must not be resolved by a recency tie-break.
     """
+
+    if (
+        imported.source_kind == "ir_document"
+        and imported.document_type == "earnings_release"
+        and imported.period_end is not None
+        and imported.source_url is not None
+    ):
+        from pipeline.issuer_document_inventory import (
+            current_reported_period_review_identity,
+            reviewed_current_period_for_url,
+        )
+
+        review = reviewed_current_period_for_url(
+            conn,
+            issuer_id=issuer_id,
+            ticker=ticker,
+            source_url=imported.source_url,
+            observed_through=reconciled_at,
+        )
+        if review is not None and review.period_end == imported.period_end.date():
+            node_id, review_sha = current_reported_period_review_identity(review)
+            details = dict(imported.absence.reason_details) if imported.absence is not None else {}
+            if (
+                details.get("native_period_document_version_id") == review.document_version_id
+                and details.get("native_period_review_node_id") == node_id
+                and details.get("native_period_review_sha256") == review_sha
+            ):
+                return review.document_version_id, 1
 
     predicates = [
         "document.document_type = ?",
@@ -1143,6 +1173,7 @@ def _successful_extraction(conn: sqlite3.Connection, document_version_id: str) -
     row = conn.execute(
         "SELECT extraction_run_id FROM evidence_extraction_runs "
         "WHERE document_version_id = ? AND outcome = 'succeeded' "
+        "AND extractor_name <> 'ir-current-reported-period' "
         "AND EXISTS (SELECT 1 FROM v_evidence_current AS node "
         "WHERE node.extraction_run_id = evidence_extraction_runs.extraction_run_id "
         "AND node.node_kind <> 'document') "
