@@ -146,7 +146,7 @@ def test_rubrik_rows_keep_latest_five_quarters_and_dedupe() -> None:
 
 
 @pytest.mark.parametrize("only_webcast", [False, True])
-def test_newest_observed_empty_period_displaces_sixth_period(only_webcast: bool) -> None:
+def test_newest_observed_without_release_retains_fifth_reported_period(only_webcast: bool) -> None:
     observations = _rubrik_observations()
     links: tuple[RubrikLinkObservation, ...] = ()
     if only_webcast:
@@ -171,8 +171,35 @@ def test_newest_observed_empty_period_displaces_sixth_period(only_webcast: bool)
         policy,
         parse_rubrik_quarter_rows((newest, *observations), policy=policy),
     )
+    assert catalog.reported_quarters[0] == date(2026, 7, 31)
+    assert date(2025, 7, 31) in catalog.reported_quarters
+    assert all(entry.quarter_end != date(2026, 10, 31) for entry in catalog.entries)
+
+
+def test_newest_observed_release_displaces_fifth_reported_period() -> None:
+    policy = issuer_policy("RBRK")
+    newest = RubrikQuarterObservation(
+        observation_key="rbrk-2026-10-31",
+        authority_url=policy.ir.authority_url,
+        raw_sha256="1" * 64,
+        quarter_end=date(2026, 10, 31),
+        row_locator="quarter-row[Third Quarter Fiscal 2027]",
+        links=(
+            RubrikLinkObservation(
+                title="Earnings Release",
+                url="https://ir.rubrik.com/static-files/2026-10-31-release.pdf",
+                declared_kind="earnings-release",
+                evidence_locator="row[newest] > release",
+            ),
+        ),
+    )
+    catalog = build_catalog(
+        policy,
+        parse_rubrik_quarter_rows((newest, *_rubrik_observations()), policy=policy),
+    )
     assert catalog.reported_quarters[0] == date(2026, 10, 31)
     assert date(2025, 7, 31) not in catalog.reported_quarters
+    assert any(entry.quarter_end == date(2026, 10, 31) for entry in catalog.entries)
 
 
 def test_catalog_hash_is_order_independent_and_bound_to_raw_and_policy_hashes() -> None:

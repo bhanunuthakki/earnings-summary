@@ -188,7 +188,7 @@ def build_catalog(
     policy: IssuerAcquisitionPolicy,
     parsed: IrParseResult,
 ) -> ApprovedIrCatalog:
-    """Deduplicate and cap candidates at the latest policy-approved quarters."""
+    """Select source-linked releases without treating empty quarter controls as reports."""
     observation_by_key = {item.observation_key: item for item in parsed.observations}
     if len(observation_by_key) != len(parsed.observations):
         raise IrCatalogError("source observation keys must be unique")
@@ -203,10 +203,16 @@ def build_catalog(
             raise IrCatalogError("source observation adapter does not match issuer policy")
         if observation.quarter_end not in parsed.observed_reporting_periods:
             raise IrCatalogError("source observation period was not declared observed")
+    # A visible quarter control is only a candidate. Require a source-bound
+    # earnings release before it can displace an older reported period.
+    release_periods = {
+        entry.quarter_end
+        for entry in parsed.entries
+        if entry.disposition is CatalogDisposition.IR_DOCUMENT
+        and entry.doc_type is DocType.IR_PRESS_RELEASE
+    }
     latest_quarters = tuple(
-        sorted(set(parsed.observed_reporting_periods), reverse=True)[
-            : policy.ir.reported_quarter_window
-        ]
+        sorted(release_periods, reverse=True)[: policy.ir.reported_quarter_window]
     )
     quarter_set = frozenset(latest_quarters)
     admitted = tuple(
