@@ -454,6 +454,49 @@ coverage lives in `test_evidence_backfill.py`, `test_evidence_backfill_cli_guard
 `test_managed_ir_sources.py`, including quarantine recovery, contention, byte drift,
 replay integrity, and transaction rollback.
 
+The WIX and RBRK observation import CLIs, and the RBRK browser capture CLI, accept
+`--reviewed-period-selection` with an explicit read-only `--db` for a new five-period
+selection. Each selected period names an existing native `CurrentReportedPeriodReview`
+by document version, source hash, publisher URL, and period end. The capture owner
+reconstructs each review against retained source bytes and its current exact URL
+before browser work or bundle output. The issuer must resolve through the existing
+canonical issuer binding at the selection cutoff; a historical alias needs its own
+approved binding. The fixed-cohort path remains available for
+historical replay; WIX server-side capture remains unavailable. The selected five
+are observations, not a certified latest-five window. Source-inventory completion,
+exact document admission, financial fact admission, and reader checks remain
+separate. A missing, stale, or conflicting review fails before output.
+
+The existing `execution/capture_ir_authority_surfaces.py` request also accepts an
+explicit MZ catalog POST surface for the NU results archive. This paragraph
+supersedes the 2026-10-04 no-surface-change statement for that POST capability
+only. The operator supplies one retained results-page GET surface, one years
+POST surface, and one required document POST surface for each advertised year.
+The years surface is mandatory in the capture request. It is non-required in
+the authority evidence because it lists years, not documents. The POST body
+is generated from the retained page's MZ endpoint and
+category names; it selects `en_US`, published documents, and an exact year.
+The request manifest binds each POST body hash. The existing content-blob and
+source-observation ledger retains the manifest, exact POST bodies, and raw
+responses. Missing years, a changed endpoint, a mismatched document URL set,
+an authentication failure, or a POST redirect prevents an exhausted claim.
+The operator must still verify the publisher's advertised scope and submit
+the complete URL set through the existing `--request` JSON input. The same
+`--db` and `--blob-root` inputs apply. Dry run remains read-only; `--apply`
+uses the existing configured writer lane. Historical GET-only request hashes
+and observation identities remain unchanged. A complete authority capture
+does not certify document acquisition, reported-period coverage, or financial
+facts.
+
+`execution/sync_ir_source_inventory.py` reconstructs an `@2` MZ request and
+response set from retained blobs before it adds publisher document URLs to the
+existing candidate inventory. The capture must precede inventory completion.
+A failed generic crawl page stays visible but is non-required only when the
+reconstructed URLs exactly close the exhausted publisher surface set. Missing
+or changed blobs, a wrong issuer, or a changed request or year set stop the
+inventory before a write. Historical `@1` GET authority keeps its existing
+candidate and receipt behavior.
+
 ### Recovery queue policy migration
 
 Migration `0040_fmp_watchlist_recovery` admits automatic evaluation and watchlist

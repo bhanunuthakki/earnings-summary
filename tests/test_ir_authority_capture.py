@@ -7,7 +7,7 @@ import json
 import os
 import sqlite3
 import subprocess
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlunsplit
@@ -21,8 +21,14 @@ from ir_pipeline.authority_capture import (
     IRAuthorityCaptureIdentityError,
     IRAuthorityCaptureRequest,
     IRAuthorityCaptureSpec,
+    MZCatalogPost,
     capture_ir_authority_surfaces,
+    verified_mz_authority_documents,
 )
+from ir_pipeline.discover import generic
+from ir_pipeline.discover._docmeta import CandidateDoc
+from ir_pipeline.discover.generic import CrawlPageOutcome, DocumentDiscoveryInventory
+from ir_pipeline.source_inventory import source_inventory_request, sync_ir_source_inventory
 from provenance.evidence_native_candidates import resolve_local_storage_uri
 from provenance.issuer_registry import (
     IssuerEntity,
@@ -68,8 +74,8 @@ class FakeResponse:
 
 
 class FakeSession:
-    def __init__(self, responses: list[FakeResponse | Exception]) -> None:
-        self.responses = responses
+    def __init__(self, responses: Sequence[FakeResponse | Exception]) -> None:
+        self.responses = list(responses)
         self.calls: list[tuple[str, Mapping[str, str]]] = []
 
     def get(
@@ -86,6 +92,25 @@ class FakeSession:
         assert not allow_redirects
         assert set(headers) == {"User-Agent", "Accept"}
         self.calls.append((url, headers))
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    def post(
+        self,
+        url: str,
+        *,
+        data: bytes,
+        headers: Mapping[str, str],
+        timeout: tuple[int, int],
+        stream: bool,
+        allow_redirects: bool,
+    ) -> FakeResponse:
+        assert timeout == (3, 7)
+        assert stream and not allow_redirects
+        assert headers["Content-Type"] == "application/json"
+        self.calls.append((url, {**headers, "body_sha256": hashlib.sha256(data).hexdigest()}))
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
@@ -188,6 +213,104 @@ def _request(
     )
 
 
+MZ_BASE = "https://api.mziq.com/mzfilemanager"
+MZ_RESULTS = "https://www.investidores.nu/financials/results-center/"
+MZ_FILE_2025 = "https://api.mziq.com/mzfilemanager/v2/d/issuer-id/q4-2025"
+MZ_FILE_2026 = "https://api.mziq.com/mzfilemanager/v2/d/issuer-id/q1-2026"
+MZ_PAGE = (
+    b"<script>const fmId='issuer-id';const fmBase='https://api.mziq.com/mzfilemanager';"
+    b"categories.push({internal_name:'release_resultados'});</script>"
+)
+
+
+def _mz_request(*, years: tuple[int, ...] = (2025, 2026)) -> IRAuthorityCaptureRequest:
+    categories = ("release_resultados",)
+    results = IRAuthorityCaptureSpec(
+        surface_key="results",
+        surface_kind="primary_landing",
+        source_url=MZ_RESULTS,
+        traversal_kind="single_response",
+        outcome="observed",
+        required=False,
+        observed_document_urls=(),
+        verification_method="retained_results_page",
+        revision=1,
+    )
+    years_spec = IRAuthorityCaptureSpec(
+        surface_key="years",
+        surface_kind="publisher_api",
+        source_url=f"{MZ_BASE}/company/issuer-id/categoryInternalName/document/language/years",
+        traversal_kind="single_response",
+        outcome="observed",
+        required=False,
+        observed_document_urls=(),
+        verification_method="retained_mz_years",
+        revision=1,
+        mz_catalog_post=MZCatalogPost(results_surface_key="results", categories=categories),
+    )
+    documents = tuple(
+        IRAuthorityCaptureSpec(
+            surface_key=f"documents-{year}",
+            surface_kind="publisher_api",
+            source_url=f"{MZ_BASE}/company/issuer-id/filter/categories/year/meta",
+            traversal_kind="single_response",
+            outcome="exhausted",
+            required=True,
+            terminal_condition="publisher_total_reconciled",
+            observed_document_urls=(MZ_FILE_2025 if year == 2025 else MZ_FILE_2026,),
+            verification_method="retained_mz_document_year",
+            revision=1,
+            mz_catalog_post=MZCatalogPost(
+                results_surface_key="results", categories=categories, year=year
+            ),
+        )
+        for year in years
+    )
+    return IRAuthorityCaptureRequest(
+        issuer_id="issuer-acme",
+        ticker="ACME",
+        authority_basis="publisher_api",
+        asserted_at=STAMP,
+        user_agent="research-agent test@example.test",
+        connect_timeout_seconds=3,
+        read_timeout_seconds=7,
+        max_surface_bytes=1_000_000,
+        max_redirects=2,
+        surfaces=(results, years_spec, *documents),
+    )
+
+
+def _mz_responses(*, years: tuple[int, ...] = (2025, 2026)) -> list[FakeResponse]:
+    responses = [
+        FakeResponse(body=MZ_PAGE),
+        FakeResponse(
+            body=json.dumps({"success": True, "data": list(years)}).encode(),
+            headers={"Content-Type": "application/json"},
+        ),
+    ]
+    for year in years:
+        responses.append(
+            FakeResponse(
+                body=json.dumps(
+                    {
+                        "success": True,
+                        "data": {
+                            "document_metas": [
+                                {
+                                    "internal_name": "release_resultados",
+                                    "file_title": f"Results {year}",
+                                    "link_url": (MZ_FILE_2025 if year == 2025 else MZ_FILE_2026),
+                                }
+                            ]
+                        },
+                    }
+                ).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+        )
+    return responses
+
+
 def test_required_exhausted_surface_requires_at_least_one_observed_document() -> None:
     with pytest.raises(ValueError, match="observed document"):
         IRAuthorityCaptureSpec(
@@ -255,6 +378,539 @@ def test_exhausted_surface_rejects_an_unclaimed_document_reference(
             "SELECT COUNT(*) FROM issuer_authority_surface_revisions"
         ).fetchone() == (0,)
         assert conn.execute("SELECT COUNT(*) FROM evidence_source_observations").fetchone() == (0,)
+    finally:
+        conn.close()
+
+
+def test_exhausted_html_ignores_navigation_assets_but_keeps_document_links(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    body = (
+        b"<html><head><link rel='stylesheet' href='/assets/archive.css'></head>"
+        b"<body><nav><a href='/press-releases'>Press Releases</a></nav>"
+        b"<img src='https://s25.q4cdn.com/issuer/logo.png'>"
+        b"<a href='/q4-2025-results.pdf'>Q4 results</a></body></html>"
+    )
+    try:
+        result = capture_ir_authority_surfaces(
+            conn,
+            _request(),
+            blob_root=tmp_path / "blobs",
+            apply=False,
+            session=FakeSession([FakeResponse(body=body)]),
+        )
+        assert result.complete
+        assert result.failed == 0
+    finally:
+        conn.close()
+
+
+def test_exhausted_html_retains_a_pdf_link_inside_navigation(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    body = (
+        b"<html><nav><a href='/archive'>Archive</a>"
+        b"<a href='/q4-2025-results.pdf'>Q4 results PDF</a></nav></html>"
+    )
+    try:
+        result = capture_ir_authority_surfaces(
+            conn,
+            _request(),
+            blob_root=tmp_path / "blobs",
+            apply=False,
+            session=FakeSession([FakeResponse(body=body)]),
+        )
+        assert result.complete
+    finally:
+        conn.close()
+
+
+def test_exhausted_json_retains_bare_document_urls_array(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    body = json.dumps({"title": "Quarterly archive", "urls": [DOCUMENT_URL]}).encode()
+    try:
+        result = capture_ir_authority_surfaces(
+            conn,
+            _request(),
+            blob_root=tmp_path / "blobs",
+            apply=False,
+            session=FakeSession(
+                [FakeResponse(body=body, headers={"Content-Type": "application/json"})]
+            ),
+        )
+        assert result.complete
+    finally:
+        conn.close()
+
+
+def test_exhausted_html_keeps_opaque_cdn_file_without_claiming_cdn_authority(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    opaque = "https://s25.q4cdn.com/issuer/files/quarterly-download.dat"
+    body = (
+        b"<html><img src='https://s25.q4cdn.com/issuer/logo.png'>"
+        b"<a href='/q4-2025-results.pdf'>Q4 results</a>"
+        b"<a href='https://s25.q4cdn.com/issuer/files/quarterly-download.dat'>"
+        b"Quarterly document</a></html>"
+    )
+    request = _request()
+    archive = request.surfaces[0].model_copy(
+        update={"observed_document_urls": (DOCUMENT_URL, opaque)}
+    )
+    request = request.model_copy(update={"surfaces": (archive,)})
+
+    def literal_public_url(url: str) -> str:
+        return url
+
+    monkeypatch.setattr(generic, "ensure_safe_public_url", literal_public_url)
+    try:
+        result = capture_ir_authority_surfaces(
+            conn,
+            request,
+            blob_root=tmp_path / "blobs",
+            apply=False,
+            session=FakeSession([FakeResponse(body=body)]),
+        )
+        assert result.complete
+        assert result.authority_evidence is not None
+        assert result.authority_evidence.surfaces[0].observed_document_urls == (
+            DOCUMENT_URL,
+            opaque,
+        )
+    finally:
+        conn.close()
+
+
+def test_exhausted_json_ignores_titles_but_requires_each_document_url(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    body = json.dumps(
+        {
+            "title": "Quarterly Results Archive",
+            "document_metas": [
+                {
+                    "file_title": "Q4 2025 results",
+                    "link_url": DOCUMENT_URL,
+                }
+            ],
+        }
+    ).encode()
+    try:
+        result = capture_ir_authority_surfaces(
+            conn,
+            _request(),
+            blob_root=tmp_path / "blobs",
+            apply=False,
+            session=FakeSession(
+                [FakeResponse(body=body, headers={"Content-Type": "application/json"})]
+            ),
+        )
+        assert result.complete
+        assert result.failed == 0
+    finally:
+        conn.close()
+
+
+def test_exhausted_surface_keeps_opaque_download_paths_in_closed_set(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    requested = "https://ir.acme.test/files/download/opaque-one"
+    body = (
+        b"<a href='/files/download/opaque-one'>Quarterly document</a>"
+        b"<a href='/files/download/opaque-two'>Supplemental document</a>"
+    )
+    try:
+        result = capture_ir_authority_surfaces(
+            conn,
+            _request(document_url=requested),
+            blob_root=tmp_path / "blobs",
+            apply=False,
+            session=FakeSession([FakeResponse(body=body)]),
+        )
+        assert result.failed == 1
+        assert result.items[0].reason_code == "unclaimed_document_in_surface"
+    finally:
+        conn.close()
+
+
+def test_mz_catalog_retains_exact_post_and_response_bytes_with_replay(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    conn = _full_conn(tmp_path, migrated_db)
+    request = _mz_request()
+    blob_root = tmp_path / "blobs"
+    try:
+        first_session = FakeSession(_mz_responses())
+        first = capture_ir_authority_surfaces(
+            conn, request, blob_root=blob_root, apply=True, session=first_session
+        )
+        assert first.complete
+        assert first.failed == 0
+        assert len(first_session.calls) == 4
+        config_sha = conn.execute(
+            "SELECT retrieval_config_sha256 FROM evidence_source_observations WHERE source_url = ?",
+            (MZ_RESULTS,),
+        ).fetchone()[0]
+        config_uri = conn.execute(
+            "SELECT storage_uri FROM evidence_content_blobs WHERE sha256 = ?",
+            (config_sha,),
+        ).fetchone()[0]
+        config = json.loads(Path(config_uri.removeprefix("file://")).read_bytes())
+        assert config["collector"] == "ir-authority-surface-capture@2-mz-catalog"
+        assert set(config["post_requests"]) == {
+            "years",
+            "documents-2025",
+            "documents-2026",
+        }
+        retained_requests: dict[str, object] = {}
+        for key, post_request in config["post_requests"].items():
+            assert post_request["method"] == "POST"
+            digest = post_request["body_sha256"]
+            storage_uri = conn.execute(
+                "SELECT storage_uri FROM evidence_content_blobs WHERE sha256 = ?",
+                (digest,),
+            ).fetchone()[0]
+            raw_request = Path(storage_uri.removeprefix("file://")).read_bytes()
+            assert hashlib.sha256(raw_request).hexdigest() == digest
+            retained_requests[key] = json.loads(raw_request)
+        assert retained_requests["years"] == {
+            "categoryInternalNames": ["release_resultados"],
+            "language_code": "en_US",
+        }
+        assert retained_requests["documents-2026"] == {
+            "year": "2026",
+            "categories": ["release_resultados"],
+            "language": "en_US",
+            "published": True,
+        }
+        assert [call[1]["body_sha256"] for call in first_session.calls[1:]] == [
+            config["post_requests"][key]["body_sha256"]
+            for key in ("years", "documents-2025", "documents-2026")
+        ]
+        for response in _mz_responses():
+            assert conn.execute(
+                "SELECT 1 FROM evidence_content_blobs WHERE sha256 = ?",
+                (hashlib.sha256(response.body).hexdigest(),),
+            ).fetchone() == (1,)
+        second = capture_ir_authority_surfaces(
+            conn, request, blob_root=blob_root, apply=True, session=FakeSession(_mz_responses())
+        )
+        assert second.complete
+        assert second.records_created == 0
+        assert second.records_replayed == first.records_created
+    finally:
+        conn.close()
+
+
+def test_retained_mz_population_closes_source_inventory_despite_failed_generic_page(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _full_conn(tmp_path, migrated_db)
+    blob_root = tmp_path / "blobs"
+    try:
+        captured = capture_ir_authority_surfaces(
+            conn,
+            _mz_request(),
+            blob_root=blob_root,
+            apply=True,
+            session=FakeSession(_mz_responses()),
+        )
+        assert captured.authority_evidence is not None
+        conn.row_factory = sqlite3.Row
+        discovery = DocumentDiscoveryInventory(
+            candidates=(
+                CandidateDoc(
+                    url=MZ_FILE_2026,
+                    link_text="2026 results",
+                    filename_hint="2026.pdf",
+                    doc_type_guess="press_release",
+                    year_guess=2026,
+                    quarter_guess=None,
+                    source_page=MZ_RESULTS,
+                ),
+            ),
+            pages=(
+                CrawlPageOutcome(
+                    page_url=MZ_RESULTS,
+                    outcome="failed",
+                    anchor_count=0,
+                    failure_reason="generic_page_unavailable",
+                ),
+            ),
+            crawl_complete=False,
+            crawl_stop_reason="page_failure",
+        )
+        request = source_inventory_request(
+            issuer_id="issuer-acme",
+            ticker="ACME",
+            ir_url=MZ_RESULTS,
+            revision=1,
+            inventory=discovery,
+            authority=captured.authority_evidence,
+            retrieval_config_sha256="c" * 64,
+            collector_code_version="sync-ir-source-inventory@2",
+            started_at=STAMP,
+            completed_at=STAMP,
+            recorded_at=STAMP,
+            reconciled_at=STAMP,
+            apply=False,
+        )
+        result = sync_ir_source_inventory(conn, request, blob_root=blob_root)
+        assert result.complete
+        assert result.candidate_count == 2
+        assert conn.execute("SELECT COUNT(*) FROM source_inventory_snapshots").fetchone()[0] == 0
+        with pytest.raises(IRAuthorityCaptureError):
+            sync_ir_source_inventory(
+                conn,
+                request.model_copy(update={"issuer_id": "issuer-other"}),
+                blob_root=blob_root,
+            )
+        earlier = STAMP - timedelta(minutes=1)
+        with pytest.raises(ValueError, match="captured after inventory completion"):
+            sync_ir_source_inventory(
+                conn,
+                request.model_copy(
+                    update={
+                        "started_at": earlier,
+                        "completed_at": earlier,
+                        "recorded_at": earlier,
+                        "reconciled_at": earlier,
+                    }
+                ),
+                blob_root=blob_root,
+            )
+    finally:
+        conn.close()
+
+
+def test_mz_source_inventory_rejects_changed_retained_response_before_writes(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _full_conn(tmp_path, migrated_db)
+    blob_root = tmp_path / "blobs"
+    try:
+        captured = capture_ir_authority_surfaces(
+            conn,
+            _mz_request(),
+            blob_root=blob_root,
+            apply=True,
+            session=FakeSession(_mz_responses()),
+        )
+        assert captured.authority_evidence is not None
+        conn.row_factory = sqlite3.Row
+        digest = captured.authority_evidence.surfaces[-1].raw_sha256
+        (blob_root / digest[:2] / digest).write_bytes(b"changed")
+        request = source_inventory_request(
+            issuer_id="issuer-acme",
+            ticker="ACME",
+            ir_url=MZ_RESULTS,
+            revision=1,
+            inventory=DocumentDiscoveryInventory(
+                candidates=(),
+                pages=(),
+                crawl_complete=False,
+                crawl_stop_reason="page_failure",
+            ),
+            authority=captured.authority_evidence,
+            retrieval_config_sha256="c" * 64,
+            collector_code_version="sync-ir-source-inventory@2",
+            started_at=STAMP,
+            completed_at=STAMP,
+            recorded_at=STAMP,
+            reconciled_at=STAMP,
+            apply=True,
+        )
+        before = conn.execute("SELECT COUNT(*) FROM evidence_source_observations").fetchone()[0]
+        with pytest.raises(IRAuthorityCaptureError):
+            sync_ir_source_inventory(conn, request, blob_root=blob_root)
+        assert (
+            conn.execute("SELECT COUNT(*) FROM evidence_source_observations").fetchone()[0]
+            == before
+        )
+        assert conn.execute("SELECT COUNT(*) FROM source_inventory_snapshots").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_historical_get_capture_identity_remains_byte_identical(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    try:
+        result = capture_ir_authority_surfaces(
+            conn,
+            _request(),
+            blob_root=tmp_path / "blobs",
+            apply=False,
+            session=FakeSession([FakeResponse()]),
+        )
+        assert result.authority_evidence is not None
+        assert result.authority_evidence.surfaces[0].source_observation_id == (
+            "ir-authority-observation:"
+            "bc7587b66da3efb6bb12ea4e3a3c0ec45eb850cc3f3133ff9c3105c302e9a2ff"
+        )
+    finally:
+        conn.close()
+
+
+def test_historical_authority_projection_accepts_tuple_and_row_results(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _full_conn(tmp_path, migrated_db)
+    blob_root = tmp_path / "blobs"
+    try:
+        captured = capture_ir_authority_surfaces(
+            conn,
+            _request(),
+            blob_root=blob_root,
+            apply=True,
+            session=FakeSession([FakeResponse()]),
+        )
+        assert captured.authority_evidence is not None
+        for factory in (None, sqlite3.Row):
+            conn.row_factory = factory
+            assert (
+                verified_mz_authority_documents(
+                    conn,
+                    captured.authority_evidence,
+                    blob_root=blob_root,
+                    issuer_id="issuer-acme",
+                    ticker="ACME",
+                )
+                is None
+            )
+    finally:
+        conn.close()
+
+
+def test_mz_catalog_rejects_missing_declared_year_before_document_posts(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    session = FakeSession(_mz_responses(years=(2026,)))
+    try:
+        result = capture_ir_authority_surfaces(
+            conn, _mz_request(), blob_root=tmp_path / "blobs", apply=False, session=session
+        )
+        assert not result.complete
+        assert [item.reason_code for item in result.items] == [
+            "surface_fetched",
+            "mz_year_set_mismatch",
+            "mz_years_unverified",
+            "mz_years_unverified",
+        ]
+        assert len(session.calls) == 2
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    ("years_response", "reason"),
+    [
+        (FakeResponse(status_code=403), "http_status"),
+        (
+            FakeResponse(body=b'{"success":true,"data":"bad"}'),
+            "mz_years_invalid",
+        ),
+        (FakeResponse(status_code=302, headers={"Location": MZ_BASE}), "mz_post_redirect"),
+        (
+            FakeResponse(
+                body=b"{}",
+                headers={
+                    "Content-Type": "application/json",
+                    "Content-Length": str(2 * 1024 * 1024 + 1),
+                },
+            ),
+            "surface_too_large",
+        ),
+    ],
+)
+def test_mz_catalog_years_hardstop_prevents_document_posts(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    years_response: FakeResponse,
+    reason: str,
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    session = FakeSession([FakeResponse(body=MZ_PAGE), years_response])
+    try:
+        result = capture_ir_authority_surfaces(
+            conn,
+            _mz_request(),
+            blob_root=tmp_path / "blobs",
+            apply=False,
+            session=session,
+        )
+        assert not result.complete
+        assert result.items[1].reason_code == reason
+        assert len(session.calls) == 2
+        assert conn.execute("SELECT COUNT(*) FROM evidence_source_observations").fetchone() == (0,)
+        assert not (tmp_path / "blobs").exists()
+    finally:
+        conn.close()
+
+
+def test_mz_catalog_rejects_document_set_mismatch(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    responses = _mz_responses()
+    responses[2] = FakeResponse(
+        body=json.dumps({"success": True, "data": {"document_metas": []}}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        result = capture_ir_authority_surfaces(
+            conn,
+            _mz_request(),
+            blob_root=tmp_path / "blobs",
+            apply=False,
+            session=FakeSession(responses),
+        )
+        assert not result.complete
+        assert result.items[2].reason_code == "document_set_mismatch"
+    finally:
+        conn.close()
+
+
+def test_mz_catalog_rejects_endpoint_not_in_retained_results_page(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    request = _mz_request()
+    years = request.surfaces[1].model_copy(
+        update={"source_url": "https://api.mziq.com/mzfilemanager/company/other/years"}
+    )
+    changed = request.model_copy(
+        update={"surfaces": (request.surfaces[0], years, *request.surfaces[2:])}
+    )
+    session = FakeSession([FakeResponse(body=MZ_PAGE)])
+    try:
+        result = capture_ir_authority_surfaces(
+            conn, changed, blob_root=tmp_path / "blobs", apply=False, session=session
+        )
+        assert not result.complete
+        assert result.items[1].reason_code == "mz_catalog_config_mismatch"
+        assert len(session.calls) == 1
     finally:
         conn.close()
 

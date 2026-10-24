@@ -38,12 +38,18 @@ _CURRENT_RESULT_WORDING = re.compile(
     r"\b(?:reports?|reported|announces?|announced)\b.{0,100}"
     r"\b(?:quarter|q[1-4])\b.{0,70}\b(?:results|earnings)\b"
     r"|\b(?:quarter|q[1-4])\b.{0,70}\b(?:results|earnings)\b.{0,100}"
-    r"\b(?:reports?|reported|announces?|announced)\b",
+    r"\b(?:reports?|reported|announces?|announced)\b"
+    r"|\b(?:reports?|reported|announces?|announced)\b.{0,100}"
+    r"\b(?:results|earnings)\b.{0,70}\b(?:quarter|q[1-4])\b",
     re.IGNORECASE,
 )
 _FORWARD_OR_COMPARATIVE = re.compile(
     r"\b(?:guidance|outlook|forecast|expects?|anticipated?|prior|previous|"
-    r"comparable|compared|versus|year.ago)\b",
+    r"comparable|compared|versus|year.ago)\b"
+    r"|\b(?:to|will)\s+(?:announce|report|release|publish)\b"
+    r"|\bwill\s+be\s+(?:announced|reported|released|published)\b"
+    r"|\bannounc(?:es?|ed)\s+(?:the\s+)?(?:date\s+for|upcoming)\b"
+    r"|\b(?:intends?|scheduled)\s+to\b",
     re.IGNORECASE,
 )
 _REQUIRED_DOCUMENT_COLUMNS = frozenset(
@@ -1063,6 +1069,15 @@ def validate_fiscal_period_witness(
         raise IssuerDocumentInventoryError("fiscal_profile_superseded")
 
 
+def reviewable_current_reported_period_source(source_kind: object, document_type: object) -> bool:
+    """Map only the established legacy press-release pair into current review input."""
+    return (source_kind, document_type) in {
+        ("ir_document", "ir_document"),
+        ("ir_document", "earnings_release"),
+        ("ir_doc", "ir_press_release"),
+    }
+
+
 def _review_pdf_bytes(
     conn: sqlite3.Connection, document_version_id: str
 ) -> tuple[dict[str, JsonValue], bytes]:
@@ -1080,13 +1095,20 @@ def _review_pdf_bytes(
         (version["blob_sha256"], blob["storage_uri"]),
     ).fetchall()
     uri = urlsplit(str(blob["storage_uri"]))
+    publisher_url = urlsplit(str(source["source_url"]))
     if (
         len(locations) != 1
         or tuple(locations[0]) != ("present", version["blob_sha256"], blob["byte_size"])
         or uri.scheme != "file"
         or uri.netloc not in {"", "localhost"}
         or source["blob_sha256"] != version["blob_sha256"]
-        or source["source_kind"] != "ir_document"
+        or not reviewable_current_reported_period_source(
+            source["source_kind"], version["document_type"]
+        )
+        or publisher_url.scheme != "https"
+        or not publisher_url.hostname
+        or publisher_url.username is not None
+        or publisher_url.password is not None
         or blob["media_type"] != "application/pdf"
     ):
         raise IssuerDocumentInventoryError("reported_period_source_identity_mismatch")
@@ -1145,6 +1167,23 @@ def verified_current_reported_period_review(
         review = CurrentReportedPeriodReview.model_validate_json(str(text))
         locator = EvidenceLocator.model_validate_json(str(locator_json))
         version, raw = _review_pdf_bytes(conn, document_version_id)
+        canonical = _alias_row(
+            conn,
+            "v_evidence_document_versions_canonical",
+            "document_version_id",
+            document_version_id,
+        )
+        subject = _alias_row(
+            conn,
+            "recorded_subject_binding_revisions",
+            "binding_revision_id",
+            review.subject_binding_revision_id,
+        )
+        current_subject = conn.execute(
+            "SELECT binding_revision_id FROM recorded_subject_binding_revisions "
+            "WHERE recorded_issuer_id=? ORDER BY revision DESC LIMIT 1",
+            (f"legacy-ticker:{review.ticker}",),
+        ).fetchone()
         from provenance.fulltext_backfill import project_pdf_page_texts
 
         page = project_pdf_page_texts(raw)[0]
@@ -1157,6 +1196,18 @@ def verified_current_reported_period_review(
         or review.source_sha256 != source_sha256
         or review.period_end != period_end
         or version["blob_sha256"] != source_sha256
+        or canonical["issuer_id"] != review.issuer_id
+        or canonical["ticker"] != review.ticker
+        or version["issuer_id"] not in {review.issuer_id, f"legacy-ticker:{review.ticker}"}
+        or (
+            subject["recorded_issuer_id"],
+            subject["issuer_id"],
+            subject["outcome"],
+            subject["material_dissent"],
+        )
+        != (f"legacy-ticker:{review.ticker}", review.issuer_id, "selected", 0)
+        or current_subject is None
+        or current_subject[0] != review.subject_binding_revision_id
         or input_sha != source_sha256
         or output_sha != _sha256_text(str(text))
         or outcome != "succeeded"
@@ -1189,20 +1240,37 @@ def reviewed_current_period_for_url(
     observed_through: datetime,
 ) -> CurrentReportedPeriodReview | None:
     """Resolve one exact publisher URL; conflicting versions remain unqualified."""
+    required_review_schema = {
+        ("view", "v_evidence_document_versions_canonical"),
+        ("table", "recorded_subject_binding_revisions"),
+    }
+    present_review_schema = {
+        (str(row[0]), str(row[1]))
+        for row in conn.execute(
+            "SELECT type,name FROM sqlite_schema WHERE name IN "
+            "('v_evidence_document_versions_canonical','recorded_subject_binding_revisions')"
+        )
+    }
+    if not required_review_schema.issubset(present_review_schema):
+        return None
     rows = conn.execute(
-        "SELECT DISTINCT version.document_version_id,version.blob_sha256,version.recorded_at "
-        "FROM evidence_document_versions version "
+        "SELECT DISTINCT version.document_version_id,version.blob_sha256,version.recorded_at,"
+        "source.source_kind,version.document_type "
+        "FROM v_evidence_document_versions_canonical version "
         "JOIN evidence_source_observations source ON source.observation_id=version.observation_id "
         "WHERE version.issuer_id=? AND version.ticker=? AND source.source_url=? "
-        "AND version.document_type IN ('ir_document','earnings_release') "
         "AND version.recorded_at<=? AND source.retrieved_at<=? "
         "ORDER BY version.recorded_at DESC",
         (issuer_id, ticker, source_url, observed_through, observed_through),
     ).fetchall()
-    if not rows or sum(row[2] == rows[0][2] for row in rows) != 1:
+    if (
+        not rows
+        or sum(row[2] == rows[0][2] for row in rows) != 1
+        or not reviewable_current_reported_period_source(rows[0][3], rows[0][4])
+    ):
         return None
     valid: list[CurrentReportedPeriodReview] = []
-    for version_id, digest, _ in rows[:1]:
+    for version_id, digest, *_ in rows[:1]:
         node = conn.execute(
             "SELECT node.text FROM evidence_nodes node "
             "JOIN evidence_extraction_runs run ON run.extraction_run_id=node.extraction_run_id "
@@ -1273,11 +1341,18 @@ def persist_current_reported_period_review(
         raise IssuerDocumentInventoryError("reported_period_writer_busy")
     review = CurrentReportedPeriodReview.model_validate(review.model_dump(mode="python"))
     version, raw = _review_pdf_bytes(conn, review.document_version_id)
+    canonical = _alias_row(
+        conn,
+        "v_evidence_document_versions_canonical",
+        "document_version_id",
+        review.document_version_id,
+    )
     if (
-        version["issuer_id"] != review.issuer_id
+        canonical["issuer_id"] != review.issuer_id
+        or canonical["ticker"] != review.ticker
+        or version["issuer_id"] not in {review.issuer_id, f"legacy-ticker:{review.ticker}"}
         or version["ticker"] != review.ticker
         or version["blob_sha256"] != review.source_sha256
-        or version["document_type"] not in {"ir_document", "earnings_release"}
         or (
             version["period_end"] is not None
             and datetime.fromisoformat(str(version["period_end"])).date() != review.period_end
