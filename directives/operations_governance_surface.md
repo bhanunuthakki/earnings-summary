@@ -2368,6 +2368,13 @@ facts. The server receives it through its existing `--state-root` composition
 path; artifact builds use `--source-state-root`. Missing or changed source,
 layout, review, cutoff or publication evidence makes that OCR fact unavailable
 to reports, Ask, research and DCF. Native fact reads keep their prior rules.
+Before live acceptance, confirm that the configured canonical service supplies
+this root and that it is the root used by the extraction ledger's registered
+PDF, TSV and render bytes. Then reopen one reviewed OCR fact through the shared
+fact reader and its pinned PDF page and image routes. Record the source hash,
+document version, page, word regions, review and cutoff in that check. A
+successful app start alone is not reader-parity evidence. Do not infer the root
+from the database path or a checkout.
 The canonical source peek offers an OCR-only PDF page and word-region link when
 the legacy document identity matches the admitted source hash. The existing
 viewer verifies the pinned document version and PDF bytes for both the page

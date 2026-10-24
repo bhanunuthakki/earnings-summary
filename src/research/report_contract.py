@@ -128,8 +128,12 @@ def _bind_report_draft(
         raise ReportBindingError("report_draft_timestamp_in_future")
     if tuple(section.title for section in draft.sections) != required_titles:
         raise ReportBindingError("report_section_population_mismatch")
-    admission = verify_research_snapshot(
-        conn, draft.research_snapshot_id, source_context=source_context
+    admission = (
+        verify_research_snapshot(conn, draft.research_snapshot_id)
+        if source_context is None
+        else verify_research_snapshot(
+            conn, draft.research_snapshot_id, source_context=source_context
+        )
     )
     row = conn.execute(
         "SELECT request_json FROM research_snapshot_headers WHERE research_snapshot_id=?",

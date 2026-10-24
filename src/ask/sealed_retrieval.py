@@ -1479,7 +1479,12 @@ def load_verified_trace_evidence(
         observation_ids = tuple(
             dict.fromkeys(str(row["selected_observation_id"]) for row in fact_entries.values())
         )
-        reads = FactReadModel(conn, source_context=source_context).provenance_bundles(
+        reader = (
+            FactReadModel(conn)
+            if source_context is None
+            else FactReadModel(conn, source_context=source_context)
+        )
+        reads = reader.provenance_bundles(
             observation_ids,
             cutoff=observed_through,
         )
