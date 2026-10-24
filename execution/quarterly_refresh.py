@@ -24,7 +24,6 @@ import argparse
 import json
 import sqlite3
 import sys
-from datetime import date
 
 try:
     from _lib import PROJECT_ROOT
@@ -47,6 +46,7 @@ from pipeline.run_accounting import (
     start_run,
     suppression_payload,
 )
+from pipeline.source_policy import current_utc_date
 from pipeline.transcript_acquisition import (
     persist_authorized_transcript_artifact,
     read_authorized_transcript,
@@ -255,7 +255,7 @@ def main(argv: list[str] | None = None) -> int:
             project_root=PROJECT_ROOT,
             private_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
             entrypoint=TranscriptAcquisitionEntrypoint.QUARTERLY_REFRESH,
-            as_of=date.today(),
+            as_of=current_utc_date(),
             pending_callback=lambda ids: print(
                 json.dumps(
                     {"event": "reported_period_selection_pending", "deferred_document_ids": ids}

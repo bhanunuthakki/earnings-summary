@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from models.documents import DocType, SourceType
+from pipeline.reported_period_inventory import reported_period_window_from_inventory
 from pipeline.source_policy import (
     ArtifactKind,
     AuthorizationReason,
@@ -35,7 +36,6 @@ from pipeline.source_policy import (
     fiscal_quarter_end,
     ir_url_is_authorized,
     issuer_policy,
-    reported_period_window_from_inventory,
 )
 from provenance.source_regime import SourceRegime, contract_for, receipt_identity
 from runtime.deterministic import canonical_json_ascii as _canonical_json
@@ -527,11 +527,11 @@ def _receipt_paths_are_safe(
 def register_transcript_receipt_sqlite_functions(
     conn: sqlite3.Connection,
     *,
-    database_path: str | os.PathLike[str],
+    project_root: Path,
 ) -> None:
     """Register deterministic validation used by the receipt INSERT trigger."""
 
-    project_root = project_root_for_database(database_path)
+    project_root = project_root.resolve(strict=True)
 
     def validate(
         receipt_id: object,
@@ -687,6 +687,7 @@ def persist_authorized_transcript_artifact(
         if tuple(existing) != values:
             raise TranscriptAcquisitionDeniedError("immutable transcript receipt collision")
         return receipt_id
+    register_transcript_receipt_sqlite_functions(conn, project_root=project_root)
     conn.execute(
         "INSERT INTO transcript_acquisition_receipts "
         "(receipt_id,idempotency_key,document_id,canonical_ticker,fiscal_year,fiscal_quarter,"

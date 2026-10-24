@@ -25,7 +25,8 @@ from ir_pipeline.source_inventory import (
 )
 from models.documents import DocType, SourceType
 from pipeline import issuer_document_inventory as inventory
-from pipeline.source_policy import ReportedPeriodStatus, reported_period_window_from_inventory
+from pipeline.reported_period_inventory import reported_period_window_from_inventory
+from pipeline.source_policy import ReportedPeriodStatus
 from pipeline.transcript_acquisition import (
     COMBINED_SOURCE_REGIME_IDENTITY,
     TranscriptAcquisitionDeniedError,

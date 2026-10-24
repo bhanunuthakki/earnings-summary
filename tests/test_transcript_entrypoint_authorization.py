@@ -730,7 +730,7 @@ def test_fetch_replay_does_not_cross_quarterly_refresh_entrypoint(
     db_path = migrated_db(repo_root / "data" / "portfolio.db")
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        register_transcript_receipt_sqlite_functions(conn, database_path=db_path)
+        register_transcript_receipt_sqlite_functions(conn, project_root=repo_root)
         conn.execute(
             "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
             "VALUES ('ACME','Acme','portfolio','12-31','equity')"
@@ -1769,6 +1769,7 @@ def test_new_receipt_rejects_latent_or_changed_stored_target(
     darwin_staging_double: None,
 ) -> None:
     from pipeline.transcript_acquisition import (
+        register_transcript_receipt_sqlite_functions,
         require_authorized_transcript_request,
         stage_authorized_payload,
     )
@@ -1825,6 +1826,7 @@ def test_new_receipt_rejects_latent_or_changed_stored_target(
         artifact_payload["canonical_document_path"] = artifact.canonical_document_path.as_posix()
         artifact_json = json.dumps(artifact_payload, sort_keys=True, separators=(",", ":"))
         receipt_id = hashlib.sha256(artifact_json.encode("utf-8")).hexdigest()
+        register_transcript_receipt_sqlite_functions(conn, project_root=repo_root)
         conn.execute("DELETE FROM tracked_companies WHERE ticker='ACME'")
         with pytest.raises(sqlite3.IntegrityError, match="stored target"):
             conn.execute(

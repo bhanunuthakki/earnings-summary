@@ -33,11 +33,11 @@ from pipeline.ir_candidate_caller import (
     apply_ir_candidate_plan,
     plan_ir_candidates,
 )
-from pipeline.source_policy import (
-    ReportedPeriodStatus,
+from pipeline.reported_period_inventory import (
     reported_period_window_from_inventory,
     reported_quarter_selection_in_connection,
 )
+from pipeline.source_policy import ReportedPeriodStatus
 from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
 from provenance.issuer_registry import IssuerEntity, IssuerRegistry
 from provenance.reporting_entity_registry import (

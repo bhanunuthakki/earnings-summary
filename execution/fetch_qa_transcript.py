@@ -49,6 +49,7 @@ from aggregator_sources import (
     AggregatorSource,
 )
 from alias_manager import resolve_ticker
+from pipeline.source_policy import current_utc_date
 from pipeline.transcript_acquisition import (
     COMBINED_SOURCE_REGIME_IDENTITY,
     AuthorizedTranscriptArtifact,
@@ -83,7 +84,7 @@ STAGING_DIR = PROJECT_ROOT / ".tmp" / "transcript-acquisition"
 
 
 def _policy_today() -> date:
-    return date.today()
+    return current_utc_date()
 
 
 class FetchQaSpec(BaseModel):

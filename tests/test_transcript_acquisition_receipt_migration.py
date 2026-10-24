@@ -26,6 +26,7 @@ from pipeline.transcript_acquisition import (
     load_authorized_transcript_replay,
     persist_authorized_transcript_artifact,
     read_authorized_transcript,
+    register_transcript_receipt_sqlite_functions,
     require_authorized_transcript_request,
     require_persisted_authorized_transcript_artifact,
     stage_authorized_payload,
@@ -179,6 +180,7 @@ def _seed_historical_receipt(
     artifact_payload = artifact.model_dump(mode="json")
     artifact_payload["canonical_document_path"] = artifact.canonical_document_path.as_posix()
     artifact_json = canonical_json_ascii(artifact_payload)
+    register_transcript_receipt_sqlite_functions(conn, project_root=staging_root.parent.parent)
     conn.execute(
         "INSERT INTO transcript_acquisition_receipts "
         "(receipt_id,idempotency_key,document_id,canonical_ticker,fiscal_year,fiscal_quarter,"
@@ -398,6 +400,18 @@ def test_0063_preserves_historical_receipt_and_admits_current_receipt(
                 trusted_staging_root=staging_root,
             )
             == historical_artifact
+        )
+        direct = dict(historical_row)
+        direct["receipt_id"] = "f" * 64
+        columns = tuple(direct)
+        with pytest.raises(sqlite3.OperationalError, match="transcript_receipt_valid"):
+            conn.execute(
+                f"INSERT INTO transcript_acquisition_receipts ({','.join(columns)}) "
+                f"VALUES ({','.join('?' for _ in columns)})",
+                tuple(direct[column] for column in columns),
+            )
+        assert (
+            conn.execute("SELECT COUNT(*) FROM transcript_acquisition_receipts").fetchone()[0] == 1
         )
         for fresh_request in (
             request,

@@ -36,7 +36,6 @@ import json
 import sqlite3
 import subprocess
 import sys
-from datetime import date
 from pathlib import Path
 from typing import cast
 
@@ -50,11 +49,12 @@ except ImportError:
 import ir_fetch_status
 from ir_pipeline.manifest import ManifestEntry, merge_write
 from ir_uploads import calendar_id_from_fye
+from pipeline.reported_period_inventory import reported_quarter_selection_in_connection
 from pipeline.source_policy import (
     ArtifactKind,
     CollectionSource,
     authorize_stored_collection_target,
-    reported_quarter_selection_in_connection,
+    current_utc_date,
 )
 from runtime.python_process import managed_python_prefix
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -173,7 +173,7 @@ def register_urls(
             fiscal_year=year,
             fiscal_quarter=quarter,
             fiscal_year_end_month=authorization.fiscal_year_end_month,
-            as_of=date.today(),
+            as_of=current_utc_date(),
         )
     finally:
         conn.close()

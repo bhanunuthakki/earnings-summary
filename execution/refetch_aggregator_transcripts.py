@@ -46,7 +46,7 @@ import sqlite3
 import sys
 import time
 from dataclasses import asdict, dataclass
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 
 try:
@@ -68,6 +68,7 @@ from pipeline.source_policy import (
     CollectionSource,
     CollectionTarget,
     authorize_collection_target_in_connection,
+    current_utc_date,
     select_collection_targets,
 )
 from pipeline.transcript_acquisition import (
@@ -322,7 +323,7 @@ def main() -> int:
                     canonical_ticker=ticker,
                     fiscal_year=year,
                     fiscal_quarter=quarter,
-                    as_of=date.today(),
+                    as_of=current_utc_date(),
                     source_type=SourceType.IR_DOC,
                     document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
                     provider=TranscriptProvider.ROIC,

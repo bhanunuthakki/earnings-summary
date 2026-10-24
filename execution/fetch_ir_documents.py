@@ -49,7 +49,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -75,13 +75,16 @@ from pipeline.managed_ir_sources import (
     validate_prepared_staging,
     verifier_code_identity,
 )
+from pipeline.reported_period_inventory import (
+    reported_quarter_selection,
+    reported_quarter_selection_in_connection,
+)
 from pipeline.source_policy import (
     ArtifactKind,
     CollectionSource,
     StoredCollectionAuthorization,
     authorize_stored_collection_target,
-    reported_quarter_selection,
-    reported_quarter_selection_in_connection,
+    current_utc_date,
 )
 from provenance.immutable_artifact import (
     ImmutableArtifactConflictError,
@@ -656,13 +659,15 @@ def prepare_issuer_document_sources(
             fiscal_year=inventory.fiscal_year,
             fiscal_quarter=inventory.fiscal_quarter,
             fiscal_year_end_month=authorization.fiscal_year_end_month,
-            as_of=date.today(),
+            as_of=current_utc_date(),
         )
     else:
         from pipeline.managed_ir_sources import issuer_request_period_is_allowed
 
         in_window = issuer_request_period_is_allowed(
-            request, fiscal_year_end_month=authorization.fiscal_year_end_month, as_of=date.today()
+            request,
+            fiscal_year_end_month=authorization.fiscal_year_end_month,
+            as_of=current_utc_date(),
         )
     if not authorization.allowed:
         raise IssuerDocumentPreparationError("source_policy_denied")
@@ -893,7 +898,7 @@ def process_ticker(
                     fiscal_year=period[0],
                     fiscal_quarter=period[1],
                     fiscal_year_end_month=authorization.fiscal_year_end_month,
-                    as_of=date.today(),
+                    as_of=current_utc_date(),
                 )
             )
             if decision is False:

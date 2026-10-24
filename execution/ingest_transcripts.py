@@ -20,7 +20,6 @@ import os
 import sqlite3
 import sys
 from contextlib import suppress
-from datetime import date
 from pathlib import Path
 from uuid import uuid4
 
@@ -51,6 +50,7 @@ from pipeline.run_accounting import (
     start_run,
     suppression_payload,
 )
+from pipeline.source_policy import current_utc_date
 from pipeline.transcript_acquisition import (
     COMBINED_SOURCE_REGIME_IDENTITY,
     AuthorizedTranscriptArtifact,
@@ -648,7 +648,7 @@ def main() -> int:
                 canonical_ticker=parsed.ticker,
                 fiscal_year=parsed.fiscal_year_label,
                 fiscal_quarter=parsed.quarter_idx,
-                as_of=date.today(),
+                as_of=current_utc_date(),
                 source_type=SourceType.IR_DOC,
                 document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
                 provider=TranscriptProvider.ISSUER_IR,
@@ -785,7 +785,7 @@ def main() -> int:
                     project_root=PROJECT_ROOT,
                     private_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
                     entrypoint=TranscriptAcquisitionEntrypoint.INGEST_TRANSCRIPTS,
-                    as_of=date.today(),
+                    as_of=current_utc_date(),
                     pending_callback=lambda ids: print(
                         json.dumps(
                             {

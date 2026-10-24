@@ -33,13 +33,14 @@ from pipeline.issuer_document_inventory import (
     build_issuer_document_inventory,
     validate_fiscal_period_witness,
 )
+from pipeline.reported_period_inventory import reported_quarter_selection
 from pipeline.source_policy import (
     ArtifactKind,
     CollectionSource,
     authorize_stored_collection_target,
+    current_utc_date,
     fiscal_quarter_end,
     reported_quarter_is_in_window,
-    reported_quarter_selection,
 )
 from provenance.evidence_backfill import ensure_legacy_document_evidence
 from provenance.evidence_ledger import EvidenceLocator
@@ -590,7 +591,7 @@ def _policy(
             conn.close()
     if request.historical_window is not None:
         decision: bool | None = issuer_request_period_is_allowed(
-            request, fiscal_year_end_month=auth.fiscal_year_end_month, as_of=date.today()
+            request, fiscal_year_end_month=auth.fiscal_year_end_month, as_of=current_utc_date()
         )
     else:
         decision = reported_quarter_selection(
@@ -599,7 +600,7 @@ def _policy(
             fiscal_year=inv.fiscal_year,
             fiscal_quarter=inv.fiscal_quarter,
             fiscal_year_end_month=auth.fiscal_year_end_month,
-            as_of=date.today(),
+            as_of=current_utc_date(),
         )
     if decision is None and permit_pending:
         return

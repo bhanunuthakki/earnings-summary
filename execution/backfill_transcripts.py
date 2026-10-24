@@ -78,6 +78,7 @@ from pipeline.data_coverage_dispositions import (
     append_data_coverage_disposition,
     policy_config_sha256,
 )
+from pipeline.reported_period_inventory import reported_period_window_from_inventory
 from pipeline.source_policy import (
     SOURCE_POLICY_CONFIG,
     ArtifactKind,
@@ -86,7 +87,7 @@ from pipeline.source_policy import (
     ReportedPeriodStatus,
     ReportedPeriodWindow,
     authorize_collection_target_in_connection,
-    reported_period_window_from_inventory,
+    current_utc_date,
     select_collection_targets,
 )
 from pipeline.transcript_acquisition import (
@@ -1272,7 +1273,7 @@ def main() -> int:
     selected_db_path = require_db_path(args.db)
     _retarget_paths(repo_root, db_path=selected_db_path)
 
-    today = date.today()
+    today = current_utc_date()
     tickers = _resolve_tickers(args.ticker)
     if not tickers:
         print(json.dumps({"event": "no_tickers"}))

@@ -19,7 +19,7 @@ watchlist, then permitted index screening. Automatic work records `requested=fal
 an explicit request records its actual invocation identity. A scheduler run ID
 must not be fabricated into owner authorization to satisfy an obsolete role rule.
 
-The reported-quarter selector under `src/pipeline/source_policy.py` returns a closed
+The reported-quarter selector under `src/pipeline/reported_period_inventory.py` returns a closed
 five-period window only after current SEC and IR inventories, complete seals,
 captured document versions, exact retained bytes, a selected issuer/profile, and
 source-located current-period reviews agree. An expected row, a quarter label, or
@@ -38,7 +38,7 @@ version 2 pair. Unknown, stale, or
 ambiguous selection becomes
 `reported_quarter_window_pending`; it cannot authorize staging, document ingest,
 or commitment-scan completion. Version 1 transcript receipts retain their
-calendar-based replay rule. An exact stored version 2 receipt remains readable
+calendar-based historical reconstruction rule by receipt ID. An exact stored version 2 receipt remains readable
 after later source revisions when its receipt identity and artifact bytes still
 verify. New fetch, active replay, and canonical ingest recheck current source
 proof. The active backfill reports each ticker's pending

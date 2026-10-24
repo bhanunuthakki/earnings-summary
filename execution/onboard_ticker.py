@@ -31,7 +31,7 @@ import sqlite3
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
@@ -82,6 +82,7 @@ from pipeline.source_policy import (
     ArtifactKind,
     CollectionSource,
     authorize_collection_target_in_connection,
+    current_utc_date,
 )
 from pipeline.transcript_acquisition import (
     persist_authorized_transcript_artifact,
@@ -908,7 +909,7 @@ def _onboard(args: argparse.Namespace) -> int:
             project_root=_STATE_ROOT,
             private_root=_STATE_ROOT / ".tmp" / "transcript-acquisition",
             entrypoint=TranscriptAcquisitionEntrypoint.QUARTERLY_REFRESH,
-            as_of=date.today(),
+            as_of=current_utc_date(),
             pending_callback=lambda ids: print(
                 json.dumps(
                     {

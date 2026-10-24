@@ -51,6 +51,7 @@ from compute.transcript_ingest import (
 from ir_pipeline._net import UnsafeURLError, ensure_safe_public_url
 from log_redact import redact
 from models.documents import DocType, SourceType
+from pipeline.source_policy import current_utc_date
 from pipeline.transcript_acquisition import (
     COMBINED_SOURCE_REGIME_IDENTITY,
     authorize_transcript_request,
@@ -537,7 +538,7 @@ def fetch_and_transcribe(
         canonical_ticker=canonical_ticker,
         fiscal_year=spec.year,
         fiscal_quarter=spec.quarter,
-        as_of=date.today() if as_of is None else as_of,
+        as_of=current_utc_date() if as_of is None else as_of,
         source_type=SourceType.TRANSCRIPT_AUDIO,
         document_type=DocType.EARNINGS_CALL_AUDIO,
         provider=TranscriptProvider.YOUTUBE_AUDIO,

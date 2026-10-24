@@ -183,6 +183,7 @@
         "src/sources/canonical_financial_series.py",
         "src/sources/registry.py",
         "src/pipeline/source_policy.py",
+        "src/pipeline/reported_period_inventory.py",
         "execution/continue_companyfacts_statements.py",
         "src/provenance/companyfacts_statement_continuation.py",
         "src/provenance/companyfacts_source_proof.py",
