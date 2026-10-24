@@ -1729,8 +1729,9 @@ def _fact_rows_by_ids(
     for start in range(0, len(unique_ids), 400):
         batch = unique_ids[start : start + 400]
         marks = ",".join("?" for _ in batch)
-        for row in conn.execute(  # nosec B608 -- validated table, fixed columns, generated placeholders
-            f"SELECT {columns} FROM {fact_table} WHERE id IN ({marks})", batch
+        for row in conn.execute(
+            f"SELECT {columns} FROM {fact_table} WHERE id IN ({marks})",  # nosec B608 -- validated table, fixed columns, generated placeholders
+            batch,
         ):
             if not isinstance(row, sqlite3.Row):
                 raise HistoricalFactAuthorityUnavailableError(
