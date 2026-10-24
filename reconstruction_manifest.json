@@ -34,6 +34,7 @@
         "alembic/versions/0059_scoped_research_universe_commitments.py",
         "alembic/versions/0061_bulk_lexical_projection_coverage.py",
         "alembic/versions/0062_reviewed_pdf_pages.py",
+        "alembic/versions/0063_transcript_reported_period_receipts.py",
         "src/search/corpus_builder.py",
         "src/provenance/canonical_fact_resolution.py",
         "src/provenance/fact_read_model.py",

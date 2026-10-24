@@ -398,6 +398,42 @@ def test_0063_preserves_historical_receipt_and_admits_current_receipt(
                 (current_id,),
             ).fetchone()
         )
+        conn.execute("SAVEPOINT transcript_schema_shape")
+        try:
+            triggers = conn.execute(
+                "SELECT name FROM sqlite_schema WHERE type='trigger' "
+                "AND tbl_name='transcript_acquisition_receipts'"
+            ).fetchall()
+            for trigger in triggers:
+                conn.execute(f'DROP TRIGGER "{trigger[0]}"')
+            columns = tuple(current_row)
+            for missing_path in (("schema_version",), ("request", "schema_version")):
+                invalid_auth = json.loads(str(current_row["authorization_json"]))
+                if len(missing_path) == 1:
+                    invalid_auth.pop("schema_version")
+                else:
+                    invalid_auth["request"].pop("schema_version")
+                invalid_artifact = json.loads(str(current_row["artifact_json"]))
+                invalid_artifact["authorization"] = invalid_auth
+                forged_shape = dict(current_row)
+                forged_shape["authorization_json"] = json.dumps(
+                    invalid_auth, sort_keys=True, separators=(",", ":")
+                )
+                forged_shape["artifact_json"] = json.dumps(
+                    invalid_artifact, sort_keys=True, separators=(",", ":")
+                )
+                forged_shape["receipt_id"] = hashlib.sha256(
+                    str(forged_shape["artifact_json"]).encode()
+                ).hexdigest()
+                with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
+                    conn.execute(
+                        f"INSERT INTO transcript_acquisition_receipts ({','.join(columns)}) "
+                        f"VALUES ({','.join('?' for _ in columns)})",
+                        tuple(forged_shape[column] for column in columns),
+                    )
+        finally:
+            conn.execute("ROLLBACK TO SAVEPOINT transcript_schema_shape")
+            conn.execute("RELEASE SAVEPOINT transcript_schema_shape")
         forged = dict(current_row)
         forged["receipt_id"] = "d" * 64
         invalid_auth = json.loads(str(forged["authorization_json"]))

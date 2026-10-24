@@ -16,14 +16,12 @@ depends_on = None
 _OLD_CHECK = """CHECK(json_extract(authorization_json,'$.schema_version') =
                 'transcript-acquisition-authorization@1')"""
 _NEW_CHECK = """CHECK(
-                (json_extract(authorization_json,'$.schema_version') =
+                COALESCE(json_extract(authorization_json,'$.schema_version'),'') =
                     'transcript-acquisition-authorization@1'
-                 AND json_extract(authorization_json,'$.request.schema_version') =
-                    'transcript-acquisition-request@1')
                 OR
-                (json_extract(authorization_json,'$.schema_version') =
+                (COALESCE(json_extract(authorization_json,'$.schema_version'),'') =
                     'transcript-acquisition-authorization@2'
-                 AND json_extract(authorization_json,'$.request.schema_version') =
+                 AND COALESCE(json_extract(authorization_json,'$.request.schema_version'),'') =
                     'transcript-acquisition-request@2')
             )"""
 

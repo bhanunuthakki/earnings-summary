@@ -33,7 +33,8 @@ versioned replay meaning.
 Current transcript acquisition uses `transcript-acquisition-request@2` and
 `transcript-acquisition-authorization@2`. The receipt carries the source window
 and exact snapshot IDs, coverage-proof digest, and fiscal profile. The existing
-receipt table accepts exact version 1 and version 2 pairs. Unknown, stale, or
+receipt table preserves historical version 1 shape and requires the exact
+version 2 pair. Unknown, stale, or
 ambiguous selection becomes
 `reported_quarter_window_pending`; it cannot authorize staging, document ingest,
 or commitment-scan completion. Version 1 transcript receipts retain their
