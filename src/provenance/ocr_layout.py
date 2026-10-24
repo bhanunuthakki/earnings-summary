@@ -136,7 +136,8 @@ def parse_tesseract_pdf_tsv(
 ) -> OCRPageOutput:
     try:
         decoded = raw_tsv.decode("utf-8")
-        rows = csv.DictReader(io.StringIO(decoded), delimiter="\t")
+        # Tesseract emits raw word text, including unescaped quotation marks.
+        rows = csv.DictReader(io.StringIO(decoded), delimiter="\t", quoting=csv.QUOTE_NONE)
         required = {
             "level",
             "page_num",

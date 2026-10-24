@@ -775,6 +775,29 @@ def test_layout_parser_retains_exact_bytes_boxes_order_and_offsets() -> None:
         verify_ocr_layout_bytes(output.layout, raw_tsv, render_png + b"changed")
 
 
+@pytest.mark.parametrize("raw_word", ['"', '"Revenue"', 'Revenue"growth'])
+def test_layout_parser_treats_ocr_quotes_as_literal_text(raw_word: str) -> None:
+    raw_tsv, render_png, _ = _output()
+    quoted_tsv = raw_tsv.replace(b"Revenue", raw_word.encode())
+    output = parse_tesseract_pdf_tsv(
+        1,
+        quoted_tsv,
+        render_png=render_png,
+        width=300,
+        height=300,
+        dpi=300,
+        media_box=(0.0, 0.0, 72.0, 72.0),
+        rotation=0,
+    )
+    assert output.text == f"{raw_word} 25%"
+    assert output.mean_confidence == 97.5
+    assert output.layout is not None
+    assert [word.text for word in output.layout.words] == [raw_word, "25%"]
+    assert output.layout.words[1].char_start == len(raw_word) + 1
+    assert output.raw_tsv == quoted_tsv
+    assert verify_ocr_layout_bytes(output.layout, quoted_tsv, render_png) == output
+
+
 def test_unicode_layout_writer_and_reader_keep_exact_raw_bytes_and_offsets(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
