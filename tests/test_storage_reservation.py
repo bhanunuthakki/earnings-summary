@@ -268,3 +268,29 @@ def test_permission_failure_does_not_fall_back_to_account_temp(
     with pytest.raises(PermissionError, match="shared-ledger denial"):
         storage.reserve_peak(tmp_path / "run", 1, reserve_bytes=0)
     assert not shared.exists()
+
+
+@pytest.mark.parametrize("initial", [b"", b"0"])
+def test_windows_lock_does_not_write_before_acquiring_byte_range(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, initial: bytes
+) -> None:
+    from types import SimpleNamespace
+
+    ledger = tmp_path / "ledger"
+    ledger.mkdir()
+    lock = ledger / "lock"
+    lock.write_bytes(initial)
+    calls: list[tuple[int, int, int]] = []
+
+    def locking(fd: int, mode: int, size: int) -> None:
+        assert lock.read_bytes() == initial, "lock initialization wrote before ownership"
+        calls.append((os.lseek(fd, 0, os.SEEK_CUR), mode, size))
+
+    monkeypatch.setattr(storage, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setitem(
+        sys.modules, "msvcrt", SimpleNamespace(locking=locking, LK_LOCK=1, LK_UNLCK=0)
+    )
+    with getattr(storage, "_locked")(ledger):
+        assert calls == [(0, 1, 1)]
+    assert calls == [(0, 1, 1), (0, 0, 1)]
+    assert lock.read_bytes() == initial

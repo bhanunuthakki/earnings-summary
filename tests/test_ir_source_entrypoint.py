@@ -15,13 +15,16 @@ import pytest
 from pydantic import TypeAdapter
 
 import compute.ir_supplement_capture as continuation
+import compute.ir_supplement_revalidation as revalidation
 import compute.kpi_extract_summaries as summaries
 import provenance.ir_reported_facts as ir_facts
 from llm.ledger import record_llm_call
 from llm.prompt_ab import apply_prompt_override
 from llm.structured import StructuredCallResult
+from provenance.document_processing_evidence import GovernedOCRPageProjection
 from provenance.evidence_backfill import ensure_legacy_document_evidence
 from provenance.evidence_ledger import EvidenceLedger, EvidenceNode, LedgerRecord, PersistResult
+from provenance.immutable_artifact import ImmutableArtifactSnapshot
 from provenance.ir_reported_facts import (
     IrCandidatePopulation,
     IrReviewedCandidate,
@@ -39,6 +42,7 @@ from provenance.source_fact_repository import (
     SourceFactRepository,
 )
 from tests.test_ir_reported_facts import PAGE, candidate, payload_sha, sha, witnesses
+from tests.test_ir_source_review_wire import ocr_candidate_fixture
 
 RICH_PAGE = (
     PAGE
@@ -85,18 +89,67 @@ def conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> Iterator[sqlite3.C
         database.close()
 
 
-def _retained_source(conn: sqlite3.Connection, tmp_path: Path) -> Path:
+def _retained_source(
+    conn: sqlite3.Connection, tmp_path: Path, *, doc_kind: str = "ir_supplement"
+) -> Path:
     source = tmp_path / "original.pdf"
     source.write_bytes(b"original source")
     conn.execute(
         "INSERT INTO documents (id,ticker,source_type,doc_type,period_end,file_path,sha256,"
         "fetched_at,fetch_status,raw_bytes_size) VALUES "
-        "(1,'TEST','ir_doc','ir_supplement','2026-06-30 00:00:00',?,?,'2026-07-01','ok',15)",
-        (str(source), sha(source.read_bytes())),
+        "(1,'TEST','ir_doc',?,'2026-06-30 00:00:00',?,?,'2026-07-01','ok',15)",
+        (doc_kind, str(source), sha(source.read_bytes())),
     )
     ensure_legacy_document_evidence(conn, repo_root=tmp_path, document_id=1)
     conn.commit()
     return source
+
+
+def test_ocr_capture_selection_targets_only_one_document_before_model_call(
+    conn: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = _retained_source(conn, tmp_path)
+    second = tmp_path / "second.pdf"
+    second.write_bytes(b"second original source")
+    conn.execute(
+        "INSERT INTO documents (id,ticker,source_type,doc_type,period_end,file_path,sha256,"
+        "fetched_at,fetch_status,raw_bytes_size) VALUES "
+        "(2,'TEST','ir_doc','ir_supplement','2026-09-30 00:00:00',?,?,'2026-10-01','ok',22)",
+        (str(second), sha(second.read_bytes())),
+    )
+    ensure_legacy_document_evidence(conn, repo_root=tmp_path, document_id=2)
+    conn.commit()
+    opened: list[Path] = []
+    real_read = summaries.read_stable_artifact
+
+    def read_selected(path: Path) -> tuple[ImmutableArtifactSnapshot, bytes]:
+        opened.append(path)
+        return real_read(path)
+
+    def unexpected_model_route(
+        _purpose: str, *, capability_profile: object, db_path: Path
+    ) -> tuple[str, str]:
+        pytest.fail("wrong OCR selection reached model route")
+
+    monkeypatch.setattr(summaries, "read_stable_artifact", read_selected)
+    monkeypatch.setattr(
+        summaries,
+        "resolve_model_and_backend",
+        unexpected_model_route,
+    )
+    selection = continuation.OCRCaptureSelection(
+        document_id=2,
+        document_version_id="wrong-document-version",
+        source_sha256="0" * 64,
+        evidence_seal_id="seal",
+        extraction_run_id="run",
+        page_result_ids=("page",),
+        cutoff_at=datetime(2026, 10, 23, tzinfo=UTC),
+    )
+    log = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, ocr_selection=selection)
+    assert opened == [second] and first not in opened
+    assert log.error is not None and "selection differs" in log.error
+    assert conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == 0
 
 
 def _entrypoint_fixture(
@@ -107,8 +160,9 @@ def _entrypoint_fixture(
     two_rows: bool = False,
     rich_population: bool = False,
     mock_enumerator: bool = True,
+    doc_kind: str = "ir_supplement",
 ) -> Path:
-    source = _retained_source(conn, tmp_path)
+    source = _retained_source(conn, tmp_path, doc_kind=doc_kind)
     issuer_id = str(
         conn.execute(
             "SELECT issuer_id FROM evidence_document_versions WHERE legacy_document_id=1"
@@ -231,9 +285,18 @@ def _entrypoint_fixture(
                     },
                 ]
             )
-        prompt = getattr(summaries, "_enumerate_prompt")(
-            ticker, period, text, 200, source_scope="direct_pdf_rich"
+        historical = (
+            getattr(continuation, "UNREVIEWED_CAPTURE_VERSION")
+            == revalidation.REVALIDATION_PRODUCER_VERSION
         )
+        if historical:
+            prompt = getattr(summaries, "_enumerate_prompt")(
+                ticker, period, text, 200, source_scope="direct_pdf_rich"
+            )
+        else:
+            prompt = getattr(summaries, "_enumerate_direct_prompt_v20")(ticker, period, text, 200)
+            for row in rows:
+                row["reporting_consolidation_scope"] = "unknown"
         raw = json.dumps(rows)
         record_llm_call(
             started_at=datetime.now(UTC),
@@ -360,6 +423,428 @@ def test_full_entrypoint_retains_unreviewed_rows_without_financial_writes(
     )
 
 
+def _prepare_failed_v16_revalidation(
+    conn: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    doc_kind: str = "ir_supplement",
+) -> tuple[Path, revalidation.RevalidationManifest, sqlite3.Row]:
+    source = _entrypoint_fixture(conn, tmp_path, monkeypatch, doc_kind=doc_kind)
+    original_validator = getattr(summaries, "_validated_enumerated_rows")
+    current_direct_prompt = getattr(summaries, "_enumerate_direct_prompt_v20")
+    current_direct_schema = getattr(summaries, "_DirectEnumeratedKpiV20")
+    current_version = continuation.UNREVIEWED_CAPTURE_VERSION
+    current_review_version = continuation.CURRENT_CAPTURE_VERSION
+    monkeypatch.setattr(
+        continuation, "UNREVIEWED_CAPTURE_VERSION", revalidation.REVALIDATION_PRODUCER_VERSION
+    )
+    monkeypatch.setattr(
+        continuation,
+        "CURRENT_CAPTURE_VERSION",
+        "ir-supplement-native-continuation-v17-reviewed-pages-table-cell-boundaries",
+    )
+
+    def legacy_prompt(ticker: str, period: str, text: str, max_facts: int) -> str:
+        original = cast(Callable[..., str], getattr(summaries, "_enumerate_prompt"))
+        return original(ticker, period, text, max_facts, source_scope="direct_pdf_rich")
+
+    monkeypatch.setattr(summaries, "_enumerate_direct_prompt_v20", legacy_prompt)
+    monkeypatch.setattr(summaries, "_DirectEnumeratedKpiV20", getattr(summaries, "_EnumeratedKpi"))
+
+    def old_rejection(*_args: object, **_kwargs: object) -> object:
+        raise ValueError("old synthetic validator rejected valid raw source")
+
+    monkeypatch.setattr(summaries, "_validated_enumerated_rows", old_rejection)
+    failed = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, doc_types=(doc_kind,))
+    assert failed.error is not None
+    monkeypatch.setattr(summaries, "_validated_enumerated_rows", original_validator)
+    monkeypatch.setattr(continuation, "UNREVIEWED_CAPTURE_VERSION", current_version)
+    monkeypatch.setattr(continuation, "CURRENT_CAPTURE_VERSION", current_review_version)
+    monkeypatch.setattr(summaries, "_enumerate_direct_prompt_v20", current_direct_prompt)
+    monkeypatch.setattr(summaries, "_DirectEnumeratedKpiV20", current_direct_schema)
+    old_artifact = conn.execute(
+        "SELECT id,input_sha256,output_sha256,content_json FROM llm_artifacts "
+        "WHERE purpose='kpi_summary_enumerate' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert old_artifact is not None
+    old_body = json.loads(str(old_artifact[3]))
+    assert old_body["status"] == "rejected"
+    old_attempt = str(
+        conn.execute(
+            "SELECT run_id FROM ingestion_runs WHERE directive='capture_ir_supplement_sections' "
+            "AND status='failed'"
+        ).fetchone()[0]
+    )
+    version_id = str(
+        conn.execute(
+            "SELECT document_version_id FROM evidence_document_versions WHERE legacy_document_id=1"
+        ).fetchone()[0]
+    )
+    manifest = revalidation.RevalidationManifest(
+        ticker="TEST",
+        document_id=1,
+        document_version_id=version_id,
+        source_sha256=sha(source.read_bytes()),
+        failed_attempt_id=old_attempt,
+        requested_model="fixture",
+        requested_backend="fixture",
+        period_end="2026-06-30T00:00:00",
+        max_input_chars=80_000,
+        max_facts_per_doc=200,
+        max_chunks=256,
+        max_structured_calls=256,
+        prompt_sha256=sha(
+            getattr(summaries, "_enumerate_prompt")(
+                "TEST",
+                "2026-06-30 [ir_supplement]",
+                "",
+                200,
+                source_scope="direct_pdf_rich",
+            ).encode()
+        ),
+        schema_sha256=sha(
+            json.dumps(
+                TypeAdapter(list[getattr(summaries, "_EnumeratedKpi")]).json_schema(),
+                sort_keys=True,
+            ).encode()
+        ),
+        projection_identity=summaries.source_text_projection_identity(
+            str(source), "application/pdf"
+        ),
+        sections=[
+            revalidation.RevalidationSection(
+                page=1,
+                start=0,
+                length=len(RICH_PAGE),
+                artifact_id=int(old_artifact[0]),
+                input_sha256=str(old_artifact[1]),
+                output_sha256=str(old_artifact[2]),
+                llm_call_id=int(old_body["exchange"]["llm_call_id"]),
+                response_sha256=str(old_body["exchange"]["response_sha256"]),
+            )
+        ],
+    )
+    return source, manifest, old_artifact
+
+
+@pytest.mark.parametrize("doc_kind", ["ir_supplement", "ir_press_release"])
+def test_revalidate_only_retains_candidates_from_failed_v16_without_provider_or_facts(
+    conn: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    doc_kind: str,
+) -> None:
+    _, manifest, old_artifact = _prepare_failed_v16_revalidation(
+        conn, tmp_path, monkeypatch, doc_kind=doc_kind
+    )
+    before_calls = int(conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0])
+    receipt = summaries.revalidate_ir_pdf_doc(manifest, tmp_path, conn)
+    assert receipt.section_count == receipt.page_count == receipt.row_count == 1
+    assert receipt.financial_writes == receipt.provider_calls == 0
+    assert conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == before_calls
+    assert conn.execute("SELECT COUNT(*) FROM source_fact_publications").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM fact_observations_v2").fetchone()[0] == 0
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM evidence_nodes WHERE node_id LIKE 'ir-pdf-candidate:%'"
+        ).fetchone()[0]
+        == 1
+    )
+    retained = conn.execute(
+        "SELECT extractor_code_version,extractor_config_sha256 "
+        "FROM evidence_extraction_runs WHERE extractor_name='ir-supplement-native-continuation'"
+    ).fetchone()
+    assert retained is not None
+    assert retained[0] == "v16-table-cell-boundaries"
+    assert len(str(retained[1])) == 64
+    processed = conn.execute(
+        "SELECT model,llm_call_id,prompt_version FROM llm_artifacts WHERE id=?",
+        (receipt.artifact_id,),
+    ).fetchone()
+    assert processed is not None
+    assert tuple(processed) == (None, None, revalidation.REVALIDATION_PROCESSOR_VERSION)
+    assert (
+        conn.execute(
+            "SELECT content_json FROM llm_artifacts WHERE id=?", (old_artifact[0],)
+        ).fetchone()[0]
+        == old_artifact[3]
+    )
+    population_sql = (
+        "SELECT (SELECT COUNT(*) FROM llm_artifacts), "
+        "(SELECT COUNT(*) FROM evidence_extraction_runs), "
+        "(SELECT COUNT(*) FROM evidence_nodes), "
+        "(SELECT COUNT(*) FROM ingestion_runs), (SELECT COUNT(*) FROM llm_calls)"
+    )
+    before_replay = tuple(conn.execute(population_sql).fetchone())
+    again = summaries.revalidate_ir_pdf_doc(manifest, tmp_path, conn)
+    assert again == receipt
+    assert tuple(conn.execute(population_sql).fetchone()) == before_replay
+
+
+@pytest.mark.parametrize("failure_at", ["after_processing", "during_candidate_retention"])
+def test_revalidation_rolls_back_processed_sections_and_candidates_together(
+    conn: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_at: str,
+) -> None:
+    _, manifest, original = _prepare_failed_v16_revalidation(conn, tmp_path, monkeypatch)
+    old_body = str(original[3])
+    before_calls = int(conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0])
+    if failure_at == "after_processing":
+
+        def fail_retention(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("injected candidate retention failure")
+
+        monkeypatch.setattr(summaries, "retain_and_publish_reviewed_ir_source", fail_retention)
+    else:
+        original_persist = ir_facts.EvidenceLedger.persist
+
+        def fail_after_candidate(ledger: EvidenceLedger, record: LedgerRecord) -> PersistResult:
+            receipt = original_persist(ledger, record)
+            if isinstance(record, EvidenceNode) and record.node_id.startswith("ir-pdf-candidate:"):
+                raise RuntimeError("injected candidate node failure")
+            return receipt
+
+        monkeypatch.setattr(ir_facts.EvidenceLedger, "persist", fail_after_candidate)
+
+    with pytest.raises(RuntimeError, match="injected candidate"):
+        summaries.revalidate_ir_pdf_doc(manifest, tmp_path, conn)
+    assert conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == before_calls
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM llm_artifacts WHERE purpose=?",
+            (revalidation.REVALIDATION_PURPOSE,),
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM evidence_nodes WHERE node_id LIKE 'ir-pdf-candidate:%'"
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM evidence_extraction_runs "
+            "WHERE extractor_name='ir-supplement-native-continuation'"
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM ingestion_runs WHERE directive='revalidate_ir_supplement_sections' "
+            "AND status='failed'"
+        ).fetchone()[0]
+        == 1
+    )
+    assert (
+        conn.execute(
+            "SELECT content_json FROM llm_artifacts WHERE id=?", (original[0],)
+        ).fetchone()[0]
+        == old_body
+    )
+    assert conn.execute("SELECT COUNT(*) FROM source_fact_publications").fetchone()[0] == 0
+
+
+def test_direct_reporting_scope_requires_an_exact_entity_boundary_witness(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Exact native heading observed on retained META 12679 page 5.
+    context = (
+        "META PLATFORMS, INC.\n"
+        "CONDENSED CONSOLIDATED STATEMENTS OF INCOME\n"
+        "Meta advertising revenue was $100."
+    )
+
+    def native_page(_raw: bytes) -> tuple[str, ...]:
+        return (context,)
+
+    monkeypatch.setattr(continuation, "project_pdf_page_texts", native_page)
+    capture = continuation.SupplementCapture(
+        conn=conn,
+        ticker="META",
+        document_id=1,
+        source_sha256=sha(b"source"),
+        model="fixture",
+        backend="fixture",
+        period_label="2026-06-30 [ir_supplement]",
+        max_input_chars=80_000,
+        max_facts=200,
+        max_chunks=256,
+        max_structured_calls=256,
+        prompt=lambda value: value,
+        extract=lambda _text, _body, _retain: pytest.fail("provider called"),
+        validate_rows=lambda raw: cast(list[dict[str, object]], raw),
+        effective_prompt=lambda value: value,
+        override_identity=lambda: "none",
+    )
+    capture.plan_sections(b"source")
+    row: dict[str, object] = {
+        "label": "Advertising revenue",
+        "value": 100,
+        "unit": "actual",
+        "currency": "USD",
+        "source_excerpt": "Meta advertising revenue was $100.",
+        "source_value_text": "$100",
+        "reported_period_end": "2026-06-30",
+        "period_role": "current",
+        "accounting_basis": "gaap",
+        "consolidation_scope": "product",
+        "dimensions": {"Product": "Advertising"},
+        "source_unit_scale": "none",
+        "reporting_consolidation_scope": "consolidated",
+        "context_witnesses": [
+            {
+                "page": 1,
+                "quote": "CONDENSED CONSOLIDATED STATEMENTS OF INCOME",
+                "fields": ["consolidation_scope"],
+            }
+        ],
+    }
+    validate = cast(Callable[..., list[object]], getattr(summaries, "_validated_enumerated_rows"))
+    accepted = validate([row], source_scope="direct_pdf_rich", prospective_direct=True)
+    assert len(accepted) == 1
+    capture.require_context_witnesses([row])
+    with pytest.raises(ValueError):
+        capture.require_context_witnesses(
+            [
+                {
+                    **row,
+                    "context_witnesses": [
+                        {
+                            "page": 1,
+                            "quote": "CONSOLIDATED STATEMENTS OF INCOME",
+                            "fields": ["consolidation_scope"],
+                        }
+                    ],
+                }
+            ]
+        )
+    with pytest.raises(ValueError):
+        validate(
+            [{**row, "context_witnesses": []}],
+            source_scope="direct_pdf_rich",
+            prospective_direct=True,
+        )
+    with pytest.raises(ValueError):
+        validate(
+            [
+                {
+                    **row,
+                    "context_witnesses": [
+                        {
+                            "page": 1,
+                            "quote": "Advertising revenue",
+                            "fields": ["consolidation_scope"],
+                        }
+                    ],
+                }
+            ],
+            source_scope="direct_pdf_rich",
+            prospective_direct=True,
+        )
+    with pytest.raises(ValueError):
+        capture.require_context_witnesses(
+            [
+                {
+                    **row,
+                    "context_witnesses": [
+                        {
+                            "page": 1,
+                            "quote": "forged consolidated",
+                            "fields": ["consolidation_scope"],
+                        }
+                    ],
+                }
+            ]
+        )
+    old_schema = TypeAdapter(list[getattr(summaries, "_EnumeratedKpi")])
+    with pytest.raises(ValueError):
+        old_schema.validate_python([row])
+    old_prompt = getattr(summaries, "_enumerate_prompt")(
+        "META", "2026-06-30 [ir_supplement]", "", 200, source_scope="direct_pdf_rich"
+    )
+    new_prompt = getattr(summaries, "_enumerate_direct_prompt_v20")(
+        "META", "2026-06-30 [ir_supplement]", "", 200
+    )
+    assert "reporting_consolidation_scope" not in old_prompt
+    assert "reporting_consolidation_scope" in new_prompt
+
+
+@pytest.mark.parametrize(
+    "contrary_quote",
+    [
+        "META UNCONSOLIDATED AFFILIATES",
+        "META DECONSOLIDATED SUBSIDIARY",
+        "META IS NOT CONSOLIDATED WITH THE PARENT",
+        "NOT CONDENSED CONSOLIDATED STATEMENTS OF INCOME",
+        "SUBSIDIARY CONDENSED CONSOLIDATED STATEMENTS OF INCOME",
+        "SEGMENT CONDENSED CONSOLIDATED STATEMENTS OF INCOME",
+        "Meta consolidated financial statements.",
+        '"CONDENSED CONSOLIDATED STATEMENTS OF INCOME" applies to a subsidiary.',
+    ],
+)
+def test_reporting_scope_rejects_contrary_or_ambiguous_native_heading(
+    contrary_quote: str,
+) -> None:
+    row = {
+        "label": "Advertising revenue",
+        "value": 100,
+        "unit": "actual",
+        "currency": "USD",
+        "source_excerpt": "Meta advertising revenue was $100.",
+        "source_value_text": "$100",
+        "reported_period_end": "2026-06-30",
+        "period_role": "current",
+        "accounting_basis": "gaap",
+        "consolidation_scope": "product",
+        "dimensions": {"Product": "Advertising"},
+        "source_unit_scale": "none",
+        "reporting_consolidation_scope": "consolidated",
+        "context_witnesses": [
+            {"page": 1, "quote": contrary_quote, "fields": ["consolidation_scope"]}
+        ],
+    }
+    validate = cast(Callable[..., list[object]], getattr(summaries, "_validated_enumerated_rows"))
+    with pytest.raises(ValueError, match="explicit source boundary witness"):
+        validate([row], source_scope="direct_pdf_rich", prospective_direct=True)
+    row["reporting_consolidation_scope"] = "unknown"
+    assert len(validate([row], source_scope="direct_pdf_rich", prospective_direct=True)) == 1
+
+
+@pytest.mark.parametrize(
+    "other_scope", ["parent_only", "subsidiary", "segment", "security_specific", "other"]
+)
+def test_consolidated_heading_cannot_prove_another_reporting_boundary(other_scope: str) -> None:
+    row = {
+        "label": "Advertising revenue",
+        "value": 100,
+        "unit": "actual",
+        "currency": "USD",
+        "source_excerpt": "Meta advertising revenue was $100.",
+        "source_value_text": "$100",
+        "reported_period_end": "2026-06-30",
+        "period_role": "current",
+        "accounting_basis": "gaap",
+        "consolidation_scope": "product",
+        "source_unit_scale": "none",
+        "reporting_consolidation_scope": other_scope,
+        "context_witnesses": [
+            {
+                "page": 1,
+                "quote": "CONDENSED CONSOLIDATED STATEMENTS OF INCOME",
+                "fields": ["consolidation_scope"],
+            }
+        ],
+    }
+    validate = cast(Callable[..., list[object]], getattr(summaries, "_validated_enumerated_rows"))
+    with pytest.raises(ValueError, match="explicit source boundary witness"):
+        validate([row], source_scope="direct_pdf_rich", prospective_direct=True)
+
+
 def test_full_entrypoint_retains_comparator_ytd_and_guidance_range_as_raw_candidates(
     conn: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -405,6 +890,7 @@ def test_capped_lower_range_bound_recurses_and_retains_complete_raw_population(
             "period_role": "current",
             "accounting_basis": "management",
             "consolidation_scope": "segment",
+            "reporting_consolidation_scope": "unknown",
             "dimensions": {"Geography": "North"},
             "source_unit_scale": "none",
         }
@@ -422,6 +908,7 @@ def test_capped_lower_range_bound_recurses_and_retains_complete_raw_population(
         "range_bound": "lower",
         "accounting_basis": "management",
         "consolidation_scope": "consolidated",
+        "reporting_consolidation_scope": "unknown",
         "dimensions": {},
         "source_unit_scale": "billions",
     }
@@ -439,7 +926,7 @@ def test_capped_lower_range_bound_recurses_and_retains_complete_raw_population(
     responses: list[list[dict[str, object]]] = []
 
     def capped_then_complete(prompt: str, **_kwargs: object) -> object:
-        if "CONTEXT ONLY (page header" not in prompt:
+        if not responses:
             rows = [*actuals, guidance]
         elif "EXTRACT ONLY FROM THIS SOURCE SECTION:\nMargin North" in prompt:
             rows = actuals
@@ -507,6 +994,7 @@ def test_unsaturated_lone_guidance_bound_fails_closed(
         "range_bound": "lower",
         "accounting_basis": "management",
         "consolidation_scope": "consolidated",
+        "reporting_consolidation_scope": "unknown",
         "dimensions": {},
         "source_unit_scale": "billions",
     }
@@ -546,6 +1034,7 @@ def test_capped_rows_still_reject_numeric_token_outside_source_quote(
             "period_role": "current",
             "accounting_basis": "management",
             "consolidation_scope": "segment",
+            "reporting_consolidation_scope": "unknown",
             "dimensions": {"Geography": "North"},
             "source_unit_scale": "none",
         }
@@ -707,6 +1196,95 @@ def test_full_entrypoint_two_empty_pages_retain_distinct_calls_and_cache_replay(
     assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
 
 
+def test_mixed_native_ocr_entrypoint_submits_each_planned_prompt_and_replays(
+    conn: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _entrypoint_fixture(conn, tmp_path, monkeypatch, mock_enumerator=False)
+    version = str(
+        conn.execute(
+            "SELECT document_version_id FROM evidence_document_versions WHERE legacy_document_id=1"
+        ).fetchone()[0]
+    )
+    _, original_projection = ocr_candidate_fixture()
+    projection = original_projection.model_copy(
+        update={
+            "document_version_id": version,
+            "source_sha256": sha(source.read_bytes()),
+            "page_number": 2,
+        }
+    )
+    selection = continuation.OCRCaptureSelection(
+        document_id=1,
+        document_version_id=version,
+        source_sha256=projection.source_sha256,
+        evidence_seal_id=projection.evidence_seal_id,
+        extraction_run_id=projection.extraction_run_id,
+        page_result_ids=(projection.page_result_id,),
+        cutoff_at=datetime(2026, 10, 23, tzinfo=UTC),
+    )
+
+    def projected_pages(_raw: bytes) -> tuple[str, ...]:
+        return (RICH_PAGE, "")
+
+    def selected_pages(*_args: object, **_kwargs: object) -> tuple[GovernedOCRPageProjection, ...]:
+        return (projection,)
+
+    def preflight_scope(_capture: continuation.SupplementCapture, _pages: tuple[str, ...]) -> None:
+        return
+
+    monkeypatch.setattr(continuation, "project_pdf_page_texts", projected_pages)
+    monkeypatch.setattr(ir_facts, "project_pdf_page_texts", projected_pages)
+    monkeypatch.setattr(continuation, "resolve_governed_ocr_pages", selected_pages)
+    monkeypatch.setattr(ir_facts, "resolve_governed_ocr_pages", selected_pages)
+    monkeypatch.setattr(continuation.SupplementCapture, "_existing_page_preflight", preflight_scope)
+    submitted: list[str] = []
+
+    def response(prompt: str, **_kwargs: object) -> object:
+        submitted.append(prompt)
+        is_ocr = "OCR SOURCE RULE:" in prompt
+        if is_ocr:
+            assert '"source_representation": "governed_ocr"' in prompt
+        quote = projection.text if is_ocr else "Margin North 10%"
+        return [
+            {
+                "label": "Margin",
+                "value": 10,
+                "unit": "percent",
+                "source_excerpt": quote,
+                "source_value_text": "10%",
+                "reported_period_end": "2026-06-30",
+                "period_role": "current",
+                "accounting_basis": "management",
+                "consolidation_scope": "segment",
+                "reporting_consolidation_scope": "unknown",
+                "dimensions": {"Geography": "North"},
+                "source_unit_scale": "none",
+            }
+        ]
+
+    monkeypatch.setattr(
+        summaries,
+        "call_llm_structured_with_raw",
+        partial(_recorded_governed_call, response=response),
+    )
+    first = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, ocr_selection=selection)
+    assert first.error is None
+    assert len(submitted) == 2
+    assert "OCR SOURCE RULE:" not in submitted[0]
+    assert "OCR SOURCE RULE:" in submitted[1]
+    artifacts = conn.execute(
+        "SELECT content_json FROM llm_artifacts WHERE superseded_by_id IS NULL ORDER BY id"
+    ).fetchall()
+    assert len(artifacts) == 2
+    assert [json.loads(row[0])["exchange"]["submitted_prompt"] for row in artifacts] == submitted
+    assert conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == 2
+    assert conn.execute("SELECT COUNT(*) FROM fact_cells_v2").fetchone()[0] == 0
+    second = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, ocr_selection=selection)
+    assert second.error is None
+    assert len(submitted) == 2
+    assert conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == 2
+
+
 @pytest.mark.parametrize(
     "responses_kind",
     [
@@ -737,6 +1315,7 @@ def test_source_quote_repair_retains_every_raw_response_with_two_request_limit(
         "period_role": "current",
         "accounting_basis": "management",
         "consolidation_scope": "segment",
+        "reporting_consolidation_scope": "unknown",
         "dimensions": {"Geography": "North"},
         "source_unit_scale": "none",
     }
@@ -756,6 +1335,7 @@ def test_source_quote_repair_retains_every_raw_response_with_two_request_limit(
             "period_role": "guidance",
             "range_bound": bound,
             "consolidation_scope": "consolidated",
+            "reporting_consolidation_scope": "unknown",
             "dimensions": {},
             "source_unit_scale": "billions",
         }
@@ -891,6 +1471,7 @@ def test_retained_page2_range_tokens_require_literal_endpoint(
         "period_role": "guidance",
         "accounting_basis": "management",
         "consolidation_scope": "consolidated",
+        "reporting_consolidation_scope": "unknown",
         "source_unit_scale": "billions" if monetary else "none",
     }
 

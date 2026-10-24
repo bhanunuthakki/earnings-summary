@@ -226,6 +226,18 @@ Run this review when a change affects any of the following:
 
 Pure implementation refactors, test-only changes, prose-only changes, and internal CLIs that are not supported operator workflows may use `no surface change`, but the reason must name the preserved contract. Do not scan every Flask route or `execution/*.py` file and treat it as a product capability.
 
+The explicit IR `--revalidate-only` CLI is a manual, source-bound recovery action
+inside `execution/extract_kpis_from_ir.py`. Its owner is the existing IR capture
+stage. It requires a complete pinned V16 historical manifest and records a
+separate V18 processing attempt and artifact receipt. A failure leaves no partial
+processed-section or candidate population and marks only that new attempt failed.
+An exact replay requires both populations to remain intact. It makes
+no provider call and no financial publication. The Operations workspace has no
+control for this bounded action; the CLI receipt and `ingestion_runs` status are
+its operator evidence. Candidate retention does not mean source review or
+financial admission. Native execution requires the canonical-host operation
+boundary; local migrated-database tests do not authorize it.
+
 The bounded lock-filename repair has **no surface change**. Logical write-set keys,
 ownership proofs, mutex rights and cleanup remain under the existing runtime owner.
 Lock and transition-guard filenames of at most 255 filesystem-encoded bytes stay
@@ -2185,11 +2197,21 @@ or an ambiguous span fails validation. Numeric source tokens remain literal;
 range endpoints cannot acquire currency or percent symbols absent from that
 endpoint. Repair feedback uses fixed known validation reasons and never copies
 arbitrary exception text into the prompt. This cache does not confer acquisition,
-extraction completeness or semantic admission. Known OCR-required page assessments,
-blank pages, unsupported quotes, failed sections and budget exhaustion remain
-unresolved. Nonblank page text can omit visual facts. Absent page assessments
+extraction completeness or semantic admission. Unreviewed OCR-required pages,
+unreviewed blank pages, unsupported quotes, failed sections and budget exhaustion
+remain unresolved. Nonblank page text can omit visual facts. Absent page assessments
 remain unknown. The exact raw source and its immutable binding must match before
 model calls; the source must remain unchanged before financial persistence.
+
+An exact append-only reviewed PDF page revision can mark a flagged decorative
+page as `no_financial_content`. The existing OCR/page-evidence library owns the
+typed review write. This change adds no CLI, scheduled job, dashboard action,
+provider route or automatic review. An authorized operator must supply a real
+source-bound visual review before any production insertion. Capture checks the
+current review and its source/preflight commitments before model work and again
+before persistence. Only those reviewed pages leave the model input; original
+page numbers and detector flags remain. Other OCR-required or blank pages still
+block. No default OCR or document-processing certificate becomes complete.
 
 After all planned sections pass, this path retains the governed raw responses
 and page-bound candidates in the existing immutable evidence ledger. Capture does
@@ -2227,6 +2249,50 @@ spreadsheet, presentation and transcript hints. Supporting HTML notices do not
 loosen the existing financial-release HTML boundary. This classification change
 does not rewrite historical document metadata or activate a new collection job.
 
+### Source-reviewed reported-quarter selection
+
+`manage_issuer_document_sources.py review-period` is a supervised local operator
+phase on the configured canonical database. It accepts one closed source-review
+request and appends one immutable EvidenceLedger run and located node for the
+captured publisher PDF. The request names the actual analyst reviewer and method;
+it does not assert owner approval. The phase verifies exact source bytes, native
+first-page wording for a current reported actual quarter, issuer identity,
+selected subject, active SEC-source fiscal profile, source clocks, and replay.
+Changed reviews require a new source/version process; an exact replay creates no
+new evidence. Failure rolls back the review. The JSON result identifies the
+review node; it is evidence, not a financial fact or completeness seal.
+
+Current IR collection retains bounded candidates when reported-period selection
+is pending. Its output uses `period_selection_pending`, includes retained and
+deferred counts, and does not run categorization or claim complete coverage.
+The explicit-URL fallback uses the same bounded fetch path while selection is
+pending. It keeps raw bytes and the URL manifest, but does not mark the brief
+dirty, record a completed `ir_fetch_status`, or start categorization.
+The existing `.tmp/ir_incoming_urls.json` sidecar also records a per-ticker retry
+cursor and exact SHA-256 and byte size for staged raw files. A replay checks
+those bytes before skipping a download. Failed URLs consume an attempt slot,
+then the cursor advances so later manifest URLs get a bounded attempt. This
+sidecar proves retained bytes, not catalog registration or financial coverage.
+One fetch process owns this shared sidecar write set at a time. The cursor and
+retained-byte map are scoped by ticker and by the selected content root; the
+existing filename-to-URL map remains readable by the categorizer.
+The source selector can exclude a quarter only after all current inventory and
+captured-period proof checks pass. Current incomplete populations for the eleven
+portfolio issuers remain visible pending; this change does not run collection or
+activate a schedule. Operator evidence is the CLI JSON and existing source and
+coverage receipts. No cockpit control changes in this code path.
+
+Current transcript acquisition uses a version 2 authorization receipt with the
+same source window. A pending source window returns a distinct pending reason;
+it is not an out-of-window or provider-miss finding. The active backfill JSON
+reports `period_selection_status`, `period_selection_reason`, and the pending
+ticker count. Pending tickers keep existing raw artifacts and do not run transcript
+fact ingest or commitment scan. Historical version 1 receipts still validate
+under their original calendar rule. An exact stored version 2 receipt can be
+reconstructed after later source revisions while its receipt and transcript
+bytes remain unchanged. Active acquisition and ingest still require current
+source proof.
+
 
 ### Transcript scan database and retained-input scope
 
@@ -2254,6 +2320,23 @@ connections; visible report content remains subject to the owner's sharing decis
 The private report and live dashboard retain their existing behavior. This local,
 explicit file operation adds no dashboard action, scheduler, provider call or database
 write. See `docs/security/information-boundaries.md` for the invocation and boundaries.
+### As-known fact compatibility drift diagnostic (2026-10-23)
+
+`execution/audit_evidence_integrity.py` accepts `--fact-drift-only`,
+`--fact-drift-effective-at`, and `--fact-drift-known-at` for a read-only,
+dual-cutoff audit. The diagnostic uses the canonical fact selector's same
+resolution, quarantine, and comparison rules. A blocker finding reports a
+complete drift count and bounded samples with fact, observation, and
+resolution identities, ticker, and mismatch field names. It never reports
+numeric values, locators, or source text. An unavailable ledger produces a
+separate blocker with an unknown drift count. This audit does not repair facts
+or change their read eligibility. The saved receipt retains the mode, both
+cutoffs, and each table's scanned, selected, and drift counts. Missing tables
+and malformed selected rows report unavailable with null counts. The sample
+completeness flag distinguishes a complete sample from a bounded one. A
+malformed immutable clock or missing selected outcome, link, or observation
+blocks the as-known read and the audit. It cannot expose an older resolution
+as a complete current answer.
 
 ### pypdf 6.21.2 identity promotion — no operational surface change
 
@@ -2269,3 +2352,78 @@ operator action, route, service, schedule, budget, schema or live-state writer.
 Tests cover three-generation partial promotions, retained seals, native transcript
 readers and exact runtime/lock identity. Any re-extraction remains separately
 approved.
+
+
+### Explicit source-bound PDF image OCR selection — 2026-10-23
+
+The existing `execution/backfill_ocr_evidence.py` command accepts repeated
+`--page-selection` JSON objects. Each object pins `document_version_id`,
+`source_sha256`, `artifact_id`, `artifact_sha256`, `page_number` and
+`page_sha256`. Selections require the `evidence_native` lane and explicit
+`--document-version-id` targets. The existing persisted table artifact, run,
+members and seal must verify. Only selected `scanned_page` or `image_only_page`
+quarantines supplement the native character-count selection. No table detector
+runs on this path. Dry-run returns verified selections without OCR or writes.
+Selected-page apply requires the existing local engine and its exact persisted
+configuration controls. Selection plus `--preflight-only` is rejected because a
+preflight-only assessment does not retain the full configuration JSON. Default
+preflight-only behavior is unchanged.
+
+A selection creates a distinct assessment/configuration identity. Original
+assessments and table quarantines remain unchanged. Image detection does not
+classify financial content: a divider can have the same signal as a chart.
+Operator selection does not grant financial admission, table coverage or
+whole-document completeness. No collector, scheduler, service, engine or
+publication authority changes. Evidence: `tests/test_ocr_source_bound_pages.py`.
+
+The PDF OCR library now retains exact TSV and render bytes as durable content
+blobs and adds word/layout evidence to accepted pages. The existing processing
+seal can verify its layout commitment. A read-only resolver requires exact
+source, seal, run, page results, and cutoff coordinates before it returns a
+`governed_ocr` page projection. No new command, route, scheduler, engine
+invocation, automatic page selection, financial write, or operator action is
+added. Text-only history remains unavailable for the word-backed projection.
+Evidence: `tests/test_ocr_extraction_governance.py` and
+`tests/test_document_processing_evidence.py`.
+
+The existing `execution/extract_kpis_from_ir.py --capture` command also accepts
+`--ocr-projection-file PATH` only with `--ticker`. The JSON file has exactly one
+`document_id`, `document_version_id`, `source_sha256`, `evidence_seal_id`,
+`extraction_run_id`, complete ordered `page_result_ids`, and timezone-aware
+`cutoff_at`. The command captures only that registered supplement document.
+It checks the exact source and sealed projection before any model request.
+It uses the same bounded `kpi_summary_enumerate` route and raw evidence ledger.
+OCR rows remain pending visual/source-context review and make no financial fact
+write. A missing, changed, partial, conflicting, or text-only projection fails
+closed. Native-only capture and V16 revalidation keep their existing interfaces.
+
+The same extraction command accepts `--source-review-file PATH` with explicit
+`--db` and `--source-state-root`. Its default action validates the exact OCR
+candidate population, retained PDF/TSV/render bytes and field-specific visual
+witnesses, then prints a read-only preview. `--apply-source-review` persists
+that reviewed node in the existing evidence ledger. This action does not call
+the model, run OCR, or publish a financial fact. A later exact cached capture
+can reuse the review and publish accepted rows through the existing source-fact
+writer. Rejected rows remain in the reviewed population. The reviewer identity
+and reviewer kind must describe who actually performed the visual review.
+
+Financial readers require an explicit product source-state root to admit OCR
+facts. The server uses an explicit `--state-root` when supplied. Otherwise, an
+explicit `--repo-root` supplies the same product-state authority that already
+configures its database and child processes. The checkout default grants no OCR
+source authority. Artifact builds use `--source-state-root`. Missing or changed source,
+layout, review, cutoff or publication evidence makes that OCR fact unavailable
+to reports, Ask, research and DCF. Native fact reads keep their prior rules.
+Before live acceptance, confirm that the configured canonical service supplies
+the explicit root and that it is the root used by the extraction ledger's registered
+PDF, TSV and render bytes. Then reopen one reviewed OCR fact through the shared
+fact reader and its pinned PDF page and image routes. Record the source hash,
+document version, page, word regions, review and cutoff in that check. A
+successful app start alone is not reader-parity evidence. Do not infer the root
+from the database path or a checkout.
+The canonical source peek offers an OCR-only PDF page and word-region link when
+the legacy document identity matches the admitted source hash. The existing
+viewer verifies the pinned document version and PDF bytes for both the page
+and image request; mismatch returns 404. No new scheduled job, store, provider
+route, or general trust flag is added. This path does not fill OCR-missed chart
+values or prove whole-document financial completeness.

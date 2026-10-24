@@ -1,0 +1,285 @@
+{
+  "scope": "Reviewed OCR facts through existing publication and shared source readers",
+  "reviewed_at_utc": "2026-10-24T03:30:40.436402+00:00",
+  "source_commit": "61b9530cfce4aab7d74828b1cafbee5bd55ed658",
+  "independent_advisory_score": 94,
+  "independent_review_sha256": "7bf6ca89083d345e21bbf253fe53918ef0579862cf585f9238495d47639ed6e5",
+  "source_tree_growth": {
+    "executable_modules": 1,
+    "noncomment_LOC": 1185,
+    "reason": "One provenance source-context leaf replaces the DCF-owned context. Existing publication and read owners validate physical OCR evidence; consumers pass explicit context; pinned viewer uses verified source bytes."
+  },
+  "exact_SCC_memberships_unchanged": true,
+  "composition_root_growth": {
+    "execution/comments_server.py": 5
+  },
+  "scanner_or_suppression_ceilings_weakened": false,
+  "baseline_before_sha256": "7af9c4b4663a8631e18fa61f89c26880ccc426e747d778dfeb6c307fcd6b7db9",
+  "measurement_source_sha256": "9cbd54657573be14f6ddae2f3095908d3fbd726c4f771e98ac81cd89cfb2494b",
+  "reachability_parser_source_sha256": "2f08560bdf73bcd8c5b6be9e4f7c2d6770f1fa989bbf7305be7f1f91fbe5952e",
+  "existing_disposition_moves": [
+    {
+      "path": "src/pipeline/peeks.py",
+      "old_line": 2005,
+      "new_line": 2088,
+      "identical_Call_AST": true,
+      "targets_unchanged": [
+        "_COMPARE_METRIC_ROWS"
+      ],
+      "old_fingerprint": "e5ec682a7e3bd2b59d5d40013de8200dca58759eb7aa6d15e3ed70017b8b1b31",
+      "new_fingerprint": "f2e3d4f2627dc6b27ceeed47d30797eb66ae79059c2d64507770a32616225a7e"
+    },
+    {
+      "path": "src/provenance/ir_reported_facts.py",
+      "old_line": 780,
+      "new_line": 928,
+      "identical_Call_AST": true,
+      "targets_unchanged": [
+        "llm_call_id",
+        "raw_response",
+        "response_sha256",
+        "prompt_sha256",
+        "model",
+        "provider",
+        "transport"
+      ],
+      "old_fingerprint": "c580dc27ed1af941cd02c909d950725e7da9b18534947b3946b2f711c2aa5d85",
+      "new_fingerprint": "4f73552df54eb17e65fb3a7f218afdd072a4494bd9fae03664a53aeaecd994ba"
+    },
+    {
+      "path": "execution/build_artifacts.py",
+      "old_line": 123,
+      "new_line": 124,
+      "identical_Call_AST": true,
+      "targets_unchanged": [
+        "execution/extract_nvo_patent_timeline_state.py"
+      ],
+      "old_fingerprint": "4426c7b711a819e92f879973e570a2f696f4e85964fe0d4d0602b14849c15935",
+      "new_fingerprint": "da634d06ca668f4e9a047b489f9b721bd4beb41f98686f35fb545ba289253fdb"
+    }
+  ],
+  "static_gate": "77 retained files format/lint/types/suppressions pass; types0errors",
+  "focused_author_tests": 206,
+  "independent_regressions": 61,
+  "independent_physical_oracle": "PASS with real retained PDF/PNG/TSV and unmocked reader; synthetic deterministic TSV, no engine qualification",
+  "financial_chart_fidelity": "FAIL10of15; production qualification HOLD",
+  "integration_tests": "121 retained files format/lint/types/suppressions passed;2915passed3failed3skipped; failures being corrected, fullCIpending",
+  "combined_source_period_integration": {
+    "source_commit": "ed3309a2aa6bd315110627346184c7f24f4e6491",
+    "independent_advisory_score": 95,
+    "independent_review_sha256": "227455ce9df7f606c24b8e2f0e0fd8474aad10aa054e5fb1aad2ae21c4010053",
+    "baseline_before_sha256": "5a744c3a544d159924fad57f12fbf91367c2ef2bef2e298d9c45261d33149234",
+    "measurement_source_sha256": "8994a3247288f98d8c8551b3a09539bf52a96d74eb849ecae7e28a6ce797c25a",
+    "executable_module_growth": 1,
+    "noncomment_LOC_growth": 1754,
+    "reason": "One cohesive reported-period proof owner removes high-level dependencies from source policy. Existing IR recovery verifies retained bytes. Existing transcript writer owns its unchanged validation UDF. Current-source proof gates new requests; immutable historical reads remain supported. Optional source-context call compatibility is retained.",
+    "SCC_count_before": 21,
+    "SCC_count_after": 20,
+    "SCC_largest_before": 16,
+    "SCC_largest_after": 16,
+    "every_current_SCC_subset_of_previous": true,
+    "independent_targeted_tests": 14,
+    "author_affected_tests": 336,
+    "author_final_migration_tests": 3,
+    "live_55_quarter_packages": "UNQUALIFIED",
+    "schema_transition": "0061 ->0062 ->0063 requires native qualification and current recovery evidence",
+    "existing_disposition_moves": [
+      {
+        "path": "execution/backfill_transcripts.py",
+        "old_line": 786,
+        "new_line": 843,
+        "old_fingerprint": "f08c9ae3a71fa0425da13817bd4b4d8816a339d93f89e8b0f970c3bdd3ac796b",
+        "new_fingerprint": "cae3bc3f56397fb13baf7a46b2b3f189c25ad552db76318dc66479aefafa57ec",
+        "identical_Call_AST": true,
+        "enclosing_functions_unchanged": [
+          "_run_ingest"
+        ],
+        "relative_identical_call_order_unchanged": true,
+        "targets_unchanged": [
+          "execution/ingest_transcripts_state.py"
+        ]
+      },
+      {
+        "path": "execution/backfill_transcripts.py",
+        "old_line": 816,
+        "new_line": 873,
+        "old_fingerprint": "056ffa4f740ecec463ae86b574bbba0a406fb7950a140d07fa945fd821c68f27",
+        "new_fingerprint": "513a89938d3585430cfc43d86489f15d7b00e79c05b0275caf94de84daae0d11",
+        "identical_Call_AST": true,
+        "enclosing_functions_unchanged": [
+          "_run_extract"
+        ],
+        "relative_identical_call_order_unchanged": true,
+        "targets_unchanged": [
+          "execution/extract_commitments_from_transcript.py"
+        ]
+      },
+      {
+        "path": "execution/fetch_ir_documents.py",
+        "old_line": 598,
+        "new_line": 656,
+        "old_fingerprint": "deabedc12f5483af5bb9081af290fd1959638791509db250ab44a093e322007a",
+        "new_fingerprint": "7a58b14e9a5d2bcaac9eb42548d7f70bd4bd422d965e8c8d958fe37ea6c85fc4",
+        "identical_Call_AST": true,
+        "enclosing_functions_unchanged": [
+          "_run_categorize"
+        ],
+        "relative_identical_call_order_unchanged": true,
+        "targets_unchanged": [
+          "execution/categorize_ir_uploads.py"
+        ]
+      },
+      {
+        "path": "execution/fetch_ir_from_urls.py",
+        "old_line": 102,
+        "new_line": 104,
+        "old_fingerprint": "787ac30592c592b6293695149c0c2930f4ef481e1d34895b0426c61e97f30b19",
+        "new_fingerprint": "ae9f7eda3b2e03ce7e79d0d15c729208cfaa6ad644b8e5cd60f08145436deaff",
+        "identical_Call_AST": true,
+        "enclosing_functions_unchanged": [
+          "_run_narrative"
+        ],
+        "relative_identical_call_order_unchanged": true,
+        "targets_unchanged": [
+          "src/compute/ir_narrative.py"
+        ]
+      },
+      {
+        "path": "execution/onboard_ticker.py",
+        "old_line": 485,
+        "new_line": 486,
+        "old_fingerprint": "9f9ae83a24e93c895c7d3d86292da2b1a2e1485aa85ddb2e0e39d26b83b74452",
+        "new_fingerprint": "efcae282419ea17e0860c6fac3e32f44d1ee5fef42f58470a336a7751c0133b8",
+        "identical_Call_AST": true,
+        "enclosing_functions_unchanged": [
+          "_run_fmp_fetch"
+        ],
+        "relative_identical_call_order_unchanged": true,
+        "targets_unchanged": [
+          "execution/save_fmp_data.py"
+        ]
+      },
+      {
+        "path": "execution/onboard_ticker.py",
+        "old_line": 507,
+        "new_line": 508,
+        "old_fingerprint": "56631d7ce4dcde43daa41a66bdaaa0bc7a6e168d58770e40bc7ed9428610a29c",
+        "new_fingerprint": "9f777cd8c9ce0206671537608922e89724ed5632f5bfc70f74037e91588729f3",
+        "identical_Call_AST": true,
+        "enclosing_functions_unchanged": [
+          "_run_transcript_backfill"
+        ],
+        "relative_identical_call_order_unchanged": true,
+        "targets_unchanged": [
+          "execution/backfill_transcripts.py"
+        ]
+      },
+      {
+        "path": "execution/onboard_ticker.py",
+        "old_line": 576,
+        "new_line": 577,
+        "old_fingerprint": "a9da13e4c5f70850d0477e2f45e4f7699215ee35eaec07eaa1b4f6dd949eb921",
+        "new_fingerprint": "bf912bb4f7a7b1078a760ddb9fcfdcf13617da73b833a370cde8bf2d7eb0f76d",
+        "identical_Call_AST": true,
+        "enclosing_functions_unchanged": [
+          "_run_saydo"
+        ],
+        "relative_identical_call_order_unchanged": true,
+        "targets_unchanged": [
+          "execution/process_ir_documents_state.py"
+        ]
+      },
+      {
+        "path": "execution/onboard_ticker.py",
+        "old_line": 592,
+        "new_line": 593,
+        "old_fingerprint": "6f3804af00d65070f507c49c14c25869444754ee366883cd2df8e4eacb0ce821",
+        "new_fingerprint": "61bfd758fd72b0ff3e83fb1d84c7b367ca6709f7e28df91fb89861ac4e95dce6",
+        "identical_Call_AST": true,
+        "enclosing_functions_unchanged": [
+          "_run_saydo"
+        ],
+        "relative_identical_call_order_unchanged": true,
+        "targets_unchanged": [
+          "execution/build_saydo_pairs.py"
+        ]
+      },
+      {
+        "path": "execution/onboard_ticker.py",
+        "old_line": 654,
+        "new_line": 655,
+        "old_fingerprint": "4ac0faf4ec941af19765c0797b54435477dfd9bbd56020c0fc2e79ef62de7e5f",
+        "new_fingerprint": "d86724dfd743a0e7fc3d23746c0b25faae86008fb942b044efc4717f845189eb",
+        "identical_Call_AST": true,
+        "enclosing_functions_unchanged": [
+          "run_etf_onboarding"
+        ],
+        "relative_identical_call_order_unchanged": true,
+        "targets_unchanged": [
+          "execution/build_etf_workup.py"
+        ]
+      }
+    ],
+    "reachability_parser_source_sha256": "6920b4489b731d4877b4d3cd2d1ff21f7cc70efcff0f8c1c2cdb2b21514d19e8",
+    "integration_oracle_updates": "Unreviewed genericIRdocument retains generic identity; phase0 reuse expects new0063head and still checks no second snapshot. Both affected modules32pass."
+  },
+  "compatibility_repair": {
+    "source_commit": "ca512133ac1390ba71945351ab402cbb46de7301",
+    "test_evidence": "301 pass/3 Windows-only skips; one test expectation corrected and affected test passes; full integrated gate and CI pending",
+    "independent_review": "PASS94 compatibility; PASS96 narrow exact-path secret filter; noP1/P2",
+    "independent_advisory_score": 94,
+    "independent_review_sha256": "586ab4dc0750ba7e79e0699acdc9831cb9bf7075f6438b542d2ad06914348148"
+  },
+  "suppression_ratchet": {
+    "execution_before": 810,
+    "execution_after": 751,
+    "tests_before": 896,
+    "tests_after": 891,
+    "new_suppressions": false
+  },
+  "explicit_existing_state_root_binding": {
+    "independent_advisory_score": 96,
+    "independent_review_sha256": "a862a137c2cf451db4e0125367533f81ac331d29e4db2477dbe4a0255b123258",
+    "change": "Existing explicit --repo-root binds source context and child state; --state-root can override; implicit checkout default confers no OCR authority. No service-argument change needed.",
+    "noncomment_LOC_growth": 3,
+    "SCC_memberships_unchanged": true,
+    "targeted_tests": 25,
+    "measurement_source_sha256": "f2a19d2957dc8b76c7611138cd1d61bc1e4724ea2339f821327c4453325dcbfc",
+    "reachability_parser_source_sha256": "9b1df53d045cd61964fe0944797e4f2e7a51fcf0938f6608bb9467301b5eb4bb"
+  },
+  "full_CI_repair": "8686 fullCI found obsolete path exceptions and stalefixture/contracts. Removed7exceptions; cachedcurrentfixture avoidsnewbuilder; exactcatalog/recoveryfixtures fixed;25affectedtests+25rootbindingtests pass; fullCIretry pending.",
+  "trigger_numeric_compatibility": {
+    "source_commit": "864c3923e7fe382d20af95e915a5e0eba546194a",
+    "independent_advisory_score": 96,
+    "independent_review_sha256": "8a79281622c649872d31531354b71fcec95ff0846b161839eaf6bfc1f7f90282",
+    "baseline_before_sha256": "fb6ace6ac156418c9c28201f5f7da5b186cbb7411d8dacc82690a56246faf278",
+    "measurement_source_sha256": "ec17306584a270e4bd93e164c7e9ba482e4a2eb9fa8a86ee08670dc20fc0298d",
+    "executable_module_growth": 0,
+    "noncomment_LOC_growth": 8,
+    "reason": "The existing resolver compares legacy trigger captures with exact SQLite CAST text from the same row. Other capture methods retain exact Decimal comparison. This corrects serialization false positives without a tolerance or financial data rewrite. Unit, source and locator comparisons remain strict.",
+    "author_affected_tests": 182,
+    "financial_rows_written": 0,
+    "independent_boundary": "Exact trigger representation parity on pinned SQLite 3.53.4; no universal binary immutability claim.",
+    "reachability_parser_source_sha256": "bf7de5fae6bbb7e3f2668085cec4e2df085dd8c8954c8dcf7dd16e0bee75aaa3",
+    "test_source_reference_move": {
+      "path": "tests/test_kpi_definition_revisions.py",
+      "old_line": 1203,
+      "new_line": 1273,
+      "behavior": "Unchanged subprocess call moved after new regressions; reachability test expectation follows actual source.",
+      "identical_Call_AST": true
+    }
+  },
+  "native_file_uri_repair": {
+    "source_commit": "e8b730a67c422cd1031dd5827a6f453f5775a463",
+    "independent_advisory_score": 97,
+    "independent_review_sha256": "a86901cd0802f137ba394a85dfa8f2111ed9b5f34d74545bf59eff37eb582d8a",
+    "baseline_before_sha256": "5adf243afe08789d8a83265d3372b49a602313c43611a61481ca4e988ca8df49",
+    "measurement_source_sha256": "05a5210877fd919f21d1a07cf10c2ea41923f41d5d620b62b3c445ea0ba97633",
+    "reachability_parser_source_sha256": "8aee04337cfd7116a1d47e55dc33bbff6377b865060d02be1c4d63dd7485ed6a",
+    "executable_module_growth": 0,
+    "noncomment_LOC_growth": 2,
+    "reason": "The two existing retained-source readers use the standard library file-URI decoder for Windows drive paths. Existing source, size, hash and authority guards remain unchanged. Preparation tests explicitly bind their synthetic database; a new negative preserves the configured-database boundary.",
+    "author_affected_tests": 19,
+    "native_validation": "Pending final-source Windows qualification; no production mutation."
+  }
+}

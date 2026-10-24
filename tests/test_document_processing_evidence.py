@@ -1651,6 +1651,18 @@ def test_pdf_ocr_rejects_partial_required_page_set_then_closes_exactly(
         recorded_at=T2,
     )
     assert receipt.member_count == 2
+    old_members = conn.execute(
+        "SELECT native_commitment_json FROM document_processing_evidence_members "
+        "WHERE evidence_seal_id=? ORDER BY member_ordinal",
+        (receipt.evidence_seal_id,),
+    ).fetchall()
+    # The pre-layout @1 receipt has exactly these four keys. Its sealed bytes
+    # must not acquire nullable layout fields during reconstruction.
+    assert len(old_members) == 2
+    assert all(
+        set(json.loads(str(member[0]))) == {"governance_sha256", "lane", "node_sha256", "result"}
+        for member in old_members
+    )
     assert (
         verify_document_processing_evidence(
             conn,
@@ -1687,7 +1699,7 @@ def test_image_ocr_closes_exact_governance_model_and_output(
         (receipt.evidence_seal_id,),
     ).fetchone()
     assert member is not None
-    assert "governance_sha256" in str(member[0])
+    assert set(json.loads(str(member[0]))) == {"governance_sha256", "lane", "node_sha256", "result"}
 
 
 def test_member_omission_reorder_extra_and_native_loss_are_blocked_or_detected(

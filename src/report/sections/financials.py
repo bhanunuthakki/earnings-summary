@@ -37,6 +37,7 @@ from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import KPI as OVERRIDE_KPI
 from provenance.overrides import OverrideAction, chip_override_map, qualify_note
+from provenance.source_read_context import SourceReadContext
 from report.models import (
     AnnualKpiSeries,
     AnnualLineItem,
@@ -1612,11 +1613,16 @@ def _growth_reference(
 
 
 def read_growth_evidence(
-    conn: sqlite3.Connection, reference: FinancialGrowthReference
+    conn: sqlite3.Connection,
+    reference: FinancialGrowthReference,
+    *,
+    source_context: SourceReadContext | None = None,
 ) -> tuple[float, tuple[FinancialTableCell, ...]] | None:
     """Reconstruct the original calculation through the report admission owner."""
     first = reference.inputs[0]
-    projection = read_financial_table(conn, first.ticker, as_of=first.as_of)
+    projection = read_financial_table(
+        conn, first.ticker, as_of=first.as_of, source_context=source_context
+    )
     selected = {cell.canonical_metric_cell_id: cell for cell in projection.cells if cell.available}
     cells: list[FinancialTableCell] = []
     for expected in reference.inputs:
@@ -1656,6 +1662,7 @@ def build(
     *,
     conn: sqlite3.Connection | None = None,
     as_of: datetime | None = None,
+    source_context: SourceReadContext | None = None,
 ) -> FinancialsSection:
     """Project exact canonical selections; the legacy reader is shadow-only."""
     cutoff = datetime.now(UTC) if as_of is None else as_of
@@ -1675,7 +1682,7 @@ def build(
     original_factory = conn.row_factory
     try:
         conn.row_factory = sqlite3.Row
-        projection = read_financial_table(conn, ticker, as_of=cutoff)
+        projection = read_financial_table(conn, ticker, as_of=cutoff, source_context=source_context)
         quarters = sorted(
             {
                 cell.display_coordinate

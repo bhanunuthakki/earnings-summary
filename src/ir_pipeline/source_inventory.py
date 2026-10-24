@@ -14,7 +14,7 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from pathlib import Path
 from typing import Literal, Self, cast
 
@@ -26,6 +26,18 @@ from ir_pipeline.authority import (
     authority_is_complete,
 )
 from ir_pipeline.discover.generic import DocumentDiscoveryInventory
+from models.documents import DocType
+from pipeline.approved_ir_catalog import CatalogDisposition
+from pipeline.ir_approval_store import (
+    IrAuthorizationError,
+    IrCandidate,
+    authorize_current_candidate,
+    get_candidate,
+)
+from pipeline.issuer_document_inventory import (
+    current_reported_period_review_identity,
+    reviewed_current_period_for_url,
+)
 from provenance.evidence_ledger import (
     ContentBlob,
     EvidenceLedger,
@@ -42,11 +54,18 @@ from provenance.source_coverage_reconcile import (
     SourceCoverageImport,
     reconcile_source_coverage,
 )
+from runtime.deterministic import canonical_json_ascii
 
 _Mode = Literal["dry_run", "apply"]
 _PageOutcome = Literal["succeeded", "robots_denied", "failed"]
 _SCHEMA_VERSION = "ir-discovery-inventory@2"
 _DEFAULT_DOCUMENT_TYPE = "ir_document"
+_REVIEWED_DOCUMENT_TYPES = {
+    DocType.IR_PRESS_RELEASE: "earnings_release",
+    DocType.IR_PRESENTATION: "presentation",
+    DocType.IR_INVESTOR_UPDATE: "earnings_material",
+    DocType.IR_TRANSCRIPT: "earnings_transcript",
+}
 
 
 def _timeline(value: datetime) -> datetime:
@@ -271,6 +290,7 @@ def sync_ir_source_inventory(
         )
     primary_observation_id = artifacts[-1].observation_id
     coverage_request = _coverage_request(
+        conn,
         request,
         primary_observation_id=primary_observation_id,
         page_artifacts=artifacts[:-1],
@@ -460,6 +480,7 @@ def _persist_artifacts(
 
 
 def _coverage_request(
+    conn: sqlite3.Connection,
     request: IRSourceInventoryRequest,
     *,
     primary_observation_id: str,
@@ -539,6 +560,7 @@ def _coverage_request(
 
     expected = tuple(
         _expected_candidate(
+            conn,
             request,
             candidate,
             authoritative=authority_complete,
@@ -568,17 +590,47 @@ def _coverage_request(
 
 
 def _expected_candidate(
+    conn: sqlite3.Connection,
     request: IRSourceInventoryRequest,
     candidate: IRDocumentCandidate,
     *,
     authoritative: bool,
 ) -> ExpectedDocumentImport:
     url_sha = _sha_text(candidate.url)
+    reviewed = reviewed_period_candidate(
+        conn,
+        issuer_id=request.issuer_id,
+        ticker=request.ticker,
+        url=candidate.url,
+        recorded_at=request.recorded_at,
+    )
+    native = reviewed_current_period_for_url(
+        conn,
+        issuer_id=request.issuer_id,
+        ticker=request.ticker,
+        source_url=candidate.url,
+        observed_through=request.recorded_at,
+    )
+    if reviewed is not None and native is not None and reviewed.quarter_end != native.period_end:
+        reviewed = None
+        native = None
+    period_end = (
+        reviewed.quarter_end
+        if reviewed is not None
+        else (native.period_end if native is not None else None)
+    )
     return ExpectedDocumentImport(
         expected_document_key=f"{request.issuer_id}:ir:{url_sha}",
         source_kind="ir_document",
-        document_type=candidate.document_type_guess or _DEFAULT_DOCUMENT_TYPE,
+        document_type=(
+            reviewed_document_type(reviewed)
+            if reviewed is not None
+            else "earnings_release"
+            if native is not None
+            else _DEFAULT_DOCUMENT_TYPE
+        ),
         source_url=candidate.url,
+        period_end=datetime.combine(period_end, time.min) if period_end is not None else None,
         expected_at=request.completed_at,
         expectation_basis="authoritative" if authoritative else "publisher_candidate",
         absence=ExplicitAbsence(
@@ -587,9 +639,90 @@ def _expected_candidate(
             reason_details=(
                 ("candidate_url_sha256", url_sha),
                 ("source_page_sha256", _sha_text(candidate.source_page)),
+            )
+            + (
+                (("period_witness_candidate_id", reviewed.candidate_id),)
+                if reviewed is not None
+                else ()
+            )
+            + (
+                (
+                    ("native_period_document_version_id", native.document_version_id),
+                    (
+                        "native_period_review_node_id",
+                        current_reported_period_review_identity(native)[0],
+                    ),
+                    (
+                        "native_period_review_sha256",
+                        current_reported_period_review_identity(native)[1],
+                    ),
+                )
+                if native is not None
+                else ()
             ),
         ),
     )
+
+
+def reviewed_period_candidate(
+    conn: sqlite3.Connection,
+    *,
+    issuer_id: str,
+    ticker: str,
+    url: str,
+    recorded_at: datetime,
+) -> IrCandidate | None:
+    """Use an exact, still-authorized rendered-link witness; guesses remain untyped."""
+
+    if (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ir_approval_candidates'"
+        ).fetchone()
+        is None
+    ):
+        return None
+    rows = conn.execute(
+        "SELECT candidate_id FROM ir_approval_candidates "
+        "WHERE issuer_id=? AND ticker=? AND candidate_url=? "
+        "AND disposition='ir_document'",
+        (issuer_id, ticker, url),
+    ).fetchall()
+    valid: list[IrCandidate] = []
+    for (candidate_id,) in rows:
+        item = get_candidate(conn, str(candidate_id))
+        if (
+            item is None
+            or item.disposition is not CatalogDisposition.IR_DOCUMENT
+            or _timeline(item.recorded_at) > _timeline(recorded_at)
+        ):
+            continue
+        try:
+            authorize_current_candidate(item)
+        except IrAuthorizationError:
+            continue
+        evidence_json = canonical_json_ascii(
+            [part.model_dump(mode="json") for part in item.evidence]
+        )
+        if _sha_text(evidence_json) != item.evidence_sha256 or not item.evidence:
+            continue
+        source = item.evidence[0]
+        row = conn.execute(
+            "SELECT blob_sha256 FROM evidence_source_observations WHERE observation_id=?",
+            (source.evidence_id,),
+        ).fetchone()
+        if row is None or str(row[0]) != item.observation_raw_sha256:
+            continue
+        if source.content_sha256 != item.observation_raw_sha256:
+            continue
+        valid.append(item)
+    periods = {(item.quarter_end, item.doc_type) for item in valid}
+    if len(periods) != 1:
+        return None
+    return max(valid, key=lambda item: item.recorded_at)
+
+
+def reviewed_document_type(candidate: IrCandidate) -> str:
+    return _REVIEWED_DOCUMENT_TYPES[candidate.doc_type]
 
 
 def _reason_code(value: str) -> str:
@@ -708,3 +841,7 @@ def _authority_component_kind(
     if surface.surface_kind in {"publisher_api", "event_feed"}:
         return "event_feed"
     return "other"
+
+
+# Typed review seam for the existing candidate owner; no second selection path.
+expected_ir_candidate = _expected_candidate

@@ -115,6 +115,7 @@ from dispatch_registry import Registry, RegistryConflict
 from llm.cli import call_llm
 from llm.prompt_registry import PromptTemplate, register
 from llm.structured import call_llm_structured_with_raw
+from provenance.source_read_context import SourceReadContext
 from runtime.python_process import managed_python_prefix
 from search.embedding_promotion import LocalVectorRuntimeConfig
 from search.request_verification import RequestVerificationCache
@@ -603,6 +604,7 @@ def respond_turn(
     repo_root: Path,
     registry: Registry | None = None,
     retrieval_mode: AskRetrievalMode = "legacy",
+    source_context: SourceReadContext | None = None,
 ) -> Iterator[dict[str, object]]:
     """Answer one turn as an event stream (see module docstring)."""
     text = turn.text.strip()
@@ -638,6 +640,7 @@ def respond_turn(
             repo_root=repo_root,
             db_path=db_path,
             mode="sealed",
+            source_context=source_context,
         )
         return
 
@@ -714,6 +717,7 @@ def respond_turn(
             repo_root=repo_root,
             db_path=db_path,
             mode=retrieval_mode,
+            source_context=source_context,
         )
         return
     if retrieval_mode == "grounded":
@@ -1275,6 +1279,7 @@ def _sealed_or_shadow_narrative_events(
     repo_root: Path,
     db_path: Path,
     mode: AskRetrievalMode,
+    source_context: SourceReadContext | None = None,
 ) -> Iterator[dict[str, object]]:
     if mode == "shadow":
         _shadow_retrieval(_retrieval_text(text, turn), turn, pack, db_path=db_path)
@@ -1346,6 +1351,7 @@ def _sealed_or_shadow_narrative_events(
                         start_number=len(evidence) + 1,
                         local_vector_runtime=runtime,
                         verification=verification,
+                        source_context=source_context,
                     )
                 )
             if not evidence:

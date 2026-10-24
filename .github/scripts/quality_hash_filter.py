@@ -118,6 +118,15 @@ _GROUNDED_SEARCH_DIGEST_ASSIGNMENT = re.compile(
     r'[ \t]*expected_bundle_sha256[ \t]*=[ \t]*"[0-9a-f]{64}"[ \t]*(?:\r?\n)?\Z'
 )
 _PATH_HASH_KEYS = {
+    "docs/quality/ocr-reviewed-facts-growth-20261024.json": {
+        "source_commit": 40,
+        "independent_review_sha256": 64,
+        "baseline_before_sha256": 64,
+        "measurement_source_sha256": 64,
+        "reachability_parser_source_sha256": 64,
+        "old_fingerprint": 64,
+        "new_fingerprint": 64,
+    },
     "docs/quality/pdf-6212-architecture-growth-20261023.json": {
         "scoped_commit": 40,
         "baseline_commit": 40,

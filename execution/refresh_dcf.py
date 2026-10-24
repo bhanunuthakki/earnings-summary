@@ -1119,7 +1119,7 @@ def _refresh_meli_sotp(
             "reason": "model_input_source_context_unavailable",
         }
     try:
-        SourceReadContext.for_sec_state_root(source_state_root)
+        SourceReadContext.for_product_state_root(source_state_root)
     except ValueError:
         return {
             "ticker": ticker.upper(),
@@ -1212,7 +1212,7 @@ def _refresh_onon(
             "reason": "model_input_source_context_unavailable",
         }
     try:
-        SourceReadContext.for_sec_state_root(source_state_root)
+        SourceReadContext.for_product_state_root(source_state_root)
     except ValueError:
         return {
             "ticker": ticker.upper(),

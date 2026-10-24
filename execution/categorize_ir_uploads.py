@@ -129,7 +129,11 @@ def _load_url_overrides(path: Path) -> dict[str, str]:
         return {}
     if not isinstance(data, dict):
         return {}
-    return {str(k): str(v) for k, v in cast("dict[str, object]", data).items()}
+    return {
+        str(k): v
+        for k, v in cast("dict[str, object]", data).items()
+        if isinstance(v, str) and not str(k).startswith("__")
+    }
 
 
 def _insert_document_row(

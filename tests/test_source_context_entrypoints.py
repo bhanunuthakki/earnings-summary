@@ -47,7 +47,7 @@ def test_advisor_entrypoint_forwards_explicit_state_authority(
         def questions(_root: Path, ticker: str, **kwargs: object) -> socratic.SocraticPrelude:
             supplied = kwargs.get("source_context")
             seen.append(supplied)
-            assert supplied == SourceReadContext.for_sec_state_root(state)
+            assert supplied == SourceReadContext.for_product_state_root(state)
             return socratic.SocraticPrelude(
                 ticker=ticker, questions=["one?", "two?", "three?"], context_block="synthetic"
             )
@@ -62,7 +62,7 @@ def test_advisor_entrypoint_forwards_explicit_state_authority(
             ["ONON", "--repo-root", str(code), "--state-root", str(state)]
         )
     assert result == 0
-    assert seen == [SourceReadContext.for_sec_state_root(state)]
+    assert seen == [SourceReadContext.for_product_state_root(state)]
 
 
 def test_dashboard_source_authority_reaches_supported_child_arguments(
@@ -207,7 +207,7 @@ def test_decision_entrypoints_use_only_explicit_source_byte_authority(
     output.mkdir()
     database = tmp_path / "database-authority" / "synthetic.db"
     sources = tmp_path / "source-authority"
-    expected = SourceReadContext.for_sec_state_root(sources) if binding != "absent" else None
+    expected = SourceReadContext.for_product_state_root(sources) if binding != "absent" else None
     seen: list[SourceReadContext | None] = []
     monkeypatch.delenv("DCF_SOURCE_STATE_ROOT", raising=False)
     if binding == "environment":
@@ -242,7 +242,7 @@ def test_decision_entrypoints_use_only_explicit_source_byte_authority(
         assert request.repo_root == output and request.database == database
         assert request.source_state_root == (sources if binding != "absent" else None)
         seen.append(
-            SourceReadContext.for_sec_state_root(request.source_state_root)
+            SourceReadContext.for_product_state_root(request.source_state_root)
             if request.source_state_root is not None
             else None
         )

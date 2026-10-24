@@ -449,6 +449,29 @@ class CanonicalFactSelectionAsKnown(_CutoverModel):
     locator_json: str | None
 
 
+class FactCompatibilityDriftSample(_CutoverModel):
+    """Value-free identity and names of fields that differ at one selection."""
+
+    fact_table: FactTable
+    fact_row_id: int = Field(gt=0)
+    fact_revision: int = Field(gt=0)
+    observation_id: str
+    resolution_id: str
+    resolution_revision: int = Field(gt=0)
+    ticker: str
+    mismatch_fields: tuple[str, ...]
+
+
+class FactCompatibilityDriftReceipt(_CutoverModel):
+    """Complete selected-row count with bounded value-free examples."""
+
+    scanned_count: int = Field(ge=0)
+    selected_count: int = Field(ge=0)
+    drift_count: int = Field(ge=0)
+    sample_complete: bool
+    samples: tuple[FactCompatibilityDriftSample, ...]
+
+
 class GovernedDocumentFactAdmission(_CutoverModel):
     """Canonical proof that one exact evidence-backed document owns admitted facts."""
 
@@ -809,6 +832,82 @@ def canonical_fact_selections_as_known(
     known_at: datetime,
     concept_keys: Sequence[str] = (),
 ) -> tuple[CanonicalFactSelectionAsKnown, ...]:
+    """Return exact selections, rejecting any selected compatibility-row drift."""
+
+    if effective_at.tzinfo is None or known_at.tzinfo is None:
+        raise ValueError("fact-resolution cutoffs must be timezone-aware")
+    try:
+        return _canonical_fact_selections_as_known_snapshot(
+            conn,
+            fact_table=fact_table,
+            effective_at=effective_at,
+            known_at=known_at,
+            concept_keys=concept_keys,
+        )
+    except (ValueError, TypeError, OverflowError, InvalidOperation, sqlite3.Error):
+        raise HistoricalFactAuthorityUnavailableError(
+            "selected fact compatibility authority is malformed"
+        ) from None
+
+
+def diagnose_fact_compatibility_drift_as_known(
+    conn: sqlite3.Connection,
+    *,
+    fact_table: FactTable,
+    effective_at: datetime,
+    known_at: datetime,
+    sample_limit: int,
+    concept_keys: Sequence[str] = (),
+) -> FactCompatibilityDriftReceipt:
+    """Inspect the same selected rows in one snapshot without returning values."""
+
+    if sample_limit < 1 or sample_limit > 500:
+        raise ValueError("sample_limit must be between 1 and 500")
+    samples: list[FactCompatibilityDriftSample] = []
+    counts = [0, 0, 0]  # latest keys scanned, selected, drifted
+    conn.execute("SAVEPOINT fact_compatibility_drift_read")
+    try:
+        _canonical_fact_selections_as_known_snapshot(
+            conn,
+            fact_table=fact_table,
+            effective_at=effective_at,
+            known_at=known_at,
+            concept_keys=concept_keys,
+            drift_samples=samples,
+            drift_counts=counts,
+            sample_limit=sample_limit,
+        )
+    except (ValueError, TypeError, OverflowError, InvalidOperation, sqlite3.Error):
+        conn.execute("ROLLBACK TO SAVEPOINT fact_compatibility_drift_read")
+        conn.execute("RELEASE SAVEPOINT fact_compatibility_drift_read")
+        raise HistoricalFactAuthorityUnavailableError(
+            "selected fact compatibility authority is malformed"
+        ) from None
+    except BaseException:
+        conn.execute("ROLLBACK TO SAVEPOINT fact_compatibility_drift_read")
+        conn.execute("RELEASE SAVEPOINT fact_compatibility_drift_read")
+        raise
+    conn.execute("RELEASE SAVEPOINT fact_compatibility_drift_read")
+    return FactCompatibilityDriftReceipt(
+        scanned_count=counts[0],
+        selected_count=counts[1],
+        drift_count=counts[2],
+        sample_complete=counts[2] <= sample_limit,
+        samples=tuple(samples),
+    )
+
+
+def _canonical_fact_selections_as_known_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    fact_table: FactTable,
+    effective_at: datetime,
+    known_at: datetime,
+    concept_keys: Sequence[str] = (),
+    drift_samples: list[FactCompatibilityDriftSample] | None = None,
+    drift_counts: list[int] | None = None,
+    sample_limit: int = 0,
+) -> tuple[CanonicalFactSelectionAsKnown, ...]:
     """Return exact fact, observation, and resolution identities as known.
 
     This is the typed form of :func:`canonical_fact_row_ids_as_known`. It keeps
@@ -851,6 +950,7 @@ def canonical_fact_selections_as_known(
             "period_end",
             "fiscal_period_type",
             "numeric_value",
+            "method_version",
             "currency",
             "unit",
             "available_at",
@@ -870,7 +970,6 @@ def canonical_fact_selections_as_known(
     if known_at.tzinfo is None or effective_at.tzinfo is None:
         raise ValueError("fact-resolution cutoffs must be timezone-aware")
     cutoff = known_at.isoformat()
-    effective_cutoff = effective_at.isoformat()
     semantic_quarantine = semantic_quarantine_available(conn)
     quarantine = (
         "CASE WHEN "
@@ -889,7 +988,7 @@ def canonical_fact_selections_as_known(
     parameters: dict[str, object] = {
         "fact_table": fact_table,
         "cutoff": cutoff,
-        "effective_cutoff": effective_cutoff,
+        "logical_prefix": f"{fact_table}:",
     }
     concept_predicate = ""
     if concept_keys:
@@ -898,82 +997,166 @@ def canonical_fact_selections_as_known(
             name = f"concept_key_{index}"
             concept_names.append(f":{name}")
             parameters[name] = concept_key
-        concept_predicate = f"AND observation.concept_key IN ({','.join(concept_names)}) "
+        concept_predicate = (
+            f"AND (observation.concept_key IN ({','.join(concept_names)}) "
+            "OR observation.observation_id IS NULL) "
+        )
     rows = conn.execute(
         "SELECT resolution.resolution_id,resolution.logical_key,"  # nosec B608 -- only generated named placeholders are interpolated; values stay bound
-        "resolution.revision AS resolution_revision,outcome.resolution_status,"
+        "resolution.revision AS resolution_revision,"
+        "resolution.knowledge_cutoff,resolution.effective_at,"
+        "resolution.recorded_at AS resolution_recorded_at,"
+        "outcome.resolution_id AS outcome_id,outcome.resolution_status,"
+        "outcome.recorded_at AS outcome_recorded_at,"
         + quarantine
-        + "link.fact_row_id,link.fact_revision,link.source_document_id,link.locator_json,"
+        + "link.fact_table AS linked_fact_table,link.fact_row_id,link.fact_revision,"
+        "link.source_document_id,link.locator_json,"
         "link.captured_at,observation.observation_id,observation.ticker,observation.concept_key,"
         "observation.period_end,observation.fiscal_period_type,"
-        "observation.numeric_value,observation.currency,observation.unit "
+        "observation.numeric_value,observation.method_version,"
+        "observation.currency,observation.unit,"
+        "observation.available_at,observation.recorded_at AS observation_recorded_at "
         "FROM observation_resolution_revisions resolution "
-        "JOIN fact_resolution_outcomes outcome "
+        "LEFT JOIN fact_resolution_outcomes outcome "
         "ON outcome.resolution_id=resolution.resolution_id "
-        "JOIN fact_observation_revisions link "
+        "LEFT JOIN fact_observation_revisions link "
         "ON link.observation_id=resolution.selected_observation_id "
-        "JOIN reported_observations observation "
+        "LEFT JOIN reported_observations observation "
         "ON observation.observation_id=resolution.selected_observation_id "
         + evidence_joins
-        + "WHERE link.fact_table=:fact_table "
+        + "WHERE (link.fact_table=:fact_table OR (link.observation_id IS NULL "
+        "AND (substr(resolution.logical_key,1,length(:logical_prefix))=:logical_prefix "
+        "OR EXISTS (SELECT 1 FROM fact_observation_revisions prior_link "
+        "WHERE prior_link.logical_key=resolution.logical_key "
+        "AND prior_link.fact_table=:fact_table)))) "
         + concept_predicate
-        + "AND datetime(observation.period_end)<=datetime(:effective_cutoff) "
-        "AND datetime(resolution.knowledge_cutoff)<=datetime(:cutoff) "
-        "AND datetime(resolution.effective_at)<=datetime(:cutoff) "
-        "AND datetime(resolution.recorded_at)<=datetime(:cutoff) "
-        "AND datetime(outcome.recorded_at)<=datetime(:cutoff) "
-        "AND datetime(link.captured_at)<=datetime(:cutoff) "
-        "AND datetime(observation.available_at)<=datetime(:cutoff) "
-        "AND datetime(observation.recorded_at)<=datetime(:cutoff) "
-        "ORDER BY resolution.logical_key,resolution.revision",
+        + "ORDER BY resolution.logical_key,resolution.revision",
         parameters,
     ).fetchall()
     latest_by_key: dict[str, sqlite3.Row] = {}
+    known_instant = _utc_instant(known_at)
+    effective_instant = _utc_instant(effective_at)
     for row in rows:
         if not isinstance(row, sqlite3.Row):
             raise HistoricalFactAuthorityUnavailableError(
                 "fact-resolution history requires sqlite3.Row"
             )
-        latest_by_key[str(row["logical_key"])] = row
-    selections: list[CanonicalFactSelectionAsKnown] = []
-    for row in latest_by_key.values():
-        if str(row["resolution_status"]) != "resolved":
+        resolution_clocks = tuple(
+            _utc_instant(_datetime(row[field], field=field))
+            for field in ("knowledge_cutoff", "effective_at", "resolution_recorded_at")
+        )
+        if any(clock > known_instant for clock in resolution_clocks):
             continue
-        if int(row["source_quarantined"]) == 1:
-            continue
-        fact_row_id = int(row["fact_row_id"])
-        if fact_table == "kpi_facts" and semantic_quarantine:
-            derived_quarantine = _derived_source_quarantine_sql("fact", as_known=True)
-            if (
-                conn.execute(
-                    f"SELECT 1 FROM kpi_facts AS fact WHERE fact.id=:fact_row_id "  # nosec B608 -- resolver-owned SQL predicate
-                    f"AND {derived_quarantine}",
-                    {"fact_row_id": fact_row_id, "cutoff": cutoff},
-                ).fetchone()
-                is not None
-            ):
-                continue
-        fact = _fact_row(conn, fact_table, fact_row_id)
-        immutable_matches = (
-            str(row["ticker"]).upper() == str(fact["ticker"]).upper()
-            and str(row["concept_key"]) == _concept_key(fact_table, fact)
-            and _datetime(row["period_end"], field="observation period_end")
-            == _datetime(fact["period_end"], field="fact period_end")
-            and str(row["fiscal_period_type"])
-            == _observation_period_type(str(fact["fiscal_period_type"]))
-            and _canonical_decimal(row["numeric_value"]) == _canonical_decimal(fact["value"])
-            and str(row["unit"]) == str(fact["unit"])
-            and int(row["source_document_id"]) == int(fact["source_doc_id"])
-            and _optional_text(row["locator_json"]) == _optional_text(fact["locator"])
-            and (
-                fact_table == "kpi_facts"
-                or _optional_text(row["currency"]) == _optional_text(fact["currency"])
+        if (
+            row["outcome_id"] is None
+            or row["linked_fact_table"] != fact_table
+            or row["observation_id"] is None
+        ):
+            raise HistoricalFactAuthorityUnavailableError(
+                "selected immutable fact-resolution authority is incomplete"
+            )
+        if str(row["resolution_status"]) not in {"resolved", "unresolved_material"}:
+            raise HistoricalFactAuthorityUnavailableError(
+                "selected immutable fact-resolution status is invalid"
+            )
+        observed_period = _utc_instant(_datetime(row["period_end"], field="period_end"))
+        observed_clocks = tuple(
+            _utc_instant(_datetime(row[field], field=field))
+            for field in (
+                "outcome_recorded_at",
+                "captured_at",
+                "available_at",
+                "observation_recorded_at",
             )
         )
-        if not immutable_matches:
-            raise HistoricalFactAuthorityUnavailableError(
-                "selected immutable observation differs from its mutable compatibility row"
+        if observed_period > effective_instant or any(
+            clock > known_instant for clock in observed_clocks
+        ):
+            continue
+        latest_by_key[str(row["logical_key"])] = row
+    if drift_counts is not None:
+        drift_counts[0] = len(latest_by_key)
+    eligible_rows = [
+        row
+        for row in latest_by_key.values()
+        if str(row["resolution_status"]) == "resolved" and int(row["source_quarantined"]) == 0
+    ]
+    if fact_table == "kpi_facts" and semantic_quarantine and eligible_rows:
+        derived_quarantine = _derived_source_quarantine_sql("fact", as_known=True)
+        quarantined_ids: set[int] = set()
+        for start in range(0, len(eligible_rows), 400):
+            batch = eligible_rows[start : start + 400]
+            marks = ",".join(f":fact_id_{index}" for index in range(len(batch)))
+            params: dict[str, object] = {"cutoff": cutoff}
+            params.update(
+                {f"fact_id_{index}": int(row["fact_row_id"]) for index, row in enumerate(batch)}
             )
+            quarantined_ids.update(
+                int(row[0])
+                for row in conn.execute(
+                    f"SELECT fact.id FROM kpi_facts AS fact WHERE fact.id IN ({marks}) "  # nosec B608 -- generated identifiers and bound IDs
+                    f"AND {derived_quarantine}",
+                    params,
+                )
+            )
+        eligible_rows = [
+            row for row in eligible_rows if int(row["fact_row_id"]) not in quarantined_ids
+        ]
+    if drift_counts is not None:
+        drift_counts[1] = len(eligible_rows)
+    facts_by_id = _fact_rows_by_ids(
+        conn, fact_table, [int(row["fact_row_id"]) for row in eligible_rows]
+    )
+    selections: list[CanonicalFactSelectionAsKnown] = []
+    for row in eligible_rows:
+        fact_row_id = int(row["fact_row_id"])
+        fact = facts_by_id.get(fact_row_id)
+        if fact is None:
+            raise HistoricalFactAuthorityUnavailableError(
+                "selected compatibility fact row is unavailable"
+            )
+        comparisons = {
+            "ticker": str(row["ticker"]).upper() == str(fact["ticker"]).upper(),
+            "concept_key": str(row["concept_key"]) == _concept_key(fact_table, fact),
+            "period_end": _datetime(row["period_end"], field="observation period_end")
+            == _datetime(fact["period_end"], field="fact period_end"),
+            "fiscal_period_type": str(row["fiscal_period_type"])
+            == _observation_period_type(str(fact["fiscal_period_type"])),
+            "numeric_value": _canonical_decimal(row["numeric_value"])
+            == _canonical_decimal(
+                fact["sqlite_value_text"]
+                if row["method_version"] == "0231-trigger-v1"
+                else fact["value"]
+            ),
+            "unit": str(row["unit"]) == str(fact["unit"]),
+            "source_document_id": int(row["source_document_id"]) == int(fact["source_doc_id"]),
+            "locator_json": _optional_text(row["locator_json"]) == _optional_text(fact["locator"]),
+        }
+        if fact_table == "financial_facts":
+            comparisons["currency"] = _optional_text(row["currency"]) == _optional_text(
+                fact["currency"]
+            )
+        mismatch_fields = tuple(name for name, matches in comparisons.items() if not matches)
+        if mismatch_fields:
+            if drift_counts is None or drift_samples is None:
+                raise HistoricalFactAuthorityUnavailableError(
+                    "selected immutable observation differs from its mutable compatibility row"
+                )
+            drift_counts[2] += 1
+            if len(drift_samples) < sample_limit:
+                drift_samples.append(
+                    FactCompatibilityDriftSample(
+                        fact_table=fact_table,
+                        fact_row_id=fact_row_id,
+                        fact_revision=int(row["fact_revision"]),
+                        observation_id=str(row["observation_id"]),
+                        resolution_id=str(row["resolution_id"]),
+                        resolution_revision=int(row["resolution_revision"]),
+                        ticker=str(row["ticker"]),
+                        mismatch_fields=mismatch_fields,
+                    )
+                )
+            continue
         selections.append(
             CanonicalFactSelectionAsKnown(
                 fact_row_id=fact_row_id,
@@ -1531,6 +1714,39 @@ def _plan_fact_row(
         captured_at=captured_at,
         match_revision_id=match_revision_id,
     )
+
+
+def _fact_rows_by_ids(
+    conn: sqlite3.Connection, fact_table: FactTable, row_ids: Sequence[int]
+) -> dict[int, sqlite3.Row]:
+    """Read selected compatibility rows in bounded batches within one snapshot."""
+
+    if fact_table not in _TABLES:
+        raise ValueError("unsupported fact table")
+    result: dict[int, sqlite3.Row] = {}
+    unique_ids = tuple(dict.fromkeys(row_ids))
+    columns = (
+        "id,ticker,period_end,fiscal_period_type,line_item,value,currency,unit,"
+        "source_doc_id,confidence,extracted_by,locator,NULL AS computed_from,"
+        "CAST(value AS TEXT) AS sqlite_value_text"
+        if fact_table == "financial_facts"
+        else "id,ticker,period_end,fiscal_period_type,kpi_definition_id,value,"
+        "NULL AS currency,unit,source_doc_id,confidence,extracted_by,locator,computed_from,"
+        "CAST(value AS TEXT) AS sqlite_value_text"
+    )
+    for start in range(0, len(unique_ids), 400):
+        batch = unique_ids[start : start + 400]
+        marks = ",".join("?" for _ in batch)
+        for row in conn.execute(
+            f"SELECT {columns} FROM {fact_table} WHERE id IN ({marks})",  # nosec B608 -- validated table, fixed columns, generated placeholders
+            batch,
+        ):
+            if not isinstance(row, sqlite3.Row):
+                raise HistoricalFactAuthorityUnavailableError(
+                    "fact cutover requires sqlite3.Row row_factory"
+                )
+            result[int(row["id"])] = row
+    return result
 
 
 def _fact_row(conn: sqlite3.Connection, fact_table: FactTable, row_id: int) -> sqlite3.Row:

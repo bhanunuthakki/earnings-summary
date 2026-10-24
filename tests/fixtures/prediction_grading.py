@@ -76,7 +76,7 @@ def admit_prediction_facts(conn: sqlite3.Connection) -> None:
             key = f"logical-{fact_id}"
             conn.execute("UPDATE kpi_facts SET locator=? WHERE id=?", ('{"pdf_page":7}', fact_id))
             conn.execute(
-                "INSERT INTO reported_observations VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO reported_observations VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     observation,
                     "AMAT",
@@ -88,6 +88,7 @@ def admit_prediction_facts(conn: sqlite3.Connection) -> None:
                     "percent",
                     clock,
                     clock,
+                    "fixture-v1",
                 ),
             )
             conn.execute(

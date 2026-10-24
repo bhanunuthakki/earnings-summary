@@ -6,7 +6,7 @@ import hashlib
 import ipaddress
 import re
 import sqlite3
-from datetime import date
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -20,6 +20,12 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 POLICY_VERSION = "2026-09-19.1"
 _DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def current_utc_date() -> date:
+    """Use the evidence clock's UTC day for current source-window requests."""
+
+    return datetime.now(UTC).date()
 
 
 def _canonical_dns_host(host: str) -> str | None:
@@ -743,6 +749,38 @@ def reported_quarter_is_in_window(
                 completed.append((period_end, year, quarter))
     newest = sorted(completed, reverse=True)[:max_quarters]
     return any(year == fiscal_year and quarter == fiscal_quarter for _, year, quarter in newest)
+
+
+class ReportedPeriodStatus(StrEnum):
+    COMPLETE = "complete"
+    UNKNOWN = "unknown"
+    STALE = "stale"
+    AMBIGUOUS = "ambiguous"
+
+
+class ReportedPeriodWindow(BaseModel):
+    """Source-bound current window; only COMPLETE can exclude a target."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    status: ReportedPeriodStatus
+    period_ends: tuple[date, ...] = ()
+    snapshot_ids: tuple[str, ...] = ()
+    fiscal_year_end: str | None = None
+    proof_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    reason: str
+
+    @model_validator(mode="after")
+    def _complete_proof(self) -> ReportedPeriodWindow:
+        if self.status is ReportedPeriodStatus.COMPLETE and (
+            not self.period_ends or self.proof_sha256 is None or self.fiscal_year_end is None
+        ):
+            raise ValueError("complete reported window requires source proof identity")
+        return self
+
+    def includes(self, period_end: date) -> bool | None:
+        return (
+            period_end in self.period_ends if self.status is ReportedPeriodStatus.COMPLETE else None
+        )
 
 
 def _reviewed_policies() -> tuple[IssuerAcquisitionPolicy, ...]:

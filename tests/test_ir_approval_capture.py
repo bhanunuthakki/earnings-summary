@@ -35,10 +35,7 @@ from pipeline.ir_approval_store import (
 from pipeline.source_policy import issuer_policy
 
 FIXTURE = Path(__file__).parent / "fixtures" / "approved_ir" / "rubrik_rows_sanitized.json"
-URL = (
-    "https://s203.q4cdn.com/667520861/files/doc_financials/2027/q1/"
-    "RBRK-Q1-FY27-Investor-Presentation-FINAL.pdf"
-)
+URL = "https://ir.rubrik.com/static-files/rbrk-fy27-q2-presentation.pdf"
 NOW = datetime(2026, 8, 12, 15, 0, 0)
 PDF = b"%PDF-1.7\nserver-owned exact bytes\n%%EOF\n"
 
@@ -75,7 +72,6 @@ class Session:
 
 def _approved_candidate(path: Path) -> str:
     payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    payload[0]["links"][0].update(url=URL, declared_kind="presentation")
     policy = issuer_policy("RBRK")
     observations = load_rubrik_row_observations(json.dumps(payload))
     catalog = build_catalog(policy, parse_rubrik_quarter_rows(observations, policy=policy))
@@ -277,7 +273,7 @@ def test_exact_capture_never_dereferences_even_an_authorized_redirect(
 ) -> None:
     path = migrated_db(tmp_path / "redirect.db")
     candidate_id = _approved_candidate(path)
-    session = Session([Response(302, Location=URL.replace("FINAL.pdf", "v2.pdf"))])
+    session = Session([Response(302, Location=URL.replace(".pdf", "-v2.pdf"))])
     with pytest.raises(ExactIrCaptureError, match="redirect_budget_exhausted"):
         _run(path, tmp_path, candidate_id, session, "rbrk-no-redirect")
     assert session.urls == [URL]
