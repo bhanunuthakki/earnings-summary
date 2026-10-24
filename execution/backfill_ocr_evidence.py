@@ -18,6 +18,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from provenance.ocr_extraction import (  # noqa: E402
     OCRBackfillRequest,
+    OCRPageSelection,
     TesseractCLIProvider,
     backfill_ocr_evidence,
 )
@@ -48,6 +49,12 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         dest="document_version_ids",
         help="Explicit evidence-native document version; repeat for a bounded targeted run",
+    )
+    parser.add_argument(
+        "--page-selection",
+        action="append",
+        default=[],
+        help="Exact OCRPageSelection JSON; repeat for explicit image pages",
     )
     parser.add_argument(
         "--language",
@@ -99,6 +106,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.preflight_only and not args.apply:
         parser.error("--preflight-only requires --apply")
+    if args.preflight_only and args.page_selection:
+        parser.error("--preflight-only cannot persist explicit page selections")
     if args.preflight_only and args.tessdata_dir is not None:
         parser.error("--preflight-only and --tessdata-dir are mutually exclusive")
 
@@ -111,6 +120,9 @@ def main(argv: list[str] | None = None) -> int:
         task_id=args.task_id,
         source_lane=args.source_lane,
         document_version_ids=tuple(args.document_version_ids or ()),
+        page_selections=tuple(
+            OCRPageSelection.model_validate_json(value) for value in args.page_selection
+        ),
         languages=languages,
         minimum_native_characters=args.minimum_native_characters,
         minimum_mean_confidence=args.minimum_mean_confidence,

@@ -22,7 +22,6 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-import unicodedata
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,7 +42,9 @@ from provenance.evidence_native_candidates import (
     select_evidence_native_candidates,
     select_evidence_native_candidates_by_id,
 )
+from provenance.pdf_table_extraction import PdfTableExtractionArtifact
 from runtime.deterministic import canonical_json as _canonical_json
+from runtime.deterministic import normalize_extracted_text as normalize_extracted_text
 from runtime.deterministic import sha256_text as _sha256_text
 
 _EXTRACTOR_NAME = "governed-pdf-ocr"
@@ -69,6 +70,19 @@ def _validate_sha256(value: str) -> str:
     return normalized
 
 
+class OCRPageSelection(BaseModel):
+    """Operator-selected image page, bound to an existing verified table inventory."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    document_version_id: str = Field(min_length=1, max_length=128)
+    source_sha256: str = Field(pattern=_SHA256_PATTERN)
+    artifact_id: str = Field(min_length=1, max_length=128)
+    artifact_sha256: str = Field(pattern=_SHA256_PATTERN)
+    page_number: int = Field(gt=0)
+    page_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+
 class OCRBackfillRequest(BaseModel):
     """Validated controls for one bounded, dry-run-first OCR batch."""
 
@@ -81,6 +95,7 @@ class OCRBackfillRequest(BaseModel):
     source_lane: _SourceLane = "legacy"
     task_id: str = Field(default="ocr-evidence-backfill", pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
     document_version_ids: tuple[str, ...] = ()
+    page_selections: tuple[OCRPageSelection, ...] = Field(default=(), max_length=1_000)
     languages: tuple[str, ...] = ("eng",)
     minimum_native_characters: int = Field(default=32, ge=1, le=10_000)
     minimum_mean_confidence: float = Field(default=50.0, ge=0.0, le=100.0)
@@ -106,6 +121,18 @@ class OCRBackfillRequest(BaseModel):
             raise ValueError("explicit document versions require the evidence_native lane")
         if len(self.document_version_ids) > self.batch_size:
             raise ValueError("explicit document versions cannot exceed batch_size")
+        keys = [(page.document_version_id, page.page_number) for page in self.page_selections]
+        if len(keys) != len(set(keys)):
+            raise ValueError("OCR page selections must be unique")
+        if self.page_selections and (
+            self.source_lane != "evidence_native"
+            or not self.document_version_ids
+            or any(
+                page.document_version_id not in self.document_version_ids
+                for page in self.page_selections
+            )
+        ):
+            raise ValueError("OCR page selections require explicitly targeted evidence documents")
         return self
 
 
@@ -149,6 +176,7 @@ class OCRBackfillSummary(BaseModel):
     records_created: int = 0
     records_replayed: int = 0
     finding_counts: dict[str, int] = Field(default_factory=dict[str, int])
+    verified_page_selections: list[OCRPageSelection] = Field(default_factory=list[OCRPageSelection])
 
 
 class PDFPreflightPage(BaseModel):
@@ -487,6 +515,8 @@ def backfill_ocr_evidence(
 ) -> OCRBackfillSummary:
     """Assess and optionally OCR one bounded batch with one writer transaction."""
 
+    if request.apply and request.page_selections and provider is None:
+        raise OCRProviderError("selected_ocr_requires_provider")
     _require_tables(conn, request.source_lane)
     root = request.repo_root.resolve()
     allowed_roots = _allowed_content_roots(request, root)
@@ -592,6 +622,64 @@ def backfill_ocr_evidence(
     return summary
 
 
+def _selected_page_preflight(
+    conn: sqlite3.Connection,
+    candidate: _DocumentCandidate,
+    request: OCRBackfillRequest,
+    preflight: PDFPreflight,
+) -> PDFPreflight:
+    selections = [
+        item
+        for item in request.page_selections
+        if item.document_version_id == candidate.document_version_id
+    ]
+    if not selections:
+        return preflight
+    # The full evidence verifier is needed only for explicit table-bound selections.
+    from provenance.document_processing_evidence import read_pdf_table_artifact
+
+    if preflight.outcome not in {"native_sufficient", "ocr_required"}:
+        raise OCRProviderError("selected_ocr_preflight_unreadable")
+    artifacts: dict[str, PdfTableExtractionArtifact] = {}
+    for item in selections:
+        if item.artifact_id not in artifacts:
+            artifacts[item.artifact_id] = read_pdf_table_artifact(
+                conn,
+                document_version_id=item.document_version_id,
+                artifact_id=item.artifact_id,
+                cutoff_at=datetime.now(UTC),
+            )
+        artifact = artifacts[item.artifact_id]
+        if (
+            item.source_sha256 != candidate.blob_sha256
+            or artifact.raw_pdf_sha256 != item.source_sha256
+            or _canonical_sha256(artifact.model_dump(mode="json")) != item.artifact_sha256
+            or artifact.pdf_page_count != preflight.page_count
+            or len(artifact.pages) != preflight.page_count
+            or item.page_number > preflight.page_count
+        ):
+            raise OCRProviderError("selected_ocr_artifact_mismatch")
+        page = artifact.pages[item.page_number - 1]
+        if (
+            _canonical_sha256(page.model_dump(mode="json")) != item.page_sha256
+            or page.disposition != "quarantined"
+            or page.quarantine_reason not in {"scanned_page", "image_only_page"}
+        ):
+            raise OCRProviderError("selected_ocr_page_mismatch")
+    selected = {item.page_number for item in selections}
+    return PDFPreflight(
+        outcome="ocr_required",
+        page_count=preflight.page_count,
+        pages=[
+            page.model_copy(
+                update={"requires_ocr": page.requires_ocr or page.page_number in selected}
+            )
+            for page in preflight.pages
+        ],
+        native_output_sha256=preflight.native_output_sha256,
+    )
+
+
 def _plan_candidate(
     conn: sqlite3.Connection,
     candidate: _DocumentCandidate,
@@ -614,6 +702,12 @@ def _plan_candidate(
         preflight = inspector.inspect(
             raw_bytes, minimum_native_characters=request.minimum_native_characters
         )
+    preflight = _selected_page_preflight(conn, candidate, request, preflight)
+    summary.verified_page_selections.extend(
+        item
+        for item in request.page_selections
+        if item.document_version_id == candidate.document_version_id
+    )
     summary.records_planned += 1 + len(preflight.pages)
     if preflight.outcome == "native_sufficient":
         summary.documents_native_sufficient += 1
@@ -1091,8 +1185,24 @@ def _detector_config_sha256(request: OCRBackfillRequest) -> str:
             "detector_code_version": _DETECTOR_CODE_VERSION,
             "minimum_native_characters": request.minimum_native_characters,
             "normalization_version": _NORMALIZATION_VERSION,
+            **_page_selection_config(request),
         }
     )
+
+
+def _page_selection_config(request: OCRBackfillRequest) -> dict[str, object]:
+    if not request.page_selections:
+        return {}
+    return {
+        "page_selection_policy": "pinned-image-quarantine@1",
+        "page_selections": [
+            item.model_dump(mode="json")
+            for item in sorted(
+                request.page_selections,
+                key=lambda item: (item.document_version_id, item.page_number),
+            )
+        ],
+    }
 
 
 def _ocr_config_json(request: OCRBackfillRequest, descriptor: OCREngineDescriptor) -> str:
@@ -1106,6 +1216,7 @@ def _ocr_config_json(request: OCRBackfillRequest, descriptor: OCREngineDescripto
             "normalization_version": _NORMALIZATION_VERSION,
             "page_segmentation_mode": request.page_segmentation_mode,
             "timeout_seconds": request.timeout_seconds,
+            **_page_selection_config(request),
         }
     )
 
@@ -1375,12 +1486,6 @@ def _stable_token(value: str) -> str:
 
 def _canonical_sha256(value: object) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
-
-
-def normalize_extracted_text(text: str) -> str:
-    """Apply the shared nfkc-lines-v1 preflight and OCR text normalization."""
-    normalized = unicodedata.normalize("NFKC", text).replace("\r\n", "\n").replace("\r", "\n")
-    return "\n".join(line.rstrip() for line in normalized.split("\n")).strip()
 
 
 def _substantive_character_count(text: str) -> int:
