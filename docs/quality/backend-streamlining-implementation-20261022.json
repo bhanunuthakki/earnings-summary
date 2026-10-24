@@ -4418,7 +4418,7 @@
     "next": "Source-only feature-cut options for concrete owner usage decisions"
   },
   "next_feature_owner_question_20261024": {
-    "state": "OWNER_USAGE_QUESTION_PENDING;NO_REMOVAL_APPROVED",
+    "state": "RESOLVED_OWNER_RETAIN_ON_DEMAND",
     "feature": "New ETF Role in portfolio narrative generation only",
     "where": "Evaluation -> ETF workup",
     "question": "Use the generated role summary, verdict, suggested weight and watch items, or retire new generation and retain saved versions?",
@@ -4426,6 +4426,70 @@
     "independent_scope_assessment": ".tmp/cleanup-open-model-execution/etf-workup-option-sol-assessment.json",
     "no_deletion_credit": "526 physical lines across three owners are not a qualified cut; evidence blocks and saved-artifact readers stay",
     "next_if_approved": "Concrete bounded PRD -> independent Sol >85 -> DeepSeek implementation -> deterministic proof -> independent Sol >85 before CI/merge",
-    "next_if_kept": "Keep generation; do not reinterpret lack of static usage evidence as unused"
+    "next_if_kept": "Keep generation; do not reinterpret lack of static usage evidence as unused",
+    "owner_answer": "Generate on demand; retain research procedure; remove schedule, caching and background generation; add Create/Refresh buttons on ETF briefs/pages",
+    "next": "Automatic-call cut accepted; full on-demand feature incomplete. Higher-impact frontend-to-backend pruning is next owner priority."
+  },
+  "etf_automatic_generation_cut_20261024": {
+    "state": "COMMITTED_LOCAL_VALIDATED_SOL94",
+    "commit": "120a2dee4",
+    "prd_score": 93,
+    "implementation_score": 94,
+    "proof": ".tmp/cleanup-open-model-execution/etf-phase1-proof.json",
+    "review": ".tmp/cleanup-open-model-execution/etf-phase1-sol-implementation-review.json",
+    "serial_tests_passed": 47,
+    "old_assertions_preserved": 14,
+    "production_physical_lines_removed": 42,
+    "scope": "Remove automatic onboarding and bulk synthesis generation; preserve manual procedure, saved research, deterministic calculations and source acquisition",
+    "static": "Three retained Python files clean for format/lint/types/suppressions; inherited issues fixed without oracle weakening",
+    "operations": "Retired flag documented; no live scheduler inspection/change",
+    "incomplete": [
+      "Create/Refresh controls",
+      "explicit-request cache removal",
+      "selected evidence and complete-output verification"
+    ],
+    "full_prd_score": 82,
+    "revised_prd": ".tmp/cleanup-open-model-execution/etf-grounding-smallest-prd-sol.json",
+    "revised_prd_state": "UNREVIEWED_NOT_IMPLEMENTED",
+    "release": "Architecture and release remain HOLD; prior full-suite proof does not cover this change"
+  },
+  "owner_big_ticket_priority_20261024": {
+    "order": [
+      "frontend interfaces and actions",
+      "connected backend paths and procedures",
+      "redundant test-suite/setup chunks"
+    ],
+    "outcome": "Delete whole duplicate user paths through an existing retained task owner; preserve depth and evidence/history",
+    "inventory": ".tmp/cleanup-open-model-execution/frontend-big-cut-inventory-disposition.json",
+    "state": "FRONTEND_SHELL_PRD_ACCEPTED_EXECUTION_STARTED",
+    "gate": "Independent owner-selected Sol advisory >85 at PRD and implementation; deterministic checks required",
+    "candidate": "Remove mockup blocks already deleted at render time; preserve existing interface and dynamic data/action mounts",
+    "prd": ".tmp/cleanup-open-model-execution/frontend-shell-prd.json",
+    "prior_inventory": "18-step cap; missing required artifact; no deletion qualification claimed",
+    "source_spans": ".tmp/cleanup-open-model-execution/frontend-shell-spans.json",
+    "gross_source_bytes": 100537,
+    "gross_source_newlines": 1612,
+    "measurement_limit": "Static union of discarded/replaced regions includes boundary anchors and retained dynamic replacements; not net or delivered reduction",
+    "independent_review": ".tmp/cleanup-open-model-execution/frontend-shell-sol-prd-review.json",
+    "prd_score": 92,
+    "baseline_tests": {
+      "passed": 89,
+      "seconds": 94.57,
+      "log": ".tmp/cleanup-open-model-execution/frontend-shell-baseline-tests.log"
+    },
+    "execution": "DeepSeek prepares an unapplied two-file candidate and complete old/current HTML oracle; original sources still frozen",
+    "preserved": "Final accessibility/heading decorations, shared icon/favicon/assets and SCREEN_SPECS endpoint metadata retain their current owners; existing renderer functions stay"
+  },
+  "etf_role_interface_preview_20261024": {
+    "state": "ISOLATED_SYNTHETIC_PROPOSAL_RENDERED",
+    "receipt": ".tmp/cleanup-open-model-execution/etf-ui-preview.json",
+    "states": 5,
+    "widths": [
+      1280,
+      768
+    ],
+    "screenshot": ".tmp/cleanup-open-model-execution/etf-ui-preview-saved-failure-768.png",
+    "observed": "Create/Refresh simulated; pending/failure preserves saved narrative; retry and missing-source state; keyboard activation; zero HTTP requests, console/page errors or overflow; browser closed",
+    "limits": "Role region only, not app navigation or implemented/backend capability. Empty-state preview still retains old CLI/cache guidance and needs revision before product acceptance. No new product code."
   }
 }
