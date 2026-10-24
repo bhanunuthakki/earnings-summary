@@ -4,11 +4,7 @@
 Builds a fully alembic-migrated DB (every real migration executes, in order,
 against the bootstrap tables ``db.py``'s ``init_db()`` normally creates) so
 the view is validated against the true production schema rather than a
-hand-guessed shape. The bootstrap DDL below is a verbatim copy of the three
-tables ``db.py``'s ``_create_tracked_companies``/``_create_quarterly_artifacts``/
-``_create_fmp_endpoint_status`` build (inlined rather than calling those
-private module functions directly, and without mutating the module-global
-``db.DB_PATH`` other tests rely on).
+hand-guessed shape.
 """
 
 from __future__ import annotations
@@ -25,70 +21,6 @@ from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-_BOOTSTRAP_DDL = """
-CREATE TABLE IF NOT EXISTS tracked_companies (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT DEFAULT 'bhanu',
-    ticker TEXT NOT NULL,
-    name TEXT NOT NULL,
-    list_type TEXT NOT NULL CHECK(list_type IN (
-        'portfolio', 'watchlist', 'evaluation', 'none', 'etf', 'index_member'
-    )),
-    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    sec_validated BOOLEAN DEFAULT 0,
-    ir_url TEXT DEFAULT NULL,
-    model_url TEXT DEFAULT NULL,
-    publishes_release BOOLEAN DEFAULT 0,
-    publishes_slides BOOLEAN DEFAULT 0,
-    publishes_transcript BOOLEAN DEFAULT 0,
-    fmp_data_upto TEXT DEFAULT NULL,
-    manual_data_quarters TEXT DEFAULT '[]',
-    fmp_data_saved BOOLEAN DEFAULT 0,
-    UNIQUE(user_id, ticker)
-);
-CREATE TABLE IF NOT EXISTS quarterly_artifacts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker TEXT NOT NULL,
-    year INTEGER NOT NULL,
-    quarter TEXT NOT NULL,
-    has_release_file    BOOLEAN DEFAULT 0,
-    has_slides_file     BOOLEAN DEFAULT 0,
-    has_transcript_file BOOLEAN DEFAULT 0,
-    has_audio_file      BOOLEAN DEFAULT 0,
-    step_audio_transcribed BOOLEAN DEFAULT 0,
-    step_llm_summarized    BOOLEAN DEFAULT 0,
-    step_saydo_analyzed    BOOLEAN DEFAULT 0,
-    step_thesis_updated    BOOLEAN DEFAULT 0,
-    UNIQUE(ticker, year, quarter)
-);
-CREATE TABLE IF NOT EXISTS fmp_endpoint_status (
-    ticker         TEXT    NOT NULL,
-    endpoint       TEXT    NOT NULL,
-    period         TEXT    NOT NULL DEFAULT '',
-    status         TEXT    NOT NULL,
-    http_code      INTEGER,
-    record_count   INTEGER,
-    earliest_date  TEXT,
-    latest_date    TEXT,
-    file_path      TEXT,
-    file_bytes     INTEGER,
-    error_msg      TEXT,
-    last_pulled    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (ticker, endpoint, period)
-);
-"""
-
-
-def _bootstrap_base_tables(db_path: Path) -> None:
-    """The three tables ``db.py:init_db()`` creates outside alembic (every
-    migration from 0001 on assumes these already exist)."""
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.executescript(_BOOTSTRAP_DDL)
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def _build_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:

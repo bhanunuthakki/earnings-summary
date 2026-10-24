@@ -159,6 +159,19 @@
       "fresh_process_import_parity": "PASS per changed file",
       "skipped_files": 24,
       "proof": ".tmp/cleanup-open-model-execution/test-bootstrap-final-acceptance.json"
+    },
+    "dead-test-bootstrap-20261024": {
+      "status": "local implementation independently reviewed; terminal gates recorded in owning receipt",
+      "prd_score": 95,
+      "implementation_score": 93,
+      "changed_files": 3,
+      "retired_helpers": 3,
+      "retired_ddl_copies": 3,
+      "net_lines_removed": 199,
+      "net_bytes_removed": 6951,
+      "surviving_executable_AST": "unchanged",
+      "deferred_files_with_existing_type_errors": 3,
+      "proof": ".tmp/cleanup-open-model-execution/dead-test-bootstrap-final-acceptance.json"
     }
   },
   "authority": {

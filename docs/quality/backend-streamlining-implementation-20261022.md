@@ -78,6 +78,10 @@ The cut adds three small exact payload cases and two orphan-versus-reached class
 
 The setup tranche removes 60 redundant path insertions from 57 files, for 243 net lines and 8,221 bytes. Pytest already owns these paths. All 607 module definitions and retained import order are unchanged; no inline suppressions remain in changed files. The 24 skipped candidates are unchanged: 11 insert after the last module import and 13 would need retained-import reordering. Fresh strict baseline checks pass for all 81 candidates. Fresh-process collection for all 81 baselines and all 57 changed files proves equal test IDs, module origins and namespace paths; the changed files collect 498 tests. Independent Sol scored the bounded PRD 92 and implementation 94. Final selected-suite, static and dependency evidence is in `.tmp/cleanup-open-model-execution/test-bootstrap-final-acceptance.json`. No runtime speed claim is made.
 
+## Dead database setup checkpoint
+
+Three unused `_bootstrap_base_tables` helpers and their `_BOOTSTRAP_DDL` copies are removed from advice-influence, decision-journal view and decision-journal panel tests. Their builders already use the session-cached `migrated_db` fixture. This removes 199 net lines and 6,951 bytes, including obsolete copied-DDL prose. All surviving executable module ASTs are unchanged. Three other copies remain deferred because their files have 12 existing strict-type errors. Independent Sol scored the bounded PRD 95 and implementation 93. No fixture, migration, application or schema owner changes. Final evidence is in `.tmp/cleanup-open-model-execution/dead-test-bootstrap-final-acceptance.json`; the combined architecture/release gate remains HOLD.
+
 ## Backend MVP
 
 Complete outputs match in all four synthetic cases against exact merged main:
