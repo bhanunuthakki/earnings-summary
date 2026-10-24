@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "d00552c092e11fd5114379794216255edd7705f1",
+  "scoped_commit": "ba2bd7fa45d70c80ed04ce40a1c924a9cd1085ed",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "05f9550e9901049df602247b3cc4ea1cfbdb7d9e74c975d18bd0fae202016a3b",
+  "source_sha256": "1112563952536492cfb4b4a148bc80fece8a9d68996546c91b9930ae98983dcc",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1484,
-    "total_noncomment_loc": 577651,
+    "total_noncomment_loc": 577698,
     "modules_over_1000_loc": 113,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
@@ -13351,9 +13351,9 @@
         "path": "src/operations/temp_run_retention.py",
         "module": "operations.temp_run_retention",
         "lines": {
-          "physical": 979,
-          "nonblank": 897,
-          "noncomment": 887
+          "physical": 1032,
+          "nonblank": 948,
+          "noncomment": 934
         },
         "internal_fan_out": 0,
         "responsibilities": [
