@@ -527,7 +527,7 @@
     "transaction_audit": "The only stage before FMP that can write is optional SEC ingest; ingest_for_ticker commits at its commit phase and rolls back a started transaction on failure. Segment cache validation is read-only. Supplied-record refresh_cache retains its separate commit=False caller-owned path. No cross-document atomicity claim."
   },
   "r1_pending_revision": "Resolved, accepted and committed3065638a; later checkpoint proxyR1 score96.",
-  "remaining_work": "Architecture gates remain unwaived. Next material candidate is single materialization inside canonical financial reads, prepared but not applied or tested. Summary KPI is retained on command. Wider report/portfolio financial qualification remains open. No push, merge, deployment, live state or collection authority.",
+  "remaining_work": "Whole architecture and release gates remain unwaived. R6 paired financial materialization is committed and accepted at90, with325 focused tests and224 equal old-source comparisons. Current all-family R2 design is deferred. R7 generation proposal scored79 REVISE; a narrower existing selection-cache-owner PRD is in preparation and has no passing score. Summary KPI stays on command. No push, merge, deployment, live state or collection authority.",
   "review_kind": "Owner-selected independent GPT-6.1 Sol proxy; earlier exact Opus receipts preserved as history. No formal model-purpose qualification claimed.",
   "review_route_update": {
     "authority": "Owner latest steering allows independent6.1Sol proxies and no further Astra requirement.",
@@ -4310,7 +4310,7 @@
     "advisory_score_rule": "strictly >85 at PRD and implementation, no material blocker"
   },
   "next_material_data_plane_candidate_20261024": {
-    "state": "IMPLEMENTED_VALIDATED_SOL_ACCEPTED_LOCAL_UNCOMMITTED",
+    "state": "COMMITTED_LOCAL_VALIDATED_SOL90",
     "scope": "Operation-local financial population; separate series and coordinate policy folds; isolated mutable output metadata",
     "paths": [
       "src/sources/canonical_financial_series.py",
@@ -4359,7 +4359,8 @@
     "limits": "Synthetic work counts only; timings vary, including quarterly regressions. No general latency or production claim. Not all metadata reads are removed. No new public API, schema, dependency or global cache.",
     "operations_disposition": "No operator surface change: internal read only; no new endpoint, job, CLI action, persistent writer or collection",
     "resource_proof": ".tmp/cleanup-open-model-execution/r6-root-resource-closure.json",
-    "full_matrix": "22,282-test proof binds preceding 17cfdd5f checkpoint only; current bounded unit has six-module serial proof. Full gate remains required at next major integration/CI boundary."
+    "full_matrix": "22,282-test proof binds preceding 17cfdd5f checkpoint only; current bounded unit has six-module serial proof. Full gate remains required at next major integration/CI boundary.",
+    "commit": "1bbc671a3505bf108ea1b6aae749b6669b5c7c6b"
   },
   "owner_open_model_route_20261024": {
     "model": "deepseek/deepseek-v4.1-flash-1017",
@@ -4380,13 +4381,24 @@
     "app_routing_changed": false
   },
   "r2_current_design_disposition_20261024": {
-    "state": "REVISE_NOT_IMPLEMENTED",
+    "state": "DEFER_CURRENT_DESIGN;TERMINAL_R2_OPEN",
     "prd": ".tmp/cleanup-open-model-execution/next-backend-prd.json",
     "review": ".tmp/cleanup-open-model-execution/next-backend-sol-prd-review.json",
     "score": 78,
     "input_population_and_budget": ".tmp/cleanup-open-model-execution/r2-inputs-budget.json",
     "replacement_contract": ".tmp/cleanup-open-model-execution/r2-replacement-contract.json",
-    "finding": "67 noncomment legacy-body lines versus nine required managed extensions; positive net reduction unproved. No whole-source rewrite or another one-family adapter.",
-    "next": "Independent Sol architecture disposition: smaller existing-owner design or different approved high-impact unit. No owner decision identified yet."
+    "finding": "Measured 67 noncomment lines cover two legacy bodies only, not the full removable closure. Source URL already exists; processing and ordered outcome policy can remain adapter-owned. Current all-family managed proposal still lacks a qualified net cut.",
+    "next": "Prepare R7 structured Say/Do generation and selection/cache PRD; requires independent Sol >85 before implementation. No owner input required now.",
+    "disposition_review": ".tmp/cleanup-open-model-execution/r2-design-disposition-sol.json",
+    "current_score": null
+  },
+  "r7_current_preparation_20261024": {
+    "state": "PRD_PREPARATION_ONLY",
+    "prior_review": ".tmp/cleanup-open-model-execution/r7-current-prd-sol-review.json",
+    "prior_score": 79,
+    "candidate": "One existing artifact-store selection-cache authority; retain current analysis, six contexts, history and strict refresh",
+    "required": "Concrete historical compatibility, identity, expiry, transaction and exact dirty-job completion contracts; independent Sol >85 before implementation",
+    "worker_output": ".tmp/cleanup-open-model-execution/r7-shared-selection-cache-prd.json",
+    "implementation": false
   }
 }

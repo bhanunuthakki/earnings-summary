@@ -37,7 +37,7 @@ remain required.
   history remains.
 
 Against the same merged-main commit `224d9666`, the branch removes **six production
-modules and 2,005 non-comment source lines at the frozen combined candidate**. It still has one extra module above
+modules and 2,029 non-comment source lines after the financial-read MVP (2,005 at the preceding frozen candidate)**. It still has one extra module above
 2,000 lines. It also exceeds the original cleanup baseline after concurrent main
 growth. Both architecture gates remain open; no exception is approved.
 
@@ -56,7 +56,7 @@ In the two-cell synthetic fixture, annual SELECTs fall from 145 to 77 and quarte
 
 Bounded execution uses the owner-selected `deepseek/deepseek-v4.1-flash-1017` through `sail-research/fp4/us`. Current pricing is $0.101 input, $0.15 output and $0.006735 cached input per million tokens. Reported uptime is 100% over 30 minutes and one day. Endpoint variants are screened before each dispatch. The cheaper flex route reports 75.75% one-day uptime and is excluded. Observed worker charges total $0.08142; two earlier failed compatibility requests have unavailable charges. Application model routing is unchanged.
 
-The next whole-source ingestion proposal remains at 78, REVISE. Measured deletion is only 67 non-comment legacy-body lines, while the managed replacement needs nine media, date, projection and recovery extensions. A net cut is not proved. Sol is assessing a smaller existing-owner design or a different approved unit. Working HTML releases, event dates, non-calendar fiscal dates and recovery remain required. The small parser/fingerprint cuts and 59-line policy deduplication remain deferred.
+The current whole-source ingestion proposal is deferred after its 78-point PRD review. Sol corrected the worker budget: 67 non-comment lines cover only two bodies, not the full removable closure. Source URL already exists on managed documents; processing and ordered outcomes can remain adapter-owned. A worthwhile net cut still lacks proof. The next preparation target is R7 structured Say/Do generation and selection/cache ownership. It requires a concrete PRD above 85 before implementation. Working HTML releases, event dates, non-calendar fiscal dates and recovery remain required. The small parser/fingerprint cuts and 59-line policy deduplication remain deferred.
 
 ## Backend MVP
 
