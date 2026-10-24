@@ -900,6 +900,7 @@ def test_selected_ocr_page_uses_tagged_section_and_existing_cache(
     )
     capture.document_version_id = projection.document_version_id
     capture.repo_root = tmp_path
+    capture.ocr_prompt = capture.prompt
     capture.ocr_selection = continuation.OCRCaptureSelection(
         document_id=capture.document_id,
         document_version_id=projection.document_version_id,
@@ -983,6 +984,7 @@ def test_selected_ocr_page_does_not_hide_another_empty_page(
     )
     capture.document_version_id = projection.document_version_id
     capture.repo_root = tmp_path
+    capture.ocr_prompt = capture.prompt
     capture.ocr_selection = continuation.OCRCaptureSelection(
         document_id=capture.document_id,
         document_version_id=projection.document_version_id,

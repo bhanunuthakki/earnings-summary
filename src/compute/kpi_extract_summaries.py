@@ -2181,7 +2181,11 @@ def retain_and_publish_reviewed_ir_source(
             source_scope="direct_pdf_rich",
             saturation_limit=max_facts_per_doc,
             prospective_direct=capture_version
-            in {"v20-reporting-scope", "v21-reviewed-pages-reporting-scope"},
+            in {
+                "v20-reporting-scope",
+                "v21-reviewed-pages-reporting-scope",
+                ir_supplement_capture.OCR_CAPTURE_VERSION,
+            },
         )
 
     processed: list[tuple[SupplementExchange, list[dict[str, object]]]] = []
@@ -2651,19 +2655,23 @@ def capture_for_ir_pdf_docs(
                     )
                 ]
 
-            capture_prompt = (
-                _enumerate_direct_prompt_ocr
-                if ocr_selection is not None
-                else _enumerate_direct_prompt_v20
-            )
             prompt_sha256 = hashlib.sha256(
-                capture_prompt(
+                _enumerate_direct_prompt_v20(
                     ticker,
                     period_label,
                     "",
                     max_facts_per_doc,
                 ).encode()
             ).hexdigest()
+            ocr_prompt_sha256 = (
+                hashlib.sha256(
+                    _enumerate_direct_prompt_ocr(
+                        ticker, period_label, "", max_facts_per_doc
+                    ).encode()
+                ).hexdigest()
+                if ocr_selection is not None
+                else None
+            )
             schema_sha256 = hashlib.sha256(
                 json.dumps(
                     TypeAdapter(list[_DirectEnumeratedKpiV20]).json_schema(), sort_keys=True
@@ -2698,6 +2706,11 @@ def capture_for_ir_pdf_docs(
                         )
                     ),
                     "prompt_sha256": prompt_sha256,
+                    **(
+                        {"ocr_prompt_sha256": ocr_prompt_sha256}
+                        if ocr_prompt_sha256 is not None
+                        else {}
+                    ),
                     "schema_sha256": schema_sha256,
                     "projection_identity": projection_identity,
                     **({"ocr_selection": ocr_manifest} if ocr_manifest is not None else {}),
@@ -2716,10 +2729,20 @@ def capture_for_ir_pdf_docs(
                 max_chunks=max_chunks,
                 max_structured_calls=max_structured_calls,
                 prompt=partial(
-                    capture_prompt,
+                    _enumerate_direct_prompt_v20,
                     ticker,
                     period_label,
                     max_facts=max_facts_per_doc,
+                ),
+                ocr_prompt=(
+                    partial(
+                        _enumerate_direct_prompt_ocr,
+                        ticker,
+                        period_label,
+                        max_facts=max_facts_per_doc,
+                    )
+                    if ocr_selection is not None
+                    else None
                 ),
                 extract=partial(extract_section, run_id=extraction_run_id),
                 effective_prompt=effective_prompt,
@@ -2773,6 +2796,11 @@ def capture_for_ir_pdf_docs(
                         "model": model,
                         "backend": backend,
                         "prompt_sha256": prompt_sha256,
+                        **(
+                            {"ocr_prompt_sha256": ocr_prompt_sha256}
+                            if ocr_prompt_sha256 is not None
+                            else {}
+                        ),
                         "schema_sha256": schema_sha256,
                         "projection_identity": projection_identity,
                         "prompt_override_identity": override_identity(),

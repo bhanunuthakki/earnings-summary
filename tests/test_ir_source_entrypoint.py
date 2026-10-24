@@ -21,6 +21,7 @@ import provenance.ir_reported_facts as ir_facts
 from llm.ledger import record_llm_call
 from llm.prompt_ab import apply_prompt_override
 from llm.structured import StructuredCallResult
+from provenance.document_processing_evidence import GovernedOCRPageProjection
 from provenance.evidence_backfill import ensure_legacy_document_evidence
 from provenance.evidence_ledger import EvidenceLedger, EvidenceNode, LedgerRecord, PersistResult
 from provenance.immutable_artifact import ImmutableArtifactSnapshot
@@ -41,6 +42,7 @@ from provenance.source_fact_repository import (
     SourceFactRepository,
 )
 from tests.test_ir_reported_facts import PAGE, candidate, payload_sha, sha, witnesses
+from tests.test_ir_source_review_wire import ocr_candidate_fixture
 
 RICH_PAGE = (
     PAGE
@@ -1192,6 +1194,95 @@ def test_full_entrypoint_two_empty_pages_retain_distinct_calls_and_cache_replay(
     ] == clocks_before
     assert conn.execute("SELECT COUNT(*) FROM fact_cells_v2").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
+
+
+def test_mixed_native_ocr_entrypoint_submits_each_planned_prompt_and_replays(
+    conn: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _entrypoint_fixture(conn, tmp_path, monkeypatch, mock_enumerator=False)
+    version = str(
+        conn.execute(
+            "SELECT document_version_id FROM evidence_document_versions WHERE legacy_document_id=1"
+        ).fetchone()[0]
+    )
+    _, original_projection = ocr_candidate_fixture()
+    projection = original_projection.model_copy(
+        update={
+            "document_version_id": version,
+            "source_sha256": sha(source.read_bytes()),
+            "page_number": 2,
+        }
+    )
+    selection = continuation.OCRCaptureSelection(
+        document_id=1,
+        document_version_id=version,
+        source_sha256=projection.source_sha256,
+        evidence_seal_id=projection.evidence_seal_id,
+        extraction_run_id=projection.extraction_run_id,
+        page_result_ids=(projection.page_result_id,),
+        cutoff_at=datetime(2026, 10, 23, tzinfo=UTC),
+    )
+
+    def projected_pages(_raw: bytes) -> tuple[str, ...]:
+        return (RICH_PAGE, "")
+
+    def selected_pages(*_args: object, **_kwargs: object) -> tuple[GovernedOCRPageProjection, ...]:
+        return (projection,)
+
+    def preflight_scope(_capture: continuation.SupplementCapture, _pages: tuple[str, ...]) -> None:
+        return
+
+    monkeypatch.setattr(continuation, "project_pdf_page_texts", projected_pages)
+    monkeypatch.setattr(ir_facts, "project_pdf_page_texts", projected_pages)
+    monkeypatch.setattr(continuation, "resolve_governed_ocr_pages", selected_pages)
+    monkeypatch.setattr(ir_facts, "resolve_governed_ocr_pages", selected_pages)
+    monkeypatch.setattr(continuation.SupplementCapture, "_existing_page_preflight", preflight_scope)
+    submitted: list[str] = []
+
+    def response(prompt: str, **_kwargs: object) -> object:
+        submitted.append(prompt)
+        is_ocr = "OCR SOURCE RULE:" in prompt
+        if is_ocr:
+            assert '"source_representation": "governed_ocr"' in prompt
+        quote = projection.text if is_ocr else "Margin North 10%"
+        return [
+            {
+                "label": "Margin",
+                "value": 10,
+                "unit": "percent",
+                "source_excerpt": quote,
+                "source_value_text": "10%",
+                "reported_period_end": "2026-06-30",
+                "period_role": "current",
+                "accounting_basis": "management",
+                "consolidation_scope": "segment",
+                "reporting_consolidation_scope": "unknown",
+                "dimensions": {"Geography": "North"},
+                "source_unit_scale": "none",
+            }
+        ]
+
+    monkeypatch.setattr(
+        summaries,
+        "call_llm_structured_with_raw",
+        partial(_recorded_governed_call, response=response),
+    )
+    first = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, ocr_selection=selection)
+    assert first.error is None
+    assert len(submitted) == 2
+    assert "OCR SOURCE RULE:" not in submitted[0]
+    assert "OCR SOURCE RULE:" in submitted[1]
+    artifacts = conn.execute(
+        "SELECT content_json FROM llm_artifacts WHERE superseded_by_id IS NULL ORDER BY id"
+    ).fetchall()
+    assert len(artifacts) == 2
+    assert [json.loads(row[0])["exchange"]["submitted_prompt"] for row in artifacts] == submitted
+    assert conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == 2
+    assert conn.execute("SELECT COUNT(*) FROM fact_cells_v2").fetchone()[0] == 0
+    second = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, ocr_selection=selection)
+    assert second.error is None
+    assert len(submitted) == 2
+    assert conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == 2
 
 
 @pytest.mark.parametrize(

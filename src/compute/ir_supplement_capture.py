@@ -344,6 +344,7 @@ class SupplementCapture:
     document_version_id: str | None = None
     repo_root: Path | None = None
     ocr_selection: OCRCaptureSelection | None = None
+    ocr_prompt: Callable[[str], str] | None = None
     extract_ocr: (
         Callable[[int, int, str, str, Callable[[SupplementExchange], None]], SupplementExchange]
         | None
@@ -757,7 +758,10 @@ class SupplementCapture:
             )
         self.chunks_processed += 1
         model_text = self.section_text(page, start, body)
-        prompt = self.prompt(model_text)
+        prompt_builder = self.ocr_prompt if page in self._ocr_pages else self.prompt
+        if prompt_builder is None:
+            raise ValueError("IR OCR prompt builder is unavailable")
+        prompt = prompt_builder(model_text)
         override_identity = self.override_identity()
         effective_prompt = self.effective_prompt(prompt)
         inputs = self.section_inputs(
