@@ -76,12 +76,11 @@ the evaluation lane depends on them.
   profile is unavailable for auto-classification: `--instrument etf`.
 - **Refresh**: `execution/fetch_etf_published_data.py --ticker T` — weekly is
   ample (holdings churn slowly); register alongside the IR-document weekly
-  cadence when ETFs are actively tracked. The role one-pager refreshes at
-  onboard time, via `execution/build_etf_workup.py`, or by passing
-  `--refresh-synthesis` to `refresh_candidate_fit.py` from a wide-budget
-  context — NOT in the default morning Stage 0f run: the workup payload's
-  floats wiggle daily, so the sha gate re-bills most mornings and the ~60s
-  LLM calls blow the stage's 180s pure-math budget (observed 2026-07-11).
+  cadence when ETFs are actively tracked. Role-in-portfolio research runs
+  only on an explicit owner request through `execution/build_etf_workup.py`.
+  Onboarding and portfolio-fit refresh do not generate role research.
+  Published-data collection and deterministic fit/ETF-score refresh retain
+  their existing schedules and source boundaries.
 - **Logical Idempotency Key:** `etf_{ticker}_{rep_period_date}_{source}`. An
   already-ingested N-PORT report is an explicit `already_done` skip; `--force`
   requests reprocessing without changing the logical identity.

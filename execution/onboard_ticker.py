@@ -647,28 +647,6 @@ def run_etf_onboarding(conn: sqlite3.Connection, ticker: str, repo_root: Path) -
     )
     for skipped in ("quarterly_refresh", "backfill_transcripts", "ir_documents", "saydo"):
         print(f"[onboard] {ticker} stage={skipped} SKIPPED (instrument_type=etf)", flush=True)
-    # Role-in-portfolio one-pager: one governed LLM call, sha-cached, best
-    # effort (a fresh ETF lands with its workup; a failure never fails the
-    # onboard — the workup peek shows the build-hint CLI instead).
-    print(f"[onboard] {ticker} stage=etf_role_synthesis", flush=True)
-    workup_rc = subprocess.run(
-        [
-            *managed_python_prefix(PROJECT_ROOT),
-            str(PROJECT_ROOT / "execution" / "build_etf_workup.py"),
-            "--ticker",
-            ticker,
-            "--repo-root",
-            str(repo_root),
-            "--db-path",
-            str(_DB_PATH),
-        ],
-        cwd=str(PROJECT_ROOT),
-    ).returncode
-    if workup_rc != 0:
-        print(
-            f"[onboard] {ticker} etf_role_synthesis rc={workup_rc}; continuing (best-effort)",
-            flush=True,
-        )
     if result.nport_status == "unavailable" and result.issuer_status == "unavailable":
         print(
             f"[onboard] {ticker} WARNING: no ETF holdings source succeeded — "

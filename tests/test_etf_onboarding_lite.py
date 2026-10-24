@@ -13,17 +13,19 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from allocation.price_history import load_daily_closes
+from dcf.universe import dcf_universe
+from execution import onboard_ticker as onboard_ticker_mod
+from execution.onboard_ticker import run_etf_onboarding
 
-from allocation.price_history import load_daily_closes  # noqa: E402
-from dcf.universe import dcf_universe  # noqa: E402
-from execution.onboard_ticker import _saydo_should_run, run_etf_onboarding  # noqa: E402
+_saydo_should_run = cast(Callable[..., bool], getattr(onboard_ticker_mod, "_saydo_should_run"))
 
 # ---------------------------------------------------------------------------
 # price_history proxy-store fallback
@@ -46,7 +48,7 @@ def _write_fmp_chart(repo_root: Path, ticker: str, rows: list[dict[str, object]]
 
 
 def test_load_daily_closes_falls_back_to_proxy_store(tmp_path: Path) -> None:
-    _write_proxy(tmp_path, "AVDV", [["2026-07-08", 102.5], ["2026-07-09", 103.1]])
+    _write_proxy(tmp_path, "AVDV", [("2026-07-08", 102.5), ("2026-07-09", 103.1)])
     closes = load_daily_closes("AVDV", tmp_path)
     assert closes == [(date(2026, 7, 8), 102.5), (date(2026, 7, 9), 103.1)]
 
@@ -54,12 +56,12 @@ def test_load_daily_closes_falls_back_to_proxy_store(tmp_path: Path) -> None:
 def test_load_daily_closes_proxy_fallback_without_fmp_dir(tmp_path: Path) -> None:
     # No data/historical/fmp at all — the pre-existing early return must
     # still consult the proxy store.
-    _write_proxy(tmp_path, "VWO", [["2026-07-09", 44.2]])
+    _write_proxy(tmp_path, "VWO", [("2026-07-09", 44.2)])
     assert load_daily_closes("vwo", tmp_path) == [(date(2026, 7, 9), 44.2)]
 
 
 def test_load_daily_closes_fmp_wins_over_proxy(tmp_path: Path) -> None:
-    _write_proxy(tmp_path, "AVUV", [["2026-07-09", 1.0]])
+    _write_proxy(tmp_path, "AVUV", [("2026-07-09", 1.0)])
     _write_fmp_chart(tmp_path, "AVUV", [{"date": "2026-07-09", "adjClose": 95.5}])
     assert load_daily_closes("AVUV", tmp_path) == [(date(2026, 7, 9), 95.5)]
 
@@ -138,20 +140,34 @@ class _FakeResult:
 def test_run_etf_onboarding_exit_codes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import etf_sources.ingest as ingest_mod
     from etf_sources.nport import NportParseError
+    from execution import onboard_ticker as onboard_mod
 
     conn = sqlite3.connect(":memory:")
+    spawns: list[object] = []
+
+    def fail_spawn(*args: object, **kwargs: object) -> object:
+        spawns.append((args, kwargs))
+        raise AssertionError("ETF onboarding must not spawn role synthesis")
+
+    monkeypatch.setattr(onboard_mod.subprocess, "run", fail_spawn)
+
+    def ingested_result(c: object, t: str, root: Path, **kw: object) -> _FakeResult:
+        return _FakeResult("ingested", "unavailable")
 
     monkeypatch.setattr(
         ingest_mod,
         "refresh_published_data",
-        lambda c, t, root, **kw: _FakeResult("ingested", "unavailable"),
+        ingested_result,
     )
     assert run_etf_onboarding(conn, "AVDV", tmp_path) == 0
 
+    def unavailable_result(c: object, t: str, root: Path, **kw: object) -> _FakeResult:
+        return _FakeResult("unavailable", "unavailable")
+
     monkeypatch.setattr(
         ingest_mod,
         "refresh_published_data",
-        lambda c, t, root, **kw: _FakeResult("unavailable", "unavailable"),
+        unavailable_result,
     )
     assert run_etf_onboarding(conn, "AVDV", tmp_path) == 1
 
@@ -160,4 +176,80 @@ def test_run_etf_onboarding_exit_codes(tmp_path: Path, monkeypatch: pytest.Monke
 
     monkeypatch.setattr(ingest_mod, "refresh_published_data", halt)
     assert run_etf_onboarding(conn, "AVDV", tmp_path) == 2
+    assert spawns == []
     conn.close()
+
+
+def test_refresh_candidate_fit_rejects_retired_synthesis_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from execution import refresh_candidate_fit as refresh_mod
+
+    db_path = tmp_path / "portfolio.db"
+    db_path.write_bytes(b"")
+
+    def fail_connect(*args: object, **kwargs: object) -> object:
+        raise AssertionError("retired flag must be rejected before opening the DB")
+
+    monkeypatch.setattr(refresh_mod, "connect_sqlite", fail_connect)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["refresh_candidate_fit.py", "--refresh-synthesis", "--db-path", str(db_path)],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        refresh_mod.main()
+    assert exc.value.code == 2
+
+
+def test_refresh_candidate_fit_ordinary_path_keeps_both_materializers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from execution import refresh_candidate_fit as refresh_mod
+
+    db_path = tmp_path / "portfolio.db"
+    db_path.write_bytes(b"")
+    calls: list[tuple[object, ...]] = []
+
+    class _Conn:
+        def close(self) -> None:
+            calls.append(("close",))
+
+    conn = _Conn()
+
+    def fake_connect(path: str, role: object) -> _Conn:
+        calls.append(("connect", path, role))
+        return conn
+
+    def fake_candidate(c: object, repo_root: Path, *, db_path: Path, api_url: str | None) -> int:
+        calls.append(("candidate", c, repo_root, db_path, api_url))
+        return 7
+
+    def fake_etf_scores(c: object, repo_root: Path) -> int:
+        calls.append(("etf_scores", c, repo_root))
+        return 3
+
+    monkeypatch.setattr(refresh_mod, "connect_sqlite", fake_connect)
+    monkeypatch.setattr(refresh_mod, "materialize_candidate_fit", fake_candidate)
+    monkeypatch.setattr(refresh_mod, "materialize_etf_scores", fake_etf_scores)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "refresh_candidate_fit.py",
+            "--repo-root",
+            str(tmp_path),
+            "--db-path",
+            str(db_path),
+            "--api-url",
+            "http://stub.invalid",
+        ],
+    )
+
+    assert refresh_mod.main() == 0
+    assert [call[0] for call in calls] == ["connect", "candidate", "etf_scores", "close"]
+    assert calls[1] == ("candidate", conn, tmp_path, db_path, "http://stub.invalid")
+    assert calls[2] == ("etf_scores", conn, tmp_path)
+    out = capsys.readouterr().out
+    assert "names=7" in out and "etf_scores=3" in out

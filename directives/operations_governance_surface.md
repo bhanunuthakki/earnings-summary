@@ -1,5 +1,19 @@
 # Operations & Governance Surface Impact
 
+### ETF role research: automatic generation removed (2026-10-24)
+
+ETF onboarding no longer launches role research. The bulk portfolio-fit command
+rejects the retired `--refresh-synthesis` flag before database access. Its normal
+candidate-fit and ETF-score calculations remain. Published-data collection keeps
+its existing source and schedule boundaries. Saved role research and the manual
+`execution/build_etf_workup.py` procedure remain.
+
+This first cut does not deliver the requested Create/Refresh controls or remove
+the manual procedure's input-cache bypass. Those changes require the separate
+on-demand implementation and financial-narrative verification. No live scheduler
+configuration was inspected or changed. A stale external invocation with the
+retired flag will fail explicitly rather than generate research.
+
 ### Research backend consolidation (2026-10-22)
 
 Disposition: **existing operations consolidated; no new schedule or live action**.
