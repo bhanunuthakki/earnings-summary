@@ -17,6 +17,7 @@ from provenance.fact_plane_v2 import FactDimensionV2
 from provenance.fact_read_model import FactReadModel, ProvenanceBundle, ProvenanceBundleRead
 from provenance.metric_ontology import CanonicalMetricDefinitionRevision, MetricOntology
 from provenance.overrides import DEFAULT_USER_ID, FINANCIAL_FACT, chip_override_map, qualify_note
+from provenance.source_read_context import SourceReadContext
 
 FINANCIAL_CONCEPT_NAMESPACE = "urn:earnings-summary:legacy:financial"
 _QUARTER_DAYS = (70, 105)
@@ -297,15 +298,22 @@ def discover_canonical_financial_tickers(
 class CanonicalFinancialSeriesReader:
     """Read admitted actuals at one caller-owned cutoff and SQLite snapshot."""
 
-    def __init__(self, conn: sqlite3.Connection, ticker: str, *, cutoff: datetime) -> None:
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        ticker: str,
+        *,
+        cutoff: datetime,
+        source_context: SourceReadContext | None = None,
+    ) -> None:
         if cutoff.tzinfo is None:
             raise ValueError("canonical financial cutoff must be timezone-aware")
         self._conn = conn
         self._ticker = ticker.upper()
         self._cutoff = cutoff.astimezone(UTC)
-        self._resolver = CanonicalFactResolutionEngine(conn)
+        self._resolver = CanonicalFactResolutionEngine(conn, source_context=source_context)
         self._ontology = MetricOntology(conn)
-        self._reader = FactReadModel(conn)
+        self._reader = FactReadModel(conn, source_context=source_context)
         self._bundles: dict[str, ProvenanceBundle] = {}
         self._bundle_reads: dict[str, ProvenanceBundleRead] = {}
         self._cache: dict[
@@ -1320,6 +1328,7 @@ def read_financial_consumer_series(
     cutoff: datetime,
     cadence: FinancialCadence,
     continuity: SeriesContinuity = SeriesContinuity.WINDOWED,
+    source_context: SourceReadContext | None = None,
 ) -> FinancialConsumerSeries:
     """Admit a complete financial population and retain source evidence once."""
     if cutoff.tzinfo is None or cutoff > datetime.now(UTC):
@@ -1329,7 +1338,9 @@ def read_financial_consumer_series(
     if owns_snapshot:
         conn.execute("BEGIN")
     try:
-        reader = CanonicalFinancialSeriesReader(conn, ticker, cutoff=cutoff)
+        reader = CanonicalFinancialSeriesReader(
+            conn, ticker, cutoff=cutoff, source_context=source_context
+        )
         series = reader.read(metric, cadence=cadence, continuity=continuity)
         coordinates = reader.project_coordinates(metric, cadence=cadence)
         reason = None

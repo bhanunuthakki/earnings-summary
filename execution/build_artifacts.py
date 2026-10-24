@@ -53,6 +53,7 @@ from db_paths import require_db_path
 from instrument_store import get_instrument_kind
 from models.companies import InstrumentType
 from pipeline.db_writer_gate import hold_writer_gate
+from provenance.source_read_context import SourceReadContext
 from report.artifacts import persist_report_artifact
 from report.builder import build_report
 from report.models import ReportFlavor
@@ -262,6 +263,11 @@ def configure_artifact_runtime(repo_root: Path) -> None:
 def main() -> int:
     args = _parse_args()
     repo_root = args.repo_root.resolve()
+    source_context = (
+        SourceReadContext.for_product_state_root(args.source_state_root)
+        if args.source_state_root is not None
+        else None
+    )
     database_path = require_db_path(args.db_path)
     db.set_db_path(database_path)
     os.environ["EARNINGS_SUMMARY_DB_PATH"] = str(database_path)
@@ -281,6 +287,7 @@ def main() -> int:
                     repo_root,
                     purpose=args.regenerate_purpose,
                     force_budget_bypass=args.force_budget_bypass,
+                    source_context=source_context,
                 )
             )
             continue
@@ -295,6 +302,7 @@ def main() -> int:
             trigger=args.trigger,
             force_budget_bypass=args.force_budget_bypass,
             force_refresh=args.force_refresh,
+            source_context=source_context,
         )
         summary.append(result)
     print(json.dumps(summary, indent=2, default=str))
@@ -307,6 +315,7 @@ def _regenerate_native_purpose(
     *,
     purpose: str,
     force_budget_bypass: bool,
+    source_context: SourceReadContext | None = None,
 ) -> dict[str, object]:
     """Run exactly one purpose producer without rendering a report."""
     configure_artifact_runtime(repo_root)
@@ -323,7 +332,9 @@ def _regenerate_native_purpose(
     try:
         if purpose == "bear_case":
             thesis_section = thesis.build(ticker, repo_root, conn=conn)
-            financials_section = financials_section_mod.build(ticker, repo_root, conn=conn)
+            financials_section = financials_section_mod.build(
+                ticker, repo_root, conn=conn, source_context=source_context
+            )
             segments_section = segments.build(ticker, repo_root, conn=conn)
             earnings_section = earnings.build(
                 ticker,
@@ -421,6 +432,11 @@ def _parse_args() -> argparse.Namespace:
         type=Path,
         default=PROJECT_ROOT,
         help="Repo root containing data/, transcripts/, micro_thesis/. Default: this repo.",
+    )
+    parser.add_argument(
+        "--source-state-root",
+        type=Path,
+        help="Explicit product state root for sealed financial source-byte reads.",
     )
     parser.add_argument(
         "--allow-untracked",
@@ -563,6 +579,7 @@ def _build_one(
     trigger: str = "manual",
     force_budget_bypass: bool = False,
     force_refresh: bool = False,
+    source_context: SourceReadContext | None = None,
 ) -> dict[str, object]:
     out_dir = repo_root / "output" / "research" / ticker
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -642,6 +659,7 @@ def _build_one(
             force_refresh=force_refresh,
             conn=report_conn,
             db_path=report_db_path,
+            source_context=source_context,
         )
         per_metric_provenance = _collect_per_metric_provenance(ticker, repo_root, conn=report_conn)
     finally:

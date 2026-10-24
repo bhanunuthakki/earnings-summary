@@ -14,6 +14,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 
 from provenance.issuer_registry import IssuerRegistry
 from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
+from provenance.source_read_context import SourceReadContext
 from research.decision_brief import verify_memo_snapshot_node, verify_memo_snapshot_reference
 from research.memo_claim_support import (
     MemoDerivedFigure,
@@ -104,9 +105,12 @@ def bind_report_draft(
     draft: ReportDraft,
     *,
     required_titles: tuple[str, ...],
+    source_context: SourceReadContext | None = None,
 ) -> BoundReport:
     with report_read_snapshot(conn):
-        return _bind_report_draft(conn, draft, required_titles=required_titles)
+        return _bind_report_draft(
+            conn, draft, required_titles=required_titles, source_context=source_context
+        )
 
 
 def _bind_report_draft(
@@ -114,6 +118,7 @@ def _bind_report_draft(
     draft: ReportDraft,
     *,
     required_titles: tuple[str, ...],
+    source_context: SourceReadContext | None,
 ) -> BoundReport:
     """Read only: reconstruct native evidence before checking every paragraph."""
     # Revalidate even model_copy/model_construct inputs before accessing evidence.
@@ -123,7 +128,9 @@ def _bind_report_draft(
         raise ReportBindingError("report_draft_timestamp_in_future")
     if tuple(section.title for section in draft.sections) != required_titles:
         raise ReportBindingError("report_section_population_mismatch")
-    admission = verify_research_snapshot(conn, draft.research_snapshot_id)
+    admission = verify_research_snapshot(
+        conn, draft.research_snapshot_id, source_context=source_context
+    )
     row = conn.execute(
         "SELECT request_json FROM research_snapshot_headers WHERE research_snapshot_id=?",
         (draft.research_snapshot_id,),
@@ -155,9 +162,14 @@ def _bind_report_draft(
         values: list[str] = []
         for value in paragraph.values:
             verify_memo_snapshot_reference(
-                conn, value.reference, snapshot, draft.ticker, draft.drafted_at
+                conn,
+                value.reference,
+                snapshot,
+                draft.ticker,
+                draft.drafted_at,
+                source_context=source_context,
             )
-            values.append(verified_value_display(conn, value))
+            values.append(verified_value_display(conn, value, source_context=source_context))
         verify_memo_analysis_text(paragraph.text, tuple(excerpts), tuple(values), paragraph.derived)
         if paragraph.voice == "reported":
             if paragraph.derived:
@@ -165,7 +177,13 @@ def _bind_report_draft(
             nodes = tuple(
                 node for excerpt in paragraph.excerpts for node in excerpt.evidence_node_ids
             )
-            verify_reported_memo_claim(conn, paragraph.text, nodes, paragraph.values)
+            verify_reported_memo_claim(
+                conn,
+                paragraph.text,
+                nodes,
+                paragraph.values,
+                source_context=source_context,
+            )
             if excerpts and readable_source_text(paragraph.text) not in tuple(
                 readable_source_text(excerpt) for excerpt, _texts in excerpts
             ):

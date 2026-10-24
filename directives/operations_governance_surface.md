@@ -2352,3 +2352,25 @@ It uses the same bounded `kpi_summary_enumerate` route and raw evidence ledger.
 OCR rows remain pending visual/source-context review and make no financial fact
 write. A missing, changed, partial, conflicting, or text-only projection fails
 closed. Native-only capture and V16 revalidation keep their existing interfaces.
+
+The same extraction command accepts `--source-review-file PATH` with explicit
+`--db` and `--source-state-root`. Its default action validates the exact OCR
+candidate population, retained PDF/TSV/render bytes and field-specific visual
+witnesses, then prints a read-only preview. `--apply-source-review` persists
+that reviewed node in the existing evidence ledger. This action does not call
+the model, run OCR, or publish a financial fact. A later exact cached capture
+can reuse the review and publish accepted rows through the existing source-fact
+writer. Rejected rows remain in the reviewed population. The reviewer identity
+and reviewer kind must describe who actually performed the visual review.
+
+Financial readers require an explicit product source-state root to admit OCR
+facts. The server receives it through its existing `--state-root` composition
+path; artifact builds use `--source-state-root`. Missing or changed source,
+layout, review, cutoff or publication evidence makes that OCR fact unavailable
+to reports, Ask, research and DCF. Native fact reads keep their prior rules.
+The canonical source peek offers an OCR-only PDF page and word-region link when
+the legacy document identity matches the admitted source hash. The existing
+viewer verifies the pinned document version and PDF bytes for both the page
+and image request; mismatch returns 404. No new scheduled job, store, provider
+route, or general trust flag is added. This path does not fill OCR-missed chart
+values or prove whole-document financial completeness.

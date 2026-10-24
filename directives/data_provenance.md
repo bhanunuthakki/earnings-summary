@@ -157,9 +157,27 @@ the existing bounded structured-call route. Section prompts, cache inputs, and
 raw candidate nodes bind the selected OCR commitments. OCR candidate nodes use
 `ir-pdf-unreviewed-ocr-candidate.v1` and have no native character locator.
 They remain `pending_source_context_review_ocr`; the native source review and
-financial publication paths do not consume them. Exact raw PDF, render, word,
-and semantic visual review are still required before any OCR financial fact can
-be published.
+financial publication paths do not consume them without a separate OCR review.
+The versioned `ir-pdf-source-context-review-ocr.v1` record decides every retained
+candidate. It names the reviewer as a human owner, human analyst, or agent
+analyst. Each accepted OCR value has field-specific visual witnesses tied to
+retained OCR words or declared native context, including period, unit, scope,
+basis, definition, and any chart legend. A reviewer assertion is recorded as
+such; OCR confidence is not a financial accuracy score.
+
+An exact OCR review can enter the existing `SourceFactRepository` publication
+path. Its distinct OCR observation and seal identities preserve native review
+and publication hashes. The source locator binds the raw candidate, review,
+processing selection, page, raster words, and verified raster-to-PDF transform.
+The central fact reader requires an explicit `SourceReadContext` with a product
+state root. It reopens the exact PDF, TSV and render bytes, replays the review
+and processing seal at the requested cutoff, and withholds the OCR fact if any
+part is missing or changed. The same resolver serves reports, Ask, research,
+and DCF. A missing root does not fall back to a checkout or database parent.
+The OCR source chip opens the existing PDF reader with a pinned document
+version and source hash; that reader renders from verified bytes, not a mutable
+legacy PDF path. Review and source reconstruction do not establish document
+financial recall, comparability, or decision-grade completeness.
 
 ### Progressive proof and legacy repair (2026-09-19)
 
