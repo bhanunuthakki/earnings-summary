@@ -47,6 +47,8 @@ The next test-suite cut replaces the fragile real-tree list of test-only dynamic
 
 The next setup deletion removes three unused database bootstrap helpers and their three copied table-definition blocks. Existing builders already use the shared `migrated_db` fixture. The final cut removes 199 net test lines and 6,951 bytes, including obsolete prose. All surviving executable module ASTs, imports, builders, decorators and assertions remain unchanged. Independent Sol scored the PRD 95 and implementation 93. The three debt-bearing candidates stay deferred. Final tests and source bindings are recorded in the owning acceptance receipt. This is maintenance cleanup, with no runtime speed claim.
 
+A further sandbox follow-through deletes the orphaned 943-line `viewspec.latency_benchmark` module and its two architecture exceptions. The component supplied a dormant rerun/pickle latency harness and a synthetic database builder; no active CLI, scheduler, reconstruction entry or application caller remains. The complete cut removes 955 net lines and 34,214 bytes. All other test ASTs and debt entries are unchanged. Independent Sol scored the PRD 94 and implementation 96; all 107 selected architecture/ViewSpec tests and changed static checks pass. This retires that unique dormant measurement workload. Retained benchmarks measure different workloads and do not replace its performance evidence. No application speed claim or live operation is part of this cut. Final source and dependency evidence is recorded in the owning acceptance receipt.
+
 ## Product and architecture endpoint
 
 Serve pre/post earnings briefs, deep research/Q&A, and portfolio decisions through

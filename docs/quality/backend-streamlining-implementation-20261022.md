@@ -82,6 +82,12 @@ The setup tranche removes 60 redundant path insertions from 57 files, for 243 ne
 
 Three unused `_bootstrap_base_tables` helpers and their `_BOOTSTRAP_DDL` copies are removed from advice-influence, decision-journal view and decision-journal panel tests. Their builders already use the session-cached `migrated_db` fixture. This removes 199 net lines and 6,951 bytes, including obsolete copied-DDL prose. All surviving executable module ASTs are unchanged. Three other copies remain deferred because their files have 12 existing strict-type errors. Independent Sol scored the bounded PRD 95 and implementation 93. No fixture, migration, application or schema owner changes. Final evidence is in `.tmp/cleanup-open-model-execution/dead-test-bootstrap-final-acceptance.json`; the combined architecture/release gate remains HOLD.
 
+## Sandbox benchmark follow-through
+
+The unused `src/viewspec/latency_benchmark.py` module is removed with its two exclusive legacy-mutation/direct-SQLite exceptions. This follows the approved standalone sandbox retirement at `613fa7733`. The module has no active importer, CLI, scheduler or reconstruction entry; current production-root closure confirms it is unreachable. The 943-line module contains its own synthetic database seeding and rerun/pickle timing/report models. Total source/test cut is 955 lines and 34,214 bytes. All other constant entries, scanners, test functions and assertion ASTs remain unchanged. Baseline architecture checks pass 16 tests; the final selected architecture/ViewSpec/Ask-override run passes 107. Format, lint, strict types and suppression checks pass. Independent Sol scores are PRD 94 and implementation 96.
+
+This retires a unique dormant benchmark; surviving benchmarks cover different workloads and are not substitute ViewSpec latency evidence. No runtime speedup is claimed. Active application behavior and operator entrypoints are unchanged, as tested by root reachability and retained ViewSpec checks. No database, schema, dependency or scheduler changes. Historical benchmark receipts remain. Final source/population/digest evidence is in `.tmp/cleanup-open-model-execution/sandbox-benchmark-prune-final-acceptance.json`; overall architecture/release remains HOLD.
+
 ## Backend MVP
 
 Complete outputs match in all four synthetic cases against exact merged main:

@@ -37,19 +37,12 @@ _DIRECT_READ = re.compile(
 )
 
 # Pre-v2 mutation debt. New general production code must use SourceFactRepository.
-# src/viewspec/latency_benchmark.py is not a production data path: it is the
-# ViewSpec latency gate's synthetic-mode fixture generator, seeding a
-# disposable clone it creates itself (legacy projection rows plus the full
-# observation/resolution stack) so the read path can be timed at
-# representative scale. It never opens a configured, restored, or
-# checkout-default database for mutation.
 _DIRECT_MUTATION_DEBT = frozenset(
     {
         "execution/db_gc.py",
         "src/ir_pipeline/ingest.py",
         "src/pipeline/kpi_persistence.py",
         "src/pipeline/restatement_detector.py",
-        "src/viewspec/latency_benchmark.py",
     }
 )
 

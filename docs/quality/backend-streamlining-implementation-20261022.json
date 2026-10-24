@@ -172,6 +172,20 @@
       "surviving_executable_AST": "unchanged",
       "deferred_files_with_existing_type_errors": 3,
       "proof": ".tmp/cleanup-open-model-execution/dead-test-bootstrap-final-acceptance.json"
+    },
+    "sandbox-benchmark-20261024": {
+      "status": "local implementation independently reviewed; terminal graph checks in owning receipt",
+      "prd_score": 94,
+      "implementation_score": 96,
+      "deleted_module": "src/viewspec/latency_benchmark.py",
+      "retired_architecture_exceptions": 2,
+      "net_lines_removed": 955,
+      "net_bytes_removed": 34214,
+      "selected_tests_passed": 107,
+      "other_test_ASTs": "unchanged",
+      "performance_disposition": "unique dormant workload retired; no substitute coverage or speedup claim",
+      "operational_surface": "No active entrypoint changed; source closure and retained functional checks verify no-surface-change.",
+      "proof": ".tmp/cleanup-open-model-execution/sandbox-benchmark-prune-final-acceptance.json"
     }
   },
   "authority": {
