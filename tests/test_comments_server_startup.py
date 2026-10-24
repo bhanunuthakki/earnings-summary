@@ -54,7 +54,7 @@ def test_main_starts_server_without_internal_requests(
         assert server_origin == "http://127.0.0.1:7421"
         assert source_state_root == (sources if explicit_source else None)
         assert source_context == (
-            SourceReadContext.for_sec_state_root(sources) if explicit_source else None
+            SourceReadContext.for_product_state_root(sources) if explicit_source else None
         )
         return app
 

@@ -33,6 +33,10 @@ from provenance.document_processing_evidence import (
     resolve_governed_ocr_pages,
 )
 from provenance.evidence_ledger import EvidenceLedger, EvidenceLocator, EvidenceNode, ExtractionRun
+from provenance.evidence_native_candidates import (
+    read_verified_local_evidence_bytes,
+    select_evidence_native_candidates_by_id,
+)
 from provenance.fact_plane_v2 import (
     CanonicalJSONObject,
     ExtractionRunCompletenessSealV2,
@@ -51,10 +55,12 @@ from provenance.source_fact_repository import (
     SourceFactRepository,
 )
 from provenance.source_fact_stream import publication_event_for_publication
+from provenance.source_read_context import SourceReadContext
 from runtime.deterministic import canonical_json as _json
 from runtime.deterministic import content_sha256 as _sha
 
 _RECIPE = "ir-reported-facts.v1"
+_OCR_RECIPE = "ir-reported-facts-ocr.v1"
 
 
 def _time(value: object) -> datetime:
@@ -437,6 +443,148 @@ class IrSourceContextReview(BaseModel):
         if self.review_sha256 != _sha(payload):
             raise ValueError("IR review payload SHA-256 does not match")
         return self
+
+
+class IrOCRReviewWitness(BaseModel):
+    """One reviewer interpretation tied to a retained visible source region."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    field_name: Literal[
+        "value",
+        "source_definition",
+        "period_kind",
+        "period_start",
+        "period_end",
+        "fiscal_year",
+        "fiscal_period",
+        "unit_key",
+        "source_unit_scale",
+        "currency",
+        "accounting_basis",
+        "consolidation_scope",
+        "dimensions",
+        "legend_association",
+    ]
+    region: IrOCRContextRegion | IrNativeContextRegion
+    review_note: str = Field(min_length=8)
+
+
+class IrOCRReviewedCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_representation: Literal["governed_ocr"]
+    candidate_node_id: str = Field(min_length=1)
+    disposition: Literal["accepted", "rejected"]
+    fact: IrReportedCandidate | None = None
+    visual_form: Literal["chart", "table", "narrative"] | None = None
+    witnesses: tuple[IrOCRReviewWitness, ...] = ()
+    reason_code: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def _disposition(self) -> Self:
+        if self.disposition == "rejected":
+            if (
+                self.fact is not None
+                or self.visual_form is not None
+                or self.witnesses
+                or not self.reason_code
+            ):
+                raise ValueError("rejected IR OCR candidate requires only a reason code")
+            return self
+        if self.fact is None or self.visual_form is None or self.reason_code is not None:
+            raise ValueError("accepted IR OCR candidate requires visual review and source fact")
+        required = {
+            "value",
+            "source_definition",
+            "period_kind",
+            "period_end",
+            "fiscal_year",
+            "fiscal_period",
+            "unit_key",
+            "source_unit_scale",
+            "accounting_basis",
+            "consolidation_scope",
+        }
+        if self.fact.period_start is not None:
+            required.add("period_start")
+        if self.fact.currency is not None:
+            required.add("currency")
+        if self.fact.dimensions:
+            required.add("dimensions")
+        if self.visual_form == "chart":
+            required.add("legend_association")
+        if not required.issubset({witness.field_name for witness in self.witnesses}):
+            raise ValueError("accepted IR OCR candidate lacks field-specific visual witnesses")
+        return self
+
+
+class IrOCRNativeReviewedCandidate(IrReviewedCandidate):
+    """Native candidate inside a mixed OCR review; native v1 stays unchanged."""
+
+    source_representation: Literal["native_pdf_text"]
+
+
+class IrOCRVisualPage(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    page_number: int = Field(gt=0)
+    render_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    tsv_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    layout_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class IrOCRSourceContextReview(BaseModel):
+    """A visual review of one complete governed OCR candidate population."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["ir-pdf-source-context-review-ocr.v1"] = (
+        "ir-pdf-source-context-review-ocr.v1"
+    )
+    document_version_id: str = Field(min_length=1)
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    extraction_run_id: str = Field(min_length=1)
+    extractor_config_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    candidate_population_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    ocr_selection: IrOCRRetentionSelection
+    visual_pages: tuple[IrOCRVisualPage, ...] = Field(min_length=1)
+    reviewer_identity: str = Field(min_length=1)
+    reviewer_kind: Literal["human_owner", "human_analyst", "agent_analyst"]
+    review_method: Literal["visual_source_context_review"] = "visual_source_context_review"
+    reviewed_at: datetime
+    review_evidence: str = Field(min_length=10)
+    entries: tuple[IrOCRReviewedCandidate | IrOCRNativeReviewedCandidate, ...] = Field(min_length=1)
+    review_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _seal(self) -> Self:
+        if self.reviewed_at.tzinfo is None:
+            raise ValueError("IR OCR review time requires a timezone")
+        if len({item.candidate_node_id for item in self.entries}) != len(self.entries):
+            raise ValueError("IR OCR review repeats a candidate")
+        if len({item.page_number for item in self.visual_pages}) != len(self.visual_pages):
+            raise ValueError("IR OCR visual review repeats a page")
+        if self.review_sha256 != _sha(self.model_dump(mode="json", exclude={"review_sha256"})):
+            raise ValueError("IR OCR review payload SHA-256 does not match")
+        return self
+
+
+_OCR_REVIEW_CONTEXT_FIELDS: dict[str, frozenset[str]] = {
+    "source_definition": frozenset({"source_definition", "source_row_label"}),
+    "period_kind": frozenset({"period_kind", "source_column_header"}),
+    "period_start": frozenset({"reported_period_start", "source_column_header"}),
+    "period_end": frozenset({"reported_period_end", "source_column_header"}),
+    "fiscal_year": frozenset({"reported_period_end", "source_column_header"}),
+    "fiscal_period": frozenset({"period_kind", "source_column_header"}),
+    "unit_key": frozenset({"source_unit_scale", "currency"}),
+    "source_unit_scale": frozenset({"source_unit_scale"}),
+    "currency": frozenset({"currency"}),
+    "accounting_basis": frozenset({"accounting_basis"}),
+    "consolidation_scope": frozenset({"consolidation_scope"}),
+    "dimensions": frozenset({"dimensions"}),
+    "legend_association": frozenset({"dimensions", "source_definition", "source_row_label"}),
+}
 
 
 def _source_document(
@@ -890,9 +1038,9 @@ def retain_ir_pdf_candidates(
 
 
 def _review_candidate_rows(
-    conn: sqlite3.Connection, population: IrCandidatePopulation
-) -> dict[str, IrRawRow]:
-    found: dict[str, IrRawRow] = {}
+    conn: sqlite3.Connection, population: IrCandidatePopulation, *, allow_ocr: bool = False
+) -> dict[str, IrRawRow | IrOCRRawRow]:
+    found: dict[str, IrRawRow | IrOCRRawRow] = {}
     for node_id in population.candidate_node_ids:
         row = conn.execute(
             "SELECT extraction_run_id,text,parent_node_id,locator_json FROM evidence_nodes WHERE node_id=?",
@@ -901,17 +1049,21 @@ def _review_candidate_rows(
         if row is None or row[0] != population.extraction_run_id:
             raise ValueError("IR reviewed candidate node is absent from exact extraction")
         payload = json.loads(str(row[1]))
-        if payload.get("schema_version") != "ir-pdf-unreviewed-candidate.v3":
+        kind = payload.get("schema_version")
+        if kind not in (
+            {"ir-pdf-unreviewed-candidate.v3", "ir-pdf-unreviewed-ocr-candidate.v1"}
+            if allow_ocr
+            else {"ir-pdf-unreviewed-candidate.v3"}
+        ):
             raise ValueError("IR review candidate node is not a retained raw candidate")
-        raw = IrRawRow.model_validate(payload["row"])
-        locator = EvidenceLocator(
-            source_ref=population.document_version_id,
-            page_number=raw.page_number,
-            char_start=raw.native_char_start,
-            char_end=raw.native_char_end,
+        raw = (
+            IrOCRRawRow.model_validate(payload["row"])
+            if kind == "ir-pdf-unreviewed-ocr-candidate.v1"
+            else IrRawRow.model_validate(payload["row"])
         )
+        locator = _candidate_locator(population.document_version_id, raw)
         if row[3] != locator.canonical_json:
-            raise ValueError("IR candidate native locator changed")
+            raise ValueError("IR candidate locator changed")
         expected_node_id = "ir-pdf-candidate:" + _sha(
             [
                 population.extraction_run_id,
@@ -992,76 +1144,233 @@ def _validate_review(
         raise ValueError("IR review must accept or reject every retained candidate")
     for entry in review.entries:
         raw = raw_rows[entry.candidate_node_id]
+        if isinstance(raw, IrOCRRawRow):
+            raise ValueError("native IR review cannot accept an OCR candidate")
+        _validate_native_review_entry(entry, raw, pages)
+
+
+def _validate_native_review_entry(
+    entry: IrReviewedCandidate, raw: IrRawRow, pages: tuple[str, ...]
+) -> None:
+    if entry.disposition == "rejected":
+        return
+    fact = entry.fact
+    if fact is None:
+        raise ValueError("accepted IR review lacks a fact")
+    source = raw.raw_row
+    if (
+        source.get("period_role")
+        not in {"current", "prior_period_comparator", "prior_year_comparator"}
+        or source.get("range_bound") is not None
+    ):
+        raise ValueError("IR guidance or unresolved forecast cannot publish as a reported actual")
+    if raw.page_number > len(pages):
+        raise ValueError("IR candidate source page is missing")
+    _validate_native_span(raw, pages[raw.page_number - 1])
+    original_excerpt = raw.native_source_quote
+    original_label = source.get("source_row_label") or source.get("label")
+    if (
+        fact.source_row_key != entry.candidate_node_id
+        or fact.page_number != raw.page_number
+        or original_excerpt not in fact.source_quote
+        or fact.raw_label != original_label
+        or fact.source_value_text != source.get("source_value_text")
+        or fact.page_number > len(pages)
+    ):
+        raise ValueError("IR reviewed value does not match its retained raw candidate")
+    if fact.source_quote not in pages[fact.page_number - 1]:
+        raise ValueError("IR reviewed value quote is absent from source page")
+    for witness in entry.witnesses:
+        if (
+            witness.page_number > len(pages)
+            or witness.exact_quote not in pages[witness.page_number - 1]
+        ):
+            raise ValueError("IR reviewed context witness is absent from source page")
+    if not any(
+        witness.field_name == "source_unit_scale" and fact.source_unit_text in witness.exact_quote
+        for witness in entry.witnesses
+    ):
+        raise ValueError("IR reviewed source unit wording lacks an exact scale witness")
+
+
+def _validate_ocr_review(
+    conn: sqlite3.Connection,
+    review: IrOCRSourceContextReview,
+    population: IrCandidatePopulation,
+    raw_pdf_bytes: bytes,
+    *,
+    repo_root: Path | None,
+) -> dict[int, GovernedOCRPageProjection]:
+    if repo_root is None:
+        raise ValueError("explicit IR OCR source state root is required")
+    selection = review.ocr_selection
+    if (
+        review.document_version_id != population.document_version_id
+        or review.source_sha256 != population.source_sha256
+        or review.extraction_run_id != population.extraction_run_id
+        or review.extractor_config_sha256 != population.extractor_config_sha256
+        or review.candidate_population_sha256 != population.candidate_population_sha256
+        or selection.document_version_id != population.document_version_id
+        or selection.source_sha256 != population.source_sha256
+        or selection.cutoff_at > review.reviewed_at
+        or hashlib.sha256(raw_pdf_bytes).hexdigest() != population.source_sha256
+    ):
+        raise ValueError("IR OCR review differs from exact source, population, or cutoff")
+    run = conn.execute(
+        "SELECT completed_at FROM evidence_extraction_runs WHERE extraction_run_id=?",
+        (population.extraction_run_id,),
+    ).fetchone()
+    if run is None or review.reviewed_at < _time(run[0]):
+        raise ValueError("IR OCR review precedes retained candidate extraction")
+    native_pages = project_pdf_page_texts(raw_pdf_bytes)
+    projections = resolve_governed_ocr_pages(
+        conn,
+        repo_root=repo_root,
+        document_version_id=selection.document_version_id,
+        source_sha256=selection.source_sha256,
+        evidence_seal_id=selection.evidence_seal_id,
+        extraction_run_id=selection.extraction_run_id,
+        page_result_ids=selection.page_result_ids,
+        cutoff_at=selection.cutoff_at,
+    )
+    if not projections or any(page.page_number > len(native_pages) for page in projections):
+        raise ValueError("IR OCR review page population differs from source PDF")
+    pages_by_number = {page.page_number: page for page in projections}
+    expected_visual = tuple(
+        IrOCRVisualPage(
+            page_number=page.page_number,
+            render_sha256=OCRPageLayout.model_validate_json(page.layout_json).render_sha256,
+            tsv_sha256=OCRPageLayout.model_validate_json(page.layout_json).tsv_sha256,
+            layout_sha256=page.layout_sha256,
+        )
+        for page in projections
+    )
+    if review.visual_pages != expected_visual:
+        raise ValueError("IR OCR visual review does not bind all retained rasters")
+    raw_rows = _review_candidate_rows(conn, population, allow_ocr=True)
+    all_candidates = {
+        str(node_id)
+        for node_id, text_value in conn.execute(
+            "SELECT node_id,text FROM evidence_nodes WHERE extraction_run_id=?",
+            (population.extraction_run_id,),
+        )
+        if json.loads(str(text_value)).get("schema_version")
+        in {"ir-pdf-unreviewed-candidate.v3", "ir-pdf-unreviewed-ocr-candidate.v1"}
+    }
+    if all_candidates != set(raw_rows) or {
+        entry.candidate_node_id for entry in review.entries
+    } != set(raw_rows):
+        raise ValueError("IR OCR review must decide every retained source candidate")
+    if not any(isinstance(raw, IrOCRRawRow) for raw in raw_rows.values()):
+        raise ValueError("IR OCR review has no OCR candidate")
+    for entry in review.entries:
+        raw = raw_rows[entry.candidate_node_id]
+        if isinstance(raw, IrRawRow):
+            if (
+                not isinstance(entry, IrOCRNativeReviewedCandidate)
+                or raw.page_number in pages_by_number
+            ):
+                raise ValueError("IR OCR review native candidate representation differs")
+            _validate_native_review_entry(entry, raw, native_pages)
+            continue
+        if not isinstance(entry, IrOCRReviewedCandidate):
+            raise ValueError("IR OCR candidate requires a visual source review")
+        _validate_ocr_span(raw, pages_by_number, native_pages, selection)
         if entry.disposition == "rejected":
             continue
         fact = entry.fact
         if fact is None:
-            raise ValueError("accepted IR review lacks a fact")
+            raise ValueError("IR OCR accepted review lacks a fact")
         source = raw.raw_row
         if (
             source.get("period_role")
-            not in {
-                "current",
-                "prior_period_comparator",
-                "prior_year_comparator",
-            }
+            not in {"current", "prior_period_comparator", "prior_year_comparator"}
             or source.get("range_bound") is not None
         ):
-            raise ValueError(
-                "IR guidance or unresolved forecast cannot publish as a reported actual"
-            )
-        if raw.page_number > len(pages):
-            raise ValueError("IR candidate source page is missing")
-        _validate_native_span(raw, pages[raw.page_number - 1])
-        original_excerpt = raw.native_source_quote
-        original_label = source.get("source_row_label") or source.get("label")
+            raise ValueError("IR OCR guidance or forecast cannot publish as reported actual")
         if (
             fact.source_row_key != entry.candidate_node_id
             or fact.page_number != raw.page_number
-            or original_excerpt not in fact.source_quote
-            or fact.raw_label != original_label
+            or fact.source_quote != raw.ocr_source_quote
+            or fact.raw_label != (source.get("source_row_label") or source.get("label"))
             or fact.source_value_text != source.get("source_value_text")
-            or fact.page_number > len(pages)
         ):
-            raise ValueError("IR reviewed value does not match its retained raw candidate")
-        if fact.source_quote not in pages[fact.page_number - 1]:
-            raise ValueError("IR reviewed value quote is absent from source page")
+            raise ValueError("IR OCR reviewed value differs from retained raw candidate")
+        main_region = IrOCRContextRegion(
+            page_number=raw.page_number,
+            exact_quote=raw.ocr_source_quote,
+            field_names=(),
+            char_start=raw.ocr_char_start,
+            char_end=raw.ocr_char_end,
+            words=raw.words,
+        )
         for witness in entry.witnesses:
-            if (
-                witness.page_number > len(pages)
-                or witness.exact_quote not in pages[witness.page_number - 1]
+            if witness.region != main_region and witness.region not in raw.context_regions:
+                raise ValueError("IR OCR visual witness is absent from retained candidate")
+            if witness.field_name == "legend_association" and witness.region == main_region:
+                raise ValueError("IR OCR chart legend requires distinct retained context")
+            if witness.region == main_region:
+                if witness.field_name not in {
+                    "value",
+                    "source_definition",
+                    "unit_key",
+                    "source_unit_scale",
+                }:
+                    raise ValueError("IR OCR field requires distinct retained context")
+            elif not (
+                _OCR_REVIEW_CONTEXT_FIELDS.get(witness.field_name, frozenset())
+                & set(witness.region.field_names)
             ):
-                raise ValueError("IR reviewed context witness is absent from source page")
+                raise ValueError("IR OCR review field differs from retained context label")
         if not any(
             witness.field_name == "source_unit_scale"
-            and fact.source_unit_text in witness.exact_quote
+            and fact.source_unit_text in witness.region.exact_quote
             for witness in entry.witnesses
         ):
-            raise ValueError("IR reviewed source unit wording lacks an exact scale witness")
+            raise ValueError("IR OCR scale lacks a visible source witness")
+        if not any(
+            witness.field_name == "value" and fact.source_value_text in witness.region.exact_quote
+            for witness in entry.witnesses
+        ):
+            raise ValueError("IR OCR value lacks a visible source witness")
+    return pages_by_number
 
 
 def persist_ir_source_context_review(
     conn: sqlite3.Connection,
-    review: IrSourceContextReview,
+    review: IrSourceContextReview | IrOCRSourceContextReview,
     population: IrCandidatePopulation,
     *,
     raw_pdf_bytes: bytes,
+    ocr_repo_root: Path | None = None,
 ) -> str:
-    """Record an explicit manual source-context review in the existing ledger."""
+    """Record one exact native or visual OCR review in the existing ledger."""
     if conn.in_transaction:
         raise ValueError("IR review requires an idle connection")
-    review = IrSourceContextReview.model_validate(review.model_dump(mode="python"))
+    if isinstance(review, IrOCRSourceContextReview):
+        review = IrOCRSourceContextReview.model_validate(review.model_dump(mode="python"))
+    else:
+        review = IrSourceContextReview.model_validate(review.model_dump(mode="python"))
     conn.execute("BEGIN")
     try:
-        _source_document(conn, population.document_version_id, population.source_sha256)
-        _validate_review(conn, review, population, raw_pdf_bytes)
+        validate_ir_source_context_review(
+            conn,
+            review,
+            population,
+            raw_pdf_bytes=raw_pdf_bytes,
+            ocr_repo_root=ocr_repo_root,
+        )
         existing_seal = conn.execute(
             "SELECT 1 FROM fact_extraction_run_completeness_seals_v2 WHERE extraction_run_id=?",
             (population.extraction_run_id,),
         ).fetchone()
         if existing_seal is not None:
             raise ValueError("IR extraction is already sealed; review cannot change")
-        node_id = "ir-pdf-review:" + review.review_sha256
+        node_id = (
+            "ir-pdf-review-ocr:"
+            if isinstance(review, IrOCRSourceContextReview)
+            else "ir-pdf-review:"
+        ) + review.review_sha256
         prior = conn.execute(
             "SELECT text,extraction_run_id FROM evidence_nodes WHERE node_id=?", (node_id,)
         ).fetchone()
@@ -1092,26 +1401,179 @@ def persist_ir_source_context_review(
         raise
 
 
+def validate_ir_source_context_review(
+    conn: sqlite3.Connection,
+    review: IrSourceContextReview | IrOCRSourceContextReview,
+    population: IrCandidatePopulation,
+    *,
+    raw_pdf_bytes: bytes,
+    ocr_repo_root: Path | None = None,
+) -> None:
+    """Preview the exact review without a ledger or financial write."""
+    _source_document(conn, population.document_version_id, population.source_sha256)
+    if isinstance(review, IrOCRSourceContextReview):
+        _validate_ocr_review(conn, review, population, raw_pdf_bytes, repo_root=ocr_repo_root)
+    else:
+        _validate_review(conn, review, population, raw_pdf_bytes)
+
+
 def find_exact_ir_source_review(
-    conn: sqlite3.Connection, population: IrCandidatePopulation, *, raw_pdf_bytes: bytes
-) -> tuple[str, IrSourceContextReview] | None:
+    conn: sqlite3.Connection,
+    population: IrCandidatePopulation,
+    *,
+    raw_pdf_bytes: bytes,
+    ocr_repo_root: Path | None = None,
+    require_ocr: bool = False,
+) -> tuple[str, IrSourceContextReview | IrOCRSourceContextReview] | None:
     """Find one pre-existing exact review; automatic capture never creates one."""
-    matches: list[tuple[str, IrSourceContextReview]] = []
+    matches: list[tuple[str, IrSourceContextReview | IrOCRSourceContextReview]] = []
     for node_id, text_value in conn.execute(
         "SELECT node_id,text FROM evidence_nodes WHERE extraction_run_id=? AND node_kind='claim'",
         (population.extraction_run_id,),
     ):
         payload = json.loads(str(text_value))
-        if payload.get("schema_version") != "ir-pdf-source-context-review.v1":
+        schema = payload.get("schema_version")
+        expected_schema = (
+            "ir-pdf-source-context-review-ocr.v1"
+            if require_ocr
+            else "ir-pdf-source-context-review.v1"
+        )
+        if schema != expected_schema:
             continue
-        review = IrSourceContextReview.model_validate(payload)
-        if str(node_id) != "ir-pdf-review:" + review.review_sha256:
+        review = (
+            IrOCRSourceContextReview.model_validate(payload)
+            if require_ocr
+            else IrSourceContextReview.model_validate(payload)
+        )
+        prefix = "ir-pdf-review-ocr:" if require_ocr else "ir-pdf-review:"
+        if str(node_id) != prefix + review.review_sha256:
             raise ValueError("IR source review node identity changed")
-        _validate_review(conn, review, population, raw_pdf_bytes)
+        if isinstance(review, IrOCRSourceContextReview):
+            _validate_ocr_review(conn, review, population, raw_pdf_bytes, repo_root=ocr_repo_root)
+        else:
+            _validate_review(conn, review, population, raw_pdf_bytes)
         matches.append((str(node_id), review))
     if len(matches) > 1:
         raise ValueError("IR source review is ambiguous")
     return matches[0] if matches else None
+
+
+def verify_ir_ocr_observation_source(
+    conn: sqlite3.Connection,
+    observation: ReportedFactObservationV2,
+    *,
+    context: SourceReadContext | None,
+    cutoff: datetime,
+) -> None:
+    """Reconstruct one OCR fact from its reviewed source and present local bytes."""
+    if context is None or context.ocr_state_root is None:
+        raise ValueError("ir_ocr_source_context_unavailable")
+    locator = observation.source_locator.root
+    if (
+        locator.get("source_representation") != "governed_ocr"
+        or observation.source_taxonomy_version != _OCR_RECIPE
+        or locator.get("document_version_id") != observation.document_version_id
+        or locator.get("review_node_id") != observation.evidence_node_id
+    ):
+        raise ValueError("ir_ocr_source_locator_invalid")
+    selection = IrOCRRetentionSelection.model_validate(locator.get("ocr_selection"))
+    if (
+        selection.cutoff_at > cutoff
+        or selection.document_version_id != observation.document_version_id
+    ):
+        raise ValueError("ir_ocr_source_selection_after_cutoff")
+    row = conn.execute(
+        "SELECT text,extraction_run_id,recorded_at FROM evidence_nodes WHERE node_id=?",
+        (observation.evidence_node_id,),
+    ).fetchone()
+    if row is None or _time(row[2]) > cutoff:
+        raise ValueError("ir_ocr_source_review_unavailable")
+    review = IrOCRSourceContextReview.model_validate_json(str(row[0]))
+    if (
+        observation.evidence_node_id != "ir-pdf-review-ocr:" + review.review_sha256
+        or review.ocr_selection != selection
+        or review.reviewed_at > cutoff
+        or row[1] != review.extraction_run_id
+    ):
+        raise ValueError("ir_ocr_source_review_mismatch")
+    candidates = select_evidence_native_candidates_by_id(
+        conn, document_version_ids=(observation.document_version_id,), include_legacy=True
+    )
+    if len(candidates) != 1 or candidates[0].media_type != "application/pdf":
+        raise ValueError("ir_ocr_source_document_unavailable")
+    candidate = candidates[0]
+    if (
+        candidate.blob_sha256 != review.source_sha256
+        or candidate.byte_size > context.max_document_bytes
+        or candidate.byte_size > context.max_total_bytes
+    ):
+        raise ValueError("ir_ocr_source_document_bound_or_size_mismatch")
+    raw_pdf_bytes = read_verified_local_evidence_bytes(
+        conn,
+        storage_uri=candidate.storage_uri,
+        expected_sha256=candidate.blob_sha256,
+        expected_byte_size=candidate.byte_size,
+        allowed_roots=context.content_roots,
+        document_version_id=observation.document_version_id,
+    ).raw_bytes
+    run = conn.execute(
+        "SELECT output_sha256,extractor_config_sha256 FROM evidence_extraction_runs "
+        "WHERE extraction_run_id=?",
+        (review.extraction_run_id,),
+    ).fetchone()
+    if run is None:
+        raise ValueError("ir_ocr_source_candidate_run_unavailable")
+    population = IrCandidatePopulation(
+        document_version_id=review.document_version_id,
+        source_sha256=review.source_sha256,
+        extraction_run_id=review.extraction_run_id,
+        extractor_config_sha256=str(run[1]),
+        candidate_population_sha256=str(run[0]),
+        candidate_node_ids=tuple(entry.candidate_node_id for entry in review.entries),
+        retained_node_count=0,
+        exact_replay=True,
+    )
+    _source_document(conn, review.document_version_id, review.source_sha256)
+    pages = _validate_ocr_review(
+        conn, review, population, raw_pdf_bytes, repo_root=context.ocr_state_root
+    )
+    accepted = [
+        entry
+        for entry in review.entries
+        if entry.candidate_node_id == locator.get("candidate_node_id")
+        and entry.disposition == "accepted"
+    ]
+    if len(accepted) != 1 or not isinstance(accepted[0], IrOCRReviewedCandidate):
+        raise ValueError("ir_ocr_source_accepted_candidate_missing")
+    fact = accepted[0].fact
+    if fact is None:
+        raise ValueError("ir_ocr_source_reviewed_fact_missing")
+    node = conn.execute(
+        "SELECT text FROM evidence_nodes WHERE node_id=?",
+        (accepted[0].candidate_node_id,),
+    ).fetchone()
+    if node is None:
+        raise ValueError("ir_ocr_source_candidate_unavailable")
+    raw = IrOCRRawRow.model_validate(json.loads(str(node[0]))["row"])
+    if (
+        observation.source_entry_sha256 != _sha(raw.raw_row)
+        or locator.get("source_sha256") != review.source_sha256
+        or locator.get("page_number") != fact.page_number
+        or locator.get("source_quote") != fact.source_quote
+        or locator.get("raw_label") != fact.raw_label
+        or locator.get("source_value_text") != fact.source_value_text
+        or locator.get("ocr_page_manifest") != raw.ocr_page_manifest
+        or locator.get("ocr_char_start") != raw.ocr_char_start
+        or locator.get("ocr_char_end") != raw.ocr_char_end
+        or locator.get("ocr_words") != [word.model_dump(mode="json") for word in raw.words]
+        or locator.get("context_regions")
+        != [region.model_dump(mode="json") for region in raw.context_regions]
+        or locator.get("ocr_page_geometry")
+        != OCRPageLayout.model_validate_json(pages[raw.page_number].layout_json).model_dump(
+            mode="json", exclude={"words", "tsv_sha256", "render_sha256"}
+        )
+    ):
+        raise ValueError("ir_ocr_source_locator_or_words_changed")
 
 
 def _document_subject(conn: sqlite3.Connection, request: IrReportedPublicationRequest) -> None:
@@ -1183,7 +1645,13 @@ def _reported_fact(
     *,
     candidate_node_id: str,
     entry_sha256: str,
+    ocr_row: IrOCRRawRow | None = None,
+    ocr_selection: IrOCRRetentionSelection | None = None,
+    ocr_layout: OCRPageLayout | None = None,
 ) -> ReportedSourceFact:
+    if (ocr_row is None) != (ocr_selection is None) or (ocr_row is None) != (ocr_layout is None):
+        raise ValueError("IR OCR fact requires its exact source selection")
+    recipe = _OCR_RECIPE if ocr_row is not None else _RECIPE
     dimensions = tuple(
         _dimension(value, fact_cell_id="pending", recorded_at=request.recorded_at)
         for value in item.dimensions
@@ -1196,7 +1664,7 @@ def _reported_fact(
         "concept_namespace": request.concept_namespace,
         "concept_name": item.raw_label,
         "taxonomy_name": "issuer-ir-pdf-source",
-        "taxonomy_version": _RECIPE,
+        "taxonomy_version": recipe,
         "accounting_basis": item.accounting_basis,
         "consolidation_scope": item.consolidation_scope,
         "period_kind": item.period_kind,
@@ -1230,25 +1698,42 @@ def _reported_fact(
             prior[0] != cell_id or prior[1] != "reported" or _time(prior[2]) > request.knowledge_at
         ):
             raise ValueError("IR PDF correction parent is absent or has a different source cell")
-    observation_id = "ir-pdf-observation:" + _sha(
+    observation_id = ("ir-pdf-ocr-observation:" if ocr_row else "ir-pdf-observation:") + _sha(
         [request.document_version_id, item.source_row_key, entry_sha256]
     )
-    locator = CanonicalJSONObject(
-        root={
-            "document_version_id": request.document_version_id,
-            "source_sha256": request.source_sha256,
-            "page_number": item.page_number,
-            "source_quote": item.source_quote,
-            "raw_label": item.raw_label,
-            "full_wording": item.full_wording,
-            "source_row_key": item.source_row_key,
-            "source_unit_scale": item.source_unit_scale.value,
-            "source_unit_text": item.source_unit_text,
-            "raw_numeric_value": str(parse_source_numeric(item.source_value_text)),
-            "candidate_node_id": candidate_node_id,
-            "review_node_id": request.review_node_id,
-        }
-    )
+    locator_fields: dict[str, object] = {
+        "document_version_id": request.document_version_id,
+        "source_sha256": request.source_sha256,
+        "page_number": item.page_number,
+        "source_quote": item.source_quote,
+        "raw_label": item.raw_label,
+        "full_wording": item.full_wording,
+        "source_row_key": item.source_row_key,
+        "source_unit_scale": item.source_unit_scale.value,
+        "source_unit_text": item.source_unit_text,
+        "raw_numeric_value": str(parse_source_numeric(item.source_value_text)),
+        "candidate_node_id": candidate_node_id,
+        "review_node_id": request.review_node_id,
+    }
+    if ocr_row is not None and ocr_selection is not None and ocr_layout is not None:
+        locator_fields.update(
+            {
+                "source_representation": "governed_ocr",
+                "source_value_text": item.source_value_text,
+                "ocr_page_manifest": ocr_row.ocr_page_manifest,
+                "ocr_page_geometry": ocr_layout.model_dump(
+                    mode="json", exclude={"words", "tsv_sha256", "render_sha256"}
+                ),
+                "ocr_selection": ocr_selection.model_dump(mode="json"),
+                "ocr_char_start": ocr_row.ocr_char_start,
+                "ocr_char_end": ocr_row.ocr_char_end,
+                "ocr_words": [word.model_dump(mode="json") for word in ocr_row.words],
+                "context_regions": [
+                    region.model_dump(mode="json") for region in ocr_row.context_regions
+                ],
+            }
+        )
+    locator = CanonicalJSONObject.model_validate(locator_fields)
     observation = ReportedFactObservationV2(
         observation_id=observation_id,
         idempotency_key=observation_id,
@@ -1270,7 +1755,7 @@ def _reported_fact(
         source_locator=locator,
         source_entry_sha256=entry_sha256,
         subject_binding_revision_id=request.subject_binding_revision_id,
-        source_taxonomy_version=_RECIPE,
+        source_taxonomy_version=recipe,
         source_unit_id=item.unit_key.value,
     )
     return ReportedSourceFact(cell=cell, observation=observation)
@@ -1282,12 +1767,17 @@ def publish_ir_reported_facts(
     *,
     raw_pdf_bytes: bytes,
     precommit_validation: Callable[[], None] | None = None,
+    ocr_repo_root: Path | None = None,
+    ocr_selection: IrOCRRetentionSelection | None = None,
 ) -> PublicationReceipt:
     """Publish only rows from one pre-existing, exact manual source review."""
     if conn.in_transaction:
         raise ValueError("IR PDF publication requires an idle connection")
     request = IrReportedPublicationRequest.model_validate(request.model_dump(mode="python"))
-    _source_pages(request, raw_pdf_bytes)
+    if ocr_selection is None:
+        _source_pages(request, raw_pdf_bytes)
+    elif ocr_repo_root is None:
+        raise ValueError("IR OCR publication requires explicit source state root")
     conn.execute("BEGIN")
     try:
         _document_subject(conn, request)
@@ -1297,9 +1787,20 @@ def publish_ir_reported_facts(
         ).fetchone()
         if review_row is None:
             raise ValueError("IR source-context review is absent")
-        review = IrSourceContextReview.model_validate_json(str(review_row[1]))
-        if request.review_node_id != "ir-pdf-review:" + review.review_sha256:
+        review = (
+            IrOCRSourceContextReview.model_validate_json(str(review_row[1]))
+            if ocr_selection is not None
+            else IrSourceContextReview.model_validate_json(str(review_row[1]))
+        )
+        review_prefix = (
+            "ir-pdf-review-ocr:"
+            if isinstance(review, IrOCRSourceContextReview)
+            else "ir-pdf-review:"
+        )
+        if request.review_node_id != review_prefix + review.review_sha256:
             raise ValueError("IR source-context review node identity changed")
+        if isinstance(review, IrOCRSourceContextReview) and review.ocr_selection != ocr_selection:
+            raise ValueError("IR OCR publication selection differs from exact visual review")
         accepted = tuple(entry for entry in review.entries if entry.disposition == "accepted")
         if tuple(entry.fact for entry in accepted) != request.candidates:
             raise ValueError("IR publication differs from reviewed source coordinates")
@@ -1333,7 +1834,13 @@ def publish_ir_reported_facts(
             retained_node_count=0,
             exact_replay=True,
         )
-        _validate_review(conn, review, population, raw_pdf_bytes)
+        ocr_pages = (
+            _validate_ocr_review(conn, review, population, raw_pdf_bytes, repo_root=ocr_repo_root)
+            if isinstance(review, IrOCRSourceContextReview)
+            else {}
+        )
+        if not isinstance(review, IrOCRSourceContextReview):
+            _validate_review(conn, review, population, raw_pdf_bytes)
         facts: list[ReportedSourceFact] = []
         for entry in accepted:
             item = entry.fact
@@ -1344,7 +1851,12 @@ def publish_ir_reported_facts(
             ).fetchone()
             if candidate_row is None:
                 raise ValueError("IR reviewed candidate disappeared")
-            raw_candidate = IrRawRow.model_validate(json.loads(str(candidate_row[0]))["row"])
+            candidate_payload = json.loads(str(candidate_row[0]))
+            raw_candidate = (
+                IrOCRRawRow.model_validate(candidate_payload["row"])
+                if candidate_payload.get("schema_version") == "ir-pdf-unreviewed-ocr-candidate.v1"
+                else IrRawRow.model_validate(candidate_payload["row"])
+            )
             facts.append(
                 _reported_fact(
                     conn,
@@ -1352,12 +1864,31 @@ def publish_ir_reported_facts(
                     item,
                     candidate_node_id=entry.candidate_node_id,
                     entry_sha256=_sha(raw_candidate.raw_row),
+                    ocr_row=(raw_candidate if isinstance(raw_candidate, IrOCRRawRow) else None),
+                    ocr_selection=(
+                        ocr_selection if isinstance(raw_candidate, IrOCRRawRow) else None
+                    ),
+                    ocr_layout=(
+                        OCRPageLayout.model_validate_json(
+                            ocr_pages[raw_candidate.page_number].layout_json
+                        )
+                        if isinstance(raw_candidate, IrOCRRawRow)
+                        else None
+                    ),
                 )
             )
         if not facts:
             raise ValueError("IR review has no accepted source facts to publish")
-        seal_id = "ir-pdf-extraction-seal:" + _sha([run_id, review.review_sha256])
-        publication_id = "ir-pdf-source-publication:" + _sha(
+        seal_id = (
+            "ir-pdf-extraction-seal-ocr:"
+            if isinstance(review, IrOCRSourceContextReview)
+            else "ir-pdf-extraction-seal:"
+        ) + _sha([run_id, review.review_sha256])
+        publication_id = (
+            "ir-pdf-source-publication-ocr:"
+            if isinstance(review, IrOCRSourceContextReview)
+            else "ir-pdf-source-publication:"
+        ) + _sha(
             [run_id, review.review_sha256, [fact.observation.observation_id for fact in facts]]
         )
         prior = conn.execute(
@@ -1420,8 +1951,14 @@ def publish_ir_reported_facts(
                         idempotency_key=seal_id,
                         extraction_run_id=run_id,
                         expected_node_count=int(node_count),
-                        completeness_policy_name="reviewed_bounded_ir_pdf_candidates_not_document_recall",
-                        completeness_policy_version=_RECIPE,
+                        completeness_policy_name=(
+                            "reviewed_bounded_ir_pdf_ocr_candidates_not_document_recall"
+                            if isinstance(review, IrOCRSourceContextReview)
+                            else "reviewed_bounded_ir_pdf_candidates_not_document_recall"
+                        ),
+                        completeness_policy_version=(
+                            _OCR_RECIPE if isinstance(review, IrOCRSourceContextReview) else _RECIPE
+                        ),
                         completeness_policy_sha256=_sha(
                             [
                                 request.document_version_id,

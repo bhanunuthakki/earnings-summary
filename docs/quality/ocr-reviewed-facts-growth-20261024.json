@@ -1,0 +1,67 @@
+{
+  "scope": "Reviewed OCR facts through existing publication and shared source readers",
+  "reviewed_at_utc": "2026-10-24T03:30:40.436402+00:00",
+  "source_commit": "61b9530cfce4aab7d74828b1cafbee5bd55ed658",
+  "independent_advisory_score": 94,
+  "independent_review_sha256": "7bf6ca89083d345e21bbf253fe53918ef0579862cf585f9238495d47639ed6e5",
+  "source_tree_growth": {
+    "executable_modules": 1,
+    "noncomment_LOC": 1185,
+    "reason": "One provenance source-context leaf replaces the DCF-owned context. Existing publication and read owners validate physical OCR evidence; consumers pass explicit context; pinned viewer uses verified source bytes."
+  },
+  "exact_SCC_memberships_unchanged": true,
+  "composition_root_growth": {
+    "execution/comments_server.py": 2
+  },
+  "scanner_or_suppression_ceilings_weakened": false,
+  "baseline_before_sha256": "7af9c4b4663a8631e18fa61f89c26880ccc426e747d778dfeb6c307fcd6b7db9",
+  "measurement_source_sha256": "9cbd54657573be14f6ddae2f3095908d3fbd726c4f771e98ac81cd89cfb2494b",
+  "reachability_parser_source_sha256": "2f08560bdf73bcd8c5b6be9e4f7c2d6770f1fa989bbf7305be7f1f91fbe5952e",
+  "existing_disposition_moves": [
+    {
+      "path": "src/pipeline/peeks.py",
+      "old_line": 2005,
+      "new_line": 2088,
+      "identical_Call_AST": true,
+      "targets_unchanged": [
+        "_COMPARE_METRIC_ROWS"
+      ],
+      "old_fingerprint": "e5ec682a7e3bd2b59d5d40013de8200dca58759eb7aa6d15e3ed70017b8b1b31",
+      "new_fingerprint": "f2e3d4f2627dc6b27ceeed47d30797eb66ae79059c2d64507770a32616225a7e"
+    },
+    {
+      "path": "src/provenance/ir_reported_facts.py",
+      "old_line": 780,
+      "new_line": 928,
+      "identical_Call_AST": true,
+      "targets_unchanged": [
+        "llm_call_id",
+        "raw_response",
+        "response_sha256",
+        "prompt_sha256",
+        "model",
+        "provider",
+        "transport"
+      ],
+      "old_fingerprint": "c580dc27ed1af941cd02c909d950725e7da9b18534947b3946b2f711c2aa5d85",
+      "new_fingerprint": "4f73552df54eb17e65fb3a7f218afdd072a4494bd9fae03664a53aeaecd994ba"
+    },
+    {
+      "path": "execution/build_artifacts.py",
+      "old_line": 123,
+      "new_line": 124,
+      "identical_Call_AST": true,
+      "targets_unchanged": [
+        "execution/extract_nvo_patent_timeline_state.py"
+      ],
+      "old_fingerprint": "4426c7b711a819e92f879973e570a2f696f4e85964fe0d4d0602b14849c15935",
+      "new_fingerprint": "da634d06ca668f4e9a047b489f9b721bd4beb41f98686f35fb545ba289253fdb"
+    }
+  ],
+  "static_gate": "77 retained files format/lint/types/suppressions pass; types0errors",
+  "focused_author_tests": 206,
+  "independent_regressions": 61,
+  "independent_physical_oracle": "PASS with real retained PDF/PNG/TSV and unmocked reader; synthetic deterministic TSV, no engine qualification",
+  "financial_chart_fidelity": "FAIL10of15; production qualification HOLD",
+  "integration_tests": "required pre-push and full CI pending"
+}

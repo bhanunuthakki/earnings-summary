@@ -116,8 +116,8 @@ def rendered_page_path(
     return repo_root / _PDF_PAGES_CACHE_DIR / sha256[:16] / f"p{page}_dpi{dpi}.png"
 
 
-def page_count(pdf_path: Path) -> int | None:
-    value = _read_pdf("count", pdf_path)
+def page_count(pdf_path: Path, *, raw_bytes: bytes | None = None) -> int | None:
+    value = _read_pdf("count", pdf_path, raw_bytes=raw_bytes)
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
@@ -131,9 +131,11 @@ def _coordinates(value: object, count: int) -> list[float] | None:
     return coordinates if all(math.isfinite(item) for item in coordinates) else None
 
 
-def page_dimensions(pdf_path: Path, page: int) -> tuple[float, float] | None:
+def page_dimensions(
+    pdf_path: Path, page: int, *, raw_bytes: bytes | None = None
+) -> tuple[float, float] | None:
     """Width/height in PDF points; None on parser failure or deadline."""
-    value = _coordinates(_read_pdf("dimensions", pdf_path, page=page), 2)
+    value = _coordinates(_read_pdf("dimensions", pdf_path, page=page, raw_bytes=raw_bytes), 2)
     return (value[0], value[1]) if value is not None else None
 
 
@@ -168,6 +170,33 @@ def render_page_image(
         return out_path
     except OSError:
         log.warning({"event": "pdf_render_page_failed", "page": page, "dpi": dpi})
+        return None
+
+
+def render_verified_page_bytes(
+    raw_pdf_bytes: bytes, *, page: int, dpi: int = DEFAULT_PDF_RENDER_DPI
+) -> bytes | None:
+    """Render one page from the caller's verified bytes, without a path cache."""
+    if not raw_pdf_bytes or len(raw_pdf_bytes) > 100_000_000 or page < 1:
+        return None
+    try:
+        with tempfile.TemporaryDirectory(prefix=".pdf-worker-") as temporary:
+            # The stable reader rejects symlinked ancestors such as macOS /var.
+            directory = Path(temporary).resolve(strict=True)
+            source = directory / "pinned-source.pdf"
+            staged = directory / "page.png"
+            source.write_bytes(raw_pdf_bytes)
+            result = _run_pdf(
+                "render", source, directory, page=page, dpi=dpi, output_path=str(staged)
+            )
+            if result is not True:
+                return None
+            from provenance.immutable_artifact import read_stable_artifact
+
+            _snapshot, rendered = read_stable_artifact(staged, max_bytes=100_000_000)
+            return rendered if rendered.startswith(b"\x89PNG\r\n\x1a\n") else None
+    except (OSError, RuntimeError, ValueError):
+        log.warning({"event": "pdf_verified_render_failed", "page": page, "dpi": dpi})
         return None
 
 

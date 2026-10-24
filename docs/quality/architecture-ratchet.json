@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "8bb8c72bbf5992e2537d35a9cec958771a815f1e",
+  "scoped_commit": "f53e3e9521b77857d3844d749c0167049514bf6f",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "722cc294470f9b5835bd3c66a45b4a4d0f7b5a8ef70ab4e5161d9c2906f2d80d",
+  "source_sha256": "9cbd54657573be14f6ddae2f3095908d3fbd726c4f771e98ac81cd89cfb2494b",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,8 +22,8 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1482,
-    "total_noncomment_loc": 572814,
+    "executable_modules": 1483,
+    "total_noncomment_loc": 573999,
     "modules_over_1000_loc": 111,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
@@ -32,7 +32,7 @@
     "scc_module_count": 74,
     "largest_scc": 16,
     "composition_root_loc": {
-      "execution/comments_server.py": 178,
+      "execution/comments_server.py": 180,
       "src/pipeline/portfolio_panel.py": 3497
     },
     "composition_root_fan_out": {
@@ -1064,11 +1064,11 @@
         "path": "execution/build_artifacts.py",
         "module": "execution.build_artifacts",
         "lines": {
-          "physical": 864,
-          "nonblank": 796,
-          "noncomment": 758
+          "physical": 882,
+          "nonblank": 814,
+          "noncomment": 776
         },
-        "internal_fan_out": 33,
+        "internal_fan_out": 34,
         "responsibilities": [
           "database",
           "filesystem",
@@ -1769,9 +1769,9 @@
         "path": "execution/comments_server.py",
         "module": "execution.comments_server",
         "lines": {
-          "physical": 206,
-          "nonblank": 183,
-          "noncomment": 178
+          "physical": 208,
+          "nonblank": 185,
+          "noncomment": 180
         },
         "internal_fan_out": 8,
         "responsibilities": [
@@ -1889,11 +1889,11 @@
         "path": "execution/comments_server_content_routes.py",
         "module": "execution.comments_server_content_routes",
         "lines": {
-          "physical": 802,
-          "nonblank": 725,
-          "noncomment": 702
+          "physical": 894,
+          "nonblank": 813,
+          "noncomment": 790
         },
-        "internal_fan_out": 14,
+        "internal_fan_out": 16,
         "responsibilities": [
           "database",
           "filesystem",
@@ -1982,11 +1982,11 @@
         "path": "execution/comments_server_financial_evidence_routes.py",
         "module": "execution.comments_server_financial_evidence_routes",
         "lines": {
-          "physical": 72,
-          "nonblank": 66,
-          "noncomment": 66
+          "physical": 79,
+          "nonblank": 73,
+          "noncomment": 73
         },
-        "internal_fan_out": 4,
+        "internal_fan_out": 5,
         "responsibilities": [
           "database",
           "network"
@@ -2240,9 +2240,9 @@
         "path": "execution/comments_server_sibling_wiring.py",
         "module": "execution.comments_server_sibling_wiring",
         "lines": {
-          "physical": 157,
-          "nonblank": 147,
-          "noncomment": 142
+          "physical": 158,
+          "nonblank": 148,
+          "noncomment": 143
         },
         "internal_fan_out": 4,
         "responsibilities": [],
@@ -2284,9 +2284,9 @@
         "path": "execution/comments_server_viewspec_ask_routes.py",
         "module": "execution.comments_server_viewspec_ask_routes",
         "lines": {
-          "physical": 553,
-          "nonblank": 511,
-          "noncomment": 491
+          "physical": 555,
+          "nonblank": 513,
+          "noncomment": 493
         },
         "internal_fan_out": 21,
         "responsibilities": [
@@ -3023,11 +3023,11 @@
         "path": "execution/extract_kpis_from_ir.py",
         "module": "execution.extract_kpis_from_ir",
         "lines": {
-          "physical": 498,
-          "nonblank": 449,
-          "noncomment": 447
+          "physical": 645,
+          "nonblank": 593,
+          "noncomment": 591
         },
-        "internal_fan_out": 13,
+        "internal_fan_out": 18,
         "responsibilities": [
           "database",
           "filesystem",
@@ -7472,11 +7472,11 @@
         "path": "src/ask/engine.py",
         "module": "ask.engine",
         "lines": {
-          "physical": 2103,
-          "nonblank": 1941,
-          "noncomment": 1890
+          "physical": 2109,
+          "nonblank": 1947,
+          "noncomment": 1896
         },
-        "internal_fan_out": 26,
+        "internal_fan_out": 27,
         "responsibilities": [
           "database",
           "network"
@@ -7598,11 +7598,11 @@
         "path": "src/ask/sealed_retrieval.py",
         "module": "ask.sealed_retrieval",
         "lines": {
-          "physical": 1865,
-          "nonblank": 1733,
-          "noncomment": 1726
+          "physical": 1867,
+          "nonblank": 1735,
+          "noncomment": 1728
         },
-        "internal_fan_out": 11,
+        "internal_fan_out": 12,
         "responsibilities": [
           "database",
           "filesystem",
@@ -8494,9 +8494,9 @@
         "path": "src/compute/kpi_extract_summaries.py",
         "module": "compute.kpi_extract_summaries",
         "lines": {
-          "physical": 3055,
-          "nonblank": 2867,
-          "noncomment": 2754
+          "physical": 3061,
+          "nonblank": 2873,
+          "noncomment": 2760
         },
         "internal_fan_out": 36,
         "responsibilities": [
@@ -9586,11 +9586,11 @@
         "path": "src/dcf/input_evidence.py",
         "module": "dcf.input_evidence",
         "lines": {
-          "physical": 948,
-          "nonblank": 888,
-          "noncomment": 867
+          "physical": 936,
+          "nonblank": 881,
+          "noncomment": 860
         },
-        "internal_fan_out": 10,
+        "internal_fan_out": 11,
         "responsibilities": [
           "database",
           "network"
@@ -9784,9 +9784,9 @@
         "path": "src/dcf/readiness.py",
         "module": "dcf.readiness",
         "lines": {
-          "physical": 641,
-          "nonblank": 611,
-          "noncomment": 605
+          "physical": 644,
+          "nonblank": 614,
+          "noncomment": 608
         },
         "internal_fan_out": 14,
         "responsibilities": [
@@ -14696,17 +14696,17 @@
         "path": "src/pipeline/pdf_render.py",
         "module": "pipeline.pdf_render",
         "lines": {
-          "physical": 227,
-          "nonblank": 198,
-          "noncomment": 196
+          "physical": 256,
+          "nonblank": 224,
+          "noncomment": 221
         },
-        "internal_fan_out": 0,
+        "internal_fan_out": 1,
         "responsibilities": [
           "filesystem",
           "process"
         ],
-        "public_functions": 7,
-        "fully_annotated_public_functions": 7
+        "public_functions": 8,
+        "fully_annotated_public_functions": 8
       },
       {
         "path": "src/pipeline/pdf_worker.py",
@@ -14728,18 +14728,18 @@
         "path": "src/pipeline/peeks.py",
         "module": "pipeline.peeks",
         "lines": {
-          "physical": 2767,
-          "nonblank": 2514,
-          "noncomment": 2388
+          "physical": 2850,
+          "nonblank": 2595,
+          "noncomment": 2469
         },
-        "internal_fan_out": 33,
+        "internal_fan_out": 34,
         "responsibilities": [
           "database",
           "filesystem",
           "network"
         ],
-        "public_functions": 17,
-        "fully_annotated_public_functions": 17
+        "public_functions": 18,
+        "fully_annotated_public_functions": 18
       },
       {
         "path": "src/pipeline/performance_risk_panel.py",
@@ -15286,9 +15286,9 @@
         "path": "src/pipeline/source_viewers.py",
         "module": "pipeline.source_viewers",
         "lines": {
-          "physical": 1085,
-          "nonblank": 969,
-          "noncomment": 916
+          "physical": 1091,
+          "nonblank": 975,
+          "noncomment": 922
         },
         "internal_fan_out": 5,
         "responsibilities": [
@@ -16022,11 +16022,11 @@
         "path": "src/provenance/canonical_fact_resolution.py",
         "module": "provenance.canonical_fact_resolution",
         "lines": {
-          "physical": 1673,
-          "nonblank": 1596,
-          "noncomment": 1590
+          "physical": 1694,
+          "nonblank": 1617,
+          "noncomment": 1611
         },
-        "internal_fan_out": 2,
+        "internal_fan_out": 3,
         "responsibilities": [
           "database",
           "network"
@@ -16261,11 +16261,11 @@
         "path": "src/provenance/fact_read_model.py",
         "module": "provenance.fact_read_model",
         "lines": {
-          "physical": 1283,
-          "nonblank": 1203,
-          "noncomment": 1203
+          "physical": 1317,
+          "nonblank": 1236,
+          "noncomment": 1236
         },
-        "internal_fan_out": 4,
+        "internal_fan_out": 6,
         "responsibilities": [
           "database",
           "network"
@@ -16518,17 +16518,17 @@
         "path": "src/provenance/ir_reported_facts.py",
         "module": "provenance.ir_reported_facts",
         "lines": {
-          "physical": 1445,
-          "nonblank": 1343,
-          "noncomment": 1343
+          "physical": 1982,
+          "nonblank": 1851,
+          "noncomment": 1851
         },
-        "internal_fan_out": 14,
+        "internal_fan_out": 16,
         "responsibilities": [
           "database",
           "network"
         ],
-        "public_functions": 4,
-        "fully_annotated_public_functions": 4
+        "public_functions": 6,
+        "fully_annotated_public_functions": 6
       },
       {
         "path": "src/provenance/issuer_registry.py",
@@ -17031,11 +17031,11 @@
         "path": "src/provenance/research_snapshot.py",
         "module": "provenance.research_snapshot",
         "lines": {
-          "physical": 3059,
-          "nonblank": 2883,
-          "noncomment": 2870
+          "physical": 3089,
+          "nonblank": 2912,
+          "noncomment": 2899
         },
-        "internal_fan_out": 12,
+        "internal_fan_out": 13,
         "responsibilities": [
           "database",
           "network"
@@ -17385,6 +17385,19 @@
         ],
         "public_functions": 1,
         "fully_annotated_public_functions": 1
+      },
+      {
+        "path": "src/provenance/source_read_context.py",
+        "module": "provenance.source_read_context",
+        "lines": {
+          "physical": 60,
+          "nonblank": 49,
+          "noncomment": 49
+        },
+        "internal_fan_out": 0,
+        "responsibilities": [],
+        "public_functions": 0,
+        "fully_annotated_public_functions": 0
       },
       {
         "path": "src/provenance/source_regime.py",
@@ -18256,11 +18269,11 @@
         "path": "src/report/builder.py",
         "module": "report.builder",
         "lines": {
-          "physical": 213,
-          "nonblank": 202,
-          "noncomment": 192
+          "physical": 217,
+          "nonblank": 206,
+          "noncomment": 196
         },
-        "internal_fan_out": 25,
+        "internal_fan_out": 26,
         "responsibilities": [
           "database"
         ],
@@ -19044,11 +19057,11 @@
         "path": "src/report/sections/financials.py",
         "module": "report.sections.financials",
         "lines": {
-          "physical": 1877,
-          "nonblank": 1720,
-          "noncomment": 1638
+          "physical": 1884,
+          "nonblank": 1727,
+          "noncomment": 1645
         },
-        "internal_fan_out": 15,
+        "internal_fan_out": 16,
         "responsibilities": [
           "database",
           "filesystem",
@@ -19452,9 +19465,9 @@
         "path": "src/research/decision_brief.py",
         "module": "research.decision_brief",
         "lines": {
-          "physical": 1618,
-          "nonblank": 1529,
-          "noncomment": 1504
+          "physical": 1709,
+          "nonblank": 1620,
+          "noncomment": 1595
         },
         "internal_fan_out": 19,
         "responsibilities": [
@@ -19469,9 +19482,9 @@
         "path": "src/research/decision_brief_workflow.py",
         "module": "research.decision_brief_workflow",
         "lines": {
-          "physical": 911,
-          "nonblank": 866,
-          "noncomment": 856
+          "physical": 913,
+          "nonblank": 868,
+          "noncomment": 858
         },
         "internal_fan_out": 16,
         "responsibilities": [
@@ -19517,11 +19530,11 @@
         "path": "src/research/earnings_report_contract.py",
         "module": "research.earnings_report_contract",
         "lines": {
-          "physical": 77,
-          "nonblank": 66,
-          "noncomment": 65
+          "physical": 88,
+          "nonblank": 77,
+          "noncomment": 76
         },
-        "internal_fan_out": 3,
+        "internal_fan_out": 4,
         "responsibilities": [
           "database",
           "network"
@@ -19596,11 +19609,11 @@
         "path": "src/research/memo_claim_support.py",
         "module": "research.memo_claim_support",
         "lines": {
-          "physical": 280,
-          "nonblank": 228,
-          "noncomment": 222
+          "physical": 290,
+          "nonblank": 238,
+          "noncomment": 232
         },
-        "internal_fan_out": 1,
+        "internal_fan_out": 2,
         "responsibilities": [
           "database"
         ],
@@ -19782,11 +19795,11 @@
         "path": "src/research/report_contract.py",
         "module": "research.report_contract",
         "lines": {
-          "physical": 204,
-          "nonblank": 178,
-          "noncomment": 176
+          "physical": 222,
+          "nonblank": 196,
+          "noncomment": 194
         },
-        "internal_fan_out": 4,
+        "internal_fan_out": 5,
         "responsibilities": [
           "database"
         ],
@@ -20569,11 +20582,11 @@
         "path": "src/sources/canonical_financial_series.py",
         "module": "sources.canonical_financial_series",
         "lines": {
-          "physical": 1404,
-          "nonblank": 1318,
-          "noncomment": 1318
+          "physical": 1415,
+          "nonblank": 1329,
+          "noncomment": 1329
         },
-        "internal_fan_out": 5,
+        "internal_fan_out": 6,
         "responsibilities": [
           "database",
           "network"
@@ -20842,11 +20855,11 @@
         "path": "src/sources/report_financials.py",
         "module": "sources.report_financials",
         "lines": {
-          "physical": 551,
-          "nonblank": 517,
-          "noncomment": 513
+          "physical": 558,
+          "nonblank": 524,
+          "noncomment": 520
         },
-        "internal_fan_out": 5,
+        "internal_fan_out": 6,
         "responsibilities": [
           "database",
           "network"

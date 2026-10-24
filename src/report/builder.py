@@ -12,6 +12,7 @@ from datetime import date
 from pathlib import Path
 
 from industry_classifier import suppressed_sections_for_ticker
+from provenance.source_read_context import SourceReadContext
 from report.models import BudgetSkip, ReportFlavor, ReportSpec
 from report.render_clock import render_today
 from report.sections import (
@@ -53,6 +54,7 @@ def build_report(
     conn: sqlite3.Connection | None = None,
     generation_date: date | None = None,
     db_path: Path | None = None,
+    source_context: SourceReadContext | None = None,
 ) -> ReportSpec:
     """Build the unified ReportSpec for one ticker.
 
@@ -99,7 +101,9 @@ def build_report(
     )
     company_description_section = company_description.build(ticker, repo_root, conn=conn)
     thesis_section = thesis.build(ticker, repo_root, conn=conn)
-    financials_section = financials.build(ticker, repo_root, conn=conn)
+    financials_section = financials.build(
+        ticker, repo_root, conn=conn, source_context=source_context
+    )
     signals_section = signals.build(ticker, repo_root, conn=conn)
     segments_section = segments.build(ticker, repo_root, conn=conn)
     earnings_section = earnings.build(

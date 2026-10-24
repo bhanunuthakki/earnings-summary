@@ -33,6 +33,7 @@ from provenance.source_fact_repository import (
     SourceFactPublication,
     SourceFactRepository,
 )
+from provenance.source_read_context import SourceReadContext
 from report.models import (
     CellSource,
     FinancialsSection,
@@ -47,6 +48,7 @@ from report.sections import financials
 from sources.report_financials import (
     FinancialEvidenceReference,
     FinancialTableCell,
+    FinancialTableProjection,
     read_financial_evidence,
     read_financial_table,
 )
@@ -399,6 +401,37 @@ def test_financial_evidence_rejects_tampered_observation_commitment(
         (_sha("tampered-record"), reference.observation_id),
     )
     assert read_financial_evidence(database, reference) is None
+
+
+def test_report_build_passes_explicit_source_context_to_shared_reader(
+    database: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed_table(database, [("revenue", "2025-01-01", "2025-03-31", "Q1", "100000000", "USD")])
+    context = SourceReadContext.for_product_state_root(tmp_path / "state")
+    original = financials.read_financial_table
+    seen: list[SourceReadContext | None] = []
+
+    def tracked(
+        conn: sqlite3.Connection,
+        ticker: str,
+        *,
+        as_of: datetime,
+        resolution_observed_through: datetime | None = None,
+        source_context: SourceReadContext | None = None,
+    ) -> FinancialTableProjection:
+        seen.append(source_context)
+        return original(
+            conn,
+            ticker,
+            as_of=as_of,
+            resolution_observed_through=resolution_observed_through,
+            source_context=source_context,
+        )
+
+    monkeypatch.setattr(financials, "read_financial_table", tracked)
+    result = financials.build("SYNTH", tmp_path, conn=database, as_of=STAMP, source_context=context)
+    assert seen == [context]
+    assert any(item.line_item == "Revenue" for item in result.line_items)
 
 
 def test_actual_report_build_keeps_offcalendar_coordinates_and_reconciliation(

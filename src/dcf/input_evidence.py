@@ -12,7 +12,6 @@ import sqlite3
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 from typing import Literal
 
 from pydantic import (
@@ -53,6 +52,7 @@ from provenance.sec_package_subject_witness import (
     SecPackageSubjectWitnessError,
     verify_sec_package_subject_witness,
 )
+from provenance.source_read_context import SourceReadContext
 from runtime.deterministic import as_utc as _utc
 from search.canonical_fact_projection import read_canonical_facts_by_id
 
@@ -205,31 +205,6 @@ class VerifiedInput(FrozenModel):
     recorded_at: datetime
     document_recorded_at: datetime | None = None
     extraction_completed_at: datetime | None = None
-
-
-class SourceReadContext(FrozenModel):
-    """Explicit read authority; ledger paths and database locations grant none."""
-
-    content_roots: tuple[Path, ...]
-    max_documents: int = Field(default=28, gt=0, le=28, strict=True)
-    max_document_bytes: int = Field(default=100_000_000, gt=0, le=100_000_000, strict=True)
-    max_total_bytes: int = Field(default=250_000_000, gt=0, le=250_000_000, strict=True)
-
-    @field_validator("content_roots")
-    @classmethod
-    def explicit_roots(cls, roots: tuple[Path, ...]) -> tuple[Path, ...]:
-        if not roots or any(not root.is_absolute() or root == Path(root.anchor) for root in roots):
-            raise ValueError("explicit absolute content roots are required")
-        if any(".." in root.parts for root in roots):
-            raise ValueError("content roots must be lexical absolute paths")
-        return roots
-
-    @classmethod
-    def for_sec_state_root(cls, state_root: Path) -> SourceReadContext:
-        """Use the capture owner's SEC blob layout under an explicit state root."""
-        if not state_root.is_absolute() or state_root == Path(state_root.anchor):
-            raise ValueError("explicit absolute state root is required")
-        return cls(content_roots=(state_root / "data" / "evidence" / "blobs",))
 
 
 class RawDocumentWitness(FrozenModel):
@@ -539,7 +514,11 @@ def _foreign_interim_periods(
 
 
 def verify_source_coverage(
-    conn: sqlite3.Connection, request: ModelInputRequest, cutoff: datetime
+    conn: sqlite3.Connection,
+    request: ModelInputRequest,
+    cutoff: datetime,
+    *,
+    source_context: SourceReadContext | None = None,
 ) -> tuple[ResearchSnapshotRequest, str, tuple[str, ...]]:
     """Verify an existing sealed snapshot and its current inventory membership.
 
@@ -548,7 +527,9 @@ def verify_source_coverage(
     when the old inventory is within that window. No FMP cache participates.
     """
     try:
-        admission = verify_research_snapshot(conn, request.research_snapshot_id)
+        admission = verify_research_snapshot(
+            conn, request.research_snapshot_id, source_context=source_context
+        )
     except ValueError as exc:
         # The snapshot owner uses ValueError for both absence and corruption.
         # Normalize only missing state; a present but invalid seal still fails
@@ -699,7 +680,12 @@ def verify_model_inputs(
     for key, assumption in request.assumptions.items():
         if effective_inputs.get(key) != assumption.value:
             raise InputEvidenceError(f"assumption_value_mismatch:{key}")
-    snapshot, member_sha, inventories = verify_source_coverage(conn, request, cutoff)
+    if source_context is not None and source_context.ocr_state_root is not None:
+        snapshot, member_sha, inventories = verify_source_coverage(
+            conn, request, cutoff, source_context=source_context
+        )
+    else:
+        snapshot, member_sha, inventories = verify_source_coverage(conn, request, cutoff)
     analysis = snapshot.research_universe.analysis_scope
     pdf_scopes = analysis.request.report_pdf_tables if analysis is not None else ()
     try:
@@ -708,12 +694,13 @@ def verify_model_inputs(
             pdf_scopes,
             observation_ids=tuple(ref.observation_id for ref in request.facts.values()),
             cutoff=cutoff,
+            source_context=source_context,
         )
     except DeferredPdfPageError as exc:
         raise InputEvidenceError("model_input_deferred_pdf_page_used") from exc
     reader, resolver, ontology = (
-        FactReadModel(conn),
-        CanonicalFactResolutionEngine(conn),
+        FactReadModel(conn, source_context=source_context),
+        CanonicalFactResolutionEngine(conn, source_context=source_context),
         MetricOntology(conn),
     )
     cell_ids = tuple(
@@ -897,6 +884,7 @@ def verify_model_inputs(
                 pdf_scopes,
                 evidence_node_ids=(bundle.evidence.evidence_node_id,),
                 cutoff=cutoff,
+                source_context=source_context,
             )
         except DeferredPdfPageError as exc:
             raise InputEvidenceError("model_input_deferred_pdf_page_used") from exc

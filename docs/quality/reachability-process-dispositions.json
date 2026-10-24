@@ -75,8 +75,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_TICKER_SPECIFIC_EXTRACTORS remains one NVO extract_nvo_patent_timeline_state.py entry; adds require_db_path() --db. Optional LLM gating is separate caller behavior.",
-      "fingerprint": "4426c7b711a819e92f879973e570a2f696f4e85964fe0d4d0602b14849c15935",
-      "line": 123,
+      "fingerprint": "da634d06ca668f4e9a047b489f9b721bd4beb41f98686f35fb545ba289253fdb",
+      "line": 124,
       "path": "execution/build_artifacts.py",
       "targets": [
         "execution/extract_nvo_patent_timeline_state.py"
@@ -1073,7 +1073,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "7d619a011780d2725498e46199679740255d9399079291d0dd8a0c18347989ad",
+      "source_sha256": "2f08560bdf73bcd8c5b6be9e4f7c2d6770f1fa989bbf7305be7f1f91fbe5952e",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

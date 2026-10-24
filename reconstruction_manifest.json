@@ -37,6 +37,7 @@
         "src/search/corpus_builder.py",
         "src/provenance/canonical_fact_resolution.py",
         "src/provenance/fact_read_model.py",
+        "src/provenance/source_read_context.py",
         "src/provenance/native_pdf_transcript.py",
         "src/provenance/ocr_page_review.py",
         "src/provenance/cohort_readiness.py",

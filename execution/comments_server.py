@@ -109,10 +109,12 @@ def create_app(
     this factory is the composition root.
     """
     if source_state_root is not None:
-        child_context = SourceReadContext.for_sec_state_root(source_state_root)
-        if source_context is None:
+        child_context = SourceReadContext.for_product_state_root(source_state_root)
+        if source_context is None or source_context == SourceReadContext.for_sec_state_root(
+            source_state_root
+        ):
             source_context = child_context
-        elif source_context.content_roots != child_context.content_roots:
+        elif source_context != child_context:
             raise ValueError("source reader and child state root authorities differ")
     app = RedactingFlask(__name__)
     register_tracker_read_routes(app)
@@ -189,7 +191,7 @@ def main() -> int:
         db_path=db_path,
         server_origin=f"http://{origin_host}:{args.port}",
         source_state_root=args.state_root,
-        source_context=SourceReadContext.for_sec_state_root(args.state_root)
+        source_context=SourceReadContext.for_product_state_root(args.state_root)
         if args.state_root
         else None,
     )

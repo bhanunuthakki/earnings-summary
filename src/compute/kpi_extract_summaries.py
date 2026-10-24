@@ -2310,6 +2310,13 @@ def retain_and_publish_reviewed_ir_source(
                 )
             )
     completed_at = datetime.now(UTC)
+    selected_ocr = (
+        IrOCRRetentionSelection.model_validate(
+            ocr_capture.ocr_selection.model_dump(exclude={"document_id"})
+        )
+        if ocr_capture is not None and ocr_capture.ocr_selection is not None
+        else None
+    )
     population = retain_ir_pdf_candidates(
         conn,
         IrCandidateRetentionRequest(
@@ -2334,25 +2341,8 @@ def retain_and_publish_reviewed_ir_source(
         require_existing=require_existing,
         historical_revalidation=revalidated is not None,
         ocr_repo_root=ocr_capture.repo_root if ocr_capture is not None else None,
-        ocr_selection=(
-            IrOCRRetentionSelection.model_validate(
-                ocr_capture.ocr_selection.model_dump(exclude={"document_id"})
-            )
-            if ocr_capture is not None and ocr_capture.ocr_selection is not None
-            else None
-        ),
+        ocr_selection=selected_ocr,
     )
-    if ocr_capture is not None:
-        logger.info(
-            {
-                "event": "ir_source_candidate_disposition",
-                "document_version_id": document_version_id,
-                "candidate_count": len(population.candidate_node_ids),
-                "source_publication_count": 0,
-                "disposition": "pending_source_context_review_ocr",
-            }
-        )
-        return
     if revalidated is not None:
         logger.info(
             {
@@ -2365,7 +2355,13 @@ def retain_and_publish_reviewed_ir_source(
             }
         )
         return
-    reviewed = find_exact_ir_source_review(conn, population, raw_pdf_bytes=raw_pdf_bytes)
+    reviewed = find_exact_ir_source_review(
+        conn,
+        population,
+        raw_pdf_bytes=raw_pdf_bytes,
+        ocr_repo_root=ocr_capture.repo_root if ocr_capture is not None else None,
+        require_ocr=ocr_capture is not None,
+    )
     if reviewed is None:
         logger.info(
             {
@@ -2373,7 +2369,11 @@ def retain_and_publish_reviewed_ir_source(
                 "document_version_id": document_version_id,
                 "candidate_count": len(population.candidate_node_ids),
                 "source_publication_count": 0,
-                "disposition": "pending_source_context_review",
+                "disposition": (
+                    "pending_source_context_review_ocr"
+                    if ocr_capture is not None
+                    else "pending_source_context_review"
+                ),
             }
         )
         return
@@ -2413,7 +2413,11 @@ def retain_and_publish_reviewed_ir_source(
             reporting_entity_id=subject.reporting_entity_id,
             scope_security_id=subject.security_id,
             concept_namespace="issuer-ir-pdf-source:" + str(issuer_row[0]),
-            extractor_name="ir-supplement-native-continuation",
+            extractor_name=(
+                "ir-supplement-ocr-continuation"
+                if ocr_capture is not None
+                else "ir-supplement-native-continuation"
+            ),
             extractor_code_version=capture_version,
             extractor_config_sha256=extractor_config_sha256,
             candidate_population_sha256=population.candidate_population_sha256,
@@ -2426,6 +2430,8 @@ def retain_and_publish_reviewed_ir_source(
         ),
         raw_pdf_bytes=raw_pdf_bytes,
         precommit_validation=precommit_validation,
+        ocr_repo_root=ocr_capture.repo_root if ocr_capture is not None else None,
+        ocr_selection=selected_ocr,
     )
     logger.info(
         {
