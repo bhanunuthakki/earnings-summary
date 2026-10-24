@@ -48,8 +48,27 @@ from compute.kpi_resolver import (
     semantic_series_identity_sql,
 )
 from compute.kpi_revision_shadow_census import verify_snapshot_evidence
-from models.documents import SOURCE_QUALITY_TIER_RANK as SOURCE_QUALITY_TIER_RANK
+from compute.metrics_engine.registry import REGISTRY
+from models.documents import (
+    SOURCE_QUALITY_TIER_RANK as SOURCE_QUALITY_TIER_RANK,
+)
+from models.documents import (
+    issuer_origin_rank_sql as issuer_origin_rank_sql,
+)
+from models.documents import (
+    reader_source_order_sql as reader_source_order_sql,
+)
+from models.documents import (
+    reader_tier_join_sql as reader_tier_join_sql,
+)
+from models.documents import (
+    reader_tier_rank_sql as reader_tier_rank_sql,
+)
+from models.documents import (
+    tier_rank_case_sql as tier_rank_case_sql,
+)
 from pipeline.kpi_semantics import semantic_admission_sql
+from provenance.fact_read_model import FactReadModel
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import (
     FINANCIAL_FACT,
@@ -60,7 +79,12 @@ from provenance.overrides import (
     qualify_note,
 )
 from provenance.verifier_identity import verifier_source_artifact_sha256
+from runtime.deterministic import as_utc as _utc
 from runtime.deterministic import table_exists_or_false as _has_table
+from sources.canonical_financial_series import (
+    CanonicalFinancialSeriesReader,
+    FinancialCadence,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from timeseries.kpi_revision_shadow import (
     KpiReaderShadowComparison,
@@ -181,9 +205,12 @@ def _normalize_as_of(as_of_date: date | datetime | str | None) -> str | None:
         # end-of-day so the filter is inclusive of fetches done that day.
         if len(s) == 10:
             return f"{s} 23:59:59"
+        parsed = datetime.fromisoformat(s)
+        if parsed.tzinfo is not None:
+            return _utc(parsed).strftime("%Y-%m-%d %H:%M:%S")
         return s
     if isinstance(as_of_date, datetime):
-        return as_of_date.strftime("%Y-%m-%d %H:%M:%S")
+        return _utc(as_of_date).strftime("%Y-%m-%d %H:%M:%S")
     # date (not datetime — class check order matters: datetime is a date)
     return f"{as_of_date.isoformat()} 23:59:59"
 
@@ -285,123 +312,8 @@ def _overlay_sourced_series(
     return out
 
 
-def tier_rank_case_sql(column_alias: str) -> str:
-    """Build a CASE expression mapping source_quality_tier text -> int rank.
-
-    Public so the reader families that can't route through the Series loaders
-    (cockpit_fundamentals, report §3 financials, fmp_derived_kpis, ask.grounding)
-    can replicate the loaders' EXACT ``(tier_rank, id)`` winner ordering in their
-    own SQL rather than diverging into a source-agnostic ``source_doc_id DESC``
-    pick. ``column_alias`` is the SQL reference to ``documents.source_quality_tier``
-    in the caller's query (e.g. ``"d.source_quality_tier"``). Unknown/NULL tiers
-    fall to rank 0, matching :data:`SOURCE_QUALITY_TIER_RANK`'s fallback."""
-    cases = " ".join(
-        f"WHEN '{tier}' THEN {rank}" for tier, rank in SOURCE_QUALITY_TIER_RANK.items()
-    )
-    return f"CASE {column_alias} {cases} ELSE 0 END"
-
-
-# Back-compat alias for the pre-public name (internal callers below).
+# Reader tier SQL lives with the document source-quality policy.
 _tier_rank_case_sql = tier_rank_case_sql
-
-
-def _probe_has_table(conn: sqlite3.Connection, table: str) -> bool:
-    """row_factory-independent table probe for the reader helpers.
-
-    The Series loaders' ``_has_table``/``_has_column`` read ``r["name"]``, which
-    needs ``conn.row_factory = sqlite3.Row``. The reader families call the
-    ``reader_tier_*`` helpers with whatever connection they hold — research
-    cockpit / the refresh script open a bare (tuple-row) connection — so these
-    probes use positional access and work regardless of row_factory."""
-    try:
-        row = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
-        ).fetchone()
-    except sqlite3.Error:
-        return False
-    return row is not None
-
-
-def _probe_has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
-    """row_factory-independent column probe (see :func:`_probe_has_table`).
-    PRAGMA table_info returns (cid, name, type, ...); name is index 1."""
-    try:
-        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    except sqlite3.Error:
-        return False
-    return any(r[1] == column for r in rows)
-
-
-def reader_tier_rank_sql(
-    conn: sqlite3.Connection,
-    *,
-    tier_column: str = "d.source_quality_tier",
-    documents_table: str = "documents",
-) -> str:
-    """Tier-rank ORDER-BY fragment for a reader query, guarded for legacy DBs.
-
-    Returns :func:`tier_rank_case_sql` when ``documents.source_quality_tier``
-    exists, else the constant ``"NULL"`` so the caller's ``ORDER BY <this> DESC,
-    <table>.id DESC`` collapses to the pre-0053 ``id``-only pick on fixture DBs
-    that predate the tier column (or lack the ``documents`` table entirely). The
-    same degrade the Series loaders apply via their ``has_tier`` branch — factored
-    out so the four reader families that replicate the ordering in raw SQL
-    (cockpit_fundamentals, report §3 financials, fmp_derived_kpis, ask.grounding)
-    stay column-safe without duplicating the PRAGMA probe.
-
-    The degraded value is ``"NULL"``, NOT ``"0"``: a bare integer in an
-    ``ORDER BY`` is a POSITIONAL COLUMN REFERENCE in SQLite (``ORDER BY 0`` →
-    "term out of range"), whereas ``NULL`` is a constant that sorts all rows
-    equal so the ``id`` tiebreak takes over cleanly."""
-    if _probe_has_table(conn, documents_table) and _probe_has_column(
-        conn, documents_table, "source_quality_tier"
-    ):
-        return tier_rank_case_sql(tier_column)
-    return "NULL"
-
-
-def issuer_origin_rank_sql(source_type_column: str) -> str:
-    """Stable same-tier tie-break for issuer-originated document facts.
-
-    Reader quality is always decided by :func:`reader_tier_rank_sql` first.
-    This expression deliberately has no opinion across tiers: it only keeps an
-    issuer document ahead of a vendor normalization when their quality tier is
-    equal.
-    """
-    return f"CASE {source_type_column} WHEN 'ir_doc' THEN 1 WHEN 'sec_xbrl' THEN 1 ELSE 0 END"
-
-
-def reader_source_order_sql(
-    conn: sqlite3.Connection, *, source_type_column: str = "d.source_type"
-) -> str:
-    """Canonical reader ordering: quality tier, issuer tie-break, stable id.
-
-    Callers append their fact-id tie-break so this helper remains usable for
-    different fact tables.  Keeping the two policy components together avoids
-    a report surface silently elevating issuer origin above a higher-tier fact.
-    """
-    return f"{reader_tier_rank_sql(conn)} DESC, {issuer_origin_rank_sql(source_type_column)} DESC"
-
-
-def reader_tier_join_sql(
-    conn: sqlite3.Connection,
-    *,
-    fact_alias: str = "ff",
-    doc_alias: str = "d",
-    documents_table: str = "documents",
-) -> str:
-    """The ``LEFT JOIN documents`` clause a tier-aware reader query needs, or
-    ``""`` when the ``documents`` table is absent.
-
-    Paired with :func:`reader_tier_rank_sql`: when documents is missing the rank
-    fragment is the constant ``"NULL"`` AND this join is empty, so the query
-    never references the ``d`` alias it can't resolve — it degrades cleanly to
-    the id-only pick over ``financial_facts`` alone (the pre-0053 behavior). When
-    documents exists but the tier column doesn't, the join is still emitted
-    (harmless) and the rank fragment is ``"NULL"``."""
-    if _probe_has_table(conn, documents_table):
-        return f"LEFT JOIN {documents_table} {doc_alias} ON {doc_alias}.id = {fact_alias}.source_doc_id"
-    return ""
 
 
 def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
@@ -911,6 +823,201 @@ def _sourced_rows(
     return [by_period[pe] for pe in sorted(by_period)]
 
 
+def _canonical_metrics_engine_kpi_points(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    kpi_name: str,
+    period_types: list[str],
+    as_of_cutoff: str | None = None,
+) -> dict[datetime, SourcedObservation | None]:
+    """Read the revenue-YoY V2 bridge through its admitted output and inputs.
+
+    A ``None`` value reserves a period with an attempted but unavailable
+    canonical output. It must not fall back to a mutable legacy KPI row.
+    """
+    if (
+        kpi_name != "revenue_yoy"
+        or not _has_table(conn, "metric_computation_attempts")
+        or not _has_column(conn, "metric_computation_attempts", "output_observation_id")
+    ):
+        return {}
+
+    placeholders = ",".join("?" * len(period_types))
+    rows = conn.execute(
+        "SELECT attempt.period_end,attempt.fiscal_period_type,attempt.computed_at,"
+        "attempt.status,attempt.output_observation_id,"
+        "definition.version "
+        "FROM metric_computation_attempts AS attempt "
+        "JOIN formula_definitions AS definition ON definition.id=attempt.formula_id "
+        "WHERE attempt.ticker=? AND definition.formula_key=? "
+        f"AND attempt.fiscal_period_type IN ({placeholders}) "
+        "ORDER BY attempt.period_end,attempt.id",
+        (ticker.upper(), kpi_name, *period_types),
+    ).fetchall()
+    cutoff = _utc(datetime.fromisoformat(as_of_cutoff)) if as_of_cutoff else datetime.now(UTC)
+    by_period: dict[datetime, SourcedObservation | None] = {}
+    issuer_revenue = None
+    for row in rows:
+        period_end = _parse_period_end(row["period_end"])
+        if period_end is None:
+            continue
+        if as_of_cutoff is not None:
+            computed_at = datetime.fromisoformat(str(row["computed_at"]))
+            if _utc(computed_at) > cutoff:
+                continue
+        output_id = row["output_observation_id"]
+        if output_id is None and str(row["status"]) == "ok":
+            # An older V1 attempt still belongs to the strict legacy pick.
+            continue
+        by_period[period_end] = None
+        if output_id is None or str(row["status"]) != "ok":
+            continue
+        try:
+            formula = REGISTRY.get((kpi_name, int(row["version"])))
+            if formula is None:
+                continue
+            reader = FactReadModel(conn)
+            output = reader.admitted_derived_output(
+                str(output_id),
+                cutoff=cutoff,
+                formula_id=kpi_name,
+                formula_version=str(formula.version),
+                concept_namespace="urn:earnings-summary:derived:metrics-engine",
+                taxonomy_name="earnings-summary-metrics-engine",
+                unit_key=formula.unit.value,
+            )
+            if (
+                output is None
+                or output.observation.decimal_value is None
+                or output.derivation is None
+                or output.cell.period_end.date() != period_end.date()
+                or output.cell.fiscal_period != str(row["fiscal_period_type"])
+            ):
+                continue
+            inputs = reader.required_provenance_bundles(
+                output.derivation.input_observation_ids, cutoff=cutoff
+            )
+            if issuer_revenue is None:
+                issuer_revenue = CanonicalFinancialSeriesReader(
+                    conn, ticker, cutoff=cutoff
+                ).project_coordinates("revenue", cadence=FinancialCadence.QUARTERLY)
+            admitted_inputs = {
+                coordinate.observation.observation_id: coordinate.observation
+                for coordinate in issuer_revenue.coordinates
+                if coordinate.status == "admitted" and coordinate.observation is not None
+            }
+            if any(
+                item.observation.observation_id not in admitted_inputs
+                or item.cell.reporting_entity_id != output.cell.reporting_entity_id
+                or item.cell.scope_security_id != output.cell.scope_security_id
+                for item in inputs
+            ):
+                continue
+            input_contexts: list[dict[str, object]] = []
+            primary_source: dict[str, object] | None = None
+            for item in inputs:
+                sources: list[dict[str, object]] = []
+                for leaf in reader.reported_source_leaves(
+                    (item.observation.observation_id,), cutoff=cutoff
+                ):
+                    evidence = leaf.evidence
+                    if evidence is None:
+                        raise ValueError("reported source has no evidence")
+                    if (
+                        leaf.cell.reporting_entity_id != output.cell.reporting_entity_id
+                        or leaf.cell.scope_security_id != output.cell.scope_security_id
+                    ):
+                        raise ValueError("reported source has a different issuer scope")
+                    source = conn.execute(
+                        "SELECT document.ticker,source.source_url,source.retrieved_at,"
+                        "document.legacy_document_id "
+                        "FROM evidence_document_versions AS document "
+                        "JOIN evidence_source_observations AS source "
+                        "ON source.observation_id=document.observation_id "
+                        "AND source.blob_sha256=document.blob_sha256 "
+                        "WHERE document.document_version_id=?",
+                        (evidence.document_version_id,),
+                    ).fetchone()
+                    if source is None or str(source["ticker"]).upper() != ticker.upper():
+                        raise ValueError("canonical metrics input source is unavailable")
+                    source_context: dict[str, object] = {
+                        "bundle": leaf.model_dump(mode="json"),
+                        "source_url": str(source["source_url"]),
+                        "retrieved_at": str(source["retrieved_at"]),
+                        "legacy_document_id": (
+                            int(source["legacy_document_id"])
+                            if source["legacy_document_id"] is not None
+                            else None
+                        ),
+                    }
+                    sources.append(source_context)
+                    if primary_source is None:
+                        primary_source = source_context
+                input_contexts.append(
+                    {"bundle": item.model_dump(mode="json"), "source_leaves": tuple(sources)}
+                )
+            if primary_source is None:
+                continue
+            provenance: dict[str, object] = {
+                "source": "canonical_metrics_engine",
+                "fact_id": None,
+                "fact_table": None,
+                "source_doc_id": primary_source["legacy_document_id"],
+                "source_url": primary_source["source_url"],
+                "fetched_at": primary_source["retrieved_at"],
+                "locator": None,
+                "output_observation_id": str(output_id),
+                "canonical_output": output.model_dump(mode="json"),
+                "canonical_inputs": tuple(input_contexts),
+            }
+            by_period[period_end] = SourcedObservation(
+                period_end=period_end,
+                value=float(output.observation.decimal_value),
+                unit=output.cell.unit_key,
+                provenance=provenance,
+            )
+        except (sqlite3.Error, RuntimeError, ValueError):
+            # Admission and source-context failures remain unavailable.
+            continue
+    return by_period
+
+
+def _merge_canonical_kpi_points(
+    legacy: list[SourcedObservation],
+    canonical: dict[datetime, SourcedObservation | None],
+) -> list[SourcedObservation]:
+    by_period: dict[datetime, SourcedObservation | None] = {
+        item.period_end: item for item in legacy
+    }
+    by_period.update(canonical)
+    return [item for _, item in sorted(by_period.items()) if item is not None]
+
+
+def _kpi_rows_to_series(
+    conn: sqlite3.Connection,
+    rows: Iterable[sqlite3.Row],
+    *,
+    ticker: str,
+    kpi_name: str,
+    period_types: list[str],
+    as_of_cutoff: str | None,
+) -> list[Observation]:
+    by_period = {item.period_end: item for item in _rows_to_series(rows)}
+    for period_end, point in _canonical_metrics_engine_kpi_points(
+        conn,
+        ticker=ticker,
+        kpi_name=kpi_name,
+        period_types=period_types,
+        as_of_cutoff=as_of_cutoff,
+    ).items():
+        if point is None:
+            by_period.pop(period_end, None)
+        else:
+            by_period[period_end] = Observation(period_end=period_end, value=point.value)
+    return [by_period[period_end] for period_end in sorted(by_period)]
+
+
 def load_financial_series_with_provenance(
     ticker: str,
     line_item: str,
@@ -1294,7 +1401,12 @@ def _kpi_series_with_provenance(
                 """,
                 (ticker.upper(), kpi_name, *period_list),
             ).fetchall()
-            return _sourced_rows(rows, fact_table="kpi_facts")
+            return _merge_canonical_kpi_points(
+                _sourced_rows(rows, fact_table="kpi_facts"),
+                _canonical_metrics_engine_kpi_points(
+                    conn, ticker=ticker, kpi_name=kpi_name, period_types=period_list
+                ),
+            )
         semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
         semantic_join2, semantic_where2 = semantic_admission_sql(
             conn, fact_alias="kf2", context_alias="ksc2", fail_closed=True
@@ -1330,7 +1442,12 @@ def _kpi_series_with_provenance(
             """,
             (ticker.upper(), kpi_name, *period_list),
         ).fetchall()
-        return _sourced_rows(rows, fact_table="kpi_facts")
+        return _merge_canonical_kpi_points(
+            _sourced_rows(rows, fact_table="kpi_facts"),
+            _canonical_metrics_engine_kpi_points(
+                conn, ticker=ticker, kpi_name=kpi_name, period_types=period_list
+            ),
+        )
     except sqlite3.Error as exc:
         log.warning(
             {
@@ -1406,7 +1523,14 @@ def load_kpi_series(
                 """,
                 (ticker.upper(), kpi_name, *period_list),
             ).fetchall()
-            return _rows_to_series(rows)
+            return _kpi_rows_to_series(
+                conn,
+                rows,
+                ticker=ticker,
+                kpi_name=kpi_name,
+                period_types=period_list,
+                as_of_cutoff=as_of_cutoff,
+            )
 
         has_tier = _has_column(conn, "documents", "source_quality_tier")
         rank_expr = _tier_rank_case_sql("d.source_quality_tier") if has_tier else "0"
@@ -1442,7 +1566,14 @@ def load_kpi_series(
                 """,
                 (ticker.upper(), kpi_name, *period_list),
             ).fetchall()
-            return _rows_to_series(rows)
+            return _kpi_rows_to_series(
+                conn,
+                rows,
+                ticker=ticker,
+                kpi_name=kpi_name,
+                period_types=period_list,
+                as_of_cutoff=as_of_cutoff,
+            )
         rows = conn.execute(
             f"""
             SELECT kf.period_end, kf.value
@@ -1479,7 +1610,14 @@ def load_kpi_series(
                 *as_of_params,
             ),
         ).fetchall()
-        return _rows_to_series(rows)
+        return _kpi_rows_to_series(
+            conn,
+            rows,
+            ticker=ticker,
+            kpi_name=kpi_name,
+            period_types=period_list,
+            as_of_cutoff=as_of_cutoff,
+        )
     except sqlite3.Error as exc:
         log.warning(
             {

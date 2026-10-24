@@ -86,9 +86,59 @@ PAYLOAD = b"%PDF-1.4\nsynthetic exact source bytes"
 SHA = hashlib.sha256(PAYLOAD).hexdigest()
 
 
+@pytest.mark.parametrize(
+    ("quote", "admitted"),
+    [
+        ("Uber Announces Results for Second Quarter 2025", True),
+        (
+            "Uber Technologies, Inc. today announced financial results for the "
+            "second quarter ended June 30, 2025.",
+            True,
+        ),
+        ("Wix Reports Second Quarter 2025 Results", True),
+        ("Meta to Announce Second Quarter 2025 Results", False),
+        ("MercadoLibre to Report Second Quarter 2025 Financial Results", False),
+        ("Uber will release results for the second quarter of 2025", False),
+        ("Uber Announces Date for Results for Second Quarter 2025", False),
+        ("Uber Announces Upcoming Results for Second Quarter 2025", False),
+        ("Uber announced second quarter 2025 outlook results", False),
+        ("Uber Reports Second Quarter 2025 Results compared with prior quarter", False),
+    ],
+)
+def test_current_period_quote_requires_actual_release_wording(quote: str, admitted: bool) -> None:
+    payload = {
+        "document_version_id": "synthetic-release-v1",
+        "source_sha256": "a" * 64,
+        "issuer_id": "issuer:synthetic",
+        "ticker": "UBER",
+        "profile_revision_id": "profile:synthetic",
+        "subject_binding_revision_id": "subject:synthetic",
+        "fiscal_year": 2025,
+        "fiscal_quarter": 2,
+        "period_end": "2025-06-30",
+        "page_number": 1,
+        "char_start": 0,
+        "char_end": len(quote),
+        "exact_quote": quote,
+        "reviewer_identity": "agent-analyst:synthetic",
+        "review_evidence": "Exact first-page issuer wording states current reported actuals.",
+        "knowledge_cutoff": "2026-10-24T14:00:00+00:00",
+        "observed_through": "2026-10-24T14:00:00+00:00",
+        "reviewed_at": "2026-10-24T14:00:00+00:00",
+    }
+    if admitted:
+        assert inventory.CurrentReportedPeriodReview.model_validate(payload).exact_quote == quote
+    else:
+        with pytest.raises(ValueError, match="current reported actual quarter"):
+            inventory.CurrentReportedPeriodReview.model_validate(payload)
+
+
 def _reviewed_period_fixture(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
+    *,
+    legacy_type: str | None = None,
+    publisher_url: str = "https://investors.nu/current.pdf",
 ) -> tuple[sqlite3.Connection, inventory.CurrentReportedPeriodReview]:
     db = migrated_db(tmp_path / "period-review.db")
     conn = connect_sqlite(db, role=SQLiteConnectionRole.WRITER)
@@ -158,8 +208,8 @@ def _reviewed_period_fixture(
         SourceObservation(
             observation_id="ir-current-source",
             idempotency_key="ir-current-source",
-            source_kind="ir_document",
-            source_url="https://investors.nu/current.pdf",
+            source_kind="ir_doc" if legacy_type is not None else "ir_document",
+            source_url=publisher_url,
             blob_sha256=digest,
             source_published_at=None,
             filing_at=None,
@@ -177,10 +227,10 @@ def _reviewed_period_fixture(
             version_sequence=1,
             observation_id="ir-current-source",
             blob_sha256=digest,
-            issuer_id=issuer_id,
+            issuer_id="legacy-ticker:NU" if legacy_type is not None else issuer_id,
             ticker="NU",
-            document_type="ir_document",
-            form_type="IR",
+            document_type=legacy_type or "ir_document",
+            form_type=legacy_type or "IR",
             period_start=None,
             period_end=None,
             as_of_at=None,
@@ -249,6 +299,102 @@ def test_current_reported_period_review_binds_native_quote_and_replays(
             ).fetchone()[0]
             == 1
         )
+    finally:
+        conn.close()
+
+
+def test_legacy_ir_press_release_uses_canonical_subject_and_exact_review(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn, review = _reviewed_period_fixture(tmp_path, migrated_db, legacy_type="ir_press_release")
+    later = datetime(2026, 10, 22, tzinfo=UTC)
+    try:
+        assert inventory.persist_current_reported_period_review(conn, review)
+        assert (
+            inventory.verified_current_reported_period_review(
+                conn,
+                document_version_id=review.document_version_id,
+                source_sha256=review.source_sha256,
+                period_end=review.period_end,
+            )
+            == review
+        )
+        assert (
+            inventory.reviewed_current_period_for_url(
+                conn,
+                issuer_id=review.issuer_id,
+                ticker="NU",
+                source_url="https://investors.nu/current.pdf",
+                observed_through=later,
+            )
+            == review
+        )
+        request = IRSourceInventoryRequest(
+            issuer_id=review.issuer_id,
+            ticker="NU",
+            ir_url="https://investors.nu/",
+            revision=1,
+            discovery=IRDiscoverySnapshot(
+                pages=(), candidates=(), crawl_complete=True, crawl_stop_reason="frontier_exhausted"
+            ),
+            retrieval_config_sha256="a" * 64,
+            collector_code_version="synthetic@1",
+            started_at=later,
+            completed_at=later,
+            recorded_at=later,
+            reconciled_at=later,
+        )
+        expected = expected_ir_candidate(
+            conn,
+            request,
+            IRDocumentCandidate(
+                url="https://investors.nu/current.pdf",
+                link_text="Current quarter results",
+                filename_hint="current.pdf",
+                source_page="https://investors.nu/",
+            ),
+            authoritative=True,
+        )
+        assert expected.document_type == "earnings_release"
+        assert exact_captured_document(
+            conn, expected, issuer_id=review.issuer_id, ticker="NU", reconciled_at=later
+        ) == (review.document_version_id, 1)
+        assert tuple(
+            conn.execute(
+                "SELECT version.issuer_id,version.document_type,source.source_kind "
+                "FROM evidence_document_versions version JOIN evidence_source_observations source "
+                "ON source.observation_id=version.observation_id "
+                "WHERE version.document_version_id=?",
+                (review.document_version_id,),
+            ).fetchone()
+        ) == ("legacy-ticker:NU", "ir_press_release", "ir_doc")
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    ("legacy_type", "publisher_url"),
+    [
+        ("ir_presentation", "https://investors.nu/current.pdf"),
+        ("ir_press_release", "file:///tmp/current.pdf"),
+    ],
+)
+def test_current_period_review_rejects_presentation_and_nonpublisher_url(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    legacy_type: str,
+    publisher_url: str,
+) -> None:
+    conn, review = _reviewed_period_fixture(
+        tmp_path, migrated_db, legacy_type=legacy_type, publisher_url=publisher_url
+    )
+    try:
+        with pytest.raises(
+            inventory.IssuerDocumentInventoryError,
+            match="reported_period_source_identity_mismatch",
+        ):
+            inventory.persist_current_reported_period_review(conn, review)
+        assert conn.execute("SELECT COUNT(*) FROM evidence_extraction_runs").fetchone()[0] == 0
     finally:
         conn.close()
 
@@ -360,14 +506,28 @@ def test_reviewed_generic_ir_document_bridges_inventory_without_metadata_rewrite
         conn.close()
 
 
+@pytest.mark.parametrize("unreviewed_ir_document", [False, True])
+@pytest.mark.parametrize("legacy_press_release", [False, True])
 def test_reported_window_accepts_captured_native_review_and_sealed_sec_population(
-    tmp_path: Path, migrated_db: Callable[..., Path], darwin_staging_double: None
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    darwin_staging_double: None,
+    unreviewed_ir_document: bool,
+    legacy_press_release: bool,
 ) -> None:
-    conn, review = _reviewed_period_fixture(tmp_path, migrated_db)
+    conn, review = _reviewed_period_fixture(
+        tmp_path,
+        migrated_db,
+        legacy_type="ir_press_release" if legacy_press_release else None,
+    )
     later = datetime(2026, 10, 22, tzinfo=UTC)
     archive_url = "https://investors.nu/quarterly-results"
     release_url = "https://investors.nu/current.pdf"
     q4_url = "https://investors.nu/fourth-quarter-2025.pdf"
+    generic_url = "https://investors.nu/unreviewed-document.pdf"
+    ir_urls = (
+        (release_url, q4_url, generic_url) if unreviewed_ir_document else (release_url, q4_url)
+    )
     sec_url = "https://data.sec.gov/submissions/CIK0001691493.json"
 
     def source(observation_id: str, kind: str, url: str, raw: bytes) -> str:
@@ -536,12 +696,31 @@ def test_reported_window_accepts_captured_native_review_and_sealed_sec_populatio
                     ),
                 )
             )
+        old_period = date(2025, 6, 30)
+        sec_expected.append(
+            ExpectedDocumentImport(
+                expected_document_key=f"{review.issuer_id}:sec:{old_period.isoformat()}",
+                source_kind="sec_filing",
+                document_type="filing",
+                form_type="10-Q",
+                source_url=f"https://www.sec.gov/Archives/edgar/data/1691493/{old_period}.htm",
+                period_end=datetime.combine(old_period, time.min),
+                filing_at=review.reviewed_at,
+                expected_at=later,
+                expectation_basis="authoritative",
+                absence=ExplicitAbsence(
+                    coverage_status="available",
+                    reason_code="synthetic_uncaptured_historical_filing",
+                    reason_details=(("period", old_period.isoformat()),),
+                ),
+            )
+        )
         source("sec-submissions-window", "sec_submissions", sec_url, b'{"filings":[]}')
         archive_digest = source(
             "ir-archive-window",
             "ir_publisher_authority",
             archive_url,
-            json.dumps({"urls": [release_url, q4_url]}).encode(),
+            json.dumps({"urls": ir_urls}).encode(),
         )
         conn.commit()
         sec_result = reconcile_source_coverage(
@@ -577,7 +756,8 @@ def test_reported_window_accepts_captured_native_review_and_sealed_sec_populatio
                 apply=True,
             ),
         )
-        assert sec_result.assessment_statuses == ("captured",) * 4
+        assert sec_result.assessment_statuses.count("captured") == 4
+        assert sec_result.assessment_statuses.count("available") == 1
         ir_result = sync_ir_source_inventory(
             conn,
             IRSourceInventoryRequest(
@@ -594,7 +774,7 @@ def test_reported_window_accepts_captured_native_review_and_sealed_sec_populatio
                             filename_hint=Path(url).name,
                             source_page=archive_url,
                         )
-                        for url in (release_url, q4_url)
+                        for url in ir_urls
                     ),
                     crawl_complete=True,
                     crawl_stop_reason="frontier_exhausted",
@@ -612,7 +792,7 @@ def test_reported_window_accepts_captured_native_review_and_sealed_sec_populatio
                             traversal_kind="pagination",
                             outcome="exhausted",
                             terminal_condition="next_link_absent",
-                            observed_document_urls=(release_url, q4_url),
+                            observed_document_urls=ir_urls,
                         ),
                     ),
                 ),
@@ -627,7 +807,13 @@ def test_reported_window_accepts_captured_native_review_and_sealed_sec_populatio
             blob_root=tmp_path / "inventory-blobs",
         )
         assert ir_result.complete
-        assert ir_result.assessment_statuses == ("captured", "captured")
+        assert ir_result.assessment_statuses.count("captured") == 2
+        if unreviewed_ir_document:
+            assert ir_result.assessment_statuses.count("available") == 1
+            unknown = reported_period_window_from_inventory(conn, ticker="NU", as_of=later.date())
+            assert unknown.status is ReportedPeriodStatus.UNKNOWN
+            assert unknown.reason == "ir_period_unqualified"
+            return
         selected = reported_period_window_from_inventory(conn, ticker="NU", as_of=later.date())
         assert selected.status is ReportedPeriodStatus.COMPLETE
         assert selected.period_ends == (
@@ -639,6 +825,11 @@ def test_reported_window_accepts_captured_native_review_and_sealed_sec_populatio
         )
         assert selected.fiscal_year_end == "12-31"
         assert selected.proof_sha256 is not None
+        historical = reported_period_window_from_inventory(
+            conn, ticker="NU", as_of=later.date(), max_quarters=6
+        )
+        assert historical.status is ReportedPeriodStatus.UNKNOWN
+        assert historical.reason == "captured_period_proof_missing"
         conn.execute(
             "INSERT INTO tracked_companies (ticker,name,list_type,instrument_type,fiscal_year_end) "
             "VALUES ('NU','Nu Holdings','portfolio','equity','12-31')"

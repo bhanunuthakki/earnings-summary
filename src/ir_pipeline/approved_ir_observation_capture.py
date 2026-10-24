@@ -7,6 +7,7 @@ import binascii
 import hashlib
 import importlib
 import json
+import sqlite3
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,7 +17,7 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime
 from enum import StrEnum
 from html.parser import HTMLParser
-from typing import Any, Protocol, Self, TypeVar, cast
+from typing import Any, Literal, Protocol, Self, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -40,7 +41,12 @@ from pipeline.approved_ir_wix import (
     load_wix_rendered_observations,
     parse_wix_visible_quarters,
 )
-from pipeline.source_policy import AdapterKey, issuer_policy
+from pipeline.issuer_document_inventory import (
+    reviewed_current_period_for_url,
+    verified_current_reported_period_review,
+)
+from pipeline.source_policy import AdapterKey, ir_url_is_authorized, issuer_policy
+from provenance.issuer_registry import IssuerRegistry, UnresolvedIssuerIdentityError
 from runtime.deterministic import canonical_json_ascii as _canonical_json
 
 _SCHEMA_VERSION = "approved-ir-observation-bundle@1"
@@ -179,6 +185,173 @@ class ApprovedIrObservationCaptureRequest(_FrozenModel):
         if len(value) != len(set(value)):
             raise ValueError("requested reporting periods must be unique")
         return value
+
+
+class ReviewedIrPeriod(_FrozenModel):
+    document_version_id: str = Field(min_length=1, max_length=128)
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_url: str = Field(min_length=1, max_length=4096)
+    period_end: date
+
+
+class ReviewedIrPeriodSelection(_FrozenModel):
+    schema_version: Literal["approved-ir-reviewed-period-selection@1"] = (
+        "approved-ir-reviewed-period-selection@1"
+    )
+    issuer_identifier: str = Field(min_length=1, max_length=128)
+    cutoff_at: datetime
+    periods: tuple[ReviewedIrPeriod, ...] = Field(min_length=5, max_length=5)
+
+    @model_validator(mode="after")
+    def _distinct_periods(self) -> Self:
+        dates = tuple(item.period_end for item in self.periods)
+        if dates != tuple(sorted(set(dates), reverse=True)):
+            raise ValueError("reviewed reporting periods must be unique and newest first")
+        if self.cutoff_at.tzinfo is None or self.cutoff_at.utcoffset() != UTC.utcoffset(None):
+            raise ValueError("reviewed period cutoff must be timezone-aware UTC")
+        if any(period > self.cutoff_at.date() for period in dates):
+            raise ValueError("reviewed reporting period is after the selection cutoff")
+        return self
+
+
+def load_reviewed_ir_period_selection(wire_bytes: bytes) -> ReviewedIrPeriodSelection:
+    if not wire_bytes or len(wire_bytes) > 100_000:
+        raise ApprovedIrObservationCaptureError("reviewed period selection size is invalid")
+    try:
+        return ReviewedIrPeriodSelection.model_validate_json(wire_bytes)
+    except ValidationError as exc:
+        raise ApprovedIrObservationCaptureError(
+            f"reviewed period selection schema is invalid: {exc}"
+        ) from None
+
+
+def verify_reviewed_ir_period_selection(
+    conn: sqlite3.Connection,
+    selection: ReviewedIrPeriodSelection,
+    *,
+    issuer_identifier: str,
+    capture_at: datetime | None = None,
+) -> tuple[date, ...]:
+    """Reconstruct five current native period reviews before a new observation capture."""
+
+    _verify_selection_capture_clock(selection, capture_at or datetime.now(UTC))
+    policy = issuer_policy(issuer_identifier)
+    ticker = policy.ticker_aliases[0]
+    own_snapshot = not conn.in_transaction
+    if own_snapshot:
+        conn.execute("BEGIN")
+    try:
+        registry = IssuerRegistry(conn)
+        try:
+            policy_binding = registry.canonicalize_recorded_issuer(
+                f"legacy-ticker:{ticker}", knowledge_at=selection.cutoff_at
+            )
+            if policy_binding.material_dissent:
+                raise ApprovedIrObservationCaptureError(
+                    "reviewed period issuer has material dissent"
+                )
+            canonical_issuer_id = policy_binding.issuer_id
+            if selection.issuer_identifier != canonical_issuer_id:
+                selected_binding = registry.canonicalize_recorded_issuer(
+                    selection.issuer_identifier, knowledge_at=selection.cutoff_at
+                )
+                if (
+                    selected_binding.material_dissent
+                    or selected_binding.issuer_id != canonical_issuer_id
+                ):
+                    raise ApprovedIrObservationCaptureError("reviewed period issuer does not match")
+        except UnresolvedIssuerIdentityError as exc:
+            raise ApprovedIrObservationCaptureError(
+                "reviewed period issuer lacks an approved canonical binding"
+            ) from exc
+        for item in selection.periods:
+            if not ir_url_is_authorized(policy.ir, item.source_url):
+                raise ApprovedIrObservationCaptureError(
+                    "reviewed period source URL is unauthorized"
+                )
+            verified = verified_current_reported_period_review(
+                conn,
+                document_version_id=item.document_version_id,
+                source_sha256=item.source_sha256,
+                period_end=item.period_end,
+            )
+            if verified is None:
+                raise ApprovedIrObservationCaptureError(
+                    "reviewed period source is missing, stale, or conflicts with the selection"
+                )
+            try:
+                verified_issuer_id = verified.issuer_id
+                if verified_issuer_id != canonical_issuer_id:
+                    verified_binding = registry.canonicalize_recorded_issuer(
+                        verified_issuer_id, knowledge_at=selection.cutoff_at
+                    )
+                    if verified_binding.material_dissent:
+                        raise ApprovedIrObservationCaptureError(
+                            "reviewed period issuer has material dissent"
+                        )
+                    verified_issuer_id = verified_binding.issuer_id
+            except UnresolvedIssuerIdentityError as exc:
+                raise ApprovedIrObservationCaptureError(
+                    "reviewed period issuer lacks an approved canonical binding"
+                ) from exc
+            if (
+                verified_issuer_id != canonical_issuer_id
+                or verified.ticker != ticker
+                or verified.reviewed_at > selection.cutoff_at
+                or item.period_end > verified.reviewed_at.date()
+                or verified.knowledge_cutoff > selection.cutoff_at
+                or verified.observed_through > selection.cutoff_at
+                or reviewed_current_period_for_url(
+                    conn,
+                    issuer_id=verified.issuer_id,
+                    ticker=ticker,
+                    source_url=item.source_url,
+                    observed_through=selection.cutoff_at,
+                )
+                != verified
+            ):
+                raise ApprovedIrObservationCaptureError(
+                    "reviewed period source is missing, stale, or conflicts with the selection"
+                )
+        return tuple(item.period_end for item in selection.periods)
+    finally:
+        if own_snapshot:
+            conn.rollback()
+
+
+def _import_periods(
+    fixed: tuple[date, ...],
+    selection: ReviewedIrPeriodSelection | None,
+    conn: sqlite3.Connection | None,
+    issuer: str,
+    capture_at: datetime,
+) -> tuple[date, ...]:
+    if selection is None and conn is None:
+        return fixed
+    if selection is None or conn is None:
+        raise ApprovedIrObservationCaptureError("reviewed selection requires a source connection")
+    return verify_reviewed_ir_period_selection(
+        conn, selection, issuer_identifier=issuer, capture_at=capture_at
+    )
+
+
+def _verify_selection_capture_clock(
+    selection: ReviewedIrPeriodSelection, capture_at: datetime
+) -> None:
+    if any(item.period_end > selection.cutoff_at.date() for item in selection.periods):
+        raise ApprovedIrObservationCaptureError(
+            "reviewed reporting period is after the selection cutoff"
+        )
+    captured = (
+        capture_at.replace(tzinfo=UTC) if capture_at.tzinfo is None else capture_at.astimezone(UTC)
+    )
+    now = datetime.now(UTC)
+    if selection.cutoff_at > now:
+        raise ApprovedIrObservationCaptureError("reviewed period selection cutoff is in the future")
+    if not selection.cutoff_at <= captured <= now:
+        raise ApprovedIrObservationCaptureError(
+            "reviewed period capture must follow selection cutoff and precede current time"
+        )
 
 
 class _WixVisibleExportLink(_FrozenModel):
@@ -431,7 +604,12 @@ class _VisibleAnchorParser(HTMLParser):
         self._active = None
 
 
-def import_wix_visible_browser_export(export_bytes: bytes) -> ApprovedIrObservationBundle:
+def import_wix_visible_browser_export(
+    export_bytes: bytes,
+    *,
+    reviewed_selection: ReviewedIrPeriodSelection | None = None,
+    source_connection: sqlite3.Connection | None = None,
+) -> ApprovedIrObservationBundle:
     """Validate an automatic visible-Chrome export and seal its exact proof bytes."""
 
     if not export_bytes or len(export_bytes) > _MAX_WIRE_BYTES:
@@ -451,21 +629,25 @@ def import_wix_visible_browser_export(export_bytes: bytes) -> ApprovedIrObservat
         raise ApprovedIrObservationCaptureError(
             "Wix visible-browser export authority or document identity is invalid"
         )
-    if len(exported.states) != len(_WIX_IMPORT_PERIODS) or {
-        state.period_end for state in exported.states
-    } != set(_WIX_IMPORT_PERIODS):
-        raise ApprovedIrObservationCaptureError(
-            "Wix visible-browser export does not contain the exact approved period set"
-        )
     captured_at = exported.captured_at
     if captured_at.tzinfo is not None:
         captured_at = captured_at.astimezone(UTC).replace(tzinfo=None)
+    requested_periods = _import_periods(
+        _WIX_IMPORT_PERIODS, reviewed_selection, source_connection, "WIX", captured_at
+    )
+    if len(exported.states) != len(requested_periods) or {
+        state.period_end for state in exported.states
+    } != set(requested_periods):
+        period_kind = "approved" if reviewed_selection is None else "reviewed"
+        raise ApprovedIrObservationCaptureError(
+            f"Wix visible-browser export does not contain the exact {period_kind} period set"
+        )
     captures: list[WixRenderedPanelCapture] = []
     for state in exported.states:
         captures.append(_wix_export_state_capture(exported, state))
     request = ApprovedIrObservationCaptureRequest(
         issuer_identifier="WIX",
-        requested_quarter_ends=_WIX_IMPORT_PERIODS,
+        requested_quarter_ends=requested_periods,
         captured_at=captured_at,
         user_agent="external-visible-browser-export",
     )
@@ -477,7 +659,12 @@ def import_wix_visible_browser_export(export_bytes: bytes) -> ApprovedIrObservat
     )
 
 
-def import_rubrik_visible_browser_export(export_bytes: bytes) -> ApprovedIrObservationBundle:
+def import_rubrik_visible_browser_export(
+    export_bytes: bytes,
+    *,
+    reviewed_selection: ReviewedIrPeriodSelection | None = None,
+    source_connection: sqlite3.Connection | None = None,
+) -> ApprovedIrObservationBundle:
     """Validate an automatic visible-Chrome Rubrik export and seal exact DOM proof."""
 
     if not export_bytes or len(export_bytes) > _MAX_WIRE_BYTES:
@@ -498,19 +685,23 @@ def import_rubrik_visible_browser_export(export_bytes: bytes) -> ApprovedIrObser
         raise ApprovedIrObservationCaptureError(
             "Rubrik visible-browser export authority or document identity is invalid"
         )
-    if len(exported.states) != len(_RUBRIK_IMPORT_PERIODS) or {
-        state.period_end for state in exported.states
-    } != set(_RUBRIK_IMPORT_PERIODS):
-        raise ApprovedIrObservationCaptureError(
-            "Rubrik visible-browser export does not contain the exact approved period set"
-        )
     captured_at = exported.captured_at
     if captured_at.tzinfo is not None:
         captured_at = captured_at.astimezone(UTC).replace(tzinfo=None)
+    requested_periods = _import_periods(
+        _RUBRIK_IMPORT_PERIODS, reviewed_selection, source_connection, "RBRK", captured_at
+    )
+    if len(exported.states) != len(requested_periods) or {
+        state.period_end for state in exported.states
+    } != set(requested_periods):
+        period_kind = "approved" if reviewed_selection is None else "reviewed"
+        raise ApprovedIrObservationCaptureError(
+            f"Rubrik visible-browser export does not contain the exact {period_kind} period set"
+        )
     captures = tuple(_rubrik_export_state_capture(exported, state) for state in exported.states)
     request = ApprovedIrObservationCaptureRequest(
         issuer_identifier="RBRK",
-        requested_quarter_ends=_RUBRIK_IMPORT_PERIODS,
+        requested_quarter_ends=requested_periods,
         captured_at=captured_at,
         user_agent="external-visible-browser-export",
     )
