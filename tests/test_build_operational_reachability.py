@@ -186,272 +186,121 @@ def test_actual_head_is_supported() -> None:
         for edge in graph.unknown_edges
         if not edge.source.startswith(("tests/", "instruction_tests/"))
     ]
-    # Test-sourced dynamic references stay tolerated; the residual assertion
-    # below is the production gate.
-    # Keep the OS proxies and actual native metadata field lookup test-only and exact.
-    assert [
-        edge for edge in graph.unknown_edges if edge.source == "tests/test_bounded_source_reader.py"
-    ] == [
-        GraphEdge(
-            source="tests/test_bounded_source_reader.py",
-            target="<dynamic attribute>",
-            kind="getattr",
-            evidence="dynamic getattr expression",
-            confidence="low",
-            line=line,
-            unknown=True,
-        )
-        for line in (219, 307, 348)
-    ]
-    # The native fence tests read a fixed GenericMapping field tuple and select
-    # GetCurrentProcess or GetCurrentThread for read-only token observation.
-    assert [
-        edge for edge in graph.unknown_edges if edge.source == "tests/test_inline_xbrl_processor.py"
-    ] == [
-        GraphEdge(
-            source="tests/test_inline_xbrl_processor.py",
-            target="<dynamic attribute>",
-            kind="getattr",
-            evidence="dynamic getattr expression",
-            confidence="low",
-            line=line,
-            unknown=True,
-        )
-        for line in (124, 914)
-    ]
-    # Keep the exact managed-startup, shared-ledger admission, dead/live
-    # lease-holder and harness session-start pruning test children. Reject any
-    # other additions in these files.
-    for source, lines in (
-        ("tests/test_sqlite_bootstrap.py", (32, 108)),
-        ("tests/test_weekly_cleanup.py", (190,)),
-        ("tests/test_filing_xbrl_appcontainer_launcher.py", (22, 34)),
-        ("tests/test_storage_reservation.py", (61, 121, 139)),
-        ("tests/test_temp_run_pruning.py", (166,)),
-        ("tests/test_temp_run_retention.py", (907,)),
-        ("tests/test_financial_source_semantic_quarantine.py", (49,)),
-    ):
-        assert [edge for edge in graph.unknown_edges if edge.source == source] == [
+    # Only unreachable unknown sources fall outside the production closure;
+    # reached test sources remain subject to the zero production-unknown gate.
+    # The residual census below is a stricter non-test-source check, not an
+    # independent restatement of production_unknown.
+    assert residual_source_edges == []
+
+
+@pytest.mark.parametrize(
+    ("source", "edge"),
+    [
+        (
+            "getattr(mod, name)\n",
             GraphEdge(
-                source=source,
-                target="<dynamic process entrypoint>",
-                kind="unknown",
-                evidence="subprocess/runpy expression",
-                confidence="low",
-                line=line,
-                unknown=True,
-            )
-            for line in lines
-        ]
-    # SEC creator retirement removes only its three test-only process edges.
-    assert not any(e.source == "tests/test_sec_delta_planner.py" for e in graph.unknown_edges)
-    # Pin the IR fixture lookups: bounded capture entrypoints and monkeypatch
-    # restoration of fixed state-path fields. Line 27 is an existing seam;
-    # the other seven lookups accompany the new isolation/transaction tests.
-    for source, lines in (
-        ("tests/test_ir_supplement_continuation.py", (871,)),
-        ("tests/test_scan_ir_transcripts.py", (422, 424, 484, 486)),
-        ("tests/test_split_root_legacy_adapters.py", (27, 205, 215)),
-    ):
-        assert [edge for edge in graph.unknown_edges if edge.source == source] == [
-            GraphEdge(
-                source=source,
+                source="execution/main.py",
                 target="<dynamic attribute>",
                 kind="getattr",
                 evidence="dynamic getattr expression",
                 confidence="low",
-                line=line,
+                line=1,
                 unknown=True,
-            )
-            for line in lines
-        ]
-    # Retain all exact test seams from both branches.
-    # The zero-production assertions stay above.
-    assert len(graph.unknown_edges) == 170
+            ),
+        ),
+        (
+            "import subprocess\nsubprocess.run(command)\n",
+            GraphEdge(
+                source="execution/main.py",
+                target="<dynamic process entrypoint>",
+                kind="unknown",
+                evidence="subprocess/runpy expression",
+                confidence="low",
+                line=2,
+                unknown=True,
+            ),
+        ),
+        (
+            "import importlib\nimportlib.import_module('missing_optional_dependency')\n",
+            GraphEdge(
+                source="execution/main.py",
+                target="missing_optional_dependency",
+                kind="dynamic_import",
+                evidence="dynamic import expression (target unresolved)",
+                confidence="low",
+                line=2,
+                unknown=True,
+            ),
+        ),
+    ],
+)
+def test_raw_unknown_payload_preserved_exactly(
+    tmp_path: Path, source: str, edge: GraphEdge
+) -> None:
+    root = _repo(tmp_path)
+    _write(root, "execution/main.py", source)
+    _track(root, "execution/main.py")
+    graph = build_graph(root)
     assert [
-        edge for edge in graph.unknown_edges if edge.source == "tests/test_db_writer_gate.py"
-    ] == [
-        GraphEdge(
-            source="tests/test_db_writer_gate.py",
-            target="<dynamic process entrypoint>",
-            kind="unknown",
-            evidence="subprocess/runpy expression",
-            confidence="low",
-            line=line,
-            unknown=True,
-        )
-        for line in (304, 474, 578)
-    ]
-    assert [
-        edge
-        for edge in graph.unknown_edges
-        if edge.source == "tests/test_job_runtime_process_tree.py"
-    ] == [
-        GraphEdge(
-            source="tests/test_job_runtime_process_tree.py",
-            target="<dynamic process entrypoint>",
-            kind="unknown",
-            evidence="subprocess/runpy expression",
-            confidence="low",
-            line=line,
-            unknown=True,
-        )
-        for line in (233, 330)
-    ]
-    assert (
-        GraphEdge(
-            source="tests/test_design_computed_canary.py",
-            target="playwright.sync_api",
-            kind="dynamic_import",
-            evidence="dynamic import expression (target unresolved)",
-            confidence="low",
-            line=107,
-            unknown=True,
-        )
-        in graph.unknown_edges
-    )
-    assert [
-        edge
-        for edge in graph.unknown_edges
-        if edge.source == "tests/test_job_runtime_lock_filenames.py"
-    ] == [
-        GraphEdge(
-            source="tests/test_job_runtime_lock_filenames.py",
-            target="<dynamic process entrypoint>",
-            kind="unknown",
-            evidence="subprocess/runpy expression",
-            confidence="low",
-            line=73,
-            unknown=True,
-        )
-    ]
-    assert [
-        edge for edge in graph.unknown_edges if edge.source == "tests/test_pytest_temp_lifecycle.py"
-    ] == [
-        GraphEdge(
-            source="tests/test_pytest_temp_lifecycle.py",
-            target="<dynamic process entrypoint>",
-            kind="unknown",
-            evidence="subprocess/runpy expression",
-            confidence="low",
-            line=60,
-            unknown=True,
-        )
-    ]
-    # Ten new acquisition/authority fixture calls preserve synthetic db globals.
-    # Exact AST evidence is retained in followup-test-edge-census.json.
-    new_fixture_calls = (
-        {("tests/test_onboard_sec_fallback.py", line) for line in (70, 320, 365, 397, 403)}
-        | {("tests/test_onboarding_state_authority.py", line) for line in (30, 59, 74)}
-        | {
-            ("tests/test_scheduled_singleflight.py", 98),
-            ("tests/test_split_root_legacy_adapters.py", 27),
-        }
-    )
-    assert new_fixture_calls <= {(edge.source, edge.line) for edge in graph.unknown_edges}
-    # A checked private-helper lookup removes the scheduled test's broad type
-    # suppression. Its dynamic name remains visible as one test-only seam.
-    # Six new synthetic children test artifact ownership and database refusal.
-    # Their executable choices remain test-only and visible in this inventory.
-    remedy_children = {
-        ("tests/test_dcf_artifact_ownership.py", 232),
-        ("tests/test_dcf_artifact_ownership.py", 242),
-        ("tests/test_dcf_artifact_ownership.py", 252),
-        ("tests/test_dcf_artifact_ownership.py", 312),
-        ("tests/test_retained_tool_database_authority.py", 35),
-        ("tests/test_retained_tool_database_authority.py", 182),
-    }
-    assert {
-        (edge.source, edge.line)
-        for edge in graph.unknown_edges
-        if edge.source in {source for source, _line in remedy_children}
-        and edge.target == "<dynamic process entrypoint>"
-    } == remedy_children
-    # Exact-period CLI and skill-maintenance checks add two test-owned calls.
-    # Keep their computed entrypoints explicit without admitting production gaps.
-    assert (
-        GraphEdge(
-            source="tests/test_earnings_readout.py",
-            target="<dynamic process entrypoint>",
-            kind="unknown",
-            evidence="subprocess/runpy expression",
-            confidence="low",
-            line=728,
-            unknown=True,
-        )
-        in graph.unknown_edges
-    )
-    assert (
-        GraphEdge(
-            source="instruction_tests/test_investing_skill_maintenance.py",
-            target="<dynamic process entrypoint>",
-            kind="unknown",
-            evidence="subprocess/runpy expression",
-            confidence="low",
-            line=371,
-            unknown=True,
-        )
-        in graph.unknown_edges
-    )
-    # Twelve bounded Node children exercise synthetic browser request lifecycles.
-    # Keep their exact test-only inventory visible without admitting production edges.
-    lifecycle_children = {
-        ("tests/test_company_desk_read_lifecycle.py", 97),
-        ("tests/test_copilot_restore_read_lifecycle.py", 62),
-        ("tests/test_copilot_restore_read_lifecycle.py", 112),
-        ("tests/test_panel_read_lifecycle.py", 95),
-        ("tests/test_panel_read_lifecycle.py", 152),
-        ("tests/test_policy_refresh_lifecycle.py", 74),
-        ("tests/test_ui_requests.py", 69),
-        ("tests/test_work_os_read_lifecycle.py", 75),
-        ("tests/test_work_os_read_lifecycle.py", 110),
-        ("tests/test_workspace_dcf_read_lifecycle.py", 134),
-        ("tests/test_workspace_dcf_read_lifecycle.py", 193),
-        ("tests/test_workspace_dcf_read_lifecycle.py", 354),
-    }
-    assert {
-        (edge.source, edge.line)
-        for edge in graph.unknown_edges
-        if edge.source in {source for source, _line in lifecycle_children}
-    } == lifecycle_children
-    assert all(
-        edge.kind == "unknown" and edge.target == "<dynamic process entrypoint>"
-        for edge in graph.unknown_edges
-        if (edge.source, edge.line) in lifecycle_children
-    )
+        candidate for candidate in graph.unknown_edges if candidate.source == "execution/main.py"
+    ] == [edge]
 
-    # Three bounded Node harnesses exercise rail state, exact-edition routing,
-    # and lazy research disclosures. Keep them visible as test-only processes.
-    compact_reader_children = {
-        ("tests/test_compact_brief_reader.py", 162),
-        ("tests/test_compact_brief_routing.py", 23),
-        ("tests/test_full_brief_chrome.py", 133),
-    }
-    assert {
-        (edge.source, edge.line)
-        for edge in graph.unknown_edges
-        if edge.source in {source for source, _line in compact_reader_children}
-    } == compact_reader_children
-    assert all(
-        edge.kind == "unknown" and edge.target == "<dynamic process entrypoint>"
-        for edge in graph.unknown_edges
-        if (edge.source, edge.line) in compact_reader_children
-    )
 
-    assert (
-        sum(
-            edge.source == "tests/test_dcf_assumption_cli.py"
-            and edge.target == "<dynamic process entrypoint>"
-            for edge in graph.unknown_edges
-        )
-        == 2
+@pytest.mark.parametrize(
+    "main_source",
+    [
+        "import tests.probe\n",
+        "import subprocess\nsubprocess.run('python tests/probe.py')\n",
+    ],
+)
+def test_unknown_test_source_is_raw_but_only_reachable_qualifies_for_production(
+    tmp_path: Path, main_source: str
+) -> None:
+    root = _repo(tmp_path)
+    _write(root, "tests/probe.py", "getattr(mod, name)\n")
+    _track(root, "tests/probe.py")
+    _write_manifest(
+        root,
+        "reachability-getattr-dispositions.json",
+        "reachability-getattr-dispositions/v2",
+        [],
     )
-    assert any(
-        edge.source == "tests/test_release_retained_boundaries.py"
-        and edge.target == "<dynamic process entrypoint>"
-        for edge in graph.unknown_edges
+    orphan = build_graph(root)
+    orphan_test_edges = [
+        candidate for candidate in orphan.unknown_edges if candidate.source == "tests/probe.py"
+    ]
+    assert len(orphan_test_edges) == 1
+    assert orphan_test_edges[0].target == "<dynamic attribute>"
+    assert orphan_test_edges[0].kind == "getattr"
+    assert orphan_test_edges[0].unknown is True
+    assert "tests/probe.py" not in production_reachable_nodes(orphan)
+    assert not production_unknown_edges(orphan)
+    assert orphan.stats["production_unknown"] == 0
+    assert orphan.collection_status == "COMPLETE"
+    assert orphan.diagnostics == []
+    assert orphan.closure_status == "PASS"
+
+    _write(root, "execution/main.py", main_source)
+    _track(root, "execution/main.py")
+    _write_manifest(
+        root,
+        "reachability-getattr-dispositions.json",
+        "reachability-getattr-dispositions/v2",
+        [],
     )
-    assert residual_source_edges == []
+    reached = build_graph(root)
+    assert "tests/probe.py" in production_reachable_nodes(reached)
+    reached_edges = [
+        candidate
+        for candidate in production_unknown_edges(reached)
+        if candidate.source == "tests/probe.py"
+    ]
+    assert len(reached_edges) == 1
+    assert reached_edges[0].target == "<dynamic attribute>"
+    assert reached.stats["production_unknown"] == 1
+    assert reached.collection_status == "COMPLETE"
+    assert reached.diagnostics == []
+    assert reached.closure_status == "HOLD"
 
 
 def test_discovery_and_manifest_hash_are_deterministic(

@@ -70,6 +70,14 @@ The owner explicitly approved retiring `/api/ticker/<ticker>` and the old standa
 
 The backend's 142 owning tests and 14 registry tests pass. The first geometry mutation test used a font property outside the geometry scanner's scope and failed as it should; the corrected two geometry cases use an actual gap token and pass. No scanner or debt ledger was weakened. The unused page assertions, thesis-fixture fields and per-file import bootstrap are removed; active refresh/DCF event assertions moved to the retained Ops fragment. Static and final dependency evidence are recorded in `.tmp/cleanup-open-model-execution/legacy-ticker-final-acceptance.json`. The dependency records also remove the obsolete ETF onboarding call from accepted commit `120a2dee4`; all retained targets keep their reviewed meaning. The combined architecture gate still fails at 26 modules above 2,000 lines against a limit of 25. No exception is approved. No push, merge, deployment, live database, source collection or scheduler change occurred.
 
+## Test-suite pruning checkpoint
+
+The real-tree reachability test no longer maintains a large list of test-only file locations and a total count. Its production check shrinks from 287 to 26 lines. All eight core assertions remain unchanged: current commit, source hash, application-node presence, complete collection, passing closure, zero production unknown/unresolved edges, and no unknown sources outside the test trees. Tests that production code imports or launches remain in production closure.
+
+The cut adds three small exact payload cases and two orphan-versus-reached classification cases using the existing isolated fixture helpers. These preserve the only unique edge-field oracles from the old snapshot. All 59 other definitions in the module are unchanged. The five new cases pass. Net reduction is 151 lines and 6,606 bytes. Independent Sol scored the original PRD 72, its corrected scope 94 and the implemented scope 94. No scanner, disposition policy, application code, expected-count bump or allowed production gap is part of this change. Final owning-module/static evidence and exact source binding are in `.tmp/cleanup-open-model-execution/test-suite-pruning-final-acceptance.json`. Release and the combined architecture limit remain HOLD.
+
+The subsequent setup proposal identifies 81 simple test headers with 90 redundant path insertions. Pytest already owns the same paths. This is an inventory, not an applied cut; import-origin equivalence, unchanged test bodies and fresh static checks are required before acceptance.
+
 ## Backend MVP
 
 Complete outputs match in all four synthetic cases against exact merged main:

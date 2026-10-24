@@ -133,6 +133,18 @@
       "geometry_cases": 2,
       "proof": ".tmp/cleanup-open-model-execution/legacy-ticker-final-acceptance.json",
       "limits": "No production state/service change, push, merge or deployment. Final graph/static evidence is in the root acceptance receipt. Full current-branch release matrix remains unqualified."
+    },
+    "test-only-census-20261024": {
+      "status": "local implementation independently reviewed; release architecture remains HOLD",
+      "original_prd_score": 72,
+      "corrected_prd_score": 94,
+      "implementation_score": 94,
+      "net_test_lines_removed": 151,
+      "net_test_bytes_removed": 6606,
+      "retained_core_assertions": 8,
+      "unchanged_other_definitions": 59,
+      "new_focused_cases": 5,
+      "proof": ".tmp/cleanup-open-model-execution/test-suite-pruning-final-acceptance.json"
     }
   },
   "authority": {
@@ -4515,5 +4527,10 @@
     "screenshot": ".tmp/cleanup-open-model-execution/etf-ui-preview-saved-failure-768.png",
     "observed": "Create/Refresh simulated; pending/failure preserves saved narrative; retry and missing-source state; keyboard activation; zero HTTP requests, console/page errors or overflow; browser closed",
     "limits": "Role region only, not app navigation or implemented/backend capability. Empty-state preview still retains old CLI/cache guidance and needs revision before product acceptance. No new product code."
+  },
+  "next_test_bootstrap_proposal": {
+    "candidate_files": 81,
+    "candidate_calls": 90,
+    "status": "PRD advisory review 92; no source edits"
   }
 }
