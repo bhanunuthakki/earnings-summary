@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "716486b5bb0a19088556773c75a1570bb87c40fe",
+  "scoped_commit": "8686e13d0fb45f67cd6e6790c126188bb3150d0c",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "8994a3247288f98d8c8551b3a09539bf52a96d74eb849ecae7e28a6ce797c25a",
+  "source_sha256": "f2a19d2957dc8b76c7611138cd1d61bc1e4724ea2339f821327c4453325dcbfc",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1484,
-    "total_noncomment_loc": 575758,
+    "total_noncomment_loc": 575761,
     "modules_over_1000_loc": 112,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
@@ -32,7 +32,7 @@
     "scc_module_count": 69,
     "largest_scc": 16,
     "composition_root_loc": {
-      "execution/comments_server.py": 180,
+      "execution/comments_server.py": 183,
       "src/pipeline/portfolio_panel.py": 3497
     },
     "composition_root_fan_out": {
@@ -1769,9 +1769,9 @@
         "path": "execution/comments_server.py",
         "module": "execution.comments_server",
         "lines": {
-          "physical": 208,
-          "nonblank": 185,
-          "noncomment": 180
+          "physical": 211,
+          "nonblank": 188,
+          "noncomment": 183
         },
         "internal_fan_out": 8,
         "responsibilities": [

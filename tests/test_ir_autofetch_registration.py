@@ -12,6 +12,7 @@ fetch_ir_documents invokes it), which also sidesteps its import-time root.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import subprocess
@@ -132,11 +133,35 @@ def test_real_download_picks_xlsx_extension_from_content_disposition(
     assert sidecar[staged[0].name] == "https://x/opaque"
 
 
-def test_skips_already_registered_urls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("retained_state", ["valid", "failed", "missing", "corrupt"])
+def test_skips_already_registered_urls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, retained_state: str
+) -> None:
     db = tmp_path / "data" / "portfolio.db"
     _make_documents_db(db)
+    retained = tmp_path / "ir_documents" / "NU" / "retained.pdf"
+    retained.parent.mkdir(parents=True)
+    content = b"%PDF-1.7\nretained source\n%%EOF\n"
+    retained.write_bytes(content)
+    if retained_state == "missing":
+        retained.unlink()
+    elif retained_state == "corrupt":
+        retained.write_bytes(b"%PDF-1.7\nchanged source!\n%%EOF\n")
     conn = sqlite3.connect(str(db))
-    conn.execute("INSERT INTO documents (ticker, source_url) VALUES ('NU', 'https://x/a.pdf')")
+    conn.execute(
+        "INSERT INTO documents "
+        "(ticker, source_url, source_type, fetch_status, file_path, sha256, raw_bytes_size) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            "NU",
+            "https://x/a.pdf",
+            "ir_doc",
+            "failed" if retained_state == "failed" else "ok",
+            str(retained.relative_to(tmp_path)),
+            hashlib.sha256(content).hexdigest(),
+            len(content),
+        ),
+    )
     conn.commit()
     conn.close()
     _write_manifest(
@@ -153,8 +178,13 @@ def test_skips_already_registered_urls(tmp_path: Path, monkeypatch: pytest.Monke
     monkeypatch.setattr("execution.fetch_ir_documents._download", _record)
     summary = fid.process_ticker("NU", root=tmp_path, db_path=db)
     assert summary["downloaded"] == 0
-    assert summary["skipped"] == 1
-    assert calls == []  # never attempted
+    if retained_state == "valid":
+        assert summary["skipped"] == 1
+        assert calls == []  # never attempted
+    else:
+        assert summary["skipped"] == 0
+        assert summary["failed"] == 1
+        assert calls == ["https://x/a.pdf"]
 
 
 # ---------------------------------------------------------------------------

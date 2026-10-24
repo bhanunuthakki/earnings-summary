@@ -11,7 +11,7 @@
   },
   "exact_SCC_memberships_unchanged": true,
   "composition_root_growth": {
-    "execution/comments_server.py": 2
+    "execution/comments_server.py": 5
   },
   "scanner_or_suppression_ceilings_weakened": false,
   "baseline_before_sha256": "7af9c4b4663a8631e18fa61f89c26880ccc426e747d778dfeb6c307fcd6b7db9",
@@ -236,5 +236,16 @@
     "tests_before": 896,
     "tests_after": 891,
     "new_suppressions": false
-  }
+  },
+  "explicit_existing_state_root_binding": {
+    "independent_advisory_score": 96,
+    "independent_review_sha256": "a862a137c2cf451db4e0125367533f81ac331d29e4db2477dbe4a0255b123258",
+    "change": "Existing explicit --repo-root binds source context and child state; --state-root can override; implicit checkout default confers no OCR authority. No service-argument change needed.",
+    "noncomment_LOC_growth": 3,
+    "SCC_memberships_unchanged": true,
+    "targeted_tests": 25,
+    "measurement_source_sha256": "f2a19d2957dc8b76c7611138cd1d61bc1e4724ea2339f821327c4453325dcbfc",
+    "reachability_parser_source_sha256": "9b1df53d045cd61964fe0944797e4f2e7a51fcf0938f6608bb9467301b5eb4bb"
+  },
+  "full_CI_repair": "8686 fullCI found obsolete path exceptions and stalefixture/contracts. Removed7exceptions; cachedcurrentfixture avoidsnewbuilder; exactcatalog/recoveryfixtures fixed;25affectedtests+25rootbindingtests pass; fullCIretry pending."
 }

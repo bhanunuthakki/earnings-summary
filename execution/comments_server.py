@@ -162,7 +162,7 @@ def main() -> int:
     configure_logging()  # structured root logging + correlation ids (sre-4)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=7421)
-    parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    parser.add_argument("--repo-root", type=Path)
     parser.add_argument("--state-root", type=Path)
     parser.add_argument("--host")
     parser.add_argument(
@@ -172,7 +172,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    repo_root = args.repo_root.resolve()
+    repo_root = (args.repo_root or PROJECT_ROOT).resolve()
+    source_state_root = args.state_root
+    if source_state_root is None and args.repo_root is not None:
+        source_state_root = repo_root
     db_path = configure_runtime_db(repo_root)
     if args.tailscale:
         os.environ["COMMENTS_SERVER_ALLOW_TAILSCALE"] = "1"
@@ -190,9 +193,9 @@ def main() -> int:
         repo_root,
         db_path=db_path,
         server_origin=f"http://{origin_host}:{args.port}",
-        source_state_root=args.state_root,
-        source_context=SourceReadContext.for_product_state_root(args.state_root)
-        if args.state_root
+        source_state_root=source_state_root,
+        source_context=SourceReadContext.for_product_state_root(source_state_root)
+        if source_state_root is not None
         else None,
     )
     # Each Ask request checks its own sealed evidence coordinates. Avoid a

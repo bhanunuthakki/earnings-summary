@@ -2408,12 +2408,14 @@ writer. Rejected rows remain in the reviewed population. The reviewer identity
 and reviewer kind must describe who actually performed the visual review.
 
 Financial readers require an explicit product source-state root to admit OCR
-facts. The server receives it through its existing `--state-root` composition
-path; artifact builds use `--source-state-root`. Missing or changed source,
+facts. The server uses an explicit `--state-root` when supplied. Otherwise, an
+explicit `--repo-root` supplies the same product-state authority that already
+configures its database and child processes. The checkout default grants no OCR
+source authority. Artifact builds use `--source-state-root`. Missing or changed source,
 layout, review, cutoff or publication evidence makes that OCR fact unavailable
 to reports, Ask, research and DCF. Native fact reads keep their prior rules.
 Before live acceptance, confirm that the configured canonical service supplies
-this root and that it is the root used by the extraction ledger's registered
+the explicit root and that it is the root used by the extraction ledger's registered
 PDF, TSV and render bytes. Then reopen one reviewed OCR fact through the shared
 fact reader and its pinned PDF page and image routes. Record the source hash,
 document version, page, word regions, review and cutoff in that check. A
