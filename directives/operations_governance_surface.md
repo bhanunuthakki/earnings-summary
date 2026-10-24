@@ -2331,3 +2331,13 @@ classify financial content: a divider can have the same signal as a chart.
 Operator selection does not grant financial admission, table coverage or
 whole-document completeness. No collector, scheduler, service, engine or
 publication authority changes. Evidence: `tests/test_ocr_source_bound_pages.py`.
+
+The PDF OCR library now retains exact TSV and render bytes as durable content
+blobs and adds word/layout evidence to accepted pages. The existing processing
+seal can verify its layout commitment. A read-only resolver requires exact
+source, seal, run, page results, and cutoff coordinates before it returns a
+`governed_ocr` page projection. No new command, route, scheduler, engine
+invocation, automatic page selection, financial write, or operator action is
+added. Text-only history remains unavailable for the word-backed projection.
+Evidence: `tests/test_ocr_extraction_governance.py` and
+`tests/test_document_processing_evidence.py`.

@@ -724,8 +724,8 @@
     {
       "disposition": "external_process",
       "evidence": "Provider renders pages with its configured, resolved pdftoppm executable. The descriptor records the executable version and SHA256; this disposition classifies the external process and does not approve an executable pin.",
-      "fingerprint": "1fde241f60d9545c58b02d7b1f4bbf9361d9c6dd3a51efc199fa27e628f85c79",
-      "line": 407,
+      "fingerprint": "9b2e7d18a61d559a756ed1bbab2a67cd865a41c5812d6a9914ee2345fe04345e",
+      "line": 419,
       "path": "src/provenance/ocr_extraction.py",
       "targets": [
         "pdftoppm"
@@ -734,8 +734,8 @@
     {
       "disposition": "external_process",
       "evidence": "Provider extracts text with its configured, resolved tesseract executable. The descriptor records the executable version and SHA256; this disposition classifies the external process and does not approve an executable pin.",
-      "fingerprint": "cc6560b4cffce53c497c89e9d4f50be9dd1826881c471e07a835351428a58c17",
-      "line": 430,
+      "fingerprint": "3d2110e84d6d64df8300dd8a0aca6e6aea7c05a1c08ce02eec09b1af612bbf92",
+      "line": 470,
       "path": "src/provenance/ocr_extraction.py",
       "targets": [
         "tesseract"
@@ -744,8 +744,8 @@
     {
       "disposition": "external_process",
       "evidence": "_binary_version probes the configured, resolved OCR executable with the constructor's fixed version arguments. This is an external process identity probe, not an executable approval.",
-      "fingerprint": "aa1625dae8db1710f2e43d00115c25e57daab99db48c7e7420b5c77269fc00fb",
-      "line": 1514,
+      "fingerprint": "d1ed2be33cef232e14070b781a70d130852eabe8efcbdc4d277b562dff5a6a74",
+      "line": 1685,
       "path": "src/provenance/ocr_extraction.py",
       "targets": [
         "ocr executable"
@@ -1073,7 +1073,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "4e3f2749c69b5d00f4434ee9714db94259beb27828304adde6785379a939a338",
+      "source_sha256": "f3eff9fcd48da160acddd59bf34a6083717efefc429f8a41253624794e42832a",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

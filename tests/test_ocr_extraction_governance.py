@@ -6,7 +6,7 @@ import hashlib
 import io
 import sqlite3
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -15,11 +15,19 @@ from alembic.config import Config
 
 from alembic import command
 from execution import backfill_ocr_evidence as cli
+from provenance.document_processing_evidence import (
+    DocumentProcessingEvidenceError,
+    publish_document_processing_evidence,
+    resolve_governed_ocr_pages,
+)
 from provenance.evidence_backfill import BackfillRequest, backfill_legacy_evidence
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
     EvidenceLedger,
+    EvidenceNode,
+    LedgerRecord,
+    PersistResult,
     SourceObservation,
 )
 from provenance.ocr_extraction import (
@@ -31,6 +39,12 @@ from provenance.ocr_extraction import (
     PypdfPDFInspector,
     backfill_ocr_evidence,
 )
+from provenance.ocr_layout import (
+    OCRLayoutError,
+    parse_tesseract_pdf_tsv,
+    verify_ocr_layout_bytes,
+)
+from runtime.deterministic import content_sha256_or_text
 from sqlite_runtime import register_sqlite_integrity_functions
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -423,6 +437,33 @@ def test_apply_records_exact_governance_page_confidence_and_replays(
         assert page["locator_json"] == '{"page_number":1,"source_ref":"data/ACME.pdf"}'
         assert page["text"] == "Revenue increased to $2.0 billion."
 
+        run_id, document_id, source_sha = conn.execute(
+            "SELECT extraction_run_id,document_version_id,input_sha256 "
+            "FROM evidence_extraction_runs WHERE extractor_name='governed-pdf-ocr'"
+        ).fetchone()
+        cutoff = datetime(2026, 8, 1, tzinfo=UTC)
+        text_only_seal = publish_document_processing_evidence(
+            conn,
+            document_version_id=document_id,
+            processing_lane="pdf_ocr",
+            cutoff_at=cutoff,
+            recorded_at=datetime(2026, 8, 2, tzinfo=UTC),
+        )
+        assert text_only_seal.member_count == 1
+        with pytest.raises(
+            DocumentProcessingEvidenceError, match="ocr_projection_layout_missing_or_ambiguous"
+        ):
+            resolve_governed_ocr_pages(
+                conn,
+                repo_root=repo_root,
+                document_version_id=document_id,
+                source_sha256=source_sha,
+                evidence_seal_id=text_only_seal.evidence_seal_id,
+                extraction_run_id=run_id,
+                page_result_ids=(f"{run_id}:1",),
+                cutoff_at=cutoff,
+            )
+
         replay = backfill_ocr_evidence(
             conn,
             _request(repo_root, apply=True, task_id="ocr-replay"),
@@ -685,5 +726,402 @@ def test_evidence_native_lane_preflights_extensionless_pdf_without_legacy_row(
             == 0
         )
         assert not (repo_root / ".tmp" / "native-ocr" / "evidence-native-state.json").exists()
+    finally:
+        conn.close()
+
+
+def _output() -> tuple[bytes, bytes, OCRPageOutput]:
+    raw_tsv = (
+        b"level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n"
+        b"5\t1\t1\t1\t1\t1\t10\t20\t35\t12\t98\tRevenue\n"
+        b"5\t1\t1\t1\t1\t2\t50\t20\t20\t12\t97\t25%\n"
+    )
+    render_png = (
+        b"\x89PNG\r\n\x1a\n"
+        + b"\x00\x00\x00\rIHDR"
+        + (300).to_bytes(4, "big") * 2
+        + b"synthetic-render"
+    )
+    output = parse_tesseract_pdf_tsv(
+        1,
+        raw_tsv,
+        render_png=render_png,
+        width=300,
+        height=300,
+        dpi=300,
+        media_box=(0.0, 0.0, 72.0, 72.0),
+        rotation=0,
+    )
+    return raw_tsv, render_png, output
+
+
+def test_layout_parser_retains_exact_bytes_boxes_order_and_offsets() -> None:
+    raw_tsv, render_png, output = _output()
+    assert output.text == "Revenue 25%"
+    assert output.layout is not None
+    assert [
+        (word.ordinal, word.char_start, word.char_end, word.left, word.top)
+        for word in output.layout.words
+    ] == [
+        (0, 0, 7, 10, 20),
+        (1, 8, 11, 50, 20),
+    ]
+    assert output.layout.tsv_sha256 == hashlib.sha256(raw_tsv).hexdigest()
+    assert output.layout.render_sha256 == hashlib.sha256(render_png).hexdigest()
+    verify_ocr_layout_bytes(output.layout, raw_tsv, render_png)
+    with pytest.raises(OCRLayoutError, match="ocr_layout_reconstruction_mismatch"):
+        verify_ocr_layout_bytes(output.layout, raw_tsv.replace(b"25%", b"26%"), render_png)
+    with pytest.raises(OCRLayoutError, match="ocr_layout_reconstruction_mismatch"):
+        verify_ocr_layout_bytes(output.layout, raw_tsv, render_png + b"changed")
+
+
+def test_unicode_layout_writer_and_reader_keep_exact_raw_bytes_and_offsets(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    raw_tsv, render_png, _ = _output()
+    unicode_tsv = raw_tsv.replace(b"Revenue", "\ufb03".encode()).replace(
+        b"25%", "\uff12\uff15\u00a0\uff05".encode()
+    )
+    output = parse_tesseract_pdf_tsv(
+        1,
+        unicode_tsv,
+        render_png=render_png,
+        width=300,
+        height=300,
+        dpi=300,
+        media_box=(0.0, 0.0, 72.0, 72.0),
+        rotation=0,
+    )
+    assert output.text == "ffi 25 %"
+    assert output.layout is not None
+    assert [word.text for word in output.layout.words] == ["ffi", "25 %"]
+    assert [(word.char_start, word.char_end) for word in output.layout.words] == [
+        (0, 3),
+        (4, 8),
+    ]
+    assert output.raw_tsv == unicode_tsv
+    assert output.layout.tsv_sha256 == hashlib.sha256(unicode_tsv).hexdigest()
+    assert verify_ocr_layout_bytes(output.layout, unicode_tsv, render_png) == output
+    assert raw_tsv != unicode_tsv
+    conn, repo_root = _connection(tmp_path, migrated_db)
+    try:
+        summary = backfill_ocr_evidence(
+            conn,
+            OCRBackfillRequest(repo_root=repo_root, apply=True, task_id="unicode-layout"),
+            inspector=_Inspector(_required_preflight(1)),
+            provider=_Provider([output]),
+        )
+        assert summary.pages_ocr_accepted == 1
+        run_id, document_id, source_sha = conn.execute(
+            "SELECT extraction_run_id,document_version_id,input_sha256 "
+            "FROM evidence_extraction_runs WHERE extractor_name='governed-pdf-ocr'"
+        ).fetchone()
+        cutoff = datetime(2026, 8, 1, tzinfo=UTC)
+        receipt = publish_document_processing_evidence(
+            conn,
+            document_version_id=document_id,
+            processing_lane="pdf_ocr",
+            cutoff_at=cutoff,
+            recorded_at=datetime(2026, 8, 2, tzinfo=UTC),
+        )
+        projection = resolve_governed_ocr_pages(
+            conn,
+            repo_root=repo_root,
+            document_version_id=document_id,
+            source_sha256=source_sha,
+            evidence_seal_id=receipt.evidence_seal_id,
+            extraction_run_id=run_id,
+            page_result_ids=(f"{run_id}:1",),
+            cutoff_at=cutoff,
+        )
+        assert projection[0].text == "ffi 25 %"
+        retained_tsv = (
+            repo_root
+            / "data"
+            / "ocr_evidence"
+            / output.layout.tsv_sha256[:2]
+            / output.layout.tsv_sha256
+        )
+        assert retained_tsv.read_bytes() == unicode_tsv
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("mutation", ["text", "confidence", "layout"])
+def test_layout_output_disagreement_fails_before_acceptance(
+    mutation: str, tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn, repo_root = _connection(tmp_path, migrated_db)
+    _raw_tsv, _render_png, output = _output()
+    assert output.layout is not None
+    if mutation == "text":
+        contradictory = output.model_copy(update={"text": "Revenue 26%"})
+    elif mutation == "confidence":
+        contradictory = output.model_copy(update={"mean_confidence": 99.0})
+    else:
+        words = (
+            output.layout.words[0],
+            output.layout.words[1].model_copy(update={"text": "26%"}),
+        )
+        contradictory = output.model_copy(
+            update={
+                "text": "Revenue 26%",
+                "layout": output.layout.model_copy(update={"words": words}),
+            }
+        )
+    try:
+        summary = backfill_ocr_evidence(
+            conn,
+            OCRBackfillRequest(repo_root=repo_root, apply=True, task_id=f"bad-{mutation}"),
+            inspector=_Inspector(_required_preflight(1)),
+            provider=_Provider([contradictory]),
+        )
+        assert summary.documents_ocr_failed == 1
+        assert summary.pages_ocr_accepted == 0
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM ocr_page_results WHERE outcome='accepted'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM evidence_content_blobs WHERE media_type IN "
+                "('text/tab-separated-values','image/png')"
+            ).fetchone()[0]
+            == 0
+        )
+        assert not any(path.is_file() for path in (repo_root / "data" / "ocr_evidence").rglob("*"))
+    finally:
+        conn.close()
+
+
+def test_layout_blob_publication_rolls_back_on_later_database_failure(
+    tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn, repo_root = _connection(tmp_path, migrated_db)
+    _raw_tsv, _render_png, output = _output()
+    original = EvidenceLedger.persist
+
+    def fail_after_blobs(self: EvidenceLedger, record: LedgerRecord) -> PersistResult:
+        if isinstance(record, EvidenceNode) and record.node_kind == "passage":
+            raise RuntimeError("synthetic layout node write failure")
+        return original(self, record)
+
+    monkeypatch.setattr(EvidenceLedger, "persist", fail_after_blobs)
+    before = conn.execute("SELECT COUNT(*) FROM evidence_extraction_runs").fetchone()[0]
+    try:
+        with pytest.raises(RuntimeError, match="synthetic layout node write failure"):
+            backfill_ocr_evidence(
+                conn,
+                OCRBackfillRequest(repo_root=repo_root, apply=True, task_id="rollback-layout"),
+                inspector=_Inspector(_required_preflight(1)),
+                provider=_Provider([output]),
+            )
+        assert conn.execute("SELECT COUNT(*) FROM evidence_extraction_runs").fetchone()[0] == before
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM evidence_content_blobs WHERE media_type IN "
+                "('text/tab-separated-values','image/png')"
+            ).fetchone()[0]
+            == 0
+        )
+        assert not any(path.is_file() for path in (repo_root / "data" / "ocr_evidence").rglob("*"))
+        monkeypatch.setattr(EvidenceLedger, "persist", original)
+        succeeded = backfill_ocr_evidence(
+            conn,
+            OCRBackfillRequest(repo_root=repo_root, apply=True, task_id="first-layout"),
+            inspector=_Inspector(_required_preflight(1)),
+            provider=_Provider([output]),
+        )
+        assert succeeded.pages_ocr_accepted == 1
+        retained = {
+            path: path.read_bytes()
+            for path in (repo_root / "data" / "ocr_evidence").rglob("*")
+            if path.is_file()
+        }
+        assert len(retained) == 2
+        monkeypatch.setattr(EvidenceLedger, "persist", fail_after_blobs)
+        with pytest.raises(RuntimeError, match="synthetic layout node write failure"):
+            backfill_ocr_evidence(
+                conn,
+                OCRBackfillRequest(
+                    repo_root=repo_root,
+                    apply=True,
+                    task_id="replay-layout",
+                    minimum_mean_confidence=40.0,
+                ),
+                inspector=_Inspector(_required_preflight(1)),
+                provider=_Provider([output]),
+            )
+        assert {path: path.read_bytes() for path in retained} == retained
+        assert conn.execute("SELECT COUNT(*) FROM evidence_extraction_runs").fetchone()[0] == (
+            before + 1
+        )
+    finally:
+        conn.close()
+
+
+def test_projection_requires_exact_seal_source_page_set_and_retained_bytes(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn, repo_root = _connection(tmp_path, migrated_db)
+    _raw_tsv, _render_png, output = _output()
+    try:
+        summary = backfill_ocr_evidence(
+            conn,
+            OCRBackfillRequest(repo_root=repo_root, apply=True, task_id="layout-test"),
+            inspector=_Inspector(_required_preflight(1)),
+            provider=_Provider([output]),
+        )
+        assert summary.pages_ocr_accepted == 1
+        run_id, document_id, source_sha = conn.execute(
+            "SELECT extraction_run_id,document_version_id,input_sha256 FROM evidence_extraction_runs "
+            "WHERE extractor_name='governed-pdf-ocr'"
+        ).fetchone()
+        cutoff = datetime(2026, 8, 1, tzinfo=UTC)
+        receipt = publish_document_processing_evidence(
+            conn,
+            document_version_id=document_id,
+            processing_lane="pdf_ocr",
+            cutoff_at=cutoff,
+            recorded_at=datetime(2026, 8, 2, tzinfo=UTC),
+        )
+
+        def resolve(
+            *,
+            source: str = source_sha,
+            run: str = run_id,
+            results: tuple[str, ...] = (f"{run_id}:1",),
+            at: datetime = cutoff,
+        ) -> tuple[object, ...]:
+            return resolve_governed_ocr_pages(
+                conn,
+                repo_root=repo_root,
+                document_version_id=document_id,
+                source_sha256=source,
+                evidence_seal_id=receipt.evidence_seal_id,
+                extraction_run_id=run,
+                page_result_ids=results,
+                cutoff_at=at,
+            )
+
+        projection = resolve_governed_ocr_pages(
+            conn,
+            repo_root=repo_root,
+            document_version_id=document_id,
+            source_sha256=source_sha,
+            evidence_seal_id=receipt.evidence_seal_id,
+            extraction_run_id=run_id,
+            page_result_ids=(f"{run_id}:1",),
+            cutoff_at=cutoff,
+        )
+        assert len(projection) == 1
+        assert projection[0].text == "Revenue 25%"
+        assert projection[0].source_representation == "governed_ocr"
+        assert (
+            projection[0].layout_sha256
+            == hashlib.sha256(projection[0].layout_json.encode()).hexdigest()
+        )
+        with pytest.raises(DocumentProcessingEvidenceError):
+            resolve(source="0" * 64)
+        with pytest.raises(DocumentProcessingEvidenceError):
+            resolve(run="wrong-engine-run")
+        with pytest.raises(DocumentProcessingEvidenceError):
+            resolve(results=(f"{run_id}:2",))
+        with pytest.raises(DocumentProcessingEvidenceError):
+            resolve(results=(f"{run_id}:1", f"{run_id}:2"))
+        with pytest.raises(DocumentProcessingEvidenceError):
+            resolve(at=datetime(2026, 7, 1, tzinfo=UTC))
+        assert output.layout is not None
+        retained_tsv = (
+            repo_root
+            / "data"
+            / "ocr_evidence"
+            / output.layout.tsv_sha256[:2]
+            / output.layout.tsv_sha256
+        )
+        retained_tsv.write_bytes(retained_tsv.read_bytes().replace(b"25%", b"26%"))
+        with pytest.raises(
+            DocumentProcessingEvidenceError, match="ocr_projection_blob_bytes_mismatch"
+        ):
+            resolve()
+    finally:
+        conn.close()
+
+
+def test_projection_rejects_sealed_confidence_unlike_retained_tsv(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn, repo_root = _connection(tmp_path, migrated_db)
+    _raw_tsv, _render_png, output = _output()
+    try:
+        backfill_ocr_evidence(
+            conn,
+            OCRBackfillRequest(repo_root=repo_root, apply=True, task_id="reader-confidence"),
+            inspector=_Inspector(_required_preflight(1)),
+            provider=_Provider([output]),
+        )
+        run_id, document_id, source_sha = conn.execute(
+            "SELECT extraction_run_id,document_version_id,input_sha256 "
+            "FROM evidence_extraction_runs WHERE extractor_name='governed-pdf-ocr'"
+        ).fetchone()
+        result = dict(
+            conn.execute(
+                "SELECT * FROM ocr_page_results WHERE extraction_run_id=?", (run_id,)
+            ).fetchone()
+        )
+        layout_json = conn.execute(
+            "SELECT text FROM evidence_nodes WHERE extraction_run_id=? AND node_kind='passage'",
+            (run_id,),
+        ).fetchone()[0]
+        # Model an older or external writer that seals a self-consistent run
+        # commitment but records a mean not present in the retained TSV.
+        conn.execute("DROP TRIGGER trg_ocr_page_results_append_only")
+        conn.execute("DROP TRIGGER trg_evidence_extraction_runs_append_only")
+        conn.execute(
+            "UPDATE ocr_page_results SET mean_confidence=99 WHERE extraction_run_id=?",
+            (run_id,),
+        )
+        result["mean_confidence"] = 99.0
+        run_output_sha = content_sha256_or_text(
+            [
+                {
+                    "page_number": result["page_number"],
+                    "outcome": result["outcome"],
+                    "output_sha256": result["output_sha256"],
+                    "mean_confidence": result["mean_confidence"],
+                    "locator_sha256": result["locator_sha256"],
+                    "reason_code": result["reason_code"],
+                    "layout_sha256": content_sha256_or_text(layout_json),
+                }
+            ]
+        )
+        conn.execute(
+            "UPDATE evidence_extraction_runs SET output_sha256=? WHERE extraction_run_id=?",
+            (run_output_sha, run_id),
+        )
+        conn.commit()
+        cutoff = datetime(2026, 8, 1, tzinfo=UTC)
+        receipt = publish_document_processing_evidence(
+            conn,
+            document_version_id=document_id,
+            processing_lane="pdf_ocr",
+            cutoff_at=cutoff,
+            recorded_at=datetime(2026, 8, 2, tzinfo=UTC),
+        )
+        with pytest.raises(
+            DocumentProcessingEvidenceError, match="ocr_projection_confidence_mismatch"
+        ):
+            resolve_governed_ocr_pages(
+                conn,
+                repo_root=repo_root,
+                document_version_id=document_id,
+                source_sha256=source_sha,
+                evidence_seal_id=receipt.evidence_seal_id,
+                extraction_run_id=run_id,
+                page_result_ids=(f"{run_id}:1",),
+                cutoff_at=cutoff,
+            )
     finally:
         conn.close()
