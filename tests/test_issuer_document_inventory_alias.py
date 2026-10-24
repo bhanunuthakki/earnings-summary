@@ -481,9 +481,13 @@ def test_reported_window_accepts_captured_native_review_and_sealed_sec_populatio
             period_text = period.isoformat()
             url = f"https://www.sec.gov/Archives/edgar/data/1691493/{period_text}.htm"
             observation_id = f"sec-filing:{period_text}"
-            raw = f"<html>Form 10-Q for quarterly period ended {period_text}</html>".encode()
-            digest = source(observation_id, "sec_filing", url, raw)
             form = "10-K" if period.month == 12 else "10-Q"
+            raw = (
+                f"<html>Form {form} for "
+                f"{'fiscal year' if form == '10-K' else 'quarterly period'} ended "
+                f"{period_text}</html>"
+            ).encode()
+            digest = source(observation_id, "sec_filing", url, raw)
             EvidenceLedger(conn).persist(
                 DocumentVersion(
                     document_version_id=f"sec-version:{period_text}",
