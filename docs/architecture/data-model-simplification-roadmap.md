@@ -17,7 +17,7 @@ The earlier owner gate required Opus 5.5 membership review, with no paid fallbac
 On 2026-10-23 the owner removed the Astra requirement and allowed independent
 GPT-6.1 Sol judges as the review proxy. The current checkpoint uses that proxy;
 the earlier roadmap and key implementation target was strictly above 90.
-On October 24 the owner changed the advisory acceptance target to **85 or higher**,
+On October 24 the owner changed the advisory acceptance target. The latest rule is **strictly above 85 at PRD and implementation review**,
 with no unresolved material blocker. Financial integrity and deterministic checks
 remain required. Earlier scores and failed checks retain their original meaning.
 Prioritize removal of whole duplicate procedures, repeated data work and unused
@@ -32,6 +32,14 @@ adoption contract and incomplete terminal retirement populations. Its retained
 receipt is `.tmp/roadmap-execution-signoff-review.json`. The amendments below
 address those plan findings; they are not a new review verdict. Source observations
 in that receipt describe its supplied snapshot, not necessarily the current code.
+
+## October 24 execution disposition
+
+The financial-read MVP is committed locally at `1bbc671a3`. It shares operation-local materialization across the two financial views. Independent Sol scored the PRD 89 and the corrected implementation 90. All 325 owning tests pass and 224 full old-source comparisons match. In the bounded two-cell case, annual SELECTs fall from 145 to 77; projection work falls from four to two. This is a repeated-work reduction, not a general latency claim.
+
+The current all-family R2 migration is deferred. Its net cut is not qualified, and working source formats, fiscal dates and recovery must stay. R7 structured generation scored 79, REVISE. A narrower common-store selection-cache proposal then scored 78, REVISE: its expiry, identity, dirty completion and normal-build persistence contracts do not preserve current behavior. Do not expand storage or job frameworks just to force these cuts. The R2/R7 endpoint remains open; their partial checkpoints are not terminal retirement.
+
+The next owner usage decision is whether to stop new ETF “Role in portfolio” narratives while retaining saved versions and the ETF workup, evidence and portfolio analysis. Sol confirmed this narrow separation; no removal is approved. A broader short source-backed inventory may follow if needed. Existing approved retirements stand. Retain all core analysis and history. Any later implementation needs its own concrete PRD above 85 and independent implementation review. Bounded execution uses the owner-approved inexpensive OpenRouter model; Sol remains the independent judge. Current source proof and remaining gates are in the linked implementation checkpoint.
 
 ## Product and architecture endpoint
 

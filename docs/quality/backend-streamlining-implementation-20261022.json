@@ -527,7 +527,7 @@
     "transaction_audit": "The only stage before FMP that can write is optional SEC ingest; ingest_for_ticker commits at its commit phase and rolls back a started transaction on failure. Segment cache validation is read-only. Supplied-record refresh_cache retains its separate commit=False caller-owned path. No cross-document atomicity claim."
   },
   "r1_pending_revision": "Resolved, accepted and committed3065638a; later checkpoint proxyR1 score96.",
-  "remaining_work": "Whole architecture and release gates remain unwaived. R6 paired financial materialization is committed and accepted at90, with325 focused tests and224 equal old-source comparisons. Current all-family R2 design is deferred. R7 generation proposal scored79 REVISE; a narrower existing selection-cache-owner PRD is in preparation and has no passing score. Summary KPI stays on command. No push, merge, deployment, live state or collection authority.",
+  "remaining_work": "Owner usage decision pending for new ETF Role in portfolio narratives only. Keep ETF evidence/workup/history/all portfolio analysis. R2/R7 current rewrite designs deferred. R6 code committed/accepted90,325 focused tests/224 equal comparisons. Architecture/release remain HOLD; fresh graph/full applicable gates required at next integration/CI boundary. No push, merge, deploy, live-state or collection authority.",
   "review_kind": "Owner-selected independent GPT-6.1 Sol proxy; earlier exact Opus receipts preserved as history. No formal model-purpose qualification claimed.",
   "review_route_update": {
     "authority": "Owner latest steering allows independent6.1Sol proxies and no further Astra requirement.",
@@ -2893,6 +2893,13 @@
       "release": "Existing temporary-artifact owner after integration and unresolved qualification close; protected sidecars and held paths need their existing owner disposition",
       "protected_prior_run": "666protectedsidecars and metadata remain; no broad prune or manual deletion",
       "current_full": "54013 eligible files retired normally;664 protected sidecars and16122 held paths retained; zero errors; no task processes or listeners"
+    },
+    "open_model_client": {
+      "retirement": ".tmp/cleanup-open-model-execution/client-cache-retirement.json",
+      "logical_bytes_retired": 849330370,
+      "retained": "One exact qualified client SDK/runtime and shared model cache; per-job proof and conversation state for active roadmap/recovery",
+      "release": "Existing task temporary-artifact owner after roadmap/owner decisions and recovery close",
+      "producer_fix": "Future task workers share identical SDK/config/cache; per-job conversation data/state and usage remain isolated. One owner installs shared SDK dependencies."
     }
   },
   "legacy_guard_disposition": {
@@ -4376,9 +4383,13 @@
     "cap_per_job_usd": 0.4,
     "provider_fallbacks": false,
     "recheck": "Refresh matched endpoint variants before dispatch; initial 30-minute floor 99%, inspect longer window",
-    "observed_total_usd": 0.0814180032,
+    "observed_total_usd": 0.12782817092,
     "unpriced_earlier_failed_requests": 2,
-    "app_routing_changed": false
+    "app_routing_changed": false,
+    "execution_reasoning_effort": "low after two high-default empty-result output-cap failures",
+    "worker_success_check": "Expected artifact must exist in addition to normal process exit; Sol independently validates substance",
+    "resource_closure": ".tmp/cleanup-open-model-execution/current-worker-resource-closure.json",
+    "client_storage_retirement": ".tmp/cleanup-open-model-execution/client-cache-retirement.json"
   },
   "r2_current_design_disposition_20261024": {
     "state": "DEFER_CURRENT_DESIGN;TERMINAL_R2_OPEN",
@@ -4393,12 +4404,28 @@
     "current_score": null
   },
   "r7_current_preparation_20261024": {
-    "state": "PRD_PREPARATION_ONLY",
+    "state": "DEFER_CURRENT_DESIGN;NO_IMPLEMENTATION",
     "prior_review": ".tmp/cleanup-open-model-execution/r7-current-prd-sol-review.json",
     "prior_score": 79,
     "candidate": "One existing artifact-store selection-cache authority; retain current analysis, six contexts, history and strict refresh",
     "required": "Concrete historical compatibility, identity, expiry, transaction and exact dirty-job completion contracts; independent Sol >85 before implementation",
     "worker_output": ".tmp/cleanup-open-model-execution/r7-shared-selection-cache-prd.json",
-    "implementation": false
+    "implementation": false,
+    "prd": ".tmp/cleanup-open-model-execution/r7-shared-selection-cache-prd.json",
+    "independent_review": ".tmp/cleanup-open-model-execution/r7-shared-cache-independent-sol-prd-review.json",
+    "score": 78,
+    "reason": "Expiry, per-input versus stable-pair/aggregate identity, exact completion and normal builder persistence fail preservation; lifecycle growth not worth limited cut",
+    "next": "Source-only feature-cut options for concrete owner usage decisions"
+  },
+  "next_feature_owner_question_20261024": {
+    "state": "OWNER_USAGE_QUESTION_PENDING;NO_REMOVAL_APPROVED",
+    "feature": "New ETF Role in portfolio narrative generation only",
+    "where": "Evaluation -> ETF workup",
+    "question": "Use the generated role summary, verdict, suggested weight and watch items, or retire new generation and retain saved versions?",
+    "retained": "ETF workup page, saved narratives, profile/style/holdings/overlap/country/what-if evidence, scoring, candidate fit, qualitative stress and portfolio analysis",
+    "independent_scope_assessment": ".tmp/cleanup-open-model-execution/etf-workup-option-sol-assessment.json",
+    "no_deletion_credit": "526 physical lines across three owners are not a qualified cut; evidence blocks and saved-artifact readers stay",
+    "next_if_approved": "Concrete bounded PRD -> independent Sol >85 -> DeepSeek implementation -> deterministic proof -> independent Sol >85 before CI/merge",
+    "next_if_kept": "Keep generation; do not reinterpret lack of static usage evidence as unused"
   }
 }
