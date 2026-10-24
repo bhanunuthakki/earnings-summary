@@ -23,6 +23,7 @@ from llm.prompt_ab import apply_prompt_override
 from llm.structured import StructuredCallResult
 from provenance.evidence_backfill import ensure_legacy_document_evidence
 from provenance.evidence_ledger import EvidenceLedger, EvidenceNode, LedgerRecord, PersistResult
+from provenance.immutable_artifact import ImmutableArtifactSnapshot
 from provenance.ir_reported_facts import (
     IrCandidatePopulation,
     IrReviewedCandidate,
@@ -100,6 +101,53 @@ def _retained_source(
     ensure_legacy_document_evidence(conn, repo_root=tmp_path, document_id=1)
     conn.commit()
     return source
+
+
+def test_ocr_capture_selection_targets_only_one_document_before_model_call(
+    conn: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = _retained_source(conn, tmp_path)
+    second = tmp_path / "second.pdf"
+    second.write_bytes(b"second original source")
+    conn.execute(
+        "INSERT INTO documents (id,ticker,source_type,doc_type,period_end,file_path,sha256,"
+        "fetched_at,fetch_status,raw_bytes_size) VALUES "
+        "(2,'TEST','ir_doc','ir_supplement','2026-09-30 00:00:00',?,?,'2026-10-01','ok',22)",
+        (str(second), sha(second.read_bytes())),
+    )
+    ensure_legacy_document_evidence(conn, repo_root=tmp_path, document_id=2)
+    conn.commit()
+    opened: list[Path] = []
+    real_read = summaries.read_stable_artifact
+
+    def read_selected(path: Path) -> tuple[ImmutableArtifactSnapshot, bytes]:
+        opened.append(path)
+        return real_read(path)
+
+    def unexpected_model_route(
+        _purpose: str, *, capability_profile: object, db_path: Path
+    ) -> tuple[str, str]:
+        pytest.fail("wrong OCR selection reached model route")
+
+    monkeypatch.setattr(summaries, "read_stable_artifact", read_selected)
+    monkeypatch.setattr(
+        summaries,
+        "resolve_model_and_backend",
+        unexpected_model_route,
+    )
+    selection = continuation.OCRCaptureSelection(
+        document_id=2,
+        document_version_id="wrong-document-version",
+        source_sha256="0" * 64,
+        evidence_seal_id="seal",
+        extraction_run_id="run",
+        page_result_ids=("page",),
+        cutoff_at=datetime(2026, 10, 23, tzinfo=UTC),
+    )
+    log = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, ocr_selection=selection)
+    assert opened == [second] and first not in opened
+    assert log.error is not None and "selection differs" in log.error
+    assert conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == 0
 
 
 def _entrypoint_fixture(

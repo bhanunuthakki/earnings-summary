@@ -11,14 +11,12 @@ while the persistence stays deterministic Python:
      persist into kpi_facts via src/pipeline/kpi_persistence.py, and emit
      validation_issues for any failed sanity check. Wrapped in a run_id.
 
-  3. `--capture`: capture-every-number mode for IR supplement / data-pack PDFs
-     (the doc kind with no LLM brief handler). Enumerates EVERY labeled number in
-     each supplement PDF — no allowlist — and persists at IR_DOC tier with
-     origin=CAPTURE (each label canonicalized on write via
-     compute.kpi_resolver.canonical_metric_name). Scopes to `--ticker` when given,
-     else every ticker with a supplement PDF. Idempotent; `--refresh` re-captures
-     docs already processed. This is the automated counterpart to the manual
-     `--list-pending`/`--apply` two-step for the PDF long tail.
+  3. `--capture`: enumerate bounded IR supplement PDF sections and retain exact
+     raw source candidates. Native candidates can publish only after exact
+     source-context review. `--ocr-projection-file` with `--ticker` selects one
+     sealed OCR projection for one document; its candidates remain pending OCR
+     source-context review and cannot publish financial facts. `--refresh`
+     re-enumerates the selected source through the existing governed call route.
 
 Manifest JSON shape:
     {
@@ -72,6 +70,7 @@ from typing import cast
 from _lib import PROJECT_ROOT
 from pydantic import BaseModel
 
+from compute.ir_supplement_capture import OCRCaptureSelection
 from compute.ir_supplement_revalidation import RevalidationManifest
 from compute.kpi_extract_summaries import (
     capture_for_ir_pdf_docs,
@@ -357,11 +356,18 @@ def _tickers_with_capture_docs(conn: sqlite3.Connection) -> list[str]:
 
 
 def _run_capture(
-    conn: sqlite3.Connection, *, ticker: str | None, refresh: bool
+    conn: sqlite3.Connection,
+    *,
+    ticker: str | None,
+    refresh: bool,
+    ocr_selection: OCRCaptureSelection | None = None,
 ) -> dict[str, object]:
     """Capture-every-number from IR supplement PDFs for one ticker (or all)."""
     tickers = [ticker.upper()] if ticker else _tickers_with_capture_docs(conn)
-    logs = [capture_for_ir_pdf_docs(t, PROJECT_ROOT, conn, refresh=refresh) for t in tickers]
+    logs = [
+        capture_for_ir_pdf_docs(t, PROJECT_ROOT, conn, refresh=refresh, ocr_selection=ocr_selection)
+        for t in tickers
+    ]
     write_log(PROJECT_ROOT, logs)
     return {
         "mode": "capture",
@@ -413,6 +419,11 @@ def main() -> int:
         help="With --capture, re-enumerate supplement PDFs already captured.",
     )
     parser.add_argument(
+        "--ocr-projection-file",
+        type=Path,
+        help="With --capture and --ticker, pin one sealed OCR run for one exact document; retain candidates only.",
+    )
+    parser.add_argument(
         "--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"), help="Path to portfolio.db"
     )
     parser.add_argument(
@@ -426,6 +437,9 @@ def main() -> int:
         help="With --apply, persist again even when the same immutable manifest already completed.",
     )
     args = parser.parse_args()
+
+    if args.ocr_projection_file is not None and (not args.capture or not args.ticker):
+        parser.error("--ocr-projection-file requires --capture and --ticker")
 
     conn = open_db(args.db)
     try:
@@ -449,7 +463,16 @@ def main() -> int:
                 print(receipt.model_dump_json())
                 return 0
             if args.capture:
-                result = _run_capture(conn, ticker=args.ticker, refresh=args.refresh)
+                ocr_selection = (
+                    OCRCaptureSelection.model_validate_json(
+                        args.ocr_projection_file.read_text(encoding="utf-8")
+                    )
+                    if args.ocr_projection_file is not None
+                    else None
+                )
+                result = _run_capture(
+                    conn, ticker=args.ticker, refresh=args.refresh, ocr_selection=ocr_selection
+                )
                 print(json.dumps(result, indent=2, default=str))
                 return 0 if result["ok"] else 1
 

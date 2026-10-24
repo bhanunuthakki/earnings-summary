@@ -148,6 +148,19 @@ is tagged `governed_ocr`; its offsets are not native PDF text offsets. OCR
 acceptance and layout proof do not grant financial candidate retention,
 semantic admission, or publication.
 
+An explicit `--capture --ticker TICKER --ocr-projection-file MANIFEST` selection
+can use that projection for one exact IR supplement document. The manifest pins
+the document ID/version, raw PDF hash, processing seal, OCR run, complete ordered
+page-result IDs, and cutoff. Native pages retain native text; selected
+`requires_ocr` pages carry `governed_ocr` text and raster-word regions through
+the existing bounded structured-call route. Section prompts, cache inputs, and
+raw candidate nodes bind the selected OCR commitments. OCR candidate nodes use
+`ir-pdf-unreviewed-ocr-candidate.v1` and have no native character locator.
+They remain `pending_source_context_review_ocr`; the native source review and
+financial publication paths do not consume them. Exact raw PDF, render, word,
+and semantic visual review are still required before any OCR financial fact can
+be published.
+
 ### Progressive proof and legacy repair (2026-09-19)
 
 Capture, extraction, source coverage, semantic admission, and reader parity are

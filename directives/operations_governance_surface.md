@@ -2341,3 +2341,14 @@ invocation, automatic page selection, financial write, or operator action is
 added. Text-only history remains unavailable for the word-backed projection.
 Evidence: `tests/test_ocr_extraction_governance.py` and
 `tests/test_document_processing_evidence.py`.
+
+The existing `execution/extract_kpis_from_ir.py --capture` command also accepts
+`--ocr-projection-file PATH` only with `--ticker`. The JSON file has exactly one
+`document_id`, `document_version_id`, `source_sha256`, `evidence_seal_id`,
+`extraction_run_id`, complete ordered `page_result_ids`, and timezone-aware
+`cutoff_at`. The command captures only that registered supplement document.
+It checks the exact source and sealed projection before any model request.
+It uses the same bounded `kpi_summary_enumerate` route and raw evidence ledger.
+OCR rows remain pending visual/source-context review and make no financial fact
+write. A missing, changed, partial, conflicting, or text-only projection fails
+closed. Native-only capture and V16 revalidation keep their existing interfaces.
