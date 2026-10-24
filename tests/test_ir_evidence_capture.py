@@ -528,8 +528,13 @@ def test_apply_promotes_verified_bytes_and_creates_legacy_free_document_version(
         )
         assert result.fetched == 1
         assert conn.execute(
-            "SELECT legacy_document_id, document_type, form_type FROM evidence_document_versions"
-        ).fetchone() == (None, "press_release", "IR")
+            "SELECT legacy_document_id, document_type, form_type, as_of_at "
+            "FROM evidence_document_versions"
+        ).fetchone() == (None, "press_release", "IR", None)
+        assert conn.execute(
+            "SELECT source_published_at FROM evidence_source_observations "
+            "WHERE source_kind='ir_document'"
+        ).fetchone() == (None,)
         assert conn.execute(
             "SELECT coverage_status, material_dissent FROM v_source_coverage_current"
         ).fetchone() == ("captured", 1)
