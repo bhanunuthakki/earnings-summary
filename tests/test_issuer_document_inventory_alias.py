@@ -29,8 +29,10 @@ from pipeline.source_policy import ReportedPeriodStatus, reported_period_window_
 from pipeline.transcript_acquisition import (
     COMBINED_SOURCE_REGIME_IDENTITY,
     TranscriptAcquisitionDeniedError,
+    load_authorized_transcript_receipt,
     load_authorized_transcript_replay,
     persist_authorized_transcript_artifact,
+    read_authorized_transcript,
     require_authorized_transcript_request,
     stage_authorized_payload,
 )
@@ -671,7 +673,7 @@ def test_reported_window_accepts_captured_native_review_and_sealed_sec_populatio
             source_url="https://investors.nu/transcript",
             canonical_document_path=Path("transcripts/raw/NU_Q2_2026.txt"),
         )
-        persist_authorized_transcript_artifact(
+        receipt_id = persist_authorized_transcript_artifact(
             conn, artifact, project_root=tmp_path, trusted_staging_root=staging_root
         )
         conn.commit()
@@ -685,6 +687,19 @@ def test_reported_window_accepts_captured_native_review_and_sealed_sec_populatio
         unavailable = reported_period_window_from_inventory(conn, ticker="NU", as_of=later.date())
         assert unavailable.status is ReportedPeriodStatus.UNKNOWN
         assert unavailable.reason == "ir_period_proof_missing"
+        assert (
+            load_authorized_transcript_receipt(
+                conn,
+                receipt_id=receipt_id,
+                project_root=tmp_path,
+                trusted_staging_root=staging_root,
+            )
+            == artifact
+        )
+        with pytest.raises(TranscriptAcquisitionDeniedError):
+            read_authorized_transcript(
+                conn, artifact, project_root=tmp_path, trusted_staging_root=staging_root
+            )
         with pytest.raises(TranscriptAcquisitionDeniedError):
             load_authorized_transcript_replay(
                 conn, request=request, project_root=tmp_path, trusted_staging_root=staging_root
