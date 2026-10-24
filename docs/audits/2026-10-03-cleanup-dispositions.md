@@ -112,3 +112,13 @@ their existing import paths. Existing old-format, schema, policy and snapshot
 refusals remain. Standard SEC acquisition is separate. No saved artifact,
 production state or installed task is changed. The current capability disposition
 is in `directives/operations_governance_surface.md`.
+
+## Metric-to-DCF mapping retirement — 2026-10-23 addendum
+
+The owner approved retiring the dormant metric-to-DCF mapping/resolution path.
+The earlier authoring-experiment row records the 2026-10-03 state. Pure conversion,
+ordered field safety metadata, bounds and WACC registry protection stay in the
+existing DCF owner. Normal model editing, synchronization and the no-Explore-write
+guard remain. Only the unused resolver, input application, dropdown and additive
+lineage writer retire. Existing driver-provenance JSON is retained unchanged.
+The current disposition is in `directives/operations_governance_surface.md`.

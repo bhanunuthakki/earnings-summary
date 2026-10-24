@@ -2249,3 +2249,20 @@ collection permission, fallback, verifier CLI or new stored representation is ad
 No saved plan, terminal receipt, source document, historical row or backup is
 rewritten or deleted. Creator-only tests retire; retained artifact and admission
 contracts keep their tests and bounded synthetic fixtures.
+
+## Dormant metric-to-DCF mapping retirement — 2026-10-23
+
+Disposition: **no current surface change**. The owner approved retiring the
+unused metric-to-DCF mapping and resolution experiment. Its resolver, direct
+input-application helper, unused dropdown and lineage writer have no current
+application caller and are removed. The field registry drops only application
+metadata; its ordered keys, labels, unit families and inclusive bounds remain.
+Pure conversion, unit/refusal errors, finite-number checks and the WACC registry
+exclusion remain. No arbitrary custom-field ban is added.
+
+The normal DCF editor, guarded commit/synchronization owners and shared unit
+converter stay unchanged. Explore still has no fact-injection write route.
+Historical assumptions, driver lineage JSON, observations and override history
+are not rewritten or deleted. The legacy fact-reader inventory loses only this
+unused resolver's one SQL-reader entry. No replacement reader, state, provider
+call, collection, schema or installed operation is added.

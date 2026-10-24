@@ -86,6 +86,14 @@
       "review_receipt": ".tmp/sec-plan-creation-independent-review.json",
       "review_sha256": "35bb7776d36760f1f460ec61d16a9042d8d3b9ab586c4e150d869c44340e88da",
       "local_commit_receipt": ".tmp/sec-plan-creation-final/local-commit.json"
+    },
+    "DCF1": {
+      "scope": "Unusedmetric-to-DCF mapping retired; unit/bounds/WACC and normaleditor retained",
+      "score": 97,
+      "status": "acceptedlocal; broaderHOLD",
+      "review_receipt": ".tmp/dcf-mapping-independent-review.json",
+      "review_sha256": "bbb867616402f6c6fdaa767f5fed669c107861952adbad465d0b1822972b0fb4",
+      "local_commit_receipt": ".tmp/dcf-mapping-final/local-commit.json"
     }
   },
   "authority": {
@@ -869,7 +877,7 @@
     "transport": "claude_membership"
   },
   "static_count_clarification": "Old2012/1835 values are previous configured ceilings, not a paired prechange measurement of actual diagnostics/suppressions. Revised measured1826/1811 values tighten those ceilings.",
-  "status": "LOCAL_SEC_PLAN_CREATOR_RETIREMENT_ACCEPTED; Sol advisory97; original architecture FAIL and wider roadmap open",
+  "status": "LOCAL_DCF_MAPPING_RETIREMENT_ACCEPTED; Sol advisory97; original architecture FAIL and wider roadmap open",
   "third_independent_sol_proxy_review": {
     "binding_sha256": "53493b3675b5a59400c3527a8954914d8a50ea0ae9d09a819d27d854d8c897d0",
     "effort": "high",
@@ -3836,7 +3844,6 @@
       "qualification": "User-selected independent GPT-6.1 Sol advisory proxy; no formal purpose-qualified frontier claim"
     },
     "commit_receipt": ".tmp/sec-plan-creation-final/local-commit.json",
-    "next_decision_pending": "Retire dormant metric-to-DCF mapping/resolution path while retaining unit conversion, bounds, normal DCF editing and no research-screen writes; owner answer pending.",
     "proof": ".tmp/sec-plan-creation-final/checkpoint-data.json",
     "tests": "33focusedpass;50preservationchecks;185retainedpass5optionalbenchskips1obsoletecountfailure;1correctedoraclepass",
     "current_changed": "129filesclean",
@@ -3844,6 +3851,32 @@
     "graph": "COMPLETE/PASS158test-onlyunknown0productiongaps0diagnostics",
     "source_noncomment_lines": 560637,
     "reduction_from_original": 1645,
-    "broader_branch": "HOLD25oversizedmodulesversus24; full/nativequalificationopen"
+    "broader_branch": "HOLD25oversizedmodulesversus24; full/nativequalificationopen",
+    "next_decision_resolution": {
+      "answer": "Retire metric-to-DCF mapping; keep safeguards",
+      "implementation": "DCF1"
+    }
+  },
+  "dcf_mapping_checkpoint": {
+    "status": "ACCEPTED_LOCAL_SOURCE_CHECKPOINT",
+    "approval": "Retire metric-to-DCF mapping; keep safeguards",
+    "freeze": ".tmp/dcf-mapping-final/freeze.json",
+    "freeze_sha256": "314773954251b9ff028b51cc19d4be241ee4b39fdfb4df888dabd14f673c1f76",
+    "source_lines_removed": 414,
+    "test_lines_removed": 334,
+    "independent_review": {
+      "path": ".tmp/dcf-mapping-independent-review.json",
+      "sha256": "bbb867616402f6c6fdaa767f5fed669c107861952adbad465d0b1822972b0fb4",
+      "score": 97,
+      "verdict": "ACCEPT",
+      "qualification": "User-selected GPT-6.1 Sol advisory proxy; no qualified-frontier claim"
+    },
+    "commit_receipt": ".tmp/dcf-mapping-final/local-commit.json",
+    "next": "Larger presentation-number duplicate path: reuse existing R4 held-pair inventory and qualification brief; source-parity and automated extraction gates remain unwaived.",
+    "proof": ".tmp/dcf-mapping-final/checkpoint-data.json",
+    "checks": "20focusedpass;10878pairedguardcases;42retainedpass;131changedfilesclean; whole2863/1825/1803PASS",
+    "source_noncomment_lines": 560290,
+    "reduction_from_original": 1992,
+    "broader_branch": "HOLD25oversizedvs24; native/fullqualificationopen"
   }
 }

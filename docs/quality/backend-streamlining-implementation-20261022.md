@@ -1,6 +1,6 @@
 # Backend streamlining: implementation checkpoints
 
-Status: **SEC plan-creator retirement accepted locally at 97/100; broader release HOLD**.
+Status: **metric-to-DCF mapping retired locally at 97/100; broader release HOLD**.
 Production source is below the original baseline. One large-module-count gate still fails.
 Started 2026-10-22; revised 2026-10-23 Pacific. Base: `c978523d`.
 Branch: `codex/research-procedure-cleanup`. R1 corrections are at `3065638a`,
@@ -650,7 +650,38 @@ Proof: `.tmp/sec-plan-creation-final/checkpoint-data.json` and
 `.tmp/sec-plan-creation-final/local-commit.json`. No collection, source admission,
 provider call, live-state operation, push, merge or deployment occurred. The next
 owner question concerns the dormant metric-to-DCF mapping experiment; its unit
-conversion, bounds and normal model editing would remain. No removal is approved yet.
+conversion, bounds and normal model editing would remain. The owner subsequently
+approved that cut; its checkpoint follows.
+
+## Metric-to-DCF mapping retirement — 2026-10-23
+
+The owner approved retiring the dormant mapping/resolution experiment while
+keeping safeguards. Remove its resolver, input-application helper, lineage writer,
+dropdown and application-only field metadata. The existing module now contains
+only safety metadata and pure conversion. This cuts **414 source lines** and
+**334 test lines**; one unused legacy-reader entry also retires. Historical JSON,
+overrides, normal model editing and synchronization remain unchanged.
+
+Independent Sol advisory review accepts DCF1 at **97/100**, with no scoped blocker.
+All **13 ordered field safety tuples**, four guard ASTs and 16 test bodies are
+preserved. **10,878 paired cases match exactly**, including values, notes, units
+and refusal errors. The focused suites pass 20 cases after ten mapper-only tests
+retire. The retained reader/DCF API suites pass 42 cases. These batches overlap
+in the Explore guard; they are not a unique total. All 131 changed files pass
+current format/lint/strict/suppression checks. Whole static checking passes for
+2,863 files with unchanged 1,825 diagnostics and 1,803 suppressions. No limits rise.
+
+The current dependency graph is COMPLETE/PASS with zero production gaps or
+diagnostics; all 3,685 input hashes match. Contract checks pass. Source measures
+**560,290 noncomment lines**, **1,992 below** the original baseline. Duplication
+passes; oversized modules remain **25 versus 24, FAIL**. No full-suite, native
+financial or live qualification is claimed. Proof: `.tmp/dcf-mapping-final/checkpoint-data.json`
+and `.tmp/dcf-mapping-independent-review.json`. The commit receipt is
+`.tmp/dcf-mapping-final/local-commit.json`. No current rendered task changes.
+
+The next core data-plane work uses the existing R4 held-pair inventory and
+qualification brief. The larger presentation-summary number path stays until
+original-source, novel-coverage and historical-preservation proofs qualify it.
 
 ## Gates that remain open
 

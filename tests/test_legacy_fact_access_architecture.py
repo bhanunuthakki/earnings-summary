@@ -123,7 +123,6 @@ AUDITED_LEGACY_FACT_READS = {
     "src/compute/segment_quarterly_10q.py": 1,
     "src/compute/segments.py": 1,
     "src/credibility/observations.py": 3,
-    "src/dcf/fact_drivers.py": 1,
     "src/decision_conditions.py": 2,
     "src/pipeline/confidence.py": 2,
     "src/pipeline/explore_panel.py": 1,
