@@ -12,16 +12,12 @@ unmatched-segment-identity gap, and idempotency on a same-inputs re-run.
 from __future__ import annotations
 
 import sqlite3
-import sys
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import compute.segment_q4_derive as q4  # noqa: E402
+import compute.segment_q4_derive as q4
 
 _SCHEMA = """
 CREATE TABLE documents (

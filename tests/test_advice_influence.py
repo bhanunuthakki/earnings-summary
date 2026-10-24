@@ -11,18 +11,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-from calibration_guard import MIN_CONFIDENT_N  # noqa: E402
-from decision_calibration import compute_advice_influence  # noqa: E402
+from calibration_guard import MIN_CONFIDENT_N
+from decision_calibration import compute_advice_influence
 
 # Verbatim copy of the three tables db.py's init_db() creates outside alembic
 # (every migration from 0001 on assumes these already exist) — see the

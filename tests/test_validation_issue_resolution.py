@@ -8,16 +8,11 @@ no-op) and the route wires it with the right status codes.
 from __future__ import annotations
 
 import sqlite3
-import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+import comments_server
 
-import comments_server  # noqa: E402
-
-from validation_issues_store import resolve_validation_issue  # noqa: E402
+from validation_issues_store import resolve_validation_issue
 
 _SCHEMA = """
 CREATE TABLE validation_issues (

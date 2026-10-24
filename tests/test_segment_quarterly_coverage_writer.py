@@ -11,16 +11,11 @@ omits it).
 from __future__ import annotations
 
 import sqlite3
-import sys
 from datetime import datetime
-from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from pipeline.segment_quarterly_coverage import (  # noqa: E402
+from pipeline.segment_quarterly_coverage import (
     coverage_rows_for_ticker,
     record_coverage,
 )

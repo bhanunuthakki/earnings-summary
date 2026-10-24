@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from evals.injection_canaries import (  # noqa: E402
+from evals.injection_canaries import (
     load_canary_golden,
     run_canary_eval,
 )
-from evals.provenance_caution import (  # noqa: E402
+from evals.provenance_caution import (
     load_caution_golden,
     run_caution_eval,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 CAUTION_GOLDEN = PROJECT_ROOT / "evals" / "golden" / "provenance_caution.json"
 CANARY_GOLDEN = PROJECT_ROOT / "evals" / "golden" / "injection_canaries.json"

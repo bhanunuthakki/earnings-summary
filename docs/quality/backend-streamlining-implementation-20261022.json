@@ -145,6 +145,20 @@
       "unchanged_other_definitions": 59,
       "new_focused_cases": 5,
       "proof": ".tmp/cleanup-open-model-execution/test-suite-pruning-final-acceptance.json"
+    },
+    "test-bootstrap-20261024": {
+      "status": "local implementation independently reviewed; terminal gates recorded in owning receipt",
+      "prd_score": 92,
+      "implementation_score": 94,
+      "changed_files": 57,
+      "removed_calls": 60,
+      "net_test_lines_removed": 243,
+      "net_test_bytes_removed": 8221,
+      "module_definitions_preserved": 607,
+      "selected_test_population": 498,
+      "fresh_process_import_parity": "PASS per changed file",
+      "skipped_files": 24,
+      "proof": ".tmp/cleanup-open-model-execution/test-bootstrap-final-acceptance.json"
     }
   },
   "authority": {
@@ -4529,8 +4543,11 @@
     "limits": "Role region only, not app navigation or implemented/backend capability. Empty-state preview still retains old CLI/cache guidance and needs revision before product acceptance. No new product code."
   },
   "next_test_bootstrap_proposal": {
-    "candidate_files": 81,
-    "candidate_calls": 90,
-    "status": "PRD advisory review 92; no source edits"
+    "status": "applied qualified subset; final checks in owning receipt",
+    "initial_candidates": 81,
+    "initial_calls": 90,
+    "changed_files": 57,
+    "removed_calls": 60,
+    "skipped_files": 24
   }
 }

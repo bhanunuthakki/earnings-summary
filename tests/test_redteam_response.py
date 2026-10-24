@@ -8,22 +8,18 @@ transition rejects a further response.
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from redteam import response, store  # noqa: E402
-from redteam.models import Kind, RedTeamLLMItem  # noqa: E402
-from redteam.response import Action  # noqa: E402
-from user_state import notes  # noqa: E402
-from user_state.ledger import list_entries  # noqa: E402
-from user_state.sizing import list_intents  # noqa: E402
+from redteam import response, store
+from redteam.models import Kind, RedTeamLLMItem
+from redteam.response import Action
+from user_state import notes
+from user_state.ledger import list_entries
+from user_state.sizing import list_intents
 
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 

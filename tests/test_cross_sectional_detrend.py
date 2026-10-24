@@ -16,16 +16,11 @@ Weighted toward the failure modes ``docs/design/disclosure_change_build_stack.md
 from __future__ import annotations
 
 import sqlite3
-import sys
-from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from filings import cross_sectional_detrend as csd  # noqa: E402
-from filings.models import HardStopError  # noqa: E402
+from filings import cross_sectional_detrend as csd
+from filings.models import HardStopError
 
 _SCHEMA = """
 CREATE TABLE filing_sections (

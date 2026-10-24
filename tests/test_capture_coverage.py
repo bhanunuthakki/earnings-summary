@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from pipeline.capture_coverage import (  # noqa: E402
+from pipeline.capture_coverage import (
     CaptureCoverageRecord,
     load_coverage,
     record_coverage,

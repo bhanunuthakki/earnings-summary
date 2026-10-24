@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from collections.abc import Callable, Iterator
 from datetime import datetime
 from pathlib import Path
@@ -22,12 +21,9 @@ from typing import cast
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import db as dbmod  # noqa: E402
-from owner_profile.store import append_fact  # noqa: E402
-from pipeline import weekly_packet as wp  # noqa: E402
+import db as dbmod
+from owner_profile.store import append_fact
+from pipeline import weekly_packet as wp
 
 
 @pytest.fixture

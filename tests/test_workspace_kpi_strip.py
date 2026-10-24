@@ -8,14 +8,8 @@ as a bare twelve-digit float. Pure formatting, so pinned here without a DB.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from report.models import KpiLedgerRow  # noqa: E402
-from report.renderers.workspace_data import (  # noqa: E402
+from report.models import KpiLedgerRow
+from report.renderers.workspace_data import (
     KpiStripTile,
     format_ledger_value,
     select_kpi_strip,

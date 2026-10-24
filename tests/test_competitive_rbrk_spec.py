@@ -11,24 +11,22 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import sys
 from pathlib import Path
 from typing import cast
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from competitive import (  # noqa: E402
+from competitive import (
     OWNER_KPI_CATEGORY_SHARE,
     OWNER_KPI_INCREMENTAL,
     SYNCED_KPI_NAMES,
 )
-from competitive.category_share import ingest_category_share  # noqa: E402
-from competitive.holdings_sync import resolve_synced_current, sync_holdings  # noqa: E402
+from competitive.category_share import ingest_category_share
+from competitive.holdings_sync import resolve_synced_current, sync_holdings
 
-from ._competitive_fixtures import kpi_conn  # noqa: E402
+from ._competitive_fixtures import kpi_conn
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _private_holdings_dir(required: tuple[str, ...] = ()) -> Path:

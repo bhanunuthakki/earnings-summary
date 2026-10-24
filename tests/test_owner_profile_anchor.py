@@ -10,21 +10,17 @@ default" comes from the data (Phase 1 only ever stages `proposed` facts).
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from llm.anchors import (  # noqa: E402
+from llm.anchors import (
     OWNER_PROFILE_ANCHOR_CHAR_CAP,
     compose_anchor_block,
     load_owner_profile_anchor,
 )
-from owner_profile.store import affirm_fact, append_fact  # noqa: E402
+from owner_profile.store import affirm_fact, append_fact
 
 _DDL = """
 CREATE TABLE owner_profile_facts (

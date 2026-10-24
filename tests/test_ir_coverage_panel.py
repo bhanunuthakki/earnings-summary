@@ -8,13 +8,9 @@ ir_fetch_status when present.
 from __future__ import annotations
 
 import sqlite3
-import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from pipeline.ir_coverage_panel import render_ir_coverage_panel  # noqa: E402
+from pipeline.ir_coverage_panel import render_ir_coverage_panel
 
 
 def _build(db: Path) -> None:

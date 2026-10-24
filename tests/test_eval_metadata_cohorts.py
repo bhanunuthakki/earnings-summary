@@ -2,15 +2,10 @@
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
-from pathlib import Path
 from typing import cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from evals.golden_classifiers import (  # noqa: E402
+from evals.golden_classifiers import (
     GOLDEN_DIR,
     grade_intake_classifier_case,
     grade_transcript_metadata_case,

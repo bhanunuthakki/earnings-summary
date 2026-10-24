@@ -8,17 +8,13 @@ weight renormalization and the three hidden-reason degradations.
 from __future__ import annotations
 
 import json
-import sys
 from datetime import date, timedelta
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from allocation.book_risk import build_book_risk  # noqa: E402
+from allocation.book_risk import build_book_risk
 
 TICKERS = ["AAA", "BBB", "CCC"]
 

@@ -9,19 +9,13 @@ from the per-ticker correlation/beta rows.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from integrations.portfolio_tracker_client import (  # noqa: E402
+from integrations.portfolio_tracker_client import (
     PerformancePoint,
     PositionCorrelationRow,
 )
-from portfolio_risk import (  # noqa: E402
+from portfolio_risk import (
     compute_drawdown,
     factor_exposure_rollup,
 )

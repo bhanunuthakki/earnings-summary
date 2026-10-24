@@ -13,17 +13,15 @@ Covers:
 from __future__ import annotations
 
 import json
-import sys
 from datetime import date
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from dcf import scenario_prior as sp
+from dcf.scenario_reward import SCENARIO_PROBABILITIES
+from evals import scenario_prior as sp_eval
+from llm.structured import StructuredParseError
 
-from dcf import scenario_prior as sp  # noqa: E402
-from dcf.scenario_reward import SCENARIO_PROBABILITIES  # noqa: E402
-from evals import scenario_prior as sp_eval  # noqa: E402
-from llm.structured import StructuredParseError  # noqa: E402
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 _TODAY = date(2026, 7, 2)
 

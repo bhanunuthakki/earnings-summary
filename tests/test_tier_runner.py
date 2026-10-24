@@ -8,16 +8,12 @@ portfolio.db built per-test so suites don't share state.
 from __future__ import annotations
 
 import sqlite3
-import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from pipeline.tier_runner import (  # noqa: E402
+from pipeline.tier_runner import (
     tickers_due_for_lens_regen,
     tickers_due_for_refresh,
     tier_coverage_summary,

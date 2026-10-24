@@ -13,20 +13,18 @@
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from allocation.candidate_fit import BookContext
+from positioning.profile import PositioningProfile, SectorTarget
+from positioning.store import append_intent, latest_intent, list_intents
+from positioning.target import book_default_target, resolve_target_context
 
-from allocation.candidate_fit import BookContext  # noqa: E402
-from positioning.profile import PositioningProfile, SectorTarget  # noqa: E402
-from positioning.store import append_intent, latest_intent, list_intents  # noqa: E402
-from positioning.target import book_default_target, resolve_target_context  # noqa: E402
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 _DDL = """
 CREATE TABLE positioning_intents (

@@ -9,17 +9,13 @@ currently sitting ``deferred`` (it used its one allowed defer).
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from redteam import gate, response, store  # noqa: E402
-from redteam.models import RedTeamLLMItem  # noqa: E402
+from redteam import gate, response, store
+from redteam.models import RedTeamLLMItem
 
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 

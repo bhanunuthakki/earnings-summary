@@ -10,20 +10,14 @@ the render's signed-regret phrasing + partial-exit flag.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from advisor.exit_quality import (  # noqa: E402
+from advisor.exit_quality import (
     TickerExitQuality,
     read_ticker_exit_quality,
     render_exit_quality_note,
 )
-from integrations.portfolio_tracker_client import (  # noqa: E402
+from integrations.portfolio_tracker_client import (
     ExitQuality,
     ExitQualityRow,
 )

@@ -8,15 +8,11 @@ not only from the show_source_calls CLI (v6 re-grade, Smart caching).
 from __future__ import annotations
 
 import sqlite3
-import sys
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from pipeline.source_calls_panel import (  # noqa: E402
+from pipeline.source_calls_panel import (
     render_action_usage_section,
     render_source_calls_panel,
 )

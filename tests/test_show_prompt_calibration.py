@@ -10,20 +10,14 @@ from __future__ import annotations
 import io
 import json
 import sqlite3
-import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+import show_prompt_calibration as cli
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import show_prompt_calibration as cli  # noqa: E402
-
-from llm.calibration import CalibrationScore, record_score  # noqa: E402
-from report.renderers.workspace_html import _prompt_quality_panel  # noqa: E402
+from llm.calibration import CalibrationScore, record_score
+from report.renderers.workspace_html import _prompt_quality_panel
 
 Capsys = pytest.CaptureFixture[str]
 

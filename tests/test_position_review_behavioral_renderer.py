@@ -19,17 +19,13 @@ test_position_review_graded_record.py).
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from advisor import position_review  # noqa: E402
-from owner_profile.store import append_fact  # noqa: E402
+from advisor import position_review
+from owner_profile.store import append_fact
 
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 

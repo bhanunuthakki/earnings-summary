@@ -6,14 +6,9 @@ FYEs), and the column classification table.
 
 from __future__ import annotations
 
-import sys
 from datetime import date
-from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from table_extractors.period_axis import (  # noqa: E402
+from table_extractors.period_axis import (
     classify_period_column,
     expected_period_ends,
     parse_period_label,

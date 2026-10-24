@@ -8,13 +8,7 @@ definition line. Pinning both halves here keeps that split from drifting.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from report.kpi_naming import clean_kpi_name, kpi_qualifier  # noqa: E402
+from report.kpi_naming import clean_kpi_name, kpi_qualifier
 
 
 def test_clean_name_strips_trailing_parenthetical() -> None:

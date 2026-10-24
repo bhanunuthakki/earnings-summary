@@ -8,14 +8,9 @@ without a DB.
 
 from __future__ import annotations
 
-import sys
 from datetime import date
-from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from report.renderers.workspace_data import (  # noqa: E402
+from report.renderers.workspace_data import (
     kpi_is_stale,
     kpi_trend_delta,
 )

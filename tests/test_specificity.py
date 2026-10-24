@@ -15,13 +15,7 @@ Weighted toward the failure modes the design doc calls out:
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from filings.specificity import (  # noqa: E402
+from filings.specificity import (
     SpecificityBand,
     extract_diff_hunk,
     specificity_metrics,

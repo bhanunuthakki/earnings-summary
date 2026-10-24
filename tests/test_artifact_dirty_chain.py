@@ -10,13 +10,9 @@ facts move.
 from __future__ import annotations
 
 import sqlite3
-import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from llm_artifact_store import (  # noqa: E402
+from llm_artifact_store import (
     FACT_DEPENDENT_PURPOSES,
     mark_artifacts_dirty_for_fact_change,
 )
