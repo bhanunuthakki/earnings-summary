@@ -5,7 +5,10 @@ import json
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from datetime import datetime
+from io import StringIO
+from itertools import permutations
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -514,4 +517,148 @@ def _request(document: Path, body: bytes) -> dict[str, object]:
         "expected_cik": "0000000001",
         "members": [member],
         "package_member_set_sha256": package_sha,
+    }
+
+
+def test_tied_fact_input_order_preserves_result_and_locator_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Tree:
+        def getpath(self, fact: object) -> str:
+            assert isinstance(fact, Fact)
+            return fact.path
+
+    class Fact:
+        def __init__(self, fact_id: str, path: str) -> None:
+            self.id = fact_id
+            self.path = path
+            self.modelDocument = SimpleNamespace(uri="filing.htm")
+            self.sourceline = 8
+            self.qname = SimpleNamespace(
+                namespaceURI="https://example.test/taxonomy", localName="Revenue"
+            )
+            self.contextID = "same-context"
+            self.value = "10"
+
+        def getroottree(self) -> Tree:
+            return Tree()
+
+    def extract_fact(
+        _model: object,
+        fact: object,
+        _members: list[dict[str, object]],
+        _ordinal: int,
+        **_focus: object,
+    ) -> bridge.ExtractedFact:
+        assert isinstance(fact, Fact)
+        return bridge.ExtractedFact(
+            member_ordinal=0,
+            fact_id=fact.id,
+            element_path=fact.path,
+            concept_namespace="https://example.test/taxonomy",
+            concept_name="Revenue",
+            context_id=fact.contextID,
+            observed_cik="0000000001",
+            evidence_text="Revenue 10",
+            canonical_raw_fact={"fact_id": fact.id, "value": fact.value},
+            footnotes=(),
+        )
+
+    extract_model = cast(
+        Callable[[object, list[dict[str, object]]], tuple[bridge.ExtractedFact, ...]],
+        getattr(bridge, "_facts_from_model"),
+    )
+    facts = (
+        Fact("z-source-id", "/html/body/fact[1]"),
+        Fact("a-source-id", "/html/body/fact[2]"),
+        Fact("m-source-id", "/html/body/fact[3]"),
+    )
+    document = tmp_path / "filing.htm"
+    body = b"<html>three distinct captured source elements</html>"
+    document.write_bytes(body)
+    request = _request(document, body)
+    monkeypatch.setattr(bridge, "_extracted_fact", extract_fact)
+    model = SimpleNamespace(factsInInstance=facts)
+
+    def extract(
+        _request: dict[str, object], members: list[dict[str, object]]
+    ) -> bridge.ArelleExtraction:
+        return bridge.ArelleExtraction(
+            facts=extract_model(model, members),
+            loaded_member_ordinals=(0,),
+            source_inline_fact_count=3,
+        )
+
+    monkeypatch.setattr(bridge, "_extract_arelle_facts", extract)
+    results: list[dict[str, object]] = []
+    for ordering in permutations(facts):
+        model.factsInInstance = ordering
+        results.append(bridge.process_request(request, runtime_artifact_sha256="b" * 64))
+    # Complete output equality includes ordinal-derived locators, source entries and set digests.
+    assert all(result == results[0] for result in results)
+    captured = cast(list[dict[str, object]], results[0]["facts"])
+    assert [
+        cast(dict[str, object], fact["source_locator"])["xbrl_fact_id"] for fact in captured
+    ] == ["z-source-id", "a-source-id", "m-source-id"]
+    assert [fact["input_ordinal"] for fact in captured] == [0, 1, 2]
+
+
+@pytest.mark.parametrize("has_locator", [False, True])
+def test_ambiguous_fact_order_refuses_before_assigning_ordinals(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    has_locator: bool,
+) -> None:
+    facts = [
+        SimpleNamespace(
+            modelDocument=SimpleNamespace(uri="filing.htm"),
+            sourceline=8,
+            qname=SimpleNamespace(namespaceURI="example", localName="Revenue"),
+            contextID="context",
+            value="10",
+            decimals=decimals,
+            id="duplicate-id" if has_locator else None,
+        )
+        for decimals in ("0", "-3")
+    ]
+    if has_locator:
+
+        def element_path(_fact: object) -> str:
+            return "/xbrl/fact[1]"
+
+        for fact in facts:
+            fact.getroottree = lambda: SimpleNamespace(getpath=element_path)
+    extract_model = cast(
+        Callable[[object, list[dict[str, object]]], tuple[bridge.ExtractedFact, ...]],
+        getattr(bridge, "_facts_from_model"),
+    )
+
+    def extract(
+        _request: dict[str, object], members: list[dict[str, object]]
+    ) -> bridge.ArelleExtraction:
+        return bridge.ArelleExtraction(
+            facts=extract_model(SimpleNamespace(factsInInstance=facts), members),
+            loaded_member_ordinals=(0,),
+        )
+
+    def unexpected_extraction(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("ambiguous source identities must fail before ordinal assignment")
+
+    body = b"<html>ambiguous source facts</html>"
+    document = tmp_path / "filing.htm"
+    document.write_bytes(body)
+    monkeypatch.setattr(bridge, "_extract_arelle_facts", extract)
+    monkeypatch.setattr(bridge, "_extracted_fact", unexpected_extraction)
+    monkeypatch.setattr(bridge, "_configure_standard_streams", lambda: None)
+    monkeypatch.setattr(bridge.sys, "stdin", StringIO(json.dumps(_request(document, body))))
+    assert (
+        bridge.main(["--protocol", "filing-xbrl-bridge.v2", "--runtime-artifact-sha256", "b" * 64])
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err) == {
+        "error_type": "ValueError",
+        "event": "filing_xbrl_bridge_refused",
     }
