@@ -34,7 +34,6 @@
     "execution/backfill_insider_transactions.py",
     "execution/backfill_ir_deck_locators.py",
     "execution/backfill_llm_extracted_parents.py",
-    "execution/backfill_ocr_evidence.py",
     "execution/backfill_pdf_table_evidence.py",
     "execution/backfill_priced_in.py",
     "execution/backfill_recorded_subject_bindings.py",

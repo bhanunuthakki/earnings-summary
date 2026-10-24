@@ -2308,3 +2308,26 @@ operator action, route, service, schedule, budget, schema or live-state writer.
 Tests cover three-generation partial promotions, retained seals, native transcript
 readers and exact runtime/lock identity. Any re-extraction remains separately
 approved.
+
+
+### Explicit source-bound PDF image OCR selection — 2026-10-23
+
+The existing `execution/backfill_ocr_evidence.py` command accepts repeated
+`--page-selection` JSON objects. Each object pins `document_version_id`,
+`source_sha256`, `artifact_id`, `artifact_sha256`, `page_number` and
+`page_sha256`. Selections require the `evidence_native` lane and explicit
+`--document-version-id` targets. The existing persisted table artifact, run,
+members and seal must verify. Only selected `scanned_page` or `image_only_page`
+quarantines supplement the native character-count selection. No table detector
+runs on this path. Dry-run returns verified selections without OCR or writes.
+Selected-page apply requires the existing local engine and its exact persisted
+configuration controls. Selection plus `--preflight-only` is rejected because a
+preflight-only assessment does not retain the full configuration JSON. Default
+preflight-only behavior is unchanged.
+
+A selection creates a distinct assessment/configuration identity. Original
+assessments and table quarantines remain unchanged. Image detection does not
+classify financial content: a divider can have the same signal as a chart.
+Operator selection does not grant financial admission, table coverage or
+whole-document completeness. No collector, scheduler, service, engine or
+publication authority changes. Evidence: `tests/test_ocr_source_bound_pages.py`.

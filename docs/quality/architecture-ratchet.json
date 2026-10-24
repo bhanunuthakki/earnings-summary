@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "483e826bad4adf6baeafb1497bc52c677d418d21",
+  "scoped_commit": "4423649a24218e0946826f75312561dc552d29f8",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "290f870fc7d06c35bb0b24184f42bd9ff119c8bce74df71c88c28bc84964868f",
+  "source_sha256": "c8e3033ad861fdf2b8a438b273df7a84dbe31b6af49d7f9d581bacd2265cf214",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1481,
-    "total_noncomment_loc": 571345,
+    "total_noncomment_loc": 571501,
     "modules_over_1000_loc": 111,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
@@ -729,9 +729,9 @@
         "path": "execution/backfill_ocr_evidence.py",
         "module": "execution.backfill_ocr_evidence",
         "lines": {
-          "physical": 143,
-          "nonblank": 133,
-          "noncomment": 133
+          "physical": 154,
+          "nonblank": 144,
+          "noncomment": 144
         },
         "internal_fan_out": 2,
         "responsibilities": [],
@@ -16134,17 +16134,17 @@
         "path": "src/provenance/document_processing_evidence.py",
         "module": "provenance.document_processing_evidence",
         "lines": {
-          "physical": 2507,
-          "nonblank": 2396,
-          "noncomment": 2388
+          "physical": 2552,
+          "nonblank": 2437,
+          "noncomment": 2429
         },
-        "internal_fan_out": 7,
+        "internal_fan_out": 6,
         "responsibilities": [
           "database",
           "network"
         ],
-        "public_functions": 3,
-        "fully_annotated_public_functions": 3
+        "public_functions": 4,
+        "fully_annotated_public_functions": 4
       },
       {
         "path": "src/provenance/edgar_8k.py",
@@ -16337,9 +16337,9 @@
         "path": "src/provenance/financial_fact_resolution.py",
         "module": "provenance.financial_fact_resolution",
         "lines": {
-          "physical": 2517,
-          "nonblank": 2315,
-          "noncomment": 2304
+          "physical": 2518,
+          "nonblank": 2316,
+          "noncomment": 2305
         },
         "internal_fan_out": 8,
         "responsibilities": [
@@ -16721,19 +16721,19 @@
         "path": "src/provenance/ocr_extraction.py",
         "module": "provenance.ocr_extraction",
         "lines": {
-          "physical": 1542,
-          "nonblank": 1369,
-          "noncomment": 1367
+          "physical": 1647,
+          "nonblank": 1467,
+          "noncomment": 1464
         },
-        "internal_fan_out": 3,
+        "internal_fan_out": 5,
         "responsibilities": [
           "database",
           "filesystem",
           "network",
           "process"
         ],
-        "public_functions": 3,
-        "fully_annotated_public_functions": 3
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
       },
       {
         "path": "src/provenance/ocr_page_review.py",
@@ -19969,17 +19969,17 @@
         "path": "src/runtime/deterministic.py",
         "module": "runtime.deterministic",
         "lines": {
-          "physical": 312,
-          "nonblank": 232,
-          "noncomment": 217
+          "physical": 320,
+          "nonblank": 238,
+          "noncomment": 223
         },
         "internal_fan_out": 0,
         "responsibilities": [
           "database",
           "filesystem"
         ],
-        "public_functions": 31,
-        "fully_annotated_public_functions": 31
+        "public_functions": 32,
+        "fully_annotated_public_functions": 32
       },
       {
         "path": "src/runtime/job_runtime.py",

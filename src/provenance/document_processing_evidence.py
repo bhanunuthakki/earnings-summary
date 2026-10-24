@@ -34,11 +34,11 @@ from provenance.native_pdf_transcript import (
 from provenance.native_pdf_transcript import EXTRACTOR_NAME as PDF_TRANSCRIPT_EXTRACTOR_NAME
 from provenance.native_pdf_transcript import EXTRACTOR_VERSION as PDF_TRANSCRIPT_EXTRACTOR_VERSION
 from provenance.native_pdf_transcript import verify_native_pdf_transcript
-from provenance.ocr_extraction import normalize_extracted_text
 from provenance.pdf_table_extraction import PdfTableExtractionArtifact
 from runtime.deterministic import as_utc as _utc
 from runtime.deterministic import canonical_json as _canonical_json
 from runtime.deterministic import content_sha256_or_text as _digest
+from runtime.deterministic import normalize_extracted_text
 
 DocumentProcessingLane = Literal[
     "html_native_hierarchy",
@@ -1761,14 +1761,16 @@ def record_pdf_table_extraction_artifact(
     )
 
 
-def _pdf_table_derived(
+def _verified_pdf_table_parts(
     conn: sqlite3.Connection,
     document: dict[str, object],
     cutoff_at: datetime,
     pinned_run_id: str | None,
     pinned_artifact_id: str | None,
     report_pdf_table_scope: ReportPdfTableScope | None = None,
-) -> _Derived:
+    *,
+    allow_quarantine: bool = False,
+) -> tuple[PdfTableExtractionArtifact, dict[str, object], dict[str, object], list[_NativeMember]]:
     clauses = [
         "header.document_version_id=?",
         "(?=1 OR header.disposition='sealed')",
@@ -1776,7 +1778,7 @@ def _pdf_table_derived(
     ]
     parameters: list[object] = [
         _require_text(document, "document_version_id"),
-        int(report_pdf_table_scope is not None),
+        int(report_pdf_table_scope is not None or allow_quarantine),
         _iso(cutoff_at),
     ]
     if report_pdf_table_scope is not None:
@@ -1813,9 +1815,13 @@ def _pdf_table_derived(
         raise DocumentProcessingEvidenceIntegrityError(
             "pdf_table_artifact_schema_or_commitment_invalid"
         ) from exc
-    if report_pdf_table_scope is None and (
-        artifact.disposition != "sealed"
-        or any(page.disposition == "quarantined" for page in artifact.pages)
+    if (
+        not allow_quarantine
+        and report_pdf_table_scope is None
+        and (
+            artifact.disposition != "sealed"
+            or any(page.disposition == "quarantined" for page in artifact.pages)
+        )
     ):
         raise DocumentProcessingEvidenceMissingError("pdf_table_artifact_not_publishable")
     if report_pdf_table_scope is not None:
@@ -1961,6 +1967,45 @@ def _pdf_table_derived(
         or _datetime(artifact_row["sealed_at"], "artifact.sealed_at") != artifact_recorded
     ):
         raise DocumentProcessingEvidenceIntegrityError("pdf_table_member_set_mismatch")
+    return artifact, artifact_row, run, members
+
+
+def read_pdf_table_artifact(
+    conn: sqlite3.Connection,
+    *,
+    document_version_id: str,
+    artifact_id: str,
+    cutoff_at: datetime,
+) -> PdfTableExtractionArtifact:
+    """Verify a pinned inventory, including quarantine; grant no processing admission."""
+    artifact, _, _, _ = _verified_pdf_table_parts(
+        conn,
+        _document_context(conn, document_version_id),
+        _utc(cutoff_at),
+        None,
+        artifact_id,
+        allow_quarantine=True,
+    )
+    return artifact
+
+
+def _pdf_table_derived(
+    conn: sqlite3.Connection,
+    document: dict[str, object],
+    cutoff_at: datetime,
+    pinned_run_id: str | None,
+    pinned_artifact_id: str | None,
+    report_pdf_table_scope: ReportPdfTableScope | None = None,
+) -> _Derived:
+    _, artifact_row, run, members = _verified_pdf_table_parts(
+        conn,
+        document,
+        cutoff_at,
+        pinned_run_id,
+        pinned_artifact_id,
+        report_pdf_table_scope,
+    )
+    artifact_id = _require_text(artifact_row, "artifact_id")
     native_scope: dict[str, object] = {"artifact": _scope_row(artifact_row)}
     if report_pdf_table_scope is not None:
         required_pages = {

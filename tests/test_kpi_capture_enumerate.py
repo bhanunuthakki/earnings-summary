@@ -578,7 +578,10 @@ def test_capture_for_ir_pdf_docs_supplement_long_tail(
 
     def fake_call(prompt: str, **_: object) -> object:
         calls.append(1)
-        return json.loads(_ENUMERATE_JSON)
+        payload = json.loads(_ENUMERATE_JSON)
+        for row in payload:
+            row["reporting_consolidation_scope"] = "unknown"
+        return payload
 
     monkeypatch.setattr(
         kes, "call_llm_structured_with_raw", partial(_governed_fixture_call, response=fake_call)
@@ -721,8 +724,11 @@ def test_capture_for_ir_pdf_docs_retains_native_page_locators_without_financial_
     monkeypatch.setattr(kes, "resolve_model_and_backend", _fixture_model_route)
 
     def extract_page(prompt: str, **kwargs: object) -> object:
+        payload = json.loads(_ENUMERATE_JSON)[:2]
+        for row in payload:
+            row["reporting_consolidation_scope"] = "unknown"
         return (
-            json.loads(_ENUMERATE_JSON)[:2]
+            payload
             if "NIM of 17.8%" in prompt.split("EXTRACT ONLY FROM THIS SOURCE SECTION:\n")[-1]
             else []
         )
