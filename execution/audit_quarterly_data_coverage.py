@@ -296,7 +296,7 @@ def _reason_matches_status(
 
 
 def _transcript_authorization_keys(
-    *, ticker: str, fiscal_year: int, fiscal_quarter: int, period_end: date
+    *, ticker: str, fiscal_year: int, fiscal_quarter: int, period_end: date, current: bool = False
 ) -> dict[str, str]:
     keys: dict[str, str] = {}
     for source in TRANSCRIPT_SOURCES:
@@ -315,7 +315,11 @@ def _transcript_authorization_keys(
             source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
             source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
         )
-        keys[source.name] = transcript_authorization_idempotency_key(request)
+        keys[source.name] = transcript_authorization_idempotency_key(
+            request.model_copy(update={"schema_version": "transcript-acquisition-request@2"})
+            if current
+            else request
+        )
     return keys
 
 
@@ -481,9 +485,17 @@ def _latest_disposition(
             fiscal_quarter=fiscal_quarter,
             period_end=period_end,
         )
+        current_keys = _transcript_authorization_keys(
+            ticker=ticker,
+            fiscal_year=fiscal_year,
+            fiscal_quarter=fiscal_quarter,
+            period_end=period_end,
+            current=True,
+        )
         if any(
             attempt.provider in expected_keys
-            and attempt.authorization_key != expected_keys[attempt.provider]
+            and attempt.authorization_key
+            not in {expected_keys[attempt.provider], current_keys[attempt.provider]}
             for attempt in latest_request.attempts
         ):
             reasons.append("attempt_authorization_identity_mismatch")

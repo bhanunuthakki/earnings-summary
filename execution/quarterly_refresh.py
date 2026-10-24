@@ -255,6 +255,11 @@ def main(argv: list[str] | None = None) -> int:
             private_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
             entrypoint=TranscriptAcquisitionEntrypoint.QUARTERLY_REFRESH,
             as_of=date.today(),
+            pending_callback=lambda ids: print(
+                json.dumps(
+                    {"event": "reported_period_selection_pending", "deferred_document_ids": ids}
+                )
+            ),
         )
         for artifact in transcript_artifacts.values():
             persist_authorized_transcript_artifact(

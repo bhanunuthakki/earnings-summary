@@ -909,6 +909,15 @@ def _onboard(args: argparse.Namespace) -> int:
             private_root=_STATE_ROOT / ".tmp" / "transcript-acquisition",
             entrypoint=TranscriptAcquisitionEntrypoint.QUARTERLY_REFRESH,
             as_of=date.today(),
+            pending_callback=lambda ids: print(
+                json.dumps(
+                    {
+                        "event": "reported_period_selection_pending",
+                        "ticker": ticker,
+                        "deferred_document_ids": ids,
+                    }
+                )
+            ),
         )
         for artifact in transcript_artifacts.values():
             persist_authorized_transcript_artifact(

@@ -72,6 +72,7 @@ from transcripts.acquisition_semantics import (  # noqa: E402
     TranscriptAcquisitionAuthorization,
     TranscriptAcquisitionEntrypoint,
     TranscriptAcquisitionRequest,
+    TranscriptAuthorizationReason,
     TranscriptAuthorizationStatus,
     TranscriptProvider,
 )
@@ -111,6 +112,7 @@ class FetchQaResult:
 
 class FetchQaAttemptStatus(StrEnum):
     DENIED = "denied"
+    PENDING = "period_selection_pending"
     PROVIDER_MISS = "provider_miss"
     ACQUIRED = "acquired"
     IDEMPOTENT_REPLAY = "idempotent_replay"
@@ -118,6 +120,7 @@ class FetchQaAttemptStatus(StrEnum):
 
 class FetchQaStatus(StrEnum):
     DENIED = "denied"
+    PENDING = "period_selection_pending"
     PROVIDER_MISS = "provider_miss"
     ACQUIRED = "acquired"
     IDEMPOTENT_REPLAY = "idempotent_replay"
@@ -151,6 +154,7 @@ def _request_for_source(
         raise TypeError("source must be an AggregatorSource")
     canonical = resolve_ticker(spec.ticker)
     return TranscriptAcquisitionRequest(
+        schema_version="transcript-acquisition-request@2",
         entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
         canonical_ticker=canonical,
         fiscal_year=spec.year,
@@ -301,6 +305,14 @@ def fetch_qa(
             authorization = authorize_transcript_request(conn, request)
             last_key = authorization.idempotency_key
             if authorization.status is TranscriptAuthorizationStatus.DENIED:
+                if (
+                    authorization.reason
+                    is TranscriptAuthorizationReason.REPORTED_QUARTER_WINDOW_PENDING
+                ):
+                    attempts.append(
+                        FetchQaAttempt(source.name, FetchQaAttemptStatus.PENDING, last_key)
+                    )
+                    continue
                 _log_denial(authorization)
                 attempts.append(FetchQaAttempt(source.name, FetchQaAttemptStatus.DENIED, last_key))
                 continue
@@ -405,6 +417,22 @@ def fetch_qa(
         )
         return FetchQaOutcome(FetchQaStatus.ACQUIRED, last_key, tuple(attempts), result)
 
+    if any(item.status is FetchQaAttemptStatus.PENDING for item in attempts):
+        print(
+            json.dumps(
+                {
+                    "event": "reported_period_selection_pending",
+                    "ticker": canonical,
+                    "fiscal_year": spec.year,
+                    "fiscal_quarter": spec.quarter,
+                    "deferred_sources": sum(
+                        item.status is FetchQaAttemptStatus.PENDING for item in attempts
+                    ),
+                },
+                sort_keys=True,
+            )
+        )
+        return FetchQaOutcome(FetchQaStatus.PENDING, last_key, tuple(attempts))
     if attempts and all(item.status is FetchQaAttemptStatus.DENIED for item in attempts):
         return FetchQaOutcome(FetchQaStatus.DENIED, last_key, tuple(attempts))
     tried = [attempt.provider for attempt in attempts]

@@ -23,8 +23,17 @@ from ir_pipeline.source_inventory import (
     _expected_candidate,
     sync_ir_source_inventory,
 )
+from models.documents import DocType, SourceType
 from pipeline import issuer_document_inventory as inventory
 from pipeline.source_policy import ReportedPeriodStatus, reported_period_window_from_inventory
+from pipeline.transcript_acquisition import (
+    COMBINED_SOURCE_REGIME_IDENTITY,
+    TranscriptAcquisitionDeniedError,
+    load_authorized_transcript_replay,
+    persist_authorized_transcript_artifact,
+    require_authorized_transcript_request,
+    stage_authorized_payload,
+)
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -54,6 +63,16 @@ from provenance.source_coverage_reconcile import (
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from tests.test_sec_submissions_issuer_bootstrap import _request as sec_profile_request
+from tests.test_transcript_acquisition_receipt_migration import (
+    darwin_staging_double as darwin_staging_double,
+)
+from transcripts.acquisition_semantics import (
+    TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+    ExistingArtifactBehavior,
+    TranscriptAcquisitionEntrypoint,
+    TranscriptAcquisitionRequest,
+    TranscriptProvider,
+)
 
 CLOCK = datetime(2026, 8, 6, tzinfo=UTC)
 URL = "https://investor.example.test/bkng/release.pdf"
@@ -330,12 +349,13 @@ def test_reviewed_generic_ir_document_bridges_inventory_without_metadata_rewrite
 
 
 def test_reported_window_accepts_captured_native_review_and_sealed_sec_population(
-    tmp_path: Path, migrated_db: Callable[..., Path]
+    tmp_path: Path, migrated_db: Callable[..., Path], darwin_staging_double: None
 ) -> None:
     conn, review = _reviewed_period_fixture(tmp_path, migrated_db)
     later = datetime(2026, 10, 22, tzinfo=UTC)
     archive_url = "https://investors.nu/quarterly-results"
     release_url = "https://investors.nu/current.pdf"
+    q4_url = "https://investors.nu/fourth-quarter-2025.pdf"
     sec_url = "https://data.sec.gov/submissions/CIK0001691493.json"
 
     def source(observation_id: str, kind: str, url: str, raw: bytes) -> str:
@@ -347,7 +367,9 @@ def test_reported_window_accepts_captured_native_review_and_sealed_sec_populatio
             ContentBlob(
                 sha256=digest,
                 byte_size=len(raw),
-                media_type="application/octet-stream",
+                media_type="application/pdf"
+                if kind == "ir_document"
+                else "application/octet-stream",
                 storage_uri=path.as_uri(),
                 recorded_at=review.reviewed_at,
             )
@@ -387,6 +409,51 @@ def test_reported_window_accepts_captured_native_review_and_sealed_sec_populatio
 
     try:
         inventory.persist_current_reported_period_review(conn, review)
+        wording = "Nu Holdings Reports Fourth Quarter 2025 Financial Results"
+        stream = io.BytesIO()
+        pdf = canvas.Canvas(stream)
+        pdf.drawString(72, 730, wording)
+        pdf.showPage()
+        pdf.save()
+        q4_raw = stream.getvalue()
+        q4_sha = source("ir-q4-review", "ir_document", q4_url, q4_raw)
+        EvidenceLedger(conn).persist(
+            DocumentVersion(
+                document_version_id="ir-q4-version",
+                document_key="ir-q4-key",
+                version_sequence=1,
+                observation_id="ir-q4-review",
+                blob_sha256=q4_sha,
+                issuer_id=review.issuer_id,
+                ticker="NU",
+                document_type="ir_document",
+                form_type="IR",
+                period_start=None,
+                period_end=None,
+                as_of_at=None,
+                language="en",
+                recorded_at=review.reviewed_at,
+            )
+        )
+        conn.commit()
+        from provenance.fulltext_backfill import project_pdf_page_texts
+
+        q4_page = project_pdf_page_texts(q4_raw)[0]
+        q4_start = q4_page.index(wording)
+        q4_review = review.model_copy(
+            update={
+                "document_version_id": "ir-q4-version",
+                "source_sha256": q4_sha,
+                "fiscal_year": 2025,
+                "fiscal_quarter": 4,
+                "period_end": date(2025, 12, 31),
+                "char_start": q4_start,
+                "char_end": q4_start + len(wording),
+                "exact_quote": wording,
+                "review_evidence": "First-page issuer headline states reported fourth-quarter results.",
+            }
+        )
+        inventory.persist_current_reported_period_review(conn, q4_review)
         ReportingEntityRegistry(conn).persist(
             SourceObligationRevision(
                 obligation_revision_id="period-window:ir",
@@ -414,7 +481,7 @@ def test_reported_window_accepts_captured_native_review_and_sealed_sec_populatio
             period_text = period.isoformat()
             url = f"https://www.sec.gov/Archives/edgar/data/1691493/{period_text}.htm"
             observation_id = f"sec-filing:{period_text}"
-            raw = f"<html>Nu Holdings fiscal period ended {period_text}</html>".encode()
+            raw = f"<html>Form 10-Q for quarterly period ended {period_text}</html>".encode()
             digest = source(observation_id, "sec_filing", url, raw)
             form = "10-K" if period.month == 12 else "10-Q"
             EvidenceLedger(conn).persist(
@@ -455,7 +522,10 @@ def test_reported_window_accepts_captured_native_review_and_sealed_sec_populatio
             )
         source("sec-submissions-window", "sec_submissions", sec_url, b'{"filings":[]}')
         archive_digest = source(
-            "ir-archive-window", "ir_publisher_authority", archive_url, release_url.encode()
+            "ir-archive-window",
+            "ir_publisher_authority",
+            archive_url,
+            json.dumps({"urls": [release_url, q4_url]}).encode(),
         )
         conn.commit()
         sec_result = reconcile_source_coverage(
@@ -501,13 +571,14 @@ def test_reported_window_accepts_captured_native_review_and_sealed_sec_populatio
                 revision=1,
                 discovery=IRDiscoverySnapshot(
                     pages=(),
-                    candidates=(
+                    candidates=tuple(
                         IRDocumentCandidate(
-                            url=release_url,
+                            url=url,
                             link_text="Current quarter results",
-                            filename_hint="current.pdf",
+                            filename_hint=Path(url).name,
                             source_page=archive_url,
-                        ),
+                        )
+                        for url in (release_url, q4_url)
                     ),
                     crawl_complete=True,
                     crawl_stop_reason="frontier_exhausted",
@@ -525,7 +596,7 @@ def test_reported_window_accepts_captured_native_review_and_sealed_sec_populatio
                             traversal_kind="pagination",
                             outcome="exhausted",
                             terminal_condition="next_link_absent",
-                            observed_document_urls=(release_url,),
+                            observed_document_urls=(release_url, q4_url),
                         ),
                     ),
                 ),
@@ -540,16 +611,80 @@ def test_reported_window_accepts_captured_native_review_and_sealed_sec_populatio
             blob_root=tmp_path / "inventory-blobs",
         )
         assert ir_result.complete
-        assert ir_result.assessment_statuses == ("captured",)
+        assert ir_result.assessment_statuses == ("captured", "captured")
         selected = reported_period_window_from_inventory(conn, ticker="NU", as_of=later.date())
         assert selected.status is ReportedPeriodStatus.COMPLETE
-        assert selected.period_ends == tuple(sorted((*periods, review.period_end), reverse=True))
+        assert selected.period_ends == (
+            date(2026, 9, 30),
+            date(2026, 6, 30),
+            date(2026, 3, 31),
+            date(2025, 12, 31),
+            date(2025, 9, 30),
+        )
         assert selected.fiscal_year_end == "12-31"
         assert selected.proof_sha256 is not None
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,instrument_type,fiscal_year_end) "
+            "VALUES ('NU','Nu Holdings','portfolio','equity','12-31')"
+        )
+        config_path = tmp_path / "micro_thesis" / "ir_config" / "NU.json"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text(
+            json.dumps(
+                {
+                    "ticker": "NU",
+                    "platform": "mz",
+                    "results_center_url": "https://investors.nu/quarterly-results",
+                    "spreadsheet_kpis": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        request = TranscriptAcquisitionRequest(
+            schema_version="transcript-acquisition-request@2",
+            entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
+            canonical_ticker="NU",
+            fiscal_year=2026,
+            fiscal_quarter=2,
+            as_of=later.date(),
+            source_type=SourceType.IR_DOC,
+            document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+            provider=TranscriptProvider.ISSUER_IR,
+            owner_requested=False,
+            existing_artifact=False,
+            existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+            source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+            source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
+        )
+        authorization = require_authorized_transcript_request(conn, request)
+        assert authorization.stored_target.reported_window == selected
+        staging_root = tmp_path / ".tmp" / "transcript-acquisition"
+        staging_root.mkdir(parents=True)
+        artifact = stage_authorized_payload(
+            authorization,
+            payload=b"Operator\nSource-qualified question?",
+            private_root=staging_root,
+            source_url="https://investors.nu/transcript",
+            canonical_document_path=Path("transcripts/raw/NU_Q2_2026.txt"),
+        )
+        persist_authorized_transcript_artifact(
+            conn, artifact, project_root=tmp_path, trusted_staging_root=staging_root
+        )
+        conn.commit()
+        assert (
+            load_authorized_transcript_replay(
+                conn, request=request, project_root=tmp_path, trusted_staging_root=staging_root
+            )
+            == artifact
+        )
         (tmp_path / "current-quarter.pdf").unlink()
         unavailable = reported_period_window_from_inventory(conn, ticker="NU", as_of=later.date())
         assert unavailable.status is ReportedPeriodStatus.UNKNOWN
         assert unavailable.reason == "ir_period_proof_missing"
+        with pytest.raises(TranscriptAcquisitionDeniedError):
+            load_authorized_transcript_replay(
+                conn, request=request, project_root=tmp_path, trusted_staging_root=staging_root
+            )
     finally:
         conn.close()
 

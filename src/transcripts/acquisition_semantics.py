@@ -10,20 +10,30 @@ from __future__ import annotations
 import hashlib
 from datetime import date
 from enum import StrEnum
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal, Self, cast
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    SerializerFunctionWrapHandler,
     StringConstraints,
+    model_serializer,
     model_validator,
     validate_call,
 )
 
 from models.companies import ListType
 from models.documents import DocType, SourceType
-from pipeline.source_policy import POLICY_VERSION, ArtifactKind, CollectionSource, decision_for
+from pipeline.source_policy import (
+    POLICY_VERSION,
+    ArtifactKind,
+    CollectionSource,
+    ReportedPeriodStatus,
+    ReportedPeriodWindow,
+    decision_for,
+    fiscal_quarter_end,
+)
 from provenance.source_regime import (
     EvidenceAuthority,
     SourceDomain,
@@ -87,6 +97,7 @@ class TranscriptReportingStatus(StrEnum):
     ELIGIBLE = "eligible"
     OUT_OF_WINDOW = "reported_quarter_window_denied"
     FISCAL_CALENDAR_UNAVAILABLE = "fiscal_calendar_unavailable"
+    PENDING = "reported_period_selection_pending"
     NOT_EVALUATED = "not_evaluated"
 
 
@@ -115,6 +126,7 @@ class TranscriptAuthorizationReason(StrEnum):
     STORED_IDENTITY_DENIED = "stored_identity_denied"
     REPORTED_QUARTER_WINDOW_DENIED = "reported_quarter_window_denied"
     FISCAL_CALENDAR_UNAVAILABLE = "fiscal_calendar_unavailable"
+    REPORTED_QUARTER_WINDOW_PENDING = "reported_quarter_window_pending"
     WEBCAST_EXCLUDED = "webcast_excluded"
 
 
@@ -157,7 +169,9 @@ class TranscriptAcquisitionRequest(BaseModel):
 
     model_config = _STRICT_FROZEN
 
-    schema_version: Literal["transcript-acquisition-request@1"] = "transcript-acquisition-request@1"
+    schema_version: Literal[
+        "transcript-acquisition-request@1", "transcript-acquisition-request@2"
+    ] = "transcript-acquisition-request@1"
     entrypoint: TranscriptAcquisitionEntrypoint
     canonical_ticker: _CanonicalTicker
     fiscal_year: int = Field(ge=2000, le=2100)
@@ -212,10 +226,21 @@ class TranscriptStoredTarget(BaseModel):
     owner_requested: bool
     coverage_role: ListType | None
     fiscal_year_end_month: int | None = Field(default=None, ge=1, le=12)
+    fiscal_year_end: str | None = None
+    reported_window: ReportedPeriodWindow | None = None
     source_policy_version: TranscriptSourcePolicyVersion
     source_regime_identity: SourceRegimeReceiptIdentity
     status: StoredTargetStatus
     reporting_status: TranscriptReportingStatus
+
+    @model_serializer(mode="wrap")
+    def _legacy_payload(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        result = cast("dict[str, object]", handler(self))
+        if self.reported_window is None:
+            result.pop("reported_window", None)
+        if self.fiscal_year_end is None:
+            result.pop("fiscal_year_end", None)
+        return result
 
     @model_validator(mode="after")
     def _closed_status_pair(self) -> Self:
@@ -227,23 +252,44 @@ class TranscriptStoredTarget(BaseModel):
         if self.status is StoredTargetStatus.AUTHORIZED:
             if not role_allowed:
                 raise ValueError("stored target status does not match coverage-role policy")
-            expected_reporting = (
-                TranscriptReportingStatus.FISCAL_CALENDAR_UNAVAILABLE
-                if self.fiscal_year_end_month is None
-                else TranscriptReportingStatus.ELIGIBLE
-                if _reported_quarter_is_in_window(
+            if self.reported_window is None:
+                if self.fiscal_year_end is not None:
+                    raise ValueError("legacy target cannot carry source fiscal profile")
+                expected_reporting = (
+                    TranscriptReportingStatus.FISCAL_CALENDAR_UNAVAILABLE
+                    if self.fiscal_year_end_month is None
+                    else TranscriptReportingStatus.ELIGIBLE
+                    if _reported_quarter_is_in_window(
+                        fiscal_year=self.fiscal_year,
+                        fiscal_quarter=self.fiscal_quarter,
+                        fiscal_year_end_month=self.fiscal_year_end_month,
+                        as_of=self.as_of,
+                    )
+                    else TranscriptReportingStatus.OUT_OF_WINDOW
+                )
+            elif (
+                self.reported_window.status is ReportedPeriodStatus.COMPLETE
+                and self.fiscal_year_end is not None
+            ):
+                target_end = fiscal_quarter_end(
                     fiscal_year=self.fiscal_year,
                     fiscal_quarter=self.fiscal_quarter,
-                    fiscal_year_end_month=self.fiscal_year_end_month,
-                    as_of=self.as_of,
+                    fiscal_year_end=self.fiscal_year_end,
                 )
-                else TranscriptReportingStatus.OUT_OF_WINDOW
-            )
+                expected_reporting = (
+                    TranscriptReportingStatus.ELIGIBLE
+                    if self.reported_window.includes(target_end)
+                    else TranscriptReportingStatus.OUT_OF_WINDOW
+                )
+            else:
+                expected_reporting = TranscriptReportingStatus.PENDING
             if self.reporting_status is not expected_reporting:
                 raise ValueError("stored reporting status does not match reporting policy")
             return self
         if self.reporting_status is not TranscriptReportingStatus.NOT_EVALUATED:
             raise ValueError("reporting status must be unevaluated for a denied stored target")
+        if self.reported_window is not None or self.fiscal_year_end is not None:
+            raise ValueError("denied stored target cannot carry reported-period proof")
         if self.status is StoredTargetStatus.POLICY_DENIED:
             if self.coverage_role is None or role_allowed:
                 raise ValueError("stored target denial does not match coverage-role policy")
@@ -265,9 +311,9 @@ class TranscriptAcquisitionAuthorization(BaseModel):
 
     model_config = _STRICT_FROZEN
 
-    schema_version: Literal["transcript-acquisition-authorization@1"] = (
-        "transcript-acquisition-authorization@1"
-    )
+    schema_version: Literal[
+        "transcript-acquisition-authorization@1", "transcript-acquisition-authorization@2"
+    ] = "transcript-acquisition-authorization@1"
     request: TranscriptAcquisitionRequest
     status: TranscriptAuthorizationStatus
     reason: TranscriptAuthorizationReason
@@ -292,6 +338,7 @@ class _TranscriptIdempotencyInput(BaseModel):
     document_type: DocType
     source_policy_version: TranscriptSourcePolicyVersion
     source_regime_identity: SourceRegimeReceiptIdentity
+    request_schema_version: Literal["transcript-acquisition-request@2"] | None = None
 
 
 def _role_is_authorized(
@@ -347,10 +394,16 @@ def transcript_authorization_idempotency_key(request: TranscriptAcquisitionReque
         document_type=request.document_type,
         source_policy_version=request.source_policy_version,
         source_regime_identity=request.source_regime_identity,
+        request_schema_version=(
+            "transcript-acquisition-request@2"
+            if request.schema_version == "transcript-acquisition-request@2"
+            else None
+        ),
     )
-    digest = hashlib.sha256(
-        _canonical_json(payload.model_dump(mode="json")).encode("utf-8")
-    ).hexdigest()
+    key_payload = payload.model_dump(mode="json")
+    if request.schema_version == "transcript-acquisition-request@1":
+        key_payload.pop("request_schema_version", None)
+    digest = hashlib.sha256(_canonical_json(key_payload).encode("utf-8")).hexdigest()
     return f"transcript:{digest}"
 
 
@@ -476,6 +529,12 @@ def _expected_outcome(
             TranscriptAuthorizationReason.FISCAL_CALENDAR_UNAVAILABLE,
             TranscriptAuthorizationFailure.REPORTING_PERIOD,
         )
+    if stored_target.reporting_status is TranscriptReportingStatus.PENDING:
+        return (
+            TranscriptAuthorizationStatus.DENIED,
+            TranscriptAuthorizationReason.REPORTED_QUARTER_WINDOW_PENDING,
+            TranscriptAuthorizationFailure.REPORTING_PERIOD,
+        )
     if request.existing_artifact and request.existing_artifact_behavior in {
         ExistingArtifactBehavior.SKIP,
         ExistingArtifactBehavior.REUSE,
@@ -499,8 +558,22 @@ def authorize_transcript_acquisition_request(
 ) -> TranscriptAcquisitionAuthorization:
     """Build the one canonical receipt for an exact request and stored target."""
 
+    if request.schema_version == "transcript-acquisition-request@1":
+        if stored_target.reported_window is not None or stored_target.fiscal_year_end is not None:
+            raise ValueError("historical transcript request cannot carry source window")
+    elif (
+        stored_target.status is StoredTargetStatus.AUTHORIZED
+        and stored_target.reported_window is None
+    ):
+        raise ValueError("current transcript request requires source window")
+
     status, reason, failure = _expected_outcome(request, stored_target)
     return TranscriptAcquisitionAuthorization(
+        schema_version=(
+            "transcript-acquisition-authorization@2"
+            if request.schema_version == "transcript-acquisition-request@2"
+            else "transcript-acquisition-authorization@1"
+        ),
         request=request,
         status=status,
         reason=reason,
@@ -535,6 +608,19 @@ def validate_transcript_acquisition_authorization(
         authorization.model_dump(mode="python")
     )
     request = validated.request
+    if validated.schema_version != request.schema_version.replace("request", "authorization"):
+        raise ValueError("authorization schema version does not match request")
+    if request.schema_version == "transcript-acquisition-request@1":
+        if (
+            validated.stored_target.reported_window is not None
+            or validated.stored_target.fiscal_year_end is not None
+        ):
+            raise ValueError("historical transcript receipt cannot carry source window")
+    elif (
+        validated.stored_target.status is StoredTargetStatus.AUTHORIZED
+        and validated.stored_target.reported_window is None
+    ):
+        raise ValueError("current transcript receipt lacks source window")
     request_provenance = (
         *_request_provenance_identity(request),
         classification_for_source_type(request.source_type).authority,

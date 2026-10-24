@@ -317,6 +317,7 @@ def main() -> int:
             receipt = authorize_transcript_request(
                 conn,
                 TranscriptAcquisitionRequest(
+                    schema_version="transcript-acquisition-request@2",
                     entrypoint=TranscriptAcquisitionEntrypoint.REFETCH_AGGREGATOR_TRANSCRIPTS,
                     canonical_ticker=ticker,
                     fiscal_year=year,

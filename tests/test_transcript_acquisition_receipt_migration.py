@@ -15,9 +15,14 @@ from alembic.config import Config
 
 from alembic import command
 from models.documents import DocType, SourceType
+from pipeline.source_policy import ReportedPeriodStatus, ReportedPeriodWindow
 from pipeline.transcript_acquisition import (
     COMBINED_SOURCE_REGIME_IDENTITY,
+    TranscriptAcquisitionDeniedError,
+    load_authorized_transcript_receipt,
+    load_authorized_transcript_replay,
     persist_authorized_transcript_artifact,
+    read_authorized_transcript,
     require_authorized_transcript_request,
     stage_authorized_payload,
 )
@@ -34,6 +39,8 @@ from transcripts.immutable_staging import StagedTranscriptArtifact
 ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0017_add_owner_decision_checkpoints"
 HEAD = "0018_add_transcript_acquisition_receipts"
+REPORTED_PERIOD_PRIOR_HEAD = "0062_reviewed_pdf_pages"
+REPORTED_PERIOD_HEAD = "0063_transcript_reported_period_receipts"
 
 
 @pytest.fixture
@@ -235,3 +242,180 @@ def test_0018_downgrade_removes_only_transcript_receipts(
         }
         assert "transcript_acquisition_receipts" not in names
         assert "owner_decision_checkpoints" in names
+
+
+def test_0063_preserves_historical_receipt_and_admits_current_receipt(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    darwin_staging_double: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pipeline import transcript_acquisition as acquisition
+
+    repo_root = tmp_path / "repo"
+    config_path = repo_root / "micro_thesis" / "ir_config" / "ACME.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "ticker": "ACME",
+                "platform": "mz",
+                "results_center_url": "https://issuer.example.invalid/results",
+                "spreadsheet_kpis": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    database = migrated_db(repo_root / "data" / "portfolio.db", target=REPORTED_PERIOD_PRIOR_HEAD)
+    staging_root = repo_root / ".tmp" / "transcript-acquisition"
+    staging_root.mkdir(parents=True)
+    request = TranscriptAcquisitionRequest(
+        entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
+        canonical_ticker="ACME",
+        fiscal_year=2026,
+        fiscal_quarter=2,
+        as_of=date(2026, 8, 12),
+        source_type=SourceType.IR_DOC,
+        document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+        provider=TranscriptProvider.ISSUER_IR,
+        owner_requested=False,
+        existing_artifact=False,
+        existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+        source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+        source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
+    )
+    with connect_sqlite(database, role=SQLiteConnectionRole.WRITER, schema_preflight=False) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,instrument_type,fiscal_year_end) "
+            "VALUES ('ACME','Acme','portfolio','equity','12-31')"
+        )
+        historical = require_authorized_transcript_request(conn, request)
+        historical_artifact = stage_authorized_payload(
+            historical,
+            payload=b"Operator\nHistorical question?",
+            private_root=staging_root,
+            source_url="https://issuer.example.invalid/transcript",
+            canonical_document_path=Path("transcripts/raw/ACME_Q2_2026.txt"),
+        )
+        persist_authorized_transcript_artifact(
+            conn,
+            historical_artifact,
+            project_root=repo_root,
+            trusted_staging_root=staging_root,
+        )
+        conn.commit()
+        historical_row = dict(
+            conn.execute("SELECT * FROM transcript_acquisition_receipts").fetchone()
+        )
+    command.upgrade(_config(database), REPORTED_PERIOD_HEAD)
+    with connect_sqlite(database, role=SQLiteConnectionRole.WRITER, schema_preflight=False) as conn:
+        assert (
+            dict(
+                conn.execute(
+                    "SELECT * FROM transcript_acquisition_receipts WHERE receipt_id=?",
+                    (historical_row["receipt_id"],),
+                ).fetchone()
+            )
+            == historical_row
+        )
+
+        def qualified_window(*_args: object, **_kwargs: object) -> ReportedPeriodWindow:
+            return ReportedPeriodWindow(
+                status=ReportedPeriodStatus.COMPLETE,
+                period_ends=(
+                    date(2026, 6, 30),
+                    date(2026, 3, 31),
+                    date(2025, 12, 31),
+                    date(2025, 9, 30),
+                    date(2025, 6, 30),
+                ),
+                snapshot_ids=("synthetic-sec", "synthetic-ir"),
+                fiscal_year_end="12-31",
+                proof_sha256="a" * 64,
+                reason="migration_fixture_qualified_source_window",
+            )
+
+        monkeypatch.setattr(acquisition, "reported_period_window_from_inventory", qualified_window)
+        current_request = request.model_copy(
+            update={"schema_version": "transcript-acquisition-request@2"}
+        )
+        current = require_authorized_transcript_request(conn, current_request)
+        current_artifact = stage_authorized_payload(
+            current,
+            payload=b"Operator\nCurrent question?",
+            private_root=staging_root,
+            source_url="https://issuer.example.invalid/transcript",
+            canonical_document_path=Path("transcripts/raw/ACME_Q2_2026.txt"),
+        )
+        current_id = persist_authorized_transcript_artifact(
+            conn,
+            current_artifact,
+            project_root=repo_root,
+            trusted_staging_root=staging_root,
+        )
+        conn.commit()
+        assert (
+            load_authorized_transcript_replay(
+                conn,
+                request=current_request,
+                project_root=repo_root,
+                trusted_staging_root=staging_root,
+            )
+            == current_artifact
+        )
+        changed_window = qualified_window().model_copy(update={"proof_sha256": "b" * 64})
+        monkeypatch.setattr(
+            acquisition,
+            "reported_period_window_from_inventory",
+            lambda *_args, **_kwargs: changed_window,
+        )
+        assert (
+            load_authorized_transcript_receipt(
+                conn,
+                receipt_id=current_id,
+                project_root=repo_root,
+                trusted_staging_root=staging_root,
+            )
+            == current_artifact
+        )
+        with pytest.raises(TranscriptAcquisitionDeniedError):
+            read_authorized_transcript(
+                conn,
+                current_artifact,
+                project_root=repo_root,
+                trusted_staging_root=staging_root,
+            )
+        with pytest.raises(TranscriptAcquisitionDeniedError):
+            load_authorized_transcript_replay(
+                conn,
+                request=current_request,
+                project_root=repo_root,
+                trusted_staging_root=staging_root,
+            )
+        current_row = dict(
+            conn.execute(
+                "SELECT * FROM transcript_acquisition_receipts WHERE receipt_id=?",
+                (current_id,),
+            ).fetchone()
+        )
+        forged = dict(current_row)
+        forged["receipt_id"] = "d" * 64
+        invalid_auth = json.loads(str(forged["authorization_json"]))
+        invalid_auth["request"]["schema_version"] = "transcript-acquisition-request@1"
+        forged["authorization_json"] = json.dumps(invalid_auth, sort_keys=True)
+        columns = tuple(forged)
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                f"INSERT INTO transcript_acquisition_receipts ({','.join(columns)}) "
+                f"VALUES ({','.join('?' for _ in columns)})",
+                tuple(forged[column] for column in columns),
+            )
+    with pytest.raises(RuntimeError, match="cannot downgrade while current transcript receipts"):
+        command.downgrade(_config(database), REPORTED_PERIOD_PRIOR_HEAD)
+    with sqlite3.connect(database) as conn:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            REPORTED_PERIOD_HEAD,
+        )
+        assert conn.execute("SELECT COUNT(*) FROM transcript_acquisition_receipts").fetchone() == (
+            2,
+        )

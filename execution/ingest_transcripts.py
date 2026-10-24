@@ -53,6 +53,7 @@ from pipeline.transcript_acquisition import (  # noqa: E402
     COMBINED_SOURCE_REGIME_IDENTITY,
     AuthorizedTranscriptArtifact,
     TranscriptAcquisitionDeniedError,
+    authorize_transcript_request,
     load_authorized_transcript_receipt,
     load_authorized_transcript_replay,
     persist_authorized_transcript_artifact,
@@ -66,6 +67,7 @@ from transcripts.acquisition_semantics import (  # noqa: E402
     ExistingArtifactBehavior,
     TranscriptAcquisitionEntrypoint,
     TranscriptAcquisitionRequest,
+    TranscriptAuthorizationReason,
     TranscriptProvider,
 )
 from transcripts.immutable_staging import install_transcript_output  # noqa: E402
@@ -618,12 +620,28 @@ def main() -> int:
         pending_scope = [item for item in in_scope if item not in already_ingested]
 
         raw_authorizations: dict[Path, AuthorizedTranscriptArtifact] = {}
+        if any(
+            authorize_transcript_request(conn, artifact.authorization.request).reason
+            is TranscriptAuthorizationReason.REPORTED_QUARTER_WINDOW_PENDING
+            for artifact in selected_artifacts.values()
+        ):
+            print(
+                json.dumps(
+                    {
+                        "event": "reported_period_selection_pending",
+                        "deferred_count": len(pending_scope),
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
         for path, parsed in pending_scope:
             selected = selected_artifacts.get(path)
             if selected is not None:
                 raw_authorizations[path] = selected
                 continue
             request = TranscriptAcquisitionRequest(
+                schema_version="transcript-acquisition-request@2",
                 entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
                 canonical_ticker=parsed.ticker,
                 fiscal_year=parsed.fiscal_year_label,
@@ -638,6 +656,22 @@ def main() -> int:
                 source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
                 source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
             )
+            current_authorization = authorize_transcript_request(conn, request)
+            if (
+                current_authorization.reason
+                is TranscriptAuthorizationReason.REPORTED_QUARTER_WINDOW_PENDING
+            ):
+                print(
+                    json.dumps(
+                        {
+                            "event": "reported_period_selection_pending",
+                            "ticker": parsed.ticker,
+                            "deferred_count": len(pending_scope),
+                        },
+                        sort_keys=True,
+                    )
+                )
+                return 0
             try:
                 artifact = load_authorized_transcript_replay(
                     conn,
@@ -750,6 +784,14 @@ def main() -> int:
                     private_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
                     entrypoint=TranscriptAcquisitionEntrypoint.INGEST_TRANSCRIPTS,
                     as_of=date.today(),
+                    pending_callback=lambda ids: print(
+                        json.dumps(
+                            {
+                                "event": "reported_period_selection_pending",
+                                "deferred_document_ids": ids,
+                            }
+                        )
+                    ),
                 )
                 if ir_sources
                 else {}

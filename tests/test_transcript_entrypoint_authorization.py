@@ -28,6 +28,33 @@ from transcripts.acquisition_semantics import (
 from transcripts.immutable_staging import StagedTranscriptArtifact, TranscriptStagingError
 
 
+@pytest.fixture(autouse=True)
+def qualified_window_for_transport_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep transport tests on an explicit current receipt; source replay has its own fixture."""
+    from pipeline import transcript_acquisition
+    from pipeline.source_policy import ReportedPeriodStatus, ReportedPeriodWindow
+
+    def qualified_window(*_args: object, **_kwargs: object) -> ReportedPeriodWindow:
+        return ReportedPeriodWindow(
+            status=ReportedPeriodStatus.COMPLETE,
+            period_ends=(
+                date(2026, 6, 30),
+                date(2026, 3, 31),
+                date(2025, 12, 31),
+                date(2025, 9, 30),
+                date(2025, 6, 30),
+            ),
+            snapshot_ids=("synthetic-sec", "synthetic-ir"),
+            fiscal_year_end="12-31",
+            proof_sha256="a" * 64,
+            reason="transport_fixture_qualified_source_window",
+        )
+
+    monkeypatch.setattr(
+        transcript_acquisition, "reported_period_window_from_inventory", qualified_window
+    )
+
+
 @pytest.fixture
 def darwin_staging_double(monkeypatch: pytest.MonkeyPatch) -> Callable[[Any], None]:
     """Replace unavailable Darwin staging with a typed, read-only test seam."""

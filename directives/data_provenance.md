@@ -148,6 +148,17 @@ is tagged `governed_ocr`; its offsets are not native PDF text offsets. OCR
 acceptance and layout proof do not grant financial candidate retention,
 semantic admission, or publication.
 
+A current reported-quarter review is an append-only `EvidenceNode` and
+`ExtractionRun` on one immutable issuer PDF `DocumentVersion`. It binds the
+reviewer's source judgment to exact native first-page wording, page offsets,
+raw SHA-256, issuer, selected subject, SEC-source fiscal profile, and knowledge
+cutoff. The generic raw `ir_document` version keeps its original type and
+empty period; a later expected earnings-release row may use the reviewed
+semantic alias only while the version, URL, node ID, review digest, captured
+bytes, coverage assessment, and inventory seal still agree. A review is period
+evidence. It is not a financial fact, extraction-completeness receipt, or
+owner approval.
+
 ### Progressive proof and legacy repair (2026-09-19)
 
 Capture, extraction, source coverage, semantic admission, and reader parity are
