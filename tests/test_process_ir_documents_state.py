@@ -160,7 +160,7 @@ def test_main_passes_all_selectors_and_explicit_authorities(
     assert sys.argv == original_argv
 
 
-def test_all_selects_quarterly_and_event_tickers_from_explicit_index(
+def test_all_selects_only_quarterly_tickers_from_explicit_index(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _index(
@@ -195,15 +195,15 @@ def test_all_selects_quarterly_and_event_tickers_from_explicit_index(
     monkeypatch.setattr(processor, "load_project_env", _noop)
     monkeypatch.setattr(processor, "run_for_ticker", run)
     assert processor.main(["--all", "--repo-root", str(tmp_path), "--db", str(database)]) == 0
-    assert seen == ["GOOG", "NU"]
+    assert seen == ["NU"]
 
 
 @pytest.mark.parametrize(
-    ("quarter", "year", "processed"),
-    [(None, "2026", True), ("Q1", "2026", False), (None, "2025", False)],
+    ("quarter", "year"),
+    [(None, "2026"), ("Q1", "2026"), (None, "2025")],
 )
-def test_event_cache_and_completion_keep_event_identity(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quarter: str | None, year: str, processed: bool
+def test_retired_event_keeps_history_and_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quarter: str | None, year: str
 ) -> None:
     document = {
         "ticker": "GOOG",
@@ -230,16 +230,19 @@ def test_event_cache_and_completion_keep_event_identity(
     monkeypatch.setattr(processor, "resolve_ticker", _identity)
     monkeypatch.setattr(processor.index_manager, "resolve_ticker", _identity)
 
-    def no_generation(*_args: object, **_kwargs: object) -> str:
-        raise AssertionError("A cached event must not call the model")
+    attempts: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
-    monkeypatch.setitem(
-        cast("dict[str, object]", processor.DOC_TYPE_CONFIG["event"]), "llm_fn", no_generation
-    )
+    def no_generation(*args: object, **kwargs: object) -> str:
+        attempts.append((args, kwargs))
+        raise AssertionError("A cached event must not extract text")
+
+    monkeypatch.setattr(processor, "extract_text", no_generation)
+    assert processor.process_document(document, repo_root=tmp_path) is False
+    assert attempts == []
     processor.run_for_ticker("GOOG", quarter=quarter, year=year, repo_root=tmp_path)
+    assert attempts == []
     assert (
-        json.loads(index_path.read_text())["GOOG_event_2026-05-01_abc12345"]["processed"]
-        is processed
+        json.loads(index_path.read_text())["GOOG_event_2026-05-01_abc12345"]["processed"] is False
     )
     assert cache.read_text() == "PRIOR EVENT BRIEF"
 
@@ -266,9 +269,6 @@ def test_missing_summary_repair_uses_quarterly_only_selection_from_mixed_index(
         generated.append(text)
         return "REPAIRED SUMMARY"
 
-    def no_event(*_args: object, **_kwargs: object) -> str:
-        raise AssertionError("Quarterly summary repair must exclude event generation")
-
     monkeypatch.setattr(processor, "resolve_ticker", _identity)
     monkeypatch.setattr(processor.index_manager, "resolve_ticker", _identity)
     for name in ("load_thesis_anchor", "load_bear_anchor", "load_ir_anchor"):
@@ -276,9 +276,6 @@ def test_missing_summary_repair_uses_quarterly_only_selection_from_mixed_index(
     monkeypatch.setattr(processor.time, "sleep", _noop)
     monkeypatch.setitem(
         cast("dict[str, object]", processor.DOC_TYPE_CONFIG["transcript"]), "llm_fn", generate
-    )
-    monkeypatch.setitem(
-        cast("dict[str, object]", processor.DOC_TYPE_CONFIG["event"]), "llm_fn", no_event
     )
 
     processor.run_for_ticker("GOOG", regenerate_missing=True, repo_root=tmp_path)
@@ -467,3 +464,36 @@ def test_main_propagates_processor_status_with_explicit_authorities(
     )
     assert sys.argv == original_argv
     assert original_globals == (processor.PROJECT_ROOT, db.DB_PATH)
+
+
+def test_event_retirement_preserves_registered_source_and_saved_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    document = {
+        "ticker": "GOOG",
+        "event_date": "2026-05-01",
+        "doc_type": "event",
+        "local_path": "event__abc12345.txt",
+        "processed": False,
+    }
+    source = tmp_path / "event__abc12345.txt"
+    source.write_bytes(b"Retained raw event source.")
+    index = _index(tmp_path, {"GOOG_event_2026-05-01_abc12345": document})
+    cache = tmp_path / ".tmp/GOOG_event_2026-05-01_abc12345_event_brief.txt"
+    cache.write_bytes(b"Historical event brief.\r\n")
+    sidecar = cache.with_suffix(".source.json")
+    sidecar.write_bytes(b'{"historical":"unknown generation context"}\n')
+    before = {path: path.read_bytes() for path in (source, index, cache, sidecar)}
+    selected: list[object] = []
+
+    def reject_synthesis(doc: object, **_kwargs: object) -> bool:
+        selected.append(doc)
+        return True
+
+    monkeypatch.setattr(processor, "resolve_ticker", _identity)
+    monkeypatch.setattr(processor.index_manager, "resolve_ticker", _identity)
+    monkeypatch.setattr(processor, "process_document", reject_synthesis)
+    assert processor.run_for_ticker("GOOG", repo_root=tmp_path) == 0
+    assert selected == []
+    assert processor.cache_path_for(document, repo_root=tmp_path) == cache
+    assert {path: path.read_bytes() for path in before} == before

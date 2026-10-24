@@ -2642,3 +2642,39 @@ and after hashing in planning and immediately before deletion. Changed manifests
 remain protected. The public producer owner, scope, pins, proofs, file identities,
 live-database exclusion, byte bound and durable journal remain authoritative.
 No retention period, operator action, scheduler, service or live-state writer changes.
+
+
+### Standalone event-brief generation retirement — 2026-10-24
+
+Disposition: **owner-approved local feature retirement**. New standalone event
+brief generation and its processing selectors are retired. Event-only intake
+registers source documents without launching summary synthesis. Mixed intake
+retains quarterly summary, transcript and Say/Do processing. Direct retired event
+processing returns the existing unsupported-type result before generation.
+
+Raw event registration, identity checks, saved event bodies and source sidecars
+remain. Historical event filename lookup remains. The four consumed quarterly
+products and their anchors, prompts and model routes remain. Historical purpose
+metadata stays available for stored call/capture audits. No new model, budget,
+scheduler, source collection, schema or live-state action is introduced. The
+focused qualification exercises zero event generation, mixed-input order and
+failure handling, retained source/history bytes and quarterly replay/repair.
+
+
+### Explicit summary-KPI candidate procedure — 2026-10-24
+
+Disposition: **owner-approved on-command behavior**. Summary-derived numeric
+candidate extraction remains available through its existing backend CLI and valid
+explicit refresh selection. Routine refresh and automatic comment rebuilds do not
+invoke it. Comment processing retains definition seeding, thesis evaluation and
+report rebuild. Omitted refresh steps use the normal default chain without numeric
+summary extraction. Explicit null, empty, blank, non-list or unknown steps are rejected; excluding
+all selected steps must not fall back to the default collection chain.
+
+Explore projects the existing report, Analytics, grounded Ask and manual extraction
+paths. Its manual refresh adapter supports configured earnings-summary extraction
+only. IR and novel-capture modes remain backend CLI capabilities. A job accepted by
+the existing registry is not finished work or admitted evidence. Saved candidates,
+reviews, corrections and history remain. Summary-derived candidates remain subject
+to primary-source review; execution grants no financial admission. There is no new
+store, scheduler, collection permission, model route or live operation.

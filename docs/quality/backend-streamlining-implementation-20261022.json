@@ -527,7 +527,7 @@
     "transaction_audit": "The only stage before FMP that can write is optional SEC ingest; ingest_for_ticker commits at its commit phase and rolls back a started transaction on failure. Segment cache validation is read-only. Supplied-record refresh_cache retains its separate commit=False caller-owned path. No cross-document atomicity claim."
   },
   "r1_pending_revision": "Resolved, accepted and committed3065638a; later checkpoint proxyR1 score96.",
-  "remaining_work": "Finish current-main integration proof and independent acceptance. Original architecture goal remains unwaived. Further R4 extraction retirement depends on owner reference choice and held-source parity; no report decision-grade acceptance or new collection is granted. Approved feature retirements already executed locally remain preserved.",
+  "remaining_work": "Architecture gates remain unwaived. Next material candidate is single materialization inside canonical financial reads, prepared but not applied or tested. Summary KPI is retained on command. Wider report/portfolio financial qualification remains open. No push, merge, deployment, live state or collection authority.",
   "review_kind": "Owner-selected independent GPT-6.1 Sol proxy; earlier exact Opus receipts preserved as history. No formal model-purpose qualification claimed.",
   "review_route_update": {
     "authority": "Owner latest steering allows independent6.1Sol proxies and no further Astra requirement.",
@@ -892,7 +892,7 @@
     "transport": "claude_membership"
   },
   "static_count_clarification": "Old2012/1835 values are previous configured ceilings, not a paired prechange measurement of actual diagnostics/suppressions. Revised measured1826/1811 values tighten those ceilings.",
-  "status": "LOCAL_IMPLEMENTATION_VALIDATED_AND_ADVISORY_ACCEPT95;overallroadmap/releaseHOLD",
+  "status": "LOCAL_IMPLEMENTATION_VALIDATED_EVENT96_MANUAL95;overallroadmap/releaseHOLD",
   "third_independent_sol_proxy_review": {
     "binding_sha256": "53493b3675b5a59400c3527a8954914d8a50ea0ae9d09a819d27d854d8c897d0",
     "effort": "high",
@@ -2888,11 +2888,11 @@
     "confirmed": "Secondarycheckoutremoved, archived_worktreeattachmentreturned. Alllocalcommitsintegrated; exacttemporaryproofbytescopiedbeforearchive. No databasecopy.",
     "retention": "Existingtasktemporaryartifactowner; rawreviewbindingsremainhistorical, relocation+Gitcommits own reconstruction.",
     "current_checkpoint_retention": {
-      "retained": "Bound source/probe/review receipts, minimal deterministic failure evidence, conditional event patch and pending R4 references",
-      "reason": "Reproducibility and unresolved owner decisions; no additional database or environment copies",
-      "release": "Existing temporary-artifact owner after checkpoint integration and pending decisions close; failed synthetic runs retain existing seven-day review window",
+      "retained": "Bound source, probe, review and normal full-gate receipts plus unapplied next R6 patch; no state/environment copies",
+      "reason": "Reproduction of accepted local checkpoint and next material data-plane candidate; architecture and financial qualification still open",
+      "release": "Existing temporary-artifact owner after integration and unresolved qualification close; protected sidecars and held paths need their existing owner disposition",
       "protected_prior_run": "666protectedsidecars and metadata remain; no broad prune or manual deletion",
-      "current_full": "53968eligiblefiles retired normally;663protectedsidecars and16108heldpaths retained"
+      "current_full": "54013 eligible files retired normally;664 protected sidecars and16122 held paths retained; zero errors; no task processes or listeners"
     }
   },
   "legacy_guard_disposition": {
@@ -4234,5 +4234,87 @@
       "journal_matches": true,
       "remaining_task_listeners": []
     }
+  },
+  "current_owner_decisions_20261024": {
+    "user_text": "1. yes 2. yes",
+    "preservation_references": "Corrected October23 NU PRE/POST and expanded MELI",
+    "event_retirement": "Approved new generation retirement only; retain sources/registration/history",
+    "scope_limits": "Engineering reference choice, not financial acceptance or decision-grade; no new collection/live state/push/deploy",
+    "implementation_status": "Event retirement and explicit procedure MVP implemented, independently reviewed and current full gate passed",
+    "summary_kpi_procedure": {
+      "decision": "Keep backend generation on explicit command; expose reports/research procedures, analytics and grounded search through a simple existing interface",
+      "retirement_proposal": "superseded",
+      "implementation": "Implemented on command through existing Explore; preserved engine/CLI/resolver and review boundaries",
+      "preserve": [
+        "saved candidates",
+        "semantic review",
+        "history",
+        "quarantine",
+        "original-document extraction",
+        "narrative summaries"
+      ]
+    }
+  },
+  "explicit_procedure_mvp_20261024": {
+    "state": "Implemented and locally validated; independent advisory event96/manual95; release HOLD",
+    "event_score": 96,
+    "manual_implementation_score": 95,
+    "plan_score": 95,
+    "manual_review": ".tmp/cleanup-command-implementation-review.json",
+    "backend_proof": ".tmp/cleanup-kpi-manual-only/proof.json",
+    "bootstrap_proof": ".tmp/cleanup-comments-bootstrap-preservation.json",
+    "ui_proof": ".tmp/cleanup-explore-procedures-qualification.json",
+    "preservation": ".tmp/cleanup-command-preservation.json",
+    "static": ".tmp/cleanup-command-frozen-static.json",
+    "graph": ".tmp/cleanup-command-owner-update-reachability.json",
+    "fullgate": {
+      "state": "PASS normal supervised exit; unchanged source, Python diff and HEAD",
+      "receipt": ".tmp/cleanup-command-full-suite.json",
+      "log": ".tmp/cleanup-command-full-suite.log",
+      "passed": 22282,
+      "skipped": 102,
+      "warnings": 11,
+      "subtests_passed": 2,
+      "pytest_seconds": 1828.18,
+      "supervised_seconds": 2510.0,
+      "returncode": 0,
+      "source_sha256": "7b9e7b74c8a82600ad464a3330cd19b863d49535c004a573522353b027cb00a9",
+      "python_diff_sha256": "64f2680fb7ca70a761cb14f0f95f6976de5ec4f367585485f2bd6ab1e7efc19c",
+      "head_at_qualification": "b015fd840ad8999663891a9d25c6e4b0acca9261",
+      "observed_task_processes": 580,
+      "cleanup_signalled_pids": [],
+      "remaining_task_processes": [],
+      "teardown_verification": ".tmp/cleanup-command-full-teardown-verification.json",
+      "resource_verification": ".tmp/cleanup-command-full-resource-verification.json",
+      "deleted": 54013,
+      "protected": 664,
+      "held_paths_present": 16122,
+      "errors": 0
+    },
+    "production_sha256": "7b9e7b74c8a82600ad464a3330cd19b863d49535c004a573522353b027cb00a9",
+    "source_cut_vs_exact_main": 2005,
+    "modules_cut_vs_exact_main": 6,
+    "source_accounting": "event -154physical; manualbackend/UI+22physical; retainedcapability estimate withdrawn",
+    "whole_diagnostics": 1646,
+    "whole_suppressions": 1733,
+    "architecture": "FAIL26>2000vs25; originalregressionsunwaived",
+    "deployment": "None"
+  },
+  "owner_efficiency_update_20261024": {
+    "advisory_score_minimum": 85,
+    "material_blockers": "not waived",
+    "priority": "wholeprocedure/wholeloop/unusedfeature removals; reuseexistingowners/installedcomponents, qualifiedopen-sourcewhere materialnetgain",
+    "test_strategy": "focusedmeaningfultargetedduringbuild; fullgatebatchedformajorintegration/delivery/push",
+    "deferred": ".tmp/cleanup-next-r6-admission.patch net59linecode-onlydedup; noapplication",
+    "current_full_gate": "Continue currentmajorcheckpoint once; no repeatedfullmatrixperMVP"
+  },
+  "next_material_data_plane_candidate_20261024": {
+    "state": "PREPARED_ONLY_NOT_APPLIED_OR_TESTED",
+    "patch": ".tmp/cleanup-r6-single-materialization.patch",
+    "proof": ".tmp/cleanup-r6-single-materialization-proof.json",
+    "plan_review_score": 90,
+    "target": "Construct and project each financial cell once per read; preserve complete results, ambiguity, lineage and trace",
+    "performance_claim": "None; implementation parity and measured counts still required",
+    "deferred": "59-line policy deduplication and small parser/fingerprint cleanup; low relative impact"
   }
 }

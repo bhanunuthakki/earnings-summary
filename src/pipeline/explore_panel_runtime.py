@@ -47,6 +47,67 @@ window.initExplorePanel = function () {
   var workbenchVersion = 0;
   var savedController = null;
   var savedVersion = 0;
+  var procedureController = null;
+  var procedureVersion = 0;
+  function retireProcedure() {
+    procedureVersion += 1;
+    if (procedureController) procedureController.abort();
+    procedureController = null;
+    if (!isCurrent()) return;
+    el('vx-procedure-run').disabled = !ticker();
+    el('vx-procedure-run').textContent = 'Run earnings-summary KPI extraction';
+    el('vx-procedure-ticker').textContent = ticker() || 'no selected company';
+    el('vx-procedure-operation').hidden = true;
+    el('vx-procedure-status').textContent = 'Company changed. Any earlier request may still be running; check Operations before retrying.';
+  }
+  function navigateProcedure(screen) {
+    if (typeof window.navigateTo === 'function') window.navigateTo(screen);
+    else el('vx-procedure-status').textContent = 'Open this destination from the application navigation.';
+  }
+  function runSummaryProcedure() {
+    var company = ticker();
+    var button = el('vx-procedure-run');
+    if (!company || button.disabled) return;
+    var version = ++procedureVersion;
+    var controller = new AbortController();
+    procedureController = controller;
+    button.disabled = true;
+    button.textContent = 'Requesting…';
+    var status = el('vx-procedure-status');
+    status.textContent = 'Requesting earnings-summary KPI extraction for ' + company + '…';
+    el('vx-procedure-operation').hidden = true;
+    var deadline = window.setTimeout(function () { controller.abort(); }, 30000);
+    fetch('/actions/refresh', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      signal: controller.signal,
+      body: JSON.stringify({ticker: company, steps: ['extract_kpis']})
+    }).then(function (response) {
+      return response.json().then(function (job) {
+        if (!isCurrent() || version !== procedureVersion || ticker() !== company) return;
+        if (!response.ok) {
+          status.textContent = response.status === 409
+            ? 'Another refresh is active. Check Operations before retrying.'
+            : 'Request rejected (HTTP ' + response.status + '). Check Operations for details.';
+          return;
+        }
+        if (typeof job.job_id !== 'string' || !/^job_[a-zA-Z0-9]+$/.test(job.job_id)) {
+          throw new Error('Invalid operation identity');
+        }
+        status.textContent = 'Request accepted for ' + company + '. Extraction is not yet complete; candidates still require primary-source review before admission.';
+        var link = el('vx-procedure-operation');
+        link.href = '/actions/stream/' + encodeURIComponent(job.job_id);
+        link.hidden = false;
+      });
+    }).catch(function () {
+      if (!isCurrent() || version !== procedureVersion || ticker() !== company) return;
+      status.textContent = 'Request status unknown. Check Operations before running again; the operation may still be active.';
+    }).finally(function () {
+      window.clearTimeout(deadline);
+      if (!isCurrent() || version !== procedureVersion) return;
+      procedureController = null;
+      button.disabled = !ticker();
+      button.textContent = 'Run earnings-summary KPI extraction';
+    });
+  }
   function retireAnalysis() {
     analysisVersion += 1;
     if (analysisController) analysisController.abort();
@@ -74,6 +135,7 @@ window.initExplorePanel = function () {
   var lifetimeObserver = new MutationObserver(function () {
     if (isCurrent()) return;
     retireWorkbench();
+    retireProcedure();
     savedVersion += 1;
     if (savedController) savedController.abort();
     lifetimeObserver.disconnect();
@@ -232,6 +294,7 @@ window.initExplorePanel = function () {
     var values = event.detail && Array.isArray(event.detail.tickers) ? event.detail.tickers : [];
     if (!values.length) return;
     el('vx-tickers').value = String(values[0]).trim().toUpperCase();
+    retireProcedure();
     workbenchTickers = values.map(function (value) { return String(value).trim().toUpperCase(); }).filter(Boolean);
     sessionId = null;
     lastSpec = null;
@@ -551,6 +614,10 @@ window.initExplorePanel = function () {
     if (!panel.hidden) refreshSavedViews();
   }
   el('vx-open-empty').addEventListener('click', function (event) { openWorkbench('', null, event.currentTarget); });
+  el('vx-procedure-reports').addEventListener('click', function () { navigateProcedure('screen-brief-library'); });
+  el('vx-procedure-operations').addEventListener('click', function () { navigateProcedure('screen-execution-queue'); });
+  el('vx-procedure-analytics').addEventListener('click', function (event) { openWorkbench('', null, event.currentTarget); });
+  el('vx-procedure-run').addEventListener('click', runSummaryProcedure);
   el('vx-back').addEventListener('click', closeWorkbench);
   el('vx-workbench').addEventListener('cancel', function (event) {
     event.preventDefault(); closeWorkbench();

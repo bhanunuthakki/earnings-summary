@@ -148,7 +148,6 @@ def test_default_path_skips_processed_doc(
         return []
 
     monkeypatch.setattr(pir.index_manager, "get_unprocessed_documents", fake_unprocessed)
-    monkeypatch.setattr(pir.index_manager, "get_unprocessed_events", fake_unprocessed)
 
     pir.run_for_ticker("UBER", regenerate_missing=False, repo_root=tmp_path)
 
@@ -234,14 +233,10 @@ def test_run_status_tracks_document_failure(
     def documents(*args: object, **kwargs: object) -> list[dict[str, object]]:
         return [doc]
 
-    def no_events(*args: object, **kwargs: object) -> list[dict[str, object]]:
-        return []
-
     def process(*args: object, **kwargs: object) -> bool:
         return succeeds
 
     monkeypatch.setattr(pir.index_manager, "get_unprocessed_documents", documents)
-    monkeypatch.setattr(pir.index_manager, "get_unprocessed_events", no_events)
     monkeypatch.setattr(pir, "process_document", process)
     assert pir.run_for_ticker("UBER", repo_root=tmp_path) == int(not succeeds)
 
@@ -251,7 +246,6 @@ def test_no_documents_is_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         return []
 
     monkeypatch.setattr(pir.index_manager, "get_unprocessed_documents", empty)
-    monkeypatch.setattr(pir.index_manager, "get_unprocessed_events", empty)
     assert pir.run_for_ticker("UBER", repo_root=tmp_path) == 0
 
 
@@ -259,15 +253,11 @@ def test_main_all_retains_failure_status(tmp_path: Path, monkeypatch: pytest.Mon
     def documents(*args: object, **kwargs: object) -> list[dict[str, object]]:
         return [{"ticker": "AAA"}, {"ticker": "ZZZ"}]
 
-    def empty(*args: object, **kwargs: object) -> list[dict[str, object]]:
-        return []
-
     def run(ticker: str, *args: object, **kwargs: object) -> int:
         return int(ticker == "AAA")
 
     monkeypatch.setattr(sys, "argv", ["process_ir_documents.py", "--all"])
     monkeypatch.setattr(pir.index_manager, "get_unprocessed_documents", documents)
-    monkeypatch.setattr(pir.index_manager, "get_unprocessed_events", empty)
     monkeypatch.setattr(pir, "run_for_ticker", run)
     database = tmp_path / "explicit.sqlite"
     database.touch()

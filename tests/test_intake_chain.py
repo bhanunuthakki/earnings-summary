@@ -1,6 +1,6 @@
 """Tests for execution/intake_documents.py chain wiring.
 
-`chain_processing` must route every newly-filed doc through the LLM summarizer
+`chain_processing` must route non-event newly-filed docs through the LLM summarizer
 (`process_ir_documents.py`), and additionally bridge transcripts into the
 `transcripts` + `transcript_segments` tables (`ingest_transcripts.py
 --include-ir-transcripts`) and trigger Say-Do extraction
@@ -18,13 +18,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import intake_documents  # noqa: E402
-
-from intake import IntakeClassification, IntakeResult  # noqa: E402
-from models.documents import DocType  # noqa: E402
+from execution import intake_documents
+from intake import IntakeClassification, IntakeResult
+from models.documents import DocType
 
 
 def _result(ticker: str, doc_type: DocType, *, skipped: bool = False) -> IntakeResult:
@@ -62,7 +58,7 @@ def _ticker_for_call(call_args: list[str]) -> str:
     return call_args[idx + 1]
 
 
-def test_chain_processing_runs_only_summarizer_for_non_transcript_docs():
+def test_chain_processing_runs_only_summarizer_for_non_transcript_docs() -> None:
     results = [_result("NU", DocType.IR_PRESS_RELEASE)]
     with patch.object(
         intake_documents.subprocess,
@@ -73,7 +69,7 @@ def test_chain_processing_runs_only_summarizer_for_non_transcript_docs():
     assert _called_script_names(mock_run) == ["process_ir_documents.py"]
 
 
-def test_chain_processing_runs_only_summarizer_for_presentation_docs():
+def test_chain_processing_runs_only_summarizer_for_presentation_docs() -> None:
     results = [_result("MELI", DocType.IR_PRESENTATION)]
     with patch.object(
         intake_documents.subprocess,
@@ -84,7 +80,7 @@ def test_chain_processing_runs_only_summarizer_for_presentation_docs():
     assert _called_script_names(mock_run) == ["process_ir_documents.py"]
 
 
-def test_chain_processing_bridges_transcripts_into_transcripts_table():
+def test_chain_processing_bridges_transcripts_into_transcripts_table() -> None:
     results = [_result("META", DocType.EARNINGS_CALL_TRANSCRIPT)]
     with patch.object(
         intake_documents.subprocess,
@@ -136,7 +132,7 @@ def test_chain_processing_returns_commitment_failure() -> None:
     assert result.exit_code == 5
 
 
-def test_chain_processing_handles_mixed_doctype_batch():
+def test_chain_processing_handles_mixed_doctype_batch() -> None:
     """Press release for NU + transcript for META: both get summarizer; only META
     gets the transcripts-table bridge + Say-Do extraction."""
     results = [
@@ -171,7 +167,7 @@ def test_chain_processing_handles_mixed_doctype_batch():
     assert commit_tickers == {"META"}
 
 
-def test_chain_processing_deduplicates_multiple_transcripts_for_same_ticker():
+def test_chain_processing_deduplicates_multiple_transcripts_for_same_ticker() -> None:
     """Two transcripts for META (e.g. Q1 + Q2 in one drop): chain runs once per ticker."""
     results = [
         _result("META", DocType.EARNINGS_CALL_TRANSCRIPT),
@@ -191,7 +187,7 @@ def test_chain_processing_deduplicates_multiple_transcripts_for_same_ticker():
     ]
 
 
-def test_chain_processing_skips_when_only_skipped_results():
+def test_chain_processing_skips_when_only_skipped_results() -> None:
     results = [_result("NU", DocType.IR_PRESS_RELEASE, skipped=True)]
     with patch.object(
         intake_documents.subprocess,
@@ -202,7 +198,7 @@ def test_chain_processing_skips_when_only_skipped_results():
     mock_run.assert_not_called()
 
 
-def test_chain_processing_skips_when_classification_is_none():
+def test_chain_processing_skips_when_classification_is_none() -> None:
     """Audio files have classification=None; chain must not crash on them."""
     audio = IntakeResult(
         source=Path("META_Q1_2026.mp3"),
@@ -247,3 +243,33 @@ def test_main_accepts_include_ir_transcripts_without_running_summarizer(
         process_documents=False,
         include_ir_transcripts=True,
     )
+
+
+@pytest.mark.parametrize("include_core", [False, True])
+def test_event_intake_keeps_core_chain_without_event_synthesis(include_core: bool) -> None:
+    results = [_result("ZZZ", DocType.IR_EVENT)]
+    if include_core:
+        results += [
+            _result("NU", DocType.IR_PRESS_RELEASE),
+            _result("META", DocType.EARNINGS_CALL_TRANSCRIPT),
+        ]
+    with patch.object(
+        intake_documents.subprocess,
+        "run",
+        return_value=subprocess.CompletedProcess[str]([], 0),
+    ) as mock_run:
+        result = intake_documents.chain_processing(results)
+    calls = [
+        (_managed_target(c.args[0]).name, _ticker_for_call(c.args[0])) for c in mock_run.mock_calls
+    ]
+    assert calls == (
+        [
+            ("process_ir_documents.py", "META"),
+            ("process_ir_documents.py", "NU"),
+            ("ingest_transcripts.py", "META"),
+            ("extract_commitments_from_transcript.py", "META"),
+        ]
+        if include_core
+        else []
+    )
+    assert result.exit_code == 0

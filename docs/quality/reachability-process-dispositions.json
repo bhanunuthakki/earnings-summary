@@ -175,8 +175,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Chain runs the fixed execution/process_ir_documents.py via managed_python_prefix.",
-      "fingerprint": "d1d2772e7e15732ee15b109d93fd43141a26b0f140935a0ee85b879f04b989db",
-      "line": 111,
+      "fingerprint": "eb6de4ba6cfc849f78d1c37bc3f24ee7756c564ecb8524c9a0628ba8fe720164",
+      "line": 119,
       "path": "execution/intake_documents.py",
       "targets": [
         "execution/process_ir_documents.py"
@@ -185,8 +185,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Chain runs the fixed execution/ingest_transcripts.py via managed_python_prefix.",
-      "fingerprint": "d601bc50445ad87bbe8ed9250785708646f182c8b55a2e805095992c5aaea476",
-      "line": 126,
+      "fingerprint": "c25dfa25da2ec49475e512723dc183ab237e13080d76c56582fa64fb2114e86b",
+      "line": 134,
       "path": "execution/intake_documents.py",
       "targets": [
         "execution/ingest_transcripts.py"
@@ -195,8 +195,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Chain runs the fixed execution/extract_commitments_from_transcript.py via managed_python_prefix.",
-      "fingerprint": "3f953ab46e2d9cf70c3e14c946d77cbac652e6453314b67af5c0d50084c57eca",
-      "line": 156,
+      "fingerprint": "1c499de0808594180d18d0ca06b08e8dbacaed281057b2fed746533ed69f61b5",
+      "line": 164,
       "path": "execution/intake_documents.py",
       "targets": [
         "execution/extract_commitments_from_transcript.py"
@@ -267,13 +267,12 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "_spawn_step runs only the four fixed managed-Python rebuild scripts.",
-      "fingerprint": "9c41af9ff0a5b8f1bfc62c0b298d2c19eabb66969309d73c97a21ee0941083c6",
-      "line": 742,
+      "evidence": "_spawn_step runs only the three fixed managed-Python rebuild scripts.",
+      "fingerprint": "6f5e43ea8e186f4dd98844f30a7f0a9c87e5e3e4df1a3bb035c08bd548ef2365",
+      "line": 672,
       "path": "execution/process_report_comments.py",
       "targets": [
         "execution/seed_kpi_definitions.py",
-        "execution/extract_kpis_from_summaries.py",
         "execution/run_thesis_evaluator.py",
         "execution/build_artifacts.py"
       ]
@@ -395,8 +394,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Dispatcher argv builders select only the nine fixed STEP_NAMES scripts via managed_python_argv, including execution/process_ir_documents.py directly after its state adapter retirement. Ticker and state arguments do not select executable identity.",
-      "fingerprint": "6ca92b671a9dd36ae25ad37309876a28fdebf0dd8d9c87c1c47e5d001b723f62",
-      "line": 288,
+      "fingerprint": "23d2044431983651cc6fc7d0b20b90a1ceaf40a9d4dc4103f06208838e4c86ae",
+      "line": 296,
       "path": "execution/refresh_dispatch.py",
       "targets": [
         "execution/fetch_fmp_historical_data.py",
@@ -1062,9 +1061,9 @@
     "input_scope": "scanner-consumed-inputs/v1",
     "parser": {
       "name": "ast+xml+literal-scanner",
-      "version": "1.3.0",
       "python": ">=3.11",
-      "source_sha256": "20e5b29c06aed0d36c635e916cb41678f0ae613cd81ad76dd07ff287990f0b66"
+      "source_sha256": "3dd005bb73186b3e97eff9842911bb5b01a0f97d4365dc9797335a16d3abf527",
+      "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c9ec98b1cbcdf93c9b890d9a8a8c59ef6109598f67b1739c38463d79d5986175",

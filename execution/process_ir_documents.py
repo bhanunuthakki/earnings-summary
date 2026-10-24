@@ -36,7 +36,6 @@ from alias_manager import resolve_ticker
 from db_paths import db_path_context, require_db_path
 from llm_client import (
     compose_anchor_block,
-    generate_event_brief,
     generate_presentation_brief,
     generate_press_release_summary,
     generate_summary,
@@ -55,8 +54,8 @@ log = logging.getLogger(__name__)
 RATE_LIMIT_SLEEP = 15
 
 # `uses_anchor` marks doc types whose LLM prompt accepts a thesis/bear-case
-# anchor block (transcripts → analytical takeaway needs KPI anchor; events →
-# §7 thesis-read-through needs the same). Press-release and presentation
+# anchor block (transcripts → analytical takeaway needs KPI anchor).
+# Press-release and presentation
 # briefs are pure structured-data summaries — no anchor needed; their job is
 # to be factual condensers, not to render thesis judgments.
 DOC_TYPE_CONFIG: dict[str, dict[str, Any]] = {
@@ -86,14 +85,6 @@ DOC_TYPE_CONFIG: dict[str, dict[str, Any]] = {
         "label": "Investor Update Summary",
         "uses_anchor": False,
     },
-    # Non-quarterly IR events: investor days, AGMs, capital markets days, conference decks.
-    # Uses the dedicated event-brief prompt focused on multi-year strategy + capital allocation.
-    "event": {
-        "cache_suffix": "event_brief.txt",
-        "llm_fn": generate_event_brief,
-        "label": "Event Brief",
-        "uses_anchor": True,
-    },
 }
 
 
@@ -104,13 +95,14 @@ def _is_event(doc: dict[str, Any]) -> bool:
 def cache_path_for(doc: dict[str, Any], *, repo_root: Path = PROJECT_ROOT) -> Path:
     cache_dir = repo_root / ".tmp"
     ticker = doc["ticker"]
-    suffix = DOC_TYPE_CONFIG[doc["doc_type"]]["cache_suffix"]
     if _is_event(doc):
         # Event index entries have `event_date` instead of (year, quarter); the registered
         # local_path's filename ends in `__<sha8>.pdf` which we surface in the cache name.
+        suffix = "event_brief.txt"  # Retained historical projection name.
         event_date = doc["event_date"]
         sha8 = Path(doc["local_path"]).stem.split("__")[-1]
         return cache_dir / f"{ticker}_event_{event_date}_{sha8}_{suffix}"
+    suffix = DOC_TYPE_CONFIG[doc["doc_type"]]["cache_suffix"]
     quarter = doc["quarter"]
     year = doc["year"]
     return cache_dir / f"{ticker}_{quarter}_{year}_{suffix}"
@@ -118,12 +110,6 @@ def cache_path_for(doc: dict[str, Any], *, repo_root: Path = PROJECT_ROOT) -> Pa
 
 def _mark_processed(doc: dict[str, Any], *, repo_root: Path = PROJECT_ROOT) -> None:
     index_path = repo_root / ".tmp" / "document_index.json"
-    if _is_event(doc):
-        sha8 = Path(doc["local_path"]).stem.split("__")[-1]
-        index_manager.mark_event_processed(
-            doc["ticker"], doc["event_date"], sha8, document_index_path=index_path
-        )
-        return
     index_manager.mark_document_processed(
         doc["ticker"],
         doc["year"],
@@ -283,15 +269,6 @@ def run_for_ticker(
     if year:
         docs = [d for d in docs if str(d["year"]) == str(year)]
 
-    # Events: include unless the caller filtered by quarter (events have no quarter).
-    # `--year` filters events by event_date year so users can scope to a specific period.
-    # regenerate_missing intentionally scopes to quarterly docs (the Say-Do inputs).
-    if not quarter and not regenerate_missing:
-        events = index_manager.get_unprocessed_events(ticker, document_index_path=index_path)
-        if year:
-            events = [e for e in events if e.get("event_date", "").startswith(str(year))]
-        docs = docs + events
-
     if not docs:
         print(f"[{ticker}] No unprocessed documents found.")
         return 0
@@ -346,9 +323,7 @@ def main(argv: list[str] | None = None) -> int:
     index_path = repo_root / ".tmp" / "document_index.json"
 
     if args.all:
-        unprocessed = index_manager.get_unprocessed_documents(
-            document_index_path=index_path
-        ) + index_manager.get_unprocessed_events(document_index_path=index_path)
+        unprocessed = index_manager.get_unprocessed_documents(document_index_path=index_path)
         tickers = sorted({d["ticker"] for d in unprocessed})
         if not tickers:
             print("No unprocessed documents found.")

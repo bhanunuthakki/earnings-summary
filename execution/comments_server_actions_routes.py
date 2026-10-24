@@ -14,7 +14,7 @@ from comments_server_shared import (
     opt_int,
 )
 from flask import Flask, request
-from refresh_dispatch import STEP_NAMES
+from refresh_dispatch import resolve_steps
 
 import ticker_validation
 from dispatch_registry import RegistryConflict
@@ -73,13 +73,14 @@ def register_actions_routes(app: Flask, ctx: ServerContext) -> None:
         force = bool(body.get("force", False))
         steps_raw = body.get("steps")
         steps: list[str] | None = None
-        if steps_raw is not None:
+        if "steps" in body:
             if not isinstance(steps_raw, list):
                 return ({"error": "steps must be a list of step names"}, 400)
             steps = [str(s) for s in cast("list[object]", steps_raw)]
-            bad = [s for s in steps if s not in STEP_NAMES]
-            if bad:
-                return ({"error": f"unknown step(s): {bad}; valid: {list(STEP_NAMES)}"}, 400)
+            try:
+                resolve_steps(steps)
+            except ValueError as exc:
+                return ({"error": str(exc)}, 400)
 
         dispatcher = resolved_code_root / "execution" / "refresh_dispatch.py"
         try:
@@ -103,7 +104,7 @@ def register_actions_routes(app: Flask, ctx: ServerContext) -> None:
             argv.extend(("--source-state-root", str(ctx.source_state_root)))
         if force:
             argv.append("--force")
-        if steps:
+        if steps is not None:
             argv += ["--steps", ",".join(steps)]
         if force_budget_bypass:
             argv.append("--force-budget-bypass")

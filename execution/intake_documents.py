@@ -28,15 +28,16 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-# Make `src/` importable
-SCRIPT_DIR = Path(__file__).parent.resolve()
-PROJECT_ROOT = SCRIPT_DIR.parent
-SRC_DIR = PROJECT_ROOT / "src"
-sys.path.insert(0, str(SRC_DIR))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from intake import INBOX_DIR, IntakeResult, scan_inbox  # noqa: E402
-from models.documents import DocType  # noqa: E402
-from runtime.python_process import managed_python_prefix  # noqa: E402
+from intake import INBOX_DIR, IntakeResult, scan_inbox
+from models.documents import DocType
+from runtime.python_process import managed_python_prefix
+
+SCRIPT_DIR = Path(__file__).parent.resolve()
 
 
 class ChainResult(BaseModel):
@@ -74,7 +75,8 @@ def chain_processing(
 ) -> ChainResult:
     """Run downstream pipelines for each ticker that got new IR docs.
 
-    Every ticker with new docs gets `process_ir_documents.py` (LLM summary).
+    Tickers with new non-event docs get `process_ir_documents.py` (LLM summary).
+    Event documents remain registered raw sources without automatic synthesis.
     Tickers that received transcripts additionally get
     `ingest_transcripts.py --include-ir-transcripts` (bridges intake-filed
     transcripts into the `transcripts` + `transcript_segments` tables) and
@@ -88,7 +90,13 @@ def chain_processing(
         print("[intake] No newly-filed IR documents — skipping process chain.", file=sys.stderr)
         return ChainResult()
 
-    tickers = sorted({r.classification.ticker for r in new_filings if r.classification})
+    tickers = sorted(
+        {
+            r.classification.ticker
+            for r in new_filings
+            if r.classification and r.classification.doc_type != DocType.IR_EVENT
+        }
+    )
     transcript_tickers = sorted(
         {
             r.classification.ticker

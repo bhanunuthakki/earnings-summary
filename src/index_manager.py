@@ -666,40 +666,6 @@ def register_event_document(
     return True
 
 
-def mark_event_processed(
-    ticker: str, event_date: str, sha8: str, *, document_index_path: Path | None = None
-) -> bool:
-    """Mark an event artifact as processed. `sha8` is the 8-character sha256 prefix
-    that appears in the event's index key and on-disk filename."""
-    path = str(document_index_path) if document_index_path is not None else DOCUMENT_INDEX_PATH
-    index = _load(path)
-    key = f"{resolve_ticker(ticker).upper()}_event_{event_date}_{sha8}"
-    if key not in index:
-        return False
-    index[key]["processed"] = True
-    index[key]["updated_at"] = datetime.datetime.now().isoformat()
-    _save(path, index)
-    return True
-
-
-def get_unprocessed_events(
-    ticker: str | None = None, *, document_index_path: Path | None = None
-) -> list[dict[str, Any]]:
-    """Return all registered but unprocessed event artifacts, optionally filtered by ticker."""
-    path = str(document_index_path) if document_index_path is not None else DOCUMENT_INDEX_PATH
-    index = _load(path)
-    result = [
-        v
-        for v in index.values()
-        if v.get("doc_type") == "event" and not v.get("processed") and v.get("local_path")
-    ]
-    if ticker:
-        ticker = resolve_ticker(ticker).upper()
-        result = [v for v in result if v.get("ticker") == ticker]
-    result.sort(key=lambda d: (d.get("ticker", ""), d.get("event_date", "")))
-    return result
-
-
 def register_user_intake_document(
     ticker: str,
     year: int | str,
@@ -774,8 +740,8 @@ def get_unprocessed_documents(
 ) -> list[dict[str, Any]]:
     """Return all registered but unprocessed quarterly documents, optionally filtered by ticker.
 
-    Events live in a separate keyspace (no year/quarter fields) — fetch via
-    `get_unprocessed_events`.
+    Raw events retain their separate registration keyspace and are excluded
+    from quarterly summary synthesis.
     """
     path = str(document_index_path) if document_index_path is not None else DOCUMENT_INDEX_PATH
     index = _load(path)

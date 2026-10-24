@@ -1,6 +1,22 @@
 # Backend streamlining: implementation checkpoints
 
-Status: **Local implementation validated and accepted at 95/100; combined release HOLD**.
+Status: **October 24 event unit accepted at 96/100; on-command procedure MVP accepted at 95/100; current full gate passed; combined release HOLD**.
+
+The owner selected corrected October 23 NU PRE/POST and expanded MELI as the
+engineering preservation references. The owner also approved retiring new
+standalone event briefs while preserving sources, registration and history.
+The current full-suite pass covers the event and on-command procedure changes.
+Its 99 focused tests pass; independent Sol review accepts the unit at 96/100.
+Its corrected candidate also passes changed checks and whole-tree static checks.
+The owner retained summary-to-KPI generation as an explicit backend procedure.
+The earlier proposed full retirement is superseded. The implemented MVP removes its
+automatic refresh/comment coupling and maps existing reports, procedures,
+Analytics and grounded questions through Explore. Its 120 backend tests and
+59 bootstrap checks pass. The frontend passes 139 tests before the recovery
+correction, then all 14 browser tests on the final runtime. Synthetic browser
+checks at 1280/768 preserve the question, use one explicit step, show accepted
+versus completed state and support explicit retries. No live extraction ran.
+The retained engine, CLI and resolver and all 21 reference files are unchanged.
 
 The private app retains deep pre/post earnings briefs, research/Q&A, portfolio
 decisions and one shared evidence plane. Analytical depth and financial lineage
@@ -21,9 +37,24 @@ remain required.
   history remains.
 
 Against the same merged-main commit `224d9666`, the branch removes **six production
-modules and 1,933 non-comment source lines**. It still has one extra module above
+modules and 2,005 non-comment source lines at the frozen combined candidate**. It still has one extra module above
 2,000 lines. It also exceeds the original cleanup baseline after concurrent main
 growth. Both architecture gates remain open; no exception is approved.
+
+## Current execution rule
+
+The owner now accepts independent advisory scores of 85 or higher, with no
+unresolved material blocker. Financial integrity and deterministic checks stay
+required. Prioritize whole duplicate procedures, repeated data work and unused
+features. Reuse existing components before adding a dependency. The prepared
+59-line admission deduplication is deferred for low relative impact. Focused tests
+support iteration; complete gates are batched at major checkpoints.
+
+The next material candidate removes repeated construction and projection inside
+one canonical financial read. Its patch is prepared but remains unapplied and
+untested. Complete output, ambiguity, lineage and trace parity must pass before
+acceptance. Existing components are preferred. The small parser/fingerprint cuts
+and the 59-line policy deduplication remain deferred. No dependency was added.
 
 ## Backend MVP
 
@@ -42,7 +73,29 @@ or cold-cache claim. See `.tmp/cleanup-main-reader-probe/probe-receipt.json` and
 
 ## Current validation
 
-Changed format, lint, strict types and suppression checks pass on 164 files.
+At the frozen combined candidate, changed format, lint, strict types and suppression
+checks pass on 177 files. Whole-tree static checks pass with 1,646 diagnostics and
+1,733 suppressions, with no ceiling increase. The graph passes with 39,535 edges,
+170 test-only residuals and all 3,722 input hashes current. Architecture boundaries,
+design sync, directive/folder contracts, reconstruction and public-tree checks pass.
+The complete current suite passes: **22,282 tests, 102 skips and two passing
+subtests**, with normal supervised exit in 2,510 seconds. Source, Python diff and
+HEAD stayed unchanged. Exact cleanup verifies 54,013 deletions, 664 protected
+sidecars and all 16,122 held paths. No task process or listener remains. See
+`.tmp/cleanup-command-full-suite.json`,
+`.tmp/cleanup-command-full-teardown-verification.json` and
+`.tmp/cleanup-command-full-resource-verification.json`. Current static and graph
+proofs are `.tmp/cleanup-command-frozen-static.json` and
+`.tmp/cleanup-command-owner-update-reachability.json`.
+
+Source accounting stays explicit: event retirement removes 154 net physical
+production lines. The on-command backend/interface unit adds 22 net physical
+production lines after its automatic jobs are removed. The superseded 1,450–1,600
+line full-retirement estimate is not credited. No module split or scanner exception
+is used to pass the oversized-module gate.
+
+The accepted `b015fd8` checkpoint had the following full validation.
+Changed format, lint, strict types and suppression checks passed on 164 files.
 Whole-tree static checks pass on 2,895 files with 1,779 diagnostics and 1,757
 suppressions: 169 fewer diagnostics and 34 fewer suppressions than exact merged
 main. No ceiling increased. The dependency graph passes with 39,522 edges,
@@ -62,7 +115,7 @@ No production schema or default seed policy changes.
 | Repeat before cleanup fix | 22,229 passed; 102 skipped; two passing subtests; gate interrupted in teardown |
 | Checkout-local qualification namespace | 12 failed; 22,231 passed; 102 skipped; two passing subtests |
 | External namespace before clock fix | One failed; 10,705 passed; 41 skipped; stopped for diagnosis |
-| Current frozen candidate | **22,243 passed; 102 skipped; two passing subtests; normal supervised exit** |
+| Accepted `b015fd8` candidate | **22,243 passed; 102 skipped; two passing subtests; normal supervised exit** |
 
 The 12-failure run exposed 11 correctly rejected checkout-local FMP policy files
 and one obsolete 803-read expectation. Qualification now uses an external native

@@ -13,6 +13,7 @@ import json
 import sqlite3
 import sys
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import TextIO
 
@@ -346,7 +347,7 @@ class _MockRunner:
         return _Result(rc)
 
 
-def test_execute_full_runs_all_six_steps(tmp_path: Path) -> None:
+def test_execute_full_runs_default_steps_without_numeric_extraction(tmp_path: Path) -> None:
     runner = _MockRunner()
     plan = Plan(ticker="NU", mode="full", skip_fmp=False, skip_fmp_reason=None)
     out = io.StringIO()
@@ -357,7 +358,6 @@ def test_execute_full_runs_all_six_steps(tmp_path: Path) -> None:
         "fetch_fmp_historical_data",
         "backfill_transcripts",
         "process_ir_documents",
-        "extract_kpis_from_summaries",
         "build_saydo_pairs",
         "build_artifacts",
     ]
@@ -379,7 +379,6 @@ def test_execute_stale_skips_fmp_when_planned(tmp_path: Path) -> None:
     assert script_names == [
         "backfill_transcripts",
         "process_ir_documents",
-        "extract_kpis_from_summaries",
         "build_saydo_pairs",
         "build_artifacts",
     ]
@@ -400,12 +399,12 @@ def test_execute_emits_dispatch_markers(tmp_path: Path) -> None:
 
 def test_execute_keeps_going_after_step_failure(tmp_path: Path) -> None:
     """A failed FMP step must not block independent subsequent steps."""
-    runner = _MockRunner(exit_codes=[1, 0, 0, 0, 0, 0])  # FMP fails, rest succeed
+    runner = _MockRunner(exit_codes=[1, 0, 0, 0, 0])  # FMP fails, rest succeed
     plan = Plan(ticker="NU", mode="full", skip_fmp=False, skip_fmp_reason=None)
     out = io.StringIO()
     rc = execute(plan, project_root=tmp_path, out=out, runner=runner)
     assert rc == 1  # remembered the failure
-    assert len(runner.calls) == 6  # all steps still attempted
+    assert len(runner.calls) == 5  # all default steps still attempted
     assert "step=fmp action=end rc=1" in out.getvalue()
 
 
@@ -418,12 +417,12 @@ def test_execute_includes_ticker_in_argv(tmp_path: Path) -> None:
 
 
 def test_execute_includes_repo_root_where_needed(tmp_path: Path) -> None:
-    """extract_kpis, build_saydo, and build_artifacts need --repo-root."""
+    """Default summary, Say-Do and report steps retain their state root."""
     runner = _MockRunner()
     plan = Plan(ticker="NU", mode="full", skip_fmp=False, skip_fmp_reason=None)
     execute(plan, project_root=tmp_path, out=io.StringIO(), runner=runner)
     needs_repo_root = {
-        "extract_kpis_from_summaries",
+        "process_ir_documents",
         "build_saydo_pairs",
         "build_artifacts",
     }
@@ -512,3 +511,74 @@ def test_model_source_authority_is_separate_from_dispatch_data_root(
         assert child[child.index("--state-root") + 1] == str(sources)
     else:
         assert "--state-root" not in child
+
+
+@pytest.mark.parametrize("selection", ["", " ", "bogus", "dcf,bogus", "dcf,"])
+def test_cli_invalid_steps_refuse_before_database_or_execution(
+    monkeypatch: pytest.MonkeyPatch, selection: str
+) -> None:
+    def forbidden(*args: object, **kwargs: object) -> None:
+        pytest.fail("invalid selection reached database resolution or execution")
+
+    monkeypatch.setattr(rd, "require_db_path", forbidden)
+    monkeypatch.setattr(rd, "execute", forbidden)
+    monkeypatch.setattr(
+        sys, "argv", ["refresh_dispatch.py", "--ticker", "NU", "--steps", selection]
+    )
+    with pytest.raises(SystemExit) as exc:
+        rd.main()
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("selection", [None, "extract_kpis"])
+def test_cli_omitted_and_explicit_selection_plan_exact_steps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    selection: str | None,
+) -> None:
+    def resolver(override: Path | str | None = None) -> Path:
+        del override
+        return tmp_path / "unused.db"
+
+    monkeypatch.setattr(rd, "require_db_path", resolver)
+    argv = ["refresh_dispatch.py", "--ticker", "NU", "--mode", "full", "--plan-only"]
+    if selection is not None:
+        argv += ["--steps", selection]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert rd.main() == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["steps"] == (["extract_kpis"] if selection else list(rd.DEFAULT_STEPS))
+    if selection is None:
+        assert "extract_kpis" not in plan["steps"]
+
+
+def test_cli_skip_all_does_not_start_default_collection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def resolver(override: Path | str | None = None) -> Path:
+        del override
+        return tmp_path / "data" / "portfolio.db"
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        pytest.fail("skip-all started a child")
+
+    output = io.StringIO()
+    monkeypatch.setattr(rd, "execute", partial(rd.execute, out=output))
+    monkeypatch.setattr(rd, "require_db_path", resolver)
+    monkeypatch.setattr(rd, "_default_runner", forbidden)
+    argv = [
+        "refresh_dispatch.py",
+        "--ticker",
+        "NU",
+        "--mode",
+        "full",
+        "--state-root",
+        str(tmp_path),
+    ]
+    for name in rd.DEFAULT_STEPS:
+        argv += ["--skip-step", name]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert rd.main() == 0
+    assert "action=start" not in output.getvalue()
+    assert "all_done rc=0" in output.getvalue()

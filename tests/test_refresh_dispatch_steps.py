@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TextIO
 
+import pytest
+
 from execution import refresh_dispatch as rd
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -57,7 +59,7 @@ def _fresh_db(tmp_path: Path) -> Path:
 def test_resolve_steps_default_is_standard_chain() -> None:
     assert rd.resolve_steps() == list(rd.DEFAULT_STEPS)
     # news / dcf / thesis_eval are opt-in, not in the default chain.
-    for opt_in in ("news", "dcf", "thesis_eval"):
+    for opt_in in ("news", "extract_kpis", "dcf", "thesis_eval"):
         assert opt_in not in rd.resolve_steps()
 
 
@@ -65,8 +67,10 @@ def test_resolve_steps_subset_reordered_to_canonical() -> None:
     assert rd.resolve_steps(["dcf", "fmp"]) == ["fmp", "dcf"]
 
 
-def test_resolve_steps_drops_unknown() -> None:
-    assert rd.resolve_steps(["dcf", "bogus"]) == ["dcf"]
+@pytest.mark.parametrize("steps", [[], [""], ["  "], ["bogus"], ["dcf", "bogus"], ["dcf", ""]])
+def test_resolve_steps_rejects_invalid_selection(steps: list[str]) -> None:
+    with pytest.raises(ValueError):
+        rd.resolve_steps(steps)
 
 
 def test_resolve_steps_skip_removes() -> None:
@@ -164,3 +168,32 @@ def test_new_step_builders_point_at_the_right_clis() -> None:
         "run_thesis_evaluator.py",
     ]
     assert "--tickers" in commands[0] and "NU" in commands[0]
+
+
+def test_explicit_kpi_selection_runs_only_earnings_configured_extraction() -> None:
+    commands: list[list[str]] = []
+
+    def runner(argv: list[str], *, out: TextIO) -> _Result:
+        del out
+        commands.append(argv)
+        return _Result()
+
+    plan = rd.build_plan(
+        ticker="NU", mode="full", db_path=Path("unused.db"), steps=["extract_kpis"]
+    )
+    assert rd.execute(plan, runner=runner, out=io.StringIO()) == 0
+    assert len(commands) == 1
+    assert _managed_target(commands[0]).name == "extract_kpis_from_summaries.py"
+    assert commands[0][commands[0].index("--source") + 1] == "earnings"
+    assert "--capture" not in commands[0]
+
+
+def test_skipping_entire_default_chain_starts_no_children() -> None:
+    def runner(argv: list[str], *, out: TextIO) -> _Result:
+        pytest.fail(f"unexpected child: {argv}")
+
+    plan = rd.build_plan(
+        ticker="NU", mode="full", db_path=Path("unused.db"), skip_steps=list(rd.DEFAULT_STEPS)
+    )
+    assert plan.steps == ()
+    assert rd.execute(plan, runner=runner, out=io.StringIO()) == 0

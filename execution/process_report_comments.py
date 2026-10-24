@@ -57,10 +57,6 @@ Five-pass apply flow:
                    invalidate the bear_case cache, then chain through:
                      seed_kpi_definitions   sync kpi_definitions with the
                                             current tier_*_kpis (idempotent)
-                     extract_kpis_from_summaries  LLM-extract values for
-                                            newly-added KPIs from transcript
-                                            summaries (idempotent skip on
-                                            existing facts)
                      run_thesis_evaluator   refresh break_rule_evaluations
                                             with the latest kpi_facts
                      build_artifacts        regenerate workspace HTML.
@@ -94,26 +90,26 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
-PROJECT_ROOT = SCRIPT_DIR.parent
-SRC_DIR = PROJECT_ROOT / "src"
-sys.path.insert(0, str(SRC_DIR))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-import comments  # noqa: E402
-import db  # noqa: E402
-from comments import Comment, IntentType, ThreadEntry  # noqa: E402
-from compute.holdings_sanitize import sanitize_holdings_scalars  # noqa: E402
-from llm.structured import StructuredParseError, call_llm_structured  # noqa: E402
-from llm.untrusted import spotlight  # noqa: E402
-from llm_client import (  # noqa: E402
+import comments
+import db
+from comments import Comment, IntentType, ThreadEntry
+from compute.holdings_sanitize import sanitize_holdings_scalars
+from llm.structured import StructuredParseError, call_llm_structured
+from llm.untrusted import spotlight
+from llm_client import (
     call_llm,
     is_hard_stop,
     load_bear_anchor,
     load_ir_anchor,
     load_thesis_anchor,
 )
-from runtime.python_process import ensure_managed_python_argv, managed_python_prefix  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from runtime.python_process import ensure_managed_python_argv, managed_python_prefix
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 class _StrictModel(BaseModel):
@@ -593,18 +589,6 @@ def maybe_auto_rebuild(
     if not mutated:
         return {"rebuilt": False, "reason": "no holdings-mutating comments applied"}
 
-    # When edit_structured fired, the KPI roster in tier_*_kpis likely changed.
-    # New KPI names need a fresh extraction attempt across ALL quarters — the
-    # default per-period idempotency check would skip quarters where the first
-    # auto-rebuild's LLM pass returned nothing for the new KPI (Haiku is
-    # noisy on the first ask for unfamiliar names). --refresh is one wasted
-    # re-extraction of stable KPIs in exchange for materially better
-    # population of the new ones the analyst just added.
-    structured_changed = any(
-        r.get("intent") == "edit_structured" and r.get("status") == "ok" for r in results
-    )
-    refresh_kpi_facts = structured_changed
-
     # Invalidate the bear case cache so the next build regenerates from the new thesis.
     invalidated: list[str] = []
     bear_case_path = repo_root / "data" / "bear_case" / f"{ticker.upper()}.json"
@@ -638,61 +622,7 @@ def maybe_auto_rebuild(
         )
     )
 
-    # Step 2a — LLM-extract values from per-quarter EARNINGS-CALL summaries.
-    # Idempotent on (ticker, period, KPI name) — values already in kpi_facts
-    # are skipped, so adding new KPI names only re-prompts for the new ones.
-    # When edit_structured fired this round, we --refresh so newly-added KPI
-    # names get a clean re-attempt across all quarters.
-    earnings_cmd = [
-        *managed_python_prefix(PROJECT_ROOT),
-        str(repo_root / "execution" / "extract_kpis_from_summaries.py"),
-        "--ticker",
-        ticker,
-        "--source",
-        "earnings",
-        "--repo-root",
-        str(repo_root),
-    ]
-    if refresh_kpi_facts:
-        earnings_cmd.append("--refresh")
-    steps.append(
-        _spawn_step(
-            repo_root,
-            name="extract_kpis_from_summaries(earnings)"
-            + (" [refresh]" if refresh_kpi_facts else ""),
-            cmd=earnings_cmd,
-            timeout=900,
-        )
-    )
-
-    # Step 2b — LLM-extract values from IR PRESS-RELEASE / PRESENTATION briefs.
-    # These are typically richer with explicit numeric KPIs (NPL ratios,
-    # capital adequacy, segment margins) than the qualitative earnings-call
-    # summaries, so this step fills gaps that 2a couldn't.
-    ir_cmd = [
-        *managed_python_prefix(PROJECT_ROOT),
-        str(repo_root / "execution" / "extract_kpis_from_summaries.py"),
-        "--ticker",
-        ticker,
-        "--source",
-        "ir",
-        "--repo-root",
-        str(repo_root),
-    ]
-    if refresh_kpi_facts:
-        ir_cmd.append("--refresh")
-    steps.append(
-        _spawn_step(
-            repo_root,
-            name="extract_kpis_from_summaries(ir)" + (" [refresh]" if refresh_kpi_facts else ""),
-            cmd=ir_cmd,
-            timeout=900,
-        )
-    )
-
-    # Step 3 — re-evaluate break_rules against the (now populated) kpi_facts
-    # so the brief's Universal break rules panel reflects the new rules
-    # with their actual current values.
+    # Step 2 — re-evaluate break rules against the current saved KPI facts.
     steps.append(
         _spawn_step(
             repo_root,
@@ -707,7 +637,7 @@ def maybe_auto_rebuild(
         )
     )
 
-    # Step 4 — regenerate the workspace HTML from the updated DB + holdings.
+    # Step 3 — regenerate the workspace HTML from the updated DB + holdings.
     steps.append(
         _spawn_step(
             repo_root,

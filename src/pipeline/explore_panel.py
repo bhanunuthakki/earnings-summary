@@ -388,6 +388,18 @@ def render_explore_panel(
     <div class="ask-thread" id="ask-thread"><div class="explore-empty" id="explore-empty"><p>Ask a company question. Explore answers in narrative, grounds material claims in governed data, and offers deeper analysis only when you want it.</p><div class="explore-suggestions" aria-label="Suggested questions">{suggestion_chips}</div></div></div>
     <div class="explore-compose"><input id="ask-q" aria-label="Ask Explore" autocomplete="off" placeholder="Ask about growth, margins, segment mix, management claims, or what changed…"><button type="button" id="ask-go" class="k-btn k-btn-primary">Ask</button></div>
     <div class="explore-compose-meta"><span id="explore-status">Grounded in reported facts, source documents, and clearly labeled inference.</span><button type="button" id="vx-open-empty" class="k-chip k-chip-btn">Work with data ↗</button></div>
+    <details class="k-card k-card-section" id="vx-procedures">
+      <summary>Reports and research procedures</summary>
+      <ul>
+        <li><strong>Saved reports.</strong> Open PRE / POST earnings reports and full research briefs in Brief Library. Each saved edition retains its source scope, identity and coverage gaps. <button type="button" class="k-btn k-btn-quiet k-btn-sm" id="vx-procedure-reports">Open Brief Library</button></li>
+        <li><strong>Analytics.</strong> Compare governed company facts with the existing table and chart workbench. <button type="button" class="k-btn k-btn-quiet k-btn-sm" id="vx-procedure-analytics">Work with data</button></li>
+        <li><strong>Extract KPI candidates from earnings summaries.</strong> Run the configured KPI procedure for <span id="vx-procedure-ticker">{escape(ticker or "no selected company")}</span>. This uses saved earnings summaries and may make model calls and write candidates. Primary-source review is required before admission. IR-summary and novel-number modes remain backend CLI procedures.</li>
+      </ul>
+      <button type="button" class="k-btn k-btn-quiet k-btn-sm" id="vx-procedure-run" aria-describedby="vx-procedure-status"{"" if ticker else " disabled"}>Run earnings-summary KPI extraction</button>
+      <button type="button" class="k-btn k-btn-quiet k-btn-sm" id="vx-procedure-operations">Open Operations</button>
+      <p class="k-card-meta" id="vx-procedure-status" role="status" aria-live="polite">Runs only after you select Run. No source collection is requested.</p>
+      <a class="k-btn k-btn-quiet k-btn-sm" id="vx-procedure-operation" hidden>View operation output</a>
+    </details>
   </section>
 
   <dialog class="vx-workbench-page" id="vx-workbench" aria-label="Analytics Work Bench">
