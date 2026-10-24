@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import cast
 
-from pytest import MonkeyPatch
+from pytest import MonkeyPatch, mark, param
 
 from scripts import check_design_sync, gen_design_conformance_debt, gen_design_controls
 
@@ -201,6 +201,61 @@ def test_work_os_contract_checks_the_runtime_prototype_and_mobile_rail() -> None
     regressed = renderer.replace('class="k-well work-os-action-card"', 'class="k-well"', 1)
     failures = check_design_sync.work_os_contract_failures(renderer_source=regressed)
     assert failures == ["Work OS hydrated Action Queue missing class 'work-os-action-card'"]
+
+
+def test_work_os_contract_accepts_production_shell_and_slotted_template() -> None:
+    assert check_design_sync.work_os_contract_failures() == []
+    mockup = check_design_sync.WORK_OS_PROTOTYPE.read_text(encoding="utf-8")
+    assert check_design_sync.work_os_contract_failures(mockup_text=mockup) == []
+
+
+@mark.parametrize(
+    ("mutation", "expected"),
+    [
+        param(
+            ('id="workOsActionQueue"', 'id="workOsActionQueueRenamed"'),
+            "Work OS shell must have exactly one #workOsActionQueue",
+            id="queue-mount",
+        ),
+        param(
+            ('<div class="k-well" role="status">', '<div role="status">'),
+            "Work OS Action Queue must contain exactly one .k-well[role=status]",
+            id="loading-well",
+        ),
+        param(
+            ('<div class="k-well" role="status">', '<div class="k-well">'),
+            "Work OS Action Queue must contain exactly one .k-well[role=status]",
+            id="loading-status",
+        ),
+        param(
+            ('id="workOsActionCount" aria-live="polite"', 'id="workOsActionCount"'),
+            "Work OS Action Queue article must own #workOsActionCount.k-card-meta[aria-live=polite]",
+            id="count-aria-live",
+        ),
+    ],
+)
+def test_work_os_contract_rejects_retained_shell_mutations(
+    mutation: tuple[str, str], expected: str
+) -> None:
+    from pipeline.work_os_shell import render_work_os_shell
+
+    rendered = render_work_os_shell()
+    old, new = mutation
+    assert rendered.count(old) >= 1
+    mutated = rendered.replace(old, new, 1)
+    assert check_design_sync.work_os_contract_failures(rendered_shell=mutated) == [expected]
+
+
+def test_work_os_contract_rejects_decoy_queue_classes_outside_queue() -> None:
+    from pipeline.work_os_shell import render_work_os_shell
+
+    rendered = render_work_os_shell()
+    mutated = rendered.replace('class="k-well" role="status"', 'role="status"', 1)
+    decoy = '<div class="k-well" role="status" id="decoyWell"></div>'
+    mutated = mutated.replace("</body>", decoy + "</body>", 1)
+    assert check_design_sync.work_os_contract_failures(rendered_shell=mutated) == [
+        "Work OS Action Queue must contain exactly one .k-well[role=status]"
+    ]
 
 
 def test_work_os_contract_accepts_composed_classes_and_rejects_substrings() -> None:

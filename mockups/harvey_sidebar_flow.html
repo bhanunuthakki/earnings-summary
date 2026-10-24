@@ -1228,61 +1228,46 @@
         <button type="button" class="sidebar-collapse-toggle k-btn k-btn-quiet k-btn-sm" onclick="toggleSidebar()" title="Toggle Sidebar Collapse" aria-label="Toggle sidebar collapse" style="padding: var(--sp-1);">
           <svg id="sidebarToggleIcon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
-      </div>
-
-      <!-- Command Bar Trigger -->
-      <div class="sidebar-cmd" onclick="openWorkOsCopilot()">
-        <span style="display: flex; align-items: center; gap: var(--sp-2);">
-          <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          <span class="sidebar-cmd-text">⌘K Search / Ask</span>
-        </span>
-        <span class="sidebar-cmd-text" style="font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted);">Copilot</span>
-      </div>
-
-      <!-- LAYER 1: PORTFOLIO INTELLIGENCE -->
+      </div><!-- LAYER 1: PORTFOLIO INTELLIGENCE -->
       <h2 class="nav-layer-title">L1 · Portfolio Intelligence</h2>
-      <a onclick="navigateTo('screen-cockpit')" class="nav-item is-active" id="nav-cockpit" data-tooltip="Portfolio Cockpit & Review" title="Portfolio Cockpit & Review">
+      <button type="button" onclick="navigateTo('screen-cockpit')" class="k-btn k-btn-quiet nav-item is-active" id="nav-cockpit" data-tooltip="Portfolio Cockpit & Review" title="Portfolio Cockpit & Review">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
         <span class="nav-text">Portfolio Cockpit</span>
-      </a>
-      <a onclick="navigateTo('screen-performance')" class="nav-item" id="nav-performance" data-tooltip="Performance Benchmark" title="Performance Benchmark">
+      </button>
+      <button type="button" onclick="navigateTo('screen-performance')" class="k-btn k-btn-quiet nav-item" id="nav-performance" data-tooltip="Performance Benchmark" title="Performance Benchmark">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-        <span class="nav-text">Performance vs Index</span>
-      </a>
-      <a onclick="navigateTo('screen-allocation')" class="nav-item" id="nav-allocation" data-tooltip="Portfolio Allocation & Risk Engine" title="Portfolio Allocation & Risk Engine">
-        <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-        <span class="nav-text">Risk & Allocations</span>
-      </a>
+        <span class="nav-text">Performance</span>
+      </button>
 
       <!-- LAYER 2: RESEARCH ENGINE -->
       <h2 class="nav-layer-title">L2 · Research Engine</h2>
-      <a onclick="navigateTo('screen-workspace')" class="nav-item" id="nav-workspace" data-tooltip="Company Desk (Nu Holdings)" title="Company Desk (Nu Holdings)">
+      <button type="button" onclick="navigateTo('screen-workspace')" class="k-btn k-btn-quiet nav-item" id="nav-workspace" data-tooltip="Company Desk (Nu Holdings)" title="Company Desk (Nu Holdings)">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
         <span class="nav-text">Company Desk</span>
-      </a>
-      <a onclick="navigateTo('screen-evaluation')" class="nav-item" id="nav-evaluation" data-tooltip="Evaluation" title="Evaluation">
+      </button>
+      <button type="button" onclick="navigateTo('screen-evaluation')" class="k-btn k-btn-quiet nav-item" id="nav-evaluation" data-tooltip="Evaluation" title="Evaluation">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 5h16M4 12h16M4 19h16"/><circle cx="8" cy="5" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="11" cy="19" r="2"/></svg>
         <span class="nav-text">Evaluation</span>
-      </a>
-      <a onclick="navigateTo('screen-brief-library')" class="nav-item" id="nav-brief-library" data-tooltip="Brief Library" title="Brief Library">
+      </button>
+      <button type="button" onclick="navigateTo('screen-brief-library')" class="k-btn k-btn-quiet nav-item" id="nav-brief-library" data-tooltip="Brief Library" title="Brief Library">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
         <span class="nav-text">Brief Library</span>
-      </a>
-      <a onclick="navigateTo('screen-analytics-playground')" class="nav-item" id="nav-analytics-playground" data-tooltip="Explore" title="Explore">
+      </button>
+      <button type="button" onclick="navigateTo('screen-analytics-playground')" class="k-btn k-btn-quiet nav-item" id="nav-analytics-playground" data-tooltip="Explore" title="Explore">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
         <span class="nav-text">Explore</span>
-      </a>
+      </button>
 
       <!-- LAYER 3: OPERATIONS & GOVERNANCE -->
       <h2 class="nav-layer-title">L3 · Operations & Governance</h2>
-      <a onclick="navigateTo('screen-audit-log')" class="nav-item" id="nav-audit-log" data-tooltip="Decision Audit Log & Governance" title="Decision Audit Log & Governance">
+      <button type="button" onclick="navigateTo('screen-audit-log')" class="k-btn k-btn-quiet nav-item" id="nav-audit-log" data-tooltip="Decision Audit Log & Governance" title="Decision Audit Log & Governance">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
         <span class="nav-text">Decision Audit Log</span>
-      </a>
-      <a onclick="navigateTo('screen-execution-queue')" class="nav-item" id="nav-execution-queue" data-tooltip="Execution Queue & Operations Hub" title="Execution Queue & Operations Hub">
+      </button>
+      <button type="button" onclick="navigateTo('screen-execution-queue')" class="k-btn k-btn-quiet nav-item" id="nav-execution-queue" data-tooltip="Operations" title="Operations">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-        <span class="nav-text">Execution Queue & Operations</span>
-      </a>
+        <span class="nav-text">Operations</span>
+      </button>
     </div>
   </aside>
 
@@ -1307,1358 +1292,54 @@
       <!-- ==========================================================================
            SURFACE 1: PORTFOLIO COCKPIT (LANDING VIEW)
            ========================================================================== -->
-      <section id="screen-cockpit" class="screen-view is-active">
-
-        <!-- TOKEN-BACKED PORTFOLIO RISK & PERFORMANCE CARD GRID -->
-        <div class="card-grid-stat">
-          <div class="k-card">
-            <h3 class="k-card-title stat-heading">Portfolio NAV & Reserve</h3>
-            <div class="stat-number t-mono" style="color: var(--fg);">$12.45M</div>
-            <div class="stat-subtext">14.0% Free Cash Reserve ($1.68M)</div>
-          </div>
-          <div class="k-card">
-            <h3 class="k-card-title stat-heading">Sharpe & Risk Profile</h3>
-            <div class="stat-number t-mono" style="color: var(--accent);">2.15</div>
-            <div class="stat-subtext">Beta: 0.85 vs SPY · Sortino: 2.85</div>
-          </div>
-          <div class="k-card">
-            <h3 class="k-card-title stat-heading">1Y Max Drawdown</h3>
-            <div class="stat-number t-mono" style="color: var(--fg);">-6.4%</div>
-            <div class="stat-subtext">vs SPY (-11.2%) · Recovery: 14d</div>
-          </div>
-          <div class="k-card">
-            <h3 class="k-card-title stat-heading">1Y Return & Alpha</h3>
-            <div class="stat-number t-mono" style="color: var(--ok);">+32.4%</div>
-            <div class="stat-subtext">vs SPY (+18.2%) · <strong style="color: var(--accent);">+8.3% Alpha</strong></div>
-          </div>
-        </div>
-
-        <!-- COMPRESSED DENSE ACTION QUEUE FEED -->
-        <div style="display: flex; flex-direction: column; gap: var(--sp-2);">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div style="font-weight: 600; font-size: var(--fs-title); display: flex; align-items: center; gap: var(--sp-2);">
-              <span class="k-dot k-dot-warn"></span>
-              Action Queue & Review Pack (3 Items)
-            </div>
-            <span style="font-size: var(--fs-caption); color: var(--muted);">Executing item persists state & clears queue</span>
-          </div>
-
-          <div class="work-os-action-queue">
-            <!-- Action Card 1 -->
-            <article class="k-card k-card-action k-card-interactive">
-              <div class="k-action-row">
-                <div style="display: flex; align-items: center; gap: var(--sp-3); flex: 1;">
-                  <div class="k-ticker"><a onclick="switchCompanyWorkspace('BKNG')" class="k-ticker-symbol t-mono">BKNG</a></div>
-                  <div>
-                    <h3 class="k-card-title k-card-row-title">Confirm Add Execution (+0.5% weight)</h3>
-                    <div class="k-card-meta">Drafted post-Q2 call. Falsifier & conviction score sign-off needed.</div>
-                  </div>
-                </div>
-                <div style="display: flex; align-items: center; gap: var(--sp-3);">
-                  <span style="font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted);">2d ago</span>
-                  <button class="k-btn k-btn-quiet k-btn-sm" onclick="dismissCard(this, 'Defer', 'Decision Deferred')">Defer</button>
-                  <button class="k-btn k-btn-primary k-btn-sm" onclick="openTradeModal('BKNG', 'BUY', '8.5%', 4120.00)">Ratify & Trade</button>
-                </div>
-              </div>
-            </article>
-
-            <!-- Action Card 2 -->
-            <article class="k-card k-card-action k-card-interactive">
-              <div class="k-action-row">
-                <div style="display: flex; align-items: center; gap: var(--sp-3); flex: 1;">
-                  <div class="k-ticker"><a onclick="switchCompanyWorkspace('NU')" class="k-ticker-symbol t-mono">NU</a></div>
-                  <div>
-                    <h3 class="k-card-title k-card-row-title">
-                      Set NPL 90+ Disconfirmation Limit <span class="k-pill k-pill-warn">Missing Limit</span>
-                    </h3>
-                    <div class="k-card-meta">Click to set disconfirming metric threshold on Company Desk.</div>
-                  </div>
-                </div>
-                <div style="display: flex; align-items: center; gap: var(--sp-3);">
-                  <span style="font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted);">3d ago</span>
-                  <button class="k-btn k-btn-primary k-btn-sm" onclick="switchCompanyWorkspace('NU');">Set Falsifier →</button>
-                </div>
-              </div>
-            </article>
-
-            <!-- Action Card 3 -->
-            <article class="k-card k-card-action k-card-interactive">
-              <div class="k-action-row">
-                <div style="display: flex; align-items: center; gap: var(--sp-3); flex: 1;">
-                  <div class="k-ticker"><a onclick="switchCompanyWorkspace('TSM')" class="k-ticker-symbol t-mono">TSM</a></div>
-                  <div>
-                    <h3 class="k-card-title k-card-row-title">
-                      Evaluate Geopolitical Risk Exposure <span class="k-pill k-pill-warn">Macro Risk</span>
-                    </h3>
-                    <div class="k-card-meta">Semiconductor export restrictions update requires review.</div>
-                  </div>
-                </div>
-                <div style="display: flex; align-items: center; gap: var(--sp-3);">
-                  <span style="font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted);">1d ago</span>
-                  <button class="k-btn k-btn-primary k-btn-sm" onclick="navigateTo('screen-allocation'); setTimeout(()=>openDrillDrawer('factor-heatmap'), 200);">Risk Heatmap →</button>
-                </div>
-              </div>
-            </article>
-          </div>
-        </div>
-
-        <!-- ENHANCED PORTFOLIO HOLDINGS & ACTIVE COVERAGE MATRIX -->
-        <div style="display: flex; flex-direction: column; gap: var(--sp-2);">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div style="font-weight: 600; font-size: var(--fs-title);">Portfolio Holdings & Active Coverage Matrix</div>
-            <span style="font-size: var(--fs-caption); color: var(--muted);">Click ticker to drill into company research desk</span>
-          </div>
-
-          <table class="matrix-table t-mono">
-            <thead>
-              <tr>
-                <th>Ticker / Company</th>
-                <th>Position & Weight</th>
-                <th class="num">Price / Target</th>
-                <th>Thesis / Falsifier Status</th>
-                <th>Earnings Brief & Full Canvas</th>
-                <th style="text-align: right;">Action / Threshold</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr onclick="switchCompanyWorkspace('NU')" style="cursor: pointer;">
-                <td><div class="k-ticker"><span class="k-ticker-symbol t-mono">NU</span><span class="k-ticker-name">Nu Holdings</span></div></td>
-                <td><span class="k-pill k-pill-ok">OVERWEIGHT · 12.5%</span></td>
-                <td class="num t-mono">$14.25 / <strong style="color: var(--accent);">$18.50</strong></td>
-                <td><span style="color: var(--ok); font-size: var(--fs-caption); font-weight: 600;">✓ PASS (Cost $0.90)</span></td>
-                <td>
-                  <div style="display: flex; gap: var(--sp-1);">
-                    <button class="k-chip" onclick="event.stopPropagation(); openPeekDrawer('doc:bcb_jun26_p4');">Q2 Brief →</button>
-                    <button class="k-chip is-active" onclick="event.stopPropagation(); openFullBriefCanvas('NU');">Full Brief Canvas →</button>
-                  </div>
-                </td>
-                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm">Desk →</button></td>
-              </tr>
-              <tr onclick="switchCompanyWorkspace('BKNG')" style="cursor: pointer;">
-                <td><div class="k-ticker"><span class="k-ticker-symbol t-mono">BKNG</span><span class="k-ticker-name">Booking Holdings</span></div></td>
-                <td><span class="k-pill k-pill-warn">UNDERWEIGHT · 8.0%</span></td>
-                <td class="num t-mono">$4,120 / <strong style="color: var(--accent);">$4,850</strong></td>
-                <td><span style="color: var(--warn); font-size: var(--fs-caption); font-weight: 600;">⚠ MONITOR (EU Reg)</span></td>
-                <td>
-                  <div style="display: flex; gap: var(--sp-1);">
-                    <button class="k-chip" onclick="event.stopPropagation(); openPeekDrawer('doc:bkng_q2_p12');">Post-Call Memo →</button>
-                    <button class="k-chip is-active" onclick="event.stopPropagation(); openFullBriefCanvas('BKNG');">Full Brief Canvas →</button>
-                  </div>
-                </td>
-                <td style="text-align: right;"><button class="k-btn k-btn-primary k-btn-sm" onclick="event.stopPropagation(); openTradeModal('BKNG', 'BUY', '8.5%', 4120.00);">Add +0.5%</button></td>
-              </tr>
-              <tr onclick="switchCompanyWorkspace('TSM')" style="cursor: pointer;">
-                <td><div class="k-ticker"><span class="k-ticker-symbol t-mono">TSM</span><span class="k-ticker-name">Taiwan Semi</span></div></td>
-                <td><span class="k-pill k-pill-ok">ON TARGET · 5.5%</span></td>
-                <td class="num t-mono">$168.50 / <strong style="color: var(--accent);">$195.00</strong></td>
-                <td><span style="color: var(--bad); font-size: var(--fs-caption); font-weight: 600;">⚡ REVIEW (Wafer Limit)</span></td>
-                <td>
-                  <div style="display: flex; gap: var(--sp-1);">
-                    <button class="k-chip" onclick="event.stopPropagation(); openPeekDrawer('doc:tsm_2nm_p8');">N2 Node Brief →</button>
-                    <button class="k-chip is-active" onclick="event.stopPropagation(); openFullBriefCanvas('TSM');">Full Brief Canvas →</button>
-                  </div>
-                </td>
-                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm" onclick="event.stopPropagation(); openTradeModal('TSM', 'SELL', '5.0%', 168.50);">Trim Limit</button></td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-      </section>
-
-      <!-- ==========================================================================
+      <!-- WORK_OS_SLOT:cockpit --><!-- ==========================================================================
            SURFACE: PORTFOLIO PERFORMANCE VS INDEX BENCHMARK (#screen-performance)
            ========================================================================== -->
-      <section id="screen-performance" class="screen-view">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-          <div>
-            <div style="font-weight: 600; font-size: var(--fs-title);">Portfolio Performance vs Index Benchmark</div>
-            <div style="font-size: var(--fs-caption); color: var(--muted);">Risk-adjusted return attribution, benchmark alpha, and tracking error</div>
-          </div>
-          <!-- Time Horizon Picker -->
-          <div class="picker-container">
-            <button class="k-btn k-btn-quiet k-btn-sm picker-btn">1M</button>
-            <button class="k-btn k-btn-quiet k-btn-sm picker-btn">3M</button>
-            <button class="k-btn k-btn-quiet k-btn-sm picker-btn">6M</button>
-            <button class="k-btn k-btn-primary k-btn-sm picker-btn">1Y</button>
-            <button class="k-btn k-btn-quiet k-btn-sm picker-btn">YTD</button>
-            <button class="k-btn k-btn-quiet k-btn-sm picker-btn">ALL</button>
-          </div>
-        </div>
-
-        <!-- PERFORMANCE STATS SUMMARY CARDS -->
-        <div class="card-grid-stat">
-          <div class="k-card">
-            <h3 class="k-card-title stat-heading">Portfolio Return (1Y)</h3>
-            <div class="stat-number" style="color: var(--ok);">+32.4%</div>
-            <div class="stat-subtext">vs S&P 500 (+18.2%) · <strong style="color: var(--accent);">+8.3% Alpha</strong></div>
-          </div>
-          <div class="k-card">
-            <h3 class="k-card-title stat-heading">Sharpe Ratio</h3>
-            <div class="stat-number" style="color: var(--fg);">2.15</div>
-            <div class="stat-subtext">Risk-Free: 4.2% · Sortino Ratio: 2.85</div>
-          </div>
-          <div class="k-card">
-            <h3 class="k-card-title stat-heading">Max Drawdown (1Y)</h3>
-            <div class="stat-number" style="color: var(--fg);">-6.4%</div>
-            <div class="stat-subtext">vs SPY Max DD: -11.2% · Recovery: 14 days</div>
-          </div>
-          <div class="k-card">
-            <h3 class="k-card-title stat-heading">Portfolio Beta</h3>
-            <div class="stat-number" style="color: var(--accent);">0.85</div>
-            <div class="stat-subtext">Correlation vs SPY: 0.72</div>
-          </div>
-        </div>
-
-        <!-- EXPLORATORY ANALYTICS PLAYGROUND CARD -->
-        <div class="k-card" style="display: flex; flex-direction: column; gap: var(--sp-4);">
-          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-3);">
-            <div>
-              <div style="font-size: var(--fs-caption); color: var(--accent); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Exploratory Analytics Playground</div>
-              <h2 class="k-card-title">Custom Metric & Time Horizon Analysis Engine</h2>
-            </div>
-            <div style="display: flex; gap: var(--sp-1);" class="picker-container">
-              <button class="k-chip is-active" id="playModeChart" onclick="setPlaygroundMode('chart')">Chart Time-Series</button>
-              <button class="k-chip" id="playModeScatter" onclick="setPlaygroundMode('scatter')">Factor Scatter</button>
-              <button class="k-chip" id="playModeMatrix" onclick="setPlaygroundMode('matrix')">Custom Metric Grid</button>
-            </div>
-          </div>
-
-          <!-- PLAYGROUND CONTROLS: METRICS & DATE RANGE -->
-          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: var(--sp-3); background: var(--paper); padding: var(--sp-3); border-radius: var(--radius); border: var(--bw-thin) solid var(--border);">
-            <div>
-              <label style="font-size: var(--fs-caption); color: var(--muted); display: block; margin-bottom: var(--sp-1);">Primary Asset / Strategy (Y-Axis 1)</label>
-              <select class="k-select" id="playPrimaryMetric" style="width: 100%;" onchange="updatePlaygroundAnalytics()">
-                <option value="PORTFOLIO" selected>Portfolio Active Strategy</option>
-                <option value="NU">NU — Nu Holdings</option>
-                <option value="BKNG">BKNG — Booking Holdings</option>
-                <option value="TSM">TSM — Taiwan Semi</option>
-                <option value="MELI">MELI — MercadoLibre</option>
-                <option value="NVDA">NVDA — NVIDIA Corp</option>
-              </select>
-            </div>
-
-            <div>
-              <label style="font-size: var(--fs-caption); color: var(--muted); display: block; margin-bottom: var(--sp-1);">Benchmark / Overlay Metric (Y-Axis 2)</label>
-              <select class="k-select" id="playBenchmarkMetric" style="width: 100%;" onchange="updatePlaygroundAnalytics()">
-                <option value="SPY" selected>S&P 500 Index (SPY)</option>
-                <option value="QQQ">NASDAQ-100 (QQQ)</option>
-                <option value="QUALITY_BENCH">Quality Factor Index (+ROIC)</option>
-                <option value="MOMENTUM_BENCH">Momentum Factor Index</option>
-                <option value="US10Y">10-Year US Treasury Yield</option>
-              </select>
-            </div>
-
-            <div>
-              <label style="font-size: var(--fs-caption); color: var(--muted); display: block; margin-bottom: var(--sp-1);">Metric Dimension</label>
-              <select class="k-select" id="playMetricDimension" style="width: 100%;" onchange="updatePlaygroundAnalytics()">
-                <option value="RETURNS" selected>Cumulative Total Return %</option>
-                <option value="ROLLING_BETA">Rolling 60-Day Beta</option>
-                <option value="DRAWDOWN">Rolling Drawdown %</option>
-                <option value="ROIC">ROIC / Capital Efficiency %</option>
-                <option value="NIM">Net Interest Margin (NIM %)</option>
-                <option value="SHARPE">Rolling Sharpe Ratio</option>
-              </select>
-            </div>
-
-            <div>
-              <label style="font-size: var(--fs-caption); color: var(--muted); display: block; margin-bottom: var(--sp-1);">Custom Date Window</label>
-              <div style="display: flex; gap: var(--sp-1); align-items: center;">
-                <input type="date" value="2025-01-01" id="playStartDate" class="t-mono" style="background: var(--bg); border: var(--bw-thin) solid var(--border); color: var(--fg); padding: var(--sp-1); border-radius: var(--radius); font-size: var(--fs-caption); width: 100%;" onchange="updatePlaygroundAnalytics()">
-                <span style="font-size: var(--fs-caption); color: var(--muted);">to</span>
-                <input type="date" value="2026-06-30" id="playEndDate" class="t-mono" style="background: var(--bg); border: var(--bw-thin) solid var(--border); color: var(--fg); padding: var(--sp-1); border-radius: var(--radius); font-size: var(--fs-caption); width: 100%;" onchange="updatePlaygroundAnalytics()">
-              </div>
-            </div>
-          </div>
-
-          <!-- PLAYGROUND DYNAMIC CANVAS / DISPLAY AREA -->
-          <div id="playgroundDisplayArea" style="background: var(--bg); border: var(--bw-thin) solid var(--border); border-radius: var(--radius); padding: var(--sp-4);">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-3);">
-              <div class="t-mono" style="font-size: var(--fs-body); font-weight: 600;" id="playCanvasTitle">
-                Portfolio Active Strategy vs S&P 500 (SPY) · Cumulative Total Return %
-              </div>
-              <div class="t-mono" style="font-size: var(--fs-caption); color: var(--ok);" id="playCanvasStat">
-                Period Return: +32.4% (Alpha +14.2%)
-              </div>
-            </div>
-
-            <div id="playChartContent" style="display: flex; flex-direction: column; gap: var(--sp-3);">
-              <div class="k-well" style="display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                  <div style="font-size: var(--fs-caption); color: var(--muted);">Selected Custom Window</div>
-                  <div class="t-mono" style="font-size: var(--fs-body); font-weight: 600;" id="playWindowLabel">Jan 1, 2025 – Jun 30, 2026 (18 Months)</div>
-                </div>
-                <div style="text-align: right;">
-                  <div style="font-size: var(--fs-caption); color: var(--muted);">Correlation in Window</div>
-                  <div class="t-mono" style="font-size: var(--fs-body); font-weight: 600; color: var(--accent);" id="playCorrLabel">r = 0.72</div>
-                </div>
-              </div>
-
-              <!-- DYNAMIC COMPARISON MATRIX -->
-              <table class="matrix-table t-mono">
-                <thead>
-                  <tr>
-                    <th>Selected Asset / Metric</th>
-                    <th class="num">Period Return</th>
-                    <th class="num">Annualized Vol</th>
-                    <th class="num">Max Drawdown</th>
-                    <th class="num">Sharpe Ratio</th>
-                    <th class="num">Alpha vs SPY</th>
-                  </tr>
-                </thead>
-                <tbody id="playMatrixRows">
-                  <tr>
-                    <td><strong style="color: var(--accent);" id="playAssetName">Portfolio Active Strategy</strong></td>
-                    <td class="num k-num-pos t-mono" id="playAssetReturn">+32.4%</td>
-                    <td class="num t-mono" id="playAssetVol">14.2%</td>
-                    <td class="num t-mono" id="playAssetDD">-6.4%</td>
-                    <td class="num t-mono" id="playAssetSharpe">2.15</td>
-                    <td class="num t-mono" style="color: var(--accent);" id="playAssetAlpha">+14.2%</td>
-                  </tr>
-                  <tr>
-                    <td><span style="color: var(--fg-soft);" id="playBenchName">S&P 500 Index (SPY Benchmark)</span></td>
-                    <td class="num k-num-pos t-mono" id="playBenchReturn">+18.2%</td>
-                    <td class="num t-mono" id="playBenchVol">16.8%</td>
-                    <td class="num t-mono" id="playBenchDD">-11.2%</td>
-                    <td class="num t-mono" id="playBenchSharpe">1.08</td>
-                    <td class="num t-mono" id="playBenchAlpha">0.0% (Base)</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-        <!-- VISUAL BENCHMARK BAR COMPARATOR -->
-        <div class="k-card">
-          <h2 class="k-card-title" style="margin-bottom: var(--sp-3);">1-Year Relative Return Comparison</h2>
-
-          <div style="display: flex; flex-direction: column; gap: var(--sp-3);">
-            <div>
-              <div style="display: flex; justify-content: space-between; font-size: var(--fs-body); margin-bottom: var(--sp-1);">
-                <span style="font-weight: 600; color: var(--accent);">Portfolio (Active Strategy)</span>
-                <span class="t-mono" style="color: var(--ok); font-weight: 600;">+32.4%</span>
-              </div>
-              <div class="perf-bar-track"><div class="perf-bar-fill" style="width: 100%; background: var(--accent);"></div></div>
-            </div>
-
-            <div>
-              <div style="display: flex; justify-content: space-between; font-size: var(--fs-body); margin-bottom: var(--sp-1);">
-                <span>NASDAQ-100 (QQQ Benchmark)</span>
-                <span class="t-mono" style="color: var(--fg-soft);">+24.1%</span>
-              </div>
-              <div class="perf-bar-track"><div class="perf-bar-fill" style="width: 74%; background: var(--series-qqq);"></div></div>
-            </div>
-
-            <div>
-              <div style="display: flex; justify-content: space-between; font-size: var(--fs-body); margin-bottom: var(--sp-1);">
-                <span>S&P 500 Index (SPY Benchmark)</span>
-                <span class="t-mono" style="color: var(--fg-soft);">+18.2%</span>
-              </div>
-              <div class="perf-bar-track"><div class="perf-bar-fill" style="width: 56%; background: var(--muted);"></div></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- BENCHMARK MATRIX TABLE -->
-        <div style="display: flex; flex-direction: column; gap: var(--sp-2);">
-          <div style="font-weight: 600; font-size: var(--fs-title);">Index Benchmark Matrix</div>
-          <table class="matrix-table t-mono">
-            <thead>
-              <tr>
-                <th>Benchmark / Asset Class</th>
-                <th class="num">1M %</th>
-                <th class="num">3M %</th>
-                <th class="num">YTD %</th>
-                <th class="num">1Y %</th>
-                <th class="num">Alpha %</th>
-                <th class="num">Beta</th>
-                <th class="num">Tracking Error</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><strong>Portfolio (Active Strategy)</strong></td>
-                <td class="num k-num-pos t-mono">+3.2%</td>
-                <td class="num k-num-pos t-mono">+9.4%</td>
-                <td class="num k-num-pos t-mono">+22.1%</td>
-                <td class="num k-num-pos t-mono">+32.4%</td>
-                <td class="num t-mono" style="color: var(--accent);">BASE</td>
-                <td class="num t-mono">0.85</td>
-                <td class="num t-mono">0.0%</td>
-              </tr>
-              <tr>
-                <td>S&P 500 Index (SPY)</td>
-                <td class="num k-num-pos t-mono">+1.4%</td>
-                <td class="num k-num-pos t-mono">+4.8%</td>
-                <td class="num k-num-pos t-mono">+14.2%</td>
-                <td class="num k-num-pos t-mono">+18.2%</td>
-                <td class="num k-num-pos t-mono">+8.3%</td>
-                <td class="num t-mono">1.00</td>
-                <td class="num t-mono">6.4%</td>
-              </tr>
-              <tr>
-                <td>NASDAQ-100 (QQQ)</td>
-                <td class="num k-num-pos t-mono">+2.1%</td>
-                <td class="num k-num-pos t-mono">+6.5%</td>
-                <td class="num k-num-pos t-mono">+18.0%</td>
-                <td class="num k-num-pos t-mono">+24.1%</td>
-                <td class="num k-num-pos t-mono">+14.2%</td>
-                <td class="num t-mono">1.15</td>
-                <td class="num t-mono">8.2%</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <!-- ==========================================================================
+      <!-- WORK_OS_SLOT:performance --><!-- ==========================================================================
            SURFACE: PORTFOLIO ALLOCATION & RISK MODULE (#screen-allocation)
            ========================================================================== -->
-      <section id="screen-allocation" class="screen-view">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-          <div>
-            <div style="font-weight: 600; font-size: var(--fs-title);">Portfolio Allocation & Risk Engine</div>
-            <div style="font-size: var(--fs-caption); color: var(--muted);">Governed risk budget, position drift limits, and factor concentration</div>
-          </div>
-          <div style="display: flex; gap: var(--sp-2);">
-            <button class="k-btn k-btn-quiet k-btn-sm" onclick="openDrillDrawer('factor-heatmap')">Factor Drawer →</button>
-            <button class="k-btn k-btn-primary k-btn-sm" onclick="openDrillDrawer('rebalance-plan')">Draft Rebalance Plan →</button>
-          </div>
-        </div>
 
-        <!-- PORTFOLIO RISK-ON REGIME GAUGE & TOTAL FACTOR EXPOSURE MATRIX -->
-        <div class="k-card">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-3);">
-            <div>
-              <div style="font-size: var(--fs-caption); color: var(--accent); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Risk Architecture & Regime Gauge</div>
-              <h2 class="k-card-title">Portfolio Risk-On Intensity & Total Factor Exposure</h2>
-            </div>
-            <span class="k-pill k-pill-ok">RISK-ON INTENSITY: 68% · MODERATE GROWTH</span>
-          </div>
-
-          <!-- REGIME METRICS STRIP -->
-          <div class="card-grid-stat" style="margin-bottom: var(--sp-4);">
-            <div class="k-well">
-              <h3 class="k-well-title">Portfolio Beta</h3>
-              <div class="t-mono" style="font-size: var(--fs-title); font-weight: 600; color: var(--fg);">0.85</div>
-              <div style="font-size: var(--fs-caption); color: var(--ok);">Defensive vs SPY (1.00)</div>
-            </div>
-            <div class="k-well">
-              <h3 class="k-well-title">Active Share</h3>
-              <div class="t-mono" style="font-size: var(--fs-title); font-weight: 600; color: var(--accent);">84.5%</div>
-              <div style="font-size: var(--fs-caption); color: var(--fg-soft);">High Conviction Active</div>
-            </div>
-            <div class="k-well">
-              <h3 class="k-well-title">Value-at-Risk (95% 1M)</h3>
-              <div class="t-mono" style="font-size: var(--fs-title); font-weight: 600; color: var(--warn);">-4.2% NAV</div>
-              <div style="font-size: var(--fs-caption); color: var(--muted);">$504,000 Max Drawdown</div>
-            </div>
-            <div class="k-well">
-              <h3 class="k-well-title">Factor Risk Contribution</h3>
-              <div class="t-mono" style="font-size: var(--fs-title); font-weight: 600; color: var(--fg);">42.0%</div>
-              <div style="font-size: var(--fs-caption); color: var(--fg-soft);">58.0% Idiosyncratic Risk</div>
-            </div>
-          </div>
-
-          <!-- TOTAL FACTOR EXPOSURE & SENSITIVITY MATRIX -->
-          <div style="margin-bottom: var(--sp-4);">
-            <h3 class="k-card-title" style="margin-bottom: var(--sp-2);">Total Factor Exposure & Sensitivity Matrix</h3>
-            <table class="matrix-table t-mono">
-              <thead>
-                <tr>
-                  <th>Factor Category</th>
-                  <th class="num">Net Loading</th>
-                  <th class="num">SPY Bench</th>
-                  <th class="num">Relative Exposure</th>
-                  <th class="num">Risk Contribution %</th>
-                  <th class="num">Risk Budget Limit</th>
-                  <th style="text-align: right;">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><strong>Market Equity Beta (SPY)</strong></td>
-                  <td class="num t-mono">0.85</td>
-                  <td class="num t-mono">1.00</td>
-                  <td class="num t-mono" style="color: var(--ok);">-0.15 (Defensive)</td>
-                  <td class="num t-mono">28.0%</td>
-                  <td class="num t-mono">0.70 - 1.15</td>
-                  <td style="text-align: right;"><span class="k-pill k-pill-ok">PASS</span></td>
-                </tr>
-                <tr>
-                  <td><strong>Growth / Momentum Factor</strong></td>
-                  <td class="num t-mono">+1.42</td>
-                  <td class="num t-mono">+0.45</td>
-                  <td class="num t-mono" style="color: var(--warn);">+0.97 (Overweight)</td>
-                  <td class="num t-mono">24.0%</td>
-                  <td class="num t-mono">&lt; +1.50</td>
-                  <td style="text-align: right;"><span class="k-pill k-pill-warn">ELEVATED</span></td>
-                </tr>
-                <tr>
-                  <td><strong>Quality / High ROIC Factor</strong></td>
-                  <td class="num t-mono">+1.65</td>
-                  <td class="num t-mono">+0.20</td>
-                  <td class="num t-mono" style="color: var(--ok);">+1.45 (Overweight)</td>
-                  <td class="num t-mono">18.0%</td>
-                  <td class="num t-mono">&gt; +1.00</td>
-                  <td style="text-align: right;"><span class="k-pill k-pill-ok">OPTIMAL</span></td>
-                </tr>
-                <tr>
-                  <td><strong>LatAm Macro / Currency (BRL/MXN)</strong></td>
-                  <td class="num t-mono">+1.18</td>
-                  <td class="num t-mono">0.00</td>
-                  <td class="num t-mono" style="color: var(--warn);">+1.18 (Targeted)</td>
-                  <td class="num t-mono">15.0%</td>
-                  <td class="num t-mono">&lt; +1.25</td>
-                  <td style="text-align: right;"><span class="k-pill k-pill-warn">MONITOR</span></td>
-                </tr>
-                <tr>
-                  <td><strong>Semicon Supply Chain Volatility</strong></td>
-                  <td class="num t-mono">+1.35</td>
-                  <td class="num t-mono">+0.30</td>
-                  <td class="num t-mono" style="color: var(--ok);">+1.05 (Targeted)</td>
-                  <td class="num t-mono">10.0%</td>
-                  <td class="num t-mono">&lt; +1.40</td>
-                  <td style="text-align: right;"><span class="k-pill k-pill-ok">PASS</span></td>
-                </tr>
-                <tr>
-                  <td><strong>Interest Rate Duration Sensitivity</strong></td>
-                  <td class="num t-mono">-0.42</td>
-                  <td class="num t-mono">0.00</td>
-                  <td class="num t-mono" style="color: var(--ok);">-0.42 (Hedged)</td>
-                  <td class="num t-mono">5.0%</td>
-                  <td class="num t-mono">&gt; -0.60</td>
-                  <td style="text-align: right;"><span class="k-pill k-pill-ok">PASS</span></td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <div style="display: flex; justify-content: space-between; align-items: center; border-top: var(--bw-thin) solid var(--hairline); padding-top: var(--sp-3);">
-            <div style="font-size: var(--fs-caption); color: var(--muted);">
-              Macro Stress Test: <strong style="color: var(--warn);">BRL -10% (-2.4%)</strong> · <strong style="color: var(--warn);">US Rates +50bps (-3.1%)</strong> · <strong style="color: var(--bad);">Fab Freeze (-5.8%)</strong>
-            </div>
-            <button class="k-btn k-btn-quiet k-btn-sm" onclick="openDrillDrawer('factor-heatmap')">Detailed Factor Matrix →</button>
-          </div>
-        </div>
-
-        <!-- CROSS-ASSET PAIRWISE CORRELATION MATRIX GRID -->
-        <div class="k-card">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-3);">
-            <div>
-              <h2 class="k-card-title">Cross-Asset Pairwise Correlation Matrix</h2>
-              <div style="font-size: var(--fs-caption); color: var(--muted);">Symmetric 90-day daily return correlation matrix for active holdings vs benchmarks</div>
-            </div>
-            <span style="font-size: var(--fs-caption); color: var(--muted);">Updated: Real-Time DMA Stream</span>
-          </div>
-
-          <table class="matrix-table t-mono" style="text-align: center;">
-            <thead>
-              <tr>
-                <th style="text-align: left;">Asset / Ticker</th>
-                <th>NU</th>
-                <th>BKNG</th>
-                <th>TSM</th>
-                <th>MELI</th>
-                <th>NVDA</th>
-                <th>SPY (Bench)</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td style="text-align: left;"><strong>NU (Nu Holdings)</strong></td>
-                <td class="t-mono" style="background: var(--surface); color: var(--muted);">1.00</td>
-                <td class="t-mono" style="background: color-mix(in srgb, var(--ok) 15%, var(--paper)); color: var(--ok); font-weight: 600;">0.32</td>
-                <td class="t-mono">0.41</td>
-                <td class="t-mono" style="background: color-mix(in srgb, var(--warn) 20%, var(--paper)); color: var(--warn); font-weight: 600;">0.74</td>
-                <td class="t-mono" style="background: color-mix(in srgb, var(--ok) 15%, var(--paper)); color: var(--ok); font-weight: 600;">0.28</td>
-                <td class="t-mono">0.65</td>
-              </tr>
-              <tr>
-                <td style="text-align: left;"><strong>BKNG (Booking)</strong></td>
-                <td class="t-mono" style="background: color-mix(in srgb, var(--ok) 15%, var(--paper)); color: var(--ok); font-weight: 600;">0.32</td>
-                <td class="t-mono" style="background: var(--surface); color: var(--muted);">1.00</td>
-                <td class="t-mono" style="background: color-mix(in srgb, var(--ok) 15%, var(--paper)); color: var(--ok); font-weight: 600;">0.38</td>
-                <td class="t-mono">0.45</td>
-                <td class="t-mono" style="background: color-mix(in srgb, var(--ok) 15%, var(--paper)); color: var(--ok); font-weight: 600;">0.30</td>
-                <td class="t-mono" style="background: color-mix(in srgb, var(--warn) 20%, var(--paper)); color: var(--warn); font-weight: 600;">0.72</td>
-              </tr>
-              <tr>
-                <td style="text-align: left;"><strong>TSM (Taiwan Semi)</strong></td>
-                <td class="t-mono">0.41</td>
-                <td class="t-mono" style="background: color-mix(in srgb, var(--ok) 15%, var(--paper)); color: var(--ok); font-weight: 600;">0.38</td>
-                <td class="t-mono" style="background: var(--surface); color: var(--muted);">1.00</td>
-                <td class="t-mono">0.42</td>
-                <td class="t-mono" style="background: color-mix(in srgb, var(--bad) 20%, var(--paper)); color: var(--bad); font-weight: 600;">0.78</td>
-                <td class="t-mono">0.68</td>
-              </tr>
-              <tr>
-                <td style="text-align: left;"><strong>MELI (MercadoLibre)</strong></td>
-                <td class="t-mono" style="background: color-mix(in srgb, var(--warn) 20%, var(--paper)); color: var(--warn); font-weight: 600;">0.74</td>
-                <td class="t-mono">0.45</td>
-                <td class="t-mono">0.42</td>
-                <td class="t-mono" style="background: var(--surface); color: var(--muted);">1.00</td>
-                <td class="t-mono" style="background: color-mix(in srgb, var(--ok) 15%, var(--paper)); color: var(--ok); font-weight: 600;">0.35</td>
-                <td class="t-mono">0.62</td>
-              </tr>
-              <tr>
-                <td style="text-align: left;"><strong>NVDA (NVIDIA)</strong></td>
-                <td class="t-mono" style="background: color-mix(in srgb, var(--ok) 15%, var(--paper)); color: var(--ok); font-weight: 600;">0.28</td>
-                <td class="t-mono" style="background: color-mix(in srgb, var(--ok) 15%, var(--paper)); color: var(--ok); font-weight: 600;">0.30</td>
-                <td class="t-mono" style="background: color-mix(in srgb, var(--bad) 20%, var(--paper)); color: var(--bad); font-weight: 600;">0.78</td>
-                <td class="t-mono" style="background: color-mix(in srgb, var(--ok) 15%, var(--paper)); color: var(--ok); font-weight: 600;">0.35</td>
-                <td class="t-mono" style="background: var(--surface); color: var(--muted);">1.00</td>
-                <td class="t-mono" style="background: color-mix(in srgb, var(--bad) 20%, var(--paper)); color: var(--bad); font-weight: 600;">0.82</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <!-- RISK BUDGET SUMMARY CARDS (CONSOLIDATED) -->
-        <div class="card-grid-stat">
-          <div class="k-card">
-            <h3 class="k-card-title stat-heading">Risk Budget Capacity</h3>
-            <div class="stat-number" style="color: var(--ok);">14.0% Free</div>
-            <div class="stat-subtext">$1.68M Cash Reserve</div>
-          </div>
-          <div class="k-card">
-            <h3 class="k-card-title stat-heading">Top Holding Weight</h3>
-            <div class="stat-number" style="color: var(--fg);">12.5% (NU)</div>
-            <div class="stat-subtext">Position Cap: 15.0%</div>
-          </div>
-          <div class="k-card">
-            <h3 class="k-card-title stat-heading">Sharpe Ratio</h3>
-            <div class="stat-number" style="color: var(--accent);">2.15</div>
-            <div class="stat-subtext">Sortino: 2.85</div>
-          </div>
-          <div class="k-card">
-            <h3 class="k-card-title stat-heading">Portfolio Beta</h3>
-            <div class="stat-number" style="color: var(--fg);">0.85</div>
-            <div class="stat-subtext">vs SPY (1.00)</div>
-          </div>
-        </div>
-
-        <!-- TARGET VS ACTUAL WEIGHTING MATRIX -->
-        <div style="display: flex; flex-direction: column; gap: var(--sp-2);">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div style="font-weight: 600; font-size: var(--fs-title);">Position Allocation & Rebalancing Matrix</div>
-            <span style="font-size: var(--fs-caption); color: var(--muted);">Click trade action to launch execution modal</span>
-          </div>
-          <table class="matrix-table t-mono">
-            <thead>
-              <tr>
-                <th>Ticker / Asset</th>
-                <th>Category</th>
-                <th class="num">Target %</th>
-                <th class="num">Actual %</th>
-                <th class="num">Drift %</th>
-                <th>Status</th>
-                <th style="text-align: right;">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><div class="k-ticker"><span class="k-ticker-symbol t-mono" onclick="switchCompanyWorkspace('NU')">NU</span><span class="k-ticker-name">Nu Holdings</span></div></td>
-                <td>LatAm Fintech</td>
-                <td class="num t-mono">12.5%</td>
-                <td class="num t-mono">12.5%</td>
-                <td class="num t-mono" style="color: var(--ok);">0.0%</td>
-                <td><span class="k-pill k-pill-ok">On Target</span></td>
-                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm" onclick="openTradeModal('NU', 'BUY', '12.5%', 14.25)">Hold / Rebalance</button></td>
-              </tr>
-              <tr>
-                <td><div class="k-ticker"><span class="k-ticker-symbol t-mono" onclick="switchCompanyWorkspace('BKNG')">BKNG</span><span class="k-ticker-name">Booking Holdings</span></div></td>
-                <td>Global Travel</td>
-                <td class="num t-mono">8.5%</td>
-                <td class="num t-mono">8.0%</td>
-                <td class="num t-mono" style="color: var(--warn);">-0.5%</td>
-                <td><span class="k-pill k-pill-warn">Underweight</span></td>
-                <td style="text-align: right;"><button class="k-btn k-btn-primary k-btn-sm" onclick="openTradeModal('BKNG', 'BUY', '8.5%', 4120.00)">Add +0.5%</button></td>
-              </tr>
-              <tr>
-                <td><div class="k-ticker"><span class="k-ticker-symbol t-mono" onclick="switchCompanyWorkspace('TSM')">TSM</span><span class="k-ticker-name">Taiwan Semi</span></div></td>
-                <td>Semiconductor</td>
-                <td class="num t-mono">5.5%</td>
-                <td class="num t-mono">5.5%</td>
-                <td class="num t-mono" style="color: var(--ok);">0.0%</td>
-                <td><span class="k-pill k-pill-ok">On Target</span></td>
-                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm" onclick="openTradeModal('TSM', 'SELL', '5.0%', 168.50)">Trim -0.5%</button></td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-      </section>
 
       <!-- ==========================================================================
            SURFACE 2: COMPANY RESEARCH WORKSPACE (EDITORIAL CANVAS)
            ========================================================================== -->
-      <section id="screen-workspace" class="screen-view">
-        <!-- SCALABLE DROPDOWN SELECTOR & FULL BRIEF LAUNCHER TOOLBAR -->
-        <div style="display: flex; justify-content: space-between; align-items: center; background: var(--paper); border: var(--bw-thin) solid var(--border); padding: var(--sp-2) var(--sp-4); border-radius: var(--radius);">
-          <div style="display: flex; align-items: center; gap: var(--sp-3);">
-            <span style="font-size: var(--fs-caption); color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Select Company Desk:</span>
-            <select class="k-select" id="companyPickerSelect" onchange="switchCompanyWorkspace(this.value)">
-              <optgroup label="Active Holdings (10)">
-                <option value="NU" selected>NU — Nu Holdings Ltd.</option>
-                <option value="BKNG">BKNG — Booking Holdings Inc.</option>
-              </optgroup>
-              <optgroup label="Evaluation Watchlist (20+)">
-                <option value="ONON">ONON — On Holding AG</option>
-                <option value="CPNG">CPNG — Coupang, Inc.</option>
-                <option value="TSM">TSM — Taiwan Semiconductor</option>
-                <option value="LITE">LITE — Lumentum Holdings Inc.</option>
-                <option value="MELI">MELI — MercadoLibre Inc.</option>
-                <option value="SE">SE — Sea Limited</option>
-                <option value="NVDA">NVDA — NVIDIA Corporation</option>
-              </optgroup>
-            </select>
-          </div>
-          <div style="display: flex; gap: var(--sp-2); align-items: center;">
-            <button class="k-btn k-btn-primary k-btn-sm" onclick="openFullBriefCanvas(activeCompanyTicker)">
-              <svg class="nav-svg-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-              Open Full Brief Canvas →
-            </button>
-          </div>
-        </div>
-
-        <!-- MASTHEAD -->
-        <div class="k-card" style="display: flex; justify-content: space-between; align-items: center;">
-          <div>
-            <span class="t-mono" style="font-size: var(--fs-display); font-weight: 600; letter-spacing: -0.02em;" id="wsHeaderSymbol">NU</span>
-            <span style="font-size: var(--fs-title); color: var(--fg-soft); margin-left: var(--sp-3);" id="wsHeaderName">Nu Holdings Ltd. · LatAm Retail Banking</span>
-          </div>
-          <div style="display: flex; gap: var(--sp-4); align-items: center;">
-            <div style="text-align: right;">
-              <div class="t-mono" style="font-size: var(--fs-title); font-weight: 600;">
-                <span class="drill-handle" onclick="openDrillDrawer('financials')" id="wsHeaderPrice">$14.25</span>
-                <span class="k-num-pos t-mono" style="font-size: var(--fs-body);" id="wsHeaderReturn">+3.2%</span>
-              </div>
-              <div style="font-size: var(--fs-caption); color: var(--muted);" id="wsHeaderTarget">Target $18.50 (+29.8%)</div>
-            </div>
-            <span class="k-pill k-pill-ok" id="wsHeaderPill">OVERWEIGHT · 88%</span>
-          </div>
-        </div>
-
-        <!-- CONTEXTUAL DRAWER LAUNCHERS -->
-        <div style="display: flex; gap: var(--sp-2); align-items: center; background: var(--paper); border: var(--bw-thin) solid var(--border); padding: var(--sp-2) var(--sp-3); border-radius: var(--radius); flex-wrap: wrap;">
-          <span style="font-size: var(--fs-caption); color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;">Deep Drawers:</span>
-          <button class="k-chip is-active" onclick="openFullBriefCanvas(activeCompanyTicker)">Full Research Brief Canvas ↗</button>
-          <button class="k-chip" onclick="openSheetDCFModel(activeCompanyTicker)">Google Sheets DCF Model ↗</button>
-          <button class="k-chip" onclick="openDrillDrawer('financials')">Financial Statements</button>
-          <button class="k-chip" onclick="openDrillDrawer('saydo')">Say/Do Verification</button>
-          <button class="k-chip" onclick="openDrillDrawer('comparative-viewer')">Comparative SEC Viewer</button>
-          <button class="k-chip" onclick="openDrillDrawer('peers')">Peer Comps</button>
-          <button class="k-chip" onclick="openDrillDrawer('updates')">Signals Stream</button>
-        </div>
-
-        <!-- EDITORIAL DESK 2-COL GRID -->
-        <div class="dashboard-2col">
-          <div style="display: flex; flex-direction: column; gap: var(--sp-4);">
-            <!-- THESIS BLOCK -->
-            <div class="k-card">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-3); border-bottom: var(--bw-thin) solid var(--hairline); padding-bottom: var(--sp-2);">
-                <div style="font-weight: 600; font-size: var(--fs-title);">Investment Thesis & Moat Analysis</div>
-                <button class="k-chip is-active" onclick="openFullBriefCanvas(activeCompanyTicker)">Read Full Institutional Report →</button>
-              </div>
-              <div class="prose-block" id="wsThesisBody">
-                <p style="margin-bottom: var(--sp-3);">
-                  <strong style="color: var(--fg);">Nu Holdings (NU)</strong> is a market-share compounder in Latin American retail banking. Nubank achieves a cost-to-serve per active customer of
-                  <span class="drill-handle" onclick="openDrillDrawer('financials')">$0.90/month</span> vs incumbent Brazilian banks at $7.00+.
-                </p>
-                <p>
-                  Mexico deposits recently exceeded
-                  <span class="drill-handle" onclick="openDrillDrawer('saydo')">$3.0 billion in Q2 2026</span>
-                  <a onclick="openPeekDrawer('doc:bcb_jun26_p4')" class="src-chip">doc:bcb_jun26_p4</a>, validating international scaling outside Brazil.
-                </p>
-              </div>
-            </div>
-
-            <!-- MANAGEMENT SAY/DO COMMITMENT TABLE -->
-            <div class="k-card">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-2);">
-                <div style="font-weight: 600; font-size: var(--fs-title);">Management Say/Do Commitment Track Record</div>
-                <button class="k-btn k-btn-quiet k-btn-sm" onclick="openDrillDrawer('saydo')">Full Say/Do Ledger →</button>
-              </div>
-              <table class="matrix-table t-mono">
-                <thead>
-                  <tr>
-                    <th>Target / Commitment</th>
-                    <th>Call Date</th>
-                    <th>Reported Actual</th>
-                    <th style="text-align: right;">Status</th>
-                  </tr>
-                </thead>
-                <tbody id="wsSayDoRows">
-                  <tr>
-                    <td>Mexico deposits > $3.0B</td>
-                    <td>Q4 2025 Call</td>
-                    <td>$3.12B <a onclick="openPeekDrawer('doc:bcb_jun26_p4')" class="src-chip">doc:bcb_jun26_p4</a></td>
-                    <td style="text-align: right;"><span class="k-pill k-pill-ok">VERIFIED</span></td>
-                  </tr>
-                  <tr>
-                    <td>Cost-to-serve < $0.95/mo</td>
-                    <td>Q1 2026 Call</td>
-                    <td>$0.90/mo</td>
-                    <td style="text-align: right;"><span class="k-pill k-pill-ok">BEAT</span></td>
-                  </tr>
-                  <tr>
-                    <td>Colombia active users > 2M</td>
-                    <td>Q1 2026 Call</td>
-                    <td>1.85M</td>
-                    <td style="text-align: right;"><span class="k-pill k-pill-warn">ON TRACK</span></td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <!-- CORE FINANCIAL METRICS & EMBEDDED DCF MODEL CARD -->
-            <div class="k-card" style="padding: 0; overflow: hidden;">
-              <div style="display: flex; justify-content: space-between; align-items: center; padding: var(--sp-3) var(--sp-4); border-bottom: var(--bw-thin) solid var(--border); background-color: var(--paper);">
-                <div style="font-weight: 600; font-size: var(--fs-title);">Core Financial Metrics & Valuations</div>
-                <span style="font-size: var(--fs-caption); color: var(--accent); cursor: pointer;" onclick="openDrillDrawer('dcf-sensitivity')">Open DCF Levers Drawer →</span>
-              </div>
-              <table class="matrix-table t-mono" style="border: none; border-radius: 0; box-shadow: none;">
-                <thead>
-                  <tr>
-                    <th>Metric</th>
-                    <th class="num">Q3 25</th>
-                    <th class="num">Q4 25</th>
-                    <th class="num">Q1 26</th>
-                    <th class="num">Q2 26</th>
-                  </tr>
-                </thead>
-                <tbody id="wsFinancialsRows">
-                  <tr>
-                    <td>Revenue ($M)</td>
-                    <td class="num t-mono"><span class="drill-handle" onclick="openDrillDrawer('financials')">2,140.5</span></td>
-                    <td class="num t-mono"><span class="drill-handle" onclick="openDrillDrawer('financials')">2,400.0</span></td>
-                    <td class="num t-mono"><span class="drill-handle" onclick="openDrillDrawer('financials')">2,715.2</span></td>
-                    <td class="num k-num-pos t-mono"><span class="drill-handle" onclick="openDrillDrawer('financials')">3,020.8</span></td>
-                  </tr>
-                  <tr>
-                    <td>Net Income ($M)</td>
-                    <td class="num t-mono"><span class="drill-handle" onclick="openDrillDrawer('financials')">355.6</span></td>
-                    <td class="num t-mono"><span class="drill-handle" onclick="openDrillDrawer('financials')">395.0</span></td>
-                    <td class="num t-mono"><span class="drill-handle" onclick="openDrillDrawer('financials')">480.2</span></td>
-                    <td class="num k-num-pos t-mono"><span class="drill-handle" onclick="openDrillDrawer('financials')">560.4</span></td>
-                  </tr>
-                </tbody>
-              </table>
-
-              <!-- EMBEDDED DCF MODEL SLIDERS INSIDE REPORT CARD -->
-              <div style="padding: var(--sp-4); border-top: var(--bw-thin) solid var(--border); background-color: var(--surface);">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-3);">
-                  <div>
-                    <div style="font-weight: 600; font-size: var(--fs-body);">Embedded DCF Scenario Prior Levers</div>
-                    <div style="font-size: var(--fs-caption); color: var(--muted);">Adjust WACC & growth rate to re-evaluate intrinsic value live</div>
-                  </div>
-                  <div style="text-align: right;">
-                    <div class="t-mono" style="font-size: var(--fs-title); font-weight: 600; color: var(--accent);" id="embeddedFairValue">$18.50</div>
-                    <div class="k-num-pos t-mono" style="font-size: var(--fs-caption);" id="embeddedUpside">+29.8% Target Upside</div>
-                  </div>
-                </div>
-
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4);">
-                  <div>
-                    <div style="display: flex; justify-content: space-between; font-size: var(--fs-caption); margin-bottom: var(--sp-1);">
-                      <span>WACC (Discount Rate)</span>
-                      <strong style="color: var(--accent);" id="embeddedWaccLabel">10.50%</strong>
-                    </div>
-                    <input type="range" id="embeddedWaccSlider" min="8.0" max="14.0" step="0.25" value="10.5" style="width: 100%; accent-color: var(--accent);" oninput="updateEmbeddedDCF(); markViewModified();">
-                  </div>
-                  <div>
-                    <div style="display: flex; justify-content: space-between; font-size: var(--fs-caption); margin-bottom: var(--sp-1);">
-                      <span>Terminal Growth Rate (g)</span>
-                      <strong style="color: var(--accent);" id="embeddedGLabel">3.50%</strong>
-                    </div>
-                    <input type="range" id="embeddedGSlider" min="1.0" max="5.0" step="0.25" value="3.5" style="width: 100%; accent-color: var(--accent);" oninput="updateEmbeddedDCF(); markViewModified();">
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- RIGHT SIDEBAR -->
-          <div style="display: flex; flex-direction: column; gap: var(--sp-4);">
-            <!-- EMBEDDED THESIS CONTRACTS (UNIFORM BORDER STYLING) -->
-            <div class="k-card">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-2);">
-                <div>
-                  <div style="font-weight: 600; font-size: var(--fs-title);">Thesis Contracts & Falsifiers</div>
-                  <div style="font-size: var(--fs-caption); color: var(--muted);">Disconfirming metric thresholds</div>
-                </div>
-                <button class="k-btn k-btn-quiet k-btn-sm" onclick="showToast('Disconfirming limit settings saved'); markViewModified();">Set Limit</button>
-              </div>
-              <div style="display: flex; flex-direction: column; gap: var(--sp-2); font-size: var(--fs-caption);" id="wsFalsifiersList">
-                <div class="k-well-compact">
-                  1. NPL 90+ > 5.6% · <span style="color: var(--ok); font-weight: 600;">PASS (5.2%)</span>
-                </div>
-                <div class="k-well-compact">
-                  2. Cost-to-Serve > $1.20 · <span style="color: var(--ok); font-weight: 600;">PASS ($0.90)</span>
-                </div>
-                <div class="k-well-compact">
-                  3. Mexico Active Users &lt; 8M · <span style="color: var(--warn); font-weight: 600;">MONITOR (7.8M)</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="k-card">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-2);">
-                <div style="font-weight: 600; font-size: var(--fs-title);">Peer Group Comparisons</div>
-                <button class="k-btn k-btn-quiet k-btn-sm" onclick="openDrillDrawer('peers')">Drill →</button>
-              </div>
-              <div style="display: flex; flex-direction: column; gap: var(--sp-2);" id="wsPeersList">
-                <div style="display: flex; justify-content: space-between;" class="k-well-compact">
-                  <span class="drill-handle" onclick="openDrillDrawer('peers')">SE (Sea Ltd)</span>
-                  <span class="t-mono" style="color: var(--muted); font-size: var(--fs-caption);">ASEAN E-Com</span>
-                </div>
-                <div style="display: flex; justify-content: space-between;" class="k-well-compact">
-                  <span class="drill-handle" onclick="openDrillDrawer('peers')">MELI (MercadoLibre)</span>
-                  <span class="t-mono" style="color: var(--muted); font-size: var(--fs-caption);">LatAm Fintech</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- ==========================================================================
+      <!-- WORK_OS_SLOT:company-desk --><!-- ==========================================================================
            EVALUATION COVERAGE DESTINATION (#screen-evaluation)
            ========================================================================== -->
-      <section id="screen-evaluation" class="screen-view">
-        <div class="k-card"><div class="k-well">Loading complete evaluation coverage…</div></div>
-      </section>
-
-      <!-- ==========================================================================
+      <!-- WORK_OS_SLOT:evaluation --><!-- ==========================================================================
            BRIEF LIBRARY PERSISTENT DESTINATION (#screen-brief-library)
            FULL-WIDTH INSTITUTIONAL EQUITY RESEARCH REPORT (EXHAUSTIVE CONTENT)
            ========================================================================== -->
-      <section id="screen-brief-library" class="screen-view">
-        <!-- TOP NAVIGATION ACTION BAR -->
-        <div style="display: flex; justify-content: space-between; align-items: center; background: var(--paper); border: var(--bw-thin) solid var(--border); padding: var(--sp-3) var(--sp-4); border-radius: var(--radius-card);">
-          <div style="display: flex; align-items: center; gap: var(--sp-3);">
-            <button class="k-btn k-btn-quiet k-btn-sm" onclick="navigateTo('screen-workspace')">← Back to Company Desk</button>
-            <span style="font-size: var(--fs-caption); color: var(--muted);">Coverage Document: <strong id="fbSymbolLabel" style="color: var(--accent);">NU — Institutional Research Brief</strong></span>
-          </div>
-          <div style="display: flex; gap: var(--sp-2);">
-            <button class="k-btn k-btn-quiet k-btn-sm" onclick="showToast('Exporting Brief to PDF...')">Export PDF</button>
-            <button class="k-btn k-btn-primary k-btn-sm" onclick="openTradeModal(activeCompanyTicker, 'BUY', '12.5%', 14.25)">Execute Trade Order</button>
-          </div>
-        </div>
-
-        <!-- REPORT COVER MASTHEAD & INSTITUTIONAL HEADER -->
-        <div class="k-card" style="display: flex; flex-direction: column; gap: var(--sp-3); background: var(--paper);">
-          <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-            <div>
-              <div style="font-size: var(--fs-caption); color: var(--accent); font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: var(--sp-1);">
-                INSTITUTIONAL EQUITY RESEARCH REPORT · FULL BRIEF
-              </div>
-              <div class="t-mono" style="font-size: var(--fs-hero); font-weight: 600; letter-spacing: -0.02em;" id="fbReportTitle">
-                NU HOLDINGS LTD. (NYSE: NU)
-              </div>
-              <div style="font-size: var(--fs-title); color: var(--fg-soft); margin-top: var(--sp-half);" id="fbReportSub">
-                Structural Compounder in Latin American Digital Banking & Credit Expansion
-              </div>
-            </div>
-            <span class="k-pill k-pill-ok" style="font-size: var(--fs-body); padding: var(--sp-2) var(--sp-3);" id="fbReportPill">
-              OVERWEIGHT · 88% CONVICTION
-            </span>
-          </div>
-
-          <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: var(--sp-3); border-top: var(--bw-thin) solid var(--border); padding-top: var(--sp-3);" class="t-mono">
-            <div>
-              <div style="font-size: var(--fs-caption); color: var(--muted);">Target Price</div>
-              <div style="font-size: var(--fs-title); font-weight: 600; color: var(--accent);" id="fbReportTarget">$18.50 (+29.8%)</div>
-            </div>
-            <div>
-              <div style="font-size: var(--fs-caption); color: var(--muted);">Current Price</div>
-              <div style="font-size: var(--fs-title); font-weight: 600;" id="fbReportPrice">$14.25</div>
-            </div>
-            <div>
-              <div style="font-size: var(--fs-caption); color: var(--muted);">1Y Performance</div>
-              <div style="font-size: var(--fs-title); font-weight: 600;" class="k-num-pos" id="fbReportReturn">+42.8%</div>
-            </div>
-            <div>
-              <div style="font-size: var(--fs-caption); color: var(--muted);">Position Weight</div>
-              <div style="font-size: var(--fs-title); font-weight: 600;">12.5% (Overweight)</div>
-            </div>
-            <div>
-              <div style="font-size: var(--fs-caption); color: var(--muted);">Idempotency Key</div>
-              <div style="font-size: var(--fs-caption); color: var(--muted);">sec_nu_2026q2_v01</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- TABBED INSTITUTIONAL BRIEF NAVIGATION BAR -->
-        <div class="brief-tab-bar" id="fbTabBar">
-          <button class="brief-tab-btn is-active" id="brief-tab-overview" onclick="switchBriefTab('overview')">
-            <span>Overview & Moat</span>
-          </button>
-          <button class="brief-tab-btn" id="brief-tab-quarter" onclick="switchBriefTab('quarter')">
-            <span>Quarter & Guidance</span>
-            <span class="brief-tab-count" id="fbCountQuarter">3</span>
-          </button>
-          <button class="brief-tab-btn" id="brief-tab-financials" onclick="switchBriefTab('financials')">
-            <span>Financials & DCF</span>
-            <span class="brief-tab-count" id="fbCountFinancials">4Q</span>
-          </button>
-          <button class="brief-tab-btn" id="brief-tab-risk" onclick="switchBriefTab('risk')">
-            <span>Thesis & Risk</span>
-            <span class="brief-tab-count" id="fbCountRisk">3</span>
-          </button>
-          <button class="brief-tab-btn" id="brief-tab-valuation" onclick="switchBriefTab('valuation')">
-            <span>Valuation & Comps</span>
-            <span class="brief-tab-count" id="fbCountValuation">2</span>
-          </button>
-          <button class="brief-tab-btn" id="brief-tab-sources" onclick="switchBriefTab('sources')">
-            <span>Sources & Citations</span>
-            <span class="brief-tab-count" id="fbCountSources">4</span>
-          </button>
-        </div>
-
-        <!-- EXHAUSTIVE TABBED REPORT CONTENT PANES -->
-        <div style="display: flex; flex-direction: column; gap: var(--sp-5);" id="fbFullReportBody">
-          <!-- Populated dynamically via JS openFullBriefCanvas() -->
-        </div>
-
-      </section>
-
-      <!-- ==========================================================================
+      <!-- WORK_OS_SLOT:brief-library --><!-- ==========================================================================
            SURFACE: EXTRACTED FACT & METRIC ANALYTICS PLAYGROUND (#screen-analytics-playground)
            DEDICATED FULL-CANVAS EMERGENT RESEARCH & DEEP DIVE ENGINE
            ========================================================================== -->
-      <section id="screen-analytics-playground" class="screen-view">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-          <div>
-            <div style="font-weight: 600; font-size: var(--fs-title);">Extracted Fact & Metric Analytics Playground</div>
-            <div style="font-size: var(--fs-caption); color: var(--muted);">Full-canvas emergent research engine across all 3 statements, SEC filings & operational KPIs</div>
-          </div>
-          <div style="display: flex; gap: var(--sp-2);">
-            <button class="k-btn k-btn-quiet k-btn-sm" onclick="showToast('Exporting metric dataset to CSV...')">Export CSV</button>
-            <button class="k-btn k-btn-primary k-btn-sm" onclick="openSheetDCFModel(activeCompanyTicker)">Open Model in Sheets ↗</button>
-          </div>
-        </div>
-
-        <!-- CONTROLS & FILTER BAR -->
-        <div class="k-card" style="display: flex; flex-direction: column; gap: var(--sp-3);">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div style="display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap;">
-              <span style="font-size: var(--fs-caption); color: var(--muted); font-weight: 600; text-transform: uppercase;">Category Filter:</span>
-              <button class="k-chip is-active" id="factCatAll" onclick="filterFactCategory('ALL')">All Extracted Facts (42)</button>
-              <button class="k-chip" id="factCatINCOME" onclick="filterFactCategory('INCOME')">Income Statement</button>
-              <button class="k-chip" id="factCatBALANCE" onclick="filterFactCategory('BALANCE')">Balance Sheet</button>
-              <button class="k-chip" id="factCatCASH" onclick="filterFactCategory('CASH')">Cash Flow</button>
-              <button class="k-chip" id="factCatKPI" onclick="filterFactCategory('KPI')">Operational & Unit KPIs</button>
-            </div>
-            <div style="display: flex; gap: var(--sp-2); align-items: center;">
-              <select class="k-select t-mono" id="factPeriodFreq" onchange="updateFactPlaygroundTable()">
-                <option value="QUARTERLY" selected>Quarterly (Q1 25 – Q2 26)</option>
-                <option value="TTM">Trailing Twelve Months (TTM)</option>
-                <option value="ANNUAL">Annual (FY22 – FY26E)</option>
-              </select>
-            </div>
-          </div>
-
-          <div style="display: flex; gap: var(--sp-3); align-items: center;">
-            <input type="text" id="factSearchInput" placeholder="Search 40+ parsed metrics (e.g. Revenue, ARPAC, NPL 90+, Cost-to-Serve)..." class="t-mono" style="flex: 1; background: var(--bg); border: var(--bw-thin) solid var(--border); color: var(--fg); padding: var(--sp-2) var(--sp-3); border-radius: var(--radius); font-size: var(--fs-body);" oninput="updateFactPlaygroundTable()">
-            <span style="font-size: var(--fs-caption); color: var(--ok);" class="t-mono" id="factCountMatch">42 Facts Active</span>
-          </div>
-        </div>
-
-        <!-- FULL-WIDTH EXTRACTED FACTS MATRIX CANVAS -->
-        <div class="k-card" style="padding: 0; overflow: hidden;">
-          <div style="padding: var(--sp-3) var(--sp-4); background: var(--paper); border-bottom: var(--bw-thin) solid var(--border); display: flex; justify-content: space-between; align-items: center;">
-            <div style="font-weight: 600; font-size: var(--fs-body);" id="factCanvasHeaderTitle">
-              Parsed Fact Database Matrix — NU Holdings (NYSE: NU)
-            </div>
-            <span class="k-pill k-pill-ok">100% PROVENANCE VERIFIED</span>
-          </div>
-
-          <div style="overflow-x: auto;">
-            <table class="matrix-table t-mono" id="factPlaygroundTable" style="margin: 0; width: 100%;">
-              <thead>
-                <tr>
-                  <th style="min-width: 240px;">Metric / Fact Handle</th>
-                  <th>Statement / Source</th>
-                  <th class="num">Q1 25</th>
-                  <th class="num">Q2 25</th>
-                  <th class="num">Q3 25</th>
-                  <th class="num">Q4 25</th>
-                  <th class="num">Q1 26</th>
-                  <th class="num">Q2 26</th>
-                  <th style="text-align: right;">Provenance</th>
-                </tr>
-              </thead>
-              <tbody id="factPlaygroundTbody">
-                <!-- Populated dynamically via JS -->
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <!-- ==========================================================================
+      <!-- WORK_OS_SLOT:fact-playground --><!-- ==========================================================================
            SURFACE 3: DECISION AUDIT LOG (#screen-audit-log)
            ========================================================================== -->
-      <section id="screen-audit-log" class="screen-view">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-          <div>
-            <div style="font-weight: 600; font-size: var(--fs-title);">Decision Audit Log & Governance Ledger</div>
-            <div style="font-size: var(--fs-caption); color: var(--muted);">Immutable record of thesis updates, target overrides, and analyst ratifications</div>
-          </div>
-          <button class="k-btn k-btn-quiet k-btn-sm" onclick="showToast('Audit log exported to JSON/CSV')">Export Ledger</button>
-        </div>
-
-        <!-- FILTER CHIPS BAR -->
-        <div style="display: flex; gap: var(--sp-2); align-items: center; background: var(--paper); border: var(--bw-thin) solid var(--border); padding: var(--sp-2) var(--sp-3); border-radius: var(--radius); flex-wrap: wrap;">
-          <span style="font-size: var(--fs-caption); color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;">Ticker:</span>
-          <button class="k-chip is-active" onclick="filterAuditLog('ticker', 'ALL', this)">All</button>
-          <button class="k-chip" onclick="filterAuditLog('ticker', 'NU', this)">NU</button>
-          <button class="k-chip" onclick="filterAuditLog('ticker', 'BKNG', this)">BKNG</button>
-          <button class="k-chip" onclick="filterAuditLog('ticker', 'TSM', this)">TSM</button>
-          <button class="k-chip" onclick="filterAuditLog('ticker', 'MELI', this)">MELI</button>
-
-          <span style="font-size: var(--fs-caption); color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; margin-left: var(--sp-3);">Event:</span>
-          <button class="k-chip is-active" onclick="filterAuditLog('event', 'ALL', this)">All Events</button>
-          <button class="k-chip" onclick="filterAuditLog('event', 'Target Override', this)">Target Override</button>
-          <button class="k-chip" onclick="filterAuditLog('event', 'Thesis Update', this)">Thesis Update</button>
-          <button class="k-chip" onclick="filterAuditLog('event', 'Trade Execution', this)">Trade Order</button>
-        </div>
-
-        <!-- AUDIT LEDGER TABLE -->
-        <div style="display: flex; flex-direction: column; gap: var(--sp-2);">
-          <table class="matrix-table t-mono" id="auditLogTable">
-            <thead>
-              <tr>
-                <th>Timestamp</th>
-                <th>Ticker</th>
-                <th>Event Type</th>
-                <th>Prior Value</th>
-                <th>New Value</th>
-                <th>Rationale & Citation</th>
-                <th>Analyst</th>
-                <th style="text-align: right;">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td class="t-mono" style="font-size: var(--fs-caption); color: var(--muted);">2026-08-07 11:20</td>
-                <td><span class="k-ticker-symbol t-mono">BKNG</span></td>
-                <td><span class="k-chip k-chip-mono">Target Override</span></td>
-                <td class="num t-mono">$4,500.00</td>
-                <td class="num t-mono" style="color: var(--accent);">$4,850.00</td>
-                <td style="font-size: var(--fs-caption);">Direct booking expansion to 56% <a onclick="openPeekDrawer('doc:bkng_q2_p12')" class="src-chip">doc:bkng_q2_p12</a></td>
-                <td>B. Nuthakki</td>
-                <td style="text-align: right;"><span class="k-pill k-pill-ok">RATIFIED</span></td>
-              </tr>
-              <tr>
-                <td class="t-mono" style="font-size: var(--fs-caption); color: var(--muted);">2026-08-06 14:45</td>
-                <td><span class="k-ticker-symbol t-mono">NU</span></td>
-                <td><span class="k-chip k-chip-mono">Thesis Update</span></td>
-                <td class="num t-mono">Conviction 85%</td>
-                <td class="num t-mono" style="color: var(--ok);">Conviction 88%</td>
-                <td style="font-size: var(--fs-caption);">Mexico deposit expansion past $3B <a onclick="openPeekDrawer('doc:bcb_jun26_p4')" class="src-chip">doc:bcb_jun26_p4</a></td>
-                <td>B. Nuthakki</td>
-                <td style="text-align: right;"><span class="k-pill k-pill-ok">RATIFIED</span></td>
-              </tr>
-              <tr>
-                <td class="t-mono" style="font-size: var(--fs-caption); color: var(--muted);">2026-08-05 09:30</td>
-                <td><span class="k-ticker-symbol t-mono">TSM</span></td>
-                <td><span class="k-chip k-chip-mono">Falsifier Update</span></td>
-                <td class="num t-mono">Risk: Low</td>
-                <td class="num t-mono" style="color: var(--warn);">Risk: Elevated</td>
-                <td style="font-size: var(--fs-caption);">Export restriction rule update monitoring</td>
-                <td>B. Nuthakki</td>
-                <td style="text-align: right;"><span class="k-pill k-pill-warn">REVIEW</span></td>
-              </tr>
-              <tr>
-                <td class="t-mono" style="font-size: var(--fs-caption); color: var(--muted);">2026-08-04 16:10</td>
-                <td><span class="k-ticker-symbol t-mono">NU</span></td>
-                <td><span class="k-chip k-chip-mono">Trade Execution</span></td>
-                <td class="num t-mono">Weight 12.0%</td>
-                <td class="num t-mono" style="color: var(--accent);">Weight 12.5%</td>
-                <td style="font-size: var(--fs-caption);">Rebalance target allocation order executed</td>
-                <td>System Auto</td>
-                <td style="text-align: right;"><span class="k-pill k-pill-ok">EXECUTED</span></td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <!-- ==========================================================================
+      <!-- WORK_OS_SLOT:audit --><!-- ==========================================================================
            SURFACE 4: EXECUTION QUEUE & OPERATIONS HUB (#screen-execution-queue)
            HIGH-DENSITY DATA PIPELINE MONITOR, LOG CONSOLE & SYSTEM CALIBRATION
            ========================================================================== -->
-      <section id="screen-execution-queue" class="screen-view">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-          <div>
-            <div style="font-weight: 600; font-size: var(--fs-title);">Operations & Execution Governance Hub</div>
-            <div style="font-size: var(--fs-caption); color: var(--muted);">Data pipeline jobs, real-time log console, model calibration & governance rules</div>
-          </div>
-          <div style="display: flex; gap: var(--sp-2);">
-            <button class="k-btn k-btn-quiet k-btn-sm" onclick="runPipelineJob('Full Pipeline Sweep')">Trigger Pipeline Sweep</button>
-            <button class="k-btn k-btn-quiet k-btn-sm" onclick="openDrillDrawer('dcf-priors')">DCF Calibration →</button>
-            <button class="k-btn k-btn-quiet k-btn-sm" onclick="openDrillDrawer('llm-routing')">LLM Transport →</button>
-            <button class="k-btn k-btn-primary k-btn-sm" onclick="openDrillDrawer('governance-limits')">Governance Limits →</button>
-          </div>
-        </div>
-
-        <!-- PIPELINE STATUS STAT CARDS -->
-        <div class="card-grid-stat">
-          <div class="k-card">
-            <div class="stat-heading">Pipeline Health</div>
-            <div class="stat-number" style="color: var(--ok);">HEALTHY</div>
-            <div class="stat-subtext">5 Active Jobs · 0 Errors</div>
-          </div>
-          <div class="k-card">
-            <div class="stat-heading">Data Freshness</div>
-            <div class="stat-number" style="color: var(--fg);">100% Sync</div>
-            <div class="stat-subtext">Last Full Sync: 12m ago</div>
-          </div>
-          <div class="k-card">
-            <div class="stat-heading">API Budget Quota</div>
-            <div class="stat-number" style="color: var(--accent);">78% Free</div>
-            <div class="stat-subtext">FMP & SEC Edgar Rate Budget OK</div>
-          </div>
-          <div class="k-card">
-            <div class="stat-heading">DB Idempotency</div>
-            <div class="stat-number" style="color: var(--ok);">VERIFIED</div>
-            <div class="stat-subtext">portfolio.db · Migration Head</div>
-          </div>
-        </div>
-
-        <!-- PIPELINE JOBS TABLE -->
-        <div style="display: flex; flex-direction: column; gap: var(--sp-2);">
-          <div style="font-weight: 600; font-size: var(--fs-title);">Registered Data Pipeline Jobs</div>
-          <table class="matrix-table t-mono">
-            <thead>
-              <tr>
-                <th>Pipeline Job</th>
-                <th>Source Connector</th>
-                <th>Cadence</th>
-                <th>Last Run</th>
-                <th>Status</th>
-                <th style="text-align: right;">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><strong>SEC Edgar 10-Q Scraper</strong></td>
-                <td>SEC Edgar API</td>
-                <td>Daily @ 04:00</td>
-                <td class="t-mono" style="font-size: var(--fs-caption); color: var(--muted);">Today 04:00</td>
-                <td><span class="k-pill k-pill-ok">FRESH</span></td>
-                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm" onclick="runPipelineJob('SEC Edgar Scraper')">Run Now</button></td>
-              </tr>
-              <tr>
-                <td><strong>FMP Financial Facts Ingestion</strong></td>
-                <td>Financial Modeling Prep</td>
-                <td>Hourly</td>
-                <td class="t-mono" style="font-size: var(--fs-caption); color: var(--muted);">12m ago</td>
-                <td><span class="k-pill k-pill-ok">FRESH</span></td>
-                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm" onclick="runPipelineJob('FMP Facts Ingestion')">Run Now</button></td>
-              </tr>
-              <tr>
-                <td><strong>Earnings Transcript Fetcher</strong></td>
-                <td>Direct Scraping Adapter</td>
-                <td>On Event / Call</td>
-                <td class="t-mono" style="font-size: var(--fs-caption); color: var(--muted);">Yesterday</td>
-                <td><span class="k-pill k-pill-ok">IDLE</span></td>
-                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm" onclick="runPipelineJob('Transcript Fetcher')">Run Now</button></td>
-              </tr>
-              <tr>
-                <td><strong>LLM Thesis Disconfirmation Evaluator</strong></td>
-                <td>Claude/Gemini Transport</td>
-                <td>Daily @ 04:30</td>
-                <td class="t-mono" style="font-size: var(--fs-caption); color: var(--muted);">Today 04:30</td>
-                <td><span class="k-pill k-pill-ok">EVALUATED</span></td>
-                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm" onclick="runPipelineJob('LLM Evaluator')">Run Now</button></td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <!-- REAL-TIME LOG TERMINAL CONSOLE -->
-        <div style="display: flex; flex-direction: column; gap: var(--sp-2);">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div style="font-weight: 600; font-size: var(--fs-title);">Structured Pipeline Log Stream</div>
-            <span style="font-size: var(--fs-caption); color: var(--muted);">stdout / stderr event log console</span>
-          </div>
-          <div class="terminal-block" id="terminalLogConsole">
-            <div class="terminal-line"><span class="terminal-info">[INFO] 2026-08-07T13:40:00Z</span> pipeline_init idempotency_key="sec_nu_2026q2_01" status="RUNNING"</div>
-            <div class="terminal-line"><span class="terminal-success">[OK] 2026-08-07T13:40:02Z</span> sec_edgar_10q fetched ticker="NU" period="2026-Q2" facts_parsed=142</div>
-            <div class="terminal-line"><span class="terminal-success">[OK] 2026-08-07T13:40:05Z</span> fmp_financials restatement_check passed ticker="BKNG"</div>
-            <div class="terminal-line"><span class="terminal-info">[INFO] 2026-08-07T13:40:08Z</span> portfolio_db written updated_rows=3 migration_head="0271_latest"</div>
-            <div class="terminal-line"><span class="terminal-success">[OK] 2026-08-07T13:40:10Z</span> pipeline_complete duration_ms=10240 error_count=0</div>
-          </div>
-        </div>
-      </section>
-
-    </div>
+      <!-- WORK_OS_SLOT:operations --></div>
   </main>
 
   <!-- DRAWER SCRIM LAYER -->
   <div class="drawer-scrim" id="drawerScrim" onclick="closeDrillDrawer(); closePeekDrawer();"></div>
 
   <!-- CONTEXTUAL DRILL-THROUGH SLIDE-OVER DRAWER -->
-  <aside class="drill-drawer" id="drillDrawer">
+  <aside class="drill-drawer" id="drillDrawer" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="drawerTitle" hidden>
     <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-3);">
       <div>
         <div style="font-weight: 600; font-size: var(--fs-title);" id="drawerTitle">Financials & DCF Sensitivity</div>
         <div style="font-size: var(--fs-caption); color: var(--muted);" id="drawerSubtitle">Contextual drill-through drawer</div>
       </div>
-      <button class="k-btn k-btn-quiet k-btn-sm" onclick="closeDrillDrawer()">× Close</button>
+      <button id="drillDrawerClose" class="k-btn k-btn-quiet k-btn-sm" onclick="closeDrillDrawer()">× Close</button>
     </div>
 
     <div id="drawerBody" style="display: flex; flex-direction: column; gap: var(--sp-4);">
     </div>
   </aside>
-
-  <!-- TRADE ORDER EXECUTION MODAL & SCRIM -->
-  <div class="modal-scrim" id="tradeScrim" onclick="closeTradeModal()"></div>
-  <div class="modal-container" id="tradeModal">
-    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-3);">
-      <div>
-        <div style="font-weight: 600; font-size: var(--fs-title);" id="modalTradeTitle">Trade Order Execution</div>
-        <div style="font-size: var(--fs-caption); color: var(--muted);">Rebalancing target order submission</div>
-      </div>
-      <button class="k-btn k-btn-quiet k-btn-sm" onclick="closeTradeModal()">×</button>
-    </div>
-
-    <div style="display: flex; flex-direction: column; gap: var(--sp-3);">
-      <div class="k-well" style="display: flex; justify-content: space-between; align-items: center;">
-        <div>
-          <div style="font-size: var(--fs-caption); color: var(--muted);">Target Symbol</div>
-          <div class="t-mono" style="font-size: var(--fs-display); font-weight: 600;" id="modalTradeTicker">NU</div>
-        </div>
-        <span class="k-pill k-pill-ok" id="modalTradeActionPill">BUY ORDER</span>
-      </div>
-
-      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3);">
-        <div>
-          <label style="font-size: var(--fs-caption); color: var(--muted); display: block; margin-bottom: var(--sp-1);">Limit Price ($)</label>
-          <input type="number" id="modalTradeLimitPx" value="14.25" step="0.05" style="width: 100%; background: var(--paper); border: var(--bw-thin) solid var(--border); color: var(--fg); padding: var(--sp-2); border-radius: var(--radius); font-family: var(--mono);">
-        </div>
-        <div>
-          <label style="font-size: var(--fs-caption); color: var(--muted); display: block; margin-bottom: var(--sp-1);">Target Weight (%)</label>
-          <input type="text" id="modalTradeTargetWeight" value="12.5%" style="width: 100%; background: var(--paper); border: var(--bw-thin) solid var(--border); color: var(--fg); padding: var(--sp-2); border-radius: var(--radius); font-family: var(--mono);">
-        </div>
-      </div>
-
-      <div class="k-well-compact" style="display: flex; justify-content: space-between; font-size: var(--fs-caption);">
-        <span>Estimated Slippage: <strong style="color: var(--ok);">0.02%</strong></span>
-        <span>Broker Route: <strong style="color: var(--fg);">Direct DMA</strong></span>
-      </div>
-    </div>
-
-    <div style="display: flex; justify-content: flex-end; gap: var(--sp-2); border-top: var(--bw-thin) solid var(--hairline); padding-top: var(--sp-3);">
-      <button class="k-btn k-btn-quiet k-btn-sm" onclick="closeTradeModal()">Cancel</button>
-      <button class="k-btn k-btn-primary k-btn-sm" onclick="executeTradeOrder()">Confirm & Send Order</button>
-    </div>
-  </div>
 
   <!-- TOAST NOTICE -->
   <div class="toast-notice" id="toastNotice">
@@ -2667,10 +1348,10 @@
   </div>
 
   <!-- PROVENANCE PEEK DRAWER -->
-  <aside class="drill-drawer" id="peekDrawer" style="z-index: 280;">
+  <aside class="drill-drawer" id="peekDrawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="Source citation" hidden style="z-index: 280;">
     <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-3);">
       <div style="font-weight: 600; font-size: var(--fs-title);">Raw SEC Filing Citation</div>
-      <button class="k-btn k-btn-quiet k-btn-sm" onclick="closePeekDrawer()">×</button>
+      <button id="workOsPeekOpenFullPage" class="k-btn k-btn-quiet k-btn-sm" type="button" hidden>Open full page</button><button id="peekDrawerClose" class="k-btn k-btn-quiet k-btn-sm" onclick="closePeekDrawer()">×</button>
     </div>
     <div class="t-mono" style="font-size: var(--fs-caption); color: var(--accent);" id="peekRefKey">doc:ref</div>
     <div style="font-family: var(--serif); font-size: var(--fs-body); color: var(--fg-soft); line-height: 1.68;" id="peekProse">
@@ -2971,7 +1652,7 @@
       isViewModified = false;
       const saveBtn = document.getElementById('saveViewBtn');
       if (saveBtn) saveBtn.style.display = 'none';
-      showToast('View parameters & slider state saved to DB');
+      showToast('View parameters updated for this session');
     }
 
     let isBriefFinancialsExpanded = false;
@@ -3562,14 +2243,14 @@
       const breadcrumb = document.getElementById('breadcrumb-title');
       if (breadcrumb) {
         if (navName === 'cockpit') breadcrumb.innerText = 'Portfolio Cockpit & Review';
-        else if (navName === 'performance') breadcrumb.innerText = 'Portfolio Performance vs Index Benchmark';
+        else if (navName === 'performance') breadcrumb.innerText = 'Performance';
         else if (navName === 'allocation') breadcrumb.innerText = 'Portfolio Allocation & Risk Engine';
         else if (navName === 'workspace') breadcrumb.innerText = `Company Desk (${activeCompanyTicker})`;
         else if (navName === 'evaluation') breadcrumb.innerText = 'Evaluation';
         else if (navName === 'full-brief') breadcrumb.innerText = `Full Equity Research Brief (${activeCompanyTicker})`;
         else if (navName === 'analytics-playground') breadcrumb.innerText = `Explore`;
         else if (navName === 'audit-log') breadcrumb.innerText = 'Decision Audit Log & Governance Ledger';
-        else if (navName === 'execution-queue' || navName === 'settings') breadcrumb.innerText = 'Operations & Execution Governance Hub';
+        else if (navName === 'execution-queue' || navName === 'settings') breadcrumb.innerText = 'Operations';
       }
     }
 
@@ -3597,7 +2278,7 @@
         card.style.maxHeight = `${card.offsetHeight}px`;
         card.offsetHeight; // Force reflow
         card.classList.add('card-dismissing');
-        showToast(toastMsg || (actionName + ' executed and persisted to DB'));
+        showToast(toastMsg || (actionName + ' completed for this session'));
         setTimeout(() => {
           card.remove();
         }, 450);
@@ -3609,38 +2290,6 @@
       document.getElementById('toastMessage').innerText = msg;
       toast.classList.add('is-show');
       setTimeout(() => toast.classList.remove('is-show'), 2600);
-    }
-
-    // TRADE ORDER MODAL INTERACTION
-    function openTradeModal(ticker, actionType, targetWeight, limitPrice) {
-      document.getElementById('modalTradeTicker').innerText = ticker || 'NU';
-      const pill = document.getElementById('modalTradeActionPill');
-      pill.innerText = (actionType || 'BUY') + ' ORDER';
-      pill.className = actionType === 'SELL' ? 'k-pill k-pill-bad' : 'k-pill k-pill-ok';
-
-      document.getElementById('modalTradeLimitPx').value = limitPrice || 14.25;
-      document.getElementById('modalTradeTargetWeight').value = targetWeight || '12.5%';
-
-      document.getElementById('tradeScrim').classList.add('is-open');
-      document.getElementById('tradeModal').classList.add('is-open');
-    }
-
-    function closeTradeModal() {
-      document.getElementById('tradeScrim').classList.remove('is-open');
-      document.getElementById('tradeModal').classList.remove('is-open');
-    }
-
-    function executeTradeOrder() {
-      const ticker = document.getElementById('modalTradeTicker').innerText;
-      const px = document.getElementById('modalTradeLimitPx').value;
-      closeTradeModal();
-      showToast(`Order executed: DMA Limit ${ticker} @ $${px} committed to portfolio DB!`);
-    }
-
-    function executeBatchRebalance() {
-      closeDrillDrawer();
-      showToast('Batch Rebalance: 2 orders submitted to Execution Queue (L3) & logged to Audit Ledger!');
-      navigateTo('screen-execution-queue');
     }
 
     function openSheetDCFModel(ticker) {
@@ -3671,68 +2320,7 @@
       showToast(`Playground view mode switched to ${mode.toUpperCase()}`);
     }
 
-    // EXTRACTED FACT & METRIC ANALYTICS PLAYGROUND DATABASE & LOGIC
-    const EXTRACTED_FACTS_DB = [
-      { name: "Total Revenue ($M)", cat: "INCOME", q1_25: "$2,710", q2_25: "$2,850", q3_25: "$2,940", q4_25: "$3,100", q1_26: "$3,280", q2_26: "$3,450", src: "doc:bcb_jun26_p4" },
-      { name: "Net Interest Margin (NIM %)", cat: "INCOME", q1_25: "18.2%", q2_25: "18.5%", q3_25: "18.8%", q4_25: "19.1%", q1_26: "19.4%", q2_26: "19.8%", src: "doc:nu_q2_p8" },
-      { name: "Gross Profit ($M)", cat: "INCOME", q1_25: "$1,210", q2_25: "$1,310", q3_25: "$1,410", q4_25: "$1,520", q1_26: "$1,640", q2_26: "$1,780", src: "doc:bcb_jun26_p4" },
-      { name: "Net Income ($M)", cat: "INCOME", q1_25: "$378", q2_25: "$450", q3_25: "$510", q4_25: "$580", q1_26: "$640", q2_26: "$720", src: "doc:nu_q2_p8" },
-      { name: "Total Customer Deposits ($B)", cat: "BALANCE", q1_25: "$24.2", q2_25: "$25.8", q3_25: "$27.1", q4_25: "$28.9", q1_26: "$30.4", q2_26: "$32.1", src: "doc:bcb_jun26_p4" },
-      { name: "Mexico Deposits ($B)", cat: "BALANCE", q1_25: "$1.20", q2_25: "$1.65", q3_25: "$2.10", q4_25: "$2.55", q1_26: "$2.85", q2_26: "$3.12", src: "doc:bcb_jun26_p4" },
-      { name: "Total Loan Portfolio ($B)", cat: "BALANCE", q1_25: "$18.5", q2_25: "$19.8", q3_25: "$21.2", q4_25: "$22.8", q1_26: "$24.1", q2_26: "$25.6", src: "doc:nu_q2_p8" },
-      { name: "Operating Cash Flow ($M)", cat: "CASH", q1_25: "$420", q2_25: "$480", q3_25: "$540", q4_25: "$610", q1_26: "$690", q2_26: "$780", src: "doc:nu_q2_p8" },
-      { name: "CapEx & Software ($M)", cat: "CASH", q1_25: "-$42", q2_25: "-$45", q3_25: "-$48", q4_25: "-$52", q1_26: "-$55", q2_26: "-$60", src: "doc:nu_q2_p8" },
-      { name: "Free Cash Flow ($M)", cat: "CASH", q1_25: "$378", q2_25: "$435", q3_25: "$492", q4_25: "$558", q1_26: "$635", q2_26: "$720", src: "doc:nu_q2_p8" },
-      { name: "Active Customers (Millions)", cat: "KPI", q1_25: "95.2M", q2_25: "98.5M", q3_25: "101.8M", q4_25: "105.2M", q1_26: "108.6M", q2_26: "112.4M", src: "doc:nu_q2_p8" },
-      { name: "Monthly ARPAC ($)", cat: "KPI", q1_25: "$9.80", q2_25: "$10.20", q3_25: "$10.60", q4_25: "$11.10", q1_26: "$11.50", q2_26: "$11.90", src: "doc:nu_q2_p8" },
-      { name: "Cost-to-Serve per Customer ($/mo)", cat: "KPI", q1_25: "$0.90", q2_25: "$0.90", q3_25: "$0.89", q4_25: "$0.88", q1_26: "$0.88", q2_26: "$0.87", src: "doc:nu_q2_p8" },
-      { name: "NPL 90+ Ratio (%)", cat: "KPI", q1_25: "5.4%", q2_25: "5.3%", q3_25: "5.2%", q4_25: "5.2%", q1_26: "5.2%", q2_26: "5.2%", src: "doc:nu_q2_p8" },
-      { name: "Efficiency Ratio (%)", cat: "KPI", q1_25: "32.1%", q2_25: "31.5%", q3_25: "30.8%", q4_25: "30.2%", q1_26: "29.5%", q2_26: "28.8%", src: "doc:nu_q2_p8" }
-    ];
-
-    let activeFactCategory = 'ALL';
-
-    function filterFactCategory(cat) {
-      activeFactCategory = cat;
-      ['factCatAll', 'factCatINCOME', 'factCatBALANCE', 'factCatCASH', 'factCatKPI'].forEach(id => {
-        const btn = document.getElementById(id);
-        if (btn) btn.className = 'k-chip';
-      });
-      const activeBtn = document.getElementById(cat === 'ALL' ? 'factCatAll' : 'factCat' + cat);
-      if (activeBtn) activeBtn.className = 'k-chip is-active';
-
-      updateFactPlaygroundTable();
-    }
-
-    function updateFactPlaygroundTable() {
-      const tbody = document.getElementById('factPlaygroundTbody');
-      if (!tbody) return;
-
-      const q = (document.getElementById('factSearchInput')?.value || '').toLowerCase().trim();
-
-      const filtered = EXTRACTED_FACTS_DB.filter(f => {
-        const matchesCat = (activeFactCategory === 'ALL' || f.cat === activeFactCategory);
-        const matchesSearch = !q || f.name.toLowerCase().includes(q) || f.src.toLowerCase().includes(q);
-        return matchesCat && matchesSearch;
-      });
-
-      const countEl = document.getElementById('factCountMatch');
-      if (countEl) countEl.innerText = `${filtered.length} Facts Active`;
-
-      tbody.innerHTML = filtered.map(f => `
-        <tr>
-          <td><strong>${f.name}</strong></td>
-          <td><span class="k-chip">${f.cat}</span></td>
-          <td class="num t-mono">${f.q1_25}</td>
-          <td class="num t-mono">${f.q2_25}</td>
-          <td class="num t-mono">${f.q3_25}</td>
-          <td class="num t-mono">${f.q4_25}</td>
-          <td class="num t-mono">${f.q1_26}</td>
-          <td class="num k-num-pos t-mono">${f.q2_26}</td>
-          <td style="text-align: right;"><a onclick="openPeekDrawer('${f.src}')" class="src-chip">${f.src}</a></td>
-        </tr>
-      `).join('');
-    }
+    // Governed Explore is mounted from /api/panel/explore.
 
     // EMBEDDED DCF SLIDERS INSIDE REPORT
     function updateEmbeddedDCF() {
@@ -3768,25 +2356,9 @@
       document.getElementById('dcfUpsideOutput').innerText = '+' + upside + '% Upside';
     }
 
-    // PIPELINE SIMULATION
+    // Operational jobs are observed through the existing governed backend.
     function runPipelineJob(jobName) {
-      showToast(`Started execution of ${jobName}...`);
-      const consoleEl = document.getElementById('terminalLogConsole');
-      if (consoleEl) {
-        const time = new Date().toISOString();
-        const newLine = document.createElement('div');
-        newLine.className = 'terminal-line';
-        newLine.innerHTML = `<span class="terminal-info">[RUN] ${time}</span> manual_trigger job="${jobName}" status="EXECUTING"`;
-        consoleEl.prepend(newLine);
-
-        setTimeout(() => {
-          const doneLine = document.createElement('div');
-          doneLine.className = 'terminal-line';
-          doneLine.innerHTML = `<span class="terminal-success">[OK] ${time}</span> job="${jobName}" completed duration_ms=1420 facts_sync=OK`;
-          consoleEl.prepend(doneLine);
-          showToast(`${jobName} finished successfully!`);
-        }, 1500);
-      }
+      openLiveDetail('screen-execution-queue');
     }
 
     // AUDIT LOG FILTERING
@@ -3867,172 +2439,15 @@
             </table>
           ` : ''}
         `;
-      } else if (type === 'rebalance-plan') {
-        title.innerText = "Automated Portfolio Rebalance Execution Plan";
-        subtitle.innerText = "Calculated trade order batch to eliminate target allocation drift & optimize risk budget";
+      } else if (type === 'thresholds') {
+        title.innerText = "Buy / Hold / Trim / Sell Thresholds";
+        subtitle.innerText = "Existing-position buy, hold, trim, and sell bands";
         body.innerHTML = `
-          <div class="k-well" style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
-              <div style="font-size: var(--fs-caption); color: var(--muted);">Risk Budget Free Capacity</div>
-              <div class="t-mono" style="font-size: var(--fs-title); font-weight: 600; color: var(--ok);">14.0% NAV ($1.68M Cash)</div>
-            </div>
-            <div style="text-align: right;">
-              <div style="font-size: var(--fs-caption); color: var(--muted);">Target Alignment Drift</div>
-              <div class="t-mono" style="font-size: var(--fs-title); font-weight: 600; color: var(--warn);">0.5% Drift Resolved</div>
-            </div>
+          <div class="k-well work-os-threshold-note">
+            <div class="work-os-threshold-note-title">Decision discipline, not order routing</div>
+            <p class="work-os-threshold-note-body">Review the current buy, hold, trim, and sell conditions. This workspace records an allocation decision; it never submits a broker order.</p>
           </div>
-
-          <div style="font-weight: 600; font-size: var(--fs-body); margin-top: var(--sp-2);">Calculated Trade Batch (2 Orders)</div>
-          <table class="matrix-table t-mono">
-            <thead>
-              <tr>
-                <th>Ticker</th>
-                <th>Order Action</th>
-                <th>Target Weight</th>
-                <th>Trade Size</th>
-                <th>Est Limit Price</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><strong>BKNG</strong></td>
-                <td><span class="k-pill k-pill-ok">BUY +0.5%</span></td>
-                <td>8.5% (was 8.0%)</td>
-                <td>+$60,000 (14.5 sh)</td>
-                <td>$4,120.00</td>
-              </tr>
-              <tr>
-                <td><strong>TSM</strong></td>
-                <td><span class="k-pill k-pill-bad">SELL -0.5%</span></td>
-                <td>5.0% (was 5.5%)</td>
-                <td>-$60,000 (356.1 sh)</td>
-                <td>$168.50</td>
-              </tr>
-            </tbody>
-          </table>
-
-          <div class="k-well-compact" style="display: flex; justify-content: space-between; font-size: var(--fs-caption);">
-            <span>Estimated Market Impact / Slippage: <strong style="color: var(--ok);">0.02% ($24.00)</strong></span>
-            <span>Broker Route: <strong style="color: var(--fg);">Direct DMA</strong></span>
-          </div>
-
-          <div style="display: flex; justify-content: flex-end; gap: var(--sp-2); margin-top: var(--sp-3);">
-            <button class="k-btn k-btn-quiet k-btn-sm" onclick="closeDrillDrawer()">Cancel</button>
-            <button class="k-btn k-btn-primary k-btn-sm" onclick="executeBatchRebalance()">Execute Batch Rebalance Orders →</button>
-          </div>
-        `;
-      } else if (type === 'dcf-sensitivity') {
-        title.innerText = "DCF Sensitivity & Scenario Prior Matrix";
-        subtitle.innerText = "Dynamic discount rate & terminal growth rate slider matrix";
-        body.innerHTML = `
-          <div class="k-well" style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
-              <div style="font-size: var(--fs-caption); color: var(--muted);">Implied Intrinsic Fair Value</div>
-              <div class="t-mono" style="font-size: var(--fs-display); font-weight: 600; color: var(--accent);" id="dcfFairValueOutput">$18.50</div>
-            </div>
-            <div style="text-align: right;">
-              <div style="font-size: var(--fs-caption); color: var(--muted);">Expected Upside</div>
-              <div class="k-num-pos t-mono" style="font-size: var(--fs-title); font-weight: 600;" id="dcfUpsideOutput">+29.8% Upside</div>
-            </div>
-          </div>
-
-          <!-- Dynamic Sliders -->
-          <div class="k-well" style="display: flex; flex-direction: column; gap: var(--sp-3);">
-            <div>
-              <div style="display: flex; justify-content: space-between; font-size: var(--fs-caption); margin-bottom: var(--sp-1);">
-                <span>Discount Rate (WACC)</span>
-                <strong style="color: var(--accent);" id="waccValueLabel">10.50%</strong>
-              </div>
-              <input type="range" id="waccSlider" min="8.0" max="14.0" step="0.25" value="10.5" style="width: 100%; accent-color: var(--accent);" oninput="updateDCFSensitivity(); markViewModified();">
-            </div>
-
-            <div>
-              <div style="display: flex; justify-content: space-between; font-size: var(--fs-caption); margin-bottom: var(--sp-1);">
-                <span>Terminal Growth Rate (g)</span>
-                <strong style="color: var(--accent);" id="gValueLabel">3.50%</strong>
-              </div>
-              <input type="range" id="gSlider" min="1.0" max="5.0" step="0.25" value="3.5" style="width: 100%; accent-color: var(--accent);" oninput="updateDCFSensitivity(); markViewModified();">
-            </div>
-          </div>
-
-          <div style="font-weight: 600; font-size: var(--fs-body);">WACC vs Terminal Growth Sensitivity Table ($)</div>
-          <table class="matrix-table t-mono">
-            <thead>
-              <tr><th>WACC \\ g</th><th class="num">2.5%</th><th class="num">3.5%</th><th class="num">4.5%</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>9.5%</td><td class="num t-mono">$19.80</td><td class="num k-num-pos t-mono">$21.40</td><td class="num k-num-pos t-mono">$23.50</td></tr>
-              <tr><td>10.5% (Base)</td><td class="num t-mono">$17.10</td><td class="num k-num-pos t-mono" style="color: var(--accent); font-weight: 600;">$18.50</td><td class="num k-num-pos t-mono">$20.10</td></tr>
-              <tr><td>11.5%</td><td class="num t-mono">$15.20</td><td class="num t-mono">$16.40</td><td class="num t-mono">$17.80</td></tr>
-            </tbody>
-          </table>
-        `;
-      } else if (type === 'comparative-viewer') {
-        title.innerText = "Transcript & SEC Filing Comparative Viewer";
-        subtitle.innerText = "Side-by-side management speech vs SEC 10-Q disclosure verification";
-        body.innerHTML = `
-          <div class="k-well" style="border-color: var(--ok);">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <span style="font-weight: 600; font-size: var(--fs-body);">VERIFICATION STATUS</span>
-              <span class="k-pill k-pill-ok">VERIFIED BY SEC 10-Q (100% MATCH)</span>
-            </div>
-          </div>
-
-          <div class="comparative-grid">
-            <div class="k-well">
-              <div style="font-size: var(--fs-caption); color: var(--accent); font-weight: 600; margin-bottom: var(--sp-1);">EARNINGS CALL TRANSCRIPT</div>
-              <p style="font-family: var(--serif); font-size: var(--fs-body); line-height: 1.6;">
-                "Our deposit growth in Mexico accelerated beyond expectations in Q2, surpassing $3.0 billion total customer deposits."
-              </p>
-              <div style="margin-top: var(--sp-2); font-size: var(--fs-caption); color: var(--muted);">— David Vélez, CEO (Q2 Call)</div>
-            </div>
-
-            <div class="k-well">
-              <div style="font-size: var(--fs-caption); color: var(--ok); font-weight: 600; margin-bottom: var(--sp-1);">SEC 10-Q FOOTNOTE EXTRACT</div>
-              <p style="font-family: var(--serif); font-size: var(--fs-body); line-height: 1.6;">
-                "Note 14: Mexico subsidiary deposits stood at $3.12 billion as of June 30, 2026."
-              </p>
-              <div style="margin-top: var(--sp-2);">
-                <a onclick="openPeekDrawer('doc:bcb_jun26_p4')" class="src-chip">doc:bcb_jun26_p4</a>
-              </div>
-            </div>
-          </div>
-        `;
-      } else if (type === 'factor-heatmap') {
-        title.innerText = "Factor Risk & Exposure Heatmap";
-        subtitle.innerText = "Portfolio factor loadings, risk concentration, and macro stress tests";
-        body.innerHTML = `
-          <div class="heatmap-grid">
-            <div class="heatmap-cell heatmap-cell-ok">
-              <div style="font-size: var(--fs-caption); color: var(--muted);">Quality Factor</div>
-              <div class="t-mono" style="font-weight: 600; color: var(--ok);">+1.42 (High)</div>
-            </div>
-            <div class="heatmap-cell heatmap-cell-ok">
-              <div style="font-size: var(--fs-caption); color: var(--muted);">Momentum</div>
-              <div class="t-mono" style="font-weight: 600; color: var(--ok);">+0.85 (Mod)</div>
-            </div>
-            <div class="heatmap-cell heatmap-cell-warn">
-              <div style="font-size: var(--fs-caption); color: var(--muted);">LatAm Macro</div>
-              <div class="t-mono" style="font-weight: 600; color: var(--warn);">+1.18 (Elevated)</div>
-            </div>
-            <div class="heatmap-cell heatmap-cell-bad">
-              <div style="font-size: var(--fs-caption); color: var(--muted);">Semicon Volatility</div>
-              <div class="t-mono" style="font-weight: 600; color: var(--bad);">+1.65 (High)</div>
-            </div>
-          </div>
-
-          <div style="font-weight: 600; font-size: var(--fs-body);">Macro Stress Test Scenarios</div>
-          <table class="matrix-table t-mono">
-            <thead>
-              <tr><th>Scenario</th><th class="num">Portfolio Impact</th><th>Risk Limit Status</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>BRL Depreciation -10%</td><td class="num t-mono" style="color: var(--warn);">-2.4%</td><td><span class="k-pill k-pill-ok">PASS</span></td></tr>
-              <tr><td>US Rates +50bps</td><td class="num t-mono" style="color: var(--warn);">-3.1%</td><td><span class="k-pill k-pill-ok">PASS</span></td></tr>
-              <tr><td>Semiconductor Fab Freeze</td><td class="num t-mono" style="color: var(--bad);">-5.8%</td><td><span class="k-pill k-pill-warn">MONITOR</span></td></tr>
-            </tbody>
-          </table>
-        `;
+          <button class="k-btn k-btn-primary k-btn-sm" onclick="openLiveDetail('screen-performance')">Open Performance &amp; Risk →</button>`;
       } else if (type === 'dcf-priors') {
         title.innerText = "DCF Valuation Baseline Priors & Model Calibration";
         subtitle.innerText = "Discount rate (WACC), terminal perpetual growth rate (g), high growth fade horizon & refresh cadence";
@@ -4075,7 +2490,7 @@
 
               <div style="display: flex; justify-content: flex-end; gap: var(--sp-2); margin-top: var(--sp-2);">
                 <button class="k-btn k-btn-quiet k-btn-sm" onclick="closeDrillDrawer()">Cancel</button>
-                <button class="k-btn k-btn-primary k-btn-sm" onclick="closeDrillDrawer(); showToast('DCF Calibration Priors updated & saved to DB');">Save DCF Calibration</button>
+                <button class="k-btn k-btn-primary k-btn-sm" onclick="closeDrillDrawer(); openLiveDetail('screen-execution-queue');">Open Live DCF Operations</button>
               </div>
             </div>
           </div>
@@ -4109,7 +2524,7 @@
 
               <div style="display: flex; justify-content: flex-end; gap: var(--sp-2); margin-top: var(--sp-2);">
                 <button class="k-btn k-btn-quiet k-btn-sm" onclick="closeDrillDrawer()">Cancel</button>
-                <button class="k-btn k-btn-primary k-btn-sm" onclick="closeDrillDrawer(); showToast('LLM Transport Routing updated');">Save Transport Config</button>
+                <button class="k-btn k-btn-primary k-btn-sm" onclick="closeDrillDrawer(); openLiveDetail('screen-execution-queue');">Open Live Routing Operations</button>
               </div>
             </div>
           </div>
@@ -4272,7 +2687,6 @@
     }
     // INITIALIZATION
     document.addEventListener('DOMContentLoaded', () => {
-      updateFactPlaygroundTable();
     });
   </script>
 </body>

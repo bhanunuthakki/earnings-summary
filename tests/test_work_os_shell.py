@@ -651,8 +651,14 @@ def test_work_os_copilot_is_not_a_top_right_header_action() -> None:
         Path(__file__).resolve().parents[1] / "mockups" / "harvey_sidebar_flow.html"
     ).read_text(encoding="utf-8")
     assert "Ask Copilot" not in prototype
-    assert prototype.count("openWorkOsCopilot()") == 1
+    assert 'onclick="openWorkOsCopilot()"' not in prototype
     assert html.count('id="workOsCopilotLauncher"') == 1
+    assert html.count('onclick="openWorkOsCopilot()"') == 0
+    launcher_tags = re.findall(r'<button[^>]*id="workOsCopilotLauncher"[^>]*>', html)
+    assert len(launcher_tags) == 1
+    launcher = launcher_tags[0]
+    assert 'aria-label="Open Copilot"' in launcher
+    assert 'aria-controls="workOsCopilot"' in launcher
 
 
 def test_work_os_shell_composes_the_canonical_dark_control_baseline() -> None:
@@ -931,7 +937,7 @@ def test_prototype_template_has_no_dead_copilot_runtime_to_strip() -> None:
     assert "type === 'ask-copilot'" not in prototype
     assert "populateCopilotPrompt" not in prototype
     assert "executeCopilotQuery" not in prototype
-    assert prototype.count("openWorkOsCopilot()") == 1
+    assert 'onclick="openWorkOsCopilot()"' not in prototype
 
 
 def test_full_brief_is_transient_reader_state_not_persistent_navigation() -> None:

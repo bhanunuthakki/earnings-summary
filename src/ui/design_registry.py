@@ -845,7 +845,6 @@ _RUNTIME_JS_SURFACES = frozenset(
         "pipeline/triage_panel.py",
         "pipeline/work_os_copilot.py",
         "pipeline/work_os_evaluation.py",
-        "pipeline/work_os_shell.py",
         "pipeline/work_os_runtime.js",
         "pipeline/worldview_panel.py",
         "redteam/brief.py",

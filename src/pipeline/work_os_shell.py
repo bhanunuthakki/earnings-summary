@@ -142,24 +142,6 @@ _LEGACY_HASHES: dict[str, str] = {
 
 _PROTOTYPE_PATH = Path(__file__).resolve().parents[2] / "mockups" / "harvey_sidebar_flow.html"
 
-_TRADE_MODAL_RE = re.compile(
-    r"\n\s*<!-- TRADE ORDER EXECUTION MODAL & SCRIM -->.*?\n\s*<!-- TOAST NOTICE -->",
-    re.DOTALL,
-)
-_TRADE_FUNCTIONS_RE = re.compile(
-    r"\n\s*// TRADE ORDER MODAL INTERACTION.*?\n\s*function openSheetDCFModel",
-    re.DOTALL,
-)
-_REBALANCE_DRAWER_RE = re.compile(
-    r"\n\s*\} else if \(type === 'rebalance-plan'\) \{.*?\n\s*\} else if \(type === 'dcf-priors'\)",
-    re.DOTALL,
-)
-_NAV_ITEM_RE = re.compile(
-    r'<a (?P<attrs>onclick="[^"]+" class="nav-item[^"]*" id="nav-[^"]+"[^>]*)>'
-    r"(?P<body>.*?)</a>",
-    re.DOTALL,
-)
-
 
 def _render_full_page_detail_host() -> str:
     """Render the one registered, read-only host for routed detail peeks."""
@@ -179,72 +161,6 @@ def _render_full_page_detail_host() -> str:
   </main>
 </section>
 """.strip()
-
-
-_ALLOCATION_NAV_RE = re.compile(
-    r'\s*<a onclick="navigateTo\(\'screen-allocation\'\)".*?id="nav-allocation".*?</a>',
-    re.DOTALL,
-)
-_PIPELINE_SIMULATION_RE = re.compile(
-    r"\n\s*// PIPELINE SIMULATION\n\s*function runPipelineJob\(jobName\) \{.*?"
-    r"\n\s*\}\n\n\s*// AUDIT LOG FILTERING",
-    re.DOTALL,
-)
-_COCKPIT_SECTION_RE = re.compile(
-    r'<section id="screen-cockpit".*?</section>\s*'
-    r"(?=<!-- =+\s*SURFACE: PORTFOLIO PERFORMANCE)",
-    re.DOTALL,
-)
-_PERFORMANCE_SECTION_RE = re.compile(
-    r'<section id="screen-performance".*?</section>\s*'
-    r"(?=<!-- =+\s*SURFACE: PORTFOLIO ALLOCATION)",
-    re.DOTALL,
-)
-_ALLOCATION_SECTION_RE = re.compile(
-    r'<section id="screen-allocation".*?</section>\s*'
-    r"(?=<!-- =+\s*SURFACE 2: COMPANY RESEARCH WORKSPACE)",
-    re.DOTALL,
-)
-_COMPANY_DESK_SECTION_RE = re.compile(
-    r'<section id="screen-workspace".*?</section>\s*'
-    r"(?=<!-- =+\s*EVALUATION COVERAGE DESTINATION)",
-    re.DOTALL,
-)
-_EVALUATION_SECTION_RE = re.compile(
-    r'<section id="screen-evaluation".*?</section>\s*'
-    r"(?=<!-- =+\s*BRIEF LIBRARY PERSISTENT DESTINATION)",
-    re.DOTALL,
-)
-_BRIEF_LIBRARY_SECTION_RE = re.compile(
-    r'<section id="screen-brief-library".*?</section>\s*'
-    r"(?=<!-- =+\s*SURFACE: EXTRACTED FACT & METRIC)",
-    re.DOTALL,
-)
-_FACT_PLAYGROUND_SECTION_RE = re.compile(
-    r'<section id="screen-analytics-playground".*?</section>\s*'
-    r"(?=<!-- =+\s*SURFACE 3: DECISION AUDIT LOG)",
-    re.DOTALL,
-)
-_FACT_PLAYGROUND_RUNTIME_RE = re.compile(
-    r"\n\s*// EXTRACTED FACT & METRIC ANALYTICS PLAYGROUND DATABASE & LOGIC.*?"
-    r"\n\s*// EMBEDDED DCF SLIDERS INSIDE REPORT",
-    re.DOTALL,
-)
-_AUDIT_SECTION_RE = re.compile(
-    r'<section id="screen-audit-log".*?</section>\s*'
-    r"(?=<!-- =+\s*SURFACE 4: EXECUTION QUEUE)",
-    re.DOTALL,
-)
-_OPERATIONS_SECTION_RE = re.compile(
-    r'<section id="screen-execution-queue".*?</section>\s*'
-    r"(?=</div>\s*</main>)",
-    re.DOTALL,
-)
-_SIDEBAR_COMMAND_RE = re.compile(
-    r"\s*<!-- Command Bar Trigger -->\s*<div class=\"sidebar-cmd\"[^>]*>.*?</div>\s*"
-    r"(?=<!-- LAYER 1: PORTFOLIO INTELLIGENCE -->)",
-    re.S,
-)
 
 
 def _endpoint_map() -> dict[str, str]:
@@ -418,11 +334,6 @@ def _render_live_screen_shell(
 """.strip()
 
 
-def _nav_button(match: re.Match[str]) -> str:
-    attrs = match.group("attrs").replace('class="', 'class="k-btn k-btn-quiet ', 1)
-    return f'<button type="button" {attrs}>{match.group("body")}</button>'
-
-
 def _production_runtime(generated_at: datetime) -> str:
     endpoint_json = json.dumps(_endpoint_map(), indent=2, sort_keys=False)
     legacy_hash_json = json.dumps(_LEGACY_HASHES, indent=2, sort_keys=False)
@@ -447,71 +358,49 @@ def _production_runtime(generated_at: datetime) -> str:
 """
 
 
-def _make_allocation_language_honest(html: str) -> str:
-    replacements = {
-        "Ratify & Trade": "Review Thresholds",
-        "Confirm Add Execution (+0.5% weight)": "Review Add Threshold (+0.5% weight)",
-        "Executing item persists state & clears queue": "Completing an item clears it from this session",
-        "executed and persisted to DB": "completed for this session",
-        "Add +0.5%": "Review Buy Band",
-        "Trim -0.5%": "Review Trim Band",
-        "Trim Limit": "Review Trim Band",
-        "Hold / Rebalance": "Review Hold Band",
-        "Execute Trade Order": "Review Thresholds",
-        "Draft Rebalance Plan →": "Review Allocation Thresholds →",
-        "Click trade action to launch execution modal": "Review decision thresholds before allocating capital",
-        "Trade Order": "Allocation Decision",
-        "Trade Execution": "Allocation Decision",
-        "Rebalance target allocation order executed": "Allocation threshold decision recorded",
-        "showToast('Disconfirming limit settings saved'); markViewModified();": "openDrillDrawer('thresholds');",
-        "showToast('View parameters & slider state saved to DB')": "showToast('View parameters updated for this session')",
-        "closeDrillDrawer(); showToast('DCF Calibration Priors updated & saved to DB');": "closeDrillDrawer(); openLiveDetail('screen-execution-queue');",
-        "closeDrillDrawer(); showToast('LLM Transport Routing updated');": "closeDrillDrawer(); openLiveDetail('screen-execution-queue');",
-        "Save DCF Calibration": "Open Live DCF Operations",
-        "Save Transport Config": "Open Live Routing Operations",
-    }
-    for old, new in replacements.items():
-        html = html.replace(old, new)
-    html = re.sub(
-        r'onclick="(?:event\.stopPropagation\(\);\s*)?openTradeModal\([^\"]+\);?"',
-        "onclick=\"event.stopPropagation(); openDrillDrawer('thresholds')\"",
-        html,
-    )
-    html = html.replace("openDrillDrawer('rebalance-plan')", "openDrillDrawer('thresholds')")
-    html = _TRADE_MODAL_RE.sub("\n\n  <!-- TOAST NOTICE -->", html)
-    html = _TRADE_FUNCTIONS_RE.sub("\n\n    function openSheetDCFModel", html)
-    html = _REBALANCE_DRAWER_RE.sub(
-        """
-      } else if (type === 'thresholds') {
-        title.innerText = "Buy / Hold / Trim / Sell Thresholds";
-        subtitle.innerText = "Existing-position buy, hold, trim, and sell bands";
-        body.innerHTML = `
-          <div class="k-well work-os-threshold-note">
-            <div class="work-os-threshold-note-title">Decision discipline, not order routing</div>
-            <p class="work-os-threshold-note-body">Review the current buy, hold, trim, and sell conditions. This workspace records an allocation decision; it never submits a broker order.</p>
-          </div>
-          <button class="k-btn k-btn-primary k-btn-sm" onclick="openLiveDetail('screen-performance')">Open Performance &amp; Risk →</button>`;
-      } else if (type === 'dcf-priors')""",
-        html,
-    )
-    return _PIPELINE_SIMULATION_RE.sub(
-        """
-
-    // Operational jobs are observed through the existing governed backend.
-    function runPipelineJob(jobName) {
-      openLiveDetail('screen-execution-queue');
-    }
-
-    // AUDIT LOG FILTERING""",
-        html,
-    )
-
-
 def _add_production_contract(
     html: str, generated_at: datetime, *, db_path: Path | None = None
 ) -> str:
+    slot_replacements = (
+        ("cockpit", _render_portfolio_cockpit_shell(), "\n\n      "),
+        (
+            "performance",
+            _render_live_screen_shell(
+                screen_id="screen-performance",
+                mount_id="workOsPerformanceMount",
+                layer="Portfolio Intelligence",
+                title="Performance & Risk",
+                description="Live benchmarking, allocation, posture, and risk evidence",
+            ),
+            "\n\n      ",
+        ),
+        ("company-desk", render_company_desk_shell(), "\n\n      "),
+        ("evaluation", _render_evaluation_shell(), "\n\n      "),
+        ("brief-library", render_brief_library_shell(), "\n\n      "),
+        ("fact-playground", render_fact_playground_shell(), "\n\n      "),
+        (
+            "audit",
+            _render_live_screen_shell(
+                screen_id="screen-audit-log",
+                mount_id="workOsAuditMount",
+                layer="Operations & Governance",
+                title="Decision Audit Log",
+                description="Live decisions, memos, triggers, and the governed research record",
+            ),
+            "\n\n      ",
+        ),
+        ("operations", render_operations_shell(), "\n      "),
+    )
+    for slot_name, replacement, suffix in slot_replacements:
+        marker = f"<!-- WORK_OS_SLOT:{slot_name} -->"
+        slot_count = html.count(marker)
+        if slot_count != 1:
+            raise ValueError(
+                f"Work OS template must contain exactly one {marker} slot; found {slot_count}"
+            )
+        html = html.replace(marker, replacement + suffix, 1)
+
     html = html.replace("</title>", f"</title>{FAVICON_LINK}", 1)
-    html = _SIDEBAR_COMMAND_RE.sub("", html, count=1)
     html = re.sub(
         r'<button type="button" class="sidebar-collapse-toggle.*?</button>',
         '<button id="workOsAppSidebarToggle" type="button" '
@@ -524,59 +413,7 @@ def _add_production_contract(
         count=1,
         flags=re.DOTALL,
     )
-    html = html.replace("Execution Queue & Operations Hub", "Operations")
-    html = html.replace("Operations & Execution Governance Hub", "Operations")
-    html = html.replace("Portfolio Performance vs Index Benchmark", "Performance")
-    html = html.replace(
-        '<span class="nav-text">Execution Queue & Operations</span>',
-        '<span class="nav-text">Operations</span>',
-        1,
-    )
-    html = html.replace(
-        '<span class="nav-text">Performance vs Index</span>',
-        '<span class="nav-text">Performance</span>',
-        1,
-    )
-    html = _COCKPIT_SECTION_RE.sub(_render_portfolio_cockpit_shell() + "\n\n      ", html, count=1)
-    html = _PERFORMANCE_SECTION_RE.sub(
-        _render_live_screen_shell(
-            screen_id="screen-performance",
-            mount_id="workOsPerformanceMount",
-            layer="Portfolio Intelligence",
-            title="Performance & Risk",
-            description="Live benchmarking, allocation, posture, and risk evidence",
-        )
-        + "\n\n      ",
-        html,
-        count=1,
-    )
-    html = _ALLOCATION_SECTION_RE.sub("\n\n      ", html, count=1)
-    html = _ALLOCATION_NAV_RE.sub("", html, count=1)
-    html = _COMPANY_DESK_SECTION_RE.sub(render_company_desk_shell() + "\n\n      ", html, count=1)
-    html = _EVALUATION_SECTION_RE.sub(_render_evaluation_shell() + "\n\n      ", html, count=1)
-    html = _BRIEF_LIBRARY_SECTION_RE.sub(render_brief_library_shell() + "\n\n      ", html, count=1)
-    html = _FACT_PLAYGROUND_SECTION_RE.sub(
-        render_fact_playground_shell() + "\n\n      ", html, count=1
-    )
-    html = _FACT_PLAYGROUND_RUNTIME_RE.sub(
-        "\n\n    // Governed Explore is mounted from /api/panel/explore.\n\n    // EMBEDDED DCF SLIDERS INSIDE REPORT",
-        html,
-        count=1,
-    )
-    html = html.replace("      updateFactPlaygroundTable();\n", "", 1)
-    html = _AUDIT_SECTION_RE.sub(
-        _render_live_screen_shell(
-            screen_id="screen-audit-log",
-            mount_id="workOsAuditMount",
-            layer="Operations & Governance",
-            title="Decision Audit Log",
-            description="Live decisions, memos, triggers, and the governed research record",
-        )
-        + "\n\n      ",
-        html,
-        count=1,
-    )
-    html = _OPERATIONS_SECTION_RE.sub(render_operations_shell() + "\n      ", html, count=1)
+
     html = html.replace(
         '<section id="screen-cockpit" class="screen-view is-active">',
         '<section id="screen-cockpit" class="screen-view is-active" data-mobile-surface="cockpit">',
@@ -620,31 +457,7 @@ def _add_production_contract(
         '<h1 class="k-card-title work-os-explore-title" id="workOsFactPlaygroundHeading">Explore</h1>',
         1,
     )
-    html = html.replace(
-        '<aside class="drill-drawer" id="drillDrawer">',
-        '<aside class="drill-drawer" id="drillDrawer" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="drawerTitle" hidden>',
-        1,
-    )
-    html = html.replace(
-        '<button class="k-btn k-btn-quiet k-btn-sm" onclick="closeDrillDrawer()">',
-        '<button id="drillDrawerClose" class="k-btn k-btn-quiet k-btn-sm" onclick="closeDrillDrawer()">',
-        1,
-    )
-    html = html.replace(
-        '<aside class="drill-drawer" id="peekDrawer"',
-        '<aside class="drill-drawer" id="peekDrawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="Source citation" hidden',
-        1,
-    )
-    peek_start = html.index('id="peekDrawer"')
-    peek_close = '<button class="k-btn k-btn-quiet k-btn-sm" onclick="closePeekDrawer()">'
-    peek_close_at = html.index(peek_close, peek_start)
-    html = (
-        html[:peek_close_at]
-        + '<button id="workOsPeekOpenFullPage" class="k-btn k-btn-quiet k-btn-sm" type="button" hidden>Open full page</button>'
-        + '<button id="peekDrawerClose" class="k-btn k-btn-quiet k-btn-sm" onclick="closePeekDrawer()">'
-        + html[peek_close_at + len(peek_close) :]
-    )
-    html = _NAV_ITEM_RE.sub(_nav_button, html)
+
     for screen in SCREEN_SPECS:
         needle = f'<section id="{screen.screen_id}"'
         html = html.replace(
@@ -652,6 +465,7 @@ def _add_production_contract(
             f'<section data-live-endpoint="{screen.endpoint}" id="{screen.screen_id}"',
             1,
         )
+
     runtime = _production_runtime(generated_at)
     copilot = render_work_os_copilot()
     reader = render_brief_reader_shell()
@@ -749,7 +563,7 @@ def render_work_os_shell_result(
     with _SHELL_MEMO_LOCK:
         html = _SHELL_MEMO.get(key)
         if html is None:
-            html = _make_allocation_language_honest(_prototype_html())
+            html = _prototype_html()
             html = _add_production_contract(html, rendered_at, db_path=db_path)
             if len(_SHELL_MEMO) >= _SHELL_MEMO_MAX_ENTRIES:
                 _SHELL_MEMO.pop(next(iter(_SHELL_MEMO)))
