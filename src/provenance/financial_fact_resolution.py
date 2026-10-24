@@ -63,6 +63,11 @@ from provenance.source_regime import (
     classification_for_source_type,
     contract_for,
 )
+from sqlite_runtime import (
+    ensure_fact_capture_functions,
+    fact_capture_locator_matches,
+    fact_capture_numeric_matches,
+)
 
 log = logging.getLogger(__name__)
 
@@ -811,6 +816,7 @@ def _derived_current_graph_invalid_sql(
     child_fiscal = "COALESCE(kpi.fiscal_period_type,financial.fiscal_period_type)"
     child_unit = "COALESCE(kpi.unit,financial.unit)"
     child_doc = "COALESCE(kpi.source_doc_id,financial.source_doc_id)"
+    child_locator = "COALESCE(kpi.locator,financial.locator)"
     quarantine = explicit_document_quarantine_sql("run.document_version_id", as_known=as_known)
     temporal_evidence = (
         "AND "
@@ -973,11 +979,13 @@ def _derived_current_graph_invalid_sql(
         f"WHEN upper({child_fiscal}) IN ('FY','ANNUAL') THEN 'annual' "
         f"WHEN upper({child_fiscal}) IN ('YTD','TTM','YEAR_TO_DATE') THEN 'year_to_date' "
         f"WHEN upper({child_fiscal})='INSTANT' THEN 'instant' ELSE 'other' END "
-        f"AND CAST(observation.numeric_value AS NUMERIC)={child_value} "
+        f"AND fact_capture_numeric_matches(observation.method_version,"
+        f"observation.numeric_value,{child_value},CAST({child_value} AS TEXT))=1 "
         f"AND observation.unit={child_unit} "
         f"AND observation.currency IS CASE WHEN {table}='kpi_facts' "
         "THEN kpi.currency ELSE financial.currency END "
         f"AND {child_doc}={doc_id} "
+        f"AND fact_capture_locator_matches(link.locator_json,{child_locator})=1 "
         f"AND {version_id}=run.document_version_id "
         "AND version.legacy_document_id=link.source_document_id "
         "AND extraction.outcome='succeeded' "
@@ -1068,6 +1076,8 @@ def _historical_derived_valid_ids(
 ) -> set[int]:
     """Check requested KPI graphs in one SQL statement and one read snapshot."""
 
+    ensure_fact_capture_functions(conn)
+
     if not fact_ids:
         return set()
     resolution_clocks = " AND ".join(
@@ -1143,6 +1153,7 @@ def canonical_fact_relation(
 
     if fact_table not in _TABLES:
         raise ValueError(f"unsupported fact table: {fact_table}")
+    ensure_fact_capture_functions(conn)
     view = (
         "v_financial_facts_resolved_current"
         if fact_table == "financial_facts"
@@ -1511,15 +1522,15 @@ def _canonical_fact_selections_as_known_snapshot(
             == _datetime(fact["period_end"], field="fact period_end"),
             "fiscal_period_type": str(row["fiscal_period_type"])
             == _observation_period_type(str(fact["fiscal_period_type"])),
-            "numeric_value": _canonical_decimal(row["numeric_value"])
-            == _canonical_decimal(
-                fact["sqlite_value_text"]
-                if row["method_version"] == "0231-trigger-v1"
-                else fact["value"]
+            "numeric_value": fact_capture_numeric_matches(
+                row["method_version"],
+                row["numeric_value"],
+                fact["value"],
+                fact["sqlite_value_text"],
             ),
             "unit": str(row["unit"]) == str(fact["unit"]),
             "source_document_id": int(row["source_document_id"]) == int(fact["source_doc_id"]),
-            "locator_json": _optional_text(row["locator_json"]) == _optional_text(fact["locator"]),
+            "locator_json": fact_capture_locator_matches(row["locator_json"], fact["locator"]),
         }
         if fact_table == "financial_facts":
             comparisons["currency"] = _optional_text(row["currency"]) == _optional_text(

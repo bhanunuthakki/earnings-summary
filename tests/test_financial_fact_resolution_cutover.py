@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sqlite3
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
@@ -42,6 +43,7 @@ from provenance.evidence_ledger import (
 )
 from provenance.financial_fact_resolution import (
     FactCutoverRequest,
+    HistoricalFactAuthorityUnavailableError,
     _dimensions,  # pyright: ignore[reportPrivateUsage] -- current-head seam under test
     canonical_fact_relation,
     canonical_fact_selections_as_known,
@@ -51,7 +53,11 @@ from provenance.financial_fact_resolution import (
 )
 from provenance.integrity_audit import AuditOptions, audit_connection
 from run_lock import hold_run_lock
-from sqlite_runtime import SQLiteConnectionRole
+from sqlite_runtime import (
+    SQLiteConnectionRole,
+    fact_capture_numeric_matches,
+    register_sqlite_integrity_functions,
+)
 from tests.fixtures.kpi_revision_setup import definition_fixture
 from tests.kpi_semantic_support import admit_all_kpi_facts
 from timeseries.loaders import load_financial_series
@@ -60,6 +66,54 @@ ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0224_expected_document_lifecycle"
 HEAD = "0225_financial_fact_resolution_cutover"
 STAMP = datetime(2026, 7, 27, 12, 0, 0)
+
+
+def test_capture_numeric_policy_matches_sqlite_trigger_text_without_rounding() -> None:
+    conn = sqlite3.connect(":memory:")
+    try:
+        register_sqlite_integrity_functions(conn)
+        value = 0.00263774618976614
+        captured = str(conn.execute("SELECT CAST(? AS TEXT)", (value,)).fetchone()[0])
+        next_value = math.nextafter(value, math.inf)
+        assert captured == "0.0026377461897661401"
+        assert captured != str(value)
+        assert fact_capture_numeric_matches("0231-trigger-v1", captured, value, captured)
+        assert (
+            conn.execute(
+                "SELECT fact_capture_numeric_matches(?,?,?,CAST(? AS TEXT))",
+                ("0231-trigger-v1", captured, value, value),
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            conn.execute(
+                "SELECT fact_capture_numeric_matches(?,?,?,CAST(? AS TEXT))",
+                ("0231-trigger-v1", captured, next_value, next_value),
+            ).fetchone()[0]
+            == 0
+        )
+        assert not fact_capture_numeric_matches("manual-v1", "1.00000000000000001", 1.0, "1")
+    finally:
+        conn.close()
+
+
+def test_nested_canonical_reader_keeps_active_managed_cursor(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    path = migrated_db(tmp_path / "nested-capture-reader.db")
+    conn = open_db(path)
+    try:
+
+        def capture_test(value: int) -> int:
+            return value
+
+        conn.create_function("capture_test", 1, capture_test)
+        cursor = conn.execute("SELECT capture_test(1) UNION ALL SELECT capture_test(2)")
+        assert cursor.fetchone()[0] == 1
+        assert canonical_fact_relation(conn, "kpi_facts").selection_mode == "resolved_view"
+        assert cursor.fetchone()[0] == 2
+    finally:
+        conn.close()
 
 
 def test_kpi_observation_dimensions_use_only_current_semantic_head() -> None:
@@ -1227,6 +1281,58 @@ def test_derived_relation_requires_exact_current_v1_input_selection(
         relation = canonical_fact_relation(conn, "kpi_facts")
         selected = conn.execute(f"SELECT id FROM {relation.sql}").fetchall()
         assert [int(row[0]) for row in selected] == [derived_id]
+
+        def selected_derived() -> tuple[list[int], list[int]]:
+            current = [int(row[0]) for row in conn.execute(f"SELECT id FROM {relation.sql}")]
+            historical = [
+                item.fact_row_id
+                for item in canonical_fact_selections_as_known(
+                    conn,
+                    fact_table="kpi_facts",
+                    effective_at=STAMP.replace(tzinfo=UTC),
+                    known_at=datetime(2027, 1, 1, tzinfo=UTC),
+                )
+            ]
+            return current, historical
+
+        assert selected_derived() == ([derived_id], [derived_id])
+        conn.execute("SAVEPOINT numeric_tamper")
+        conn.execute("DROP TRIGGER trg_financial_facts_observation_update")
+        conn.execute("UPDATE financial_facts SET value=101 WHERE id=?", (child_id,))
+        assert selected_derived() == ([], [])
+        conn.execute("ROLLBACK TO numeric_tamper")
+        conn.execute("RELEASE numeric_tamper")
+        assert selected_derived() == ([derived_id], [derived_id])
+        conn.execute("SAVEPOINT locator_tamper")
+        conn.execute("DROP TRIGGER trg_financial_facts_observation_update")
+        conn.execute(
+            "UPDATE financial_facts SET locator=? WHERE id=?",
+            (json.dumps({"page": 99}), child_id),
+        )
+        assert selected_derived() == ([], [])
+        conn.execute("ROLLBACK TO locator_tamper")
+        conn.execute("RELEASE locator_tamper")
+        assert selected_derived() == ([derived_id], [derived_id])
+        # An isolated corrupt-capture fixture proves Decimal parity. The real
+        # observation table remains append-only under its installed trigger.
+        conn.execute("SAVEPOINT capture_tamper")
+        conn.execute("DROP TRIGGER trg_reported_observations_append_only")
+        conn.execute(
+            "UPDATE reported_observations SET method_version='manual-v1',"
+            "numeric_value='100.00000000000000001' WHERE observation_id=?",
+            (child_link["observation_id"],),
+        )
+        assert selected_derived() == ([], [])
+        with pytest.raises(HistoricalFactAuthorityUnavailableError):
+            canonical_fact_selections_as_known(
+                conn,
+                fact_table="financial_facts",
+                effective_at=STAMP.replace(tzinfo=UTC),
+                known_at=datetime(2027, 1, 1, tzinfo=UTC),
+            )
+        conn.execute("ROLLBACK TO capture_tamper")
+        conn.execute("RELEASE capture_tamper")
+        assert selected_derived() == ([derived_id], [derived_id])
         conn.execute(
             "INSERT INTO kpi_definitions (id,ticker,name,unit,primary_source) "
             "VALUES (707,'ACME','Invalid ratio','percent','sec_xbrl')"
