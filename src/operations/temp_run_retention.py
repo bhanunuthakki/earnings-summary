@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import re
@@ -36,6 +37,12 @@ _TEST_RUN_NAME = re.compile(r"earnings-summary-pytest-(?:controller|gw\d+)-[A-Za
 # its default seven-day review window (``begin_temp_run`` sets ``review_after``).
 TEST_RUN_SKELETON_AGE = timedelta(days=1)
 TEST_RUN_FAILED_AGE = timedelta(days=7)
+# A failed or crashed run keeps its fixture payload this long, then only its
+# review evidence (manifest, logs, JUnit XML, JSONL, retirement receipts) stays
+# until TEST_RUN_FAILED_AGE: a failed full suite otherwise held tens of GB.
+TEST_RUN_PAYLOAD_GRACE = timedelta(hours=1)
+_EVIDENCE_SUFFIXES = frozenset({".log", ".xml", ".jsonl"})
+_RETIREMENT_DIR = ".earnings-temp-retirement"
 # Links and multiply linked files stay in place, unfollowed and never retired, so
 # they do not make a passed rerun unfit to prove a failed attempt's recovery.
 _RETAINED_SHAPE_HOLDS = frozenset({"linked_fixture", "not_unique_regular_file"})
@@ -182,6 +189,8 @@ class TempRunPruneResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     removed: tuple[Path, ...] = ()
+    trimmed: tuple[Path, ...] = ()
+    trimmed_bytes: int = 0
     kept: dict[str, int] = Field(default_factory=dict)
 
 
@@ -554,15 +563,45 @@ def _write_once(path: Path, payload: BaseModel) -> None:
         os.fsync(handle.fileno())
 
 
-def _newest_change(root: Path) -> datetime:
-    newest = root.lstat().st_mtime
+def _newest_change(root: Path, now: datetime) -> datetime:
+    # Some tests stamp fixtures years ahead; a future time is not a recent change.
+    ceiling = now.timestamp()
+    newest = min(root.lstat().st_mtime, ceiling)
     for directory, children, names in os.walk(root, followlinks=False):
         for name in (*children, *names):
             try:
-                newest = max(newest, (Path(directory) / name).lstat().st_mtime)
+                changed = (Path(directory) / name).lstat().st_mtime
             except FileNotFoundError:
                 continue
+            if changed <= ceiling:
+                newest = max(newest, changed)
     return datetime.fromtimestamp(newest, UTC)
+
+
+def _trim_payload(root: Path, *, apply: bool) -> int:
+    """Remove a run's payload, keeping review evidence; links are removed, never followed."""
+    freed = 0
+    for directory, children, names in os.walk(root, topdown=False, followlinks=False):
+        here = Path(directory)
+        relative = here.relative_to(root)
+        if relative.parts[:1] == (_RETIREMENT_DIR,):
+            continue
+        for name in names + [child for child in children if (here / child).is_symlink()]:
+            path = here / name
+            if relative == Path(".") and name in {MANIFEST_NAME, RESOLUTION_NAME}:
+                continue
+            if not path.is_symlink() and path.suffix.lower() in _EVIDENCE_SUFFIXES:
+                continue
+            try:
+                freed += path.lstat().st_size
+                if apply:
+                    path.unlink()
+            except FileNotFoundError:
+                continue
+        if apply and here != root:
+            with contextlib.suppress(OSError):
+                here.rmdir()
+    return freed
 
 
 def prune_abandoned_test_runs(
@@ -577,14 +616,17 @@ def prune_abandoned_test_runs(
     Only direct children named like harness session roots are considered, and a
     root whose lease holder may still run is always kept. Completed runs and
     folders without a manifest go after a day; failed runs, and runs still
-    marked active whose holder is gone, go after the seven-day review window.
-    Links and unreadable manifests are kept for review.
+    marked active whose holder is gone, keep only their review evidence after
+    an hour and go after the seven-day review window. Links and unreadable
+    manifests are kept for review.
     """
     base = _absolute(temp_root or Path(tempfile.gettempdir()))
     _safe_path(base)
     stamp = _now(now)
     live = {os.path.normcase(str(root)) for root in live_lease_roots(base, store=store)}
     removed: list[Path] = []
+    trimmed: list[Path] = []
+    trimmed_bytes = 0
     kept: dict[str, int] = {}
 
     def keep(reason: str) -> None:
@@ -612,8 +654,17 @@ def prune_abandoned_test_runs(
             else:
                 ended, window = manifest.started_at, TEST_RUN_FAILED_AGE
         else:
-            ended, window = _newest_change(root), TEST_RUN_SKELETON_AGE
+            ended, window = _newest_change(root, stamp), TEST_RUN_SKELETON_AGE
         if stamp - ended < window:
+            if window == TEST_RUN_FAILED_AGE and stamp - ended >= TEST_RUN_PAYLOAD_GRACE:
+                try:
+                    freed = _trim_payload(root, apply=apply)
+                except OSError:
+                    keep("trim_failed")
+                    continue
+                if freed:
+                    trimmed.append(root)
+                    trimmed_bytes += freed
             keep("within_window")
             continue
         if apply:
@@ -625,7 +676,9 @@ def prune_abandoned_test_runs(
                 keep("removal_failed")
                 continue
         removed.append(root)
-    return TempRunPruneResult(removed=tuple(removed), kept=kept)
+    return TempRunPruneResult(
+        removed=tuple(removed), trimmed=tuple(trimmed), trimmed_bytes=trimmed_bytes, kept=kept
+    )
 
 
 def resolve_failed_temp_run(
