@@ -567,6 +567,7 @@ def test_work_os_evaluation_api_returns_complete_versioned_projection(
     assert "stock" not in response.get_data(as_text=True).lower()
 
 
+@pytest.mark.usefixtures("shell_clock")
 def test_dashboard_page_revalidates_on_the_memo_bucket_etag(client: FlaskClient) -> None:
     """GET / carries a memo-key ETag; a repeat load revalidates to a 304."""
     first = client.get("/")

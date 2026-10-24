@@ -632,12 +632,15 @@ def test_nested_verification_scope_uses_complete_normalized_clock_keys(
 def test_malformed_stored_observation_clock_is_typed_and_independent_publication_survives(
     conn: sqlite3.Connection,
 ) -> None:
-    broken = _two_observation_publication()
-    valid = _derived_publication(broken.reported_facts[0].observation.observation_id)
+    valid = _two_observation_publication()
+    valid_id = valid.reported_facts[0].observation.observation_id
+    # The source is independent of its derived output, not the reverse.
+    broken = _derived_publication(valid_id)
     repository = SourceFactRepository(conn)
-    repository.publish(broken)
     repository.publish(valid)
-    broken_id = broken.reported_facts[0].observation.observation_id
+    repository.publish(broken)
+    expected_valid = FactReadModel(conn).provenance_bundle(valid_id, cutoff=STAMP)
+    broken_id = broken.derived_facts[0].observation.observation_id
     conn.execute("DROP TRIGGER trg_fact_observations_v2_append_only")
     conn.execute(
         "UPDATE fact_observations_v2 SET effective_at='0000-01-01T00:00:00+00:00' WHERE observation_id=?",
@@ -646,13 +649,17 @@ def test_malformed_stored_observation_clock_is_typed_and_independent_publication
     with pytest.raises(FactEvidenceIntegrityError, match="clock"):
         FactReadModel(conn).provenance_bundle(broken_id, cutoff=STAMP)
     reads = FactReadModel(conn).provenance_bundles(
-        (broken_id, valid.derived_facts[0].observation.observation_id),
+        (broken_id, valid_id),
         cutoff=STAMP,
     )
-    assert (
-        reads[0].failure is not None and reads[0].failure.reason_code == "fact_evidence_malformed"
-    )
-    assert reads[1].bundle is not None
+    assert reads[0].bundle is None
+    assert reads[0].failure is not None
+    assert reads[0].failure.reason_code == "fact_evidence_malformed"
+    assert reads[0].failure.record_kind == "fact_observation"
+    assert reads[0].failure.record_id == broken_id
+    assert reads[0].failure.disposition == "quarantined"
+    assert reads[1].failure is None
+    assert reads[1].bundle == expected_valid
 
 
 @pytest.mark.parametrize("primitive", ["plane_clock", "plane_integer", "numeric"])

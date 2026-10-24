@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
+
+import pytest
 
 from pipeline.portfolio_decision_support import (
     render_portfolio_posture_section,
@@ -15,107 +18,9 @@ from pipeline.portfolio_decision_support import (
 # --------------------------------------------------------------------------- #
 
 
-def _make_db(tmp_path: Path) -> Path:
-    db_path = tmp_path / "data" / "portfolio.db"
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
-    conn.executescript(
-        """
-        CREATE TABLE llm_artifacts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker VARCHAR(16),
-            scope VARCHAR(64) NOT NULL DEFAULT 'ticker',
-            purpose VARCHAR(64) NOT NULL,
-            fiscal_period VARCHAR(10),
-            content_md TEXT,
-            content_json TEXT,
-            input_sha256 VARCHAR(64) NOT NULL,
-            output_sha256 VARCHAR(64),
-            model VARCHAR(64),
-            prompt_version VARCHAR(32) NOT NULL DEFAULT 'v1',
-            generated_at DATETIME NOT NULL,
-            expires_at DATETIME,
-            superseded_by_id INTEGER,
-            dirty BOOLEAN NOT NULL DEFAULT 0,
-            dirty_reason VARCHAR(128),
-            source_doc_ids TEXT,
-            parent_artifact_ids TEXT,
-            llm_call_id INTEGER
-        );
-        CREATE TABLE owner_profile_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL DEFAULT 'bhanu',
-            category TEXT NOT NULL,
-            key TEXT NOT NULL,
-            value_json TEXT NOT NULL,
-            narrative TEXT NOT NULL,
-            provenance TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'proposed',
-            affirmed_at TEXT,
-            review_horizon_days INTEGER,
-            source_detail TEXT,
-            created_at TEXT NOT NULL,
-            is_latest INTEGER NOT NULL DEFAULT 1,
-            superseded_at TEXT,
-            superseded_by_id INTEGER
-        );
-        CREATE TABLE portfolio_risk_snapshots (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL DEFAULT 'bhanu',
-            captured_at TEXT NOT NULL,
-            window_start TEXT, window_end TEXT, benchmark TEXT,
-            beta REAL, alpha_annualized_pct REAL, sharpe REAL, sortino REAL,
-            information_ratio REAL, tracking_error_annualized REAL,
-            portfolio_volatility_annualized REAL, r_squared REAL,
-            weighted_avg_correlation_spy REAL, num_positions INTEGER,
-            top1_weight_pct REAL, top5_weight_pct REAL, top10_weight_pct REAL,
-            hhi REAL, effective_holdings REAL,
-            max_drawdown_pct REAL, current_drawdown_pct REAL,
-            drawdown_recovered INTEGER, days_to_recovery INTEGER,
-            spy_beta REAL, qqq_beta REAL, growth_tilt REAL,
-            avg_correlation_spy REAL, rate_beta_10y REAL,
-            names_priced INTEGER, names_total INTEGER,
-            metric_version TEXT, rebase_basis TEXT,
-            perf_window_start TEXT, perf_observed_from TEXT
-        );
-        CREATE TABLE portfolio_risk_snapshot_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL DEFAULT 'bhanu',
-            captured_at TEXT NOT NULL,
-            window_start TEXT, window_end TEXT, benchmark TEXT,
-            beta REAL, alpha_annualized_pct REAL, sharpe REAL, sortino REAL,
-            information_ratio REAL, tracking_error_annualized REAL,
-            portfolio_volatility_annualized REAL, r_squared REAL,
-            weighted_avg_correlation_spy REAL, num_positions INTEGER,
-            top1_weight_pct REAL, top5_weight_pct REAL, top10_weight_pct REAL,
-            hhi REAL, effective_holdings REAL,
-            max_drawdown_pct REAL, current_drawdown_pct REAL,
-            drawdown_recovered INTEGER, days_to_recovery INTEGER,
-            spy_beta REAL, qqq_beta REAL, growth_tilt REAL,
-            avg_correlation_spy REAL, rate_beta_10y REAL,
-            names_priced INTEGER, names_total INTEGER,
-            input_sha TEXT,
-            metric_version TEXT, rebase_basis TEXT,
-            perf_window_start TEXT, perf_observed_from TEXT
-        );
-        CREATE TABLE wealth_context_snapshot_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL DEFAULT 'bhanu',
-            captured_at TEXT NOT NULL,
-            as_of TEXT NOT NULL,
-            tracker_as_of TEXT, wealthplan_as_of TEXT,
-            currency TEXT NOT NULL DEFAULT 'USD',
-            net_worth_total REAL, liquid_total REAL, investable_total REAL,
-            home_equity REAL,
-            snapshot_json TEXT NOT NULL,
-            input_sha TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-        """
-    )
-    conn.commit()
-    conn.close()
-    return db_path
+@pytest.fixture
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    return migrated_db(tmp_path / "data" / "portfolio.db")
 
 
 def _seed_weights(repo_root: Path, weights: dict[str, float]) -> None:
@@ -165,14 +70,12 @@ def _no_raw_floats(html: str) -> bool:
 # --------------------------------------------------------------------------- #
 
 
-def test_risk_budget_no_snapshot_state(tmp_path: Path) -> None:
-    db_path = _make_db(tmp_path)
+def test_risk_budget_no_snapshot_state(tmp_path: Path, db_path: Path) -> None:
     html = render_risk_budget_section(db_path, tmp_path)
     assert "No risk snapshot yet" in html
 
 
-def test_risk_budget_four_categories_and_delta(tmp_path: Path) -> None:
-    db_path = _make_db(tmp_path)
+def test_risk_budget_four_categories_and_delta(tmp_path: Path, db_path: Path) -> None:
     _seed_weights(tmp_path, {"NU": 0.24, "MELI": 0.10})
     _seed_risk_snapshot(
         db_path,
@@ -211,7 +114,7 @@ def test_risk_budget_four_categories_and_delta(tmp_path: Path) -> None:
     assert "Secondary metrics" in html
 
 
-def test_risk_budget_rounds_every_scalar_metric(tmp_path: Path) -> None:
+def test_risk_budget_rounds_every_scalar_metric(tmp_path: Path, db_path: Path) -> None:
     """Every scalar metric is rounded for display, not f-stringed raw.
 
     Seeds the exact prod values that surfaced the bug: the panel formatted its
@@ -220,7 +123,6 @@ def test_risk_budget_rounds_every_scalar_metric(tmp_path: Path) -> None:
     owner's Risk Budget read `Sharpe: -0.3513674average...` at full float
     precision.
     """
-    db_path = _make_db(tmp_path)
     _seed_weights(tmp_path, {"VTI": 0.201, "MELI": 0.147})
     _seed_risk_snapshot(
         db_path,
@@ -256,10 +158,9 @@ def test_risk_budget_rounds_every_scalar_metric(tmp_path: Path) -> None:
     assert "Rate beta (10y): 0.02" not in html
 
 
-def test_risk_budget_absent_scalars_render_em_dash_not_zero(tmp_path: Path) -> None:
+def test_risk_budget_absent_scalars_render_em_dash_not_zero(tmp_path: Path, db_path: Path) -> None:
     """Rounding must not turn a NULL metric into 0.00 — §7.1's null-not-zero
     rule applies to the scalar block the same as to the percentages."""
-    db_path = _make_db(tmp_path)
     _seed_risk_snapshot(
         db_path,
         table="portfolio_risk_snapshot_history",
@@ -277,11 +178,10 @@ def test_risk_budget_absent_scalars_render_em_dash_not_zero(tmp_path: Path) -> N
     assert "HHI: 0" not in html
 
 
-def test_risk_budget_mismatched_provenance_suppresses_delta(tmp_path: Path) -> None:
+def test_risk_budget_mismatched_provenance_suppresses_delta(tmp_path: Path, db_path: Path) -> None:
     """PRD §7.1.9: a metric-version change must not render a false delta
     against an incomparable prior — the numeric delta is suppressed and the
     reason is surfaced instead."""
-    db_path = _make_db(tmp_path)
     _seed_risk_snapshot(
         db_path,
         table="portfolio_risk_snapshot_history",
@@ -312,8 +212,7 @@ def test_risk_budget_mismatched_provenance_suppresses_delta(tmp_path: Path) -> N
     assert 'k-pill k-pill-warn">metric definition changed' in html
 
 
-def test_risk_budget_null_metrics_render_as_em_dash_not_zero(tmp_path: Path) -> None:
-    db_path = _make_db(tmp_path)
+def test_risk_budget_null_metrics_render_as_em_dash_not_zero(tmp_path: Path, db_path: Path) -> None:
     _seed_risk_snapshot(
         db_path,
         table="portfolio_risk_snapshot_history",
@@ -326,8 +225,7 @@ def test_risk_budget_null_metrics_render_as_em_dash_not_zero(tmp_path: Path) -> 
     assert "Top-1 weight: 0.0%" not in html
 
 
-def test_risk_budget_stale_snapshot_visibly_stale(tmp_path: Path) -> None:
-    db_path = _make_db(tmp_path)
+def test_risk_budget_stale_snapshot_visibly_stale(tmp_path: Path, db_path: Path) -> None:
     _seed_risk_snapshot(
         db_path,
         table="portfolio_risk_snapshot_history",
@@ -343,14 +241,12 @@ def test_risk_budget_stale_snapshot_visibly_stale(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_posture_no_data_state(tmp_path: Path) -> None:
-    db_path = _make_db(tmp_path)
+def test_posture_no_data_state(tmp_path: Path, db_path: Path) -> None:
     html = render_portfolio_posture_section(db_path, tmp_path)
     assert "Not enough live data" in html
 
 
-def test_posture_affirmed_constraints_and_actions(tmp_path: Path) -> None:
-    db_path = _make_db(tmp_path)
+def test_posture_affirmed_constraints_and_actions(tmp_path: Path, db_path: Path) -> None:
     _seed_weights(tmp_path, {"NU": 0.24, "MELI": 0.10})
     _seed_risk_snapshot(
         db_path,
@@ -383,8 +279,7 @@ def test_posture_affirmed_constraints_and_actions(tmp_path: Path) -> None:
     assert 'data-console-jump="csec-positioning"' in html
 
 
-def test_posture_display_only_mode_has_no_persistent_actions(tmp_path: Path) -> None:
-    db_path = _make_db(tmp_path)
+def test_posture_display_only_mode_has_no_persistent_actions(tmp_path: Path, db_path: Path) -> None:
     _seed_weights(tmp_path, {"NU": 0.24, "MELI": 0.10})
 
     html = render_portfolio_posture_section(db_path, tmp_path, include_actions=False)

@@ -5,10 +5,10 @@
     "alembic": 0,
     "cron": 0,
     "evals": 0,
-    "execution": 47,
+    "execution": 39,
     "instruction_tests": 0,
     "scripts": 0,
-    "src": 297,
+    "src": 162,
     "src/advisor": 0,
     "src/alerts": 0,
     "src/allocation": 0,
@@ -54,7 +54,7 @@
     "src/ui": 0,
     "src/user_state": 0,
     "src/viewspec": 0,
-    "tests": 1377
+    "tests": 1351
   },
   "suppressions": {
     ".github": 0,
@@ -110,6 +110,6 @@
     "src/ui": 0,
     "src/user_state": 1,
     "src/viewspec": 0,
-    "tests": 877
+    "tests": 873
   }
 }

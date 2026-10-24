@@ -32,9 +32,6 @@ from pipeline.run_accounting import PipelineRunSuppressedError
 _build_capture_manifest = cast(
     Callable[..., KpiExtractionManifest], getattr(kes, "_build_capture_manifest")
 )
-_fiscal_period_type_for = cast(
-    Callable[[str, datetime], FiscalPeriodType], getattr(kes, "_fiscal_period_type_for")
-)
 _llm_extract_enumerate = cast(
     Callable[..., list[dict[str, object]]], getattr(kes, "_llm_extract_enumerate")
 )
@@ -438,22 +435,6 @@ def test_capture_surfaces_accounting_suppression(
 # ---------------------------------------------------------------------------
 # capture_for_ir_pdf_docs — the ir_supplement PDF capture path
 # ---------------------------------------------------------------------------
-
-
-def test_fiscal_period_type_for_calendar_and_jan_fye() -> None:
-    # Calendar-FY issuer: quarter derived straight from the period-end month.
-    assert _fiscal_period_type_for("NU", datetime(2025, 3, 31)) is FiscalPeriodType.Q1
-    assert _fiscal_period_type_for("NU", datetime(2025, 12, 31)) is FiscalPeriodType.Q4
-    # Jan-FYE issuer (RBRK): Jan-31 is fiscal Q4, NOT calendar Q1 — the override
-    # map is reversed so the supplement lands on the same axis as the analyst series.
-    assert _fiscal_period_type_for("RBRK", datetime(2026, 1, 31)) is FiscalPeriodType.Q4
-    assert _fiscal_period_type_for("RBRK", datetime(2025, 4, 30)) is FiscalPeriodType.Q1
-    # Oct-FYE issuer (AMAT): Oct-31 is fiscal Q4, Jan-31 is fiscal Q1 (not Q4,
-    # despite sharing January with Jan-FYE's Q4 above) — the reverse-lookup
-    # only matches on (month, day), so it's unaffected by the two conventions'
-    # different year_offset handling.
-    assert _fiscal_period_type_for("AMAT", datetime(2025, 10, 31)) is FiscalPeriodType.Q4
-    assert _fiscal_period_type_for("AMAT", datetime(2026, 1, 31)) is FiscalPeriodType.Q1
 
 
 def _governed_fixture_call(

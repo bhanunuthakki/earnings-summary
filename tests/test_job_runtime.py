@@ -143,7 +143,6 @@ _PORTFOLIO_DB_POLICY = {
     "fetch-sec-xbrl": "sec-companyfacts",
     "grade-calibration": "llm-evaluation",
     "ledger-synthesis": "research-synthesis",
-    "monthly-advisor-memos": "research-synthesis",
     "monthly-calibration-scorecard": "llm-evaluation",
     "morning_pipeline": "morning-orchestration",
     "refresh-business-factors": "research-synthesis",

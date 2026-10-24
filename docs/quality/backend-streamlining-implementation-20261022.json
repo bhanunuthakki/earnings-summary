@@ -527,7 +527,7 @@
     "transaction_audit": "The only stage before FMP that can write is optional SEC ingest; ingest_for_ticker commits at its commit phase and rolls back a started transaction on failure. Segment cache validation is read-only. Supplied-record refresh_cache retains its separate commit=False caller-owned path. No cross-document atomicity claim."
   },
   "r1_pending_revision": "Resolved, accepted and committed3065638a; later checkpoint proxyR1 score96.",
-  "remaining_work": "Further feature cuts await owner choices on guided exercises and Telegram coach delivery. R3 product completion, R4 held-source retirement and R5 native promotion remain unqualified. The original source/large-module ceilings still fail. Preserve deep research and recovery; do not remove explicitly retained core capabilities or change live state without its authority.",
+  "remaining_work": "Finish current-main integration proof and independent acceptance. Original architecture goal remains unwaived. Further R4 extraction retirement depends on owner reference choice and held-source parity; no report decision-grade acceptance or new collection is granted. Approved feature retirements already executed locally remain preserved.",
   "review_kind": "Owner-selected independent GPT-6.1 Sol proxy; earlier exact Opus receipts preserved as history. No formal model-purpose qualification claimed.",
   "review_route_update": {
     "authority": "Owner latest steering allows independent6.1Sol proxies and no further Astra requirement.",
@@ -892,7 +892,7 @@
     "transport": "claude_membership"
   },
   "static_count_clarification": "Old2012/1835 values are previous configured ceilings, not a paired prechange measurement of actual diagnostics/suppressions. Revised measured1826/1811 values tighten those ceilings.",
-  "status": "LOCAL_MAIN_INTEGRATION_IN_PROGRESS; combined release HOLD; original architecture gate unwaived",
+  "status": "LOCAL_IMPLEMENTATION_VALIDATED_AND_ADVISORY_ACCEPT95;overallroadmap/releaseHOLD",
   "third_independent_sol_proxy_review": {
     "binding_sha256": "53493b3675b5a59400c3527a8954914d8a50ea0ae9d09a819d27d854d8c897d0",
     "effort": "high",
@@ -2886,7 +2886,14 @@
     "bytes": 3391535,
     "source_worktree": "ARCHIVED_SECONDARY_WORKTREE",
     "confirmed": "Secondarycheckoutremoved, archived_worktreeattachmentreturned. Alllocalcommitsintegrated; exacttemporaryproofbytescopiedbeforearchive. No databasecopy.",
-    "retention": "Existingtasktemporaryartifactowner; rawreviewbindingsremainhistorical, relocation+Gitcommits own reconstruction."
+    "retention": "Existingtasktemporaryartifactowner; rawreviewbindingsremainhistorical, relocation+Gitcommits own reconstruction.",
+    "current_checkpoint_retention": {
+      "retained": "Bound source/probe/review receipts, minimal deterministic failure evidence, conditional event patch and pending R4 references",
+      "reason": "Reproducibility and unresolved owner decisions; no additional database or environment copies",
+      "release": "Existing temporary-artifact owner after checkpoint integration and pending decisions close; failed synthetic runs retain existing seven-day review window",
+      "protected_prior_run": "666protectedsidecars and metadata remain; no broad prune or manual deletion",
+      "current_full": "53968eligiblefiles retired normally;663protectedsidecars and16108heldpaths retained"
+    }
   },
   "legacy_guard_disposition": {
     "status": "SCOPED_TESTS_AND_INDEPENDENT_PROXY_ACCEPTED",
@@ -3940,9 +3947,292 @@
   "main_integration": {
     "cleanup_head": "2c2caa49559341e4830d90c6ceb8937c74c88202",
     "main": "224d9666038674921fef20360258e18981884dc8",
-    "state": "merge in progress; tests correcting integration failures",
-    "architecture_receipt": ".tmp/cleanup-main-integration-architecture.json",
-    "independent_review": "pending",
-    "original_gate_waived": false
+    "state": "Local merge57050f54 plus qualified source/test repairs;normalfullPASS;independentlocalcheckpointACCEPT95;no push/deploy/livechanges",
+    "architecture_receipt": ".tmp/cleanup-main-retention-fixed-architecture.json",
+    "independent_review": {
+      "review_kind": "Independent owner-selected GPT-6.1 Sol advisory proxy",
+      "formal_frontier_qualification": false,
+      "reviewer": "/root/sol_integration_judge",
+      "verdict": "ACCEPT",
+      "score": 95,
+      "scope": "Frozen local implementation checkpoint only",
+      "blockers_within_scope": [],
+      "production_source_sha256": "b0d3ebc674f2180fbc6c2b7b1c29bd8f5dc019e48ec87c9bc3e25f579ca80553",
+      "python_diff_sha256": "9bf914e4f65663930a209443c75260d85128110b89cfddb0b70aa8dab776ecfc",
+      "passed": 22243,
+      "skipped": 102,
+      "subtests_passed": 2,
+      "graph_current_input_hashes": 3722,
+      "deleted_paths_absent": 53968,
+      "protected_paths_present": 663,
+      "held_paths_present": 16108,
+      "remaining_task_processes": [],
+      "remaining_task_listeners": [],
+      "overall_roadmap_and_release": "HOLD",
+      "open": [
+        "Architecture26oversizedvs25 and original4regressions unwaived",
+        "R4retirement and broaderfinancialqualification",
+        "Ownerchoices: NU/MELIreference and neweventbriefretirement"
+      ],
+      "evidence": {
+        ".tmp/cleanup-main-clock-fixed-full-suite.json": "48c67267ee08a7b5181fd5b2641fd8a6fc4988fa0e2cd5dc4b948824725828bb",
+        ".tmp/cleanup-main-clock-fixed-full-teardown-verification.json": "d4ac33af2927f338956caec334ade5f099f9030d2e1735b5d8b75449f0a0a1cb",
+        ".tmp/cleanup-main-clock-fixed-full-resource-verification.json": "3b14ba3c19d9b3130b5aafb824cdee78f79bd6925894a132b8b30bb854004247",
+        ".tmp/cleanup-main-schema-final-static.json": "0f1b659aa5343430cf60098d38740813d71700721fc3fd1a4dee0e471aeb5ef3",
+        ".tmp/cleanup-main-reachability-schema-final.json": "6feb19e4c224c94269fc9a8c196e7b458fd4d35a3bbef8e3ee26c35ff64088a1"
+      }
+    },
+    "original_gate_waived": false,
+    "source_lines_removed_vs_main": 1933,
+    "production_modules_removed_vs_main": 6,
+    "first_full_suite": {
+      "result": "32 failed,22192 passed,102 skipped",
+      "receipt": ".tmp/cleanup-main-full-suite.json",
+      "head": "57050f5462e629c212952dc0845afbb028c53122"
+    },
+    "performance_receipt": ".tmp/cleanup-main-reader-probe/probe-receipt.json",
+    "fiscal_date_policy": {
+      "version": "investor-grade-fact-resolution@3",
+      "targeted_tests": 114,
+      "log": ".tmp/cleanup-main-period-v3-tests.txt",
+      "independent_sol_score": 96,
+      "scope": "bounded ACCEPT; broader integration pending"
+    },
+    "final_static": {
+      "status": "PASS",
+      "measurement": ".tmp/cleanup-main-schema-final-static.json",
+      "log": ".tmp/cleanup-main-schema-final-static.log",
+      "retained_files": 2895,
+      "diagnostics": 1779,
+      "suppressions": 1757,
+      "diagnostics_removed_vs_main": 169,
+      "suppressions_removed_vs_main": 34,
+      "source_sha256": "b0d3ebc674f2180fbc6c2b7b1c29bd8f5dc019e48ec87c9bc3e25f579ca80553",
+      "python_diff_unchanged": true,
+      "remaining_task_processes": [],
+      "changed_files": 164
+    },
+    "normal_reachability": {
+      "receipt": ".tmp/cleanup-main-reachability-schema-final.json",
+      "state": "COMPLETE/PASS;39522edges170test-only0productiongaps/diagnostics;currenthashclosure",
+      "source_sha256": "20e5b29c06aed0d36c635e916cb41678f0ae613cd81ad76dd07ff287990f0b66",
+      "current_input_hashes_verified": 3722
+    },
+    "semantic_proxy_review": {
+      "status": "ACCEPT95 for semantic implementation; whole integration/release HOLD",
+      "role": "Independent owner-selected GPT-6.1 Sol advisory proxy, not formally purpose-qualified blocking seat",
+      "production_source_sha256": "6af68e3f0e2be0a8d2f32e002c44d0f2b25e16e66d909197c5c8c2acc92f9a64",
+      "source_scope": "HEAD57050f54 plus frozen working source/test changes",
+      "scores_by_unit": {
+        "shared_fmp": 95,
+        "managed_ir_intake": 93,
+        "explicit_state_routing": 96,
+        "summary_context_anchors": 95,
+        "native_candidate_review_boundary": 96,
+        "dcf_safeguards": 97,
+        "canonical_reader_reuse": 96,
+        "prepared_saydo": 95,
+        "approved_feature_retirements": 96,
+        "fixture_repairs": 95,
+        "fiscal_date_policy_v3": 96,
+        "dead_helpers": 97
+      },
+      "remaining": [
+        "Full test repeat pending",
+        "Large module count26vs25",
+        "Original architecture4regressions unwaived",
+        "R4retirement and report/portfolio semantic qualification open"
+      ]
+    },
+    "repeat_before_cleanup_fix": {
+      "assertions_passed": 22229,
+      "skipped": 102,
+      "subtests_passed": 2,
+      "pytest_seconds": 1685.77,
+      "supervised_gate": "INTERRUPTED",
+      "receipt": ".tmp/cleanup-main-final-full-suite.json",
+      "early_stop": ".tmp/cleanup-main-full-suite-early-stop.json",
+      "reason": "76,566file22.9MBmanifestquadraticatexitJSONparsing",
+      "remaining_processes": []
+    },
+    "new_cleanup_fix": {
+      "state": "Implementation+empirical+exactpriorrecovery97;freshnormalfullandteardownPASS",
+      "owner": "sol_data_duplication_cut",
+      "files": [
+        "src/operations/artifact_retention.py",
+        "tests/test_artifact_retention.py",
+        "tests/test_temp_run_retention.py"
+      ],
+      "run_root": "/var/folders/lm/w_dtlt_d7kl7czfvr3zzlq9h0000gn/T/earnings-summary-pytest-controller-goomilv7",
+      "manifest_bytes": 22932341,
+      "sealed_files": 76566,
+      "recovery_authority": "Root only after targetedproof+independentreview; exactpublicowner, no otherroots/liveoperations",
+      "required": "Oneoperationlocal64MiBbound snapshot/index; freshbytecomparisonsbothsidesofhashretained; newnormalfullgateafterfix",
+      "runtime_sample": ".tmp/cleanup-main-pytest-closing.sample",
+      "source_sha256": "618249ca32ab9b6a7c9f0aebe72437cc2b0f370ab2823ae91f8cce2ed0f973dd",
+      "targeted_receipt": ".tmp/cleanup-retention-chunked-targeted.json",
+      "passed": 154,
+      "skipped": 1,
+      "independent_implementation_review": {
+        "model": "GPT-6.1 Sol",
+        "role": "independent advisory proxy",
+        "verdict": "ACCEPT",
+        "score": 97,
+        "formal_frontier_qualification": false
+      },
+      "prior_candidate_review": {
+        "verdict": "REVISE",
+        "score": 89,
+        "reason": "Initial manifest digest drift still caused repeated generic decoding; corrected before acceptance"
+      },
+      "limitation": "Fresh byte checks still scale with manifest size times target count. No linear byte-I/O or full-suite completion prediction.",
+      "prior_benchmark": {
+        "receipt": ".tmp/cleanup-retention-benchmark.json",
+        "cpu_improved": true,
+        "memory_tradeoff": "64 selected targets peaked at1454.6MiB setup-inclusive; exact large recovery held pending chunked comparison plateau proof"
+      },
+      "benchmark_receipt": ".tmp/cleanup-retention-chunked-benchmark.json",
+      "empirical_review": {
+        "verdict": "ACCEPT",
+        "score": 97,
+        "scope": "bounded synthetic measurement and exact preserved-run recovery plan",
+        "full_gate_pending": true
+      },
+      "recovery_supervisor": ".tmp/cleanup-main-exact-run-recovery-supervised.json",
+      "exact_recovery": {
+        "status": "PASS",
+        "verification": ".tmp/cleanup-main-exact-run-recovery-verification.json",
+        "supervision": ".tmp/cleanup-main-exact-run-recovery-supervised.json",
+        "sealed_files": 76566,
+        "deleted": 75900,
+        "protected": 666,
+        "errors": 0,
+        "manifest_unchanged": true,
+        "deleted_paths_present": 0,
+        "protected_paths_missing": 0,
+        "remaining_task_processes": []
+      },
+      "completed_unit_advisory_score": 97
+    },
+    "entity_fixture_cut": {
+      "path": "tests/test_entity_store.py",
+      "state": "Applied:109 net test lines and9 copied tables removed;24 tests and original53 assertions retained;9 explicit non-null checks added,62 total; all24 tests pass",
+      "patch_manifest": ".tmp/cleanup-entity-store-fixture-proposal.json"
+    },
+    "prior_external_boundary_failure": {
+      "state": "FAILED12;22231passed102skipped2subtests; normalprocessclosure nochildren",
+      "receipt": ".tmp/cleanup-main-retention-fixed-full-suite.json",
+      "log": ".tmp/cleanup-main-retention-fixed-full-suite.log",
+      "source_sha256": "b0d3ebc674f2180fbc6c2b7b1c29bd8f5dc019e48ec87c9bc3e25f579ca80553",
+      "concurrent_exact_recovery": true,
+      "concurrency_advisory_review": 96,
+      "timing_claim": false,
+      "returncode": 2,
+      "failed": 12,
+      "passed": 22231,
+      "elapsed_seconds": 1761.4,
+      "failure_groups": {
+        "qualification_namespace_inside_checkout": 11,
+        "obsolete_read_count803_to804": 1
+      },
+      "resolution": "ExternalnativeTMPDIR, exact804readoracle, producerowned22000filecleanup;targetedandfreshnormalfullpending"
+    },
+    "fresh_full_suite": {
+      "state": "PASS normal supervised exit with unchanged source/testdiff/HEAD",
+      "receipt": ".tmp/cleanup-main-clock-fixed-full-suite.json",
+      "log": ".tmp/cleanup-main-clock-fixed-full-suite.log",
+      "active_roots": ".tmp/cleanup-main-clock-fixed-full-active-roots.json",
+      "closure_verifier": ".tmp/cleanup-main-verify-clock-fixed-full-teardown.py",
+      "source_sha256": "b0d3ebc674f2180fbc6c2b7b1c29bd8f5dc019e48ec87c9bc3e25f579ca80553",
+      "python_diff_sha256": "9bf914e4f65663930a209443c75260d85128110b89cfddb0b70aa8dab776ecfc",
+      "passed": 22243,
+      "skipped": 102,
+      "subtests_passed": 2,
+      "pytest_seconds": 1614.68,
+      "supervised_seconds": 2271.68,
+      "returncode": 0,
+      "observed_task_processes": 522,
+      "cleanup_signalled_pids": [],
+      "remaining_task_processes": [],
+      "teardown_verification": ".tmp/cleanup-main-clock-fixed-full-teardown-verification.json",
+      "resource_verification": ".tmp/cleanup-main-clock-fixed-full-resource-verification.json"
+    },
+    "producer_fixture_cleanup": {
+      "state": "Implemented;targetedproof97;normalfullandteardownPASS",
+      "real_files_and_original_assertions_preserved": true,
+      "files_no_longer_carried_to_parent": 22000,
+      "proof": ".tmp/cleanup-fixture-producer-proof.json",
+      "targeted_prior_passed": 313,
+      "targeted_prior_skipped": 6,
+      "only_changed_hash_assertion_passed": 1,
+      "read_hash_oracle": "804freshreads,<=3manifesthashes"
+    },
+    "clock_fixture_fix": {
+      "state": "Implemented;118targetedPASS;independent98;normalfullPASS",
+      "proof": ".tmp/cleanup-shell-clock-proof.json",
+      "product_behavior_changed": false,
+      "test_bodies_retained": 118
+    },
+    "three_schema_fixture_cut": {
+      "state": "implemented;38PASS5.59s;independentSolACCEPT97",
+      "proof": ".tmp/cleanup-three-schema-cuts/proof.json",
+      "net_test_lines_removed": 268,
+      "copied_tables_removed": 16,
+      "tests_preserved": 38,
+      "original_assertion_asts_preserved": 108,
+      "production_changes": false
+    },
+    "fixture_schema_totals": {
+      "areas": 5,
+      "copied_tables_removed": 33,
+      "net_test_lines_removed": 465
+    },
+    "preceding_full_clock_failure": {
+      "state": "FAILED AND INTERRUPTED;1failed10705passed41skipped;closed with nochildren",
+      "receipt": ".tmp/cleanup-main-external-temp-full-suite.json",
+      "log": ".tmp/cleanup-main-external-temp-full-suite.log",
+      "active_roots": ".tmp/cleanup-main-external-full-active-roots.json",
+      "closure_verifier": ".tmp/cleanup-main-verify-external-full-teardown.py",
+      "source_sha256": "b0d3ebc674f2180fbc6c2b7b1c29bd8f5dc019e48ec87c9bc3e25f579ca80553",
+      "python_diff_sha256": "ab83345461802d4e6b034bccb53c72d1b109e81ad3730e5aa450dffeecbfe16f",
+      "failed": 1,
+      "passed": 10705,
+      "skipped": 41,
+      "returncode": 2,
+      "remaining_task_processes": []
+    },
+    "next_architecture_advisory": {
+      "review_kind": "Independent owner-selected GPT-6.1 Sol advisory proxy",
+      "formal_frontier_qualification": false,
+      "reviewer": "/root/sol_integration_judge",
+      "current_incremental_r2_strategy": {
+        "verdict": "REVISE",
+        "ambition_score": 60,
+        "effectiveness_score": 58,
+        "finding": "Adding one managed input cell leaves the legacy registration, sidecars, categorizer and compatibility index active; no terminal deletion credit."
+      },
+      "next_preparation": {
+        "unit": "R3 terminal generated-product completion across all five current product types",
+        "score": 92,
+        "verdict": "PROVISIONAL ACCEPT TO PREPARE",
+        "requires": "Measured net production deletion with original generators, prompts, anchors, source bytes, history and failure recovery preserved."
+      },
+      "do_not_collapse": "Managed precommit intent, immutable DB commit, later inventory seal and filesystem completion projection express distinct crash boundaries. Repeated fields alone do not justify deletion.",
+      "implementation_or_release_acceptance": false,
+      "current_execution_disposition": "Do not execute all5completion replacement: measurednetdeletionunproved/likelygrowth;preserve4coreproducts",
+      "conditional_event_retirement": "Owner decision pending; no trackedimplementation or removal"
+    },
+    "full_teardown": {
+      "status": "PASS",
+      "deleted": 53968,
+      "protected": 663,
+      "errors": 0,
+      "held_paths_present": 16108,
+      "held_paths_missing": 0,
+      "deleted_paths_present": 0,
+      "protected_paths_missing": 0,
+      "journal_matches": true,
+      "remaining_task_listeners": []
+    }
   }
 }

@@ -25,6 +25,7 @@ from pipeline.quarterly_refresh import (
     refresh_ticker,
 )
 from provenance.evidence_backfill import ensure_legacy_document_evidence
+from provenance.financial_fact_resolution import resolve_fact_row
 
 
 def _empty_artifact_batch(*_args: object, **_kwargs: object) -> dict[str, object]:
@@ -89,7 +90,9 @@ def _seed_thesis_state(
     conn.commit()
 
 
-def _seed_quarterly_income(conn: sqlite3.Connection, ticker: str) -> None:
+def _seed_quarterly_income(
+    conn: sqlite3.Connection, ticker: str, *, sec_official: bool = False
+) -> None:
     """Insert one quarterly income statement document + its 4 line items."""
     root = Path(conn.execute("PRAGMA database_list").fetchone()[2]).parent
     source = root / f"{ticker}_income_statement_quarterly.json"
@@ -111,15 +114,17 @@ def _seed_quarterly_income(conn: sqlite3.Connection, ticker: str) -> None:
     )
     cur = conn.execute(
         "INSERT INTO documents (ticker, source_type, doc_type, file_path, "
-        "sha256, fetched_at, fetch_status, raw_bytes_size, period_end) "
-        "VALUES (?, 'fmp', 'fmp_income_statement', ?, ?, ?, 'ok', ?, ?)",
+        "sha256, fetched_at, fetch_status, raw_bytes_size, period_end, source_quality_tier) "
+        "VALUES (?, ?, 'fmp_income_statement', ?, ?, ?, 'ok', ?, ?, ?)",
         (
             ticker,
+            "sec_xbrl" if sec_official else "fmp",
             str(source),
             hashlib.sha256(source.read_bytes()).hexdigest(),
             datetime.now(),
             source.stat().st_size,
             datetime(2024, 12, 31),
+            "sec_official" if sec_official else "fmp_normalized",
         ),
     )
     assert cur.lastrowid is not None
@@ -132,12 +137,17 @@ def _seed_quarterly_income(conn: sqlite3.Connection, ticker: str) -> None:
         ("net_income", 150),
         ("gross_profit", 500),
     ]:
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO financial_facts (ticker, period_end, fiscal_period_type, "
             "line_item, value, currency, unit, source_doc_id) "
             "VALUES (?, ?, 'Q4', ?, ?, 'USD', 'actual', ?)",
             (ticker, pe, line, str(val), doc_id),
         )
+        assert cursor.lastrowid is not None
+        resolved = resolve_fact_row(
+            conn, fact_table="financial_facts", fact_row_id=cursor.lastrowid
+        )
+        assert resolved is not None
     conn.commit()
 
 
@@ -470,12 +480,7 @@ def test_refresh_ticker_sec_official_derived_rule_can_change_status(
 ) -> None:
     """SEC-official source cells qualify deterministic GAAP arithmetic for evaluation."""
     _seed_thesis_state(conn, "X", status=BreachStatus.OK)
-    _seed_quarterly_income(conn, "X")
-    conn.execute(
-        "UPDATE documents SET source_type='sec_xbrl', source_quality_tier='sec_official' "
-        "WHERE ticker='X'"
-    )
-    conn.commit()
+    _seed_quarterly_income(conn, "X", sec_official=True)
     _write_holdings(tmp_path, "X", threshold=50)
 
     report = refresh_ticker(

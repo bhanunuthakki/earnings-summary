@@ -1,14 +1,15 @@
 """Tests for src/pipeline/ — source routing, run accounting, queries.
 
-Uses an in-memory SQLite DB seeded with the minimum schema and rows needed
-for each test. Avoids touching the real portfolio.db.
+Uses the current migrated schema with explicit synthetic rows for each test.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable, Generator
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
@@ -31,92 +32,19 @@ from pipeline.run_accounting import (
 from pipeline.source_routing import plan_for_ticker
 
 
-def _create_schema(conn: sqlite3.Connection) -> None:
-    cur = conn.cursor()
-    cur.executescript(
-        """
-        CREATE TABLE tracked_companies (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT DEFAULT 'bhanu',
-            ticker TEXT NOT NULL,
-            name TEXT NOT NULL,
-            list_type TEXT NOT NULL,
-            added_at TIMESTAMP,
-            sec_validated INTEGER DEFAULT 0,
-            ir_url TEXT,
-            instrument_type TEXT,
-            filing_regime TEXT,
-            fiscal_year_end TEXT,
-            fmp_data_saved INTEGER DEFAULT 0,
-            fmp_data_upto TEXT,
-            archived_at TIMESTAMP,
-            UNIQUE(user_id, ticker)
-        );
-
-        CREATE TABLE kpi_definitions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            name TEXT NOT NULL,
-            unit TEXT NOT NULL DEFAULT 'actual',
-            primary_source TEXT NOT NULL,
-            fallback_source TEXT,
-            ir_url TEXT,
-            threshold_tier TEXT,
-            threshold_low REAL,
-            threshold_high REAL,
-            notes TEXT
-        );
-
-        CREATE TABLE documents (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            source_type TEXT NOT NULL,
-            doc_type TEXT NOT NULL,
-            period_start TIMESTAMP,
-            period_end TIMESTAMP,
-            file_path TEXT NOT NULL,
-            sha256 TEXT NOT NULL,
-            fetched_at TIMESTAMP NOT NULL,
-            fetch_status TEXT NOT NULL,
-            http_code INTEGER,
-            raw_bytes_size INTEGER NOT NULL,
-            source_url TEXT,
-            parent_document_id INTEGER
-        );
-
-        CREATE TABLE ingestion_runs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            run_id TEXT NOT NULL UNIQUE,
-            started_at TIMESTAMP NOT NULL,
-            ended_at TIMESTAMP,
-            directive TEXT NOT NULL,
-            ticker_scope TEXT NOT NULL,
-            status TEXT NOT NULL,
-            error_summary TEXT
-        );
-
-        CREATE TABLE stage_transitions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            run_id TEXT NOT NULL,
-            ticker TEXT NOT NULL,
-            period_end TIMESTAMP,
-            stage TEXT NOT NULL,
-            status TEXT NOT NULL,
-            started_at TIMESTAMP NOT NULL,
-            ended_at TIMESTAMP,
-            error_msg TEXT
-        );
-        """
-    )
-    conn.commit()
-
-
 @pytest.fixture
-def conn() -> sqlite3.Connection:
-    c = sqlite3.connect(":memory:")
-    c.row_factory = sqlite3.Row
-    _create_schema(c)
-    return c
+def conn(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> Generator[sqlite3.Connection, None, None]:
+    database = sqlite3.connect(migrated_db(tmp_path / "pipeline.db"))
+    database.row_factory = sqlite3.Row
+    # Each test declares its own KPI registry rather than migration seed defaults.
+    database.execute("DELETE FROM kpi_definitions")
+    database.commit()
+    try:
+        yield database
+    finally:
+        database.close()
 
 
 def _add_company(

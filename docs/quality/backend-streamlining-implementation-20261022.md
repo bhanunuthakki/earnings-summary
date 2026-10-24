@@ -1,12 +1,124 @@
 # Backend streamlining: implementation checkpoints
 
-Status: **Local integration in progress; combined release HOLD**.
-The cleanup is being reconciled with merged main `224d9666`. Initial measurement
-removes six production modules and 1,899 non-comment lines against that same main
-commit. The merged tree still fails the large-module-count gate. Main has also
-grown since the original cleanup baseline; that original comparison remains open.
-The checkpoints below describe their recorded candidates, not an accepted merged
-release. Targeted tests and independent review of the combined tree are pending.
+Status: **Local implementation validated and accepted at 95/100; combined release HOLD**.
+
+The private app retains deep pre/post earnings briefs, research/Q&A, portfolio
+decisions and one shared evidence plane. Analytical depth and financial lineage
+remain required.
+
+- **Ingestion:** FMP batch selection, ordering, dispatch and failure accounting
+  share one owner. Two URL routes share managed registration for the qualified
+  calendar-year PDF presentation family. Other supported families retain their
+  named routes. Terminal ingestion retirement is not complete.
+- **Evidence reads:** discovery and report consumers reuse ordered outcomes and
+  verification within one read. Source context, ambiguity and explicit gaps remain.
+- **Analysis and portfolio:** Say/Do prepares evidence before rendering. The unused
+  metric-to-DCF mapping is retired; normal editing, conversion, input bounds and
+  research-write safeguards remain.
+- **Setup and features:** five test areas use the real migrated schema instead of
+  33 copied table definitions, removing 465 net test lines. Approved standalone
+  tools, coaching actions and new experiment-creation paths are retired; required
+  history remains.
+
+Against the same merged-main commit `224d9666`, the branch removes **six production
+modules and 1,933 non-comment source lines**. It still has one extra module above
+2,000 lines. It also exceeds the original cleanup baseline after concurrent main
+growth. Both architecture gates remain open; no exception is approved.
+
+## Backend MVP
+
+Complete outputs match in all four synthetic cases against exact merged main:
+
+| Operation | SELECTs before → after | Median before → after |
+|---|---:|---:|
+| Discovery, 21 references | 1,744 → 659 | 276.00 → 33.76 ms |
+| Report, 8 cells | 681 → 264 | 67.81 → 24.73 ms |
+| Derived report, ambiguity retained | 720 → 214 | 46.46 → 24.45 ms |
+| DCF, 56 inputs | 1,688 → 1,688 | 61.80 → 63.65 ms |
+
+DCF shows parity. These bounded synthetic measurements establish no production
+or cold-cache claim. See `.tmp/cleanup-main-reader-probe/probe-receipt.json` and
+`comparison.json`.
+
+## Current validation
+
+Changed format, lint, strict types and suppression checks pass on 164 files.
+Whole-tree static checks pass on 2,895 files with 1,779 diagnostics and 1,757
+suppressions: 169 fewer diagnostics and 34 fewer suppressions than exact merged
+main. No ceiling increased. The dependency graph passes with 39,522 edges,
+170 test-only residuals, current input hashes and no production gaps or diagnostics.
+
+The shared opt-in clock fixture fixes a deterministically reproduced test flake.
+All 118 test bodies remain; both complete modules pass. Product clock, cache
+expiry and ETag behavior are unchanged. Independent Sol accepts the fix at 98/100.
+The three newest schema cuts pass all 38 tests and preserve all 108 original
+assertion trees, parameterization and error cases; independent acceptance is 97/100.
+One fixture clears migration reference seeds to retain its original empty registry.
+No production schema or default seed policy changes.
+
+| Full-suite attempt | Result and gate state |
+|---|---|
+| First integrated run | 32 failed; 22,192 passed; 102 skipped |
+| Repeat before cleanup fix | 22,229 passed; 102 skipped; two passing subtests; gate interrupted in teardown |
+| Checkout-local qualification namespace | 12 failed; 22,231 passed; 102 skipped; two passing subtests |
+| External namespace before clock fix | One failed; 10,705 passed; 41 skipped; stopped for diagnosis |
+| Current frozen candidate | **22,243 passed; 102 skipped; two passing subtests; normal supervised exit** |
+
+The 12-failure run exposed 11 correctly rejected checkout-local FMP policy files
+and one obsolete 803-read expectation. Qualification now uses an external native
+temporary namespace. The oracle requires exactly 804 fresh reads and at most
+three whole-manifest hashes. No admission guard was relaxed.
+
+The teardown fix parses and indexes one bounded manifest per exact-run operation.
+Fresh byte, identity, hash, pin and proof checks remain. Chunked reads avoid the
+prior transient memory growth. The 64-file synthetic plan improves from 8.208 to
+0.419 seconds; decisions match. Setup-inclusive peak memory stays near 295 MiB at
+64 files and 304 MiB at 1,024 files. Fresh byte I/O still scales with manifest size
+times target count. No full-suite or production performance forecast is made.
+The unit passes 154 targeted tests with one Windows-only skip and independent
+acceptance at 97/100. Exact prior-run recovery removed 75,900 eligible synthetic
+files with zero errors, retained all 666 protected sidecars and left no child
+process. See `.tmp/cleanup-retention-chunked-benchmark.json` and
+`.tmp/cleanup-main-exact-run-recovery-verification.json`.
+
+The 22,000-file scale test now retires its files at the producer after both timed
+filesystem passes. All 22,000 real files and four original assertions remain.
+This removes 22,000 entries from parent teardown without reducing test scale.
+The nine targeted suites passed 313 tests with six Windows-only skips. The sole
+later hash-budget tightening passed its affected test. Independent acceptance is
+97/100. The normal full gate and exact teardown verification pass.
+
+The full command exits zero with production source, Python diff and HEAD unchanged.
+All 522 observed task processes exit without forced termination. Exact three-root
+verification confirms 53,968 deletions, 663 protected sidecars, zero errors and
+all 16,108 held paths present. Journals agree; deleted paths are absent. Captured
+process groups and owned listeners are gone. Independent Sol accepts this frozen
+local checkpoint at 95/100, with no blocker within that scope. This advisory
+verdict does not close the architecture or roadmap gates. See
+`.tmp/cleanup-main-clock-fixed-full-suite.json`,
+`.tmp/cleanup-main-clock-fixed-full-teardown-verification.json` and
+`.tmp/cleanup-main-clock-fixed-full-resource-verification.json`.
+
+## Next cuts and owner boundaries
+
+The architecture review scores further one-family-at-a-time intake expansion at
+60/100 for ambition and 58/100 for simplification effectiveness. It leaves the
+legacy registration procedure active. The safeguards themselves remain valid.
+A proposed terminal summary-completion replacement scored 92/100 only for plan
+preparation, conditional on net deletion. Exact caller and line-budget inspection
+has not proved that condition. Four summary types still feed core readers. No new
+completion store, schema or orchestration has been implemented.
+
+The bounded caller inventory found no explicit application/report reader for
+standalone event briefs. Retiring new generation is a pending owner decision;
+sources, event registration and saved history would remain. R4 extraction retirement separately awaits the owner's NU/MELI
+reference-brief choice. Corrected October 23 packets remain explicitly not
+`decision-grade`. No collection or financial acceptance is inferred.
+
+No push, deployment, installed scheduler change or live-state mutation has occurred.
+
+The sections below retain evidence for earlier frozen candidates. Their historical
+counts and review scores do not establish acceptance of this integrated branch.
 
 Started 2026-10-22; revised 2026-10-23 Pacific. Base: `c978523d`.
 Branch: `codex/research-procedure-cleanup`. R1 corrections are at `3065638a`,
@@ -33,8 +145,8 @@ and portfolio decisions. The cleanup targets four sources of friction:
 
 No analytical-depth reduction is approved. The owner has also approved retiring
 new guided exercises and Telegram coaching delivery, replies and buttons. Other
-feature removals need an owner decision. Current source is below the original
-baseline; the large-module count remains above it. No baseline exception is approved.
+feature removals need an owner decision. After integration with concurrent main work, current source exceeds the original
+baseline. The large-module count also remains above it. No baseline exception is approved.
 
 ## Cuts and remaining boundaries
 

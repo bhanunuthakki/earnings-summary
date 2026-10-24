@@ -196,15 +196,31 @@ def test_changed_bytes_prompt_and_model_invalidate_cache(
     assert len(calls) == 4
 
 
-@pytest.mark.parametrize("limits", [{"max_chunks": 2}, {"max_structured_calls": 4}])
+@pytest.mark.parametrize(
+    ("pages", "limits", "expected_error"),
+    [
+        (("A", "B", "C"), {"max_chunks": 2}, "before extraction"),
+        (("A", "B", "C"), {"max_structured_calls": 4}, "before extraction"),
+        (
+            ("source exceeds limit",),
+            {"max_input_chars": 5},
+            "IR native source line exceeds section budget at page 1",
+        ),
+    ],
+)
 def test_global_budget_preflight_makes_no_calls(
-    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, limits: dict[str, int]
+    conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    pages: tuple[str, ...],
+    limits: dict[str, int],
+    expected_error: str,
 ) -> None:
     def extract(text: str) -> list[dict[str, object]]:
         pytest.fail("preflight must occur before model work")
 
-    with pytest.raises(ValueError, match="before extraction"):
-        _capture(conn, monkeypatch, ("A", "B", "C"), extract, **limits).capture(b"original source")
+    with pytest.raises(ValueError, match=expected_error):
+        _capture(conn, monkeypatch, pages, extract, **limits).capture(b"original source")
+    assert conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == 0
 
 
 @pytest.mark.parametrize("pages", [("one", ""), ("",), ()])
@@ -216,6 +232,7 @@ def test_empty_image_pages_unresolved_before_calls(
 
     with pytest.raises(ValueError, match="unresolved"):
         _capture(conn, monkeypatch, pages, extract).capture(b"original source")
+    assert conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == 0
 
 
 def test_saturation_splits_with_source_context_and_replays(

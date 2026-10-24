@@ -79,7 +79,7 @@ def _capture_inputs() -> tuple[list[tuple[int, list[dict[str, object]]]], list[S
         llm_call_id=1,
         run_id="fixture-run",
     )
-    return [(1, [raw])], [exchange]
+    return [(1, [{**raw, "source_precision": None}])], [exchange]
 
 
 def _wire(
@@ -201,7 +201,7 @@ def test_identical_response_bodies_preserve_each_governed_exchange_and_replay(
     monkeypatch.setattr("provenance.ir_reported_facts.project_pdf_page_texts", repeated_pages)
     first_rows, first_exchanges = _capture_inputs()
     raw_rows = [] if empty else first_rows[0][1]
-    body = json.dumps(raw_rows)
+    body = "[]" if empty else first_exchanges[0].raw_response
     exchanges = [
         first_exchanges[0].model_copy(
             update={

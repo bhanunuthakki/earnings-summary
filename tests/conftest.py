@@ -10,6 +10,7 @@ import stat
 import tempfile
 from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -25,6 +26,20 @@ if TYPE_CHECKING:
 else:
     preload_sqlite()
     sqlite3 = importlib.import_module("sqlite3")
+
+
+@pytest.fixture
+def shell_clock(monkeypatch: pytest.MonkeyPatch) -> list[datetime]:
+    clock = [datetime(2026, 8, 7, 12, 0, 5, tzinfo=UTC)]
+
+    class FixedClock:
+        @staticmethod
+        def now(_zone: object) -> datetime:
+            return clock[0]
+
+    monkeypatch.setattr("pipeline.work_os_shell.datetime", FixedClock)
+    return clock
+
 
 # --- Deterministic FMP tier baseline (runs at conftest IMPORT, before pytest
 # collects any test module) ---------------------------------------------------

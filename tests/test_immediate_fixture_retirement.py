@@ -257,13 +257,15 @@ class ImmediateFixtureTest(unittest.TestCase):
         self.assertEqual(decode.call_count, 1)
         self.assertLessEqual(matches.call_count, 600)
         self.assertLessEqual(len(vars(artifacts)["_MANIFEST_CACHE"]), 2)
-        # Two fresh reads/hashes per validation, planning plus apply, and three
-        # caller reads/hashes bind the exact manifest before retirement starts.
+        # Three caller reads, one operation snapshot, and four fresh reads per file:
+        # before/after hashing in planning and immediate apply validation.
         full_hashes = initial_hashes + sum(
             call.args[0] == manifest for call in file_hash.call_args_list
         )
-        self.assertLessEqual(manifest_reads, 803, f"reads={manifest_reads}, hashes={full_hashes}")
-        self.assertLessEqual(full_hashes, 803)
+        self.assertEqual(
+            manifest_reads, 4 * 200 + 4, f"reads={manifest_reads}, hashes={full_hashes}"
+        )
+        self.assertLessEqual(full_hashes, 3)
 
     def test_manifest_pin_added_during_apply_hash_with_preserved_metadata_is_held(self):
         payload = self.payload()

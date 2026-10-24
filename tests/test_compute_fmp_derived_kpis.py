@@ -27,6 +27,7 @@ from compute.fmp_derived_kpis import (
 )
 from models.facts import FiscalPeriodType, Unit
 from provenance.evidence_backfill import ensure_legacy_document_evidence
+from provenance.financial_fact_resolution import resolve_fact_row
 
 
 @pytest.fixture
@@ -85,12 +86,16 @@ def _insert_fact(
     source_doc_id: int,
     currency: str | None = "USD",
 ) -> None:
-    conn.execute(
+    cursor = conn.execute(
         "INSERT INTO financial_facts "
         "(ticker, period_end, fiscal_period_type, line_item, value, currency, unit, source_doc_id) "
         "VALUES (?, ?, ?, ?, ?, ?, 'actual', ?)",
         (ticker, period_end, fpt, line_item, str(value), currency, source_doc_id),
     )
+
+    assert cursor.lastrowid is not None
+    resolved = resolve_fact_row(conn, fact_table="financial_facts", fact_row_id=cursor.lastrowid)
+    assert resolved is not None
 
 
 def test_derive_for_facts_emits_three_margin_metrics_per_period() -> None:
@@ -197,8 +202,8 @@ def test_derive_skips_yoy_when_year_gap_is_not_exactly_one() -> None:
     assert yoy == []
 
 
-def test_derive_for_ticker_filters_to_quarterly_files(conn: sqlite3.Connection) -> None:
-    """Only documents whose file_path ends in _quarterly.json contribute to derivation."""
+def test_derive_for_ticker_excludes_annual_and_ttm_fiscal_periods(conn: sqlite3.Connection) -> None:
+    """Annual and TTM fiscal periods do not contribute to quarterly derivation."""
     quarterly_doc = _insert_doc(conn, "X", "data/historical/fmp/X_income_statement_quarterly.json")
     annual_doc = _insert_doc(conn, "X", "data/historical/fmp/X_income_statement.json")
     ttm_doc = _insert_doc(conn, "X", "data/historical/fmp/X_income_statement_ttm.json")
@@ -219,12 +224,12 @@ def test_derive_for_ticker_filters_to_quarterly_files(conn: sqlite3.Connection) 
             value=val,
             source_doc_id=quarterly_doc,
         )
-        # Annual + TTM rows would pollute if not filtered
+        # Annual and TTM sources retain their actual fiscal period kinds.
         _insert_fact(
             conn,
             ticker="X",
             period_end=pe,
-            fpt="Q4",
+            fpt="FY",
             line_item=line,
             value=val * 10,
             source_doc_id=annual_doc,
@@ -233,7 +238,7 @@ def test_derive_for_ticker_filters_to_quarterly_files(conn: sqlite3.Connection) 
             conn,
             ticker="X",
             period_end=pe,
-            fpt="Q4",
+            fpt="TTM",
             line_item=line,
             value=val * 4,
             source_doc_id=ttm_doc,

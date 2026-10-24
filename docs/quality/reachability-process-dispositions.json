@@ -886,8 +886,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "Same operator-supplied command in no-owner/no-deadline branch; now forwards optional stdout/stderr. It is not a closed internal Python target.",
-      "fingerprint": "a35b02c0cd396e75b8fd2bec72c3df34d42c63a57a424ef9307f9f76ae791c4c",
-      "line": 979,
+      "fingerprint": "336c0b340869f121d04e24a2da3b0b9e2502997f5077137f8d0eb997dd04007a",
+      "line": 978,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -896,8 +896,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "Old single Popen becomes two branches: no redirection and stdout/stderr redirection. Both retain command/cwd/env/suspended-create flags and owned job-tree lifecycle; each requires a separate disposition.",
-      "fingerprint": "a8ae3375533d1317b835ba556ec65e00d6109fa0860bb85b24e1bc35d8a2f759",
-      "line": 986,
+      "fingerprint": "c2a259efea50d8ed8b048a730855d6752abda622aa3daac18924b2cfcd7d9a80",
+      "line": 985,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -906,8 +906,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "Old single Popen becomes two branches: no redirection and stdout/stderr redirection. Both retain command/cwd/env/suspended-create flags and owned job-tree lifecycle; each requires a separate disposition.",
-      "fingerprint": "ae966a0202fb0f863c2a872c9af8b1d537869c185a3e0cc9d02771adafbdc40a",
-      "line": 988,
+      "fingerprint": "a5d25cd742d92f0a9692e0a2c8710a531262086c7b19641129c1bcd2c73cc66c",
+      "line": 987,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -1064,7 +1064,7 @@
       "name": "ast+xml+literal-scanner",
       "version": "1.3.0",
       "python": ">=3.11",
-      "source_sha256": "1c23c6e4b1e3efe9f851a13429b726668f2c3d8274ea268a54f858d722c99b97"
+      "source_sha256": "20e5b29c06aed0d36c635e916cb41678f0ae613cd81ad76dd07ff287990f0b66"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c9ec98b1cbcdf93c9b890d9a8a8c59ef6109598f67b1739c38463d79d5986175",

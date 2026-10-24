@@ -228,6 +228,7 @@ def test_actual_head_is_supported() -> None:
         ("tests/test_filing_xbrl_appcontainer_launcher.py", (22, 34)),
         ("tests/test_storage_reservation.py", (61, 121, 139)),
         ("tests/test_temp_run_pruning.py", (166,)),
+        ("tests/test_temp_run_retention.py", (907,)),
         ("tests/test_financial_source_semantic_quarantine.py", (49,)),
     ):
         assert [edge for edge in graph.unknown_edges if edge.source == source] == [
@@ -248,7 +249,7 @@ def test_actual_head_is_supported() -> None:
     # restoration of fixed state-path fields. Line 27 is an existing seam;
     # the other seven lookups accompany the new isolation/transaction tests.
     for source, lines in (
-        ("tests/test_ir_supplement_continuation.py", (854,)),
+        ("tests/test_ir_supplement_continuation.py", (871,)),
         ("tests/test_scan_ir_transcripts.py", (422, 424, 484, 486)),
         ("tests/test_split_root_legacy_adapters.py", (27, 205, 215)),
     ):
@@ -266,7 +267,7 @@ def test_actual_head_is_supported() -> None:
         ]
     # Retain all exact test seams from both branches.
     # The zero-production assertions stay above.
-    assert len(graph.unknown_edges) == 169
+    assert len(graph.unknown_edges) == 170
     assert [
         edge for edge in graph.unknown_edges if edge.source == "tests/test_db_writer_gate.py"
     ] == [

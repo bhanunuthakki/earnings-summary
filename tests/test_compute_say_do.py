@@ -12,6 +12,7 @@ from typing import cast
 import pytest
 
 from compute import kpi_definition_units, say_do
+from compute.kpi_resolver import resolve_kpi_definition_name
 from compute.say_do import (
     CommitmentExtractionManifest,
     CommitmentInput,
@@ -23,7 +24,6 @@ from compute.say_do import (
     persist_manifest,
 )
 from compute.thesis_evaluator import Comparator
-from dcf import fact_drivers
 from models.facts import Unit
 from provenance.financial_fact_resolution import resolve_fact_row
 from provenance.semantic_disposition import SemanticDispositionStore
@@ -485,7 +485,6 @@ def test_quarantined_kpi_cannot_grade_commitment_or_choose_fact_metadata(
             is not None
         )
         lookup = getattr(say_do, "_lookup_realized_value")
-        load_name = getattr(fact_drivers, "_resolve_kpi_load_name")
         period = datetime(2026, 6, 30)
         assert lookup(
             database, ticker="ACME", kpi_name="Active customers", period_target=period
@@ -497,7 +496,9 @@ def test_quarantined_kpi_cannot_grade_commitment_or_choose_fact_metadata(
             kpi_definition_units.dominant_fact_unit(database, "ACME", "Active customers")
             == Unit.MILLIONS
         )
-        assert load_name(database, "ACME", "ACTIVE CUSTOMERS") == "Active customers"
+        assert (
+            resolve_kpi_definition_name(database, "ACME", "ACTIVE CUSTOMERS") == "Active customers"
+        )
 
         at = datetime.now(UTC) + timedelta(hours=1)
         SemanticDispositionStore(database).persist(
@@ -528,6 +529,6 @@ def test_quarantined_kpi_cannot_grade_commitment_or_choose_fact_metadata(
         )
         assert say_do.match_commitment(database, commitment).outcome == CommitmentOutcome.NO_DATA
         assert kpi_definition_units.dominant_fact_unit(database, "ACME", "Active customers") is None
-        assert load_name(database, "ACME", "ACTIVE CUSTOMERS") == "ACTIVE CUSTOMERS"
+        assert resolve_kpi_definition_name(database, "ACME", "ACTIVE CUSTOMERS") is None
     finally:
         database.close()

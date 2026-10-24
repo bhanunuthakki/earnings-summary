@@ -86,8 +86,9 @@ def test_ir_job_preserves_database_and_missing_summary_selector(
     root, database = state
     seen: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
-    def run(*args: object, **kwargs: object) -> None:
+    def run(*args: object, **kwargs: object) -> int:
         seen.append((args, kwargs))
+        return 0
 
     monkeypatch.setattr(process_ir_documents, "run_for_ticker", run)
     monkeypatch.setattr(process_ir_documents, "load_project_env", _no_environment)

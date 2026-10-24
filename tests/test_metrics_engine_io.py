@@ -34,6 +34,7 @@ from compute.metrics_engine.registry import REGISTRY, ReasonCode
 from models.companies import AccountingStandard, BusinessModelClass
 from models.facts import Currency, FactLocator, LocatorKind
 from provenance.evidence_backfill import ensure_legacy_document_evidence
+from provenance.financial_fact_resolution import resolve_fact_row
 from sources.price import LivePrice
 
 _PRE_CUTOVER_REVISION = "0224_expected_document_lifecycle"
@@ -138,12 +139,15 @@ def _insert_fact(
     ):
         root = Path(conn.execute("PRAGMA database_list").fetchone()[2]).parent
         ensure_legacy_document_evidence(conn, repo_root=root, document_id=source_doc_id)
-    conn.execute(
+    cursor = conn.execute(
         "INSERT INTO financial_facts "
         "(ticker, period_end, fiscal_period_type, line_item, value, currency, unit, source_doc_id) "
         "VALUES (?, ?, ?, ?, ?, 'USD', 'actual', ?)",
         (ticker, period_end, fpt, line_item, value, source_doc_id),
     )
+
+    assert cursor.lastrowid is not None
+    resolve_fact_row(conn, fact_table="financial_facts", fact_row_id=cursor.lastrowid)
 
 
 @pytest.mark.parametrize(

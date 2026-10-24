@@ -1735,19 +1735,6 @@ def test_company_context_playground_change_updates_url_and_history_restores_it()
 _STAMP_RX = re.compile(r'data-generated-at="([^"]+)"')
 
 
-@pytest.fixture
-def shell_clock(monkeypatch: pytest.MonkeyPatch) -> list[datetime]:
-    clock = [datetime(2026, 8, 7, 12, 0, 5, tzinfo=UTC)]
-
-    class FixedClock:
-        @staticmethod
-        def now(_zone: object) -> datetime:
-            return clock[0]
-
-    monkeypatch.setattr("pipeline.work_os_shell.datetime", FixedClock)
-    return clock
-
-
 def test_shell_render_is_memoized_within_the_thirty_second_bucket(
     shell_clock: list[datetime],
 ) -> None:

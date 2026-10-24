@@ -2620,3 +2620,25 @@ operator action, route, service, schedule, budget, schema or live-state writer.
 Tests cover three-generation partial promotions, retained seals, native transcript
 readers and exact runtime/lock identity. Any re-extraction remains separately
 approved.
+
+### Cleanup integration and fiscal-date resolution — 2026-10-23
+
+Disposition: **no new Operations surface**. The retired monthly advisor-memo
+wrapper also loses its unused runtime classification. On-demand memo generation
+and saved history remain. No installed task is changed.
+
+Financial fact resolution policy `investor-grade-fact-resolution@3` compares source
+reporting dates and fiscal types. Availability, knowledge, effective and capture
+clocks retain their UTC comparisons. A subsequent resolution appends a new policy
+revision; prior observations and decisions remain unchanged. This code change
+does not re-resolve live facts, collect sources or grant financial admission.
+
+### Exact synthetic-run cleanup reuse — 2026-10-23
+
+Disposition: **no new Operations surface**. Exact completed synthetic-run
+retirement reuses one bounded manifest parse and declaration index within the
+existing retention operation. Fresh manifest bytes still guard every target before
+and after hashing in planning and immediately before deletion. Changed manifests
+remain protected. The public producer owner, scope, pins, proofs, file identities,
+live-database exclusion, byte bound and durable journal remain authoritative.
+No retention period, operator action, scheduler, service or live-state writer changes.

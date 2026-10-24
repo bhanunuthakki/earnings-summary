@@ -1,8 +1,9 @@
-"""Tests for src/entity_store.py and the migration 0036 spine."""
+"""Tests for current public entity-store behavior and connection ownership."""
 
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -27,129 +28,9 @@ from entity_store import (
 )
 
 
-def _schema(conn: sqlite3.Connection) -> None:
-    """Mirror migration 0036 inline for hermetic tests."""
-    conn.executescript(
-        """
-        CREATE TABLE entities (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            kind VARCHAR(32) NOT NULL,
-            canonical_name VARCHAR(255) NOT NULL,
-            display_name VARCHAR(255),
-            external_ids TEXT,
-            parent_entity_id INTEGER REFERENCES entities(id),
-            meta_json TEXT,
-            effective_from DATETIME, effective_to DATETIME,
-            created_at DATETIME NOT NULL,
-            last_observed_at DATETIME,
-            UNIQUE(kind, canonical_name)
-        );
-        CREATE TABLE entity_aliases (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            entity_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-            alias_text VARCHAR(255) NOT NULL,
-            alias_kind VARCHAR(32) NOT NULL,
-            first_observed_at DATETIME, last_observed_at DATETIME,
-            observation_count INTEGER NOT NULL DEFAULT 1,
-            confidence FLOAT NOT NULL DEFAULT 1.0,
-            exemplar_source_doc_id INTEGER, exemplar_excerpt TEXT,
-            UNIQUE(entity_id, alias_text)
-        );
-        CREATE TABLE entity_relationships (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            from_entity_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-            relationship_kind VARCHAR(48) NOT NULL,
-            to_entity_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-            effective_from DATETIME, effective_to DATETIME,
-            evidence_doc_id INTEGER, evidence_excerpt TEXT,
-            confidence FLOAT NOT NULL DEFAULT 1.0,
-            meta_json TEXT
-        );
-        CREATE TABLE entity_mentions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source_doc_id INTEGER NOT NULL,
-            entity_id INTEGER REFERENCES entities(id),
-            char_offset_start INTEGER, char_offset_end INTEGER,
-            mention_text VARCHAR(255) NOT NULL,
-            surrounding_context TEXT,
-            extractor_id VARCHAR(64) NOT NULL,
-            extractor_version VARCHAR(16) NOT NULL,
-            confidence FLOAT NOT NULL DEFAULT 1.0,
-            unresolved_alias_text VARCHAR(255)
-        );
-        CREATE TABLE concepts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            kind VARCHAR(32) NOT NULL,
-            canonical_name VARCHAR(128) NOT NULL,
-            unit_kind VARCHAR(32),
-            taxonomy_xbrl_tag VARCHAR(128),
-            generic_definition_md TEXT,
-            computation_kind VARCHAR(32),
-            computation_formula_md TEXT,
-            created_at DATETIME NOT NULL,
-            UNIQUE(canonical_name)
-        );
-        CREATE TABLE concept_aliases (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
-            ticker VARCHAR(16),
-            alias_text VARCHAR(255) NOT NULL,
-            alias_kind VARCHAR(32) NOT NULL,
-            first_observed_at DATETIME, last_observed_at DATETIME,
-            confidence FLOAT NOT NULL DEFAULT 1.0,
-            UNIQUE(concept_id, ticker, alias_text)
-        );
-        CREATE TABLE concept_definitions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            concept_id INTEGER NOT NULL REFERENCES concepts(id),
-            ticker VARCHAR(16) NOT NULL,
-            effective_from DATETIME NOT NULL,
-            effective_to DATETIME,
-            definition_md TEXT NOT NULL,
-            evidence_doc_id INTEGER, evidence_excerpt TEXT,
-            computation_change_md TEXT,
-            superseded_by_id INTEGER REFERENCES concept_definitions(id)
-        );
-        CREATE TABLE extractions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source_doc_id INTEGER NOT NULL,
-            char_offset_start INTEGER, char_offset_end INTEGER,
-            extraction_kind VARCHAR(48) NOT NULL,
-            extractor_id VARCHAR(64) NOT NULL,
-            extractor_version VARCHAR(16) NOT NULL,
-            payload_json TEXT NOT NULL,
-            confidence FLOAT NOT NULL DEFAULT 1.0,
-            extracted_at DATETIME NOT NULL,
-            superseded_by_extraction_id INTEGER REFERENCES extractions(id),
-            links_to_json TEXT
-        );
-        CREATE TABLE mapping_proposals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            kind VARCHAR(48) NOT NULL,
-            ticker VARCHAR(16),
-            proposed_by VARCHAR(64) NOT NULL,
-            payload_json TEXT NOT NULL,
-            confidence FLOAT NOT NULL,
-            source_doc_id INTEGER, source_excerpt TEXT,
-            status VARCHAR(24) NOT NULL DEFAULT 'pending_review',
-            applied_at DATETIME, applied_to_entity_id INTEGER, applied_to_concept_id INTEGER,
-            decided_at DATETIME, decided_by VARCHAR(64), decision_notes TEXT,
-            created_at DATETIME NOT NULL
-        );
-        """
-    )
-    conn.commit()
-
-
 @pytest.fixture()
-def db(tmp_path: Path) -> Path:
-    p = tmp_path / "spine.db"
-    conn = sqlite3.connect(str(p))
-    try:
-        _schema(conn)
-    finally:
-        conn.close()
-    return p
+def db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    return migrated_db(tmp_path / "spine.db")
 
 
 # ---------------------------------------------------------------------------
@@ -219,9 +100,10 @@ def test_borrowed_entity_writers_leave_transaction_ownership_to_caller(db: Path)
     conn.close()
 
 
-def test_default_entity_writer_owns_commit_and_close(monkeypatch: pytest.MonkeyPatch) -> None:
-    conn = _TrackingConnection(":memory:")
-    _schema(conn)
+def test_default_entity_writer_owns_commit_and_close(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn = sqlite3.connect(str(db), factory=_TrackingConnection)
     conn.commit_calls = 0
 
     def open_tracking(_db_path: Path | str | None) -> _TrackingConnection:
@@ -243,6 +125,7 @@ def test_get_entity_round_trips_metadata(db: Path) -> None:
         meta={"sector": "Communication Services"},
         db_path=db,
     )
+    assert eid is not None
     e = get_entity(eid, db_path=db)
     assert e is not None
     assert e.canonical_name == "Alphabet"
@@ -257,6 +140,7 @@ def test_get_entity_round_trips_metadata(db: Path) -> None:
 
 def test_record_alias_increments_count_on_duplicate(db: Path) -> None:
     eid = upsert_entity(kind="company", canonical_name="Alphabet", db_path=db)
+    assert eid is not None
     aid1 = record_alias(entity_id=eid, alias_text="Google", db_path=db)
     aid2 = record_alias(entity_id=eid, alias_text="Google", db_path=db)
     assert aid1 == aid2  # same row
@@ -273,9 +157,11 @@ def test_record_alias_increments_count_on_duplicate(db: Path) -> None:
 
 def test_resolve_entity_picks_highest_confidence(db: Path) -> None:
     eid = upsert_entity(kind="company", canonical_name="Brookfield Corp", db_path=db)
+    assert eid is not None
     record_alias(entity_id=eid, alias_text="BN", confidence=0.95, db_path=db)
     # A lower-confidence alias for the same text on a different entity
     other = upsert_entity(kind="ticker", canonical_name="BN-ticker", db_path=db)
+    assert other is not None
     record_alias(entity_id=other, alias_text="BN", confidence=0.30, db_path=db)
 
     resolved = resolve_entity("BN", db_path=db)
@@ -333,7 +219,9 @@ def test_record_mention_handles_unresolved(db: Path) -> None:
 
 def test_upsert_relationship_dedups_same_edge(db: Path) -> None:
     co = upsert_entity(kind="company", canonical_name="Alphabet", db_path=db)
+    assert co is not None
     seg = upsert_entity(kind="segment", canonical_name="Google Cloud", db_path=db)
+    assert seg is not None
     r1 = upsert_relationship(
         from_entity_id=seg,
         relationship_kind="segment_of",
@@ -364,7 +252,9 @@ def test_upsert_concept_creates_with_self_alias(db: Path) -> None:
 
 def test_resolve_concept_ticker_specific_wins(db: Path) -> None:
     cid_universal = upsert_concept(canonical_name="Customers", db_path=db)
+    assert cid_universal is not None
     cid_nu = upsert_concept(canonical_name="NU Active Customers", db_path=db)
+    assert cid_nu is not None
     record_concept_alias(concept_id=cid_nu, ticker="NU", alias_text="customers", db_path=db)
     record_concept_alias(concept_id=cid_universal, ticker=None, alias_text="customers", db_path=db)
 
@@ -376,6 +266,7 @@ def test_resolve_concept_ticker_specific_wins(db: Path) -> None:
 
 def test_concept_definition_supersedes_prior(db: Path) -> None:
     cid = upsert_concept(canonical_name="Active Customers", db_path=db)
+    assert cid is not None
     d1 = record_concept_definition(
         concept_id=cid,
         ticker="NU",
@@ -512,7 +403,7 @@ def test_pending_proposals_lists_only_pending(db: Path) -> None:
         db_path=db,
     )
     pending = pending_proposals(db_path=db)
-    names = [p.payload.get("canonical_name") for p in pending if isinstance(p.payload, dict)]
+    names = [p.payload.get("canonical_name") for p in pending]
     assert "NeedsReview" in names
     assert "AutoApplied" not in names
 

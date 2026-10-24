@@ -7,15 +7,28 @@ import json
 import sqlite3
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from alembic.config import Config
+from upgrade_database import upgrade_database
 
+import db as dbmod
 from alembic import command
 from execution import backfill_financial_fact_resolutions as cutover_cli
+from pipeline.kpi_semantics import (
+    KpiAccountingBasis,
+    KpiConsolidationScope,
+    KpiPeriodRole,
+    KpiPublicationLane,
+    KpiSemanticContext,
+    KpiSemanticStatus,
+    KpiUnitScale,
+    persist_kpi_semantic_context,
+)
 from pipeline.restatement_detector import insert_with_restatement_detection
 from provenance.evidence_ledger import (
     ContentBlob,
@@ -27,13 +40,14 @@ from provenance.evidence_ledger import (
 )
 from provenance.financial_fact_resolution import (
     FactCutoverRequest,
-    _dimensions,  # pyright: ignore[reportPrivateUsage] -- current-head seam under test
     canonical_fact_relation,
+    capture_fact_row_observation,
     execute_fact_cutover,
     resolve_fact_logical_key,
     resolve_fact_row,
 )
 from provenance.integrity_audit import AuditOptions, audit_connection
+from provenance.observation_resolution import ObservationResolutionLedger, ResolutionRevision
 from run_lock import hold_run_lock
 from sqlite_runtime import SQLiteConnectionRole
 from timeseries.loaders import load_financial_series
@@ -44,39 +58,133 @@ HEAD = "0225_financial_fact_resolution_cutover"
 STAMP = datetime(2026, 7, 27, 12, 0, 0)
 
 
-def test_kpi_observation_dimensions_use_only_current_semantic_head() -> None:
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    conn.executescript(
-        """
-        CREATE TABLE kpi_facts (id INTEGER PRIMARY KEY,kpi_definition_id INTEGER);
-        CREATE TABLE kpi_fact_semantic_contexts (
-            id INTEGER PRIMARY KEY,kpi_fact_id INTEGER,revision INTEGER,
-            supersedes_context_id INTEGER,metric_name_as_reported TEXT,
-            period_role TEXT,publication_lane TEXT,accounting_basis TEXT,
-            consolidation_scope TEXT,dimensions_json TEXT,unit_scale TEXT,status TEXT
-        );
-        INSERT INTO kpi_facts VALUES (7,641);
-        INSERT INTO kpi_fact_semantic_contexts VALUES
-          (10,7,1,NULL,'Customers','prior_year_comparator','comparator','gaap',
-           'geography','{"country":"BR"}','actual','admitted'),
-          (11,7,2,10,'Total customers','current','current_actual','management',
-           'consolidated','{}','millions','admitted');
-        """
+def test_kpi_observation_dimensions_use_only_current_semantic_head(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    seed_sha256 = hashlib.sha256(
+        Path(__file__).read_bytes() + Path(dbmod.__file__).read_bytes()
+    ).hexdigest()
+
+    def bootstrap(path: Path) -> None:
+        legacy = sqlite3.connect(path)
+        legacy.row_factory = sqlite3.Row
+        try:
+            with patch.object(dbmod, "get_connection", return_value=legacy) as open_database:
+                dbmod.init_db()
+                open_database.assert_called_once_with(allow_create=True)
+        finally:
+            legacy.close()
+
+    def seed_legacy(path: Path) -> None:
+        migrated_db(
+            path,
+            archived=True,
+            upgrade_from="0000_baseline",
+            before_upgrade=bootstrap,
+            seed_sha256=seed_sha256,
+            target=PRIOR_HEAD,
+        )
+        legacy = sqlite3.connect(path)
+        try:
+            _seed_document(
+                legacy, document_id=1, source_tier="sec_official", value_suffix="KPI source"
+            )
+            fact_id = _insert_kpi_fact(
+                legacy, document_id=1, value="1000000", unit="count", kpi_definition_id=641
+            )
+            legacy.execute(
+                "UPDATE kpi_facts SET source_excerpt='1 million customers.' WHERE id=?",
+                (fact_id,),
+            )
+            legacy.commit()
+        finally:
+            legacy.close()
+
+    database = migrated_db(
+        tmp_path / "current-head-dimensions.db",
+        archived=True,
+        upgrade_from=PRIOR_HEAD,
+        before_upgrade=seed_legacy,
+        seed_sha256=seed_sha256,
     )
-    row = conn.execute("SELECT * FROM kpi_facts WHERE id=7").fetchone()
-    dimensions = {item.key: item.value for item in _dimensions(conn, "kpi_facts", row)}
-    assert dimensions == {
-        "accounting_basis": "management",
-        "consolidation_scope": "consolidated",
-        "kpi_definition_id": "641",
-        "metric_name_as_reported": "Total customers",
-        "period_role": "current",
-        "publication_lane": "current_actual",
-        "semantic_status": "admitted",
-        "unit_scale": "millions",
-    }
-    conn.close()
+    backup = tmp_path / "current-head-dimensions.pre-upgrade.db"
+    upgraded = upgrade_database(
+        database,
+        repo_root=ROOT,
+        runtime_root=tmp_path,
+        backup_path=backup,
+        allow_isolated_db=True,
+    )
+    assert upgraded.status == "bridged" and upgraded.backup_path == str(backup)
+    conn = sqlite3.connect(database)
+    conn.row_factory = sqlite3.Row
+    try:
+        fact_id = int(conn.execute("SELECT id FROM kpi_facts").fetchone()[0])
+        assert conn.execute("SELECT COUNT(*) FROM reported_observations").fetchone()[0] == 0
+        observed_at = STAMP.replace(tzinfo=UTC)
+        prior = KpiSemanticContext(
+            metric_name_as_reported="Customers",
+            reported_period_end=date(2025, 6, 30),
+            period_role=KpiPeriodRole.PRIOR_YEAR_COMPARATOR,
+            publication_lane=KpiPublicationLane.COMPARATOR,
+            accounting_basis=KpiAccountingBasis.GAAP,
+            consolidation_scope=KpiConsolidationScope.GEOGRAPHY,
+            dimensions={"country": "BR"},
+            unit_scale=KpiUnitScale.MILLIONS,
+            source_value_text="1",
+            status=KpiSemanticStatus.ADMITTED,
+        )
+        first = persist_kpi_semantic_context(
+            conn, kpi_fact_id=fact_id, context=prior, knowledge_at=observed_at
+        )
+        current = prior.model_copy(
+            update={
+                "metric_name_as_reported": "Total customers",
+                "reported_period_end": date(2026, 6, 30),
+                "period_role": KpiPeriodRole.CURRENT,
+                "publication_lane": KpiPublicationLane.CURRENT_ACTUAL,
+                "accounting_basis": KpiAccountingBasis.MANAGEMENT,
+                "consolidation_scope": KpiConsolidationScope.CONSOLIDATED,
+                "dimensions": {},
+            }
+        )
+        second = persist_kpi_semantic_context(
+            conn, kpi_fact_id=fact_id, context=current, knowledge_at=observed_at
+        )
+        revisions = conn.execute(
+            "SELECT id,revision,supersedes_context_id,dimensions_json "
+            "FROM kpi_fact_semantic_contexts WHERE kpi_fact_id=? ORDER BY revision",
+            (fact_id,),
+        ).fetchall()
+        assert [(row[0], row[1], row[2]) for row in revisions] == [
+            (first, 1, None),
+            (second, 2, first),
+        ]
+        assert json.loads(revisions[0][3]) == {"country": "BR"}
+        assert capture_fact_row_observation(
+            conn, fact_table="kpi_facts", fact_row_id=fact_id, recorded_at=observed_at
+        )
+        result = resolve_fact_row(
+            conn, fact_table="kpi_facts", fact_row_id=fact_id, knowledge_cutoff=observed_at
+        )
+        assert result is not None and result.resolution_status == "resolved"
+        payload = conn.execute(
+            "SELECT dimensions_json FROM reported_observations WHERE observation_id=?",
+            (result.selected_observation_id,),
+        ).fetchone()[0]
+        dimensions = {item["key"]: item["value"] for item in json.loads(payload)}
+        assert dimensions == {
+            "accounting_basis": "management",
+            "consolidation_scope": "consolidated",
+            "kpi_definition_id": "641",
+            "metric_name_as_reported": "Total customers",
+            "period_role": "current",
+            "publication_lane": "current_actual",
+            "semantic_status": "admitted",
+            "unit_scale": "millions",
+        }
+    finally:
+        conn.close()
 
 
 def _config(path: Path) -> Config:
@@ -287,14 +395,16 @@ def _insert_financial_fact(
     value: str,
     unit: str = "actual",
     period_end: str = "2026-06-30",
+    fiscal_period_type: str = "Q2",
+    currency: str = "USD",
 ) -> int:
     cursor = conn.execute(
         "INSERT INTO financial_facts "
         "(ticker, period_end, fiscal_period_type, line_item, value, currency, unit, "
         "source_doc_id, confidence, extracted_by, locator) "
-        "VALUES ('ACME', ?, 'Q2', 'revenue', ?, 'USD', ?, ?, 0.99, "
+        "VALUES ('ACME', ?, ?, 'revenue', ?, ?, ?, ?, 0.99, "
         "'deterministic:test', '{\"json_path\":\"[0].revenue\"}')",
-        (period_end, value, unit, document_id),
+        (period_end, fiscal_period_type, value, currency, unit, document_id),
     )
     assert cursor.lastrowid is not None
     return int(cursor.lastrowid)
@@ -307,19 +417,20 @@ def _insert_kpi_fact(
     value: str,
     unit: str,
     supersedes_id: int | None = None,
+    kpi_definition_id: int = 1,
 ) -> int:
     conn.execute(
         "INSERT OR IGNORE INTO kpi_definitions (id, ticker, name, unit) "
-        "VALUES (1, 'ACME', 'Active customers', ?)",
-        (unit,),
+        "VALUES (?, 'ACME', 'Active customers', ?)",
+        (kpi_definition_id, unit),
     )
     cursor = conn.execute(
         "INSERT INTO kpi_facts "
         "(ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, "
         "source_doc_id, confidence, extracted_by, locator, supersedes_id) "
-        "VALUES ('ACME', '2026-06-30', 'Q2', 1, ?, ?, ?, 0.95, "
+        "VALUES ('ACME', '2026-06-30', 'Q2', ?, ?, ?, ?, 0.95, "
         "'deterministic:test', '{\"pdf_page\":3}', ?)",
-        (value, unit, document_id, supersedes_id),
+        (kpi_definition_id, value, unit, document_id, supersedes_id),
     )
     assert cursor.lastrowid is not None
     return int(cursor.lastrowid)
@@ -1182,5 +1293,300 @@ def test_integrity_auditor_flags_unbridged_fact_state_and_missing_capture_guard(
             f"financial_facts:{orphan_id}",
         )
         assert "FINANCIAL_FACTS_CAPTURE_TRIGGER_MISSING" in by_code
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    "source_start,source_end,period_consistent",
+    [
+        ("2026-04-01 00:00:00", "2026-06-30 00:00:00", True),
+        ("2026-04-01T09:15:00+05:30", "2026-06-30T17:45:00+05:30", True),
+        ("2026-04-02T00:00:00+00:00", "2026-06-30T00:00:00+00:00", False),
+        ("2026-01-01T00:00:00+00:00", "2026-06-30T00:00:00+00:00", False),
+    ],
+)
+def test_resolution_uses_source_reporting_dates_and_keeps_duration_boundaries(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    source_start: str,
+    source_end: str,
+    period_consistent: bool,
+) -> None:
+    conn = sqlite3.connect(migrated_db(tmp_path / "reporting-dates.db"))
+    conn.row_factory = sqlite3.Row
+    try:
+        _seed_document(conn, document_id=1, source_tier="fmp_normalized", value_suffix="vendor")
+        _seed_document(
+            conn,
+            document_id=2,
+            source_tier="sec_official",
+            value_suffix="issuer",
+            document_period_start=datetime.fromisoformat(source_start),
+            document_period_end=datetime.fromisoformat(source_end),
+        )
+        _insert_financial_fact(conn, document_id=1, value="100")
+        issuer_id = _insert_financial_fact(conn, document_id=2, value="100", period_end=source_end)
+        raw_periods = conn.execute(
+            "SELECT period_start,period_end FROM reported_observations ORDER BY observation_id"
+        ).fetchall()
+        raw_facts = conn.execute("SELECT * FROM financial_facts ORDER BY id").fetchall()
+        assert raw_facts[1]["period_end"] == source_end
+        result = resolve_fact_row(
+            conn, fact_table="financial_facts", fact_row_id=issuer_id, knowledge_cutoff=STAMP
+        )
+        assert result is not None and result.candidate_count == 2
+        assert result.resolution_status == (
+            "resolved" if period_consistent else "unresolved_material"
+        )
+        checks = json.loads(
+            conn.execute(
+                "SELECT checks_json FROM fact_resolution_outcomes WHERE resolution_id=?",
+                (result.resolution_id,),
+            ).fetchone()[0]
+        )
+        assert checks["period_consistent"] is period_consistent
+        selected = conn.execute("SELECT id FROM v_financial_facts_resolved_current").fetchall()
+        assert [row[0] for row in selected] == ([issuer_id] if period_consistent else [])
+        assert (
+            conn.execute(
+                "SELECT policy_version FROM observation_resolution_revisions WHERE resolution_id=?",
+                (result.resolution_id,),
+            ).fetchone()[0]
+            == "investor-grade-fact-resolution@3"
+        )
+        assert (
+            conn.execute(
+                "SELECT period_start,period_end FROM reported_observations ORDER BY observation_id"
+            ).fetchall()
+            == raw_periods
+        )
+        assert conn.execute("SELECT * FROM financial_facts ORDER BY id").fetchall() == raw_facts
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("boundary", ["local_date", "fiscal_type"])
+def test_resolution_keeps_distinct_reporting_date_and_fiscal_keys(
+    tmp_path: Path, migrated_db: Callable[..., Path], boundary: str
+) -> None:
+    conn = sqlite3.connect(migrated_db(tmp_path / "distinct-period-keys.db"))
+    conn.row_factory = sqlite3.Row
+    try:
+        ends = (
+            ("2026-06-30T23:30:00-02:00", "2026-07-01T01:30:00+00:00")
+            if boundary == "local_date"
+            else ("2026-06-30", "2026-06-30")
+        )
+        if boundary == "local_date":
+            assert datetime.fromisoformat(ends[0]) == datetime.fromisoformat(ends[1])
+            assert ends[0][:10] != ends[1][:10]
+        logical_keys: list[str] = []
+        for number, period_end in enumerate(ends, 1):
+            endpoint = datetime.fromisoformat(period_end)
+            _seed_document(
+                conn,
+                document_id=number,
+                source_tier="sec_official",
+                value_suffix="distinct reporting period",
+                document_period_start=datetime(2026, 4, 1, tzinfo=endpoint.tzinfo),
+                document_period_end=endpoint,
+            )
+            fact_id = _insert_financial_fact(
+                conn,
+                document_id=number,
+                value="100",
+                period_end=period_end,
+                fiscal_period_type="FY" if boundary == "fiscal_type" and number == 2 else "Q2",
+            )
+            result = resolve_fact_row(
+                conn, fact_table="financial_facts", fact_row_id=fact_id, knowledge_cutoff=STAMP
+            )
+            assert result is not None
+            assert result.candidate_count == 1 and result.resolution_status == "resolved"
+            logical_keys.append(result.logical_key)
+        assert logical_keys[0] != logical_keys[1]
+        assert (
+            conn.execute("SELECT COUNT(*) FROM v_financial_facts_resolved_current").fetchone()[0]
+            == 2
+        )
+    finally:
+        conn.close()
+
+
+def test_reporting_date_equivalence_does_not_override_equal_authority_dissent(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = sqlite3.connect(migrated_db(tmp_path / "date-authority-dissent.db"))
+    conn.row_factory = sqlite3.Row
+    try:
+        fact_ids: list[int] = []
+        for number, (end, value) in enumerate(
+            [("2026-06-30", "100"), ("2026-06-30T19:00:00+03:00", "100.5")], 1
+        ):
+            endpoint = datetime.fromisoformat(end)
+            _seed_document(
+                conn,
+                document_id=number,
+                source_tier="sec_official",
+                value_suffix="equal issuer authority",
+                document_period_start=datetime(2026, 4, 1, tzinfo=endpoint.tzinfo),
+                document_period_end=endpoint,
+            )
+            fact_ids.append(
+                _insert_financial_fact(conn, document_id=number, value=value, period_end=end)
+            )
+        result = resolve_fact_row(
+            conn, fact_table="financial_facts", fact_row_id=fact_ids[-1], knowledge_cutoff=STAMP
+        )
+        assert result is not None and result.candidate_count == 2
+        assert result.resolution_status == "unresolved_material" and result.material_dissent
+        checks = json.loads(
+            conn.execute(
+                "SELECT checks_json FROM fact_resolution_outcomes WHERE resolution_id=?",
+                (result.resolution_id,),
+            ).fetchone()[0]
+        )
+        assert checks["period_consistent"] is True
+        assert (
+            conn.execute("SELECT COUNT(*) FROM v_financial_facts_resolved_current").fetchone()[0]
+            == 0
+        )
+    finally:
+        conn.close()
+
+
+def test_policy_v3_appends_unchanged_unresolved_outcome_and_replays_exactly(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = sqlite3.connect(migrated_db(tmp_path / "period-policy-history.db"))
+    conn.row_factory = sqlite3.Row
+    try:
+        for number, (end, currency) in enumerate(
+            [("2026-06-30", "USD"), ("2026-06-30T19:00:00+03:00", "BRL")], 1
+        ):
+            endpoint = datetime.fromisoformat(end)
+            _seed_document(
+                conn,
+                document_id=number,
+                source_tier="sec_official",
+                value_suffix="historical unresolved currency",
+                document_period_start=datetime(2026, 4, 1, tzinfo=endpoint.tzinfo),
+                document_period_end=endpoint,
+            )
+            _insert_financial_fact(
+                conn, document_id=number, value="100", period_end=end, currency=currency
+            )
+        captured = conn.execute(
+            "SELECT logical_key,observation_id FROM fact_observation_revisions ORDER BY observation_id"
+        ).fetchall()
+        logical_key = str(captured[0][0])
+        candidate_ids = tuple(str(row[1]) for row in captured)
+        assert len(candidate_ids) == 2 and {row[0] for row in captured} == {logical_key}
+        # Seed an immutable prior policy receipt through its public ledger. The
+        # membership digest binds its exact candidate IDs, not a test resolver.
+        candidate_digest = hashlib.sha256("\0".join(candidate_ids).encode()).hexdigest()
+        old_checks = {
+            "candidate_set_nonempty": True,
+            "source_authorities_known": True,
+            "currency_consistent": False,
+            "fact_kind_consistent": True,
+            "period_consistent": False,
+            "source_tiers_known": True,
+            "unit_consistent": True,
+        }
+        ObservationResolutionLedger(conn).persist_resolution(
+            ResolutionRevision(
+                resolution_id="fixture-policy-v2",
+                idempotency_key="fixture-policy-v2",
+                logical_key=logical_key,
+                revision=1,
+                candidate_observation_ids=candidate_ids,
+                selected_observation_id=candidate_ids[-1],
+                resolver_kind="deterministic_policy",
+                policy_version="investor-grade-fact-resolution@2",
+                reason="Retained synthetic v2 unresolved period/currency decision.",
+                knowledge_cutoff=STAMP,
+                effective_at=STAMP,
+                recorded_at=STAMP,
+                material_dissent=True,
+            )
+        )
+        conn.execute(
+            "INSERT INTO fact_resolution_outcomes VALUES (?,?,?,?,?)",
+            (
+                "fixture-policy-v2",
+                "unresolved_material",
+                candidate_digest,
+                json.dumps(old_checks, sort_keys=True, separators=(",", ":")),
+                STAMP,
+            ),
+        )
+        old_revision = conn.execute(
+            "SELECT * FROM observation_resolution_revisions WHERE resolution_id='fixture-policy-v2'"
+        ).fetchone()
+        old_outcome = conn.execute(
+            "SELECT * FROM fact_resolution_outcomes WHERE resolution_id='fixture-policy-v2'"
+        ).fetchone()
+        raw_periods = conn.execute(
+            "SELECT period_start,period_end FROM reported_observations ORDER BY observation_id"
+        ).fetchall()
+        result = resolve_fact_logical_key(
+            conn, logical_key=logical_key, knowledge_cutoff=STAMP, recorded_at=STAMP
+        )
+        assert result.created and result.resolution_status == "unresolved_material"
+        assert result.selected_observation_id == candidate_ids[-1]
+        revision = conn.execute(
+            "SELECT revision,policy_version,supersedes_resolution_id FROM observation_resolution_revisions "
+            "WHERE resolution_id=?",
+            (result.resolution_id,),
+        ).fetchone()
+        assert tuple(revision) == (2, "investor-grade-fact-resolution@3", "fixture-policy-v2")
+        checks = json.loads(
+            conn.execute(
+                "SELECT checks_json FROM fact_resolution_outcomes WHERE resolution_id=?",
+                (result.resolution_id,),
+            ).fetchone()[0]
+        )
+        assert checks == {**old_checks, "period_consistent": True}
+        assert (
+            conn.execute(
+                "SELECT * FROM observation_resolution_revisions WHERE resolution_id='fixture-policy-v2'"
+            ).fetchone()
+            == old_revision
+        )
+        assert (
+            conn.execute(
+                "SELECT * FROM fact_resolution_outcomes WHERE resolution_id='fixture-policy-v2'"
+            ).fetchone()
+            == old_outcome
+        )
+        tables = (
+            "observation_resolution_revisions",
+            "observation_resolution_candidates",
+            "fact_resolution_outcomes",
+        )
+        retained = {
+            table: conn.execute(f"SELECT * FROM {table} ORDER BY 1,2").fetchall()
+            for table in tables
+        }
+        replay = resolve_fact_logical_key(
+            conn, logical_key=logical_key, knowledge_cutoff=STAMP, recorded_at=STAMP
+        )
+        assert not replay.created and replay.resolution_id == result.resolution_id
+        assert {
+            table: conn.execute(f"SELECT * FROM {table} ORDER BY 1,2").fetchall()
+            for table in tables
+        } == retained
+        assert (
+            conn.execute(
+                "SELECT period_start,period_end FROM reported_observations ORDER BY observation_id"
+            ).fetchall()
+            == raw_periods
+        )
+        assert (
+            conn.execute("SELECT COUNT(*) FROM v_financial_facts_resolved_current").fetchone()[0]
+            == 0
+        )
     finally:
         conn.close()

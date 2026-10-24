@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -16,101 +17,9 @@ import pytest
 from table_extractors import customer_concentration as cc
 
 
-def _schema(conn: sqlite3.Connection) -> None:
-    """Inline customer_concentrations + entity spine + extractions schema."""
-    conn.executescript(
-        """
-        CREATE TABLE customer_concentrations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker VARCHAR(16) NOT NULL,
-            fiscal_period VARCHAR(10) NOT NULL,
-            fiscal_period_type VARCHAR(4) NOT NULL,
-            customer_label VARCHAR(255) NOT NULL,
-            customer_entity_id INTEGER,
-            pct_of_revenue FLOAT NOT NULL,
-            revenue_amount NUMERIC(24, 6),
-            revenue_currency VARCHAR(3),
-            source_doc_id INTEGER,
-            source_excerpt TEXT,
-            extracted_at DATETIME NOT NULL,
-            UNIQUE(ticker, fiscal_period, customer_label)
-        );
-        CREATE TABLE entities (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            kind VARCHAR(32) NOT NULL,
-            canonical_name VARCHAR(255) NOT NULL,
-            display_name VARCHAR(255),
-            external_ids TEXT,
-            parent_entity_id INTEGER REFERENCES entities(id),
-            meta_json TEXT,
-            effective_from DATETIME, effective_to DATETIME,
-            created_at DATETIME NOT NULL,
-            last_observed_at DATETIME,
-            UNIQUE(kind, canonical_name)
-        );
-        CREATE TABLE entity_aliases (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            entity_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-            alias_text VARCHAR(255) NOT NULL,
-            alias_kind VARCHAR(32) NOT NULL,
-            first_observed_at DATETIME, last_observed_at DATETIME,
-            observation_count INTEGER NOT NULL DEFAULT 1,
-            confidence FLOAT NOT NULL DEFAULT 1.0,
-            exemplar_source_doc_id INTEGER, exemplar_excerpt TEXT,
-            UNIQUE(entity_id, alias_text)
-        );
-        CREATE TABLE concepts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            kind VARCHAR(32) NOT NULL,
-            canonical_name VARCHAR(128) NOT NULL,
-            unit_kind VARCHAR(32),
-            taxonomy_xbrl_tag VARCHAR(128),
-            generic_definition_md TEXT,
-            computation_kind VARCHAR(32),
-            computation_formula_md TEXT,
-            created_at DATETIME NOT NULL,
-            UNIQUE(canonical_name)
-        );
-        CREATE TABLE mapping_proposals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            kind VARCHAR(48) NOT NULL,
-            ticker VARCHAR(16),
-            proposed_by VARCHAR(64) NOT NULL,
-            payload_json TEXT NOT NULL,
-            confidence FLOAT NOT NULL,
-            source_doc_id INTEGER, source_excerpt TEXT,
-            status VARCHAR(24) NOT NULL DEFAULT 'pending_review',
-            applied_at DATETIME, applied_to_entity_id INTEGER, applied_to_concept_id INTEGER,
-            decided_at DATETIME, decided_by VARCHAR(64), decision_notes TEXT,
-            created_at DATETIME NOT NULL
-        );
-        CREATE TABLE extractions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source_doc_id INTEGER NOT NULL,
-            char_offset_start INTEGER, char_offset_end INTEGER,
-            extraction_kind VARCHAR(48) NOT NULL,
-            extractor_id VARCHAR(64) NOT NULL,
-            extractor_version VARCHAR(16) NOT NULL,
-            payload_json TEXT NOT NULL,
-            confidence FLOAT NOT NULL DEFAULT 1.0,
-            extracted_at DATETIME NOT NULL,
-            superseded_by_extraction_id INTEGER REFERENCES extractions(id),
-            links_to_json TEXT
-        );
-        """
-    )
-    conn.commit()
-
-
 @pytest.fixture()
-def db(tmp_path: Path) -> Path:
-    p = tmp_path / "test.db"
-    conn = sqlite3.connect(str(p))
-    try:
-        _schema(conn)
-    finally:
-        conn.close()
-    return p
+def db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    return migrated_db(tmp_path / "test.db")
 
 
 class _Validator(Protocol):

@@ -36,6 +36,7 @@ class _ManifestSnapshot(NamedTuple):
     sha256: str
     record: dict[str, object]
     declarations: dict[str, object] | None
+    data: bytes
 
 
 def _decode_manifest(data: bytes) -> tuple[dict[str, object], dict[str, object] | None]:
@@ -71,25 +72,39 @@ def _fresh_digest(data: bytes) -> str:
 def _manifest_view(data: bytes) -> _ManifestSnapshot:
     """Reuse parsing only for freshly read bytes, never filesystem metadata."""
     if len(data) > _MANIFEST_CACHE_INPUT_LIMIT:
-        return _ManifestSnapshot(hashlib.sha256(data).hexdigest(), *_decode_manifest(data))
+        return _ManifestSnapshot(hashlib.sha256(data).hexdigest(), *_decode_manifest(data), data)
     with _MANIFEST_CACHE_LOCK:
         digest = _fresh_digest(data)
         cached = _MANIFEST_CACHE.get(digest)
         if cached is not None:
             _MANIFEST_CACHE.move_to_end(digest)
-            return _ManifestSnapshot(digest, *cached)
+            return _ManifestSnapshot(digest, *cached, data)
         value = _decode_manifest(data)
         _MANIFEST_CACHE[digest] = value
         _MANIFEST_CACHE.move_to_end(digest)
         while len(_MANIFEST_CACHE) > 2:
             _MANIFEST_CACHE.popitem(last=False)
-        return _ManifestSnapshot(digest, *value)
+        return _ManifestSnapshot(digest, *value, data)
+
+
+def _read_manifest_bytes(path: Path) -> bytes:
+    with path.open("rb") as handle:
+        return handle.read(64 * 1024 * 1024 + 1)
+
+
+def _manifest_bytes_equal(path: Path, expected: bytes) -> bool:
+    """Compare fresh <=1MiB chunks through EOF without copying the full snapshot."""
+    with path.open("rb") as handle:
+        for start in range(0, len(expected), 1024 * 1024):
+            end = min(start + 1024 * 1024, len(expected))
+            if handle.read(end - start) != expected[start:end]:
+                return False
+        return handle.read(1) == b""
 
 
 def _read_manifest_snapshot(path: Path) -> _ManifestSnapshot:
     """Bind one validation to fresh bounded bytes, never cached file metadata."""
-    with path.open("rb") as handle:
-        data = handle.read(64 * 1024 * 1024 + 1)
+    data = _read_manifest_bytes(path)
     if len(data) > 64 * 1024 * 1024:
         raise ValueError("lifecycle manifest exceeds its byte bound")
     return _manifest_view(data)
@@ -535,7 +550,12 @@ def _validate_proofs(item: Artifact) -> str | None:
     return None
 
 
-def _validate_file(item: Artifact, repo_root: Path, live_db: Path | None) -> str | None:
+def _validate_file(
+    item: Artifact,
+    repo_root: Path,
+    live_db: Path | None,
+    exact_manifest: tuple[Path, _ManifestSnapshot] | None = None,
+) -> str | None:
     """A preservation reason, or None when the named file still matches proof."""
     if not _approved_root(item.allowed_root, repo_root):
         return "unapproved_scope"
@@ -550,6 +570,11 @@ def _validate_file(item: Artifact, repo_root: Path, live_db: Path | None) -> str
         return "live_database"
     relative_parts = item.path.relative_to(item.allowed_root).parts
     fixture = item.disposable_class == "isolated_test_fixture"
+    reusable = (
+        exact_manifest[1]
+        if exact_manifest is not None and item.lifecycle_manifest == exact_manifest[0]
+        else None
+    )
     if not fixture and any(
         component.casefold()
         in {
@@ -577,7 +602,15 @@ def _validate_file(item: Artifact, repo_root: Path, live_db: Path | None) -> str
                 return "linked_lifecycle_manifest"
             if fixture:
                 try:
-                    snapshot = _read_manifest_snapshot(item.lifecycle_manifest)
+                    if reusable is not None:
+                        if (
+                            item.lifecycle_manifest_sha256 != reusable.sha256
+                            or not _manifest_bytes_equal(item.lifecycle_manifest, reusable.data)
+                        ):
+                            return "lifecycle_manifest_changed"
+                        snapshot = reusable
+                    else:
+                        snapshot = _read_manifest_snapshot(item.lifecycle_manifest)
                 except (UnicodeError, ValueError):
                     return "unverified_fixture_ownership"
                 manifest_digest = snapshot.sha256
@@ -684,7 +717,11 @@ def _validate_file(item: Artifact, repo_root: Path, live_db: Path | None) -> str
             return "file_changed_during_validation"
         if item.lifecycle_manifest is not None and (
             not _safe_ancestors(item.lifecycle_manifest)
-            or _fresh_file_digest(item.lifecycle_manifest) != item.lifecycle_manifest_sha256
+            or (
+                not _manifest_bytes_equal(item.lifecycle_manifest, reusable.data)
+                if reusable is not None
+                else _fresh_file_digest(item.lifecycle_manifest) != item.lifecycle_manifest_sha256
+            )
         ):
             return "lifecycle_manifest_changed"
         if reason := _validate_proofs(item):
@@ -796,7 +833,20 @@ def run_retention(
         elif any(item.path.name.casefold() == "portfolio.db" for item in catalog.artifacts):
             raise ValueError("EARNINGS_SUMMARY_DB_PATH is required for database retirement")
     catalog_sha = hashlib.sha256(catalog.model_dump_json().encode()).hexdigest()
-    reasons = [_validate_file(item, repo_root, live_db) for item in catalog.artifacts]
+    exact_manifest: tuple[Path, _ManifestSnapshot] | None = None
+    if exact_run_root is not None:
+        manifest_path = exact_run_root / ".earnings-temp-run.json"
+        try:
+            if _safe_ancestors(manifest_path):
+                snapshot = _read_manifest_snapshot(manifest_path)
+                # One invocation owns this bounded view. Fresh byte comparisons
+                # still guard each target before/after hashing and before delete.
+                exact_manifest = (manifest_path, snapshot)
+        except (OSError, UnicodeError, ValueError):
+            pass  # Normal per-target validation retains its preservation reason.
+    reasons = [
+        _validate_file(item, repo_root, live_db, exact_manifest) for item in catalog.artifacts
+    ]
     latest: dict[str, Artifact] = {}
     for item, unsafe in zip(catalog.artifacts, reasons, strict=True):
         if (
@@ -889,7 +939,7 @@ def run_retention(
             item = by_path[decision.path]
             # Revalidate both target and last-good survivor immediately before each
             # deletion. A changed newest backup cannot justify retiring the old one.
-            unsafe = _validate_file(item, repo_root, live_db)
+            unsafe = _validate_file(item, repo_root, live_db, exact_manifest)
             survivor = latest.get(item.family)
             if unsafe is None and item.kind == "backup" and survivor is not None:
                 unsafe = _validate_file(survivor, repo_root, live_db)

@@ -5,11 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
+import sys
 import tempfile
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from textwrap import dedent
 from typing import cast
 
 import pytest
@@ -862,3 +865,60 @@ def test_large_hold_population_is_indexed_once_per_completion(
     # Missing candidates then use hashed ancestor lookups rather than hold scans.
     assert comparisons < len(holds)
     assert hashes == len(holds)
+
+
+def test_completed_fixture_retirement_exits_atexit_subprocess(tmp_path: Path) -> None:
+    repo = tmp_path / "synthetic-repo"
+    repo.mkdir()
+    system_temp = tmp_path / "isolated-system-temp"
+    system_temp.mkdir()
+    code_root = Path(__file__).resolve().parents[1]
+    script = dedent(
+        """\
+        import atexit
+        import json
+        import sys
+        from pathlib import Path
+        from src.operations.temp_run_retention import (
+            begin_temp_run, finish_temp_run, retire_completed_temp_run,
+        )
+
+        repo = Path(sys.argv[1])
+        root = repo / ".tmp" / "subprocess-retirement"
+        begin_temp_run(
+            root, repo_root=repo, disposable_class="isolated_test_fixture",
+            purpose="synthetic process teardown", min_free_bytes=0,
+        )
+        paths = [root / f"payload-{index}.bin" for index in range(3)]
+        for path in paths:
+            path.write_bytes(b"synthetic disposable fixture")
+        finish_temp_run(root, repo_root=repo, success=True, disposable_paths=paths)
+
+        def retire():
+            result = retire_completed_temp_run(root, repo_root=repo, apply=True)
+            (repo / "child-result.json").write_text(result.model_dump_json())
+
+        atexit.register(retire)
+        """
+    )
+    environment = dict(os.environ)
+    environment["TMPDIR"] = str(system_temp)
+    environment["PYTHONPATH"] = os.pathsep.join((str(code_root), str(code_root / "src")))
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(repo)],
+        cwd=code_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert not completed.stderr
+    result = json.loads((repo / "child-result.json").read_bytes())
+    assert result["deleted"] == 3 and result["errors"] == 0
+    assert not list((repo / ".tmp/subprocess-retirement").glob("payload-*.bin"))
+    receipt = Path(result["receipt_path"])
+    assert json.loads(receipt.read_bytes())["state"] == "completed"
+    assert len(receipt.with_suffix(".jsonl").read_text().splitlines()) == 3
+    assert (repo / ".tmp/subprocess-retirement" / MANIFEST_NAME).exists()

@@ -49,7 +49,6 @@ from pydantic import (
 )
 
 from compute import ir_supplement_capture
-from compute.fiscal_calendar import FILENAME_CALENDARS, period_end_for
 from compute.fiscal_calendar import summary_period_end as _period_end
 from compute.ir_supplement_capture import (
     SupplementCapture,
@@ -111,7 +110,7 @@ from pipeline.source_policy import (
 )
 from provenance.document_evidence_pipeline import DocumentEvidenceRequest, process_document_evidence
 from provenance.financial_fact_resolution import require_summary_anchor_coherence
-from provenance.fulltext_backfill import project_source_text, source_text_projection_identity
+from provenance.fulltext_backfill import source_text_projection_identity
 from provenance.immutable_artifact import assert_artifact_unchanged, read_stable_artifact
 from provenance.ir_reported_facts import (
     IrCandidateRetentionRequest,
@@ -1635,22 +1634,6 @@ def _complete_capture_text(text: str, max_input_chars: int) -> str:
             "full-document capture requires a larger approved budget or chunked extraction"
         )
     return text
-
-
-def _read_pdf_text(path: str) -> str:
-    """Use the full-text owner's source projection for KPI candidates."""
-    return project_source_text(Path(path).read_bytes(), path, "application/pdf")
-
-
-def _fiscal_period_type_for(ticker: str, period_end: datetime) -> FiscalPeriodType:
-    """Match known filename calendars exactly; retain the calendar-quarter fallback."""
-    calendar = FILENAME_CALENDARS.get(ticker.upper())
-    if calendar is not None:
-        for quarter in (1, 2, 3, 4):
-            endpoint = period_end_for(calendar, period_end.year, quarter)
-            if (period_end.month, period_end.day) == (endpoint.month, endpoint.day):
-                return FiscalPeriodType(f"Q{quarter}")
-    return FiscalPeriodType(f"Q{(period_end.month - 1) // 3 + 1}")
 
 
 def _coerce_period_end(raw: object) -> datetime | None:

@@ -585,37 +585,6 @@ def test_capture_preserves_complete_source() -> None:
     assert getattr(module, "_complete_capture_text")("whole source", 12) == "whole source"
 
 
-@pytest.mark.parametrize("source_text", ["", "source exceeds limit"])
-def test_ir_capture_errors_before_model_call(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source_text: str
-) -> None:
-    source = tmp_path / "source.pdf"
-    source.write_bytes(b"PDF fixture")
-
-    def list_sources(*args: object) -> list[tuple[int, Path, datetime]]:
-        return [(1, source, datetime(2026, 6, 30))]
-
-    def not_captured(*args: object) -> bool:
-        return False
-
-    def read_source(*args: object) -> str:
-        return source_text
-
-    monkeypatch.setattr(kes, "_list_ir_capture_pdf_docs", list_sources)
-    monkeypatch.setattr(kes, "_doc_already_captured", not_captured)
-    monkeypatch.setattr(kes, "_read_pdf_text", read_source)
-
-    def reject_call(*args: object, **kwargs: object) -> list[dict[str, object]]:
-        pytest.fail("invalid input must not trigger a model call")
-
-    monkeypatch.setattr(kes, "_llm_extract_enumerate", reject_call)
-    with sqlite3.connect(":memory:") as conn:
-        result = kes.capture_for_ir_pdf_docs("FOO", tmp_path, conn, max_input_chars=5)
-    assert result.error is not None
-    assert result.quarters_extracted == []
-    assert result.kpis_inserted_total == 0
-
-
 def test_enumeration_limit_is_unknown_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
     row = {
         "label": "Margin",
