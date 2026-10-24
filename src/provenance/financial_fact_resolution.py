@@ -950,6 +950,7 @@ def _canonical_fact_selections_as_known_snapshot(
             "period_end",
             "fiscal_period_type",
             "numeric_value",
+            "method_version",
             "currency",
             "unit",
             "available_at",
@@ -1012,7 +1013,8 @@ def _canonical_fact_selections_as_known_snapshot(
         "link.source_document_id,link.locator_json,"
         "link.captured_at,observation.observation_id,observation.ticker,observation.concept_key,"
         "observation.period_end,observation.fiscal_period_type,"
-        "observation.numeric_value,observation.currency,observation.unit,"
+        "observation.numeric_value,observation.method_version,"
+        "observation.currency,observation.unit,"
         "observation.available_at,observation.recorded_at AS observation_recorded_at "
         "FROM observation_resolution_revisions resolution "
         "LEFT JOIN fact_resolution_outcomes outcome "
@@ -1121,7 +1123,11 @@ def _canonical_fact_selections_as_known_snapshot(
             "fiscal_period_type": str(row["fiscal_period_type"])
             == _observation_period_type(str(fact["fiscal_period_type"])),
             "numeric_value": _canonical_decimal(row["numeric_value"])
-            == _canonical_decimal(fact["value"]),
+            == _canonical_decimal(
+                fact["sqlite_value_text"]
+                if row["method_version"] == "0231-trigger-v1"
+                else fact["value"]
+            ),
             "unit": str(row["unit"]) == str(fact["unit"]),
             "source_document_id": int(row["source_document_id"]) == int(fact["source_doc_id"]),
             "locator_json": _optional_text(row["locator_json"]) == _optional_text(fact["locator"]),
@@ -1721,10 +1727,12 @@ def _fact_rows_by_ids(
     unique_ids = tuple(dict.fromkeys(row_ids))
     columns = (
         "id,ticker,period_end,fiscal_period_type,line_item,value,currency,unit,"
-        "source_doc_id,confidence,extracted_by,locator,NULL AS computed_from"
+        "source_doc_id,confidence,extracted_by,locator,NULL AS computed_from,"
+        "CAST(value AS TEXT) AS sqlite_value_text"
         if fact_table == "financial_facts"
         else "id,ticker,period_end,fiscal_period_type,kpi_definition_id,value,"
-        "NULL AS currency,unit,source_doc_id,confidence,extracted_by,locator,computed_from"
+        "NULL AS currency,unit,source_doc_id,confidence,extracted_by,locator,computed_from,"
+        "CAST(value AS TEXT) AS sqlite_value_text"
     )
     for start in range(0, len(unique_ids), 400):
         batch = unique_ids[start : start + 400]

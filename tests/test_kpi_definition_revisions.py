@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sqlite3
 import subprocess
 import sys
@@ -1133,6 +1134,75 @@ def test_as_known_compatibility_diagnostic_reports_only_identity_and_field_names
     )
     assert unavailable.fact_drift_scope is not None
     assert unavailable.fact_drift_scope.tables[1].drift_count is None
+
+
+def test_trigger_real_capture_matches_sqlite_text_but_rejects_next_real_value() -> None:
+    conn = _database(real_value=True)
+    fact_id = _fact(conn, value="61.4100185528757")
+    stored = conn.execute(
+        "SELECT value,typeof(value),CAST(value AS TEXT) FROM kpi_facts WHERE id=?", (fact_id,)
+    ).fetchone()
+    assert stored is not None
+    assert stored[1] == "real"
+    assert str(stored[0]) != stored[2]
+    conn.execute(
+        "UPDATE reported_observations SET numeric_value=?,method_version='0231-trigger-v1' "
+        "WHERE observation_id=?",
+        (stored[2], f"kpi-observation-{fact_id}"),
+    )
+
+    assert canonical_fact_row_ids_as_known(
+        conn, fact_table="kpi_facts", effective_at=NOW, known_at=NOW
+    ) == (fact_id,)
+    assert (
+        diagnose_fact_compatibility_drift_as_known(
+            conn, fact_table="kpi_facts", effective_at=NOW, known_at=NOW, sample_limit=1
+        ).drift_count
+        == 0
+    )
+    audit = audit_connection(
+        conn,
+        AuditOptions(fact_drift_only=True, fact_drift_effective_at=NOW, fact_drift_known_at=NOW),
+    )
+    assert audit.fact_drift_scope is not None
+    assert audit.fact_drift_scope.tables[1].drift_count == 0
+
+    conn.execute(
+        "UPDATE kpi_facts SET value=? WHERE id=?", (math.nextafter(stored[0], math.inf), fact_id)
+    )
+    changed = conn.execute(
+        "SELECT CAST(value AS TEXT) FROM kpi_facts WHERE id=?", (fact_id,)
+    ).fetchone()
+    assert changed is not None
+    assert changed[0] != stored[2]
+    receipt = diagnose_fact_compatibility_drift_as_known(
+        conn, fact_table="kpi_facts", effective_at=NOW, known_at=NOW, sample_limit=1
+    )
+    assert receipt.drift_count == 1
+    assert receipt.samples[0].mismatch_fields == ("numeric_value",)
+    with pytest.raises(
+        HistoricalFactAuthorityUnavailableError, match="immutable observation differs"
+    ):
+        canonical_fact_row_ids_as_known(
+            conn, fact_table="kpi_facts", effective_at=NOW, known_at=NOW
+        )
+
+
+def test_non_trigger_real_capture_keeps_exact_decimal_comparison() -> None:
+    conn = _database(real_value=True)
+    fact_id = _fact(conn, value="61.4100185528757")
+    cast_text = conn.execute(
+        "SELECT CAST(value AS TEXT) FROM kpi_facts WHERE id=?", (fact_id,)
+    ).fetchone()[0]
+    conn.execute(
+        "UPDATE reported_observations SET numeric_value=? WHERE observation_id=?",
+        (cast_text, f"kpi-observation-{fact_id}"),
+    )
+    receipt = diagnose_fact_compatibility_drift_as_known(
+        conn, fact_table="kpi_facts", effective_at=NOW, known_at=NOW, sample_limit=1
+    )
+    assert receipt.drift_count == 1
+    assert receipt.samples[0].mismatch_fields == ("numeric_value",)
 
 
 def test_as_known_drift_count_is_complete_when_samples_are_bounded() -> None:

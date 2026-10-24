@@ -140,7 +140,8 @@ def _reviewed_period_fixture(
     page = project_pdf_page_texts(raw)[0]
     start = page.index(wording)
     digest = hashlib.sha256(raw).hexdigest()
-    path = tmp_path / "current-quarter.pdf"
+    # Exercise a platform file URI with escaped space, percent, and fragment characters.
+    path = tmp_path / "current quarter % #1.pdf"
     path.write_bytes(raw)
     reviewed_at = datetime(2026, 10, 20, tzinfo=UTC)
     ledger = EvidenceLedger(conn)
@@ -338,7 +339,7 @@ def test_reviewed_generic_ir_document_bridges_inventory_without_metadata_rewrite
             )
             is None
         )
-        (tmp_path / "current-quarter.pdf").unlink()
+        (tmp_path / "current quarter % #1.pdf").unlink()
         assert (
             inventory.reviewed_current_period_for_url(
                 conn,
@@ -692,7 +693,7 @@ def test_reported_window_accepts_captured_native_review_and_sealed_sec_populatio
             )
             == artifact
         )
-        (tmp_path / "current-quarter.pdf").unlink()
+        (tmp_path / "current quarter % #1.pdf").unlink()
         unavailable = reported_period_window_from_inventory(conn, ticker="NU", as_of=later.date())
         assert unavailable.status is ReportedPeriodStatus.UNKNOWN
         assert unavailable.reason == "ir_period_proof_missing"

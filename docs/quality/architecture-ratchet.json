@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "8686e13d0fb45f67cd6e6790c126188bb3150d0c",
+  "scoped_commit": "e8b730a67c422cd1031dd5827a6f453f5775a463",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "f2a19d2957dc8b76c7611138cd1d61bc1e4724ea2339f821327c4453325dcbfc",
+  "source_sha256": "05a5210877fd919f21d1a07cf10c2ea41923f41d5d620b62b3c445ea0ba97633",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1484,
-    "total_noncomment_loc": 575761,
+    "total_noncomment_loc": 575771,
     "modules_over_1000_loc": 112,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
@@ -14295,9 +14295,9 @@
         "path": "src/pipeline/issuer_document_inventory.py",
         "module": "pipeline.issuer_document_inventory",
         "lines": {
-          "physical": 1598,
-          "nonblank": 1472,
-          "noncomment": 1468
+          "physical": 1599,
+          "nonblank": 1473,
+          "noncomment": 1469
         },
         "internal_fan_out": 5,
         "responsibilities": [
@@ -14956,9 +14956,9 @@
         "path": "src/pipeline/reported_period_inventory.py",
         "module": "pipeline.reported_period_inventory",
         "lines": {
-          "physical": 547,
-          "nonblank": 524,
-          "noncomment": 524
+          "physical": 548,
+          "nonblank": 525,
+          "noncomment": 525
         },
         "internal_fan_out": 8,
         "responsibilities": [
@@ -16355,9 +16355,9 @@
         "path": "src/provenance/financial_fact_resolution.py",
         "module": "provenance.financial_fact_resolution",
         "lines": {
-          "physical": 2518,
-          "nonblank": 2316,
-          "noncomment": 2305
+          "physical": 2526,
+          "nonblank": 2324,
+          "noncomment": 2313
         },
         "internal_fan_out": 8,
         "responsibilities": [

@@ -247,5 +247,39 @@
     "measurement_source_sha256": "f2a19d2957dc8b76c7611138cd1d61bc1e4724ea2339f821327c4453325dcbfc",
     "reachability_parser_source_sha256": "9b1df53d045cd61964fe0944797e4f2e7a51fcf0938f6608bb9467301b5eb4bb"
   },
-  "full_CI_repair": "8686 fullCI found obsolete path exceptions and stalefixture/contracts. Removed7exceptions; cachedcurrentfixture avoidsnewbuilder; exactcatalog/recoveryfixtures fixed;25affectedtests+25rootbindingtests pass; fullCIretry pending."
+  "full_CI_repair": "8686 fullCI found obsolete path exceptions and stalefixture/contracts. Removed7exceptions; cachedcurrentfixture avoidsnewbuilder; exactcatalog/recoveryfixtures fixed;25affectedtests+25rootbindingtests pass; fullCIretry pending.",
+  "trigger_numeric_compatibility": {
+    "source_commit": "864c3923e7fe382d20af95e915a5e0eba546194a",
+    "independent_advisory_score": 96,
+    "independent_review_sha256": "8a79281622c649872d31531354b71fcec95ff0846b161839eaf6bfc1f7f90282",
+    "baseline_before_sha256": "fb6ace6ac156418c9c28201f5f7da5b186cbb7411d8dacc82690a56246faf278",
+    "measurement_source_sha256": "ec17306584a270e4bd93e164c7e9ba482e4a2eb9fa8a86ee08670dc20fc0298d",
+    "executable_module_growth": 0,
+    "noncomment_LOC_growth": 8,
+    "reason": "The existing resolver compares legacy trigger captures with exact SQLite CAST text from the same row. Other capture methods retain exact Decimal comparison. This corrects serialization false positives without a tolerance or financial data rewrite. Unit, source and locator comparisons remain strict.",
+    "author_affected_tests": 182,
+    "financial_rows_written": 0,
+    "independent_boundary": "Exact trigger representation parity on pinned SQLite 3.53.4; no universal binary immutability claim.",
+    "reachability_parser_source_sha256": "bf7de5fae6bbb7e3f2668085cec4e2df085dd8c8954c8dcf7dd16e0bee75aaa3",
+    "test_source_reference_move": {
+      "path": "tests/test_kpi_definition_revisions.py",
+      "old_line": 1203,
+      "new_line": 1273,
+      "behavior": "Unchanged subprocess call moved after new regressions; reachability test expectation follows actual source.",
+      "identical_Call_AST": true
+    }
+  },
+  "native_file_uri_repair": {
+    "source_commit": "e8b730a67c422cd1031dd5827a6f453f5775a463",
+    "independent_advisory_score": 97,
+    "independent_review_sha256": "a86901cd0802f137ba394a85dfa8f2111ed9b5f34d74545bf59eff37eb582d8a",
+    "baseline_before_sha256": "5adf243afe08789d8a83265d3372b49a602313c43611a61481ca4e988ca8df49",
+    "measurement_source_sha256": "05a5210877fd919f21d1a07cf10c2ea41923f41d5d620b62b3c445ea0ba97633",
+    "reachability_parser_source_sha256": "8aee04337cfd7116a1d47e55dc33bbff6377b865060d02be1c4d63dd7485ed6a",
+    "executable_module_growth": 0,
+    "noncomment_LOC_growth": 2,
+    "reason": "The two existing retained-source readers use the standard library file-URI decoder for Windows drive paths. Existing source, size, hash and authority guards remain unchanged. Preparation tests explicitly bind their synthetic database; a new negative preserves the configured-database boundary.",
+    "author_affected_tests": 19,
+    "native_validation": "Pending final-source Windows qualification; no production mutation."
+  }
 }
