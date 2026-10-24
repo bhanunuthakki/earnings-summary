@@ -899,6 +899,40 @@ def test_categorizer_success_requires_downloaded_source_registration(
         assert replay["skipped"] == 1
 
 
+def test_registered_prefix_does_not_starve_manifest_entry_after_attempt_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = tmp_path / "portfolio.db"
+    _make_policy_db(db, [("PORT", "portfolio")])
+    urls = [f"https://issuer.example/release-{index}.pdf" for index in range(101)]
+    manifest = fid.manifest_dir(tmp_path) / "PORT_urls.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        json.dumps(
+            [
+                {"url": url, "doc_type": "press_release", "year": 2026, "quarter": "Q1"}
+                for url in urls
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(fid, "reported_quarter_selection_in_connection", _source_qualified_period)
+    monkeypatch.setattr(fid, "_registered_source_urls", lambda _db, _ticker: set(urls[:100]))
+    monkeypatch.setattr(fid.time, "sleep", _no_sleep)
+    downloaded: list[str] = []
+
+    def download(url: str, _dest: Path, _base: str, **_kwargs: object) -> Path:
+        downloaded.append(url)
+        return tmp_path / "last.pdf"
+
+    monkeypatch.setattr(fid, "_download", download)
+    result = fid.process_ticker("PORT", root=tmp_path, db_path=db)
+    assert downloaded == [urls[100]]
+    assert result["downloaded"] == 1
+    assert result["skipped"] == 100
+    assert result["deferred"] == 0
+
+
 def test_shared_staged_object_does_not_hide_unregistered_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

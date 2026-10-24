@@ -7,7 +7,7 @@ import io
 import json
 import sqlite3
 from collections.abc import Callable
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 
 import pytest
@@ -15,13 +15,16 @@ from reportlab.pdfgen import canvas
 
 from execution import capture_issuer_document_inventory as cli
 from execution import manage_issuer_document_sources as manage_cli
+from ir_pipeline.authority import IRAuthorityEvidence, PublisherSurfaceEvidence
 from ir_pipeline.source_inventory import (
     IRDiscoverySnapshot,
     IRDocumentCandidate,
     IRSourceInventoryRequest,
     _expected_candidate,
+    sync_ir_source_inventory,
 )
 from pipeline import issuer_document_inventory as inventory
+from pipeline.source_policy import ReportedPeriodStatus, reported_period_window_from_inventory
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -39,8 +42,16 @@ from provenance.reporting_entity_registry import (
     EvidenceSubjectBindingRevision,
     ReportingEntity,
     ReportingEntityRegistry,
+    SourceObligationRevision,
 )
-from provenance.source_coverage_reconcile import _exact_document
+from provenance.source_coverage_reconcile import (
+    ExpectedDocumentImport,
+    ExplicitAbsence,
+    InventoryComponentImport,
+    SourceCoverageImport,
+    _exact_document,
+    reconcile_source_coverage,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from tests.test_sec_submissions_issuer_bootstrap import _request as sec_profile_request
 
@@ -314,6 +325,231 @@ def test_reviewed_generic_ir_document_bridges_inventory_without_metadata_rewrite
             )
             is None
         )
+    finally:
+        conn.close()
+
+
+def test_reported_window_accepts_captured_native_review_and_sealed_sec_population(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn, review = _reviewed_period_fixture(tmp_path, migrated_db)
+    later = datetime(2026, 10, 22, tzinfo=UTC)
+    archive_url = "https://investors.nu/quarterly-results"
+    release_url = "https://investors.nu/current.pdf"
+    sec_url = "https://data.sec.gov/submissions/CIK0001691493.json"
+
+    def source(observation_id: str, kind: str, url: str, raw: bytes) -> str:
+        digest = hashlib.sha256(raw).hexdigest()
+        path = tmp_path / observation_id
+        path.write_bytes(raw)
+        ledger = EvidenceLedger(conn)
+        ledger.persist(
+            ContentBlob(
+                sha256=digest,
+                byte_size=len(raw),
+                media_type="application/octet-stream",
+                storage_uri=path.as_uri(),
+                recorded_at=review.reviewed_at,
+            )
+        )
+        ledger.persist(
+            SourceObservation(
+                observation_id=observation_id,
+                idempotency_key=observation_id,
+                source_kind=kind,
+                source_url=url,
+                blob_sha256=digest,
+                source_published_at=None,
+                filing_at=review.reviewed_at if kind == "sec_filing" else None,
+                accepted_at=None,
+                observed_at=review.reviewed_at,
+                retrieved_at=review.reviewed_at,
+                retrieval_config_sha256="a" * 64,
+                collector_code_version="synthetic@1",
+            )
+        )
+        EvidenceLinkLedger(conn).persist_location(
+            BlobLocationObservation(
+                location_observation_id=f"location:{observation_id}",
+                idempotency_key=f"location:{observation_id}",
+                blob_sha256=digest,
+                storage_uri=path.as_uri(),
+                location_kind="local",
+                availability_state="present",
+                location_sequence=1,
+                verified_at=review.reviewed_at,
+                verified_byte_size=len(raw),
+                verified_sha256=digest,
+                recorded_at=review.reviewed_at,
+            )
+        )
+        return digest
+
+    try:
+        inventory.persist_current_reported_period_review(conn, review)
+        ReportingEntityRegistry(conn).persist(
+            SourceObligationRevision(
+                obligation_revision_id="period-window:ir",
+                idempotency_key="period-window:ir",
+                obligation_key="period-window:ir",
+                revision=1,
+                issuer_id=review.issuer_id,
+                authority_kind="issuer_publisher",
+                document_family="issuer_earnings_materials",
+                obligation_state="required",
+                completeness_rule="publisher_surface_exhaustion",
+                active_from=review.reviewed_at,
+                active_to=None,
+                decision_kind="manual",
+                effective_at=review.reviewed_at,
+                knowledge_at=review.reviewed_at,
+                recorded_at=review.reviewed_at,
+                reason_code="synthetic_source_duty",
+                reason_details=(("scope", "reported_period"),),
+            )
+        )
+        periods = (date(2025, 9, 30), date(2025, 12, 31), date(2026, 3, 31), date(2026, 9, 30))
+        sec_expected = []
+        for period in periods:
+            period_text = period.isoformat()
+            url = f"https://www.sec.gov/Archives/edgar/data/1691493/{period_text}.htm"
+            observation_id = f"sec-filing:{period_text}"
+            raw = f"<html>Nu Holdings fiscal period ended {period_text}</html>".encode()
+            digest = source(observation_id, "sec_filing", url, raw)
+            form = "10-K" if period.month == 12 else "10-Q"
+            EvidenceLedger(conn).persist(
+                DocumentVersion(
+                    document_version_id=f"sec-version:{period_text}",
+                    document_key=f"sec-key:{period_text}",
+                    version_sequence=1,
+                    observation_id=observation_id,
+                    blob_sha256=digest,
+                    issuer_id=review.issuer_id,
+                    ticker="NU",
+                    document_type="filing",
+                    form_type=form,
+                    period_start=None,
+                    period_end=datetime.combine(period, time.min),
+                    as_of_at=None,
+                    language="en",
+                    recorded_at=review.reviewed_at,
+                )
+            )
+            sec_expected.append(
+                ExpectedDocumentImport(
+                    expected_document_key=f"{review.issuer_id}:sec:{period_text}",
+                    source_kind="sec_filing",
+                    document_type="filing",
+                    form_type=form,
+                    source_url=url,
+                    period_end=datetime.combine(period, time.min),
+                    filing_at=review.reviewed_at,
+                    expected_at=later,
+                    expectation_basis="authoritative",
+                    absence=ExplicitAbsence(
+                        coverage_status="available",
+                        reason_code="synthetic_sec_filing",
+                        reason_details=(("period", period_text),),
+                    ),
+                )
+            )
+        source("sec-submissions-window", "sec_submissions", sec_url, b'{"filings":[]}')
+        archive_digest = source(
+            "ir-archive-window", "ir_publisher_authority", archive_url, release_url.encode()
+        )
+        conn.commit()
+        sec_result = reconcile_source_coverage(
+            conn,
+            SourceCoverageImport(
+                inventory_key=f"{review.issuer_id}:sec-submissions",
+                revision=1,
+                issuer_id=review.issuer_id,
+                ticker="NU",
+                source_kind="sec_submissions",
+                source_url=sec_url,
+                source_observation_id="sec-submissions-window",
+                outcome="succeeded",
+                authoritative=True,
+                retrieval_config_sha256="a" * 64,
+                collector_code_version="synthetic-sec-inventory@1",
+                started_at=later,
+                completed_at=later,
+                recorded_at=later,
+                reconciled_at=later,
+                components=(
+                    InventoryComponentImport(
+                        component_key="primary",
+                        component_kind="primary",
+                        source_url=sec_url,
+                        source_observation_id="sec-submissions-window",
+                        outcome="succeeded",
+                        required=True,
+                        ordinal=0,
+                    ),
+                ),
+                expected_documents=tuple(sec_expected),
+                apply=True,
+            ),
+        )
+        assert sec_result.assessment_statuses == ("captured",) * 4
+        ir_result = sync_ir_source_inventory(
+            conn,
+            IRSourceInventoryRequest(
+                issuer_id=review.issuer_id,
+                ticker="NU",
+                ir_url=archive_url,
+                revision=1,
+                discovery=IRDiscoverySnapshot(
+                    pages=(),
+                    candidates=(
+                        IRDocumentCandidate(
+                            url=release_url,
+                            link_text="Current quarter results",
+                            filename_hint="current.pdf",
+                            source_page=archive_url,
+                        ),
+                    ),
+                    crawl_complete=True,
+                    crawl_stop_reason="frontier_exhausted",
+                ),
+                authority=IRAuthorityEvidence(
+                    authority_basis="publisher_archive",
+                    asserted_at=later,
+                    surfaces=(
+                        PublisherSurfaceEvidence(
+                            surface_key="archive",
+                            surface_kind="archive",
+                            source_url=archive_url,
+                            source_observation_id="ir-archive-window",
+                            raw_sha256=archive_digest,
+                            traversal_kind="pagination",
+                            outcome="exhausted",
+                            terminal_condition="next_link_absent",
+                            observed_document_urls=(release_url,),
+                        ),
+                    ),
+                ),
+                retrieval_config_sha256="a" * 64,
+                collector_code_version="synthetic-ir-inventory@1",
+                started_at=later,
+                completed_at=later,
+                recorded_at=later,
+                reconciled_at=later,
+                apply=True,
+            ),
+            blob_root=tmp_path / "inventory-blobs",
+        )
+        assert ir_result.complete
+        assert ir_result.assessment_statuses == ("captured",)
+        selected = reported_period_window_from_inventory(conn, ticker="NU", as_of=later.date())
+        assert selected.status is ReportedPeriodStatus.COMPLETE
+        assert selected.period_ends == tuple(sorted((*periods, review.period_end), reverse=True))
+        assert selected.fiscal_year_end == "12-31"
+        assert selected.proof_sha256 is not None
+        (tmp_path / "current-quarter.pdf").unlink()
+        unavailable = reported_period_window_from_inventory(conn, ticker="NU", as_of=later.date())
+        assert unavailable.status is ReportedPeriodStatus.UNKNOWN
+        assert unavailable.reason == "ir_period_proof_missing"
     finally:
         conn.close()
 

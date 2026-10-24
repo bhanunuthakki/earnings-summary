@@ -855,15 +855,29 @@ def process_ticker(
             selected.append(entry)
     finally:
         conn.close()
-    # Deferred URLs stay in the append-only manifest for a later bounded run.
-    deferred_count = max(0, len(selected) - _MAX_MANIFEST_ATTEMPTS)
-    entries = selected[:_MAX_MANIFEST_ATTEMPTS]
-
     already = _registered_source_urls(db_path, ticker)
+    # The attempt budget applies to unfinished URLs. A registered prefix must
+    # not starve an unregistered URL on every replay of the same manifest.
+    pending: list[dict[str, object]] = []
+    seen_urls: set[str] = set()
+    skipped = 0
+    for entry in selected:
+        url = str(entry.get("url") or "")
+        if not url:
+            continue
+        if url in already or url in seen_urls:
+            skipped += 1
+            continue
+        seen_urls.add(url)
+        pending.append(entry)
+    # Deferred URLs stay in the append-only manifest for a later bounded run.
+    deferred_count = max(0, len(pending) - _MAX_MANIFEST_ATTEMPTS)
+    entries = pending[:_MAX_MANIFEST_ATTEMPTS]
+
     dest_dir = root / "ir_documents" / ticker
     sidecar: dict[str, str] = {}
     downloaded_urls: set[str] = set()
-    downloaded = skipped = failed = 0
+    downloaded = failed = 0
 
     for entry in entries:
         url = str(entry.get("url") or "")

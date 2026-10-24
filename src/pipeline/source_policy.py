@@ -760,7 +760,17 @@ class ReportedPeriodWindow(BaseModel):
     status: ReportedPeriodStatus
     period_ends: tuple[date, ...] = ()
     snapshot_ids: tuple[str, ...] = ()
+    fiscal_year_end: str | None = None
+    proof_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     reason: str
+
+    @model_validator(mode="after")
+    def _complete_proof(self) -> ReportedPeriodWindow:
+        if self.status is ReportedPeriodStatus.COMPLETE and (
+            not self.period_ends or self.proof_sha256 is None or self.fiscal_year_end is None
+        ):
+            raise ValueError("complete reported window requires source proof identity")
+        return self
 
     def includes(self, period_end: date) -> bool | None:
         return (
@@ -792,7 +802,7 @@ def _captured_reported_period_proof(
         return False
     coverage = conn.execute(
         "SELECT coverage_status,document_version_id,reason_details_json "
-        "WHERE expected_document_id=?",
+        "FROM v_source_coverage_current WHERE expected_document_id=?",
         (expected.expected_document_id,),
     ).fetchone()
     if (
@@ -809,7 +819,12 @@ def _captured_reported_period_proof(
     ).fetchone()
     if (
         version is None
-        or (version[1], version[2], version[4]) != (expected.issuer_id, ticker, expected.form_type)
+        or (version[1], version[2]) != (expected.issuer_id, ticker)
+        or (expected.source_kind != "ir_document" and version[4] != expected.form_type)
+        or (
+            expected.source_kind == "ir_document"
+            and (expected.form_type is not None or version[4] != "IR")
+        )
         or (
             version[3] != expected.document_type
             and not (
@@ -930,6 +945,8 @@ def _captured_reported_period_proof(
             coverage_details = json.loads(str(coverage[2]))
         except (TypeError, ValueError):
             return False
+        if not isinstance(coverage_details, dict):
+            return False
         if (
             coverage_details.get("imported_detail_native_period_document_version_id") != version[0]
             or coverage_details.get("imported_detail_native_period_review_node_id") != node_id
@@ -939,7 +956,7 @@ def _captured_reported_period_proof(
     return True
 
 
-def reported_period_window_from_inventory(
+def _reported_period_window_from_inventory_unpinned(
     conn: sqlite3.Connection,
     *,
     ticker: str,
@@ -994,6 +1011,8 @@ def reported_period_window_from_inventory(
     end_of_day = datetime.combine(as_of + timedelta(days=1), time.min, tzinfo=UTC)
     snapshots: list[str] = []
     reported: set[date] = set()
+    seal_proofs: list[tuple[str, str, str]] = []
+    coverage_proofs: list[tuple[str, str, str, str]] = []
     for kind in ("sec_submissions", "ir_crawl"):
         snapshot = SourceInventorySnapshot.model_validate(by_kind[kind])
         snapshots.append(snapshot.snapshot_id)
@@ -1049,6 +1068,9 @@ def reported_period_window_from_inventory(
             return ReportedPeriodWindow(
                 status=ReportedPeriodStatus.AMBIGUOUS, reason="inventory_seal_mismatch"
             )
+        seal_proofs.append(
+            (snapshot.snapshot_id, seal.component_digest_sha256, seal.sealed_at.isoformat())
+        )
         document_cursor = conn.execute(
             "SELECT * FROM expected_documents WHERE snapshot_id=?",
             (snapshot.snapshot_id,),
@@ -1138,25 +1160,89 @@ def reported_period_window_from_inventory(
                     reason="captured_period_proof_missing",
                 )
             if item.period_end is not None:
+                coverage_proof = conn.execute(
+                    "SELECT assessment_id,document_version_id,reason_details_json "
+                    "FROM v_source_coverage_current WHERE expected_document_id=?",
+                    (item.expected_document_id,),
+                ).fetchone()
+                if coverage_proof is None:
+                    return ReportedPeriodWindow(
+                        status=ReportedPeriodStatus.UNKNOWN,
+                        reason="coverage_proof_missing",
+                    )
+                coverage_proofs.append(
+                    (
+                        item.expected_document_id,
+                        str(coverage_proof[0]),
+                        str(coverage_proof[1]),
+                        str(coverage_proof[2]),
+                    )
+                )
+            if item.period_end is not None:
                 if item.period_end.date() > as_of:
                     return ReportedPeriodWindow(
                         status=ReportedPeriodStatus.AMBIGUOUS, reason="future_reported_period"
                     )
                 if (
                     kind == "sec_submissions"
-                    and (item.form_type or "").upper().removesuffix("/A") == "10-Q"
+                    and (item.form_type or "").upper().removesuffix("/A")
+                    in {"10-Q", "10-K", "20-F", "40-F"}
                 ) or (kind == "ir_crawl" and item.document_type == "earnings_release"):
                     reported.add(item.period_end.date())
     if len(reported) < max_quarters:
         return ReportedPeriodWindow(
             status=ReportedPeriodStatus.UNKNOWN, reason="reported_period_population_short"
         )
+    profile_rows = conn.execute(
+        "SELECT fiscal_year_end FROM issuer_profile_revisions "
+        "WHERE issuer_id=? AND status='active' ORDER BY revision DESC LIMIT 1",
+        (next(iter(issuers)),),
+    ).fetchall()
+    if len(profile_rows) != 1:
+        return ReportedPeriodWindow(
+            status=ReportedPeriodStatus.UNKNOWN, reason="fiscal_profile_unavailable"
+        )
+    fiscal_year_end = str(profile_rows[0][0])
+    selected_periods = tuple(sorted(reported, reverse=True)[:max_quarters])
+    proof_sha256 = hashlib.sha256(
+        deterministic.canonical_json_ascii(
+            {
+                "seal_proofs": seal_proofs,
+                "coverage_proofs": sorted(coverage_proofs),
+                "selected_periods": [item.isoformat() for item in selected_periods],
+                "fiscal_year_end": fiscal_year_end,
+            }
+        ).encode("utf-8")
+    ).hexdigest()
     return ReportedPeriodWindow(
         status=ReportedPeriodStatus.COMPLETE,
-        period_ends=tuple(sorted(reported, reverse=True)[:max_quarters]),
+        period_ends=selected_periods,
         snapshot_ids=tuple(snapshots),
+        fiscal_year_end=fiscal_year_end,
+        proof_sha256=proof_sha256,
         reason="sealed_source_population",
     )
+
+
+def reported_period_window_from_inventory(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    as_of: date,
+    max_quarters: int = SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters,
+) -> ReportedPeriodWindow:
+    """Read the complete proof under one SQLite snapshot when the caller owns no transaction."""
+    own_snapshot = not conn.in_transaction
+    if own_snapshot:
+        conn.execute("BEGIN")
+        conn.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone()
+    try:
+        return _reported_period_window_from_inventory_unpinned(
+            conn, ticker=ticker, as_of=as_of, max_quarters=max_quarters
+        )
+    finally:
+        if own_snapshot:
+            conn.rollback()
 
 
 def reported_quarter_selection_in_connection(
