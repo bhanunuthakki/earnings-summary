@@ -1826,14 +1826,14 @@ def test_paired_financial_views_preserve_standalone_json_and_trace(
 
 
 @pytest.mark.parametrize(
-    ("case", "metric", "attribute"),
+    ("case", "metric"),
     [
-        ("reported", "revenue", "source_locator"),
-        ("derived", "operating_cash_flow", "derivation"),
+        ("reported", "revenue"),
+        ("derived", "operating_cash_flow"),
     ],
 )
 def test_paired_financial_views_isolate_mutable_observation_metadata(
-    database: sqlite3.Connection, case: str, metric: str, attribute: str
+    database: sqlite3.Connection, case: str, metric: str
 ) -> None:
     if case == "reported":
         seed_table(
@@ -1867,8 +1867,13 @@ def test_paired_financial_views_isolate_mutable_observation_metadata(
     coordinate_observation = coordinate.observation
     assert coordinate_observation is not None
     assert series_observation is not coordinate_observation
-    series_value = getattr(series_observation, attribute)
-    coordinate_value = getattr(coordinate_observation, attribute)
+    if case == "reported":
+        series_value = series_observation.source_locator
+        coordinate_value = coordinate_observation.source_locator
+    else:
+        series_value = series_observation.derivation
+        coordinate_value = coordinate_observation.derivation
+    assert coordinate_value is not None
     assert series_value
     assert series_value is not coordinate_value
     assert series_value == coordinate_value

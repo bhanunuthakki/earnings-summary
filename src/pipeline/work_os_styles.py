@@ -454,42 +454,6 @@ a.cc-fdot { text-decoration: none; cursor: pointer; }
 @keyframes cc-fade-in { from { opacity: 0; } to { opacity: 1; } }
 </style>"""
 
-TCC_PAGE_CSS = """<style>
-body { margin: 0; padding: var(--sp-5); font-family: var(--sans); background: var(--bg); color: var(--fg); line-height: 1.5; font-size: var(--fs-body); }
-.tcc-refresh-note { margin-top:var(--sp-2); }
-.tcc-dcfsheets-open[hidden], .stamp[hidden] { display:none; }
-.cc-report-embed { padding:var(--sp-1) var(--sp-1); }
-header { margin-bottom: var(--sp-3); border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-2); display: flex; justify-content: space-between; align-items: flex-start; }
-h1 { font-size: var(--fs-display); margin: 0 0 var(--sp-1); font-weight: 600; }
-h1 .k-tick-name { font-size: var(--fs-body); }
-h2 { font-size: var(--fs-title); margin: 0 0 var(--sp-2); font-weight: 600; }
-a { transition: color var(--transition); }
-.top-nav { font-size: var(--fs-caption); }
-.top-nav a { color: var(--accent); text-decoration: none; }
-.top-nav a:hover { text-decoration: underline; }
-.badges { text-align: right; }
-.panel { margin-bottom: var(--sp-4); background: var(--surface); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); }
-.panel .sub { color: var(--muted); font-size: var(--fs-caption); margin: 0 0 var(--sp-3); }
-.panel-h3 { font-size: var(--fs-title); margin: var(--sp-4) 0 var(--sp-2); color: var(--fg); font-weight: 600; }
-.muted { color: var(--muted); }
-table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); font-variant-numeric: tabular-nums; }
-th { text-align: left; padding: var(--sp-1) var(--sp-2); border-bottom: var(--bw-thin) solid var(--border); font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
-td { padding: var(--sp-1) var(--sp-2); border-bottom: var(--bw-thin) solid var(--hairline); vertical-align: top; }
-tbody tr:hover td { background: var(--paper); }
-td.num { text-align: right; }
-code { font-family: var(--mono); font-size: var(--fs-body); color: var(--fg-soft); }
-.fresh-strip { display: flex; gap: var(--sp-half); margin-bottom: var(--sp-4); background: var(--border); border-radius: var(--radius); overflow: hidden; }
-.fresh-cell { background: var(--surface); padding: var(--sp-2) var(--sp-3); flex: 1; }
-.fresh-label { font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
-.fresh-val { font-size: var(--fs-body); font-variant-numeric: tabular-nums; }
-.kpi-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-sm), 1fr)); gap: var(--sp-half); margin-bottom: var(--sp-3); background: var(--border); border-radius: var(--radius); overflow: hidden; }
-.kpi-card { background: var(--surface); padding: var(--sp-2) var(--sp-3); }
-.kpi-label { font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
-.kpi-value { font-size: var(--fs-display); font-weight: 600; margin-top: var(--sp-half); font-variant-numeric: tabular-nums; }
-ul { margin: var(--sp-1) 0; padding-left: var(--sp-5); }
-li { margin-bottom: var(--sp-half); }
-</style>"""
-
 
 def work_os_style_block(*, theme: str = "dark") -> str:
     """Return the family style block, including canonical palette and kit."""
@@ -508,7 +472,6 @@ __all__ = [
     "TCC_COMBO_STYLE",
     "TCC_DISCLOSURE_STYLE",
     "TCC_DRAWER_STYLE",
-    "TCC_PAGE_CSS",
     "TCC_QUICK_NOTE_STYLE",
     "TCC_YOU_SAID_STYLE",
     "WORK_OS_COPILOT_CSS",

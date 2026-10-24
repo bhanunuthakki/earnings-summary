@@ -13,7 +13,6 @@ from typing import cast
 
 from compute.thesis_evaluator import BreakRule
 from entity_seed import all_known_tickers
-from pipeline.ticker_command_center import build_ticker_command_center
 from report.models import SectionStatus
 from report.sections import thesis as thesis_section
 
@@ -51,19 +50,6 @@ def test_evaluation_theses_valid_schema() -> None:
         break_rules_list = cast("list[object]", break_rules)
         validated_rules = [BreakRule.model_validate(r) for r in break_rules_list]
         assert len(validated_rules) >= 2, f"{ticker} must have at least 2 break rules"
-
-
-def test_evaluation_theses_surface_in_command_center() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-
-    for ticker in EVALUATION_TICKERS:
-        tcc = build_ticker_command_center(repo_root, ticker)
-        assert tcc.thesis.present is True, f"{ticker} thesis must be present in command center"
-        assert tcc.thesis.thesis, f"{ticker} thesis text must not be empty"
-        assert tcc.thesis.verdict in ("Evaluation", "Watch")
-        assert len(tcc.thesis.tier1) >= 4
-        assert len(tcc.thesis.break_rules) >= 2
-        assert tcc.identity.name, f"{ticker} identity name must resolve"
 
 
 def test_evaluation_theses_surface_in_report_section() -> None:

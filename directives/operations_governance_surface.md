@@ -1,5 +1,22 @@
 # Operations & Governance Surface Impact
 
+### Legacy company feed and standalone page retired (2026-10-24)
+
+The owner approved retiring the unused `/api/ticker/<ticker>` JSON feed and
+standalone company-page renderer. Valid feed requests now return HTTP 410 with
+`error=legacy_ticker_feed_retired`, a Company Desk replacement URL and
+`Cache-Control: no-store`. Invalid ticker values return 400 before data access.
+Lowercase ticker values normalize through the existing validator.
+`/ticker/<ticker>` still redirects to Company Desk.
+
+Holding retains identity, freshness, artifacts, analyses, report links, and Ops
+and Notes fragments. It no longer builds unused position, thesis and recent
+selection fields for the retired page/feed. Shared reports, portfolio analysis,
+records, source files and history remain. No schema, data, schedule or live
+service was changed. Evidence: `tests/test_ticker_command_center.py` checks the
+410 response with all data callbacks forbidden and retains refresh/DCF event
+assertions in the active Ops fragment.
+
 ### ETF role research: automatic generation removed (2026-10-24)
 
 ETF onboarding no longer launches role research. The bulk portfolio-fit command

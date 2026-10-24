@@ -1,59 +1,38 @@
-"""PR B — per-ticker command-center drill-down.
+"""Tests for per-ticker command-center drill-down.
 
 Covers the artifact inventory (filesystem), the analysis log (DB, defensive),
-the assembler + renderer, and the live /ticker/<t> and /api/ticker/<t>
-endpoints. The portfolio-tracker DB is intentionally absent in the tmp repo,
-so the position strip exercises its graceful "not connected" path.
+the Holding fragments (rail, picker band, notes drawer, ticker fragment), and
+the live /ticker/<t> redirect and /api/ticker/<t> 410 tombstone endpoints.
+The portfolio-tracker DB is intentionally absent in the tmp repo.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Never
 
 import pytest
 from flask.testing import FlaskClient
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-from identity import DEFAULT_USER_ID  # noqa: E402
-from pipeline.analysis_log import build_analysis_log  # noqa: E402
-from pipeline.artifact_inventory import build_artifact_inventory  # noqa: E402
-from pipeline.ticker_command_center import (  # noqa: E402
+from identity import DEFAULT_USER_ID
+from pipeline.analysis_log import build_analysis_log
+from pipeline.artifact_inventory import build_artifact_inventory
+from pipeline.ticker_command_center import (
     build_holding_rail,
     build_ticker_command_center,
     render_holding_fragment,
     render_holding_picker_band,
     render_notes_drawer_fragment,
     render_ticker_fragment,
-    render_ticker_html,
 )
-from user_state.notes import create_note, resolve_note  # noqa: E402
+from user_state.notes import create_note, resolve_note
 
 _HOLDINGS = {
     "ticker": "NU",
     "name": "Nu Holdings",
-    "last_updated": "2026-05-10",
-    "thesis": "LatAm digital bank; monetization compounding.",
-    "verdict": "Pending",
-    "tier_1_kpis": [
-        {"name": "ROE", "current": "30%", "status": "ok", "break_condition": "<25% for 2Q"}
-    ],
-    "break_rules": [
-        {
-            "kpi_name": "ROE",
-            "comparator": "lt",
-            "threshold": 25,
-            "unit": "percent",
-            "narrative": "sub-25 breaks",
-        }
-    ],
-    "thesis_breakers_qualitative": ["ROE drifts below 25%"],
 }
 
 
@@ -231,29 +210,12 @@ def test_analysis_log_empty_db_is_safe(tmp_path: Path) -> None:
 # ----- assembler + render -----
 
 
-def test_build_and_to_dict_round_trips(repo: Path) -> None:
+def test_build_surfaces_retained_fields(repo: Path) -> None:
     tcc = build_ticker_command_center(repo, "NU")
     assert tcc.identity.list_type == "portfolio"
     assert tcc.identity.breach_status == "watch"
-    assert tcc.thesis.present is True
-    assert tcc.thesis.tier1[0].name == "ROE"
-    assert tcc.position.available is False  # no portfolio-tracker sibling in tmp
+    assert tcc.identity.name == "Nu Holdings"
     assert tcc.tracker_url is None
-    json.loads(json.dumps(tcc.to_dict()))  # JSON round-trips cleanly
-
-
-def test_render_has_all_panels(repo: Path) -> None:
-    tcc = build_ticker_command_center(repo, "NU")
-    html = render_ticker_html(tcc, generated_at=datetime(2026, 6, 1, tzinfo=UTC))
-    assert html.startswith("<!doctype html>")
-    for marker in ("Analyses run", "Artifacts", "Thesis", "Position", "Recent decisions"):
-        assert marker in html
-    assert "Open in Portfolio Tracker" not in html  # no guessed tracker endpoint
-    assert "localhost:5173" not in html
-    assert "/trade-analysis?" not in html
-    assert "work-os:investment-evidence-updated" in html
-    assert "detail: {kind: 'research_refresh'" in html
-    assert "detail: {kind: 'dcf', ticker: tk}" in html
 
 
 # ----- Holding tab (PR 8): report_date + head/foot-less fragments + embed -----
@@ -264,7 +226,6 @@ def test_report_date_derived_from_workspace_artifact(repo: Path) -> None:
     (ticker, report_date) key the comment store + chat thread use."""
     tcc = build_ticker_command_center(repo, "NU")
     assert tcc.report_date == "2026-05-18"
-    assert tcc.to_dict()["report_date"] == "2026-05-18"
 
 
 def test_report_date_none_without_brief(tmp_path: Path) -> None:
@@ -310,6 +271,10 @@ def test_render_holding_fragment_embeds_report(repo: Path) -> None:
     assert "Analyses run" in frag
     assert "5-minute reread" in frag
     assert "Per-holding 5-min rereads" in frag
+    # Refresh/DCF event wiring rides the retained Ops drawer.
+    assert "work-os:investment-evidence-updated" in frag
+    assert "detail: {kind: 'research_refresh'" in frag
+    assert "detail: {kind: 'dcf', ticker: tk}" in frag
     # The reread is no longer an inline fold above the report.
     assert "tcc-reread-fold" not in frag
     assert "Disclosure drift" in frag
@@ -603,15 +568,65 @@ def client(repo: Path) -> FlaskClient:
     return comments_server.create_app(repo).test_client()
 
 
-def test_ticker_api_returns_json(client: FlaskClient) -> None:
-    resp = client.get("/api/ticker/NU")
-    assert resp.status_code == 200
-    payload = cast(dict[str, object], resp.get_json())
-    identity = cast(dict[str, object], payload["identity"])
-    thesis = cast(dict[str, object], payload["thesis"])
-    assert identity["ticker"] == "NU"
-    assert thesis["present"] is True
-    assert payload["tracker_url"] is None
+def _forbidden_data_work(*_args: object, **_kwargs: object) -> Never:
+    pytest.fail("retired ticker route must perform no data work")
+
+
+@pytest.fixture
+def retired_ticker_client(tmp_path: Path) -> FlaskClient:
+    from comments_server_content_routes import (
+        ContentRouteContext,
+        register_content_routes,
+    )
+    from flask import Flask
+
+    from ticker_validation import safe_ticker
+
+    app = Flask(__name__)
+    context = ContentRouteContext(
+        repo_root=tmp_path,
+        db_path=tmp_path / "data" / "portfolio.db",
+        open_db=_forbidden_data_work,
+        get_read_db=_forbidden_data_work,
+        safe_ticker=safe_ticker,
+        linked_gsheet=_forbidden_data_work,
+        probe_tracker=_forbidden_data_work,
+        fetch_live_portfolio=_forbidden_data_work,
+        default_user_id=DEFAULT_USER_ID,
+    )
+    register_content_routes(app, context)
+    return app.test_client()
+
+
+def test_ticker_api_retired_returns_410_without_work(
+    retired_ticker_client: FlaskClient,
+) -> None:
+    resp = retired_ticker_client.get("/api/ticker/NU")
+    assert resp.status_code == 410
+    assert resp.headers["Cache-Control"] == "no-store"
+    payload = resp.get_json()
+    assert payload["error"] == "legacy_ticker_feed_retired"
+    assert payload["replacement_url"] == "/?screen=company-desk&ticker=NU"
+    lower = retired_ticker_client.get("/api/ticker/nu")
+    assert lower.status_code == 410
+    assert lower.get_json()["replacement_url"] == "/?screen=company-desk&ticker=NU"
+    assert retired_ticker_client.get("/api/ticker/..").status_code == 400
+
+
+def test_holding_builder_never_calls_portfolio_position(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import report.sections.portfolio_position as portfolio_position
+
+    def _forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError(
+            "retained builder must not call report.sections.portfolio_position.build"
+        )
+
+    monkeypatch.setattr(portfolio_position, "build", _forbidden)
+    tcc = build_ticker_command_center(repo, "NU")
+    assert tcc.identity.ticker == "NU"
+    render_holding_fragment(repo, "NU")
 
 
 def test_ticker_page_redirects_to_shell(client: FlaskClient) -> None:

@@ -14,7 +14,7 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, cast
 from urllib.parse import urlencode
 
 from comments_server_evaluation_projection import resolve_work_os_evaluation_item
@@ -22,6 +22,7 @@ from flask import (
     Flask,
     Response,
     abort,
+    jsonify,
     redirect,
     request,
     send_file,
@@ -39,11 +40,6 @@ from pipeline.work_os_company import build_company_desk
 from pipeline.work_os_decisions import build_decision_projection
 from report.artifacts import load_report_artifact_index
 
-
-class _TickerCommandCenter(Protocol):
-    def to_dict(self) -> dict[str, object]: ...
-
-
 # Self-hosted webfonts vendored under src/ui/vendor/fonts/, beside the inlined
 # Alpine asset. The Work OS shell's @font-face rules reference these exact
 # files, so first paint never depends on an external font origin.
@@ -59,7 +55,6 @@ class ContentRouteContext:
     open_db: Callable[[], sqlite3.Connection]
     get_read_db: Callable[[], sqlite3.Connection]
     safe_ticker: Callable[[str], str]
-    build_ticker_command_center: Callable[[Path, str], _TickerCommandCenter]
     linked_gsheet: Callable[[Path, str], tuple[str | None, str | None]]
     probe_tracker: Callable[[], tuple[bool, str]]
     fetch_live_portfolio: Callable[[], LivePortfolio]
@@ -530,8 +525,19 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
 
     @app.route("/api/ticker/<ticker>", methods=["GET"])
     def ticker_api(ticker: str):
-        command_center = context.build_ticker_command_center(repo_root, ticker)
-        return command_center.to_dict()
+        try:
+            validated = context.safe_ticker(ticker)
+        except ValueError:
+            abort(400)
+        response = jsonify(
+            {
+                "error": "legacy_ticker_feed_retired",
+                "replacement_url": f"/?screen=company-desk&ticker={validated}",
+            }
+        )
+        response.status_code = 410
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.route("/ticker/<ticker>", methods=["GET"])
     def ticker_page(ticker: str):

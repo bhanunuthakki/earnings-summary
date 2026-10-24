@@ -33,7 +33,6 @@ from flask import Flask
 import ticker_validation
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import fetch_live_portfolio, probe_tracker
-from pipeline.ticker_command_center import build_ticker_command_center
 
 
 def register_sibling_routes(app: Flask, ctx: ServerContext) -> None:
@@ -138,7 +137,6 @@ def register_sibling_routes(app: Flask, ctx: ServerContext) -> None:
             open_db=open_db,
             get_read_db=get_read_db,
             safe_ticker=ticker_validation.safe_ticker,
-            build_ticker_command_center=build_ticker_command_center,
             linked_gsheet=linked_gsheet,
             probe_tracker=probe_tracker,
             fetch_live_portfolio=fetch_live_portfolio,

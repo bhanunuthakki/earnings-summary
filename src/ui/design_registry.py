@@ -1059,8 +1059,8 @@ _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/operations_styles.py": "137755c548ddc80fa25d51832b0b3de479a8c159864696f1deb10a5d34c10c5e",  # pragma: allowlist secret
         "pipeline/portfolio_styles.py": "88c95e4bbb36e9e2a24411a50420723e636af0aec9ad3f3cdb07897fc21638ff",  # pragma: allowlist secret
         "pipeline/research_panel_styles.py": "d96812258b5b52e07525a58768ff33de9b2a52fd54fdaf1cbbd2f813a4a4fcbe",  # pragma: allowlist secret
-        # Work OS owns the existing Explore heading's token-sized title and top spacing.
-        "pipeline/work_os_styles.py": "f69463a974adc26c6b9dc0e6230d539b312961bc004f81e31b8b63e75bc96c80",  # pragma: allowlist secret
+        # Work OS retains its family geometry after the standalone page CSS retired; this digest covers that retained geometry.
+        "pipeline/work_os_styles.py": "42f32470f84e129f39682d482cbe5cbf60a458ac3f91b23fdf26dfc0c3c24d82",  # pragma: allowlist secret
         "report/renderers/workspace_charts.py": "e55dff6926088b1c08aa42dc69fad725a1f55c15d46a8d9f5c60e60f1773b13a",  # pragma: allowlist secret
         "report/renderers/workspace_styles.py": "eefc919b64fe7ce4af879749c89de195f4a4979ea13d97b57a04b5616b94579a",  # pragma: allowlist secret
         "ui/cite_marks.py": "0c45d7eefb5ef340b1ec58036f32ec4042f69c41473850fc8624f4968e95783e",  # pragma: allowlist secret

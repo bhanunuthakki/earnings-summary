@@ -96,13 +96,22 @@ def test_consumer_cannot_add_token_clean_visual_css_outside_a_master() -> None:
     )["consumer-visual-css"]
 
 
-def test_master_digest_covers_token_geometry_and_keyframes() -> None:
-    surface = "report/renderers/workspace_charts.py"
+@pytest.mark.parametrize(
+    ("surface", "token_old", "token_new"),
+    [
+        ("report/renderers/workspace_charts.py", "gap: var(--sp-3)", "gap: var(--sp-5)"),
+        ("pipeline/work_os_styles.py", "gap: var(--sp-3)", "gap: var(--sp-5)"),
+    ],
+)
+def test_master_digest_covers_token_geometry_and_keyframes(
+    surface: str, token_old: str, token_new: str
+) -> None:
     source = css_text(SRC / surface)
     contract = next(item for item in registry.MASTER_GEOMETRY_CONTRACTS if item.surface == surface)
     assert master_geometry_digest(surface, source) == contract.digest
 
-    token_change = str(source).replace("gap: var(--sp-3)", "gap: var(--sp-5)", 1)
+    assert token_old in str(source)
+    token_change = str(source).replace(token_old, token_new, 1)
     assert master_geometry_digest(surface, token_change) != contract.digest
     assert "master-geometry-contract" in scan_surface(surface, token_change)
 
