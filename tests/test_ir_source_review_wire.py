@@ -18,6 +18,7 @@ from provenance.ir_reported_facts import (
     IrCandidatePopulation,
     IrCandidateRetentionRequest,
     IrOCRRawRow,
+    IrOCRRetentionSelection,
     IrRawExchange,
     IrReviewedCandidate,
     IrSourceContextReview,
@@ -219,16 +220,38 @@ def ocr_candidate_fixture() -> tuple[IrCandidateRetentionRequest, GovernedOCRPag
     return request, projection
 
 
+def _retention_selection(projection: GovernedOCRPageProjection) -> IrOCRRetentionSelection:
+    return IrOCRRetentionSelection(
+        document_version_id=projection.document_version_id,
+        source_sha256=projection.source_sha256,
+        evidence_seal_id=projection.evidence_seal_id,
+        extraction_run_id=projection.extraction_run_id,
+        page_result_ids=(projection.page_result_id,),
+        cutoff_at=STAMP,
+    )
+
+
+def _patch_selected_projection(
+    monkeypatch: pytest.MonkeyPatch, projection: GovernedOCRPageProjection
+) -> None:
+    def selected(*_args: object, **_kwargs: object) -> tuple[GovernedOCRPageProjection, ...]:
+        return (projection,)
+
+    monkeypatch.setattr("provenance.ir_reported_facts.resolve_governed_ocr_pages", selected)
+
+
 def test_ocr_candidate_retains_tagged_word_region_without_financial_publication(
-    conn: sqlite3.Connection,
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     request, projection = ocr_candidate_fixture()
+    _patch_selected_projection(monkeypatch, projection)
     receipt = retain_ir_pdf_candidates(
         conn,
         request,
         raw_pdf_bytes=PDF_BYTES,
         page_projection=page_texts,
-        ocr_projection_loader=lambda: (projection,),
+        ocr_repo_root=tmp_path,
+        ocr_selection=_retention_selection(projection),
     )
     assert not receipt.exact_replay
     assert retain_ir_pdf_candidates(
@@ -236,7 +259,8 @@ def test_ocr_candidate_retains_tagged_word_region_without_financial_publication(
         request,
         raw_pdf_bytes=PDF_BYTES,
         page_projection=page_texts,
-        ocr_projection_loader=lambda: (projection,),
+        ocr_repo_root=tmp_path,
+        ocr_selection=_retention_selection(projection),
     ).exact_replay
     node = conn.execute(
         "SELECT text,locator_json FROM evidence_nodes WHERE node_id=?",
@@ -249,9 +273,10 @@ def test_ocr_candidate_retains_tagged_word_region_without_financial_publication(
 
 @pytest.mark.parametrize("tamper", ["word_box", "render", "source", "page", "quote"])
 def test_ocr_candidate_rejects_changed_projection_before_write(
-    conn: sqlite3.Connection, tamper: str
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tamper: str
 ) -> None:
     request, projection = ocr_candidate_fixture()
+    _patch_selected_projection(monkeypatch, projection)
     row = cast(IrOCRRawRow, request.rows[0])
     if tamper == "word_box":
         row = row.model_copy(
@@ -276,7 +301,8 @@ def test_ocr_candidate_rejects_changed_projection_before_write(
             request,
             raw_pdf_bytes=PDF_BYTES,
             page_projection=page_texts,
-            ocr_projection_loader=lambda: (projection,),
+            ocr_repo_root=tmp_path,
+            ocr_selection=_retention_selection(projection),
         )
     assert (
         conn.execute(
@@ -287,9 +313,10 @@ def test_ocr_candidate_rejects_changed_projection_before_write(
 
 
 def test_ocr_candidate_precommit_failure_rolls_back_response_and_candidate(
-    conn: sqlite3.Connection,
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     request, projection = ocr_candidate_fixture()
+    _patch_selected_projection(monkeypatch, projection)
 
     def changed_projection() -> None:
         raise ValueError("selected OCR projection changed")
@@ -300,7 +327,8 @@ def test_ocr_candidate_precommit_failure_rolls_back_response_and_candidate(
             request,
             raw_pdf_bytes=PDF_BYTES,
             page_projection=page_texts,
-            ocr_projection_loader=lambda: (projection,),
+            ocr_repo_root=tmp_path,
+            ocr_selection=_retention_selection(projection),
             precommit_validation=changed_projection,
         )
     assert (
@@ -309,6 +337,133 @@ def test_ocr_candidate_precommit_failure_rolls_back_response_and_candidate(
         ).fetchone()[0]
         == 0
     )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "foreign_document_projection",
+        "foreign_source_projection",
+        "foreign_document_selection",
+        "foreign_source_selection",
+        "wrong_retained_cutoff",
+        "wrong_selected_cutoff",
+        "missing_retained_cutoff",
+        "naive_selected_cutoff",
+        "wrong_run_projection",
+        "wrong_seal_projection",
+        "out_of_range_page",
+        "duplicate_projection",
+    ],
+)
+def test_ocr_owner_rejects_foreign_or_forged_selection_without_sql(
+    conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    case: str,
+) -> None:
+    request, projection = ocr_candidate_fixture()
+    selection = _retention_selection(projection)
+    row = cast(IrOCRRawRow, request.rows[0])
+    if case == "foreign_document_projection":
+        projection = projection.model_copy(update={"document_version_id": "foreign-document"})
+        row = row.model_copy(
+            update={
+                "ocr_page_manifest": {
+                    **row.ocr_page_manifest,
+                    "document_version_id": "foreign-document",
+                }
+            }
+        )
+    elif case == "foreign_source_projection":
+        projection = projection.model_copy(update={"source_sha256": "f" * 64})
+        row = row.model_copy(
+            update={"ocr_page_manifest": {**row.ocr_page_manifest, "source_sha256": "f" * 64}}
+        )
+    elif case == "foreign_document_selection":
+        selection = selection.model_copy(update={"document_version_id": "foreign-document"})
+    elif case == "foreign_source_selection":
+        selection = selection.model_copy(update={"source_sha256": "f" * 64})
+    elif case == "wrong_retained_cutoff":
+        row = row.model_copy(
+            update={
+                "ocr_page_manifest": {
+                    **row.ocr_page_manifest,
+                    "cutoff_at": "1900-01-01T00:00:00+00:00",
+                }
+            }
+        )
+    elif case == "wrong_selected_cutoff":
+        selection = selection.model_copy(update={"cutoff_at": datetime(2026, 10, 22, tzinfo=UTC)})
+    elif case == "missing_retained_cutoff":
+        row = row.model_copy(
+            update={
+                "ocr_page_manifest": {
+                    key: value for key, value in row.ocr_page_manifest.items() if key != "cutoff_at"
+                }
+            }
+        )
+    elif case == "naive_selected_cutoff":
+        selection = selection.model_copy(update={"cutoff_at": datetime(2026, 10, 23)})
+    elif case == "wrong_run_projection":
+        projection = projection.model_copy(update={"extraction_run_id": "foreign-run"})
+    elif case == "wrong_seal_projection":
+        projection = projection.model_copy(update={"evidence_seal_id": "foreign-seal"})
+    elif case == "out_of_range_page":
+        projection = projection.model_copy(update={"page_number": 3})
+    request = request.model_copy(update={"rows": (row,)})
+
+    def resolved(*_args: object, **_kwargs: object) -> tuple[GovernedOCRPageProjection, ...]:
+        return (projection, projection) if case == "duplicate_projection" else (projection,)
+
+    monkeypatch.setattr("provenance.ir_reported_facts.resolve_governed_ocr_pages", resolved)
+    sql: list[str] = []
+    conn.set_trace_callback(sql.append)
+    try:
+        with pytest.raises(ValueError, match=r"OCR|cutoff"):
+            retain_ir_pdf_candidates(
+                conn,
+                request,
+                raw_pdf_bytes=PDF_BYTES,
+                page_projection=page_texts,
+                ocr_repo_root=tmp_path,
+                ocr_selection=selection,
+            )
+    finally:
+        conn.set_trace_callback(None)
+    assert not sql and not conn.in_transaction
+
+
+def test_ocr_candidate_replay_rejects_changed_cutoff_without_write(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    request, projection = ocr_candidate_fixture()
+    _patch_selected_projection(monkeypatch, projection)
+    selection = _retention_selection(projection)
+    retain_ir_pdf_candidates(
+        conn,
+        request,
+        raw_pdf_bytes=PDF_BYTES,
+        page_projection=page_texts,
+        ocr_repo_root=tmp_path,
+        ocr_selection=selection,
+    )
+    changed = selection.model_copy(update={"cutoff_at": datetime(2026, 10, 22, tzinfo=UTC)})
+    sql: list[str] = []
+    conn.set_trace_callback(sql.append)
+    try:
+        with pytest.raises(ValueError, match="OCR candidate manifest"):
+            retain_ir_pdf_candidates(
+                conn,
+                request,
+                raw_pdf_bytes=PDF_BYTES,
+                page_projection=page_texts,
+                ocr_repo_root=tmp_path,
+                ocr_selection=changed,
+            )
+    finally:
+        conn.set_trace_callback(None)
+    assert not sql and not conn.in_transaction
 
 
 def test_wire_retains_raw_response_without_auto_review_or_financial_write(

@@ -124,6 +124,7 @@ from provenance.ir_reported_facts import (
     IrNativeContextRegion,
     IrOCRContextRegion,
     IrOCRRawRow,
+    IrOCRRetentionSelection,
     IrRawExchange,
     IrRawRow,
     IrReportedPublicationRequest,
@@ -2328,8 +2329,13 @@ def retain_and_publish_reviewed_ir_source(
         caller_transaction=caller_transaction,
         require_existing=require_existing,
         historical_revalidation=revalidated is not None,
-        ocr_projection_loader=(
-            ocr_capture.verified_ocr_projections if ocr_capture is not None else None
+        ocr_repo_root=ocr_capture.repo_root if ocr_capture is not None else None,
+        ocr_selection=(
+            IrOCRRetentionSelection.model_validate(
+                ocr_capture.ocr_selection.model_dump(exclude={"document_id"})
+            )
+            if ocr_capture is not None and ocr_capture.ocr_selection is not None
+            else None
         ),
     )
     if ocr_capture is not None:
