@@ -40,22 +40,24 @@ from datetime import date
 from pathlib import Path
 from typing import cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+    from fetch_ir_documents import process_ticker
+except ImportError:
+    from execution._lib import PROJECT_ROOT
+    from execution.fetch_ir_documents import process_ticker
 
-import ir_fetch_status  # noqa: E402
-from execution.fetch_ir_documents import process_ticker  # noqa: E402
-from ir_pipeline.manifest import ManifestEntry, merge_write  # noqa: E402
-from ir_uploads import calendar_id_from_fye  # noqa: E402
-from pipeline.source_policy import (  # noqa: E402
+import ir_fetch_status
+from ir_pipeline.manifest import ManifestEntry, merge_write
+from ir_uploads import calendar_id_from_fye
+from pipeline.source_policy import (
     ArtifactKind,
     CollectionSource,
     authorize_stored_collection_target,
     reported_quarter_selection_in_connection,
 )
-from runtime.python_process import managed_python_prefix  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from runtime.python_process import managed_python_prefix
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 def _ticker_fye(db_path: Path, ticker: str) -> str | None:
@@ -202,18 +204,29 @@ def register_urls(
     sys.stdout.write(f"[{ticker}] manifest: +{added} new, {total} total\n")
 
     if in_window is None:
+        summary = process_ticker(
+            ticker,
+            root=repo_root,
+            db_path=db_path,
+            categorize=False,
+            calendar=None,
+            owner_requested=True,
+        )
+        downloaded = summary.get("downloaded")
+        downloaded_n = downloaded if type(downloaded) is int else 0
         sys.stdout.write(
             json.dumps(
                 {
                     "event": "reported_period_selection_pending",
                     "ticker": ticker,
                     "retained_candidates": len(urls),
+                    "downloaded_raw": downloaded_n,
                 },
                 sort_keys=True,
             )
             + "\n"
         )
-        return 0
+        return downloaded_n
 
     calendar = calendar_id_from_fye(_ticker_fye(db_path, ticker))
     summary = process_ticker(

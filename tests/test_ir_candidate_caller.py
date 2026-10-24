@@ -40,7 +40,13 @@ from pipeline.source_policy import (
 )
 from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
 from provenance.issuer_registry import IssuerEntity, IssuerRegistry
-from provenance.reporting_entity_registry import ReportingEntityRegistry, SourceObligationRevision
+from provenance.reporting_entity_registry import (
+    AuthorityKind,
+    CompletenessRule,
+    DocumentFamily,
+    ReportingEntityRegistry,
+    SourceObligationRevision,
+)
 from provenance.source_coverage_reconcile import (
     ExpectedDocumentImport,
     ExplicitAbsence,
@@ -62,10 +68,11 @@ def _seed_source_duties(connection: sqlite3.Connection, issuer_id: str) -> None:
             created_at=NOW,
         )
     )
-    for name, authority, family, rule in (
+    duties: tuple[tuple[str, AuthorityKind, DocumentFamily, CompletenessRule], ...] = (
         ("sec", "sec_edgar", "operating_company_periodic", "regulator_inventory"),
         ("ir", "issuer_publisher", "issuer_earnings_materials", "publisher_surface_exhaustion"),
-    ):
+    )
+    for name, authority, family, rule in duties:
         ReportingEntityRegistry(connection).persist(
             SourceObligationRevision(
                 obligation_revision_id=f"test-period-duty:{name}:{issuer_id}",

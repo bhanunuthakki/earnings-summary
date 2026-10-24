@@ -841,3 +841,7 @@ def _authority_component_kind(
     if surface.surface_kind in {"publisher_api", "event_feed"}:
         return "event_feed"
     return "other"
+
+
+# Typed review seam for the existing candidate owner; no second selection path.
+expected_ir_candidate = _expected_candidate

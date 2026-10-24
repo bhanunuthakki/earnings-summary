@@ -20,7 +20,7 @@ from ir_pipeline.source_inventory import (
     IRDiscoverySnapshot,
     IRDocumentCandidate,
     IRSourceInventoryRequest,
-    _expected_candidate,
+    expected_ir_candidate,
     sync_ir_source_inventory,
 )
 from models.documents import DocType, SourceType
@@ -48,7 +48,10 @@ from provenance.evidence_links import (
     EvidenceLinkLedger,
 )
 from provenance.issuer_registry import IssuerEntity, IssuerRegistry
-from provenance.issuer_registry_bootstrap import bootstrap_sec_submissions_issuer
+from provenance.issuer_registry_bootstrap import (
+    SecSubmissionsIssuerRequest,
+    bootstrap_sec_submissions_issuer,
+)
 from provenance.reporting_entity_registry import (
     EvidenceSubjectBindingRevision,
     ReportingEntity,
@@ -60,11 +63,10 @@ from provenance.source_coverage_reconcile import (
     ExplicitAbsence,
     InventoryComponentImport,
     SourceCoverageImport,
-    _exact_document,
+    exact_captured_document,
     reconcile_source_coverage,
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
-from tests.test_sec_submissions_issuer_bootstrap import _request as sec_profile_request
 from tests.test_transcript_acquisition_receipt_migration import (
     darwin_staging_double as darwin_staging_double,
 )
@@ -91,8 +93,10 @@ def _reviewed_period_fixture(
     conn = connect_sqlite(db, role=SQLiteConnectionRole.WRITER)
     subject = bootstrap_sec_submissions_issuer(
         conn,
-        request=sec_profile_request(
-            tmp_path,
+        request=SecSubmissionsIssuerRequest(
+            ticker="NU",
+            normalized_cik="0001691493",
+            source_url="https://data.sec.gov/submissions/CIK0001691493.json",
             apply=True,
             raw_body=json.dumps(
                 {
@@ -104,6 +108,10 @@ def _reviewed_period_fixture(
                     "fiscalYearEnd": "1231",
                 }
             ).encode(),
+            blob_root=tmp_path / "blobs",
+            observed_at=datetime(2026, 10, 18, 4, 39, 34, tzinfo=UTC),
+            retrieved_at=datetime(2026, 10, 18, 4, 39, 35, tzinfo=UTC),
+            recorded_at=datetime(2026, 10, 19, 12, tzinfo=UTC),
         ),
     )
     issuer_id = subject.canonical_issuer_id
@@ -266,7 +274,7 @@ def test_reviewed_generic_ir_document_bridges_inventory_without_metadata_rewrite
             recorded_at=later,
             reconciled_at=later,
         )
-        expected = _expected_candidate(
+        expected = expected_ir_candidate(
             conn,
             request,
             IRDocumentCandidate(
@@ -290,7 +298,7 @@ def test_reviewed_generic_ir_document_bridges_inventory_without_metadata_rewrite
             details["native_period_review_sha256"]
             == inventory.current_reported_period_review_identity(review)[1]
         )
-        assert _exact_document(
+        assert exact_captured_document(
             conn, expected, issuer_id=review.issuer_id, ticker="NU", reconciled_at=later
         ) == (review.document_version_id, 1)
         assert (
@@ -304,7 +312,7 @@ def test_reviewed_generic_ir_document_bridges_inventory_without_metadata_rewrite
             is None
         )
         assert (
-            _exact_document(
+            exact_captured_document(
                 conn,
                 expected.model_copy(update={"source_url": "https://investors.nu/unrelated.pdf"}),
                 issuer_id=review.issuer_id,
@@ -341,7 +349,7 @@ def test_reviewed_generic_ir_document_bridges_inventory_without_metadata_rewrite
             is None
         )
         assert (
-            _exact_document(
+            exact_captured_document(
                 conn, expected, issuer_id=review.issuer_id, ticker="NU", reconciled_at=later
             )
             is None
@@ -478,7 +486,7 @@ def test_reported_window_accepts_captured_native_review_and_sealed_sec_populatio
             )
         )
         periods = (date(2025, 9, 30), date(2025, 12, 31), date(2026, 3, 31), date(2026, 9, 30))
-        sec_expected = []
+        sec_expected: list[ExpectedDocumentImport] = []
         for period in periods:
             period_text = period.isoformat()
             url = f"https://www.sec.gov/Archives/edgar/data/1691493/{period_text}.htm"

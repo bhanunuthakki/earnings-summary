@@ -1,34 +1,30 @@
 from __future__ import annotations
 
-import sys
 from datetime import date
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from models.documents import DocType  # noqa: E402
-from pipeline.approved_ir_catalog import (  # noqa: E402
+from models.documents import DocType
+from pipeline.approved_ir_catalog import (
     CatalogDisposition,
     IrCatalogError,
     build_catalog,
     classify_link,
 )
-from pipeline.approved_ir_rubrik import (  # noqa: E402
+from pipeline.approved_ir_rubrik import (
     RubrikLinkObservation,
     RubrikQuarterObservation,
     load_rubrik_row_observations,
     parse_rubrik_quarter_rows,
 )
-from pipeline.approved_ir_wix import (  # noqa: E402
+from pipeline.approved_ir_wix import (
     WixPanelObservation,
     load_wix_rendered_observations,
     parse_wix_visible_quarters,
 )
-from pipeline.source_policy import ir_url_is_authorized, issuer_policy  # noqa: E402
+from pipeline.source_policy import ir_url_is_authorized, issuer_policy
 
 FIXTURES = Path(__file__).parent / "fixtures" / "approved_ir"
 RUBRIK_FIXTURE = FIXTURES / "rubrik_rows_sanitized.json"

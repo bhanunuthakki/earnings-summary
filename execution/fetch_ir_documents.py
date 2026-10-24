@@ -573,7 +573,9 @@ def _write_incoming_sidecar(
     existing = _load_incoming_sidecar(root)
     existing.update(mapping)
     progress_value = existing.get(_FETCH_PROGRESS_KEY)
-    progress = dict(progress_value) if isinstance(progress_value, dict) else {}
+    progress: dict[str, object] = (
+        dict(cast("dict[str, object]", progress_value)) if isinstance(progress_value, dict) else {}
+    )
     progress[ticker] = {"next_index": next_index, "retained": retained}
     existing[_FETCH_PROGRESS_KEY] = progress
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -913,7 +915,9 @@ def process_ticker(
         cast("dict[str, object]", ticker_progress) if isinstance(ticker_progress, dict) else {}
     )
     prior_retained = progress.get("retained")
-    retained = dict(prior_retained) if isinstance(prior_retained, dict) else {}
+    retained: dict[str, object] = (
+        dict(cast("dict[str, object]", prior_retained)) if isinstance(prior_retained, dict) else {}
+    )
     # The attempt budget applies to unfinished URLs. A registered prefix must
     # not starve an unregistered URL on every replay of the same manifest.
     pending: list[dict[str, object]] = []

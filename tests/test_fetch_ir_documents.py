@@ -930,7 +930,11 @@ def test_registered_prefix_does_not_starve_manifest_entry_after_attempt_budget(
         encoding="utf-8",
     )
     monkeypatch.setattr(fid, "reported_quarter_selection_in_connection", _source_qualified_period)
-    monkeypatch.setattr(fid, "_registered_source_urls", lambda _db, _ticker: set(urls[:100]))
+
+    def registered_prefix(_db: Path, _ticker: str) -> set[str]:
+        return set(urls[:100])
+
+    monkeypatch.setattr(fid, "_registered_source_urls", registered_prefix)
     monkeypatch.setattr(fid.time, "sleep", _no_sleep)
     downloaded: list[str] = []
 
@@ -966,7 +970,11 @@ def test_pending_retained_prefix_advances_and_replays_without_redownload(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(fid, "reported_quarter_selection_in_connection", lambda *_a, **_k: None)
+
+    def unknown_period(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(fid, "reported_quarter_selection_in_connection", unknown_period)
     monkeypatch.setattr(fid, "_registered_source_urls", _no_registered_urls)
     monkeypatch.setattr(fid.time, "sleep", _no_sleep)
     calls: list[str] = []
@@ -1044,44 +1052,40 @@ def test_failed_prefix_advances_retry_cursor_to_later_manifest_url(
 
 
 def test_fetch_progress_keeps_legacy_url_map_and_separates_roots_and_issuers(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from execution.categorize_ir_uploads import _load_url_overrides
-
     first_root = tmp_path / "first"
     second_root = tmp_path / "second"
-    fid._write_incoming_sidecar(
-        first_root,
-        {"port.pdf": "https://issuer.example/port.pdf"},
-        ticker="PORT",
-        next_index=7,
-        retained={"https://issuer.example/port.pdf": {"filename": "port.pdf"}},
-    )
-    fid._write_incoming_sidecar(
-        first_root,
-        {"nu.pdf": "https://issuer.example/nu.pdf"},
-        ticker="NU",
-        next_index=2,
-        retained={"https://issuer.example/nu.pdf": {"filename": "nu.pdf"}},
-    )
-    fid._write_incoming_sidecar(
-        second_root,
-        {"port.pdf": "https://other.example/port.pdf"},
-        ticker="PORT",
-        next_index=3,
-        retained={},
-    )
+    for root, tickers in ((first_root, ("PORT", "NU")), (second_root, ("PORT",))):
+        db = root / "portfolio.db"
+        _make_policy_db(db, [(ticker, "portfolio") for ticker in tickers])
+        for ticker in tickers:
+            host = "other.example" if root == second_root else "issuer.example"
+            _write_manifest(root, ticker, f"https://{host}/{ticker}.pdf")
+    monkeypatch.setattr(fid, "_registered_source_urls", _no_registered_urls)
+    monkeypatch.setattr(fid, "reported_quarter_selection_in_connection", _source_qualified_period)
+    monkeypatch.setattr(fid.time, "sleep", _no_sleep)
+
+    def download(_url: str, dest: Path, base: str) -> Path:
+        return _staged_download(dest, base)
+
+    monkeypatch.setattr(fid, "_download", download)
+    for root, tickers in ((first_root, ("PORT", "NU")), (second_root, ("PORT",))):
+        for ticker in tickers:
+            result = fid.process_ticker(ticker, root=root, db_path=root / "portfolio.db")
+            assert result["downloaded"] == 1
     first_path = fid.incoming_urls_path(first_root)
     first = json.loads(first_path.read_text(encoding="utf-8"))
     second = json.loads(fid.incoming_urls_path(second_root).read_text(encoding="utf-8"))
-    assert _load_url_overrides(first_path) == {
-        "port.pdf": "https://issuer.example/port.pdf",
-        "nu.pdf": "https://issuer.example/nu.pdf",
+    assert {value for key, value in first.items() if key != "__fetch_progress_v1__"} == {
+        "https://issuer.example/PORT.pdf",
+        "https://issuer.example/NU.pdf",
     }
-    assert first["__fetch_progress_v1__"]["PORT"]["next_index"] == 7
-    assert first["__fetch_progress_v1__"]["NU"]["next_index"] == 2
-    assert second["__fetch_progress_v1__"]["PORT"]["next_index"] == 3
-    assert second["port.pdf"] == "https://other.example/port.pdf"
+    assert {value for key, value in second.items() if key != "__fetch_progress_v1__"} == {
+        "https://other.example/PORT.pdf"
+    }
+    assert set(first["__fetch_progress_v1__"]) == {"PORT", "NU"}
+    assert set(second["__fetch_progress_v1__"]) == {"PORT"}
 
 
 def test_shared_staged_object_does_not_hide_unregistered_source(

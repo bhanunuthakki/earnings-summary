@@ -2265,6 +2265,9 @@ review node; it is evidence, not a financial fact or completeness seal.
 Current IR collection retains bounded candidates when reported-period selection
 is pending. Its output uses `period_selection_pending`, includes retained and
 deferred counts, and does not run categorization or claim complete coverage.
+The explicit-URL fallback uses the same bounded fetch path while selection is
+pending. It keeps raw bytes and the URL manifest, but does not mark the brief
+dirty, record a completed `ir_fetch_status`, or start categorization.
 The existing `.tmp/ir_incoming_urls.json` sidecar also records a per-ticker retry
 cursor and exact SHA-256 and byte size for staged raw files. A replay checks
 those bytes before skipping a download. Failed URLs consume an attempt slot,

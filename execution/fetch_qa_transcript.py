@@ -36,20 +36,20 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
-SRC_DIR = PROJECT_ROOT / "src"
-sys.path.append(str(SRC_DIR))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-import db  # noqa: E402
-import index_manager  # noqa: E402
-from aggregator_sources import (  # noqa: E402
+import db
+import index_manager
+from aggregator_sources import (
     SOURCES,
     AggregatorHit,
     AggregatorSource,
 )
-from alias_manager import resolve_ticker  # noqa: E402
-from pipeline.transcript_acquisition import (  # noqa: E402
+from alias_manager import resolve_ticker
+from pipeline.transcript_acquisition import (
     COMBINED_SOURCE_REGIME_IDENTITY,
     AuthorizedTranscriptArtifact,
     TranscriptAcquisitionDeniedError,
@@ -62,11 +62,11 @@ from pipeline.transcript_acquisition import (  # noqa: E402
     stage_authorized_payload,
     transcript_acquisition_receipt_id,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
-from transcript_qa import (  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from transcript_qa import (
     validate_synthesized_transcript,
 )
-from transcripts.acquisition_semantics import (  # noqa: E402
+from transcripts.acquisition_semantics import (
     TRANSCRIPT_ACQUISITION_POLICY_VERSION,
     ExistingArtifactBehavior,
     TranscriptAcquisitionAuthorization,
@@ -76,7 +76,7 @@ from transcripts.acquisition_semantics import (  # noqa: E402
     TranscriptAuthorizationStatus,
     TranscriptProvider,
 )
-from transcripts.immutable_staging import install_transcript_output  # noqa: E402
+from transcripts.immutable_staging import install_transcript_output
 
 RAW_DIR = PROJECT_ROOT / "transcripts" / "raw"
 STAGING_DIR = PROJECT_ROOT / ".tmp" / "transcript-acquisition"

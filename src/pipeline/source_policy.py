@@ -1149,7 +1149,7 @@ def _reported_period_window_from_inventory_unpinned(
                     return ReportedPeriodWindow(
                         status=ReportedPeriodStatus.AMBIGUOUS, reason="ir_period_proof_conflict"
                     )
-            if item.period_end is not None and not _captured_reported_period_proof(
+            if not _captured_reported_period_proof(
                 conn,
                 item=item,
                 ticker=ticker.strip().upper(),
@@ -1159,35 +1159,33 @@ def _reported_period_window_from_inventory_unpinned(
                     status=ReportedPeriodStatus.UNKNOWN,
                     reason="captured_period_proof_missing",
                 )
-            if item.period_end is not None:
-                coverage_proof = conn.execute(
-                    "SELECT assessment_id,document_version_id,reason_details_json "
-                    "FROM v_source_coverage_current WHERE expected_document_id=?",
-                    (item.expected_document_id,),
-                ).fetchone()
-                if coverage_proof is None:
-                    return ReportedPeriodWindow(
-                        status=ReportedPeriodStatus.UNKNOWN,
-                        reason="coverage_proof_missing",
-                    )
-                coverage_proofs.append(
-                    (
-                        item.expected_document_id,
-                        str(coverage_proof[0]),
-                        str(coverage_proof[1]),
-                        str(coverage_proof[2]),
-                    )
+            coverage_proof = conn.execute(
+                "SELECT assessment_id,document_version_id,reason_details_json "
+                "FROM v_source_coverage_current WHERE expected_document_id=?",
+                (item.expected_document_id,),
+            ).fetchone()
+            if coverage_proof is None:
+                return ReportedPeriodWindow(
+                    status=ReportedPeriodStatus.UNKNOWN,
+                    reason="coverage_proof_missing",
                 )
-            if item.period_end is not None:
-                if item.period_end.date() > as_of:
-                    return ReportedPeriodWindow(
-                        status=ReportedPeriodStatus.AMBIGUOUS, reason="future_reported_period"
-                    )
-                if (
-                    kind == "sec_submissions"
-                    and (item.form_type or "").upper().removesuffix("/A") == "10-Q"
-                ) or (kind == "ir_crawl" and item.document_type == "earnings_release"):
-                    reported.add(item.period_end.date())
+            coverage_proofs.append(
+                (
+                    item.expected_document_id,
+                    str(coverage_proof[0]),
+                    str(coverage_proof[1]),
+                    str(coverage_proof[2]),
+                )
+            )
+            if item.period_end.date() > as_of:
+                return ReportedPeriodWindow(
+                    status=ReportedPeriodStatus.AMBIGUOUS, reason="future_reported_period"
+                )
+            if (
+                kind == "sec_submissions"
+                and (item.form_type or "").upper().removesuffix("/A") == "10-Q"
+            ) or (kind == "ir_crawl" and item.document_type == "earnings_release"):
+                reported.add(item.period_end.date())
     if len(reported) < max_quarters:
         return ReportedPeriodWindow(
             status=ReportedPeriodStatus.UNKNOWN, reason="reported_period_population_short"

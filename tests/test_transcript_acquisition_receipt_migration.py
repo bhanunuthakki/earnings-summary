@@ -364,10 +364,14 @@ def test_0063_preserves_historical_receipt_and_admits_current_receipt(
             == current_artifact
         )
         changed_window = qualified_window().model_copy(update={"proof_sha256": "b" * 64})
+
+        def revised_window(*_args: object, **_kwargs: object) -> ReportedPeriodWindow:
+            return changed_window
+
         monkeypatch.setattr(
             acquisition,
             "reported_period_window_from_inventory",
-            lambda *_args, **_kwargs: changed_window,
+            revised_window,
         )
         assert (
             load_authorized_transcript_receipt(

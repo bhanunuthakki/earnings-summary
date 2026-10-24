@@ -1278,3 +1278,7 @@ def _json_default(value: object) -> str:
     if isinstance(value, datetime):
         return value.isoformat()
     raise TypeError(f"unsupported canonical JSON value: {type(value).__name__}")
+
+
+# Typed review seam for the existing exact-document validator.
+exact_captured_document = _exact_document

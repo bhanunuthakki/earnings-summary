@@ -24,24 +24,26 @@ from datetime import date
 from pathlib import Path
 from uuid import uuid4
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-import db  # noqa: E402
-import index_manager  # noqa: E402
-from compute import evidence_snapshot  # noqa: E402
-from compute.transcript_ingest import (  # noqa: E402
+import db
+import index_manager
+from compute import evidence_snapshot
+from compute.transcript_ingest import (
     IngestResult,
     ParsedFilename,
     ingest_evidence_file,
     map_to_period,
     parse_transcript_filename,
 )
-from models.documents import DocType, SourceType  # noqa: E402
-from models.runs import StageName, StageStatus  # noqa: E402
-from pipeline.invocation_fingerprint import files_fingerprint  # noqa: E402
-from pipeline.queries import open_db  # noqa: E402
-from pipeline.run_accounting import (  # noqa: E402
+from models.documents import DocType, SourceType
+from models.runs import StageName, StageStatus
+from pipeline.invocation_fingerprint import files_fingerprint
+from pipeline.queries import open_db
+from pipeline.run_accounting import (
     JsonValue,
     PipelineRunSuppressedError,
     end_run,
@@ -49,7 +51,7 @@ from pipeline.run_accounting import (  # noqa: E402
     start_run,
     suppression_payload,
 )
-from pipeline.transcript_acquisition import (  # noqa: E402
+from pipeline.transcript_acquisition import (
     COMBINED_SOURCE_REGIME_IDENTITY,
     AuthorizedTranscriptArtifact,
     TranscriptAcquisitionDeniedError,
@@ -61,8 +63,8 @@ from pipeline.transcript_acquisition import (  # noqa: E402
     stage_pending_issuer_transcripts,
     transcript_acquisition_receipt_id,
 )
-from provenance.selection import selected_transcripts_relation  # noqa: E402
-from transcripts.acquisition_semantics import (  # noqa: E402
+from provenance.selection import selected_transcripts_relation
+from transcripts.acquisition_semantics import (
     TRANSCRIPT_ACQUISITION_POLICY_VERSION,
     ExistingArtifactBehavior,
     TranscriptAcquisitionEntrypoint,
@@ -70,7 +72,7 @@ from transcripts.acquisition_semantics import (  # noqa: E402
     TranscriptAuthorizationReason,
     TranscriptProvider,
 )
-from transcripts.immutable_staging import install_transcript_output  # noqa: E402
+from transcripts.immutable_staging import install_transcript_output
 
 _TRANSCRIPT_DIRS = (
     PROJECT_ROOT / "transcripts" / "processed",

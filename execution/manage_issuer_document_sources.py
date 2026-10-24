@@ -16,12 +16,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC_ROOT = PROJECT_ROOT / "src"
-sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(SRC_ROOT))
+try:
+    import _lib as execution_lib
+    from sqlite_bootstrap import require_managed_sqlite_runtime
+except ImportError:
+    from execution import _lib as execution_lib
+    from execution.sqlite_bootstrap import require_managed_sqlite_runtime
 
-from execution.sqlite_bootstrap import require_managed_sqlite_runtime  # noqa: E402
+PROJECT_ROOT = execution_lib.PROJECT_ROOT
 
 
 class _RequestModel(Protocol):

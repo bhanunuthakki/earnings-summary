@@ -1064,7 +1064,7 @@ def validate_fiscal_period_witness(
 
 def _review_pdf_bytes(
     conn: sqlite3.Connection, document_version_id: str
-) -> tuple[dict[str, object], bytes]:
+) -> tuple[dict[str, JsonValue], bytes]:
     version = _alias_row(
         conn, "evidence_document_versions", "document_version_id", document_version_id
     )
@@ -1093,9 +1093,11 @@ def _review_pdf_bytes(
         raw = Path(unquote(uri.path)).read_bytes()
     except OSError as exc:
         raise IssuerDocumentInventoryError("reported_period_source_unavailable") from exc
+    blob_size = blob["byte_size"]
     if (
         not raw.startswith(b"%PDF-")
-        or len(raw) != int(blob["byte_size"])
+        or type(blob_size) is not int
+        or len(raw) != blob_size
         or hashlib.sha256(raw).hexdigest() != version["blob_sha256"]
     ):
         raise IssuerDocumentInventoryError("reported_period_source_hash_mismatch")
