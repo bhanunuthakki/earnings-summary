@@ -286,7 +286,7 @@ _DERIVED_AGGREGATES: Final[tuple[_AggregateMapping, ...]] = (
 _DERIVATION_VERSION: Final[str] = "primary_fact_aggregate_v1"
 
 _CANDIDATE_QUERY_BASE: Final[str] = """
-    FROM v_financial_facts_resolved_current AS fact
+    FROM {fact_relation} AS fact
     LEFT JOIN documents AS document
       ON document.id = fact.source_doc_id
      AND UPPER(document.ticker) = UPPER(fact.ticker)
@@ -498,15 +498,15 @@ def _load_candidates(
     ticker: str,
     mappings: Sequence[FieldMapping],
 ) -> list[_FactCandidate]:
-    fact_relation = canonical_fact_relation(conn, "financial_facts").sql
-    if fact_relation != "v_financial_facts_resolved_current":
+    fact_relation = canonical_fact_relation(conn, "financial_facts")
+    if fact_relation.selection_mode != "resolved_view":
         raise RuntimeError(
             "canonical financial-fact cutover is unavailable; refusing a legacy read"
         )
     view_columns = {
         str(column[0]).lower()
         for column in conn.execute(
-            "SELECT * FROM v_financial_facts_resolved_current LIMIT 0"
+            f"SELECT * FROM {fact_relation.sql} LIMIT 0"  # nosec B608 -- resolver-owned relation
         ).description
     }
     has_reported_observation_id = "reported_observation_id" in view_columns
@@ -520,7 +520,7 @@ def _load_candidates(
     else:
         query = _CANDIDATE_QUERY_WITHOUT_RESOLUTION_IDS
     rows = conn.execute(
-        query,
+        query.format(fact_relation=fact_relation.sql),  # nosec B608 -- resolver-owned relation
         (ticker,),
     ).fetchall()
     requested_line_items = {mapping.line_item for mapping in mappings}

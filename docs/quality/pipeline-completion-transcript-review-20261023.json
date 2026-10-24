@@ -1,0 +1,79 @@
+{
+  "review_kind": "ad_hoc_independent_readonly_code_review",
+  "governance_certificate": false,
+  "created_at": "2026-10-23T08:42:58.800773+00:00",
+  "scope": [
+    "execution/scan_ir_transcripts.py",
+    "execution/ingest_transcripts_state.py",
+    "tests/test_scan_ir_transcripts.py",
+    "tests/test_split_root_legacy_adapters.py"
+  ],
+  "sha256_manifest": {
+    "execution/scan_ir_transcripts.py": {
+      "sha256": "4d88e4e1751969442804ee4dba203c0da1d096ecf3179e8e96ae875af702b4fe"
+    },
+    "execution/ingest_transcripts_state.py": {
+      "sha256": "ccbc1369fcc549753f7517d6a3cf8c5d3fb52ab88e172344105106fdcb494f5f"
+    },
+    "tests/test_scan_ir_transcripts.py": {
+      "sha256": "602724be930264af7c9d86fc7f50be0774640b950bdf1e22dc3b132ac75028a4"
+    },
+    "tests/test_split_root_legacy_adapters.py": {
+      "sha256": "28da5eaac0c5f531055c1b0a7ffe1038814a3d692674991c396fb264126fe523"
+    }
+  },
+  "verdict": "advisory_pass",
+  "score": 94,
+  "score_breakdown": {
+    "sources": {
+      "earned": 20,
+      "max": 20
+    },
+    "lineage": {
+      "earned": 24,
+      "max": 25
+    },
+    "execution": {
+      "earned": 19,
+      "max": 20
+    },
+    "recovery": {
+      "earned": 14,
+      "max": 15
+    },
+    "verification": {
+      "earned": 7,
+      "max": 10
+    },
+    "reuse": {
+      "earned": 10,
+      "max": 10
+    }
+  },
+  "blockers": [],
+  "findings": [],
+  "observed_evidence": [
+    "Reviewed complete four-file diff and both actual entrypoints.",
+    "Reviewed scheduler wrapper, shared backfill target selector and caller, canonical DB/state/path resolvers, managed child process builder, transcript fetch receipt persistence and actual receipt-scoped ingestion selector.",
+    "Scan requires existing explicit/configured database and rejects database-derived state-root disagreement before roster, acquisition or child execution.",
+    "Raw and staging paths bind to selected state; child code comes from current checkout and gets exact database, state root, ticker, receipt selector and owner/automatic context.",
+    "New fetch success requires a receipt ID; actual child validates receipt authority, request context, ticker, filename fiscal period and canonical raw path before evidence ingestion.",
+    "Legacy pending files retain existing ticker-limited replay validation and retained-period selection; output marks that broader legacy scope.",
+    "Scan dry-run returns before acquisition and child launch; adapter forwards dry-run to existing child before financial/document ingestion.",
+    "No second provider, schema, ingester or financial transformation engine was added."
+  ],
+  "reported_validation_not_rerun": [
+    "Root brief reports 69 focused scan/state-adapter/backfill tests passed before the final mismatch guard and fixtures.",
+    "Root brief reports 10 edge tests passed after the final mismatch guard and fixtures.",
+    "Root brief reports strict Pyright zero and Ruff clean."
+  ],
+  "limitations": [
+    "No tests were run by this reviewer; test execution remains serialized under root control.",
+    "Final combined project gate is pending and this review does not claim it passed.",
+    "The new real-child dry-run test patches open_db to a read-only sqlite3 connection and patches receipt candidate resolution. It verifies forwarding, selected-scope planning and absence of ingestion, but not the unpatched writer connection policy or receipt-authority loading end to end.",
+    "Existing ingestion open_db uses the shared WRITER connection policy, which can change WAL metadata or sidecars. The root confirmed that zero SQLite metadata mutation is outside the requested dry-run contract; no downloads, new document/raw capture or financial ingestion is the reviewed contract.",
+    "No live host, production database or network operations were performed. Live behavior remains unverified."
+  ],
+  "acceptance_boundary": "No actionable regression found in reviewed changes. Root must resolve validation and authorize any operational use; this advisory receipt grants no mutation or publication authority.",
+  "publication_digest_format": "Public digest values use named sha256 or subject_commit members. Original review bytes remain retained in task evidence; this is a display-only transformation."
+}

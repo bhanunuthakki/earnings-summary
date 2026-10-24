@@ -27,6 +27,7 @@ from models.documents import DocType
 from models.ir_uploads import CategorizationFailure, CategorizationResult, Confidence
 from pipeline import managed_ir_sources as managed
 from pipeline.source_policy import ArtifactKind, CollectionSource, StoredCollectionAuthorization
+from provenance.document_evidence_pipeline import DocumentEvidenceItem, DocumentEvidenceResult
 
 
 def _no_sleep(_seconds: float) -> None:
@@ -118,6 +119,30 @@ def _manifest(root: Path, urls: list[str]) -> None:
     )
 
 
+def _evidence_child(argv: list[str], database: Path) -> subprocess.CompletedProcess[str]:
+    """Simulate the deterministic child transport using actual stored document IDs."""
+    with sqlite3.connect(database) as conn:
+        documents = conn.execute(
+            "SELECT id,ticker FROM documents WHERE ticker='MELI' AND source_type='ir_doc' ORDER BY id"
+        ).fetchall()
+    assert documents
+    result = DocumentEvidenceResult(
+        mode="apply",
+        items=[
+            DocumentEvidenceItem(
+                document_id=document_id,
+                ticker=ticker,
+                status="already-covered",
+                inventory_state="linked",
+                coverage_statuses=("extracted",),
+            )
+            for document_id, ticker in documents
+        ],
+        status_counts={"already-covered": len(documents)},
+    )
+    return subprocess.CompletedProcess(argv, 0, result.model_dump_json(), "")
+
+
 def _auto(root: Path, database: Path) -> dict[str, object]:
     return fetch.process_ticker(
         "MELI", root=root, db_path=database, categorize=True, calendar="calendar"
@@ -146,23 +171,28 @@ def test_transport_skip_keeps_registered_work_and_explicit_zero_ready_truth(
     monkeypatch.setattr(fetch, "_fetch_bytes", absent)
     before = list(classifications)
     result = _auto(root, database)
-    assert (result["status"], result["failed"], result["transport_skipped"]) == ("done", 0, 1)
+    assert (result["status"], result["failed"], result["transport_skipped"]) == (
+        "partial" if existing else "failed",
+        1,
+        1,
+    )
     assert result["downloaded"] == 0
     assert result["ready_existing"] == int(existing)
     assert (
         fetch.main(
             ["--ticker", "MELI", "--categorize", "--repo-root", str(root), "--db", str(database)]
         )
+        == 1
+    )
+    assert (
+        manual.register_urls(
+            "MELI", [dead], repo_root=root, db_path=database, year=2026, quarter=2, process=False
+        )
         == 0
     )
-    assert manual.register_urls(
-        "MELI", [dead], repo_root=root, db_path=database, year=2026, quarter=2, process=False
-    ) == int(existing)
     assert classifications == before
     with sqlite3.connect(database) as conn:
-        assert conn.execute("SELECT last_status FROM ir_fetch_status").fetchone()[0] == (
-            "ok" if existing else "failed"
-        )
+        assert conn.execute("SELECT last_status FROM ir_fetch_status").fetchone()[0] == "failed"
         assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == int(existing)
 
 
@@ -190,6 +220,8 @@ def test_pending_registered_processing_runs_after_new_publication_failure(
     def child(argv: list[str], _timeout: float) -> subprocess.CompletedProcess[str]:
         if any(Path(arg).name == "fetch_ir_documents.py" for arg in argv):
             return _fetch_cli_child(argv)
+        if any(Path(arg).name == "process_document_evidence.py" for arg in argv):
+            return _evidence_child(argv, database)
         assert any(Path(arg).name == "ir_narrative.py" for arg in argv)
         anchors.append("MELI")
         return subprocess.CompletedProcess(argv, 0, "", "")
@@ -1542,6 +1574,8 @@ def test_explicit_effect_failure_recovers_on_coherent_replay(
     anchors: list[str] = []
 
     def child(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        if any(Path(arg).name == "process_document_evidence.py" for arg in argv):
+            return _evidence_child(argv, database)
         assert any(Path(arg).name == "ir_narrative.py" for arg in argv)
         anchors.append("MELI")
         return subprocess.CompletedProcess(argv, anchor_results.pop(0), "", "")
@@ -1644,6 +1678,8 @@ def test_actual_failed_intake_stays_failed_through_cli_and_discovery(
                     if adapter == "discovery_zero_exit"
                     else child_result
                 )
+            if any(Path(arg).name == "process_document_evidence.py" for arg in argv):
+                return _evidence_child(argv, database)
             assert any(Path(arg).name == "ir_narrative.py" for arg in argv)
             anchors.append("MELI")
             return subprocess.CompletedProcess(argv, 0, "", "")
@@ -1728,6 +1764,8 @@ def test_discovery_repair_only_completes_deterministic_effects_and_defers_models
     def child(argv: list[str], _timeout: float) -> subprocess.CompletedProcess[str]:
         if any(Path(arg).name == "fetch_ir_documents.py" for arg in argv):
             return _fetch_cli_child(argv)
+        if any(Path(arg).name == "process_document_evidence.py" for arg in argv):
+            return _evidence_child(argv, database)
         assert any(Path(arg).name == "ir_narrative.py" for arg in argv), (
             "repair launched a model summary child"
         )

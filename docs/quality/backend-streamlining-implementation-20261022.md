@@ -1,7 +1,13 @@
 # Backend streamlining: implementation checkpoints
 
-Status: **DCF mapping retired at 97/100; source-context precondition accepted at 95/100; broader release HOLD**.
-Production source is below the original baseline. One large-module-count gate still fails.
+Status: **Local integration in progress; combined release HOLD**.
+The cleanup is being reconciled with merged main `224d9666`. Initial measurement
+removes six production modules and 1,899 non-comment lines against that same main
+commit. The merged tree still fails the large-module-count gate. Main has also
+grown since the original cleanup baseline; that original comparison remains open.
+The checkpoints below describe their recorded candidates, not an accepted merged
+release. Targeted tests and independent review of the combined tree are pending.
+
 Started 2026-10-22; revised 2026-10-23 Pacific. Base: `c978523d`.
 Branch: `codex/research-procedure-cleanup`. R1 corrections are at `3065638a`,
 R2/R3 at `3980b0ad`, R5 issuer protection at `24e2373a`, R6 at `b7f4b998`,

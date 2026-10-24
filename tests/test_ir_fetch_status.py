@@ -7,14 +7,10 @@ from ``ir_fetch_status``. Every reader/writer must tolerate a missing table.
 from __future__ import annotations
 
 import sqlite3
-import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import ir_fetch_status as ifs  # noqa: E402
-from pipeline.queries import BRIEFED_LIST_TYPE_VALUES  # noqa: E402
+import ir_fetch_status as ifs
+from pipeline.queries import BRIEFED_LIST_TYPE_VALUES
 
 
 def test_ir_coverage_uses_canonical_briefed_list_types() -> None:
@@ -154,6 +150,14 @@ def test_gap_tickers_are_zero_coverage_names(tmp_path: Path) -> None:
     _make_db(db)
     gaps = ifs.gap_tickers(db, ["NU", "ORCL", "NOW", "missing"])
     assert set(gaps) == {"NOW", "MISSING"}  # NU/ORCL have docs; case-normalized
+
+
+def test_gap_tickers_include_failed_crawl_with_existing_documents(tmp_path: Path) -> None:
+    db = tmp_path / "p.db"
+    _make_db(db)
+    ifs.record_attempt(db, "NU", status="failed", discovered=3, downloaded=1, reason="partial")
+    ifs.record_attempt(db, "ORCL", status="ok", discovered=1, downloaded=0)
+    assert set(ifs.gap_tickers(db, ["NU", "ORCL", "NOW"])) == {"NU", "NOW"}
 
 
 def test_readers_tolerate_absent_documents_table(tmp_path: Path) -> None:

@@ -286,7 +286,9 @@ def canonical_db(database: sqlite3.Connection, tmp_path: Path) -> Path:
     # receipts that are outside this formatting fixture (as in cockpit tests).
     database.execute("DROP VIEW IF EXISTS v_kpi_facts_resolved_current")
     database.execute(
-        "CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts WHERE ticker='TST'"
+        "CREATE VIEW v_kpi_facts_resolved_current AS "
+        "SELECT fact.*, CAST(NULL AS TEXT) AS reported_observation_id "
+        "FROM kpi_facts AS fact WHERE ticker='TST'"
     )
     database.commit()
     return tmp_path / "source-fact-repository.db"

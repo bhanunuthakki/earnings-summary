@@ -1,0 +1,11 @@
+# IR extraction release review
+
+The unchanged architecture scanner measures 562,342 noncomment source lines, 350 above the prior reviewed baseline. This explicit full-receipt refresh records the authorized acquisition and extraction fixes. It does not change the scanner or individual limits by hand. Module count (1,468), size buckets, maximum internal fan-out (40), strongly connected components (21), and largest component (16) are unchanged. Existing facade findings remain debt.
+
+The additional code makes download and registration failures explicit, retains permitted HTML releases, binds derived caches to exact source and extractor identities, and drains the existing document-evidence CLI within its deadline. Generic discovery now delegates to the existing inventory crawler. Text projection reuses existing parser nodes. No new provider, schema, evidence writer, service, or persisted cursor is introduced.
+
+The root inspected the integration and the Sol worker supplied a bounded duplication review. The worker authored part of the extraction changes, so this is not an independent formal review. The clean release passes 337 focused tests. Full release gates and native Windows qualification remain required. Financial completeness and semantic admission remain separate obligations; this measurement refresh does not establish decision-grade coverage.
+
+The fast gate passes architecture, changed-file format/lint/strict types/suppression checks and 337 tests. The CI configuration controls pass 120 tests. The complete static scan measures 70 fewer execution diagnostics, 12 fewer test diagnostics, 11 fewer execution suppressions and 21 fewer test suppressions. The exact descending subsystem ceilings are lowered to those measured counts; no ceiling increases. Full CI and native qualification still gate deployment.
+
+The release merges current main at `9132de36`, including its existing test-harness retention correction. The refreshed complete measurement remains exactly 350 noncomment lines above that main baseline. The IR changes do not alter its retention policy.

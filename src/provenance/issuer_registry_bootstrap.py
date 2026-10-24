@@ -832,6 +832,16 @@ def bootstrap_issuer_reporting_registry(
         candidates[entry.ticker].append(entry)
     source_sha = hashlib.sha256(raw_body).hexdigest()
 
+    for item in tracked:
+        ticker_candidates = tuple(candidates.get(item.ticker, ()))
+        if len(ticker_candidates) == 1:
+            _selected_ticker_subject_bindings(
+                conn,
+                ticker=item.ticker,
+                issuer_id=_issuer_id(ticker_candidates[0].normalized_cik),
+                normalized_cik=ticker_candidates[0].normalized_cik,
+            )
+
     if not request.apply:
         planned = tuple(
             _planned_result(item, tuple(candidates.get(item.ticker, ()))) for item in tracked
@@ -890,6 +900,7 @@ def bootstrap_issuer_reporting_registry(
                 observation_id=observation_id,
                 source_sha=source_sha,
                 recorded_at=recorded_at,
+                subject_recorded_at=request.recorded_at,
                 scope_inclusion_state=(
                     None
                     if item.inclusion_state == "historical"
@@ -1145,6 +1156,18 @@ def bootstrap_sec_submissions_issuer(
         raise SecCompanyTickerContractError(
             "SEC submissions has no unique requested current ticker"
         )
+    fiscal_year_end: str | None = None
+    if "fiscalYearEnd" in payload:
+        raw_fye = payload["fiscalYearEnd"]
+        if not isinstance(raw_fye, str) or re.fullmatch(r"\d{4}", raw_fye) is None:
+            raise SecCompanyTickerContractError("SEC submissions fiscalYearEnd is malformed")
+        try:
+            date(2000, int(raw_fye[:2]), int(raw_fye[2:]))
+        except ValueError as exc:
+            raise SecCompanyTickerContractError(
+                "SEC submissions fiscalYearEnd is malformed"
+            ) from exc
+        fiscal_year_end = f"{raw_fye[:2]}-{raw_fye[2:]}"
     legal_name = name.strip()
     issuer_id = _issuer_id(request.normalized_cik)
     reporting_id = f"reporting:sec:{request.normalized_cik}"
@@ -1228,6 +1251,8 @@ def bootstrap_sec_submissions_issuer(
                 source_sha=digest,
                 recorded_at=admitted_at,
                 reason_code="sec_submissions_current_issuer",
+                explicit_fiscal_year_end=fiscal_year_end,
+                enrichment_recorded_at=request.recorded_at,
             )
             assertion = IdentifierAssertion(
                 assertion_id=assertion_id,
@@ -1989,6 +2014,39 @@ def _capture_source(
     return observation_id, created, recorded_at
 
 
+def _selected_ticker_subject_bindings(
+    conn: sqlite3.Connection, *, ticker: str, issuer_id: str, normalized_cik: str
+) -> tuple[tuple[str, str | None], ...]:
+    if (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='recorded_subject_binding_revisions'"
+        ).fetchone()
+        is None
+    ):
+        return ()
+    reporting_id = f"reporting:sec:{normalized_cik}"
+    bindings: list[tuple[str, str | None]] = []
+    for recorded in (f"legacy-ticker:{ticker}", issuer_id):
+        current = conn.execute(
+            "SELECT issuer_id,reporting_entity_id,security_id,outcome,material_dissent "
+            "FROM recorded_subject_binding_revisions WHERE recorded_issuer_id=? "
+            "ORDER BY revision DESC LIMIT 1",
+            (recorded,),
+        ).fetchone()
+        if current is not None and (
+            bool(current[4])
+            or current[3] != "selected"
+            or current[0] != issuer_id
+            or current[1] not in (None, reporting_id)
+        ):
+            raise SecCompanyTickerContractError("existing recorded subject identity conflicts")
+        bindings.append(
+            (recorded, None if current is None or current[2] is None else str(current[2]))
+        )
+    return tuple(bindings)
+
+
 def _persist_selected_ticker(
     conn: sqlite3.Connection,
     *,
@@ -1998,11 +2056,15 @@ def _persist_selected_ticker(
     observation_id: str,
     source_sha: str,
     recorded_at: datetime,
+    subject_recorded_at: datetime,
     scope_inclusion_state: Literal["core", "monitored"] | None,
     scope_list_types: tuple[str, ...],
 ) -> tuple[BootstrapTickerResult, int]:
     normalized_cik = entry.normalized_cik
     issuer_id = _issuer_id(normalized_cik)
+    subject_bindings = _selected_ticker_subject_bindings(
+        conn, ticker=item.ticker, issuer_id=issuer_id, normalized_cik=normalized_cik
+    )
     created = 0
     created += _persist_entity(
         conn,
@@ -2060,6 +2122,20 @@ def _persist_selected_ticker(
         recorded_at=recorded_at,
         active_scope=scope_inclusion_state is not None,
     )
+    for recorded_issuer_id, security_id in subject_bindings:
+        created += _persist_subject_binding(
+            conn,
+            ReportingEntityRegistry(conn),
+            ticker=item.ticker,
+            recorded_issuer_id=recorded_issuer_id,
+            issuer_id=issuer_id,
+            reporting_entity_id=f"reporting:sec:{normalized_cik}",
+            security_id=security_id,
+            registry_observation_id=observation_id,
+            registry_source_sha=source_sha,
+            recorded_at=subject_recorded_at,
+            reason_code="unique_sec_ticker_selected",
+        )
     created += _persist_sec_surface(
         conn,
         registry,
@@ -3107,6 +3183,8 @@ def _persist_profile(
     reason_code: str = "sec_company_tickers_import",
     status: Literal["active", "inactive", "merged", "dissolved"] = "active",
     effective_at: datetime | None = None,
+    explicit_fiscal_year_end: str | None = None,
+    enrichment_recorded_at: datetime | None = None,
 ) -> int:
     current = conn.execute(
         "SELECT profile_revision_id, revision, legal_name, filing_regime, status, "
@@ -3118,17 +3196,37 @@ def _persist_profile(
     # The ticker registry supplies no fiscal metadata. A new ticker binding
     # must not clear already verified issuer metadata at this shared boundary.
     fiscal_year_end = None if current is None or current[5] is None else str(current[5])
+    if explicit_fiscal_year_end is not None:
+        fiscal_year_end = explicit_fiscal_year_end
     domicile_country = None if current is None or current[6] is None else str(current[6])
     if filing_regime == "SEC" and current is not None and current[3] in {"10-K", "20-F", "40-F"}:
         filing_regime = str(current[3])
-    if current is not None and tuple(str(value) for value in current[2:5]) == (
-        legal_name,
-        filing_regime,
-        status,
+    if (
+        current is not None
+        and tuple(str(value) for value in current[2:5])
+        == (
+            legal_name,
+            filing_regime,
+            status,
+        )
+        and (current[5] == fiscal_year_end)
     ):
         return 0
     revision = 1 if current is None else int(current[1]) + 1
     record_id = _record_id("issuer-profile", issuer_id, source_sha, legal_name)
+    reason_details = (("source_observation_id", observation_id),)
+    if explicit_fiscal_year_end is not None:
+        recorded_at = enrichment_recorded_at or recorded_at
+        record_id = _record_id(
+            "issuer-profile",
+            issuer_id,
+            source_sha,
+            legal_name,
+            "sec-fiscal-year-end@1",
+            explicit_fiscal_year_end,
+            str(revision),
+        )
+        reason_details += (("source_sha256", source_sha), ("field_locator", "/fiscalYearEnd"))
     return int(
         registry.persist(
             IssuerProfileRevision(
@@ -3143,7 +3241,7 @@ def _persist_profile(
                 status=status,
                 decision_kind="imported",
                 reason_code=reason_code,
-                reason_details=(("source_observation_id", observation_id),),
+                reason_details=reason_details,
                 effective_at=effective_at or recorded_at,
                 knowledge_at=recorded_at,
                 recorded_at=recorded_at,

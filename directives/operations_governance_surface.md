@@ -285,6 +285,9 @@ inventory. The cleanup does not infer ownership or deletion rights from that cou
 
 ## Outcome
 
+### Pytest session-start pruning of abandoned temp runs (2026-10-22)
+Disposition: **no surface change** (internal test-harness storage behavior; not an operator workflow). No host ran a cleaner for local pytest session roots. Weekly cleanup only counts system-temp test pools, completed runs kept their folder, manifest and receipts with no expiry, and failed runs waited indefinitely for a reviewed resolution. A Mac accumulated 435 such roots (about 15 GB). Each pytest controller now prunes earlier harness-named roots whose lease holder no longer runs: completed and manifest-less roots after one day, failed and holder-gone active roots after the seven-day review window (owner decision). Shared secrets folders, links, unreadable manifests and live-leased roots are kept. No operator action, scheduler, service or Operations surface changed. Regression evidence: `tests/test_temp_run_pruning.py`.
+
 ### Linear fixture retirement validation and Actions runner exit (2026-10-21)
 Disposition: **no surface change** (internal performance change inside existing retention; not an operator workflow). Exact retirement re-read and re-hashed the run's `.earnings-temp-run.json` up to three times per payload file. For a large pytest shard (22,182 files, a 5 MiB manifest) that took 383 s at process exit, and CI shard 4 hung after its tests passed until the 40-minute job timeout. `src/operations/artifact_retention.py` still reads fresh manifest and proof bytes for every validation and never trusts file metadata; it now reuses a SHA-256 only for byte-identical content already hashed in the process (`_fresh_digest`, `_fresh_file_digest`). The same run now exits in 208 s locally; the remaining cost is the deliberate per-file fresh read. `tests/conftest.py` skips the at-exit payload retirement on GitHub Actions runners, which are discarded after the job; those runs are still sealed `completed` with their lease released, and fixtures stay inside the admitted temporary roots. Batching validations under one manifest read would make retirement linear but changes its freshness guarantee, so it is left to the retention owner. Evidence: `tests/test_artifact_retention.py::test_fresh_file_digest_rereads_bytes_and_ignores_metadata` (same-length tamper with a restored mtime is detected), `tests/test_pytest_temp_lifecycle.py` (local successful runs still retire at exit; an Actions run seals and keeps its payload; failed runs stay protected), and the unchanged retention suites.
 
@@ -613,6 +616,54 @@ Forward calendar coverage is deliberately surfaced beside its retained events us
 claim about provider health. Missing, stale and failed receipts cannot render a
 verified empty calendar. `tests/test_ir_events_ingestion.py` and
 `tests/test_ir_events_cli_unavailable.py` cover these boundaries and disabled apply.
+
+### IR acquisition batch
+
+The weekly IR discovery batch now treats an empty crawl, failed URL download,
+or failed registration as a failed ticker. The failing-crawler retry includes
+both zero-document names and names with a failed last crawl despite older
+registered documents. The source status and batch exit code expose these cases;
+no new scheduler task or operator action was added. The batch requires an
+existing configured database and rejects the checkout-default database before
+opening a source. A successful batch still means acquisition and optional
+narrative processing only; it does not certify fact-extraction completeness.
+Hybrid and list discovery now use the same inventory crawler. Partial crawls
+retain available documents, expose page diagnostics, and retry discovery.
+Categorizer exit zero must also reconcile every downloaded source URL with
+registered documents. The batch invokes the existing bounded document-evidence
+continuation before derived views, including when downloads are unchanged.
+Its existing selector accepts an optional source-type filter; the IR batch uses
+`ir_doc` so unrelated stored source formats do not block IR work. The existing
+resume receipt binds that filter. It adds no second cursor or evidence writer. Failed or unfinished extraction
+defers views. Missing inventory remains degraded but does not block views of
+current extracted documents. Summary and narrative views share the full-text
+owner's source-text projection. Financial admission remains with existing owners.
+Official HTML earnings releases use the existing download, classification,
+registration, and source-URL operation. Failed HTML classification remains an
+acquisition failure. No new operation, listener, or scheduled LLM leg was added.
+
+Narrative extraction, pending checks, and prompt anchors use one verified cache
+envelope. The envelope binds all current source bytes and the extraction method.
+An unreadable, changed, or missing preferred source produces an explicit context
+gap. Legacy text caches remain retained but cannot supply prompt text.
+
+The existing summary-KPI CLI requires the configured database or an explicit
+`--db-path`; `--repo-root` selects source files only. Allowlist extraction checks
+existing evidence before a model call. It registers the exact summary bytes and
+uses the existing document-evidence coordinator for that document ID when
+deterministic preparation is needed. Registration and preparation share the exact
+database writer lock; the lock is released before model work. Invalid explicit
+bindings fail closed. Failed preparation makes no model call and remains
+retryable. Missing issuer-inventory linkage for a derived summary stays degraded;
+it does not become an acquisition-completeness claim. The existing run ledger binds
+each completed attempt to its exact source, parent, holdings, and model route.
+Empty and partial responses record bounded processing; unreturned metrics remain
+unknown. `--refresh` repeats completed work but cannot replace an active writer.
+The capture/enumeration path is unchanged. `--requested` carries explicit owner
+request context for a selected ticker or document. Resume receipts bind that
+context. Existing automatic role policy is unchanged. Derived summaries do not
+gain financial admission from this completion record. No scheduler task or service
+was added.
 
 ### Legacy evidence backfill and managed IR byte admission
 
@@ -1406,6 +1457,23 @@ ledger and resolved views. No daily writer task or wrapper is added.
 Operations surface disposition: **no additional scheduled writer**. A future
 scheduled backfill needs its own workload, overlap, source and activation review.
 
+### Financial source quarantine and fiscal source authority
+
+The existing semantic disposition ledger owns document quarantine. Financial
+readers use the shared resolver at their requested knowledge and recording
+cutoffs. A quarantined selected source does not reveal an older value by default.
+An explicit later resolution or release retains its own visibility cutoff.
+Document reading and retained financial history remain available for inspection.
+The application adds no quarantine store, automatic repair writer or schedule.
+
+The existing issuer bootstrap records subject bindings for both legacy ticker
+and canonical issuer references. SEC submissions can enrich the existing issuer
+profile with a verified fiscal year-end. A fiscal inventory witness binds that
+profile revision to its exact source document and issuer. The verified profile
+owns the fiscal calendar; the tracked roster still owns collection eligibility.
+Missing fiscal evidence stays unknown. Unsupported week-based calendars remain
+unresolved. These changes add no source collector or operating job.
+
 ### Investing workflow maintenance and brief inputs
 
 Disposition: **no Operations surface change**. The internal post-earnings CLI
@@ -1515,6 +1583,69 @@ permission. MELI's existing scenario-acceptance boundary remains unchanged.
 installation descriptor. Missing, template, unapproved, source-drift and runtime
 failures are separate states. Preflight cannot approve a bundle. Protocol v2
 uses canonical XBRL measure units and a separately committed unit helper.
+
+The Windows filing-XBRL launcher gives each invocation a new noninteractive
+window station and desktop. Only the launcher owner and its AppContainer package
+receive access. The package cannot change permissions or ownership, switch the
+desktop, read the screen, use the clipboard, or install hooks. The launcher
+checks the effective permissions and low-integrity label, restores its own UI
+context, and starts the child with the private desktop. It stops the complete
+child process tree before it closes the private objects. A failed check refuses
+the invocation. This adds no network capability, loopback exemption, host-desktop
+grant, service, schedule, or installed-runtime approval. The launcher uses the
+stable `EarningsSummaryFilingXbrlV2` profile and its V2 mutex. The mutex uses the global Windows namespace to serialize sessions. Its
+protected permissions allow only LocalSystem and built-in Administrators. The
+launcher checks the effective owner and exact grants before it changes any
+profile or directory. Other operators fail closed. It preserves the existing V1
+profile. The stdout protocol remains unchanged.
+
+The source launcher uses the verified bundle Python with `-I -S -B`. Its
+`python_source` manifest mode binds both the Python entrypoint and the shared
+`runtime.windows_appcontainer` source in the complete runtime member set. The
+builder accepts `--launcher-kind python_source`; it checks both copied sources
+against the reviewed repository files before sealing. There is no automatic
+fallback from an executable to source. Existing executable manifests retain
+their own identity and approval requirements.
+
+Source execution does not disable Smart App Control, load a blocked assembly,
+add a certificate, or add a network capability. It keeps the private desktop,
+protected mutex, exact permission grants, suspended child ownership and full
+child-tree cleanup requirements. The launcher runs in a dedicated subprocess;
+it does not change the dashboard process's window station. Fresh native
+qualification must bind the exact interpreter, source closure and runtime
+before bundle approval or installation. Source mode is an implementation
+change, not proof of host compatibility or an installed-runtime approval.
+
+Source installations also name one explicit `sandbox_state_root`. All approved
+V2 versions share this protected operational authority. It is outside the sealed
+runtime and input trees. The controller creates an exclusive pending invocation
+record before launch. An existing record refuses another invocation. Changing
+an installation descriptor cannot authorize a different recovery authority or
+clear a pending record.
+
+The controller owns a separate Job for the launcher and its descendants. It
+starts the launcher suspended and assigns the Job before resume. Timeout or
+output overflow requests cancellation first and leaves a bounded cleanup period.
+The parser receives neither the cancellation handle nor the separate cleanup
+acknowledgement pipe. Parser stdout is never cleanup proof. The controller clears
+the pending record only after trusted acknowledgement, launcher exit, zero active
+Job processes, exact permission parity and byte verification. Forced termination
+or unproved cleanup leaves a recovery hold. If descendant stop is unproved, the
+controller also retains its write fences and owned resources. Process exit can
+close handles; it does not clear the durable recovery requirement.
+
+Use the existing descriptor for normal operation. Direct qualification calls
+must name `--sandbox-state-root` explicitly. Recovery requires the exact retained
+invocation identity, stopped-process proof, permission and byte reconciliation,
+and independent review before clearing a hold. No automatic retry or stale-grant
+removal is supported by the source launcher.
+
+The bridge gives the SEC renderer a fresh `MPLCONFIGDIR` inside its private
+temporary directory. It restores the environment and removes that directory on
+success or handled failure. Four incomplete directories block another allocation
+and require recovery; the bridge does not delete prior incomplete requests.
+This avoids reading a host home configuration or writing into the sealed runtime.
+Recovery follows the bounded filing-XBRL procedure in `agent_host_operations.md`.
 
 `provenance.integrity_audit.verify_filing_xbrl_run` is a read-only retained-run
 verifier. Its caller must hold one read transaction and supply an exact retained
@@ -2266,3 +2397,226 @@ Historical assumptions, driver lineage JSON, observations and override history
 are not rewritten or deleted. The legacy fact-reader inventory loses only this
 unused resolver's one SQL-reader entry. No replacement reader, state, provider
 call, collection, schema or installed operation is added.
+
+### Explicit cohort rollout census — 2026-10-22
+
+Disposition: **manual read-only CLI; no dashboard or scheduler change**. Run
+`execution/sqlite_bootstrap.py execution/audit_cohort_readiness.py` with a required
+`--db-path`, one or more `--issuer-id` selectors, `--knowledge-cutoff`, and
+`--observed-through`. The command reads one SQLite transaction through the
+read-only role. It emits acquisition, processing, semantic/publication, and
+global consumer-receipt evidence counts. Missing schema is unknown, not zero.
+It performs no collection, writes, provider calls, or consumer audit. It creates
+no persisted state and adds no scheduler or dashboard control. Evidence census
+clock comparisons have whole-second precision under the existing reporting
+selector; receipt clock equality preserves microseconds. Both limits appear in
+the JSON output. Counts do not certify completeness or readiness.
+`execution/audit_data_cutover_readiness.py` and the existing population cutover
+evaluator remain the verification authorities. See
+`docs/architecture/cohort-rollout-readiness.md` for invocation, representative
+cohort criteria, and the bounded population sequence.
+
+### Isolated pre-integration Hero revision recovery — 2026-10-22
+
+The existing `upgrade_database.py --allow-isolated-db` action can recover the
+retained `0060_bulk_lexical_projection_coverage` branch revision. It first creates
+and verifies the normal pre-upgrade backup under the shared writer lock. It checks
+the complete schema against a temporary reference built from migration 0059 and
+the unchanged lexical migration owner. Table comparison permits only the existing
+constraint-order spelling variation and retains ordered column metadata. Extra,
+missing, altered and partly migrated objects stop recovery. A single physical
+SQLite transaction applies owner migration 0060, verifies the already installed
+0061 lexical guard, and advances the revision. An interrupted transaction rolls
+back both schema and revision. The compatibility event records the checked schema
+SHA-256; the existing upgrade receipt retains the source revision and backup path.
+The temporary reference is deleted. This path requires an isolated target and does
+not change canonical-host migration protections, financial admission, services or
+publication authority. Evidence: `tests/test_upgrade_hero_revision_bridge.py` and
+`tests/test_upgrade_database.py`.
+
+### Bounded NU Q2 2025 historical ratio publication — 2026-10-22
+
+The reusable `nu_historical_backfill` boundary prepares exactly three reviewed IR
+observations from two fixed document hashes. It rechecks local raw bytes and the
+complete approved Office/PDF fulltext output. Workbook selectors require the
+exact bilingual sheet, June 2025 header, labels and Brazil scope witnesses. The
+publisher rechecks the prepared digest and writes one atomic source-fact graph
+through the existing evidence and publication owners. The caller retains the
+writer lock and commit. Read-only preparation never writes SQLite. The resulting
+publication makes no issuer/archive/document completeness claim. NPL definitions
+retain Brazil consumer credit excluding SMEs, use `other` consolidation scope,
+and explicitly remain incomparable with consolidated NPL. Risk-adjusted NIM
+retains its annualized Holdings meaning. Original ratio tokens and source-bound
+definitions remain available; pure-ratio normalization is explicit. Semantic
+admission uses the existing exact reviewed-source owner as a separate action.
+Publication does not admit a historical public-day witness, activate a report,
+change a thesis rule, or authorize production writes. Evidence:
+`tests/test_nu_historical_backfill.py`; native Windows source replay remains a
+required operation check.
+
+The architecture measurement is deliberately refreshed for this repair: two
+executable modules and 612 noncomment lines above the previous baseline. They
+own exact NU source publication and claim-preserving financial links; the
+migration bridge and narrow owner-calculation guard extend existing owners.
+The scanner, duplication limits, dependency limits and all verification gates
+remain unchanged. Source publication, semantic admission and report acceptance
+remain separate operations.
+
+### Indexed inventory verification cost repair — 2026-10-22
+
+Source-coverage assessment retains exact lexical representation verification.
+The query groups the global FTS population once before checking the selected
+manifest and extraction. Missing rows, duplicate identities anywhere in the
+FTS population and changed text still fail. The check does not add a cache,
+change seals or lower source admission. A retained Windows inventory operation
+exposed the previous per-chunk full scans; a read-only process stack confirmed
+the active call site. The task-owned operation was stopped before inventory
+revision 3 admission. Its committed source captures remain available for an
+exact resumption after the query repair. Corruption and SQLite-work-budget
+regressions prove the retained behavior and bounded query structure. This
+changes verification cost only and adds no operator action or public route.
+
+Test completion also retains the existing fixture protection rules. Each file
+checks a held-path set and its ancestors. The three existing operation owners
+build that set once. This removes repeated scans of all held paths without
+changing retention authority, symlink handling or path boundaries. Evidence:
+`tests/test_temp_run_retention.py` includes boundary and bounded-work regressions.
+
+
+### Explicit FMP bulk backpopulation scope
+
+`execution/fmp_backpop.py` remains the manual bulk interface. It selects one
+validated explicit/configured database, one retained artifact root, and an exact
+current-user ticker scope. Dry-run planning opens SQLite read-only. Apply needs
+a positive attempt limit. The existing artifact lock spans fetch through
+extraction; a child must validate the exact live ancestor proof. The database
+lock covers indexing/extraction only. The attempt limit includes retries and
+fallback requests; account/schema failure stops plural work and records
+`prerequisite_not_attempted` for dependent remaining coordinates.
+The code checkout supplies executables; the selected root supplies retained data.
+
+The existing fetch CLI adds plural `--work-receipts` for a multi-entry manifest.
+Each member uses the existing typed per-work receipt schema. The singular
+`--work-receipt` interface retains its one-entry contract. The bulk orchestrator
+checks the exact coordinate population, capture times and retained content hashes.
+A successful process exit cannot replace that reconciliation. Missing, denied,
+failed or budget-not-attempted prerequisites block dependent indexing/extraction.
+A verified empty response remains an unavailable coverage disposition.
+
+The existing extraction CLI accepts `--repo-root` and exact `--tickers`, preserving
+its `--ticker` and `--all` modes. Bulk propagation uses the exact selection and
+database rather than the ambient checkout default or expanded active universe.
+The existing batch extractor, source fact writer and financial resolver retain
+ownership. This adds no scheduler, automatic activation, store or dashboard action.
+The manifest and receipt outcomes are operational evidence; archive completeness,
+financial admission and reader parity require their existing separate checks.
+
+
+### Direct supplement page continuation
+
+The existing direct `ir_supplement` KPI extraction function uses native PDF page
+and line sections, not a truncated document prefix. Its default 80,000-character
+input and 200-fact saturation limit apply per section. Internal parameters bound
+processing to 256 chunks and 256 logical structured model requests, including the
+reserved primary/repair pair. Provider transport retries retain their separate
+existing route controls. No CLI option, schedule, dashboard action or provider
+route is added.
+
+The existing derived LLM artifact store retains source/model/prompt/schema-bound
+chunk responses for exact replay. It records each raw primary or repair response
+before JSON or source-quote validation. Pending and rejected versions do not
+prove successful capture. JSON repair and source-quote repair share two logical
+requests per section. Unresolved rejected replay stops without another model
+call. A retention failure stops before a repair request. The primary prompt and
+model route stay unchanged; repair feedback and cache identity are versioned.
+Whitespace-only quotation differences can resolve to one exact contiguous native
+source span. The raw model row stays unchanged. The retained native quotation and
+page offsets must match the source again at review and publication. Changed text
+or an ambiguous span fails validation. Numeric source tokens remain literal;
+range endpoints cannot acquire currency or percent symbols absent from that
+endpoint. Repair feedback uses fixed known validation reasons and never copies
+arbitrary exception text into the prompt. This cache does not confer acquisition,
+extraction completeness or semantic admission. Known OCR-required page assessments,
+blank pages, unsupported quotes, failed sections and budget exhaustion remain
+unresolved. Nonblank page text can omit visual facts. Absent page assessments
+remain unknown. The exact raw source and its immutable binding must match before
+model calls; the source must remain unchanged before financial persistence.
+
+After all planned sections pass, this path retains the governed raw responses
+and page-bound candidates in the existing immutable evidence ledger. Capture does
+not write these unreviewed rows through the legacy KPI writer. A missing source
+context review remains `pending_source_context_review`.
+
+The separate `persist_ir_source_context_review` interface records a manual review
+of the exact document, source hash, extraction run, configuration and candidate
+population. It accepts or rejects every retained candidate. Accepted coordinates
+need field-specific source witnesses, explicit period, scope, accounting basis,
+unit wording and scale. Automatic capture can discover an existing exact review;
+it cannot create that review. A source-only publication uses the existing
+`SourceFactRepository` and its `as_reported` reader. Its observations anchor the
+review node and retain the raw candidate identity in their locators. Source
+corrections supersede observations. Same-input replay preserves original clocks.
+
+The source-only extraction seal covers the declared candidate population. It does
+not prove document financial recall, archive completeness, an admitted metric
+definition, comparability, or canonical reader readiness. These remain separate
+existing gates. Original-presentation migration retains its separate owner.
+Representative approved-runtime/model qualification governs promotion.
+
+### Earnings-date announcements
+
+The existing IR classifier distinguishes `ir_earnings_announcement` from a results
+release. A future results notice uses its supported publication date. It does not
+supply a fiscal quarter or a financial results event. An explicit publication
+label or recognized wire-service dateline supplies the date; a future calendar
+caption, filename year or fiscal period cannot replace it. Missing evidence
+remains `publication_date_unidentified`.
+
+Existing registration excludes announcements from quarterly and analytical event
+indexes. The source inventory marks them as supporting documents. Discovery keeps
+spreadsheet, presentation and transcript hints. Supporting HTML notices do not
+loosen the existing financial-release HTML boundary. This classification change
+does not rewrite historical document metadata or activate a new collection job.
+
+
+### Transcript scan database and retained-input scope
+
+`scan_ir_transcripts.py --db` selects the validated explicit or configured
+database. Its state root uses the existing configured-root owner. The selected
+database must map to that same state root through the existing fetch adapter;
+a contradictory pair fails before collection or child execution. It does not
+create or infer a checkout-local database.
+
+New fetch success requires an acquisition receipt. The scan invokes the existing
+state ingester for the exact ticker, database, state root, receipt and automatic
+or owner-requested context. Legacy pending files keep the existing retained-period
+selection and authority checks for that ticker. That mode is explicit; it is not
+an exact-new-receipt population claim. `ingest_transcripts_state.py --dry-run`
+forwards the existing child mode. It does not promise byte-unchanged SQLite files:
+the legacy connection owner can still apply its normal journal policy. No new
+collector, ingester, schedule, provider route or financial schema is introduced.
+
+## Private report export
+
+`execution/export_shareable_report.py` creates a separate offline reading copy of a
+recognized standalone workspace report. It never overwrites the source or an existing
+destination. It removes application capabilities, hidden stored comments and application
+connections; visible report content remains subject to the owner's sharing decision.
+The private report and live dashboard retain their existing behavior. This local,
+explicit file operation adds no dashboard action, scheduler, provider call or database
+write. See `docs/security/information-boundaries.md` for the invocation and boundaries.
+
+### pypdf 6.21.2 identity promotion — no operational surface change
+
+New PDF full-text extraction uses the reviewed locked pypdf 6.21.2 runtime with
+its own exact code/config identity and idempotency namespace. The exact 6.21.1
+and 6.19.0 identities and namespaces stay approved for readers and retained
+coverage. The evidence namespace remains `fulltext-pdf-v6`. No old node or run
+is relabelled. Readers retain one whole run; without preflight, a newer run must
+preserve the previously selected complete page population through every prior
+generation. Retained coverage still prevents automatic re-extraction. Existing
+seals, cutoffs and financial evidence checks remain required. This changes no
+operator action, route, service, schedule, budget, schema or live-state writer.
+Tests cover three-generation partial promotions, retained seals, native transcript
+readers and exact runtime/lock identity. Any re-extraction remains separately
+approved.

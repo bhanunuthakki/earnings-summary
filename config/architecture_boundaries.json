@@ -101,7 +101,6 @@
     "execution/detect_transcript_disclosure_events.py",
     "execution/detect_unannounced_fills.py",
     "execution/detrend_disclosure_events.py",
-    "execution/discover_ir_documents.py",
     "execution/draft_annual_letter.py",
     "execution/eval_model_downgrade.py",
     "execution/eval_peer_selection_models.py",

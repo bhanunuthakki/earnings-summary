@@ -232,11 +232,12 @@ def _fetch_quarterly_facts(
     all_line_items = _REQUIRED_LINE_ITEMS + _OPTIONAL_LINE_ITEMS + _BALANCE_LINE_ITEMS
     placeholders = ",".join("?" * len(all_line_items))
     tier_rank = reader_tier_rank_sql(conn)
+    fact_relation = canonical_fact_relation(conn, "financial_facts").sql
     cur = conn.execute(
         f"""
         SELECT ff.period_end, ff.fiscal_period_type, ff.line_item, ff.value, ff.currency,
                ff.source_doc_id
-        FROM financial_facts ff
+        FROM {fact_relation} ff
         JOIN documents d ON d.id = ff.source_doc_id
         WHERE ff.ticker = ?
           AND (

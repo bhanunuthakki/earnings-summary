@@ -7,10 +7,14 @@ use so they don't all hand-roll SQL. Returns Pydantic models, not raw rows.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from identity import DEFAULT_USER_ID
-from models.companies import Company, FilingRegime, InstrumentType, ListType
+from models.companies import Company, ListType
 from models.documents import DocType, SourceType
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -86,18 +90,33 @@ ANALYZED_LIST_TYPE_VALUES: tuple[str, ...] = tuple(
 )
 
 
+@dataclass(frozen=True)
+class TrackedCompanyRejection:
+    """Invalid row identity and field names; raw validation values stay private."""
+
+    row_id: int | None
+    ticker: str | None
+    fields: tuple[str, ...]
+
+
 def tracked_companies_for_user(
     conn: sqlite3.Connection,
     user_id: str = DEFAULT_USER_ID,
     only_classified: bool = True,
     list_types: frozenset[ListType] = ANALYZED_LIST_TYPES,
     include_archived: bool = False,
+    *,
+    on_invalid: Callable[[TrackedCompanyRejection], None] | None = None,
 ) -> list[Company]:
     """Return Company rows for user, scoped to `list_types`.
 
     `only_classified` filters out NULL instrument_type. Default `list_types` is
     portfolio + watchlist so bulk callers don't iterate the index-member universe;
     pass `frozenset(ListType)` (or any superset) to opt in to the broader scope.
+
+    Invalid rows raise by default. A batch caller can supply `on_invalid` to
+    retain rejected row identities and continue with validated companies.
+    The caller must report the resulting incomplete scope. No values are repaired.
 
     `include_archived` defaults False so archived names disappear from analysis,
     DCF, thesis, refresh-queue scopes; pass True only for admin/diagnostic flows.
@@ -121,26 +140,40 @@ def tracked_companies_for_user(
     cur.execute(sql, (user_id, *(lt.value for lt in list_types)))
     out: list[Company] = []
     for row in cur.fetchall():
-        out.append(
-            Company(
+        try:
+            company = Company(
                 id=row["id"],
                 user_id=row["user_id"],
                 ticker=row["ticker"],
                 name=row["name"],
-                list_type=ListType(row["list_type"]),
+                list_type=row["list_type"],
                 sec_validated=bool(row["sec_validated"]),
                 ir_url=row["ir_url"],
-                instrument_type=(
-                    InstrumentType(row["instrument_type"]) if row["instrument_type"] else None
-                ),
-                filing_regime=(
-                    FilingRegime(row["filing_regime"]) if row["filing_regime"] else None
-                ),
+                instrument_type=row["instrument_type"] or None,
+                filing_regime=row["filing_regime"] or None,
                 fiscal_year_end=row["fiscal_year_end"],
                 fmp_data_saved=bool(row["fmp_data_saved"]),
                 fmp_data_upto=row["fmp_data_upto"],
             )
-        )
+        except ValidationError as exc:
+            if on_invalid is None:
+                raise
+            on_invalid(
+                TrackedCompanyRejection(
+                    row_id=row["id"] if isinstance(row["id"], int) else None,
+                    ticker=row["ticker"] if isinstance(row["ticker"], str) else None,
+                    fields=tuple(
+                        sorted(
+                            {
+                                str(error["loc"][0]) if error["loc"] else "$model"
+                                for error in exc.errors(include_input=False)
+                            }
+                        )
+                    ),
+                )
+            )
+            continue
+        out.append(company)
     return out
 
 

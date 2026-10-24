@@ -26,6 +26,18 @@ resolve_python() {
 }
 
 python_bin=$(resolve_python) || exit 1
+head=$(git rev-parse HEAD) || exit 1
+# All retained-file checks below validate HEAD. Refuse an unchecked commit,
+# including an annotated tag object, rather than silently validating another ref.
+while read -r local_ref local_oid remote_ref remote_oid; do
+  case "$local_oid" in
+    0000000000000000000000000000000000000000) continue ;;
+  esac
+  if [ "$local_oid" != "$head" ]; then
+    printf 'PRE-PUSH FAILED: checkout the commit being pushed so it can be checked.\n' >&2
+    exit 1
+  fi
+done
 run "$python_bin" execution/verify_public_tree.py
 run "$python_bin" -m ruff --version
 run "$python_bin" -m pytest --version
@@ -34,6 +46,7 @@ run "$python_bin" execution/validate_folder_contract.py
 
 base=$(git merge-base HEAD origin/main 2>/dev/null || git rev-parse HEAD~1 2>/dev/null || true)
 [ -n "$base" ] || { printf 'PRE-PUSH FAILED: no comparison revision.\n' >&2; exit 1; }
+run "$python_bin" execution/verify_public_tree.py --outgoing "$base"
 # The committed candidate is the push boundary. Make uses worktree mode instead.
 export PYTHONPATH="$root/src${PYTHONPATH:+:$PYTHONPATH}"
 run "$python_bin" -m quality.check_changed --base "$base" --mode committed --check format --check lint --check suppressions

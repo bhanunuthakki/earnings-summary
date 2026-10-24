@@ -1186,7 +1186,7 @@ WITH dedup AS (
                 ff.line_item
             ORDER BY {tier_rank} DESC, ff.id DESC
         ) AS rn
-    FROM financial_facts ff
+    FROM {fact_relation} ff
     {doc_join}
     WHERE ff.ticker = ? AND ff.fiscal_period_type IN ({marks})
 )
@@ -1201,7 +1201,7 @@ LIMIT ?
 
 
 def _load_quarterly(conn: sqlite3.Connection, ticker: str) -> list[dict[str, object]]:
-    """One deduped row per calendar quarter, read straight from financial_facts.
+    """One deduped row per calendar quarter from the canonical fact relation.
 
     See ``_QUARTERLY_FACTS_SQL`` for why this bypasses the ``metrics`` view.
     Over-pulls a generous window; ``_dedupe_by_calendar_quarter`` runs
@@ -1215,6 +1215,7 @@ def _load_quarterly(conn: sqlite3.Connection, ticker: str) -> list[dict[str, obj
             pivot=_FACT_PIVOT,
             tier_rank=reader_tier_rank_sql(conn),
             doc_join=reader_tier_join_sql(conn),
+            fact_relation=canonical_fact_relation(conn, "financial_facts").sql,
         ),
         (ticker.upper(), *QUARTERLY_PERIOD_TYPES, UNDERLYING_QUARTERS * 4),
     )
@@ -1299,7 +1300,7 @@ WITH dedup AS (
             PARTITION BY CAST(substr(ff.period_end, 1, 4) AS INTEGER), ff.line_item
             ORDER BY {tier_rank} DESC, ff.id DESC
         ) AS rn
-    FROM financial_facts ff
+    FROM {fact_relation} ff
     {doc_join}
     WHERE ff.ticker = ? AND ff.fiscal_period_type IN ({marks})
 )
@@ -1322,6 +1323,7 @@ def _load_annual(conn: sqlite3.Connection, ticker: str) -> list[dict[str, object
             pivot=_FACT_PIVOT,
             tier_rank=reader_tier_rank_sql(conn),
             doc_join=reader_tier_join_sql(conn),
+            fact_relation=canonical_fact_relation(conn, "financial_facts").sql,
         ),
         (ticker.upper(), *ANNUAL_PERIOD_TYPES, ANNUAL_HISTORY_YEARS * 3),
     )

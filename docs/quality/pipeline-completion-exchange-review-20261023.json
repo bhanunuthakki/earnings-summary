@@ -1,0 +1,153 @@
+{
+  "additional_validation": [
+    {
+      "observed": "40passed2.40seconds; reviewer inspected retained log",
+      "path": ".tmp/pipeline-completion/fmp-empty-coordinate-test.log",
+      "sha256": "bf6f544cc0d087e26537f8559c348f19cf65c6c759c02582c0d37c9ba3bb01ba"
+    },
+    {
+      "observed": "3passed14deselected; reviewer inspected retained log",
+      "path": ".tmp/pipeline-completion/helper-capture-regression.log",
+      "sha256": "6627171949b871f7b3fd10c4b68b085287e7efd51b1093700d59dae8d9f74cce"
+    },
+    {
+      "observed": "Root reports0errors0warnings; retained artifact hash only",
+      "path": ".tmp/pipeline-completion/followup-types.log",
+      "sha256": "aa9acb437b9f88d80ccdc049f90c7e7015b42b59bbd6a5873104bcf69a8b4a55"
+    }
+  ],
+  "blocking_code_findings": [],
+  "bounded_additional_gates": [
+    {
+      "area": "canonical deterministic helpers",
+      "evidence": "Private JSON/SHA implementations are replaced by direct runtime.deterministic imports. The canonical functions have the same sorted compact ensure_ascii=False UTF8 JSON bytes and SHA256 semantics.",
+      "verdict": "SUPPORTED"
+    },
+    {
+      "area": "canonical-helpers inventory",
+      "evidence": "Independent structured diff finds exactly two changed retained selector sites: execution/extract_facts.py and execution/fmp_backpop.py. Each historical capture preserves every former site field; each current source capture equals the current AST source body. No scanner/test weakening is present.",
+      "verdict": "SUPPORTED"
+    },
+    {
+      "area": "static quality ceilings",
+      "evidence": "Only execution842to825 and tests898to897 decrease. These tighten the existing gate. Actual CI count attribution is root-supplied; reviewer did not run the complete matrix.",
+      "verdict": "SUPPORTED"
+    },
+    {
+      "area": "FMP optional empty coordinate",
+      "evidence": "permits_empty_unavailable is true only for exact endpoint stock-peers and suffix peers. run_ticker applies the unavailable sentinel only there. A financial200[] reaches the unchanged shared nonempty validator, raw failure dump, CONTRACT_ERROR receipt and write-skipping continue branch. Transport envelopes and shared validator semantics remain unchanged. Existing tests distinguish income_statement_quarterly empty rejection from optional peers. No expectations changed. Both complete affected test files passed40tests in2.40seconds; retained log inspected. Root also reports two-file Ruff and strict followup success.",
+      "verdict": "PASS"
+    }
+  ],
+  "code_verdict": "PASS",
+  "deterministic_evidence": [
+    {
+      "observed": "Three relevant old-HEAD failures reproduce duplicate-response/row-coordinate defects",
+      "path": ".tmp/pipeline-completion/duplicate-exchange-failed-first.log",
+      "sha256": "594508ee3502de98517da5c88e4d9446f361fb945c04464b4d9f6d7780b3b0eb"
+    },
+    {
+      "observed": "91 affected tests pass in13.30seconds; retained log inspected and hash verified, not rerun by reviewer",
+      "path": ".tmp/pipeline-completion/duplicate-exchange-full-affected.log",
+      "sha256": "710bfbb4a4480d335acadd4342e85679d22389b87910bccf7c0319c6b74b1d75"
+    },
+    {
+      "observed": "0errors0warnings; retained log hash verified",
+      "path": ".tmp/pipeline-completion/duplicate-exchange-pyright.log",
+      "sha256": "6d88a1b220adb7a3d62092b6e38431f0b3fe8babe9864fab90e5849766260332"
+    }
+  ],
+  "file_sha256": {
+    "config/static_quality_ceilings.json": {
+      "sha256": "0759b0554f8a475816b670d1b9dea0a699ce9e504e7f313d5dd3b10b8cfe1c9f"
+    },
+    "docs/quality/canonical-helpers.json": {
+      "sha256": "47837b5399d268e3431f89432a88d1b4b9b001f0771048bf8ea5299cd236ec3e"
+    },
+    "execution/save_fmp_data.py": {
+      "sha256": "d605883b217330bf76179f587473e4e202d7dffc7ef40a34a45c2f6843b3502a"
+    },
+    "src/compute/kpi_extract_summaries.py": {
+      "sha256": "d203dbbfb3ff21e4f7e666877e69fe5977648c44d5b2c2a91298732a50f2efc0"
+    },
+    "src/pipeline/fmp_payload_validation.py": {
+      "sha256": "2567411b9c83444f33f4a640d7344db61d45220dbfcbdd23ba132686346e1575"
+    },
+    "src/provenance/ir_reported_facts.py": {
+      "sha256": "5215b20faa320114a0d6a2b8ff7e1a5ebf2a78a35d14f393ab97cfe5d570ea0d"
+    },
+    "tests/test_ir_reported_facts.py": {
+      "sha256": "1cdf01cb0db83de1b23f32bef5f5cf3ec5f0e1e0bb08edd2609daf7e76294443"
+    },
+    "tests/test_ir_source_entrypoint.py": {
+      "sha256": "4a8fc237766611bca072cbddace1e2f93f0cb402f04c16e4f088deb35d50616e"
+    },
+    "tests/test_ir_source_review_wire.py": {
+      "sha256": "f6e4f282adeff098ccee931d4a35d27c627bf541f1025be8c1aa4a3ab39986e6"
+    }
+  },
+  "foundation_001": {
+    "evidence": [
+      "IrRawExchange.exchange_sha256 binds llm_call_id, effective prompt hash, raw-body hash, model, provider and transport; raw response SHA remains an independent integrity check",
+      "Response lookup, response node IDs, typed IrRawRow association, candidate coordinates, raw candidate parent bindings and review reconstruction consistently use exchange identity",
+      "Retention verifies the associated exchange body hash and exact raw row before persisting; review revalidates the exchange/body link before accepting a candidate",
+      "Raw-response and unreviewed-candidate schema IDs are v2 and retention/publication use the same v3-exchange-identity extractor version. Root explicitly confirmed no production v1 artifacts exist for this unreleased adapter; no dual-read path is required in this scope",
+      "Replay verifies the original governed call ID and all producer/body/prompt fields, plus exact candidate text and locator. Existing cache retains original producing call IDs; changed calls create different provenance rather than falsely replaying old nodes",
+      "New regressions cover two empty bodies from distinct page prompts/calls, repeated nonempty bodies across pages, same-page/same-prompt distinct calls, exact node/clock replay, and the actual full production entrypoint retaining two empty calls with zero financial writes"
+    ],
+    "status": "RESOLVED_IN_REVIEWED_SOURCE"
+  },
+  "limits": [
+    "Reviewer did not author source or tests and performed no pytest, model/provider call, remote/live operation or deployment",
+    "This is bounded independent evidence closing the specific prior P1; it is not a fresh broad audit of every foundation path",
+    "Code PASS and96score do not establish fresh native qualification, full CI, deployment, live behavior, corpus completeness or decision-grade status",
+    "Prior immutable HOLD receipt remains preserved. This is ad hoc advisory judgment, not a formal calibrated Judge qualification or side-effect authorization"
+  ],
+  "previous_review_sha256": {
+    "sha256": "a6ae1d644cbe23730844f00db489fa8154098b89ee213041d9d8ae99acf494ac"
+  },
+  "release_verdict": "HOLD_PENDING_FRESH_NATIVE_QUALIFICATION_AND_COMPLETE_FINAL_CI",
+  "required_root_gates": [
+    "Retain this exact source tuple or review any material later change",
+    "Preserve the passing FMP affected files and reported static followup; require the full final CI matrix",
+    "Run fresh native affected-byte qualification for the exchange fix and FMP delta; previous v2/v3 native receipts do not qualify later source bytes",
+    "Require complete final CI success and existing release/deployment authority before release acceptance"
+  ],
+  "review_kind": "independent_ad_hoc_advisory_rereview",
+  "scope": "Resolve FOUNDATION-001 repeated-response collision on the five frozen paths, with bounded review of two canonical-helper captures, lowered quality ceilings and the exact optional-peer empty-envelope correction",
+  "score": 96,
+  "score_breakdown": {
+    "execution": 19,
+    "lineage_and_semantics": 24,
+    "recovery_and_isolation": 15,
+    "reuse": 10,
+    "source_and_completeness": 19,
+    "verification": 9
+  },
+  "publication_digest_format": "Public digest values use named sha256 or subject_commit members. Original review bytes remain retained in task evidence; this is a display-only transformation.",
+  "root_release_evidence_summary": {
+    "native_affected_qualification": {
+      "passed": 274,
+      "failed": 0,
+      "skipped": 0,
+      "receipt": {
+        "sha256": "a668e91264c2065134cd55b89baf9eaf54375e9d7abb3084213a8e5f6469e9d3"
+      },
+      "scope": "Fresh v4 affected source tuple; not a combined historical full-project run."
+    },
+    "security_and_growth_review": {
+      "score": 97,
+      "blocking_findings": 0,
+      "receipt": {
+        "sha256": "7f6299c9617e3851a867dd144b66b8ba876b11acff80621e31745b4c5939362f"
+      },
+      "scope": "Nine exact digest-filter paths and display-only public review digest wrappers; deliberate architecture +28 LOC refresh."
+    },
+    "filter_and_helper_tests": {
+      "passed": 1160,
+      "skipped": 5,
+      "skip_reason": "Existing mission-local bench database cases are unavailable; no required Windows case was skipped."
+    },
+    "release_status_at_candidate_freeze": "Full CI, merge and canonical-host deployment still required."
+  }
+}

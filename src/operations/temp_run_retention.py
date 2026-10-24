@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import socket
 import stat
@@ -24,10 +25,17 @@ from src.operations.artifact_retention import (
     fixture_git_hold,
     run_retention,
 )
-from src.operations.storage_reservation import release_peak, reserve_peak
+from src.operations.storage_reservation import live_lease_roots, release_peak, reserve_peak
 
 MANIFEST_NAME = ".earnings-temp-run.json"
 RESOLUTION_NAME = ".earnings-temp-run-resolution.json"
+# Session roots the pytest harness creates in the system temp directory. The
+# shared ``earnings-summary-pytest-secrets*`` folders deliberately do not match.
+_TEST_RUN_NAME = re.compile(r"earnings-summary-pytest-(?:controller|gw\d+)-[A-Za-z0-9_]+\Z")
+# A completed run's payload is already retired or disposable; a failed run keeps
+# its default seven-day review window (``begin_temp_run`` sets ``review_after``).
+TEST_RUN_SKELETON_AGE = timedelta(days=1)
+TEST_RUN_FAILED_AGE = timedelta(days=7)
 # Links and multiply linked files stay in place, unfollowed and never retired, so
 # they do not make a passed rerun unfit to prove a failed attempt's recovery.
 _RETAINED_SHAPE_HOLDS = frozenset({"linked_fixture", "not_unique_regular_file"})
@@ -168,6 +176,13 @@ class TempRunDiscovery(BaseModel):
 
     catalog: ArtifactCatalog
     reports: list[TempRunReport]
+
+
+class TempRunPruneResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    removed: tuple[Path, ...] = ()
+    kept: dict[str, int] = Field(default_factory=dict)
 
 
 def _now(value: datetime | None) -> datetime:
@@ -537,6 +552,80 @@ def _write_once(path: Path, payload: BaseModel) -> None:
         handle.write(payload.model_dump_json())
         handle.flush()
         os.fsync(handle.fileno())
+
+
+def _newest_change(root: Path) -> datetime:
+    newest = root.lstat().st_mtime
+    for directory, children, names in os.walk(root, followlinks=False):
+        for name in (*children, *names):
+            try:
+                newest = max(newest, (Path(directory) / name).lstat().st_mtime)
+            except FileNotFoundError:
+                continue
+    return datetime.fromtimestamp(newest, UTC)
+
+
+def prune_abandoned_test_runs(
+    *,
+    temp_root: Path | None = None,
+    store: Path | None = None,
+    now: datetime | None = None,
+    apply: bool = True,
+) -> TempRunPruneResult:
+    """Remove earlier pytest session roots whose owner is gone.
+
+    Only direct children named like harness session roots are considered, and a
+    root whose lease holder may still run is always kept. Completed runs and
+    folders without a manifest go after a day; failed runs, and runs still
+    marked active whose holder is gone, go after the seven-day review window.
+    Links and unreadable manifests are kept for review.
+    """
+    base = _absolute(temp_root or Path(tempfile.gettempdir()))
+    _safe_path(base)
+    stamp = _now(now)
+    live = {os.path.normcase(str(root)) for root in live_lease_roots(base, store=store)}
+    removed: list[Path] = []
+    kept: dict[str, int] = {}
+
+    def keep(reason: str) -> None:
+        kept[reason] = kept.get(reason, 0) + 1
+
+    for root in sorted(base.iterdir()):
+        if not _TEST_RUN_NAME.match(root.name):
+            continue
+        if _linked(root) or not root.is_dir():
+            keep("linked_or_not_directory")
+            continue
+        if os.path.normcase(str(root)) in live:
+            keep("live_lease")
+            continue
+        if (root / MANIFEST_NAME).exists() or (root / MANIFEST_NAME).is_symlink():
+            try:
+                manifest = _read_manifest(root)
+            except (OSError, ValueError):
+                keep("unreadable_manifest")
+                continue
+            if manifest.status == "completed":
+                ended, window = manifest.completed_at or manifest.started_at, TEST_RUN_SKELETON_AGE
+            elif manifest.status == "failed":
+                ended, window = manifest.completed_at or manifest.started_at, TEST_RUN_FAILED_AGE
+            else:
+                ended, window = manifest.started_at, TEST_RUN_FAILED_AGE
+        else:
+            ended, window = _newest_change(root), TEST_RUN_SKELETON_AGE
+        if stamp - ended < window:
+            keep("within_window")
+            continue
+        if apply:
+            try:
+                shutil.rmtree(root)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                keep("removal_failed")
+                continue
+        removed.append(root)
+    return TempRunPruneResult(removed=tuple(removed), kept=kept)
 
 
 def resolve_failed_temp_run(

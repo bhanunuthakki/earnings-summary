@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
 import sys
 from collections.abc import Callable, Generator
 from pathlib import Path
@@ -145,6 +147,134 @@ def test_transcript_adapter_preserves_explicit_owner_intent(
         "--ticker",
         "NU",
     ]
+
+
+def test_transcript_adapter_dry_run_keeps_exact_receipts_and_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ingester = _FakeIngester()
+    monkeypatch.setattr(transcript_adapter, "_load_ingester", lambda: ingester)
+    state = tmp_path / "state"
+    state.mkdir()
+    database = tmp_path / "explicit-authority.sqlite"
+    before = database.read_bytes()
+    receipts = ("a" * 64, "b" * 64)
+    assert (
+        transcript_adapter.main(
+            [
+                "--repo-root",
+                str(state),
+                "--db",
+                str(database),
+                "--ticker",
+                "NU",
+                "--receipt-id",
+                receipts[0],
+                "--receipt-id",
+                receipts[1],
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    assert state == ingester.PROJECT_ROOT
+    assert "--dry-run" in ingester.seen_argv
+    assert "--automatic" in ingester.seen_argv
+    assert [
+        ingester.seen_argv[i + 1]
+        for i, item in enumerate(ingester.seen_argv)
+        if item == "--receipt-id"
+    ] == list(receipts)
+    assert database.read_bytes() == before
+    assert not (state / "data/portfolio.db").exists()
+
+
+def test_transcript_adapter_real_child_dry_run_has_no_ingestion_or_file_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    state = tmp_path / "state"
+    raw = state / "transcripts/raw"
+    raw.mkdir(parents=True)
+    selected = raw / "NU_Q1_2026.txt"
+    other = raw / "WIX_Q1_2026.txt"
+    selected.write_text("selected exact receipt evidence")
+    other.write_text("other ticker stays untouched")
+    database = tmp_path / "explicit-authority.sqlite"
+    before = {path: path.read_bytes() for path in (database, selected, other)}
+    for field in ("PROJECT_ROOT", "_TRANSCRIPT_DIRS"):
+        monkeypatch.setattr(legacy_ingest, field, getattr(legacy_ingest, field))
+    for field in (
+        "PROJECT_ROOT",
+        "CACHE_DIR",
+        "TRANSCRIPT_INDEX_PATH",
+        "DOCUMENT_INDEX_PATH",
+        "TRANSCRIPTS_RAW_DIR",
+        "TRANSCRIPTS_PROCESSED_DIR",
+    ):
+        monkeypatch.setattr(
+            legacy_ingest.index_manager, field, getattr(legacy_ingest.index_manager, field)
+        )
+    monkeypatch.setattr(transcript_adapter, "_load_ingester", lambda: legacy_ingest)
+
+    def read_only_database(path: str) -> sqlite3.Connection:
+        return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+
+    def tracked(_conn: sqlite3.Connection) -> frozenset[str]:
+        return frozenset({"NU", "WIX"})
+
+    monkeypatch.setattr(legacy_ingest, "open_db", read_only_database)
+    monkeypatch.setattr(legacy_ingest, "_load_tracked_tickers", tracked)
+    receipts = ["a" * 64]
+
+    def exact_candidates(
+        _conn: sqlite3.Connection,
+        receipt_ids: list[str],
+        *,
+        restrict_ticker: str | None,
+        expected_owner_requested: bool,
+        project_root: Path,
+    ) -> tuple[
+        list[tuple[Path, legacy_ingest.ParsedFilename]],
+        dict[Path, legacy_ingest.AuthorizedTranscriptArtifact],
+    ]:
+        assert receipt_ids == receipts
+        assert restrict_ticker == "NU"
+        assert expected_owner_requested is False
+        assert project_root == state
+        parsed = legacy_ingest.parse_transcript_filename(selected)
+        assert parsed is not None
+        return [(selected, parsed)], {}
+
+    def no_ingestion(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("dry-run reached financial/document writes")
+
+    monkeypatch.setattr(legacy_ingest, "_receipt_scoped_candidates", exact_candidates)
+    monkeypatch.setattr(legacy_ingest, "ingest_evidence_file", no_ingestion)
+    assert (
+        transcript_adapter.main(
+            [
+                "--repo-root",
+                str(state),
+                "--db",
+                str(database),
+                "--ticker",
+                "NU",
+                "--receipt-id",
+                receipts[0],
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["receipt_ids"] == receipts
+    assert plan["candidates_total"] == 1
+    assert len(plan["in_scope"]) == 1
+    assert plan["in_scope"][0]["ticker"] == "NU"
+    assert Path(plan["in_scope"][0]["file"]) == Path("transcripts/raw/NU_Q1_2026.txt")
+    assert {path: path.read_bytes() for path in before} == before
+    assert not (state / "transcripts/processed").exists()
+    assert not (state / "data/portfolio.db").exists()
 
 
 def test_transcript_adapter_retargets_real_legacy_candidate_scan(

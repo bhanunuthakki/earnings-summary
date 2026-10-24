@@ -6,7 +6,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -468,3 +468,47 @@ def test_alias_rejects_precise_future_clock_and_ambiguous_source(
     expected = "alias_lineage_after_cutoff" if case == "future_link" else "alias_source_ambiguous"
     with pytest.raises(inventory.IssuerDocumentInventoryError, match=expected):
         _seal(db, payload)
+
+
+def test_alias_fiscal_request_retains_shared_period_and_clock_rules(
+    migrated_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    db = tmp_path / "alias-fiscal.db"
+    migrated_db(db)
+    root = tmp_path / "repo"
+    payload = _fixture(db, root)
+    witness = inventory.FiscalPeriodWitness(
+        issuer_id="issuer:bkng",
+        profile_revision_id="synthetic:profile",
+        fiscal_year_end="01-31",
+        document_version_id="legacy-doc-7365",
+        document_sha256=SHA,
+        knowledge_cutoff=CLOCK,
+        observed_through=CLOCK,
+    )
+    payload.update(
+        fiscal_year=2027, fiscal_quarter=2, period_end="2026-07-31", fiscal_period_witness=witness
+    )
+    request = inventory.IssuerDocumentAliasInventoryRequest.model_validate(payload)
+    assert request.fiscal_period_witness == witness
+    assert request.period_end == date(2026, 7, 31)
+    with pytest.raises(ValueError, match="clocks must match"):
+        inventory.IssuerDocumentAliasInventoryRequest.model_validate(
+            {
+                **payload,
+                "knowledge_cutoff": CLOCK + timedelta(seconds=1),
+                "observed_through": CLOCK + timedelta(seconds=1),
+            }
+        )
+    with pytest.raises(ValueError, match="fiscal quarter"):
+        inventory.IssuerDocumentAliasInventoryRequest.model_validate(
+            {**payload, "period_end": "2026-06-30"}
+        )
+
+
+def test_absent_fiscal_witness_preserves_fixed_predecessor_bytes() -> None:
+    raw = '{"expected_documents":[{"document_type":"ir_press_release","source_url":"https://investor.example.test/bkng/release.pdf"}],"fiscal_quarter":2,"fiscal_year":2026,"period_end":"2026-06-30","schema_version":"issuer_document_inventory_request.v1","ticker":"BKNG"}'
+    request = inventory.IssuerDocumentInventoryRequest.model_validate_json(raw)
+    explicit_unknown = request.model_copy(update={"fiscal_period_witness": None})
+    assert explicit_unknown.canonical_json.encode() == raw.encode()
+    assert explicit_unknown.request_sha256 == hashlib.sha256(raw.encode()).hexdigest()

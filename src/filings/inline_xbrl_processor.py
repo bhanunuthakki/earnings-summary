@@ -154,6 +154,8 @@ class RuntimeArtifactMember(_Closed):
 
 
 class ProcessorExecution(_Closed):
+    launcher_kind: Literal["native_executable", "python_source"] | None = None
+    sandbox_state_root_sha256: str | None = Field(default=None, pattern=_SHA256)
     isolated_python: Literal[True]
     internet_connectivity: Literal["os_denied"]
     sandbox_contract_version: Literal["earnings-xbrl-os-sandbox.v1"]
@@ -207,6 +209,7 @@ class ProcessorBuildProvenance(_Closed):
     bridge_source_sha256: str = Field(pattern=_SHA256)
     launcher_source_sha256: str = Field(pattern=_SHA256)
     unit_source_sha256: str | None = Field(default=None, pattern=_SHA256)
+    support_source_sha256: str | None = Field(default=None, pattern=_SHA256)
 
 
 class ProcessorBundleManifest(_Closed):
@@ -231,6 +234,32 @@ class ProcessorBundleManifest(_Closed):
                 raise ValueError("v2 unit source is absent from the runtime closure")
         elif self.build_provenance.unit_source_sha256 is not None:
             raise ValueError("legacy bridge cannot claim the v2 unit contract")
+        if self.execution.launcher_kind == "python_source":
+            if (
+                self.execution.sandbox_state_root_sha256 is None
+                or self.execution.timeout_seconds > 3600
+            ):
+                raise ValueError(
+                    "source launcher requires bound state authority and bounded timeout"
+                )
+            required = {
+                "earnings_summary_xbrl_launcher.py": self.build_provenance.launcher_source_sha256,
+                "earnings_summary_windows_appcontainer.py": self.build_provenance.support_source_sha256,
+            }
+            indexed = {
+                item.relative_path: item.blob_sha256 for item in self.execution.runtime_members
+            }
+            if any(
+                digest is None or indexed.get(path) != digest for path, digest in required.items()
+            ):
+                raise ValueError("source launcher modules are absent from the runtime closure")
+            if (
+                self.execution.sandbox_launcher_sha256
+                != self.build_provenance.launcher_source_sha256
+            ):
+                raise ValueError("source launcher digest differs from reviewed source")
+        elif self.build_provenance.support_source_sha256 is not None:
+            raise ValueError("native launcher cannot claim source launcher support")
         return self
 
     @property
@@ -251,6 +280,7 @@ class ProcessorBundleApprovalSeal(_Closed):
     bridge_source_sha256: str = Field(pattern=_SHA256)
     launcher_source_sha256: str = Field(pattern=_SHA256)
     unit_source_sha256: str | None = Field(default=None, pattern=_SHA256)
+    support_source_sha256: str | None = Field(default=None, pattern=_SHA256)
 
 
 @dataclass(frozen=True)
@@ -543,6 +573,7 @@ def _load_approved_processor_bundle_manifest(
         manifest.build_provenance.bridge_source_sha256,
         manifest.build_provenance.launcher_source_sha256,
         manifest.build_provenance.unit_source_sha256,
+        manifest.build_provenance.support_source_sha256,
     )
     sealed = (
         seal.runtime_artifact_sha256,
@@ -550,6 +581,7 @@ def _load_approved_processor_bundle_manifest(
         seal.bridge_source_sha256,
         seal.launcher_source_sha256,
         seal.unit_source_sha256,
+        seal.support_source_sha256,
     )
     if expected != sealed:
         raise InlineXbrlProcessorError(
@@ -558,10 +590,18 @@ def _load_approved_processor_bundle_manifest(
         )
     source_paths = (
         _PROJECT_ROOT / "execution" / "filing_xbrl_bridge.py",
-        _PROJECT_ROOT / "execution" / "filing_xbrl_appcontainer_launcher.cs",
+        _PROJECT_ROOT
+        / "execution"
+        / (
+            "filing_xbrl_appcontainer_launcher.py"
+            if manifest.execution.launcher_kind == "python_source"
+            else "filing_xbrl_appcontainer_launcher.cs"
+        ),
     )
     if manifest.bridge_protocol_version == "filing-xbrl-bridge.v2":
         source_paths += (_PROJECT_ROOT / "src" / "filings" / "xbrl_units.py",)
+    if manifest.execution.launcher_kind == "python_source":
+        source_paths += (_PROJECT_ROOT / "src" / "runtime" / "windows_appcontainer.py",)
     observed_sources = tuple(_sha(_read_stable_file(source)) for source in source_paths)
     if observed_sources != tuple(value for value in sealed[2:] if value is not None):
         raise InlineXbrlProcessorError(
@@ -582,12 +622,15 @@ def verify_processor_installation(
     runtime_root: Path,
     sandbox_launcher: Path,
     bundle_python: Path | None = None,
+    sandbox_state_root: Path | None = None,
 ) -> Path:
     """Verify installed bytes without launching a child or claiming native qualification."""
 
     if not isinstance(cast(object, approved_bundle), ApprovedProcessorBundle):
         raise InlineXbrlProcessorError("filing-XBRL bundle is not approved")
     manifest = approved_bundle.manifest
+    _verify_sandbox_state_authority(manifest, sandbox_state_root)
+    _verify_launcher_location(manifest, runtime_root, sandbox_launcher)
     _verify_executable(
         sandbox_launcher, manifest.execution.sandbox_launcher_sha256, "OS sandbox launcher"
     )
@@ -605,6 +648,34 @@ def verify_processor_installation(
         expected_python, manifest.execution.bundle_python_sha256, "qualified bundle Python"
     )
     return expected_python
+
+
+def sandbox_state_root_sha256(path: Path) -> str:
+    """Bind one existing local state authority without resolving aliases."""
+    _require_local_path(path, "sandbox state root")
+    if not path.is_absolute() or ".." in path.parts:
+        raise InlineXbrlProcessorError("sandbox state root must be absolute and normalized")
+    _require_no_reparse_points(path)
+    if not path.is_dir():
+        raise InlineXbrlProcessorError("sandbox state root must be a directory")
+    return _sha(os.path.normcase(os.path.abspath(path)).encode("utf-8"))
+
+
+def _verify_sandbox_state_authority(manifest: ProcessorBundleManifest, path: Path | None) -> None:
+    if manifest.execution.launcher_kind == "python_source" and (
+        path is None
+        or sandbox_state_root_sha256(path) != manifest.execution.sandbox_state_root_sha256
+    ):
+        raise InlineXbrlProcessorError("source launcher sandbox state authority is not approved")
+
+
+def _verify_launcher_location(
+    manifest: ProcessorBundleManifest, runtime_root: Path, sandbox_launcher: Path
+) -> None:
+    if manifest.execution.launcher_kind == "python_source":
+        expected = runtime_root / "earnings_summary_xbrl_launcher.py"
+        if sandbox_launcher.absolute() != expected.absolute():
+            raise InlineXbrlProcessorError("source sandbox launcher is outside its runtime lock")
 
 
 def _read_stable_file(path: Path) -> bytes:
@@ -697,6 +768,7 @@ def run_inline_xbrl_processor(
     bundle_python: Path,
     sandbox_launcher: Path,
     environment: Mapping[str, str] | None = None,
+    sandbox_state_root: Path | None = None,
 ) -> InlineXbrlProcessorResult:
     if not isinstance(cast(object, approved_bundle), ApprovedProcessorBundle):
         raise InlineXbrlProcessorError("filing-XBRL processor bundle is not approved")
@@ -707,6 +779,7 @@ def run_inline_xbrl_processor(
         bundle_python=bundle_python,
         sandbox_launcher=sandbox_launcher,
         environment=environment,
+        sandbox_state_root=sandbox_state_root,
     )
 
 
@@ -718,9 +791,12 @@ def _run_inline_xbrl_processor(
     bundle_python: Path,
     sandbox_launcher: Path,
     environment: Mapping[str, str] | None = None,
+    sandbox_state_root: Path | None = None,
 ) -> InlineXbrlProcessorResult:
     """Run and verify the qualified processor without importing its dependencies."""
 
+    _verify_sandbox_state_authority(manifest, sandbox_state_root)
+    _verify_launcher_location(manifest, runtime_root, sandbox_launcher)
     _verify_executable(
         sandbox_launcher,
         manifest.execution.sandbox_launcher_sha256,
@@ -744,8 +820,13 @@ def _run_inline_xbrl_processor(
     for member in request.members:
         _verify_member(member)
     staged_request, staged_root = _stage_package(request, runtime_root=runtime_root)
+    launcher_prefix = (
+        (str(bundle_python), "-I", "-S", "-B", str(sandbox_launcher))
+        if manifest.execution.launcher_kind == "python_source"
+        else (str(sandbox_launcher),)
+    )
     command = (
-        str(sandbox_launcher),
+        *launcher_prefix,
         "--contract",
         manifest.execution.sandbox_contract_version,
         "--deny-network",
@@ -772,10 +853,36 @@ def _run_inline_xbrl_processor(
         staged_root,
         *enumerate_closed_local_tree(staged_root, label="staged filing-XBRL package"),
     )
-    with _tree_write_denial_fence((runtime_root, staged_root)) as tree_fence_mode:
-        if os.name == "nt" and tree_fence_mode != "windows-deny-write-acl":
-            raise InlineXbrlProcessorError("filing-XBRL tree write denial is unavailable")
-        with _write_denial_fence(fenced_paths) as fence_mode:
+    from contextlib import ExitStack
+
+    from runtime.windows_appcontainer import AppContainerError
+    from runtime.windows_appcontainer_supervisor import (
+        SandboxRecoveryRequiredError,
+        SourceLauncherSupervisor,
+        retain_fences,
+    )
+
+    try:
+        supervisor = None
+        if manifest.execution.launcher_kind == "python_source":
+            assert sandbox_state_root is not None
+            supervisor = SourceLauncherSupervisor(
+                sandbox_state_root=sandbox_state_root,
+                runtime_root=runtime_root,
+                input_root=staged_root,
+                installation_id=manifest.manifest_sha256,
+                timeout_seconds=manifest.execution.timeout_seconds,
+                maximum_members=len(fenced_paths),
+            )
+            supervisor.__enter__()
+        fences = ExitStack()
+        try:
+            tree_fence_mode = fences.enter_context(
+                _tree_write_denial_fence((runtime_root, staged_root))
+            )
+            if os.name == "nt" and tree_fence_mode != "windows-deny-write-acl":
+                raise InlineXbrlProcessorError("filing-XBRL tree write denial is unavailable")
+            fence_mode = fences.enter_context(_write_denial_fence(fenced_paths))
             if os.name == "nt" and fence_mode != "windows-deny-write":
                 raise InlineXbrlProcessorError("filing-XBRL write-denial fence is unavailable")
             _verify_executable(
@@ -789,7 +896,8 @@ def _run_inline_xbrl_processor(
                 expected_sha256=manifest.execution.runtime_artifact_sha256,
             )
             _verify_staged_package(staged_root, staged_request.members)
-            returncode, stdout, stderr = run_capped_process(
+            runner = run_capped_process if supervisor is None else supervisor.run
+            returncode, stdout, stderr = runner(
                 command,
                 payload.encode(),
                 environment=clean_environment,
@@ -808,6 +916,21 @@ def _run_inline_xbrl_processor(
                 expected_sha256=manifest.execution.runtime_artifact_sha256,
             )
             _verify_staged_package(staged_root, staged_request.members)
+        finally:
+            if supervisor is not None and not supervisor.stop_proved:
+                assert sandbox_state_root is not None
+                retain_fences(sandbox_state_root, fences)
+            else:
+                fences.close()
+        if supervisor is not None:
+            supervisor.complete()
+    except (SandboxRecoveryRequiredError, AppContainerError, OSError) as exc:
+        if manifest.execution.launcher_kind != "python_source":
+            raise
+        raise InlineXbrlProcessorError(
+            "filing-XBRL sandbox requires reviewed recovery",
+            reason_code="sandbox_recovery_required",
+        ) from exc
     if returncode != 0:
         refusal = _sandbox_refusal_stage(stderr) if returncode == 125 else None
         detail = "" if refusal is None else f"; sandbox {refusal}"

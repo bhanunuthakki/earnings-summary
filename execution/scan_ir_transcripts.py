@@ -24,9 +24,9 @@ Per ticker:
   5. Otherwise ``fetch_qa(...)`` — the issuer_ir-first chain re-checks the IR
      site and writes the raw Q&A file.
 
-After the per-ticker pass, if anything was fetched (or is awaiting ingest),
-invoke ``execution/ingest_transcripts.py --no-promote`` once to register rows
-while preserving the immutable raw evidence path.
+After the per-ticker pass, ingest each fetched exact acquisition receipt through
+the existing state adapter. Legacy pending files retain ticker-scoped validation
+and period selection. Preserve immutable raw evidence paths with ``--no-promote``.
 
 Idempotent + best-effort: an issuer that hasn't posted yet is a no-op that
 retries tomorrow, and one ticker's failure never aborts the batch.
@@ -45,11 +45,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
+from typing import Literal
 
 try:
     from _lib import PROJECT_ROOT
@@ -69,24 +71,23 @@ except ImportError:
 
 import db
 from compute.evidence_snapshot import snapshot_recorded_evidence
+from db_paths import require_db_path
+from operations.paths import configured_product_state_root
 from pipeline.source_policy import SOURCE_POLICY_CONFIG
+from pipeline.transcript_acquisition import project_root_for_database
 from runtime.python_process import managed_python_prefix
+from runtime.secrets import load_project_env
 from sources.earnings_calendar import last_earnings_date
 
 DEFAULT_WINDOW_DAYS = 14
 
 
-def _retarget_paths(repo_root: Path) -> None:
-    """Point db + the fetch helper's RAW_DIR at `repo_root` (mirrors
-    backfill_transcripts). Lets a worktree-based run target the MAIN repo's data
-    dir / DB / transcripts without copying anything. The production cron runs
-    from the main repo, so this is a no-op there.
-    """
+def _retarget_paths(repo_root: Path, db_path: Path) -> None:
+    """Bind the database and mutable transcript paths independently of code."""
     db.PROJECT_ROOT = str(repo_root)
-    db.DATA_DIR = str(repo_root / "data")
-    db.DB_PATH = str(repo_root / "data" / "portfolio.db")
-    db.FMP_DIR = str(repo_root / "data" / "historical" / "fmp")
+    db.set_db_path(db_path, state_root=repo_root)
     fetch_qa_transcript.RAW_DIR = repo_root / "transcripts" / "raw"
+    fetch_qa_transcript.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
 
 
 def due_for_scan(last_earnings: date | None, today: date, window_days: int) -> bool:
@@ -175,6 +176,10 @@ class TickerScanResult:
     status: str  # see scan_one for the vocabulary
     quarter: str = ""  # "Q<n>_<year>" once a target quarter is known
     detail: str = ""
+    receipt_id: str | None = None
+    ingest_scope: (
+        Literal["exact_acquisition_receipt", "legacy_pending_ticker_retained_periods"] | None
+    ) = None
 
 
 def scan_one(
@@ -212,7 +217,12 @@ def scan_one(
     # A raw file from a prior day's fetch is awaiting ingest — don't re-fetch
     # (fetch_qa would skip on the existing raw anyway); flag it for promotion.
     if _raw_exists(repo_root, ticker, year, quarter):
-        return TickerScanResult(ticker, "pending_ingest", qlabel)
+        return TickerScanResult(
+            ticker,
+            "pending_ingest",
+            qlabel,
+            ingest_scope="legacy_pending_ticker_retained_periods",
+        )
 
     try:
         hit = fetch_qa(
@@ -227,24 +237,46 @@ def scan_one(
         return TickerScanResult(ticker, "error", qlabel, detail="transcript acquisition denied")
     if hit.status == FetchQaStatus.PROVIDER_MISS:
         return TickerScanResult(ticker, "not_published_yet", qlabel)
-    source_name = hit.result.source_name if hit.result is not None else "issuer_ir"
-    return TickerScanResult(ticker, "fetched", qlabel, detail=source_name)
+    if hit.result is None or not hit.result.receipt_id:
+        return TickerScanResult(ticker, "error", qlabel, detail="acquisition_receipt_missing")
+    return TickerScanResult(
+        ticker,
+        "fetched",
+        qlabel,
+        detail=hit.result.source_name,
+        receipt_id=hit.result.receipt_id,
+        ingest_scope="exact_acquisition_receipt",
+    )
 
 
-def _run_ingest(repo_root: Path, dry_run: bool) -> int:
-    """Run ingest_transcripts.py without moving immutable evidence paths.
-
-    Invokes `repo_root`'s copy of the script with `cwd=repo_root` (the same
-    rationale as backfill_transcripts) so a worktree run lands on the main repo.
-    """
+def _run_ingest(
+    repo_root: Path,
+    db_path: Path,
+    ticker: str,
+    receipt_id: str | None,
+    *,
+    owner_requested: bool,
+    dry_run: bool,
+) -> int:
+    """Run current ingestion code for one ticker against exact state and DB."""
     if dry_run:
         print("  [dry-run] would invoke ingest_transcripts.py", file=sys.stderr)
         return 0
     cmd = [
         *managed_python_prefix(PROJECT_ROOT),
-        str(repo_root / "execution" / "ingest_transcripts.py"),
+        str(PROJECT_ROOT / "execution" / "ingest_transcripts_state.py"),
+        "--repo-root",
+        str(repo_root),
+        "--db",
+        str(db_path),
+        "--ticker",
+        ticker,
         "--no-promote",
     ]
+    if owner_requested:
+        cmd.append("--owner-requested")
+    if receipt_id is not None:
+        cmd.extend(["--receipt-id", receipt_id])
     proc = subprocess.run(cmd, cwd=str(repo_root))
     return proc.returncode
 
@@ -271,18 +303,21 @@ def main() -> int:
     p.add_argument(
         "--repo-root",
         type=Path,
-        default=PROJECT_ROOT,
-        help="Repo root containing data/, transcripts/. Default: this repo. "
-        "Worktree-based runs should pass the main repo path.",
+        help="Mutable state root; defaults to the configured product state root.",
     )
+    p.add_argument("--db", type=Path, help="Existing explicit or configured database")
     args = p.parse_args()
 
-    repo_root = args.repo_root.resolve()
-    if repo_root != PROJECT_ROOT:
-        _retarget_paths(repo_root)
+    repo_root = (
+        args.repo_root.resolve() if args.repo_root else configured_product_state_root(PROJECT_ROOT)
+    )
+    load_project_env(repo_root)
+    selected_db_path = require_db_path(args.db or os.environ.get("EARNINGS_SUMMARY_DB_PATH"))
+    if project_root_for_database(selected_db_path) != repo_root:
+        raise ValueError("The selected database and state root disagree for transcript acquisition")
+    _retarget_paths(repo_root, selected_db_path)
 
     today = date.today()
-    selected_db_path = repo_root / "data" / "portfolio.db"
     tickers = _resolve_tickers(args.ticker)
     if not tickers:
         print(json.dumps({"event": "no_tickers"}))
@@ -311,9 +346,29 @@ def main() -> int:
 
     need_ingest = any(r.status in ("fetched", "pending_ingest") for r in results)
     ingest_rc: int | None = None
+    ingest_results: list[dict[str, object]] = []
     if need_ingest and not args.skip_ingest:
-        print("[scan_ir_transcripts] running ingest_transcripts.py", file=sys.stderr)
-        ingest_rc = _run_ingest(repo_root, args.dry_run)
+        for result in results:
+            if result.status not in ("fetched", "pending_ingest"):
+                continue
+            rc = _run_ingest(
+                repo_root,
+                selected_db_path,
+                result.ticker,
+                result.receipt_id,
+                owner_requested=args.ticker is not None,
+                dry_run=args.dry_run,
+            )
+            ingest_results.append(
+                {
+                    "ticker": result.ticker,
+                    "ingest_scope": result.ingest_scope,
+                    "receipt_id": result.receipt_id,
+                    "rc": rc,
+                }
+            )
+            if ingest_rc in (None, 0):
+                ingest_rc = rc
 
     status_counts: dict[str, int] = {}
     for r in results:
@@ -326,6 +381,7 @@ def main() -> int:
         "tickers_scanned": len(tickers),
         "status_counts": status_counts,
         "ingest_rc": ingest_rc,
+        "ingest_results": ingest_results,
         "in_window": [asdict(r) for r in results if r.status != "out_of_window"],
     }
     print(json.dumps(summary, indent=2))

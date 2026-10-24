@@ -11,7 +11,6 @@ doctype priority + recency selection work, and missing/empty caches degrade to
 from __future__ import annotations
 
 from pathlib import Path
-from typing import BinaryIO
 
 import pytest
 
@@ -34,11 +33,11 @@ def _write_ir(repo_root: Path, ticker: str, filename: str, body: str) -> Path:
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text(body if not body.strip() else body * (200 // len(body) + 1))
 
-    def extract(payload: BinaryIO) -> str:
-        return payload.read().decode()
+    def extract(payload: bytes, _source_ref: str) -> str:
+        return payload.decode()
 
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr("parser.extract_text_from_pdf", extract)
+        patch.setattr("compute.ir_narrative.project_source_text", extract)
         assert extract_for_ticker(repo_root, ticker)["failed"] == 0
     return repo_root / "data" / "ir_narrative" / ticker / Path(filename).with_suffix(".json")
 
@@ -61,7 +60,7 @@ def test_dir_without_matching_files_returns_empty(tmp_path: Path) -> None:
 
 def test_empty_extraction_returns_explicit_gap(tmp_path: Path) -> None:
     _write_ir(tmp_path, "FOO", "ir_presentation__2025-Q4.txt", "   \n\n  ")
-    assert "no_usable_narrative" in load_ir_anchor(tmp_path, "FOO")
+    assert "UNAVAILABLE" in load_ir_anchor(tmp_path, "FOO")
 
 
 # --- positive path + bias framing -------------------------------------------

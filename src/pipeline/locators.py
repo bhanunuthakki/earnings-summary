@@ -228,8 +228,9 @@ class PdfQuoteLocator:
     its escape hatch; a fabricated page is worse than an honest legacy row.
     """
 
-    def __init__(self, pdf_path: Path) -> None:
+    def __init__(self, pdf_path: Path, *, raw_bytes: bytes | None = None) -> None:
         self._pdf_path = pdf_path
+        self._raw_bytes = raw_bytes
         self._page_texts: list[str] | None = None
         self._indexed = False
 
@@ -239,19 +240,28 @@ class PdfQuoteLocator:
             # importing it lazily keeps locators importable everywhere.
             from pipeline.pdf_render import extract_page_texts
 
-            self._page_texts = extract_page_texts(self._pdf_path)
+            self._page_texts = extract_page_texts(self._pdf_path, raw_bytes=self._raw_bytes)
             self._indexed = True
         return self._page_texts
 
-    def __call__(self, quote: str | None) -> FactLocator | None:
+    def __call__(self, quote: str | None, *, page_number: int | None = None) -> FactLocator | None:
         if quote is None or not quote.strip():
             return None
         page_texts = self._index()
         if not page_texts:
             return None
+        if page_number is not None:
+            if page_number < 1 or page_number > len(page_texts):
+                return None
+            page_texts = [
+                text if index == page_number else ""
+                for index, text in enumerate(page_texts, start=1)
+            ]
         from pipeline.pdf_render import find_page_for_quote
 
-        hit = find_page_for_quote(self._pdf_path, quote, page_texts=page_texts)
+        hit = find_page_for_quote(
+            self._pdf_path, quote, page_texts=page_texts, raw_bytes=self._raw_bytes
+        )
         if hit is None:
             return None
         page, bbox = hit
@@ -340,10 +350,17 @@ def verify_quote_in_source(quote: str, source_text: str) -> bool:
     return _normalize(quote) in _normalize(source_text)
 
 
-def locate_char_span(quote: str, source_text: str) -> tuple[int, int] | None:
+def locate_char_span(
+    quote: str, source_text: str, *, whitespace_only: bool = False
+) -> tuple[int, int] | None:
     """Best-effort ``(char_start, char_end)`` of ``quote`` inside ``source_text``.
 
-    An EXACT (non-normalized) substring find -- the common case, since most
+    ``whitespace_only=True`` resolves a unique whitespace-equivalent native
+    span, with no case or other character changes. A native physical newline
+    after a preserved ASCII hyphen between ASCII letters is allowed. Other
+    word separators and numeric hyphens stay strict. Ambiguous matches fail.
+
+    The default is an EXACT (non-normalized) substring find -- the common case, since most
     LLM-returned anchors reproduce the source's literal whitespace/case.
     Returns ``None`` when the quote only matches after
     ``verify_quote_in_source``'s whitespace/case normalization (or not at
@@ -352,6 +369,33 @@ def locate_char_span(quote: str, source_text: str) -> tuple[int, int] | None:
     a verified-but-unlocatable-by-exact-offset quote still carries the quote
     text itself, which is enough for the legacy-floor peek (§2.7) to show.
     """
+    if whitespace_only:
+        # Match only runs of whitespace. All other characters remain literal,
+        # including case, signs, punctuation and Unicode code points. Resolve
+        # to native offsets instead of returning normalized model wording.
+        tokens = quote.split()
+        if not tokens:
+            return None
+        token_patterns: list[str] = []
+        for token in tokens:
+            pieces: list[str] = []
+            for index, char in enumerate(token):
+                pieces.append(re.escape(char))
+                if (
+                    char == "-"
+                    and 0 < index < len(token) - 1
+                    and token[index - 1] in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+                    and token[index + 1] in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+                ):
+                    # Keep the literal hyphen. Permit one physical source line
+                    # break, not a space or deletion of a word boundary.
+                    pieces.append(r"(?:[^\S\r\n]*(?:\r\n|\r|\n)[^\S\r\n]*)?")
+            token_patterns.append("".join(pieces))
+        pattern = r"\s+".join(token_patterns)
+        matches = list(re.finditer("(?=(" + pattern + "))", source_text))
+        if len(matches) != 1:
+            return None
+        return matches[0].span(1)
     if not quote:
         return None
     idx = source_text.find(quote)

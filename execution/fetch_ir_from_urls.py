@@ -227,7 +227,7 @@ def register_urls(
     failed = summary.get("failed")
     projection_failed = summary.get("projection_failed")
     attempt_failed = (
-        summary.get("status") in {"failed", "partial", "policy_denied"}
+        summary.get("status") not in ("done", "recovered")
         or (isinstance(failed, int) and failed > 0)
         or (isinstance(projection_failed, int) and projection_failed > 0)
     )

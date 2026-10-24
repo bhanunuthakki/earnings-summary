@@ -7,6 +7,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+import pytest
+
+import dcf.primary_fact_overlay as primary_fact_overlay
 from dcf.primary_fact_overlay import overlay_quarterly_records
 from execution.refresh_dcf import (
     build_dcf_provenance,
@@ -14,6 +17,7 @@ from execution.refresh_dcf import (
     equity_bridge_context_from_builder,
     primary_fact_overlay_from_builder,
 )
+from provenance.financial_fact_resolution import CanonicalFactRelation, FactTable
 
 
 def _db() -> sqlite3.Connection:
@@ -182,6 +186,37 @@ def test_overlay_reads_only_the_canonical_resolved_fact_relation() -> None:
         "CREATE VIEW v_financial_facts_resolved_current AS "
         "SELECT * FROM financial_facts WHERE id = 21"
     )
+
+    result = overlay_quarterly_records(
+        conn, ticker="TEST", statement="income", records=[_income_row()]
+    )
+
+    assert result.records[0]["revenue"] == 1_300_000
+    assert [item.fact_id for item in result.applied] == [21]
+
+
+def test_overlay_uses_the_guarded_canonical_relation_sql(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _db()
+    conn.executemany(
+        """
+        INSERT INTO financial_facts
+            (id, ticker, period_end, fiscal_period_type, line_item, value, currency, unit,
+             source_doc_id, extracted_by, locator)
+        VALUES (?, 'TEST', '2026-06-30', 'Q2', 'revenue', ?, 'USD', 'actual', 1,
+                'sec_xbrl', NULL)
+        """,
+        ((20, 1_100_000), (21, 1_300_000)),
+    )
+
+    def guarded_relation(_conn: sqlite3.Connection, _table: FactTable) -> CanonicalFactRelation:
+        return CanonicalFactRelation(
+            "(SELECT * FROM v_financial_facts_resolved_current WHERE id=21)",
+            "resolved_view",
+        )
+
+    monkeypatch.setattr(primary_fact_overlay, "canonical_fact_relation", guarded_relation)
 
     result = overlay_quarterly_records(
         conn, ticker="TEST", statement="income", records=[_income_row()]

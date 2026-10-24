@@ -112,25 +112,16 @@ AUDITED_LEGACY_FACT_READS = {
     "src/allocation/eligibility.py": 1,
     "src/bear_case_grader.py": 1,
     "src/competitive/holdings_sync.py": 1,
-    "src/compute/fmp_derived_kpis.py": 1,
-    # Shared fact-aware unit resolution moved this existing read out of the
-    # seeding CLI so Ask approval and seeding use one deterministic authority.
-    "src/compute/kpi_definition_units.py": 1,
     "src/compute/kpi_extract_summaries.py": 2,
-    "src/compute/metrics_engine/io.py": 8,
-    "src/compute/say_do.py": 1,
-    "src/compute/segment_q4_derive.py": 1,
-    "src/compute/segment_quarterly_10q.py": 1,
-    "src/compute/segments.py": 1,
+    "src/compute/metrics_engine/io.py": 6,
     "src/credibility/observations.py": 3,
     "src/decision_conditions.py": 2,
     "src/pipeline/confidence.py": 2,
     "src/pipeline/explore_panel.py": 1,
-    # c96bab532 added one existing-owner recovery read: _insert_kpi_fact
-    # checks a cross-source duplicate only after the exact-source lookup misses
-    # and uq_kpi_facts_logical exists. Preserve the prior fact/context unchanged.
-    # Retire this read when pre-0059 logical-index recovery is no longer supported.
-    # The remaining reads include the reviewed scale guard excluding superseded neighbors.
+    # Includes the pre-0059 logical-index duplicate guard and the reviewed
+    # scale guard, which excludes superseded neighbors. The duplicate guard
+    # preserves an existing source's semantic context on an ignored insert.
+    # These write-boundary checks retire with the legacy KPI projection.
     "src/pipeline/kpi_persistence.py": 6,
     # Exact predecessor/head reads guard the one governed append-only repair
     # write. They are not product analytics and retire with that write seam.
@@ -141,27 +132,21 @@ AUDITED_LEGACY_FACT_READS = {
     "src/pipeline/issuer_document_coverage.py": 3,
     "src/pipeline/restatements_panel.py": 4,
     "src/pipeline/validation_engine.py": 5,
-    # Canonical cutover resolution must inspect both exact legacy candidates
-    # and their available-at-cutoff supersession links before it can publish
-    # one immutable selected observation. These are resolver-boundary reads,
-    # not product-consumer fallbacks.
-    "src/provenance/financial_fact_resolution.py": 4,
+    # Canonical cutover resolution inspects exact legacy candidates and
+    # supersession links. Its historical selector also checks one exact KPI
+    # row's declared inputs before admitting the selected observation. These
+    # are resolver-boundary reads, not product-consumer fallbacks.
+    "src/provenance/financial_fact_resolution.py": 5,
     "src/provenance/integrity_audit.py": 1,
     "src/provenance/legacy_canonical_parity.py": 2,
-    "src/report/sections/financials.py": 2,
     "src/synthesis/lenses/_shared.py": 1,
     # Admitted semantic persistence validates the exact legacy projection row's
     # stored unit before appending context. This is a write-boundary guard, not
     # an analytical reader, and retires with the legacy KPI projection.
     "src/pipeline/kpi_semantics.py": 1,
-    # One direct legacy financial-fact read moved behind the canonical relation
-    # resolver; the frozen literal legacy-read debt therefore shrinks by one.
     # The KPI pick-pair read joins raw kpi_facts to the per-connection
-    # materialized pick (winners of the resolved relation + admission +
-    # identity, built once per connection), so the raw read is
-    # provenance-equivalent to the resolved-relation read it replaced; the
-    # audited count grows by exactly that one read.
-    "src/timeseries/loaders.py": 5,
+    # materialized pick of guarded, admitted winners.
+    "src/timeseries/loaders.py": 1,
     "src/triggers/kpi_inflection.py": 1,
     "src/user_state/kpi_catalog.py": 1,
     "src/viewspec/engine.py": 1,

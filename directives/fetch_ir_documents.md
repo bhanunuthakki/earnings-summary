@@ -8,7 +8,7 @@ shareholder letters, transcripts) for tracked names through two parallel paths:
 1. **Auto-fetch** — download documents from official IR websites for authorized companies,
    covering at most the canonical last 5 reported quarters. Files land in `ir_documents/{TICKER}/{period}/`
    and are registered in the canonical `documents` SQLite table (`source_type='ir_doc'`).
-2. **Manual upload** — the user drops an explicitly approved PDF/XLSX at the root of
+2. **Manual upload** — the user drops an explicitly approved PDF/XLSX/HTML at the root of
    `ir_documents/`. This exact-document lane does not start a crawler. The
    `categorize_ir_uploads.py` step classifies and routes them through the same
    provenance contract as auto-fetch.
@@ -16,6 +16,14 @@ shareholder letters, transcripts) for tracked names through two parallel paths:
 IR coverage is a separately reported source obligation. Other analysis may proceed
 with an explicit gap when the issuer source is unavailable, but absent documents
 do not establish that the issuer has no relevant material or that coverage is complete.
+The batch treats an empty crawl, failed download, or failed registration as an
+incomplete acquisition. A retry also includes a company whose last crawl failed,
+even when older IR documents exist. A missing IR URL remains an explicit skip.
+Batch success is not a fact-extraction or decision-grade completeness receipt.
+Official HTML earnings releases are accepted when discovery marks a release link,
+the server returns HTML, and content classification confirms an earnings release.
+The original HTML bytes and source URL are retained. HTML error pages and unrelated
+news pages fail classification; PDF links that return HTML fail acquisition.
 
 ## Auto-fetch authorization and known site coverage
 
@@ -91,15 +99,16 @@ invocation cannot widen the window.
 
 | DocType (canonical) | Legacy index alias | Description | Priority |
 |---|---|---|---|
-| `IR_PRESS_RELEASE` | `press_release` | Quarterly earnings press release or financial results PDF | High |
+| `IR_PRESS_RELEASE` | `press_release` | Quarterly earnings press release or financial results PDF/HTML | High |
 | `IR_PRESENTATION`  | `presentation`  | Earnings slide deck / investor presentation PDF | High |
 | `IR_TRANSCRIPT`    | `transcript`    | IR-published earnings call transcript PDF (text) | High; no audio/webcast fallback |
 | `IR_SUPPLEMENT`    | (none)          | Financial supplement / data workbook (XLSX or PDF) | Medium |
 | `IR_INVESTOR_UPDATE`| (none)         | Shareholder letter, annual report, investor day deck | Medium |
 
-`IR_SUPPLEMENT` and `IR_INVESTOR_UPDATE` aren't yet wired into the legacy
-`process_ir_documents.py` LLM step, but they are first-class citizens of the
-`documents` table for downstream analytical queries.
+`IR_INVESTOR_UPDATE` uses the legacy summary path. `IR_SUPPLEMENT` does not use
+that summary path; its separate KPI-capture command remains an explicit step.
+Both are first-class citizens of the `documents` table. A cached summary or KPI
+row is not a terminal extraction-completeness receipt.
 
 ## Path A: Auto-fetch (headless discovery → download → register)
 
@@ -116,6 +125,10 @@ best-effort step on onboard (`execution/onboard_ticker.py`, `--skip-ir` to skip)
    (.pdf/.xlsx/CDN/filemanager), follows obvious "quarterly results / archive"
    sub-links one hop, and classifies each by filename + link text. Merges the
    results into `.tmp/ir_url_manifest/<TICKER>_urls.json` (append-only, URL-keyed).
+   Hybrid and list consumers use the same inventory crawler. Page failures and
+   exhausted crawl limits produce `partial`. The batch retains available
+   candidates, reports degradation, and retries discovery on its next run.
+   Technical crawl closure never proves publisher authority or archive completeness.
    Best-effort: no IR URL → `no_ir_url` (exit 0); a JS-widget site that exposes
    only the current quarter accumulates history across weekly runs.
 2. **Download + register** (`execution/fetch_ir_documents.py --ticker <X> --categorize`):
@@ -126,7 +139,8 @@ best-effort step on onboard (`execution/onboard_ticker.py`, `--skip-ir` to skip)
    canonical `ir_documents/<TICKER>/<period_end_iso>/<doc_type>__<sha8>.<ext>`, and
    publishes the `documents` row (`source_type='ir_doc'`, real `source_url`) and
    foundational evidence anchor in one transaction, then updates the legacy
-   JSON-index mirror. Classification is not semantic admission. `--calendar <id>` (FYE-derived) lets a ticker not yet
+   JSON-index mirror. The fetcher rechecks registered source URLs after categorization;
+   exit code zero alone does not prove registration. Classification is not semantic admission. `--calendar <id>` (FYE-derived) lets a ticker not yet
    in `ISSUER_REGISTRY` register best-effort.
 3. **Batch** (`execution/discover_ir_documents_all.py`): the scheduled entry point.
    Reads the active roster from the DB at run time; scheduled acquisition covers
@@ -138,13 +152,22 @@ best-effort step on onboard (`execution/onboard_ticker.py`, `--skip-ir` to skip)
    URL deduplication is not evidence that the remote publisher has not changed the
    document. Source inventory/freshness reconciliation owns that separate check.
 5. **Processing debt**: existing pending documents remain eligible even if discovery
-   downloaded zero new files. Processing failure remains pending and makes the batch
-   degraded. The deterministic `process_document_evidence.py` interface selects exact
-   input/extractor versions; optional narrative processing does not seal evidence.
+   downloaded zero new files. The batch invokes the existing deterministic
+   `process_document_evidence.py --ticker <X> --source-type ir_doc --apply` interface before derived views,
+   without a second cursor or extraction writer. Its bounded batch selects exact
+   input/extractor versions. Quarantined, unsupported, failed, or unfinished extraction
+   defers the views and keeps the batch degraded. Missing inventory also stays degraded;
+   current extracted documents may still refresh the existing views. Narrative and
+   summary views use the full-text owner's source-text projection; they do not seal
+   evidence or admit facts. KPI PDF candidates use that same projection. LLM
+   summaries remain opt-in. The batch follows the existing evidence cursor when
+   one company has more than one page of stored documents, under its current
+   deadline. Older batch checkpoints retain their completed crawls and requeue
+   only the evidence continuation when their prior completion predates it.
 
 ## Path B: Manual upload (Categorize → Register)
 
-1. **Drop**: User places any combination of `.pdf` / `.xlsx` files at the root of `ir_documents/`. Filenames may be arbitrary — UUID exports, IR-CDN hex names, vendor-specific conventions — the categorizer doesn't need them to follow a schema.
+1. **Drop**: User places any combination of `.pdf` / `.xlsx` / `.html` files at the root of `ir_documents/`. Filenames may be arbitrary — UUID exports, IR-CDN hex names, vendor-specific conventions — the categorizer doesn't need them to follow a schema.
 2. **Categorize** (`execution/categorize_ir_uploads.py`):
    - Filename heuristics (RBRK-/ServiceNow-/novo-nordisk- prefixes, Wix CDN hex, NU's `NQYY Results Presentation` convention) decide ticker when possible.
    - First-page content fingerprint (first ~2 PDF pages or first xlsx sheet) confirms ticker via the issuer-name registry, identifies doc_type via cover-page phrase rules, and locates period via quarter/date/fiscal regex.

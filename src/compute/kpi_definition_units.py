@@ -6,6 +6,7 @@ import sqlite3
 
 from models.facts import Unit
 from models.unit_convert import same_family
+from provenance.financial_fact_resolution import canonical_fact_relation
 
 _RATE_NAME_TOKENS = (
     "growth",
@@ -75,8 +76,9 @@ def infer_unit(name: str) -> Unit:
 def dominant_fact_unit(connection: sqlite3.Connection, ticker: str, name: str) -> Unit | None:
     """Return the modal recorded fact unit, breaking ties by latest period."""
 
+    fact_relation = canonical_fact_relation(connection, "kpi_facts").sql
     row = connection.execute(
-        "SELECT f.unit FROM kpi_facts f "
+        f"SELECT f.unit FROM {fact_relation} f "  # nosec B608 -- canonical resolver owns relation; values bound
         "JOIN kpi_definitions d ON d.id=f.kpi_definition_id "
         "WHERE d.ticker=? AND d.name=? AND f.unit IS NOT NULL "
         "GROUP BY f.unit ORDER BY COUNT(*) DESC, MAX(f.period_end) DESC LIMIT 1",

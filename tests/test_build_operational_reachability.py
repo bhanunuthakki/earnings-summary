@@ -217,14 +217,18 @@ def test_actual_head_is_supported() -> None:
             line=line,
             unknown=True,
         )
-        for line in (123, 913)
+        for line in (124, 914)
     ]
-    # Keep the exact managed-startup, shared-ledger admission, and dead/live
-    # lease-holder test children. Reject any other additions in these files.
+    # Keep the exact managed-startup, shared-ledger admission, dead/live
+    # lease-holder and harness session-start pruning test children. Reject any
+    # other additions in these files.
     for source, lines in (
         ("tests/test_sqlite_bootstrap.py", (32, 108)),
         ("tests/test_weekly_cleanup.py", (190,)),
+        ("tests/test_filing_xbrl_appcontainer_launcher.py", (22, 34)),
         ("tests/test_storage_reservation.py", (61, 121, 139)),
+        ("tests/test_temp_run_pruning.py", (166,)),
+        ("tests/test_financial_source_semantic_quarantine.py", (49,)),
     ):
         assert [edge for edge in graph.unknown_edges if edge.source == source] == [
             GraphEdge(
@@ -240,7 +244,29 @@ def test_actual_head_is_supported() -> None:
         ]
     # SEC creator retirement removes only its three test-only process edges.
     assert not any(e.source == "tests/test_sec_delta_planner.py" for e in graph.unknown_edges)
-    assert len(graph.unknown_edges) == 158
+    # Pin the IR fixture lookups: bounded capture entrypoints and monkeypatch
+    # restoration of fixed state-path fields. Line 27 is an existing seam;
+    # the other seven lookups accompany the new isolation/transaction tests.
+    for source, lines in (
+        ("tests/test_ir_supplement_continuation.py", (854,)),
+        ("tests/test_scan_ir_transcripts.py", (422, 424, 484, 486)),
+        ("tests/test_split_root_legacy_adapters.py", (27, 205, 215)),
+    ):
+        assert [edge for edge in graph.unknown_edges if edge.source == source] == [
+            GraphEdge(
+                source=source,
+                target="<dynamic attribute>",
+                kind="getattr",
+                evidence="dynamic getattr expression",
+                confidence="low",
+                line=line,
+                unknown=True,
+            )
+            for line in lines
+        ]
+    # Retain all exact test seams from both branches.
+    # The zero-production assertions stay above.
+    assert len(graph.unknown_edges) == 169
     assert [
         edge for edge in graph.unknown_edges if edge.source == "tests/test_db_writer_gate.py"
     ] == [
@@ -318,7 +344,7 @@ def test_actual_head_is_supported() -> None:
         | {("tests/test_onboarding_state_authority.py", line) for line in (30, 59, 74)}
         | {
             ("tests/test_scheduled_singleflight.py", 98),
-            ("tests/test_split_root_legacy_adapters.py", 25),
+            ("tests/test_split_root_legacy_adapters.py", 27),
         }
     )
     assert new_fixture_calls <= {(edge.source, edge.line) for edge in graph.unknown_edges}

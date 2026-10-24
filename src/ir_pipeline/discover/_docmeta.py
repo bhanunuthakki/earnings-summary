@@ -70,7 +70,14 @@ def filename_for_url(url: str, timeout: int = 30) -> str:
 def classify(filename: str) -> str | None:
     """Map a filename to a canonical doc_type, or None if unrecognized."""
     low = filename.lower()
+    guessed: str | None = None
     for doc_type, patterns in _PATTERNS:
         if any(re.search(p, low) for p in patterns):
-            return doc_type
-    return None
+            guessed = doc_type
+            break
+    title = re.sub(r"[-_]", " ", low)
+    if guessed not in {"spreadsheet", "deck", "transcript"} and re.search(
+        r"\b(?:to|will)\s+(?:announce|report|release)\b.{0,100}\b(?:results|earnings)\b", title
+    ):
+        return "earnings_announcement"
+    return guessed

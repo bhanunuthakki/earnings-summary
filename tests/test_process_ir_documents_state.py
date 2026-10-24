@@ -127,8 +127,9 @@ def test_main_passes_all_selectors_and_explicit_authorities(
     seen: list[tuple[tuple[object, ...], dict[str, object]]] = []
     environments: list[Path] = []
 
-    def run(*args: object, **kwargs: object) -> None:
+    def run(*args: object, **kwargs: object) -> int:
         seen.append((args, kwargs))
+        return 0
 
     monkeypatch.setattr(processor, "run_for_ticker", run)
     monkeypatch.setattr(processor, "load_project_env", environments.append)
@@ -186,9 +187,10 @@ def test_all_selects_quarterly_and_event_tickers_from_explicit_index(
     database.touch()
     seen: list[str] = []
 
-    def run(ticker: str, *_args: object, **kwargs: object) -> None:
+    def run(ticker: str, *_args: object, **kwargs: object) -> int:
         assert kwargs == {"repo_root": tmp_path, "db_path": database}
         seen.append(ticker)
+        return 0
 
     monkeypatch.setattr(processor, "load_project_env", _noop)
     monkeypatch.setattr(processor, "run_for_ticker", run)
@@ -214,6 +216,17 @@ def test_event_cache_and_completion_keep_event_identity(
     index_path = _index(tmp_path, {"GOOG_event_2026-05-01_abc12345": document})
     cache = tmp_path / ".tmp/GOOG_event_2026-05-01_abc12345_event_brief.txt"
     cache.write_text("PRIOR EVENT BRIEF", encoding="utf-8")
+    source = tmp_path / "event__abc12345.pdf"
+    cache.with_suffix(".source.json").write_text(
+        json.dumps(
+            {
+                "source_text_identity": processor.source_text_projection_identity(str(source)),
+                "source_sha256": sha256(source.read_bytes()).hexdigest(),
+                "summary_sha256": sha256(cache.read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(processor, "resolve_ticker", _identity)
     monkeypatch.setattr(processor.index_manager, "resolve_ticker", _identity)
 
@@ -430,3 +443,27 @@ def test_real_summary_chain_routes_pins_budget_and_usage_to_explicit_database(
     assert sha256(decoy.read_bytes()).hexdigest() == decoy_sha
     assert not decoy_root.exists()
     assert not (root / "data/portfolio.db").exists()
+
+
+@pytest.mark.parametrize("status", [0, 1])
+def test_main_propagates_processor_status_with_explicit_authorities(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    database = tmp_path / "authority.sqlite"
+    database.touch()
+    original_argv = list(sys.argv)
+    original_globals = (processor.PROJECT_ROOT, db.DB_PATH)
+
+    def run(ticker: str, *_args: object, **kwargs: object) -> int:
+        assert ticker == "NU"
+        assert kwargs == {"repo_root": tmp_path, "db_path": database}
+        return status
+
+    monkeypatch.setattr(processor, "load_project_env", _noop)
+    monkeypatch.setattr(processor, "run_for_ticker", run)
+    assert (
+        processor.main(["--ticker", "NU", "--repo-root", str(tmp_path), "--db", str(database)])
+        == status
+    )
+    assert sys.argv == original_argv
+    assert original_globals == (processor.PROJECT_ROOT, db.DB_PATH)

@@ -376,10 +376,12 @@ def test_native_import_replay_preserves_parent_and_exact_original_bytes(
 def test_wrong_parent_or_original_identity_is_rejected_without_partial_rows(
     retained: tuple[sqlite3.Connection, RetainedSubmissionImportRequest],
     damage: str,
+    tmp_path: Path,
 ) -> None:
     conn, request = retained
     if damage == "hash":
-        path = Path(request.parent_blob.storage_uri.removeprefix("file://"))
+        path = tmp_path / "parent.txt"
+        assert path.as_uri() == request.parent_blob.storage_uri
         path.write_bytes(path.read_bytes() + b"changed")
     elif damage == "cik":
         request = request.model_copy(update={"cik": "2"})

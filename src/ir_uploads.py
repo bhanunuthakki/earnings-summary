@@ -23,6 +23,7 @@ from datetime import date
 from pathlib import Path
 from typing import Protocol, cast
 
+from bs4 import BeautifulSoup
 from openpyxl import load_workbook
 from pypdf import PdfReader
 
@@ -620,12 +621,23 @@ def fingerprint_xlsx(path: Path) -> str:
         wb.close()
 
 
+def fingerprint_html(path: Path) -> str:
+    """Read a release classification view without changing its publisher bytes."""
+    soup = BeautifulSoup(path.read_bytes(), "html.parser")
+    for node in soup.select("script, style, noscript, template, nav, header, footer"):
+        node.decompose()
+    content = soup.find("article") or soup.find("main") or soup.body or soup
+    return content.get_text(" ", strip=True)[:_PDF_FINGERPRINT_CHARS]
+
+
 def fingerprint(path: Path) -> str:
     sfx = path.suffix.lower()
     if sfx == ".pdf":
         return fingerprint_pdf(path)
     if sfx == ".xlsx":
         return fingerprint_xlsx(path)
+    if sfx in {".html", ".htm"}:
+        return fingerprint_html(path)
     raise ValueError(f"Unsupported extension {sfx!r} for {path.name}")
 
 
@@ -825,6 +837,25 @@ def _detect_doc_type(
             earliest_pos = pos
             earliest_idx = idx
             earliest_match = (doc_type, label, m.group(0))
+    # A scheduling headline is stronger than a generic publication dateline.
+    # Restrict this to the opening title lines. Earlier results, transcript,
+    # or presentation evidence keeps later forward-looking prose from winning.
+    title = "\n".join(text.splitlines()[:3])
+    notice = re.search(
+        r"^[^\n]{0,100}\b(?:to|will)\s+(?:announce|report|release)\b"
+        r"[^\n]{0,100}\b(?:results|earnings)\b[ \t]*$",
+        title,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    if notice is not None and not any(
+        hit is not None and hit.start() < notice.start()
+        for _kind, rule, label in _DOC_TYPE_RULES
+        if label != "press_release_dateline"
+        for hit in [rule.search(text)]
+    ):
+        return DocType.IR_EARNINGS_ANNOUNCEMENT, [
+            f"earnings_announcement_title:{notice.group(0)!r}"
+        ]
     if earliest_match is not None:
         doc_type, label, hit = earliest_match
         return doc_type, [f"{label}:{hit!r}@{earliest_pos}"]
@@ -1108,6 +1139,36 @@ def _detect_event_period_end(text: str, filename: str) -> tuple[date | None, lis
     return None, []
 
 
+def _detect_publication_period_end(text: str) -> tuple[date | None, list[str]]:
+    """Require an explicit publication label or a stamped wire-service dateline."""
+    for line in text.splitlines():
+        label = re.match(
+            r"\s*(?:Published(?:\s+on)?|Publication\s+date)\s*:\s*", line, re.IGNORECASE
+        )
+        if label is not None:
+            published, evidence = _detect_event_period_end(line[label.end() :], "")
+            if published is not None:
+                return published, [f"publication_label:{line!r}", *evidence]
+    dateline_rule = next(
+        rule for _kind, rule, label in _DOC_TYPE_RULES if label == "press_release_dateline"
+    )
+    for hit in dateline_rule.finditer(text):
+        # Capitalization and a comma cannot prove that a calendar caption is a
+        # publication location. Only an affirmative wire-service stamp qualifies.
+        stamp = re.match(
+            r"\s*(?:/PR\s?Newswire/|\((?:BUSINESS\s+WIRE|GLOBE\s+NEWSWIRE)\))",
+            text[hit.end() :],
+            re.IGNORECASE,
+        )
+        if stamp is None:
+            continue
+        dateline = hit.group(0)
+        published, evidence = _detect_event_period_end(dateline, "")
+        if published is not None:
+            return published, [f"publication_wire_dateline:{dateline!r}", *evidence]
+    return None, []
+
+
 def _filename_period_hint(name: str) -> tuple[tuple[int, int] | None, list[str]]:
     """Best-effort period hint from filename — used to disambiguate when
     content gives a less-specific match (e.g. cover slide doesn't say which Q).
@@ -1190,7 +1251,7 @@ def classify_ir_file(
     a local filename.
     """
     ext = path.suffix.lower()
-    if ext not in {".pdf", ".xlsx"}:
+    if ext not in {".pdf", ".xlsx", ".html", ".htm"}:
         return CategorizationFailure(
             reason=f"unsupported_extension:{ext!r}",
             text_sample="",
@@ -1240,7 +1301,26 @@ def classify_ir_file(
                 text_sample=text[:600],
             )
 
-    doc_type, doc_ev = _detect_doc_type(text, ext, path.name)
+    # HTML is limited to releases with a positive content signal. A staging
+    # filename cannot promote an access-denied page or an unrelated listing.
+    is_html = ext in {".html", ".htm"}
+    doc_type, doc_ev = _detect_doc_type(text, ext, "" if is_html else path.name)
+    html_release_signal = (
+        any(
+            rule_type is DocType.IR_PRESS_RELEASE
+            and label != "press_release_dateline"
+            and pattern.search(text) is not None
+            for rule_type, pattern, label in _DOC_TYPE_RULES
+        )
+        if is_html
+        else False
+    )
+    if is_html and (doc_type is not DocType.IR_PRESS_RELEASE or not html_release_signal):
+        return CategorizationFailure(
+            reason="html_earnings_release_unidentified",
+            text_sample=text[:600],
+            ticker_guess=ticker,
+        )
     if doc_type is None:
         return CategorizationFailure(
             reason="doc_type_unidentified",
@@ -1262,14 +1342,20 @@ def classify_ir_file(
             )
         cal = calendar_override
 
+    # Earnings notices use publication date; other IR_EVENT materials use event date.
     # IR_EVENT (investor day, broker conference, capital markets day) is keyed
     # by event date, not fiscal quarter. Pull the first explicit date out of
     # the cover-page text; fall back to a year-only filename hint.
-    if doc_type == DocType.IR_EVENT:
-        event_period_end, event_evidence = _detect_event_period_end(text, path.name)
+    if doc_type in {DocType.IR_EVENT, DocType.IR_EARNINGS_ANNOUNCEMENT}:
+        if doc_type is DocType.IR_EARNINGS_ANNOUNCEMENT:
+            event_period_end, event_evidence = _detect_publication_period_end(text)
+            missing_date_reason = "publication_date_unidentified"
+        else:
+            event_period_end, event_evidence = _detect_event_period_end(text, path.name)
+            missing_date_reason = "event_date_unidentified"
         if event_period_end is None:
             return CategorizationFailure(
-                reason="event_date_unidentified",
+                reason=missing_date_reason,
                 text_sample=text[:600],
                 ticker_guess=ticker,
                 doc_type_guess=doc_type,
@@ -1368,7 +1454,7 @@ _CANONICAL_PATH_RX = re.compile(
     # both round-trip the reindexer fast-path; `parse_canonical_path` validates the
     # token against the DocType enum, so an unknown token still falls through.
     r"(?P<doc_type>(?:ir|sec)_[a-z0-9_]+)__(?P<sha8>[0-9a-f]{8})"
-    r"\.(?P<ext>pdf|xlsx)$"
+    r"\.(?P<ext>pdf|xlsx|html|htm)$"
 )
 
 
@@ -1440,7 +1526,7 @@ def iter_uncategorized_files(root: Path) -> list[Path]:
     for p in sorted(root.rglob("*")):
         if not p.is_file() or p.name.startswith("."):
             continue
-        if p.suffix.lower() not in {".pdf", ".xlsx"}:
+        if p.suffix.lower() not in {".pdf", ".xlsx", ".html", ".htm"}:
             continue
         try:
             rel_parts = p.resolve().relative_to(root.resolve()).parts
@@ -1481,6 +1567,7 @@ __all__: Sequence[str] = (
     "classify_ir_file",
     "detect_sec_form",
     "fingerprint",
+    "fingerprint_html",
     "fingerprint_pdf",
     "fingerprint_xlsx",
     "iter_uncategorized_files",

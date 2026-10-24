@@ -128,7 +128,7 @@ def _expected_document_family(
     record: ExpectedDocument,
     *,
     issuer_kind: str,
-) -> str:
+) -> str | None:
     """Apply the explicit source-duty policy for one expected document.
 
     Regulatory form families are a closed, issuer-kind-aware vocabulary. An
@@ -180,6 +180,8 @@ def _expected_document_family(
     if record.source_kind == "earnings_call":
         return "issuer_earnings_materials"
     document_type = record.document_type.strip().lower()
+    if document_type == "earnings_announcement":
+        return None  # Retain supporting calendar notices without a financial duty.
     families = {
         "annual_report": "issuer_financial_statements",
         "earnings_material": "issuer_earnings_materials",
@@ -403,6 +405,8 @@ class SourceCoverageLedger:
         ):
             return
         obligation = self._resolve_source_obligation(record)
+        if obligation is None:
+            return
         obligation_revision_id = str(obligation[0])
         reporting_entity_id = None if obligation[1] is None else str(obligation[1])
         document_family = str(obligation[2])
@@ -465,7 +469,7 @@ class SourceCoverageLedger:
     def _resolve_source_obligation(
         self,
         record: ExpectedDocument,
-    ) -> sqlite3.Row | tuple[object, ...]:
+    ) -> sqlite3.Row | tuple[object, ...] | None:
         issuer = self._conn.execute(
             "SELECT entity_kind FROM issuer_entities WHERE issuer_id=?",
             (record.issuer_id,),
@@ -476,6 +480,10 @@ class SourceCoverageLedger:
             record,
             issuer_kind=str(issuer[0]),
         )
+        if expected_family is None:
+            if record.source_obligation_revision_id is not None:
+                raise ValueError("supporting IR notice cannot claim a financial source obligation")
+            return None
         params: list[object] = [
             record.issuer_id,
             expected_family,

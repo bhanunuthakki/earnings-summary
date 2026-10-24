@@ -1,0 +1,12 @@
+{
+  "schema_version": "architecture-ratchet-v1",
+  "status": "FAIL",
+  "scoped_commit": "d97be09311fa21667fa7e537609831ce32340f93",
+  "baseline_commit": "5913b1fc18be872e7297ffc55fe1e074fdc40af8",
+  "current_source_sha256": "8a2ec01e54c0605458691630ab5abfb2eb004f93758af42cef14c9db4d0952c6",
+  "baseline_source_sha256": "b59f08e09fb3f61e29759f92a7bbc3e16ca990cefd165064c3fdaca2872a6a2a",
+  "regressions": [
+    "total_noncomment_loc increased from 569345 to 569356"
+  ],
+  "scanner_mismatch": false
+}

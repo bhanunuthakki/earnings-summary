@@ -132,17 +132,19 @@ PDF full-text extraction uses the deliberately promoted identity in
 library version. The writer checks the loaded parser before parsing; a missing or
 different version is quarantined without recording an approved extraction run.
 Dependency updates require an explicit identity promotion and isolated parser
-validation. New extraction uses pypdf 6.21.1 only. Readers select exact approved
-identities independently of their installed libraries, retaining the prior 6.19.0
-code/config pair for seals, current coverage, search and KPI evidence. Readers
-select one complete approved run per document, preferring 6.21.1 and falling back
-to 6.19.0; they never combine nodes across parser runs. Retained coverage also
-counts as complete for scheduled resume and explicit full-text backfill, so the
+validation. New extraction uses pypdf 6.21.2 only. Readers select exact approved
+identities independently of their installed libraries, retaining the exact 6.21.1
+and 6.19.0 code/config pairs and original namespaces for seals, current coverage,
+search and KPI evidence. Readers select one complete approved run per document.
+With a native preflight inventory, the newest approved run must cover all required
+native pages. Without one, each promotion must cover every substantive page of
+the previously selected whole run, from oldest to newest. An incomplete
+intermediate run cannot remove older coverage. Readers never combine nodes across
+parser runs. Retained coverage also counts as complete for scheduled resume and explicit full-text backfill, so the
 promotion does not trigger re-extraction. Historical
 base `@1` sealed evidence remains reconstructible under its pinned identity, but
-cannot authorize a new seal or current coverage. The 6.21.1 writer has a distinct
-idempotency namespace to avoid colliding with 6.19.0 runs; `fulltext-pdf-v6`
-evidence keys retain explicit superseding revisions without erasing old nodes.
+cannot authorize a new seal or current coverage. The 6.21.2 writer has a distinct
+idempotency namespace to avoid colliding with either retained generation. The `fulltext-pdf-v6` evidence keys retain explicit superseding revisions without erasing old nodes.
 
 Mutable provider caches are working projections. Before registration, exact retained FMP
 cache bytes are installed without clobbering under content-addressed

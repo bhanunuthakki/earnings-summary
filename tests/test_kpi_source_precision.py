@@ -1,6 +1,7 @@
 """A plain numeric cell does not discard a reviewed table qualifier."""
 
 import hashlib
+import json
 import sqlite3
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
@@ -163,12 +164,12 @@ def test_exact_source_token_must_match_the_stored_value() -> None:
 
 
 @pytest.mark.parametrize(
-    "precision_kind,role,quarantine_reason",
+    "precision_kind,role",
     [
-        ("approximate", "current", None),
-        ("exact", "current", "source_precision_requires_review"),
-        ("exact", "prior_period_comparator", "period_role_prior_period_comparator"),
-        ("exact", "guidance", "period_role_guidance"),
+        ("approximate", "current"),
+        ("exact", "current"),
+        ("exact", "prior_period_comparator"),
+        ("exact", "guidance"),
     ],
 )
 def test_original_pdf_extraction_preserves_duration_precision_and_novel_counts(
@@ -177,12 +178,14 @@ def test_original_pdf_extraction_preserves_duration_precision_and_novel_counts(
     monkeypatch: pytest.MonkeyPatch,
     precision_kind: str,
     role: str,
-    quarantine_reason: str | None,
 ) -> None:
     fitz = pytest.importorskip("fitz", reason="PyMuPDF (fitz) not installed")
     import parser
     from compute import kpi_extract_summaries as summaries
-    from models.facts import FactLocator
+    from llm import structured
+    from llm.ledger import record_llm_call
+    from provenance.evidence_ledger import EvidenceLocator
+    from provenance.ir_reported_facts import IrRawRow
 
     qualifier = "Amounts are rounded to the nearest million."
     pdf = tmp_path / "presentation.pdf"
@@ -201,6 +204,7 @@ def test_original_pdf_extraction_preserves_duration_precision_and_novel_counts(
             "value": 1200000000,
             "unit": "actual",
             "currency": "USD",
+            "source_value_text": "1200000000",
             "source_excerpt": "Revenue was USD 1200000000.",
             "reported_period_start": "2025-01-01",
             "reported_period_end": "2025-03-31",
@@ -227,12 +231,30 @@ def test_original_pdf_extraction_preserves_duration_precision_and_novel_counts(
         },
     ]
 
-    def model_response(prompt: str, **kwargs: object) -> object:
-        assert text in prompt
+    def model_response(prompt: str, **kwargs: object) -> str:
+        assert "Revenue was USD 1200000000." in prompt
         assert kwargs["purpose"] == "kpi_summary_enumerate"
-        return rows
+        raw = json.dumps(rows)
+        # Only the transport is synthetic. The structured parser, native source
+        # guard, continuation and immutable candidate writer remain executable.
+        record_llm_call(
+            started_at=datetime.now(UTC),
+            elapsed_ms=0,
+            model=str(kwargs["model"]),
+            prompt_sha=hashlib.sha256(prompt.encode()).hexdigest(),
+            prompt_chars=len(prompt),
+            purpose="kpi_summary_enumerate",
+            ticker="NU",
+            scope=None,
+            run_id=str(kwargs["run_id"]),
+            response_text=raw,
+            provider="synthetic-r4",
+            transport="synthetic-r4",
+            outcome="success",
+        )
+        return raw
 
-    monkeypatch.setattr(summaries, "call_llm_structured", model_response)
+    monkeypatch.setattr(structured, "call_llm", model_response)
     from provenance.evidence_ledger import (
         ContentBlob,
         DocumentVersion,
@@ -250,7 +272,7 @@ def test_original_pdf_extraction_preserves_duration_precision_and_novel_counts(
         conn.execute(
             "INSERT INTO documents(id,ticker,source_type,doc_type,period_end,file_path,"
             "sha256,fetched_at,fetch_status,raw_bytes_size,source_quality_tier) "
-            "VALUES (42,'NU','ir_doc','ir_presentation','2025-03-31',?,?,?,'ok',?,'ir_doc')",
+            "VALUES (42,'NU','ir_doc','ir_supplement','2025-03-31',?,?,?,'ok',?,'ir_doc')",
             (str(pdf), digest, stamp, len(payload)),
         )
         ledger = EvidenceLedger(conn)
@@ -267,7 +289,7 @@ def test_original_pdf_extraction_preserves_duration_precision_and_novel_counts(
             SourceObservation(
                 observation_id="r4-pdf",
                 idempotency_key="r4-pdf",
-                source_kind="ir_document",
+                source_kind="ir_doc",
                 source_url="https://example.test/NU/presentation.pdf",
                 blob_sha256=digest,
                 source_published_at=None,
@@ -288,9 +310,10 @@ def test_original_pdf_extraction_preserves_duration_precision_and_novel_counts(
                 blob_sha256=digest,
                 issuer_id="fixture:NU",
                 ticker="NU",
-                document_type="ir_presentation",
+                document_type="ir_supplement",
                 form_type="presentation",
                 language="en",
+                period_end=datetime(2025, 3, 31),
                 legacy_document_id=42,
                 recorded_at=stamp,
             )
@@ -322,42 +345,43 @@ def test_original_pdf_extraction_preserves_duration_precision_and_novel_counts(
             )
         )
 
-        result = summaries.capture_for_ir_pdf_docs(
-            "NU", tmp_path, conn, doc_types=("ir_presentation",)
-        )
+        conn.commit()
+        result = summaries.capture_for_ir_pdf_docs("NU", tmp_path, conn)
         assert result.error is None
-        assert result.kpis_inserted_total == 2
+        assert result.kpis_inserted_total == 0
+        assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
         stored = conn.execute(
-            "SELECT facts.id,definition.name,facts.value,facts.source_doc_id,facts.locator "
-            "FROM kpi_facts AS facts JOIN kpi_definitions AS definition "
-            "ON definition.id=facts.kpi_definition_id ORDER BY facts.id"
+            "SELECT text,locator_json FROM evidence_nodes "
+            "WHERE node_id LIKE 'ir-pdf-candidate:%' ORDER BY node_id"
         ).fetchall()
-        assert {str(row[1]) for row in stored} == {"Revenue", "New active accounts"}
-        assert all(row[3] == 42 for row in stored)
+        assert len(stored) == 2
+        retained: dict[str, IrRawRow] = {}
         for row in stored:
-            locator = FactLocator.from_json(str(row[4]))
-            assert locator is not None
-            assert locator.pdf_page == 1
-            assert locator.verbatim_snippet is not None
-            assert locator.verbatim_snippet in text
-        revenue_context = current_kpi_semantic_context(conn, kpi_fact_id=int(stored[0][0]))
-        assert revenue_context is not None
-        assert revenue_context.context.reported_period_start == date(2025, 1, 1)
-        assert revenue_context.context.source_precision is not None
-        assert revenue_context.context.source_precision.kind == precision_kind
-        if quarantine_reason is not None:
-            assert revenue_context.context.status.value == "quarantined"
-            assert revenue_context.context.reason_code == quarantine_reason
-            assert revenue_context.context.source_precision.qualifiers == ()
-        else:
-            assert revenue_context.context.source_precision.qualifiers == (qualifier,)
-        assert Decimal(str(stored[0][2])) == Decimal("1200000000")
-        count_context = current_kpi_semantic_context(conn, kpi_fact_id=int(stored[1][0]))
-        assert count_context is not None
-        assert count_context.context.source_precision is None
-        assert count_context.context.reported_period_start is None
-        assert count_context.context.source_value_text == "118"
-        assert Decimal(str(stored[1][2])) == Decimal("118000000")
+            payload = json.loads(str(row[0]))
+            assert payload["schema_version"] == "ir-pdf-unreviewed-candidate.v3"
+            assert payload["promotion_status"] == "pending_review"
+            candidate = IrRawRow.model_validate(payload["row"])
+            locator = EvidenceLocator.model_validate_json(str(row[1]))
+            assert candidate.page_number == locator.page_number == 1
+            assert locator.source_ref == "r4-pdf"
+            assert candidate.native_source_quote in text
+            assert candidate.native_char_end > candidate.native_char_start
+            retained[str(candidate.raw_row["label"])] = candidate
+        assert set(retained) == {"Revenue", "New active accounts"}
+        assert retained["Revenue"].raw_row == rows[0]
+        assert retained["New active accounts"].raw_row == rows[1]
+        revenue = retained["Revenue"].raw_row
+        assert revenue["reported_period_start"] == "2025-01-01"
+        assert revenue["period_role"] == role
+        precision = KpiSourcePrecision.model_validate(revenue["source_precision"])
+        assert precision.kind == precision_kind
+        assert precision.qualifiers == ((qualifier,) if precision_kind == "approximate" else ())
+        assert Decimal(str(revenue["value"])) == Decimal("1200000000")
+        count = retained["New active accounts"].raw_row
+        assert "source_precision" not in count
+        assert "reported_period_start" not in count
+        assert count["source_value_text"] == "118"
+        assert Decimal(str(count["value"])) == Decimal("118000000")
         rule_result = calculate_metric_series(
             conn,
             "NU",

@@ -386,6 +386,7 @@ def upsert(
     req: UpsertRequest,
     *,
     db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> tuple[int | None, bool]:
     """Idempotent upsert.
 
@@ -395,13 +396,22 @@ def upsert(
       - was_cache_hit=False â†’ either no prior row (insert) or prior input_sha256
                               differs (supersede + insert). New id returned.
 
+    With a supplied connection, use a savepoint and retain caller transaction
+    ownership. The caller commits or rolls back and closes the connection.
+
     On DB unavailability returns (None, False) â€” caller must treat as "go
     ahead, compute the artifact" (the LLM call still produces output, just
     no persistence).
     """
-    conn = _open(db_path)
+    owns_connection = conn is None
+    conn = conn or _open(db_path)
     if conn is None:
         return (None, False)
+    savepoint = "llm_artifact_upsert"
+    if not owns_connection:
+        if not conn.in_transaction:
+            conn.execute("BEGIN")
+        conn.execute(f"SAVEPOINT {savepoint}")
     try:
         conn.row_factory = sqlite3.Row
         input_sha = compute_input_sha256(
@@ -444,7 +454,10 @@ def upsert(
         ):
             existing_id = int(existing["id"])
             _supersede_exact_obligations(conn, req=req, successor_id=existing_id)
-            conn.commit()
+            if owns_connection:
+                conn.commit()
+            else:
+                conn.execute(f"RELEASE SAVEPOINT {savepoint}")
             return (existing_id, True)
 
         # Missing/corrupt output also requires a new version; retain prior bytes.
@@ -493,14 +506,22 @@ def upsert(
                 (new_id, int(existing["id"])),
             )
         _supersede_exact_obligations(conn, req=req, successor_id=new_id)
-        conn.commit()
+        if owns_connection:
+            conn.commit()
+        else:
+            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
         return (new_id, False)
     except sqlite3.Error as exc:
-        conn.rollback()
+        if owns_connection:
+            conn.rollback()
+        else:
+            conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
         log.warning({"event": "artifact_upsert_failed", "error": str(exc)})
         return (None, False)
     finally:
-        conn.close()
+        if owns_connection:
+            conn.close()
 
 
 def _supersede_exact_obligations(

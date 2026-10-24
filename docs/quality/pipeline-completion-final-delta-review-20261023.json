@@ -1,0 +1,171 @@
+{
+  "review_id": "pipeline-completion-final-delta-20261023",
+  "created_at": "2026-10-23T09:38:51.389106+00:00",
+  "review_kind": "independent_ad_hoc_advisory",
+  "reviewer": {
+    "agent": "final_delta_review",
+    "requested_model": "GPT6.1",
+    "model_route_receipt": "unavailable; no blocking qualification claimed",
+    "independence": "Separately briefed reviewer; no implementation edits or test execution."
+  },
+  "worktree": "Managed pipeline-completion task checkout; private absolute path omitted from publication.",
+  "scope": "Supporting earnings notice inventory fix, no-noqa import cleanup, portable exact Path test oracle, and architecture candidate v3 refresh only.",
+  "score": 96,
+  "score_max": 100,
+  "threshold": "strictly greater than 90",
+  "verdict": "PASS",
+  "release_verdict": "NOT_ASSESSED",
+  "blockers": [],
+  "findings": [],
+  "file_sha256": {
+    "src/provenance/source_coverage.py": {
+      "sha256": "64398dc9778d9de1446b77c013957fcd3f6f8b11e7c339f09704991a24833d5a"
+    },
+    "tests/test_ir_earnings_announcement.py": {
+      "sha256": "739aca863f2bb94dfc25f10c634b4b8e4076293e0d72ed5d1145c0b40c024bd9"
+    },
+    "execution/extract_facts.py": {
+      "sha256": "63236000b38c3adf43e8c79be4629c84b25358cc83c1c6ce462d7ef6d23990b7"
+    },
+    "execution/fmp_backpop.py": {
+      "sha256": "18baa065448a1a713d7f90b7b1bc38330f335824d22ac13af9e05f20bc42d334"
+    },
+    "tests/test_fmp_backpop.py": {
+      "sha256": "500e74b80ef14ec752e63a5ffb4bcea7fab063b07d340e00417009330e2202c8"
+    },
+    "tests/test_split_root_legacy_adapters.py": {
+      "sha256": "b7cec69f2010980ab86e0db81181c6da67322eba95a2554db0e2c8e7251a2377"
+    },
+    ".tmp/pipeline-completion/architecture-final-candidate-v3.json": {
+      "sha256": "18b9d513d5590bba615ce464acfc8bbca3ab0a184453f51cca9d43d6d75714de"
+    },
+    "docs/quality/architecture-ratchet.json": {
+      "sha256": "407606b73b752eb16ab95d293b09a5b8c48cb552c89817b309105c0e56635634"
+    },
+    ".tmp/pipeline-completion/supporting-notice-inventory-test.log": {
+      "sha256": "60e1242058710208b756baf523521a82eea38d2c90c067ed3ab4b4b664248044"
+    },
+    ".tmp/pipeline-completion/native-final-prep/native-final-v2-receipt.json": {
+      "sha256": "4c3f9b895a1787aeb4bd117afc8a3af3814893a3375f4be25360d44bf7b77db4"
+    },
+    "docs/quality/pipeline-completion-rich-review-20261023.json": {
+      "sha256": "29c26ada7bb8f89a34e23122cb1b17b61790fb1798f531f21b0df7929c05ce0a"
+    },
+    ".tmp/pipeline-completion/rich-source-review-attempt-4.json": {
+      "sha256": "09f018a4bb0edbd6114aeacd1a14a6ddda4e7a15fac8f2af68f0fddb5d0dc01e"
+    },
+    ".tmp/pipeline-completion/rich-source-review-attempt-4-architecture.json": {
+      "sha256": "3bce757baaaf548877d01a9650d6fb64af6c8a0b941873fc885a7069f7081e50"
+    },
+    "src/quality/architecture.py": {
+      "sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7"
+    },
+    "src/quality/duplicates.py": {
+      "sha256": "3e5eeae4a510bfc41990c977ec0d327f0ae945ba849766b82534e0efa043bdf1"
+    },
+    "src/quality/admission_policy.py": {
+      "sha256": "b2c98b954b710f06f3d3bbc9d278c450c7aa2734032c834ea128fb9e13d03cc9"
+    },
+    "scripts/check_architecture_ratchet.py": {
+      "sha256": "f4c3d56fceb9650111b39e110c13aaee672065122d2b5331858420ce5bf0ca90"
+    },
+    "docs/quality/duplicates-ratchet.json": {
+      "sha256": "d796a27bfa25751071cbc137ce12e2da3749a2c5c77458ee6cd8bb5659cd7f9a"
+    }
+  },
+  "assessments": [
+    {
+      "area": "supporting_notice_inventory",
+      "result": "PASS",
+      "evidence": [
+        "src/provenance/source_coverage.py:180-184 limits no-duty handling to ir_document earnings_announcement after closed sec_filing and earnings_call branches.",
+        "src/provenance/source_coverage.py:473-486 checks the issuer before returning no obligation and rejects an explicit financial obligation for the notice.",
+        "src/provenance/source_coverage.py:185-197 preserves genuine release family resolution and unknown-type rejection; ordinary binding query and atomic persist rollback remain unchanged.",
+        "tests/test_ir_earnings_announcement.py:309-365 checks complete source inventory with two lifecycle records, notice without financial binding, genuine release with its binding, unchanged fact count, replay, and three rejection cases.",
+        "Reporting-document classification remains excluded_supporting for exact notices and governed_reporting for earnings_release."
+      ],
+      "admission_effect": "No change to financial fact admission. A complete inventory is distinct from captured or admitted facts."
+    },
+    {
+      "area": "no_noqa_cleanup",
+      "result": "PASS_STATIC_WITH_EVIDENCE_LIMIT",
+      "evidence": [
+        "The current three files contain no noqa markers.",
+        "CLI sys.path setup still precedes project imports and resolves the same paths; PROJECT_ROOT is initialized before runtime/parser use.",
+        "The complete tests/test_fmp_backpop.py diff removes no meaningful assertion. The old import-time test-key setup was obsolete because save_fmp_data no longer exits on absent API_KEY at import.",
+        "Architecture module comparison reports one physical-line increase in each CLI, zero noncomment LOC change, and unchanged import fan-out/responsibility metrics."
+      ],
+      "limit": "Immediate predecessor bytes were not available locally at review time. The native manifest retains hashes, but the supplied local candidate.zip path is absent. No help command or import was executed by this reviewer. Root must validate current bytes."
+    },
+    {
+      "area": "portable_path_oracle",
+      "result": "PASS",
+      "evidence": [
+        "tests/test_split_root_legacy_adapters.py:274 compares two native Path values exactly, preserving relative location and filename while accepting each platform path separator.",
+        "Adjacent receipt scope, candidate count, ticker, unchanged bytes, absent processed directory, and absent checkout-local database assertions remain.",
+        "Native v2 receipt binds this test file to b7cec69f2010980ab86e0db81181c6da67322eba95a2554db0e2c8e7251a2377."
+      ]
+    },
+    {
+      "area": "architecture_baseline_refresh",
+      "result": "SUPPORTED_EXACT_CANDIDATE",
+      "baseline_sha256": {
+        "sha256": "407606b73b752eb16ab95d293b09a5b8c48cb552c89817b309105c0e56635634"
+      },
+      "candidate_sha256": {
+        "sha256": "18b9d513d5590bba615ce464acfc8bbca3ab0a184453f51cca9d43d6d75714de"
+      },
+      "current_source_sha256": {
+        "sha256": "c718ffa4c836fb7004e49fa8630334909216293d0147950eea853836fc04009f"
+      },
+      "comparison": {
+        "executable_modules": 1474,
+        "total_noncomment_loc_before": 566274,
+        "total_noncomment_loc_after": 566282,
+        "added_noncomment_loc": 8,
+        "changed_module_metrics": [
+          "execution/extract_facts.py: physical lines +1 only",
+          "execution/fmp_backpop.py: physical lines +1 only",
+          "src/provenance/source_coverage.py: physical/nonblank/noncomment lines +8 only"
+        ],
+        "other_metrics": "All equal, including SCC inventory, module buckets, fan-out, responsibilities, annotations and facade violations."
+      },
+      "evidence": [
+        "The current tracked source digest was independently recomputed using the scanner digest algorithm and matches candidate v3.",
+        "The scanner file hash matches both receipts. No worktree diff exists for the architecture scanner, duplicate scanner, admission policy, ratchet script or duplicate baseline.",
+        "Earlier +2423 LOC and two-module growth is explicitly disclosed in the architecture addendum and earlier independent rich review."
+      ],
+      "assessment": "A deliberate +8 LOC refresh is truthful and proportionate. It does not hide new structural growth or weaken a gate. The candidate can replace only the exact reviewed baseline.",
+      "limit": "The architecture scanner and gate were not rerun by this reviewer; the root owns that final check."
+    }
+  ],
+  "deterministic_evidence": [
+    {
+      "path": ".tmp/pipeline-completion/supporting-notice-inventory-test.log",
+      "observed": "35 passed in 4.32s",
+      "status": "retained log inspected; not rerun"
+    },
+    {
+      "path": ".tmp/pipeline-completion/native-final-prep/native-final-v2-receipt.json",
+      "observed": "151 integration +327 continuation +40 stage1 =518 distinct selected native cases passed; no failures/skips reported.",
+      "status": "retained aggregate receipt inspected; underlying remote logs not independently fetched",
+      "version_limit": "Excludes the later source-coverage inventory and no-noqa changes; cannot qualify those current bytes."
+    }
+  ],
+  "required_root_followup": [
+    "Requalify affected current source and test bytes, including imports/help and the source coverage inventory regression.",
+    "Run the applicable final project and architecture/duplicate gates after any exact baseline replacement."
+  ],
+  "review_limits": [
+    "No source changes, tests, live operations, model/provider calls, or remote access by this reviewer.",
+    "Only the bounded named deltas and nearby owners were reviewed.",
+    "Advisory PASS is not a full release judgment, model routing qualification, actual financial extraction recall proof, source deployment, or production verification.",
+    "The retained 518-case receipt is selected native evidence, not a single full-project test run.",
+    "No approval for external or production action is granted."
+  ],
+  "publication_note": "Public copy omits only the private checkout path. The unchanged original review is retained in task evidence.",
+  "original_review_sha256": {
+    "sha256": "87e4b53a2cea20a3bb646015c1753191777b60779e986aede111672300a36f7d"
+  },
+  "publication_digest_format": "Public digest values use named sha256 or subject_commit members. Original review bytes remain retained in task evidence; this is a display-only transformation."
+}

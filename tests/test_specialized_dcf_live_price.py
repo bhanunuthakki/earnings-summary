@@ -336,6 +336,7 @@ def test_bank_persisted_provenance_includes_only_effective_price_source(
     profile.write_text('[{"price":12.29}]', encoding="utf-8")
     db = repo / "data/portfolio.db"
     db.touch()
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db))
     conn = _provenance_connection()
     captured: list[DcfRunRow] = []
 
@@ -407,6 +408,7 @@ def test_bank_global_assumption_receipt_records_database_authority(
     db = tmp_path / "data/portfolio.db"
     db.parent.mkdir(parents=True)
     _global_store(db)
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db))
     monkeypatch.setattr(bank, "REPO", tmp_path)
 
     assumptions, _actuals = bank.load_assumptions("NU")

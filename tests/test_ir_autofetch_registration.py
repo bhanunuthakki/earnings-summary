@@ -220,6 +220,55 @@ def test_categorize_registers_unregistered_ticker_with_source_url(tmp_path: Path
     assert row[3].startswith("2025-09-30")  # calendar Q3 → Sep-30
 
 
+def test_html_release_registration_keeps_source_url_and_bytes(tmp_path: Path) -> None:
+    db = tmp_path / "data" / "portfolio.db"
+    _make_documents_db(db, "META")
+    staged_dir = tmp_path / "ir_documents" / "META"
+    staged_dir.mkdir(parents=True)
+    staged = staged_dir / "META_press_release_2025Q3__deadbeef.html"
+    payload = (
+        b"<html><body><main><h1>Meta Reports Third Quarter 2025 Results</h1>"
+        b"<p>Meta Platforms reported financial results for the third quarter 2025."
+        b" Revenue was $40 billion.</p></main></body></html>"
+    )
+    staged.write_bytes(payload)
+    (tmp_path / ".tmp").mkdir()
+    (tmp_path / ".tmp" / "ir_incoming_urls.json").write_text(
+        json.dumps({staged.name: "https://investor.example.com/q3-results"}), encoding="utf-8"
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(PROJECT_ROOT / "execution" / "sqlite_bootstrap.py"),
+            str(_CATEGORIZER),
+            "--ticker",
+            "META",
+            "--source-dir",
+            str(tmp_path / "ir_documents"),
+            "--db-path",
+            str(db),
+            "--rel-root",
+            str(tmp_path),
+            "--calendar",
+            "calendar",
+        ],
+        capture_output=True,
+        text=True,
+        env={**_os_environ(), "IR_PROJECT_ROOT": str(tmp_path)},
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    with sqlite3.connect(db) as conn:
+        row = conn.execute(
+            "SELECT doc_type, source_url, file_path FROM documents WHERE ticker='META'"
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "ir_press_release"
+    assert row[1] == "https://investor.example.com/q3-results"
+    assert (tmp_path / row[2]).read_bytes() == payload
+
+
 def _os_environ() -> dict[str, str]:
     import os
 

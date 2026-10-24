@@ -10,32 +10,33 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import openpyxl
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from ir_pipeline import config_builder  # noqa: E402
-from ir_pipeline.config import (  # noqa: E402
+from ir_pipeline import config_builder, spreadsheet
+from ir_pipeline.config import (
     IrConfig,
     SheetKpi,
     get_config,
     save_config,
 )
-from ir_pipeline.discover import (  # noqa: E402
+from ir_pipeline.discover import (
     discover_documents,
     discover_history_hybrid,
 )
-from ir_pipeline.discover._docmeta import CandidateDoc, classify  # noqa: E402
-from ir_pipeline.spreadsheet import (  # noqa: E402
-    _header_row,
-    _parse_period,
-    parse_spreadsheet,
+from ir_pipeline.discover._docmeta import classify
+from ir_pipeline.discover.generic import DocumentDiscoveryInventory
+from ir_pipeline.spreadsheet import parse_spreadsheet
+
+_header_row = cast(
+    Callable[[list[tuple[object, ...]]], tuple[int, dict[int, dt.datetime]]],
+    getattr(spreadsheet, "_header_row"),
 )
+_parse_period = cast(Callable[[object], dt.datetime | None], getattr(spreadsheet, "_parse_period"))
 
 _QUARTERS = [
     dt.datetime(2025, 3, 31),
@@ -48,6 +49,7 @@ _QUARTERS = [
 def _write_nu_like_sheet(path: Path) -> None:
     wb = openpyxl.Workbook()
     ws = wb.active
+    assert ws is not None
     ws.title = "Managerial indicators"
     ws.cell(1, 2, "Nu Holdings Ltd.")
     # Header row offset down (mirrors the real file's row 9); labels in col B (2),
@@ -90,13 +92,15 @@ def test_q4cdn_config_uses_generic_history_fallback(
         platform="q4cdn",
         results_center_url="https://example.test/results",
     )
-    calls: list[tuple[str, int, int]] = []
+    calls: list[tuple[str, int]] = []
 
-    def fake_history(*, ir_url: str, max_quarters: int, timeout_ms: int) -> list[CandidateDoc]:
-        calls.append((ir_url, max_quarters, timeout_ms))
-        return []
+    def fake_history(
+        *, ir_url: str, timeout_ms: int, **kwargs: object
+    ) -> DocumentDiscoveryInventory:
+        calls.append((ir_url, timeout_ms))
+        return DocumentDiscoveryInventory((), (), True, "frontier_exhausted")
 
-    monkeypatch.setattr("ir_pipeline.discover.generic.discover_document_history", fake_history)
+    monkeypatch.setattr("ir_pipeline.discover.generic.discover_document_inventory", fake_history)
     assert (
         discover_history_hybrid(
             ir_url=config.results_center_url,
@@ -106,14 +110,16 @@ def test_q4cdn_config_uses_generic_history_fallback(
         )
         == []
     )
-    assert calls == [(config.results_center_url, 4, 1234)]
+    assert calls == [(config.results_center_url, 1234)]
 
 
 def test_header_row_detection_finds_offset_date_row(tmp_path: Path) -> None:
     path = tmp_path / "nu.xlsx"
     _write_nu_like_sheet(path)
     wb = openpyxl.load_workbook(str(path), data_only=True)
-    rows = [tuple(r) for r in wb["Managerial indicators"].iter_rows(values_only=True)]
+    rows: list[tuple[object, ...]] = [
+        tuple(r) for r in wb["Managerial indicators"].iter_rows(values_only=True)
+    ]
     idx, col_map = _header_row(rows)
     assert idx == 8  # 0-based -> Excel row 9
     assert len(col_map) == 4
@@ -122,7 +128,9 @@ def test_header_row_detection_finds_offset_date_row(tmp_path: Path) -> None:
 def test_parse_extracts_canonical_kpis_with_scale(tmp_path: Path) -> None:
     path = tmp_path / "nu.xlsx"
     _write_nu_like_sheet(path)
-    parsed = parse_spreadsheet(path, get_config("NU"), max_quarters=8)
+    config = get_config("NU")
+    assert config is not None
+    parsed = parse_spreadsheet(path, config, max_quarters=8)
 
     arpac = parsed["Monthly ARPAC (USD)"]
     assert arpac[dt.datetime(2025, 12, 31)] == 15.0
@@ -140,7 +148,9 @@ def test_parse_extracts_canonical_kpis_with_scale(tmp_path: Path) -> None:
 def test_max_quarters_truncates_to_recent(tmp_path: Path) -> None:
     path = tmp_path / "nu.xlsx"
     _write_nu_like_sheet(path)
-    parsed = parse_spreadsheet(path, get_config("NU"), max_quarters=2)
+    config = get_config("NU")
+    assert config is not None
+    parsed = parse_spreadsheet(path, config, max_quarters=2)
     arpac = parsed["Monthly ARPAC (USD)"]
     assert set(arpac) == {dt.datetime(2025, 9, 30), dt.datetime(2025, 12, 31)}
 

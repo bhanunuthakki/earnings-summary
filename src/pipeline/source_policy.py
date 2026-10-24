@@ -697,6 +697,24 @@ def authorize_collection_target_in_connection(
     )
 
 
+def fiscal_quarter_end(*, fiscal_year: int, fiscal_quarter: int, fiscal_year_end: str) -> date:
+    """Calculate month-end fiscal quarters; unsupported 52/53-week calendars fail closed."""
+    match = re.fullmatch(r"(\d{2})-(\d{2})", fiscal_year_end)
+    if match is None or not 1 <= fiscal_quarter <= 4:
+        raise ValueError("invalid fiscal quarter calendar")
+    month, day = map(int, match.groups())
+    anchor = date(fiscal_year, month, day)
+    next_month = date(fiscal_year + 1, 1, 1) if month == 12 else date(fiscal_year, month + 1, 1)
+    if anchor.toordinal() != next_month.toordinal() - 1:
+        raise ValueError("non-month-end fiscal calendars require separate authority")
+    end_year, end_month = fiscal_year, month - (4 - fiscal_quarter) * 3
+    while end_month < 1:
+        end_month += 12
+        end_year -= 1
+    following = date(end_year + 1, 1, 1) if end_month == 12 else date(end_year, end_month + 1, 1)
+    return date.fromordinal(following.toordinal() - 1)
+
+
 def reported_quarter_is_in_window(
     *,
     fiscal_year: int,
@@ -712,17 +730,15 @@ def reported_quarter_is_in_window(
     completed: list[tuple[date, int, int]] = []
     for year in range(as_of.year - 2, as_of.year + 2):
         for quarter in range(1, 5):
-            months_before_fye = (4 - quarter) * 3
-            end_year = year
-            end_month = fiscal_year_end_month - months_before_fye
-            while end_month < 1:
-                end_month += 12
-                end_year -= 1
-            if end_month == 12:
-                next_month = date(end_year + 1, 1, 1)
-            else:
-                next_month = date(end_year, end_month + 1, 1)
-            period_end = date.fromordinal(next_month.toordinal() - 1)
+            following = (
+                date(year + 1, 1, 1)
+                if fiscal_year_end_month == 12
+                else date(year, fiscal_year_end_month + 1, 1)
+            )
+            fye = date.fromordinal(following.toordinal() - 1).strftime("%m-%d")
+            period_end = fiscal_quarter_end(
+                fiscal_year=year, fiscal_quarter=quarter, fiscal_year_end=fye
+            )
             if period_end <= as_of:
                 completed.append((period_end, year, quarter))
     newest = sorted(completed, reverse=True)[:max_quarters]

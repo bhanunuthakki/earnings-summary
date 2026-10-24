@@ -92,6 +92,7 @@ def main() -> int:
                         conn,
                         refresh=args.refresh,
                         source_group=args.source,
+                        requested=args.requested,
                     )
                 results.append(log)
                 summary_lines.append(
@@ -144,9 +145,17 @@ def _parse_args() -> argparse.Namespace:
         default="earnings",
         help="Which document family to extract from (default: earnings)",
     )
+    p.add_argument(
+        "--requested",
+        action="store_true",
+        help="Retain owner request context for --ticker evidence preparation",
+    )
     add_database_argument(p)
     p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT, help="Source and artifact root")
-    return p.parse_args()
+    args = p.parse_args()
+    if args.requested and not args.ticker:
+        p.error("--requested requires one --ticker")
+    return args
 
 
 def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:

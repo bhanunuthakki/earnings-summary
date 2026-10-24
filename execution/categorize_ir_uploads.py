@@ -3,7 +3,7 @@ execution/categorize_ir_uploads.py
 -----------------------------------
 Layer 3 CLI: classify and register manually-uploaded IR documents.
 
-For every PDF/XLSX dropped at the root of `ir_documents/`, this script:
+For every PDF/XLSX/HTML dropped at the root of `ir_documents/`, this script:
   1. Identifies (ticker, doc_type, period_end) deterministically — filename
      heuristics first, then first-page content fingerprinting (no LLM).
   2. Moves the file to the canonical path

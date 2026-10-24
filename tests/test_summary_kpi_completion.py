@@ -5,9 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -19,6 +20,7 @@ from pipeline.kpi_semantics import (
     current_kpi_semantic_context,
 )
 from pipeline.run_accounting import JsonValue, PipelineRunSuppressedError
+from provenance.document_evidence_pipeline import DocumentEvidenceResult
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -50,6 +52,10 @@ def workspace(
     )
     conn = sqlite3.connect(migrated_db(root / "test.sqlite"))
     conn.row_factory = sqlite3.Row
+    conn.execute(
+        "INSERT INTO tracked_companies(ticker,name,list_type,instrument_type) VALUES ('NU','Synthetic NU','portfolio','equity')"
+    )
+    conn.commit()
     try:
         yield root, conn
     finally:
@@ -88,6 +94,9 @@ def _register_summary(
     version_ticker: str = "NU",
     version_type: str = "llm_summary",
     run_succeeded: bool = True,
+    version_has_period: bool = True,
+    extraction_outcome: Literal["succeeded", "failed"] = "succeeded",
+    extraction_input_sha: str | None = None,
 ) -> int:
     """Preserve real synthetic bytes and their extraction lineage, without admission."""
     source.write_text(text, encoding="utf-8")
@@ -96,30 +105,28 @@ def _register_summary(
     preserved.write_bytes(source.read_bytes())
     stamp = datetime(2025, 5, 1)
     quarter = int(source.name.split("_Q")[1][0])
-    period_end = datetime(2025, quarter * 3, 31 if quarter in {1, 4} else 30)
-    parent = resolve_parent(
-        conn, ticker="NU", doc_type="llm_summary", file_path=str(source), period_end=period_end
+    month, day = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}[quarter]
+    period = datetime(2025, month, day)
+    match = resolve_parent(
+        conn, ticker="NU", doc_type="llm_summary", file_path=str(source), period_end=period
     )
-    existing = conn.execute("SELECT id FROM documents WHERE sha256=?", (digest,)).fetchone()
-    if existing is not None:
-        doc_id = int(existing[0])
-    else:
-        cur = conn.execute(
-            "INSERT INTO documents(ticker,source_type,doc_type,period_end,file_path,sha256,"
-            "fetched_at,fetch_status,raw_bytes_size,source_quality_tier,parent_document_id) "
-            "VALUES ('NU','llm_extracted','llm_summary',?,?,?,?,'ok',?,'llm_extracted',?)",
-            (
-                period_end.isoformat(),
-                str(source),
-                digest,
-                stamp.isoformat(),
-                len(source.read_bytes()),
-                None if parent is None else parent.parent_document_id,
-            ),
-        )
-        assert cur.lastrowid is not None
-        doc_id = cur.lastrowid
-    identity = f"synthetic-summary-{doc_id}"
+    conn.execute(
+        "INSERT INTO documents(ticker,source_type,doc_type,period_end,file_path,sha256,"
+        "fetched_at,fetch_status,raw_bytes_size,source_quality_tier,parent_document_id) "
+        "VALUES ('NU','llm_extracted','llm_summary',?,?,?,?, 'ok',?,4,?) ON CONFLICT(sha256) DO NOTHING",
+        (
+            period.isoformat(sep=" "),
+            str(source),
+            digest,
+            stamp.isoformat(),
+            len(source.read_bytes()),
+            match.parent_document_id if match else None,
+        ),
+    )
+    document_id = int(
+        conn.execute("SELECT id FROM documents WHERE sha256=?", (digest,)).fetchone()[0]
+    )
+    identity = f"synthetic-summary-{document_id}"
     ledger = EvidenceLedger(conn)
     ledger.persist(
         ContentBlob(
@@ -158,7 +165,8 @@ def _register_summary(
             document_type=version_type,
             form_type="summary",
             language="en",
-            legacy_document_id=doc_id,
+            period_end=period if version_has_period else None,
+            legacy_document_id=document_id,
             recorded_at=stamp,
         )
     )
@@ -167,119 +175,32 @@ def _register_summary(
             extraction_run_id=identity,
             idempotency_key=identity,
             document_version_id=identity,
-            input_sha256=digest,
+            input_sha256=extraction_input_sha or digest,
             extractor_name="synthetic-summary",
             extractor_config_sha256=digest,
             extractor_code_version="test-v1",
             output_sha256=digest,
             started_at=stamp,
             completed_at=stamp,
-            outcome="succeeded" if run_succeeded else "failed",
+            outcome=extraction_outcome if run_succeeded else "failed",
         )
     )
-    if run_succeeded:
-        ledger.persist(
-            EvidenceNode(
-                node_id=identity,
-                evidence_key=identity,
-                revision=1,
-                extraction_run_id=identity,
-                node_kind="document",
-                text=text,
-                recorded_at=stamp,
-            )
+    if extraction_outcome == "failed" or not run_succeeded:
+        conn.commit()
+        return document_id
+    ledger.persist(
+        EvidenceNode(
+            node_id=identity,
+            evidence_key=identity,
+            revision=1,
+            extraction_run_id=identity,
+            node_kind="document",
+            text=text,
+            recorded_at=stamp,
         )
+    )
     conn.commit()
-    return doc_id
-
-
-@pytest.mark.parametrize(
-    "case,error",
-    [
-        ("supplied", None),
-        ("absent", None),
-        ("comparator", None),
-        ("guidance", None),
-        ("invalid_duration", "matching later period end"),
-        ("invalid_precision", "requires source qualifiers"),
-        ("conflicting_exact", "cannot carry uncertainty qualifiers"),
-    ],
-)
-def test_public_extraction_preserves_only_supplied_source_context(
-    workspace: tuple[Path, sqlite3.Connection],
-    monkeypatch: pytest.MonkeyPatch,
-    case: str,
-    error: str | None,
-) -> None:
-    root, conn = workspace
-    qualifier = "Percentages are rounded."
-    text = (
-        "Reporting period: 2025-01-01 through 2025-03-31. "
-        f"Net interest margin was 17.8%. {qualifier}"
-    )
-    source = root / ".tmp" / "NU_Q1_2025_summary.txt"
-    doc_id = _register_summary(conn, source, text)
-    payload: dict[str, object] = {
-        "value": 17.8,
-        "unit": "percent",
-        "confidence": 0.9,
-        "source_excerpt": "Net interest margin was 17.8%.",
-        "reported_period_start": "2025-01-01",
-        "reported_period_end": "2025-03-31",
-        "period_role": "current",
-        "accounting_basis": "management",
-        "consolidation_scope": "consolidated",
-        "source_unit_scale": "none",
-        "source_precision": {"kind": "approximate", "qualifiers": [qualifier]},
-    }
-    if case == "absent":
-        payload.pop("reported_period_start")
-        payload.pop("source_precision")
-    elif case == "comparator":
-        payload["period_role"] = "prior_period_comparator"
-    elif case == "guidance":
-        payload["period_role"] = "guidance"
-    elif case == "invalid_duration":
-        payload["reported_period_start"] = "2025-04-01"
-    elif case == "invalid_precision":
-        payload["source_precision"] = {"kind": "approximate", "qualifiers": []}
-    elif case == "conflicting_exact":
-        payload["source_precision"] = {"kind": "exact", "qualifiers": [qualifier]}
-
-    def model_response(prompt: str, **kwargs: object) -> object:
-        assert text in prompt
-        assert kwargs["purpose"] == "kpi_summary_extract"
-        return {"Net interest margin": payload}
-
-    monkeypatch.setattr(summaries, "call_llm_structured", model_response)
-    result = summaries.extract_for_ticker("NU", root, conn)
-    if error is not None:
-        assert result.error is not None
-        assert error in result.error
-        assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
-        return
-    assert result.error is None
-    assert result.kpis_inserted_total == 1
-    row = conn.execute("SELECT id,source_doc_id,locator FROM kpi_facts").fetchone()
-    assert row is not None and row[1] == doc_id
-    assert row[2] is not None
-    stored = current_kpi_semantic_context(conn, kpi_fact_id=int(row[0]))
-    assert stored is not None
-    context = stored.context
-    assert context.status is KpiSemanticStatus.QUARANTINED
-    assert context.reason_code == "synthesized_source_requires_primary_review"
-    assert context.period_role.value == payload["period_role"]
-    if case == "absent":
-        assert context.reported_period_start is None
-        assert context.source_precision is None
-        serialized = context.model_dump(mode="json")
-        assert "reported_period_start" not in serialized
-        assert "source_precision" not in serialized
-    else:
-        assert context.reported_period_start == datetime(2025, 1, 1).date()
-        assert context.source_precision == KpiSourcePrecision(
-            kind="approximate", qualifiers=(qualifier,)
-        )
+    return document_id
 
 
 def test_changed_summary_is_processed_despite_existing_period_metric(
@@ -492,7 +413,7 @@ def test_model_failure_is_retryable_and_route_is_bound_to_attempt(
     ]
 
 
-@pytest.mark.parametrize("target", ["summary", "holdings", "document", "route"])
+@pytest.mark.parametrize("target", ["summary", "holdings", "document", "period", "route"])
 def test_drift_during_model_work_fails_before_persistence(
     workspace: tuple[Path, sqlite3.Connection],
     monkeypatch: pytest.MonkeyPatch,
@@ -511,6 +432,10 @@ def test_drift_during_model_work_fails_before_persistence(
             path.write_bytes(path.read_bytes() + b" ")
         elif target == "document":
             conn.execute("UPDATE documents SET sha256='changed' WHERE doc_type='llm_summary'")
+        elif target == "period":
+            conn.execute(
+                "UPDATE documents SET period_end='2025-06-30' WHERE doc_type='llm_summary'"
+            )
         else:
             route[0] = "claude-sonnet-4-6"
         return {}
@@ -519,9 +444,9 @@ def test_drift_during_model_work_fails_before_persistence(
     assert summaries.extract_for_ticker("NU", root, conn).error is not None
     assert conn.execute("SELECT status FROM pipeline_attempts").fetchone()[0] == "failed"
     assert conn.execute("SELECT COUNT(*) FROM pipeline_stage_transitions").fetchone()[0] == 0
+    monkeypatch.setattr(summaries, "_llm_extract", _empty_extractor([]))
     if target == "summary":
         _register_summary(conn, source, source.read_text())
-    monkeypatch.setattr(summaries, "_llm_extract", _empty_extractor([]))
     assert summaries.extract_for_ticker("NU", root, conn).error is None
 
 
@@ -572,32 +497,35 @@ def test_pending_fact_and_stage_writes_roll_back_before_failed_accounting(
     assert len(calls) == 2
 
 
-def test_real_evidence_trigger_rejection_is_failed_and_retryable(
+def test_failed_preparation_blocks_model_and_retry_recovers_exact_source(
     workspace: tuple[Path, sqlite3.Connection],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from provenance import document_evidence_pipeline as evidence
+
     root, conn = workspace
     source = root / ".tmp" / "NU_Q1_2025_summary.txt"
-    source.write_text("Synthetic unbound summary.")
-
-    def bypass_anchor(*args: object, **kwargs: object) -> None:
-        return None
-
-    monkeypatch.setattr(summaries, "require_summary_anchor_coherence", bypass_anchor)
+    source.write_text("Net interest margin was 17.8%.", encoding="utf-8")
     calls: list[str] = []
     monkeypatch.setattr(summaries, "_llm_extract", _extractor(calls))
-    for _ in range(2):
-        result = summaries.extract_for_ticker("NU", root, conn)
-        assert (
-            result.error
-            and "fact write requires an evidence-backed source document" in result.error
-        )
-    assert len(calls) == 2
+    original = evidence.backfill_fulltext_evidence
+
+    def fail(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("synthetic deterministic extraction unavailable")
+
+    monkeypatch.setattr(evidence, "backfill_fulltext_evidence", fail)
+    result = summaries.extract_for_ticker("NU", root, conn)
+    assert result.error and "preparation incomplete" in result.error
+    assert calls == []
     assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
-    assert [r[0] for r in conn.execute("SELECT status FROM pipeline_attempts")] == [
-        "failed",
-        "failed",
-    ]
+    assert conn.execute("SELECT COUNT(*) FROM pipeline_attempts").fetchone()[0] == 0
+    monkeypatch.setattr(evidence, "backfill_fulltext_evidence", original)
+    result = summaries.extract_for_ticker("NU", root, conn)
+    assert result.error is None
+    assert len(calls) == 1
+    assert result.kpis_inserted_total == 1
+    assert summaries.extract_for_ticker("NU", root, conn).error is None
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize(
@@ -623,7 +551,8 @@ def test_same_hash_wrong_document_identity_fails_before_model(
     calls: list[list[str]] = []
     monkeypatch.setattr(summaries, "_llm_extract", _empty_extractor(calls))
     result = summaries.extract_for_ticker("NU", root, conn)
-    assert result.error and "identity or parent binding" in result.error
+    expected_reason = "summary_anchor_period_mismatch" if field == "period_end" else "identity"
+    assert result.error and expected_reason in result.error
     assert calls == []
     assert conn.execute("SELECT COUNT(*) FROM pipeline_attempts").fetchone()[0] == 0
 
@@ -733,7 +662,7 @@ def test_new_parent_does_not_silently_repair_existing_unlinked_summary(
     assert summaries.extract_for_ticker("NU", root, conn).error is None
     _parent(conn, root)
     result = summaries.extract_for_ticker("NU", root, conn)
-    assert result.error and "identity or parent binding" in result.error
+    assert result.error and "identity" in result.error
     assert (
         conn.execute(
             "SELECT parent_document_id FROM documents WHERE doc_type='llm_summary'"
@@ -786,20 +715,374 @@ def test_original_failure_survives_failed_accounting(
     assert not conn.in_transaction
 
 
-def test_unbound_summary_fails_before_model_work(
+def test_existing_evidence_mismatch_blocks_all_model_work(
     workspace: tuple[Path, sqlite3.Connection],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root, conn = workspace
     source = root / ".tmp" / "NU_Q1_2025_summary.txt"
-    source.write_text("Synthetic summary without an evidence anchor.")
+    _register_summary(
+        conn,
+        source,
+        "Net interest margin was 17.8%.",
+        version_ticker="OTHER",
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(summaries, "_llm_extract", _extractor(calls))
+    before = conn.total_changes
+    result = summaries.extract_for_ticker("NU", root, conn)
+    assert result.error and "summary_anchor_chain_identity_mismatch" in result.error
+    assert calls == []
+    assert conn.total_changes == before
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM pipeline_attempts").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("mismatch", ["source_hash", "period"])
+def test_invalid_explicit_binding_never_falls_back_to_valid_direct_version(
+    workspace: tuple[Path, sqlite3.Connection],
+    monkeypatch: pytest.MonkeyPatch,
+    mismatch: str,
+) -> None:
+    root, conn = workspace
+    source = root / ".tmp" / "NU_Q1_2025_summary.txt"
+    document_id = _register_summary(conn, source, "Net interest margin was 17.8%.")
+    identity = f"synthetic-summary-{document_id}"
+    stamp = datetime(2025, 5, 1)
+    LegacyDocumentEvidenceBindingLedger(conn).persist(
+        LegacyDocumentEvidenceBindingRevision(
+            binding_revision_id=f"synthetic-binding-{document_id}",
+            idempotency_key=f"synthetic-binding-{document_id}",
+            legacy_document_id=document_id,
+            revision=1,
+            document_version_id=identity,
+            evidence_node_id=identity,
+            scope_locator=LegacyDocumentScopeLocator(source_ref=str(source)),
+            scope_content_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+            effective_at=stamp,
+            knowledge_at=stamp,
+            recorded_at=stamp,
+        )
+    )
+    LegacyDocumentEvidenceBindingLedger(conn).persist(
+        LegacyDocumentEvidenceBindingRevision(
+            binding_revision_id="invalid-source-hash",
+            idempotency_key="invalid-source-hash",
+            legacy_document_id=document_id,
+            revision=2,
+            supersedes_binding_revision_id=f"synthetic-binding-{document_id}",
+            document_version_id=identity,
+            evidence_node_id=identity,
+            scope_locator=LegacyDocumentScopeLocator(source_ref=str(source)),
+            scope_content_sha256=(
+                "0" * 64
+                if mismatch == "source_hash"
+                else hashlib.sha256(source.read_bytes()).hexdigest()
+            ),
+            effective_at=stamp,
+            knowledge_at=stamp,
+            recorded_at=stamp,
+        )
+    )
+    if mismatch == "period":
+        conn.execute("UPDATE documents SET period_end='2025-06-30' WHERE id=?", (document_id,))
+    conn.commit()
+    calls: list[str] = []
+    monkeypatch.setattr(summaries, "_llm_extract", _extractor(calls))
+    before = conn.total_changes
+    result = summaries.extract_for_ticker("NU", root, conn)
+    expected = (
+        "summary_anchor_scope_hash_mismatch"
+        if mismatch == "source_hash"
+        else "summary_anchor_period_mismatch"
+    )
+    assert result.error and expected in result.error
+    assert calls == []
+    assert conn.total_changes == before
+    assert conn.execute("SELECT COUNT(*) FROM pipeline_attempts").fetchone()[0] == 0
+
+
+def test_rejected_extractor_input_requires_verified_continuation_before_model(
+    workspace: tuple[Path, sqlite3.Connection],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, conn = workspace
+    source = root / ".tmp" / "NU_Q1_2025_summary.txt"
+    with pytest.raises(sqlite3.IntegrityError, match="input hash must match"):
+        _register_summary(
+            conn, source, "Net interest margin was 17.8%.", extraction_input_sha="0" * 64
+        )
+    conn.commit()
     calls: list[str] = []
     monkeypatch.setattr(summaries, "_llm_extract", _extractor(calls))
     result = summaries.extract_for_ticker("NU", root, conn)
-    assert result.error is not None
-    assert calls == []
-    assert conn.execute("SELECT status FROM pipeline_attempts").fetchone()[0] == "failed"
-    assert conn.execute("SELECT COUNT(*) FROM evidence_document_versions").fetchone()[0] == 0
+    assert result.error is None
+    assert len(calls) == 1
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM evidence_extraction_runs WHERE outcome='succeeded'"
+        ).fetchone()[0]
+        == 1
+    )
+
+
+@pytest.mark.parametrize(
+    "role,requested", [("portfolio", False), ("evaluation", False), ("evaluation", True)]
+)
+def test_unregistered_summary_uses_exact_existing_continuation_before_model(
+    workspace: tuple[Path, sqlite3.Connection],
+    monkeypatch: pytest.MonkeyPatch,
+    role: str,
+    requested: bool,
+) -> None:
+    root, conn = workspace
+    conn.execute("UPDATE tracked_companies SET list_type=?", (role,))
+    conn.commit()
+    source = root / ".tmp" / "NU_Q1_2025_summary.txt"
+    source.write_text("Synthetic newly generated derived summary.", encoding="utf-8")
+    requests: list[summaries.DocumentEvidenceRequest] = []
+    original = summaries.process_document_evidence
+
+    def prepare(
+        connection: sqlite3.Connection, request: summaries.DocumentEvidenceRequest
+    ) -> DocumentEvidenceResult:
+        assert not connection.in_transaction
+        requests.append(request)
+        return original(connection, request)
+
+    monkeypatch.setattr(summaries, "process_document_evidence", prepare)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(summaries, "_llm_extract", _empty_extractor(calls))
+    first = summaries.extract_for_ticker("NU", root, conn, requested=requested)
+    assert first.error is None
+    assert len(calls) == 1
+    assert len(requests) == 1
+    assert requests[0].document_id is not None
+    assert requests[0].source_type == summaries.SourceType.LLM_EXTRACTED
+    assert requests[0].requested is requested
+    assert requests[0].ticker == "NU"
+    second = summaries.extract_for_ticker("NU", root, conn, requested=requested)
+    assert second.error is None
+    assert len(calls) == 1
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
+    assert (
+        conn.execute("SELECT COUNT(*) FROM legacy_document_evidence_binding_revisions").fetchone()[
+            0
+        ]
+        == 1
+    )
+
+
+def test_same_process_exact_database_job_lock_is_reused(
+    workspace: tuple[Path, sqlite3.Connection],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from runtime.job_runtime import JobLock
+
+    root, conn = workspace
+    database = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(database))
+    (root / ".tmp" / "NU_Q1_2025_summary.txt").write_text("Synthetic newly generated summary.")
+    monkeypatch.setattr(summaries, "_llm_extract", _empty_extractor([]))
+    with JobLock(root, "test-summary-owner", ["portfolio-db"], wait_s=0):
+        result = summaries.extract_for_ticker("NU", root, conn)
+        assert result.error is None
+
+
+@pytest.mark.parametrize("inherit", [False, True])
+def test_ancestor_claim_or_foreign_contention_uses_exact_database(
+    workspace: tuple[Path, sqlite3.Connection],
+    monkeypatch: pytest.MonkeyPatch,
+    inherit: bool,
+) -> None:
+    import os
+    import subprocess
+    import sys
+
+    from runtime.job_runtime import JobLock
+
+    root, conn = workspace
+    database = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(database))
+    (root / ".tmp" / "NU_Q1_2025_summary.txt").write_text("Synthetic newly generated summary.")
+    child = """from execution.sqlite_bootstrap import preload_sqlite
+preload_sqlite()
+import json,sqlite3,sys
+from pathlib import Path
+from compute import kpi_extract_summaries as s
+conn=sqlite3.connect(sys.argv[1]);conn.row_factory=sqlite3.Row
+calls=[]
+def fake(*args,**kwargs):
+ calls.append(True);return {}
+s._llm_extract=fake
+result=s.extract_for_ticker('NU',Path(sys.argv[2]),conn)
+print(json.dumps({'error':result.error,'model_calls':len(calls)}))
+conn.close()
+"""
+    with JobLock(root, "test-ancestor-owner", ["portfolio-db"], wait_s=0) as lock:
+        environment = os.environ.copy()
+        if inherit:
+            environment["EARNINGS_SUMMARY_JOB_LOCK_PROOF"] = lock.inheritance_proof()
+        else:
+            environment.pop("EARNINGS_SUMMARY_JOB_LOCK_PROOF", None)
+        completed = subprocess.run(
+            [sys.executable, "-c", child, str(database), str(root)],
+            env=environment,
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+    result = json.loads(completed.stdout)
+    if inherit:
+        assert result["error"] is None
+        assert result["model_calls"] == 1
+    else:
+        assert "RunLockHeldError" in result["error"]
+        assert result["model_calls"] == 0
+
+
+def test_failed_unbound_extractor_is_preserved_and_existing_owner_recovers(
+    workspace: tuple[Path, sqlite3.Connection],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, conn = workspace
+    source = root / ".tmp" / "NU_Q1_2025_summary.txt"
+    _register_summary(conn, source, "Net interest margin was 17.8%.", extraction_outcome="failed")
+    calls: list[str] = []
+    monkeypatch.setattr(summaries, "_llm_extract", _extractor(calls))
+    result = summaries.extract_for_ticker("NU", root, conn)
+    assert result.error is None
+    assert len(calls) == 1
+    outcomes = [
+        row[0]
+        for row in conn.execute(
+            "SELECT outcome FROM evidence_extraction_runs ORDER BY extraction_run_id"
+        )
+    ]
+    assert sorted(outcomes) == ["failed", "succeeded"]
+
+
+def test_other_configured_database_claim_does_not_authorize_connection(
+    workspace: tuple[Path, sqlite3.Connection],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from contextlib import contextmanager
+
+    from run_lock import RunLock
+    from runtime.job_runtime import JobLock
+
+    root, conn = workspace
+    database = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+    other = root / "other.sqlite"
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(other))
+    (root / ".tmp" / "NU_Q1_2025_summary.txt").write_text("Synthetic exact-database summary.")
+    original = summaries.hold_run_lock
+    selected: list[Path] = []
+
+    @contextmanager
+    def hold(path: Path, *, owner: str, timeout_s: float) -> Generator[RunLock]:
+        selected.append(path)
+        with original(path, owner=owner, timeout_s=timeout_s) as lock:
+            yield lock
+
+    monkeypatch.setattr(summaries, "hold_run_lock", hold)
+    monkeypatch.setattr(summaries, "_llm_extract", _empty_extractor([]))
+    with JobLock(root, "other-database-owner", ["portfolio-db"], wait_s=0):
+        result = summaries.extract_for_ticker("NU", root, conn)
+        assert result.error is None
+    assert selected == [database]
+
+
+@pytest.mark.parametrize(
+    "case,error",
+    [
+        ("supplied", None),
+        ("absent", None),
+        ("comparator", None),
+        ("guidance", None),
+        ("invalid_duration", "matching later period end"),
+        ("invalid_precision", "requires source qualifiers"),
+        ("conflicting_exact", "cannot carry uncertainty qualifiers"),
+    ],
+)
+def test_public_extraction_preserves_only_supplied_source_context(
+    workspace: tuple[Path, sqlite3.Connection],
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+    error: str | None,
+) -> None:
+    root, conn = workspace
+    qualifier = "Percentages are rounded."
+    text = (
+        "Reporting period: 2025-01-01 through 2025-03-31. "
+        f"Net interest margin was 17.8%. {qualifier}"
+    )
+    source = root / ".tmp" / "NU_Q1_2025_summary.txt"
+    doc_id = _register_summary(conn, source, text)
+    payload: dict[str, object] = {
+        "value": 17.8,
+        "unit": "percent",
+        "confidence": 0.9,
+        "source_excerpt": "Net interest margin was 17.8%.",
+        "reported_period_start": "2025-01-01",
+        "reported_period_end": "2025-03-31",
+        "period_role": "current",
+        "accounting_basis": "management",
+        "consolidation_scope": "consolidated",
+        "source_unit_scale": "none",
+        "source_precision": {"kind": "approximate", "qualifiers": [qualifier]},
+    }
+    if case == "absent":
+        payload.pop("reported_period_start")
+        payload.pop("source_precision")
+    elif case == "comparator":
+        payload["period_role"] = "prior_period_comparator"
+    elif case == "guidance":
+        payload["period_role"] = "guidance"
+    elif case == "invalid_duration":
+        payload["reported_period_start"] = "2025-04-01"
+    elif case == "invalid_precision":
+        payload["source_precision"] = {"kind": "approximate", "qualifiers": []}
+    elif case == "conflicting_exact":
+        payload["source_precision"] = {"kind": "exact", "qualifiers": [qualifier]}
+
+    def model_response(prompt: str, **kwargs: object) -> object:
+        assert text in prompt
+        assert kwargs["purpose"] == "kpi_summary_extract"
+        return {"Net interest margin": payload}
+
+    monkeypatch.setattr(summaries, "call_llm_structured", model_response)
+    result = summaries.extract_for_ticker("NU", root, conn)
+    if error is not None:
+        assert result.error is not None
+        assert error in result.error
+        assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
+        return
+    assert result.error is None
+    assert result.kpis_inserted_total == 1
+    row = conn.execute("SELECT id,source_doc_id,locator FROM kpi_facts").fetchone()
+    assert row is not None and row[1] == doc_id
+    assert row[2] is not None
+    stored = current_kpi_semantic_context(conn, kpi_fact_id=int(row[0]))
+    assert stored is not None
+    context = stored.context
+    assert context.status is KpiSemanticStatus.QUARANTINED
+    assert context.reason_code == "synthesized_source_requires_primary_review"
+    assert context.period_role.value == payload["period_role"]
+    if case == "absent":
+        assert context.reported_period_start is None
+        assert context.source_precision is None
+        serialized = context.model_dump(mode="json")
+        assert "reported_period_start" not in serialized
+        assert "source_precision" not in serialized
+    else:
+        assert context.reported_period_start == datetime(2025, 1, 1).date()
+        assert context.source_precision == KpiSourcePrecision(
+            kind="approximate", qualifiers=(qualifier,)
+        )
 
 
 def _scoped_binding(
@@ -817,6 +1100,7 @@ def _scoped_binding(
         parent_dir / "NU_Q1_2025_summary.txt",
         "Larger synthetic parent document.",
         issuer_id=issuer_id,
+        version_has_period=False,
     )
     parent_identity = f"synthetic-summary-{parent_id}"
     EvidenceLedger(conn).persist(
@@ -900,6 +1184,13 @@ def test_scoped_anchor_accepts_section_and_distinct_parent_blob(
         summary_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
     )
     assert identity.binding == binding
+    assert (
+        conn.execute(
+            "SELECT period_end FROM evidence_document_versions WHERE document_version_id=?",
+            (identity.document_version_id,),
+        ).fetchone()[0]
+        is None
+    )
     assert identity.blob_sha256 != binding.scope_content_sha256
     assert identity.evidence_node_id == "summary-scope"
     monkeypatch.setattr(summaries, "_llm_extract", _empty_extractor([]))
@@ -1015,54 +1306,11 @@ def test_changed_anchor_selection_during_model_work_fails_and_rolls_back_facts(
 
     monkeypatch.setattr(summaries, "_llm_extract", change_selection)
     result = summaries.extract_for_ticker("NU", root, conn)
-    assert result.error and "summary anchor selection changed" in result.error
+    assert result.error and (
+        "summary extraction database inputs changed before persistence" in result.error
+    )
     assert conn.execute("SELECT status FROM pipeline_attempts").fetchone()[0] == "failed"
     assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM pipeline_stage_transitions").fetchone()[0] == 0
     monkeypatch.setattr(summaries, "_llm_extract", _empty_extractor([]))
     assert summaries.extract_for_ticker("NU", root, conn).error is None
-
-
-def test_missing_anchor_retry_succeeds_after_real_synthetic_lineage_is_added(
-    workspace: tuple[Path, sqlite3.Connection],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root, conn = workspace
-    source = root / ".tmp" / "NU_Q1_2025_summary.txt"
-    text = "Synthetic summary waiting for evidence processing."
-    source.write_text(text)
-    calls: list[list[str]] = []
-    monkeypatch.setattr(summaries, "_llm_extract", _empty_extractor(calls))
-    assert summaries.extract_for_ticker("NU", root, conn).error is not None
-    assert calls == []
-    _register_summary(conn, source, text)
-    assert summaries.extract_for_ticker("NU", root, conn).error is None
-    assert len(calls) == 1
-    assert [r[0] for r in conn.execute("SELECT status FROM pipeline_attempts ORDER BY rowid")] == [
-        "failed",
-        "ok",
-    ]
-
-
-def test_historical_completed_empty_receipt_skips_before_new_anchor_guard(
-    workspace: tuple[Path, sqlite3.Connection],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root, conn = workspace
-    source = root / ".tmp" / "NU_Q1_2025_summary.txt"
-    source.write_text("Synthetic historical unbound empty completion.")
-    calls: list[list[str]] = []
-    monkeypatch.setattr(summaries, "_llm_extract", _empty_extractor(calls))
-
-    def historical_preflight(*args: object, **kwargs: object) -> None:
-        return None
-
-    # Reproduce an already completed receipt from the preflight's predecessor.
-    with monkeypatch.context() as previous:
-        previous.setattr(summaries, "require_summary_anchor_coherence", historical_preflight)
-        assert summaries.extract_for_ticker("NU", root, conn).error is None
-    result = summaries.extract_for_ticker("NU", root, conn)
-    assert result.error is None
-    assert len(result.quarters_skipped_no_missing) == 1
-    assert len(calls) == 1
-    assert conn.execute("SELECT COUNT(*) FROM evidence_document_versions").fetchone()[0] == 0

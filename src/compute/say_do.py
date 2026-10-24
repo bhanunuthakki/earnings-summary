@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field, field_validator
 from compute.thesis_evaluator import Comparator
 from llm.postprocess import strip_inline_markdown
 from models.facts import Unit
+from provenance.financial_fact_resolution import canonical_fact_relation
 
 
 class CommitmentOutcome(StrEnum):
@@ -157,25 +158,23 @@ def fetch_pending_commitments(
     return out
 
 
-def _row_to_commitment(row) -> CommitmentRow:
-    pm = row["period_made"]
-    pt = row["period_target"]
-    if isinstance(pm, str):
-        pm = datetime.fromisoformat(pm)
-    if isinstance(pt, str):
-        pt = datetime.fromisoformat(pt)
+def _row_to_commitment(row: sqlite3.Row) -> CommitmentRow:
+    pm_raw = row["period_made"]
+    pt_raw = row["period_target"]
+    pm = pm_raw if isinstance(pm_raw, datetime) else datetime.fromisoformat(str(pm_raw))
+    pt = pt_raw if isinstance(pt_raw, datetime) else datetime.fromisoformat(str(pt_raw))
     realized = Decimal(str(row["realized_value"])) if row["realized_value"] is not None else None
     outcome = CommitmentOutcome(row["outcome"]) if row["outcome"] is not None else None
     return CommitmentRow(
         id=int(row["id"]),
-        ticker=row["ticker"],
+        ticker=str(row["ticker"]),
         period_made=pm,
         period_target=pt,
-        kpi_name=row["kpi_name"],
+        kpi_name=str(row["kpi_name"]),
         comparator=Comparator(row["comparator"]),
         target_value=Decimal(str(row["target_value"])),
         unit=Unit(row["unit"]),
-        narrative=row["narrative"],
+        narrative=str(row["narrative"]),
         realized_value=realized,
         outcome=outcome,
     )
@@ -215,9 +214,10 @@ def _lookup_realized_value(
 
     Returns (value, source_doc_id) or None if no row exists.
     """
+    fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
     cur = conn.execute(
         "SELECT kf.value, kf.source_doc_id "
-        "FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
+        f"FROM {fact_relation} kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "  # nosec B608 -- canonical resolver owns relation; values bound
         "WHERE kf.ticker = ? AND kd.name = ? AND kf.period_end = ? "
         "LIMIT 1",
         (ticker.upper(), kpi_name, period_target),

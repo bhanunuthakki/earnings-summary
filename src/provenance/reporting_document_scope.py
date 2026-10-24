@@ -281,6 +281,8 @@ def classify_reporting_document(
         return "unresolved", None, "unclassified_earnings_call_artifact"
     if source != "ir_document":
         return "unresolved", None, "unknown_expected_document_source_kind"
+    if document == "earnings_announcement":
+        return "excluded_supporting", None, "earnings_calendar_announcement"
     ir_families = {
         "annual_report": "issuer_financial_statements",
         "financial_statement": "issuer_financial_statements",

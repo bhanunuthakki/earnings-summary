@@ -59,6 +59,7 @@ class FilingXbrlIngestRequest(_Closed):
     runtime_root: Path
     bundle_python: Path
     sandbox_launcher: Path
+    sandbox_state_root: Path | None = None
     recorded_at: datetime
     offline_artifacts: tuple[ProcessorPackageMember, ...] = ()
     apply: bool = False
@@ -130,6 +131,7 @@ def ingest_sec_filing_xbrl(
         runtime_root=request.runtime_root,
         bundle_python=request.bundle_python,
         sandbox_launcher=request.sandbox_launcher,
+        sandbox_state_root=request.sandbox_state_root,
     )
     run_id = _run_id(request, manifest, processor_result)
     effective_recorded_at = _original_recorded_at(

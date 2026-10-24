@@ -50,8 +50,19 @@ RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0 = FulltextExtractorIdentity(
     evidence_namespace="fulltext-pdf-v6",
     hierarchy="flat",
 )
-RETAINED_PDF_FULLTEXT_EXTRACTORS = (RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0,)
-PDF_FULLTEXT_PYPDF_VERSION = "6.21.1"
+RETAINED_PDF_FULLTEXT_EXTRACTOR_6_21_1 = FulltextExtractorIdentity(
+    name=FULLTEXT_EXTRACTOR_NAME,
+    code_version="fulltext-evidence-backfill@6-pdf-public-access;pypdf=6.21.1",
+    config_sha256="6612094498918ed049af77f2f5323acd5524ec309339a00243d0b31ec3db57ae",  # pragma: allowlist secret -- retained extractor config digest, not a credential
+    idempotency_namespace="fulltext-pdf-v6-pypdf-6.21.1",
+    evidence_namespace="fulltext-pdf-v6",
+    hierarchy="flat",
+)
+RETAINED_PDF_FULLTEXT_EXTRACTORS = (
+    RETAINED_PDF_FULLTEXT_EXTRACTOR_6_21_1,
+    RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0,
+)
+PDF_FULLTEXT_PYPDF_VERSION = "6.21.2"
 PDF_FULLTEXT_EXTRACTOR = FulltextExtractorIdentity(
     name=FULLTEXT_EXTRACTOR_NAME,
     code_version=f"fulltext-evidence-backfill@6-pdf-public-access;pypdf={PDF_FULLTEXT_PYPDF_VERSION}",
@@ -60,7 +71,7 @@ PDF_FULLTEXT_EXTRACTOR = FulltextExtractorIdentity(
         f"verify-permissions,pypdf={PDF_FULLTEXT_PYPDF_VERSION}".encode()
     ).hexdigest(),
     # Run keys must distinguish parser identities; page evidence keeps its revision lineage.
-    idempotency_namespace="fulltext-pdf-v6-pypdf-6.21.1",
+    idempotency_namespace="fulltext-pdf-v6-pypdf-6.21.2",
     evidence_namespace="fulltext-pdf-v6",
     hierarchy="flat",
 )
@@ -242,8 +253,10 @@ def select_approved_fulltext_run(
         candidates.append((next(iter(run_ids)), page_numbers))
     if not candidates:
         return None
-    if required_pages is None and len(candidates) > 1:
-        promoted, retained = candidates[:2]
-        if not retained[1] or not retained[1].issubset(promoted[1]):
-            return retained[0]
-    return candidates[0][0]
+    # Replay each promotion against the previously selected whole run. An
+    # incomplete intermediate generation cannot hide older complete coverage.
+    selected = candidates[-1]
+    for candidate in reversed(candidates[:-1]):
+        if selected[1] and selected[1].issubset(candidate[1]):
+            selected = candidate
+    return selected[0]

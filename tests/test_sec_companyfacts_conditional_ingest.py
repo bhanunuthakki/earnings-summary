@@ -762,7 +762,7 @@ def test_driver_reports_skip_rows_events_and_summary_without_staleness_checks(
     def _open_db(_path: Path) -> sqlite3.Connection:
         return conn
 
-    def _tickers(_args: object, _conn: sqlite3.Connection) -> list[str]:
+    def _tickers(_args: object, _conn: sqlite3.Connection, **_kwargs: object) -> list[str]:
         return ["NU"]
 
     def _begin_run(*_args: object, **_kwargs: object) -> str:

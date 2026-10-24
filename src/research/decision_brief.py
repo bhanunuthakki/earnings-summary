@@ -1023,6 +1023,14 @@ def verify_memo_claims(
             or scoped_support
             or model_values
             or observation_sum
+            or (
+                isinstance(claim, ReviewedMemoClaimV2)
+                and claim.kind == "calculation"
+                and isinstance(review, MemoContextReviewV2)
+                and review.owner_thesis is not None
+                and claim.owner_thesis_excerpts
+                and claim.derived_values
+            )
         ):
             raise MemoEvidenceError("memo_reported_claim_support_missing")
         for node_id in claim.evidence_node_ids:

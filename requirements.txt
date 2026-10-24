@@ -21,11 +21,12 @@ python-dotenv
 cryptography>=50.0.0
 # Security floor: pypdf parses UNTRUSTED IR/filing PDFs, so it sits on the
 # attacker-reachable path and carries a heavy CVE stream — keep it current
-# (>=6.21.1 clears CVE-2026-113786 and >=6.20.1 cleared CVE-2026-113792
+# (>=6.21.2 clears CVE-2026-115572, CVE-2026-115585 and CVE-2026-115580;
+# >=6.21.1 clears CVE-2026-113786 and >=6.20.1 cleared CVE-2026-113792
 # through CVE-2026-113795, both reported by 2026-10-21 hosted SCA runs;
 # >=6.19.0 cleared PYSEC-2026-4153 through PYSEC-2026-4160; the earlier
 # >=6.16.1 floor cleared CVE-2026-84309, CVE-2026-84310, and CVE-2026-84311).
-pypdf>=6.21.1
+pypdf>=6.21.2
 # PyMuPDF powers bounded, position-preserving PDF table extraction and is
 # required by the evidence-processing runtime and its CI coverage.
 pymupdf>=1.27.2.3

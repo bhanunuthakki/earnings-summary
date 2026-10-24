@@ -53,6 +53,17 @@ from pipeline.run_accounting import (
 
 def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:
     """Return the list of tickers to extract for, per CLI args."""
+    if getattr(args, "tickers", None) is not None:
+        requested = list(
+            dict.fromkeys(t.strip().upper() for t in args.tickers.split(",") if t.strip())
+        )
+        eligible = {
+            c.ticker.upper()
+            for c in tracked_companies_for_user(conn, list_types=frozenset(ListType))
+        }
+        if not requested or any(t not in eligible for t in requested):
+            raise ValueError("--tickers must name eligible tracked companies for the current user")
+        return requested
     if args.ticker:
         return [args.ticker.upper()]
     list_types = frozenset(ListType) if args.include_index_members else ANALYZED_LIST_TYPES
@@ -126,6 +137,8 @@ def _report_document(conn: sqlite3.Connection, run_id: str, outcome: DocumentOut
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--tickers", help="Exact comma-separated eligible ticker subset")
+    parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
     group.add_argument("--ticker", help="Single ticker to extract for")
     group.add_argument("--all", action="store_true", help="All classified tracked companies")
     parser.add_argument(
@@ -164,7 +177,9 @@ def main() -> int:
                 conn,
                 directive="extract_facts",
                 ticker_scope=tickers,
-                invocation_inputs=_invocation_inputs(conn, docs, doc_types, PROJECT_ROOT),
+                invocation_inputs=_invocation_inputs(
+                    conn, docs, doc_types, args.repo_root.resolve()
+                ),
                 force=bool(args.force),
                 deduplicate_completed=True,
             )
@@ -175,7 +190,7 @@ def main() -> int:
             result = extract_documents(
                 conn,
                 docs,
-                PROJECT_ROOT,
+                args.repo_root.resolve(),
                 report=lambda outcome: _report_document(conn, run_id, outcome),
             )
             total, ok, failed = result.rows_inserted, result.succeeded, result.failed

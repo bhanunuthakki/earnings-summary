@@ -892,7 +892,7 @@
     "transport": "claude_membership"
   },
   "static_count_clarification": "Old2012/1835 values are previous configured ceilings, not a paired prechange measurement of actual diagnostics/suppressions. Revised measured1826/1811 values tighten those ceilings.",
-  "status": "LOCAL_SOURCE_CONTEXT_PRECONDITION_ACCEPTED; Sol advisory95; original architecture FAIL and wider roadmap open",
+  "status": "LOCAL_MAIN_INTEGRATION_IN_PROGRESS; combined release HOLD; original architecture gate unwaived",
   "third_independent_sol_proxy_review": {
     "binding_sha256": "53493b3675b5a59400c3527a8954914d8a50ea0ae9d09a819d27d854d8c897d0",
     "effort": "high",
@@ -3936,5 +3936,13 @@
       "No collection, model call, production mutation, push, merge or deployment. Separate held-source inspection is read-only planning evidence."
     ],
     "local_commit_receipt": ".tmp/r4-source-context-final/local-commit.json"
+  },
+  "main_integration": {
+    "cleanup_head": "2c2caa49559341e4830d90c6ceb8937c74c88202",
+    "main": "224d9666038674921fef20360258e18981884dc8",
+    "state": "merge in progress; tests correcting integration failures",
+    "architecture_receipt": ".tmp/cleanup-main-integration-architecture.json",
+    "independent_review": "pending",
+    "original_gate_waived": false
   }
 }

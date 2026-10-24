@@ -5,7 +5,7 @@ Backs two surfaces:
   * the command-center "IR Docs" panel — which roster names have auto-fetched IR
     documents vs. which need a manual pull, with the last crawl outcome + reason;
   * the failing-crawler rescan (``discover_ir_documents_all --only-failing``) —
-    the roster names with zero registered IR documents.
+    the roster names with zero registered IR documents or a failed last crawl.
 
 Two data sources, deliberately split:
 
@@ -249,12 +249,19 @@ def coverage_rows(db_path: Path, roster: list[tuple[str, str, str]]) -> list[IrC
                 status=statuses.get(t),
             )
         )
-    # Gaps first (most actionable), then by ticker.
+    # Zero-document gaps first, then by ticker. Failed partial crawls remain
+    # visible through status and enter the retry set even with old documents.
     out.sort(key=lambda r: (r.has_docs, r.ticker))
     return out
 
 
 def gap_tickers(db_path: Path, roster: list[str]) -> list[str]:
-    """Roster names with ZERO auto-fetched IR docs — the rescan target set."""
+    """Names with no IR documents or a failed most recent crawl."""
     cov = ir_doc_coverage(db_path)
-    return [t.upper() for t in roster if cov.get(t.upper(), (0, None, None))[0] == 0]
+    statuses = load_statuses(db_path)
+    return [
+        t.upper()
+        for t in roster
+        if cov.get(t.upper(), (0, None, None))[0] == 0
+        or ((status := statuses.get(t.upper())) is not None and status.last_status == "failed")
+    ]

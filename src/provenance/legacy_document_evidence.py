@@ -187,3 +187,96 @@ class LegacyDocumentEvidenceBindingLedger:
         ).fetchone()
         if exists is None:
             raise ValueError(f"legacy documents.id {document_id} does not exist")
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyDocumentEvidenceReadiness:
+    """Verified existing lineage for one exact legacy source; grants no admission."""
+
+    document_version_id: str
+    evidence_node_id: str
+    extraction_run_id: str
+    source_sha256: str
+    binding_revision_id: str | None
+
+
+def require_legacy_document_evidence(
+    conn: sqlite3.Connection,
+    *,
+    document_id: int,
+    ticker: str,
+    source_type: str,
+    doc_type: str,
+    period_end: datetime,
+    source_sha256: str,
+) -> LegacyDocumentEvidenceReadiness:
+    """Check existing evidence before model work, without repairing or writing it."""
+    digest = _sha256(source_sha256)
+    document = conn.execute(
+        "SELECT ticker,source_type,doc_type,period_end,sha256 FROM documents WHERE id=?",
+        (document_id,),
+    ).fetchone()
+    if document is None or (
+        str(document[0]).upper() != ticker.upper()
+        or document[1] != source_type
+        or document[2] != doc_type
+        or _timeline(datetime.fromisoformat(str(document[3]))) != _timeline(period_end)
+        or document[4] != digest
+    ):
+        raise ValueError("legacy document evidence identity does not match extraction source")
+    binding = conn.execute(
+        "SELECT binding_revision_id,document_version_id,evidence_node_id,scope_content_sha256 "
+        "FROM legacy_document_evidence_binding_revisions WHERE legacy_document_id=? "
+        "ORDER BY revision DESC LIMIT 1",
+        (document_id,),
+    ).fetchone()
+    if binding is None:
+        versions = conn.execute(
+            "SELECT document_version_id FROM evidence_document_versions WHERE legacy_document_id=?",
+            (document_id,),
+        ).fetchall()
+        if len(versions) != 1:
+            raise ValueError("legacy document evidence version is missing or ambiguous")
+        version_id = str(versions[0][0])
+        node_id: str | None = None
+        binding_id: str | None = None
+    else:
+        binding_id, version_id, node_id = str(binding[0]), str(binding[1]), str(binding[2])
+        if binding[3] != digest:
+            raise ValueError("legacy document evidence binding source hash does not match")
+    version = conn.execute(
+        "SELECT ticker,document_type,period_end,blob_sha256,legacy_document_id "
+        "FROM evidence_document_versions WHERE document_version_id=?",
+        (version_id,),
+    ).fetchone()
+    if version is None or (
+        str(version[0]).upper() != ticker.upper()
+        or version[1] != doc_type
+        or version[2] is None
+        or _timeline(datetime.fromisoformat(str(version[2]))) != _timeline(period_end)
+        or version[3] != digest
+        or version[4] != document_id
+    ):
+        raise ValueError("legacy document evidence version does not match source identity or hash")
+    nodes = conn.execute(
+        "SELECT node.node_id,run.extraction_run_id,run.input_sha256,run.outcome,"
+        "run.completed_at FROM evidence_nodes node "
+        "JOIN evidence_extraction_runs run ON run.extraction_run_id=node.extraction_run_id "
+        "WHERE run.document_version_id=? AND node.node_kind='document' "
+        "AND (? IS NULL OR node.node_id=?)",
+        (version_id, node_id, node_id),
+    ).fetchall()
+    if (
+        len(nodes) != 1
+        or nodes[0][2] != digest
+        or nodes[0][3] != "succeeded"
+        or nodes[0][4] is None
+    ):
+        raise ValueError("legacy document evidence node or successful extractor is unavailable")
+    return LegacyDocumentEvidenceReadiness(
+        document_version_id=version_id,
+        evidence_node_id=str(nodes[0][0]),
+        extraction_run_id=str(nodes[0][1]),
+        source_sha256=digest,
+        binding_revision_id=binding_id,
+    )

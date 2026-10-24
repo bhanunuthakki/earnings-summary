@@ -33,8 +33,8 @@ a single cache file with a ``=== SOURCE BREAK ===`` delimiter so the loader
 sees the full narrative for that period in one read.
 
 CLI:
-    python src/compute/ir_narrative.py --ticker META
-    python src/compute/ir_narrative.py --all
+    python execution/sqlite_bootstrap.py src/compute/ir_narrative.py --ticker META
+    python execution/sqlite_bootstrap.py src/compute/ir_narrative.py --all
 """
 
 from __future__ import annotations
@@ -48,12 +48,12 @@ import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
 from hashlib import sha256
-from importlib.metadata import PackageNotFoundError, version
-from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from provenance.fulltext_backfill import project_source_text, source_text_projection_identity
 
 if TYPE_CHECKING:
     from provenance.immutable_artifact import ImmutableArtifactSnapshot
@@ -91,7 +91,6 @@ _NOISE_LINE = re.compile(
 )
 
 _MIN_CACHE_BYTES = 200  # below this the deck has no usable narrative
-_MAX_CHARS_PER_DOC = 24000  # post-normalize per-PDF cap; loader trims further
 _SOURCE_BREAK = "\n\n=== SOURCE BREAK ===\n\n"
 
 
@@ -156,14 +155,12 @@ class _Source(BaseModel):
     path: str
     sha256: str
     size_bytes: int = Field(ge=0)
-    disposition: Literal["included", "below_minimum"]
-    truncated: bool
 
 
 class _Envelope(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[3] = 3
     ticker: str
     doctype: str
     period: str
@@ -177,25 +174,18 @@ class _Envelope(BaseModel):
 class NarrativeCache:
     """Local extraction validity; never financial admission or archive coverage."""
 
-    status: Literal["valid", "empty", "unavailable"]
+    status: Literal["valid", "unavailable"]
     source_tag: str
     reason: str = ""
     body: str = ""
 
 
 def _method_identity() -> str:
-    # Code and settings both bind reuse. pypdf is not imported by the reader.
-    try:
-        parser_version = version("pypdf")
-    except PackageNotFoundError as exc:
-        raise ValueError("PDF parser distribution is unavailable") from exc
     payload = {
-        "revision": 1,
-        "parser_version": parser_version,
-        "parser_code": sha256((Path(__file__).parents[1] / "parser.py").read_bytes()).hexdigest(),
+        "revision": 3,
+        "source_text_identity": source_text_projection_identity("source.pdf"),
         "normalizer_code": sha256(Path(__file__).read_bytes()).hexdigest(),
         "minimum_chars": _MIN_CACHE_BYTES,
-        "maximum_chars": _MAX_CHARS_PER_DOC,
         "source_break": _SOURCE_BREAK,
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -259,13 +249,8 @@ def _read_cache(
         if actual != recorded:
             return NarrativeCache("unavailable", tag, "sources_changed")
         _assert_population_unchanged(repo_root, ticker, key, pdfs, snapshots)
-        included = any(s.disposition == "included" for s in envelope.sources)
-        if bool(envelope.text) != included or any(
-            s.truncated and s.disposition != "included" for s in envelope.sources
-        ):
+        if not envelope.text.strip() or not envelope.sources:
             return NarrativeCache("unavailable", tag, "invalid_disposition")
-        if not included:
-            return NarrativeCache("empty", tag, "no_usable_narrative")
         return NarrativeCache("valid", tag, body=envelope.text)
     except FileNotFoundError:
         return NarrativeCache("unavailable", tag, "missing_cache_or_source")
@@ -319,30 +304,30 @@ def has_pending_narrative(repo_root: Path, ticker: str) -> bool:
 def _extract_group(repo_root: Path, ticker: str, key: tuple[str, str], pdfs: list[Path]) -> bool:
     # Parse the exact stable bytes that were hashed, never a second file read.
     from materialized_cache import write_payload_atomically
-    from parser import extract_text_from_pdf
 
     method = _method_identity()
     snapshots: list[ImmutableArtifactSnapshot] = []
     sources: list[_Source] = []
     chunks: list[str] = []
+    empty_sources = 0
     for pdf, (snapshot, payload) in zip(pdfs, _read_sources(repo_root, pdfs), strict=True):
         snapshots.append(snapshot)
-        cleaned = _normalize(extract_text_from_pdf(BytesIO(payload)))
-        included = len(cleaned) >= _MIN_CACHE_BYTES
-        truncated = included and len(cleaned) > _MAX_CHARS_PER_DOC
-        if included:
-            if truncated:
-                cleaned = cleaned[:_MAX_CHARS_PER_DOC].rstrip() + "\n[...truncated]"
+        cleaned = _normalize(project_source_text(payload, str(pdf)))
+        if len(cleaned) < _MIN_CACHE_BYTES:
+            empty_sources += 1
+        else:
             chunks.append(cleaned)
         sources.append(
             _Source(
                 path=str(pdf.relative_to(repo_root)),
                 sha256=snapshot.file_sha256,
                 size_bytes=snapshot.size_bytes,
-                disposition="included" if included else "below_minimum",
-                truncated=truncated,
             )
         )
+    if empty_sources:
+        if not chunks:
+            return False
+        raise ValueError("narrative source population contains empty documents")
     merged = _SOURCE_BREAK.join(chunks)
     envelope = _Envelope(
         ticker=ticker.upper(),
@@ -439,7 +424,7 @@ def main() -> int:
     failures = 0
     for ticker in tickers:
         counts = extract_for_ticker(repo_root, ticker, refresh=args.refresh)
-        failures += counts["failed"]
+        failures += counts["failed"] + counts["skipped_empty"]
         row: dict[str, object] = dict(counts)
         row["ticker"] = ticker
         summary.append(row)

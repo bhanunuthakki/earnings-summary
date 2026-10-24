@@ -699,6 +699,47 @@ class _WindowsKillOnCloseJob:
             if process_handle:
                 kernel32.CloseHandle(process_handle)
 
+    def stop_and_wait(self, *, terminate: bool = False, timeout_seconds: float = 5) -> None:
+        """Prove this owned Job has no active processes before releasing resources."""
+        if sys.platform != "win32" or not self._handle:
+            raise OSError("Windows owned Job is unavailable")
+        from ctypes import wintypes
+
+        class Accounting(ctypes.Structure):
+            _fields_ = [
+                ("times", ctypes.c_longlong * 4),
+                ("page_faults", wintypes.DWORD),
+                ("total", wintypes.DWORD),
+                ("active", wintypes.DWORD),
+                ("terminated", wintypes.DWORD),
+            ]
+
+        native = ctypes.WinDLL("kernel32", use_last_error=True)
+        native.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        native.TerminateJobObject.restype = wintypes.BOOL
+        native.QueryInformationJobObject.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+        ]
+        native.QueryInformationJobObject.restype = wintypes.BOOL
+        if terminate and not native.TerminateJobObject(self._handle, 125):
+            raise ctypes.WinError(ctypes.get_last_error())
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            accounting = Accounting()
+            if not native.QueryInformationJobObject(
+                self._handle, 1, ctypes.byref(accounting), ctypes.sizeof(accounting), None
+            ):
+                raise ctypes.WinError(ctypes.get_last_error())
+            if accounting.active == 0:
+                return
+            if time.monotonic() >= deadline:
+                raise OSError("owned Job stop could not be proved")
+            time.sleep(0.05)
+
     def close(self) -> None:
         if self._handle == 0:
             return
@@ -845,6 +886,11 @@ def _resume_process_threads(
         )
     if resumed == 0:
         raise OSError(f"no suspended thread found for process {pid}")
+
+
+# Public ownership primitives for callers with their own bounded stdio protocol.
+WindowsKillOnCloseJob = _WindowsKillOnCloseJob
+resume_suspended_process = _resume_process_threads
 
 
 def _create_process_tree_job(

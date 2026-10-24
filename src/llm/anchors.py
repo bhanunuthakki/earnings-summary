@@ -482,12 +482,11 @@ def load_bear_anchor(repo_root: Path, ticker: str) -> str:
 def load_ir_anchor(repo_root: Path, ticker: str, char_cap: int = IR_ANCHOR_CHAR_CAP) -> str:
     """Compose an IR-narrative anchor for prompt injection.
 
-    Reads from `data/ir_narrative/<TICKER>/` (written by
-    `src/compute/ir_narrative.py`). Picks the most-recent narrative for the
-    ticker, walking doctypes in priority order:
-    ``ir_presentation > ir_event > ir_investor_update``. Within a doctype, the
-    lexicographically-largest filename wins — period strings are ISO dates
-    (YYYY-MM-DD), so lex order is also chronological order.
+    Uses the single envelope validity owner in `src/compute/ir_narrative.py`.
+    It selects the latest period among source and cache candidates, with priority
+    ``ir_presentation > ir_event > ir_investor_update``. It verifies the exact
+    source population, source bytes, extraction method and envelope output before
+    exposing text. Legacy text files are unverified candidates, not prompt inputs.
 
     The output has the bias-framing header prepended so every consumer treats
     the content as company spin rather than ground truth.

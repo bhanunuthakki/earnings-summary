@@ -68,3 +68,70 @@ checkout does not make that database isolated.
    Preserve appended evidence and immutable files. Database restoration must use the validated
    snapshot and account for intervening legitimate writes; never blindly replace live state
    or force a downgrade that would discard rows requiring the newer schema.
+
+
+## Filing-XBRL configuration recovery
+
+The qualified bridge uses a fresh `earnings-summary-xbrl-mpl-` directory in its
+AppContainer temporary directory. A hard process stop can leave that directory.
+Four matching entries block another allocation. This is a recovery hold, not a
+permission to delete an existing profile or unrelated temporary files.
+
+1. Resolve the configured installation and its invoking identity through the
+   canonical service or operator configuration. Do not infer the service route
+   from an SSH user's environment. The launcher requires LocalSystem or an
+   administrative operator and uses one protected global mutex across sessions.
+2. Stop only the affected task-owned invocation through its process owner. Prove
+   that the launcher and every child Job stopped. A stopped root PID alone is
+   insufficient. Preserve the failure receipt and original source operands.
+3. Derive the V2 package SID and query `GetAppContainerFolderPath` under that same
+   identity. Match the profile's user SID and the actual contained TEMP path from
+   the qualification receipt. Do not substitute the host TEMP or a user home.
+4. Inspect only matching configuration entries in that verified private TEMP.
+   Reject reparse points and identity changes. Record each entry's path, owner,
+   file identity and size. Directory names or age alone do not prove ownership.
+5. Use a separately reviewed exact recovery plan. Retain unknown or unique data.
+   When deletion ownership is unproved, a bounded same-profile quarantine may
+   preserve the entries and remove them from the allocation prefix. It needs
+   explicit entry identities, a maximum of four retained entries and a review
+   disposition before another recovery. Do not create an unbounded quarantine.
+6. Recheck profile and directory identities. Run one bounded synthetic smoke
+   through the configured installation. Require its cleanup and exact source/ACL
+   parity. Keep processing on hold if any proof is missing. Never delete V1 or
+   reset an existing V2 profile as incidental recovery.
+
+The source-mode application caller uses `SourceLauncherSupervisor` for the
+manifest deadline, bounded input/output, cooperative cancellation and an outer
+Windows Job. It assigns the suspended launcher before resume. The launcher stops
+its nested child Job before private UI cleanup. A separate control pipe supplies
+trusted cleanup acknowledgement; parser stdout is not proof. The controller
+requires launcher exit, zero active outer Job processes, full permission parity
+and unchanged runtime/input bytes before it clears the pending invocation.
+
+The source installation descriptor must name the canonical protected
+`sandbox_state_root`. All approved V2 releases share it. A pending record blocks
+another run, including after forced termination. Preserve that record and its
+exact invocation evidence for separately reviewed recovery. Unknown stop status
+also retains the current process's write fences and owner resources. Closing the
+process does not authorize removing the durable hold. No alternate state root,
+profile reset or implicit retry may bypass it.
+
+Legacy executable mode retains `run_capped_process`; that runner alone does not
+prove Windows descendant cleanup. It is not the approved replacement source path.
+Direct unbounded launcher invocation is not an operational entrypoint.
+
+## Abandoned filing-XBRL global mutex
+
+An abandoned `Global\EarningsSummaryFilingXbrlLauncherV2` mutex causes a refusal.
+Keep this behavior. The previous invocation can have incomplete ACL cleanup.
+Hold its service and scheduler owners before recovery. Resolve the exact invoking
+user, immutable roots and owned Job receipts. Stop only verified owned children.
+Require zero active Job processes and close all remaining launcher handles.
+
+Compare immutable bytes and full ACL populations with the retained baseline.
+Remove only proven invocation-owned grants. Preserve V1 and every pre-existing
+V2 profile. Unknown ownership, changed bytes, a missing baseline or another live
+owner causes HOLD. Do not change the mutex owner, DACL or name to bypass the hold.
+After exact restoration, require one bounded acquire/release and contention check
+without an abandoned-state exception. Run configured byte preflight before one
+supervised replay. Do not retry an unchanged failure.

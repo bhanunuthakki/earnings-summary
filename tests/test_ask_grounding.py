@@ -379,6 +379,52 @@ def test_transcript_channel_cites_file_lines(repo: Path) -> None:
     assert "NPL formation slowing" in top.text
 
 
+def test_transcript_excerpt_keeps_late_query_context_and_source_line(tmp_path: Path) -> None:
+    prefix = "Operator: Please raise your hand to ask a question. " * 30
+    relevant = "CFO: Risk-adjusted margins recovered as lending growth offset credit losses."
+    line = prefix + relevant + " We will now take the next question." * 20
+    path = tmp_path / "call.txt"
+    path.write_text("Call header\n" + line, encoding="utf-8")
+    docs = [(71, "call.txt", "Q2", "2026-06-30")]
+
+    hits = _score_transcript_lines(
+        tmp_path, question_terms("risk-adjusted margin credit losses"), "TST", docs
+    )
+    assert len(hits) == 1
+    item = hits[0][1]
+    assert relevant in str(item["text"])
+    excerpt = str(item["text"]).split("line 2: ", 1)[1]
+    assert excerpt in line
+    assert len(excerpt) <= 400
+    assert item["href"] == "/source/71#L2"
+    assert item["label"] == "TST Q2'26 call · L2"
+
+    # The cached source stays question-independent; another query gets its context.
+    second = _score_transcript_lines(tmp_path, ["operator"], "TST", docs)
+    assert "Operator:" in str(second[0][1]["text"])
+
+
+@pytest.mark.parametrize("distance", [350, 399])
+def test_transcript_excerpt_keeps_complete_terms_across_window(
+    tmp_path: Path, distance: int
+) -> None:
+    line = "Opening remarks. " * 40 + "margin" + " " * (distance - 6) + "profitability"
+    # Preserve spacing through normalisation with neutral words instead of padding.
+    line = line.replace(" " * (distance - 6), " x" * ((distance - 6) // 2) + " ")
+    (tmp_path / "call.txt").write_text(line, encoding="utf-8")
+    hits = _score_transcript_lines(
+        tmp_path, ["margin", "profitability"], "TST", [(1, "call.txt", "Q1", "2026-03-31")]
+    )
+    excerpt = str(hits[0][1]["text"]).split("line 1: ", 1)[1]
+    assert len(excerpt) <= 400
+    if distance == 350:
+        assert "margin" in excerpt and "profitability" in excerpt
+    else:
+        # A token outside the complete span must not win by its start alone.
+        assert "margin" in excerpt
+        assert "profit" not in excerpt
+
+
 def test_named_ticker_beats_scope_default(repo: Path) -> None:
     items = _gather(repo, "TST revenue trend", tickers=["OTHER"])
     assert any(i.label == "TST · Revenue" for i in items)

@@ -7,9 +7,16 @@ Other supported families retain exact-file legacy categorization. Managed inputs
 never enter the incoming-URL sidecar or a broad categorizer scan.
 
 Idempotent: a URL already present in the ``documents`` table (source_url) is
-skipped. Best-effort transport failures are logged and skipped, while an explicit
+skipped. Transport failures remain visible and fail the bounded operation; an explicit
 HTTP 401/403 is a typed authentication denial that halts the current job; auth is
 never bypassed.
+
+The JSON summary reports ``failed`` or ``partial`` for download failures and
+``registration_failed`` for a nonzero categorizer exit or missing source registration.
+``registration_missing`` counts legacy downloaded sources absent after categorization.
+Managed registrations retain their publication receipt and URL-membership checks.
+These states and a missing manifest return exit code 1. Successful downloads remain available for
+recovery. An automatic ``--all`` run continues after these failures.
 
 Usage:
     python execution/fetch_ir_documents.py --ticker GOOG
@@ -30,13 +37,16 @@ import sqlite3
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal, cast
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from db_paths import require_db_path
 from ir_pipeline._net import (
     UnsafeURLError,
     build_public_opener,
@@ -381,7 +391,9 @@ def _fetch_bytes(url: str) -> tuple[bytes, str, str] | None:
         return _fetch_curl_cffi(url)
 
 
-def _download(url: str, dest_dir: Path, base_name: str) -> Path | None:
+def _download(
+    url: str, dest_dir: Path, base_name: str, *, allow_html_release: bool = False
+) -> Path | None:
     """GET ``url`` into ``dest_dir/<base_name><ext>``; ext from response headers.
 
     Returns the written Path, or None on any network/HTTP error (logged, skipped).
@@ -392,6 +404,18 @@ def _download(url: str, dest_dir: Path, base_name: str) -> Path | None:
         return None
     data, cd, ct = fetched
     ext = _ext_from_headers(url, cd, ct)
+    binary_extensions = {".pdf", ".xlsx", ".xls", ".pptx", ".ppt"}
+    url_extension = Path(urllib.parse.urlsplit(url).path).suffix.lower()
+    # A manifest release hint permits staging HTML for content classification.
+    # It does not admit a financial fact or certify the page as a release.
+    # A binary download that returns HTML remains a failed download.
+    if (
+        allow_html_release
+        and ct.split(";", 1)[0].strip().lower() == "text/html"
+        and url_extension not in binary_extensions
+        and not re.search(r"\.(?:pdf|xlsx?|pptx?)(?:[\";\s]|$)", cd, re.IGNORECASE)
+    ):
+        ext = ".html"
     dest = dest_dir / f"{base_name}{ext}"
     try:
         require_no_reparse_points(dest)
@@ -586,6 +610,7 @@ def process_ticker(
     dest_dir = root / "ir_documents" / ticker
     sidecar: dict[str, str] = {}
     legacy_paths: list[Path] = []
+    legacy_downloaded_urls: set[str] = set()
     legacy_classifications: dict[Path, BoundIRClassification] = {}
     downloaded = skipped = failed = registered = managed_registered = ready = 0
     projection_repaired = projection_failed = ready_existing = alias_held = transport_skipped = 0
@@ -640,6 +665,10 @@ def process_ticker(
             print(f"[DRY RUN] would download {redact(url)} -> {dest_dir / base}.<ext>")
             skipped += 1
             continue
+        allow_html_release = entry.get("doc_type") == "press_release" and Path(
+            urllib.parse.urlsplit(url).path
+        ).suffix.lower() not in {".pdf", ".xlsx", ".xls", ".pptx", ".ppt"}
+        download = partial(_download, allow_html_release=True) if allow_html_release else _download
         did_download = False
         try:
             if categorize and authorization.fiscal_year_end_month == 12:
@@ -656,7 +685,7 @@ def process_ticker(
                     fiscal_year=period[0],
                     fiscal_quarter=period[1],
                     legacy_base_name=base,
-                    download=_download,
+                    download=download,
                 )
                 downloaded += 1
                 did_download = True
@@ -689,12 +718,14 @@ def process_ticker(
                         ready += count
                     continue
             else:
-                dest = _download(url, dest_dir, base)
+                dest = download(url, dest_dir, base)
                 if dest is None:
                     transport_skipped += 1
+                    failed += 1
                     continue
                 downloaded += 1
             sidecar[dest.name] = url
+            legacy_downloaded_urls.add(url)
             legacy_paths.append(dest)
         except JobAlreadyRunningError as exc:
             failed += 1
@@ -704,6 +735,7 @@ def process_ticker(
         except IssuerDocumentPreparationError as exc:
             if exc.code == "staging_download_failed":
                 transport_skipped += 1
+                failed += 1
                 continue
             if not did_download and exc.phase in {"classify", "publish"}:
                 downloaded += 1
@@ -751,15 +783,25 @@ def process_ticker(
         failed += legacy_failed
         cat_rc = 1 if legacy_failed else 0
 
-    summary: dict[str, object] = {
-        "ticker": ticker,
-        "status": "partial"
-        if failed and registered
+    registration_missing: int | None = None
+    if categorize and not dry_run and legacy_downloaded_urls:
+        registration_missing = len(
+            legacy_downloaded_urls - _registered_source_urls(db_path, ticker)
+        )
+    status = (
+        "partial"
+        if failed and (downloaded or registered or ready_existing)
         else "failed"
         if failed
         else "recovered"
         if projection_repaired
-        else "done",
+        else "done"
+    )
+    if (registration_missing and not failed) or (cat_rc not in (None, 0) and not registered):
+        status = "registration_failed"
+    summary: dict[str, object] = {
+        "ticker": ticker,
+        "status": status,
         "downloaded": downloaded,
         "skipped": skipped,
         "failed": failed,
@@ -775,6 +817,7 @@ def process_ticker(
         "registration_not_reverified": registration_not_reverified,
         "alias_held_by_other_document": alias_held,
         "legacy_outcomes": [asdict(item) for item in legacy_outcomes],
+        "registration_missing": registration_missing,
     }
     print(json.dumps(summary))
     return summary
@@ -795,15 +838,15 @@ def verify_ticker(root: Path, db_path: Path, ticker: str) -> None:
 
 
 def _exit_code(summary: dict[str, object]) -> int:
-    if summary["status"] == "policy_denied":
+    if summary.get("status") == "policy_denied":
         return 2
-    return 1 if summary["status"] in {"failed", "partial"} else 0
+    return 0 if summary.get("status") in ("done", "recovered") else 1
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     root = resolve_root(args.repo_root)
-    db_path = Path(args.db) if args.db else root / "data" / "portfolio.db"
+    db_path = require_db_path(args.db)
 
     if args.verify:
         if args.all:
@@ -870,7 +913,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--verify", action="store_true", help="Report manifest-vs-documents coverage; no download"
     )
     p.add_argument("--dry-run", action="store_true", help="Show what would download; no writes")
-    p.add_argument("--db", help="portfolio.db path (default: <root>/data/portfolio.db)")
+    p.add_argument("--db", help="Explicit database path (otherwise configured authority)")
     p.add_argument(
         "--repo-root", dest="repo_root", help="Root holding ir_documents/ + data/ + .tmp/"
     )

@@ -66,6 +66,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--bundle-python", type=Path)
     parser.add_argument(
+        "--sandbox-state-root",
+        type=Path,
+        help="Explicit protected source-launcher recovery authority",
+    )
+    parser.add_argument(
         "--sandbox-launcher",
         type=Path,
         help="Hash-pinned OS sandbox launcher that enforces network denial",
@@ -99,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
             bundle_manifest=args.bundle_manifest,
             runtime_root=args.runtime_root,
             sandbox_launcher=args.sandbox_launcher,
+            sandbox_state_root=args.sandbox_state_root,
             bundle_python=args.bundle_python,
         )
     except (OSError, ValueError, InlineXbrlProcessorError, ImmutableArtifactConflictError) as exc:
@@ -158,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
             runtime_root=resolved.installation.runtime_root,
             bundle_python=resolved.bundle_python,
             sandbox_launcher=resolved.installation.sandbox_launcher,
+            sandbox_state_root=resolved.installation.sandbox_state_root,
             recorded_at=datetime.now(UTC),
             offline_artifacts=_offline_artifacts(args.offline_artifact_manifest),
             statement_context_reviews=(

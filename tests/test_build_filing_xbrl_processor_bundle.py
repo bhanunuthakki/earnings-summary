@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -291,3 +292,93 @@ def test_bundle_builder_rejects_runtime_junction(tmp_path: Path) -> None:
                 output=tmp_path / "qualified.json",
             )
         )
+
+
+@pytest.mark.parametrize("tamper", [None, "launcher", "support", "external"])
+def test_source_launcher_builder_seals_reviewed_runtime_members(
+    tmp_path: Path, tamper: str | None
+) -> None:
+    state_root = tmp_path / "state"
+    state_root.mkdir()
+    runtime = tmp_path / "runtime"
+    (runtime / "Scripts").mkdir(parents=True)
+    (runtime / "Scripts" / "python.exe").write_bytes(b"python")
+    shutil.copyfile(
+        ROOT / "execution" / "filing_xbrl_bridge.py", runtime / "earnings_summary_xbrl_bridge.py"
+    )
+    _write_offline_cache(runtime)
+    launcher = runtime / "earnings_summary_xbrl_launcher.py"
+    support = runtime / "earnings_summary_windows_appcontainer.py"
+    shutil.copyfile(ROOT / "execution" / "filing_xbrl_appcontainer_launcher.py", launcher)
+    shutil.copyfile(ROOT / "src" / "runtime" / "windows_appcontainer.py", support)
+    if tamper == "launcher":
+        launcher.write_bytes(b"changed")
+    elif tamper == "support":
+        support.write_bytes(b"changed")
+    elif tamper == "external":
+        external = tmp_path / "launcher.py"
+        shutil.copyfile(launcher, external)
+        launcher = external
+    request = FilingXbrlBundleBuildRequest(
+        template=ROOT / "config" / "filing_xbrl_processor_bundle.json",
+        runtime_root=runtime,
+        sandbox_launcher=launcher,
+        output=tmp_path / "sealed.json",
+        launcher_kind="python_source",
+        sandbox_state_root=state_root,
+    )
+    if tamper:
+        with pytest.raises(ValueError, match=r"(reviewed source|exact runtime member)"):
+            build_filing_xbrl_processor_bundle(request)
+        assert not request.output.exists()
+    else:
+        build_filing_xbrl_processor_bundle(request)
+        manifest = load_processor_bundle_manifest(request.output)
+        assert manifest.execution.launcher_kind == "python_source"
+        assert (
+            manifest.execution.sandbox_launcher_sha256
+            == manifest.build_provenance.launcher_source_sha256
+        )
+        assert manifest.build_provenance.support_source_sha256 is not None
+        seal = tmp_path / "approval.json"
+        provenance = manifest.build_provenance.model_dump(mode="json", exclude_none=True)
+        seal_payload = {
+            "schema_version": "filing-xbrl-bundle-approval/v1",
+            "manifest_sha256": manifest.manifest_sha256,
+            "manifest_artifact_sha256": hashlib.sha256(request.output.read_bytes()).hexdigest(),
+            "runtime_artifact_sha256": manifest.execution.runtime_artifact_sha256,
+            "sandbox_launcher_sha256": manifest.execution.sandbox_launcher_sha256,
+            **{key: value for key, value in provenance.items() if key.endswith("source_sha256")},
+        }
+        seal.write_text(json.dumps(seal_payload))
+        approved = _load_approved_bundle_for_test(request.output, approval_seal_path=seal)
+        assert (
+            processor_module.verify_processor_installation(
+                approved,
+                runtime_root=runtime,
+                sandbox_launcher=launcher,
+                sandbox_state_root=state_root,
+            )
+            == runtime / "Scripts" / "python.exe"
+        )
+        other_state = tmp_path / "other-state"
+        other_state.mkdir()
+        with pytest.raises(InlineXbrlProcessorError, match="state authority is not approved"):
+            processor_module.verify_processor_installation(
+                approved,
+                runtime_root=runtime,
+                sandbox_launcher=launcher,
+                sandbox_state_root=other_state,
+            )
+        seal_payload.pop("support_source_sha256")
+        seal.write_text(json.dumps(seal_payload))
+        with pytest.raises(InlineXbrlProcessorError, match="commitments"):
+            _load_approved_bundle_for_test(request.output, approval_seal_path=seal)
+        removed = manifest.model_dump(mode="json")
+        removed["execution"]["runtime_members"] = [
+            item
+            for item in removed["execution"]["runtime_members"]
+            if item["relative_path"] != "earnings_summary_windows_appcontainer.py"
+        ]
+        with pytest.raises(ValueError, match="source launcher modules"):
+            processor_module.ProcessorBundleManifest.model_validate(removed)

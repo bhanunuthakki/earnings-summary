@@ -1,10 +1,3 @@
-# pyright: reportPrivateUsage=false
-# This module reuses two private helpers from generic_xbrl_capture.py by
-# cross-module import (_is_detail_section, _detect_fye_monthday) — the same
-# established convention llm/cli.py documents for _setup_verified/
-# _claude_cli_path and compute/segment_crosstabs_llm.py already uses for
-# llm_client._call_claude. generic_xbrl_capture.py itself is not edited here
-# beyond its own sanctioned import-only change (see that module's docstring).
 """Deterministic Stage-A 10-Q segment extractor + LLM Stage-B fallback
 (docs/design/segment_quarterly_framework.md §2, Phase 1 — 10-K-regime
 domestic filers only).
@@ -55,8 +48,9 @@ from llm.structured import StructuredParseError, call_llm_structured
 from models.facts import FactLocator, FiscalPeriodType, SegmentDimension, SegmentDimType, Unit
 from pipeline.segment_junction_writer import write_segment_facts_junction
 from pipeline.segment_quarterly_coverage import record_coverage
+from provenance.financial_fact_resolution import canonical_fact_relation
 from table_extractors.base import iter_xbrl_table, parse_units
-from table_extractors.generic_xbrl_capture import _is_detail_section
+from table_extractors.generic_xbrl_capture import is_detail_section
 from table_extractors.period_axis import (
     NominalQuarter,
     PeriodAxisClass,
@@ -184,7 +178,7 @@ def _resolve_fye_monthday(
     Primary: ``tracked_companies.fiscal_year_end`` ("MM-DD", written by
     ``fmp_doc_index.set_fiscal_year_end_from_fmp``). Fallback: the modal-date
     detector already implemented for the 10-K capture-all pass
-    (``generic_xbrl_capture._detect_fye_monthday``), run against the
+    (``generic_xbrl_capture.detect_fye_monthday``), run against the
     ticker's most recent 10-K JSON if one is on disk — reused by import, not
     reforked (§2.1's "no fourth copy" instruction is about
     ``_FYE_OFFSETS``-style tables; this is the existing detector function
@@ -212,7 +206,7 @@ def _resolve_fye_monthday(
     candidates = sorted(fmp_dir.glob(f"{ticker}_form_10k_*.json"))
     if not candidates:
         return None
-    from table_extractors.generic_xbrl_capture import _detect_fye_monthday
+    from table_extractors.generic_xbrl_capture import detect_fye_monthday
 
     try:
         payload = json.loads(candidates[-1].read_text(encoding="utf-8"))
@@ -220,7 +214,7 @@ def _resolve_fye_monthday(
         return None
     if not isinstance(payload, dict):
         return None
-    return _detect_fye_monthday(cast("dict[str, object]", payload))
+    return detect_fye_monthday(cast("dict[str, object]", payload))
 
 
 def _row_metric(label: str) -> str | None:
@@ -251,7 +245,7 @@ def _iter_segment_sections(payload: dict[str, object]):
         inner = _inner_title(section) or key
         if not _SECTION_KEYWORD_RX.search(inner):
             continue
-        if not _is_detail_section(inner):
+        if not is_detail_section(inner):
             continue
         yield key, inner, section
 
@@ -752,13 +746,11 @@ def _cross_check_consolidated(
     if not row:
         return
     seg_sum = sum((Decimal(str(r[0])) for r in row), start=Decimal("0"))
+    fact_relation = canonical_fact_relation(conn, "financial_facts").sql
     rev_row = conn.execute(
-        """
-        SELECT value FROM financial_facts
-        WHERE ticker = ? AND line_item = 'revenue' AND fiscal_period_type = ?
-          AND strftime('%Y', period_end) = ?
-        ORDER BY id DESC LIMIT 1
-        """,
+        f"SELECT value FROM {fact_relation} "  # nosec B608 -- canonical resolver owns relation; values bound
+        "WHERE ticker = ? AND line_item = 'revenue' AND fiscal_period_type = ? "
+        "AND strftime('%Y', period_end) = ? ORDER BY id DESC LIMIT 1",
         (ticker, quarter, str(year)),
     ).fetchone()
     if rev_row is None:

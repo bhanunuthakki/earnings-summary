@@ -10,6 +10,7 @@ downloaded, all 403). A blocked URL must still degrade to a skip, never a crash.
 from __future__ import annotations
 
 import email.message
+import hashlib
 import json
 import sqlite3
 import urllib.error
@@ -23,6 +24,7 @@ import pytest
 from openpyxl import Workbook
 
 from execution import fetch_ir_documents as fid
+from ir_uploads import BoundIRClassification
 from models.documents import DocType
 from models.ir_uploads import CategorizationResult, Confidence
 from pipeline import managed_ir_sources as managed
@@ -93,6 +95,31 @@ def _make_policy_db(db: Path, rows: list[tuple[str, str]]) -> None:
         conn.executemany(
             "INSERT INTO tracked_companies VALUES (?, ?, NULL, 'equity')",
             rows,
+        )
+
+
+@pytest.fixture
+def legacy_registration_db(
+    tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    database = migrated_db(tmp_path / "legacy-registration.sqlite")
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(database))
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('PORT','Synthetic issuer','portfolio','06-30','equity')"
+        )
+    return database
+
+
+def _register_legacy_source(database: Path, path: Path, url: str) -> None:
+    payload = path.read_bytes()
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            "INSERT INTO documents (ticker,source_type,doc_type,file_path,sha256,fetched_at,"
+            "fetch_status,raw_bytes_size,source_url) VALUES "
+            "('PORT','ir_doc','ir_press_release',?,?,'2026-06-30','ok',?,?)",
+            (str(path), hashlib.sha256(payload).hexdigest(), len(payload), url),
         )
 
 
@@ -683,3 +710,299 @@ def test_staging_replay_error_reports_existing_objects_and_direct_residue(
     assert raised.value.attempt_id == request.attempt_id
     assert raised.value.phase == "replay"
     assert raised.value.residue_paths == tuple(sorted(("q2.pdf", residue.name)))
+
+
+@pytest.mark.parametrize("categorize", [False, True])
+def test_cli_reports_download_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    categorize: bool,
+) -> None:
+    db = tmp_path / "portfolio.db"
+    _make_policy_db(db, [("PORT", "portfolio")])
+    _write_manifest(tmp_path, "PORT", "https://issuer.example/Q1-2026.pdf")
+
+    def fail_download(_url: str, _dest: Path, _base: str) -> None:
+        return None
+
+    monkeypatch.setattr(fid, "_download", fail_download)
+    monkeypatch.setattr(fid.time, "sleep", _no_sleep)
+    argv = ["--ticker", "PORT", "--repo-root", str(tmp_path), "--db", str(db)]
+    if categorize:
+        argv.append("--categorize")
+    assert fid.main(argv) == 1
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["failed"] == 1
+    assert summary["status"] == "failed"
+
+
+def test_cli_reports_missing_manifest(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    db = tmp_path / "portfolio.db"
+    _make_policy_db(db, [("PORT", "portfolio")])
+    assert fid.main(["--ticker", "PORT", "--repo-root", str(tmp_path), "--db", str(db)]) == 1
+    assert json.loads(capsys.readouterr().out)["status"] == "no_manifest"
+
+
+def test_cli_all_continues_after_acquisition_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    db = tmp_path / "portfolio.db"
+    _make_policy_db(db, [("AAA", "portfolio"), ("ZZZ", "portfolio")])
+    for ticker in ("AAA", "ZZZ"):
+        _write_manifest(tmp_path, ticker, f"https://issuer.example/{ticker}/Q1-2026.pdf")
+    calls: list[str] = []
+
+    def download(url: str, _dest: Path, _base: str) -> Path | None:
+        calls.append(url)
+        return None if "/AAA/" in url else tmp_path / "staged.pdf"
+
+    monkeypatch.setattr(fid, "_download", download)
+    monkeypatch.setattr(fid.time, "sleep", _no_sleep)
+    assert fid.main(["--all", "--repo-root", str(tmp_path), "--db", str(db)]) == 1
+    assert len(calls) == 2
+    summaries = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [item["status"] for item in summaries] == ["failed", "done"]
+
+
+def test_cli_reports_registration_failure(
+    tmp_path: Path,
+    legacy_registration_db: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    db = legacy_registration_db
+    _write_manifest(tmp_path, "PORT", "https://issuer.example/Q1-2026.pdf")
+
+    def download(_url: str, _dest: Path, _base: str) -> Path:
+        path = tmp_path / "staged.pdf"
+        path.write_bytes(b"synthetic legacy source")
+        return path
+
+    def categorize(
+        _ticker: str,
+        _root: Path,
+        _db: Path,
+        _calendar: str | None,
+        paths: list[Path],
+        _urls: dict[str, str],
+        _classifications: dict[Path, BoundIRClassification],
+    ) -> tuple[fid.LegacyCategorizationOutcome, ...]:
+        return tuple(
+            fid.LegacyCategorizationOutcome(str(path), "failed", "synthetic_categorization_failure")
+            for path in paths
+        )
+
+    monkeypatch.setattr(fid, "_download", download)
+    monkeypatch.setattr(fid, "_run_categorize", categorize)
+    monkeypatch.setattr(fid.time, "sleep", _no_sleep)
+    assert (
+        fid.main(
+            [
+                "--ticker",
+                "PORT",
+                "--categorize",
+                "--repo-root",
+                str(tmp_path),
+                "--db",
+                str(db),
+            ]
+        )
+        == 1
+    )
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["downloaded"] == 1
+    assert summary["categorize_rc"] == 1
+    assert summary["failed"] == 1
+    assert summary["legacy_outcomes"][0]["status"] == "failed"
+    assert summary["status"] == "registration_failed"
+
+
+def test_cli_retains_successful_documents_when_another_download_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db = tmp_path / "portfolio.db"
+    _make_policy_db(db, [("PORT", "portfolio")])
+    _write_manifest(tmp_path, "PORT", "https://issuer.example/good.pdf")
+    manifest = fid.manifest_dir(tmp_path) / "PORT_urls.json"
+    entries = json.loads(manifest.read_text())
+    entries.append(
+        {
+            "url": "https://issuer.example/failed.pdf",
+            "doc_type": "presentation",
+            "year": 2026,
+            "quarter": "Q1",
+        }
+    )
+    manifest.write_text(json.dumps(entries))
+
+    def download(url: str, _dest: Path, _base: str) -> Path | None:
+        return tmp_path / "staged.pdf" if url.endswith("good.pdf") else None
+
+    monkeypatch.setattr(fid, "_download", download)
+    monkeypatch.setattr(fid.time, "sleep", _no_sleep)
+    assert fid.main(["--ticker", "PORT", "--repo-root", str(tmp_path), "--db", str(db)]) == 1
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["status"] == "partial"
+    assert summary["downloaded"] == summary["failed"] == 1
+    sidecar = json.loads(fid.incoming_urls_path(tmp_path).read_text())
+    assert sidecar == {"staged.pdf": "https://issuer.example/good.pdf"}
+
+
+def test_cli_retains_html_release_bytes_with_source_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db = tmp_path / "portfolio.db"
+    _make_policy_db(db, [("PORT", "portfolio")])
+    url = "https://issuer.example/news/q1-2026-earnings-release"
+    _write_manifest(tmp_path, "PORT", url)
+    raw = b"<!doctype html><html><body><h1>Q1 2026 Earnings Release</h1></body></html>"
+
+    def fetch(request_url: str) -> tuple[bytes, str, str]:
+        assert request_url == url
+        return raw, "", "text/html; charset=utf-8"
+
+    monkeypatch.setattr(fid, "_fetch_bytes", fetch)
+    monkeypatch.setattr(fid.time, "sleep", _no_sleep)
+    assert fid.main(["--ticker", "PORT", "--repo-root", str(tmp_path), "--db", str(db)]) == 0
+    assert json.loads(capsys.readouterr().out)["downloaded"] == 1
+    staged = list((tmp_path / "ir_documents" / "PORT").glob("*.html"))
+    assert len(staged) == 1
+    assert staged[0].read_bytes() == raw
+    assert json.loads(fid.incoming_urls_path(tmp_path).read_text()) == {staged[0].name: url}
+
+
+@pytest.mark.parametrize(
+    ("url", "disposition", "allow_html"),
+    [
+        ("https://issuer.example/earnings-release", "", False),
+        ("https://issuer.example/release.pdf", "", True),
+        ("https://issuer.example/earnings-release", 'attachment; filename="release.pdf"', True),
+    ],
+)
+def test_html_does_not_replace_binary_or_unapproved_document(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    url: str,
+    disposition: str,
+    allow_html: bool,
+) -> None:
+    def fetch(_url: str) -> tuple[bytes, str, str]:
+        return b"<!doctype html><html><body>Access denied</body></html>", disposition, "text/html"
+
+    monkeypatch.setattr(fid, "_fetch_bytes", fetch)
+    download = cast(Callable[..., Path | None], getattr(fid, "_download"))
+    assert download(url, tmp_path / "staging", "release", allow_html_release=allow_html) is None
+    assert not (tmp_path / "staging").exists()
+
+
+@pytest.mark.parametrize("register", [False, True])
+def test_categorizer_success_requires_downloaded_source_registration(
+    tmp_path: Path,
+    legacy_registration_db: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    register: bool,
+) -> None:
+    db = legacy_registration_db
+    url = "https://issuer.example/Q1-2026.pdf"
+    _write_manifest(tmp_path, "PORT", url)
+
+    def download(_url: str, _dest: Path, _base: str) -> Path:
+        path = tmp_path / "staged.pdf"
+        path.write_bytes(b"synthetic legacy source")
+        return path
+
+    def categorize(
+        _ticker: str,
+        _root: Path,
+        _db: Path,
+        _calendar: str | None,
+        paths: list[Path],
+        _urls: dict[str, str],
+        _classifications: dict[Path, BoundIRClassification],
+    ) -> tuple[fid.LegacyCategorizationOutcome, ...]:
+        if register:
+            _register_legacy_source(db, paths[0], url)
+        return tuple(fid.LegacyCategorizationOutcome(str(path), "registered") for path in paths)
+
+    monkeypatch.setattr(fid, "_download", download)
+    monkeypatch.setattr(fid, "_run_categorize", categorize)
+    monkeypatch.setattr(fid.time, "sleep", _no_sleep)
+    argv = ["--ticker", "PORT", "--categorize", "--repo-root", str(tmp_path), "--db", str(db)]
+    assert fid.main(argv) == (0 if register else 1)
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["status"] == ("done" if register else "registration_failed")
+    assert summary["registration_missing"] == (0 if register else 1)
+    assert summary["categorize_rc"] == 0
+    if register:
+
+        def unexpected_download(_url: str, _dest: Path, _base: str) -> Path:
+            raise AssertionError("registered sources must not download again")
+
+        monkeypatch.setattr(fid, "_download", unexpected_download)
+        assert fid.main(argv) == 0
+        replay = json.loads(capsys.readouterr().out)
+        assert replay["downloaded"] == 0
+        assert replay["skipped"] == 1
+
+
+def test_shared_staged_object_does_not_hide_unregistered_source(
+    tmp_path: Path,
+    legacy_registration_db: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    db = legacy_registration_db
+    first = "https://issuer.example/first.pdf"
+    second = "https://issuer.example/second.pdf"
+    _write_manifest(tmp_path, "PORT", first)
+    manifest = fid.manifest_dir(tmp_path) / "PORT_urls.json"
+    entries = json.loads(manifest.read_text())
+    entries.append({"url": second, "doc_type": "press_release", "year": 2026, "quarter": "Q1"})
+    manifest.write_text(json.dumps(entries))
+
+    def download(_url: str, _dest: Path, _base: str) -> Path:
+        path = tmp_path / "same-bytes.pdf"
+        path.write_bytes(b"same synthetic source bytes")
+        return path
+
+    def categorize(
+        _ticker: str,
+        _root: Path,
+        _db: Path,
+        _calendar: str | None,
+        paths: list[Path],
+        _urls: dict[str, str],
+        _classifications: dict[Path, BoundIRClassification],
+    ) -> tuple[fid.LegacyCategorizationOutcome, ...]:
+        assert len(paths) == 2 and paths[0] == paths[1]
+        _register_legacy_source(db, paths[0], second)
+        return tuple(fid.LegacyCategorizationOutcome(str(path), "registered") for path in paths)
+
+    monkeypatch.setattr(fid, "_download", download)
+    monkeypatch.setattr(fid, "_run_categorize", categorize)
+    monkeypatch.setattr(fid.time, "sleep", _no_sleep)
+    assert (
+        fid.main(
+            [
+                "--ticker",
+                "PORT",
+                "--categorize",
+                "--repo-root",
+                str(tmp_path),
+                "--db",
+                str(db),
+            ]
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    summary = json.loads(captured.out)
+    assert summary["downloaded"] == 2
+    assert summary["registration_missing"] == 1
+    assert summary["status"] == "registration_failed"
+    assert first not in captured.err
+    assert second not in captured.err

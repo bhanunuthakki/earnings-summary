@@ -68,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Preserve explicit owner intent for a per-ticker acquisition",
     )
     parser.add_argument("--no-promote", action="store_true")
+    parser.add_argument("--dry-run", action="store_true", help="Plan the exact child ingestion")
     args = parser.parse_args(argv)
     if args.owner_requested and not args.ticker:
         parser.error("--owner-requested requires --ticker")
@@ -90,6 +91,8 @@ def main(argv: list[str] | None = None) -> int:
         legacy_argv.extend(["--receipt-id", receipt_id])
     if args.no_promote:
         legacy_argv.append("--no-promote")
+    if args.dry_run:
+        legacy_argv.append("--dry-run")
     original_argv = sys.argv
     try:
         sys.argv = legacy_argv

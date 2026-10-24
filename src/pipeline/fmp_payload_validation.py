@@ -36,6 +36,11 @@ class FmpPayloadCoordinate(BaseModel):
     def permits_cross_issuer_records(self) -> bool:
         return self.endpoint == "stock-peers" and self.suffix == "peers"
 
+    @property
+    def permits_empty_unavailable(self) -> bool:
+        """An absent peer list is availability evidence, never a financial artifact."""
+        return self.endpoint == "stock-peers" and self.suffix == "peers"
+
 
 class FmpPayloadContractIssue(BaseModel):
     """Stable, serializable detail for one rejected payload field or record."""

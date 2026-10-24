@@ -73,19 +73,14 @@ from table_extractors.base import (
     parse_units,
 )
 
-# Extracted OUT to their own modules (segment_quarterly_framework.md §2.2) —
-# the ONE sanctioned edit to this otherwise-frozen module: import under the
-# old private names so every call site below is untouched, behavior
-# byte-identical. table_extractors.xbrl_value_classify also backs the new
-# compute.segment_quarterly_10q extractor, which needs the identical guards.
+# Shared period and value helpers live in their owning modules. This capture
+# path and the quarterly segment extractor use the same guards.
 from table_extractors.period_axis import parse_trailing_date as _parse_period
 
 # Not referenced below directly (the moved _classify_value already closes
 # over it) — kept as a module attribute because tests/test_generic_xbrl_
 # capture.py asserts against it reflectively (g._RESIDUAL_RISK_CONFIDENCE).
-from table_extractors.xbrl_value_classify import (  # noqa: F401
-    RESIDUAL_RISK_CONFIDENCE as _RESIDUAL_RISK_CONFIDENCE,  # pyright: ignore[reportUnusedImport]
-)
+from table_extractors.xbrl_value_classify import RESIDUAL_RISK_CONFIDENCE
 from table_extractors.xbrl_value_classify import SCALE_FACTOR as _SCALE_FACTOR
 from table_extractors.xbrl_value_classify import build_name as _build_name
 from table_extractors.xbrl_value_classify import classify_value as _classify_value
@@ -95,6 +90,8 @@ from table_extractors.xbrl_value_classify import (
 from table_extractors.xbrl_value_classify import (
     semantic_section_title as _semantic_section_title,
 )
+
+_RESIDUAL_RISK_CONFIDENCE = RESIDUAL_RISK_CONFIDENCE
 
 log = logging.getLogger(__name__)
 
@@ -205,7 +202,7 @@ def extract(
         # tables. Only columns landing on it are captured (as annual FY facts);
         # stray interim columns (a quarter-end comparative, a subsequent-event
         # date) are off-cycle and skipped. Handles non-December FYEs (Jan-31).
-        fye_md = _detect_fye_monthday(fmp_payload)
+        fye_md = detect_fye_monthday(fmp_payload)
         # period_end -> the captured values reported in that column.
         per_period: dict[datetime, list[KpiValue]] = defaultdict(list)
         for section_key, section in _iter_sections(fmp_payload):
@@ -316,7 +313,7 @@ def _walk_section(
     if not section:
         return
     inner_title = _inner_title(section) or section_key
-    if not _is_detail_section(inner_title):
+    if not is_detail_section(inner_title):
         return
     units = parse_units(inner_title)
     scale = units.scale
@@ -402,7 +399,7 @@ def _inner_title(section: Sequence[object]) -> str | None:
     return keys[0] if keys else None
 
 
-def _is_detail_section(inner_title: str) -> bool:
+def is_detail_section(inner_title: str) -> bool:
     """True for an XBRL note ``(Details)`` table that isn't on the non-financial
     denylist. Primary statements / narrative / templates lack '(Details)'."""
     low = inner_title.lower()
@@ -411,12 +408,15 @@ def _is_detail_section(inner_title: str) -> bool:
     return not any(tok in low for tok in _NONFINANCIAL_SECTION_TOKENS)
 
 
+_is_detail_section = is_detail_section  # Compatibility for existing private-helper tests.
+
+
 def _excerpt(label: str, raw: object, currency: str, scale: str) -> str:
     """Compact provenance string for the source cell (clipped by persist)."""
     return f"{label}: {raw} [{currency} {scale}]"[:1024]
 
 
-def _detect_fye_monthday(payload: dict[str, object]) -> tuple[int, int] | None:
+def detect_fye_monthday(payload: dict[str, object]) -> tuple[int, int] | None:
     """The fiscal-year-end as a (month, day) — the MODAL column date across all
     capturable detail tables. None when no detail column parses to a date.
 
@@ -430,7 +430,7 @@ def _detect_fye_monthday(payload: dict[str, object]) -> tuple[int, int] | None:
         if not section:
             continue
         inner = _inner_title(section) or key
-        if not _is_detail_section(inner) or _is_unit_ambiguous_section(inner):
+        if not is_detail_section(inner) or _is_unit_ambiguous_section(inner):
             continue
         if parse_units(inner).scale not in _SCALE_FACTOR:
             continue
@@ -445,6 +445,9 @@ def _detect_fye_monthday(payload: dict[str, object]) -> tuple[int, int] | None:
         return None
     # Most frequent (month, day); ties broken deterministically (latest in year).
     return max(counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
+
+
+_detect_fye_monthday = detect_fye_monthday  # Compatibility for existing private-helper tests.
 
 
 def _accept_period(parsed: datetime | None, fye_md: tuple[int, int] | None) -> datetime | None:

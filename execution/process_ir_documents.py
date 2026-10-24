@@ -18,6 +18,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import sys
@@ -43,7 +44,7 @@ from llm_client import (
     load_ir_anchor,
     load_thesis_anchor,
 )
-from parser import extract_text_from_pdf, read_text_file
+from provenance.fulltext_backfill import project_source_text, source_text_projection_identity
 from runtime.secrets import load_project_env
 
 LOG_FORMAT = json.dumps({"level": "%(levelname)s", "ts": "%(asctime)s", "msg": "%(message)s"})
@@ -145,9 +146,19 @@ def _doc_log_fields(doc: dict[str, Any]) -> dict[str, Any]:
 
 def extract_text(local_path: str) -> str:
     path = Path(local_path)
-    if path.suffix.lower() == ".pdf":
-        return extract_text_from_pdf(str(path))
-    return read_text_file(str(path))
+    return project_source_text(path.read_bytes(), str(path))
+
+
+def _summary_source_matches(cache: Path, source: Path) -> bool:
+    try:
+        receipt = json.loads(cache.with_suffix(".source.json").read_text(encoding="utf-8"))
+        return (
+            receipt["source_text_identity"] == source_text_projection_identity(str(source))
+            and receipt["source_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+            and receipt["summary_sha256"] == hashlib.sha256(cache.read_bytes()).hexdigest()
+        )
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
 
 
 def process_document(
@@ -178,7 +189,7 @@ def process_document(
 
     cache = cache_path_for(doc, repo_root=repo_root)
 
-    if cache.exists():
+    if cache.exists() and _summary_source_matches(cache, Path(local_path)):
         log.info({"event": "cache_hit", "cache": str(cache)})
         _mark_processed(doc, repo_root=repo_root)
         return True
@@ -190,6 +201,7 @@ def process_document(
         return True
 
     try:
+        source_sha256 = hashlib.sha256(Path(local_path).read_bytes()).hexdigest()
         text = extract_text(local_path)
         if not text.strip():
             log.error({"event": "empty_text", "local_path": local_path})
@@ -207,9 +219,23 @@ def process_document(
                 result_text = config["llm_fn"](text)
 
         cache.parent.mkdir(parents=True, exist_ok=True)
-        with open(cache, "w", encoding="utf-8") as f:
-            f.write(result_text)
+        pending_cache = cache.with_suffix(".pending")
+        try:
+            pending_cache.write_text(result_text, encoding="utf-8")
+            pending_cache.replace(cache)
+        finally:
+            pending_cache.unlink(missing_ok=True)
 
+        cache.with_suffix(".source.json").write_text(
+            json.dumps(
+                {
+                    "source_text_identity": source_text_projection_identity(local_path),
+                    "source_sha256": source_sha256,
+                    "summary_sha256": hashlib.sha256(cache.read_bytes()).hexdigest(),
+                }
+            ),
+            encoding="utf-8",
+        )
         log.info({"event": "cached", "cache": str(cache)})
         _mark_processed(doc, repo_root=repo_root)
         time.sleep(RATE_LIMIT_SLEEP)
@@ -229,7 +255,7 @@ def run_for_ticker(
     *,
     repo_root: Path = PROJECT_ROOT,
     db_path: Path | None = None,
-) -> None:
+) -> int:
     index_path = repo_root / ".tmp" / "document_index.json"
     ticker = resolve_ticker(ticker).upper()
     if regenerate_missing:
@@ -239,7 +265,7 @@ def run_for_ticker(
         # written is otherwise skipped forever by get_unprocessed_documents —
         # the gap that leaves §6 Say-Do empty for freshly-onboarded names.
         # process_document early-returns on cache-hit, so docs that already have
-        # a summary are skipped (no re-billing); only missing artifacts regenerate.
+        # a current source-bound summary are skipped; stale artifacts regenerate.
         docs = [
             d
             for d in index_manager.get_documents_for_ticker(
@@ -268,7 +294,7 @@ def run_for_ticker(
 
     if not docs:
         print(f"[{ticker}] No unprocessed documents found.")
-        return
+        return 0
 
     print(f"[{ticker}] Processing {len(docs)} document(s)...")
     success = 0
@@ -287,6 +313,7 @@ def run_for_ticker(
             }
         )
     )
+    return int(success != len(docs))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -307,7 +334,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Re-include every registered quarterly doc whose summary cache file "
         "is absent, even if marked processed. Self-heals transcripts registered "
         "processed=True without a summary ever being written (the gap that leaves "
-        "§6 Say-Do empty). Never re-bills a doc that already has a cached summary. "
+        "§6 Say-Do empty). Reuses only summaries bound to the current source bytes. "
         "Intended with --ticker.",
     )
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
@@ -326,27 +353,30 @@ def main(argv: list[str] | None = None) -> int:
         if not tickers:
             print("No unprocessed documents found.")
             return 0
+        status = 0
         for t in tickers:
-            run_for_ticker(
-                t,
-                args.quarter,
-                args.year,
-                args.dry_run,
-                args.regenerate_missing,
-                repo_root=repo_root,
-                db_path=database,
+            status = max(
+                status,
+                run_for_ticker(
+                    t,
+                    args.quarter,
+                    args.year,
+                    args.dry_run,
+                    args.regenerate_missing,
+                    repo_root=repo_root,
+                    db_path=database,
+                ),
             )
-    else:
-        run_for_ticker(
-            args.ticker,
-            args.quarter,
-            args.year,
-            args.dry_run,
-            args.regenerate_missing,
-            repo_root=repo_root,
-            db_path=database,
-        )
-    return 0
+        return status
+    return run_for_ticker(
+        args.ticker,
+        args.quarter,
+        args.year,
+        args.dry_run,
+        args.regenerate_missing,
+        repo_root=repo_root,
+        db_path=database,
+    )
 
 
 if __name__ == "__main__":
