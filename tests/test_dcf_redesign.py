@@ -1788,6 +1788,19 @@ def test_apply_edits_persists_without_rebuild_and_records_override(
         "TESTCO", refresh_repo, db, redesign.RedesignInputs.from_dict(payload)
     )
     assert res["status"] == "ok", res
+    revision = res["model_revision"]
+    assert isinstance(revision, dict)
+    with sqlite3.connect(db) as saved_conn:
+        saved_row = saved_conn.execute(
+            "SELECT id, input_sha256, workbook_sha256, engine_version FROM dcf_runs "
+            "WHERE ticker='TESTCO' AND is_latest=1"
+        ).fetchone()
+    assert saved_row == (
+        revision["row_id"],
+        revision["input_sha256"],
+        revision["workbook_sha256"],
+        revision["engine_version"],
+    )
 
     # The edit landed on the live workbook (no rebuild) and lifts the value.
     edited = redesign.read_inputs(dest)
@@ -1989,6 +2002,12 @@ def test_save_cleanup_failure_preserves_committed_truth_and_blocks_next_write(
     monkeypatch.setattr(Path, "unlink", fail_backup_unlink)
     result = refresh_dcf.apply_edits("TESTCO", refresh_repo, db, edited)
     assert result["status"] == "committed_cleanup_failed" and result["recovery_required"] is True
+    revision = result["model_revision"]
+    assert isinstance(revision, dict)
+    with sqlite3.connect(db) as saved_conn:
+        assert saved_conn.execute("SELECT id FROM dcf_runs WHERE is_latest=1").fetchone() == (
+            revision["row_id"],
+        )
     committed = redesign.read_inputs(accepted)
     assert committed is not None and result["inputs"] == committed.to_dict()
     assert accepted.read_bytes() != old_bytes

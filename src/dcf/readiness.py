@@ -250,8 +250,9 @@ def _assess(
     cutoff: datetime,
     source_context: SourceReadContext | None,
     purpose: Literal["allocation", "analyst_memo"],
+    run_id: int | None = None,
 ) -> ValuationReadiness:
-    evidence = load_dcf_verification_evidence(conn, ticker)
+    evidence = load_dcf_verification_evidence(conn, ticker, run_id=run_id)
     if evidence.status != "available":
         return ValuationReadiness(
             ticker=ticker,
@@ -606,6 +607,7 @@ def load_valuation_readiness(
     as_of: datetime,
     source_context: SourceReadContext | None = None,
     purpose: Literal["allocation", "analyst_memo"] = "allocation",
+    run_id: int | None = None,
 ) -> ValuationReadiness:
     """Assess persisted evidence under one read snapshot; no writes/network/fallback.
 
@@ -626,7 +628,7 @@ def load_valuation_readiness(
         owns_snapshot = not conn.in_transaction
         if owns_snapshot:
             conn.execute("BEGIN")
-        return _assess(conn, ticker, cutoff, source_context, purpose)
+        return _assess(conn, ticker, cutoff, source_context, purpose, run_id)
     except sqlite3.Error:
         return ValuationReadiness(
             ticker=ticker,

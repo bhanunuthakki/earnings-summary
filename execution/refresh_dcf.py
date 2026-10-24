@@ -2446,9 +2446,12 @@ def _apply_edits_owned(
             files.append((staged_assumptions, assumptions_path))
         cleanup_warning: str | None = None
         persisted = False
+        saved_revision: dict[str, object] | None = None
         try:
             with StagedArtifactBundle(files):
-                persisted = persist_mod.upsert(conn, row)
+                saved = persist_mod.persist_run(conn, row)
+                persisted = saved.written
+                saved_revision = dataclasses.asdict(saved.revision)
         except DcfCommittedCleanupError as exc:
             cleanup_warning = str(exc)
 
@@ -2472,6 +2475,7 @@ def _apply_edits_owned(
         "wacc": rv.wacc,
         "terminal_method": rv.terminal_method,
         "dcf_run_persisted": persisted,
+        "model_revision": saved_revision,
         "input_sha256": input_provenance.input_sha256,
     }
 

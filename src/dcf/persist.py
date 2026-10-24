@@ -26,6 +26,7 @@ same self-consistency on any raw write.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -80,6 +81,44 @@ class DcfRunRow:
 
 
 PromotionStatus = Literal["verified", "unverified", "not_applicable", "missing"]
+
+
+@dataclass(frozen=True)
+class DcfRunRevision:
+    """Identity captured by the writer, never resolved from a later latest row."""
+
+    row_id: int
+    ticker: str
+    input_sha256: str | None
+    workbook_sha256: str | None
+    engine_version: str | None
+    provenance_sha256: str | None
+    assumption_snapshot_sha256: str
+
+
+@dataclass(frozen=True)
+class DcfPersistenceResult:
+    written: bool
+    revision: DcfRunRevision
+
+
+def _revision(row: DcfRunRow, row_id: int) -> DcfRunRevision:
+    provenance = row.provenance
+    return DcfRunRevision(
+        row_id=row_id,
+        ticker=row.ticker.upper(),
+        input_sha256=provenance.input_sha256 if provenance is not None else None,
+        workbook_sha256=provenance.workbook_sha256 if provenance is not None else None,
+        engine_version=provenance.engine_version if provenance is not None else None,
+        provenance_sha256=(
+            hashlib.sha256(provenance.as_json().encode("utf-8")).hexdigest()
+            if provenance is not None
+            else None
+        ),
+        assumption_snapshot_sha256=hashlib.sha256(
+            row.assumption_snapshot_json.encode("utf-8")
+        ).hexdigest(),
+    )
 
 
 @dataclass(frozen=True)
@@ -338,17 +377,17 @@ def _persist_forecast_points(
     )
 
 
-def _same_current_version(
+def _matching_current_version(
     conn: sqlite3.Connection,
     row: DcfRunRow,
     params: dict[str, object],
-) -> bool:
-    """Whether the current row already represents this exact input set."""
+) -> int | None:
+    """Return the identity from the same read that matched the complete input set."""
     if row.provenance is None:
-        return False
+        return None
     current = conn.execute(
         """
-        SELECT valuation_date, horizon_years, wacc, npv, npv_per_share,
+        SELECT id, valuation_date, horizon_years, wacc, npv, npv_per_share,
                shares_outstanding, currency, notes, run_id, live_price,
                live_price_at, over_under_pct, mos_bar_used,
                assumption_snapshot_json, input_sha256, workbook_sha256,
@@ -360,7 +399,7 @@ def _same_current_version(
         (row.ticker.upper(),),
     ).fetchone()
     if current is None:
-        return False
+        return None
     expected = (
         params["valuation_date"],
         params["horizon_years"],
@@ -382,7 +421,7 @@ def _same_current_version(
         row.provenance.inputs_as_of_iso(),
         row.provenance.as_json(),
     )
-    return tuple(current) == expected
+    return int(current[0]) if tuple(current)[1:] == expected else None
 
 
 def _same_current_forecast_points(
@@ -586,6 +625,16 @@ def upsert(
     *,
     artifact_promotion: ArtifactPromotion | None = None,
 ) -> bool:
+    """Preserve the Boolean persistence API used by existing model builders."""
+    return persist_run(conn, row, artifact_promotion=artifact_promotion).written
+
+
+def persist_run(
+    conn: sqlite3.Connection,
+    row: DcfRunRow,
+    *,
+    artifact_promotion: ArtifactPromotion | None = None,
+) -> DcfPersistenceResult:
     """Persist a new dcf_runs version for ``row.ticker``.
 
     On the versioned schema (migration 0137+) the prior current run for the ticker
@@ -594,8 +643,8 @@ def upsert(
     valuation history is preserved. On a pre-0137 schema it falls back to the legacy
     INSERT-OR-REPLACE keyed on ticker.
 
-    Returns ``True`` when a version is written and ``False`` when the current
-    version already has the exact provenance and calculated values.
+    Return the exact written or reused version. Capture its identity before the
+    commit releases the writer, so an interleaved save cannot change the receipt.
 
     A row carrying sync fields against a pre-0091 schema raises (loud, with
     the fix) rather than dropping them — a silently-unpersisted sync status
@@ -704,13 +753,10 @@ def upsert(
             }
         )
 
-    if (
-        _has_versioning_columns(conn)
-        and has_provenance
-        and _same_current_version(conn, row, params)
-        and _same_current_forecast_points(conn, row)
-    ):
-        return False
+    if _has_versioning_columns(conn) and has_provenance:
+        matching_id = _matching_current_version(conn, row, params)
+        if matching_id is not None and _same_current_forecast_points(conn, row):
+            return DcfPersistenceResult(written=False, revision=_revision(row, matching_id))
 
     decision = promotion_decision(conn, row)
     if not decision.allowed:
@@ -771,7 +817,7 @@ def upsert(
         raise
     if artifact_applied and artifact_promotion is not None:
         artifact_promotion.finalize()
-    return True
+    return DcfPersistenceResult(written=True, revision=_revision(row, new_id))
 
 
 def build_assumption_snapshot(

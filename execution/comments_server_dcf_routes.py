@@ -172,6 +172,7 @@ def create_dcf_blueprint(context: DcfRouteContext) -> Blueprint:
         return {
             **response_payload,
             "saved": True,
+            "model_revision": result.get("model_revision"),
             "result": result,
             "recovery_required": result.get("recovery_required", False),
             "cleanup_warning": result.get("cleanup_warning"),

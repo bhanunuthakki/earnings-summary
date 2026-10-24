@@ -20,7 +20,7 @@ from dcf.artifact_promotion import (
     StagedFilePromotion,
     live_path_from_env,
 )
-from dcf.persist import DcfPromotionBlocked, DcfRunRow, upsert
+from dcf.persist import DcfPromotionBlocked, DcfRunRow, persist_run, upsert
 from dcf.provenance import (
     DcfInputProvenance,
     build_file_provenance,
@@ -117,6 +117,52 @@ def _row() -> DcfRunRow:
             },
         ),
     )
+
+
+def test_persistence_receipt_identifies_written_and_reused_revision() -> None:
+    with sqlite3.connect(":memory:") as conn:
+        conn.executescript(_SCHEMA)
+        first = persist_run(conn, _row())
+        repeated = persist_run(conn, _row())
+        changed = persist_run(conn, dataclasses.replace(_row(), npv_per_share=110.0))
+
+        assert first.written is True
+        assert repeated.written is False
+        assert repeated.revision == first.revision
+        assert changed.revision.row_id != first.revision.row_id
+        assert first.revision.input_sha256 == "a" * 64
+        assert first.revision.workbook_sha256 == "b" * 64
+        assert first.revision.engine_version == "redesign_fcff_v1"
+        assert (
+            first.revision.assumption_snapshot_sha256
+            == hashlib.sha256(_row().assumption_snapshot_json.encode()).hexdigest()
+        )
+        provenance = _row().provenance
+        assert provenance is not None
+        assert (
+            first.revision.provenance_sha256
+            == hashlib.sha256(provenance.as_json().encode()).hexdigest()
+        )
+
+
+def test_persistence_receipt_survives_another_save_after_commit(tmp_path: Path) -> None:
+    database = tmp_path / "revision.db"
+
+    class InterleavedConnection(sqlite3.Connection):
+        def commit(self) -> None:
+            super().commit()
+            with sqlite3.connect(database) as other:
+                upsert(other, dataclasses.replace(_row(), npv_per_share=120.0))
+
+    with sqlite3.connect(database, factory=InterleavedConnection) as conn:
+        conn.executescript(_SCHEMA)
+        saved = persist_run(conn, _row())
+        latest_id = conn.execute("SELECT id FROM dcf_runs WHERE is_latest=1").fetchone()[0]
+        assert saved.revision.row_id != latest_id
+        persisted = conn.execute(
+            "SELECT npv_per_share FROM dcf_runs WHERE id=?", (saved.revision.row_id,)
+        ).fetchone()
+        assert persisted == (100.0,)
 
 
 def test_exact_provenance_retry_is_a_noop() -> None:
