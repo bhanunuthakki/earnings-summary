@@ -1,11 +1,11 @@
 # Backend streamlining: implementation checkpoints
 
-Status: **October 24 event unit accepted at 96/100; on-command procedure MVP accepted at 95/100; current full gate passed; combined release HOLD**.
+Status: **October 24 event unit accepted at 96/100; on-command procedure MVP at 95/100; financial-read MVP at 90/100. Combined architecture and release remain HOLD**.
 
 The owner selected corrected October 23 NU PRE/POST and expanded MELI as the
 engineering preservation references. The owner also approved retiring new
 standalone event briefs while preserving sources, registration and history.
-The current full-suite pass covers the event and on-command procedure changes.
+The 22,282-test full-suite pass covers the committed event and on-command procedure changes at `17cfdd5f`. The later financial-read MVP has separate focused proof.
 Its 99 focused tests pass; independent Sol review accepts the unit at 96/100.
 Its corrected candidate also passes changed checks and whole-tree static checks.
 The owner retained summary-to-KPI generation as an explicit backend procedure.
@@ -43,18 +43,20 @@ growth. Both architecture gates remain open; no exception is approved.
 
 ## Current execution rule
 
-The owner now accepts independent advisory scores of 85 or higher, with no
+The owner now requires independent Sol advisory scores strictly above 85 at both the PRD and implementation stages, with no
 unresolved material blocker. Financial integrity and deterministic checks stay
 required. Prioritize whole duplicate procedures, repeated data work and unused
 features. Reuse existing components before adding a dependency. The prepared
 59-line admission deduplication is deferred for low relative impact. Focused tests
 support iteration; complete gates are batched at major checkpoints.
 
-The next material candidate removes repeated construction and projection inside
-one canonical financial read. Its patch is prepared but remains unapplied and
-untested. Complete output, ambiguity, lineage and trace parity must pass before
-acceptance. Existing components are preferred. The small parser/fingerprint cuts
-and the 59-line policy deduplication remain deferred. No dependency was added.
+The financial-read MVP now shares candidates, admitted observations and deferred reads within one operation. Distinct series and coordinate policy folds remain. Its PRD scored 89. The first implementation review scored 84 and found shared mutable output metadata. DeepSeek corrected the output boundary and added a regression. Independent Sol accepted the corrected unit at 90. All 325 tests in six owning modules pass; 224 old-source output, exception and provenance comparisons match. The regression fails on the old candidate. All 137 original assertions remain.
+
+In the two-cell synthetic fixture, annual SELECTs fall from 145 to 77 and quarterly SELECTs from 91 to 77. Candidate construction and projection each fall from four to two. Production source falls by 12 physical lines and 24 non-comment lines; moved code is not counted as deletion. Timing varies, including quarterly regressions, so this is a repeated-work reduction with no general latency claim. No schema, public API, dependency or global cache was added. This is an internal read change with no operator surface change. The full matrix is batched at the next major integration boundary. Proof: `.tmp/cleanup-open-model-execution/r6-alias-fix-proof.json`; final review: `.tmp/cleanup-r6-corrected-sol-review.json`.
+
+Bounded execution uses the owner-selected `deepseek/deepseek-v4.1-flash-1017` through `sail-research/fp4/us`. Current pricing is $0.101 input, $0.15 output and $0.006735 cached input per million tokens. Reported uptime is 100% over 30 minutes and one day. Endpoint variants are screened before each dispatch. The cheaper flex route reports 75.75% one-day uptime and is excluded. Observed worker charges total $0.08142; two earlier failed compatibility requests have unavailable charges. Application model routing is unchanged.
+
+The next whole-source ingestion proposal remains at 78, REVISE. Measured deletion is only 67 non-comment legacy-body lines, while the managed replacement needs nine media, date, projection and recovery extensions. A net cut is not proved. Sol is assessing a smaller existing-owner design or a different approved unit. Working HTML releases, event dates, non-calendar fiscal dates and recovery remain required. The small parser/fingerprint cuts and 59-line policy deduplication remain deferred.
 
 ## Backend MVP
 
@@ -73,15 +75,15 @@ or cold-cache claim. See `.tmp/cleanup-main-reader-probe/probe-receipt.json` and
 
 ## Current validation
 
-At the frozen combined candidate, changed format, lint, strict types and suppression
+At the preceding frozen `17cfdd5f` candidate, changed format, lint, strict types and suppression
 checks pass on 177 files. Whole-tree static checks pass with 1,646 diagnostics and
 1,733 suppressions, with no ceiling increase. The graph passes with 39,535 edges,
 170 test-only residuals and all 3,722 input hashes current. Architecture boundaries,
 design sync, directive/folder contracts, reconstruction and public-tree checks pass.
-The complete current suite passes: **22,282 tests, 102 skips and two passing
+That complete suite passes: **22,282 tests, 102 skips and two passing
 subtests**, with normal supervised exit in 2,510 seconds. Source, Python diff and
 HEAD stayed unchanged. Exact cleanup verifies 54,013 deletions, 664 protected
-sidecars and all 16,122 held paths. No task process or listener remains. See
+sidecars and all 16,122 held paths. At that checkpoint, no task process or listener remained. The later worker closure separately checks 14 named proxy ports and finds no task client or probe process. No implicit checkout database exists. See
 `.tmp/cleanup-command-full-suite.json`,
 `.tmp/cleanup-command-full-teardown-verification.json` and
 `.tmp/cleanup-command-full-resource-verification.json`. Current static and graph

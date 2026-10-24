@@ -22,7 +22,11 @@ from provenance.metric_ontology import (
     MetricOntology,
 )
 from provenance.source_fact_repository import ReportedSourceFact
-from sources.canonical_financial_series import CanonicalFinancialSeriesReader, FinancialCadence
+from sources.canonical_financial_series import (
+    CanonicalFinancialSeriesReader,
+    FinancialCadence,
+    SeriesContinuity,
+)
 from tests.test_report_canonical_financials import STAMP, seed_table
 from tests.test_report_canonical_financials import database as database
 
@@ -58,6 +62,25 @@ def test_consumer_reuses_source_and_quarterly_population(
     )
     canonical = CanonicalFactResolutionEngine.read_as_known_outcomes
     materialize = FactReadModel.provenance_bundles
+    projected: list[str] = []
+    candidate_ids: list[str] = []
+    constructor: Callable[..., owner.CanonicalFinancialCandidate] = getattr(
+        owner, "CanonicalFinancialCandidate"
+    )
+
+    def candidate(**values: object) -> owner.CanonicalFinancialCandidate:
+        candidate_ids.append(str(values["observation_id"]))
+        return constructor(**values)
+
+    projection: Callable[..., owner.CanonicalFinancialObservation | str] = getattr(
+        owner.CanonicalFinancialSeriesReader, "_project_observation"
+    )
+
+    def project(*args: object) -> owner.CanonicalFinancialObservation | str:
+        item = projection(*args)
+        if not isinstance(item, str):
+            projected.append(item.observation_id)
+        return item
 
     def source_rows(reader: CanonicalFinancialSeriesReader, metric: str) -> list[sqlite3.Row]:
         source_calls.append(metric)
@@ -86,12 +109,18 @@ def test_consumer_reuses_source_and_quarterly_population(
     monkeypatch.setattr(CanonicalFactResolutionEngine, "read_as_known_outcomes", outcomes)
     monkeypatch.setattr(CanonicalFactResolutionEngine, "read_as_known", scalar)
     monkeypatch.setattr(FactReadModel, "provenance_bundles", bundles)
+    monkeypatch.setattr(
+        owner.CanonicalFinancialSeriesReader, "_project_observation", staticmethod(project)
+    )
+    monkeypatch.setattr(owner, "CanonicalFinancialCandidate", candidate)
     first = owner.read_financial_consumer_series(
         database, "SYNTH", "revenue", cutoff=STAMP, cadence=cadence
     )
     assert first.series.status == "available", first.series.reason_code
     assert len(first.points) == 2
-    populations = 1 if cadence is owner.FinancialCadence.QUARTERLY else 2
+    assert len(projected) == len(set(projected)) == 2
+    assert len(candidate_ids) == len(set(candidate_ids)) == 2
+    populations = 1
     assert source_calls == ["revenue"]
     assert len(canonical_calls) == len(bundle_calls) == populations
     assert all(len(ids) == 2 for ids in canonical_calls)
@@ -101,6 +130,8 @@ def test_consumer_reuses_source_and_quarterly_population(
     assert second.model_dump(mode="json") == first.model_dump(mode="json")
     assert source_calls == ["revenue", "revenue"]
     assert len(canonical_calls) == len(bundle_calls) == 2 * populations
+    assert len(projected) == 4
+    assert len(candidate_ids) == 4
 
 
 @pytest.mark.parametrize("projection", [False, True])
@@ -1752,3 +1783,99 @@ def test_discovery_reviewed_mapping_requires_its_committed_source_currency(
     database.commit()
     after = read_financial_history(database, "SYNTH", as_of=later.date(), concepts=("revenue",))
     assert after.references == () and after.unresolved
+
+
+@pytest.mark.parametrize("windowed", [False, True])
+@pytest.mark.parametrize("case", ["clean", "older_rejected", "newer_rejected", "duplicate"])
+def test_paired_financial_views_preserve_standalone_json_and_trace(
+    database: sqlite3.Connection, case: str, windowed: bool
+) -> None:
+    from sources.canonical_financial_series import SeriesContinuity
+
+    rows = [
+        ("revenue", "2025-01-01", "2025-03-31", "Q1", "0", "USD"),
+        ("revenue", "2025-04-01", "2025-06-30", "Q2", "-120", "USD"),
+    ]
+    if case == "older_rejected":
+        rows.insert(0, ("revenue", "2024-01-01", "2024-06-30", "Q2", "80", "USD"))
+    elif case == "newer_rejected":
+        rows.append(("revenue", "2025-07-01", "2025-12-31", "Q4", "90", "USD"))
+    elif case == "duplicate":
+        rows.insert(1, ("revenue", "2025-01-02", "2025-03-31", "Q1", "10", "USD"))
+    facts = seed_table(database, rows)
+    continuity = SeriesContinuity.WINDOWED if windowed else SeriesContinuity.STRICT_CONTIGUOUS
+    series_reader = CanonicalFinancialSeriesReader(database, "SYNTH", cutoff=STAMP)
+    coordinate_reader = CanonicalFinancialSeriesReader(database, "SYNTH", cutoff=STAMP)
+    expected_series = series_reader.read("revenue", continuity=continuity)
+    expected_coordinates = coordinate_reader.project_coordinates("revenue")
+    paired = CanonicalFinancialSeriesReader(database, "SYNTH", cutoff=STAMP)
+    series, coordinates = paired.read_with_coordinates(
+        "revenue", FinancialCadence.QUARTERLY, continuity
+    )
+    assert series.model_dump(mode="json") == expected_series.model_dump(mode="json")
+    assert coordinates.model_dump(mode="json") == expected_coordinates.model_dump(mode="json")
+    for fact in facts:
+        observation_id = fact.observation.observation_id
+        expected = coordinate_reader.provenance_for(observation_id) or series_reader.provenance_for(
+            observation_id
+        )
+        actual = paired.provenance_for(observation_id)
+        assert (None if actual is None else actual.model_dump(mode="json")) == (
+            None if expected is None else expected.model_dump(mode="json")
+        )
+
+
+@pytest.mark.parametrize(
+    ("case", "metric", "attribute"),
+    [
+        ("reported", "revenue", "source_locator"),
+        ("derived", "operating_cash_flow", "derivation"),
+    ],
+)
+def test_paired_financial_views_isolate_mutable_observation_metadata(
+    database: sqlite3.Connection, case: str, metric: str, attribute: str
+) -> None:
+    if case == "reported":
+        seed_table(
+            database,
+            [
+                ("revenue", "2025-01-01", "2025-03-31", "Q1", "100", "USD"),
+                ("revenue", "2025-04-01", "2025-06-30", "Q2", "120", "USD"),
+            ],
+        )
+    else:
+        assert case == "derived"
+        _nested_quarter(database)
+    paired = CanonicalFinancialSeriesReader(database, "SYNTH", cutoff=STAMP)
+    series, coordinates = paired.read_with_coordinates(
+        metric, FinancialCadence.QUARTERLY, SeriesContinuity.WINDOWED
+    )
+    assert series.status == "available", series.reason_code
+    assert coordinates.status == "available", coordinates.reason_code
+    if case == "reported":
+        series_observation = next(item for item in series.observations if item.source_locator)
+    else:
+        series_observation = next(
+            item for item in series.observations if item.derivation is not None
+        )
+    coordinate = next(
+        item
+        for item in coordinates.coordinates
+        if item.observation is not None
+        and item.observation.observation_id == series_observation.observation_id
+    )
+    coordinate_observation = coordinate.observation
+    assert coordinate_observation is not None
+    assert series_observation is not coordinate_observation
+    series_value = getattr(series_observation, attribute)
+    coordinate_value = getattr(coordinate_observation, attribute)
+    assert series_value
+    assert series_value is not coordinate_value
+    assert series_value == coordinate_value
+    series_value["r6_alias_probe"] = "series"
+    assert "r6_alias_probe" not in coordinate_value
+    del series_value["r6_alias_probe"]
+    coordinate_value["r6_alias_probe"] = "coordinate"
+    assert "r6_alias_probe" not in series_value
+    del coordinate_value["r6_alias_probe"]
+    assert series_value == coordinate_value

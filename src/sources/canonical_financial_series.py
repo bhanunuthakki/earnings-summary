@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
@@ -27,10 +28,6 @@ FINANCIAL_CONCEPT_NAMESPACE = "urn:earnings-summary:legacy:financial"
 _QUARTER_DAYS = (70, 105)
 _SEMIANNUAL_DAYS = (175, 200)
 _REPORTED_TTM_DAYS = (345, 385)
-_FinancialPreparation: TypeAlias = (
-    tuple[list[tuple[object, ...]], dict[str, BindingRevision | None], dict[str, CanonicalFactRead]]
-    | str
-)
 
 
 class CanonicalFinancialReadError(RuntimeError):
@@ -193,6 +190,26 @@ class CanonicalFinancialSeries(BaseModel):
 
     def manifest(self) -> dict[str, object]:
         return self.model_dump(mode="json")
+
+
+@dataclass
+class _FinancialPopulation:
+    """One read operation's lazy source and admitted-observation materialization."""
+
+    rows: list[tuple[object, ...]]
+    bindings: dict[str, BindingRevision | None]
+    reads: dict[str, CanonicalFactRead]
+    validated_reads: set[str] = field(default_factory=set[str])
+    cells: dict[str, dict[str, str] | str] = field(default_factory=dict[str, dict[str, str] | str])
+    candidates: dict[str, CanonicalFinancialCandidate] = field(
+        default_factory=dict[str, CanonicalFinancialCandidate]
+    )
+    observations: dict[tuple[str, str, str], CanonicalFinancialObservation | str] = field(
+        default_factory=dict[tuple[str, str, str], CanonicalFinancialObservation | str]
+    )
+
+
+_FinancialPreparation: TypeAlias = _FinancialPopulation | str
 
 
 def _clock(value: object) -> datetime:
@@ -579,7 +596,172 @@ class CanonicalFinancialSeriesReader:
                 if str(row[0]) not in covered
                 or _duration_matches(cadence, _duration_days(row[3], row[4]))
             ]
-        return relevant, bindings, reads
+        return _FinancialPopulation(relevant, bindings, reads, validated_reads=set(reads))
+
+    def _bindings_for(
+        self, preparation: _FinancialPopulation, observation_ids: tuple[str, ...]
+    ) -> dict[str, BindingRevision | None]:
+        for observation_id in observation_ids:
+            if observation_id not in preparation.bindings:
+                preparation.bindings[observation_id] = self._ontology.binding_as_known(
+                    observation_id, self._cutoff
+                )
+        return preparation.bindings
+
+    def _prepared_cells(
+        self, preparation: _FinancialPopulation, observation_ids: tuple[str, ...]
+    ) -> dict[str, str] | str:
+        cells: dict[str, str] = {}
+        for observation_id in observation_ids:
+            if observation_id not in preparation.cells:
+                preparation.cells[observation_id] = self._bound_cells(
+                    (observation_id,), preparation.bindings
+                )
+            outcome = preparation.cells[observation_id]
+            if isinstance(outcome, str):
+                return outcome
+            cells.update(outcome)
+        return cells
+
+    def _populate_reads(
+        self, preparation: _FinancialPopulation, cell_ids: tuple[str, ...]
+    ) -> dict[str, CanonicalFactRead]:
+        missing = tuple(cell_id for cell_id in cell_ids if cell_id not in preparation.reads)
+        if missing:
+            preparation.reads.update(self._canonical_reads(missing))
+        return preparation.reads
+
+    def _candidates(
+        self,
+        preparation: _FinancialPopulation,
+        rows: list[tuple[object, ...]] | tuple[tuple[object, ...], ...],
+        cadence: FinancialCadence,
+    ) -> tuple[CanonicalFinancialCandidate, ...]:
+        for row in rows:
+            observation_id = str(row[0])
+            if observation_id not in preparation.candidates:
+                preparation.candidates[observation_id] = CanonicalFinancialCandidate(
+                    observation_id=str(row[0]),
+                    fact_cell_id=str(row[1]),
+                    reporting_entity_id=str(row[2]),
+                    scope_security_id=None if row[16] is None else str(row[16]),
+                    period_start=None if row[3] is None else _clock(row[3]),
+                    period_end=_clock(row[4]),
+                    fiscal_year=None if row[5] is None else int(str(row[5])),
+                    fiscal_period=str(row[6]),
+                    currency=None if row[7] is None else str(row[7]),
+                    unit=str(row[8]),
+                    accounting_basis=str(row[9]),
+                    consolidation_scope=str(row[10]),
+                    duration_days=_duration_days(row[3], row[4]),
+                    cadence_supported=_duration_matches(cadence, _duration_days(row[3], row[4])),
+                )
+        return tuple(preparation.candidates[str(row[0])] for row in rows)
+
+    def _selected(
+        self, preparation: _FinancialPopulation, cells: dict[str, str]
+    ) -> list[tuple[str, str, str, ProvenanceBundle]] | str:
+        selected: list[tuple[str, str, str, ProvenanceBundle]] = []
+        for cell_id, metric_id in cells.items():
+            read = preparation.reads[cell_id]
+            if cell_id not in preparation.validated_reads:
+                self._resolver.validate_as_known_read(read)
+                preparation.validated_reads.add(cell_id)
+            resolution = read.resolution
+            if (
+                resolution is None
+                or resolution.status != "resolved"
+                or resolution.selected_observation_id is None
+            ):
+                return "canonical_financial_resolution_unavailable"
+            if read.bundle is None:
+                return "canonical_financial_provenance_unavailable"
+            selected.append(
+                (cell_id, metric_id, resolution.canonical_resolution_revision_id, read.bundle)
+            )
+        self._bundles.update(
+            (bundle.observation.observation_id, bundle) for _, _, _, bundle in selected
+        )
+        if len({bundle.observation.observation_id for _, _, _, bundle in selected}) != len(
+            selected
+        ):
+            return "canonical_financial_provenance_unavailable"
+        return selected
+
+    def _materialized_observation(
+        self,
+        preparation: _FinancialPopulation,
+        metric: str,
+        cadence: FinancialCadence,
+        cell_id: str,
+        metric_id: str,
+        resolution_id: str,
+        bundle: ProvenanceBundle,
+    ) -> CanonicalFinancialObservation | str:
+        key = cell_id, metric_id, resolution_id
+        if key not in preparation.observations:
+            preparation.observations[key] = self._admitted_observation(
+                preparation, metric, cadence, cell_id, metric_id, resolution_id, bundle
+            )
+        return preparation.observations[key]
+
+    def _admitted_observation(
+        self,
+        preparation: _FinancialPopulation,
+        metric: str,
+        cadence: FinancialCadence,
+        cell_id: str,
+        metric_id: str,
+        resolution_id: str,
+        bundle: ProvenanceBundle,
+    ) -> CanonicalFinancialObservation | str:
+        observation_id = bundle.observation.observation_id
+        selected_binding = self._bindings_for(preparation, (observation_id,))[observation_id]
+        if (
+            selected_binding is None
+            or selected_binding.binding_status != "bound"
+            or selected_binding.canonical_metric_cell_id != cell_id
+        ):
+            return "selected_financial_binding_unavailable"
+        if not (
+            (
+                bundle.cell.concept_namespace == FINANCIAL_CONCEPT_NAMESPACE
+                and bundle.cell.concept_name == metric
+            )
+            or self._metric_name_matches(metric_id, metric)
+        ):
+            return "selected_financial_concept_mismatch"
+        current_definition = self._ontology.metric_definition_as_known(metric_id, self._cutoff)
+        admitted_definition = self._ontology.metric_definition_as_known(
+            metric_id, selected_binding.recorded_at
+        )
+        if (
+            current_definition is None
+            or admitted_definition is None
+            or current_definition.lifecycle != "active"
+            or admitted_definition.lifecycle != "active"
+            or _definition_semantics(current_definition)
+            != _definition_semantics(admitted_definition)
+            or current_definition.value_kind != "numeric"
+            or current_definition.period_kind != "duration"
+            or current_definition.unit_family != "currency"
+            or not self.reviewed_currency_matches(observation_id, bundle.cell.currency)
+            or current_definition.accounting_basis != bundle.cell.accounting_basis
+            or current_definition.scope_constraints.get("reporting_entity_id")
+            != bundle.cell.reporting_entity_id
+            or current_definition.scope_constraints.get("consolidation_scope")
+            != bundle.cell.consolidation_scope
+        ):
+            return "active_metric_definition_unavailable_or_changed"
+        return self._project_observation(
+            metric,
+            cadence,
+            metric_id,
+            admitted_definition.metric_definition_revision_id,
+            cell_id,
+            resolution_id,
+            bundle,
+        )
 
     def read_with_coordinates(
         self, metric: str, cadence: FinancialCadence, continuity: SeriesContinuity
@@ -597,7 +779,7 @@ class CanonicalFinancialSeriesReader:
     ) -> CanonicalFinancialCoordinateProjection:
         if isinstance(preparation, str):
             return self._projection_unavailable(metric, cadence, preparation)
-        relevant, bindings, reads = preparation
+        relevant = preparation.rows
         grouped: dict[tuple[datetime, int | None, str], list[tuple[object, ...]]] = {}
         try:
             for row in relevant:
@@ -619,27 +801,31 @@ class CanonicalFinancialSeriesReader:
             and all(_duration_matches(cadence, _duration_days(row[3], row[4])) for row in rows)
         }
         if cadence is not FinancialCadence.QUARTERLY:
-            bindings = {
-                observation_id: self._ontology.binding_as_known(observation_id, self._cutoff)
-                for observation_ids in eligible.values()
-                for observation_id in observation_ids
-            }
+            self._bindings_for(
+                preparation, tuple(item for ids in eligible.values() for item in ids)
+            )
         populations = {
-            coordinate: self._bound_cells(observation_ids, bindings)
+            coordinate: self._prepared_cells(preparation, observation_ids)
             for coordinate, observation_ids in eligible.items()
         }
         if cadence is not FinancialCadence.QUARTERLY:
-            reads = self._canonical_reads(
+            self._populate_reads(
+                preparation,
                 tuple(
                     cell_id
                     for cells in populations.values()
                     if isinstance(cells, dict)
                     for cell_id in cells
-                )
+                ),
             )
         coordinates = tuple(
             self._project_coordinate(
-                metric, cadence, coordinate, tuple(rows), populations.get(coordinate, {}), reads
+                metric,
+                cadence,
+                coordinate,
+                tuple(rows),
+                populations.get(coordinate, {}),
+                preparation,
             )
             for coordinate, rows in sorted(grouped.items(), key=lambda item: item[0][0])
         )
@@ -659,27 +845,9 @@ class CanonicalFinancialSeriesReader:
         coordinate: tuple[datetime, int | None, str],
         rows: tuple[tuple[object, ...], ...],
         cells: dict[str, str] | str,
-        reads: dict[str, CanonicalFactRead],
+        preparation: _FinancialPopulation,
     ) -> CanonicalFinancialCoordinate:
-        candidates = tuple(
-            CanonicalFinancialCandidate(
-                observation_id=str(row[0]),
-                fact_cell_id=str(row[1]),
-                reporting_entity_id=str(row[2]),
-                scope_security_id=None if row[16] is None else str(row[16]),
-                period_start=None if row[3] is None else _clock(row[3]),
-                period_end=_clock(row[4]),
-                fiscal_year=None if row[5] is None else int(str(row[5])),
-                fiscal_period=str(row[6]),
-                currency=None if row[7] is None else str(row[7]),
-                unit=str(row[8]),
-                accounting_basis=str(row[9]),
-                consolidation_scope=str(row[10]),
-                duration_days=_duration_days(row[3], row[4]),
-                cadence_supported=_duration_matches(cadence, _duration_days(row[3], row[4])),
-            )
-            for row in rows
-        )
+        candidates = self._candidates(preparation, rows, cadence)
 
         def failed(
             status: Literal["rejected", "ambiguous", "unavailable"], reason: str
@@ -705,77 +873,18 @@ class CanonicalFinancialSeriesReader:
                 "rejected" if cells == "exact_financial_concept_not_admitted" else "unavailable"
             )
             return failed(status, cells)
-        selected: list[tuple[str, str, str, ProvenanceBundle]] = []
-        for cell_id, metric_id in cells.items():
-            read = reads[cell_id]
-            self._resolver.validate_as_known_read(read)
-            resolution = read.resolution
-            if (
-                resolution is None
-                or resolution.status != "resolved"
-                or resolution.selected_observation_id is None
-            ):
-                return failed("rejected", "canonical_financial_resolution_unavailable")
-            if read.bundle is None:
-                return failed("unavailable", "canonical_financial_provenance_unavailable")
-            selected.append(
-                (cell_id, metric_id, resolution.canonical_resolution_revision_id, read.bundle)
+        selected = self._selected(preparation, cells)
+        if isinstance(selected, str):
+            status = (
+                "rejected"
+                if selected == "canonical_financial_resolution_unavailable"
+                else "unavailable"
             )
-        self._bundles.update(
-            (bundle.observation.observation_id, bundle) for _, _, _, bundle in selected
-        )
-        if len({bundle.observation.observation_id for _, _, _, bundle in selected}) != len(
-            selected
-        ):
-            return failed("unavailable", "canonical_financial_provenance_unavailable")
+            return failed(status, selected)
         observations: list[CanonicalFinancialObservation] = []
         for cell_id, metric_id, resolution_id, bundle in selected:
-            observation_id = bundle.observation.observation_id
-            selected_binding = self._ontology.binding_as_known(observation_id, self._cutoff)
-            if (
-                selected_binding is None
-                or selected_binding.binding_status != "bound"
-                or selected_binding.canonical_metric_cell_id != cell_id
-            ):
-                return failed("rejected", "selected_financial_binding_unavailable")
-            if not (
-                (
-                    bundle.cell.concept_namespace == FINANCIAL_CONCEPT_NAMESPACE
-                    and bundle.cell.concept_name == metric
-                )
-                or self._metric_name_matches(metric_id, metric)
-            ):
-                return failed("rejected", "selected_financial_concept_mismatch")
-            current_definition = self._ontology.metric_definition_as_known(metric_id, self._cutoff)
-            admitted_definition = self._ontology.metric_definition_as_known(
-                metric_id, selected_binding.recorded_at
-            )
-            if (
-                current_definition is None
-                or admitted_definition is None
-                or current_definition.lifecycle != "active"
-                or admitted_definition.lifecycle != "active"
-                or _definition_semantics(current_definition)
-                != _definition_semantics(admitted_definition)
-                or current_definition.value_kind != "numeric"
-                or current_definition.period_kind != "duration"
-                or current_definition.unit_family != "currency"
-                or not self.reviewed_currency_matches(observation_id, bundle.cell.currency)
-                or current_definition.accounting_basis != bundle.cell.accounting_basis
-                or current_definition.scope_constraints.get("reporting_entity_id")
-                != bundle.cell.reporting_entity_id
-                or current_definition.scope_constraints.get("consolidation_scope")
-                != bundle.cell.consolidation_scope
-            ):
-                return failed("rejected", "active_metric_definition_unavailable_or_changed")
-            item = self._project_observation(
-                metric,
-                cadence,
-                metric_id,
-                admitted_definition.metric_definition_revision_id,
-                cell_id,
-                resolution_id,
-                bundle,
+            item = self._materialized_observation(
+                preparation, metric, cadence, cell_id, metric_id, resolution_id, bundle
             )
             if isinstance(item, str):
                 return failed("rejected", item)
@@ -794,7 +903,7 @@ class CanonicalFinancialSeriesReader:
             fiscal_period=coordinate[2],
             status="admitted",
             candidates=candidates,
-            observation=observations[0],
+            observation=observations[0].model_copy(deep=True),
         )
 
     def _unavailable(
@@ -826,31 +935,13 @@ class CanonicalFinancialSeriesReader:
     ) -> CanonicalFinancialSeries:
         if isinstance(preparation, str):
             return self._unavailable(metric, cadence, continuity, preparation)
-        relevant, bindings, reads = preparation
+        relevant = preparation.rows
         if not relevant:
             return self._unavailable(
                 metric, cadence, continuity, "exact_financial_concept_unavailable"
             )
         try:
-            candidates = tuple(
-                CanonicalFinancialCandidate(
-                    observation_id=str(row[0]),
-                    fact_cell_id=str(row[1]),
-                    reporting_entity_id=str(row[2]),
-                    scope_security_id=None if row[16] is None else str(row[16]),
-                    period_start=None if row[3] is None else _clock(row[3]),
-                    period_end=_clock(row[4]),
-                    fiscal_year=None if row[5] is None else int(str(row[5])),
-                    fiscal_period=str(row[6]),
-                    currency=None if row[7] is None else str(row[7]),
-                    unit=str(row[8]),
-                    accounting_basis=str(row[9]),
-                    consolidation_scope=str(row[10]),
-                    duration_days=_duration_days(row[3], row[4]),
-                    cadence_supported=_duration_matches(cadence, _duration_days(row[3], row[4])),
-                )
-                for row in relevant
-            )
+            candidates = self._candidates(preparation, relevant, cadence)
         except (TypeError, ValueError):
             return self._unavailable(
                 metric, cadence, continuity, "canonical_financial_coordinate_invalid"
@@ -894,127 +985,24 @@ class CanonicalFinancialSeriesReader:
         observation_ids = tuple(str(row[0]) for row in valid)
 
         if cadence is not FinancialCadence.QUARTERLY:
-            bindings = {
-                observation_id: self._ontology.binding_as_known(observation_id, self._cutoff)
-                for observation_id in observation_ids
-            }
-        cells = self._bound_cells(observation_ids, bindings)
+            self._bindings_for(preparation, observation_ids)
+        cells = self._prepared_cells(preparation, observation_ids)
         if isinstance(cells, str):
             return self._unavailable(metric, cadence, continuity, cells, candidates=candidates)
         if cadence is not FinancialCadence.QUARTERLY:
-            reads = self._canonical_reads(tuple(cells))
-        selected: list[tuple[str, str, str, ProvenanceBundle]] = []
-        for cell_id, metric_id in cells.items():
-            read = reads[cell_id]
-            self._resolver.validate_as_known_read(read)
-            resolution = read.resolution
-            if (
-                resolution is None
-                or resolution.status != "resolved"
-                or resolution.selected_observation_id is None
-            ):
-                return self._unavailable(
-                    metric,
-                    cadence,
-                    continuity,
-                    "canonical_financial_resolution_unavailable",
-                    candidates=candidates,
-                )
-            if read.bundle is None:
-                return self._unavailable(
-                    metric,
-                    cadence,
-                    continuity,
-                    "canonical_financial_provenance_unavailable",
-                    candidates=candidates,
-                )
-            selected.append(
-                (cell_id, metric_id, resolution.canonical_resolution_revision_id, read.bundle)
-            )
-        self._bundles.update(
-            (bundle.observation.observation_id, bundle) for _, _, _, bundle in selected
-        )
-        if len({bundle.observation.observation_id for _, _, _, bundle in selected}) != len(
-            selected
-        ):
-            return self._unavailable(
-                metric,
-                cadence,
-                continuity,
-                "canonical_financial_provenance_unavailable",
-                candidates=candidates,
-            )
+            self._populate_reads(preparation, tuple(cells))
+        selected = self._selected(preparation, cells)
+        if isinstance(selected, str):
+            return self._unavailable(metric, cadence, continuity, selected, candidates=candidates)
         observations: list[CanonicalFinancialObservation] = []
         admitted_definition_ids: set[str] = set()
         for cell_id, metric_id, resolution_id, bundle in selected:
-            observation_id = bundle.observation.observation_id
-            selected_binding = self._ontology.binding_as_known(observation_id, self._cutoff)
-            if (
-                selected_binding is None
-                or selected_binding.binding_status != "bound"
-                or selected_binding.canonical_metric_cell_id != cell_id
-            ):
-                return self._unavailable(
-                    metric,
-                    cadence,
-                    continuity,
-                    "selected_financial_binding_unavailable",
-                    candidates=candidates,
-                )
-            if not (
-                (
-                    bundle.cell.concept_namespace == FINANCIAL_CONCEPT_NAMESPACE
-                    and bundle.cell.concept_name == metric
-                )
-                or self._metric_name_matches(metric_id, metric)
-            ):
-                return self._unavailable(
-                    metric,
-                    cadence,
-                    continuity,
-                    "selected_financial_concept_mismatch",
-                    candidates=candidates,
-                )
-            current_definition = self._ontology.metric_definition_as_known(metric_id, self._cutoff)
-            admitted_definition = self._ontology.metric_definition_as_known(
-                metric_id, selected_binding.recorded_at
-            )
-            if (
-                current_definition is None
-                or admitted_definition is None
-                or current_definition.lifecycle != "active"
-                or admitted_definition.lifecycle != "active"
-                or _definition_semantics(current_definition)
-                != _definition_semantics(admitted_definition)
-                or current_definition.value_kind != "numeric"
-                or current_definition.period_kind != "duration"
-                or current_definition.unit_family != "currency"
-                or not self.reviewed_currency_matches(observation_id, bundle.cell.currency)
-                or current_definition.accounting_basis != bundle.cell.accounting_basis
-                or current_definition.scope_constraints.get("reporting_entity_id")
-                != bundle.cell.reporting_entity_id
-                or current_definition.scope_constraints.get("consolidation_scope")
-                != bundle.cell.consolidation_scope
-            ):
-                return self._unavailable(
-                    metric,
-                    cadence,
-                    continuity,
-                    "active_metric_definition_unavailable_or_changed",
-                    candidates=candidates,
-                )
-            admitted_definition_ids.add(admitted_definition.metric_definition_revision_id)
-            item = self._project_observation(
-                metric,
-                cadence,
-                metric_id,
-                admitted_definition.metric_definition_revision_id,
-                cell_id,
-                resolution_id,
-                bundle,
+            item = self._materialized_observation(
+                preparation, metric, cadence, cell_id, metric_id, resolution_id, bundle
             )
             if isinstance(item, str):
                 return self._unavailable(metric, cadence, continuity, item, candidates=candidates)
+            admitted_definition_ids.add(item.metric_definition_revision_id)
             if item.period_end > self._cutoff:
                 return self._unavailable(
                     metric,

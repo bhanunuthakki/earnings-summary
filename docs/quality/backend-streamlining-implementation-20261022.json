@@ -892,7 +892,7 @@
     "transport": "claude_membership"
   },
   "static_count_clarification": "Old2012/1835 values are previous configured ceilings, not a paired prechange measurement of actual diagnostics/suppressions. Revised measured1826/1811 values tighten those ceilings.",
-  "status": "LOCAL_IMPLEMENTATION_VALIDATED_EVENT96_MANUAL95;overallroadmap/releaseHOLD",
+  "status": "LOCAL_UNITS_ACCEPTED_EVENT96_MANUAL95_FINANCIAL_READ90;OVERALL_ARCHITECTURE_RELEASE_HOLD",
   "third_independent_sol_proxy_review": {
     "binding_sha256": "53493b3675b5a59400c3527a8954914d8a50ea0ae9d09a819d27d854d8c897d0",
     "effort": "high",
@@ -4306,15 +4306,87 @@
     "priority": "wholeprocedure/wholeloop/unusedfeature removals; reuseexistingowners/installedcomponents, qualifiedopen-sourcewhere materialnetgain",
     "test_strategy": "focusedmeaningfultargetedduringbuild; fullgatebatchedformajorintegration/delivery/push",
     "deferred": ".tmp/cleanup-next-r6-admission.patch net59linecode-onlydedup; noapplication",
-    "current_full_gate": "Continue currentmajorcheckpoint once; no repeatedfullmatrixperMVP"
+    "current_full_gate": "Continue currentmajorcheckpoint once; no repeatedfullmatrixperMVP",
+    "advisory_score_rule": "strictly >85 at PRD and implementation, no material blocker"
   },
   "next_material_data_plane_candidate_20261024": {
-    "state": "PREPARED_ONLY_NOT_APPLIED_OR_TESTED",
-    "patch": ".tmp/cleanup-r6-single-materialization.patch",
-    "proof": ".tmp/cleanup-r6-single-materialization-proof.json",
-    "plan_review_score": 90,
-    "target": "Construct and project each financial cell once per read; preserve complete results, ambiguity, lineage and trace",
-    "performance_claim": "None; implementation parity and measured counts still required",
-    "deferred": "59-line policy deduplication and small parser/fingerprint cleanup; low relative impact"
+    "state": "IMPLEMENTED_VALIDATED_SOL_ACCEPTED_LOCAL_UNCOMMITTED",
+    "scope": "Operation-local financial population; separate series and coordinate policy folds; isolated mutable output metadata",
+    "paths": [
+      "src/sources/canonical_financial_series.py",
+      "tests/test_financial_source_repairs.py"
+    ],
+    "hashes": {
+      "src/sources/canonical_financial_series.py": "b68c7fec41ca9b620ab38ca5e6c96929272356b09a8258c47910ac4f9f41a38f",
+      "tests/test_financial_source_repairs.py": "020ebe072c8270029caab412028cd8d028f64391332c9dab5c94b66828c2644f"
+    },
+    "prd_review": ".tmp/cleanup-r6-current-prd-sol-review.json",
+    "prd_score": 89,
+    "initial_implementation_review": ".tmp/cleanup-r6-final-sol-review.json",
+    "initial_score": 84,
+    "initial_material_finding": "Cross-view mutable observation metadata alias; corrected with a deep copy at coordinate publication",
+    "implementation_review": ".tmp/cleanup-r6-corrected-sol-review.json",
+    "implementation_score": 90,
+    "implementation_verdict": "ACCEPT",
+    "review_kind": "Owner-selected independent GPT-6.1 Sol advisory proxy; not a qualified release receipt",
+    "proof": ".tmp/cleanup-open-model-execution/r6-alias-fix-proof.json",
+    "tests_passed": 325,
+    "old_source_full_comparisons_equal": 224,
+    "old_assertions_preserved": 137,
+    "negative_control": "Both metadata-isolation regression cases fail on old weak-alias candidate",
+    "source_reduction": {
+      "physical": 12,
+      "noncomment": 24
+    },
+    "bounded_two_cell_work": {
+      "annual_selects": [
+        145,
+        77
+      ],
+      "quarterly_selects": [
+        91,
+        77
+      ],
+      "candidates": [
+        4,
+        2
+      ],
+      "projections": [
+        4,
+        2
+      ]
+    },
+    "limits": "Synthetic work counts only; timings vary, including quarterly regressions. No general latency or production claim. Not all metadata reads are removed. No new public API, schema, dependency or global cache.",
+    "operations_disposition": "No operator surface change: internal read only; no new endpoint, job, CLI action, persistent writer or collection",
+    "resource_proof": ".tmp/cleanup-open-model-execution/r6-root-resource-closure.json",
+    "full_matrix": "22,282-test proof binds preceding 17cfdd5f checkpoint only; current bounded unit has six-module serial proof. Full gate remains required at next major integration/CI boundary."
+  },
+  "owner_open_model_route_20261024": {
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "provider": "sail-research/fp4/us",
+    "role": "Bounded execution; root orchestrates; independent GPT-6.1 Sol reviews PRD and implementation strictly above 85 without material blockers",
+    "input_usd_per_million": 0.101,
+    "output_usd_per_million": 0.15,
+    "cached_input_usd_per_million": 0.006735,
+    "reported_uptime_30m": 100,
+    "reported_uptime_1d": 100,
+    "endpoint_metadata": ".tmp/cleanup-open-model-execution/current-model-endpoints.json",
+    "selection": "Lowest observed-token cost among currently reliable candidates; deepinfra/fp8/flex cheaper but one-day uptime 75.75%, excluded",
+    "cap_per_job_usd": 0.4,
+    "provider_fallbacks": false,
+    "recheck": "Refresh matched endpoint variants before dispatch; initial 30-minute floor 99%, inspect longer window",
+    "observed_total_usd": 0.0814180032,
+    "unpriced_earlier_failed_requests": 2,
+    "app_routing_changed": false
+  },
+  "r2_current_design_disposition_20261024": {
+    "state": "REVISE_NOT_IMPLEMENTED",
+    "prd": ".tmp/cleanup-open-model-execution/next-backend-prd.json",
+    "review": ".tmp/cleanup-open-model-execution/next-backend-sol-prd-review.json",
+    "score": 78,
+    "input_population_and_budget": ".tmp/cleanup-open-model-execution/r2-inputs-budget.json",
+    "replacement_contract": ".tmp/cleanup-open-model-execution/r2-replacement-contract.json",
+    "finding": "67 noncomment legacy-body lines versus nine required managed extensions; positive net reduction unproved. No whole-source rewrite or another one-family adapter.",
+    "next": "Independent Sol architecture disposition: smaller existing-owner design or different approved high-impact unit. No owner decision identified yet."
   }
 }
