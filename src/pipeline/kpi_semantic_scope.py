@@ -46,12 +46,18 @@ class ScopedKpiDefinition(BaseModel):
 def portfolio_tickers(
     conn: sqlite3.Connection, *, user_id: str = DEFAULT_USER_ID
 ) -> tuple[str, ...]:
-    """Current portfolio companies only; watchlist/evaluation names stay out."""
+    """Current portfolio companies only; watchlist/evaluation names and ETFs stay out.
+
+    A held ETF has no company KPI report configuration. An unclassified
+    instrument stays in scope so a missing configuration still fails closed.
+    """
     if not _table_exists(conn, "tracked_companies"):
         return ()
     columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
     predicates = ["list_type='portfolio'"]
     params: list[object] = []
+    if "instrument_type" in columns:
+        predicates.append("LOWER(COALESCE(instrument_type, '')) <> 'etf'")
     if "user_id" in columns:
         predicates.append("user_id=?")
         params.append(user_id)
