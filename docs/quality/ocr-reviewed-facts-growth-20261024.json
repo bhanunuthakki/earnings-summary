@@ -268,5 +268,18 @@
       "behavior": "Unchanged subprocess call moved after new regressions; reachability test expectation follows actual source.",
       "identical_Call_AST": true
     }
+  },
+  "native_file_uri_repair": {
+    "source_commit": "e8b730a67c422cd1031dd5827a6f453f5775a463",
+    "independent_advisory_score": 97,
+    "independent_review_sha256": "a86901cd0802f137ba394a85dfa8f2111ed9b5f34d74545bf59eff37eb582d8a",
+    "baseline_before_sha256": "5adf243afe08789d8a83265d3372b49a602313c43611a61481ca4e988ca8df49",
+    "measurement_source_sha256": "05a5210877fd919f21d1a07cf10c2ea41923f41d5d620b62b3c445ea0ba97633",
+    "reachability_parser_source_sha256": "8aee04337cfd7116a1d47e55dc33bbff6377b865060d02be1c4d63dd7485ed6a",
+    "executable_module_growth": 0,
+    "noncomment_LOC_growth": 2,
+    "reason": "The two existing retained-source readers use the standard library file-URI decoder for Windows drive paths. Existing source, size, hash and authority guards remain unchanged. Preparation tests explicitly bind their synthetic database; a new negative preserves the configured-database boundary.",
+    "author_affected_tests": 19,
+    "native_validation": "Pending final-source Windows qualification; no production mutation."
   }
 }

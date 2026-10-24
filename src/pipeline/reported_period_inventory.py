@@ -11,7 +11,8 @@ import json
 import sqlite3
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 from pipeline.source_policy import (
     SOURCE_POLICY_CONFIG,
@@ -116,7 +117,7 @@ def _captured_reported_period_proof(
     if uri.scheme != "file" or uri.netloc not in {"", "localhost"}:
         return False
     try:
-        raw = Path(unquote(uri.path)).read_bytes()
+        raw = Path(url2pathname(uri.path)).read_bytes()
     except OSError:
         return False
     if len(raw) != int(blob[1]) or hashlib.sha256(raw).hexdigest() != version[5]:

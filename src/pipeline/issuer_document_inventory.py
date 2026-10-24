@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path, PurePosixPath
 from typing import Literal, Self, TypeAlias, cast, overload
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 from pydantic import (
     BaseModel,
@@ -1090,7 +1091,7 @@ def _review_pdf_bytes(
     ):
         raise IssuerDocumentInventoryError("reported_period_source_identity_mismatch")
     try:
-        raw = Path(unquote(uri.path)).read_bytes()
+        raw = Path(url2pathname(uri.path)).read_bytes()
     except OSError as exc:
         raise IssuerDocumentInventoryError("reported_period_source_unavailable") from exc
     blob_size = blob["byte_size"]

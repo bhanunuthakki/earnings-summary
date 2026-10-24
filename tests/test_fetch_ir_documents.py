@@ -471,6 +471,8 @@ def test_final_preparation_reports_owned_receipt_after_post_rename_verification_
     """The receipt target is retained when the installer loses only final verification."""
     root = tmp_path / "state"
     (root / "data").mkdir(parents=True)
+    db_path = root / "data" / "portfolio.db"
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db_path))
     request = _preparation_request()
     monkeypatch.setattr(fid, "authorize_stored_collection_target", _allow_preparation_policy)
     monkeypatch.setattr(fid, "reported_quarter_selection", _preparation_window)
@@ -484,9 +486,7 @@ def test_final_preparation_reports_owned_receipt_after_post_rename_verification_
         secure_file_install, "_verify_no_clobber_install", reject_final_verification
     )
     with pytest.raises(fid.IssuerDocumentPreparationError) as raised:
-        fid.prepare_issuer_document_sources(
-            request, state_root=root, db_path=root / "data" / "portfolio.db"
-        )
+        fid.prepare_issuer_document_sources(request, state_root=root, db_path=db_path)
 
     assert raised.value.code == "staging_receipt_publish_failed"
     assert raised.value.attempt_id == request.attempt_id
@@ -496,6 +496,21 @@ def test_final_preparation_reports_owned_receipt_after_post_rename_verification_
         root / ".tmp" / "managed_ir_staging" / request.attempt_id / "staging_receipt.json"
     )
     assert receipt_path.exists()
+
+
+def test_final_preparation_rejects_a_nonconfigured_database_before_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "state"
+    root.mkdir()
+    configured_db = root / "data" / "portfolio.db"
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(configured_db))
+    with pytest.raises(fid.IssuerDocumentPreparationError) as raised:
+        fid.prepare_issuer_document_sources(
+            _preparation_request(), state_root=root, db_path=tmp_path / "other.db"
+        )
+    assert raised.value.code == "configured_database_mismatch"
+    assert not (root / ".tmp" / "managed_ir_staging").exists()
 
 
 def _supplement_preparation_request() -> fid.IssuerDocumentStagingRequest:
@@ -567,6 +582,7 @@ def test_preparation_accepts_actual_xlsx_supplement(
     root = tmp_path / "state"
     (root / "data").mkdir(parents=True)
     db_path = migrated_db(root / "data" / "portfolio.db")
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db_path))
     request = _supplement_preparation_request()
     monkeypatch.setattr(fid, "authorize_stored_collection_target", _allow_preparation_policy)
     monkeypatch.setattr(fid, "reported_quarter_selection", _preparation_window)
@@ -656,6 +672,8 @@ def test_final_preparation_errors_report_staged_objects_and_direct_residue(
 ) -> None:
     root = tmp_path / "state"
     (root / "data").mkdir(parents=True)
+    db_path = root / "data" / "portfolio.db"
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db_path))
     request = _preparation_request()
     objects = root / ".tmp" / "managed_ir_staging" / request.attempt_id / "objects"
     monkeypatch.setattr(fid, "authorize_stored_collection_target", _allow_preparation_policy)
@@ -685,9 +703,7 @@ def test_final_preparation_errors_report_staged_objects_and_direct_residue(
         monkeypatch.setattr(fid, "validate_prepared_staging", fail_validation)
 
     with pytest.raises(fid.IssuerDocumentPreparationError) as raised:
-        fid.prepare_issuer_document_sources(
-            request, state_root=root, db_path=root / "data" / "portfolio.db"
-        )
+        fid.prepare_issuer_document_sources(request, state_root=root, db_path=db_path)
     assert raised.value.code == expected_code
     assert raised.value.attempt_id == request.attempt_id
     assert raised.value.phase == "publish"
@@ -699,6 +715,8 @@ def test_staging_replay_error_reports_existing_objects_and_direct_residue(
 ) -> None:
     root = tmp_path / "state"
     (root / "data").mkdir(parents=True)
+    db_path = root / "data" / "portfolio.db"
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db_path))
     request = _preparation_request()
     staging = root / ".tmp" / "managed_ir_staging" / request.attempt_id
     objects = staging / "objects"
@@ -715,9 +733,7 @@ def test_staging_replay_error_reports_existing_objects_and_direct_residue(
 
     monkeypatch.setattr(fid, "validate_prepared_staging", fail_replay)
     with pytest.raises(fid.IssuerDocumentPreparationError) as raised:
-        fid.prepare_issuer_document_sources(
-            request, state_root=root, db_path=root / "data" / "portfolio.db"
-        )
+        fid.prepare_issuer_document_sources(request, state_root=root, db_path=db_path)
     assert raised.value.code == "staging_replay_invalid"
     assert raised.value.attempt_id == request.attempt_id
     assert raised.value.phase == "replay"
