@@ -2,9 +2,8 @@
 `src/synthesis/lenses/`.
 
 This module re-exports the public API from the new package so existing
-callers (execution/run_lens.py, execution/run_due_lenses.py,
-execution/run_scenario.py, src/report/sections/synthesis.py) keep their
-top-of-file imports unchanged.
+callers (execution/run_lens.py, execution/run_scenario.py,
+src/report/sections/synthesis.py) keep their top-of-file imports unchanged.
 
 See `src/synthesis/lenses/__init__.py` for the registry, runner, and
 the per-lens sibling modules.

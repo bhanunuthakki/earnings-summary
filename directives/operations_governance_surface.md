@@ -1,5 +1,7 @@
 # Operations & Governance Surface Impact
 
+**2026-10-24 disposition:** two dedicated lens declarations/runners were removed locally; manual engine/cache/history access and the separate dirty-artifact refresh are retained. Declared Jobs rows disappear; still-installed jobs show unexpected. No live/deploy change or new control.
+
 ### Standalone portfolio dashboard and old overview feed retired (2026-10-24)
 
 The owner approved retiring new standalone weekly portfolio-dashboard HTML exports and `/api/overview`. The feed returns HTTP 410 with `error=retired`, a Cockpit replacement URL and `Cache-Control: no-store`, without assembling analytics. `/analytical` remains a shell redirect. Saved exports, current Cockpit panels, source records, decision history, outcome scoring and shared trigger, reread, synthesis and budget components stay. The exclusive CLI, page renderer, legacy dashboard data fields and queries are removed.

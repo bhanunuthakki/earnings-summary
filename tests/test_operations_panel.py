@@ -982,9 +982,11 @@ def test_jobs_have_attention_filter_search_and_responsive_cards(tmp_path: Path) 
     assert 'aria-live="polite"' in html
     assert ":focus-visible" in html
     # The manual-only backfill has no Scheduler or Operations task card.
-    # The on-demand memo retirement leaves 44 tasks, including semantic review.
-    assert html.count('data-operations-task-card="true"') == 44
+    # On-demand lens retirement leaves 42 tasks, including semantic review.
+    assert html.count('data-operations-task-card="true"') == 42
     assert "monthly_p3_refresh" not in html
+    assert "weekly_synthesis" not in html
+    assert "weekly_p2_lens_refresh" not in html
     assert "@media (max-width:" in html
     assert "min-block-size:var(--touch-target-size)" in html
     assert 'data-operations-table-scroll="true"' not in html

@@ -1,8 +1,7 @@
 """Unit tests for src/pipeline/tier_runner.py — tier-aware due-list math.
 
-Covers the daily/weekly/monthly cadence rules across P1/P2/P3 tiers and the
-lens-regen variant that joins through llm_artifacts. Uses a sandboxed
-portfolio.db built per-test so suites don't share state.
+Covers the daily/weekly/monthly cadence rules across P1/P2/P3 tiers. Uses a
+sandboxed portfolio.db built per-test so suites don't share state.
 """
 
 from __future__ import annotations
@@ -14,13 +13,12 @@ from pathlib import Path
 import pytest
 
 from pipeline.tier_runner import (
-    tickers_due_for_lens_regen,
     tickers_due_for_refresh,
     tier_coverage_summary,
 )
 
 
-def _bootstrap_schema(db_path: Path, *, with_artifacts: bool = True) -> None:
+def _bootstrap_schema(db_path: Path) -> None:
     """Create the minimal schema slice tier_runner reads against."""
     conn = sqlite3.connect(str(db_path))
     conn.executescript(
@@ -38,32 +36,6 @@ def _bootstrap_schema(db_path: Path, *, with_artifacts: bool = True) -> None:
         );
         """
     )
-    if with_artifacts:
-        conn.executescript(
-            """
-            CREATE TABLE llm_artifacts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ticker TEXT,
-                scope TEXT NOT NULL DEFAULT 'ticker',
-                purpose TEXT NOT NULL,
-                fiscal_period TEXT,
-                content_md TEXT,
-                content_json TEXT,
-                input_sha256 TEXT NOT NULL,
-                output_sha256 TEXT,
-                model TEXT,
-                prompt_version TEXT NOT NULL DEFAULT 'v1',
-                generated_at TIMESTAMP NOT NULL,
-                expires_at TIMESTAMP,
-                superseded_by_id INTEGER,
-                dirty INTEGER NOT NULL DEFAULT 0,
-                dirty_reason TEXT,
-                source_doc_ids TEXT,
-                parent_artifact_ids TEXT,
-                llm_call_id INTEGER
-            );
-            """
-        )
     conn.commit()
     conn.close()
 
@@ -85,33 +57,6 @@ def _seed_ticker(
     conn.execute(
         "INSERT INTO tracked_companies (user_id, ticker, name, list_type, last_built_at, archived_at) VALUES (1, ?, ?, ?, ?, ?)",
         (ticker, f"{ticker} Co", list_type, last_built_at, archived_at),
-    )
-    conn.commit()
-    conn.close()
-
-
-def _seed_lens_artifact(
-    db_path: Path,
-    ticker: str,
-    lens_name: str,
-    *,
-    generated_at: str,
-    superseded: bool = False,
-) -> None:
-    conn = sqlite3.connect(str(db_path))
-    conn.execute(
-        """
-        INSERT INTO llm_artifacts
-            (ticker, scope, purpose, input_sha256, output_sha256, prompt_version,
-             generated_at, superseded_by_id)
-        VALUES (?, 'ticker', ?, 'sha', 'sha', 'v1', ?, ?)
-        """,
-        (
-            ticker,
-            f"lens:{lens_name}",
-            generated_at,
-            1 if superseded else None,
-        ),
     )
     conn.commit()
     conn.close()
@@ -250,35 +195,7 @@ def test_monthly_cadence_p3_threshold_30d(repo_root: Path, now: datetime) -> Non
     assert "MSFT" in tickers_due_for_refresh(repo_root, "monthly", now=now)
 
 
-# --- tickers_due_for_lens_regen: joins llm_artifacts -------------------------
-
-
-def test_lens_regen_due_when_no_artifact(repo_root: Path, now: datetime) -> None:
-    """A tracked ticker with no cached lens artifact is always due."""
-    fresh = (now - timedelta(hours=1)).isoformat(timespec="seconds")
-    _seed_ticker(repo_root / "data" / "portfolio.db", "META", "P1", last_built_at=fresh)
-    due = tickers_due_for_lens_regen(repo_root, "five_min_reread", "daily", now=now)
-    assert "META" in due
-
-
-def test_lens_regen_skipped_when_recent(repo_root: Path, now: datetime) -> None:
-    """P2 ticker with a fresh lens (3d old) → within the 7d weekly interval."""
-    fresh = (now - timedelta(hours=1)).isoformat(timespec="seconds")
-    _seed_ticker(
-        repo_root / "data" / "portfolio.db",
-        "ABNB",
-        "P2",
-        last_built_at=fresh,
-    )
-    three_days_ago = (now - timedelta(days=3)).isoformat(timespec="seconds")
-    _seed_lens_artifact(
-        repo_root / "data" / "portfolio.db",
-        "ABNB",
-        "five_min_reread",
-        generated_at=three_days_ago,
-    )
-    due = tickers_due_for_lens_regen(repo_root, "five_min_reread", "weekly", now=now)
-    assert "ABNB" not in due
+# --- additional refresh cadence thresholds --------------------------------
 
 
 def test_p2_due_on_weekly_after_seven_days(repo_root: Path, now: datetime) -> None:
@@ -303,36 +220,6 @@ def test_p3_due_on_monthly_after_thirty_days(repo_root: Path, now: datetime) -> 
         list_type="index_member",
     )
     assert "SPY" in tickers_due_for_refresh(repo_root, "monthly", now=now)
-
-
-def test_lens_regen_ignores_superseded(repo_root: Path, now: datetime) -> None:
-    """Superseded artifact rows are ignored (the current row decides freshness)."""
-    fresh = (now - timedelta(hours=1)).isoformat(timespec="seconds")
-    _seed_ticker(
-        repo_root / "data" / "portfolio.db",
-        "TICK",
-        "P2",
-        last_built_at=fresh,
-        list_type="watchlist",
-    )
-    very_old = (now - timedelta(days=60)).isoformat(timespec="seconds")
-    recent = (now - timedelta(days=2)).isoformat(timespec="seconds")
-    # Superseded old row + current fresh row → should be skipped on daily (P2 cadence 7d)
-    _seed_lens_artifact(
-        repo_root / "data" / "portfolio.db",
-        "TICK",
-        "five_min_reread",
-        generated_at=very_old,
-        superseded=True,
-    )
-    _seed_lens_artifact(
-        repo_root / "data" / "portfolio.db",
-        "TICK",
-        "five_min_reread",
-        generated_at=recent,
-    )
-    due = tickers_due_for_lens_regen(repo_root, "five_min_reread", "daily", now=now)
-    assert "TICK" not in due
 
 
 # --- tier_coverage_summary ---------------------------------------------------
@@ -398,7 +285,6 @@ def test_list_type_is_sufficient_for_fresh_schema(tmp_path: Path) -> None:
     conn.commit()
     conn.close()
     assert tickers_due_for_refresh(tmp_path, "daily") == ["GOOG"]
-    assert tickers_due_for_lens_regen(tmp_path, "five_min_reread", "daily") == ["GOOG"]
 
 
 def test_idempotency_repeated_call(repo_root: Path, now: datetime) -> None:

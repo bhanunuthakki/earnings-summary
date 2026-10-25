@@ -12,7 +12,7 @@ REM      discount. A pre-flight cost gate hard-halts if the projection would
 REM      breach the pairwise_analysis cap. No-op (no_jsonl_found) when step 1
 REM      wrote nothing.
 REM
-REM Runs in its own task (not folded into weekly_synthesis) because the batch
+REM Runs in its own task because the batch
 REM poll can outlast that task's 2h cap — this one allows 6h.
 
 setlocal

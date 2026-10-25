@@ -4670,5 +4670,25 @@
       "unchanged_targets": 88
     },
     "acceptance": ".tmp/cleanup-open-model-execution/legacy-dashboard-final-acceptance.json"
+  },
+  "lens_batch_retirement_20261024": {
+    "baseline": "5215bcd30",
+    "owner_decision": "2026-10-24 explicit Make research lenses on demand only",
+    "status": "local implementation; final independent review/graph receipt in named acceptance record",
+    "PRD_score": 92,
+    "PRD_review": ".tmp/cleanup-open-model-execution/lens-batch-sol-prd-review.json",
+    "acceptance": ".tmp/cleanup-open-model-execution/lens-batch-final-acceptance.json",
+    "source_proof": ".tmp/cleanup-open-model-execution/lens-batch-source-proof.json",
+    "graph": ".tmp/cleanup-open-model-execution/lens-batch-current-graph.json",
+    "manual_engine": "execution/run_lens.py and complete shared engine/prompts/cache/history retained",
+    "retired": "Two dedicated batch runners and exclusive tests/wrappers/XML, exactly2manifest entries, exclusive lens due-list query and tests",
+    "task_specs_retained_equal": 42,
+    "byte_equal_preservation_paths": 102,
+    "selected_tests": "298passed11.23seconds; seven manual dispatch shapes including scope guards/force",
+    "browser": "Before/after synthetic Jobs unavailable and still-installed states at1280/768; search/filter passed; unexpected retained tasks visible. No server or live data.",
+    "operational_candidate": "cron/SETUP_WINDOWS_SCHEDULER.md Dedicated lens-task retirement: deployment candidate; separate exact-version approval needed; disable before source deployment; rollback binds predecessor code+exported XML/state",
+    "global_release": "HOLD26oversized>25; managed_ir_sources2495. Independent bounded advice NO_GO sufficient genuine cut. Fullcurrentbranchsuite notrun; older22282pass binds17cfdd5f only.",
+    "authority": "No push/merge/deploy/live scheduler/collection/history deletion or production mutation",
+    "storage": "Use existing proof/handoff owners. Retain source proof/reviews and current graph; regenerable prompt/HTML cleanup after final acceptance."
   }
 }

@@ -666,23 +666,6 @@
    }
   },
   {
-   "task_name": "\\earnings-summary\\weekly_p2_lens_refresh",
-   "xml": "weekly_p2_lens_refresh.task.xml",
-   "wrapper": "run_weekly_p2_lens_refresh.bat",
-   "schedule": {
-    "trigger": "CalendarTrigger",
-    "start_boundary": "2026-05-29T22:00:00",
-    "repetition_interval": null,
-    "days_interval": null,
-    "weeks_interval": 1,
-    "days_of_week": [
-     "Friday"
-    ],
-    "days_of_month": [],
-    "months": []
-   }
-  },
-  {
    "task_name": "\\earnings-summary\\weekly_packet",
    "xml": "weekly_packet.task.xml",
    "wrapper": "run_weekly_packet.bat",
@@ -706,23 +689,6 @@
    "schedule": {
     "trigger": "CalendarTrigger",
     "start_boundary": "2026-06-14T06:30:00",
-    "repetition_interval": null,
-    "days_interval": null,
-    "weeks_interval": 1,
-    "days_of_week": [
-     "Sunday"
-    ],
-    "days_of_month": [],
-    "months": []
-   }
-  },
-  {
-   "task_name": "\\earnings-summary\\weekly_synthesis",
-   "xml": "weekly_synthesis.task.xml",
-   "wrapper": "run_weekly_synthesis.bat",
-   "schedule": {
-    "trigger": "CalendarTrigger",
-    "start_boundary": "2026-05-31T23:00:00",
     "repetition_interval": null,
     "days_interval": null,
     "weeks_interval": 1,

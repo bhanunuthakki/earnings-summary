@@ -177,10 +177,6 @@ $existing = Get-ScheduledTask -TaskName 'weekly_cleanup' -TaskPath '\earnings-su
 if ($existing) { Export-ScheduledTask -TaskName 'weekly_cleanup' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'weekly_cleanup.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'weekly_cleanup' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'weekly_cleanup.task.xml')
 & $taskSecurityScript -TaskPath '\earnings-summary\weekly_cleanup' -RenderedXmlPath (Join-Path $renderDir 'weekly_cleanup.task.xml')
-$existing = Get-ScheduledTask -TaskName 'weekly_p2_lens_refresh' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
-if ($existing) { Export-ScheduledTask -TaskName 'weekly_p2_lens_refresh' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'weekly_p2_lens_refresh.task.xml') -Encoding Unicode }
-Register-ManifestTask -TaskName 'weekly_p2_lens_refresh' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'weekly_p2_lens_refresh.task.xml')
-& $taskSecurityScript -TaskPath '\earnings-summary\weekly_p2_lens_refresh' -RenderedXmlPath (Join-Path $renderDir 'weekly_p2_lens_refresh.task.xml')
 $existing = Get-ScheduledTask -TaskName 'weekly_packet' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
 if ($existing) { Export-ScheduledTask -TaskName 'weekly_packet' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'weekly_packet.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'weekly_packet' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'weekly_packet.task.xml')
@@ -189,10 +185,6 @@ $existing = Get-ScheduledTask -TaskName 'weekly_score_stances' -TaskPath '\earni
 if ($existing) { Export-ScheduledTask -TaskName 'weekly_score_stances' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'weekly_score_stances.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'weekly_score_stances' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'weekly_score_stances.task.xml')
 & $taskSecurityScript -TaskPath '\earnings-summary\weekly_score_stances' -RenderedXmlPath (Join-Path $renderDir 'weekly_score_stances.task.xml')
-$existing = Get-ScheduledTask -TaskName 'weekly_synthesis' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
-if ($existing) { Export-ScheduledTask -TaskName 'weekly_synthesis' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'weekly_synthesis.task.xml') -Encoding Unicode }
-Register-ManifestTask -TaskName 'weekly_synthesis' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'weekly_synthesis.task.xml')
-& $taskSecurityScript -TaskPath '\earnings-summary\weekly_synthesis' -RenderedXmlPath (Join-Path $renderDir 'weekly_synthesis.task.xml')
 $existing = Get-ScheduledTask -TaskName 'weekly_validation' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
 if ($existing) { Export-ScheduledTask -TaskName 'weekly_validation' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'weekly_validation.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'weekly_validation' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'weekly_validation.task.xml')

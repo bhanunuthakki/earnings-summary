@@ -45,6 +45,26 @@ EXPECTED_DISABLED_TASKS = {
 }
 
 
+def test_retired_research_lens_batch_jobs_are_absent() -> None:
+    """On-demand lenses: neither retired scheduled batch may be declared or shipped."""
+    manifest = load_manifest(MANIFEST_PATH)
+    declared = {task.task_name for task in manifest.tasks}
+    assert r"\earnings-summary\weekly_synthesis" not in declared
+    assert r"\earnings-summary\weekly_p2_lens_refresh" not in declared
+    for name in (
+        "run_weekly_p2_lens_refresh.bat",
+        "run_weekly_synthesis.bat",
+        "weekly_p2_lens_refresh.task.xml",
+        "weekly_synthesis.task.xml",
+    ):
+        assert not (CRON_DIR / name).exists(), name
+    for relative in (
+        "execution/run_weekly_synthesis.py",
+        "execution/run_due_lenses.py",
+    ):
+        assert not (PROJECT_ROOT / relative).exists(), relative
+
+
 def test_manifest_rejects_duplicate_json_keys(tmp_path: Path) -> None:
     manifest_path = tmp_path / "task_manifest.json"
     manifest_path.write_text(
@@ -58,7 +78,7 @@ def test_manifest_rejects_duplicate_json_keys(tmp_path: Path) -> None:
 
 def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     manifest = load_manifest(MANIFEST_PATH)
-    assert len(manifest.tasks) == 44
+    assert len(manifest.tasks) == 42
     assert all(
         task.task_name != r"\earnings-summary\backfill_financial_fact_resolutions"
         for task in manifest.tasks

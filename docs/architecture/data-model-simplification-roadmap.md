@@ -1,5 +1,12 @@
 # Research platform: backend and ingestion retirement roadmap
 
+### Current local checkpoint: dedicated lens batches (October 24)
+
+The owner approved on-demand research lenses. Two dedicated batch runners and their schedule declarations are retired locally. Manual procedures and saved results remain. The 42 retained task specifications are unchanged. The existing Jobs projection continues to expose retired tasks as unexpected when host evidence still lists them. The scheduler runbook contains the separate deployment/rollback candidate. Source removal does not disable Windows tasks.
+
+The exact acceptance receipt is `.tmp/cleanup-open-model-execution/lens-batch-final-acceptance.json`. Architecture/release remains HOLD at 26 oversized modules against 25. Bounded managed-IR advice is NO_GO for a material existing-owner cut sufficient to close that gate. Do not split code to change the count. This checkpoint does not complete the data-plane roadmap or qualify ETF manual generation.
+
+
 Status: **Implementation in progress; bounded checkpoints accepted independently.**
 The owner authorized execution before the pending roadmap review on 2026-10-22.
 See the [implementation checkpoint](../quality/backend-streamlining-implementation-20261022.md)

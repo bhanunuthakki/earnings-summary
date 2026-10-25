@@ -497,17 +497,6 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "_run_stage runs only the fixed refresh and lens scripts via managed_python_argv; the standalone dashboard export stage is retired.",
-      "fingerprint": "f1a451950a69f34ef4f50c68205f7266eb39179cd256fa76556efe12b26679b3",
-      "line": 225,
-      "path": "execution/run_weekly_synthesis.py",
-      "targets": [
-        "execution/refresh_dirty_artifacts.py",
-        "execution/run_lens.py"
-      ]
-    },
-    {
-      "disposition": "internal_python_target",
       "evidence": "_run_ingest launches the existing fixed PROJECT_ROOT/execution/ingest_transcripts_state.py through managed_python_prefix, with explicit --db, --repo-root, ticker and exact receipt when present. Source content and state roots never choose executable code.",
       "fingerprint": "5d8a2e6e3c48f0ff2bb203aaaca079ff05930455592a05f8579eefd3be1eff53",
       "line": 280,
@@ -1050,9 +1039,9 @@
     "input_scope": "scanner-consumed-inputs/v1",
     "parser": {
       "name": "ast+xml+literal-scanner",
+      "version": "1.3.0",
       "python": ">=3.11",
-      "source_sha256": "9cd813c075f43c24d0188232e62d360f5292511332138ed898e9bbee25392a45",
-      "version": "1.3.0"
+      "source_sha256": "a0b798b41d4a1033ca1d87f234cf800cf742248b2ca13638da51cfb06e26493b"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c9ec98b1cbcdf93c9b890d9a8a8c59ef6109598f67b1739c38463d79d5986175",

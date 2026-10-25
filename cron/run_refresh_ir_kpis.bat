@@ -14,8 +14,8 @@ REM Resilience: the batch never aborts early — one ticker's failed/hung discov
 REM is logged and the next ticker still runs. Process exit code = count of failed
 REM tickers, so a non-zero log line flags partial failure for monitoring.
 REM
-REM Runs Sunday 01:00 so freshly-ingested IR KPIs precede the Sunday-night
-REM weekly_synthesis (23:00). Edit refresh_ir_kpis.task.xml to change the cadence
+REM Runs Sunday 01:00; cadence is unrelated to weekly synthesis.
+REM Edit refresh_ir_kpis.task.xml to change the cadence
 REM (e.g. monthly) — the script is cadence-agnostic and idempotent either way.
 REM
 REM PREREQUISITE: the optional `ir` extra (headless browser) must be installed in
