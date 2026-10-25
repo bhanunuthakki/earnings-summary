@@ -23,14 +23,21 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import sqlite3
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from etf_sources.ingest import PublishedDataResult, refresh_published_data  # noqa: E402
-from etf_sources.nport import NportParseError  # noqa: E402
+from db_paths import require_db_path
+from etf_sources.ingest import PublishedDataResult, refresh_published_data
+from etf_sources.nport import NportParseError
+from log_redact import redact
+from operations.paths import configured_product_state_root
+from runtime.secrets import load_project_env
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def print_result(result: PublishedDataResult) -> None:
@@ -55,6 +62,10 @@ def print_result(result: PublishedDataResult) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--ticker", required=True, help="ETF ticker (e.g. AVDV)")
+    ap.add_argument("--db", type=Path, help="Existing database in the product state root")
+    ap.add_argument(
+        "--repo-root", type=Path, help="Product state root; otherwise use configured authority"
+    )
     ap.add_argument(
         "--force",
         action="store_true",
@@ -72,21 +83,29 @@ def main() -> int:
         "402s on plan-gated symbols are tolerated)",
     )
     args = ap.parse_args()
+    load_project_env(PROJECT_ROOT)
     ticker = args.ticker.upper()
 
-    import db as portfolio_db
-
-    conn = portfolio_db.get_connection()
+    state_root = (
+        args.repo_root.expanduser().resolve()
+        if args.repo_root
+        else configured_product_state_root(PROJECT_ROOT)
+    )
+    database = require_db_path(args.db or state_root / "data" / "portfolio.db")
+    if database != (state_root / "data" / "portfolio.db").resolve():
+        raise ValueError("ETF database must match the product state root/data/portfolio.db")
+    conn = connect_sqlite(database, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     try:
         try:
             result = refresh_published_data(
                 conn,
                 ticker,
-                PROJECT_ROOT,
+                state_root,
                 force=args.force,
                 skip_prices=args.skip_prices,
             )
         except NportParseError as exc:
+            conn.rollback()
             # Schema drift: the directive needs updating, not a retry.
             print(f"[etf] {ticker} NPORT PARSE HALT: {exc}", flush=True)
             return 2
@@ -97,15 +116,19 @@ def main() -> int:
             from fetch_etf_data import ingest_live  # same-directory script import
 
             try:
-                profile, n = ingest_live(conn, ticker)
+                profile, n = ingest_live(conn, ticker, state_root)
                 conn.commit()
                 print(
                     f"[etf] {ticker} fmp_enrichment ok issuer={profile.issuer or '?'} "
                     f"holdings_rows={n}",
                     flush=True,
                 )
-            except (RuntimeError, OSError) as exc:
-                print(f"[etf] {ticker} fmp_enrichment unavailable: {exc}", flush=True)
+            except (RuntimeError, ValueError, OSError, sqlite3.Error) as exc:
+                conn.rollback()
+                print(f"[etf] {ticker} fmp_enrichment unavailable: {redact(exc)}", flush=True)
+    except BaseException:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

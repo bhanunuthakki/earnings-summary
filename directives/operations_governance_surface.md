@@ -41,6 +41,32 @@ on-demand implementation and financial-narrative verification. No live scheduler
 configuration was inspected or changed. A stale external invocation with the
 retired flag will fail explicitly rather than generate research.
 
+### ETF FMP capture prerequisite (2026-10-24)
+
+`execution/fetch_etf_data.py --ticker <ETF>` and
+`execution/fetch_etf_published_data.py --ticker <ETF> --fmp` require the configured
+product state root and existing database. For an explicit target, pass
+`--repo-root <product-state-root> --db <product-state-root>/data/portfolio.db`.
+The two paths must agree. The commands reject checkout-default database state.
+These arguments identify an authorized target; they do not grant collection
+permission. FMP remains opt-in on the published-data command.
+
+Live FMP success retains exact response entity bytes in immutable snapshots and
+saves retrieval links, profile and holdings as one database unit. Receive times
+remain separate for info and holdings. The live path no longer publishes the
+mutable ETF cache. Direct `--from-cache` reads saved files beneath the explicit
+state root and writes unverified profiles without current capture links.
+
+Validation, provider, filesystem or SQLite failures roll back FMP before an
+unavailable result. Already committed SEC/issuer/price results remain. Unexpected
+errors roll back and propagate. Equal bytes under conflicting legacy metadata
+fail closed; immutable residue after rollback is not a registered witness. See
+`etf_data.md` for field scope and recovery limits.
+
+This is a locally tested capture prerequisite. It does not deliver role-research
+Create/Refresh, verify a live positive witness, admit financial narrative, deploy
+code or authorize a new collection, action or schedule.
+
 ### Research backend consolidation (2026-10-22)
 
 Disposition: **existing operations consolidated; no new schedule or live action**.

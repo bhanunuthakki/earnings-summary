@@ -866,7 +866,7 @@ def test_fmp_get_does_not_leak_api_key_on_network_error(
 
     monkeypatch.setenv("FMP_API_KEY", secret)
     with pytest.raises(RuntimeError) as excinfo:
-        ingest_live(etf_db, "SOXX", fmp_dir=tmp_path)
+        ingest_live(etf_db, "SOXX", state_root=tmp_path)
 
     raised = excinfo.value
     # The secret must not appear anywhere reachable from the raised exception:

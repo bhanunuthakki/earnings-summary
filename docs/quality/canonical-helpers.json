@@ -7347,21 +7347,6 @@
     },
     {
       "canonical_extra": null,
-      "canonical_target": "canonical_json",
-      "disposition": "collapsed",
-      "end_line": 199,
-      "family": "json",
-      "file": "src/viewspec/latency_benchmark.py",
-      "line": 198,
-      "name": "canonical_json",
-      "referenced": {},
-      "retained_reason": null,
-      "scope": "module",
-      "source": "def canonical_json(value: object) -> str:\n    return json.dumps(value, ensure_ascii=False, separators=(\",\", \":\"), sort_keys=True)",
-      "unresolved": []
-    },
-    {
-      "canonical_extra": null,
       "canonical_target": null,
       "disposition": "retained",
       "end_line": 31,
@@ -7896,11 +7881,11 @@
   ],
   "summary": {
     "json": {
-      "collapsed": 50,
-      "mappable": 53,
-      "module": 54,
+      "collapsed": 49,
+      "mappable": 52,
+      "module": 53,
       "retained": 26,
-      "total": 76
+      "total": 75
     },
     "sha": {
       "collapsed": 66,
@@ -7938,5 +7923,26 @@
       "execution/fmp_backpop.py"
     ],
     "scope": "Refresh exactly two retained domain selector source captures for the reviewed current-user bulk scope; preserve historical bytes. No test or scanner change."
+  },
+  "latency_benchmark_retirement_reconciliation": {
+    "source_commit": "28681bf4c90990067229049015e1e1924620d545",
+    "scope": "Remove one active helper site from the already retired orphan benchmark module. Preserve the entire captured site here as history; every other active record remains exact. No test weakening.",
+    "retired_sites": [
+      {
+        "canonical_extra": null,
+        "canonical_target": "canonical_json",
+        "disposition": "collapsed",
+        "end_line": 199,
+        "family": "json",
+        "file": "src/viewspec/latency_benchmark.py",
+        "line": 198,
+        "name": "canonical_json",
+        "referenced": {},
+        "retained_reason": null,
+        "scope": "module",
+        "source": "def canonical_json(value: object) -> str:\n    return json.dumps(value, ensure_ascii=False, separators=(\",\", \":\"), sort_keys=True)",
+        "unresolved": []
+      }
+    ]
   }
 }

@@ -4690,5 +4690,23 @@
     "global_release": "HOLD26oversized>25; managed_ir_sources2495. Independent bounded advice NO_GO sufficient genuine cut. Fullcurrentbranchsuite notrun; older22282pass binds17cfdd5f only.",
     "authority": "No push/merge/deploy/live scheduler/collection/history deletion or production mutation",
     "storage": "Use existing proof/handoff owners. Retain source proof/reviews and current graph; regenerable prompt/HTML cleanup after final acceptance."
+  },
+  "etf_capture_prerequisite_20261024": {
+    "baseline": "0818e0e46fa62610b51239d7f0723757ae8a36ad",
+    "status": "Implemented locally; selected synthetic validation passed; final gate disposition owned by acceptance receipt",
+    "PRD_score": 88,
+    "implementation_score": 89,
+    "review_scope": "advisory local prerequisite only",
+    "adopted_PRD": ".tmp/cleanup-open-model-execution/etf-capture-repair-prd-adopted.json",
+    "review": ".tmp/cleanup-open-model-execution/etf-capture-sol-implementation-review.json",
+    "acceptance": ".tmp/cleanup-open-model-execution/etf-capture-final-acceptance.json",
+    "source_proof": ".tmp/cleanup-open-model-execution/etf-capture-source-proof.json",
+    "selected_tests": "241 passed in 8.79s, 13 files; independent 57 passed",
+    "retained": "SEC/issuer/price lane, pure ETF parser semantics, original source URLs/clocks, immutable history, existing evidence writers and unverified saved-cache API",
+    "changed": "Opt-in actual HTTP entity bytes/receive clocks, immutable snapshots, per-retrieval observations/links, five field source pointers, guarded caller transaction, explicit DB/root and approved environment loader",
+    "no_new": "schema, dependency, provider route, scheduler, collection permission, canonical fact admission, financial narrative or Create/Refresh claim",
+    "global_release": "HOLD existing26oversizedmodules>25; full serial result in acceptance",
+    "real_witness": "Approved read-only sample AVDV/AVUV/VDE had no usable current capture witness; no new collection authorized",
+    "retirement_credit": 0
   }
 }

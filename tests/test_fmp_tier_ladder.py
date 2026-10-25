@@ -60,7 +60,7 @@ write_work_receipt = cast(
 fmp_utc_now = cast("Callable[[], datetime]", getattr(sfd, "_utc_now"))
 cache_utc_now = cast("Callable[[], datetime]", getattr(rc, "_utc_now"))
 dispatch_one = cast("DispatchWork", getattr(rc, "_dispatch_one"))
-etf_fmp_get = cast("Callable[[str, str, str], object]", getattr(etf, "_fmp_get"))
+etf_fmp_get = cast("Callable[[str, str, str], HttpJsonResponse]", getattr(etf, "_fmp_get"))
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -409,12 +409,11 @@ def test_env_fmp_tier_free_enables_stable_only_at_import(
 
 
 # ---------------------------------------------------------------------------
-# fetch_etf_data — same gate on its stable->v3 ladder
+# fetch_etf_data — shared stable transport, capture retained, no legacy fallback
 # ---------------------------------------------------------------------------
 
 
-def test_etf_fmp_get_stable_only_skips_v3(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(etf, "_STABLE_ONLY", True)
+def test_etf_fmp_get_retains_shared_stable_response(monkeypatch: pytest.MonkeyPatch) -> None:
     requested: list[str] = []
 
     def fake_get(url: str, **_kwargs: object) -> HttpJsonResponse:
@@ -422,13 +421,13 @@ def test_etf_fmp_get_stable_only_skips_v3(monkeypatch: pytest.MonkeyPatch) -> No
         return HttpJsonResponse(status_code=200, payload=[{"ok": 1}])
 
     monkeypatch.setattr(etf.FMP_CLIENT, "get_url_json", fake_get)
-    etf_fmp_get("key", "SOXX", "etf/info")
-    assert requested == [f"{etf.FMP_BASE}/stable/etf/info/SOXX"]
+    response = etf_fmp_get("key", "SOXX", "etf/info")
+    assert response.payload == [{"ok": 1}]
+    assert requested == ["https://financialmodelingprep.com/stable/etf/info"]
     assert not any("/api/v3/" in url for url in requested)
 
 
-def test_etf_fmp_get_legacy_falls_back_to_v3(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(etf, "_STABLE_ONLY", False)
+def test_etf_fmp_get_failure_does_not_fall_back_to_v3(monkeypatch: pytest.MonkeyPatch) -> None:
     requested: list[str] = []
 
     def fake_get(url: str, **_kwargs: object) -> HttpJsonResponse:
@@ -443,8 +442,10 @@ def test_etf_fmp_get_legacy_falls_back_to_v3(monkeypatch: pytest.MonkeyPatch) ->
         return HttpJsonResponse(status_code=200, payload=[{"ok": 1}])
 
     monkeypatch.setattr(etf.FMP_CLIENT, "get_url_json", fake_get)
-    etf_fmp_get("key", "SOXX", "etf/info")
-    assert any("/api/v3/" in url for url in requested)
+    with pytest.raises(RuntimeError):
+        etf_fmp_get("key", "SOXX", "etf/info")
+    assert requested == ["https://financialmodelingprep.com/stable/etf/info"]
+    assert not any("/api/v3/" in url for url in requested)
 
 
 # ---------------------------------------------------------------------------

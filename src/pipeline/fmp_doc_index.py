@@ -28,13 +28,17 @@ import json
 import re
 import sqlite3
 import sys
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
+from uuid import UUID
 
 from compute.evidence_snapshot import capture_snapshot
-from net.client import HTTP_CLIENT, HttpCallError, JsonShape
+from net.client import HTTP_CLIENT, HttpCallError, HttpResponseCapture, JsonShape
 from provenance.evidence_backfill import ensure_legacy_document_evidence
+from provenance.evidence_ledger import EvidenceLedger, SourceObservation
+from provenance.evidence_links import DocumentObservationLink, EvidenceLinkLedger
 from provenance.immutable_artifact import publish_bytes_no_clobber
 
 _PERIOD_SUFFIXES = ("annual", "quarterly", "ttm")
@@ -435,6 +439,7 @@ def register_fmp_snapshot(
     project_root: Path,
     captured_at: datetime,
     period_end: datetime | None,
+    source_url: str | None = None,
 ) -> tuple[int, bool]:
     """Register exact retained bytes and evidence inside the caller's transaction.
 
@@ -467,8 +472,17 @@ def register_fmp_snapshot(
         cursor = conn.execute(
             "INSERT INTO documents "
             "(ticker,source_type,doc_type,period_end,file_path,sha256,fetched_at,"
-            "fetch_status,raw_bytes_size,source_url) VALUES (?,'fmp',?,?,?,?,?,'ok',?,NULL)",
-            (upper, doc_type, period_end, relative.as_posix(), digest, captured_at, len(content)),
+            "fetch_status,raw_bytes_size,source_url) VALUES (?,'fmp',?,?,?,?,?,'ok',?,?)",
+            (
+                upper,
+                doc_type,
+                period_end,
+                relative.as_posix(),
+                digest,
+                captured_at,
+                len(content),
+                source_url,
+            ),
         )
         if cursor.lastrowid is None:
             raise RuntimeError("FMP document registration returned no identity")
@@ -488,6 +502,163 @@ def register_fmp_snapshot(
     ):
         ensure_legacy_document_evidence(conn, repo_root=project_root, document_id=document_id)
     return document_id, created
+
+
+_ETF_CAPTURE_CONFIG_SHA256 = hashlib.sha256(b"etf-fmp-http-capture.v1").hexdigest()
+_ETF_CAPTURE_COLLECTOR_VERSION = "etf-fmp-http-capture.v1"
+_ETF_CAPTURE_ENDPOINTS = {
+    "etf_info": "https://financialmodelingprep.com/stable/etf/info",
+    "etf_holdings": "https://financialmodelingprep.com/stable/etf/holdings",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class EtfCaptureReceipt:
+    document_id: int
+    document_version_id: str
+    observation_id: str
+    content_sha256: str
+    source_url: str
+    captured_at: datetime
+
+
+def _etf_capture_endpoint(ticker: str, source_filename: str) -> tuple[str, str]:
+    upper = ticker.upper()
+    match = re.fullmatch(r"([A-Z0-9.\-]+)_(etf_info|etf_holdings)\.json", source_filename)
+    if match is None or match.group(1) != upper:
+        raise ValueError("ETF capture filename does not match its ticker")
+    endpoint = _ETF_CAPTURE_ENDPOINTS[match.group(2)]
+    return endpoint, f"{endpoint}?symbol={upper}"
+
+
+def _is_nonfuture_utc(value: datetime) -> bool:
+    if value.tzinfo is None or value.utcoffset() is None:
+        return False
+    return value.astimezone(UTC) <= datetime.now(UTC)
+
+
+def bind_etf_capture(
+    conn: sqlite3.Connection,
+    *,
+    document_id: int,
+    ticker: str,
+    source_filename: str,
+    capture: HttpResponseCapture,
+) -> EtfCaptureReceipt:
+    """Bind a validated ETF HTTP capture to its registered document and evidence."""
+    if not conn.in_transaction:
+        raise RuntimeError("ETF capture binding requires a caller-owned transaction")
+    upper = ticker.upper()
+    if not upper:
+        raise ValueError("ETF capture ticker is invalid")
+    endpoint, expected_url = _etf_capture_endpoint(upper, source_filename)
+    try:
+        capture_uuid = UUID(str(capture.capture_id))
+    except (AttributeError, TypeError, ValueError):
+        raise ValueError("ETF capture id is not a valid UUID") from None
+    if str(capture_uuid) != str(capture.capture_id).lower():
+        raise ValueError("ETF capture id is not a canonical UUID")
+    if not _is_nonfuture_utc(capture.received_at):
+        raise ValueError("ETF capture time must be a non-future aware UTC datetime")
+    if (
+        capture.origin != "https://financialmodelingprep.com"
+        or capture.path != endpoint.removeprefix("https://financialmodelingprep.com")
+    ):
+        raise ValueError("ETF capture endpoint does not match the accepted filename")
+    digest = hashlib.sha256(capture.body).hexdigest()
+    size = len(capture.body)
+    captured_at = capture.received_at.astimezone(UTC)
+
+    document = conn.execute(
+        "SELECT ticker,source_type,doc_type,sha256,raw_bytes_size FROM documents WHERE id=?",
+        (document_id,),
+    ).fetchone()
+    if document is None or tuple(document) != (upper, "fmp", "fmp_other", digest, size):
+        raise ValueError("ETF capture does not match registered document identity or bytes")
+    blob = conn.execute(
+        "SELECT sha256,byte_size FROM evidence_content_blobs WHERE sha256=?", (digest,)
+    ).fetchone()
+    if blob is None or tuple(blob) != (digest, size):
+        raise ValueError("ETF capture blob is not registered with matching size")
+
+    legacy_version_id = f"legacy-doc-{document_id}"
+    version = conn.execute(
+        "SELECT ticker,document_type,blob_sha256,legacy_document_id "
+        "FROM evidence_document_versions WHERE document_version_id=?",
+        (legacy_version_id,),
+    ).fetchone()
+    if version is None or tuple(version) != (upper, "fmp_other", digest, document_id):
+        raise ValueError("ETF capture legacy document version does not match")
+    binding = conn.execute(
+        "SELECT binding_revision_id,document_version_id,evidence_node_id,scope_content_sha256 "
+        "FROM legacy_document_evidence_binding_revisions "
+        "WHERE legacy_document_id=? ORDER BY revision DESC LIMIT 1",
+        (document_id,),
+    ).fetchone()
+    if binding is None or (str(binding[1]) != legacy_version_id or str(binding[3]) != digest):
+        raise ValueError("ETF capture current legacy binding does not match")
+    root_node_id = str(binding[2])
+    root = conn.execute(
+        "SELECT node.node_id,node.node_kind,node.parent_node_id,run.document_version_id,"
+        "run.input_sha256,run.outcome,run.completed_at FROM evidence_nodes node "
+        "JOIN evidence_extraction_runs run ON run.extraction_run_id=node.extraction_run_id "
+        "WHERE node.node_id=?",
+        (root_node_id,),
+    ).fetchone()
+    if root is None or (
+        str(root[0]) != root_node_id
+        or root[1] != "document"
+        or root[2] is not None
+        or str(root[3]) != legacy_version_id
+        or str(root[4]) != digest
+        or root[5] != "succeeded"
+        or root[6] is None
+    ):
+        raise ValueError("ETF capture root evidence node does not match successful extraction")
+    source = conn.execute(
+        "SELECT obs.source_kind,obs.blob_sha256 FROM evidence_source_observations obs "
+        "JOIN evidence_document_versions version ON version.observation_id=obs.observation_id "
+        "WHERE version.document_version_id=?",
+        (legacy_version_id,),
+    ).fetchone()
+    if source is None or tuple(source) != ("fmp", digest):
+        raise ValueError("ETF capture primary source observation does not match")
+
+    observation_id = f"etf-fmp-http:{capture_uuid}"
+    link_id = f"etf-fmp-http-link:{capture_uuid}"
+    observation = SourceObservation(
+        observation_id=observation_id,
+        idempotency_key=observation_id,
+        source_kind="fmp",
+        source_url=expected_url,
+        blob_sha256=digest,
+        source_published_at=None,
+        filing_at=None,
+        accepted_at=None,
+        observed_at=captured_at,
+        retrieved_at=captured_at,
+        retrieval_config_sha256=_ETF_CAPTURE_CONFIG_SHA256,
+        collector_code_version=_ETF_CAPTURE_COLLECTOR_VERSION,
+    )
+    ledger = EvidenceLedger(conn)
+    ledger.persist(observation)
+    EvidenceLinkLedger(conn).persist_link(
+        DocumentObservationLink(
+            link_id=link_id,
+            document_version_id=legacy_version_id,
+            observation_id=observation_id,
+            link_kind="retrieval",
+            linked_at=captured_at,
+        )
+    )
+    return EtfCaptureReceipt(
+        document_id=document_id,
+        document_version_id=legacy_version_id,
+        observation_id=observation_id,
+        content_sha256=digest,
+        source_url=expected_url,
+        captured_at=captured_at,
+    )
 
 
 def index_fmp_files_for_ticker(

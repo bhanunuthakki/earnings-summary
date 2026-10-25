@@ -1,14 +1,20 @@
 """Fetch FMP ETF profile + holdings for a single ETF ticker.
 
-Two ingest modes:
-    --live (default) — HTTP call to FMP /stable/etf/info and
-                       /stable/etf/holdings, writes responses to
-                       data/historical/fmp/<TICKER>_etf_{info,holdings}.json,
-                       upserts to etf_profile / etf_holdings.
+Ingest modes:
+    ingest_live  — HTTP call to FMP /stable/etf/info and /stable/etf/holdings
+                   via the shared client with capture enabled, then registers
+                   each exact response body as an immutable FMP snapshot and
+                   binds the resulting captures to the ETF document within a
+                   caller-owned transaction. The live path never publishes a
+                   mutable cache file or a new manifest: its only durable
+                   output is the immutable snapshot plus the DB rows it
+                   writes (left uncommitted for the caller to commit).
 
-    --from-cache    — skip HTTP, read the cached JSON files in
-                       data/historical/fmp/ written by a prior --live run
-                       (or seeded manually). Same DB writes.
+    --from-cache — skip HTTP, read the saved JSON files in
+                   data/historical/fmp/ (written by a prior --live run under
+                   the previous contract, or seeded manually). These saved
+                   files are unverified cache: field_evidence is always empty
+                   for cache ingests. Same DB writes.
 
 Usage:
     python execution/fetch_etf_data.py --ticker SOXX
@@ -26,22 +32,58 @@ import argparse
 import json
 import math
 import os
+import re
 import sqlite3
 import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
+from uuid import UUID
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from etf_sources.profile_evidence import capture_profile_fields
-from instrument_store import upsert_etf_holdings, upsert_etf_profile
+from db_paths import require_db_path
+from etf_sources.profile_evidence import (
+    bind_fmp_profile_fields,
+    capture_profile_fields,
+)
+from etf_sources.profile_evidence import (
+    fmp_float_value as _float,
+)
+from etf_sources.profile_evidence import (
+    fmp_percent_decimal as _pct_to_decimal,
+)
+from etf_sources.profile_evidence import (
+    fmp_text_value as _str,
+)
+from instrument_store import (
+    upsert_etf_holdings,
+    upsert_etf_profile,
+)
 from models.instruments import EtfHolding, EtfProfile
-from net.client import FMP_CLIENT, HttpCallError, JsonShape
+from net.client import (
+    FMP_CLIENT,
+    HttpCallError,
+    HttpJsonResponse,
+    HttpResponseCapture,
+    JsonShape,
+    JsonValue,
+)
+from operations.paths import configured_product_state_root
+from pipeline.fmp_doc_index import bind_etf_capture, register_fmp_snapshot
+from runtime.secrets import load_project_env
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 FMP_DIR = PROJECT_ROOT / "data" / "historical" / "fmp"
+
+_FMP_ETF_INFO_PATH = "etf/info"
+_FMP_ETF_HOLDINGS_PATH = "etf/holdings"
+_FMP_ORIGIN = "https://financialmodelingprep.com"
+_TICKER_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,15}$")
+_PROVIDER_ERROR_KEYS = ("error", "Error Message", "message")
+_FUND_ID_KEYS = ("etfSymbol", "fundSymbol")
 
 
 # ---------------------------------------------------------------------------
@@ -147,14 +189,12 @@ def ingest_from_payloads(
     holdings_payload: object,
     as_of_date: date | None = None,
     fetched_at: datetime | None = None,
-    profile_capture_verified: bool = False,
 ) -> tuple[EtfProfile, int]:
     """Persist parsed payloads to the DB. Returns (profile, num_holdings)."""
     ts = fetched_at or datetime.now(UTC)
     resolved_date = as_of_date or ts.date()
     profile = parse_etf_info(info_payload, ticker, ts)
-    if not profile_capture_verified:
-        profile = profile.model_copy(update={"field_evidence": {}})
+    profile = profile.model_copy(update={"field_evidence": {}})
     holdings = parse_etf_holdings(holdings_payload, ticker, resolved_date, ts)
     upsert_etf_profile(conn, profile)
     upsert_etf_holdings(conn, ticker, resolved_date, holdings)
@@ -190,46 +230,185 @@ def ingest_from_cache(
         holdings_payload=holdings_payload,
         as_of_date=as_of_date,
         fetched_at=file_mtime,
-        profile_capture_verified=False,
     )
 
 
 def ingest_live(
-    conn: sqlite3.Connection,
-    ticker: str,
-    fmp_dir: Path = FMP_DIR,
-    *,
-    as_of_date: date | None = None,
+    conn: sqlite3.Connection, ticker: str, state_root: Path, *, as_of_date: date | None = None
 ) -> tuple[EtfProfile, int]:
-    """Hit FMP, write JSON to `fmp_dir`, ingest. Requires FMP_API_KEY in env."""
+    if not state_root.is_absolute():
+        raise RuntimeError(f"state_root must be absolute: {state_root!r}")
+    normalized = ticker.strip().upper()
+    if not re.fullmatch(r"[A-Z0-9][A-Z0-9.\-]{0,15}", normalized):
+        raise ValueError(f"invalid ticker: {ticker!r}")
     api_key = os.environ.get("FMP_API_KEY")
     if not api_key:
-        raise RuntimeError(
-            "FMP_API_KEY not set. Use --from-cache mode with pre-seeded JSON, "
-            "or set FMP_API_KEY in .env."
-        )
-    info_payload = _fmp_get(api_key, ticker, "etf/info")
-    holdings_payload = _fmp_get(api_key, ticker, "etf/holdings")
-
-    fmp_dir.mkdir(parents=True, exist_ok=True)
-    with open(fmp_dir / f"{ticker.upper()}_etf_info.json", "w", encoding="utf-8") as f:
-        json.dump(info_payload, f, indent=2)
-    with open(fmp_dir / f"{ticker.upper()}_etf_holdings.json", "w", encoding="utf-8") as f:
-        json.dump(holdings_payload, f, indent=2)
-
-    return ingest_from_payloads(
-        conn,
-        ticker,
-        info_payload=info_payload,
-        holdings_payload=holdings_payload,
-        as_of_date=as_of_date,
-        fetched_at=datetime.now(UTC),
-        profile_capture_verified=True,
+        raise RuntimeError("FMP_API_KEY environment variable is not set")
+    response_info = _fmp_get(api_key, normalized, "etf/info")
+    response_holdings = _fmp_get(api_key, normalized, "etf/holdings")
+    capture_info, payload_info = _validated_capture(response_info, normalized, "etf/info")
+    capture_holdings, payload_holdings = _validated_capture(
+        response_holdings, normalized, "etf/holdings"
     )
+    profile_clock = capture_info.received_at
+    profile = parse_etf_info(payload_info, normalized, profile_clock)
+    holdings_clock = capture_holdings.received_at
+    resolved_date = as_of_date if as_of_date is not None else capture_holdings.received_at.date()
+    holdings = parse_etf_holdings(payload_holdings, normalized, resolved_date, holdings_clock)
+    filename_info = f"{normalized}_etf_info.json"
+    filename_holdings = f"{normalized}_etf_holdings.json"
+    source_url_info = f"https://financialmodelingprep.com/stable/etf/info?symbol={normalized}"
+    source_url_holdings = (
+        f"https://financialmodelingprep.com/stable/etf/holdings?symbol={normalized}"
+    )
+    started = not conn.in_transaction
+    if started:
+        conn.execute("BEGIN")
+    savepoint_open = False
+    try:
+        conn.execute("SAVEPOINT etf_fmp_capture")
+        savepoint_open = True
+        document_info, _ = register_fmp_snapshot(
+            conn,
+            ticker=normalized,
+            source_filename=filename_info,
+            content=capture_info.body,
+            project_root=state_root,
+            captured_at=capture_info.received_at,
+            period_end=None,
+            source_url=source_url_info,
+        )
+        document_holdings, _ = register_fmp_snapshot(
+            conn,
+            ticker=normalized,
+            source_filename=filename_holdings,
+            content=capture_holdings.body,
+            project_root=state_root,
+            captured_at=capture_holdings.received_at,
+            period_end=None,
+            source_url=source_url_holdings,
+        )
+        receipt_info = bind_etf_capture(
+            conn,
+            document_id=document_info,
+            ticker=normalized,
+            source_filename=filename_info,
+            capture=capture_info,
+        )
+        bind_etf_capture(
+            conn,
+            document_id=document_holdings,
+            ticker=normalized,
+            source_filename=filename_holdings,
+            capture=capture_holdings,
+        )
+        profile = bind_fmp_profile_fields(profile, receipt_info, payload_info)
+        upsert_etf_profile(conn, profile)
+        upsert_etf_holdings(conn, normalized, resolved_date, holdings)
+        conn.execute("RELEASE SAVEPOINT etf_fmp_capture")
+        return profile, len(holdings)
+    except BaseException:
+        try:
+            if savepoint_open:
+                conn.execute("ROLLBACK TO SAVEPOINT etf_fmp_capture")
+                conn.execute("RELEASE SAVEPOINT etf_fmp_capture")
+        finally:
+            if started:
+                conn.rollback()
+        raise
 
 
-def _fmp_get(api_key: str, ticker: str, path: str) -> object:
-    """Fetch a FMP endpoint via the shared client; return the JSON payload.
+def _same_json(left: object, right: object) -> bool:
+    """Compare JSON values without treating booleans or integers as floats."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict) and isinstance(right, dict):
+        lhs = cast("dict[str, object]", left)
+        rhs = cast("dict[str, object]", right)
+        return lhs.keys() == rhs.keys() and all(
+            _same_json(value, rhs[key]) for key, value in lhs.items()
+        )
+    if isinstance(left, list) and isinstance(right, list):
+        lhs_list = cast("list[object]", left)
+        rhs_list = cast("list[object]", right)
+        return len(lhs_list) == len(rhs_list) and all(
+            _same_json(a, b) for a, b in zip(lhs_list, rhs_list, strict=True)
+        )
+    if isinstance(left, float) and not math.isfinite(left):
+        return False
+    return left is None or (isinstance(left, (str, int, float, bool)) and left == right)
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("ETF response contains duplicate JSON keys")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(_value: str) -> None:
+    raise ValueError("ETF response contains a nonstandard JSON constant")
+
+
+def _validated_capture(
+    response: HttpJsonResponse, ticker: str, path: str
+) -> tuple[HttpResponseCapture, JsonValue]:
+    capture = response.capture
+    if not 200 <= response.status_code < 300 or capture is None:
+        raise ValueError("ETF response has no successful HTTP capture")
+    if capture.received_at.utcoffset() is None or capture.received_at > datetime.now(UTC):
+        raise ValueError("ETF capture requires a non-future aware timestamp")
+    try:
+        UUID(capture.capture_id)
+    except ValueError:
+        raise ValueError("ETF capture identity is invalid") from None
+    if capture.origin != "https://financialmodelingprep.com" or capture.path != f"/stable/{path}":
+        raise ValueError("ETF capture final endpoint does not match the request")
+    try:
+        decoded: object = json.loads(
+            capture.body,
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (ValueError, UnicodeError):
+        raise ValueError("ETF response is not strict JSON") from None
+    if not _same_json(decoded, response.payload):
+        raise ValueError("ETF capture does not match its parsed payload")
+    if path == "etf/info":
+        record: object = decoded
+        if isinstance(decoded, list):
+            rows = cast("list[object]", decoded)
+            record = rows[0] if len(rows) == 1 else None
+        if not isinstance(record, dict):
+            raise ValueError("ETF info must contain exactly one object")
+        info = cast("dict[str, object]", record)
+        symbol = info.get("symbol")
+        if (
+            not isinstance(symbol, str)
+            or symbol.strip().upper() != ticker
+            or any(key in info for key in ("error", "Error Message", "message"))
+        ):
+            raise ValueError("ETF info identity is missing or does not match")
+    else:
+        if not isinstance(decoded, list):
+            raise ValueError("ETF holdings must be an array of objects")
+        for row in cast("list[object]", decoded):
+            if not isinstance(row, dict):
+                raise ValueError("ETF holdings must be an array of objects")
+            holding = cast("dict[str, object]", row)
+            for key in ("etfSymbol", "fundSymbol"):
+                if key in holding:
+                    fund = holding[key]
+                    if not isinstance(fund, str) or fund.strip().upper() != ticker:
+                        raise ValueError("ETF holdings fund identity does not match")
+    # Equality proves that this decoded value has the shared JSON type grammar.
+    return capture, response.payload
+
+
+def _fmp_get(api_key: str, ticker: str, path: str) -> HttpJsonResponse:
+    """Fetch a FMP endpoint via the shared client; return the complete response.
 
     The shared client strips query strings and redacts transport exceptions,
     so the runtime error raised here never carries the raw URL or API key.
@@ -241,22 +420,16 @@ def _fmp_get(api_key: str, ticker: str, path: str) -> object:
             api_key=api_key,
             expected=JsonShape.ANY,
             timeout=(10, 60),
+            retain_capture=True,
         )
     except HttpCallError as exc:
         raise RuntimeError(f"FMP fetch failed for {ticker} {path}: {exc}") from None
-    return response.payload
+    return response
 
 
 # ---------------------------------------------------------------------------
 # Coercion helpers
 # ---------------------------------------------------------------------------
-
-
-def _str(v: object) -> str | None:
-    if v is None:
-        return None
-    s = str(v).strip()
-    return s or None
 
 
 def _first_valid_float(*values: float | None) -> float | None:
@@ -267,20 +440,6 @@ def _first_valid_float(*values: float | None) -> float | None:
     return None
 
 
-def _float(v: object) -> float | None:
-    if v is None or isinstance(v, bool):
-        return None
-    if not isinstance(v, (str, int, float)):
-        return None
-    if isinstance(v, str) and not v.strip():
-        return None
-    try:
-        f = float(v)
-    except (TypeError, ValueError, OverflowError):
-        return None
-    return f if math.isfinite(f) else None
-
-
 def _iso_date(v: object) -> date | None:
     s = _str(v)
     if not s:
@@ -289,22 +448,6 @@ def _iso_date(v: object) -> date | None:
         return date.fromisoformat(s[:10])
     except ValueError:
         return None
-
-
-def _pct_to_decimal(v: object) -> float | None:
-    """Coerce '7.42', 7.42, or '7.42%' to 0.0742.
-
-    FMP returns weights, expense ratios, yields, and premium/discount in
-    *percent units* (e.g. `weightPercentage: 9.42` means 9.42%, not 9.42).
-    We always divide by 100 to produce a canonical decimal in [0, 1ish].
-
-    Trailing '%' is tolerated for the string-shaped inputs FMP occasionally
-    returns for descriptive fields.
-    """
-    f = _float(v) if not (isinstance(v, str) and v.endswith("%")) else _float(v[:-1].strip())
-    if f is None:
-        return None
-    return f / 100.0
 
 
 def _aum_to_millions(v: object) -> float | None:
@@ -338,6 +481,10 @@ def _first_record(payload: object) -> object:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--ticker", required=True)
+    ap.add_argument("--db", type=Path, help="Existing database in the product state root")
+    ap.add_argument(
+        "--repo-root", type=Path, help="Product state root; otherwise use configured authority"
+    )
     ap.add_argument(
         "--from-cache",
         action="store_true",
@@ -350,17 +497,28 @@ def main() -> int:
         help="as_of_date for holdings rows (default: today)",
     )
     args = ap.parse_args()
+    load_project_env(PROJECT_ROOT)
 
-    # Connect via the canonical helper so module-level init runs first.
-    import db as portfolio_db
-
-    conn = portfolio_db.get_connection()
+    state_root = (
+        args.repo_root.expanduser().resolve()
+        if args.repo_root
+        else configured_product_state_root(PROJECT_ROOT)
+    )
+    database = require_db_path(args.db or state_root / "data" / "portfolio.db")
+    if database != (state_root / "data" / "portfolio.db").resolve():
+        raise ValueError("ETF database must match the product state root/data/portfolio.db")
+    conn = connect_sqlite(database, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     try:
         if args.from_cache:
-            profile, n = ingest_from_cache(conn, args.ticker, as_of_date=args.as_of)
+            profile, n = ingest_from_cache(
+                conn, args.ticker, state_root / "data/historical/fmp", as_of_date=args.as_of
+            )
         else:
-            profile, n = ingest_live(conn, args.ticker, as_of_date=args.as_of)
+            profile, n = ingest_live(conn, args.ticker, state_root, as_of_date=args.as_of)
         conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

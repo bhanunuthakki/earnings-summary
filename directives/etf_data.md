@@ -53,6 +53,19 @@ the evaluation lane depends on them.
   invented. An issuer overlay updates receipts only for fields it actually
   publishes and does not renew `profile_fetched_at` for the original profile.
   Holdings dates must not be assigned to separately fetched profile fields.
+- Live FMP enrichment retains the exact decompressed JSON response bytes through
+  `register_fmp_snapshot`. It no longer updates the mutable
+  `<TICKER>_etf_{info,holdings}.json` cache. Each received response has its own
+  capture UUID and aware receive time. Equal bytes reuse the document/version
+  and add a retrieval observation; exact replay preserves its original clocks.
+  Existing source URLs and first-observation times do not change.
+- FMP field receipts also require a complete document ID, native document version,
+  retrieval observation, SHA256, credential-free source URL, JSON pointer and
+  parser version. Pointers identify raw values before normalization. Only the
+  five existing label fields receive these links. Saved-cache and arbitrary
+  payload ingestion remain available but cannot create verified capture links.
+  Issuer receipt policy is unchanged. Capture linkage does not establish
+  canonical financial-fact admission, current fund facts or archive completeness.
 - Label acquisition admission uses `etf_weekly_capture.v1`: at most seven days
   since a verified capture, derived from the weekly refresh cadence below.
   This means **recently captured**, not proof that underlying issuer facts are
@@ -96,6 +109,21 @@ the evaluation lane depends on them.
 
 ## Failure modes
 
+- Live FMP info requires one object with the requested symbol. Holdings require
+  an array of objects; constituent symbols are not fund identities. Duplicate
+  JSON keys, nonfinite numbers, body/payload mismatch, invalid capture clocks,
+  missing captures or a different final endpoint halt before database writes.
+- The optional FMP unit saves both snapshots, source observations, links, profile
+  and holdings in one caller-owned transaction. Its local savepoint preserves
+  unrelated pending writes. The caller commits only a complete unit. The
+  published-data CLI commits SEC/issuer/price results before optional FMP, and
+  rolls back failed enrichment before reporting it unavailable.
+- The legacy document table uses global SHA256 identity. Equal bytes registered
+  under another ticker or document type cause an explicit optional FMP failure;
+  a shared empty holdings body can hit this limit. No identity is silently
+  changed. Immutable files installed before a database rollback can remain as
+  content-addressed residue. They are not registered capture proof and cannot
+  supply a recovered receive clock. Existing files are never overwritten.
 - **N-PORT schema drift** (fetched but unparseable): `NportParseError` —
   HALT, raw XML dumped to `.tmp/etf_nport/<T>_<accession>.xml`. Fix the
   parser/directive; never guess-fix in the agent loop.

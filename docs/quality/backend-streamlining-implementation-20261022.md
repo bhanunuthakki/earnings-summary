@@ -977,3 +977,16 @@ Independent Sol PRD review scored 92. The selected serial suite passed 298 tests
 Final independent implementation review, graph, exact line counts and checks are owned by `.tmp/cleanup-open-model-execution/lens-batch-final-acceptance.json`. The scheduler runbook prepares separate exact-version approval. Disable the two tasks before source deployment; rollback requires predecessor code `5215bcd30e595a58869faf04690260274c91eae4` plus exported task definitions and enabled states. No live step occurred.
 
 The architecture/release gate remains HOLD at 26 oversized modules against 25. A bounded independent managed-IR review found no supported material cut below 2,000 lines; it recommends no broad rewrite. Full current-branch testing remains pending. The older 22,282-test pass binds `17cfdd5f`, not this source. No push, merge, deployment, source collection or production mutation occurred.
+
+
+## ETF capture prerequisite
+
+The bounded read-only canonical-host check inspected AVDV, AVUV and VDE. It found no usable current ETF capture witness in that sample. It did not establish absence across all ETFs or archives. Generic profile bytes and saved row timestamps do not qualify a current ETF source. The check is complete; it did not collect or generate new data.
+
+The local prerequisite now retains actual HTTP entity bytes and separate receive times through the existing FMP snapshot and evidence owners. Each new receive event adds a retrieval observation; equal bytes retain the original document/version and first-observation clocks. Five existing label fields receive complete document/version/observation links and raw JSON pointers. The live path stops publishing mutable ETF cache files. Saved cache/payload ingestion remains available and unverified. No schema, provider route or new acquisition framework was added.
+
+Both operational CLIs bind the existing database to the explicit/configured state root and keep the approved environment loader. The optional FMP unit uses a local savepoint without committing caller work. Failure preserves prior ETF state and the already committed published-data lane. Global legacy hash conflicts fail closed. Immutable files installed before a database rollback can remain as unregistered content-addressed residue; they cannot create a fresh capture clock.
+
+The original plan scored 77/HOLD. Root adopted the complete corrected scope, scored 88 by independent Sol. The implementation scored 89 with no material blockers for this prerequisite. The final 13-file owning suite passed 241 tests; the independent subset passed 57. Six pure parser functions and three rehomed coercions match the predecessor AST. Existing evidence, store and published-data owners remain byte-equal. Final exact source bindings, full serial suite result, dependency closure and checks are owned by `.tmp/cleanup-open-model-execution/etf-capture-final-acceptance.json`.
+
+This change adds capture evidence; it claims no deletion credit. The existing architecture gate remains HOLD at 26 oversized modules against 25. It does not qualify a live positive witness, current fund facts, archive completeness, financial narrative, manual ETF Create/Refresh or release. No push, merge, deployment, live scheduler change, collection, financial generation or production write occurred.

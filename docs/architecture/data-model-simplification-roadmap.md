@@ -1,5 +1,11 @@
 # Research platform: backend and ingestion retirement roadmap
 
+### Current local checkpoint: ETF capture prerequisite (October 24)
+
+The local optional FMP path now retains actual response bytes and separate receive clocks through the existing immutable snapshot and evidence owners. It binds five existing label fields to their source locations, removes mutable live cache publication, and rolls back the complete optional unit without committing caller work. Saved caches remain readable and unverified. The six pure parser functions and three shared coercions retain their behavior. Both CLIs require an existing database bound to the explicit/configured state root.
+
+Independent Sol scored the adopted corrected PRD 88 and implementation 89, with no material blockers in this scope. The 13-file owning suite passed 241 tests. Final source and gate evidence is owned by `.tmp/cleanup-open-model-execution/etf-capture-final-acceptance.json`. The architecture/release HOLD remains. No deletion credit is claimed for this prerequisite. The approved read-only AVDV/AVUV/VDE check found no current usable capture witness in that sample. New collection, live qualification, financial narrative and manual ETF Create/Refresh remain open and unauthorized here.
+
 ### Current local checkpoint: dedicated lens batches (October 24)
 
 The owner approved on-demand research lenses. Two dedicated batch runners and their schedule declarations are retired locally. Manual procedures and saved results remain. The 42 retained task specifications are unchanged. The existing Jobs projection continues to expose retired tasks as unexpected when host evidence still lists them. The scheduler runbook contains the separate deployment/rollback candidate. Source removal does not disable Windows tasks.

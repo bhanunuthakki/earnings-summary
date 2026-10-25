@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -13,9 +16,54 @@ from etf_sources.ingest import apply_characteristics
 from etf_sources.issuer_registry import IssuerCharacteristics
 from execution.fetch_etf_data import ingest_live, parse_etf_holdings, parse_etf_info
 from instrument_store import get_etf_profile, upsert_etf_profile
-from net.client import FMP_CLIENT, HttpCallError, HttpErrorKind, HttpJsonResponse, JsonShape
+from models.instruments import EtfProfile
+from net.client import (
+    FMP_CLIENT,
+    HttpCallError,
+    HttpErrorKind,
+    HttpJsonResponse,
+    HttpResponseCapture,
+    JsonShape,
+    JsonValue,
+)
 from pipeline.work_os_evaluation import build_etf_profile_inputs
 from research.investment_profile import EtfProfileInputs, derive_etf_label_evidence
+
+
+def _captured_response(payload: JsonValue, url: str) -> HttpJsonResponse:
+    return HttpJsonResponse(
+        200,
+        payload,
+        HttpResponseCapture(
+            body=json.dumps(payload).encode(),
+            received_at=datetime.now(UTC),
+            capture_id=str(uuid4()),
+            origin="https://financialmodelingprep.com",
+            path=url.removeprefix("https://financialmodelingprep.com"),
+        ),
+    )
+
+
+def _policy_link(profile: EtfProfile) -> EtfProfile:
+    """Synthetic complete links isolate the existing age/value policy assertions."""
+    return profile.model_copy(
+        update={
+            "field_evidence": {
+                key: evidence.model_copy(
+                    update={
+                        "document_id": 1,
+                        "document_version_id": "synthetic-document",
+                        "observation_id": "synthetic-observation",
+                        "content_sha256": hashlib.sha256(b"synthetic").hexdigest(),
+                        "source_url": "https://financialmodelingprep.com/stable/etf/info?symbol=VDE",
+                        "json_pointer": "/sector",
+                        "parser_version": "synthetic-policy-test.v1",
+                    }
+                )
+                for key, evidence in profile.field_evidence.items()
+            }
+        }
+    )
 
 
 def _inputs(conn: sqlite3.Connection) -> EtfProfileInputs:
@@ -58,13 +106,21 @@ def test_partial_overlay_does_not_renew_old_profile_fields(
 
 
 def test_fresh_capture_roundtrip_labels_disclose_unknown_publication(
-    tmp_path: Path, migrated_db: Callable[..., Path]
+    tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with sqlite3.connect(migrated_db(tmp_path / "test.db")) as conn:
         conn.row_factory = sqlite3.Row
-        upsert_etf_profile(
-            conn, parse_etf_info({"sector": "Energy", "yield": 3.5}, "VDE", datetime.now(UTC))
-        )
+
+        def wire(url: str, **_kwargs: object) -> HttpJsonResponse:
+            payload: JsonValue = (
+                {"symbol": "VDE", "sector": "Energy", "yield": 3.5} if url.endswith("/info") else []
+            )
+            return _captured_response(payload, url)
+
+        monkeypatch.setattr(FMP_CLIENT, "get_url_json", wire)
+        monkeypatch.setenv("FMP_API_KEY", "synthetic-key")
+        ingest_live(conn, "VDE", tmp_path)
+
         warnings: set[str] = set()
         inputs = build_etf_profile_inputs(
             conn,
@@ -170,9 +226,11 @@ def test_capture_admission_bounds_and_value_identity() -> None:
         (now + timedelta(seconds=1), False),
         (now.replace(tzinfo=None), False),
     ):
-        profile = parse_etf_info({"sector": "Energy"}, "VDE", capture)
+        profile = _policy_link(parse_etf_info({"sector": "Energy"}, "VDE", capture))
         assert bool(admitted_profile_fields(profile, now=now)) is expected
-    profile = parse_etf_info({"sector": "Energy", "asOfDate": "2026-09-19"}, "VDE", now)
+    profile = _policy_link(
+        parse_etf_info({"sector": "Energy", "asOfDate": "2026-09-19"}, "VDE", now)
+    )
     assert admitted_profile_fields(profile, now=now)
     assert not admitted_profile_fields(
         profile.model_copy(update={"sector_label": "Utilities"}), now=now
@@ -250,8 +308,8 @@ def test_ingest_live_positive_two_calls(
     def wire(url: str, **kwargs: object) -> HttpJsonResponse:
         calls.append((url, kwargs))
         if url.endswith("/stable/etf/info"):
-            return HttpJsonResponse(200, {"sector": "Energy"})
-        return HttpJsonResponse(200, [])
+            return _captured_response({"symbol": "ZZZ", "sector": "Energy"}, url)
+        return _captured_response([], url)
 
     monkeypatch.setattr(FMP_CLIENT, "get_url_json", wire)
     monkeypatch.setenv("FMP_API_KEY", "synthetic-key")
@@ -270,6 +328,7 @@ def test_ingest_live_positive_two_calls(
         assert kw["api_key"] == "synthetic-key"
         assert kw["expected"] is JsonShape.ANY
         assert kw["timeout"] == (10, 60)
+        assert kw["retain_capture"] is True
 
 
 def test_ingest_live_network_error_no_fallback(

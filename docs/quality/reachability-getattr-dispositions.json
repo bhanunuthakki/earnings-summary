@@ -519,8 +519,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Capture iterates only the checked-in LABEL_FIELDS tuple on the typed EtfProfile model.",
-      "fingerprint": "6ba2c7c119916ee144010f9a479be287081ffda254638a961c782735269e2f1c",
-      "line": 31,
+      "fingerprint": "910259a0f87af46837cbf2458a6179a035288b83ced2c6af0c338c89a0fac7b3",
+      "line": 36,
       "path": "src/etf_sources/profile_evidence.py",
       "targets": [
         "asset_class",
@@ -533,8 +533,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Admission rejects keys outside LABEL_FIELDS before reading a corresponding typed EtfProfile value.",
-      "fingerprint": "831bf19ac7352675f6ea64de2337e624194512038a88cdbd669ae15ef15297fa",
-      "line": 56,
+      "fingerprint": "e2f1585f49fdb65c837d9dc18a71d6c9fb0915345a922625e35b0fcc0b9d2236",
+      "line": 63,
       "path": "src/etf_sources/profile_evidence.py",
       "targets": [
         "asset_class",
@@ -1084,6 +1084,20 @@
         "provider",
         "transport"
       ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Live capture binding iterates the checked-in five LABEL_FIELDS values on typed EtfProfile. It compares normalized values to the matching profile fields; source content cannot select an attribute or executable target.",
+      "fingerprint": "545e8fe38438d88dddd44e271fd61208c0f589304d0b72398539810959a6de80",
+      "line": 168,
+      "path": "src/etf_sources/profile_evidence.py",
+      "targets": [
+        "asset_class",
+        "benchmark_index",
+        "sector_label",
+        "expense_ratio",
+        "distribution_yield"
+      ]
     }
   ],
   "graph_provenance": {
@@ -1092,7 +1106,7 @@
       "name": "ast+xml+literal-scanner",
       "version": "1.3.0",
       "python": ">=3.11",
-      "source_sha256": "a0b798b41d4a1033ca1d87f234cf800cf742248b2ca13638da51cfb06e26493b"
+      "source_sha256": "8ce1b51254993ab00d082837249d47926eb7cac4383f19b863eefae4623d30f1"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c9ec98b1cbcdf93c9b890d9a8a8c59ef6109598f67b1739c38463d79d5986175",
