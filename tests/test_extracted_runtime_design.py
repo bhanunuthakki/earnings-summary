@@ -73,11 +73,19 @@ def test_source_browser_asset_is_discovered_without_registry_membership(
     assert discovered[0].adapter_kinds == {"html", "runtime-js"}
 
 
-@pytest.mark.parametrize("filename", ["work_os_shell.py", "work_os_runtime.js"])
-def test_work_os_split_preserves_explicit_visual_evidence_contracts(filename: str) -> None:
+@pytest.mark.parametrize(
+    ("filename", "expected_kinds"),
+    [
+        ("work_os_shell.py", {"html", "python-css"}),
+        ("work_os_runtime.js", {"html", "python-css", "runtime-js"}),
+    ],
+)
+def test_work_os_split_preserves_explicit_visual_evidence_contracts(
+    filename: str, expected_kinds: set[str]
+) -> None:
     relative = "pipeline/" + filename
     entry = next(item for item in VISUAL_EMITTER_MANIFEST if item.path == relative)
-    assert entry.adapter_kinds == {"html", "python-css", "runtime-js"}
+    assert entry.adapter_kinds == expected_kinds
     contracts = [item for item in DYNAMIC_VISUAL_CONTRACTS if item.surface == relative]
     assert len(contracts) == 1
     source = (ROOT / "src" / relative).read_text(encoding="utf-8")

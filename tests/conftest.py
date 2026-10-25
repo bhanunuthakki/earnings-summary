@@ -476,9 +476,26 @@ def _isolate_default_database(
     import db
 
     database = tmp_path / "default-db" / "portfolio.db"
+    # In-process CLI bootstraps must not leak the other path globals either.
+    monkeypatch.setattr(db, "PROJECT_ROOT", db.PROJECT_ROOT)
+    monkeypatch.setattr(db, "STATE_ROOT", db.STATE_ROOT)
     monkeypatch.setattr(db, "DB_PATH", os.fspath(database))
     monkeypatch.setattr(db, "DATA_DIR", os.fspath(database.parent))
     monkeypatch.setattr(db, "FMP_DIR", os.fspath(database.parent / "historical" / "fmp"))
+
+
+@pytest.fixture(autouse=True)
+def _no_real_capture_triage_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Block unmocked capture classification like the other offline LLM paths."""
+    import capture.triage as capture_triage
+
+    def _blocked(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError(
+            "real capture triage invoked in a test — inject call= or monkeypatch "
+            "capture.triage._default_call"
+        )
+
+    monkeypatch.setattr(capture_triage, "_default_call", _blocked)
 
 
 @pytest.fixture(autouse=True)

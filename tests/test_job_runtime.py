@@ -163,15 +163,13 @@ _PORTFOLIO_DB_POLICY = {
     "weekly-cleanup": "filesystem-maintenance",
     "weekly-cleanup-expire-research": "portfolio-db",
     "weekly-model-eval": "llm-evaluation",
-    "weekly-p2-lens-refresh": "lens-refresh",
     "weekly-packet": "notification-delivery",
     "weekly-score-stances": "advisor-scoring",
-    "weekly-synthesis": "research-synthesis",
     "weekly-validation": "portfolio-db",
 }
-_LONG_RUNNING_LANES = tuple(
-    (job_name, lane) for job_name, lane in _PORTFOLIO_DB_POLICY.items() if lane != "portfolio-db"
-)
+_DATABASE_ADJACENT_LANES = {
+    lane for lane in _PORTFOLIO_DB_POLICY.values() if lane != "portfolio-db"
+} | {"lens-refresh"}
 
 
 def _wait_for(path: Path, process: subprocess.Popen[str], *, timeout_s: float = 5.0) -> None:
@@ -659,6 +657,12 @@ def test_scheduler_preserves_unknown_and_explicit_write_sets() -> None:
     assert _scheduler_write_sets("refresh_cache", ["operator-explicit"]) == ["operator-explicit"]
 
 
+@pytest.mark.parametrize("job_name", ["weekly-p2-lens-refresh", "weekly-synthesis"])
+def test_retired_lens_jobs_preserve_requested_write_sets(job_name: str) -> None:
+    assert _scheduler_write_sets(job_name, ["portfolio-db"]) == ["portfolio-db"]
+    assert _scheduler_write_sets(job_name, ["operator-explicit"]) == ["operator-explicit"]
+
+
 def test_operations_runtime_collector_scheduler_lane_is_preserved() -> None:
     assert _scheduler_write_sets(
         "collect-operations-runtime-observations", ["operations-runtime-receipts"]
@@ -700,7 +704,7 @@ def test_only_proven_bounded_database_jobs_keep_the_coarse_mutex() -> None:
     }
 
 
-@pytest.mark.parametrize("lane", sorted({lane for _, lane in _LONG_RUNNING_LANES}))
+@pytest.mark.parametrize("lane", sorted(_DATABASE_ADJACENT_LANES))
 def test_lane_lock_is_cross_process_single_flight(tmp_path: Path, lane: str) -> None:
     acquired = tmp_path / f"{lane}.acquired"
     release = tmp_path / f"{lane}.release"
@@ -734,7 +738,7 @@ def test_lane_lock_is_cross_process_single_flight(tmp_path: Path, lane: str) -> 
     assert not _write_set_lock_path(tmp_path, lane).exists()
 
 
-@pytest.mark.parametrize("lane", sorted({lane for _, lane in _LONG_RUNNING_LANES}))
+@pytest.mark.parametrize("lane", sorted(_DATABASE_ADJACENT_LANES))
 def test_lane_lock_converges_across_checkouts_for_one_database(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lane: str
 ) -> None:
@@ -751,7 +755,7 @@ def test_lane_lock_converges_across_checkouts_for_one_database(
         JobLock(second, "second", [lane], wait_s=0).__enter__()
 
 
-@pytest.mark.parametrize("lane", sorted({lane for _, lane in _LONG_RUNNING_LANES}))
+@pytest.mark.parametrize("lane", sorted(_DATABASE_ADJACENT_LANES))
 def test_lane_job_leaves_global_mutex_free_and_sqlite_bounds_writer_contention(
     tmp_path: Path, lane: str
 ) -> None:

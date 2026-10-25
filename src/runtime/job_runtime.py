@@ -98,15 +98,13 @@ _SCHEDULER_PORTFOLIO_DB_POLICY: tuple[tuple[str, str], ...] = (
     ("weekly-cleanup", "filesystem-maintenance"),
     ("weekly-cleanup-expire-research", "portfolio-db"),
     ("weekly-model-eval", "llm-evaluation"),
-    ("weekly-p2-lens-refresh", "lens-refresh"),
     ("weekly-packet", "notification-delivery"),
     ("weekly-score-stances", "advisor-scoring"),
-    ("weekly-synthesis", "research-synthesis"),
     ("weekly-validation", "portfolio-db"),
 )
 _DATABASE_ADJACENT_LANES = frozenset(
     lane for _, lane in _SCHEDULER_PORTFOLIO_DB_POLICY if lane != "portfolio-db"
-)
+) | {"lens-refresh"}  # Preserve the lock identity for explicit retired-lane callers.
 
 
 def _scheduler_write_sets(job_name: str, requested: list[str]) -> list[str]:

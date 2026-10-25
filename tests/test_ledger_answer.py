@@ -9,11 +9,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
 from capture import ingest
 from capture.matcher import build_roster_index
+from capture.triage import TriageVerdict
 from onmymind import respond
 from pipeline.ledger_panel import render_onmymind_list
 from user_state import notes
@@ -30,6 +32,11 @@ def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
 @pytest.fixture(autouse=True)
 def _answer_on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LEDGER_ANSWER", raising=False)
+    monkeypatch.setattr(
+        respond,
+        "classify_capture_triage",
+        Mock(return_value=TriageVerdict(route="answer_now")),
+    )
 
 
 def _musing(db_path: Path, text: str) -> int:
@@ -39,7 +46,7 @@ def _musing(db_path: Path, text: str) -> int:
     )
 
 
-def _fake_engine(answer: str) -> None:
+def _fake_engine(answer: str) -> Callable[..., Iterator[dict[str, object]]]:
     """Return a stub for ``respond.respond_turn`` that yields one final answer —
     the real ``fold_events`` still runs, so the tap's plumbing is exercised
     without a live model call."""
@@ -47,7 +54,7 @@ def _fake_engine(answer: str) -> None:
     def _stub(*_a: object, **_k: object) -> Iterator[dict[str, object]]:
         yield {"type": "final", "text": answer, "route": "narrative"}
 
-    return _stub  # type: ignore[return-value]
+    return _stub
 
 
 # --- the question heuristic --------------------------------------------------
@@ -121,6 +128,11 @@ def test_ambiguous_capture_not_answered(db_path: Path, monkeypatch: pytest.Monke
 
 
 def test_non_question_not_answered(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        respond,
+        "classify_capture_triage",
+        Mock(return_value=TriageVerdict(route="plain")),
+    )
     called = {"n": 0}
 
     def _boom(*_a: object, **_k: object) -> Iterator[dict[str, object]]:
