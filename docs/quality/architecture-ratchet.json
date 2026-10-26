@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "d00552c092e11fd5114379794216255edd7705f1",
+  "scoped_commit": "ba2bd7fa45d70c80ed04ce40a1c924a9cd1085ed",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "05f9550e9901049df602247b3cc4ea1cfbdb7d9e74c975d18bd0fae202016a3b",
+  "source_sha256": "265f2e16d4be81a821f4205598944550e7e09d63b7e31c2413f92b7a46935418",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1484,
-    "total_noncomment_loc": 577651,
+    "total_noncomment_loc": 577739,
     "modules_over_1000_loc": 113,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
@@ -5843,9 +5843,9 @@
         "path": "execution/run_morning_pipeline.py",
         "module": "execution.run_morning_pipeline",
         "lines": {
-          "physical": 878,
-          "nonblank": 768,
-          "noncomment": 719
+          "physical": 881,
+          "nonblank": 771,
+          "noncomment": 722
         },
         "internal_fan_out": 10,
         "responsibilities": [
@@ -6564,11 +6564,11 @@
         "path": "execution/sync_list_type_from_holdings.py",
         "module": "execution.sync_list_type_from_holdings",
         "lines": {
-          "physical": 242,
-          "nonblank": 212,
-          "noncomment": 198
+          "physical": 265,
+          "nonblank": 235,
+          "noncomment": 226
         },
-        "internal_fan_out": 6,
+        "internal_fan_out": 8,
         "responsibilities": [
           "database",
           "network"
@@ -9310,16 +9310,16 @@
         "path": "src/db_paths.py",
         "module": "db_paths",
         "lines": {
-          "physical": 128,
-          "nonblank": 111,
-          "noncomment": 105
+          "physical": 152,
+          "nonblank": 132,
+          "noncomment": 126
         },
         "internal_fan_out": 1,
         "responsibilities": [
           "network"
         ],
-        "public_functions": 4,
-        "fully_annotated_public_functions": 4
+        "public_functions": 5,
+        "fully_annotated_public_functions": 5
       },
       {
         "path": "src/dcf/__init__.py",
@@ -11906,18 +11906,18 @@
         "path": "src/list_type_reconcile.py",
         "module": "list_type_reconcile",
         "lines": {
-          "physical": 312,
-          "nonblank": 267,
-          "noncomment": 238
+          "physical": 362,
+          "nonblank": 309,
+          "noncomment": 274
         },
-        "internal_fan_out": 1,
+        "internal_fan_out": 2,
         "responsibilities": [
           "database",
           "filesystem",
           "network"
         ],
-        "public_functions": 3,
-        "fully_annotated_public_functions": 3
+        "public_functions": 4,
+        "fully_annotated_public_functions": 4
       },
       {
         "path": "src/llm/__init__.py",

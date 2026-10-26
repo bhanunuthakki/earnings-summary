@@ -26,9 +26,10 @@ Promotion only ever touches names **already tracked** (``watchlist`` /
 manual onboarding, never auto-added — onboarding has SEC-validation and
 issuer-registry side effects this reconciler must not trigger blind.
 
-The tracker holdings are read from the companion ``portfolio-tracker`` SQLite
-(read-only); the ``securities.type`` column is why we read the DB directly rather
-than the live API, which doesn't carry the instrument type we gate promotion on.
+Tracker holdings are read through the typed portfolio-tracker v1 API. The
+snapshot is already rolled up across accounts, sold securities are absent from
+the latest positions, and ``SecurityV1`` carries both the instrument type and
+cash-equivalent flag used by the promotion gate.
 After applying a diff the caller is expected to run
 ``issuer_registry.sync_all`` (the documented reconcile behind raw ``list_type``
 flips) and, if desired, ``sync_position_lifecycle``.
@@ -43,6 +44,11 @@ from pathlib import Path
 from typing import cast
 
 from identity import DEFAULT_USER_ID
+from integrations.portfolio_tracker_v1 import (
+    PortfolioSnapshotV1,
+    SecuritiesV1Result,
+    V1Fetch,
+)
 
 # Plaid ``securities.type`` codes that denote an *operating company* — the only
 # instruments the research platform can brief. Observed in the tracker DB:
@@ -67,6 +73,19 @@ _PINS_REL = ("data", "portfolio_pins.json")
 
 
 @dataclass(frozen=True, slots=True)
+class TrackerHoldings:
+    """Fail-closed holdings projection from the portfolio-tracker v1 API."""
+
+    operating: dict[str, float] = field(default_factory=dict[str, float])
+    all_held: dict[str, float] = field(default_factory=dict[str, float])
+    unavailable_reason: str | None = None
+
+
+class PinsUnreadableError(ValueError):
+    """The pins store exists but its payload cannot be trusted."""
+
+
+@dataclass(frozen=True, slots=True)
 class Reclassification:
     """The computed diff between the world (holdings + pins) and the DB.
 
@@ -86,9 +105,11 @@ class Reclassification:
     )
     # ``portfolio`` names that are correctly held > threshold (no change).
     unchanged_portfolio: list[str] = field(default_factory=list[str])
-    # Safety latch: the tracker showed ZERO holdings (absent / empty / failed
-    # sync). When True the plan is forced empty — see compute_reclassification.
+    # Safety latch: the tracker could not prove a complete, current holdings
+    # book. When True the plan is forced empty — see compute_reclassification.
     holdings_unavailable: bool = False
+    # Why holdings were unavailable. Empty when holdings were usable.
+    unavailable_reason: str | None = None
 
     @property
     def has_changes(self) -> bool:
@@ -100,73 +121,93 @@ class Reclassification:
 # ---------------------------------------------------------------------------
 
 
-def _held_operating_companies(
-    tracker_conn: sqlite3.Connection, min_value: float
-) -> dict[str, float]:
-    """``{TICKER: market_value}`` for operating companies held above ``min_value``.
+def holdings_from_tracker_v1(
+    snapshot_fetch: V1Fetch[PortfolioSnapshotV1],
+    securities_fetch: V1Fetch[SecuritiesV1Result],
+) -> TrackerHoldings:
+    """Build holdings from the typed snapshot and security catalogs.
 
-    Latest snapshot per (account, security), summed across accounts; filtered to
-    the equity-type allowlist and non-cash-equivalents. ETFs/funds/options/cash
-    never appear here, so they can never be promoted.
+    The tracker only emits current holdings. Any partial, stale, or incomplete
+    read is unavailable, never an empty book that would mass-demote the roster.
     """
-    allowed_types = tuple(sorted(EQUITY_SECURITY_TYPES))
-    type_placeholders = ",".join("?" for _ in allowed_types)
-    rows = tracker_conn.execute(
-        f"""
-        WITH latest AS (
-            SELECT hs.account_id, hs.security_id, hs.quantity, hs.institution_value,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY hs.account_id, hs.security_id
-                       ORDER BY hs.snapshot_date DESC
-                   ) AS rn
-            FROM holdings_snapshots hs
-        )
-        SELECT UPPER(s.ticker)                        AS ticker,
-               SUM(COALESCE(l.institution_value, 0)) AS mv
-        FROM latest l
-        JOIN securities s ON s.security_id = l.security_id
-        WHERE l.rn = 1
-          AND l.quantity > 0
-          AND s.ticker IS NOT NULL
-          AND TRIM(s.ticker) <> ''
-          AND COALESCE(s.is_cash_equivalent, 0) = 0
-          AND LOWER(COALESCE(s.type, '')) IN ({type_placeholders})
-        GROUP BY UPPER(s.ticker)
-        """,  # nosec B608 -- placeholders only; the SQL shape is module-owned
-        allowed_types,
-    ).fetchall()
-    held: dict[str, float] = {}
-    for r in rows:
-        mv = float(r["mv"] or 0.0)
-        if mv <= min_value:
+
+    def unavailable(reason: str) -> TrackerHoldings:
+        return TrackerHoldings(unavailable_reason=reason)
+
+    if not snapshot_fetch.available:
+        return unavailable(snapshot_fetch.error or "portfolio snapshot fetch unavailable")
+    snapshot = snapshot_fetch.data
+    if snapshot is None:
+        return unavailable("portfolio snapshot fetch unavailable")
+    meta = snapshot.meta
+    if meta.as_of is None:
+        return unavailable("portfolio snapshot has no holdings as-of date")
+    if meta.is_partial:
+        return unavailable("portfolio snapshot is partial")
+    if meta.is_stale:
+        return unavailable("portfolio snapshot is stale")
+    if meta.account_coverage.lagging_account_ids:
+        return unavailable("portfolio snapshot has lagging accounts")
+
+    accounts = {account.account_id: account for account in snapshot.accounts}
+    for account_id in meta.account_coverage.included_account_ids:
+        account = accounts.get(account_id)
+        if account is None:
+            return unavailable(f"included account {account_id} missing from snapshot accounts")
+        if account.holdings_as_of is not None:
+            if account.holdings_as_of != meta.as_of:
+                return unavailable(f"account {account_id} holdings date differs from snapshot")
             continue
-        held[str(r["ticker"])] = mv
-    return held
+        # Live Tracker data has successfully synced investment accounts with no
+        # holdings history; strict rejection would fail every run, while an
+        # unsynced or warned account is unknown coverage.
+        if (
+            account.last_successful_sync_at is None
+            or account.warnings
+            or (account.value is not None and account.value != 0)
+        ):
+            return unavailable(f"account {account_id} has unknown holdings coverage")
 
+    if not securities_fetch.available:
+        return unavailable(securities_fetch.error or "securities fetch unavailable")
+    securities_result = securities_fetch.data
+    if securities_result is None:
+        return unavailable("securities fetch unavailable")
+    securities = {security.security_id: security for security in securities_result.securities}
 
-def _all_held_value(tracker_conn: sqlite3.Connection) -> dict[str, float]:
-    """``{TICKER: market_value}`` for everything held (any type) — used only to
-    annotate demotions with what (if anything) is actually held."""
-    rows = tracker_conn.execute(
-        """
-        WITH latest AS (
-            SELECT hs.account_id, hs.security_id, hs.quantity, hs.institution_value,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY hs.account_id, hs.security_id
-                       ORDER BY hs.snapshot_date DESC
-                   ) AS rn
-            FROM holdings_snapshots hs
-        )
-        SELECT UPPER(s.ticker)                       AS ticker,
-               SUM(COALESCE(l.institution_value, 0)) AS mv
-        FROM latest l
-        JOIN securities s ON s.security_id = l.security_id
-        WHERE l.rn = 1 AND l.quantity > 0
-          AND s.ticker IS NOT NULL AND TRIM(s.ticker) <> ''
-        GROUP BY UPPER(s.ticker)
-        """
-    ).fetchall()
-    return {str(r["ticker"]): float(r["mv"] or 0.0) for r in rows}
+    operating: dict[str, float] = {}
+    all_held: dict[str, float] = {}
+    for position in snapshot.positions:
+        security = securities.get(position.security_id)
+        if security is None:
+            return unavailable(f"security {position.security_id} missing from securities catalog")
+        ticker = position.ticker or security.ticker
+        if ticker is None or not ticker.strip():
+            return unavailable(f"position {position.security_id} has no ticker")
+        lots = position.accounts
+        if not lots:
+            return unavailable(f"position {ticker.strip()} has no account lots")
+        held_lots = [lot for lot in lots if lot.quantity > 0]
+        if not held_lots:
+            continue
+        # Value comes from the long lots, but a missing aggregate means the
+        # Tracker could not value the position; treat it as unknown, not zero.
+        if position.market_value is None:
+            return unavailable(f"position {ticker.strip()} has no market value")
+        normalized_ticker = ticker.strip().upper()
+        held_market_values = [
+            float(lot.market_value) for lot in held_lots if lot.market_value is not None
+        ]
+        if len(held_market_values) != len(held_lots):
+            return unavailable(f"position {ticker.strip()} has an unvalued account lot")
+        market_value = sum(held_market_values)
+        all_held[normalized_ticker] = all_held.get(normalized_ticker, 0.0) + market_value
+        security_type = security.type.strip().lower() if security.type else ""
+        if not security.is_cash_equivalent and security_type in EQUITY_SECURITY_TYPES:
+            operating[normalized_ticker] = operating.get(normalized_ticker, 0.0) + market_value
+    if not all_held:
+        return unavailable("portfolio snapshot has zero held positions")
+    return TrackerHoldings(operating=operating, all_held=all_held)
 
 
 def _active_tracked(es_conn: sqlite3.Connection, user_id: str) -> dict[str, str]:
@@ -186,30 +227,33 @@ def load_pins(repo_root: Path) -> dict[str, str]:
 
         {"pinned_portfolio": [{"ticker": "META", "reason": "..."}]}
 
-    Returns ``{}`` when absent or malformed — an empty pins store means the rule
-    applies with no exceptions (every unheld portfolio name demotes).
+    Returns ``{}`` when absent. Any present-but-untrusted payload raises
+    :class:`PinsUnreadableError`; an absent file is the only valid empty store.
     """
     path = Path(repo_root).joinpath(*_PINS_REL)
-    if not path.exists():
-        return {}
     try:
         payload: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return {}
+    except OSError as exc:
+        raise PinsUnreadableError(f"pins file {path} is unreadable: {exc}") from exc
+    except ValueError as exc:
+        raise PinsUnreadableError(f"pins file {path} contains invalid JSON: {exc}") from exc
     if not isinstance(payload, dict):
-        return {}
+        raise PinsUnreadableError(f"pins file {path} top level must be an object")
     entries = cast("dict[str, object]", payload).get("pinned_portfolio")
     if not isinstance(entries, list):
-        return {}
+        raise PinsUnreadableError(f"pins file {path} must contain a pinned_portfolio list")
     pins: dict[str, str] = {}
     for raw in cast("list[object]", entries):
         if not isinstance(raw, dict):
-            continue
+            raise PinsUnreadableError(f"pins file {path} has a non-object entry")
         entry = cast("dict[str, object]", raw)
         ticker = entry.get("ticker")
-        if isinstance(ticker, str) and ticker.strip():
-            reason = entry.get("reason")
-            pins[ticker.strip().upper()] = reason if isinstance(reason, str) else ""
+        if not isinstance(ticker, str) or not ticker.strip():
+            raise PinsUnreadableError(f"pins file {path} has an entry without a ticker")
+        reason = entry.get("reason")
+        pins[ticker.strip().upper()] = reason if isinstance(reason, str) else ""
     return pins
 
 
@@ -221,7 +265,7 @@ def load_pins(repo_root: Path) -> dict[str, str]:
 def compute_reclassification(
     *,
     es_conn: sqlite3.Connection,
-    tracker_conn: sqlite3.Connection,
+    holdings: TrackerHoldings,
     pins: set[str] | None = None,
     min_value: float = 100.0,
     user_id: str = DEFAULT_USER_ID,
@@ -230,9 +274,8 @@ def compute_reclassification(
 
     Pure read — no writes. Pass the result to :func:`apply_reclassification`.
 
-    **Safety latch:** if the tracker shows *zero* holdings of any kind (absent /
-    empty DB, or a failed sync), the result is forced empty with
-    ``holdings_unavailable=True``. Without this, an empty holdings read would make
+    **Safety latch:** if tracker holdings are unavailable, the result is forced
+    empty with ``holdings_unavailable=True``. Without this, an empty holdings read would make
     EVERY unpinned portfolio name look "not held" and demote the entire book —
     exactly the wrong move on a transient tracker outage. Mirrors
     ``position_lifecycle``'s None-means-no-op guard. A real all-cash book is
@@ -240,11 +283,18 @@ def compute_reclassification(
     either way (demotions never fire on no data).
     """
     pins = pins or set()
-    all_held = _all_held_value(tracker_conn)
-    if not all_held:
-        return Reclassification(holdings_unavailable=True)
+    if holdings.unavailable_reason is not None:
+        return Reclassification(
+            holdings_unavailable=True,
+            unavailable_reason=holdings.unavailable_reason,
+        )
 
-    held = _held_operating_companies(tracker_conn, min_value)
+    all_held = holdings.all_held
+    held = {
+        ticker: market_value
+        for ticker, market_value in holdings.operating.items()
+        if market_value > min_value
+    }
     tracked = _active_tracked(es_conn, user_id)
     portfolio = {t for t, lt in tracked.items() if lt == "portfolio"}
 
