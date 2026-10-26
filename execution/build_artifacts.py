@@ -310,7 +310,7 @@ def main() -> int:
     db.set_db_path(database_path)
     os.environ["EARNINGS_SUMMARY_DB_PATH"] = str(database_path)
     configure_artifact_runtime(repo_root)
-    if args.candidate:
+    if getattr(args, "candidate", False):
         result = build_candidate_artifact(
             args.ticker,
             repo_root,

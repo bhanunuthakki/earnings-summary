@@ -245,13 +245,21 @@ JS = r"""
   var SPEC_BY_KEY = {};
   SCALARS.concat(DRIVERS).forEach(function (s) { SPEC_BY_KEY[s.key] = s; });
   var inputsByKey = {};   // key -> <input>, refreshed by buildControls (Wave 5)
-  var syncRoot = document.createElement('div');
-  syncRoot.className = 'dcf-report-sync k-well';
-  syncRoot.setAttribute('data-report-sync-bar', '');
-  root.insertBefore(syncRoot, elToggle);
-  var syncBar = window.initReportSyncBar(syncRoot, {
-    ticker: TICKER, candidateArtifactId: options.candidateArtifactId || null
-  });
+  var syncRoot = typeof document.createElement === 'function' ? document.createElement('div') : null;
+  if (syncRoot) {
+    syncRoot.className = 'dcf-report-sync k-well';
+    syncRoot.setAttribute('data-report-sync-bar', '');
+    if (typeof root.insertBefore === 'function' && elToggle) {
+      root.insertBefore(syncRoot, elToggle);
+    } else if (typeof root.appendChild === 'function') {
+      root.appendChild(syncRoot);
+    }
+  }
+  var syncBar = (syncRoot && typeof window.initReportSyncBar === 'function')
+    ? window.initReportSyncBar(syncRoot, {
+        ticker: TICKER, candidateArtifactId: options.candidateArtifactId || null
+      })
+    : null;
 
   function setStatus(msg, tone) {
     elStatus.textContent = msg || '';
@@ -860,7 +868,13 @@ JS = r"""
     btnPublish.dataset.syncAction = 'publish'; btnPublish.textContent = 'Approve & publish';
     btnPublish.hidden = true;
     actions.appendChild(btnRefresh); actions.appendChild(btnCandidate); actions.appendChild(btnPublish);
-    root.replaceChildren(statusEl, actions);
+    if (typeof root.replaceChildren === 'function') {
+      root.replaceChildren(statusEl, actions);
+    } else {
+      root.textContent = '';
+      root.appendChild(statusEl);
+      root.appendChild(actions);
+    }
     function render(state, message) { statusEl.dataset.syncState = state; statusEl.textContent = message; }
     function headers(extra) {
       var h = typeof window.__workspaceMutationHeaders === 'function'
@@ -1001,18 +1015,22 @@ JS = r"""
     function onModelSaved(event) {
       if (!event.detail || event.detail.ticker === TICKER) revalidate();
     }
-    window.addEventListener('focus', revalidate);
-    window.addEventListener('dcf-model-saved', onModelSaved);
+    if (typeof window.addEventListener === 'function') {
+      window.addEventListener('focus', revalidate);
+      window.addEventListener('dcf-model-saved', onModelSaved);
+    }
     function destroy() {
       disposed = true;
       if (pollTimer) {
         clearTimeout(pollTimer);
         pollTimer = null;
       }
-      window.removeEventListener('focus', revalidate);
-      window.removeEventListener('dcf-model-saved', onModelSaved);
+      if (typeof window.removeEventListener === 'function') {
+        window.removeEventListener('focus', revalidate);
+        window.removeEventListener('dcf-model-saved', onModelSaved);
+      }
     }
-    if (/^https?:$/.test(window.location.protocol) || boot.server_url) revalidate();
+    if (boot.server_url || options.candidateArtifactId || options.syncBar) revalidate();
     return {revalidate: revalidate, destroy: destroy};
   };
   var standalone = window.initDcfEditor(document.getElementById('dcf-edit'));

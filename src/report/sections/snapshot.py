@@ -269,12 +269,12 @@ def _valuation_snapshot(
     """
     if model_run_id is not None:
         cursor.execute(
-            f"{select_columns} WHERE ticker = ? AND id = ? LIMIT 1",
+            f"{select_columns} WHERE ticker = ? AND id = ? LIMIT 1",  # nosec B608 -- trusted column fragments selected only by schema presence; parameters stay bound
             (ticker.upper(), model_run_id),
         )
     else:
         cursor.execute(
-            f"{select_columns} WHERE ticker = ? ORDER BY valuation_date DESC, id DESC LIMIT 1",
+            f"{select_columns} WHERE ticker = ? ORDER BY valuation_date DESC, id DESC LIMIT 1",  # nosec B608 -- trusted column fragments selected only by schema presence; parameters stay bound
             (ticker.upper(),),
         )
     row = cursor.fetchone()

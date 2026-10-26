@@ -212,7 +212,9 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # +1 exact-edition descriptor for shared-reader reload and historical links.
     # +1 sealed evidence citation source-version viewer: the destination for
     # /source/version/<document_version_id>?node=… citations.
-    assert len(rules) == 180
+    # +3 report-sync routes: GET /api/report-sync/<ticker>, POST /api/report-sync/<ticker>/candidate,
+    # and POST /api/report-sync/<ticker>/publish.
+    assert len(rules) == 183
     assert rules["peek_canonical_financial"] == "/api/peek/canonical-financial"
     assert rules["peek_financial_calculation"] == "/api/peek/financial-calculation"
     assert rules["operations_host_runtime_api"] == "/api/operations/host-runtime"

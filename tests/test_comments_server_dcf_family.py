@@ -264,6 +264,15 @@ def _setup_meli_fixture(
 
     monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
 
+    def _synthetic_build(*args: Any, **kwargs: Any) -> None:
+        dest = kwargs.get("dest") or (args[2] if len(args) > 2 else None)
+        if dest is not None:
+            Path(dest).parent.mkdir(parents=True, exist_ok=True)
+            Path(dest).write_bytes(b"synthetic meli workbook bytes")
+
+    if not (os.environ.get("DCF_ARTIFACT_NODE") and os.environ.get("DCF_ARTIFACT_NODE_MODULES")):
+        monkeypatch.setattr(meli, "build", _synthetic_build)
+
     with sqlite3.connect(db_path) as conn:
         request = _build_reviewed_request(conn, refs, source_context)
 

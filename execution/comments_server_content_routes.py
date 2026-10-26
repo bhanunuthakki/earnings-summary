@@ -143,6 +143,253 @@ def _pinned_ocr_pdf_bytes(
     ).raw_bytes
 
 
+def _register_report_sync_routes(app: Flask, context: ContentRouteContext) -> None:
+    repo_root = context.repo_root
+    db_path = context.db_path
+
+    @app.route("/api/report-sync/<ticker>", methods=["GET"])
+    def report_sync_status(ticker: str):
+        try:
+            validated = context.safe_ticker(ticker)
+        except ValueError:
+            abort(400)
+        status = build_report_sync_status(
+            repo_root,
+            validated,
+            conn=context.get_read_db(),
+            candidate_artifact_id=request.args.get("candidate_artifact_id"),
+        )
+        etag = str(status["etag"])
+        if request.headers.get("If-None-Match", "").strip('"') == etag:
+            return Response(status=304, headers={"ETag": f'"{etag}"'})
+        response = Response(json.dumps(status), mimetype="application/json")
+        response.headers["ETag"] = f'"{etag}"'
+        return response
+
+    @app.route("/api/report-sync/<ticker>/candidate", methods=["POST"])
+    def report_sync_candidate(ticker: str):
+        try:
+            validated = context.safe_ticker(ticker)
+        except ValueError:
+            abort(400)
+        raw_payload = request.get_json(silent=True)
+        payload: dict[str, object] = (
+            cast(dict[str, object], raw_payload) if isinstance(raw_payload, dict) else {}
+        )
+        if_match = request.headers.get("If-Match")
+        if if_match:
+            clean_if_match = if_match.strip('"')
+            live = build_report_sync_status(repo_root, validated, conn=context.get_read_db())
+            valid_etags = {str(live["etag"])}
+            cand_id = (
+                request.args.get("candidate_artifact_id")
+                or payload.get("candidate_artifact_id")
+                or payload.get("artifact_id")
+            )
+            if cand_id:
+                live_cand = build_report_sync_status(
+                    repo_root,
+                    validated,
+                    conn=context.get_read_db(),
+                    candidate_artifact_id=str(cand_id),
+                )
+                valid_etags.add(str(live_cand["etag"]))
+            for item in load_report_artifact_index(repo_root).items:
+                if item.ticker == validated and item.publication_status == "draft_preview":
+                    status_cand = build_report_sync_status(
+                        repo_root,
+                        validated,
+                        conn=context.get_read_db(),
+                        candidate_artifact_id=item.artifact_id,
+                    )
+                    valid_etags.add(str(status_cand["etag"]))
+            if clean_if_match not in valid_etags:
+                return Response(
+                    json.dumps({"error": "etag_mismatch"}), status=412, mimetype="application/json"
+                )
+        owner_action_raw = request.headers.get("X-Owner-Action-Id") or payload.get(
+            "owner_action_id"
+        )
+        owner_action_id = str(owner_action_raw) if owner_action_raw is not None else None
+        expected_raw = request.args.get("expected_current_artifact_id") or payload.get(
+            "expected_current_artifact_id"
+        )
+        expected_current = str(expected_raw) if expected_raw is not None else None
+
+        binding = resolve_report_model_binding(repo_root, validated, conn=context.get_read_db())
+        model_key = binding.row_id if isinstance(binding, ReportModelBinding) else "nomodel"
+        semantic_key = f"candidate_refresh:{validated}:{model_key}:{expected_current or ''}"
+
+        record, req_reused = begin_or_reuse_report_request(
+            repo_root,
+            semantic_request_key=semantic_key,
+            kind="candidate_refresh",
+            ticker=validated,
+            owner_action_id=owner_action_id,
+        )
+        if req_reused:
+            if record.status == "running":
+                return Response(
+                    json.dumps(
+                        {
+                            "status": "running",
+                            "message": "candidate refresh in progress",
+                            "ticker": validated,
+                        }
+                    ),
+                    status=202,
+                    mimetype="application/json",
+                )
+            if record.status == "completed" and record.result_payload:
+                cand_id = record.artifact_id or str(record.result_payload.get("artifact_id") or "")
+                is_valid = False
+                if cand_id:
+                    cand_capture = load_report_capture_receipt(repo_root, validated, cand_id)
+                    cand_file = load_report_file_capture_receipt(repo_root, validated, cand_id)
+                    cand_rev = load_report_candidate_review(repo_root, validated, cand_id)
+                    if cand_capture is not None and cand_file is not None and cand_rev is not None:
+                        try:
+                            active_db = db_path
+                            if active_db.is_file():
+                                replay_read_capture(active_db, cand_capture, limits=CaptureLimits())
+                                replay_file_capture(cand_file, repo_root)
+                                is_valid = True
+                        except Exception:
+                            is_valid = False
+                if is_valid:
+                    cached_payload = dict(record.result_payload)
+                    cached_payload["reused"] = True
+                    cached_payload["status"] = "reused"
+                    return Response(
+                        json.dumps(cached_payload, default=str),
+                        status=200,
+                        mimetype="application/json",
+                    )
+                record, already_running = claim_drifted_report_request(
+                    repo_root,
+                    semantic_request_key=semantic_key,
+                    ticker=validated,
+                    owner_action_id=owner_action_id,
+                )
+                if already_running:
+                    return Response(
+                        json.dumps(
+                            {
+                                "status": "running",
+                                "message": "candidate refresh in progress",
+                                "ticker": validated,
+                            }
+                        ),
+                        status=202,
+                        mimetype="application/json",
+                    )
+
+        try:
+            from execution.build_artifacts import build_candidate_artifact
+        except ImportError:
+            from build_artifacts import build_candidate_artifact
+
+        try:
+            result = build_candidate_artifact(
+                validated,
+                repo_root,
+                db_path=db_path,
+                source_context=context.source_context,
+                expected_current_artifact_id=expected_current,
+            )
+            complete_report_request(
+                repo_root,
+                semantic_request_key=semantic_key,
+                status="completed" if result.get("status") in ("ok", "reused") else "failed",
+                artifact_id=str(result.get("artifact_id") or "") or None,
+                result_payload=result,
+            )
+        except Exception:
+            complete_report_request(
+                repo_root,
+                semantic_request_key=semantic_key,
+                status="failed",
+            )
+            raise
+
+        status_code = (
+            409
+            if result.get("status") == "capture_unavailable"
+            else (200 if result.get("reused") else 201)
+        )
+        return Response(
+            json.dumps(result, default=str), status=status_code, mimetype="application/json"
+        )
+
+    @app.route("/api/report-sync/<ticker>/publish", methods=["POST"])
+    def report_sync_publish(ticker: str):
+        try:
+            validated = context.safe_ticker(ticker)
+        except ValueError:
+            abort(400)
+        raw_payload = request.get_json(silent=True)
+        payload: dict[str, object] = (
+            cast(dict[str, object], raw_payload) if isinstance(raw_payload, dict) else {}
+        )
+        artifact_id_val = str(payload.get("artifact_id") or "")
+        expected_raw = payload.get("expected_current_artifact_id")
+        expected_current = str(expected_raw) if expected_raw is not None else None
+        owner_action_val = str(payload.get("owner_action_id") or "")
+        if owner_action_val:
+            index = load_report_artifact_index(repo_root)
+            existing = next(
+                (item for item in index.publications if item.owner_action_id == owner_action_val),
+                None,
+            )
+            if existing is not None:
+                if (existing.artifact_id, existing.expected_current_artifact_id) == (
+                    artifact_id_val,
+                    expected_current,
+                ):
+                    return Response(
+                        existing.model_dump_json(), status=200, mimetype="application/json"
+                    )
+                return Response(
+                    json.dumps({"error": "owner_action_id_conflict"}),
+                    status=409,
+                    mimetype="application/json",
+                )
+        if_match = request.headers.get("If-Match")
+        if if_match:
+            clean_if_match = if_match.strip('"')
+            live_with_candidate = build_report_sync_status(
+                repo_root,
+                validated,
+                conn=context.get_read_db(),
+                candidate_artifact_id=artifact_id_val or None,
+            )
+            live_plain = build_report_sync_status(repo_root, validated, conn=context.get_read_db())
+            candidate_etag = str(live_with_candidate.get("etag") or "")
+            plain_etag = str(live_plain.get("etag") or "")
+            if clean_if_match != candidate_etag and clean_if_match != plain_etag:
+                return Response(
+                    json.dumps({"error": "etag_mismatch"}), status=412, mimetype="application/json"
+                )
+        try:
+            approval, reused = publish_report_candidate(
+                repo_root,
+                db_path=db_path,
+                ticker=validated,
+                artifact_id=artifact_id_val,
+                expected_current_artifact_id=expected_current,
+                owner_action_id=owner_action_val,
+            )
+        except ReportPublicationConflictError as exc:
+            return Response(
+                json.dumps({"error": exc.reason, "detail": exc.detail}),
+                status=409,
+                mimetype="application/json",
+            )
+        return Response(
+            approval.model_dump_json(), status=200 if reused else 201, mimetype="application/json"
+        )
+
+
 def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
     from comments_server_financial_evidence_routes import register_growth_evidence_routes
 
@@ -746,247 +993,7 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             )
         return send_file(matches[-1])
 
-    @app.route("/api/report-sync/<ticker>", methods=["GET"])
-    def report_sync_status(ticker: str):
-        try:
-            validated = context.safe_ticker(ticker)
-        except ValueError:
-            abort(400)
-        status = build_report_sync_status(
-            repo_root,
-            validated,
-            conn=context.get_read_db(),
-            candidate_artifact_id=request.args.get("candidate_artifact_id"),
-        )
-        etag = str(status["etag"])
-        if request.headers.get("If-None-Match", "").strip('"') == etag:
-            return Response(status=304, headers={"ETag": f'"{etag}"'})
-        response = Response(json.dumps(status), mimetype="application/json")
-        response.headers["ETag"] = f'"{etag}"'
-        return response
-
-    @app.route("/api/report-sync/<ticker>/candidate", methods=["POST"])
-    def report_sync_candidate(ticker: str):
-        try:
-            validated = context.safe_ticker(ticker)
-        except ValueError:
-            abort(400)
-        raw_payload = request.get_json(silent=True)
-        payload: dict[str, object] = (
-            cast(dict[str, object], raw_payload) if isinstance(raw_payload, dict) else {}
-        )
-        if_match = request.headers.get("If-Match")
-        if if_match:
-            clean_if_match = if_match.strip('"')
-            live = build_report_sync_status(repo_root, validated, conn=context.get_read_db())
-            valid_etags = {str(live["etag"])}
-            cand_id = (
-                request.args.get("candidate_artifact_id")
-                or payload.get("candidate_artifact_id")
-                or payload.get("artifact_id")
-            )
-            if cand_id:
-                live_cand = build_report_sync_status(
-                    repo_root,
-                    validated,
-                    conn=context.get_read_db(),
-                    candidate_artifact_id=str(cand_id),
-                )
-                valid_etags.add(str(live_cand["etag"]))
-            for item in load_report_artifact_index(repo_root).items:
-                if item.ticker == validated and item.publication_status == "draft_preview":
-                    status_cand = build_report_sync_status(
-                        repo_root,
-                        validated,
-                        conn=context.get_read_db(),
-                        candidate_artifact_id=item.artifact_id,
-                    )
-                    valid_etags.add(str(status_cand["etag"]))
-            if clean_if_match not in valid_etags:
-                return Response(
-                    json.dumps({"error": "etag_mismatch"}), status=412, mimetype="application/json"
-                )
-        owner_action_raw = request.headers.get("X-Owner-Action-Id") or payload.get(
-            "owner_action_id"
-        )
-        owner_action_id = str(owner_action_raw) if owner_action_raw is not None else None
-        expected_raw = request.args.get("expected_current_artifact_id") or payload.get(
-            "expected_current_artifact_id"
-        )
-        expected_current = str(expected_raw) if expected_raw is not None else None
-
-        binding = resolve_report_model_binding(repo_root, validated, conn=context.get_read_db())
-        model_key = binding.row_id if isinstance(binding, ReportModelBinding) else "nomodel"
-        semantic_key = f"candidate_refresh:{validated}:{model_key}:{expected_current or ''}"
-
-        record, req_reused = begin_or_reuse_report_request(
-            repo_root,
-            semantic_request_key=semantic_key,
-            kind="candidate_refresh",
-            ticker=validated,
-            owner_action_id=owner_action_id,
-        )
-        if req_reused:
-            if record.status == "running":
-                return Response(
-                    json.dumps(
-                        {
-                            "status": "running",
-                            "message": "candidate refresh in progress",
-                            "ticker": validated,
-                        }
-                    ),
-                    status=202,
-                    mimetype="application/json",
-                )
-            if record.status == "completed" and record.result_payload:
-                cand_id = record.artifact_id or str(record.result_payload.get("artifact_id") or "")
-                is_valid = False
-                if cand_id:
-                    cand_capture = load_report_capture_receipt(repo_root, validated, cand_id)
-                    cand_file = load_report_file_capture_receipt(repo_root, validated, cand_id)
-                    cand_rev = load_report_candidate_review(repo_root, validated, cand_id)
-                    if cand_capture is not None and cand_file is not None and cand_rev is not None:
-                        try:
-                            active_db = db_path
-                            if active_db.is_file():
-                                replay_read_capture(active_db, cand_capture, limits=CaptureLimits())
-                                replay_file_capture(cand_file, repo_root)
-                                is_valid = True
-                        except Exception:
-                            is_valid = False
-                if is_valid:
-                    cached_payload = dict(record.result_payload)
-                    cached_payload["reused"] = True
-                    cached_payload["status"] = "reused"
-                    return Response(
-                        json.dumps(cached_payload, default=str),
-                        status=200,
-                        mimetype="application/json",
-                    )
-                record, already_running = claim_drifted_report_request(
-                    repo_root,
-                    semantic_request_key=semantic_key,
-                    ticker=validated,
-                    owner_action_id=owner_action_id,
-                )
-                if already_running:
-                    return Response(
-                        json.dumps(
-                            {
-                                "status": "running",
-                                "message": "candidate refresh in progress",
-                                "ticker": validated,
-                            }
-                        ),
-                        status=202,
-                        mimetype="application/json",
-                    )
-
-        try:
-            from execution.build_artifacts import build_candidate_artifact
-        except ImportError:
-            from build_artifacts import build_candidate_artifact
-
-        try:
-            result = build_candidate_artifact(
-                validated,
-                repo_root,
-                db_path=db_path,
-                source_context=context.source_context,
-                expected_current_artifact_id=expected_current,
-            )
-            complete_report_request(
-                repo_root,
-                semantic_request_key=semantic_key,
-                status="completed" if result.get("status") in ("ok", "reused") else "failed",
-                artifact_id=str(result.get("artifact_id") or "") or None,
-                result_payload=result,
-            )
-        except Exception:
-            complete_report_request(
-                repo_root,
-                semantic_request_key=semantic_key,
-                status="failed",
-            )
-            raise
-
-        status_code = (
-            409
-            if result.get("status") == "capture_unavailable"
-            else (200 if result.get("reused") else 201)
-        )
-        return Response(
-            json.dumps(result, default=str), status=status_code, mimetype="application/json"
-        )
-
-    @app.route("/api/report-sync/<ticker>/publish", methods=["POST"])
-    def report_sync_publish(ticker: str):
-        try:
-            validated = context.safe_ticker(ticker)
-        except ValueError:
-            abort(400)
-        raw_payload = request.get_json(silent=True)
-        payload: dict[str, object] = (
-            cast(dict[str, object], raw_payload) if isinstance(raw_payload, dict) else {}
-        )
-        artifact_id_val = str(payload.get("artifact_id") or "")
-        expected_raw = payload.get("expected_current_artifact_id")
-        expected_current = str(expected_raw) if expected_raw is not None else None
-        owner_action_val = str(payload.get("owner_action_id") or "")
-        if owner_action_val:
-            index = load_report_artifact_index(repo_root)
-            existing = next(
-                (item for item in index.publications if item.owner_action_id == owner_action_val),
-                None,
-            )
-            if existing is not None:
-                if (existing.artifact_id, existing.expected_current_artifact_id) == (
-                    artifact_id_val,
-                    expected_current,
-                ):
-                    return Response(
-                        existing.model_dump_json(), status=200, mimetype="application/json"
-                    )
-                return Response(
-                    json.dumps({"error": "owner_action_id_conflict"}),
-                    status=409,
-                    mimetype="application/json",
-                )
-        if_match = request.headers.get("If-Match")
-        if if_match:
-            clean_if_match = if_match.strip('"')
-            live_with_candidate = build_report_sync_status(
-                repo_root,
-                validated,
-                conn=context.get_read_db(),
-                candidate_artifact_id=artifact_id_val or None,
-            )
-            live_plain = build_report_sync_status(repo_root, validated, conn=context.get_read_db())
-            candidate_etag = str(live_with_candidate.get("etag") or "")
-            plain_etag = str(live_plain.get("etag") or "")
-            if clean_if_match != candidate_etag and clean_if_match != plain_etag:
-                return Response(
-                    json.dumps({"error": "etag_mismatch"}), status=412, mimetype="application/json"
-                )
-        try:
-            approval, reused = publish_report_candidate(
-                repo_root,
-                db_path=db_path,
-                ticker=validated,
-                artifact_id=artifact_id_val,
-                expected_current_artifact_id=expected_current,
-                owner_action_id=owner_action_val,
-            )
-        except ReportPublicationConflictError as exc:
-            return Response(
-                json.dumps({"error": exc.reason, "detail": exc.detail}),
-                status=409,
-                mimetype="application/json",
-            )
-        return Response(
-            approval.model_dump_json(), status=200 if reused else 201, mimetype="application/json"
-        )
+    _register_report_sync_routes(app, context)
 
     @app.route("/api/work-os/briefs/<artifact_id>", methods=["GET"])
     def brief_descriptor_api(artifact_id: str):
