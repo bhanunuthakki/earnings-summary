@@ -41,6 +41,9 @@ inventory. The cleanup does not infer ownership or deletion rights from that cou
 
 ## Outcome
 
+### Pytest failed-run payload trim and future timestamps (2026-10-24)
+Disposition: **no surface change** (internal test-harness storage behavior; not an operator workflow). Failed full-suite runs each kept up to 36 GB of fixture databases for the seven-day review window, and 489 of them held about 248 GB on one Mac, cutting free space from 733 GB to 407 GB in about a day and a half. Session-start pruning now trims a failed or holder-gone active run to its review evidence (manifest, resolution, logs, JUnit XML, JSONL, retirement receipts) one hour after it ends; the root still goes after seven days. Links inside a run are removed, never followed. Some tests stamp fixtures years ahead, which kept manifest-less roots "recent" forever; future modification times are now ignored. Owner decision recorded in `data_pipeline_dag.md`. Regression evidence: `tests/test_temp_run_pruning.py`.
+
 ### Pytest session-start pruning of abandoned temp runs (2026-10-22)
 Disposition: **no surface change** (internal test-harness storage behavior; not an operator workflow). No host ran a cleaner for local pytest session roots. Weekly cleanup only counts system-temp test pools, completed runs kept their folder, manifest and receipts with no expiry, and failed runs waited indefinitely for a reviewed resolution. A Mac accumulated 435 such roots (about 15 GB). Each pytest controller now prunes earlier harness-named roots whose lease holder no longer runs: completed and manifest-less roots after one day, failed and holder-gone active roots after the seven-day review window (owner decision). Shared secrets folders, links, unreadable manifests and live-leased roots are kept. No operator action, scheduler, service or Operations surface changed. Regression evidence: `tests/test_temp_run_pruning.py`.
 
