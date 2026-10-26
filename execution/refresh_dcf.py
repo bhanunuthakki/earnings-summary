@@ -50,7 +50,11 @@ import sys
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    import execution.build_meli_platform_dcf as meli
+    import execution.build_nu_platform_dcf as nu
 
 try:
     from _lib import PROJECT_ROOT
@@ -58,7 +62,7 @@ except ImportError:  # ``python -m execution.refresh_dcf``
     from execution._lib import PROJECT_ROOT
 
 from db_paths import configured_db_path
-from dcf import assumptions_doc
+from dcf import assumptions_doc, family_editor
 from dcf import equity_bridge as equity_bridge_mod
 from dcf import forecast_series as forecast_series_mod
 from dcf import persist as persist_mod
@@ -69,11 +73,17 @@ from dcf.artifact_promotion import (
     DcfCommittedCleanupError,
     DcfRecoveryError,
     StagedArtifactBundle,
+    StagedFilePromotion,
     dcf_child_environment,
     hold_dcf_artifacts,
     unique_staged_path,
 )
-from dcf.input_evidence import InputEvidenceError, ModelInputRequest, SourceReadContext
+from dcf.input_evidence import (
+    InputEvidenceError,
+    ModelInputReceipt,
+    ModelInputRequest,
+    SourceReadContext,
+)
 from dcf.meli_inputs import RECIPE as MELI_INPUT_RECIPE
 from dcf.onon_inputs import RECIPE as ONON_INPUT_RECIPE
 from dcf.provenance import DcfInputProvenance, input_clock_summary
@@ -744,7 +754,9 @@ def _refresh_one_owned(
     if model == "fintech_sotp":
         return _refresh_fintech_sotp(ticker, repo_root, db_path=db_path)
     if model == "platform_dcf":
-        return _refresh_platform(ticker, repo_root, db_path=db_path)
+        return _refresh_platform(
+            ticker, repo_root, db_path=db_path, source_state_root=source_state_root
+        )
     if model == "meli_platform_sotp":
         return _refresh_meli_sotp(
             ticker,
@@ -860,6 +872,9 @@ def _valuation_model(repo_root: Path, ticker: str) -> tuple[str, str | None]:
         # valuation_model yet: no template — surface the business model as the reason.
         return na, None
     return "fcff_dcf", None
+
+
+valuation_model = _valuation_model
 
 
 def _specialized_committed_cleanup_result(
@@ -1028,7 +1043,13 @@ def _refresh_fintech_sotp(ticker: str, repo_root: Path, *, db_path: Path) -> dic
     }
 
 
-def _refresh_platform(ticker: str, repo_root: Path, *, db_path: Path) -> dict[str, object]:
+def _refresh_platform(
+    ticker: str,
+    repo_root: Path,
+    *,
+    db_path: Path,
+    source_state_root: Path | None = None,
+) -> dict[str, object]:
     """Build the customer-driven platform DCF (``execution/build_nu_platform_dcf.py``)
     to ``dcf/<T>.xlsx`` — values a fintech as a customer-acquisition + monetization
     platform (customers x ARPAC -> Credit/Float/Fee gross profit -> FCFE), the right
@@ -1047,6 +1068,8 @@ def _refresh_platform(ticker: str, repo_root: Path, *, db_path: Path) -> dict[st
         DCF_DEST=str(tmp),
         DCF_PROMOTE_DEST=str(dest),
     )
+    if source_state_root is not None:
+        env["DCF_SOURCE_STATE_ROOT"] = str(source_state_root.resolve())
     env.update(dcf_child_environment(repo_root, ticker))
     proc = subprocess.run(
         [*managed_python_prefix(PROJECT_ROOT), str(_PLATFORM_BUILDER)],
@@ -2261,6 +2284,116 @@ def apply_edits(
         }
 
 
+def _probe_redesign_reuse(
+    db_path: Path,
+    repo_root: Path,
+    ticker: str,
+    dest: Path,
+    inp_edited: redesign_mod.RedesignInputs,
+) -> persist_mod.DcfRunRevision | None:
+    if not db_path.exists() or not dest.is_file():
+        return None
+    try:
+        with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
+            conn.execute("BEGIN")
+            context = persist_mod.read_reuse_context(conn, ticker)
+            if context is None:
+                return None
+            rv = redesign_mod.value(inp_edited)
+            holdings = _load_holdings(repo_root, ticker)
+            mos_bar = holdings.get("mos_bar") if holdings else None
+            mos_bar_f = float(mos_bar) if isinstance(mos_bar, (int, float)) else None
+            price = (
+                context.live_price if context.live_price is not None else inp_edited.current_price
+            )
+            price_at: datetime | None = None
+            if context.live_price_at:
+                with contextlib.suppress(ValueError):
+                    price_at = datetime.fromisoformat(context.live_price_at)
+            prior_country = prior_country_risk_context(db_path, ticker)
+            if prior_country is None:
+                return None
+            country_context = country_risk_context_for_edit(
+                prior_country,
+                ticker=ticker,
+                effective_premium=inp_edited.country_risk_premium,
+            )
+            if country_context is None:
+                return None
+            scenarios = redesign_mod.scenario_values(inp_edited)
+            assumption_snapshot = _redesign_snapshot(
+                rv,
+                str(dest),
+                reporting_currency=_reported_currency(repo_root, ticker),
+                scenarios=scenarios,
+                inp=inp_edited,
+                scenario_prior_meta=_load_scenario_prior_meta(repo_root, ticker),
+                holdings=holdings,
+            )
+            prior_overlay = prior_primary_fact_overlay(db_path, ticker)
+            prior_bridge = prior_equity_bridge_context(db_path, ticker)
+            equity_bridge_receipt = equity_bridge_mod.build_equity_bridge_receipt(
+                ticker=ticker,
+                operating_value_usd_m=rv.operating_value_usd_m,
+                cash_m=rv.cash_m,
+                total_debt_m=rv.total_debt_m,
+                diluted_shares_m=rv.diluted_shares_m,
+                fx_to_usd=rv.fx_to_usd,
+                value_per_share_usd=rv.value_per_share_usd,
+                reporting_currency=_reported_currency(repo_root, ticker),
+                primary_fact_overlay=prior_overlay,
+                bridge_context=prior_bridge,
+            )
+            assumptions_path = repo_root / "data" / "dcf_assumptions" / f"{ticker}.json"
+            input_provenance = build_dcf_provenance(
+                ticker=ticker,
+                repo_root=repo_root,
+                workbook_path=dest,
+                assumptions_path=assumptions_path,
+                workbook_locator=dest,
+                input_payload=inp_edited.to_dict(),
+                assumption_snapshot_json=assumption_snapshot,
+                live_price=price,
+                live_price_at=price_at,
+                live_price_source=context.market_source,
+                mos_bar=mos_bar_f,
+                primary_fact_overlay=prior_overlay,
+                equity_bridge_receipt=equity_bridge_receipt.to_dict(),
+                country_risk_context=country_context,
+            )
+            row = persist_mod.DcfRunRow(
+                ticker=ticker,
+                valuation_date=date.today(),
+                horizon_years=redesign_mod.N_FC,
+                wacc=rv.wacc,
+                npv=rv.operating_value_usd_m,
+                npv_per_share=rv.value_per_share_usd,
+                shares_outstanding=rv.diluted_shares_m * 1_000_000.0,
+                currency=CURRENCY_DEFAULT,
+                live_price=price,
+                live_price_at=price_at,
+                mos_bar_used=mos_bar_f,
+                assumption_snapshot_json=assumption_snapshot,
+                notes=context.notes or f"workbook={dest.name} (redesigned)",
+                assumptions_sync_status=None,
+                assumptions_synced_at=None,
+                provenance=input_provenance,
+                forecast_points=redesign_revenue_forecast_points(
+                    conn,
+                    repo_root=repo_root,
+                    ticker=ticker,
+                    workbook_path=dest,
+                    valuation=rv,
+                ),
+            )
+            matched = persist_mod.matching_current_run_id(conn, row, run_id=context.run_id)
+            if matched is None:
+                return None
+            return persist_mod.read_current_revision(conn, matched)
+    except Exception:
+        return None
+
+
 def _apply_edits_owned(
     ticker: str,
     repo_root: Path,
@@ -2288,6 +2421,20 @@ def _apply_edits_owned(
     dest = repo_root / DCF_DIR_NAME / f"{ticker}.xlsx"
     if not redesign_mod.is_redesign_format(dest):
         return {"ticker": ticker, "status": "failed", "reason": "no redesigned workbook to edit"}
+
+    reused = _probe_redesign_reuse(db_path, repo_root, ticker, dest, inp_edited)
+    if reused is not None:
+        return {
+            "ticker": ticker,
+            "status": "ok",
+            "saved": True,
+            "reused_existing_revision": True,
+            "dcf_run_persisted": False,
+            "inputs": inp_edited.to_dict(),
+            "workbook": str(dest),
+            "format": "redesign",
+            "model_revision": dataclasses.asdict(reused),
+        }
 
     # Keep the live workbook and assumptions mirror untouched until the typed
     # promotion gate clears the fully computed candidate.
@@ -2475,8 +2622,1037 @@ def _apply_edits_owned(
         "wacc": rv.wacc,
         "terminal_method": rv.terminal_method,
         "dcf_run_persisted": persisted,
+        "reused_existing_revision": False,
         "model_revision": saved_revision,
         "input_sha256": input_provenance.input_sha256,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Family editor orchestration (typed NU / MELI dispatch on the same routes)
+# ---------------------------------------------------------------------------
+
+
+def _family_defaults(family: str) -> dict[str, float | int]:
+    """Owner-true dataclass seeds; only fields missing every carrier default."""
+    import execution.build_meli_platform_dcf as meli
+    import execution.build_nu_platform_dcf as nu
+
+    cls = nu.Assum if family == family_editor.NU_FAMILY else meli.Assum
+    return {
+        key: value
+        for key, value in dataclasses.asdict(cls()).items()
+        if key in family_editor.NU_FIELDS or key in family_editor.MELI_FIELDS
+    }
+
+
+def _build_nu_assum(values: Mapping[str, float | int]) -> nu.Assum:
+    import execution.build_nu_platform_dcf as nu
+
+    base = nu.Assum()
+    base.global_assumption_source = {
+        "role": "global_dcf_assumptions",
+        "locator": "data/portfolio.db:global_dcf_assumptions",
+        "status": "default",
+    }
+    for f in dataclasses.fields(base):
+        if f.name in values:
+            raw = values[f.name]
+            val = int(raw) if f.name in ("years", "derive_ke_capm") else float(raw)
+            setattr(base, f.name, val)
+    return base
+
+
+def _build_meli_assum(values: Mapping[str, float | int]) -> meli.Assum:
+    import execution.build_meli_platform_dcf as meli
+
+    base = meli.Assum()
+    for f in dataclasses.fields(base):
+        if f.name in values:
+            raw = values[f.name]
+            val = int(raw) if f.name in ("years", "derive_capm") else float(raw)
+            setattr(base, f.name, val)
+    return base
+
+
+build_nu_assum = _build_nu_assum
+build_meli_assum = _build_meli_assum
+
+
+def family_committed_inputs(
+    db_path: Path, ticker: str, family: str
+) -> dict[str, float | int] | None:
+    """Latest committed full typed vector from the row's assumption snapshot."""
+    if not db_path.exists():
+        return None
+    try:
+        with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT assumption_snapshot_json FROM dcf_runs "
+                "WHERE UPPER(ticker) = UPPER(:ticker) AND COALESCE(segment_name, '') = '' "
+                "AND COALESCE(is_latest, 1) = 1 ORDER BY id DESC LIMIT 1",
+                {"ticker": ticker.upper()},
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+    if row is None:
+        return None
+    try:
+        snap: object = json.loads(row["assumption_snapshot_json"])
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(snap, dict):
+        return None
+    snap_dict = cast("dict[str, object]", snap)
+    block: object = snap_dict.get("committed_inputs")
+    if not isinstance(block, dict):
+        return None
+    block_dict = cast("dict[str, object]", block)
+    if block_dict.get("schema_version") != "dcf_committed_inputs.v1":
+        return None
+    if block_dict.get("family") != family:
+        raise family_editor.FamilyFieldError(
+            "family_mismatch", field=str(block_dict.get("family")), http_status=409
+        )
+    inputs: object = block_dict.get("inputs")
+    if not isinstance(inputs, dict):
+        return None
+    return family_editor.normalize_family_vector(family, cast("dict[str, object]", inputs))
+
+
+def _nu_source_bindings(state_root: Path, repo_root: Path | None = None) -> list[dict[str, str]]:
+    bindings: list[dict[str, str]] = []
+    assumptions = state_root / "data" / "bank_assumptions" / "NU_platform.json"
+    if not assumptions.is_file() and repo_root is not None:
+        assumptions = repo_root / "data" / "bank_assumptions" / "NU_platform.json"
+    if assumptions.is_file():
+        bindings.append(
+            {
+                "path": str(assumptions),
+                "role": "owner_assumptions",
+                "sha256": _sha256_file(assumptions),
+            }
+        )
+    holdings = state_root / "micro_thesis" / "holdings" / "NU.json"
+    if not holdings.is_file() and repo_root is not None:
+        holdings = repo_root / "micro_thesis" / "holdings" / "NU.json"
+    if holdings.is_file():
+        bindings.append(
+            {
+                "path": str(holdings),
+                "role": "holding_policy",
+                "sha256": _sha256_file(holdings),
+            }
+        )
+    if not bindings:
+        p = (
+            (state_root if state_root.exists() else (repo_root or state_root))
+            / "data"
+            / "bank_assumptions"
+            / "NU_platform.json"
+        )
+        bindings.append(
+            {
+                "path": str(p),
+                "role": "owner_assumptions",
+                "sha256": "0" * 64,
+            }
+        )
+    return bindings
+
+
+def _meli_source_bindings(state_root: Path) -> list[dict[str, str]]:
+    bindings: list[dict[str, str]] = []
+    packet = _meli_env_packet()
+    if packet is not None:
+        assumptions_path = packet[0]
+        if assumptions_path.is_file():
+            bindings.append(
+                {
+                    "path": str(assumptions_path),
+                    "role": "owner_assumptions",
+                    "sha256": _sha256_file(assumptions_path),
+                }
+            )
+        if packet[1] is not None and packet[1].is_file():
+            bindings.append(
+                {
+                    "path": str(packet[1]),
+                    "role": "model_input_receipt",
+                    "sha256": _sha256_file(packet[1]),
+                }
+            )
+        if packet[2] is not None and packet[2].is_file():
+            bindings.append(
+                {
+                    "path": str(packet[2]),
+                    "role": "scenario_acceptance",
+                    "sha256": _sha256_file(packet[2]),
+                }
+            )
+    holdings = state_root / "micro_thesis" / "holdings" / "MELI.json"
+    if holdings.is_file():
+        bindings.append(
+            {
+                "path": str(holdings),
+                "role": "holding_policy",
+                "sha256": _sha256_file(holdings),
+            }
+        )
+    if not bindings:
+        p = state_root / "data" / "bank_assumptions" / "MELI_sotp.json"
+        bindings.append(
+            {
+                "path": str(p),
+                "role": "owner_assumptions",
+                "sha256": "0" * 64,
+            }
+        )
+    return bindings
+
+
+def family_current_vector(
+    ticker: str,
+    family: str,
+    repo_root: Path,
+    db_path: Path,
+    state_root: Path | None,
+) -> dict[str, float | int]:
+    """Pointer-first current vector; invalid pointer fails closed (typed).
+
+    Resolution order: valid active pointer proposal → committed snapshot
+    vector → the owner's declared source authority (MELI: the env reviewed
+    packet; NU: ``load_assumptions``) → typed unavailability.
+    """
+    t = ticker.upper()
+    base = _family_defaults(family)
+
+    if state_root is not None and family_editor.active_family_pointer_path(state_root, t).exists():
+        current_row: dict[str, Any] | None = None
+        if db_path.exists():
+            try:
+                with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
+                    conn.row_factory = sqlite3.Row
+                    stored = conn.execute(
+                        "SELECT id, engine_version, input_sha256, workbook_sha256, assumption_snapshot_json "
+                        "FROM dcf_runs WHERE UPPER(ticker) = UPPER(?) AND COALESCE(segment_name, '') = '' "
+                        "AND COALESCE(is_latest, 1) = 1 ORDER BY id DESC LIMIT 1",
+                        (t,),
+                    ).fetchone()
+                    if stored is not None:
+                        current_row = {
+                            "id": int(stored["id"]),
+                            "engine_version": str(stored["engine_version"])
+                            if stored["engine_version"]
+                            else None,
+                            "input_sha256": str(stored["input_sha256"])
+                            if stored["input_sha256"]
+                            else None,
+                            "workbook_sha256": str(stored["workbook_sha256"])
+                            if stored["workbook_sha256"]
+                            else None,
+                            "assumption_snapshot_sha256": hashlib.sha256(
+                                str(stored["assumption_snapshot_json"] or "").encode("utf-8")
+                            ).hexdigest(),
+                        }
+            except (sqlite3.Error, ValueError):
+                current_row = None
+
+        current_wb_path = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
+        current_wb_sha = _sha256_file(current_wb_path) if current_wb_path.is_file() else None
+        sources = (
+            _nu_source_bindings(state_root, repo_root)
+            if family == family_editor.NU_FAMILY
+            else _meli_source_bindings(state_root)
+        )
+
+        try:
+            pointer = family_editor.read_active_family_pointer(state_root, t)
+            if pointer is None:
+                raise family_editor.FamilyPointerInvalidError(f"family_pointer_invalid:{t}")
+            if current_row is None:
+                raise family_editor.FamilyPointerInvalidError(f"family_pointer_stale_row:{t}")
+            proposal = family_editor.read_bound_family_proposal(
+                state_root,
+                t,
+                pointer,
+                expected_family=family,
+                expected_run_row_id=current_row["id"],
+                expected_engine_version=current_row.get("engine_version"),
+                expected_input_sha256=current_row.get("input_sha256"),
+                expected_assumption_snapshot_sha256=current_row["assumption_snapshot_sha256"],
+                expected_workbook_sha256=current_wb_sha,
+                expected_sources=sources,
+            )
+        except Exception as exc:
+            raise family_editor.FamilyContractUnavailableError(
+                f"family_pointer_invalid:{t}", field=t, http_status=409
+            ) from exc
+
+        return family_editor.FamilyVectorState(
+            family_editor.normalize_family_vector(family, {**base, **proposal.resolved_inputs}),
+            source="active_pointer",
+        )
+
+    committed = family_committed_inputs(db_path, t, family)
+    if committed is not None:
+        return family_editor.FamilyVectorState(
+            family_editor.normalize_family_vector(family, {**base, **committed}),
+            source="baseline",
+        )
+    if family == family_editor.MELI_FAMILY:
+        packet = _meli_env_packet()
+        if packet is not None:
+            vector = _meli_packet_vector(t, db_path, packet)
+            if vector is not None:
+                return family_editor.FamilyVectorState(
+                    family_editor.normalize_family_vector(family, {**base, **vector}),
+                    source="baseline",
+                )
+    else:
+        import execution.build_nu_platform_dcf as nu
+
+        try:
+            s = nu.load_assumptions(t, repo_root=repo_root, db_path=db_path)
+        except (OSError, ValueError, sqlite3.Error):
+            s = None
+        if s is not None:
+            return family_editor.FamilyVectorState(
+                family_editor.normalize_family_vector(family, {**base, **dataclasses.asdict(s)}),
+                source="baseline",
+            )
+    raise family_editor.FamilyFieldError("committed_input_unavailable", field=t, http_status=404)
+
+
+def _meli_env_packet() -> tuple[Path, Path | None, Path | None] | None:
+    raw = os.environ.get("DCF_MELI_ASSUMPTIONS_PATH", "").strip()
+    if not raw:
+        return None
+    receipt_raw = os.environ.get("DCF_MELI_INPUT_RECEIPT_PATH", "").strip()
+    acceptance_raw = os.environ.get("DCF_MELI_SCENARIO_ACCEPTANCE_PATH", "").strip()
+    return (
+        Path(raw),
+        Path(receipt_raw) if receipt_raw else None,
+        Path(acceptance_raw) if acceptance_raw else None,
+    )
+
+
+def _meli_packet_vector(
+    ticker: str, db_path: Path, packet: tuple[Path, Path | None, Path | None]
+) -> dict[str, float | int] | None:
+    """Read the reviewed env packet's full vector (verification included)."""
+    import execution.build_meli_platform_dcf as meli
+
+    assumptions_path = packet[0]
+    try:
+        s, _receipt = meli.load_verified_assumptions(
+            ticker, db_path=db_path, assumptions_path=assumptions_path
+        )
+    except (OSError, ValueError):
+        return None
+    return dataclasses.asdict(s)
+
+
+def _family_base_revision(db_path: Path, ticker: str) -> family_editor.FamilyBaseRevision:
+    """The current committed row identity the proposal is based on."""
+    if not db_path.exists():
+        return family_editor.FamilyBaseRevision(row_id=0)
+    try:
+        with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT id, input_sha256, workbook_sha256, assumption_snapshot_json "
+                "FROM dcf_runs WHERE UPPER(ticker) = UPPER(:ticker) AND COALESCE(segment_name, '') = '' "
+                "AND COALESCE(is_latest, 1) = 1 ORDER BY id DESC LIMIT 1",
+                {"ticker": ticker.upper()},
+            ).fetchone()
+    except sqlite3.Error:
+        return family_editor.FamilyBaseRevision(row_id=0)
+    if row is None:
+        return family_editor.FamilyBaseRevision(row_id=0)
+    return family_editor.FamilyBaseRevision(
+        row_id=int(row["id"]),
+        input_sha256=row["input_sha256"],
+        workbook_sha256=row["workbook_sha256"],
+        assumption_snapshot_sha256=hashlib.sha256(
+            str(row["assumption_snapshot_json"]).encode("utf-8")
+        ).hexdigest(),
+    )
+
+
+def _write_family_proposal(
+    state_root: Path,
+    ticker: str,
+    family: str,
+    resolved: dict[str, float | int],
+    edits: dict[str, float | int],
+    base: family_editor.FamilyBaseRevision,
+    *,
+    author: str,
+    rationale: str,
+    sources: list[dict[str, str]] | None = None,
+    workbook_sha256: str | None = None,
+) -> tuple[Path, str, str]:
+    """Idempotent immutable proposal write; returns (path, digest, file sha256)."""
+    proposal = family_editor.FamilyProposal(
+        ticker=ticker.upper(),
+        family=family,
+        base=base,
+        author=author,
+        rationale=rationale,
+        created_at=family_editor.now_utc(),
+        edits=dict(edits),
+        resolved_inputs=dict(resolved),
+        sources=sources or [],
+        workbook_sha256=workbook_sha256,
+    )
+    path, digest = family_editor.write_family_proposal(state_root, proposal)
+    return path, digest, hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _family_revision_dict(result: persist_mod.DcfPersistenceResult) -> dict[str, object]:
+    return cast("dict[str, object]", dataclasses.asdict(result.revision))
+
+
+def _matching_current_revision(
+    db_path: Path, ticker: str, row: persist_mod.DcfRunRow
+) -> persist_mod.DcfRunRevision | None:
+    """Complete-field reuse equivalence in one read snapshot."""
+    if not db_path.exists():
+        return None
+    try:
+        with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
+            conn.execute("BEGIN")
+            context = persist_mod.read_reuse_context(conn, ticker.upper())
+            if context is None:
+                return None
+            matched = persist_mod.matching_current_run_id(conn, row, run_id=context.run_id)
+            if matched is None:
+                return None
+            return persist_mod.read_current_revision(conn, matched)
+    except (sqlite3.Error, ValueError):
+        return None
+
+
+def _apply_nu_family_edits(
+    ticker: str,
+    repo_root: Path,
+    db_path: Path,
+    state_root: Path,
+    normalized: dict[str, float | int],
+    *,
+    author: str,
+    rationale: str,
+) -> dict[str, object]:
+    import execution.build_nu_platform_dcf as nu
+
+    family = family_editor.NU_FAMILY
+    current = family_current_vector(ticker, family, repo_root, db_path, state_root)
+    resolved = family_editor.normalize_family_vector(family, {**current, **normalized})
+    family_editor.validate_family_vector(family, resolved)
+    s = _build_nu_assum(resolved)
+    m = nu.mirror(s)
+    if not m.vps:
+        return {"ticker": ticker, "status": "failed", "reason": "model_value_unavailable"}
+
+    dest = nu.out_path(repo_root)
+    active_ptr = family_editor.read_active_family_pointer(state_root, ticker)
+    base = _family_base_revision(db_path, ticker)
+    sources = _nu_source_bindings(state_root, repo_root)
+
+    if dest.is_file() and active_ptr is not None:
+        dest_sha256 = _sha256_file(dest)
+        prepared_existing = nu.prepare_persist_row(
+            s,
+            m,
+            None,
+            None,
+            ticker=ticker.upper(),
+            repo_root=repo_root,
+            db_path=db_path,
+            workbook_path=dest,
+            workbook_locator_path=dest,
+            artifact_promotion=None,
+        )
+        if prepared_existing is not None:
+            matched_revision = _matching_current_revision(db_path, ticker, prepared_existing[1])
+            temp_proposal = family_editor.FamilyProposal(
+                ticker=ticker.upper(),
+                family=family,
+                base=base,
+                author=author,
+                rationale=rationale,
+                created_at=family_editor.now_utc(),
+                edits=dict(normalized),
+                resolved_inputs=dict(resolved),
+                sources=sources,
+                workbook_sha256=dest_sha256,
+            )
+            proposal_digest = family_editor.family_proposal_digest(temp_proposal)
+            if (
+                matched_revision is not None
+                and active_ptr.proposal_id == proposal_digest
+                and active_ptr.run_row_id == matched_revision.row_id
+                and active_ptr.workbook_sha256 == dest_sha256
+            ):
+                return {
+                    "ticker": ticker,
+                    "status": "ok",
+                    "saved": True,
+                    "family": family,
+                    "reused_existing_revision": True,
+                    "dcf_run_persisted": False,
+                    "inputs": resolved,
+                    "proposal_id": proposal_digest,
+                    "model_revision": dataclasses.asdict(matched_revision),
+                }
+
+    staged = unique_staged_path(dest, "family-save")
+    nu.build(s, m, dest=staged, ticker=ticker.upper(), repo_root=repo_root, db_path=db_path)
+    if not staged.is_file():
+        return {"ticker": ticker, "status": "failed", "reason": "family_workbook_unavailable"}
+    workbook_sha256 = _sha256_file(staged)
+
+    prepared = nu.prepare_persist_row(
+        s,
+        m,
+        None,
+        None,
+        ticker=ticker.upper(),
+        repo_root=repo_root,
+        db_path=db_path,
+        workbook_path=staged,
+        workbook_locator_path=dest,
+        artifact_promotion=StagedFilePromotion(staged, dest),
+    )
+    if prepared is None:
+        _unlink(staged)
+        return {"ticker": ticker, "status": "failed", "reason": "persist_unavailable"}
+
+    _proposal_path, digest, proposal_sha256 = _write_family_proposal(
+        state_root,
+        ticker,
+        family,
+        resolved,
+        normalized,
+        base,
+        author=author,
+        rationale=rationale,
+        sources=sources,
+        workbook_sha256=workbook_sha256,
+    )
+    factory = family_editor.active_pointer_promotion_factory(
+        state_root,
+        ticker,
+        family=family,
+        proposal_id=digest,
+        proposal_sha256=proposal_sha256,
+    )
+    cleanup_warning: str | None = None
+    committed_result: persist_mod.DcfPersistenceResult | None = None
+    try:
+        committed_result = nu.persist_dcf_run_with_receipt(
+            s,
+            m,
+            ticker=ticker.upper(),
+            repo_root=repo_root,
+            db_path=db_path,
+            workbook_path=staged,
+            workbook_locator_path=dest,
+            artifact_promotion=StagedFilePromotion(staged, dest),
+            pointer_promotion_factory=factory,
+        )
+    except persist_mod.DcfCommittedPointerCleanupError as exc:
+        cleanup_warning = str(exc)
+        committed_result = exc.result
+    finally:
+        _unlink(staged)
+
+    if committed_result is None:
+        return {
+            "ticker": ticker,
+            "status": "failed",
+            "reason": "persist_unavailable",
+            **({"cleanup_warning": cleanup_warning} if cleanup_warning else {}),
+        }
+    if cleanup_warning is not None:
+        return {
+            "ticker": ticker,
+            "status": "committed_cleanup_failed",
+            "saved": True,
+            "family": family,
+            "dcf_run_persisted": committed_result.written,
+            "recovery_required": True,
+            "cleanup_warning": cleanup_warning,
+            "inputs": resolved,
+            "proposal_id": digest,
+            "model_revision": _family_revision_dict(committed_result),
+        }
+    return {
+        "ticker": ticker,
+        "status": "ok",
+        "saved": True,
+        "family": family,
+        "reused_existing_revision": not committed_result.written,
+        "dcf_run_persisted": committed_result.written,
+        "inputs": resolved,
+        "proposal_id": digest,
+        "model_revision": _family_revision_dict(committed_result),
+    }
+
+
+def _apply_meli_family_edits(
+    ticker: str,
+    repo_root: Path,
+    db_path: Path,
+    state_root: Path,
+    normalized: dict[str, float | int],
+    *,
+    author: str,
+    rationale: str,
+) -> dict[str, object]:
+    import execution.build_meli_platform_dcf as meli
+
+    family = family_editor.MELI_FAMILY
+    t = "MELI"
+    current = family_current_vector(t, family, repo_root, db_path, state_root)
+    resolved = family_editor.normalize_family_vector(family, {**current, **normalized})
+    family_editor.validate_family_vector(family, resolved)
+
+    sources = _meli_source_bindings(state_root)
+    packet = _meli_env_packet()
+    workbook = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
+    source_context = SourceReadContext.for_product_state_root(state_root)
+
+    owner_assum: meli.Assum | None = None
+    owner_assumptions_path: Path | None = None
+    owner_receipt: ModelInputReceipt | None = None
+    owner_acceptance_path: Path | None = None
+
+    if (
+        packet is not None
+        and packet[1] is not None
+        and packet[2] is not None
+        and workbook.is_file()
+    ):
+        try:
+            retained_receipt = meli.load_retained_input_receipt(
+                packet[1],
+                os.environ.get("DCF_MELI_INPUT_RECEIPT_SHA256"),
+            )
+            assumptions_raw = packet[0].read_bytes()
+            expected_assumptions_sha = os.environ.get("DCF_MELI_ASSUMPTIONS_SHA256")
+            if (
+                expected_assumptions_sha is not None
+                and hashlib.sha256(assumptions_raw).hexdigest() != expected_assumptions_sha
+            ):
+                raise InputEvidenceError("assumptions_authority_changed_after_dispatch")
+            if (
+                hashlib.sha256(assumptions_raw).hexdigest()
+                != retained_receipt.assumptions_source_sha256
+            ):
+                raise InputEvidenceError("assumptions_authority_changed_after_review")
+            s_packet, packet_receipt = meli.load_verified_assumptions(
+                t,
+                db_path=db_path,
+                assumptions_path=packet[0],
+                expected_sha256=expected_assumptions_sha,
+                source_context=source_context,
+                retained_receipt=retained_receipt,
+                overrides=resolved,
+            )
+        except InputEvidenceError as exc:
+            reason = str(exc.args[0]) if exc.args else str(exc)
+            if reason == "retained_input_request_or_source_mismatch":
+                reason = "assumptions_authority_changed_after_review"
+            if reason in {
+                "assumptions_authority_changed_after_dispatch",
+                "assumptions_authority_changed_after_review",
+                "retained_input_receipt_changed_after_dispatch",
+                "retained_input_receipt_invalid",
+            }:
+                raise family_editor.FamilyFieldError(reason, field=t, http_status=409) from exc
+            s_packet = None
+            packet_receipt = None
+        except (OSError, ValueError):
+            s_packet = None
+            packet_receipt = None
+        if s_packet is not None and packet_receipt is not None:
+            packet_vector = family_editor.normalize_family_vector(
+                family, dataclasses.asdict(s_packet)
+            )
+            if packet_vector == resolved:
+                owner_assum = s_packet
+                owner_assumptions_path = packet[0]
+                owner_receipt = packet_receipt
+                owner_acceptance_path = packet[2]
+
+    if (
+        owner_assum is None
+        or owner_assumptions_path is None
+        or owner_receipt is None
+        or owner_acceptance_path is None
+    ):
+        base = _family_base_revision(db_path, t)
+        proposal_path, digest, proposal_sha256 = _write_family_proposal(
+            state_root,
+            t,
+            family,
+            resolved,
+            normalized,
+            base,
+            author=author,
+            rationale=rationale,
+            sources=sources,
+        )
+        missing: list[str] = []
+        if packet is None:
+            missing = [
+                "DCF_MELI_ASSUMPTIONS_PATH",
+                "DCF_MELI_INPUT_RECEIPT_PATH",
+                "DCF_MELI_SCENARIO_ACCEPTANCE_PATH",
+            ]
+        else:
+            if packet[1] is None:
+                missing.append("DCF_MELI_INPUT_RECEIPT_PATH")
+            if packet[2] is None:
+                missing.append("DCF_MELI_SCENARIO_ACCEPTANCE_PATH")
+            if not workbook.is_file():
+                missing.append("family_workbook_unavailable")
+            if not missing:
+                missing.append("reviewed_packet_vector_mismatch")
+        handoff = family_editor.MeliPendingHandoff(
+            proposal_id=digest,
+            proposal_sha256=proposal_sha256,
+            missing_bindings=tuple(missing),
+        )
+        return {
+            "ticker": t,
+            "status": "proposal_pending_review",
+            "saved": False,
+            "family": family,
+            "inputs": resolved,
+            "proposal_id": digest,
+            "proposal_path": str(proposal_path),
+            "pending_handoff": handoff.model_dump(mode="json"),
+        }
+
+    s = owner_assum
+    m = meli.mirror(s)
+    if not m.vps:
+        return {"ticker": t, "status": "failed", "reason": "model_value_unavailable"}
+    assumptions_path = owner_assumptions_path
+    receipt = owner_receipt
+
+    scen_acc_raw = os.environ.get("DCF_MELI_SCENARIO_ACCEPTANCE_PATH")
+    try:
+        cases, acceptance = meli.load_reviewed_cases(
+            s,
+            assumptions_path,
+            receipt,
+            scenario_acceptance_path=owner_acceptance_path
+            or (Path(scen_acc_raw) if scen_acc_raw else None),
+            expected_sha256=os.environ.get("DCF_MELI_SCENARIO_ACCEPTANCE_SHA256"),
+        )
+    except InputEvidenceError as exc:
+        reason = str(exc.args[0]) if exc.args else str(exc)
+        raise family_editor.FamilyFieldError(reason, field=t, http_status=409) from exc
+
+    dest = meli.out_path(repo_root)
+    active_ptr = family_editor.read_active_family_pointer(state_root, t)
+    base = _family_base_revision(db_path, t)
+
+    if dest.is_file() and active_ptr is not None:
+        dest_sha256 = _sha256_file(dest)
+        prepared_existing = meli.prepare_persist_row(
+            s,
+            m,
+            None,
+            None,
+            artifact_promotion=None,
+            ticker=t,
+            repo_root=repo_root,
+            db_path=db_path,
+            workbook_path=dest,
+            workbook_locator_path=dest,
+            input_receipt=receipt,
+            assumptions_path=assumptions_path,
+            source_context=source_context,
+            cases=cases,
+            scenario_acceptance=acceptance,
+        )
+        if prepared_existing is not None:
+            matched_revision = _matching_current_revision(db_path, t, prepared_existing[1])
+            temp_proposal = family_editor.FamilyProposal(
+                ticker=t,
+                family=family,
+                base=base,
+                author=author,
+                rationale=rationale,
+                created_at=family_editor.now_utc(),
+                edits=dict(normalized),
+                resolved_inputs=dict(resolved),
+                sources=sources,
+                workbook_sha256=dest_sha256,
+            )
+            proposal_digest = family_editor.family_proposal_digest(temp_proposal)
+            if (
+                matched_revision is not None
+                and active_ptr.proposal_id == proposal_digest
+                and active_ptr.run_row_id == matched_revision.row_id
+                and active_ptr.workbook_sha256 == dest_sha256
+            ):
+                return {
+                    "ticker": t,
+                    "status": "ok",
+                    "saved": True,
+                    "family": family,
+                    "reused_existing_revision": True,
+                    "dcf_run_persisted": False,
+                    "inputs": resolved,
+                    "proposal_id": proposal_digest,
+                    "model_revision": dataclasses.asdict(matched_revision),
+                }
+
+    staged = unique_staged_path(dest, "family-save")
+    meli.build(
+        s,
+        m,
+        dest=staged,
+        ticker=t,
+        cases=cases,
+        input_receipt=receipt,
+    )
+    if not staged.is_file():
+        return {"ticker": t, "status": "failed", "reason": "family_workbook_unavailable"}
+    workbook_sha256 = _sha256_file(staged)
+
+    prepared = meli.prepare_persist_row(
+        s,
+        m,
+        None,
+        None,
+        artifact_promotion=StagedFilePromotion(staged, dest),
+        ticker=t,
+        repo_root=repo_root,
+        db_path=db_path,
+        workbook_path=staged,
+        workbook_locator_path=dest,
+        input_receipt=receipt,
+        assumptions_path=assumptions_path,
+        source_context=source_context,
+        cases=cases,
+        scenario_acceptance=acceptance,
+    )
+    if prepared is None:
+        _unlink(staged)
+        return {"ticker": t, "status": "failed", "reason": "persist_unavailable"}
+
+    _proposal_path, digest, proposal_sha256 = _write_family_proposal(
+        state_root,
+        t,
+        family,
+        resolved,
+        normalized,
+        base,
+        author=author,
+        rationale=rationale,
+        sources=sources,
+        workbook_sha256=workbook_sha256,
+    )
+    factory = family_editor.active_pointer_promotion_factory(
+        state_root,
+        t,
+        family=family,
+        proposal_id=digest,
+        proposal_sha256=proposal_sha256,
+    )
+    cleanup_warning: str | None = None
+    committed_result: persist_mod.DcfPersistenceResult | None = None
+    try:
+        committed_result = meli.persist_dcf_run_with_receipt(
+            s,
+            m,
+            ticker=t,
+            repo_root=repo_root,
+            db_path=db_path,
+            workbook_path=staged,
+            workbook_locator_path=dest,
+            input_receipt=receipt,
+            assumptions_path=assumptions_path,
+            source_context=source_context,
+            cases=cases,
+            scenario_acceptance=acceptance,
+            artifact_promotion=StagedFilePromotion(staged, dest),
+            pointer_promotion_factory=factory,
+        )
+    except persist_mod.DcfCommittedPointerCleanupError as exc:
+        cleanup_warning = str(exc)
+        committed_result = exc.result
+    except InputEvidenceError as exc:
+        reason = str(exc.args[0]) if exc.args else str(exc)
+        raise family_editor.FamilyFieldError(reason, field=t, http_status=409) from exc
+    finally:
+        _unlink(staged)
+
+    if committed_result is None:
+        return {
+            "ticker": t,
+            "status": "failed",
+            "reason": "persist_unavailable",
+            **({"cleanup_warning": cleanup_warning} if cleanup_warning else {}),
+        }
+    if cleanup_warning is not None:
+        return {
+            "ticker": t,
+            "status": "committed_cleanup_failed",
+            "saved": True,
+            "family": family,
+            "dcf_run_persisted": committed_result.written,
+            "recovery_required": True,
+            "cleanup_warning": cleanup_warning,
+            "inputs": resolved,
+            "proposal_id": digest,
+            "model_revision": _family_revision_dict(committed_result),
+        }
+    return {
+        "ticker": t,
+        "status": "ok",
+        "saved": True,
+        "family": family,
+        "reused_existing_revision": not committed_result.written,
+        "dcf_run_persisted": committed_result.written,
+        "inputs": resolved,
+        "proposal_id": digest,
+        "model_revision": _family_revision_dict(committed_result),
+    }
+
+
+def apply_family_edits(
+    ticker: str,
+    repo_root: Path,
+    db_path: Path,
+    state_root: Path | None,
+    edits: Mapping[str, object],
+    *,
+    author: str,
+    rationale: str,
+) -> dict[str, object]:
+    """Typed family dispatch for the existing DCF save route.
+
+    Raises :class:`family_editor.FamilyFieldError` for typed client errors
+    (unsupported family, read-only/unsupported fields, degenerate domains);
+    the route maps ``http_status``. Writer contention returns a blocked dict.
+    """
+    family = family_editor.family_for_ticker(ticker)
+    normalized = family_editor.validate_family_edits(family, edits)
+    t = ticker.upper()
+    if state_root is None:
+        raise family_editor.FamilyFieldError("family_state_root_required", field=t, http_status=400)
+    try:
+        with hold_dcf_artifacts(repo_root, t, owner="dcf-family-save", wait_s=0):
+            if family == family_editor.NU_FAMILY:
+                return _apply_nu_family_edits(
+                    t,
+                    repo_root,
+                    db_path,
+                    state_root,
+                    normalized,
+                    author=author,
+                    rationale=rationale,
+                )
+            return _apply_meli_family_edits(
+                t,
+                repo_root,
+                db_path,
+                state_root,
+                normalized,
+                author=author,
+                rationale=rationale,
+            )
+    except JobAlreadyRunningError:
+        return {"ticker": t, "status": "blocked", "reason": "dcf_writer_busy"}
+    except DcfRecoveryError as exc:
+        return {
+            "ticker": t,
+            "status": "blocked",
+            "reason": "dcf_recovery_required",
+            "detail": str(exc),
+        }
+
+
+def family_preview(
+    ticker: str,
+    repo_root: Path,
+    db_path: Path,
+    state_root: Path | None,
+    edits: Mapping[str, object],
+) -> dict[str, object]:
+    """Typed family preview on the existing recompute route (no side effects)."""
+    import execution.build_meli_platform_dcf as meli
+    import execution.build_nu_platform_dcf as nu
+
+    family = family_editor.family_for_ticker(ticker)
+    normalized = family_editor.validate_family_edits(family, edits)
+    t = ticker.upper()
+    current = family_current_vector(t, family, repo_root, db_path, state_root)
+    resolved = family_editor.normalize_family_vector(family, {**current, **normalized})
+    family_editor.validate_family_vector(family, resolved)
+    if family == family_editor.NU_FAMILY:
+        assum_nu = _build_nu_assum(resolved)
+        m = nu.mirror(assum_nu)
+        return {
+            "ticker": t,
+            "family": family,
+            "inputs": resolved,
+            "edits": normalized,
+            "value_per_share": m.vps,
+            "value_per_share_residual_income": m.vps_ri,
+            "value_per_share_exit_pe": m.vps_pe,
+            "terminal_roe": m.roe_term,
+        }
+    assum_meli = _build_meli_assum(resolved)
+    m = meli.mirror(assum_meli)
+    return {
+        "ticker": t,
+        "family": family,
+        "inputs": resolved,
+        "edits": normalized,
+        "value_per_share": m.vps,
+        "operating_ev_m": m.operating_ev,
+        "credit_equity_value_m": m.credit_equity_value,
+        "equity_value_m": m.equity_value,
+    }
+
+
+def family_inputs(
+    ticker: str,
+    repo_root: Path,
+    db_path: Path,
+    state_root: Path | None,
+) -> dict[str, object]:
+    """Typed family GET payload: committed vector + spec tables + pointer state."""
+    family = family_editor.family_for_ticker(ticker)
+    t = ticker.upper()
+    current = family_current_vector(t, family, repo_root, db_path, state_root)
+    specs = (
+        family_editor.NU_FIELDS if family == family_editor.NU_FAMILY else family_editor.MELI_FIELDS
+    )
+    pointer = (
+        family_editor.read_active_family_pointer(state_root, t) if state_root is not None else None
+    )
+    return {
+        "ticker": t,
+        "family": family,
+        "inputs": current,
+        "editable": sorted(k for k, spec in specs.items() if spec.editable),
+        "read_only": {
+            k: spec.read_only_reason
+            for k, spec in specs.items()
+            if not spec.editable and spec.read_only_reason
+        },
+        "active_pointer": pointer.model_dump(mode="json") if pointer is not None else None,
     }
 
 

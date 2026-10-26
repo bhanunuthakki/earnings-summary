@@ -37,6 +37,7 @@ from provenance.source_fact_repository import (
     SourceFactPublication,
     SourceFactRepository,
 )
+from tests.kpi_semantic_support import admit_all_kpi_facts
 from tests.test_source_fact_repository import (
     STAMP,
     make_cell,
@@ -565,7 +566,27 @@ def test_legacy_derived_relation_checks_every_declared_input_document(
         )
         _seed_document(conn, document_id=1, source_tier="sec_official", value_suffix="SEC")
         _seed_document(conn, document_id=2, source_tier="sec_official", value_suffix="SEC")
+        input_ids = (
+            _insert_financial_fact(conn, document_id=1, value="100", line_item="revenue"),
+            _insert_financial_fact(conn, document_id=2, value="200", line_item="expenses"),
+        )
+        for input_id in input_ids:
+            assert (
+                resolve_fact_row(
+                    conn, fact_table="financial_facts", fact_row_id=input_id, knowledge_cutoff=STAMP
+                )
+                is not None
+            )
+        financial_relation = canonical_fact_relation(conn, "financial_facts")
+        assert (
+            tuple(
+                int(row[0])
+                for row in conn.execute(f"SELECT id FROM {financial_relation.sql} ORDER BY id")
+            )
+            == input_ids
+        )
         fact_id = _insert_kpi_fact(conn, document_id=1, value="50", unit="percent")
+        # The old document-only lineage is still rejected, even with real input facts.
         conn.execute(
             "UPDATE kpi_facts SET extracted_by='metrics_engine',computed_from=? WHERE id=?",
             (
@@ -598,6 +619,7 @@ def test_legacy_derived_relation_checks_every_declared_input_document(
             )
             is not None
         )
+        admit_all_kpi_facts(conn)
 
         def current_ids() -> tuple[int, ...]:
             relation = canonical_fact_relation(conn, "kpi_facts")
@@ -608,6 +630,56 @@ def test_legacy_derived_relation_checks_every_declared_input_document(
                 conn, fact_table="kpi_facts", effective_at=cutoff, known_at=cutoff
             )
 
+        assert current_ids() == ()
+        assert historical_ids(known) == ()
+
+        pinned_inputs: list[dict[str, object]] = []
+        for input_id in input_ids:
+            source = conn.execute(
+                "SELECT fact.line_item,fact.source_doc_id,version.document_version_id "
+                "FROM financial_facts AS fact JOIN evidence_document_versions AS version "
+                "ON version.legacy_document_id=fact.source_doc_id WHERE fact.id=?",
+                (input_id,),
+            ).fetchone()
+            assert source is not None
+            link = conn.execute(
+                "SELECT fact_revision,observation_id FROM fact_observation_revisions "
+                "WHERE fact_table='financial_facts' AND fact_row_id=? "
+                "ORDER BY fact_revision DESC LIMIT 1",
+                (input_id,),
+            ).fetchone()
+            assert link is not None
+            resolution = conn.execute(
+                "SELECT resolution_id,revision FROM v_observation_resolution_current "
+                "WHERE selected_observation_id=?",
+                (link["observation_id"],),
+            ).fetchone()
+            assert resolution is not None
+            pinned_inputs.append(
+                {
+                    "ref": "legacy_canonical_fact",
+                    "fact_table": "financial_facts",
+                    "fact_id": input_id,
+                    "fact_revision": link["fact_revision"],
+                    "observation_id": link["observation_id"],
+                    "resolution_id": resolution["resolution_id"],
+                    "resolution_revision": resolution["revision"],
+                    "doc_id": source["source_doc_id"],
+                    "document_version_id": source["document_version_id"],
+                    "item": source["line_item"],
+                }
+            )
+        assert [item["doc_id"] for item in pinned_inputs] == [1, 2]
+        conn.execute(
+            "UPDATE kpi_facts SET computed_from=? WHERE id=?",
+            (json.dumps({"display": "a / b", "inputs": pinned_inputs}), fact_id),
+        )
+        assert (
+            resolve_fact_row(
+                conn, fact_table="kpi_facts", fact_row_id=fact_id, knowledge_cutoff=known
+            )
+            is not None
+        )
         assert current_ids() == (fact_id,)
         assert historical_ids(known) == (fact_id,)
         quarantine_at = known + timedelta(hours=1, microseconds=900_000)

@@ -25,6 +25,7 @@ from ir_pipeline.authority import (
     PublisherSurfaceEvidence,
     authority_is_complete,
 )
+from ir_pipeline.authority_capture import verified_mz_authority_documents
 from ir_pipeline.discover.generic import DocumentDiscoveryInventory
 from models.documents import DocType
 from pipeline.approved_ir_catalog import CatalogDisposition
@@ -278,6 +279,42 @@ def sync_ir_source_inventory(
     """Persist discovery evidence first, then append its sealed coverage view."""
 
     request = IRSourceInventoryRequest.model_validate(request.model_dump())
+    verified_mz = None
+    if request.authority is not None:
+        verified_mz = verified_mz_authority_documents(
+            conn,
+            request.authority,
+            blob_root=blob_root,
+            issuer_id=request.issuer_id,
+            ticker=request.ticker,
+        )
+        if verified_mz is not None and _timeline(request.authority.asserted_at) > _timeline(
+            request.completed_at
+        ):
+            raise ValueError("publisher authority was captured after inventory completion")
+    if verified_mz is not None:
+        candidates = list(request.discovery.candidates)
+        known = {candidate.url for candidate in candidates}
+        for url, source_page in verified_mz:
+            if url not in known:
+                candidates.append(
+                    IRDocumentCandidate(
+                        url=url,
+                        link_text="",
+                        filename_hint="",
+                        source_page=source_page,
+                    )
+                )
+                known.add(url)
+        request = IRSourceInventoryRequest.model_validate(
+            request.model_copy(
+                update={
+                    "discovery": request.discovery.model_copy(
+                        update={"candidates": tuple(candidates)}
+                    )
+                }
+            ).model_dump()
+        )
     artifacts = _artifacts(request, blob_root)
     authority_complete = _authority_complete(request)
     if request.authority is not None:
@@ -294,6 +331,7 @@ def sync_ir_source_inventory(
         request,
         primary_observation_id=primary_observation_id,
         page_artifacts=artifacts[:-1],
+        verified_mz=verified_mz is not None,
     )
     coverage = reconcile_source_coverage(conn, coverage_request)
     return IRSourceInventoryResult(
@@ -485,6 +523,7 @@ def _coverage_request(
     *,
     primary_observation_id: str,
     page_artifacts: tuple[_Artifact, ...],
+    verified_mz: bool,
 ) -> SourceCoverageImport:
     authority_complete = _authority_complete(request)
     components: list[InventoryComponentImport] = [
@@ -532,7 +571,7 @@ def _coverage_request(
                 component_kind="crawl_page",
                 source_url=page.page_url,
                 outcome="failed",
-                required=True,
+                required=not (verified_mz and authority_complete),
                 failure_reason=_reason_code(page.failure_reason or page.outcome),
                 ordinal=ordinal,
             )

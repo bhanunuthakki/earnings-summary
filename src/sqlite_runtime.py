@@ -18,6 +18,7 @@ import weakref
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -158,11 +159,24 @@ class ManagedConnection(sqlite3.Connection):
         self._trace_observers: list[TraceObserver] = []
         self._rollback_observers: list[RollbackObserver] = []
         self._rollback_generation: int = 0
+        self._fact_capture_functions_registered = False
+
+    @property
+    def fact_capture_functions_registered(self) -> bool:
+        return self._fact_capture_functions_registered
+
+    def mark_fact_capture_functions_registered(self) -> None:
+        self._fact_capture_functions_registered = True
 
     @property
     def rollback_generation(self) -> int:
         """Monotonic counter incremented whenever an explicit or implicit rollback occurs."""
         return self._rollback_generation
+
+    @property
+    def protected_read_snapshot_active(self) -> bool:
+        """True when the connection is held under an immutable read snapshot owner."""
+        return False
 
     def register_rollback_observer(self, observer: RollbackObserver) -> Callable[[], None]:
         """Register an observer callable invoked when a transaction rolls back."""
@@ -564,6 +578,7 @@ def connect_sqlite(
     *,
     role: SQLiteConnectionRole,
     schema_preflight: bool | None = None,
+    connection_factory: object | None = None,
 ) -> sqlite3.Connection:
     """Open a SQLite connection under the repository's role-specific policy.
 
@@ -583,7 +598,27 @@ def connect_sqlite(
     the ``--enable-llm`` ledger/artifact/budget/quota-breaker writes) serialize
     with the chain's explicit write windows per resolved database path.
     Processes outside the daily chain keep exactly their previous behavior.
+
+    ``connection_factory`` is an optional read-only-role extension seam: a
+    supplied factory must subclass ``ManagedConnection`` so the connection
+    keeps this module's single-connection policy (URI, forbidden-path,
+    adapters, integrity functions, scope, connection policy and schema
+    preflight all still run here). The default remains ``ManagedConnection``.
     """
+    read_factory: type[ManagedConnection] = ManagedConnection
+    if connection_factory is not None:
+        if role not in (
+            SQLiteConnectionRole.READ_ONLY,
+            SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY,
+        ):
+            raise ValueError("connection_factory is supported only for read-only roles")
+        if not (
+            isinstance(connection_factory, type)
+            and issubclass(connection_factory, ManagedConnection)
+        ):
+            raise TypeError("connection_factory must be a ManagedConnection subclass")
+        read_factory = connection_factory
+
     register_datetime_adapters()
     reject_forbidden_mac_checkout_database(path)
     if role is SQLiteConnectionRole.WRITER:
@@ -605,7 +640,7 @@ def connect_sqlite(
             ),
             uri=True,
             timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
-            factory=ManagedConnection,
+            factory=read_factory,
         )
     else:
         if (
@@ -653,6 +688,75 @@ def register_sqlite_integrity_functions(conn: sqlite3.Connection) -> None:
         fact_sha256,
         deterministic=True,
     )
+    _register_fact_capture_functions(conn)
+
+
+def _register_fact_capture_functions(conn: sqlite3.Connection) -> None:
+    conn.create_function(
+        "fact_capture_numeric_matches",
+        4,
+        fact_capture_numeric_matches,
+        deterministic=True,
+    )
+    conn.create_function(
+        "fact_capture_locator_matches",
+        2,
+        fact_capture_locator_matches,
+        deterministic=True,
+    )
+    if isinstance(conn, ManagedConnection):
+        conn.mark_fact_capture_functions_registered()
+
+
+def ensure_fact_capture_functions(conn: sqlite3.Connection) -> None:
+    """Keep an active reader cursor valid while accepting legacy raw connections."""
+
+    if isinstance(conn, ManagedConnection) and conn.fact_capture_functions_registered:
+        return
+    try:
+        proof = conn.execute(
+            "SELECT fact_capture_numeric_matches('manual-v1',"
+            "'1.00000000000000001',1.0,'1'),"
+            "fact_capture_numeric_matches('0231-trigger-v1',"
+            "'0.0026377461897661401',0.00263774618976614,"
+            "'0.0026377461897661401'),"
+            "fact_capture_locator_matches(NULL,''),"
+            "fact_capture_locator_matches('a','b')"
+        ).fetchone()
+    except sqlite3.OperationalError as error:
+        if "no such function: fact_capture_" not in str(error):
+            raise
+        _register_fact_capture_functions(conn)
+        return
+    if proof is None or tuple(proof) != (0, 1, 1, 0):
+        raise RuntimeError("fact capture functions disagree with the shared reader policy")
+    if isinstance(conn, ManagedConnection):
+        conn.mark_fact_capture_functions_registered()
+
+
+def fact_capture_numeric_matches(
+    method_version: object, captured: object, current: object, sqlite_value_text: object
+) -> bool:
+    """Compare immutable capture to its mutable fact under the capture method."""
+
+    comparison = sqlite_value_text if method_version == "0231-trigger-v1" else current
+    if not isinstance(captured, (str, int, float)) or not isinstance(comparison, (str, int, float)):
+        return False
+    try:
+        left = Decimal(str(captured))
+        right = Decimal(str(comparison))
+    except (InvalidOperation, ValueError):
+        return False
+    return left.is_finite() and right.is_finite() and left == right
+
+
+def fact_capture_locator_matches(captured: object, current: object) -> bool:
+    """Use the direct reader's exact nonempty locator-text comparison."""
+
+    def optional_text(value: object) -> str | None:
+        return value if isinstance(value, str) and value.strip() else None
+
+    return optional_text(captured) == optional_text(current)
 
 
 def _register_scope_identity_function(conn: sqlite3.Connection) -> None:

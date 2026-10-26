@@ -189,6 +189,12 @@ JS = r"""
     return typeof MUTATION_HEADERS === 'function' ? MUTATION_HEADERS() : MUTATION_HEADERS;
   }
   var TICKER = options.ticker || root.getAttribute('data-dcf-ticker') || boot.ticker;
+  var loadedFamily = null;
+  var editableKeys = [];
+  var readOnlyReasons = {};
+  var familyEdits = {};
+  var authorValue = 'owner';
+  var rationaleValue = '';
 
   var elToggle = control('dcf-edit-toggle');
   var elBody = control('dcf-edit-body');
@@ -239,6 +245,13 @@ JS = r"""
   var SPEC_BY_KEY = {};
   SCALARS.concat(DRIVERS).forEach(function (s) { SPEC_BY_KEY[s.key] = s; });
   var inputsByKey = {};   // key -> <input>, refreshed by buildControls (Wave 5)
+  var syncRoot = document.createElement('div');
+  syncRoot.className = 'dcf-report-sync k-well';
+  syncRoot.setAttribute('data-report-sync-bar', '');
+  root.insertBefore(syncRoot, elToggle);
+  var syncBar = window.initReportSyncBar(syncRoot, {
+    ticker: TICKER, candidateArtifactId: options.candidateArtifactId || null
+  });
 
   function setStatus(msg, tone) {
     elStatus.textContent = msg || '';
@@ -302,6 +315,54 @@ JS = r"""
 
   function buildControls() {
     elControls.textContent = '';
+
+    if (loadedFamily) {
+      var familyGroup = group(loadedFamily === 'nu_platform_dcf'
+        ? 'NU platform DCF assumptions' : 'MELI platform SOTP assumptions');
+      var familyFields = document.createElement('div'); familyFields.className = 'dcf-edit-fields';
+      editableKeys.forEach(function (key) {
+        var isPct = !(/^(years|derive_|exit_|beta|op_exit_)/.test(key));
+        var isInt = /^(years|derive_)/.test(key);
+        var f = numField({key: key, label: key.replace(/_/g, ' '), pct: isPct,
+          step: isInt ? 1 : (isPct ? 0.5 : 0.1)}, model[key], function (v) {
+          var val = isInt ? Math.round(v) : v;
+          model[key] = val; familyEdits[key] = val; scheduleRecompute();
+        });
+        inputsByKey[key] = f.input; familyFields.appendChild(f.wrap);
+      });
+      familyGroup.appendChild(familyFields); elControls.appendChild(familyGroup);
+      if (Object.keys(readOnlyReasons).length) {
+        var lockedGroup = group('Locked facts & allocations (read-only)');
+        var lockedFields = document.createElement('div'); lockedFields.className = 'dcf-edit-fields';
+        Object.keys(readOnlyReasons).forEach(function (roKey) {
+          var wrap = document.createElement('div'); wrap.className = 'dcf-edit-field is-derived';
+          var label = document.createElement('label'); label.textContent = roKey.replace(/_/g, ' ');
+          var input = document.createElement('input'); input.type = 'text'; input.disabled = true;
+          input.value = String(model[roKey] !== undefined ? model[roKey] : '—');
+          input.title = readOnlyReasons[roKey];
+          wrap.appendChild(label); wrap.appendChild(input); lockedFields.appendChild(wrap);
+        });
+        lockedGroup.appendChild(lockedFields); elControls.appendChild(lockedGroup);
+      }
+      var attributionGroup = group('Save attribution (required for family models)');
+      var attributionFields = document.createElement('div'); attributionFields.className = 'dcf-edit-fields';
+      var authorWrap = document.createElement('div'); authorWrap.className = 'dcf-edit-field';
+      var authorLabel = document.createElement('label'); authorLabel.textContent = 'Author';
+      var authorInput = document.createElement('input'); authorInput.type = 'text';
+      authorInput.setAttribute('data-dcf-author', ''); authorInput.value = authorValue;
+      listen(authorInput, 'input', function () { authorValue = authorInput.value; });
+      authorWrap.appendChild(authorLabel); authorWrap.appendChild(authorInput);
+      var rationaleWrap = document.createElement('div'); rationaleWrap.className = 'dcf-edit-field';
+      var rationaleLabel = document.createElement('label'); rationaleLabel.textContent = 'Rationale';
+      var rationaleInput = document.createElement('input'); rationaleInput.type = 'text';
+      rationaleInput.setAttribute('data-dcf-rationale', ''); rationaleInput.placeholder = 'Rationale (min 20 chars)';
+      rationaleInput.value = rationaleValue;
+      listen(rationaleInput, 'input', function () { rationaleValue = rationaleInput.value; });
+      rationaleWrap.appendChild(rationaleLabel); rationaleWrap.appendChild(rationaleInput);
+      attributionFields.appendChild(authorWrap); attributionFields.appendChild(rationaleWrap);
+      attributionGroup.appendChild(attributionFields); elControls.appendChild(attributionGroup);
+      return;
+    }
 
     // Terminal + valuation levers.
     var gVal = group('Terminal & valuation');
@@ -478,7 +539,9 @@ JS = r"""
       method: 'POST',
       headers: requestHeaders(),
       signal: controller.signal,
-      body: JSON.stringify({inputs: model, wacc_mode: waccMode})
+      body: loadedFamily
+        ? JSON.stringify({ticker: TICKER, family: loadedFamily, inputs: familyEdits})
+        : JSON.stringify({inputs: model, wacc_mode: waccMode})
     }).then(function (r) {
       if (!current() || controller.signal.aborted) return null;
       return r.json().then(function (j) { return {ok: r.ok, status: r.status, body: j}; });
@@ -487,6 +550,27 @@ JS = r"""
       if (!res.ok) {
         setStatus((dirty ? 'Unsaved edits · ' : '')
           + ((res.body && res.body.error) || ('recompute failed (' + res.status + ')')), 'bad');
+        return;
+      }
+      if (loadedFamily) {
+        elScenarios.textContent = '';
+        var previewItems = [['Base', fmtMoney(res.body.value_per_share)]];
+        if (loadedFamily === 'nu_platform_dcf') {
+          previewItems.push(['RI', fmtMoney(res.body.ri_value_per_share)]);
+          previewItems.push(['Exit P/E', res.body.exit_pe === undefined ? '—' : fmtMult(res.body.exit_pe)]);
+        } else {
+          previewItems.push(['Operating EV', fmtMoney(res.body.operating_ev)]);
+          previewItems.push(['Credit Equity', fmtMoney(res.body.credit_equity)]);
+        }
+        previewItems.forEach(function (item) {
+          var cell = document.createElement('div'); cell.className = 'dcf-scn';
+          var label = document.createElement('div'); label.className = 'dcf-scn-label'; label.textContent = item[0];
+          var value = document.createElement('div'); value.className = 'dcf-scn-val'; value.textContent = item[1];
+          cell.appendChild(label); cell.appendChild(value); elScenarios.appendChild(cell);
+        });
+        elHeatmap.textContent = '';
+        setStatus((dirty ? 'Unsaved edits · ' : '') + 'Fair value '
+          + fmtMoney(res.body.value_per_share) + ' (' + loadedFamily + ')', '');
         return;
       }
       model.wacc = res.body.wacc;
@@ -559,6 +643,10 @@ JS = r"""
           return;
         }
         loaded = res.body.inputs;
+        loadedFamily = res.body.family || null;
+        editableKeys = Array.isArray(res.body.editable) ? res.body.editable : [];
+        readOnlyReasons = res.body.read_only || {};
+        familyEdits = {};
         model = JSON.parse(JSON.stringify(loaded));
         waccMode = 'override'; waccOverride = false; dirty = false;
         ready = true;
@@ -640,6 +728,7 @@ JS = r"""
     invalidatePreview();
     inputGeneration++;
     model = JSON.parse(JSON.stringify(loaded));
+    familyEdits = {};
     waccMode = 'override'; waccOverride = false; dirty = false;
     buildControls();
     recompute();
@@ -647,6 +736,10 @@ JS = r"""
 
   listen(elSave, 'click', function () {
     if (!ready || saving) return;
+    if (loadedFamily && (!authorValue.trim() || rationaleValue.trim().length < 20)) {
+      setStatus('Author and rationale (min 20 chars) are required to save.', 'warn');
+      return;
+    }
     invalidatePreview();
     var savedInputGeneration = inputGeneration;
     var loadedGeneration = modelGeneration;
@@ -656,7 +749,10 @@ JS = r"""
     fetch(SERVER_URL + '/api/dcf/save', {
       method: 'POST',
       headers: requestHeaders(),
-      body: JSON.stringify({ticker: TICKER, inputs: model})
+      body: loadedFamily
+        ? JSON.stringify({ticker: TICKER, family: loadedFamily, inputs: familyEdits,
+          author: authorValue.trim(), rationale: rationaleValue.trim()})
+        : JSON.stringify({ticker: TICKER, inputs: model})
     }).then(function (r) {
       return r.json().then(function (j) { return {ok: r.ok, status: r.status, body: j}; });
     }).then(function (res) {
@@ -672,6 +768,26 @@ JS = r"""
       }
       // An older save is a durable receipt for its captured inputs only.
       if (loadedGeneration === modelGeneration && root.isConnected) {
+        if (loadedFamily && (res.body.status === 'proposal_pending_review' || res.body.saved === false)) {
+          dirty = false; familyEdits = {};
+          setStatus('Proposal ' + (res.body.proposal_id ? res.body.proposal_id.slice(0, 12) : '')
+            + ' recorded; pending review packet before live model promotion.', 'warn');
+          CCAction.receipt(elSave, 'Proposal pending review');
+          saving = false; later(function () { CCAction.release(elSave); });
+          return;
+        }
+        if (loadedFamily) {
+          familyEdits = {}; dirty = false;
+          setStatus('Saved to model' + (res.body.model_revision && res.body.model_revision.row_id
+            ? ' (run #' + res.body.model_revision.row_id + ').' : '.'), 'ok');
+          window.dispatchEvent(new CustomEvent('dcf-model-saved', {detail: {
+            ticker: TICKER, model_revision: res.body.model_revision || null
+          }}));
+          if (syncBar) syncBar.revalidate();
+          CCAction.receipt(elSave, '✓ Saved');
+          saving = false; later(function () { CCAction.release(elSave); });
+          return;
+        }
         if (res.body.inputs) loaded = res.body.inputs;
         if (savedInputGeneration === inputGeneration) {
           invalidatePreview(); // A reopened preview cannot replace the persisted receipt.
@@ -709,6 +825,7 @@ JS = r"""
     modelGeneration++;
     cancelLoad();
     listeners.abort();
+    if (syncBar) syncBar.destroy();
     presentationTimers.forEach(clearTimeout);
     presentationTimers.clear();
     editors.delete(root);
@@ -716,6 +833,187 @@ JS = r"""
   var handle = {destroy: destroy, setDriver: setDriver};
   editors.set(root, handle);
   return handle;
+  };
+  window.initReportSyncBar = function (root, options) {
+    if (!root) return null;
+    options = options || {};
+    var bootEl = document.getElementById('workspace-boot'), boot = {};
+    try { boot = bootEl ? JSON.parse(bootEl.textContent) : {}; } catch (e) {}
+    var transport = window.uiFetch || fetch;
+    var TICKER = options.ticker || root.getAttribute('data-dcf-ticker') || boot.ticker;
+    var SERVER_URL = /^https?:$/.test(window.location.protocol) ? window.location.origin
+      : (boot.server_url || 'http://localhost:7421');
+    var lastEtag = null, candidateArtifactId = options.candidateArtifactId || null;
+    var lastStatus = null, busy = false;
+    var statusEl = document.createElement('span');
+    statusEl.className = 'dcf-report-sync-status'; statusEl.dataset.syncState = 'loading';
+    var actions = document.createElement('div'); actions.className = 'dcf-report-sync-actions';
+    var btnRefresh = document.createElement('button');
+    btnRefresh.type = 'button'; btnRefresh.className = 'k-btn k-btn-quiet k-btn-sm';
+    btnRefresh.dataset.syncAction = 'refresh'; btnRefresh.textContent = 'Refresh report';
+    var btnCandidate = document.createElement('a');
+    btnCandidate.className = 'k-btn k-btn-quiet k-btn-sm';
+    btnCandidate.dataset.syncAction = 'open-candidate'; btnCandidate.textContent = 'Review candidate';
+    btnCandidate.hidden = true;
+    var btnPublish = document.createElement('button');
+    btnPublish.type = 'button'; btnPublish.className = 'k-btn k-btn-primary k-btn-sm';
+    btnPublish.dataset.syncAction = 'publish'; btnPublish.textContent = 'Approve & publish';
+    btnPublish.hidden = true;
+    actions.appendChild(btnRefresh); actions.appendChild(btnCandidate); actions.appendChild(btnPublish);
+    root.replaceChildren(statusEl, actions);
+    function render(state, message) { statusEl.dataset.syncState = state; statusEl.textContent = message; }
+    function headers(extra) {
+      var h = typeof window.__workspaceMutationHeaders === 'function'
+        ? window.__workspaceMutationHeaders() : (window.__workspaceMutationHeaders || {'Content-Type': 'application/json'});
+      Object.keys(extra || {}).forEach(function (key) { h[key] = extra[key]; });
+      return h;
+    }
+    function update(status) {
+      if (status.model_status !== 'available') {
+        render('unavailable', 'Model binding unavailable · Refresh report to bind candidate');
+        btnCandidate.hidden = true; btnPublish.hidden = true;
+      } else if (status.candidate_review) {
+        btnCandidate.hidden = false;
+        btnCandidate.href = status.candidate_review.url || ('/reports/' + encodeURIComponent(status.ticker || '') + '?artifact_id=' + encodeURIComponent(status.candidate_artifact_id) + '&standalone=1');
+        if (status.candidate_review.ready) {
+          render('candidate_ready', 'Candidate ' + status.candidate_artifact_id + ' verified · Ready to approve & publish');
+          btnPublish.hidden = false;
+        } else {
+          render('candidate_blocked', 'Candidate blocked: '
+            + ((status.candidate_review.reason_codes || []).join(', ') || 'verification failed'));
+          btnPublish.hidden = true;
+        }
+      } else if (status.report_stale) {
+        render('stale', 'Report out of sync with saved model (run #'
+          + ((status.model_binding && status.model_binding.row_id) || '?') + ') · Refresh report to prepare candidate');
+        btnCandidate.hidden = true; btnPublish.hidden = true;
+      } else {
+        render('current', 'Report in sync with model (run #'
+          + ((status.model_binding && status.model_binding.row_id) || '?') + ')');
+        btnCandidate.hidden = true; btnPublish.hidden = true;
+      }
+    }
+    function revalidate() {
+      if (!TICKER || busy || disposed) return Promise.resolve();
+      var url = SERVER_URL + '/api/report-sync/' + encodeURIComponent(TICKER)
+        + (candidateArtifactId ? '?candidate_artifact_id=' + encodeURIComponent(candidateArtifactId) : '');
+      return transport(url, {headers: lastEtag ? {'If-None-Match': '"' + lastEtag + '"'} : {}})
+        .then(function (r) {
+          if (disposed) return;
+          if (r.status === 304 && lastStatus) { update(lastStatus); return; }
+          return r.json().then(function (status) {
+            if (disposed) return;
+            lastEtag = status.etag || null; lastStatus = status; update(status);
+          });
+        }).catch(function () {
+          if (disposed) return;
+          render('error', 'Report sync status unavailable · Retry refresh');
+        });
+    }
+    function response(r) { return r.json().then(function (body) {
+      return {ok: r.ok, status: r.status, body: body};
+    }); }
+    var disposed = false;
+    var pollTimer = null;
+    function pollRefresh() {
+      if (disposed) return;
+      if (pollTimer) clearTimeout(pollTimer);
+      pollTimer = setTimeout(function () {
+        if (disposed) return;
+        var suffix = lastStatus && lastStatus.current_artifact_id
+          ? '?expected_current_artifact_id=' + encodeURIComponent(lastStatus.current_artifact_id) : '';
+        transport(SERVER_URL + '/api/report-sync/' + encodeURIComponent(TICKER) + '/candidate' + suffix, {
+          method: 'POST', headers: headers(lastEtag ? {'If-Match': '"' + lastEtag + '"'} : {})
+        }).then(response).then(function (res) {
+          if (disposed) return;
+          if (res.status === 200 || res.status === 201) {
+            candidateArtifactId = res.body.artifact_id;
+            CCAction.receipt(btnRefresh, res.body.reused ? '✓ Candidate reused' : '✓ Candidate ready');
+            busy = false; CCAction.release(btnRefresh); revalidate();
+          } else if (res.status === 202) {
+            pollRefresh();
+          } else {
+            render('error', (res.body && res.body.error) || ('Refresh failed (' + res.status + ')'));
+            busy = false; CCAction.release(btnRefresh); revalidate();
+          }
+        }).catch(function () {
+          if (disposed) return;
+          render('error', 'Refresh failed · Check the report service');
+          busy = false; CCAction.release(btnRefresh); revalidate();
+        });
+      }, 1000);
+    }
+    btnRefresh.addEventListener('click', function () {
+      if (busy || disposed) return;
+      busy = true; CCAction.busy(btnRefresh, 'Refreshing…');
+      var suffix = lastStatus && lastStatus.current_artifact_id
+        ? '?expected_current_artifact_id=' + encodeURIComponent(lastStatus.current_artifact_id) : '';
+      transport(SERVER_URL + '/api/report-sync/' + encodeURIComponent(TICKER) + '/candidate' + suffix, {
+        method: 'POST', headers: headers(lastEtag ? {'If-Match': '"' + lastEtag + '"'} : {})
+      }).then(response).then(function (res) {
+        if (disposed) return;
+        if (res.status === 200 || res.status === 201) {
+          candidateArtifactId = res.body.artifact_id;
+          CCAction.receipt(btnRefresh, res.body.reused ? '✓ Candidate reused' : '✓ Candidate ready');
+          busy = false; CCAction.release(btnRefresh); revalidate();
+        } else if (res.status === 202) {
+          render('running', 'Candidate refresh in progress…');
+          btnCandidate.hidden = true; btnPublish.hidden = true;
+          pollRefresh();
+        } else {
+          render('error', (res.body && res.body.error) || ('Refresh failed (' + res.status + ')'));
+          busy = false; CCAction.release(btnRefresh); revalidate();
+        }
+      }).catch(function () {
+        if (disposed) return;
+        render('error', 'Refresh failed · Check the report service');
+        busy = false; CCAction.release(btnRefresh); revalidate();
+      });
+    });
+    btnPublish.addEventListener('click', function () {
+      if (busy || disposed) return;
+      busy = true; CCAction.busy(btnPublish, 'Publishing…');
+      var ownerActionId = 'pub-' + TICKER + '-' + (candidateArtifactId || '') + '-'
+        + String((lastStatus && lastStatus.current_artifact_id) || 'none');
+      transport(SERVER_URL + '/api/report-sync/' + encodeURIComponent(TICKER) + '/publish', {
+        method: 'POST', headers: headers(Object.assign({'Content-Type': 'application/json'},
+          lastEtag ? {'If-Match': '"' + lastEtag + '"'} : {})),
+        body: JSON.stringify({artifact_id: candidateArtifactId,
+          expected_current_artifact_id: lastStatus ? lastStatus.current_artifact_id : null,
+          owner_action_id: ownerActionId})
+      }).then(response).then(function (res) {
+        if (disposed) return;
+        if (res.status === 200 || res.status === 201) {
+          candidateArtifactId = null; CCAction.receipt(btnPublish, '✓ Published');
+          window.dispatchEvent(new CustomEvent('report-candidate-published', {detail: {
+            ticker: TICKER, artifact_id: res.body.artifact_id
+          }}));
+        } else render('error', (res.body && res.body.error) || 'publish conflict');
+      }).catch(function () {
+        if (disposed) return;
+        render('error', 'Publish failed · Check the report service');
+      })
+        .finally(function () {
+          busy = false; CCAction.release(btnPublish);
+          if (!disposed) revalidate();
+        });
+    });
+    function onModelSaved(event) {
+      if (!event.detail || event.detail.ticker === TICKER) revalidate();
+    }
+    window.addEventListener('focus', revalidate);
+    window.addEventListener('dcf-model-saved', onModelSaved);
+    function destroy() {
+      disposed = true;
+      if (pollTimer) {
+        clearTimeout(pollTimer);
+        pollTimer = null;
+      }
+      window.removeEventListener('focus', revalidate);
+      window.removeEventListener('dcf-model-saved', onModelSaved);
+    }
+    if (/^https?:$/.test(window.location.protocol) || boot.server_url) revalidate();
+    return {revalidate: revalidate, destroy: destroy};
   };
   var standalone = window.initDcfEditor(document.getElementById('dcf-edit'));
   if (standalone) window.dcfSetDriver = standalone.setDriver;

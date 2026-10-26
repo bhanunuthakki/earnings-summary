@@ -7,6 +7,7 @@ to first; content density grows as upstream sections fill in.
 
 from __future__ import annotations
 
+import sqlite3
 from io import StringIO
 from pathlib import Path
 
@@ -47,11 +48,11 @@ from report.renderers.numfmt import fmt_compact_usd as _fmt_compact_usd
 from report.renderers.workspace_data import load_standing_rules
 
 
-def render(spec: ReportSpec) -> str:
+def render(spec: ReportSpec, *, conn: sqlite3.Connection | None = None) -> str:
     out = StringIO()
     _header(out, spec)
     if spec.portfolio_position is not None:
-        _portfolio_position(out, spec)
+        _portfolio_position(out, spec, conn=conn)
     if spec.flavor == ReportFlavor.EVALUATION and spec.evaluation_snapshot is not None:
         _evaluation_snapshot(out, spec.evaluation_snapshot)
     else:
@@ -98,7 +99,9 @@ def _forgone_rollup(out: StringIO, forgone: list[BudgetSkip]) -> None:
     )
 
 
-def _portfolio_position(out: StringIO, spec: ReportSpec) -> None:
+def _portfolio_position(
+    out: StringIO, spec: ReportSpec, *, conn: sqlite3.Connection | None = None
+) -> None:
     pp = spec.portfolio_position
     if pp is None or pp.status == SectionStatus.NOT_APPLICABLE:
         return
@@ -213,18 +216,21 @@ def _portfolio_position(out: StringIO, spec: ReportSpec) -> None:
                     f"  - {d.outcome_notes[:200]}{'…' if len(d.outcome_notes) > 200 else ''}\n"
                 )
         out.write("\n")
-    render_standing_rules(out, spec)
+    render_standing_rules(out, spec, conn=conn)
     out.write("---\n\n")
 
 
-def render_standing_rules(out: StringIO, spec: ReportSpec) -> None:
+def render_standing_rules(
+    out: StringIO, spec: ReportSpec, *, conn: sqlite3.Connection | None = None
+) -> None:
     """Standing sizing rules (Monthly Red Team PR10 — surface wiring): the
     markdown mirror of the workspace Position tab's Standing-rules block, from
     the same ``load_standing_rules`` loader (one query, one draft parse).
     Silent when no rows are on file — same hide-don't-stub as the HTML."""
-    if spec.db_path is None:
+    if spec.db_path is None and conn is None:
         return
-    rules = load_standing_rules(spec.ticker, Path(spec.db_path), Path(spec.repo_root))
+    db_path = Path(spec.db_path) if spec.db_path is not None else None
+    rules = load_standing_rules(spec.ticker, db_path, Path(spec.repo_root), conn=conn)
     if rules is None or not rules.rows:
         return
     out.write("**Standing rules**")

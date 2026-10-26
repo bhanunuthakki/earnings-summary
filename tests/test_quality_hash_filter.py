@@ -102,6 +102,33 @@ HASH64_KEYS = (
 UNRECOGNIZED_MEMBER = "unrecognized_hash"
 
 
+def test_ir_authority_golden_identity_accepts_only_its_named_digest() -> None:
+    digest = hashlib.sha256(b"public authority identity fixture").hexdigest()
+    assert FILTER.is_quality_evidence_hash(
+        "tests/test_ir_authority_capture.py",
+        f'    expected_ir_sha256 = "{digest}"',
+    )
+
+
+@pytest.mark.parametrize(
+    ("filename", "line"),
+    (
+        ("other/tests/test_ir_authority_capture.py", f'expected_ir_sha256 = "{"a" * 64}"'),
+        ("./tests/test_ir_authority_capture.py", f'expected_ir_sha256 = "{"a" * 64}"'),
+        ("tests/test_ir_authority_capture.py", f'credential = "{"a" * 64}"'),
+        ("tests/test_ir_authority_capture.py", f'expected_ir_sha256 = "{"A" * 64}"'),
+        ("tests/test_ir_authority_capture.py", f'expected_ir_sha256 = "{"a" * 63}"'),
+        ("tests/test_ir_authority_capture.py", f'expected_ir_sha256 = "{"a" * 65}"'),
+        (
+            "tests/test_ir_authority_capture.py",
+            f'expected_ir_sha256 = "{"a" * 64}"; credential = "other"',
+        ),
+    ),
+)
+def test_ir_authority_golden_identity_does_not_mask_other_content(filename: str, line: str) -> None:
+    assert not FILTER.is_quality_evidence_hash(filename, line)
+
+
 @pytest.mark.parametrize("filename", CANONICAL_PATHS)
 @pytest.mark.parametrize("key", HASH40_KEYS)
 def test_all_canonical_paths_accept_each_40_character_hash_key(filename: str, key: str) -> None:

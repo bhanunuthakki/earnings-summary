@@ -34,6 +34,7 @@ from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import KPI as OVERRIDE_KPI
 from provenance.overrides import active_scalar_override_map
+from report.file_capture import read_captured_text
 from report.kpi_naming import kpi_qualifier
 from report.models import (
     BreakRuleEvaluation,
@@ -52,6 +53,14 @@ from report.sections._ts_signals import (
 _EVALUATION_ROWS = TypeAdapter(list[dict[str, JsonValue]])
 
 
+def _extract_str_list(d: dict[str, object], key: str) -> list[str]:
+    raw = d.get(key)
+    if not isinstance(raw, list):
+        return []
+    items = cast("list[object]", raw)
+    return [str(x) for x in items if isinstance(x, (str, int, float))]
+
+
 def build(
     ticker: str,
     repo_root: Path,
@@ -59,7 +68,9 @@ def build(
     conn: sqlite3.Connection | None = None,
 ) -> ThesisSection:
     holdings_path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
-    if not holdings_path.exists():
+    try:
+        raw_text = read_captured_text(repo_root, holdings_path)
+    except FileNotFoundError:
         return ThesisSection(
             status=SectionStatus.MISSING_DATA,
             missing=missing(
@@ -67,8 +78,16 @@ def build(
                 fix_command=f"create {holdings_path.relative_to(repo_root)}",
             ),
         )
-    with open(holdings_path, encoding="utf-8") as f:
-        holdings = json.load(f)
+    try:
+        holdings = cast("dict[str, object]", json.loads(raw_text))
+    except (json.JSONDecodeError, OSError):
+        return ThesisSection(
+            status=SectionStatus.MISSING_DATA,
+            missing=missing(
+                stage="INGEST(holdings)",
+                fix_command=f"create {holdings_path.relative_to(repo_root)}",
+            ),
+        )
 
     overall, evaluations, soft_evaluations, evaluated_at = _load_break_rule_state(
         ticker, repo_root, conn=conn
@@ -81,9 +100,9 @@ def build(
         thesis_full=thesis_text,
         last_updated=_parse_date(holdings.get("last_updated")),
         stub_warning=stub_warning,
-        break_conditions=list(holdings.get("break_conditions") or []),
-        competitive_watchlist=list(holdings.get("competitive_watchlist") or []),
-        qualitative_breakers=list(holdings.get("thesis_breakers_qualitative") or []),
+        break_conditions=_extract_str_list(holdings, "break_conditions"),
+        competitive_watchlist=_extract_str_list(holdings, "competitive_watchlist"),
+        qualitative_breakers=_extract_str_list(holdings, "thesis_breakers_qualitative"),
         kpi_ledger=ledger,
         overall_breach_status=overall,
         break_rule_evaluations=evaluations,
@@ -167,6 +186,9 @@ def _split_stub_warning(holdings: dict[str, object]) -> tuple[str | None, str | 
     if explicit or inline_match:
         return (cleaned, _stub_banner(explicit or "stub_regenerated_from_corruption"))
     return (raw_thesis, None)
+
+
+split_stub_warning = _split_stub_warning
 
 
 def _stub_banner(status_value: str) -> str:

@@ -168,8 +168,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Browser capture lazily loads the optional playwright.sync_api runtime.",
-      "fingerprint": "ca88782d272e501a1ffc1eed5b5e25cb6fc76b1538eb1c0a32488629675993e5",
-      "line": 341,
+      "fingerprint": "af6b69fe88072188405c26d22def8a0ab5ae697f05c8d86263d3d4d9c2ca5a56",
+      "line": 514,
       "path": "src/ir_pipeline/approved_ir_observation_capture.py",
       "targets": [
         "playwright.sync_api"
@@ -297,7 +297,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "8aee04337cfd7116a1d47e55dc33bbff6377b865060d02be1c4d63dd7485ed6a",
+      "source_sha256": "72dd77d04417f621b29883c88affe3834f262dac4700ac1c2c2f34bbbf96c457",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

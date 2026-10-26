@@ -27,6 +27,7 @@ from llm_client import (
     load_priors_anchor,
     load_thesis_anchor,
 )
+from report.file_capture import read_captured_text
 from report.models import (
     RecentDevelopmentsSection,
     SectionStatus,
@@ -53,7 +54,7 @@ def build(
     cache_path = repo_root / NEWS_CACHE_DIRNAME / f"{ticker.upper()}.json"
 
     if not force_refresh:
-        cached = _read_cache(cache_path, cache_ttl_days)
+        cached = _read_cache(repo_root, cache_path, cache_ttl_days)
         if cached is not None:
             return cached
 
@@ -135,16 +136,18 @@ def build(
     return section
 
 
-def _read_cache(path: Path, ttl_days: int) -> RecentDevelopmentsSection | None:
+def _read_cache(repo_root: Path, path: Path, ttl_days: int) -> RecentDevelopmentsSection | None:
     """Return a cached section if present and within TTL; else None.
 
     Treats any parse error or missing field as a cache miss — the caller
     falls back to a fresh LLM call.
     """
-    if not path.exists():
+    try:
+        raw_text = read_captured_text(repo_root, path)
+    except (FileNotFoundError, OSError):
         return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(raw_text)
         cached_at_raw = data["cached_at"]
         cached_at = datetime.fromisoformat(cached_at_raw)
     except (json.JSONDecodeError, KeyError, ValueError, TypeError):
@@ -163,13 +166,17 @@ def _read_cache(path: Path, ttl_days: int) -> RecentDevelopmentsSection | None:
 
 
 def _write_cache(path: Path, section: RecentDevelopmentsSection) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "cached_at": section.cached_at.isoformat() if section.cached_at else "",
-        "news_days_window": section.news_days_window,
-        "content_md": section.content_md or "",
-    }
-    path.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    from report.file_capture import hold_capture_write_set
+
+    repo_root = path.parents[2] if len(path.parents) >= 3 else path.parent
+    with hold_capture_write_set(repo_root, "capture-news-cache"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "cached_at": section.cached_at.isoformat() if section.cached_at else "",
+            "news_days_window": section.news_days_window,
+            "content_md": section.content_md or "",
+        }
+        path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )

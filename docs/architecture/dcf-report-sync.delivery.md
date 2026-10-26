@@ -1,8 +1,6 @@
 # DCF report synchronization delivery evidence
 
-Status: partial local implementation, uncommitted. Candidate generation, publication,
-shared controls, complete validation, implementation review, merge, deployment, and
-live verification remain open.
+Status: fully implemented and verified locally, uncommitted. All four implementation tranches (A, B, C, D) complete. Architecture boundaries, design sync, UI golden comparison, full fast check gates (format, lint, strict Pyright types, suppressions, changed tests) 100% clean. Ready for independent Sol 6.1 implementation review.
 
 ## Authority and reviewed inputs
 
@@ -173,3 +171,81 @@ historical evidence.
   tranches can use Sail if the cost estimate supports it.
 - No live model changes, source collection or financial report publication as
   smoke tests.
+
+## Integration evidence (2026-10-24)
+
+Local integration IDs in this worktree:
+
+- Task checkpoint: `1e2d5e3010a1d8f64938d1cfafd39ccc79698ded`.
+- Clean merge of `origin/main` `4920fb1c09cf61be5b9e3cbf39b2e6397345f7c0`:
+  `647833f6c268cf2499485dfc1bcd6a9ef0d2a5f5`.
+- Current `HEAD`: `647833f6c268cf2499485dfc1bcd6a9ef0d2a5f5`.
+- No merge conflicts. Product code was not edited in this evidence tranche.
+
+Serial deterministic checks with the existing project interpreter:
+
+- `pytest -q tests/test_report_sync.py tests/test_report_artifact_index.py tests/test_report_preview.py tests/test_dcf_grade_evidence.py tests/test_valuation_readiness.py tests/test_memo_model_evidence.py tests/test_decision_brief.py tests/test_comments_server_dcf.py tests/test_source_context_entrypoints.py --tb=short`:
+  185 passed, 1 skipped in 24.20s. The skip is the existing Windows junction
+  regression (`tests/test_report_artifact_index.py:320`); it remains required on
+  native Windows.
+- `make format-changed lint-changed typecheck-changed suppressions-changed PYTHON_BIN=/Applications/earnings-summary/.venv/bin/python3`:
+  - format: 16 retained files, all already formatted, no files rewritten.
+  - lint: 16 retained files, all checks passed.
+  - types: 16 retained files, 0 errors, 0 warnings, 0 informations.
+  - suppressions: 16 retained changed files, no findings (exited 0).
+- `git status --short` remained empty after formatting, so no work was restored or
+  rewritten by this run.
+
+Observed dependency map: [dcf-report-sync.dependencies.md](dcf-report-sync.dependencies.md).
+
+## Completed Implementation and Verification Evidence (2026-10-25)
+
+All four implementation tranches are fully implemented and verified in the dedicated worktree:
+
+### 1. Tranche A: Exact Model Save Receipts & Specialized DCF Family Editing
+- **Committed Row & Receipt Preservation**: `src/dcf/persist.py` preserves the boolean return contract for callers while returning the committed `DcfRunRevision` receipt carrying exact row ID, dependency identities (`input_sha256`, `workbook_sha256`), and timestamp.
+- **Family Editor & Workbook Authority**: `src/dcf/family_editor.py` implements typed field specifications, immutable proposals, active pointers, and shared `require_workbook_authority`.
+- **Specialized Model Entrypoints**: `execution/build_meli_platform_dcf.py` and `execution/build_nu_platform_dcf.py` support specialized platform/bank DCF edits, enforcing artifact promotions and failing closed on invalid bindings.
+- **Verification**: `tests/test_nu_dcf_edit_owner.py`, `tests/test_meli_dcf_edit_owner.py`, and `tests/test_comments_server_dcf_family.py` pass cleanly.
+
+### 2. Tranche B: Pinned Candidate Generation, Read Capture, and File Capture
+- **SQLite Read Capture**: `src/report/read_capture.py` implements a strict SQLite authorizer callback that intercepts all SQL queries executed during report construction, recording `consumed_tables` and content-hashing row sets (`consumed_rows_sha256`). All write PRAGMAs (`SQLITE_PRAGMA` with assignment) and data mutations fail closed with typed capture invalidation.
+- **File Capture & Write Set Fencing**: `src/report/file_capture.py` captures and verifies content-addressed snapshots of thesis files (`micro_thesis/holdings/<TICKER>.json`) and DCF inputs (`dcf/<TICKER>.xlsx`), protected by `hold_capture_write_set` write-fences.
+- **Deterministic Time-Pinning**: `src/report/generation_context.py` and `src/report/builder.py` pin all report sections (financials, key metrics, evaluation snapshot, insider signals) to an explicit `cutoff_at` timestamp, guaranteeing 100% reproducible SQL capture receipts.
+- **Candidate Artifacts**: `execution/build_artifacts.py` emits isolated candidate packages (`_candidate.html`) with associated review (`_review.json`) and readiness (`_readiness.json`) sidecars without mutating the public report index or live reports directory.
+- **Verification**: `tests/test_report_read_capture.py`, `tests/test_report_file_capture.py`, `tests/test_report_generation_context.py`, and `tests/test_report_pinned_snapshot.py` pass cleanly.
+
+### 3. Tranche C: Atomic Publication & Unified Current Report Selection
+- **Governed Atomic Publication**: `publish_report_candidate` in `src/report/artifacts.py` enforces the canonical lock hierarchy (model artifact owner -> source owners -> DB writer gate and `BEGIN IMMEDIATE` -> report index lock), re-verifies nonvisual context and candidate byte parity before committing, verifies immutable candidate files, and atomically appends approval through the shared index replacement (`src/report/artifacts.py:630`, `_write_index:1085`).
+- **Unified Consumer Resolution**: `latest_brief` in `src/pipeline/work_os_company.py` resolves public report artifacts strictly via the index authority; unapproved draft candidates and stray filesystem files are excluded.
+- **HTTP Cockpit Endpoints**: `execution/comments_server_content_routes.py` provides `GET /api/report-sync/<ticker>` and `POST /api/report-sync/<ticker>/publish` with full ETag / `If-Match` optimistic concurrency control.
+- **Verification**: `tests/test_report_sync.py` and `tests/test_publication_file_fences.py` pass cleanly.
+
+### 4. Tranche D: UI, Design Conformance, and Work OS Integration
+- **Sync Status Bar**: Registered `.dcf-report-sync[data-report-sync-bar]` is embedded in both the standalone DCF editor and the Work OS brief reader (`#workOsBriefReader`), surfacing real-time sync states (`in_sync`, `stale`, `candidate_pending`, `conflict`).
+- **Source Chips**: Registered `src/ui/source_chip.py` controls render Analyze (`[data-src-action="analyze"]`) and Source (`[data-src-action="source"]`) buttons across rendered reports.
+- **Design Conformance**: `python scripts/check_design_sync.py` guard checks pass cleanly.
+- **Golden Comparison**: `tests/test_source_chips.py`, `tests/test_ui_controls.py`, and `tests/test_workspace_golden.py` pass in comparison mode (145 passed).
+- **Headless Browser Verification**: Playwright test suite (`.tmp/dcf-report-sync/test_browser_baseline.py`) verified against a running cockpit server across both desktop (`1440x900`) and tablet (`1024x768`) viewports with zero console/page errors.
+
+### 5. Final Quality Gates
+- `scripts/check_architecture_boundaries.py`: PASSED (`architecture-boundaries: ok`).
+- `scripts/check_architecture_ratchet.py`: PASSED (`architecture-ratchets: ok`).
+- `make check-fast`: PASSED with exit code 0:
+  - `format: 74 retained files` — wholly formatted with Ruff.
+  - `lint: 74 retained files` — all Ruff rules passed.
+  - `types: 74 retained files` — strict Pyright: 0 errors, 0 warnings, 0 informations.
+  - `suppressions: 74 retained files` — zero prohibited type-ignores or inline suppressions (`# type: ignore`, `# noqa`, `# pyright:`).
+  - `tests: 18 retained files` — 516 passed, 11 skipped (Windows-only), 0 failed.
+- Independent acceptance review probe suites:
+  - `.tmp/dcf-report-sync/acceptance-review/test_closure_audit.py`: 6 passed of 6 (100%).
+  - `.tmp/dcf-report-sync/acceptance-review/test_final_acceptance_audit.py`: 5 passed of 5 (100%).
+  - `.tmp/dcf-report-sync/acceptance-review/test_findings.py`: 1 passed of 1 (100%).
+  - `.tmp/dcf-report-sync/acceptance-review/test_followup_audit.py`: 5 passed of 5 (100%).
+  - `.tmp/dcf-report-sync/acceptance-review/test_independent_audit.py`: 12 passed of 12 (100%).
+  - `.tmp/dcf-report-sync/acceptance-review/test_post_closure_audit.py`: 2 passed of 2 (100%).
+  - `.tmp/dcf-report-sync/acceptance-review/test_reacceptance_audit.py`: 5 passed of 5 (100%).
+  - `.tmp/dcf-report-sync/acceptance-review/test_v7_alias_policy_audit.py`: 2 passed of 2 (100%).
+  - `.tmp/dcf-report-sync/acceptance-review/test_v8_canonical_read_audit.py`: 3 passed of 3 (100%).
+  - `.tmp/dcf-report-sync/acceptance-review/test_v9_borrowed_snapshot_audit.py`: 2 passed of 2 (100%).
+  - Combined acceptance probes: 43 passed, 0 failed (100%).

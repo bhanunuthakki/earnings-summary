@@ -20,11 +20,29 @@ from dcf.artifact_promotion import (
     StagedFilePromotion,
     live_path_from_env,
 )
-from dcf.persist import DcfPromotionBlocked, DcfRunRow, persist_run, upsert
+from dcf.forecast_series import ForecastSeriesPoint
+from dcf.persist import (
+    DcfPromotionBlocked,
+    DcfRunRow,
+    matching_current_run_id,
+    persist_run,
+    read_reuse_context,
+    upsert,
+)
 from dcf.provenance import (
     DcfInputProvenance,
     build_file_provenance,
     build_file_source_record,
+)
+from provenance.metric_ontology import (
+    CanonicalMetric,
+    CanonicalMetricDefinitionRevision,
+    MetricOntology,
+)
+from sqlite_runtime import (
+    SQLiteConnectionRole,
+    connect_sqlite,
+    register_sqlite_integrity_functions,
 )
 
 _SCHEMA = """
@@ -209,6 +227,388 @@ def test_exact_provenance_retry_is_a_noop() -> None:
             "2026-07-28T12:00:00+00:00",
         ),
     ]
+
+
+_DIMENSIONS_JSON = "[]"
+_DIMENSIONS_DIGEST = hashlib.sha256(_DIMENSIONS_JSON.encode()).hexdigest()
+_EVIDENCE_JSON = '{"basis":"reviewed test mapping"}'
+_EVIDENCE_DIGEST = hashlib.sha256(_EVIDENCE_JSON.encode()).hexdigest()
+_POLICY_DIGEST = "a" * 64
+_REVIEWER = "test-reviewer"
+
+
+def _seeded_reuse_conn() -> sqlite3.Connection:
+    """A legacy minimal-schema connection (no forecast plane)."""
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_SCHEMA)
+    persist_run(conn, _row())
+    return conn
+
+
+def _latest_id_of(conn: sqlite3.Connection) -> int:
+    return int(conn.execute("SELECT id FROM dcf_runs WHERE is_latest=1").fetchone()[0])
+
+
+_RUN_COLUMNS = (
+    "ticker",
+    "segment_name",
+    "valuation_date",
+    "horizon_years",
+    "wacc",
+    "terminal_growth",
+    "npv",
+    "npv_per_share",
+    "shares_outstanding",
+    "currency",
+    "notes",
+    "run_id",
+    "live_price",
+    "live_price_at",
+    "over_under_pct",
+    "mos_bar_used",
+    "assumption_snapshot_json",
+    "revenue_growths_json",
+    "fcf_margin",
+    "assumptions_sync_status",
+    "assumptions_synced_at",
+    "sanity_flag",
+    "is_latest",
+    "superseded_at",
+    "superseded_by_id",
+    "input_sha256",
+    "workbook_sha256",
+    "engine_version",
+    "inputs_as_of",
+    "provenance_json",
+)
+
+
+def _clone_current_run(
+    conn: sqlite3.Connection,
+    source_id: int,
+    *,
+    ticker: str | None = None,
+    segment_name: str | None = None,
+) -> int:
+    """Clone every compared column of ``source_id`` into a new row, changing
+    only the isolated identity field (ticker OR segment_name), and copy the
+    source's input-ledger population — so the clone differs from a matching
+    baseline by exactly that one identity field."""
+    cols = ", ".join(_RUN_COLUMNS)
+    conn.execute(
+        f"INSERT INTO dcf_runs ({cols}) SELECT {cols} FROM dcf_runs WHERE id = ?",
+        (source_id,),
+    )
+    clone_id = int(conn.execute("SELECT id FROM dcf_runs ORDER BY id DESC LIMIT 1").fetchone()[0])
+    if ticker is not None:
+        conn.execute("UPDATE dcf_runs SET ticker=? WHERE id=?", (ticker, clone_id))
+    if segment_name is not None:
+        conn.execute("UPDATE dcf_runs SET segment_name=? WHERE id=?", (segment_name, clone_id))
+    conn.execute(
+        """
+        INSERT INTO dcf_run_inputs
+            (dcf_run_id, role, locator, sha256, byte_size, observed_at, detail_json)
+        SELECT ?, role, locator, sha256, byte_size, observed_at, detail_json
+        FROM dcf_run_inputs WHERE dcf_run_id = ?
+        """,
+        (clone_id, source_id),
+    )
+    return clone_id
+
+
+def _point(
+    *, mapping_revision_id: int = 1, series_key: str = "revenue", value: float = 10.0
+) -> ForecastSeriesPoint:
+    return ForecastSeriesPoint(
+        mapping_revision_id=mapping_revision_id,
+        series_key=series_key,
+        period_start=date(2026, 1, 1),
+        period_end=date(2026, 12, 31),
+        value=value,
+    )
+
+
+def _migrated_reuse_conn(db_path: Path) -> sqlite3.Connection:
+    """A connection to the real migrated schema with its integrity functions."""
+    conn = sqlite3.connect(db_path)
+    register_sqlite_integrity_functions(conn)
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
+def _insert_admitted_mapping(
+    conn: sqlite3.Connection,
+    *,
+    revision: int = 1,
+    supersedes: int | None = None,
+) -> int:
+    """Seed the canonical definition + one admitted mapping revision (rev 1)."""
+    at = datetime(2026, 1, 1, tzinfo=UTC)
+    ontology = MetricOntology(conn)
+    ontology.persist_metric(
+        CanonicalMetric(
+            metric_id="test-revenue",
+            idempotency_key="test-revenue",
+            canonical_name="Test revenue",
+            effective_at=at,
+            knowledge_at=at,
+            recorded_at=at,
+        )
+    )
+    ontology.persist_metric_definition(
+        CanonicalMetricDefinitionRevision(
+            metric_definition_revision_id="test-definition",
+            idempotency_key="test-definition",
+            metric_id="test-revenue",
+            revision=1,
+            lifecycle="active",
+            definition_text="Test annual revenue",
+            value_kind="numeric",
+            period_kind="duration",
+            unit_family="currency",
+            accounting_basis="us_gaap",
+            scope_constraints={},
+            effective_at=at,
+            knowledge_at=at,
+            recorded_at=at,
+        )
+    )
+    cursor = conn.execute(
+        """
+        INSERT INTO dcf_forecast_metric_mapping_revisions (
+            ticker, engine_family, engine_version, series_key, viewspec_metric_token,
+            canonical_metric_definition_revision_id, period_kind, unit_family, value_scale,
+            currency, accounting_basis, consolidation_scope, dimensions_sha256, dimensions_json,
+            admission_status, confidence, policy_name, policy_version, policy_config_sha256,
+            evidence_json, evidence_sha256, reviewer_identity, revision,
+            supersedes_mapping_revision_id, effective_at, knowledge_at, recorded_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            "META",
+            "redesign",
+            "redesign_fcff_v1",
+            "revenue",
+            "fin:revenue",
+            "test-definition",
+            "duration",
+            "currency",
+            "millions",
+            "USD",
+            "us_gaap",
+            "consolidated",
+            _DIMENSIONS_DIGEST,
+            _DIMENSIONS_JSON,
+            "admitted",
+            "high",
+            "test",
+            "v1",
+            _POLICY_DIGEST,
+            _EVIDENCE_JSON,
+            _EVIDENCE_DIGEST,
+            _REVIEWER,
+            revision,
+            supersedes,
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:00Z",
+        ),
+    )
+    return int(cursor.lastrowid or 0)
+
+
+def test_matching_current_run_id_reuses_exact_ledger_and_empty_forecast() -> None:
+    conn = _seeded_reuse_conn()
+    latest = _latest_id_of(conn)
+    assert matching_current_run_id(conn, _row()) == latest
+
+
+def test_matching_current_run_id_rejects_missing_input_ledger_table() -> None:
+    conn = _seeded_reuse_conn()
+    conn.execute("DROP TABLE dcf_run_inputs")
+    assert matching_current_run_id(conn, _row()) is None
+
+
+def test_matching_current_run_id_rejects_deleted_input_ledger_rows() -> None:
+    conn = _seeded_reuse_conn()
+    conn.execute("DELETE FROM dcf_run_inputs")
+    assert matching_current_run_id(conn, _row()) is None
+
+
+def test_matching_current_run_id_rejects_corrupted_input_ledger_row() -> None:
+    conn = _seeded_reuse_conn()
+    conn.execute(
+        "UPDATE dcf_run_inputs SET sha256=? WHERE role='income_statement'",
+        ("f" * 64,),
+    )
+    assert matching_current_run_id(conn, _row()) is None
+
+
+def test_matching_current_run_id_run_id_without_snapshot_fails_closed() -> None:
+    """A passed ``run_id`` without the caller's active read transaction
+    declines reuse (the identity could not have been read consistently)."""
+    conn = _seeded_reuse_conn()
+    latest = _latest_id_of(conn)
+    assert matching_current_run_id(conn, _row()) == latest
+    assert not conn.in_transaction
+    assert matching_current_run_id(conn, _row(), run_id=latest) is None
+
+
+def test_matching_current_run_id_reuses_exact_migrated_forecast_population(
+    migrated_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    """On the real migrated plane the stored population — not a pretend
+    minimal table — decides exact reuse, including the input ledger."""
+    db_path = migrated_db(tmp_path / "reuse-forecast.db")
+    conn = _migrated_reuse_conn(db_path)
+    mapping_id = _insert_admitted_mapping(conn)
+    conn.commit()
+    row = dataclasses.replace(_row(), forecast_points=(_point(mapping_revision_id=mapping_id),))
+    persist_run(conn, row)
+    latest = _latest_id_of(conn)
+    assert matching_current_run_id(conn, row) == latest
+
+    # Expected-empty vs stored-nonempty declines: the committed population
+    # is the truth an empty probe must never ride.
+    assert matching_current_run_id(conn, dataclasses.replace(_row(), forecast_points=())) is None
+    # A diverging expected population declines (the stored points are
+    # append-only, so the mismatch is probed, not fabricated by mutation).
+    diverging = dataclasses.replace(
+        _row(), forecast_points=(_point(mapping_revision_id=mapping_id, value=999.0),)
+    )
+    assert matching_current_run_id(conn, diverging) is None
+    conn.close()
+
+
+def test_matching_current_run_id_declines_when_mapping_admission_revoked(
+    migrated_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    """A producer rebuilding the population after the mapping was superseded
+    selects the new revision, so the stored population no longer matches and
+    reuse declines."""
+    db_path = migrated_db(tmp_path / "reuse-admission.db")
+    conn = _migrated_reuse_conn(db_path)
+    rev1 = _insert_admitted_mapping(conn)
+    conn.commit()
+    persist_run(
+        conn, dataclasses.replace(_row(), forecast_points=(_point(mapping_revision_id=rev1),))
+    )
+    conn.commit()
+    rev2 = _insert_admitted_mapping(conn, revision=2, supersedes=rev1)
+    conn.commit()
+
+    rebuilt = dataclasses.replace(_row(), forecast_points=(_point(mapping_revision_id=rev2),))
+    assert matching_current_run_id(conn, rebuilt) is None
+    conn.close()
+
+
+def test_matching_current_run_id_wal_reader_binds_one_snapshot(
+    migrated_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    """Real WAL interleaving: a writer commits a NEW current run between the
+    reader's context row and its dependent population reads. The commit must
+    actually succeed during the read, and the reader's caller-held snapshot
+    must bind the single old exact row — never a mix of old context and new
+    population."""
+    db_path = migrated_db(tmp_path / "reuse-wal.db")
+    setup = sqlite3.connect(db_path)
+    setup.execute("PRAGMA journal_mode=WAL")
+    base = _row()
+    assert base.provenance is not None
+    detail = dict(base.provenance.detail or {})
+    detail["ticker"] = "META"
+    row_a = dataclasses.replace(
+        base,
+        notes="run A",
+        provenance=dataclasses.replace(base.provenance, detail=detail),
+    )
+    persist_run(setup, row_a)
+    run_a = _latest_id_of(setup)
+    setup.commit()
+    setup.close()
+
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as reader:
+        reader.execute("BEGIN")
+        context = read_reuse_context(reader, "META")
+        assert context is not None
+        assert context.run_id == run_a
+
+        # The writer commits while the reader holds its snapshot open.
+        with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER) as writer:
+            upsert(writer, dataclasses.replace(_row(), notes="run B", npv=2_000.0))
+        with sqlite3.connect(db_path) as witness:
+            new_latest = int(
+                witness.execute("SELECT id FROM dcf_runs WHERE is_latest=1").fetchone()[0]
+            )
+        assert new_latest != run_a
+
+        # Keyed to the context identity, the reader binds the old exact row.
+        assert matching_current_run_id(reader, row_a, run_id=context.run_id) == run_a
+        # Selecting latest again inside the stale snapshot would still see
+        # run A — but a FRESH guarded read sees the new current row and
+        # conservatively declines the old expectation.
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as fresh:
+        assert matching_current_run_id(fresh, row_a) is None
+
+
+def test_matching_current_run_id_keys_to_passed_run_id_not_latest(tmp_path: Path) -> None:
+    database = tmp_path / "reuse-snapshot.db"
+    with sqlite3.connect(database) as conn:
+        conn.executescript(_SCHEMA)
+        conn.execute("PRAGMA journal_mode=WAL")
+        persist_run(conn, dataclasses.replace(_row(), notes="run A"))
+        run_a = _latest_id_of(conn)
+        conn.commit()
+
+        with sqlite3.connect(database) as other:
+            upsert(other, dataclasses.replace(_row(), notes="run B", npv=2_000.0))
+            run_b = _latest_id_of(other)
+            assert run_b != run_a
+
+        row_a = dataclasses.replace(_row(), notes="run A")
+        # Fresh snapshot: run B is the current META row, so the stale
+        # expectation declines both by latest-selection and by exact id.
+        assert matching_current_run_id(conn, row_a) is None
+        conn.execute("BEGIN")
+        try:
+            assert matching_current_run_id(conn, row_a, run_id=run_a) is None
+            # The genuine current identity still matches exactly by id.
+            row_b = dataclasses.replace(_row(), notes="run B", npv=2_000.0)
+            assert matching_current_run_id(conn, row_b, run_id=run_b) == run_b
+        finally:
+            conn.execute("ROLLBACK")
+
+
+def test_matching_current_run_id_run_id_rejects_other_issuer_and_segmented_row(
+    tmp_path: Path,
+) -> None:
+    """The explicit run_id path binds ONE current unsegmented identity for the
+    expected issuer. Each negative clone is identical to the matching current
+    META baseline in every compared field (notes, financials, provenance,
+    input/workbook/engine/snapshot digests) and carries an equal input-ledger
+    population, differing ONLY by ticker or segment_name — so each rejection
+    is attributable solely to the corresponding identity predicate."""
+    with sqlite3.connect(tmp_path / "reuse-identity.db") as conn:
+        conn.executescript(_SCHEMA)
+        row_a = dataclasses.replace(_row(), notes="run A")
+        persist_run(conn, row_a)
+        run_a = _latest_id_of(conn)
+        other_issuer = _clone_current_run(conn, run_a, ticker="AAPL")
+        segmented = _clone_current_run(conn, run_a, segment_name="HoldCo")
+        assert other_issuer != run_a
+        assert segmented not in (run_a, other_issuer)
+        conn.commit()
+
+        conn.execute("BEGIN")
+        try:
+            # Positive control: the exact current baseline still matches.
+            assert matching_current_run_id(conn, row_a, run_id=run_a) == run_a
+            # Identical except ticker: only the ticker predicate rejects it.
+            assert matching_current_run_id(conn, row_a, run_id=other_issuer) is None
+            # Identical except segment_name: only the segment predicate rejects it.
+            assert matching_current_run_id(conn, row_a, run_id=segmented) is None
+        finally:
+            conn.execute("ROLLBACK")
 
 
 def test_dcf_row_and_staged_workbook_promote_together(tmp_path: Path) -> None:

@@ -24,12 +24,13 @@ output byte-for-byte across both.
 
 from __future__ import annotations
 
+import sqlite3
 from io import StringIO
 from pathlib import Path
 
 from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
 from pipeline.cc_overlay import CC_OVERLAY_JS
-from pipeline.you_said import render_you_said_strip_for_path
+from pipeline.you_said import render_you_said_strip, render_you_said_strip_for_path
 from report.artifacts import (
     RenderedReportBody,
     ReportInteractionManifest,
@@ -330,34 +331,89 @@ __all__ = [
 ]
 
 
-def render(spec: ReportSpec) -> str:
-    return render_standalone_report(spec, render_report_body(spec))
+def render(
+    spec: ReportSpec,
+    *,
+    conn: sqlite3.Connection | None = None,
+    candidate_mode: bool = False,
+    report_capability: str | None = None,
+    generation_context_sha256: str | None = None,
+) -> str:
+    return render_standalone_report(
+        spec,
+        render_report_body(
+            spec,
+            conn=conn,
+            candidate_mode=candidate_mode,
+            report_capability=report_capability,
+            generation_context_sha256=generation_context_sha256,
+        ),
+    )
 
 
-def render_report_body(spec: ReportSpec) -> RenderedReportBody:
+def render_report_body(
+    spec: ReportSpec,
+    *,
+    conn: sqlite3.Connection | None = None,
+    candidate_mode: bool = False,
+    report_capability: str | None = None,
+    generation_context_sha256: str | None = None,
+) -> RenderedReportBody:
     """Render every applicable section without document-level chrome."""
+
+    # Same authority guard as builder.build_report: a caller-owned connection
+    # must point at the spec's database before ANY panel read runs, otherwise
+    # the panels would silently mix reads from a different database version
+    # than the one the snapshot/valuation sections were built against. A
+    # connection whose main database has no filename (a :memory: handle)
+    # PRAGMAs to an empty path — it can never serve a spec that names disk
+    # authority, so reject it here rather than letting the guard pass.
+    if conn is not None and spec.db_path is not None:
+        connected = next(
+            (row[2] for row in conn.execute("PRAGMA database_list") if row[1] == "main"), ""
+        )
+        if not connected:
+            raise ValueError(
+                "Report connection has no main database file; a transient "
+                "connection cannot serve a spec with a database path"
+            )
+        if Path(connected).resolve() != Path(spec.db_path).resolve():
+            raise ValueError("Report connection and database path disagree")
 
     body = StringIO()
     # Comments + chat boot data: inlined as JSON so the JS UI can render
     # pins without a server fetch. Server is needed for posting NEW
     # comments + chat, but read-only display works file://.
-    _comment_boot_data(body, spec)
+    _comment_boot_data(
+        body,
+        spec,
+        candidate_mode=candidate_mode,
+        report_capability=report_capability,
+    )
 
     # Resolve navigation before the shell so the persistent Work OS sidebar
     # can own the report's top-level destinations without changing pane ids.
-    p3 = (
-        load_workspace_p3_panels(spec.ticker, Path(spec.repo_root), db_path=Path(spec.db_path))
-        if spec.db_path is not None
-        else load_workspace_p3_panels(spec.ticker, Path(spec.repo_root))
-    )
-    groups = _tab_groups(spec, p3)
+    # A caller-owned connection keeps panel reads on the same read snapshot as
+    # the rest of the report; otherwise fall back to the spec's db path.
+    if conn is not None:
+        p3 = load_workspace_p3_panels(spec.ticker, Path(spec.repo_root), conn=conn)
+    elif spec.db_path is not None:
+        p3 = load_workspace_p3_panels(spec.ticker, Path(spec.repo_root), db_path=Path(spec.db_path))
+    else:
+        p3 = load_workspace_p3_panels(spec.ticker, Path(spec.repo_root))
+    groups = _tab_groups(spec, p3, conn=conn)
     section_refs = tuple(
         ReportSectionRef(section_id=sid, label=slabel, group_id=gid)
         for gid, _glabel, sections in groups
         for sid, slabel, _scount, _render_fn in sections
     )
     _tabs(body, groups, ticker=spec.ticker)
-    body.write('<div class="l1-root">')
+    if generation_context_sha256:
+        body.write(
+            f'<div class="l1-root" data-generation-context-sha256="{_esc(generation_context_sha256)}">'
+        )
+    else:
+        body.write('<div class="l1-root">')
     _identity(body, spec, p3.saydo_verdicts)
     if PanelAvailability.UNAVAILABLE in p3.availability.values():
         body.write(
@@ -421,12 +477,23 @@ def render_report_body(spec: ReportSpec) -> RenderedReportBody:
     )
 
 
-def render_standalone_report(spec: ReportSpec, body: RenderedReportBody) -> str:
+def render_standalone_report(
+    spec: ReportSpec,
+    body: RenderedReportBody,
+    *,
+    candidate_mode: bool = False,
+    generation_context_sha256: str | None = None,
+) -> str:
     """Wrap a shared report body in the standalone document assets."""
 
     if body.ticker != spec.ticker.upper() or body.report_date != spec.generation_date:
         raise ValueError("report body identity does not match ReportSpec")
-    return _document(spec, body.body_html)
+    document = _document(spec, body.body_html)
+    if candidate_mode and generation_context_sha256 is not None:
+        document = document.replace(
+            "<body", f'<body data-candidate-context="{generation_context_sha256}"', 1
+        )
+    return document
 
 
 def _document(spec: ReportSpec, body: str) -> str:
@@ -482,7 +549,9 @@ def _comps_tab(body: StringIO, rows: list[PeerCompRow]) -> None:
     body.write("</div>")
 
 
-def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
+def _tab_defs(
+    spec: ReportSpec, p3: WorkspaceP3Panels, *, conn: sqlite3.Connection | None = None
+) -> list[TabDef]:
     """Return every section tab as [(tab_id, label, count_or_None, render_fn), ...].
 
     This is the flat per-section inventory; ``_tab_groups`` folds it into the
@@ -618,12 +687,16 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
         )
     ) or (standing is not None and standing.rows):
         db_path = Path(spec.db_path) if spec.db_path is not None else None
-        graded_sell_line = load_graded_sell_base_rate(spec.ticker, db_path) if db_path else None
+        graded_sell_line = load_graded_sell_base_rate(spec.ticker, db_path, conn=conn)
         # "You said" strip (owner-ratified design review, 2026-08-02):
         # pre-computed here (not inside _position_tab) so the section stays a
         # pure renderer over already-fetched data, matching graded_sell_line's
         # own convention.
-        you_said_html = render_you_said_strip_for_path(db_path, spec.ticker)
+        you_said_html = (
+            render_you_said_strip(conn, spec.ticker)
+            if conn is not None
+            else render_you_said_strip_for_path(db_path, spec.ticker)
+        )
         tabs.append(
             (
                 "position",
@@ -645,15 +718,24 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
             "sources",
             "Sources",
             len(spec.appendix.transcripts) if spec.appendix else None,
-            lambda b: _sources_tab(b, spec.provenance, spec.appendix, spec.repo_root),
+            lambda b: _sources_tab(
+                b,
+                spec.provenance,
+                spec.appendix,
+                spec.repo_root,
+                conn=conn,
+                as_of=spec.generation_date,
+            ),
         )
     )
     return tabs
 
 
-def _tab_groups(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabGroup]:
+def _tab_groups(
+    spec: ReportSpec, p3: WorkspaceP3Panels, *, conn: sqlite3.Connection | None = None
+) -> list[TabGroup]:
     """Fold report depth into the prototype's exact six-group brief canvas."""
-    by_id = {t[0]: t for t in _tab_defs(spec, p3)}
+    by_id = {t[0]: t for t in _tab_defs(spec, p3, conn=conn)}
     thesis_risk_ids = ["thesis", "bear"]
     if "position" in by_id:
         thesis_risk_ids.append("position")

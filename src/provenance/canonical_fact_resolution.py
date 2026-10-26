@@ -212,7 +212,10 @@ class CanonicalFactResolutionEngine:
     ) -> None:
         self._conn = conn
         self._source_context = source_context
-        conn.execute("PRAGMA foreign_keys = ON")
+        foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()
+        if foreign_keys is None or foreign_keys[0] != 1:
+            conn.execute("PRAGMA foreign_keys = ON")
+
         conn.create_function("fact_sha256", 1, _sqlite_sha, deterministic=True)
 
     def resolve(
@@ -511,7 +514,9 @@ class CanonicalFactResolutionEngine:
         verification is reused only within this bounded call at the same cutoff.
         Broken selected evidence raises; it never becomes an absent resolution.
         """
-        self._conn.execute("SAVEPOINT canonical_resolution_read_batch")
+        borrow_snapshot = bool(getattr(self._conn, "protected_read_snapshot_active", False))
+        if not borrow_snapshot:
+            self._conn.execute("SAVEPOINT canonical_resolution_read_batch")
         try:
             receipts = tuple(
                 self._stored_as_known(cell_id, cutoff_at, observed_through=observed_through)
@@ -554,12 +559,14 @@ class CanonicalFactResolutionEngine:
                 ):
                     receipt, bundle = None, None
                 result.append(CanonicalFactRead(cell_id, receipt, bundle))
-            self._conn.execute("RELEASE SAVEPOINT canonical_resolution_read_batch")
+            if not borrow_snapshot:
+                self._conn.execute("RELEASE SAVEPOINT canonical_resolution_read_batch")
             return tuple(result)
         except BaseException:
-            with suppress(sqlite3.Error):
-                self._conn.execute("ROLLBACK TO SAVEPOINT canonical_resolution_read_batch")
-                self._conn.execute("RELEASE SAVEPOINT canonical_resolution_read_batch")
+            if not borrow_snapshot:
+                with suppress(sqlite3.Error):
+                    self._conn.execute("ROLLBACK TO SAVEPOINT canonical_resolution_read_batch")
+                    self._conn.execute("RELEASE SAVEPOINT canonical_resolution_read_batch")
             raise
 
     def _stored_as_known(

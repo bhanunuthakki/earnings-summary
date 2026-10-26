@@ -38,6 +38,7 @@ def _captured_reported_period_proof(
         IssuerDocumentInventoryError,
         IssuerDocumentInventoryRequest,
         current_reported_period_review_identity,
+        reviewable_current_reported_period_source,
         validate_fiscal_period_witness,
         verified_current_reported_period_review,
     )
@@ -63,20 +64,31 @@ def _captured_reported_period_proof(
         "FROM v_evidence_document_versions_canonical WHERE document_version_id=?",
         (coverage[1],),
     ).fetchone()
+    legacy_press_release = (
+        (
+            expected.source_kind == "ir_document"
+            and expected.document_type == "earnings_release"
+            and (version[3], version[4]) == ("ir_press_release", "ir_press_release")
+        )
+        if version is not None
+        else False
+    )
     if (
         version is None
         or (version[1], version[2]) != (expected.issuer_id, ticker)
         or (expected.source_kind != "ir_document" and version[4] != expected.form_type)
         or (
             expected.source_kind == "ir_document"
-            and (expected.form_type is not None or version[4] != "IR")
+            and (
+                expected.form_type is not None or (version[4] != "IR" and not legacy_press_release)
+            )
         )
         or (
             version[3] != expected.document_type
             and not (
                 expected.source_kind == "ir_document"
                 and expected.document_type == "earnings_release"
-                and version[3] == "ir_document"
+                and version[3] in {"ir_document", "ir_press_release"}
             )
         )
         or (
@@ -99,7 +111,15 @@ def _captured_reported_period_proof(
         observation is None
         or blob is None
         or observation[0] != expected.source_url
-        or observation[1] != expected.source_kind
+        or (
+            observation[1] != expected.source_kind
+            and not (legacy_press_release and observation[1] == "ir_doc")
+        )
+        or (
+            expected.source_kind == "ir_document"
+            and expected.document_type == "earnings_release"
+            and not reviewable_current_reported_period_source(observation[1], version[3])
+        )
         or observation[2] != version[5]
         or datetime.fromisoformat(str(observation[3])).date() > as_of
         or datetime.fromisoformat(str(version[8])).date() > as_of
@@ -257,6 +277,7 @@ def _reported_period_window_from_inventory_unpinned(
     end_of_day = datetime.combine(as_of + timedelta(days=1), time.min, tzinfo=UTC)
     snapshots: list[str] = []
     reported: set[date] = set()
+    period_documents: list[ExpectedDocument] = []
     seal_proofs: list[tuple[str, str, str]] = []
     coverage_proofs: list[tuple[str, str, str, str]] = []
     for kind in ("sec_submissions", "ir_crawl"):
@@ -373,6 +394,22 @@ def _reported_period_window_from_inventory_unpinned(
                     source_url=item.source_url,
                     observed_through=snapshot.recorded_at,
                 )
+                if item.document_type != "earnings_release":
+                    # Only an exact reviewed non-release type can rule this
+                    # document out as a newer reported quarter. An unreviewed
+                    # ir_document can still be an earnings release.
+                    if (
+                        item.document_type
+                        not in {"presentation", "earnings_material", "earnings_transcript"}
+                        or witness is None
+                        or witness.quarter_end != item.period_end.date()
+                        or reviewed_document_type(witness) != item.document_type
+                        or native is not None
+                    ):
+                        return ReportedPeriodWindow(
+                            status=ReportedPeriodStatus.UNKNOWN, reason="ir_period_proof_missing"
+                        )
+                    continue
                 approved_matches = (
                     witness is not None
                     and witness.quarter_end == item.period_end.date()
@@ -395,38 +432,11 @@ def _reported_period_window_from_inventory_unpinned(
                     return ReportedPeriodWindow(
                         status=ReportedPeriodStatus.AMBIGUOUS, reason="ir_period_proof_conflict"
                     )
-            if not _captured_reported_period_proof(
-                conn,
-                item=item,
-                ticker=ticker.strip().upper(),
-                as_of=as_of,
-            ):
-                return ReportedPeriodWindow(
-                    status=ReportedPeriodStatus.UNKNOWN,
-                    reason="captured_period_proof_missing",
-                )
-            coverage_proof = conn.execute(
-                "SELECT assessment_id,document_version_id,reason_details_json "
-                "FROM v_source_coverage_current WHERE expected_document_id=?",
-                (item.expected_document_id,),
-            ).fetchone()
-            if coverage_proof is None:
-                return ReportedPeriodWindow(
-                    status=ReportedPeriodStatus.UNKNOWN,
-                    reason="coverage_proof_missing",
-                )
-            coverage_proofs.append(
-                (
-                    item.expected_document_id,
-                    str(coverage_proof[0]),
-                    str(coverage_proof[1]),
-                    str(coverage_proof[2]),
-                )
-            )
             if item.period_end.date() > as_of:
                 return ReportedPeriodWindow(
                     status=ReportedPeriodStatus.AMBIGUOUS, reason="future_reported_period"
                 )
+            period_documents.append(item)
             if (
                 kind == "sec_submissions"
                 and (item.form_type or "").upper().removesuffix("/A") == "10-Q"
@@ -435,6 +445,38 @@ def _reported_period_window_from_inventory_unpinned(
     if len(reported) < max_quarters:
         return ReportedPeriodWindow(
             status=ReportedPeriodStatus.UNKNOWN, reason="reported_period_population_short"
+        )
+    selected_periods = tuple(sorted(reported, reverse=True)[:max_quarters])
+    for item in period_documents:
+        if item.period_end is None or item.period_end.date() not in selected_periods:
+            continue
+        if not _captured_reported_period_proof(
+            conn,
+            item=item,
+            ticker=ticker.strip().upper(),
+            as_of=as_of,
+        ):
+            return ReportedPeriodWindow(
+                status=ReportedPeriodStatus.UNKNOWN,
+                reason="captured_period_proof_missing",
+            )
+        coverage_proof = conn.execute(
+            "SELECT assessment_id,document_version_id,reason_details_json "
+            "FROM v_source_coverage_current WHERE expected_document_id=?",
+            (item.expected_document_id,),
+        ).fetchone()
+        if coverage_proof is None:
+            return ReportedPeriodWindow(
+                status=ReportedPeriodStatus.UNKNOWN,
+                reason="coverage_proof_missing",
+            )
+        coverage_proofs.append(
+            (
+                item.expected_document_id,
+                str(coverage_proof[0]),
+                str(coverage_proof[1]),
+                str(coverage_proof[2]),
+            )
         )
     profile_rows = conn.execute(
         "SELECT fiscal_year_end FROM issuer_profile_revisions "
@@ -446,7 +488,6 @@ def _reported_period_window_from_inventory_unpinned(
             status=ReportedPeriodStatus.UNKNOWN, reason="fiscal_profile_unavailable"
         )
     fiscal_year_end = str(profile_rows[0][0])
-    selected_periods = tuple(sorted(reported, reverse=True)[:max_quarters])
     proof_sha256 = hashlib.sha256(
         deterministic.canonical_json_ascii(
             {

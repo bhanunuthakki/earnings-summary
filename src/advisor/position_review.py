@@ -1072,7 +1072,9 @@ _VERDICT_ADAPTER = TypeAdapter(_VerdictWire)
 _GENERIC_SELL_PATTERN_LINE = "your sell-winners-too-early pattern"
 
 
-def graded_sell_record(db_path: Path | str | None) -> str | None:
+def graded_sell_record(
+    db_path: Path | str | None, *, conn: sqlite3.Connection | None = None
+) -> str | None:
     """The owner's live graded record on sell/trim recommendations, as one line.
 
     Reads ``decisions`` for his own rows (``decided_by = 'owner'``) recommending
@@ -1094,13 +1096,26 @@ def graded_sell_record(db_path: Path | str | None) -> str | None:
     the platform's own charter says a rate on a sparse denominator is reported
     but never asserted bare.
     """
-    if db_path is None or not Path(db_path).exists():
+    if conn is None and (db_path is None or not Path(db_path).exists()):
         return None
+    owned_conn = conn is None
+    if conn is None:
+        if db_path is None:
+            return None
+        try:
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        except (sqlite3.Error, OSError, ValueError):
+            return None
+    original_factory = conn.row_factory
     try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except (sqlite3.Error, OSError, ValueError):
-        return None
-    try:
+        conn.row_factory = sqlite3.Row
+        if (
+            conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='decisions'"
+            ).fetchone()
+            is None
+        ):
+            return None
         row = conn.execute(
             "SELECT COUNT(*), SUM(CASE WHEN outcome_label = 'wrong' THEN 1 ELSE 0 END) "
             "FROM decisions WHERE decided_by = 'owner' "
@@ -1120,7 +1135,10 @@ def graded_sell_record(db_path: Path | str | None) -> str | None:
     except sqlite3.Error:
         return None
     finally:
-        conn.close()
+        if owned_conn:
+            conn.close()
+        else:
+            conn.row_factory = original_factory
     names = f" ({', '.join(tickers)})" if tickers else ""
     line = f"Graded record on sells/trims: {wrong} of {total} wrong{names}"
     if not is_confident(total):

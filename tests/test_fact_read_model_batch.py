@@ -13,9 +13,13 @@ from provenance.fact_plane_v2 import (
     DerivationSealV2,
     DerivedFactObservationV2,
     FactCellV2,
+    FactObservationV2,
 )
 from provenance.fact_read_model import FactReadModel
-from provenance.source_fact_publication import VerifiedSourceFactPublication
+from provenance.source_fact_publication import (
+    PublicationMemberKind,
+    VerifiedSourceFactPublication,
+)
 from provenance.source_fact_repository import (
     DerivedSourceFact,
     ReportedSourceFact,
@@ -251,6 +255,224 @@ def test_batch_quarantines_each_request_from_a_tampered_publication(
     assert all(item.failure and item.failure.disposition == "quarantined" for item in results)
 
 
+def test_native_recursive_admission_counts_root_and_rejects_depth_and_cycles(
+    conn: sqlite3.Connection,
+) -> None:
+    template = _derived_publication("source-observation").derived_facts[0].observation
+    graph: dict[str, tuple[str, ...]] = {}
+
+    class GraphReader(FactReadModel):
+        def _admit_observation_and_inputs(
+            self,
+            observation: FactObservationV2,
+            *,
+            cutoff: datetime,
+            path: set[str],
+            admitted: dict[str, int],
+        ) -> int:
+            height = 1
+            for child_id in graph.get(observation.observation_id, ()):
+                child = template.model_copy(update={"observation_id": child_id})
+                child_height = self._admit_observation_graph(
+                    child, cutoff=cutoff, _path=path, _admitted=admitted
+                )
+                height = max(height, child_height + 1)
+            return height
+
+        def admit(self, observation: FactObservationV2) -> None:
+            self._admit_observation_graph(observation, cutoff=STAMP)
+
+    reader = GraphReader(conn)
+    root = template.model_copy(update={"observation_id": "root"})
+    graph["root"] = tuple(f"leaf-{index}" for index in range(499))
+    reader.admit(root)
+    graph["root"] = tuple(f"leaf-{index}" for index in range(500))
+    with pytest.raises(fact_read_model.FactAdmissionError) as width_error:
+        reader.admit(root)
+    assert width_error.value.reason_code == "derived_input_graph_unbounded"
+    graph.clear()
+    graph.update({f"node-{index}": (f"node-{index + 1}",) for index in range(31)})
+    depth_root = template.model_copy(update={"observation_id": "node-0"})
+    reader.admit(depth_root)
+    graph["node-31"] = ("node-32",)
+    with pytest.raises(fact_read_model.FactAdmissionError) as depth_error:
+        reader.admit(depth_root)
+    assert depth_error.value.reason_code == "derived_input_graph_unbounded"
+    graph.clear()
+    graph["root"] = ("other",)
+    graph["other"] = ("root",)
+    with pytest.raises(fact_read_model.FactAdmissionError) as cycle_error:
+        reader.admit(root)
+    assert cycle_error.value.reason_code == "derived_input_graph_unbounded"
+
+
+def _shared_subtree_graph(
+    *, shared_height: int, total_levels: int, short_first: bool
+) -> dict[str, tuple[str, ...]]:
+    chain_length = total_levels - shared_height - 1
+    graph: dict[str, tuple[str, ...]] = {
+        f"shared-{index}": (f"shared-{index + 1}",) for index in range(shared_height - 1)
+    }
+    graph.update({f"chain-{index}": (f"chain-{index + 1}",) for index in range(chain_length - 1)})
+    graph[f"chain-{chain_length - 1}"] = ("shared-0",)
+    graph["root"] = ("shared-0", "chain-0") if short_first else ("chain-0", "shared-0")
+    return graph
+
+
+def test_native_shared_subtree_depth_is_independent_of_edge_order(
+    conn: sqlite3.Connection,
+) -> None:
+    template = _derived_publication("source-observation").derived_facts[0].observation
+    graph: dict[str, tuple[str, ...]] = {}
+    visited: list[str] = []
+
+    class GraphReader(FactReadModel):
+        def admit(self, observation: FactObservationV2) -> int:
+            return self._admit_observation_graph(observation, cutoff=STAMP)
+
+        def _admit_observation_and_inputs(
+            self,
+            observation: FactObservationV2,
+            *,
+            cutoff: datetime,
+            path: set[str],
+            admitted: dict[str, int],
+        ) -> int:
+            observation_id = observation.observation_id
+            visited.append(observation_id)
+            height = 1
+            for child_id in graph.get(observation_id, ()):
+                child = template.model_copy(update={"observation_id": child_id})
+                child_height = self._admit_observation_graph(
+                    child, cutoff=cutoff, _path=path, _admitted=admitted
+                )
+                height = max(height, child_height + 1)
+            return height
+
+    root = template.model_copy(update={"observation_id": "root"})
+    for shared_height in (1, 3):
+        for total_levels in (32, 33):
+            for short_first in (True, False):
+                graph = _shared_subtree_graph(
+                    shared_height=shared_height,
+                    total_levels=total_levels,
+                    short_first=short_first,
+                )
+                visited.clear()
+                reader = GraphReader(conn)
+                if total_levels == 32:
+                    assert reader.admit(root) == 32
+                    assert len(visited) == total_levels
+                    assert visited.count("shared-0") == 1
+                else:
+                    with pytest.raises(fact_read_model.FactAdmissionError) as error:
+                        reader.admit(root)
+                    assert error.value.reason_code == "derived_input_graph_unbounded"
+
+
+def test_native_batch_shared_subtree_depth_is_independent_of_edge_order(
+    conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publication = make_publication()
+    SourceFactRepository(conn).publish(publication)
+    root_id = publication.reported_facts[0].observation.observation_id
+    template = _derived_publication("source-observation").derived_facts[0].observation
+    graph: dict[str, tuple[str, ...]] = {}
+    visited: list[str] = []
+
+    class GraphBatchReader(FactReadModel):
+        def _admit_observation_and_inputs(
+            self,
+            observation: FactObservationV2,
+            *,
+            cutoff: datetime,
+            path: set[str],
+            admitted: dict[str, int],
+        ) -> int:
+            observation_id = observation.observation_id
+            visited.append(observation_id)
+            height = 1
+            for child_id in graph.get("root" if observation_id == root_id else observation_id, ()):
+                child = template.model_copy(update={"observation_id": child_id})
+                child_height = self._admit_observation_graph(
+                    child, cutoff=cutoff, _path=path, _admitted=admitted
+                )
+                height = max(height, child_height + 1)
+            return height
+
+    monkeypatch.setattr(fact_read_model, "_BatchFactReadModel", GraphBatchReader)
+    for shared_height in (1, 3):
+        for total_levels in (32, 33):
+            for short_first in (True, False):
+                graph = _shared_subtree_graph(
+                    shared_height=shared_height,
+                    total_levels=total_levels,
+                    short_first=short_first,
+                )
+                visited.clear()
+                reads = FactReadModel(conn).provenance_bundles((root_id, root_id), cutoff=STAMP)
+                if total_levels == 32:
+                    assert all(read.bundle is not None and read.failure is None for read in reads)
+                    assert visited.count(root_id) == 2
+                    assert visited.count("shared-0") == 2
+                else:
+                    assert [
+                        read.failure.reason_code if read.failure else None for read in reads
+                    ] == ["derived_input_graph_unbounded"] * 2
+
+
+def test_native_direct_edge_query_accepts_500_and_detects_501() -> None:
+    database = sqlite3.connect(":memory:")
+    database.row_factory = sqlite3.Row
+    database.executescript(
+        "CREATE TABLE fact_derivation_seals_v2 ("
+        "derivation_seal_id TEXT,output_observation_id TEXT,input_count INTEGER,"
+        "knowledge_at TEXT,recorded_at TEXT);"
+        "CREATE TABLE fact_derivation_input_edges_v2 ("
+        "output_observation_id TEXT,input_observation_id TEXT,input_ordinal INTEGER,"
+        "recorded_at TEXT);"
+        "CREATE TABLE fact_observations_v2 ("
+        "observation_id TEXT,knowledge_at TEXT,recorded_at TEXT);"
+    )
+    database.execute(
+        "INSERT INTO fact_derivation_seals_v2 VALUES ('seal','root',500,?,?)",
+        (STAMP, STAMP),
+    )
+    database.executemany(
+        "INSERT INTO fact_derivation_input_edges_v2 VALUES ('root',?,?,?)",
+        ((f"child-{index}", index, STAMP) for index in range(500)),
+    )
+
+    class GraphReader(FactReadModel):
+        def _admit_record(
+            self, record_kind: PublicationMemberKind, record_id: str, *, cutoff: datetime
+        ) -> None:
+            return
+
+        def admit(self, observation: FactObservationV2) -> None:
+            self._admit_observation_graph(observation, cutoff=STAMP)
+
+    root = _derived_publication("source-observation").derived_facts[0].observation
+    root = root.model_copy(update={"observation_id": "root"})
+    try:
+        with pytest.raises(fact_read_model.FactAdmissionError) as accepted_width:
+            GraphReader(database).admit(root)
+        assert accepted_width.value.reason_code == "derived_input_observation_unavailable"
+        database.execute(
+            "UPDATE fact_derivation_seals_v2 SET input_count=501 WHERE output_observation_id='root'"
+        )
+        database.execute(
+            "INSERT INTO fact_derivation_input_edges_v2 VALUES ('root','child-500',500,?)",
+            (STAMP,),
+        )
+        with pytest.raises(fact_read_model.FactAdmissionError) as rejected_width:
+            GraphReader(database).admit(root)
+        assert rejected_width.value.reason_code == "derived_input_graph_incomplete"
+    finally:
+        database.close()
+
+
 def test_batch_rejects_corrupt_descendants_and_revalidates_each_call(
     conn: sqlite3.Connection,
     monkeypatch: pytest.MonkeyPatch,
@@ -403,6 +625,41 @@ def test_batch_rejects_commit_and_rebegin_that_replaces_its_snapshot(
         )
 
     assert not conn.in_transaction
+
+
+def test_batch_rejects_caller_transaction_commit_and_rebegin(
+    conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publication = _two_observation_publication()
+    SourceFactRepository(conn).publish(publication)
+    conn.commit()
+    conn.execute("BEGIN")
+    original = fact_read_model.verify_source_fact_publication
+
+    def replace_snapshot(
+        connection: sqlite3.Connection,
+        *,
+        publication_id: str,
+        cutoff: datetime,
+        observed_through: datetime | None = None,
+    ) -> VerifiedSourceFactPublication:
+        verified = original(
+            connection,
+            publication_id=publication_id,
+            cutoff=cutoff,
+            observed_through=observed_through,
+        )
+        assert connection.in_transaction
+        connection.commit()
+        connection.execute("BEGIN")
+        return verified
+
+    monkeypatch.setattr(fact_read_model, "verify_source_fact_publication", replace_snapshot)
+    with pytest.raises(RuntimeError, match="changed transaction state"):
+        FactReadModel(conn).provenance_bundles(
+            (publication.reported_facts[0].observation.observation_id,), cutoff=STAMP
+        )
 
 
 def test_batch_rejects_an_internal_write(

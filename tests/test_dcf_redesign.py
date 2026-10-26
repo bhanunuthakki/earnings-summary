@@ -26,7 +26,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import dcf_sheets
 import openpyxl
@@ -1715,6 +1715,279 @@ def test_owner_workbook_edit_off_default_creates_per_name_owner_prior(
     assert _dashboard_cell(
         dest, redesign.SCEN_WEIGHTS_ROW, redesign.SCEN_COL_BULL
     ) == pytest.approx(0.40)
+
+
+def test_apply_edits_identical_save_reuses_existing_revision(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An identical effective Save returns the exact committed revision and
+    leaves both the workbook bytes and dcf_runs untouched."""
+    import hashlib
+
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
+    refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+
+    before_inputs = redesign.read_inputs(dest)
+    assert before_inputs is not None
+    before_bytes = dest.read_bytes()
+    before_mtime = dest.stat().st_mtime_ns
+    with sqlite3.connect(str(db)) as conn:
+        seeded = conn.execute(
+            "SELECT id, input_sha256, workbook_sha256, engine_version, "
+            "assumption_snapshot_json, provenance_json FROM dcf_runs "
+            "WHERE ticker='TESTCO' AND is_latest=1"
+        ).fetchone()
+        total_before = conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0]
+    assert seeded is not None
+
+    result = refresh_dcf.apply_edits(
+        "TESTCO",
+        refresh_repo,
+        db,
+        redesign.RedesignInputs.from_dict(before_inputs.to_dict()),
+    )
+
+    assert result["status"] == "ok", result
+    assert result.get("reused_existing_revision") is True
+    assert result.get("dcf_run_persisted") is False
+    assert result["inputs"] == before_inputs.to_dict()
+    assert result["model_revision"] == {
+        "row_id": seeded[0],
+        "ticker": "TESTCO",
+        "input_sha256": seeded[1],
+        "workbook_sha256": seeded[2],
+        "engine_version": seeded[3],
+        "provenance_sha256": hashlib.sha256(str(seeded[5]).encode("utf-8")).hexdigest(),
+        "assumption_snapshot_sha256": hashlib.sha256(str(seeded[4]).encode("utf-8")).hexdigest(),
+    }
+    assert dest.read_bytes() == before_bytes
+    assert dest.stat().st_mtime_ns == before_mtime
+    with sqlite3.connect(str(db)) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == total_before
+
+
+def test_apply_edits_changed_evidence_does_not_reuse_revision(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Changed source evidence invalidates reuse even when the posted inputs are
+    identical, so the normal staged save produces a new revision."""
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
+    refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+
+    base_inp = redesign.read_inputs(dest)
+    assert base_inp is not None
+    with sqlite3.connect(str(db)) as conn:
+        seeded_id = conn.execute(
+            "SELECT id FROM dcf_runs WHERE ticker='TESTCO' AND is_latest=1"
+        ).fetchone()[0]
+        total_before = conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0]
+    assumptions = refresh_repo / "data" / "dcf_assumptions" / "TESTCO.json"
+    payload = json.loads(assumptions.read_text(encoding="utf-8"))
+    payload["evidence_marker"] = "changed"
+    assumptions.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = refresh_dcf.apply_edits("TESTCO", refresh_repo, db, base_inp)
+
+    assert result["status"] == "ok", result
+    assert result.get("reused_existing_revision") is not True
+    revision = result["model_revision"]
+    assert isinstance(revision, dict)
+    assert revision["row_id"] != seeded_id
+    with sqlite3.connect(str(db)) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == total_before + 1
+
+
+def test_apply_edits_corrupt_persisted_npv_declines_reuse(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A corrupted persisted valuation output must not be reported as an
+    identical reuse: the owner equivalence declines and the normal staged save
+    writes a fresh, correct revision."""
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
+    refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+
+    base_inp = redesign.read_inputs(dest)
+    assert base_inp is not None
+    with sqlite3.connect(str(db)) as conn:
+        seeded = conn.execute(
+            "SELECT id, npv FROM dcf_runs WHERE ticker='TESTCO' AND is_latest=1"
+        ).fetchone()
+        total_before = conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0]
+        conn.execute(
+            "UPDATE dcf_runs SET npv=? WHERE ticker='TESTCO' AND is_latest=1",
+            (float(seeded[1]) + 1000.0,),
+        )
+
+    result = refresh_dcf.apply_edits("TESTCO", refresh_repo, db, base_inp)
+
+    assert result["status"] == "ok", result
+    assert result.get("reused_existing_revision") is not True
+    revision = result["model_revision"]
+    assert isinstance(revision, dict)
+    assert revision["row_id"] != seeded[0]
+    with sqlite3.connect(str(db)) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == total_before + 1
+        repaired = conn.execute(
+            "SELECT npv FROM dcf_runs WHERE ticker='TESTCO' AND is_latest=1"
+        ).fetchone()[0]
+    assert repaired == pytest.approx(float(seeded[1]))
+
+
+def test_apply_edits_malformed_stored_snapshot_declines_reuse(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A malformed persisted assumption snapshot is caught at the reuse boundary
+    (declined, never raised) and the normal save writes a valid revision."""
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
+    refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+
+    base_inp = redesign.read_inputs(dest)
+    assert base_inp is not None
+    with sqlite3.connect(str(db)) as conn:
+        seeded_id = conn.execute(
+            "SELECT id FROM dcf_runs WHERE ticker='TESTCO' AND is_latest=1"
+        ).fetchone()[0]
+        total_before = conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0]
+        conn.execute(
+            "UPDATE dcf_runs SET assumption_snapshot_json=? WHERE ticker='TESTCO' AND is_latest=1",
+            ("{not valid json",),
+        )
+
+    result = refresh_dcf.apply_edits("TESTCO", refresh_repo, db, base_inp)
+
+    assert result["status"] == "ok", result
+    assert result.get("reused_existing_revision") is not True
+    revision = result["model_revision"]
+    assert isinstance(revision, dict)
+    assert revision["row_id"] != seeded_id
+    with sqlite3.connect(str(db)) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == total_before + 1
+        snapshot = conn.execute(
+            "SELECT assumption_snapshot_json FROM dcf_runs WHERE ticker='TESTCO' AND is_latest=1"
+        ).fetchone()[0]
+    assert json.loads(snapshot)
+
+
+def test_apply_edits_changed_forecast_population_declines_reuse(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the reuse probe computes a different forecast-point population than
+    the committed run, reuse is refused and the normal save persists the real
+    population."""
+    from datetime import date
+
+    from dcf.forecast_series import ForecastSeriesPoint
+
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
+    refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+
+    base_inp = redesign.read_inputs(dest)
+    assert base_inp is not None
+    with sqlite3.connect(str(db)) as conn:
+        seeded_id = conn.execute(
+            "SELECT id FROM dcf_runs WHERE ticker='TESTCO' AND is_latest=1"
+        ).fetchone()[0]
+        total_before = conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0]
+
+    real_points = refresh_dcf.redesign_revenue_forecast_points
+    probe = ForecastSeriesPoint(
+        mapping_revision_id=1,
+        series_key="synthetic_reuse_probe",
+        period_start=date(2025, 1, 1),
+        period_end=date(2025, 12, 31),
+        value=12345.0,
+    )
+    calls: list[object] = []
+
+    def _probe_then_real(*args: Any, **kwargs: Any) -> Any:
+        calls.append(args)
+        if len(calls) == 1:
+            return (probe,)
+        return real_points(*args, **kwargs)
+
+    monkeypatch.setattr(refresh_dcf, "redesign_revenue_forecast_points", _probe_then_real)
+
+    result = refresh_dcf.apply_edits("TESTCO", refresh_repo, db, base_inp)
+
+    assert result["status"] == "ok", result
+    assert result.get("reused_existing_revision") is not True
+    revision = result["model_revision"]
+    assert isinstance(revision, dict)
+    assert revision["row_id"] != seeded_id
+    assert len(calls) >= 2
+    with sqlite3.connect(str(db)) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == total_before + 1
+
+
+def test_apply_edits_source_read_failure_declines_reuse(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure while reading evidence at the reuse boundary declines to the
+    normal staged save, which still succeeds."""
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
+    refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+
+    base_inp = redesign.read_inputs(dest)
+    assert base_inp is not None
+
+    real_build = refresh_dcf.build_dcf_provenance
+    calls: list[object] = []
+
+    def _fail_then_build(*args: Any, **kwargs: Any) -> Any:
+        calls.append(args)
+        if len(calls) == 1:
+            raise OSError("simulated unreadable evidence")
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(refresh_dcf, "build_dcf_provenance", _fail_then_build)
+
+    result = refresh_dcf.apply_edits("TESTCO", refresh_repo, db, base_inp)
+
+    assert result["status"] == "ok", result
+    assert result.get("reused_existing_revision") is not True
+    assert result.get("dcf_run_persisted") is True
+    assert len(calls) >= 2
+
+
+def test_apply_edits_missing_country_context_declines_reuse(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unavailable country-risk context declines reuse; the normal staged
+    save retains its own specific guard and refuses the write loudly."""
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
+    refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+
+    base_inp = redesign.read_inputs(dest)
+    assert base_inp is not None
+    with sqlite3.connect(str(db)) as conn:
+        total_before = conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0]
+
+    def _no_prior_context(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(refresh_dcf, "prior_country_risk_context", _no_prior_context)
+
+    result = refresh_dcf.apply_edits("TESTCO", refresh_repo, db, base_inp)
+
+    assert result.get("reused_existing_revision") is not True
+    assert result["status"] == "failed"
+    assert result["reason"] == "country_risk_context_unavailable"
+    with sqlite3.connect(str(db)) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == total_before
 
 
 def test_apply_edits_persists_without_rebuild_and_records_override(

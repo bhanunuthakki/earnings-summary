@@ -38,6 +38,7 @@ from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import KPI as OVERRIDE_KPI
 from provenance.overrides import OverrideAction, chip_override_map, qualify_note
 from provenance.source_read_context import SourceReadContext
+from report.file_capture import read_captured_text
 from report.models import (
     AnnualKpiSeries,
     AnnualLineItem,
@@ -348,10 +349,14 @@ _to_cell_source = to_cell_source
 
 def _read_chart_priorities_request(ticker: str, repo_root: Path) -> list[str]:
     holdings_path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
-    if not holdings_path.exists():
+    try:
+        raw_text = read_captured_text(repo_root, holdings_path)
+    except FileNotFoundError:
         return list(_DEFAULT_CHART_PRIORITIES)
-    with open(holdings_path, encoding="utf-8") as f:
-        decoded: object = json.load(f)
+    try:
+        decoded: object = json.loads(raw_text)
+    except (json.JSONDecodeError, OSError):
+        return list(_DEFAULT_CHART_PRIORITIES)
     if not isinstance(decoded, dict):
         return list(_DEFAULT_CHART_PRIORITIES)
     holdings = cast(dict[str, object], decoded)
@@ -554,6 +559,9 @@ def _kpi_cell_sources_for(
         period_types=period_types,
         rows=rows,
     )
+
+
+kpi_cell_sources_for = _kpi_cell_sources_for
 
 
 def _cell_sources_from_rows(

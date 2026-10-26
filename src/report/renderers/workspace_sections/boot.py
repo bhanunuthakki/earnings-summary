@@ -29,7 +29,13 @@ def _script_json(payload: object) -> str:
     return json.dumps(payload).replace("<", "\\u003c")
 
 
-def _comment_boot_data(body: StringIO, spec: ReportSpec) -> None:
+def _comment_boot_data(
+    body: StringIO,
+    spec: ReportSpec,
+    *,
+    candidate_mode: bool = False,
+    report_capability: str | None = None,
+) -> None:
     """Embed `<script type="application/json">` blocks the JS modules pick up:
     - workspace-boot: ticker, report_date, server URL (default localhost:7421)
     - workspace-comments: existing comments for this (ticker, date) so pins
@@ -40,17 +46,22 @@ def _comment_boot_data(body: StringIO, spec: ReportSpec) -> None:
     (`start_comments_server.bat`)."""
     from comments import load_store, to_json_payload
 
-    capability_store = ReportCapabilityStore(Path(spec.repo_root))
-    report_capability = (
-        capability_store.load()
-        if os.environ.get("EARNINGS_OFFLINE_RENDER") == "1"
-        else capability_store.load_or_create()
-    )
+    if candidate_mode:
+        resolved_capability = ""
+    elif report_capability is not None:
+        resolved_capability = report_capability
+    else:
+        capability_store = ReportCapabilityStore(Path(spec.repo_root))
+        resolved_capability = (
+            capability_store.load()
+            if os.environ.get("EARNINGS_OFFLINE_RENDER") == "1"
+            else capability_store.load_or_create()
+        ) or ""
     boot = {
         "ticker": spec.ticker,
         "report_date": spec.generation_date.isoformat(),
         "server_url": "http://localhost:7421",
-        "report_capability": report_capability or "",
+        "report_capability": resolved_capability,
     }
     body.write(f'<script id="workspace-boot" type="application/json">{_script_json(boot)}</script>')
     payload: dict[str, object]

@@ -154,5 +154,6 @@ def register_sibling_routes(app: Flask, ctx: ServerContext) -> None:
             db_path=db_path,
             linked_gsheet=linked_gsheet,
             recompute_payload=dcf_recompute_payload,
+            state_root=ctx.source_state_root,
         ),
     )

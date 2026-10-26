@@ -229,7 +229,7 @@ def test_actual_head_is_supported() -> None:
         ("tests/test_filing_xbrl_appcontainer_launcher.py", (22, 34)),
         ("tests/test_storage_reservation.py", (61, 121, 139)),
         ("tests/test_temp_run_pruning.py", (166,)),
-        ("tests/test_financial_source_semantic_quarantine.py", (49,)),
+        ("tests/test_financial_source_semantic_quarantine.py", (50,)),
     ):
         assert [edge for edge in graph.unknown_edges if edge.source == source] == [
             GraphEdge(

@@ -3,30 +3,56 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
+import sqlite3
 import tempfile
 from collections.abc import Callable, Collection, Generator
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from datetime import UTC, date, datetime
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Literal, cast
 
 from bs4 import BeautifulSoup
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from report.generation_context import ReportCandidateReview, ReportGenerationContext, Sha256
+from dcf.artifact_promotion import hold_dcf_artifacts
+from pipeline.db_writer_gate import hold_writer_gate
+from report.file_capture import (
+    CAPTURE_WRITE_SETS,
+    FileCaptureMismatchError,
+    FileCaptureReceipt,
+    hold_capture_write_set,
+    replay_file_capture,
+)
+from report.generation_context import (
+    ReportCandidateReview,
+    ReportCaptureUnavailable,
+    ReportGenerationContext,
+    ReportModelBinding,
+    Sha256,
+)
 from report.legacy_body import (
     LegacyReaderBody,
     ReaderExtractionReceipt,
     extract_legacy_reader_body,
 )
+from report.read_capture import (
+    CaptureLimits,
+    CaptureReceipt,
+    ReadCaptureUnavailable,
+    replay_read_capture,
+)
 from report.render_clock import render_now
 from research.memo_report_evidence import DecisionBriefReadiness
 from runtime.job_runtime import JobLock, current_lock_claim
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 CoverageRole = Literal["portfolio", "evaluation", "unknown"]
 ReaderMode = Literal["shared_body", "legacy_standalone"]
+ReportRequestKind = Literal["candidate_refresh", "candidate_publish"]
+ReportRequestStatus = Literal["running", "completed", "failed"]
 _FISCAL_PERIOD_LABEL = re.compile(r"Q[1-4] 20\d{2}")
 _EARNINGS_PERIOD_SELECTOR = (
     '.quarter-select[data-quarter-group="earnings"] .qbtn.active[data-quarter]'
@@ -203,6 +229,35 @@ class ReportArtifactIndex(BaseModel):
         return self
 
 
+class ReportRequestConflictError(RuntimeError):
+    def __init__(self, reason: str, detail: dict[str, object] | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
+
+
+class ReportPublicationConflictError(RuntimeError):
+    def __init__(self, reason: str, detail: dict[str, object] | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
+
+
+class ReportRequestRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    semantic_request_key: str
+    kind: ReportRequestKind
+    ticker: str
+    owner_action_id: str | None = None
+    status: ReportRequestStatus
+    pid: int
+    started_at: str
+    updated_at: str
+    artifact_id: str | None = None
+    result_payload: dict[str, object] | None = None
+
+
 class ReportPublicationEligibility(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -360,6 +415,468 @@ def load_report_artifact_index(repo_root: Path) -> ReportArtifactIndex:
     index = _read_index(repo_root)
     existing = tuple(item for item in index.items if (repo_root / item.standalone_path).is_file())
     return index.model_copy(update={"items": existing})
+
+
+def _artifact_dir(repo_root: Path, ticker: str, artifact_id: str) -> Path:
+    path = repo_root / "output" / "research" / ticker.upper() / "artifacts" / artifact_id
+    validate_report_artifact_path(repo_root, path)
+    return path
+
+
+def _load_sidecar(model: type[BaseModel], path: Path) -> BaseModel | None:
+    try:
+        return model.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return None
+
+
+def save_report_candidate_sidecars(
+    repo_root: Path,
+    *,
+    ticker: str,
+    artifact_id: str,
+    capture_receipt: CaptureReceipt,
+    file_capture_receipt: FileCaptureReceipt,
+    readiness: DecisionBriefReadiness,
+    candidate_review: ReportCandidateReview,
+) -> None:
+    directory = _artifact_dir(repo_root, ticker, artifact_id)
+    for name, model in (
+        ("capture_receipt.json", capture_receipt),
+        ("file_capture_receipt.json", file_capture_receipt),
+        ("readiness.json", readiness),
+        ("candidate_review.json", candidate_review),
+    ):
+        _atomic_write_text(directory / name, model.model_dump_json(indent=2) + "\n")
+    review_json = candidate_review.model_dump_json(indent=2) + "\n"
+    artifact = next(
+        (item for item in _read_index(repo_root).items if item.artifact_id == artifact_id), None
+    )
+    if artifact is None:
+        raise ValueError("candidate artifact is missing from index")
+    review_sha = hashlib.sha256(review_json.encode("utf-8")).hexdigest()
+    _atomic_write_text(candidate_review_path(repo_root, artifact, review_sha), review_json)
+
+
+def resolve_report_model_binding(
+    repo_root: Path,
+    ticker: str,
+    *,
+    conn: sqlite3.Connection,
+    model_run_id: int | None = None,
+) -> ReportModelBinding | ReportCaptureUnavailable:
+    symbol = ticker.strip().upper()
+    if model_run_id is not None:
+        row = conn.execute(
+            "SELECT id, ticker, input_sha256, workbook_sha256, engine_version, provenance_json, assumption_snapshot_json FROM dcf_runs WHERE id = ? AND ticker = ?",
+            (model_run_id, symbol),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT id, ticker, input_sha256, workbook_sha256, engine_version, provenance_json, assumption_snapshot_json FROM dcf_runs WHERE ticker = ? ORDER BY is_latest DESC, valuation_date DESC, id DESC LIMIT 1",
+            (symbol,),
+        ).fetchone()
+    if row is None or not row[2] or not row[3] or not row[4]:
+        return ReportCaptureUnavailable(reason_code="selected_context_unavailable")
+    family = "fcff_dcf"
+    try:
+        defaults = json.loads(
+            (repo_root / "micro_thesis" / "holdings" / f"{symbol}.json").read_text(encoding="utf-8")
+        )
+        family = defaults.get("dcf_defaults", {}).get("valuation_model", family)
+    except (OSError, UnicodeError, ValueError, AttributeError):
+        pass
+    return ReportModelBinding(
+        row_id=int(row[0]),
+        ticker=symbol,
+        family=str(family),
+        input_sha256=str(row[2]),
+        workbook_sha256=str(row[3]),
+        engine_version=str(row[4]),
+        provenance_sha256=hashlib.sha256(str(row[5] or "{}").encode("utf-8")).hexdigest(),
+        assumption_snapshot_sha256=hashlib.sha256(str(row[6] or "{}").encode("utf-8")).hexdigest(),
+    )
+
+
+def load_report_candidate_review(
+    repo_root: Path, ticker: str, artifact_id: str
+) -> ReportCandidateReview | None:
+    value = _load_sidecar(
+        ReportCandidateReview,
+        _artifact_dir(repo_root, ticker, artifact_id) / "candidate_review.json",
+    )
+    return value if isinstance(value, ReportCandidateReview) else None
+
+
+def load_report_capture_receipt(
+    repo_root: Path, ticker: str, artifact_id: str
+) -> CaptureReceipt | None:
+    value = _load_sidecar(
+        CaptureReceipt, _artifact_dir(repo_root, ticker, artifact_id) / "capture_receipt.json"
+    )
+    return value if isinstance(value, CaptureReceipt) else None
+
+
+def load_report_file_capture_receipt(
+    repo_root: Path, ticker: str, artifact_id: str
+) -> FileCaptureReceipt | None:
+    value = _load_sidecar(
+        FileCaptureReceipt,
+        _artifact_dir(repo_root, ticker, artifact_id) / "file_capture_receipt.json",
+    )
+    return value if isinstance(value, FileCaptureReceipt) else None
+
+
+def publish_report_candidate(
+    repo_root: Path,
+    *,
+    db_path: Path,
+    ticker: str,
+    artifact_id: str,
+    expected_current_artifact_id: str | None,
+    owner_action_id: str,
+    approved_at: datetime | None = None,
+) -> tuple[ReportPublicationApproval, bool]:
+    symbol = ticker.strip().upper()
+    with ExitStack() as stack:
+        stack.enter_context(hold_dcf_artifacts(repo_root, symbol, owner="report-publish"))
+        stack.enter_context(hold_capture_write_set(repo_root, CAPTURE_WRITE_SETS))
+        stack.enter_context(hold_writer_gate(db_path, owner="report-publish"))
+        writer_conn = connect_sqlite(
+            db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True
+        )
+        stack.callback(writer_conn.close)
+        writer_conn.execute("BEGIN IMMEDIATE")
+        stack.enter_context(hold_report_index(repo_root))
+        index = _read_index(repo_root)
+        existing = next(
+            (item for item in index.publications if item.owner_action_id == owner_action_id), None
+        )
+        if existing is not None:
+            if (existing.artifact_id, existing.expected_current_artifact_id) == (
+                artifact_id,
+                expected_current_artifact_id,
+            ):
+                return existing, True
+            raise ReportPublicationConflictError("owner_action_id_conflict")
+        artifact = next(
+            (
+                item
+                for item in index.items
+                if item.artifact_id == artifact_id and item.ticker == symbol
+            ),
+            None,
+        )
+        if (
+            artifact is None
+            or artifact.publication_status != "draft_preview"
+            or artifact.reader_mode != "shared_body"
+            or artifact.body_sha256 is None
+            or not isinstance(artifact.generation_context, ReportGenerationContext)
+        ):
+            raise ReportPublicationConflictError("candidate_unavailable")
+        capture = load_report_capture_receipt(repo_root, symbol, artifact_id)
+        file_receipt = load_report_file_capture_receipt(repo_root, symbol, artifact_id)
+        review = load_report_candidate_review(repo_root, symbol, artifact_id)
+        if capture is None or file_receipt is None or review is None:
+            raise ReportPublicationConflictError("candidate_sidecars_missing")
+        if not review.ready or review.reason_codes:
+            raise ReportPublicationConflictError(
+                "candidate_review_blocked", {"reason_codes": list(review.reason_codes)}
+            )
+        live_binding = resolve_report_model_binding(repo_root, symbol, conn=writer_conn)
+        if (
+            isinstance(live_binding, ReportCaptureUnavailable)
+            or live_binding != artifact.generation_context.model
+        ):
+            raise ReportPublicationConflictError("model_changed_since_candidate")
+        try:
+            replay_read_capture(db_path, capture, limits=CaptureLimits())
+        except ReadCaptureUnavailable as exc:
+            raise ReportPublicationConflictError("sql_snapshot_drifted") from exc
+        try:
+            replay_file_capture(file_receipt, repo_root)
+        except FileCaptureMismatchError as exc:
+            raise ReportPublicationConflictError("file_snapshot_drifted") from exc
+        current = latest_report_artifacts_for_tickers(repo_root, (symbol,)).get(symbol)
+        current_id = current.artifact_id if current else None
+        if (
+            current_id != expected_current_artifact_id
+            or artifact.generation_context.expected_current_artifact_id
+            != expected_current_artifact_id
+        ):
+            raise ReportPublicationConflictError("current_report_changed")
+        review_json = review.model_dump_json(indent=2) + "\n"
+        review_sha256 = hashlib.sha256(review_json.encode("utf-8")).hexdigest()
+        _atomic_write_text(candidate_review_path(repo_root, artifact, review_sha256), review_json)
+        approval = ReportPublicationApproval(
+            owner_action_id=owner_action_id,
+            artifact_id=artifact.artifact_id,
+            ticker=symbol,
+            body_sha256=str(artifact.body_sha256),
+            workspace_sha256=artifact.workspace_sha256,
+            manifest_sha256=hashlib.sha256(
+                (repo_root / artifact.manifest_path).read_bytes()
+            ).hexdigest(),
+            context_sha256=artifact.generation_context.sha256,
+            verification_receipt_sha256=review_sha256,
+            model_sha256=artifact.generation_context.model_sha256,
+            evidence_sha256=artifact.generation_context.evidence_sha256,
+            expected_current_artifact_id=expected_current_artifact_id,
+            approved_at=approved_at
+            or max(render_now(), artifact.generated_at, review.evaluated_at),
+        )
+        _verify_publication_record(repo_root, artifact, approval)
+        _write_index(repo_root, index.items, publications=(*index.publications, approval))
+        return approval, False
+
+
+def build_report_sync_status(
+    repo_root: Path,
+    ticker: str,
+    *,
+    conn: sqlite3.Connection,
+    candidate_artifact_id: str | None = None,
+) -> dict[str, object]:
+    symbol = ticker.strip().upper()
+    current = latest_report_artifacts_for_tickers(repo_root, (symbol,)).get(symbol)
+    binding = resolve_report_model_binding(repo_root, symbol, conn=conn)
+    candidate = (
+        next(
+            (
+                item
+                for item in _read_index(repo_root).items
+                if item.artifact_id == candidate_artifact_id and item.ticker == symbol
+            ),
+            None,
+        )
+        if candidate_artifact_id
+        else None
+    )
+    review = (
+        load_report_candidate_review(repo_root, symbol, candidate_artifact_id)
+        if candidate_artifact_id
+        else None
+    )
+    stale = (
+        current is None
+        or not isinstance(binding, ReportModelBinding)
+        or current.generation_context is None
+        or current.generation_context.model != binding
+    )
+    stale_reason = "model_binding_changed_or_missing" if stale else None
+    if not stale and current is not None:
+        file_receipt = load_report_file_capture_receipt(repo_root, symbol, current.artifact_id)
+        read_capture = load_report_capture_receipt(repo_root, symbol, current.artifact_id)
+        if file_receipt is None or read_capture is None:
+            stale = True
+            stale_reason = "missing_capture_receipts"
+        else:
+            try:
+                replay_file_capture(file_receipt, repo_root)
+            except (FileCaptureMismatchError, OSError, ValueError):
+                stale = True
+                stale_reason = "consumed_evidence_drift"
+            if not stale:
+                db_file = next(
+                    (
+                        str(row[2])
+                        for row in conn.execute("PRAGMA database_list")
+                        if str(row[1]) == "main"
+                    ),
+                    None,
+                )
+                if db_file and Path(db_file).is_file():
+                    try:
+                        replay_read_capture(db_file, read_capture, limits=CaptureLimits())
+                    except (ReadCaptureUnavailable, OSError, ValueError):
+                        stale = True
+                        stale_reason = "consumed_evidence_drift"
+    payload: dict[str, object] = {
+        "schema_version": "report_sync_status.v1",
+        "ticker": symbol,
+        "current_artifact_id": current.artifact_id if current else None,
+        "model_status": "available" if isinstance(binding, ReportModelBinding) else "unavailable",
+        "model_binding": binding.model_dump(mode="json")
+        if isinstance(binding, ReportModelBinding)
+        else None,
+        "report_stale": stale,
+        "stale_reason": stale_reason,
+        "candidate_artifact_id": candidate.artifact_id if candidate else None,
+        "candidate_review": review.model_dump(mode="json") if review else None,
+    }
+    payload["etag"] = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return payload
+
+
+def find_matching_candidate_artifact(
+    repo_root: Path, *, ticker: str, context_sha256: str
+) -> ReportArtifactRef | None:
+    symbol = ticker.upper()
+    items = sorted(
+        load_report_artifact_index(repo_root).items,
+        key=lambda item: (item.generated_at, item.artifact_id),
+        reverse=True,
+    )
+    for item in items:
+        if (
+            item.ticker != symbol
+            or item.publication_status != "draft_preview"
+            or item.reader_mode != "shared_body"
+            or not isinstance(item.generation_context, ReportGenerationContext)
+            or item.generation_context.sha256 != context_sha256
+            or item.body_path is None
+            or not (repo_root / item.standalone_path).is_file()
+            or not (repo_root / item.body_path).is_file()
+            or load_report_candidate_review(repo_root, symbol, item.artifact_id) is None
+        ):
+            continue
+        return item
+    return None
+
+
+def _request_index_path(repo_root: Path) -> Path:
+    return repo_root / "output" / "research" / "_index" / "requests.json"
+
+
+def _read_request_records(repo_root: Path) -> list[ReportRequestRecord]:
+    path = _request_index_path(repo_root)
+    if not path.exists():
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError("report request index must be a JSON array")
+    items: list[object] = cast("list[object]", payload)
+    return [ReportRequestRecord.model_validate(item) for item in items]
+
+
+def _write_request_records(repo_root: Path, records: list[ReportRequestRecord]) -> None:
+    _atomic_write_text(
+        _request_index_path(repo_root),
+        json.dumps([item.model_dump(mode="json") for item in records], indent=2) + "\n",
+    )
+
+
+def begin_or_reuse_report_request(
+    repo_root: Path,
+    *,
+    semantic_request_key: str,
+    kind: ReportRequestKind,
+    ticker: str,
+    owner_action_id: str | None = None,
+) -> tuple[ReportRequestRecord, bool]:
+    with hold_report_index(repo_root):
+        records = _read_request_records(repo_root)
+        if owner_action_id is not None and any(
+            record.owner_action_id == owner_action_id
+            and record.semantic_request_key != semantic_request_key
+            for record in records
+        ):
+            raise ReportRequestConflictError("owner_action_id_conflict")
+        prior = next(
+            (record for record in records if record.semantic_request_key == semantic_request_key),
+            None,
+        )
+        if prior is not None:
+            if prior.status == "completed":
+                return prior, True
+            if prior.status == "running":
+                try:
+                    os.kill(prior.pid, 0)
+                except ProcessLookupError:
+                    records.remove(prior)
+                else:
+                    return prior, True
+            else:
+                records.remove(prior)
+        now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        record = ReportRequestRecord(
+            semantic_request_key=semantic_request_key,
+            kind=kind,
+            ticker=ticker.upper(),
+            owner_action_id=owner_action_id,
+            status="running",
+            pid=os.getpid(),
+            started_at=now,
+            updated_at=now,
+        )
+        records.append(record)
+        _write_request_records(repo_root, records)
+        return record, False
+
+
+def claim_drifted_report_request(
+    repo_root: Path,
+    *,
+    semantic_request_key: str,
+    ticker: str,
+    owner_action_id: str | None = None,
+) -> tuple[ReportRequestRecord, bool]:
+    with hold_report_index(repo_root):
+        records = _read_request_records(repo_root)
+        now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for position, record in enumerate(records):
+            if record.semantic_request_key == semantic_request_key:
+                if record.status == "running":
+                    try:
+                        os.kill(record.pid, 0)
+                        return record, True
+                    except ProcessLookupError:
+                        pass
+                updated = record.model_copy(
+                    update={
+                        "status": "running",
+                        "updated_at": now,
+                        "pid": os.getpid(),
+                        "owner_action_id": owner_action_id or record.owner_action_id,
+                        "artifact_id": None,
+                        "result_payload": None,
+                    }
+                )
+                records[position] = updated
+                _write_request_records(repo_root, records)
+                return updated, False
+        new_record = ReportRequestRecord(
+            semantic_request_key=semantic_request_key,
+            kind="candidate_refresh",
+            ticker=ticker.upper(),
+            owner_action_id=owner_action_id,
+            status="running",
+            pid=os.getpid(),
+            started_at=now,
+            updated_at=now,
+        )
+        records.append(new_record)
+        _write_request_records(repo_root, records)
+        return new_record, False
+
+
+def complete_report_request(
+    repo_root: Path,
+    *,
+    semantic_request_key: str,
+    status: Literal["completed", "failed"],
+    artifact_id: str | None = None,
+    result_payload: dict[str, object] | None = None,
+) -> ReportRequestRecord:
+    with hold_report_index(repo_root):
+        records = _read_request_records(repo_root)
+        for position, record in enumerate(records):
+            if record.semantic_request_key == semantic_request_key:
+                updated = record.model_copy(
+                    update={
+                        "status": status,
+                        "updated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "artifact_id": artifact_id,
+                        "result_payload": result_payload,
+                    }
+                )
+                records[position] = updated
+                _write_request_records(repo_root, records)
+                return updated
+    raise KeyError("report request was not found")
 
 
 def candidate_review_path(repo_root: Path, artifact: ReportArtifactRef, digest: str) -> Path:
@@ -1192,18 +1709,30 @@ __all__ = [
     "RenderedReportBody",
     "ReportArtifactIndex",
     "ReportArtifactRef",
+    "ReportCaptureUnavailable",
     "ReportFiscalPeriodBackfillItem",
     "ReportFiscalPeriodBackfillResult",
     "ReportFiscalPeriodEvidence",
     "ReportInteractionManifest",
+    "ReportModelBinding",
+    "ReportPublicationApproval",
+    "ReportPublicationConflictError",
     "ReportSectionRef",
     "backfill_report_fiscal_periods",
+    "build_report_sync_status",
+    "candidate_review_path",
     "latest_report_artifacts",
     "latest_report_artifacts_for_tickers",
     "load_report_artifact_index",
+    "load_report_candidate_review",
+    "load_report_capture_receipt",
+    "load_report_file_capture_receipt",
     "migrate_legacy_report_bodies",
     "persist_report_artifact",
+    "publish_report_candidate",
     "reconcile_legacy_workspace_reports",
     "report_artifact_index_path",
+    "resolve_report_model_binding",
     "rollback_legacy_report_bodies",
+    "save_report_candidate_sidecars",
 ]

@@ -33,7 +33,7 @@ from pipeline.work_os_decisions import (
 )
 from pipeline.work_os_earnings import EarningsReadoutSummary, load_latest_earnings_readouts
 from provenance.selection import selected_transcripts_relation
-from report.artifacts import load_report_artifact_index
+from report.artifacts import latest_report_artifacts_for_tickers
 from report.models import BreakRuleEvaluation, KpiLedgerRow, SectionStatus, ThesisSection
 from report.sections import thesis as thesis_section
 
@@ -543,13 +543,14 @@ def _questions(
     return questions, "ok", []
 
 
-def _latest_brief(repo_root: Path, ticker: str) -> BriefLibraryItem | None:
-    index = load_report_artifact_index(repo_root)
-    matches = [item for item in index.items if item.ticker == ticker]
-    if not matches:
+def latest_brief(repo_root: Path, ticker: str) -> BriefLibraryItem | None:
+    artifact = latest_report_artifacts_for_tickers(repo_root, (ticker.upper(),)).get(ticker.upper())
+    if artifact is None:
         return None
-    latest = max(matches, key=lambda item: (item.generated_at, item.artifact_id))
-    return build_brief_descriptor(repo_root, latest)
+    return build_brief_descriptor(repo_root, artifact)
+
+
+_latest_brief = latest_brief
 
 
 def _position_snapshot(

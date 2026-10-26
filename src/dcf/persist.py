@@ -30,13 +30,14 @@ import hashlib
 import json
 import re
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Literal, cast
 from zoneinfo import ZoneInfo
 
 from dcf import valuation
-from dcf.artifact_promotion import ArtifactPromotion
+from dcf.artifact_promotion import ArtifactPromotion, DcfCommittedCleanupError
 from dcf.forecast_series import ForecastSeriesPoint
 from dcf.provenance import DcfInputProvenance
 from model_provenance.versioning import mark_superseded_by, supersede_current
@@ -102,6 +103,22 @@ class DcfPersistenceResult:
     revision: DcfRunRevision
 
 
+class DcfCommittedPointerCleanupError(DcfCommittedCleanupError):
+    """The row committed, but pointer finalization failed after the commit.
+
+    Carries the exact captured committed receipt so callers never guess the
+    latest row or claim the transaction rolled back.
+    """
+
+    def __init__(self, result: DcfPersistenceResult, message: str) -> None:
+        self.result = result
+        super().__init__(message)
+
+    @property
+    def committed(self) -> DcfPersistenceResult:
+        return self.result
+
+
 def _revision(row: DcfRunRow, row_id: int) -> DcfRunRevision:
     provenance = row.provenance
     return DcfRunRevision(
@@ -118,6 +135,54 @@ def _revision(row: DcfRunRow, row_id: int) -> DcfRunRevision:
         assumption_snapshot_sha256=hashlib.sha256(
             row.assumption_snapshot_json.encode("utf-8")
         ).hexdigest(),
+    )
+
+
+def read_current_revision(conn: sqlite3.Connection, run_id: int) -> DcfRunRevision | None:
+    """The complete committed revision of ONE known run id, from stored columns.
+
+    Replicates :func:`_revision` semantics against the persisted row so reuse
+    responses return the full committed identity (input/workbook/engine/
+    provenance/snapshot hashes) instead of a later latest-row lookup. Must be
+    called inside the caller's read snapshot for a consistent read. Fails
+    closed (``None``) when the schema, row, or a required snapshot is absent.
+    """
+    if not _has_versioning_columns(conn) or not _has_provenance_columns(conn):
+        return None
+    stored = conn.execute(
+        """
+        SELECT ticker, input_sha256, workbook_sha256, engine_version,
+               provenance_json, assumption_snapshot_json
+        FROM dcf_runs
+        WHERE id = ?
+        """,
+        (int(run_id),),
+    ).fetchone()
+    if stored is None:
+        return None
+
+    def _optional_text(value: object) -> str | None:
+        return value if isinstance(value, str) else None
+
+    ticker = _optional_text(stored[0])
+    if ticker is None:
+        return None
+    snapshot_json = stored[5]
+    if not isinstance(snapshot_json, str) or not snapshot_json:
+        return None
+    provenance_json = _optional_text(stored[4])
+    return DcfRunRevision(
+        row_id=int(run_id),
+        ticker=ticker.upper(),
+        input_sha256=_optional_text(stored[1]),
+        workbook_sha256=_optional_text(stored[2]),
+        engine_version=_optional_text(stored[3]),
+        provenance_sha256=(
+            hashlib.sha256(provenance_json.encode("utf-8")).hexdigest()
+            if provenance_json is not None
+            else None
+        ),
+        assumption_snapshot_sha256=hashlib.sha256(snapshot_json.encode("utf-8")).hexdigest(),
     )
 
 
@@ -377,29 +442,53 @@ def _persist_forecast_points(
     )
 
 
-def _matching_current_version(
+def _matching_row_params(row: DcfRunRow) -> dict[str, object]:
+    """The complete persisted state compared by the exact-reuse path."""
+    return {
+        "ticker": row.ticker.upper(),
+        "valuation_date": row.valuation_date.isoformat(),
+        "horizon_years": row.horizon_years,
+        "wacc": row.wacc,
+        "npv": row.npv,
+        "npv_per_share": row.npv_per_share,
+        "shares_outstanding": row.shares_outstanding,
+        "currency": row.currency,
+        "notes": row.notes,
+        "run_id": row.run_id,
+        "live_price": row.live_price,
+        "live_price_at": row.live_price_at.isoformat() if row.live_price_at else None,
+        "over_under_pct": derive_over_under(row.live_price, row.npv_per_share),
+        "mos_bar_used": row.mos_bar_used,
+        "assumption_snapshot_json": row.assumption_snapshot_json,
+    }
+
+
+def _matching_version_by_id(
     conn: sqlite3.Connection,
+    run_id: int,
     row: DcfRunRow,
     params: dict[str, object],
-) -> int | None:
-    """Return the identity from the same read that matched the complete input set."""
+) -> bool:
+    """Whether the exact run ``run_id`` matches the complete input set."""
     if row.provenance is None:
-        return None
+        return False
     current = conn.execute(
         """
-        SELECT id, valuation_date, horizon_years, wacc, npv, npv_per_share,
+        SELECT valuation_date, horizon_years, wacc, npv, npv_per_share,
                shares_outstanding, currency, notes, run_id, live_price,
                live_price_at, over_under_pct, mos_bar_used,
                assumption_snapshot_json, input_sha256, workbook_sha256,
                engine_version, inputs_as_of, provenance_json
         FROM dcf_runs
-        WHERE ticker = ? AND COALESCE(segment_name, '') = '' AND is_latest = 1
-        LIMIT 1
+        WHERE id = ?
+          AND ticker = ?
+          AND COALESCE(segment_name, '') = ''
+          AND is_latest = 1
         """,
-        (row.ticker.upper(),),
+        (run_id, row.ticker.upper()),
     ).fetchone()
     if current is None:
-        return None
+        return False
     expected = (
         params["valuation_date"],
         params["horizon_years"],
@@ -421,35 +510,101 @@ def _matching_current_version(
         row.provenance.inputs_as_of_iso(),
         row.provenance.as_json(),
     )
-    return int(current[0]) if tuple(current)[1:] == expected else None
+    return tuple(current) == expected
 
 
-def _same_current_forecast_points(
+def _matching_run_for_id(
+    conn: sqlite3.Connection,
+    run_id: int,
+    row: DcfRunRow,
+) -> int | None:
+    """Exact equivalence of ONE known run identity; never re-selects latest."""
+    if not _matching_version_by_id(conn, run_id, row, _matching_row_params(row)):
+        return None
+    if not _same_current_forecast_points_for_run(conn, run_id, row):
+        return None
+    if not _same_current_input_ledger(conn, run_id, row):
+        return None
+    return run_id
+
+
+def matching_current_run_id(
     conn: sqlite3.Connection,
     row: DcfRunRow,
-) -> bool:
-    """Whether the latest run already has the exact immutable point set."""
-    if not row.forecast_points:
-        return True
+    *,
+    run_id: int | None = None,
+) -> int | None:
+    """Read-only exact identity of the current run matching ``row``.
+
+    Applies the persistence owner's complete-field equivalence, exact forecast
+    population, and exact input-ledger equivalence for ONE run identity, with
+    no latest re-selection for the populations. With ``run_id`` the caller
+    must already hold an explicit read transaction covering the context read,
+    the mapping selection, and these populations — fail closed otherwise.
+    Without it, this helper opens its own consistent read snapshot (the
+    explicit ``BEGIN`` starts it, the first read fixes it) and closes it
+    before returning. Returns ``None`` when the schema lacks the
+    versioning/provenance columns or anything differs, so callers fall back
+    to the normal staged save. Performs no writes.
+    """
+    if not _has_versioning_columns(conn) or not _has_provenance_columns(conn):
+        return None
+    if row.provenance is None:
+        return None
+    if run_id is not None:
+        if not conn.in_transaction:
+            return None
+        return _matching_run_for_id(conn, int(run_id), row)
+    owned_snapshot = not conn.in_transaction
+    if owned_snapshot:
+        conn.execute("BEGIN")
     try:
         current = conn.execute(
             """
             SELECT id FROM dcf_runs
-            WHERE ticker=? AND COALESCE(segment_name, '')='' AND is_latest=1
+            WHERE ticker = ? AND COALESCE(segment_name, '') = '' AND is_latest = 1
             LIMIT 1
             """,
             (row.ticker.upper(),),
         ).fetchone()
         if current is None:
-            return False
-        persisted = conn.execute(
+            return None
+        return _matching_run_for_id(conn, int(current[0]), row)
+    finally:
+        if owned_snapshot and conn.in_transaction:
+            conn.execute("ROLLBACK")
+
+
+def _forecast_rows_for_run(conn: sqlite3.Connection, run_id: int) -> list[tuple[object, ...]]:
+    return [
+        tuple(item)
+        for item in conn.execute(
             """
-            SELECT mapping_revision_id,series_key,period_start,period_end,value
-            FROM dcf_forecast_series_points WHERE dcf_run_id=?
-            ORDER BY mapping_revision_id,period_end,series_key
+            SELECT mapping_revision_id, series_key, period_start, period_end, value
+            FROM dcf_forecast_series_points
+            WHERE dcf_run_id = ?
+            ORDER BY mapping_revision_id, period_end, series_key
             """,
-            (int(current[0]),),
+            (run_id,),
         ).fetchall()
+    ]
+
+
+def _same_current_forecast_points_for_run(
+    conn: sqlite3.Connection,
+    run_id: int,
+    row: DcfRunRow,
+) -> bool:
+    """Exact stored forecast population for ``run_id`` (empty is exact).
+
+    A legacy schema without the forecast plane holds no population to
+    compare, so an empty expected population is exact there; a non-empty
+    one can only be persisted by the loud staged save (which raises).
+    """
+    if not _has_forecast_plane(conn):
+        return not row.forecast_points
+    try:
+        persisted = _forecast_rows_for_run(conn, run_id)
     except sqlite3.Error:
         return False
     expected = sorted(
@@ -462,7 +617,125 @@ def _same_current_forecast_points(
         )
         for point in row.forecast_points
     )
-    return [tuple(item) for item in persisted] == expected
+    return persisted == expected
+
+
+def _ledger_rows_for_run(conn: sqlite3.Connection, run_id: int) -> set[tuple[object, ...]]:
+    rows = conn.execute(
+        """
+        SELECT role, locator, sha256, byte_size, observed_at, detail_json
+        FROM dcf_run_inputs
+        WHERE dcf_run_id = ?
+        """,
+        (run_id,),
+    ).fetchall()
+    return {tuple(item) for item in rows}
+
+
+def _same_current_input_ledger(
+    conn: sqlite3.Connection,
+    run_id: int,
+    row: DcfRunRow,
+) -> bool:
+    """Exact stored input-ledger population for ``run_id`` under the snapshot."""
+    if row.provenance is None:
+        return False
+    try:
+        expected_rows = _input_ledger_rows(row.provenance)
+    except ValueError:
+        return False
+    expected = {
+        (
+            entry["role"],
+            entry["locator"],
+            entry["sha256"],
+            entry["byte_size"],
+            entry["observed_at"],
+            entry["detail_json"],
+        )
+        for entry in expected_rows
+    }
+    if not _has_input_ledger(conn):
+        return not expected
+    try:
+        stored = _ledger_rows_for_run(conn, run_id)
+    except sqlite3.Error:
+        return False
+    return stored == expected
+
+
+@dataclass(frozen=True)
+class DcfReuseContext:
+    """Validated informational context of the current reusable run."""
+
+    run_id: int
+    notes: str | None
+    live_price: float | None
+    live_price_at: str | None
+    market_source: str | None
+    provenance_detail: dict[str, object]
+
+
+def read_reuse_context(conn: sqlite3.Connection, ticker: str) -> DcfReuseContext | None:
+    """Read the current run's informational metadata + validated provenance.
+
+    A single read, keyed to the returned ``run_id`` so the caller keys mapping
+    selection and equivalence to the same identity. Returns ``None`` when the
+    schema is not reuse-capable or the stored provenance/snapshot context is
+    malformed (fail closed).
+    """
+    if not _has_versioning_columns(conn) or not _has_provenance_columns(conn):
+        return None
+    row = conn.execute(
+        """
+        SELECT id, notes, live_price, live_price_at, provenance_json
+        FROM dcf_runs
+        WHERE ticker = ? AND COALESCE(segment_name, '') = '' AND is_latest = 1
+        ORDER BY id DESC LIMIT 1
+        """,
+        (str(ticker).upper(),),
+    ).fetchone()
+    if row is None or row[4] is None:
+        return None
+    try:
+        detail_raw: object = json.loads(str(row[4]))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(detail_raw, dict):
+        return None
+    detail = cast("dict[str, object]", detail_raw)
+    recorded_ticker = detail.get("ticker")
+    if not isinstance(recorded_ticker, str) or recorded_ticker.upper() != str(ticker).upper():
+        return None
+    market_source: str | None = None
+    market = detail.get("market_price")
+    if market is not None:
+        if not isinstance(market, dict):
+            return None
+        market_detail = cast("dict[str, object]", market)
+        raw_source: object | None = market_detail.get("source")
+        if raw_source is not None and not isinstance(raw_source, str):
+            return None
+        market_source = raw_source
+    notes_raw = row[1]
+    if notes_raw is not None and not isinstance(notes_raw, str):
+        return None
+    at_raw = row[3]
+    live_price_at: str | None
+    if at_raw is None:
+        live_price_at = None
+    elif isinstance(at_raw, str):
+        live_price_at = at_raw
+    else:
+        return None
+    return DcfReuseContext(
+        run_id=int(row[0]),
+        notes=notes_raw,
+        live_price=float(row[2]) if row[2] is not None else None,
+        live_price_at=live_price_at,
+        market_source=market_source,
+        provenance_detail=dict(detail),
+    )
 
 
 _BRIDGE_STRENGTH: dict[PromotionStatus, int] = {
@@ -634,6 +907,7 @@ def persist_run(
     row: DcfRunRow,
     *,
     artifact_promotion: ArtifactPromotion | None = None,
+    pointer_promotion_factory: Callable[[DcfRunRevision], ArtifactPromotion] | None = None,
 ) -> DcfPersistenceResult:
     """Persist a new dcf_runs version for ``row.ticker``.
 
@@ -679,23 +953,7 @@ def persist_run(
     has_sanity = _has_sanity_column(conn)
     sanity_cols = ", sanity_flag" if has_sanity else ""
     sanity_vals = ", :sanity_flag" if has_sanity else ""
-    params: dict[str, object] = {
-        "ticker": row.ticker.upper(),
-        "valuation_date": row.valuation_date.isoformat(),
-        "horizon_years": row.horizon_years,
-        "wacc": row.wacc,
-        "npv": row.npv,
-        "npv_per_share": row.npv_per_share,
-        "shares_outstanding": row.shares_outstanding,
-        "currency": row.currency,
-        "notes": row.notes,
-        "run_id": row.run_id,
-        "live_price": row.live_price,
-        "live_price_at": row.live_price_at.isoformat() if row.live_price_at else None,
-        "over_under_pct": derive_over_under(row.live_price, row.npv_per_share),
-        "mos_bar_used": row.mos_bar_used,
-        "assumption_snapshot_json": row.assumption_snapshot_json,
-    }
+    params: dict[str, object] = _matching_row_params(row)
     if has_sanity:
         params["sanity_flag"] = derive_sanity_flag(
             derive_over_under(row.live_price, row.npv_per_share)
@@ -754,8 +1012,11 @@ def persist_run(
         )
 
     if _has_versioning_columns(conn) and has_provenance:
-        matching_id = _matching_current_version(conn, row, params)
-        if matching_id is not None and _same_current_forecast_points(conn, row):
+        # Complete reuse equivalence under one consistent read: when the
+        # caller holds a write transaction the check rides its snapshot,
+        # otherwise the helper opens (and closes) its own.
+        matching_id = matching_current_run_id(conn, row)
+        if matching_id is not None:
             return DcfPersistenceResult(written=False, revision=_revision(row, matching_id))
 
     decision = promotion_decision(conn, row)
@@ -770,6 +1031,8 @@ def persist_run(
         conn.execute("BEGIN")
     conn.execute("SAVEPOINT dcf_run_upsert")
     artifact_applied = False
+    pointer_applied = False
+    pointer_promotion: ArtifactPromotion | None = None
     try:
         if _has_versioning_columns(conn):
             # Supersede the prior current run for this ticker (unsegmented — the
@@ -798,6 +1061,10 @@ def persist_run(
             new_id = int(cur.lastrowid or 0)
         _persist_input_ledger(conn, dcf_run_id=new_id, rows=input_ledger_rows)
         _persist_forecast_points(conn, dcf_run_id=new_id, points=row.forecast_points)
+        if pointer_promotion_factory is not None:
+            pointer_promotion = pointer_promotion_factory(_revision(row, new_id))
+            pointer_promotion.apply()
+            pointer_applied = True
         if artifact_promotion is not None:
             artifact_promotion.apply()
             artifact_applied = True
@@ -814,10 +1081,24 @@ def persist_run(
             conn.rollback()
         if artifact_applied and artifact_promotion is not None:
             artifact_promotion.rollback()
+        if pointer_applied and pointer_promotion is not None:
+            pointer_promotion.rollback()
         raise
+    committed = DcfPersistenceResult(written=True, revision=_revision(row, new_id))
+    cleanup_failures: list[str] = []
     if artifact_applied and artifact_promotion is not None:
-        artifact_promotion.finalize()
-    return DcfPersistenceResult(written=True, revision=_revision(row, new_id))
+        try:
+            artifact_promotion.finalize()
+        except DcfCommittedCleanupError as exc:
+            cleanup_failures.append(str(exc))
+    if pointer_applied and pointer_promotion is not None:
+        try:
+            pointer_promotion.finalize()
+        except DcfCommittedCleanupError as exc:
+            cleanup_failures.append(str(exc))
+    if cleanup_failures:
+        raise DcfCommittedPointerCleanupError(committed, "; ".join(cleanup_failures)) from None
+    return committed
 
 
 def build_assumption_snapshot(

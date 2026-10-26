@@ -95,7 +95,13 @@ class PatentRecord(BaseModel):
 class MarketSignal(BaseModel):
     ticker: Literal["NVO", "LLY"]
     period: str  # e.g. "2026Q1"
-    signal_type: Literal["script_volume", "price_per_unit", "market_share", "manufacturing_capacity", "patent_commentary"]
+    signal_type: Literal[
+        "script_volume",
+        "price_per_unit",
+        "market_share",
+        "manufacturing_capacity",
+        "patent_commentary",
+    ]
     molecule: Optional[str]
     geography: Optional[str]
     metric_text: str  # the verbatim quote
