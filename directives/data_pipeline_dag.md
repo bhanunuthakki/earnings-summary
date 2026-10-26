@@ -268,10 +268,15 @@ harness names (`earnings-summary-pytest-<controller|gwN>-*`). It never touches
 the shared `earnings-summary-pytest-secrets*` folders, links, roots with an
 unreadable manifest, or any root whose lease holder may still run. Completed
 roots and roots without a manifest are removed one day after completion or last
-change. Failed roots, and active roots whose holder is gone, are removed after
-the seven-day review window. Owner decision, 2026-10-22: no host runs a cleaner
-for these local roots, so a failed pytest session's local evidence expires after
-seven days instead of waiting indefinitely for a reviewed resolution.
+change, ignoring modification times in the future. Failed roots, and active
+roots whose holder is gone, keep their fixture payload for one hour; after that
+only their review evidence (manifest, resolution, logs, JUnit XML, JSONL and
+retirement receipts) remains, and the root is removed after the seven-day review
+window. Owner decisions: 2026-10-22, no host runs a cleaner for these local
+roots, so a failed pytest session's local evidence expires after seven days
+instead of waiting indefinitely for a reviewed resolution; 2026-10-24, a failed
+run keeps evidence rather than its payload, because failed full-suite runs held
+about 250 GB of fixture databases on one Mac within two days.
 The existing weekly cleaner discovers these receipts in both configured state
 and runtime `.tmp` roots, plus narrowly named `earnings-summary-*` runs under
 the Windows/user temporary roots. Unknown paths are inventoried, not registered
