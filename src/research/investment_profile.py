@@ -20,7 +20,6 @@ from identity import DEFAULT_USER_ID
 from runtime.deterministic import content_sha256_ascii_default_str as _sha
 
 PROFILE_RULE_VERSION = "company_profile_rules.v1"
-ETF_PROFILE_RULE_VERSION = "etf_profile_rules.v1"
 
 
 class CompanyProfileLabel(StrEnum):
@@ -159,51 +158,6 @@ class ValuationEvidence(BaseModel):
     revenue_growth_yoy_pct: float | None = None
     fcf_margin_pct: float | None = None
     dcf_upside_pct: float | None = None
-
-
-class EtfStyleEvidence(BaseModel):
-    """One admitted ETF style-loading observation from the materialized workup."""
-
-    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
-
-    key: Literal["value", "size", "momentum"]
-    beta: float
-    r_squared: float = Field(ge=0.0, le=1.0)
-
-
-class EtfProfileInputs(BaseModel):
-    """Typed current evidence consumed by the deterministic ETF classifier."""
-
-    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
-
-    profile_available: bool = False
-    profile_field_evidence: dict[str, dict[str, object]] = Field(
-        default_factory=dict[str, dict[str, object]]
-    )
-    asset_class: str | None = None
-    benchmark_index: str | None = None
-    sector_label: str | None = None
-    expense_ratio: float | None = Field(default=None, ge=0.0)
-    distribution_yield: float | None = Field(default=None, ge=0.0)
-    style_evidence_available: bool = False
-    style_loadings: list[EtfStyleEvidence] = Field(default_factory=list[EtfStyleEvidence])
-    book_evidence_available: bool = False
-    diversification_multiplier: float | None = Field(default=None, ge=0.0)
-    overlap_multiplier: float | None = Field(default=None, ge=0.0)
-    sharpe_delta_bps: float | None = None
-    whatif_evidence_available: bool = False
-    vol_before_ann: float | None = Field(default=None, ge=0.0)
-    vol_after_ann: float | None = Field(default=None, ge=0.0)
-
-
-class EtfProfileLabelEvidence(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    label: EtfProfileLabel
-    source_kind: Literal["etf_rule"] = "etf_rule"
-    fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
-    summary: str = Field(min_length=1, max_length=240)
-    evidence: dict[str, object]
 
 
 LabelSourceKind = Literal["qualitative_synthesis", "dcf_rule"]
@@ -365,193 +319,6 @@ def derive_company_label_evidence(
     return result
 
 
-_BROAD_MARKET_BENCHMARKS = frozenset(
-    {
-        "crsp us total market index",
-        "ftse global all cap index",
-        "msci acwi index",
-        "msci usa index",
-        "russell 1000 index",
-        "s&p 500 index",
-        "s&p total market index",
-    }
-)
-_CYCLICAL_SECTORS = frozenset(
-    {
-        "energy",
-        "financial services",
-        "financials",
-        "industrials",
-        "materials",
-        "real estate",
-    }
-)
-
-
-def _normalized_identity(value: str | None) -> str:
-    return " ".join((value or "").strip().casefold().split())
-
-
-def _etf_evidence(
-    label: EtfProfileLabel,
-    *,
-    summary: str,
-    payload: dict[str, object],
-) -> EtfProfileLabelEvidence:
-    canonical = {"rule_version": ETF_PROFILE_RULE_VERSION, "label": label.value, **payload}
-    return EtfProfileLabelEvidence(
-        label=label,
-        fingerprint=_sha(canonical),
-        summary=summary,
-        evidence=canonical,
-    )
-
-
-def derive_etf_label_evidence(
-    inputs: EtfProfileInputs,
-) -> dict[EtfProfileLabel, EtfProfileLabelEvidence]:
-    """Classify ETF shape from typed current fund and book evidence only.
-
-    Each rule fails closed when one of its named authorities is unavailable.
-    Fingerprints intentionally record threshold outcomes instead of exact noisy
-    values so immaterial market movement does not churn owner review.
-    """
-
-    result: dict[EtfProfileLabel, EtfProfileLabelEvidence] = {}
-    qualifying_loadings = sorted(
-        (
-            loading
-            for loading in inputs.style_loadings
-            if loading.r_squared >= 0.10 and abs(loading.beta) >= 0.30
-        ),
-        key=lambda loading: loading.key,
-    )
-    benchmark = _normalized_identity(inputs.benchmark_index)
-    sector = _normalized_identity(inputs.sector_label)
-    asset_class = _normalized_identity(inputs.asset_class)
-
-    if (
-        inputs.profile_available
-        and inputs.style_evidence_available
-        and asset_class == "equity"
-        and benchmark in _BROAD_MARKET_BENCHMARKS
-        and inputs.expense_ratio is not None
-        and inputs.expense_ratio <= 0.0025
-        and not qualifying_loadings
-    ):
-        result[EtfProfileLabel.CORE_BETA] = _etf_evidence(
-            EtfProfileLabel.CORE_BETA,
-            summary="Low-cost equity exposure to a recognized broad-market index",
-            payload={
-                "benchmark": benchmark,
-                "expense_band": _coarse_band(inputs.expense_ratio, (0.001, 0.0025)),
-                "qualifying_style_loadings": [],
-            },
-        )
-
-    if inputs.style_evidence_available and qualifying_loadings:
-        loading_payload = [
-            {
-                "key": loading.key,
-                "beta_band": _coarse_band(abs(loading.beta), (0.30, 0.60, 1.0)),
-                "direction": "positive" if loading.beta > 0 else "negative",
-                "r2_band": _coarse_band(loading.r_squared, (0.10, 0.30, 0.60)),
-            }
-            for loading in qualifying_loadings
-        ]
-        result[EtfProfileLabel.FACTOR_SLEEVE] = _etf_evidence(
-            EtfProfileLabel.FACTOR_SLEEVE,
-            summary="Material measured style loading distinguishes the fund from broad beta",
-            payload={"loadings": loading_payload},
-        )
-
-    if inputs.profile_available and sector and sector not in {"broad market", "diversified"}:
-        result[EtfProfileLabel.THEMATIC_EXPOSURE] = _etf_evidence(
-            EtfProfileLabel.THEMATIC_EXPOSURE,
-            summary=f"Published fund profile targets {inputs.sector_label}",
-            payload={"sector_label": sector},
-        )
-
-    if (
-        inputs.book_evidence_available
-        and inputs.diversification_multiplier is not None
-        and inputs.diversification_multiplier >= 1.10
-        and inputs.overlap_multiplier is not None
-        and inputs.overlap_multiplier >= 1.0
-    ):
-        result[EtfProfileLabel.DIVERSIFIER] = _etf_evidence(
-            EtfProfileLabel.DIVERSIFIER,
-            summary="Low book correlation and limited look-through duplication",
-            payload={
-                "diversification_band": _coarse_band(
-                    inputs.diversification_multiplier, (1.0, 1.10, 1.20)
-                ),
-                "overlap_band": _coarse_band(inputs.overlap_multiplier, (0.92, 1.0, 1.08)),
-            },
-        )
-
-    if (
-        inputs.book_evidence_available
-        and inputs.whatif_evidence_available
-        and inputs.diversification_multiplier is not None
-        and inputs.diversification_multiplier >= 1.20
-        and inputs.sharpe_delta_bps is not None
-        and inputs.sharpe_delta_bps > 0
-        and inputs.vol_before_ann is not None
-        and inputs.vol_after_ann is not None
-        and inputs.vol_after_ann < inputs.vol_before_ann
-    ):
-        result[EtfProfileLabel.DEFENSIVE_HEDGE] = _etf_evidence(
-            EtfProfileLabel.DEFENSIVE_HEDGE,
-            summary="Strong diversification with modeled volatility reduction and Sharpe improvement",
-            payload={
-                "diversification_band": _coarse_band(
-                    inputs.diversification_multiplier, (1.0, 1.10, 1.20)
-                ),
-                "sharpe_delta_direction": "positive",
-                "volatility_direction": "lower",
-            },
-        )
-
-    if (
-        inputs.profile_available
-        and inputs.distribution_yield is not None
-        and inputs.distribution_yield >= 0.03
-    ):
-        result[EtfProfileLabel.INCOME] = _etf_evidence(
-            EtfProfileLabel.INCOME,
-            summary="Published distribution yield is at least 3%",
-            payload={
-                "distribution_yield_band": _coarse_band(
-                    inputs.distribution_yield, (0.03, 0.05, 0.08)
-                )
-            },
-        )
-
-    if inputs.profile_available and sector in _CYCLICAL_SECTORS:
-        result[EtfProfileLabel.TACTICAL_CYCLICAL] = _etf_evidence(
-            EtfProfileLabel.TACTICAL_CYCLICAL,
-            summary=f"Published sector exposure is cyclical: {inputs.sector_label}",
-            payload={"sector_label": sector},
-        )
-    # Keep capture/source dates in the displayed evidence without making daily
-    # refreshes churn the material-outcome fingerprint used by owner reviews.
-    profile_dependencies = {
-        EtfProfileLabel.CORE_BETA: ("asset_class", "benchmark_index", "expense_ratio"),
-        EtfProfileLabel.THEMATIC_EXPOSURE: ("sector_label",),
-        EtfProfileLabel.INCOME: ("distribution_yield",),
-        EtfProfileLabel.TACTICAL_CYCLICAL: ("sector_label",),
-    }
-    for label, fields in profile_dependencies.items():
-        if label in result:
-            result[label].evidence["profile_capture_evidence"] = {
-                key: inputs.profile_field_evidence[key]
-                for key in fields
-                if key in inputs.profile_field_evidence
-            }
-    return result
-
-
 def _table_exists(conn: sqlite3.Connection) -> bool:
     return (
         conn.execute(
@@ -707,64 +474,6 @@ def resolve_label_presentations(
     return presentations
 
 
-def resolve_etf_label_presentations(
-    conn: sqlite3.Connection,
-    *,
-    ticker: str,
-    suggestions: dict[EtfProfileLabel, EtfProfileLabelEvidence],
-) -> list[EtfProfileLabelPresentation]:
-    """Merge deterministic ETF suggestions with the shared owner-review ledger."""
-
-    reviews = _latest_etf_reviews(conn, ticker)
-    presentations: list[EtfProfileLabelPresentation] = []
-    for label in EtfProfileLabel:
-        suggestion = suggestions.get(label)
-        review = reviews.get(label)
-        if suggestion is not None:
-            state = ProfileLabelState.SYSTEM_SUGGESTED
-            if review is not None:
-                action = LabelReviewAction(str(review["action"]))
-                same_fingerprint = str(review["suggestion_fingerprint"]) == suggestion.fingerprint
-                if action is LabelReviewAction.RATIFY:
-                    state = (
-                        ProfileLabelState.OWNER_RATIFIED
-                        if same_fingerprint
-                        else ProfileLabelState.REVIEW_SUGGESTED
-                    )
-                elif same_fingerprint:
-                    continue
-                else:
-                    state = ProfileLabelState.REVIEW_SUGGESTED
-            presentations.append(
-                EtfProfileLabelPresentation(
-                    label=label,
-                    display_label=label.display_label,
-                    state=state,
-                    suggested=True,
-                    suggestion_fingerprint=suggestion.fingerprint,
-                    source_kind=suggestion.source_kind,
-                    evidence_summary=suggestion.summary,
-                )
-            )
-            continue
-        if (
-            review is not None
-            and LabelReviewAction(str(review["action"])) is LabelReviewAction.RATIFY
-        ):
-            presentations.append(
-                EtfProfileLabelPresentation(
-                    label=label,
-                    display_label=label.display_label,
-                    state=ProfileLabelState.REVIEW_SUGGESTED,
-                    suggested=False,
-                    suggestion_fingerprint=str(review["suggestion_fingerprint"]),
-                    source_kind="owner_review",
-                    evidence_summary="Current evidence no longer supports this previously ratified label.",
-                )
-            )
-    return presentations
-
-
 def _load_current_suggestion(
     conn: sqlite3.Connection, ticker: str
 ) -> tuple[int, str, InvestmentProfileSuggestion] | None:
@@ -872,73 +581,6 @@ def project_company_profile(
     )
 
 
-def project_etf_profile(
-    conn: sqlite3.Connection,
-    *,
-    ticker: str,
-    inputs: EtfProfileInputs,
-) -> EtfProfileProjection:
-    """Project the current ETF shape without an LLM call or persisted suggestion."""
-
-    suggestions = derive_etf_label_evidence(inputs)
-    labels = resolve_etf_label_presentations(conn, ticker=ticker, suggestions=suggestions)
-    evidence_axes = {
-        "fund profile": inputs.profile_available,
-        "style loadings": inputs.style_evidence_available,
-        "candidate vs book": inputs.book_evidence_available,
-        "portfolio what-if": inputs.whatif_evidence_available,
-    }
-    available_count = sum(evidence_axes.values())
-    if available_count >= 3:
-        coverage = EtfEvidenceCoverage.SUFFICIENT
-    elif available_count:
-        coverage = EtfEvidenceCoverage.PARTIAL
-    else:
-        coverage = EtfEvidenceCoverage.INSUFFICIENT
-    gaps = [name for name, available in evidence_axes.items() if not available]
-
-    if any(item.state is ProfileLabelState.REVIEW_SUGGESTED for item in labels):
-        state = ProfileProjectionState.REVIEW_SUGGESTED
-    elif labels and all(item.state is ProfileLabelState.OWNER_RATIFIED for item in labels):
-        state = ProfileProjectionState.OWNER_RATIFIED
-    elif labels:
-        state = ProfileProjectionState.SYSTEM_SUGGESTED
-    else:
-        state = ProfileProjectionState.UNAVAILABLE
-    if labels:
-        summary = (
-            "Current evidence supports " + ", ".join(item.display_label for item in labels) + "."
-        )
-    elif coverage is EtfEvidenceCoverage.INSUFFICIENT:
-        summary = "ETF profile is pending current fund and book evidence."
-    else:
-        summary = "Current evidence does not support a seeded ETF profile label."
-    fingerprint = _sha(
-        {
-            "rule_version": ETF_PROFILE_RULE_VERSION,
-            "ticker": ticker.upper(),
-            "inputs": inputs.model_dump(mode="json"),
-            "labels": [
-                {
-                    "label": item.label.value,
-                    "state": item.state.value,
-                    "suggested": item.suggested,
-                    "fingerprint": item.suggestion_fingerprint,
-                }
-                for item in labels
-            ],
-        }
-    )
-    return EtfProfileProjection(
-        labels=labels,
-        summary=summary,
-        state=state,
-        evidence_coverage=coverage,
-        evidence_gaps=gaps,
-        refresh_fingerprint=fingerprint,
-    )
-
-
 def _unavailable_profile_suggestion_for_projection() -> InvestmentProfileSuggestion:
     return InvestmentProfileSuggestion(
         labels=[],
@@ -952,16 +594,12 @@ def _unavailable_profile_suggestion_for_projection() -> InvestmentProfileSuggest
 
 
 __all__ = [
-    "ETF_PROFILE_RULE_VERSION",
     "CompanyProfileLabel",
     "CompanyProfileProjection",
     "EtfEvidenceCoverage",
-    "EtfProfileInputs",
     "EtfProfileLabel",
-    "EtfProfileLabelEvidence",
     "EtfProfileLabelPresentation",
     "EtfProfileProjection",
-    "EtfStyleEvidence",
     "InvestmentProfileSuggestion",
     "LabelReviewAction",
     "MoatAssessment",
@@ -973,10 +611,7 @@ __all__ = [
     "ProfileProjectionState",
     "ValuationEvidence",
     "derive_company_label_evidence",
-    "derive_etf_label_evidence",
     "project_company_profile",
-    "project_etf_profile",
     "record_label_review",
-    "resolve_etf_label_presentations",
     "resolve_label_presentations",
 ]

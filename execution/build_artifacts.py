@@ -56,7 +56,6 @@ from pipeline.db_writer_gate import hold_writer_gate
 from report.artifacts import persist_report_artifact
 from report.builder import build_report
 from report.models import ReportFlavor
-from report.renderers.etf_markdown import render as render_etf_markdown
 from report.renderers.markdown import render as render_markdown
 from report.renderers.sections_json import render as render_sections_json
 from report.renderers.workspace_html import (
@@ -76,7 +75,6 @@ from report.sections import (
 )
 from report.sections import financials as financials_section_mod
 from report.sections import snapshot as snapshot_section_mod
-from report.sections.etf_holdings import build_etf_brief
 from runtime.python_process import managed_python_prefix
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -269,16 +267,17 @@ def main() -> int:
 
     flavor = ReportFlavor(args.flavor)
     summary: list[dict[str, object]] = []
+    unsupported = False
     for ticker in tickers:
         if args.regenerate_purpose is not None:
-            summary.append(
-                _regenerate_native_purpose(
-                    ticker,
-                    repo_root,
-                    purpose=args.regenerate_purpose,
-                    force_budget_bypass=args.force_budget_bypass,
-                )
+            result = _regenerate_native_purpose(
+                ticker,
+                repo_root,
+                purpose=args.regenerate_purpose,
+                force_budget_bypass=args.force_budget_bypass,
             )
+            summary.append(result)
+            unsupported = unsupported or result.get("status") == "unsupported"
             continue
         result = _build_one(
             ticker,
@@ -293,8 +292,9 @@ def main() -> int:
             force_refresh=args.force_refresh,
         )
         summary.append(result)
+        unsupported = unsupported or result.get("status") == "unsupported"
     print(json.dumps(summary, indent=2, default=str))
-    return 0
+    return 2 if unsupported else 0
 
 
 def _regenerate_native_purpose(
@@ -306,6 +306,17 @@ def _regenerate_native_purpose(
 ) -> dict[str, object]:
     """Run exactly one purpose producer without rendering a report."""
     configure_artifact_runtime(repo_root)
+    if _resolve_kind(repo_root, ticker) is InstrumentType.ETF:
+        return {
+            "ticker": ticker,
+            "purpose": purpose,
+            "status": "unsupported",
+            "reason": (
+                "dedicated ETF brief generation is retired; "
+                "saved ETF reports remain readable as history"
+            ),
+            "instrument_kind": InstrumentType.ETF.value,
+        }
     effective_bypass = force_budget_bypass or ticker_settings.get_bypass_budget(
         ticker,
         db_path=require_db_path(),
@@ -531,7 +542,8 @@ def _all_tracked(repo_root: Path) -> list[str]:
     cursor = conn.cursor()
     cursor.execute(
         f"SELECT DISTINCT ticker FROM tracked_companies "
-        f"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} ORDER BY ticker"
+        f"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} "
+        "AND LOWER(COALESCE(instrument_type,'')) <> 'etf' ORDER BY ticker"
     )
     rows = cursor.fetchall()
     conn.close()
@@ -550,6 +562,18 @@ def _build_one(
     force_budget_bypass: bool = False,
     force_refresh: bool = False,
 ) -> dict[str, object]:
+    configure_artifact_runtime(repo_root)
+    if _resolve_kind(repo_root, ticker) is InstrumentType.ETF:
+        return {
+            "ticker": ticker,
+            "status": "unsupported",
+            "reason": (
+                "dedicated ETF brief generation is retired; "
+                "saved ETF reports remain readable as history"
+            ),
+            "instrument_kind": InstrumentType.ETF.value,
+        }
+
     out_dir = repo_root / "output" / "research" / ticker
     out_dir.mkdir(parents=True, exist_ok=True)
     today = date.today().isoformat()
@@ -560,13 +584,6 @@ def _build_one(
     # by execution/refresh_dcf.py). The brief references it rather than re-rendering
     # a per-date copy here; the dashboard serves it via the /dcf/<T> route.
     canonical_dcf = repo_root / "dcf" / f"{ticker}.xlsx"
-
-    configure_artifact_runtime(repo_root)
-
-    # Cross-asset dispatch: ETF tickers get the ETF brief shape (no DCF,
-    # no segments, no 10-K narrative). See directives/cross_asset_data_model.md.
-    if _resolve_kind(repo_root, ticker) is InstrumentType.ETF:
-        return _build_etf(ticker, repo_root, md_path, today)
 
     # Refresh quarterly_artifacts (audio/transcript/release/slides + step_* flags)
     # from the filesystem before the provenance section reads them. This is what
@@ -823,27 +840,6 @@ def _resolve_kind(repo_root: Path, ticker: str) -> InstrumentType | None:
         return get_instrument_kind(conn, ticker)
     finally:
         conn.close()
-
-
-def _build_etf(ticker: str, repo_root: Path, md_path: Path, today: str) -> dict[str, object]:
-    """ETF brief build path — markdown only for the MVP.
-
-    HTML / workspace / xlsx renderers are equity-shaped and not adapted yet;
-    they'll graduate to multi-kind dispatch in a follow-up. For now the
-    markdown brief is the canary deliverable that proves the dispatch works.
-    """
-    brief = build_etf_brief(ticker, repo_root)
-    md_path.write_text(render_etf_markdown(brief), encoding="utf-8")
-    _emit("wrote_etf_markdown", {"ticker": ticker, "path": str(md_path)})
-    return {
-        "ticker": ticker,
-        "report_md": str(md_path),
-        "instrument_kind": InstrumentType.ETF.value,
-        "section_status": {
-            "etf_profile": brief.profile.status.value,
-            "etf_holdings": brief.holdings.status.value,
-        },
-    }
 
 
 if __name__ == "__main__":

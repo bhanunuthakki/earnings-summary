@@ -25,7 +25,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from candidate_fit_cache import materialize_candidate_fit
-from etf_score_cache import materialize_etf_scores
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -72,17 +71,10 @@ def main() -> int:
     conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     try:
         n = materialize_candidate_fit(conn, repo_root, db_path=db_path, api_url=args.api_url)
-        # ETF sibling (same Stage 0f budget, no new pipeline stage): the
-        # fund-appropriate score for evaluation-list ETFs — see
-        # pipeline/etf_score.py and directives/etf_data.md.
-        n_etf = materialize_etf_scores(conn, repo_root)
     finally:
         conn.close()
 
-    print(
-        f"Candidate fit materialised · names={n} · etf_scores={n_etf} · "
-        f"caches=data/candidate_fit.json,data/etf_score.json"
-    )
+    print(f"Candidate fit materialised · names={n} · cache=data/candidate_fit.json")
     return 0
 
 

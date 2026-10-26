@@ -298,7 +298,7 @@
       "name": "ast+xml+literal-scanner",
       "version": "1.3.0",
       "python": ">=3.11",
-      "source_sha256": "3b257f7009235663279a5c246c6464e7e3ccb780be2fd1dc5fa67857949ae1b8"
+      "source_sha256": "657a7a0e72930dba5568e7a1638b3d225861524ce438df44c8658b80ccc72492"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c9ec98b1cbcdf93c9b890d9a8a8c59ef6109598f67b1739c38463d79d5986175",

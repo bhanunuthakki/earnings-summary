@@ -5,7 +5,7 @@
 - dcf.universe.dcf_universe: evaluation ETFs are excluded from the DCF
   universe; a pre-0044 substrate without instrument_type keeps old behavior.
 - onboard_ticker rails: _saydo_should_run never fires for an ETF (even
-  forced); run_etf_onboarding maps ingest outcomes to exit codes.
+  forced); company-fit refresh excludes the retired ETF tail.
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ import pytest
 from allocation.price_history import load_daily_closes
 from dcf.universe import dcf_universe
 from execution import onboard_ticker as onboard_ticker_mod
-from execution.onboard_ticker import run_etf_onboarding
 
 _saydo_should_run = cast(Callable[..., bool], getattr(onboard_ticker_mod, "_saydo_should_run"))
 
@@ -124,62 +123,6 @@ def test_saydo_never_runs_for_etf() -> None:
     assert _saydo_should_run("watchlist", force=True, instrument=None) is True
 
 
-class _FakeResult:
-    def __init__(self, nport_status: str, issuer_status: str) -> None:
-        self.nport_status = nport_status
-        self.issuer_status = issuer_status
-        self.nport_as_of = date(2026, 5, 31)
-        self.nport_rows = 3
-        self.issuer_rows = 0
-        self.issuer_as_of = None
-        self.characteristics_applied = False
-        self.price_status = "fetched"
-        self.price_rows = 1250
-
-
-def test_run_etf_onboarding_exit_codes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import etf_sources.ingest as ingest_mod
-    from etf_sources.nport import NportParseError
-    from execution import onboard_ticker as onboard_mod
-
-    conn = sqlite3.connect(":memory:")
-    spawns: list[object] = []
-
-    def fail_spawn(*args: object, **kwargs: object) -> object:
-        spawns.append((args, kwargs))
-        raise AssertionError("ETF onboarding must not spawn role synthesis")
-
-    monkeypatch.setattr(onboard_mod.subprocess, "run", fail_spawn)
-
-    def ingested_result(c: object, t: str, root: Path, **kw: object) -> _FakeResult:
-        return _FakeResult("ingested", "unavailable")
-
-    monkeypatch.setattr(
-        ingest_mod,
-        "refresh_published_data",
-        ingested_result,
-    )
-    assert run_etf_onboarding(conn, "AVDV", tmp_path) == 0
-
-    def unavailable_result(c: object, t: str, root: Path, **kw: object) -> _FakeResult:
-        return _FakeResult("unavailable", "unavailable")
-
-    monkeypatch.setattr(
-        ingest_mod,
-        "refresh_published_data",
-        unavailable_result,
-    )
-    assert run_etf_onboarding(conn, "AVDV", tmp_path) == 1
-
-    def halt(c: object, t: str, root: Path, **kw: object) -> object:
-        raise NportParseError("drifted")
-
-    monkeypatch.setattr(ingest_mod, "refresh_published_data", halt)
-    assert run_etf_onboarding(conn, "AVDV", tmp_path) == 2
-    assert spawns == []
-    conn.close()
-
-
 def test_refresh_candidate_fit_rejects_retired_synthesis_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -203,7 +146,7 @@ def test_refresh_candidate_fit_rejects_retired_synthesis_flag(
     assert exc.value.code == 2
 
 
-def test_refresh_candidate_fit_ordinary_path_keeps_both_materializers(
+def test_refresh_candidate_fit_ordinary_path_keeps_company_materializer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     from execution import refresh_candidate_fit as refresh_mod
@@ -226,13 +169,8 @@ def test_refresh_candidate_fit_ordinary_path_keeps_both_materializers(
         calls.append(("candidate", c, repo_root, db_path, api_url))
         return 7
 
-    def fake_etf_scores(c: object, repo_root: Path) -> int:
-        calls.append(("etf_scores", c, repo_root))
-        return 3
-
     monkeypatch.setattr(refresh_mod, "connect_sqlite", fake_connect)
     monkeypatch.setattr(refresh_mod, "materialize_candidate_fit", fake_candidate)
-    monkeypatch.setattr(refresh_mod, "materialize_etf_scores", fake_etf_scores)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -248,8 +186,7 @@ def test_refresh_candidate_fit_ordinary_path_keeps_both_materializers(
     )
 
     assert refresh_mod.main() == 0
-    assert [call[0] for call in calls] == ["connect", "candidate", "etf_scores", "close"]
+    assert [call[0] for call in calls] == ["connect", "candidate", "close"]
     assert calls[1] == ("candidate", conn, tmp_path, db_path, "http://stub.invalid")
-    assert calls[2] == ("etf_scores", conn, tmp_path)
     out = capsys.readouterr().out
-    assert "names=7" in out and "etf_scores=3" in out
+    assert "names=7" in out and "etf_scores" not in out

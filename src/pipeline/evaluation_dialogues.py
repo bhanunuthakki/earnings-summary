@@ -50,6 +50,7 @@ ReasonCode = Literal[
     "discovery_source_unavailable",
     "instrument_type_unavailable",
     "relevance_partial",
+    "etf_workup_retired",
 ]
 
 
@@ -422,7 +423,7 @@ def load_evaluation_dialogues(
                 any_instrument_unknown = True
                 workup: _Availability = "unavailable"
             elif instrument == "etf":
-                workup = "available"
+                workup = "unavailable"
             else:
                 workup = "partial"
 
@@ -434,7 +435,7 @@ def load_evaluation_dialogues(
             if not notes_available or not notes_complete:
                 item_reasons.append("notes_source_unavailable")
             if instrument == "etf":
-                item_reasons.append("etf_workup_route_available")
+                item_reasons.append("etf_workup_retired")
             else:
                 item_reasons.append("company_workup_route_available")
 

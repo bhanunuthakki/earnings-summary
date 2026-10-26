@@ -32,7 +32,7 @@ from instrument_store import get_etf_holdings
 #: (but still counted in the overlap fraction).
 _TOP_TABLE_CAP = 8
 
-#: The N-PORT spine's ``etf_holdings.source`` value (etf_sources.nport.SOURCE
+#: The historical N-PORT ``etf_holdings.source`` value (stored as "nport"
 #: — mirrored as a literal so this module stays free of the fetch package).
 _SOURCE_NPORT = "nport"
 

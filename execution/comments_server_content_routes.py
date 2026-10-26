@@ -447,7 +447,13 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             ticker = context.safe_ticker(request.args.get("ticker") or "")
         except ValueError:
             abort(404)
-        html = render_etf_workup(context.get_read_db(), repo_root, db_path, ticker)
+        try:
+            page = int(request.args.get("page", "0"))
+        except (TypeError, ValueError):
+            abort(404)
+        if page < 0:
+            abort(404)
+        html = render_etf_workup(context.get_read_db(), repo_root, db_path, ticker, page=page)
         if html is None:
             abort(404)
         return Response(html, mimetype="text/html")

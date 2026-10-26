@@ -2,6 +2,9 @@
 
 Status: **October 24 event unit accepted at 96/100; on-command procedure MVP at 95/100; financial-read MVP at 90/100; ETF automatic-generation cut at 94/100. Frontend shell cut at 93/100; legacy company path retirement at 96/100. Combined architecture and release remain HOLD**.
 
+Current ETF scope (October 25): the owner retired dedicated ETF research. The earlier on-demand and capture plans below are historical and superseded. The local implementation removes dedicated acquisition, generation, scoring and active workups. It preserves portfolio weights, shared risk/prices and all saved data/history. Retained commentary must use supported diversification evidence. Earnings-multiple context must use a dated source or an explicit long-term assumption. AVUV is canceled. No production, scheduler or provider-policy change occurred. Final local checks and independent review belong to `.tmp/cleanup-open-model-execution/etf-lightweight-final-acceptance.json`; the complete release remains HOLD.
+
+
 The owner selected corrected October 23 NU PRE/POST and expanded MELI as the
 engineering preservation references. The owner also approved retiring new
 standalone event briefs while preserving sources, registration and history.
@@ -979,7 +982,7 @@ Final independent implementation review, graph, exact line counts and checks are
 The architecture/release gate remains HOLD at 26 oversized modules against 25. A bounded independent managed-IR review found no supported material cut below 2,000 lines; it recommends no broad rewrite. Full current-branch testing remains pending. The older 22,282-test pass binds `17cfdd5f`, not this source. No push, merge, deployment, source collection or production mutation occurred.
 
 
-## ETF capture prerequisite
+## Historical ETF capture prerequisite — superseded October 25
 
 The bounded read-only canonical-host check inspected AVDV, AVUV and VDE. It found no usable current ETF capture witness in that sample. It did not establish absence across all ETFs or archives. Generic profile bytes and saved row timestamps do not qualify a current ETF source. The check is complete; it did not collect or generate new data.
 

@@ -8,21 +8,17 @@ from __future__ import annotations
 
 import argparse
 import sqlite3
-import sys
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
+from execution import daily_fetch_and_brief as daily
 
-from daily_fetch_and_brief import (  # noqa: E402
-    _check_skip_gates,
-    _compute_brief_hash,
-    _resolve_tickers,
-)
+_check_skip_gates: Callable[..., tuple[bool, str | None, str]] = getattr(daily, "_check_skip_gates")
+_compute_brief_hash: Callable[..., str] = getattr(daily, "_compute_brief_hash")
+_resolve_tickers: Callable[..., list[str]] = getattr(daily, "_resolve_tickers")
 
 
 def _bootstrap_min_schema(db_path: Path) -> None:
@@ -36,6 +32,7 @@ def _bootstrap_min_schema(db_path: Path) -> None:
             ticker TEXT NOT NULL,
             name TEXT NOT NULL,
             list_type TEXT NOT NULL,
+            instrument_type TEXT DEFAULT 'equity',
             added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             archived_at TIMESTAMP,
             brief_dirty BOOLEAN DEFAULT 0,
@@ -324,6 +321,7 @@ def test_resolve_tickers_dirty_only_from_fresh_schema(tmp_path: Path) -> None:
         """
         CREATE TABLE tracked_companies (
             ticker TEXT NOT NULL, name TEXT, list_type TEXT,
+            instrument_type TEXT DEFAULT 'equity',
             archived_at TIMESTAMP, brief_dirty BOOLEAN DEFAULT 0
         );
         INSERT INTO tracked_companies (ticker, name, list_type, brief_dirty)

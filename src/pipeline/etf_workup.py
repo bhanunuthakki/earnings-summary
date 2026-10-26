@@ -1,20 +1,10 @@
-"""The ETF workup peek — the fund's full evaluation story in one fragment.
+"""Saved ETF research history — the old ETF workup peek, now a read-only reader.
 
-The click-through behind the evaluation row's ETF pill
-(``GET /api/peek/etf_workup``). Five blocks, all disk/DB reads (the render
-path never runs a Sharpe window, an OLS, or an LLM):
-
-  ① profile strip — ER (bps), AUM, issuer, benchmark, basket P/E-P/B with
-     their as-of + source (etf_profile, published-data layer);
-  ② style loadings — the three spread betas + r² from the Stage 0f cache;
-  ③ look-through — direct overlap %, the top shared names (ETF w% vs book
-     w%), and the country exposure rollup (N-PORT invCountry);
-  ④ what-if at weight — the precomputed 1/3/5% before→after rows;
-  ⑤ role in portfolio — the governed one-pager (etf_role_synthesis
-     artifact), with the build-hint CLI when absent.
-
-Every block degrades independently with an explicit missing state — a fund
-with no holdings snapshot still shows its profile and what-if.
+``GET /api/peek/etf_workup`` still resolves a tracked ETF, but the fragment no
+longer renders an active workup. It lists the saved ``etf_role_synthesis``
+artifacts (current and superseded) from ``llm_artifacts`` so the historical
+record stays readable. No profile/style/overlap/what-if generation, no current
+weight recommendation, and no provider/LLM/artifact writes happen on this path.
 """
 
 from __future__ import annotations
@@ -23,44 +13,58 @@ import sqlite3
 from html import escape
 from pathlib import Path
 
-from etf_overlap import EtfOverlap, compute_lookthrough_overlap
-from etf_role_synthesis import read_role_synthesis, synthesis_generated_at
-from etf_score_cache import read_materialized_etf_loadings, read_materialized_etf_whatif
-from instrument_store import get_etf_profile
+from llm_artifact_store import Artifact, HistoricalArtifactVersion, historical_versions
 from pipeline.analysis_styles import ANALYSIS_STYLE
-from portfolio_weights import read_materialized_weights
+from report.etf_models import EtfRoleSynthesis
 from ui.prose import render_prose
 
-_VERDICT_TONES: dict[str, str] = {
-    "closes_target_gap": "k-pill k-pill-ok",
-    "diversifier": "k-pill k-pill-ok",
-    "redundant": "k-pill k-pill-warn",
-    "style_crowding": "k-pill k-pill-warn",
-    "insufficient_data": "k-pill",
-}
+_PAGE_SIZE = 20
+_PURPOSE = "etf_role_synthesis"
+_SCOPE = "etf"
 
 
 def render_etf_workup(
-    conn: sqlite3.Connection, repo_root: Path, db_path: Path, ticker: str
+    conn: sqlite3.Connection,
+    repo_root: Path,
+    db_path: Path,
+    ticker: str,
+    *,
+    page: int = 0,
 ) -> str | None:
-    """The workup fragment; None when the ticker isn't a tracked ETF (404)."""
+    """Saved ETF research history; None when the ticker isn't a tracked ETF."""
+    del repo_root  # retained in the route signature; this reader uses the DB only
     t = ticker.strip().upper()
     if not _is_tracked_etf(conn, t):
         return None
-    weights = read_materialized_weights(repo_root)
-    overlap = compute_lookthrough_overlap(conn, t, weights) if weights else None
-    blocks = [
-        _profile_block(conn, t),
-        _loadings_block(repo_root, t),
-        _overlap_block(overlap, bool(weights)),
-        _whatif_block(repo_root, t),
-        _role_block(db_path, t),
-    ]
-    foot = (
-        f'<div class="cc-peek-foot"><a href="/ticker/{escape(t, quote=True)}">'
-        "open the holding &rarr;</a></div>"
+    if page < 0:
+        page = 0
+    try:
+        versions = historical_versions(
+            conn,
+            ticker=t,
+            purpose=_PURPOSE,
+            fiscal_period=None,
+            scope=_SCOPE,
+            verify_readability=True,
+        )
+    except (sqlite3.Error, ValueError, TypeError):
+        rows = "<p class='etfw-miss' role='status'>Saved ETF research is unavailable.</p>"
+        has_next = False
+    else:
+        versions.reverse()
+        offset = page * _PAGE_SIZE
+        has_next = len(versions) > offset + _PAGE_SIZE
+        rows = "".join(_render_saved_version(v) for v in versions[offset : offset + _PAGE_SIZE])
+        if not rows:
+            rows = "<p class='etfw-miss' role='status'>No saved versions on this page.</p>"
+    nav = _pagination(t, page, has_next)
+    return (
+        "<div class='etfw'>"
+        "<h4>Saved ETF research</h4>"
+        "<p class='k-card-meta'>Historical saved versions; no active workup or "
+        "current sizing advice is generated here.</p>"
+        f"{rows}{nav}</div>{ANALYSIS_STYLE}"
     )
-    return f'<div class="etfw">{"".join(blocks)}</div>{foot}{ANALYSIS_STYLE}'
 
 
 def _is_tracked_etf(conn: sqlite3.Connection, ticker: str) -> bool:
@@ -74,168 +78,71 @@ def _is_tracked_etf(conn: sqlite3.Connection, ticker: str) -> bool:
     return bool(row) and str(row[0] or "").lower() == "etf"
 
 
-def _chip(text: str, mono: bool = True) -> str:
-    cls = "k-chip k-chip-mono" if mono else "k-chip"
-    return f'<span class="{cls}">{escape(text)}</span>'
-
-
-def _profile_block(conn: sqlite3.Connection, ticker: str) -> str:
-    try:
-        p = get_etf_profile(conn, ticker)
-    except sqlite3.Error:
-        p = None
-    if p is None:
-        return (
-            "<div><h4>Profile</h4><p class='etfw-miss'>No profile on file — run "
-            f"<code>python execution/fetch_etf_published_data.py --ticker {escape(ticker)}</code>"
-            "</p></div>"
-        )
-    chips: list[str] = []
-    if p.expense_ratio is not None:
-        chips.append(_chip(f"ER {p.expense_ratio * 1e4:.0f}bp"))
-    if p.aum_usd_m is not None:
-        chips.append(_chip(f"AUM ${p.aum_usd_m:,.0f}M"))
-    if p.pe_ratio is not None:
-        chips.append(_chip(f"P/E {p.pe_ratio:.1f}"))
-    if p.pb_ratio is not None:
-        chips.append(_chip(f"P/B {p.pb_ratio:.1f}"))
-    if p.distribution_yield is not None:
-        chips.append(_chip(f"yield {p.distribution_yield * 100.0:.1f}%"))
-    if p.inception_date is not None:
-        chips.append(_chip(f"since {p.inception_date.year}"))
-    ident = " · ".join(filter(None, (p.name, p.issuer, p.benchmark_index)))
-    src_bits: list[str] = []
-    if p.characteristics_source:
-        as_of = p.characteristics_as_of.isoformat() if p.characteristics_as_of else "?"
-        src_bits.append(f"characteristics: {p.characteristics_source} as of {as_of}")
-    src = f'<div class="etfw-src">{escape(" · ".join(src_bits))}</div>' if src_bits else ""
-    strip = "".join(chips) or "<span class='etfw-miss'>no characteristics on file</span>"
-    return (
-        f"<div><h4>Profile</h4><p>{escape(ident)}</p>"
-        f'<div class="etfw-strip">{strip}</div>{src}</div>'
+def _render_saved_version(version: HistoricalArtifactVersion) -> str:
+    artifact = version.artifact
+    artifact_id = escape(str(version.artifact_id))
+    saved = escape(
+        artifact.generated_at.isoformat(timespec="minutes")
+        if artifact is not None
+        else version.generated_at_raw or "date unavailable"
     )
-
-
-def _loadings_block(repo_root: Path, ticker: str) -> str:
-    loadings = read_materialized_etf_loadings(repo_root).get(ticker, [])
-    if not loadings:
-        return (
-            "<div><h4>Style loadings</h4><p class='etfw-miss'>No qualifying style legs "
-            "(thin history or r&sup2; below 0.10).</p></div>"
-        )
-    rows = "".join(
-        f'<div class="etfw-row"><span>{escape(ld.key)}</span>'
-        f'<span class="v">&beta; {ld.beta:+.2f} · r&sup2; {ld.r_squared:.2f} · n={ld.n_obs}</span></div>'
-        for ld in loadings
+    state = (
+        "superseded" if artifact is not None and artifact.superseded_by_id is not None else "saved"
     )
-    return f"<div><h4>Style loadings</h4>{rows}</div>"
-
-
-def _overlap_block(overlap: EtfOverlap | None, weights_present: bool) -> str:
-    if overlap is None:
-        why = (
-            "weights cache empty"
-            if not weights_present
-            else "no holdings snapshot on file (N-PORT unresolved and no issuer overlay)"
-        )
-        return (
-            f"<div><h4>Look-through</h4><p class='etfw-miss'>Unavailable — {escape(why)}.</p></div>"
-        )
-    head = (
-        f"<p>{overlap.direct_overlap_pct * 100.0:.0f}% of the fund's weight is in names the "
-        f"book already owns · {overlap.holdings_count} constituents · "
-        f"{escape(overlap.source)} as of {overlap.as_of.isoformat()}</p>"
-    )
-    top = ""
-    if overlap.top_overlaps:
-        body = "".join(
-            f"<tr><td>{escape(r.constituent)}</td>"
-            f"<td class='num'>{r.etf_weight * 100.0:.1f}%</td>"
-            f"<td class='num'>{r.book_weight * 100.0:.1f}%</td></tr>"
-            for r in overlap.top_overlaps
-        )
-        top = (
-            '<table class="etfw-table"><thead><tr><th>shared name</th><th>ETF w</th>'
-            f"<th>book w</th></tr></thead><tbody>{body}</tbody></table>"
-        )
-    countries = ""
-    if overlap.country_weights:
-        ranked = sorted(overlap.country_weights.items(), key=lambda kv: kv[1], reverse=True)[:10]
-        chips = "".join(_chip(f"{c} {w * 100.0:.0f}%") for c, w in ranked)
-        countries = (
-            f'<div class="etfw-strip">{chips}</div>'
-            f'<div class="etfw-src">country exposure (intl {overlap.intl_weight * 100.0:.0f}% · '
-            f"em {overlap.em_weight * 100.0:.0f}%)</div>"
-        )
-    return f"<div><h4>Look-through</h4>{head}{top}{countries}</div>"
-
-
-def _whatif_block(repo_root: Path, ticker: str) -> str:
-    rows = read_materialized_etf_whatif(repo_root).get(ticker, {})
-    if not rows:
-        return (
-            "<div><h4>What-if</h4><p class='etfw-miss'>Not precomputed yet — runs with the "
-            "morning Stage 0f (or <code>python execution/refresh_candidate_fit.py</code>).</p></div>"
-        )
-
-    def _num(row: dict[str, object], key: str, fmt: str, mult: float = 1.0) -> str:
-        v = row.get(key)
-        return format(float(v) * mult, fmt) if isinstance(v, (int, float)) else "—"
-
-    body = ""
-    for wkey in sorted(rows, key=float):
-        r = rows[wkey]
-        body += (
-            f"<tr><td>{float(wkey) * 100.0:g}%</td>"
-            f"<td class='num'>{_num(r, 'vol_before_ann', '.1f', 100)}% &rarr; "
-            f"{_num(r, 'vol_after_ann', '.1f', 100)}%</td>"
-            f"<td class='num'>{_num(r, 'sharpe_before', '+.3f')} &rarr; "
-            f"{_num(r, 'sharpe_after', '+.3f')}</td>"
-            f"<td class='num'>{_num(r, 'sharpe_delta_bps', '+.0f')}bp</td></tr>"
-        )
-    stamp = ""
-    three = rows.get("0.03") or next(iter(rows.values()))
-    through = three.get("prices_through")
-    if isinstance(through, str):
-        stamp = f'<div class="etfw-src">modeled book, pro-rata funded · prices through {escape(through)}</div>'
-    return (
-        "<div><h4>What-if</h4>"
-        '<table class="etfw-table"><thead><tr><th>weight</th><th>vol</th><th>Sharpe</th>'
-        f"<th>&Delta;SR</th></tr></thead><tbody>{body}</tbody></table>{stamp}</div>"
-    )
-
-
-def _role_block(db_path: Path, ticker: str) -> str:
-    synthesis = read_role_synthesis(db_path, ticker)
+    header = f"<details><summary>Version #{artifact_id} · {saved} · {state}</summary>"
+    synthesis = _decode_synthesis(artifact) if artifact is not None else None
     if synthesis is None:
-        return (
-            "<div><h4>Role in portfolio</h4><p class='etfw-miss'>Not generated yet — run "
-            f"<code>python execution/build_etf_workup.py --ticker {escape(ticker)}</code> "
-            "(one governed LLM call; cached until the workup inputs change).</p></div>"
+        body = (
+            "<p class='etfw-miss'>Unavailable — this saved version has no readable "
+            "role synthesis content.</p>"
         )
-    verdict_cls = _VERDICT_TONES.get(synthesis.verdict, "k-pill")
-    verdict = (
-        f'<div class="etfw-verdict"><span class="{verdict_cls}">'
-        f"{escape(synthesis.verdict.replace('_', ' '))}</span>"
-        + (
-            f" {_chip(f'suggested {synthesis.suggested_weight_band}')}"
-            if synthesis.suggested_weight_band
-            else ""
+    else:
+        body = render_prose(synthesis.role_summary)
+        body += (
+            f"<p class='etfw-src'>Saved verdict: {escape(synthesis.verdict.replace('_', ' '))}</p>"
         )
-        + "</div>"
-    )
-    adds = "".join(f"<li>{escape(a)}</li>" for a in synthesis.what_it_adds)
-    adds_html = f"<ul>{adds}</ul>" if adds else ""
-    caution = (
-        f'<p class="etfw-miss">&#9888; {escape(synthesis.overlap_caution)}</p>'
-        if synthesis.overlap_caution
-        else ""
-    )
-    watch = "; ".join(synthesis.watch_items)
-    watch_html = f'<div class="etfw-src">watch: {escape(watch)}</div>' if watch else ""
-    stamp = synthesis_generated_at(db_path, ticker)
-    stamp_html = f'<div class="etfw-src">generated {escape(stamp)}</div>' if stamp else ""
-    return (
-        f"<div><h4>Role in portfolio</h4>{verdict}"
-        f"{render_prose(synthesis.role_summary)}{adds_html}{caution}{watch_html}{stamp_html}</div>"
-    )
+        if synthesis.suggested_weight_band:
+            body += (
+                "<p class='etfw-src'>Historical proposed weight: "
+                f"{escape(synthesis.suggested_weight_band)}</p>"
+            )
+        if synthesis.what_it_adds:
+            items = "".join(f"<li>{escape(item)}</li>" for item in synthesis.what_it_adds)
+            body += f"<ul>{items}</ul>"
+        if synthesis.overlap_caution:
+            body += f"<p class='etfw-miss'>&#9888; {escape(synthesis.overlap_caution)}</p>"
+        if synthesis.watch_items:
+            body += (
+                "<div class='etfw-src'>watch: "
+                + escape("; ".join(synthesis.watch_items))
+                + "</div>"
+            )
+    return f"{header}{body}</details>"
+
+
+def _decode_synthesis(artifact: Artifact) -> EtfRoleSynthesis | None:
+    if artifact.content_json is None:
+        return None
+    try:
+        return EtfRoleSynthesis.model_validate(artifact.content_json)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pagination(ticker: str, page: int, has_next: bool) -> str:
+    links: list[str] = []
+    if page > 0:
+        url = f"/api/peek/etf_workup?ticker={escape(ticker, quote=True)}&amp;page={page - 1}"
+        links.append(
+            f"<a href='{url}' data-peek-url='{url}' data-peek-title='Saved ETF research'>"
+            "&larr; previous saved versions</a>"
+        )
+    if has_next:
+        url = f"/api/peek/etf_workup?ticker={escape(ticker, quote=True)}&amp;page={page + 1}"
+        links.append(
+            f"<a href='{url}' data-peek-url='{url}' data-peek-title='Saved ETF research'>"
+            "more saved versions &rarr;</a>"
+        )
+    if not links:
+        return ""
+    return "<div class='cc-peek-foot'>" + " · ".join(links) + "</div>"

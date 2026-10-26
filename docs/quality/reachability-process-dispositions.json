@@ -75,8 +75,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_TICKER_SPECIFIC_EXTRACTORS remains one NVO extract_nvo_patent_timeline_state.py entry; adds require_db_path() --db. Optional LLM gating is separate caller behavior.",
-      "fingerprint": "09053a3981106ed14c5f9719aa492c96548389e26dde4e2fa92ea1c17967495e",
-      "line": 119,
+      "fingerprint": "d5aaa4216220c0da03d63fada58c726facbaa677979f408caf69c5ce749b2fbf",
+      "line": 117,
       "path": "execution/build_artifacts.py",
       "targets": [
         "execution/extract_nvo_patent_timeline_state.py"
@@ -95,8 +95,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_step executes only the five fixed managed-Python stage scripts.",
-      "fingerprint": "21d2b2945e1a62dccbe10ba5a932e6b96e92b1e1762edd2dd7ccb854b00db117",
-      "line": 667,
+      "fingerprint": "3233da3c41b174ba8c8765cb9924c150936c182150092cd1fb16b6122a9441ac",
+      "line": 675,
       "path": "execution/daily_fetch_and_brief.py",
       "targets": [
         "execution/run_thesis_evaluator.py",
@@ -238,8 +238,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "The fixed process_ir variable names execution/process_ir_documents.py directly. Missing-summary repair retains explicit --repo-root and --db arguments and the managed subprocess boundary. This replaces the retired process_ir_documents_state.py adapter; ticker/state/database values never select code.",
-      "fingerprint": "a9da13e4c5f70850d0477e2f45e4f7699215ee35eaec07eaa1b4f6dd949eb921",
-      "line": 576,
+      "fingerprint": "7d100eaf31aac9d69336bf2e74582f0da4cd75d757d5a9f7c8597c8a270849ac",
+      "line": 589,
       "path": "execution/onboard_ticker.py",
       "targets": [
         "execution/process_ir_documents.py"
@@ -248,8 +248,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "build_saydo still names PROJECT_ROOT/execution/build_saydo_pairs.py; adds --repo-root. First-stage failure still prevents this stage.",
-      "fingerprint": "6f3804af00d65070f507c49c14c25869444754ee366883cd2df8e4eacb0ce821",
-      "line": 592,
+      "fingerprint": "a5d1b382412c63c61ad4b79919da88f1856057d87f9f1362bca31017fad2611c",
+      "line": 605,
       "path": "execution/onboard_ticker.py",
       "targets": [
         "execution/build_saydo_pairs.py"
@@ -600,8 +600,8 @@
     {
       "disposition": "external_process",
       "evidence": "_call_claude spawns the fixed claude CLI executable.",
-      "fingerprint": "fc0b1a6b73aa582d8880514d130d652f06778d83c653421e8b4330cae082a438",
-      "line": 1332,
+      "fingerprint": "1a171203f671dad37704eacb455ad66a865c16ddb1a0df77803f37501d8459f0",
+      "line": 1325,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -610,8 +610,8 @@
     {
       "disposition": "external_process",
       "evidence": "Streaming path spawns the fixed claude CLI executable.",
-      "fingerprint": "482a7d4d40d45ffe808b9899e71e913b73c8639b5f2b996cd07741678baae18c",
-      "line": 2129,
+      "fingerprint": "b738b491f3ddb8e158a6a311b8d48a2251ac19e5c420b460b64a206d9ef4f349",
+      "line": 2122,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -620,8 +620,8 @@
     {
       "disposition": "external_process",
       "evidence": "Web path spawns the fixed claude CLI with WebSearch tools.",
-      "fingerprint": "cb6c98bc206072c3ede505deae99316d83228016423b74e782ef1b83db077cb0",
-      "line": 2581,
+      "fingerprint": "8b07c0a17ed2122e9336e88b807e3515560f50aa997f5e3e3db96d557e844076",
+      "line": 2574,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -1041,7 +1041,7 @@
       "name": "ast+xml+literal-scanner",
       "version": "1.3.0",
       "python": ">=3.11",
-      "source_sha256": "3b257f7009235663279a5c246c6464e7e3ccb780be2fd1dc5fa67857949ae1b8"
+      "source_sha256": "657a7a0e72930dba5568e7a1638b3d225861524ce438df44c8658b80ccc72492"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c9ec98b1cbcdf93c9b890d9a8a8c59ef6109598f67b1739c38463d79d5986175",

@@ -1,16 +1,7 @@
-"""Report-side models for the ETF brief shape.
+"""Schemas retained to read saved ETF briefs and narrative versions.
 
-Separate from `report.models.ReportSpec` (which is equity-shaped) on purpose
-— see `directives/cross_asset_data_model.md` §4. An ETF has no income
-statement, no segments, no DCF; trying to render those as
-`NOT_APPLICABLE` stubs through the equity renderer adds noise without
-helping anyone. The renderer dispatcher in `execution/build_artifacts.py`
-picks this shape when `tracked_companies.instrument_type='etf'`.
-
-The structures here intentionally mirror the conventions of
-`report.models` (Pydantic, `SectionStatus`, `MissingReason`) so that future
-sections can graduate to a shared base or unified renderer without
-re-wiring everything.
+Dedicated ETF research and generation are retired. Existing records retain
+their original shape and historical meaning.
 """
 
 from __future__ import annotations
@@ -77,13 +68,7 @@ class EtfHoldingsSection(BaseModel):
 
 
 class EtfRoleSynthesis(BaseModel):
-    """The governed 'role in portfolio' one-pager (purpose
-    ``etf_role_synthesis``) — the ONLY semantic judgment in the ETF workup.
-    Every number the model saw was deterministic (score/fit factors, overlap,
-    country rollup, what-if deltas, target gaps); the synthesis says what
-    role the fund would actually play in THIS book. Schema-validated before
-    persisting to ``llm_artifacts`` (sha-keyed, so reruns are free until the
-    inputs move)."""
+    """Historical ETF role narrative, including its original verdict and sizing."""
 
     role_summary: str = Field(max_length=900)  # <=120 words, plain language
     what_it_adds: list[str] = Field(default_factory=list[str], max_length=4)
@@ -96,12 +81,7 @@ class EtfRoleSynthesis(BaseModel):
 
 
 class EtfBriefSpec(BaseModel):
-    """The ETF brief. One per (ticker, generation_date).
-
-    Intentionally minimal for the cross-asset MVP. As more lenses prove out
-    on ETFs (rotation tracker, look-through portfolio overlap, premium/
-    discount band) they slot in here as additional Optional sections.
-    """
+    """Saved ETF brief shape. No active producer is registered."""
 
     ticker: str
     generation_date: date

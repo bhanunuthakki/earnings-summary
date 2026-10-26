@@ -459,9 +459,12 @@ def render_investment_profile_peek(item: object) -> str | None:
     mutation route can reject stale decisions.
     """
     from pipeline.work_os_evaluation import WorkOsEvaluationItem
-    from research.investment_profile import EtfProfileProjection
 
-    if not isinstance(item, WorkOsEvaluationItem) or item.profile is None:
+    if (
+        not isinstance(item, WorkOsEvaluationItem)
+        or item.instrument_type == "etf"
+        or item.profile is None
+    ):
         return None
     profile = item.profile
     state_copy = {
@@ -493,12 +496,7 @@ def render_investment_profile_peek(item: object) -> str | None:
                 f'<button class="k-btn k-btn-quiet k-btn-sm" type="button" '
                 f'data-profile-review-action="retire" {common}>Retire label</button>'
             )
-        if label.source_kind == "dcf_rule":
-            source = "DCF rule"
-        elif label.source_kind == "etf_rule":
-            source = "Deterministic ETF rule"
-        else:
-            source = "Brief and earnings synthesis"
+        source = "DCF rule" if label.source_kind == "dcf_rule" else "Brief and earnings synthesis"
         evidence_summary = getattr(label, "evidence_summary", None)
         evidence_html = f"<p>{escape(evidence_summary)}</p>" if evidence_summary else ""
         label_cards.append(
@@ -513,32 +511,6 @@ def render_investment_profile_peek(item: object) -> str | None:
         '<div class="k-well">No profile labels are currently supported by admitted evidence.</div>'
     )
     thesis = escape(item.thesis_excerpt or "No current thesis excerpt is available.")
-    if isinstance(profile, EtfProfileProjection):
-        gaps = "".join(f"<li>{escape(value)}</li>" for value in profile.evidence_gaps)
-        gaps_html = (
-            f'<div><div class="k-card-meta">Evidence still needed</div><ul>{gaps}</ul></div>'
-            if gaps
-            else '<p class="k-card-meta">All required evidence families are available.</p>'
-        )
-        return (
-            '<section class="research-screen">'
-            '<header class="research-row">'
-            f'<div><div class="k-card-meta">{escape(item.ticker)} · ETF profile</div>'
-            f'<h2 class="k-card-title">{escape(item.name)}</h2></div>'
-            f'<span class="{state_class}">{state_label}</span>'
-            "</header>"
-            f'<div class="k-well"><strong>Current fund shape</strong><p>{escape(profile.summary)}</p>'
-            f'<div class="k-card-meta">Evaluation context</div><p>{thesis}</p></div>'
-            f"<div>{labels_html}</div>"
-            '<div class="k-well">'
-            f'<div class="research-row"><strong>ETF evidence coverage</strong>'
-            f'<span class="k-pill">{escape(profile.evidence_coverage.value)}</span></div>'
-            f"{gaps_html}</div>"
-            '<p class="k-card-meta">ETF labels are deterministic projections over the current fund '
-            "profile, style loadings, candidate-fit, overlap, and what-if evidence. Company moat "
-            "vocabulary is not applied.</p>"
-            "</section>"
-        )
     moat = profile.moat
     moat_label = moat.level.display_label if moat.level is not None else "Evidence insufficient"
     support = "".join(f"<li>{escape(value)}</li>" for value in moat.supporting_evidence)

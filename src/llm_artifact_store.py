@@ -349,7 +349,13 @@ class HistoricalArtifactVersion:
 
 
 def historical_versions(
-    conn: sqlite3.Connection, *, ticker: str, purpose: str, fiscal_period: str
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    purpose: str,
+    fiscal_period: str | None,
+    scope: str = "ticker",
+    verify_readability: bool = False,
 ) -> list[HistoricalArtifactVersion]:
     """Read all exact-key versions in the caller's snapshot; never filter by currentness.
 
@@ -360,21 +366,24 @@ def historical_versions(
     try:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT * FROM llm_artifacts WHERE ticker=? AND scope='ticker' "
-            "AND purpose=? AND fiscal_period=? ORDER BY id",
-            (ticker, purpose, fiscal_period),
+            "SELECT * FROM llm_artifacts WHERE ticker=? AND scope=? "
+            "AND purpose=? AND fiscal_period IS ? ORDER BY id",
+            (ticker, scope, purpose, fiscal_period),
         ).fetchall()
         versions: list[HistoricalArtifactVersion] = []
         for row in rows:
             ident = int(row["id"])
             try:
-                artifact = _row_to_artifact(row)
+                artifact = _readable_artifact(row) if verify_readability else _row_to_artifact(row)
             except (ValueError, TypeError, KeyError, IndexError):
                 versions.append(HistoricalArtifactVersion(ident, None, "malformed_artifact"))
             else:
                 versions.append(
                     HistoricalArtifactVersion(
-                        ident, artifact, generated_at_raw=str(row["generated_at"])
+                        ident,
+                        artifact,
+                        error="unreadable_artifact" if artifact is None else None,
+                        generated_at_raw=str(row["generated_at"]),
                     )
                 )
         return versions

@@ -11,16 +11,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import candidate_fit_cache as cfc  # noqa: E402
-from allocation.candidate_fit import BookContext, CandidateFit, FitFactor  # noqa: E402
+import candidate_fit_cache as cfc
+from allocation.candidate_fit import BookContext, CandidateFit, FitFactor
+from positioning.target import TargetContext
 
 # --------------------------------------------------------------------------- #
 # Tracker / cache stubs
@@ -62,13 +59,13 @@ class _Analytics:
 
 
 class _Snapshot:
-    def __init__(  # type: ignore[no-untyped-def]
+    def __init__(
         self,
         *,
-        sharpe=None,
-        growth_tilt=None,
-        vol_ann=None,
-        captured_at="2026-06-13T04:00:00",
+        sharpe: float | None = None,
+        growth_tilt: float | None = None,
+        vol_ann: float | None = None,
+        captured_at: str = "2026-06-13T04:00:00",
     ) -> None:
         self.sharpe = sharpe
         self.growth_tilt = growth_tilt
@@ -85,28 +82,27 @@ def _patch_book_sources(
     rollup_growth_tilt: float | None = 0.4,
 ) -> None:
     # assemble_book_context imports these names locally; patch at their source.
-    monkeypatch.setattr(
-        "portfolio_weights.read_materialized_weights", lambda _r: weights, raising=True
-    )
-    monkeypatch.setattr(
-        "integrations.portfolio_tracker_client.fetch_portfolio_analytics",
-        lambda **_k: analytics,
-        raising=True,
-    )
-    monkeypatch.setattr(
-        "portfolio_risk_snapshot_store.read_latest_snapshot",
-        lambda **_k: snapshot,
-        raising=True,
-    )
+    def read_weights(root: Path) -> dict[str, float]:
+        return weights
+
+    def read_analytics(**kwargs: object) -> _Analytics:
+        return analytics
+
+    def read_snapshot(**kwargs: object) -> _Snapshot | None:
+        return snapshot
 
     class _Rollup:
         growth_tilt = rollup_growth_tilt
 
+    def rollup(rows: object) -> _Rollup | None:
+        return _Rollup() if rollup_growth_tilt is not None else None
+
+    monkeypatch.setattr("portfolio_weights.read_materialized_weights", read_weights)
     monkeypatch.setattr(
-        "portfolio_risk.factor_exposure_rollup",
-        lambda _rows: _Rollup() if rollup_growth_tilt is not None else None,
-        raising=True,
+        "integrations.portfolio_tracker_client.fetch_portfolio_analytics", read_analytics
     )
+    monkeypatch.setattr("portfolio_risk_snapshot_store.read_latest_snapshot", read_snapshot)
+    monkeypatch.setattr("portfolio_risk.factor_exposure_rollup", rollup)
 
 
 # --------------------------------------------------------------------------- #
@@ -216,7 +212,9 @@ def _fit(ticker: str) -> CandidateFit:
 
 def _seed_eval_db(db_path: Path) -> None:
     conn = sqlite3.connect(db_path)
-    conn.execute("CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT)")
+    conn.execute(
+        "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT, instrument_type TEXT DEFAULT 'equity')"
+    )
     conn.executemany(
         "INSERT INTO tracked_companies (ticker, list_type, archived_at) VALUES (?, ?, ?)",
         [
@@ -234,15 +232,25 @@ def test_materialize_then_read_round_trip(monkeypatch: pytest.MonkeyPatch, tmp_p
     objects; only non-archived evaluation names are scored."""
     db_path = tmp_path / "portfolio.db"
     _seed_eval_db(db_path)
+
     # Stub the heavy compute + book assembly — this test pins the cache I/O, not
     # the geometry (covered in test_candidate_fit.py).
-    monkeypatch.setattr(
-        cfc, "assemble_book_context", lambda *a, **k: BookContext(weights={}), raising=True
-    )
+    def assemble(*args: object, **kwargs: object) -> BookContext:
+        return BookContext(weights={})
+
+    monkeypatch.setattr(cfc, "assemble_book_context", assemble, raising=True)
 
     captured: dict[str, object] = {}
 
-    def _fake_compute(repo_root, candidates, book, *, sectors=None, target=None, **_kw):  # type: ignore[no-untyped-def]
+    def _fake_compute(
+        repo_root: Path,
+        candidates: list[str],
+        book: BookContext,
+        *,
+        sectors: dict[str, str] | None = None,
+        target: TargetContext | None = None,
+        **kwargs: object,
+    ) -> dict[str, CandidateFit]:
         captured["candidates"] = list(candidates)
         captured["sectors"] = dict(sectors or {})
         captured["target_source"] = getattr(target, "source", None)

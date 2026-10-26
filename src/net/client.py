@@ -14,8 +14,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from types import TracebackType
@@ -179,27 +178,9 @@ DEFAULT_RETRY_POLICY = RetryPolicy()
 
 
 @dataclass(frozen=True, slots=True)
-class HttpResponseCapture:
-    """Secret-free snapshot of a final successful response entity.
-
-    ``body`` holds the decompressed entity bytes exactly as received so callers
-    can hash captured evidence without a lossy reserialization. The repr omits
-    the body; ``origin`` and ``path`` are parsed from the final response URL and
-    never include query, userinfo, fragment, or headers.
-    """
-
-    body: bytes = field(repr=False)
-    received_at: datetime
-    capture_id: str
-    origin: str
-    path: str
-
-
-@dataclass(frozen=True, slots=True)
 class HttpJsonResponse:
     status_code: int
     payload: JsonValue
-    capture: HttpResponseCapture | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,30 +302,6 @@ def _validated_json(value: object) -> JsonValue:
             output[key] = _validated_json(item)
         return output
     raise ValueError(f"unsupported JSON value type: {type(value).__name__}")
-
-
-def _secret_free_final_origin_path(response_url: str) -> dict[str, str]:
-    """Derive origin and path from a final URL without secrets or headers.
-
-    Malformed or non-HTTPS URLs must not yield an unsafe origin, so the parser
-    returns empty strings for those fields. A downstream provider policy (live
-    earnings caller) still validates endpoint match against admission rules.
-    """
-    try:
-        parsed = urlsplit(response_url)
-    except (ValueError, TypeError):
-        return {"origin": "", "path": ""}
-    if parsed.scheme != "https" or not parsed.hostname:
-        return {"origin": "", "path": ""}
-    host = parsed.hostname.lower().rstrip(".")
-    if not host:
-        return {"origin": "", "path": ""}
-    try:
-        port = parsed.port
-    except ValueError:
-        return {"origin": "", "path": ""}
-    origin = f"https://{host}" if port in (None, 443) else f"https://{host}:{port}"
-    return {"origin": origin, "path": parsed.path or "/"}
 
 
 def _parse_json(response: requests.Response, *, expected: JsonShape) -> JsonValue:
@@ -616,7 +573,6 @@ class HttpClient:
         expected: JsonShape = JsonShape.ANY,
         retry: RetryPolicy | None = None,
         attempt_hook: AttemptHook | None = None,
-        retain_capture: bool = False,
     ) -> HttpJsonResponse:
         response = self.request(
             method,
@@ -627,23 +583,8 @@ class HttpClient:
             retry=retry,
             attempt_hook=attempt_hook,
         )
-        capture: HttpResponseCapture | None = None
-        if retain_capture:
-            body = response.content
-            received_at = datetime.now(UTC)
-            capture_id = str(uuid4())
-            capture = HttpResponseCapture(
-                body=body,
-                received_at=received_at,
-                capture_id=capture_id,
-                **_secret_free_final_origin_path(response.url),
-            )
         payload = _parse_json(response, expected=expected)
-        return HttpJsonResponse(
-            status_code=response.status_code,
-            payload=payload,
-            capture=capture,
-        )
+        return HttpJsonResponse(status_code=response.status_code, payload=payload)
 
 
 class FmpClient:
@@ -668,7 +609,6 @@ class FmpClient:
         timeout: Timeout | None = None,
         retry: RetryPolicy | None = None,
         attempt_hook: AttemptHook | None = None,
-        retain_capture: bool = False,
     ) -> HttpJsonResponse:
         return self.get_url_json(
             f"{self._base_url}/{path.lstrip('/')}",
@@ -678,7 +618,6 @@ class FmpClient:
             timeout=timeout,
             retry=retry,
             attempt_hook=attempt_hook,
-            retain_capture=retain_capture,
         )
 
     def get_url_json(
@@ -691,7 +630,6 @@ class FmpClient:
         timeout: Timeout | None = None,
         retry: RetryPolicy | None = None,
         attempt_hook: AttemptHook | None = None,
-        retain_capture: bool = False,
     ) -> HttpJsonResponse:
         """Fetch an FMP stable/legacy URL through the same guarded transport."""
         parsed = urlsplit(url)
@@ -706,17 +644,6 @@ class FmpClient:
         )
         query = dict(params or {})
         query["apikey"] = os.environ.get("FMP_API_KEY", "") if api_key is None else api_key
-        if retain_capture:
-            return self._http.request_json(
-                "GET",
-                url,
-                params=query,
-                expected=expected,
-                timeout=timeout,
-                retry=retry,
-                attempt_hook=attempt_hook,
-                retain_capture=True,
-            )
         return self._http.request_json(
             "GET",
             url,

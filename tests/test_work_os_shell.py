@@ -121,7 +121,7 @@ def test_evaluation_is_a_complete_live_research_destination() -> None:
     evaluation = _screen_fragment(html, "screen-evaluation")
 
     assert "Evaluation" in evaluation
-    assert "Complete evaluation coverage" in evaluation
+    assert "Company research and portfolio context" in evaluation
     assert 'id="workOsEvaluationRows"' in evaluation
     assert evaluation.count("k-card k-card-section") == 2
     assert evaluation.count("k-card-title") == 2
@@ -149,8 +149,8 @@ def test_evaluation_is_a_complete_live_research_destination() -> None:
     assert "No companies or ETFs match this filter." in html
     assert "empty.hidden = visible !== 0;" in html
     assert "ETF profile pending deterministic classification" not in html
-    assert "'<td>' + workOsInvestmentProfileCell(item) + '</td>'" in html
-    assert "item.instrument_type === 'company' ? 'DCF upside' : 'Company DCF'" in html
+    assert ": workOsInvestmentProfileCell(item)) + '</td>'" in html
+    assert "isEtf ? 'Not applicable to ETFs' : 'DCF upside'" in html
     assert "work-os:investment-evidence-updated" in html
     assert "detail.kind === 'dcf' || detail.kind === 'research_refresh'" in html
     assert "transient.route.startsWith('/api/peek/investment-profile?')" in html
@@ -161,7 +161,8 @@ def test_evaluation_is_a_complete_live_research_destination() -> None:
     assert "if (value == null || String(value).trim() === '') return null;" in html
     assert "workOsFetch('/api/work-os/evaluation'" in html
     assert "Company Desk" in html
-    assert "ETF workup" in html
+    assert "Saved ETF research" in html
+    assert "ETF workup" not in html
     assert "if (!opened) window.location.assign(target.getAttribute('href'));" in html
     assert "Open a side peek for rationale and evidence" in evaluation
 

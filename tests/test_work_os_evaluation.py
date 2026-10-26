@@ -13,10 +13,7 @@ import pytest
 import pipeline.work_os_evaluation as evaluation
 from allocation.candidate_fit import CandidateFit, FitFactor
 from dcf.availability import DcfRouteArtifact
-from etf_sources.profile_evidence import capture_profile_fields
-from models.instruments import EtfProfile
 from pipeline.dashboard_status import DashboardRow
-from pipeline.etf_score import StyleLoadingRead
 from pipeline.peeks import render_investment_profile_peek, render_portfolio_impact_peek
 from pipeline.research_cockpit import CockpitRow
 from pipeline.work_os_briefs import BriefLibraryFacets, BriefLibraryItem, BriefLibraryResponse
@@ -143,6 +140,14 @@ def test_mixed_company_and_etf_preserve_input_order_and_user_doorways(
     assert payload.items[0].dcf_url is None
     assert payload.items[0].dcf_upside_pct is None
     assert payload.items[0].report_url is None
+    # Even stale company-shaped score/fit inputs cannot revive ETF research.
+    assert payload.items[0].profile is None
+    assert payload.items[0].sharpe_delta_bps is None
+    assert payload.items[0].portfolio_indicators == []
+    assert payload.items[0].portfolio_role_labels == []
+    assert payload.items[0].revenue_growth_yoy_pct is None
+    assert payload.items[0].fcf_margin_pct is None
+    assert payload.items[0].held_weight_pct == pytest.approx(2.5)
     assert payload.items[1].instrument_type == "company"
     assert payload.items[1].company_desk_url == "/ticker/MELI"
     assert payload.items[1].dcf_url == "/dcf/MELI"
@@ -560,106 +565,3 @@ def test_company_profile_and_direct_portfolio_indicators_reuse_current_artifacts
     assert "Candidate vs held book" in impact_html
     assert "Marginal Sharpe" in impact_html
     assert "not a composite fit score" in impact_html
-
-
-def test_etf_profile_reuses_current_profile_loadings_fit_and_whatif(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    conn.executescript(
-        """
-        CREATE TABLE investment_profile_label_reviews (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            label TEXT NOT NULL,
-            action TEXT NOT NULL,
-            suggestion_fingerprint TEXT NOT NULL,
-            evidence_json TEXT NOT NULL,
-            reviewed_by TEXT NOT NULL,
-            reviewed_at TEXT NOT NULL,
-            idempotency_key TEXT NOT NULL UNIQUE
-        );
-        """
-    )
-
-    def fake_brief_library(*_args: object, **_kwargs: object) -> BriefLibraryResponse:
-        return _brief_response()
-
-    monkeypatch.setattr(evaluation, "build_brief_library", fake_brief_library)
-    fit = CandidateFit(
-        ticker="VDE",
-        fit=1.12,
-        why="structured ETF factors",
-        partial=False,
-        sharpe_delta_bps=18.0,
-        factors=[
-            FitFactor("divers", "Diversification", 1.2, "corr +0.12 to book", False),
-            FitFactor("overlap", "Look-through overlap", 1.08, "3% overlap", False),
-            FitFactor("factor", "Factor fit", 1.12, "balances the book", False),
-            FitFactor("sector", "Sector fit", 1.08, "adds energy breadth", False),
-        ],
-    )
-
-    def fake_candidate_fit(_root: Path) -> dict[str, CandidateFit]:
-        return {"VDE": fit}
-
-    def fake_etf_loadings(_root: Path) -> dict[str, list[StyleLoadingRead]]:
-        return {"VDE": [StyleLoadingRead(key="value", beta=0.48, r_squared=0.32, n_obs=252)]}
-
-    def fake_etf_whatif(
-        _root: Path,
-    ) -> dict[str, dict[str, dict[str, float | list[str]]]]:
-        return {
-            "VDE": {
-                "0.03": {
-                    "vol_before_ann": 0.15,
-                    "vol_after_ann": 0.14,
-                    "sharpe_delta_bps": 18.0,
-                    "degraded": [],
-                }
-            }
-        }
-
-    def fake_etf_profile(_conn: sqlite3.Connection, _ticker: str) -> EtfProfile:
-        profile = EtfProfile(
-            ticker="VDE",
-            name="Vanguard Energy ETF",
-            asset_class="equity",
-            sector_label="Energy",
-            expense_ratio=0.001,
-            distribution_yield=0.035,
-            source="issuer:test",
-            profile_fetched_at=datetime.now(UTC),
-        )
-
-        return capture_profile_fields(profile)
-
-    monkeypatch.setattr(evaluation, "read_materialized_candidate_fit", fake_candidate_fit)
-    monkeypatch.setattr(
-        evaluation, "read_materialized_etf_loadings", fake_etf_loadings, raising=False
-    )
-    monkeypatch.setattr(evaluation, "read_materialized_etf_whatif", fake_etf_whatif, raising=False)
-    monkeypatch.setattr(evaluation, "get_etf_profile", fake_etf_profile, raising=False)
-
-    item = evaluation.build_work_os_evaluation(
-        [_row("VDE", name="Vanguard Energy ETF", etf=True, sharpe_delta_bps=18.0)],
-        tmp_path,
-        conn,
-    ).items[0]
-
-    assert item.profile is not None
-    assert {label.label.value for label in item.profile.labels} == {
-        "factor_sleeve",
-        "thematic_exposure",
-        "diversifier",
-        "defensive_hedge",
-        "income",
-        "tactical_cyclical",
-    }
-    html = render_investment_profile_peek(item)
-    assert html is not None
-    assert "Defensive / hedge" in html
-    assert "Published fund profile targets Energy" in html
-    assert "Company moat vocabulary is not applied" in html
-    assert "Ratify" in html

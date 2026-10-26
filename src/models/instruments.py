@@ -16,57 +16,19 @@ See `directives/cross_asset_data_model.md` for the design rationale.
 
 from __future__ import annotations
 
-import re
 from datetime import date, datetime
-from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class EtfFieldEvidence(BaseModel):
-    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
+    """Observed source value, not an inferred issuer publication date."""
 
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
     value: str | float
     source: str = Field(min_length=1)
     captured_at: datetime
     source_as_of: date | None = None
-
-    document_id: int | None = Field(default=None, gt=0)
-    document_version_id: str | None = Field(default=None, min_length=1)
-    observation_id: str | None = Field(default=None, min_length=1)
-    content_sha256: str | None = Field(default=None, min_length=64, max_length=64)
-    source_url: str | None = Field(default=None, min_length=1)
-    json_pointer: str | None = None
-    parser_version: str | None = Field(default=None, min_length=1)
-
-    @model_validator(mode="after")
-    def _check_capture_linkage(self) -> Self:
-        linked = (
-            self.document_id,
-            self.document_version_id,
-            self.observation_id,
-            self.content_sha256,
-            self.source_url,
-            self.json_pointer,
-            self.parser_version,
-        )
-        present = [item is not None for item in linked]
-        if any(present) and not all(present):
-            raise ValueError("capture linkage must be fully populated or entirely absent")
-        if self.content_sha256 is not None and not re.fullmatch(
-            r"[0-9a-f]{64}", self.content_sha256
-        ):
-            raise ValueError("content_sha256 must be 64 lowercase hexadecimal characters")
-        if self.json_pointer is not None:
-            if not self.json_pointer.startswith("/"):
-                raise ValueError("json_pointer must start with '/'")
-            if re.search(r"~(?![01])", self.json_pointer):
-                raise ValueError("json_pointer has an invalid '~' escape")
-        return self
-
-    @property
-    def has_capture_linkage(self) -> bool:
-        return self.document_id is not None
 
 
 class EtfProfile(BaseModel):

@@ -91,6 +91,7 @@ def test_onboard_equity_attempts_sec_after_failed_or_skipped_fmp(
     conn.execute("CREATE TABLE tracked_companies (ticker TEXT, instrument_type TEXT)")
     conn.execute("INSERT INTO tracked_companies VALUES ('NEW','equity')")
     monkeypatch.setattr(onboard_ticker, "open_db", _constant_result(conn))
+    monkeypatch.setattr(onboard_ticker, "_lookup_known_instrument", _constant_result("equity"))
     monkeypatch.setattr(onboard_ticker, "_STATE_ROOT", tmp_path)
     monkeypatch.setattr(onboard_ticker, "_HOLDINGS_DIR", tmp_path / "holdings")
     monkeypatch.setattr(onboard_ticker, "_run_fmp_fetch", _constant_result(1))

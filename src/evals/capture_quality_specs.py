@@ -285,14 +285,6 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "Unsupported avoidance/dropped-topic/motive inference, unmatched comparisons, or calibrated sentiment claimed without qualification.",
     ),
     _q(
-        "etf_role_synthesis",
-        "P1",
-        "warm",
-        "synthesis",
-        "Explain an ETF's portfolio role, exposures, overlap, and failure modes.",
-        "Recommending a role without identifying concentration or overlap.",
-    ),
-    _q(
         "footnote_extraction",
         "P1",
         "cold",

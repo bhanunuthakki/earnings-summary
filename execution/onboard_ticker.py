@@ -10,7 +10,7 @@ Native ingestion preserves exact bytes and admits immutable facts. A versioned
 UTC daily acquisition window prevents an old successful attempt from suppressing
 later discovery. This scheduling key is not source Content Identity.
 
-ETFs keep their published-data lane. Optional stages use existing transcript,
+Dedicated ETF research is retired. Optional stages use existing transcript,
 IR-document and Say-Do interfaces. ``--industry-template`` remains an explicit
 request. Onboarding does not approve a thesis or certify report completeness.
 ``--skip-llm`` preserves source collection and skips commitment extraction and Say-Do.
@@ -537,6 +537,19 @@ def _run_ir_documents(ticker: str) -> int:
     return 0 if result.status is not TickerStatus.FAILED else 1
 
 
+def _lookup_known_instrument(ticker: str) -> str | None:
+    """Read the known kind before any provider or writer stage."""
+    conn = connect_sqlite(str(_DB_PATH), role=SQLiteConnectionRole.READ_ONLY)
+    try:
+        row = conn.execute(
+            "SELECT instrument_type FROM tracked_companies WHERE ticker = ? LIMIT 1",
+            (ticker,),
+        ).fetchone()
+        return str(row[0]).lower() if row and row[0] else None
+    finally:
+        conn.close()
+
+
 def _lookup_list_type(ticker: str) -> str | None:
     """Return tracked_companies.list_type for the ticker, or None if absent.
 
@@ -616,47 +629,6 @@ def _saydo_should_run(list_type: str | None, *, force: bool, instrument: str | N
     return force or list_type == "evaluation"
 
 
-def run_etf_onboarding(conn: sqlite3.Connection, ticker: str, repo_root: Path) -> int:
-    """The ETF onboarding-lite path (directives/etf_data.md): published data
-    only — N-PORT holdings, issuer overlay, yfinance price history. No
-    quarterly refresh, no transcripts, no IR crawl, no Say-Do: none of the
-    bottoms-up equity stages mean anything for a fund.
-
-    Returns 0 when at least one holdings source landed, 1 when both degraded
-    (evaluation analytics will be partial until a source succeeds), 2 on an
-    N-PORT schema-drift halt.
-    """
-    from etf_sources.ingest import refresh_published_data
-    from etf_sources.nport import NportParseError
-
-    print(f"[onboard] {ticker} stage=etf_published_data", flush=True)
-    try:
-        result = refresh_published_data(conn, ticker, repo_root)
-    except NportParseError as exc:
-        print(f"[onboard] {ticker} etf_published_data NPORT PARSE HALT: {exc}", flush=True)
-        return 2
-    conn.commit()
-    as_of = result.nport_as_of.isoformat() if result.nport_as_of else "-"
-    print(
-        f"[onboard] {ticker} etf nport={result.nport_status} as_of={as_of} "
-        f"rows={result.nport_rows} issuer={result.issuer_status} "
-        f"issuer_rows={result.issuer_rows} "
-        f"characteristics={'yes' if result.characteristics_applied else 'no'} "
-        f"prices={result.price_status} price_rows={result.price_rows}",
-        flush=True,
-    )
-    for skipped in ("quarterly_refresh", "backfill_transcripts", "ir_documents", "saydo"):
-        print(f"[onboard] {ticker} stage={skipped} SKIPPED (instrument_type=etf)", flush=True)
-    if result.nport_status == "unavailable" and result.issuer_status == "unavailable":
-        print(
-            f"[onboard] {ticker} WARNING: no ETF holdings source succeeded — "
-            f"look-through analytics degrade until one does",
-            flush=True,
-        )
-        return 1
-    return 0
-
-
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -724,8 +696,7 @@ def main() -> int:
         help=(
             "Force tracked_companies.instrument_type before classification. "
             "Escape hatch for symbols whose FMP profile is unavailable (the "
-            "auto-classifier needs it); an ETF routes to the published-data "
-            "onboarding-lite path."
+            "auto-classifier needs it); an ETF returns an unsupported result."
         ),
     )
     args = ap.parse_args()
@@ -739,6 +710,15 @@ def _onboard(args: argparse.Namespace) -> int:
 
     started = datetime.now()
     print(f"[onboard] {ticker} starting at {started.isoformat(timespec='seconds')}", flush=True)
+
+    declared_instrument = str(args.instrument or "").lower()
+    instrument_kind = declared_instrument or _lookup_known_instrument(ticker)
+    if instrument_kind == "etf":
+        print(
+            f"[onboard] {ticker} unsupported: dedicated ETF research is retired",
+            flush=True,
+        )
+        return 2
 
     industry_arg = args.industry_template
     if industry_arg:
@@ -815,6 +795,14 @@ def _onboard(args: argparse.Namespace) -> int:
             ).fetchone()
             instrument = row[0] if row and row[0] else None
         print(f"[onboard] {ticker} instrument_type={instrument!s}", flush=True)
+        instrument_value = getattr(instrument, "value", instrument)
+        if str(instrument_value or "").lower() == "etf":
+            print(
+                f"[onboard] {ticker} unsupported: dedicated ETF onboarding is retired; "
+                f"saved ETF history remains readable",
+                flush=True,
+            )
+            return 2
 
         # Self-heal filing_regime the same way (write-only-when-NULL; never
         # clobbers the hand-curated 0001 backfill). segment_quarterly_framework.md
@@ -823,11 +811,9 @@ def _onboard(args: argparse.Namespace) -> int:
         filing_regime = set_filing_regime_from_profile(conn, ticker, _STATE_ROOT)
         print(f"[onboard] {ticker} filing_regime={filing_regime!s}", flush=True)
 
-        # ETFs take the published-data onboarding-lite path: the remaining
-        # stages (quarterly refresh, transcripts, IR, Say-Do) are all
-        # bottoms-up equity machinery that means nothing for a fund.
-        instrument_value = getattr(instrument, "value", instrument)
-        if not args.skip_sec and str(instrument_value or "").lower() != "etf":
+        # ETF classification stops above: no dedicated fund onboarding, no
+        # corporate-fallback workup. Continue only for company instruments.
+        if not args.skip_sec:
             identity = ensure_sec_onboarding_identity(
                 conn,
                 ticker=ticker,
@@ -853,31 +839,12 @@ def _onboard(args: argparse.Namespace) -> int:
             if identity.instrument_type is not None:
                 instrument_value = identity.instrument_type
         if str(instrument_value or "").lower() == "etf":
-            try:
-                run_id = start_run(
-                    conn,
-                    directive="onboard_ticker",
-                    ticker_scope=[ticker],
-                    invocation_inputs=_onboard_invocation_inputs(
-                        args,
-                        ticker,
-                        instrument=str(instrument_value or "").lower() or None,
-                        conn=conn,
-                    ),
-                )
-            except PipelineRunSuppressedError as exc:
-                print(json.dumps(suppression_payload(exc)))
-                return 0
-            rc = run_etf_onboarding(conn, ticker, _STATE_ROOT)
-            end_run(
-                conn,
-                run_id,
-                RunStageStatus.OK if rc == 0 else RunStageStatus.FAILED,
-                error_summary=None if rc == 0 else f"etf onboarding rc={rc}",
+            print(
+                f"[onboard] {ticker} unsupported: dedicated ETF onboarding is retired; "
+                f"saved ETF history remains readable",
+                flush=True,
             )
-            elapsed = (datetime.now() - started).total_seconds()
-            print(f"[onboard] {ticker} done in {elapsed:.1f}s (etf path rc={rc})", flush=True)
-            return rc
+            return 2
 
         print(f"[onboard] {ticker} stage=quarterly_refresh", flush=True)
         transcript_artifacts = stage_pending_issuer_transcripts(

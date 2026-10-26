@@ -183,51 +183,12 @@ def _evaluation_tickers(conn: sqlite3.Connection) -> list[str]:
 
 
 def _etf_tickers(conn: sqlite3.Connection, candidates: list[str]) -> set[str]:
-    """The evaluation candidates that are ETFs (pre-0044 substrate → none)."""
-    try:
-        rows = conn.execute(
-            "SELECT ticker FROM tracked_companies "
-            "WHERE LOWER(COALESCE(instrument_type, '')) = 'etf'"
-        ).fetchall()
-    except sqlite3.OperationalError:
-        return set()
+    """Resolve the exclusion set; an unreadable instrument kind fails closed."""
+    rows = conn.execute(
+        "SELECT ticker FROM tracked_companies WHERE LOWER(COALESCE(instrument_type, '')) = 'etf'"
+    ).fetchall()
     etf = {str(r[0]).upper() for r in rows if r[0]}
     return etf & set(candidates)
-
-
-def _etf_overlaps_and_sleeves(
-    conn: sqlite3.Connection, repo_root: Path, etf_tickers: set[str], weights: dict[str, float]
-) -> tuple[dict[str, tuple[float, str]], dict[str, tuple[str, ...]]]:
-    """Per-ETF look-through overlap + served-sleeve reads for the fit factors.
-
-    A handful of names at most, so the one extra size-spread OLS per ETF is
-    cheap. Missing holdings/spreads degrade per name (the factors are then
-    omitted, never guessed)."""
-    from allocation.price_history import daily_log_returns, load_daily_closes
-    from etf_overlap import compute_lookthrough_overlap, overlap_detail, sleeves_served
-    from factor_proxies import load_proxy_returns
-    from portfolio_style_factors import STYLE_FACTORS, factor_spread_returns, regress_loading
-
-    overlaps: dict[str, tuple[float, str]] = {}
-    sleeves: dict[str, tuple[str, ...]] = {}
-    if not etf_tickers:
-        return overlaps, sleeves
-    proxies = load_proxy_returns(repo_root)
-    size_def = next((f for f in STYLE_FACTORS if f.key == "size"), None)
-    size_spread = factor_spread_returns(proxies, size_def) if size_def is not None else {}
-    for t in sorted(etf_tickers):
-        ov = compute_lookthrough_overlap(conn, t, weights)
-        size_beta: float | None = None
-        if size_spread:
-            rets = daily_log_returns(load_daily_closes(t, repo_root))
-            loading = regress_loading(rets, size_spread) if rets else None
-            size_beta = loading.beta if loading is not None else None
-        if ov is not None:
-            overlaps[t] = (ov.direct_overlap_pct, overlap_detail(ov))
-        served = sleeves_served(ov, size_beta=size_beta)
-        if served:
-            sleeves[t] = served
-    return overlaps, sleeves
 
 
 def _load_sectors(repo_root: Path, tickers: list[str]) -> dict[str, str]:
@@ -268,15 +229,13 @@ def materialize_candidate_fit(
     computation (a tracker outage still yields partial fits from the cached
     weights + price history — see :func:`assemble_book_context`)."""
     candidates = _evaluation_tickers(conn)
+    # Dedicated ETF research is retired: keep held ETFs in the book context
+    # (assemble_book_context), but never score ETF evaluation candidates.
+    excluded_etfs = _etf_tickers(conn, candidates)
+    if excluded_etfs:
+        candidates = [t for t in candidates if t not in excluded_etfs]
     book = assemble_book_context(repo_root, db_path=db_path, api_url=api_url)
     sectors = _load_sectors(repo_root, candidates)
-    # ETF candidates: the profile 'sector' is meaningless for a fund (drop it —
-    # the factor is then omitted-equivalent), and look-through overlap + sleeve
-    # reads take its place (etf_overlap.py).
-    etf_set = _etf_tickers(conn, candidates)
-    for t in etf_set:
-        sectors.pop(t, None)
-    overlaps, sleeves = _etf_overlaps_and_sleeves(conn, repo_root, etf_set, book.weights)
     # The active positioning target (a pure local DB read — no new tracker
     # dependency; with no saved intent this is the book default and the fit
     # numbers are identical to v1).
@@ -289,8 +248,6 @@ def materialize_candidate_fit(
         book,
         sectors=sectors,
         target=target,
-        overlaps=overlaps,
-        sleeves=sleeves,
     )
 
     payload: dict[str, object] = {

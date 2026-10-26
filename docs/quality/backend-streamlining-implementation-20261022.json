@@ -4528,7 +4528,8 @@
     "full_prd_score": 82,
     "revised_prd": ".tmp/cleanup-open-model-execution/etf-grounding-smallest-prd-sol.json",
     "revised_prd_state": "UNREVIEWED_NOT_IMPLEMENTED",
-    "release": "Architecture and release remain HOLD; prior full-suite proof does not cover this change"
+    "release": "Architecture and release remain HOLD; prior full-suite proof does not cover this change",
+    "current_disposition": "HISTORICAL_SUPERSEDED_BY_ETF_LIGHTWEIGHT_RETIREMENT_20261025"
   },
   "owner_big_ticket_priority_20261024": {
     "order": [
@@ -4567,7 +4568,8 @@
     ],
     "screenshot": ".tmp/cleanup-open-model-execution/etf-ui-preview-saved-failure-768.png",
     "observed": "Create/Refresh simulated; pending/failure preserves saved narrative; retry and missing-source state; keyboard activation; zero HTTP requests, console/page errors or overflow; browser closed",
-    "limits": "Role region only, not app navigation or implemented/backend capability. Empty-state preview still retains old CLI/cache guidance and needs revision before product acceptance. No new product code."
+    "limits": "Role region only, not app navigation or implemented/backend capability. Empty-state preview still retains old CLI/cache guidance and needs revision before product acceptance. No new product code.",
+    "current_disposition": "HISTORICAL_SUPERSEDED_BY_ETF_LIGHTWEIGHT_RETIREMENT_20261025"
   },
   "next_test_bootstrap_proposal": {
     "status": "applied qualified subset; final checks in owning receipt",
@@ -4617,7 +4619,8 @@
       "unchanged_internal_targets": 89
     },
     "check_fast": "FAIL existing architecture modules_over_2000_loc26 versus25; boundaries PASS; no waiver",
-    "acceptance": ".tmp/cleanup-open-model-execution/etf-adapter-prune-final-acceptance.json"
+    "acceptance": ".tmp/cleanup-open-model-execution/etf-adapter-prune-final-acceptance.json",
+    "current_disposition": "HISTORICAL_SUPERSEDED_BY_ETF_LIGHTWEIGHT_RETIREMENT_20261025"
   },
   "legacy_dashboard_retirement_20261024": {
     "baseline": "d0660083a",
@@ -4731,6 +4734,28 @@
     "no_new": "schema, dependency, provider route, scheduler, collection permission, canonical fact admission, financial narrative or Create/Refresh claim",
     "global_release": "HOLD existing26oversizedmodules>25; full serial result in acceptance",
     "real_witness": "Approved read-only sample AVDV/AVUV/VDE had no usable current capture witness; no new collection authorized",
-    "retirement_credit": 0
+    "retirement_credit": 0,
+    "current_disposition": "HISTORICAL_SUPERSEDED_BY_ETF_LIGHTWEIGHT_RETIREMENT_20261025"
+  },
+  "etf_lightweight_retirement_20261025": {
+    "status": "LOCAL_IMPLEMENTATION; DELIVERY_EVIDENCE_IN_NAMED_ACCEPTANCE; COMBINED_RELEASE_HOLD",
+    "owner_direction": "Skip ETFs except portfolio diversification commentary and simple long-term earnings multiples.",
+    "scope": "Retire dedicated ETF collection, onboarding, brief/role generation, score/style/what-if materialization, candidate scoring and active labels/workup. Keep positions/weights/shared prices/risk and supported commentary/multiple assumptions.",
+    "preservation": "No schema/data deletion. Read-only saved history includes current and superseded narrative versions with stable IDs/content/dates; unreadable records stay explicit.",
+    "authority": "AVUV and run-only FMP exception canceled. No production, policy, scheduler, collection, financial generation, push/merge/deployment.",
+    "prd_advisory": 92,
+    "acceptance": ".tmp/cleanup-open-model-execution/etf-lightweight-final-acceptance.json",
+    "preexisting_gate": "Architecture:26 modules over2000LOC vs25; no waiver.",
+    "validation_limit": "The old capture-candidate full matrix was canceled after scope changed. Its partial results do not validate this retirement.",
+    "implementation_advisory": 89,
+    "advisory_kind": "Independent Sol advisory, not formal Judge or release authority",
+    "validation": {
+      "affected": "612 passes/9Windows-only skips in the629-case integrated population;8 stale expectations/fixtures then corrected in216-pass focused run plus final1-pass shell case. No full-suite pass claimed.",
+      "browser": "Synthetic populated/empty/malformed saved history and staleETF Evaluation payload at1280/768; disclosure keyboard activation; no page errors/overflow. Final screenshot waits for animations.",
+      "static": "Changed291Python files format/lint/strict types/suppressions pass. Whole-tree diagnostic scan completes with6GiB node heap; exact descending ceiling replay passes. No limits raised.",
+      "reconstruction": "11/11 inventory,84 directives,folder contract and design sync pass.",
+      "instructions": "47instruction maintenance tests pass."
+    },
+    "skill_hash_baseline": "59source hashes already drifted at predecessorHEAD;62currently drift. ActiveETF prose updated. No bulk recertification of unrelated sources."
   }
 }
