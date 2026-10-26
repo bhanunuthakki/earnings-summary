@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlsplit
 from alerts import AlertRow
 from dashboard.evidence_drawer import load_brief_provenance, render_evidence_drawer
 from report.models import CellSource, QuarterlyEarningsCard, QuarterlyLineItem
+from report.renderers import workspace_styles
 from report.renderers.charts_v2 import MatrixRow, yoy_heatmap_table
 from report.renderers.workspace_html import (
     _financial_highlights_panel,
@@ -26,7 +27,7 @@ from report.renderers.workspace_html import (
 from report.sections.financials import to_cell_source
 from sources.report_financials import FinancialEvidenceReference
 from timeseries.loaders import load_financial_cell_provenance
-from ui.source_chip import viewer_href
+from ui.source_chip import SOURCE_CHIP_CSS, source_chip_html, viewer_href
 
 # ----------------------------------------------------------------------------
 # loader
@@ -346,6 +347,28 @@ def test_source_chip_without_doc_id_keeps_source_url_only() -> None:
     html_out = _source_chip_html(src)
     assert "/source/" not in html_out
     assert "open source ↗" in html_out
+
+
+def test_source_chip_exposes_analyze_and_source_actions_without_inferring_urls() -> None:
+    linked = source_chip_html(
+        CellSource(
+            source="sec_official",
+            doc_id=31,
+            document_version_id="dv_123",
+            source_url="https://sec.example/filing",
+        )
+    )
+    assert 'data-src-action="analyze" href="/source/version/dv_123"' in linked
+    assert 'data-src-action="source" href="/source/31"' in linked
+
+    unlinked = source_chip_html(CellSource(source="fmp_normalized"))
+    assert 'data-src-action="analyze"' not in unlinked
+    assert 'data-src-action="source"' not in unlinked
+
+    assert ".src-pop:focus-within" in SOURCE_CHIP_CSS
+    assert ".src-pop-actions" in SOURCE_CHIP_CSS
+    assert ".src-pop:focus-within" in workspace_styles.CSS
+    assert ".src-pop-actions" in workspace_styles.CSS
 
 
 def test_yoy_matrix_emits_cell_titles_and_label_chip() -> None:

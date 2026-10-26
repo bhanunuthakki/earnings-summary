@@ -120,6 +120,9 @@ _GROUNDED_SEARCH_DIGEST_ASSIGNMENT = re.compile(
 _IR_AUTHORITY_DIGEST_ASSIGNMENT = re.compile(
     r'[ \t]*expected_ir_sha256[ \t]*=[ \t]*"[0-9a-f]{64}"[ \t]*(?:\r?\n)?\Z'
 )
+_REPORT_CONTEXT_DIGEST_ASSIGNMENT = re.compile(
+    r'[ \t]*GOLDEN_V1_(?:MODEL_|EVIDENCE_)?SHA256[ \t]*=[ \t]*"[0-9a-f]{64}"[ \t]*(?:\r?\n)?\Z'
+)
 _PATH_HASH_KEYS = {
     "docs/quality/ocr-reviewed-facts-growth-20261024.json": {
         "source_commit": 40,
@@ -186,6 +189,8 @@ def is_quality_evidence_hash(filename: str, line: str) -> bool:
         return _GROUNDED_SEARCH_DIGEST_ASSIGNMENT.fullmatch(line) is not None
     if canonical_path == "tests/test_ir_authority_capture.py":
         return _IR_AUTHORITY_DIGEST_ASSIGNMENT.fullmatch(line) is not None
+    if canonical_path == "tests/test_report_generation_context.py":
+        return _REPORT_CONTEXT_DIGEST_ASSIGNMENT.fullmatch(line) is not None
     if canonical_path not in _CANONICAL_PATHS:
         return False
     if _HASH40_MEMBER.fullmatch(line) is not None or _HASH64_MEMBER.fullmatch(line) is not None:

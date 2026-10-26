@@ -25,11 +25,14 @@ log to stderr (one event per emitted file) and a path summary to stdout.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sqlite3
 import subprocess
 import sys
+import tempfile
+from contextlib import nullcontext, suppress
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -49,14 +52,43 @@ from compute.peer_selection import (
 from compute.segment_definitions import (
     extract_for_ticker as _extract_segment_definitions,
 )
-from db_paths import require_db_path
+from db_paths import db_path_context, require_db_path
+from dcf.input_evidence import canonical_digest
 from instrument_store import get_instrument_kind
 from models.companies import InstrumentType
 from pipeline.db_writer_gate import hold_writer_gate
 from provenance.source_read_context import SourceReadContext
-from report.artifacts import persist_report_artifact
+from report.artifacts import (
+    RenderedReportBody,
+    ReportCandidateReview,
+    ReportCaptureUnavailable,
+    ReportGenerationContext,
+    find_matching_candidate_artifact,
+    load_report_artifact_index,
+    load_report_candidate_review,
+    load_report_capture_receipt,
+    load_report_file_capture_receipt,
+    persist_report_artifact,
+    resolve_report_model_binding,
+    save_report_candidate_sidecars,
+)
 from report.builder import build_report
+from report.file_capture import (
+    CAPTURE_WRITE_SETS,
+    FileCaptureMismatchError,
+    ReportFileCaptureSession,
+    hold_capture_write_set,
+    replay_file_capture,
+)
+from report.generation_context import DBSnapshotRef
 from report.models import ReportFlavor
+from report.read_capture import (
+    CaptureLimits,
+    ReadCaptureSession,
+    ReadCaptureUnavailable,
+    replay_read_capture,
+)
+from report.render_clock import render_now
 from report.renderers.etf_markdown import render as render_etf_markdown
 from report.renderers.markdown import render as render_markdown
 from report.renderers.sections_json import render as render_sections_json
@@ -82,6 +114,11 @@ from report.sections import (
 from report.sections import financials as financials_section_mod
 from report.sections import snapshot as snapshot_section_mod
 from report.sections.etf_holdings import build_etf_brief
+from research.decision_brief import (
+    assess_candidate_decision_brief,
+    persist_decision_brief_readiness,
+)
+from research.report_contract import report_read_snapshot
 from runtime.python_process import managed_python_prefix
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -273,6 +310,17 @@ def main() -> int:
     db.set_db_path(database_path)
     os.environ["EARNINGS_SUMMARY_DB_PATH"] = str(database_path)
     configure_artifact_runtime(repo_root)
+    if getattr(args, "candidate", False):
+        result = build_candidate_artifact(
+            args.ticker,
+            repo_root,
+            db_path=database_path,
+            source_context=source_context,
+            model_run_id=args.model_run_id,
+            expected_current_artifact_id=args.expected_current_artifact_id,
+        )
+        print(json.dumps([result], indent=2, default=str))
+        return 0
     tickers = _resolve_tickers(repo_root, args)
     if not tickers:
         print("[]")
@@ -308,6 +356,288 @@ def main() -> int:
         summary.append(result)
     print(json.dumps(summary, indent=2, default=str))
     return 0
+
+
+def build_candidate_artifact(
+    ticker: str,
+    repo_root: Path,
+    *,
+    db_path: Path | None = None,
+    source_context: SourceReadContext | None = None,
+    model_run_id: int | None = None,
+    cutoff_at: datetime | None = None,
+    expected_current_artifact_id: str | None = None,
+) -> dict[str, object]:
+    symbol = ticker.strip().upper()
+    active_db = require_db_path(db_path)
+    with db_path_context(active_db), hold_capture_write_set(repo_root, CAPTURE_WRITE_SETS):
+        if _resolve_kind(repo_root, symbol) is InstrumentType.ETF:
+            raise ValueError("candidate_etf_unsupported")
+        configure_artifact_runtime(repo_root)
+        read_session = ReadCaptureSession(active_db, limits=CaptureLimits())
+        file_session = ReportFileCaptureSession(repo_root=repo_root)
+        conn = read_session.open()
+        conn.row_factory = sqlite3.Row
+        read_session.begin_capture()
+        binding = resolve_report_model_binding(
+            repo_root, symbol, conn=conn, model_run_id=model_run_id
+        )
+        if isinstance(binding, ReportCaptureUnavailable):
+            read_session.abort()
+            return {
+                "status": "capture_unavailable",
+                "ticker": symbol,
+                "reason": binding.reason_code,
+            }
+
+        # Check for active candidate reuse if cutoff_at was not explicitly provided
+        if cutoff_at is None:
+            active_candidates = [
+                item
+                for item in sorted(
+                    load_report_artifact_index(repo_root).items,
+                    key=lambda it: (it.generated_at, it.artifact_id),
+                    reverse=True,
+                )
+                if item.ticker == symbol
+                and item.publication_status == "draft_preview"
+                and item.reader_mode == "shared_body"
+                and isinstance(item.generation_context, ReportGenerationContext)
+                and item.body_path is not None
+                and (repo_root / item.standalone_path).is_file()
+                and (repo_root / item.body_path).is_file()
+            ]
+            if active_candidates:
+                latest_cand = active_candidates[0]
+                cand_ctx = latest_cand.generation_context
+                if (
+                    isinstance(cand_ctx, ReportGenerationContext)
+                    and cand_ctx.model == binding
+                    and (
+                        expected_current_artifact_id is None
+                        or cand_ctx.expected_current_artifact_id == expected_current_artifact_id
+                    )
+                ):
+                    cand_capture = load_report_capture_receipt(
+                        repo_root, symbol, latest_cand.artifact_id
+                    )
+                    cand_file_receipt = load_report_file_capture_receipt(
+                        repo_root, symbol, latest_cand.artifact_id
+                    )
+                    cand_review = load_report_candidate_review(
+                        repo_root, symbol, latest_cand.artifact_id
+                    )
+                    if (
+                        cand_capture is not None
+                        and cand_file_receipt is not None
+                        and cand_review is not None
+                    ):
+                        try:
+                            replay_read_capture(active_db, cand_capture, limits=CaptureLimits())
+                            replay_file_capture(cand_file_receipt, repo_root)
+                            read_session.abort()
+                            return {
+                                "status": "reused",
+                                "reused": True,
+                                "ticker": symbol,
+                                "artifact_id": latest_cand.artifact_id,
+                                "context_sha256": cand_ctx.sha256,
+                                "body_sha256": latest_cand.body_sha256,
+                                "candidate_review": cand_review.model_dump(mode="json"),
+                            }
+                        except (ReadCaptureUnavailable, FileCaptureMismatchError, OSError):
+                            pass
+
+        for sel in (
+            "quarterly_summaries_tmp_v1",
+            "saydo_cards_tmp_v1",
+            "transcripts_dual_dir_v1",
+            "ir_briefs_tmp_v1",
+            "fmp_price_chart_v1",
+        ):
+            file_session.record_directory_selection(sel, symbol)
+
+        candidate_file_targets: list[str] = [
+            f"micro_thesis/holdings/{symbol}.json",
+            f".tmp/news_cache/{symbol}.json",
+            f"dcf/{symbol}.xlsx",
+            f"dcf/{symbol}_assumptions.json",
+            f"data/dcf_assumptions/{symbol}.json",
+            f"data/bear_case/{symbol}.json",
+            f"data/peer_selection/{symbol}.json",
+            f"data/peer_fundamentals/{symbol}.json",
+            f"data/segments/{symbol}.json",
+            f"data/segment_definitions/{symbol}.json",
+            f"data/filing_intelligence/{symbol}.json",
+            f"data/qa_topics/{symbol}.json",
+        ]
+        tmp_dir = repo_root / ".tmp"
+        if tmp_dir.is_dir():
+            for p in sorted(tmp_dir.iterdir()):
+                if p.is_file() and (
+                    p.name.upper().startswith(f"{symbol}_")
+                    or p.name.upper().startswith(f"SAYDO_{symbol}_")
+                ):
+                    candidate_file_targets.append(f".tmp/{p.name}")
+        for subdir in ("processed", "raw"):
+            tr_dir = repo_root / "transcripts" / subdir
+            if tr_dir.is_dir():
+                for p in sorted(tr_dir.iterdir()):
+                    if p.is_file() and p.name.upper().startswith(f"{symbol}_"):
+                        candidate_file_targets.append(f"transcripts/{subdir}/{p.name}")
+        for target in candidate_file_targets:
+            with suppress(FileNotFoundError):
+                file_session.read_bytes(target)
+
+        effective_cutoff = cutoff_at or render_now()
+        with file_session:
+            spec = build_report(
+                ticker=symbol,
+                repo_root=repo_root,
+                model_link=f"dcf/{symbol}.xlsx",
+                enable_llm=False,
+                refresh_news=False,
+                force_refresh=False,
+                conn=conn,
+                db_path=active_db,
+                source_context=source_context,
+                model_run_id=binding.row_id,
+                candidate_mode=True,
+                cutoff_at=effective_cutoff,
+            )
+
+            # Render body while conn is still inside read_session to capture any panel reads
+            temp_body = render_report_body(
+                spec,
+                conn=conn,
+                candidate_mode=True,
+                generation_context_sha256="__CANDIDATE_CONTEXT_PLACEHOLDER__",
+            )
+        capture_receipt = read_session.finish()
+        file_receipt = file_session.seal()
+
+        generation_context = ReportGenerationContext(
+            schema_version="report_generation.v2",
+            model=binding,
+            cutoff_at=effective_cutoff,
+            source_manifest_sha256=file_receipt.receipt_digest,
+            evidence_snapshot_id=f"capture:{binding.row_id}:{file_receipt.receipt_digest[:16]}",
+            evidence_member_sha256=file_receipt.receipt_digest,
+            recipe_versions=(("workspace_html", "v1"),),
+            expected_current_artifact_id=expected_current_artifact_id,
+            db_snapshot=DBSnapshotRef(
+                schema_sha256=capture_receipt.schema_sha256,
+                consumed_rows_sha256=canonical_digest(
+                    [s.model_dump(mode="json") for s in capture_receipt.statements]
+                ),
+            ),
+            report_date=spec.generation_date,
+            coverage_role=("evaluation" if spec.flavor is ReportFlavor.EVALUATION else "portfolio"),
+            source_authority_sha256=hashlib.sha256(str(repo_root).encode("utf-8")).hexdigest(),
+        )
+        existing = find_matching_candidate_artifact(
+            repo_root, ticker=symbol, context_sha256=generation_context.sha256
+        )
+        if existing is not None:
+            existing_review = load_report_candidate_review(repo_root, symbol, existing.artifact_id)
+            return {
+                "status": "reused",
+                "reused": True,
+                "ticker": symbol,
+                "artifact_id": existing.artifact_id,
+                "context_sha256": generation_context.sha256,
+                "body_sha256": existing.body_sha256,
+                "candidate_review": (
+                    existing_review.model_dump(mode="json") if existing_review else None
+                ),
+            }
+
+        final_body_html = temp_body.body_html.replace(
+            "__CANDIDATE_CONTEXT_PLACEHOLDER__", generation_context.sha256
+        )
+        report_body = RenderedReportBody.from_html(
+            ticker=temp_body.ticker,
+            report_date=temp_body.report_date,
+            body_html=final_body_html,
+            sections=temp_body.sections,
+            interaction_manifest=temp_body.interaction_manifest,
+            fiscal_period_label=temp_body.fiscal_period_label,
+        )
+        standalone_html = render_standalone_report(
+            spec,
+            report_body,
+            candidate_mode=True,
+            generation_context_sha256=generation_context.sha256,
+        )
+        temp_dir = repo_root / ".tmp"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", suffix=".html", dir=temp_dir, delete=False
+        ) as handle:
+            handle.write(standalone_html)
+            tmp_standalone = Path(handle.name)
+        try:
+            artifact_ref = persist_report_artifact(
+                repo_root=repo_root,
+                body=report_body,
+                standalone_path=tmp_standalone,
+                generated_at=generation_context.cutoff_at,
+                coverage_role=generation_context.coverage_role or "portfolio",
+                title=f"{symbol} Full Research Brief",
+                publication_status="draft_preview",
+                generation_context=generation_context,
+            )
+        finally:
+            tmp_standalone.unlink(missing_ok=True)
+
+        with connect_sqlite(active_db, role=SQLiteConnectionRole.READ_ONLY) as assess_conn:
+            readiness = assess_candidate_decision_brief(
+                assess_conn,
+                repo_root=repo_root,
+                artifact=artifact_ref,
+                as_of=generation_context.cutoff_at,
+                source_context=source_context,
+            )
+        if readiness.context_review_sha256 is None:
+            readiness = readiness.model_copy(
+                update={"context_review_sha256": generation_context.sha256}
+            )
+        readiness_path = persist_decision_brief_readiness(repo_root, readiness)
+        is_ready = readiness.status == "verified" and not readiness.reason_codes
+        candidate_url = f"/reports/{symbol}?artifact_id={artifact_ref.artifact_id}&standalone=1"
+        review = ReportCandidateReview(
+            artifact_id=artifact_ref.artifact_id,
+            body_sha256=str(artifact_ref.body_sha256),
+            workspace_sha256=artifact_ref.workspace_sha256,
+            context_sha256=generation_context.sha256,
+            model_sha256=generation_context.model_sha256,
+            evidence_sha256=generation_context.evidence_sha256,
+            content_receipt_path=str(readiness_path.relative_to(repo_root).as_posix()),
+            content_receipt_sha256=hashlib.sha256(readiness_path.read_bytes()).hexdigest(),
+            verification_contract="decision_brief.v1",
+            evaluated_at=generation_context.cutoff_at,
+            ready=is_ready,
+            reason_codes=tuple(readiness.reason_codes),
+            url=candidate_url,
+        )
+        save_report_candidate_sidecars(
+            repo_root,
+            ticker=symbol,
+            artifact_id=artifact_ref.artifact_id,
+            capture_receipt=capture_receipt,
+            file_capture_receipt=file_receipt,
+            readiness=readiness,
+            candidate_review=review,
+        )
+        return {
+            "status": "ok",
+            "reused": False,
+            "ticker": symbol,
+            "artifact_id": artifact_ref.artifact_id,
+            "context_sha256": generation_context.sha256,
+            "body_sha256": artifact_ref.body_sha256,
+            "candidate_review": review.model_dump(mode="json"),
+        }
 
 
 def _regenerate_native_purpose(
@@ -423,6 +753,9 @@ def _parse_args() -> argparse.Namespace:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--db-path", type=Path, help="Explicit existing portfolio database")
+    parser.add_argument("--candidate", action="store_true")
+    parser.add_argument("--model-run-id", type=int)
+    parser.add_argument("--expected-current-artifact-id", type=str)
     g = parser.add_mutually_exclusive_group(required=True)
     g.add_argument("--ticker", help="Single ticker to build for")
     g.add_argument(
@@ -581,6 +914,7 @@ def _build_one(
     force_budget_bypass: bool = False,
     force_refresh: bool = False,
     source_context: SourceReadContext | None = None,
+    model_run_id: int | None = None,
 ) -> dict[str, object]:
     out_dir = repo_root / "output" / "research" / ticker
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -647,27 +981,45 @@ def _build_one(
     if report_conn is not None:
         report_conn.row_factory = sqlite3.Row
     try:
-        spec = build_report(
-            ticker=ticker,
-            repo_root=repo_root,
-            model_link=f"dcf/{ticker}.xlsx",
-            enable_llm=enable_llm,
-            news_days=news_days,
-            news_cache_ttl_days=news_cache_ttl_days,
-            refresh_news=refresh_news,
-            flavor=flavor,
-            force_budget_bypass=effective_bypass,
-            force_refresh=force_refresh,
-            conn=report_conn,
-            db_path=report_db_path,
-            source_context=source_context,
+        # One caller-owned READ_ONLY connection + read snapshot spans section
+        # building, per-metric provenance, and the P3 panel reads that go
+        # through the caller connection, so those reads reflect one database
+        # version. This is a bounded seam, NOT full-generation capture: the
+        # prompt-quality sources tab (guesses repo/data/portfolio.db), the
+        # graded-sell base rate, Markdown standing rules, and the comment
+        # boot file each re-open their own handles and stay obligations for
+        # FULL capture later. An explicit `model_run_id` pins the valuation
+        # basis to one dcf_runs.id; None keeps the historical latest-run
+        # semantics. The connection is closed exactly once below even if
+        # rendering raises.
+        snapshot_ctx = (
+            report_read_snapshot(report_conn) if report_conn is not None else nullcontext()
         )
-        per_metric_provenance = _collect_per_metric_provenance(ticker, repo_root, conn=report_conn)
+        with snapshot_ctx:
+            spec = build_report(
+                ticker=ticker,
+                repo_root=repo_root,
+                model_link=f"dcf/{ticker}.xlsx",
+                enable_llm=enable_llm,
+                news_days=news_days,
+                news_cache_ttl_days=news_cache_ttl_days,
+                refresh_news=refresh_news,
+                flavor=flavor,
+                force_budget_bypass=effective_bypass,
+                force_refresh=force_refresh,
+                conn=report_conn,
+                db_path=report_db_path,
+                source_context=source_context,
+                model_run_id=model_run_id,
+            )
+            per_metric_provenance = _collect_per_metric_provenance(
+                ticker, repo_root, conn=report_conn, model_run_id=model_run_id
+            )
+            report_body = render_report_body(spec, conn=report_conn)
     finally:
         if report_conn is not None:
             report_conn.close()
 
-    report_body = render_report_body(spec)
     workspace_html_path.write_text(render_standalone_report(spec, report_body), encoding="utf-8")
     _emit(
         "wrote_workspace_html",
@@ -743,6 +1095,7 @@ def _collect_per_metric_provenance(
     repo_root: Path,
     *,
     conn: sqlite3.Connection | None = None,
+    model_run_id: int | None = None,
 ) -> dict[str, dict[str, object]]:
     """Collate per-line-item provenance across the sections wired for it.
 
@@ -753,7 +1106,11 @@ def _collect_per_metric_provenance(
     or synthetic test environments.
     """
     merged: dict[str, dict[str, object]] = {}
-    merged.update(snapshot_section_mod.build_per_metric(ticker, repo_root, conn=conn))
+    merged.update(
+        snapshot_section_mod.build_per_metric(
+            ticker, repo_root, conn=conn, model_run_id=model_run_id
+        )
+    )
     merged.update(financials_section_mod.build_per_metric(ticker, repo_root, conn=conn))
     return merged
 

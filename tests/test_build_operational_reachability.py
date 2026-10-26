@@ -266,7 +266,68 @@ def test_actual_head_is_supported() -> None:
     # Retain the existing test seams, the integrity-audit fixture run, and
     # both exact XBRL launcher process fixtures pinned above.
     # No production gap is admitted; the zero-production assertions stay above.
-    assert len(graph.unknown_edges) == 174
+    assert len(graph.unknown_edges) == 182
+    assert [edge for edge in graph.unknown_edges if edge.source == "tests/test_report_sync.py"] == [
+        GraphEdge(
+            source="tests/test_report_sync.py",
+            target="<dynamic process entrypoint>",
+            kind="unknown",
+            evidence="subprocess/runpy expression",
+            confidence="low",
+            line=line,
+            unknown=True,
+        )
+        for line in (74, 121)
+    ]
+    assert [
+        edge
+        for edge in graph.unknown_edges
+        if edge.source == "tests/test_workspace_dcf_read_lifecycle.py"
+    ] == [
+        GraphEdge(
+            source="tests/test_workspace_dcf_read_lifecycle.py",
+            target="<dynamic process entrypoint>",
+            kind="unknown",
+            evidence="subprocess/runpy expression",
+            confidence="low",
+            line=line,
+            unknown=True,
+        )
+        for line in (134, 193, 354)
+    ]
+    assert [
+        edge
+        for edge in graph.unknown_edges
+        if edge.source == "tests/test_publication_file_fences.py"
+    ] == [
+        GraphEdge(
+            source="tests/test_publication_file_fences.py",
+            target="<dynamic attribute>",
+            kind="getattr",
+            evidence="dynamic getattr expression",
+            confidence="low",
+            line=193,
+            unknown=True,
+        ),
+        GraphEdge(
+            source="tests/test_publication_file_fences.py",
+            target="<dynamic process entrypoint>",
+            kind="unknown",
+            evidence="subprocess/runpy expression",
+            confidence="low",
+            line=154,
+            unknown=True,
+        ),
+        GraphEdge(
+            source="tests/test_publication_file_fences.py",
+            target="msvcrt",
+            kind="dynamic_import",
+            evidence="dynamic import expression (target unresolved)",
+            confidence="low",
+            line=66,
+            unknown=True,
+        ),
+    ]
     assert [
         edge
         for edge in graph.unknown_edges

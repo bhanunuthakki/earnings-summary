@@ -8,7 +8,8 @@ re-exports in ``workspace_html``."""
 
 from __future__ import annotations
 
-from datetime import timedelta
+import sqlite3
+from datetime import date, datetime, timedelta
 from io import StringIO
 from pathlib import Path
 
@@ -38,6 +39,9 @@ def _sources_tab(
     prov: ProvenanceSection,
     app: AppendixSection,
     repo_root: str,
+    *,
+    conn: sqlite3.Connection | None = None,
+    as_of: datetime | date | None = None,
 ) -> None:
     body.write('<div class="tab-body">')
     body.write('<div class="row-split"><div>')
@@ -235,11 +239,17 @@ def _sources_tab(
         body.write(lg.grid_close())
         body.write("</div>")
 
-    _prompt_quality_panel(body, Path(repo_root) / "data" / "portfolio.db")
+    _prompt_quality_panel(body, Path(repo_root) / "data" / "portfolio.db", conn=conn, as_of=as_of)
     body.write("</div>")
 
 
-def _prompt_quality_panel(body: StringIO, db_path: Path) -> None:
+def _prompt_quality_panel(
+    body: StringIO,
+    db_path: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+    as_of: datetime | date | None = None,
+) -> None:
     """Surface the prompt_calibration_scores table — grouped by (purpose,
     prompt_version) so the analyst can see whether each prompt version is
     improving over time without spelunking the per-call ledger.
@@ -249,10 +259,15 @@ def _prompt_quality_panel(body: StringIO, db_path: Path) -> None:
     degrades to a small "no data yet" stub rather than breaking the page.
     """
     window_days = 30
-    # Stored scored_at is naive UTC ISO; compare with a naive cutoff so the
-    # SQL string comparison is well-defined.
-    since = render_now().replace(tzinfo=None) - timedelta(days=window_days)
-    summaries: list[VersionSummary] = summarize_by_prompt_version(db_path=db_path, since=since)
+    anchor = (
+        as_of
+        if isinstance(as_of, date) and not isinstance(as_of, datetime)
+        else (as_of.date() if isinstance(as_of, datetime) else render_now().date())
+    )
+    since = datetime(anchor.year, anchor.month, anchor.day) - timedelta(days=window_days)
+    summaries: list[VersionSummary] = summarize_by_prompt_version(
+        db_path=db_path, conn=conn, since=since
+    )
 
     if not summaries:
         # P4.2 hide-don't-stub: no graded outputs in the window → no panel.
@@ -265,7 +280,7 @@ def _prompt_quality_panel(body: StringIO, db_path: Path) -> None:
         )
     )
 
-    daily = daily_avg_scores(db_path=db_path, since=since)
+    daily = daily_avg_scores(db_path=db_path, conn=conn, since=since)
     body.write(lg.grid_open())
     body.write(lg.filter_bar(len(summaries), noun="versions"))
     body.write(

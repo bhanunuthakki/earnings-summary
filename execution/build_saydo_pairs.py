@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -25,24 +26,32 @@ import time
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypedDict
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-import hashlib  # noqa: E402
-
-import db  # noqa: E402
-from llm.batch import BatchRequest, saydo_custom_id, write_jsonl  # noqa: E402
-from llm_artifact_store import UpsertRequest, upsert  # noqa: E402
-from llm_client import (  # noqa: E402
-    _build_pairwise_analysis_prompt,
+import db
+from llm.batch import BatchRequest, saydo_custom_id, write_jsonl
+from llm_artifact_store import UpsertRequest, upsert
+from llm_client import (
+    build_pairwise_analysis_prompt,
     compose_anchor_block,
     generate_pairwise_analysis,
     load_bear_anchor,
     load_ir_anchor,
     load_thesis_anchor,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+
+class _SummaryRecord(TypedDict):
+    quarter: str
+    year: int
+    text: str
+
 
 _SUMMARY_RX = re.compile(
     r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})_(?:investor_update_)?summary\.txt$"
@@ -115,7 +124,7 @@ def _prepare_batch_mode(tickers: list[str], repo_root: Path, *, refresh: bool) -
             out_path = tmp / f"{custom_id}.txt"
             if out_path.exists() and not refresh:
                 continue
-            prompt = _build_pairwise_analysis_prompt(prev, curr, anchor_block=anchor_block)
+            prompt = build_pairwise_analysis_prompt(prev, curr, anchor_block=anchor_block)
             requests.append(BatchRequest(custom_id=custom_id, prompt=prompt))
             manifest_entries.append(
                 {
@@ -235,7 +244,10 @@ def _process_ticker(ticker: str, repo_root: Path, refresh: bool) -> dict[str, ob
                 f"{type(e).__name__}: {e}"
             )
             break
-        out_path.write_text(text, encoding="utf-8")
+        from report.file_capture import hold_capture_write_set
+
+        with hold_capture_write_set(repo_root, "capture-tmp-saydo"):
+            out_path.write_text(text, encoding="utf-8")
         pairs_written += 1
         # Also upsert into llm_artifact_store so the artifact dirty chain
         # picks up SayDo invalidations when thesis text changes. cache_inputs
@@ -273,7 +285,7 @@ def _process_ticker(ticker: str, repo_root: Path, refresh: bool) -> dict[str, ob
     }
 
 
-def _list_summaries(tmp: Path, ticker: str) -> list[dict[str, object]]:
+def _list_summaries(tmp: Path, ticker: str) -> list[_SummaryRecord]:
     """Return list of {quarter, year, text} ordered chronologically."""
     if not tmp.exists():
         return []

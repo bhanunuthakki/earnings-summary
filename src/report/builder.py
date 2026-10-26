@@ -8,7 +8,7 @@ direct DB / filesystem coupling in the renderer layer.
 from __future__ import annotations
 
 import sqlite3
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from industry_classifier import suppressed_sections_for_ticker
@@ -55,6 +55,9 @@ def build_report(
     generation_date: date | None = None,
     db_path: Path | None = None,
     source_context: SourceReadContext | None = None,
+    model_run_id: int | None = None,
+    candidate_mode: bool = False,
+    cutoff_at: datetime | None = None,
 ) -> ReportSpec:
     """Build the unified ReportSpec for one ticker.
 
@@ -92,17 +95,26 @@ def build_report(
     ticker = ticker.upper()
     portfolio_position_section = portfolio_position.build(ticker, repo_root)
     snapshot_section = snapshot.build(
-        ticker, repo_root, model_link, held=portfolio_position_section.held, conn=conn
+        ticker,
+        repo_root,
+        model_link,
+        held=portfolio_position_section.held,
+        conn=conn,
+        model_run_id=model_run_id,
     )
     evaluation_snapshot_section = (
-        evaluation_snapshot.build(ticker, repo_root, conn=conn)
+        evaluation_snapshot.build(ticker, repo_root, as_of=cutoff_at, conn=conn)
         if flavor == ReportFlavor.EVALUATION
         else None
     )
     company_description_section = company_description.build(ticker, repo_root, conn=conn)
     thesis_section = thesis.build(ticker, repo_root, conn=conn)
     financials_section = financials.build(
-        ticker, repo_root, conn=conn, source_context=source_context
+        ticker,
+        repo_root,
+        as_of=cutoff_at,
+        conn=conn,
+        source_context=source_context,
     )
     signals_section = signals.build(ticker, repo_root, conn=conn)
     segments_section = segments.build(ticker, repo_root, conn=conn)
@@ -135,6 +147,7 @@ def build_report(
         force_refresh=force_refresh,
         force_budget_bypass=force_budget_bypass,
         conn=conn,
+        candidate_mode=candidate_mode,
     )
     provenance_section = provenance.build(ticker, repo_root, conn=conn)
     appendix_section = appendix.build(earnings_section)
@@ -159,6 +172,7 @@ def build_report(
         enable_llm=enable_llm,
         force_budget_bypass=force_budget_bypass,
         conn=conn,
+        as_of=cutoff_at,
     )
     synthesis_section = synthesis.build(ticker, repo_root, conn=conn)
     # Read-only for BOTH flavors (P1.1, PRD §8.1) — generation happens at the

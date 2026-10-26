@@ -173,6 +173,11 @@ class ManagedConnection(sqlite3.Connection):
         """Monotonic counter incremented whenever an explicit or implicit rollback occurs."""
         return self._rollback_generation
 
+    @property
+    def protected_read_snapshot_active(self) -> bool:
+        """True when the connection is held under an immutable read snapshot owner."""
+        return False
+
     def register_rollback_observer(self, observer: RollbackObserver) -> Callable[[], None]:
         """Register an observer callable invoked when a transaction rolls back."""
         self._rollback_observers.append(observer)
@@ -573,6 +578,7 @@ def connect_sqlite(
     *,
     role: SQLiteConnectionRole,
     schema_preflight: bool | None = None,
+    connection_factory: object | None = None,
 ) -> sqlite3.Connection:
     """Open a SQLite connection under the repository's role-specific policy.
 
@@ -592,7 +598,27 @@ def connect_sqlite(
     the ``--enable-llm`` ledger/artifact/budget/quota-breaker writes) serialize
     with the chain's explicit write windows per resolved database path.
     Processes outside the daily chain keep exactly their previous behavior.
+
+    ``connection_factory`` is an optional read-only-role extension seam: a
+    supplied factory must subclass ``ManagedConnection`` so the connection
+    keeps this module's single-connection policy (URI, forbidden-path,
+    adapters, integrity functions, scope, connection policy and schema
+    preflight all still run here). The default remains ``ManagedConnection``.
     """
+    read_factory: type[ManagedConnection] = ManagedConnection
+    if connection_factory is not None:
+        if role not in (
+            SQLiteConnectionRole.READ_ONLY,
+            SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY,
+        ):
+            raise ValueError("connection_factory is supported only for read-only roles")
+        if not (
+            isinstance(connection_factory, type)
+            and issubclass(connection_factory, ManagedConnection)
+        ):
+            raise TypeError("connection_factory must be a ManagedConnection subclass")
+        read_factory = connection_factory
+
     register_datetime_adapters()
     reject_forbidden_mac_checkout_database(path)
     if role is SQLiteConnectionRole.WRITER:
@@ -614,7 +640,7 @@ def connect_sqlite(
             ),
             uri=True,
             timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
-            factory=ManagedConnection,
+            factory=read_factory,
         )
     else:
         if (

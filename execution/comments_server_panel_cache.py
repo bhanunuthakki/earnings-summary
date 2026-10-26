@@ -454,6 +454,13 @@ MUTATION_ROUTE_CACHE_REGISTRY: dict[str, CacheFamily] = {
         *FAMILY_PANEL_PORTFOLIO,
     ),
     "/api/dcf/recompute": NO_CACHE_FAMILY,  # read-only recompute projection
+    "/api/report-sync/<ticker>/candidate": (WORK_OS_BRIEFS_KIND, WORK_OS_DESK_KIND),
+    "/api/report-sync/<ticker>/publish": (
+        WORK_OS_BRIEFS_KIND,
+        WORK_OS_DESK_KIND,
+        WORK_OS_EVALUATION_KIND,
+        *FAMILY_PANEL_DECISIONS,
+    ),
     "/api/ticker-settings/<ticker>": (*FAMILY_PANEL_SETTINGS, *FAMILY_PANEL_DIET),
     "/api/llm-budgets/<purpose>": (*FAMILY_PANEL_OPERATIONS,),
     # ---- Alerts / governed lifecycle ----

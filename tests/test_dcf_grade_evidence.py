@@ -100,6 +100,40 @@ def _schema(conn: sqlite3.Connection) -> None:
     )
 
 
+def test_pinned_evidence_does_not_follow_latest_or_fall_back_to_another_issuer() -> None:
+    with sqlite3.connect(":memory:") as conn:
+        _schema(conn)
+        clock = "2026-10-24T08:00:00+00:00"
+        for identity, ticker, latest in ((1, "META", 0), (2, "META", 1), (3, "PEER", 1)):
+            conn.execute(
+                "INSERT INTO dcf_runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    identity,
+                    ticker,
+                    clock,
+                    "2026-10-24",
+                    "redesign_fcff_v1",
+                    "a" * 64,
+                    "b" * 64,
+                    clock,
+                    700.0,
+                    clock,
+                    600.0,
+                    0.1,
+                    None,
+                    "{}",
+                    "{}",
+                    latest,
+                    None,
+                ),
+            )
+        assert load_dcf_verification_evidence(conn, "META").run_id == 2
+        assert load_dcf_verification_evidence(conn, "META", run_id=1).run_id == 1
+        assert load_dcf_grade_evidence(conn, "META", run_id=1).run_id == 1
+        assert load_dcf_verification_evidence(conn, "META", run_id=3).status == "missing"
+        assert load_dcf_verification_evidence(conn, "META", run_id=404).status == "missing"
+
+
 def test_generic_receipts_are_projected_without_regrading_them() -> None:
     conn = sqlite3.connect(":memory:")
     _schema(conn)

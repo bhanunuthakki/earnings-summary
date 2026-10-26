@@ -586,7 +586,8 @@
       root.append(stylesheet, content);
       body.replaceChildren(host);
       workOsReaderDcf = window.initDcfEditor(content.querySelector('.dcf-edit'), {
-        scope: root, ticker: artifact.ticker
+        scope: root, ticker: artifact.ticker,
+        candidateArtifactId: artifact.publication_status === 'draft_preview' ? artifact.artifact_id : null
       });
       let selectPersistedSection = null;
       if (sections && Array.isArray(payload.sections)) {

@@ -48,10 +48,11 @@ import hashlib
 import json
 import os
 import sys
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 # Import co-located package code (this script's repo), NOT REPO/src — REPO points
 # at the DATA repo (which may be a different checkout, e.g. a worktree's data lives
@@ -66,6 +67,11 @@ from dcf.artifact_promotion import (
     live_path_from_env,
     promotion_from_env,
     run_dcf_entrypoint,
+)
+from dcf.family_editor import (
+    MELI_FAMILY,
+    normalize_family_vector,
+    require_workbook_authority,
 )
 from dcf.input_evidence import (
     InputEvidenceError,
@@ -112,6 +118,10 @@ from dcf.specialized_price import (
 from pipeline.db_writer_gate import hold_writer_gate
 from provenance.immutable_artifact import read_stable_artifact
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from ticker_validation import safe_ticker
+
+if TYPE_CHECKING:
+    from dcf.persist import DcfPersistenceResult, DcfRunRevision, DcfRunRow
 
 try:  # persistence is best-effort -- the workbook builds without a DB
     from dcf import persist as _persist_module
@@ -175,17 +185,70 @@ def reverse_valuation(s: Assum, m: Mirror) -> dict[str, object] | None:
     ).to_snapshot_dict()
 
 
-def load_assumptions(ticker: str, *, db_path: Path | None = None) -> Assum:
+def _owner_root(repo_root: Path | None) -> Path:
+    return Path(repo_root) if repo_root is not None else REPO
+
+
+def _owner_ticker(ticker: str | None, *, explicit: bool) -> str:
+    if ticker is None:
+        return "MELI" if explicit else T
+    if not explicit:
+        return ticker
+    normalized = safe_ticker(ticker)
+    if normalized != "MELI":
+        raise ValueError(f"MELI platform owner requires ticker 'MELI', got {normalized!r}")
+    return normalized
+
+
+def _owner_explicit_injection(
+    ticker: str | None,
+    repo_root: Path | None,
+    workbook_path: Path | None,
+    workbook_locator_path: Path | None,
+) -> bool:
+    """New owner-authority mode: any explicit new injection parameter.
+
+    ``db_path`` is excluded — it is this owner's pre-existing legacy data
+    authority, so a lone ``db_path`` call keeps its legacy resolution while
+    the new-mode parameters switch the call out of ambient defaults.
+    """
+    return any(
+        value is not None for value in (ticker, repo_root, workbook_path, workbook_locator_path)
+    )
+
+
+def load_assumptions(
+    ticker: str,
+    *,
+    repo_root: Path | None = None,
+    db_path: Path | None = None,
+) -> Assum:
     """Assum defaults overridden by data/bank_assumptions/<T>_sotp.json, then the
     editable global tax + (opt-in) CAPM-derived discount rates with the
-    revenue-weighted Damodaran country risk premium."""
+    revenue-weighted Damodaran country risk premium.
+
+    An explicit ``repo_root`` isolates the data authority and requires an
+    explicit ``db_path``; neither ambient ``DCF_REPO_ROOT`` nor a checkout
+    ``data/portfolio.db`` is inferred on that path.
+    """
+    explicit_authority = repo_root is not None or db_path is not None
+    issuer = _owner_ticker(ticker, explicit=explicit_authority)
+    root = _owner_root(repo_root)
     s = Assum()
-    try:
-        db = require_db_path(db_path)
-    except (RuntimeError, OSError):
-        if db_path is not None:
-            raise
-        db = None  # explicitly isolated draft: no checkout database fallback
+    if repo_root is not None:
+        if db_path is None:
+            raise ValueError(
+                "explicit repo_root authority requires an explicit db_path; refusing to "
+                "infer the checkout data/portfolio.db"
+            )
+        db: Path | None = require_db_path(Path(db_path).expanduser())
+    else:
+        try:
+            db = require_db_path(db_path)
+        except (RuntimeError, OSError):
+            if db_path is not None:
+                raise
+            db = None  # explicitly isolated draft: no checkout database fallback
     global_loaded = (
         global_dcf.load_with_provenance(db_path=db)
         if global_dcf is not None and db is not None
@@ -200,7 +263,7 @@ def load_assumptions(ticker: str, *, db_path: Path | None = None) -> Assum:
             "status": "module_unavailable",
             "observed_at": None,
         }
-    p = REPO / "data" / "bank_assumptions" / f"{ticker}_sotp.json"
+    p = root / "data" / "bank_assumptions" / f"{issuer}_sotp.json"
     country_risk_overridden = False
     if p.exists():
         try:
@@ -217,14 +280,14 @@ def load_assumptions(ticker: str, *, db_path: Path | None = None) -> Assum:
                     setattr(s, k, v)
                     if k == "price":
                         s.price_seed_source = "owner_assumptions"
-                        s.price_seed_path = f"data/bank_assumptions/{ticker}_sotp.json"
+                        s.price_seed_path = f"data/bank_assumptions/{issuer}_sotp.json"
                     if k == "country_risk_premium":
                         country_risk_overridden = True
     # Systematic country risk premium (revenue-weighted), filled only when the
     # owner did not explicitly set it. This makes an override a true authority
     # boundary: no geographic file is read or claimed as a model input.
     if country_risk is not None and not country_risk_overridden and not s.country_risk_premium:
-        country_observation = country_risk.country_risk_observation(REPO, ticker)
+        country_observation = country_risk.country_risk_observation(root, issuer)
         s.country_risk_premium = country_observation.premium
         if country_observation.source_record is not None:
             s.country_risk_source = country_observation.source_record
@@ -240,7 +303,7 @@ def load_assumptions(ticker: str, *, db_path: Path | None = None) -> Assum:
             + s.beta_credit * global_loaded.assumptions.equity_risk_premium
             + s.country_risk_premium
         )
-    prof = REPO / "data" / "historical" / "fmp" / f"{ticker}_profile.json"
+    prof = root / "data" / "historical" / "fmp" / f"{issuer}_profile.json"
     if prof.exists():
         try:
             raw_profile: object = json.loads(prof.read_text(encoding="utf-8"))
@@ -253,7 +316,7 @@ def load_assumptions(ticker: str, *, db_path: Path | None = None) -> Assum:
                 if isinstance(price, (int, float, str)) and price:
                     s.price = float(price)
                     s.price_seed_source = "fmp_profile"
-                    s.price_seed_path = f"data/historical/fmp/{ticker}_profile.json"
+                    s.price_seed_path = f"data/historical/fmp/{issuer}_profile.json"
         except (OSError, json.JSONDecodeError, ValueError, KeyError):
             pass
     return s
@@ -282,8 +345,9 @@ def load_assumptions(ticker: str, *, db_path: Path | None = None) -> Assum:
 # the generic BEAR_SEED (provenance "seed" — a labeled fallback). Legible over
 # precise, per the red-team directive.
 # --------------------------------------------------------------------------- #
-def _load_holdings(ticker: str) -> dict[str, object] | None:
-    path = REPO / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
+def _load_holdings(ticker: str, *, repo_root: Path | None = None) -> dict[str, object] | None:
+    root = _owner_root(repo_root)
+    path = root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
     if not path.exists():
         return None
     try:
@@ -397,10 +461,12 @@ def workbook_spec(
     m: Mirror,
     holdings: dict[str, object] | None = None,
     *,
+    ticker: str | None = None,
     cases: dict[str, Assum] | None = None,
     input_receipt: ModelInputReceipt | None = None,
     bear_provenance: BearProvenance | None = None,
 ) -> MeliWorkbookSpec:
+    issuer = _owner_ticker(ticker, explicit=ticker is not None)
     return _workbook_spec(
         s,
         m,
@@ -408,58 +474,105 @@ def workbook_spec(
             s, holdings, cases, recipe=input_receipt.recipe if input_receipt else RECIPE
         ),
         input_receipt=input_receipt,
-        ticker=T,
+        ticker=issuer,
         bear_provenance=bear_provenance or _workbook_bear_provenance(holdings, cases),
     )
 
 
+def out_path(state_root: Path | None = None) -> Path:
+    if state_root is not None:
+        return Path(state_root) / "dcf" / f"{T}.xlsx"
+    return DEST
+
+
 def build(
     s: Assum,
-    m: Mirror,
-    dest: Path,
+    m: Mirror | None = None,
+    dest: Path | None = None,
     holdings: dict[str, object] | None = None,
     *,
+    ticker: str | None = None,
     cases: dict[str, Assum] | None = None,
     runtime: WorkbookRuntime | None = None,
     input_receipt: ModelInputReceipt | None = None,
     bear_provenance: BearProvenance | None = None,
+    out_path: Path | None = None,
+    state_root: Path | None = None,
 ) -> None:
+    issuer = _owner_ticker(ticker, explicit=ticker is not None)
     if input_receipt is not None and cases is None:
         raise InputEvidenceError("reviewed_scenario_vectors_required")
+    if m is None:
+        m = mirror(s)
+    if out_path is not None:
+        target_dest = Path(out_path)
+    elif dest is not None:
+        target_dest = Path(dest)
+    elif state_root is not None:
+        target_dest = Path(state_root) / "dcf" / f"{issuer}.xlsx"
+    else:
+        target_dest = DEST
     build_workbook(
         s,
         m,
-        dest,
+        target_dest,
         cases=_validated_workbook_cases(
             s, holdings, cases, recipe=input_receipt.recipe if input_receipt else RECIPE
         ),
         runtime=runtime,
         input_receipt=input_receipt,
-        ticker=T,
+        ticker=issuer,
         bear_provenance=bear_provenance or _workbook_bear_provenance(holdings, cases),
     )
 
 
-def persist_dcf_run(
+def _owner_workbook_paths(
+    workbook_path: Path | None, workbook_locator_path: Path | None
+) -> tuple[Path, Path]:
+    if workbook_path is not None:
+        workbook = Path(workbook_path)
+        locator = Path(workbook_locator_path) if workbook_locator_path is not None else workbook
+        return workbook, locator
+    return DEST, (
+        Path(workbook_locator_path)
+        if workbook_locator_path is not None
+        else live_path_from_env(DEST)
+    )
+
+
+def _prepare_meli_persist_row(
     s: Assum,
     m: Mirror,
-    holdings: dict[str, object] | None = None,
-    price_observation: SpecializedPriceObservation | None = None,
+    holdings: dict[str, object] | None,
+    price_observation: SpecializedPriceObservation | None,
     *,
-    artifact_promotion: ArtifactPromotion | None = None,
-    db_path: Path | None = None,
-    input_receipt: ModelInputReceipt | None = None,
-    assumptions_path: Path | None = None,
-    source_context: SourceReadContext | None = None,
-    cases: dict[str, Assum] | None = None,
-    scenario_acceptance: ScenarioAcceptance | None = None,
-) -> bool:
-    """``holdings=None`` (the pre-PR10 2-arg call shape every test/caller uses)
-    loads ``micro_thesis/holdings/<T>.json`` itself, same as before. ``main()``
-    now passes the SAME dict ``build()``'s Scenario sheet used, so a mid-run
-    file edit can never make the sheet and the persisted snapshot disagree —
-    a ticker with genuinely no holdings JSON still resolves to ``None`` either
-    way, so this collapses "not passed" and "no holdings on file" safely."""
+    artifact_promotion: ArtifactPromotion | None,
+    ticker: str | None,
+    repo_root: Path | None,
+    db_path: Path | None,
+    workbook_path: Path | None,
+    workbook_locator_path: Path | None,
+    input_receipt: ModelInputReceipt | None,
+    assumptions_path: Path | None,
+    source_context: SourceReadContext | None,
+    cases: dict[str, Assum] | None,
+    scenario_acceptance: ScenarioAcceptance | None,
+) -> tuple[Path, DcfRunRow, dict[str, float], ModelInputReceipt, SourceReadContext | None] | None:
+    """Build the verified persistence row under explicit owner authority.
+
+    ``None`` means the persistence dependency or model value was unavailable.
+    ``holdings=None`` (the pre-PR10 2-arg call shape every test/caller uses)
+    loads ``micro_thesis/holdings/<issuer>.json`` itself, same as before, and a
+    ticker with genuinely no holdings JSON still resolves to ``None``.
+    """
+    explicit_owner = _owner_explicit_injection(
+        ticker, repo_root, workbook_path, workbook_locator_path
+    )
+    if explicit_owner and db_path is None:
+        raise ValueError(
+            "explicit MELI owner authority requires an explicit db_path; refusing to "
+            "select an ambient or checkout database"
+        )
     if input_receipt is None:
         raise InputEvidenceError("model_input_receipt_required")
     if assumptions_path is None or input_receipt.assumptions_source_path != str(
@@ -472,9 +585,13 @@ def persist_dcf_run(
         raise InputEvidenceError("assumptions_authority_unavailable") from exc
     if current_source_hash != input_receipt.assumptions_source_sha256:
         raise InputEvidenceError("assumptions_authority_changed_after_review")
-    db = require_db_path(db_path)
+    issuer = _owner_ticker(ticker, explicit=explicit_owner)
+    root = _owner_root(repo_root)
+    workbook, live_workbook = _owner_workbook_paths(workbook_path, workbook_locator_path)
     if persist_mod is None or not m.vps:
-        return False
+        return None
+    db = require_db_path(db_path)
+    require_workbook_authority(workbook, live_workbook, artifact_promotion)
     recomputed = mirror(s)
     if recomputed != m:
         raise InputEvidenceError("model_output_input_mismatch")
@@ -491,7 +608,7 @@ def persist_dcf_run(
             for name, case in cases.items()
         }
         replay = replay_model_scenarios(
-            "MELI",
+            issuer,
             effective,
             model_output(effective),
             {"reviewed_scenario_inputs": scenario_vectors},
@@ -511,13 +628,12 @@ def persist_dcf_run(
     elif scenario_acceptance is not None:
         raise InputEvidenceError("reviewed_scenario_vectors_required")
     if holdings is None:
-        holdings = _load_holdings(T)
+        holdings = _load_holdings(issuer, repo_root=repo_root)
     mos: object = holdings.get("mos_bar") if holdings else None
     observed_at = price_observation.observed_at if price_observation is not None else None
     price_source = (
         price_observation.source_name if price_observation is not None else "assumption_seed"
     )
-    live_workbook = live_path_from_env(DEST)
     snap_payload: dict[str, object] = {
         "model": "meli_platform_sotp",
         "effective_model_inputs": effective,
@@ -552,11 +668,16 @@ def persist_dcf_run(
     reverse = reverse_valuation(s, m)
     if reverse is not None:
         snap_payload["reverse_valuation"] = reverse
+    snap_payload["committed_inputs"] = {
+        "schema_version": "dcf_committed_inputs.v1",
+        "family": MELI_FAMILY,
+        "inputs": normalize_family_vector(MELI_FAMILY, asdict(s)),
+    }
     snap = json.dumps(snap_payload, indent=2)
     provenance = build_file_provenance(
-        ticker=T,
-        repo_root=REPO,
-        workbook_path=DEST,
+        ticker=issuer,
+        repo_root=root,
+        workbook_path=workbook,
         workbook_locator_path=live_workbook,
         engine_version="meli_platform_sotp_v1",
         effective_inputs=model_parameters(s, input_receipt.recipe),
@@ -566,9 +687,9 @@ def persist_dcf_run(
         live_price_source=price_source,
         source_files=(
             (assumptions_path, "owner_assumptions"),
-            (REPO / "micro_thesis" / "holdings" / f"{T}.json", "holding_policy"),
+            (root / "micro_thesis" / "holdings" / f"{issuer}.json", "holding_policy"),
             *(
-                price_seed_source_files(REPO, price_observation)
+                price_seed_source_files(root, price_observation)
                 if price_observation is not None
                 else ()
             ),
@@ -581,7 +702,7 @@ def persist_dcf_run(
         scenario_acceptance=scenario_review,
     )
     row = persist_mod.DcfRunRow(
-        ticker=T,
+        ticker=issuer,
         valuation_date=date.today(),
         horizon_years=s.years,
         wacc=s.wacc,
@@ -597,6 +718,92 @@ def persist_dcf_run(
         provenance=provenance,
         calculated_at=calculated_at,
     )
+    resolved_source_context = (
+        source_context if source_context is not None else model_source_context()
+    )
+    return (db, row, effective, input_receipt, resolved_source_context)
+
+
+def prepare_persist_row(
+    s: Assum,
+    m: Mirror,
+    holdings: dict[str, object] | None,
+    price_observation: SpecializedPriceObservation | None,
+    *,
+    artifact_promotion: ArtifactPromotion | None,
+    ticker: str | None,
+    repo_root: Path | None,
+    db_path: Path | None,
+    workbook_path: Path | None,
+    workbook_locator_path: Path | None,
+    input_receipt: ModelInputReceipt | None,
+    assumptions_path: Path | None,
+    source_context: SourceReadContext | None,
+    cases: dict[str, Assum] | None,
+    scenario_acceptance: ScenarioAcceptance | None,
+) -> tuple[Path, DcfRunRow, dict[str, float], ModelInputReceipt, SourceReadContext | None] | None:
+    """Public typed seam: the exact verified (db, row, ...) a family save persists."""
+    return _prepare_meli_persist_row(
+        s,
+        m,
+        holdings,
+        price_observation,
+        artifact_promotion=artifact_promotion,
+        ticker=ticker,
+        repo_root=repo_root,
+        db_path=db_path,
+        workbook_path=workbook_path,
+        workbook_locator_path=workbook_locator_path,
+        input_receipt=input_receipt,
+        assumptions_path=assumptions_path,
+        source_context=source_context,
+        cases=cases,
+        scenario_acceptance=scenario_acceptance,
+    )
+
+
+def _persist_meli_result(
+    s: Assum,
+    m: Mirror,
+    holdings: dict[str, object] | None = None,
+    price_observation: SpecializedPriceObservation | None = None,
+    *,
+    artifact_promotion: ArtifactPromotion | None = None,
+    ticker: str | None = None,
+    repo_root: Path | None = None,
+    db_path: Path | None = None,
+    workbook_path: Path | None = None,
+    workbook_locator_path: Path | None = None,
+    input_receipt: ModelInputReceipt | None = None,
+    assumptions_path: Path | None = None,
+    source_context: SourceReadContext | None = None,
+    cases: dict[str, Assum] | None = None,
+    scenario_acceptance: ScenarioAcceptance | None = None,
+    pointer_promotion_factory: Callable[[DcfRunRevision], ArtifactPromotion] | None = None,
+) -> DcfPersistenceResult | None:
+    """Persist the verified prepared row; ``None`` only for unavailable
+    persistence dependency or model value, never a silent success."""
+    prepared = _prepare_meli_persist_row(
+        s,
+        m,
+        holdings,
+        price_observation,
+        artifact_promotion=artifact_promotion,
+        ticker=ticker,
+        repo_root=repo_root,
+        db_path=db_path,
+        workbook_path=workbook_path,
+        workbook_locator_path=workbook_locator_path,
+        input_receipt=input_receipt,
+        assumptions_path=assumptions_path,
+        source_context=source_context,
+        cases=cases,
+        scenario_acceptance=scenario_acceptance,
+    )
+    if prepared is None:
+        return None
+    assert persist_mod is not None
+    db, row, effective, receipt, resolved_source_context = prepared
     with (
         hold_writer_gate(db, owner=f"build_meli_platform_dcf:{T}"),
         connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn,
@@ -608,16 +815,112 @@ def persist_dcf_run(
             conn.execute("BEGIN IMMEDIATE")
         verify_meli_inputs(
             conn,
-            input_receipt,
+            receipt,
             effective_inputs=effective,
             as_of=datetime.now(UTC),
-            source_context=source_context if source_context is not None else model_source_context(),
+            source_context=resolved_source_context,
         )
         if not schema_supports_provenance(conn):
             raise InputEvidenceError("model_input_receipt_schema_unavailable")
+        if pointer_promotion_factory is not None:
+            return persist_mod.persist_run(
+                conn,
+                row,
+                artifact_promotion=artifact_promotion,
+                pointer_promotion_factory=pointer_promotion_factory,
+            )
         if artifact_promotion is None:
-            return persist_mod.upsert(conn, row)
-        return persist_mod.upsert(conn, row, artifact_promotion=artifact_promotion)
+            return persist_mod.persist_run(conn, row)
+        return persist_mod.persist_run(conn, row, artifact_promotion=artifact_promotion)
+
+
+def persist_dcf_run(
+    s: Assum,
+    m: Mirror,
+    holdings: dict[str, object] | None = None,
+    price_observation: SpecializedPriceObservation | None = None,
+    *,
+    artifact_promotion: ArtifactPromotion | None = None,
+    ticker: str | None = None,
+    repo_root: Path | None = None,
+    db_path: Path | None = None,
+    workbook_path: Path | None = None,
+    workbook_locator_path: Path | None = None,
+    input_receipt: ModelInputReceipt | None = None,
+    assumptions_path: Path | None = None,
+    source_context: SourceReadContext | None = None,
+    cases: dict[str, Assum] | None = None,
+    scenario_acceptance: ScenarioAcceptance | None = None,
+) -> bool:
+    """Legacy Boolean wrapper; keeps the historical False/no-op behavior.
+
+    No post-commit latest lookup: the Boolean is the exact receipt's
+    ``written`` flag, so an interleaved later save cannot rewrite it.
+    """
+    result = _persist_meli_result(
+        s,
+        m,
+        holdings,
+        price_observation,
+        artifact_promotion=artifact_promotion,
+        ticker=ticker,
+        repo_root=repo_root,
+        db_path=db_path,
+        workbook_path=workbook_path,
+        workbook_locator_path=workbook_locator_path,
+        input_receipt=input_receipt,
+        assumptions_path=assumptions_path,
+        source_context=source_context,
+        cases=cases,
+        scenario_acceptance=scenario_acceptance,
+    )
+    return result.written if result is not None else False
+
+
+def persist_dcf_run_with_receipt(
+    s: Assum,
+    m: Mirror,
+    holdings: dict[str, object] | None = None,
+    price_observation: SpecializedPriceObservation | None = None,
+    *,
+    ticker: str,
+    repo_root: Path,
+    db_path: Path,
+    workbook_path: Path,
+    workbook_locator_path: Path | None = None,
+    artifact_promotion: ArtifactPromotion | None = None,
+    input_receipt: ModelInputReceipt,
+    assumptions_path: Path,
+    source_context: SourceReadContext | None = None,
+    cases: dict[str, Assum] | None = None,
+    scenario_acceptance: ScenarioAcceptance | None = None,
+    pointer_promotion_factory: Callable[[DcfRunRevision], ArtifactPromotion] | None = None,
+) -> DcfPersistenceResult | None:
+    """Persist under explicit MELI owner authority and return the exact receipt.
+
+    ``None`` means the persistence dependency, model value, or review was
+    unavailable; callers must not treat that as a successful save. The returned
+    revision is the identity captured before the commit released the writer, so
+    an interleaved subsequent save cannot rewrite it.
+    """
+    return _persist_meli_result(
+        s,
+        m,
+        holdings,
+        price_observation,
+        artifact_promotion=artifact_promotion,
+        ticker=ticker,
+        repo_root=repo_root,
+        db_path=db_path,
+        workbook_path=workbook_path,
+        workbook_locator_path=workbook_locator_path,
+        input_receipt=input_receipt,
+        assumptions_path=assumptions_path,
+        source_context=source_context,
+        cases=cases,
+        scenario_acceptance=scenario_acceptance,
+        pointer_promotion_factory=pointer_promotion_factory,
+    )
 
 
 def model_source_context() -> SourceReadContext | None:
@@ -643,6 +946,7 @@ def load_verified_assumptions(
     source_context: SourceReadContext | None = None,
     retained_receipt: ModelInputReceipt | None = None,
     verification_output: Path | None = None,
+    overrides: Mapping[str, float | int] | None = None,
 ) -> tuple[Assum, ModelInputReceipt]:
     """Read one explicit reviewed artifact; no repo/data or DB-directory fallback.
 
@@ -673,6 +977,10 @@ def load_verified_assumptions(
         setattr(
             s, key, int(assumption.value) if key in {"years", "derive_capm"} else assumption.value
         )
+    if overrides is not None:
+        for key, val in overrides.items():
+            if hasattr(s, key):
+                setattr(s, key, int(val) if key in {"years", "derive_capm"} else float(val))
     # In verified builds no historical seed is offered as a current quote.
     s.price = 0.0
     s.price_seed_source = "unavailable"

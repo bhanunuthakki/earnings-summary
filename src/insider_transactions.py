@@ -36,7 +36,6 @@ import logging
 import re
 import sqlite3
 import time
-import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -307,9 +306,11 @@ def conviction_signals(
     window_days: int = 90,
     db_path: Path | str | None = None,
     conn: sqlite3.Connection | None = None,
+    as_of: datetime | None = None,
 ) -> list[ConvictionSignal]:
     """Score recent insider activity. Returns sorted by signal_strength desc."""
-    cutoff = datetime.now(UTC) - timedelta(days=window_days)
+    base = as_of if as_of is not None else datetime.now(UTC)
+    cutoff = base - timedelta(days=window_days)
     rows = fetch_transactions(ticker=ticker, since=cutoff, db_path=db_path, conn=conn)
 
     # Group by date for cluster detection
@@ -434,19 +435,43 @@ def fetch_form4_from_edgar(
         return []
 
     # Recent filings live in payload['filings']['recent'] as parallel arrays
-    recent = (payload.get("filings") or {}).get("recent") or {}
-    forms = recent.get("form") or []
-    accession_numbers = recent.get("accessionNumber") or []
-    filing_dates = recent.get("filingDate") or []
-    primary_docs = recent.get("primaryDocument") or []
+    filings_raw = payload.get("filings")
+    filings_dict: dict[str, object] = (
+        cast("dict[str, object]", filings_raw) if isinstance(filings_raw, dict) else {}
+    )
+    recent_raw = filings_dict.get("recent")
+    recent: dict[str, object] = (
+        cast("dict[str, object]", recent_raw) if isinstance(recent_raw, dict) else {}
+    )
+    forms: list[object] = (
+        cast("list[object]", recent.get("form")) if isinstance(recent.get("form"), list) else []
+    )
+    accession_numbers: list[object] = (
+        cast("list[object]", recent.get("accessionNumber"))
+        if isinstance(recent.get("accessionNumber"), list)
+        else []
+    )
+    filing_dates: list[object] = (
+        cast("list[object]", recent.get("filingDate"))
+        if isinstance(recent.get("filingDate"), list)
+        else []
+    )
+    primary_docs: list[object] = (
+        cast("list[object]", recent.get("primaryDocument"))
+        if isinstance(recent.get("primaryDocument"), list)
+        else []
+    )
 
     out: list[InsiderTransaction] = []
     until_iso = (until or datetime.now(UTC)).isoformat()
     since_iso = since.isoformat()
 
-    for form, acc, fdate, _pdoc in zip(
+    for form_obj, acc_obj, fdate_obj, _pdoc in zip(
         forms, accession_numbers, filing_dates, primary_docs, strict=False
     ):
+        form = str(form_obj)
+        acc = str(acc_obj)
+        fdate = str(fdate_obj)
         if form not in ("4", "4/A", "5", "5/A", "144"):
             continue
         if fdate < since_iso[:10] or fdate > until_iso[:10]:
@@ -458,8 +483,19 @@ def fetch_form4_from_edgar(
             time.sleep(sleep_between_requests)
             idx = _http_get_json(f"{archive_base}/index.json", user_agent=ua)
             xml_name: str | None = None
-            for item in (idx.get("directory") or {}).get("item") or []:
-                name = item.get("name") or ""
+            directory_raw = idx.get("directory")
+            directory_dict: dict[str, object] = (
+                cast("dict[str, object]", directory_raw) if isinstance(directory_raw, dict) else {}
+            )
+            items_raw = directory_dict.get("item")
+            items_list: list[object] = (
+                cast("list[object]", items_raw) if isinstance(items_raw, list) else []
+            )
+            for item in items_list:
+                item_dict: dict[str, object] = (
+                    cast("dict[str, object]", item) if isinstance(item, dict) else {}
+                )
+                name = str(item_dict.get("name") or "")
                 if name.endswith(".xml") and not name.endswith("index.xml"):
                     xml_name = name
                     break
@@ -476,14 +512,7 @@ def fetch_form4_from_edgar(
             )
             out.extend(parsed)
         except Exception as exc:
-            log.debug(
-                {
-                    "event": "form4_parse_skip",
-                    "ticker": ticker,
-                    "accession": acc,
-                    "error": str(exc),
-                }
-            )
+            log.debug(f"form4_parse_skip ticker={ticker} accession={acc} error={exc}")
             continue
     return out
 
@@ -669,8 +698,9 @@ def _lookup_cik_for_ticker(ticker: str, *, user_agent: str) -> str | None:
         for entry in payload.values():
             try:
                 if isinstance(entry, dict):
-                    t = str(entry.get("ticker") or "").upper()
-                    c = str(entry.get("cik_str") or "")
+                    e_dict = cast("dict[str, object]", entry)
+                    t = str(e_dict.get("ticker") or "").upper()
+                    c = str(e_dict.get("cik_str") or "")
                     if t and c:
                         _TICKER_CIK_CACHE[t] = c
             except (AttributeError, TypeError):
@@ -746,7 +776,11 @@ def _parse_dt(raw: object) -> datetime | None:
 def _float_or_none(v: object) -> float | None:
     if v is None or v == "":
         return None
-    try:
-        return float(v)  # type: ignore[arg-type]
-    except (ValueError, TypeError):
-        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, (str, bytes, bytearray)):
+        try:
+            return float(v)
+        except ValueError:
+            return None
+    return None

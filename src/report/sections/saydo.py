@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal, cast
 
+from report.file_capture import current_file_capture_session
 from report.models import (
     SayDoCard,
     SayDoHistoricalMetric,
@@ -107,6 +108,34 @@ def build(
 
 
 def _scan(tmp_dir: Path, ticker: str) -> list[SayDoCard]:
+    session = current_file_capture_session()
+    if session is not None:
+        comm = session.get_directory_selection("saydo_cards_tmp_v1", ticker)
+        if comm is not None:
+            found: list[SayDoCard] = []
+            for rel_path in comm.effective_winners.values():
+                name = Path(rel_path).name
+                m = _SAYDO_FILENAME_RX.match(name)
+                if not m:
+                    continue
+                text = session.read_text(rel_path)
+                rating = _parse_rating(text)
+                thesis_view = _parse_thesis_view(text)
+                attribution = _parse_attribution(text)
+                found.append(
+                    SayDoCard(
+                        current_quarter=f"Q{m.group('cq')}",
+                        current_year=int(m.group("cy")),
+                        prior_quarter=f"Q{m.group('pq')}",
+                        prior_year=int(m.group("py")),
+                        saydo_md=text,
+                        rating=rating,
+                        thesis_view=thesis_view,
+                        attribution=attribution,
+                    )
+                )
+            found.sort(key=lambda c: (c.current_year, c.current_quarter), reverse=True)
+            return found
     if not tmp_dir.exists():
         return []
     upper = ticker.upper()

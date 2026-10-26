@@ -419,4 +419,8 @@ def _stamp(dt: datetime) -> str:
 
 
 def _write_cache(path: Path, result: KeyMetricsResult) -> None:
-    path.write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")
+    from report.file_capture import hold_capture_write_set
+
+    repo_root = path.parents[2] if len(path.parents) >= 3 else path.parent
+    with hold_capture_write_set(repo_root, "capture-key-metrics"):
+        path.write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")

@@ -462,6 +462,13 @@ class QuarterContext(TypedDict):
 # ---------------------------------------------------------------------------
 
 
+def build_pairwise_analysis_prompt(
+    prev_summary: Mapping[str, object], curr_summary: Mapping[str, object], anchor_block: str = ""
+) -> str:
+    """Compose the SayDo pairwise prompt without issuing the LLM call."""
+    return _build_pairwise_analysis_prompt(prev_summary, curr_summary, anchor_block=anchor_block)
+
+
 def _build_pairwise_analysis_prompt(
     prev_summary: Mapping[str, object], curr_summary: Mapping[str, object], anchor_block: str = ""
 ) -> str:

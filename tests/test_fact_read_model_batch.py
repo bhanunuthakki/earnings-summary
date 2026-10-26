@@ -627,6 +627,41 @@ def test_batch_rejects_commit_and_rebegin_that_replaces_its_snapshot(
     assert not conn.in_transaction
 
 
+def test_batch_rejects_caller_transaction_commit_and_rebegin(
+    conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publication = _two_observation_publication()
+    SourceFactRepository(conn).publish(publication)
+    conn.commit()
+    conn.execute("BEGIN")
+    original = fact_read_model.verify_source_fact_publication
+
+    def replace_snapshot(
+        connection: sqlite3.Connection,
+        *,
+        publication_id: str,
+        cutoff: datetime,
+        observed_through: datetime | None = None,
+    ) -> VerifiedSourceFactPublication:
+        verified = original(
+            connection,
+            publication_id=publication_id,
+            cutoff=cutoff,
+            observed_through=observed_through,
+        )
+        assert connection.in_transaction
+        connection.commit()
+        connection.execute("BEGIN")
+        return verified
+
+    monkeypatch.setattr(fact_read_model, "verify_source_fact_publication", replace_snapshot)
+    with pytest.raises(RuntimeError, match="changed transaction state"):
+        FactReadModel(conn).provenance_bundles(
+            (publication.reported_facts[0].observation.observation_id,), cutoff=STAMP
+        )
+
+
 def test_batch_rejects_an_internal_write(
     conn: sqlite3.Connection,
     monkeypatch: pytest.MonkeyPatch,

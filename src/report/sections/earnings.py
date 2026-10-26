@@ -28,15 +28,16 @@ import json
 import logging
 import re
 import sqlite3
-import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
+from compute.earnings_surprise import surprise_scorecard_for
 from llm_client import is_hard_stop
 from provenance.selection import selected_transcripts_relation
+from report.file_capture import current_file_capture_session, read_captured_text
 from report.models import (
     EarningsSection,
     QuarterlyEarningsCard,
@@ -51,13 +52,6 @@ from report.sections._ts_signals import (
     format_signals_as_prompt_block,
     load_signals_for_metrics,
 )
-
-# The compute module lives in src/compute/, accessible because src/ is on the
-# sys.path (per pyproject.toml `pythonpath = ["src"]`).
-_PROJECT_SRC = str(Path(__file__).resolve().parents[2])
-if _PROJECT_SRC not in sys.path:
-    sys.path.insert(0, _PROJECT_SRC)
-from compute.earnings_surprise import surprise_scorecard_for  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -278,7 +272,17 @@ def _extract_digest(summary_md: str) -> str:
 
 
 def _scan_summaries(tmp_dir: Path, ticker: str) -> dict[tuple[int, int], str]:
-    out: dict[tuple[int, int], str] = {}
+    session = current_file_capture_session()
+    if session is not None:
+        comm = session.get_directory_selection("quarterly_summaries_tmp_v1", ticker)
+        if comm is not None:
+            out: dict[tuple[int, int], str] = {}
+            for rel_path in comm.effective_winners.values():
+                m = _SUMMARY_RX.match(Path(rel_path).name)
+                if m:
+                    out[(int(m.group("q")), int(m.group("y")))] = session.read_text(rel_path)
+            return out
+    out = {}
     if not tmp_dir.exists():
         return out
     upper = ticker.upper()
@@ -304,7 +308,17 @@ def _scan_transcripts(tr_root: Path, ticker: str) -> dict[tuple[int, int], str]:
     `raw/` second and only fill slots that processed/ left empty, matching the
     dual-dir convention `ingest_transcripts.py` already uses.
     """
-    out: dict[tuple[int, int], str] = {}
+    session = current_file_capture_session()
+    if session is not None:
+        comm = session.get_directory_selection("transcripts_dual_dir_v1", ticker)
+        if comm is not None:
+            out: dict[tuple[int, int], str] = {}
+            for rel_path in comm.effective_winners.values():
+                m = _TRANSCRIPT_RX.match(Path(rel_path).name)
+                if m:
+                    out[(int(m.group("q")), int(m.group("y")))] = str(session.repo_root / rel_path)
+            return out
+    out = {}
     upper = ticker.upper()
     for subdir in ("processed", "raw"):
         d = tr_root / subdir
@@ -616,10 +630,12 @@ def _earnings_metric_names(ticker: str, repo_root: Path) -> list[str]:
         "gross_profit",
     ]
     holdings_path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
-    if not holdings_path.exists():
+    try:
+        raw_text = read_captured_text(repo_root, holdings_path)
+    except FileNotFoundError:
         return names
     try:
-        holdings = cast("dict[str, object]", json.loads(holdings_path.read_text(encoding="utf-8")))
+        holdings = cast("dict[str, object]", json.loads(raw_text))
     except (OSError, json.JSONDecodeError):
         return names
     raw_kpis = holdings.get("tier_1_kpis")

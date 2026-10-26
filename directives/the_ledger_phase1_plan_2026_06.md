@@ -160,7 +160,7 @@ def detect_wondering(note: Note, *, db_path: str) -> WonderingVerdict:
 ```python
 # execution/capture_poller.py  (poll_once)
 if update.kind == "callback":
-    prefix, pid, verb = update.callback_data.split(":")   # "research:<id>:approve"
+    prefix, pid, verb = update.callback_data.split(":")  # "research:<id>:approve"
     if prefix == "research":
         _act_on_proposal(int(pid), verb, db_path=db_path)  # SAME core as the HTMX route
         telegram.answer_callback(update.callback_query_id)
@@ -286,13 +286,14 @@ The mitigation is **capability-by-construction, with assertions as a tripwire, n
 
 ```python
 import os
+
 # normalize both sides through normcase+realpath before comparing (win32, case-insensitive FS)
 gitdir = os.path.normcase(os.path.realpath(git_rev_parse_git_dir(worktree)))
 expected = os.path.normcase(os.path.realpath(os.path.join(repo, ".git", "worktrees", name)))
-assert gitdir == expected                                    # not <repo>/.git (MAIN)
+assert gitdir == expected  # not <repo>/.git (MAIN)
 
 # the REAL control is the constructed env, not this equality:
-assert db_paths.resolve_db_path(coder_env) == SCRUBBED_FIXTURE_DB   # tripwire
+assert db_paths.resolve_db_path(coder_env) == SCRUBBED_FIXTURE_DB  # tripwire
 # and, asserted from inside the spawned env, prod must be UNREACHABLE:
 #   resolve_db_path(prod_path) under coder_env  → FileNotFoundError
 ```
