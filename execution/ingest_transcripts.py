@@ -189,43 +189,46 @@ def _promote_raw_to_processed(
     new_rel = str(target.relative_to(project_root)).replace("\\", "/")
     fiscal_quarter = f"Q{parsed.quarter_idx}"
 
-    if target.exists():
-        src_sha = evidence_snapshot.capture_snapshot(src, src.parent).sha256
-        target_sha = evidence_snapshot.capture_snapshot(target, target.parent).sha256
-        if src_sha == target_sha:
-            os.remove(src)
-        else:
-            sys.stderr.write(
-                json.dumps(
-                    {
-                        "event": "transcript_promotion_conflict",
-                        "src": str(src.relative_to(project_root)).replace("\\", "/"),
-                        "target": new_rel,
-                        "src_sha256": src_sha,
-                        "target_sha256": target_sha,
-                        "document_id": result.document_id,
-                    }
-                )
-                + "\n"
-            )
-            return src
-    else:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(src, target)
+    from report.file_capture import hold_capture_write_set
 
-    conn.execute(
-        "UPDATE documents SET file_path = ? WHERE id = ?",
-        (new_rel, result.document_id),
-    )
-    if commit:
-        conn.commit()
-    index_manager.update_local_path(
-        ticker=parsed.ticker,
-        year=parsed.fiscal_year_label,
-        quarter=fiscal_quarter,
-        doc_type="transcript",
-        new_path=new_rel,
-    )
+    with hold_capture_write_set(project_root, "capture-transcripts"):
+        if target.exists():
+            src_sha = evidence_snapshot.capture_snapshot(src, src.parent).sha256
+            target_sha = evidence_snapshot.capture_snapshot(target, target.parent).sha256
+            if src_sha == target_sha:
+                os.remove(src)
+            else:
+                sys.stderr.write(
+                    json.dumps(
+                        {
+                            "event": "transcript_promotion_conflict",
+                            "src": str(src.relative_to(project_root)).replace("\\", "/"),
+                            "target": new_rel,
+                            "src_sha256": src_sha,
+                            "target_sha256": target_sha,
+                            "document_id": result.document_id,
+                        }
+                    )
+                    + "\n"
+                )
+                return src
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(src, target)
+
+        conn.execute(
+            "UPDATE documents SET file_path = ? WHERE id = ?",
+            (new_rel, result.document_id),
+        )
+        if commit:
+            conn.commit()
+        index_manager.update_local_path(
+            ticker=parsed.ticker,
+            year=parsed.fiscal_year_label,
+            quarter=fiscal_quarter,
+            doc_type="transcript",
+            new_path=new_rel,
+        )
     return target
 
 

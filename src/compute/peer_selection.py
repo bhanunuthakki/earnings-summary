@@ -527,9 +527,12 @@ def _fetch_peer_fundamentals(
                 )
                 return PeerFetchOutcome(fetched_any=fetched_any, fetched_complete=fetched_complete)
             if body is not None:
-                (fmp_dir / f"{peer}_{suffix}.json").write_text(
-                    json.dumps(body, indent=2), encoding="utf-8"
-                )
+                from report.file_capture import hold_capture_write_set
+
+                with hold_capture_write_set(repo_root, "capture-fmp-peers"):
+                    (fmp_dir / f"{peer}_{suffix}.json").write_text(
+                        json.dumps(body, indent=2), encoding="utf-8"
+                    )
                 peer_ok = True
             time.sleep(0.1)  # gentle on the free-tier rate limit
         if peer_ok:
@@ -638,4 +641,8 @@ def _stamp(dt: datetime) -> str:
 
 
 def _write_cache(path: Path, result: PeerSelectionResult) -> None:
-    path.write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")
+    from report.file_capture import hold_capture_write_set
+
+    repo_root = path.parents[2] if len(path.parents) >= 3 else path.parent
+    with hold_capture_write_set(repo_root, "capture-peer-selection"):
+        path.write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")

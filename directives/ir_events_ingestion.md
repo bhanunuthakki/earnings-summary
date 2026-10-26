@@ -63,9 +63,7 @@ capability, limits, pricing, licensing, and provenance. No qualifying source mea
 Use strict, frozen Pydantic-equivalent models with `extra='forbid'`.
 
 ```python
-EventKind = Literal[
-    "investor_day", "analyst_day", "capital_markets_day", "strategy_day"
-]
+EventKind = Literal["investor_day", "analyst_day", "capital_markets_day", "strategy_day"]
 EventStatus = Literal["scheduled", "rescheduled", "cancelled"]
 SourceTier = Literal[
     "publisher_event_authority",
@@ -73,14 +71,20 @@ SourceTier = Literal[
     "issuer_regulatory_announcement",
 ]
 AttemptStatus = Literal[
-    "ok", "not_found", "robots_denied", "rate_limited", "access_denied",
-    "contract_error", "transient_error", "unsupported", "stale",
+    "ok",
+    "not_found",
+    "robots_denied",
+    "rate_limited",
+    "access_denied",
+    "contract_error",
+    "transient_error",
+    "unsupported",
+    "stale",
 ]
-Disposition = Literal[
-    "inserted", "replayed", "superseded", "cancelled", "rejected", "conflict"
-]
+Disposition = Literal["inserted", "replayed", "superseded", "cancelled", "rejected", "conflict"]
 RunStatus = Literal["complete", "empty", "partial", "error", "disabled"]
 Freshness = Literal["fresh", "stale", "unavailable"]
+
 
 class IREventObservation(BaseModel):
     event_id: str
@@ -103,6 +107,7 @@ class IREventObservation(BaseModel):
     source_published_at: AwareDatetime | None
     observed_at: AwareDatetime
 
+
 class IRSourceAttempt(BaseModel):
     ticker: str
     source_tier: SourceTier
@@ -113,12 +118,14 @@ class IRSourceAttempt(BaseModel):
     record_count: int
     source_observation_id: str | None
 
+
 class IREventDisposition(BaseModel):
     event_id: str
     revision_id: str
     disposition: Disposition
     reason_code: str
     signal_id: int | None
+
 
 class IREventRunResult(BaseModel):
     schema_version: Literal["ir-events-run.v1"]

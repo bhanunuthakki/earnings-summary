@@ -1064,11 +1064,11 @@ _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
         # Work OS owns the existing Explore heading's token-sized title and top spacing.
         "pipeline/work_os_styles.py": "f69463a974adc26c6b9dc0e6230d539b312961bc004f81e31b8b63e75bc96c80",  # pragma: allowlist secret
         "report/renderers/workspace_charts.py": "e55dff6926088b1c08aa42dc69fad725a1f55c15d46a8d9f5c60e60f1773b13a",  # pragma: allowlist secret
-        "report/renderers/workspace_styles.py": "eefc919b64fe7ce4af879749c89de195f4a4979ea13d97b57a04b5616b94579a",  # pragma: allowlist secret
+        "report/renderers/workspace_styles.py": "6d6e96d84641aa6af6d9f012c03e9a376e722b062787cd2967ce1216e8990629",  # pragma: allowlist secret
         "ui/cite_marks.py": "0c45d7eefb5ef340b1ec58036f32ec4042f69c41473850fc8624f4968e95783e",  # pragma: allowlist secret
         "ui/controls.py": "bd7e8e9ed70a1d975f01bc2138b996a859608739fb385760d34480d571bc491a",  # pragma: allowlist secret
         "ui/living_grid.py": "e95fb454ffbc17e2d248d48f9b5e7563ecd7383a063ad94e0b3ef9088dab4374",  # pragma: allowlist secret
-        "ui/source_chip.py": "374338d4d1132239c3de1c91fb84f1214e87b57472f6c5df2c0582708792f141",  # pragma: allowlist secret
+        "ui/source_chip.py": "abdc206e0509fd80be699c9e9eb64d402148143b270a82e029ad3e47ada3f15f",  # pragma: allowlist secret
         "viewspec/render.py": "9de95e9c22f55c98882139eac2d179723666f00af84cd8945653b809fdb06cee",  # pragma: allowlist secret
     }
 )
@@ -1130,7 +1130,7 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "report/renderers/workspace_html.py": "867b089ceac45baa3dd1f72d35e74feba80f1af19ae6b8c4f4bdeeb2a5d60c05",  # pragma: allowlist secret
         "report/renderers/workspace_sections/company.py": "a2a7e88bb845c9eafa39e7673ac009ee3220e068430e91dc0160c3ef62b53551",  # pragma: allowlist secret
         "report/renderers/workspace_sections/thesis_risk.py": "ea6efda97e1eba69cdeb02e03744784f89ff7e606dcb86ccddceb1d4d12c0fea",  # pragma: allowlist secret
-        "report/renderers/workspace_styles.py": "c166389b6f9260cf74379856f43c0e903ba0c8a2f72837c5802a4f836189a8f0",  # pragma: allowlist secret
+        "report/renderers/workspace_styles.py": "cc0c55f03470cc70c4abdcc7792460cb5b56dd228a6730063b9687723219bd3c",  # pragma: allowlist secret
         "ui/cite_marks.py": "3f76335ae581654995341743785185a7c317ac131a9c2e95182775ba1c4a6a7d",  # pragma: allowlist secret
         "ui/controls.py": "e4480459ae842f18982fc17967c6c6673a87588887097786508ce94f17e2483d",  # pragma: allowlist secret
         "viewspec/render.py": "7c533b52604f1cd0ad7564644dbeee92631041a047434299cc88fcc32fbf7e74",  # pragma: allowlist secret

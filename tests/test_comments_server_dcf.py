@@ -314,6 +314,7 @@ def test_save_reports_committed_cleanup_warning_with_saved_inputs(
     saved = BASE_INPUTS.to_dict()
     saved["beta"] = 1.7
     saved["wacc"] = 0.14
+    revision = {"row_id": 42, "ticker": "NU", "input_sha256": "a" * 64}
 
     def committed_save(
         ticker: str, repo_root: Path, db_path: Path, inp: redesign.RedesignInputs
@@ -324,6 +325,7 @@ def test_save_reports_committed_cleanup_warning_with_saved_inputs(
             "inputs": saved,
             "recovery_required": True,
             "cleanup_warning": "retained accepted backup",
+            "model_revision": revision,
         }
 
     monkeypatch.setattr(refresh_dcf, "apply_edits", committed_save)
@@ -331,6 +333,7 @@ def test_save_reports_committed_cleanup_warning_with_saved_inputs(
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["saved"] is True and payload["recovery_required"] is True
+    assert payload["model_revision"] == revision
     assert payload["cleanup_warning"] == "retained accepted backup"
     assert payload["inputs"]["beta"] == 1.7
     assert payload["wacc"] == pytest.approx(0.14)

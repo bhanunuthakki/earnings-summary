@@ -61,7 +61,6 @@
     "execution/build_offline_artifacts.py",
     "execution/build_operational_reachability.py",
     "execution/build_redesigned_dcf.py",
-    "execution/build_saydo_pairs.py",
     "execution/build_wix_avdv_retrospective_checkpoint.py",
     "execution/canonicalize_segments.py",
     "execution/capture_approved_ir_document.py",

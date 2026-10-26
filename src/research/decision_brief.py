@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -39,7 +40,11 @@ from provenance.research_snapshot import (
     verify_research_snapshot,
 )
 from provenance.sec_filing_xbrl_ingest import file_uri_path
-from report.artifacts import ReportArtifactRef, validate_report_artifact_path
+from report.artifacts import (
+    ReportArtifactRef,
+    publication_eligibility,
+    validate_report_artifact_path,
+)
 from report.legacy_body import extract_legacy_reader_body
 from research.memo_claim_support import (
     MemoClaimSupportError,
@@ -1293,7 +1298,7 @@ def _verify_report_source_population(
             raise MemoEvidenceError("memo_report_requirement_declared_source_unused")
 
 
-def _assess_decision_brief(
+def _assess_report_content(
     conn: sqlite3.Connection,
     *,
     repo_root: Path,
@@ -1307,8 +1312,6 @@ def _assess_decision_brief(
         raise ValueError("memo cutoff must have a timezone")
     cutoff = as_of.astimezone(UTC)
     reasons: set[str] = set()
-    if artifact.publication_status == "draft_preview":
-        raise MemoEvidenceError("memo_draft_preview_not_accepted")
     body_path = repo_root / (artifact.body_path or "")
     try:
         validate_report_artifact_path(repo_root, body_path)
@@ -1565,12 +1568,20 @@ def _assess_decision_brief(
 
     valuation_run_id: int | None = None
     if not earnings_verified:
+        pinned_run_id = (
+            artifact.generation_context.model.row_id
+            if artifact.generation_context is not None
+            else context_review.model.run_id
+            if isinstance(context_review, MemoContextReviewV2) and context_review.model is not None
+            else None
+        )
         valuation = load_valuation_readiness(
             conn,
             artifact.ticker,
             as_of=cutoff,
             purpose="analyst_memo",
             source_context=source_context,
+            run_id=pinned_run_id,
         )
         valuation_run_id = valuation.run_id
         if not valuation.ready:
@@ -1579,7 +1590,7 @@ def _assess_decision_brief(
                 reasons.add("memo_valuation_not_verified")
         # Ordinary investment memos retain the exact model/source closure.
         try:
-            grade = load_dcf_verification_evidence(conn, artifact.ticker)
+            grade = load_dcf_verification_evidence(conn, artifact.ticker, run_id=pinned_run_id)
             receipt_raw = (grade.provenance or {}).get("model_input_receipt")
             if receipt_raw is None:
                 raise MemoEvidenceError("memo_model_input_receipt_missing")
@@ -1655,6 +1666,28 @@ def _assess_decision_brief(
     )
 
 
+def _assess_decision_brief(
+    conn: sqlite3.Connection,
+    *,
+    repo_root: Path,
+    artifact: ReportArtifactRef,
+    as_of: datetime,
+    context_review: MemoContextReview | MemoContextReviewV2 | None = None,
+    source_context: SourceReadContext | None = None,
+) -> DecisionBriefReadiness:
+    eligibility = publication_eligibility(repo_root, artifact, as_of=as_of)
+    if not eligibility.eligible:
+        raise MemoEvidenceError(eligibility.reason_code or "memo_publication_unverified")
+    return _assess_report_content(
+        conn,
+        repo_root=repo_root,
+        artifact=artifact,
+        as_of=as_of,
+        context_review=context_review,
+        source_context=source_context,
+    )
+
+
 def assess_decision_brief(
     conn: sqlite3.Connection,
     *,
@@ -1664,7 +1697,54 @@ def assess_decision_brief(
     context_review: MemoContextReview | MemoContextReviewV2 | None = None,
     source_context: SourceReadContext | None = None,
 ) -> DecisionBriefReadiness:
-    """Hold one read snapshot across every gate; preserve caller transactions."""
+    """Verify a published report through the shared eligibility and content owners."""
+    return _assess_snapshot(
+        conn,
+        artifact,
+        as_of,
+        lambda: _assess_decision_brief(
+            conn,
+            repo_root=repo_root,
+            artifact=artifact,
+            as_of=as_of,
+            context_review=context_review,
+            source_context=source_context,
+        ),
+    )
+
+
+def assess_candidate_decision_brief(
+    conn: sqlite3.Connection,
+    *,
+    repo_root: Path,
+    artifact: ReportArtifactRef,
+    as_of: datetime,
+    context_review: MemoContextReview | MemoContextReviewV2 | None = None,
+    source_context: SourceReadContext | None = None,
+) -> DecisionBriefReadiness:
+    """Run identical content checks on a candidate without granting publication."""
+    return _assess_snapshot(
+        conn,
+        artifact,
+        as_of,
+        lambda: _assess_report_content(
+            conn,
+            repo_root=repo_root,
+            artifact=artifact,
+            as_of=as_of,
+            context_review=context_review,
+            source_context=source_context,
+        ),
+    )
+
+
+def _assess_snapshot(
+    conn: sqlite3.Connection,
+    artifact: ReportArtifactRef,
+    as_of: datetime,
+    assessor: Callable[[], DecisionBriefReadiness],
+) -> DecisionBriefReadiness:
+    """Hold one read snapshot and retain the same failure contract for both paths."""
     if as_of.tzinfo is None:
         raise ValueError("memo cutoff must have a timezone")
     owns_snapshot = not conn.in_transaction
@@ -1672,14 +1752,7 @@ def assess_decision_brief(
         conn.execute("BEGIN")
     try:
         try:
-            return _assess_decision_brief(
-                conn,
-                repo_root=repo_root,
-                artifact=artifact,
-                as_of=as_of,
-                context_review=context_review,
-                source_context=source_context,
-            )
+            return assessor()
         except MemoEvidenceError as exc:
             return DecisionBriefReadiness(
                 artifact_id=artifact.artifact_id,

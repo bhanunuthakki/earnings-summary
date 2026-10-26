@@ -609,13 +609,15 @@ class FactReadModel:
         initial_changes = self._conn.total_changes
         initial_factory = self._conn.row_factory
         caller_transaction = self._conn.in_transaction
+        borrow_snapshot = bool(getattr(self._conn, "protected_read_snapshot_active", False))
         savepoint_active = False
         completed = False
         try:
-            if not caller_transaction:
-                self._conn.execute("BEGIN")
-            self._conn.execute("SAVEPOINT fact_read_model_batch_guard")
-            savepoint_active = True
+            if not borrow_snapshot:
+                if not caller_transaction:
+                    self._conn.execute("BEGIN")
+                self._conn.execute("SAVEPOINT fact_read_model_batch_guard")
+                savepoint_active = True
             reader = _BatchFactReadModel(self._conn, source_context=self._source_context)
             results: list[ProvenanceBundleRead] = []
             for observation_id in observation_ids:
@@ -656,16 +658,20 @@ class FactReadModel:
                 initial_changes=initial_changes,
                 initial_factory=initial_factory,
             )
-            try:
-                self._conn.execute("RELEASE SAVEPOINT fact_read_model_batch_guard")
-            except sqlite3.OperationalError as exc:
-                raise RuntimeError("batch provenance read changed transaction state") from exc
-            savepoint_active = False
+            if savepoint_active:
+                try:
+                    self._conn.execute("RELEASE SAVEPOINT fact_read_model_batch_guard")
+                except sqlite3.OperationalError as exc:
+                    raise RuntimeError("batch provenance read changed transaction state") from exc
+                savepoint_active = False
             completed = True
             return tuple(results)
         finally:
             state_error: RuntimeError | None = None
-            if caller_transaction:
+            if borrow_snapshot:
+                if not self._conn.in_transaction:
+                    state_error = RuntimeError("batch provenance read closed its read snapshot")
+            elif caller_transaction:
                 if savepoint_active:
                     try:
                         self._conn.execute("ROLLBACK TO SAVEPOINT fact_read_model_batch_guard")

@@ -260,19 +260,22 @@ def _load_saydo_filter_cache(repo_root: Path, ticker: str, cache_key: str) -> li
 
 
 def _save_saydo_filter_cache(repo_root: Path, ticker: str, cache_key: str, ids: list[str]) -> None:
+    from report.file_capture import hold_capture_write_set
+
     path = _saydo_filter_cache_path(repo_root, ticker)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    existing: dict[str, object] = {"by_key": {}}
-    if path.exists():
-        try:
-            loaded = cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
-            if isinstance(loaded.get("by_key"), dict):
-                existing = loaded
-        except (OSError, json.JSONDecodeError):
-            pass
-    by_key = cast("dict[str, object]", existing["by_key"])
-    by_key[cache_key] = ids
-    path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    with hold_capture_write_set(repo_root, "capture-saydo-filter"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existing: dict[str, object] = {"by_key": {}}
+        if path.exists():
+            try:
+                loaded = cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
+                if isinstance(loaded.get("by_key"), dict):
+                    existing = loaded
+            except (OSError, json.JSONDecodeError):
+                pass
+        by_key = cast("dict[str, object]", existing["by_key"])
+        by_key[cache_key] = ids
+        path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
 
 
 _JSON_ARRAY_RX = re.compile(r"\[[^\[\]]*\]", re.DOTALL)
@@ -918,7 +921,9 @@ def _load_open_notes(ticker: str, conn: sqlite3.Connection) -> list[AnalystNoteR
     return sorted(rows, key=lambda note: kind_rank.get(note.kind, 9))
 
 
-def load_graded_sell_base_rate(ticker: str, db_path: Path) -> str | None:
+def load_graded_sell_base_rate(
+    ticker: str, db_path: Path | None, *, conn: sqlite3.Connection | None = None
+) -> str | None:
     """The graded-sells base-rate line for the Position-tab coaching block, or
     None when unavailable.
 
@@ -927,7 +932,7 @@ def load_graded_sell_base_rate(ticker: str, db_path: Path) -> str | None:
     renderer never hard-depends on a module that may not exist yet. Any
     failure (missing module, missing DB, missing table) degrades to None and
     the caller skips the line silently (spec: "do not fail if it's missing")."""
-    if not db_path.exists():
+    if conn is None and (db_path is None or not db_path.exists()):
         return None
     try:
         from advisor.position_review import graded_sell_record
@@ -938,7 +943,7 @@ def load_graded_sell_base_rate(ticker: str, db_path: Path) -> str | None:
         # sell/trim pattern, not this name) — ``ticker`` stays in this loader's
         # signature for the per-ticker P3 call shape but doesn't scope the SQL.
         del ticker
-        result = cast("object", graded_sell_record(db_path))
+        result = cast("object", graded_sell_record(db_path, conn=conn))
     except sqlite3.Error:
         return None
     return cast("str | None", result)

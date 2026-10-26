@@ -537,7 +537,7 @@ def build_brief_library(
     """Return one bounded page of all persisted research artifacts."""
 
     index = load_report_artifact_index(repo_root)
-    current = latest_report_artifacts(index)
+    current = latest_report_artifacts(index, repo_root=repo_root)
     earnings_rows = _earnings_artifacts(conn)
     draft_tickers = {name.group("ticker") for _, _, name in _working_draft_files(repo_root)}
     all_tickers = (

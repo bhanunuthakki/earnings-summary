@@ -205,23 +205,26 @@ def process_document(doc: dict[str, Any], dry_run: bool = False) -> bool:
         else:
             result_text = config["llm_fn"](text)
 
-        pending_cache = cache.with_suffix(".pending")
-        try:
-            pending_cache.write_text(result_text, encoding="utf-8")
-            pending_cache.replace(cache)
-        finally:
-            pending_cache.unlink(missing_ok=True)
+        from report.file_capture import hold_capture_write_set
 
-        cache.with_suffix(".source.json").write_text(
-            json.dumps(
-                {
-                    "source_text_identity": source_text_projection_identity(local_path),
-                    "source_sha256": source_sha256,
-                    "summary_sha256": hashlib.sha256(cache.read_bytes()).hexdigest(),
-                }
-            ),
-            encoding="utf-8",
-        )
+        with hold_capture_write_set(PROJECT_ROOT, "capture-tmp-summaries"):
+            pending_cache = cache.with_suffix(".pending")
+            try:
+                pending_cache.write_text(result_text, encoding="utf-8")
+                pending_cache.replace(cache)
+            finally:
+                pending_cache.unlink(missing_ok=True)
+
+            cache.with_suffix(".source.json").write_text(
+                json.dumps(
+                    {
+                        "source_text_identity": source_text_projection_identity(local_path),
+                        "source_sha256": source_sha256,
+                        "summary_sha256": hashlib.sha256(cache.read_bytes()).hexdigest(),
+                    }
+                ),
+                encoding="utf-8",
+            )
         log.info({"event": "cached", "cache": str(cache)})
         _mark_processed(doc)
         time.sleep(RATE_LIMIT_SLEEP)

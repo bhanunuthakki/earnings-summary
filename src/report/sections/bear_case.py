@@ -22,6 +22,7 @@ The on-disk cache existed pre-Phase-A as a sidecar for cross-section anchoring
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -33,6 +34,7 @@ from typing import Any, cast
 
 from llm.prompt_versions import prompt_version_for
 from llm_client import generate_bear_case, is_hard_stop, load_ir_anchor
+from report.file_capture import hold_capture_write_set
 from report.models import (
     BearCaseSection,
     EarningsSection,
@@ -68,17 +70,27 @@ def build(
     force_refresh: bool = False,
     force_budget_bypass: bool = False,
     conn: sqlite3.Connection | None = None,
+    candidate_mode: bool = False,
 ) -> BearCaseSection:
+    input_digest = _bear_inputs_sha256(
+        ticker=ticker,
+        repo_root=repo_root,
+        thesis=thesis,
+        financials=financials,
+        segments=segments,
+        earnings=earnings,
+        conn=conn,
+    )
     # Serve a valid on-disk cache regardless of enable_llm so a non-LLM build
     # (the default) still surfaces a previously-generated bear case instead of
     # blanking the section. Mirrors company_description's unconditional cache
     # read; force_refresh bypasses the cache to force a fresh LLM call.
     if not force_refresh:
-        cached = _read_cache(ticker, repo_root, cache_ttl_days)
+        cached = _read_cache(ticker, repo_root, cache_ttl_days, input_digest=input_digest)
         if cached is not None:
             return cached
 
-    if not enable_llm:
+    if not enable_llm or candidate_mode:
         return BearCaseSection(
             status=SectionStatus.LLM_PENDING,
             missing=missing(
@@ -121,7 +133,7 @@ def build(
             financials_table_md=_financials_md(financials),
             segments_table_md=_segments_md(segments),
             kpi_status_md=_kpi_status_md(thesis),
-            ticker_specific_md=_ticker_specific_md(ticker, repo_root),
+            ticker_specific_md=_ticker_specific_md(ticker, repo_root, conn=conn),
             ts_signals_md=_ts_signals_md(ticker, repo_root, conn=conn),
             ir_anchor_md=load_ir_anchor(repo_root, ticker),
             repo_root=repo_root,
@@ -149,7 +161,8 @@ def build(
     # modes via load_bear_anchor() — see llm_client.py.
     try:
         parsed = _parse_response(response_text)
-        _cache_bear_response(ticker, repo_root, response_text)
+        if not candidate_mode:
+            _cache_bear_response(ticker, repo_root, response_text, input_digest=input_digest)
         return parsed
     except (json.JSONDecodeError, ValueError) as exc:
         # A transient empty / unparseable LLM response must fail at SECTION
@@ -188,15 +201,51 @@ def _degraded_bear(ticker: str, detail: str) -> BearCaseSection:
     )
 
 
-def _research_contract() -> dict[str, object]:
+def _research_contract(*, input_digest: str | None = None) -> dict[str, object]:
     """Legacy unmarked output cannot claim the current prompt method."""
-    return {
+    contract: dict[str, object] = {
         "prompt_version": prompt_version_for("bear_case"),
         "method": load_research_method("company").as_dict(),
     }
+    if input_digest is not None:
+        contract["input_digest"] = input_digest
+        contract["dependency_digest"] = input_digest
+    return contract
 
 
-def _read_cache(ticker: str, repo_root: Path, cache_ttl_days: int) -> BearCaseSection | None:
+def _bear_inputs_sha256(
+    *,
+    ticker: str,
+    repo_root: Path,
+    thesis: ThesisSection,
+    financials: FinancialsSection,
+    segments: SegmentsSection,
+    earnings: EarningsSection,
+    conn: sqlite3.Connection | None = None,
+) -> str:
+    payload = {
+        "ticker": ticker.upper(),
+        "thesis": thesis.thesis_full or "",
+        "break_conditions": list(thesis.break_conditions),
+        "last_quarter_summaries": _last_summaries(earnings, n=4),
+        "financials_table_md": _financials_md(financials),
+        "segments_table_md": _segments_md(segments),
+        "kpi_status_md": _kpi_status_md(thesis),
+        "ticker_specific_md": _ticker_specific_md(ticker, repo_root, conn=conn),
+        "ts_signals_md": _ts_signals_md(ticker, repo_root, conn=conn),
+        "ir_anchor_md": load_ir_anchor(repo_root, ticker),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _read_cache(
+    ticker: str,
+    repo_root: Path,
+    cache_ttl_days: int,
+    *,
+    input_digest: str | None = None,
+) -> BearCaseSection | None:
     """Read data/bear_case/<TICKER>.json if it exists and is younger than TTL.
 
     Returns a parsed BearCaseSection on hit, None on miss / stale / unreadable.
@@ -216,7 +265,18 @@ def _read_cache(ticker: str, repo_root: Path, cache_ttl_days: int) -> BearCaseSe
         return None
     try:
         payload = _loads_first_json_object(raw)
-        if payload.get("_research_contract") != _research_contract():
+        contract = payload.get("_research_contract")
+        if not isinstance(contract, dict):
+            return None
+        contract_dict = cast("dict[str, object]", contract)
+        base = _research_contract()
+        if (
+            contract_dict.get("prompt_version") != base["prompt_version"]
+            or contract_dict.get("method") != base["method"]
+        ):
+            return None
+        cached_digest = contract_dict.get("input_digest") or contract_dict.get("dependency_digest")
+        if input_digest is not None and (cached_digest is None or cached_digest != input_digest):
             return None
         return _parse_response(raw)
     except (json.JSONDecodeError, ValueError):
@@ -224,21 +284,28 @@ def _read_cache(ticker: str, repo_root: Path, cache_ttl_days: int) -> BearCaseSe
         return None
 
 
-def _cache_bear_response(ticker: str, repo_root: Path, response_text: str) -> None:
+def _cache_bear_response(
+    ticker: str,
+    repo_root: Path,
+    response_text: str,
+    *,
+    input_digest: str | None = None,
+) -> None:
     """Persist the LLM's raw JSON to data/bear_case/<TICKER>.json. Best-effort:
     a write failure does not break the report build (the bear case section
     still renders from the parsed in-memory payload)."""
     try:
         payload = _loads_first_json_object(response_text)
         _parse_response(response_text)
-        payload["_research_contract"] = _research_contract()
+        payload["_research_contract"] = _research_contract(input_digest=input_digest)
     except (json.JSONDecodeError, ValueError):
         return
     out_dir = repo_root / "data" / "bear_case"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{ticker.upper()}.json"
     try:
-        out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        with hold_capture_write_set(repo_root, "capture-bear-cache"):
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / f"{ticker.upper()}.json"
+            out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     except OSError:
         return
 
@@ -262,7 +329,12 @@ def _ts_signals_md(
     return format_signals_as_prompt_block(signals, heading="Time-Series Disconfirmation Candidates")
 
 
-def _ticker_specific_md(ticker: str, repo_root: Path) -> str:
+def _ticker_specific_md(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> str:
     """Concatenate any per-ticker enhancement JSONs + investor-deck targets
     into prompt-ready markdown.
 
@@ -282,7 +354,7 @@ def _ticker_specific_md(ticker: str, repo_root: Path) -> str:
     """
     parts: list[str] = []
 
-    targets_block = _strategic_targets_md(ticker, repo_root)
+    targets_block = _strategic_targets_md(ticker, repo_root, conn=conn)
     if targets_block:
         parts.append(targets_block)
 
@@ -298,25 +370,36 @@ def _ticker_specific_md(ticker: str, repo_root: Path) -> str:
     return "\n\n".join(parts)
 
 
-def _strategic_targets_md(ticker: str, repo_root: Path) -> str:
+def _strategic_targets_md(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> str:
     """Render strategic_targets rows for `ticker` as a markdown block.
 
     Returns '' when the table is missing (fresh repo / migration not run),
     when the ticker has no rows, or on any read error — the section degrades
     gracefully so a missing DB doesn't break the report.
     """
-    db_path = repo_root / "data" / "portfolio.db"
-    if not db_path.exists():
-        return ""
+    owns_conn = conn is None
+    if owns_conn:
+        db_path = repo_root / "data" / "portfolio.db"
+        if not db_path.exists():
+            return ""
     try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        active_conn = (
+            connect_sqlite(repo_root / "data" / "portfolio.db", role=SQLiteConnectionRole.READ_ONLY)
+            if conn is None
+            else conn
+        )
         try:
-            present = conn.execute(
+            present = active_conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='strategic_targets'"
             ).fetchone()
             if present is None:
                 return ""
-            rows = conn.execute(
+            rows = active_conn.execute(
                 """
                 SELECT target_kind, target_value, target_unit, target_period,
                        target_currency, narrative_excerpt
@@ -327,7 +410,8 @@ def _strategic_targets_md(ticker: str, repo_root: Path) -> str:
                 (ticker.upper(),),
             ).fetchall()
         finally:
-            conn.close()
+            if owns_conn:
+                active_conn.close()
     except sqlite3.Error as exc:
         log.debug(
             {

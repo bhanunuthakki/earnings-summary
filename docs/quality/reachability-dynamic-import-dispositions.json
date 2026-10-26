@@ -113,8 +113,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Windows evidence path lazily loads the platform msvcrt module.",
-      "fingerprint": "0e2c209228fefccc7cd1cd7b655baac8462ab20b077bd6eb108160cff2d65784",
-      "line": 80,
+      "fingerprint": "5307d08cde8926235804e3b968abe921291a44f3e8d30d7263366afa56062d8f",
+      "line": 91,
       "path": "src/compute/evidence_snapshot.py",
       "targets": [
         "msvcrt"
@@ -297,7 +297,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "5da5bf1ca1667a8ec913e9a174ceb6139e6f8560df53a5358c0356e05e75f975",
+      "source_sha256": "c0530460db94c9b16e78cf2524810050ecf7219293b5ba5532cb2fbec5672017",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

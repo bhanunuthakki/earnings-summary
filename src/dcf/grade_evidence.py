@@ -525,22 +525,26 @@ def _market_price_consistent(
     return price_matches and clock_matches
 
 
-def load_dcf_grade_evidence(conn: sqlite3.Connection, ticker: str) -> DcfGradeEvidence:
-    """Read the bounded public display projection of the latest consolidated row."""
-    return _load_dcf_evidence(conn, ticker, verification=False)
+def load_dcf_grade_evidence(
+    conn: sqlite3.Connection, ticker: str, *, run_id: int | None = None
+) -> DcfGradeEvidence:
+    """Read the bounded display projection of a pinned or latest consolidated row."""
+    return _load_dcf_evidence(conn, ticker, verification=False, run_id=run_id)
 
 
-def load_dcf_verification_evidence(conn: sqlite3.Connection, ticker: str) -> DcfGradeEvidence:
+def load_dcf_verification_evidence(
+    conn: sqlite3.Connection, ticker: str, *, run_id: int | None = None
+) -> DcfGradeEvidence:
     """Read exact internal receipts; oversized evidence is unavailable, never truncated.
 
     This does not grade a run. The readiness owner must still validate its
     sources, receipt, scenario acceptance, market price and numerical replay.
     """
-    return _load_dcf_evidence(conn, ticker, verification=True)
+    return _load_dcf_evidence(conn, ticker, verification=True, run_id=run_id)
 
 
 def _load_dcf_evidence(
-    conn: sqlite3.Connection, ticker: str, *, verification: bool
+    conn: sqlite3.Connection, ticker: str, *, verification: bool, run_id: int | None = None
 ) -> DcfGradeEvidence:
     """Share row selection, decoding and attribution between the two readers."""
 
@@ -570,7 +574,7 @@ def _load_dcf_evidence(
                    sanity_flag, assumption_snapshot_json, provenance_json, npv
             FROM dcf_runs
             WHERE UPPER(ticker) = ?
-              AND COALESCE(is_latest, 1) = 1
+              AND ((? IS NULL AND COALESCE(is_latest, 1) = 1) OR id = ?)
               AND COALESCE(segment_name, '') = ''
             ORDER BY created_at DESC, id DESC
             LIMIT 1
@@ -583,13 +587,13 @@ def _load_dcf_evidence(
                    sanity_flag, assumption_snapshot_json, provenance_json, NULL AS npv
             FROM dcf_runs
             WHERE UPPER(ticker) = ?
-              AND COALESCE(is_latest, 1) = 1
+              AND ((? IS NULL AND COALESCE(is_latest, 1) = 1) OR id = ?)
               AND COALESCE(segment_name, '') = ''
             ORDER BY created_at DESC, id DESC
             LIMIT 1
             """
         )
-        row = conn.execute(query, (normalized_ticker,)).fetchone()
+        row = conn.execute(query, (normalized_ticker, run_id, run_id)).fetchone()
     except sqlite3.Error:
         return DcfGradeEvidence(
             status="invalid",

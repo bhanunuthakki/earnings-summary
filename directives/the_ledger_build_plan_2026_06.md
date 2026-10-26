@@ -73,7 +73,7 @@ Rationale for a scheduled task over a thread: the repo's whole async philosophy 
 # src/capture/transcribe.py — model loaded ONCE at poller start (module global), not per-message
 FFMPEG = os.environ.get("FFMPEG_LOCATION", r"C:/ffmpeg/bin") + "/ffmpeg.exe"
 subprocess.run([FFMPEG, "-y", "-i", oga_path, "-ar", "16000", "-ac", "1", wav_path], check=True)
-text = _MODEL.transcribe(wav_path)[0]   # WhisperModel("base", device="cpu", compute_type="int8")
+text = _MODEL.transcribe(wav_path)[0]  # WhisperModel("base", device="cpu", compute_type="int8")
 ```
 
 ### 2.3 The capture pipeline
@@ -109,8 +109,8 @@ def ingest_capture(*, channel, external_ref, media_kind, audio_path=None, db_pat
 ```python
 _PATTERNS = [
     (re.compile(r"\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b"), "[redacted-phone]"),
-    (re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"),          "[redacted-email]"),
-    (re.compile(r"\b\d{8,17}\b"),                      "[redacted-acct]"),
+    (re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"), "[redacted-email]"),
+    (re.compile(r"\b\d{8,17}\b"), "[redacted-acct]"),
 ]
 ```
 
@@ -119,7 +119,7 @@ _PATTERNS = [
 **Land** via `user_state.notes.create_note` — the single durable write path (validates `kind`/`source`, upper-cases ticker, JSON-encodes context, `status='open'`). We extend two tuples (code, no migration, since the columns have no CHECK):
 
 ```python
-NOTE_KINDS   = ("question", "decision", "watch", "assumption", "observation", "musing")
+NOTE_KINDS = ("question", "decision", "watch", "assumption", "observation", "musing")
 NOTE_SOURCES = ("comment", "chat", "alert", "manual", "advisor", "capture")
 ```
 

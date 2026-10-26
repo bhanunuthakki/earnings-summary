@@ -13,6 +13,7 @@ import sqlite3
 from pathlib import Path
 from typing import Literal, cast
 
+from report.file_capture import current_file_capture_session
 from report.models import (
     IrDocCard,
     IrDocsSection,
@@ -56,6 +57,31 @@ def build(
 
 
 def _scan_briefs(tmp_dir: Path, ticker: str) -> list[IrDocCard]:
+    session = current_file_capture_session()
+    if session is not None:
+        comm = session.get_directory_selection("ir_briefs_tmp_v1", ticker)
+        if comm is not None:
+            cards: list[IrDocCard] = []
+            for rel_path in comm.effective_winners.values():
+                name = Path(rel_path).name
+                m = _BRIEF_RX.match(name)
+                if not m:
+                    continue
+                kind = m.group("kind")
+                if kind not in _KIND_TO_DOCTYPE:
+                    continue
+                summary = session.read_text(rel_path)
+                cards.append(
+                    IrDocCard(
+                        quarter=f"Q{m.group('q')}",
+                        year=int(m.group("y")),
+                        doc_type=_KIND_TO_DOCTYPE[kind],
+                        summary_md=summary,
+                        local_path=str(session.repo_root / rel_path),
+                    )
+                )
+            cards.sort(key=lambda c: (c.year, c.quarter, c.doc_type))
+            return cards
     if not tmp_dir.exists():
         return []
     upper = ticker.upper()
