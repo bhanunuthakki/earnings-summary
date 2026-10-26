@@ -56,6 +56,30 @@ def configured_db_path(
     return (repo_root / "data" / "portfolio.db").resolve()
 
 
+def require_product_db_path(
+    project_root: Path,
+    *,
+    explicit: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> Path:
+    """Select the product database, never the checkout-default fallback.
+
+    The selection is compared before it is resolved: a deployed checkout's
+    ``data/`` may be a junction to product state, so resolving first would hide
+    a checkout-default choice.
+    """
+    source = os.environ if environ is None else environ
+    configured = source.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
+    selected = explicit if explicit is not None else Path(configured) if configured else None
+    if selected is None:
+        raise ValueError("EARNINGS_SUMMARY_DB_PATH is required when no database path is given")
+    selected = selected.expanduser()
+    checkout_default = project_root / "data" / "portfolio.db"
+    if Path(os.path.abspath(selected)) == Path(os.path.abspath(checkout_default)):
+        raise ValueError(f"refusing the checkout-default database {selected}")
+    return selected.resolve()
+
+
 @contextmanager
 def db_path_context(db_path: Path | str | None) -> Generator[None]:
     """Scope every ``resolve_db_path(None)`` inside the block to ``db_path``.

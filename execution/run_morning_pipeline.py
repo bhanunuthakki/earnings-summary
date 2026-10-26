@@ -107,7 +107,7 @@ except ImportError:
     # runpy.run_path from outside the checkout has neither import root.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from execution._lib import PROJECT_ROOT
-from db_paths import configured_db_path
+from db_paths import require_product_db_path
 from llm import tracectx
 from pipeline.morning_manifest import (
     STAGE_MANIFEST,
@@ -782,8 +782,11 @@ def main(argv: list[str] | None = None) -> int:
     t0 = time.monotonic()
 
     # Resolve DB path early — needed for run accounting.
-    configured_path = configured_db_path(PROJECT_ROOT)
-    db_path = args.db_path.expanduser().resolve() if args.db_path is not None else configured_path
+    try:
+        db_path = require_product_db_path(PROJECT_ROOT, explicit=args.db_path)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     args.db_path = db_path
     args.repo_root = args.repo_root.expanduser().resolve()
     return _run_pipeline(args, db_path=db_path, t0=t0)
