@@ -227,6 +227,15 @@ def _isolated_resume_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     )
 
 
+@pytest.fixture(autouse=True)
+def _configured_product_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Name a disposable product DB; the checkout-default fallback is forbidden.
+
+    Stages are faked, so nothing opens this path.
+    """
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(tmp_path / "configured" / "portfolio.db"))
+
+
 class _PipelineThread:
     """``main()`` running on a worker thread, with a fail-loud join."""
 

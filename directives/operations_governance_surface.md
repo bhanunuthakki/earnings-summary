@@ -319,6 +319,15 @@ durable approval receipt or interactive confirmation state, so adding a button
 would violate the Operator-action boundary. The existing Jobs projection and
 portfolio-health views remain unchanged.
 
+The reconciler reads current holdings only through the typed Tracker client
+(`TrackerV1Client` portfolio snapshot plus securities), never a guessed Tracker
+database path. Pins resolve from the product-state root of the configured
+database; the checkout-default database is refused. Unavailable, partial, stale,
+lagging, unvalued, unknown-coverage, or empty holdings, and an unreadable pins
+file, make no `list_type` change and exit non-zero, so the morning run records
+`stage_0a_list_type` as failed instead of a silent success. No operator action,
+scheduler, writer, or source authority is added.
+
 `issuer_fact_manifest.v2` extends the existing internal, explicit offline-produce/apply batch CLI.
 It adds no scheduled job, managed service, runtime-health claim, or operator control. The canonical
 Operations registry and its visible Jobs, Sources, Data, and Actions contracts therefore remain

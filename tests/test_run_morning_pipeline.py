@@ -219,6 +219,19 @@ def _isolated_resume_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     )
 
 
+@pytest.fixture(autouse=True)
+def _configured_product_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Declare a disposable product DB authority for each orchestrator run.
+
+    The checkout-default fallback is forbidden, so every run names its own
+    authority explicitly. Stages are faked, so nothing opens this path. Tests
+    asserting the fail-closed refusal delete the variable themselves.
+    """
+    db_path = tmp_path / "configured" / "portfolio.db"
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db_path))
+    return db_path
+
+
 def test_manifest_is_complete_ordered_and_selection_dependency_valid() -> None:
     specs = run_morning_pipeline.STAGE_MANIFEST
     keys = [spec.key for spec in specs]
@@ -606,6 +619,22 @@ def test_stage1_failure_still_runs_feed(
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_1_triggers"] == "failed"
+    assert summary["stage_2_feed"] == "ok"
+    assert summary["stage_3_validate"] == "ok"
+
+
+def test_stage_0a_list_type_exit_3_is_failed_but_not_fatal(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = _RecordingRun(returncodes={LIST_TYPE_SCRIPT: 3})
+    _install_fake(monkeypatch, fake)
+
+    rc = run_morning_pipeline.main([])
+
+    assert rc != 0
+    _assert_ran_exactly(fake, _ALL_SCRIPTS)
+    summary = _parse_summary(capsys.readouterr().out)
+    assert summary["stage_0a_list_type"] == "failed"
     assert summary["stage_2_feed"] == "ok"
     assert summary["stage_3_validate"] == "ok"
 
@@ -1020,27 +1049,34 @@ def test_db_path_passed_to_all_stages_when_set(
         assert _has_flag(argv, "--db-path", str(db_path))
 
 
-def test_configured_db_path_forwarded_when_cli_unset(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The configured default is resolved once and explicitly shared by children."""
+def test_unset_configured_db_path_without_cli_path_is_refused(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """No --db-path and no configured path fails closed — the checkout default
+    is never silently promoted to product state."""
     monkeypatch.delenv("EARNINGS_SUMMARY_DB_PATH", raising=False)
     fake = _RecordingRun()
     _install_fake(monkeypatch, fake)
-    configured = (PROJECT_ROOT / "data" / "portfolio.db").resolve()
 
     rc = run_morning_pipeline.main([])
-    assert rc == 0
 
-    for argv in fake.calls:
-        script = _script_of(argv)
-        if script == PREFLIGHT_SCRIPT:
-            continue
-        if script == FACTOR_PROXIES_SCRIPT:
-            assert _has_flag(argv, "--repo-root", str(PROJECT_ROOT))
-            continue
-        if script in {DERIVED_METRICS_SCRIPT, DOCUMENT_EVIDENCE_SCRIPT}:
-            assert _has_flag(argv, "--db", str(configured))
-            continue
-        assert _has_flag(argv, "--db-path", str(configured))
+    assert rc == 1
+    assert "EARNINGS_SUMMARY_DB_PATH is required" in capsys.readouterr().err
+    assert fake.calls == []
+
+
+def test_checkout_default_db_path_is_refused_before_any_stage(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An explicit checkout-default spelling is refused before any stage runs."""
+    fake = _RecordingRun()
+    _install_fake(monkeypatch, fake)
+
+    rc = run_morning_pipeline.main(["--db-path", str(PROJECT_ROOT / "data" / "portfolio.db")])
+
+    assert rc == 1
+    assert "refusing the checkout-default database" in capsys.readouterr().err
+    assert fake.calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -1291,7 +1327,7 @@ def test_stage0g_factor_proxies_takes_explicit_artifact_root(
 
     fake_default = _RecordingRun()
     _install_fake(monkeypatch, fake_default)
-    monkeypatch.delenv("EARNINGS_SUMMARY_DB_PATH", raising=False)
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(tmp_path / "configured.db"))
     assert run_morning_pipeline.main([]) == 0
     default_argv = next(c for c in fake_default.calls if _script_of(c) == FACTOR_PROXIES_SCRIPT)
     assert _has_flag(default_argv, "--repo-root", str(PROJECT_ROOT))
