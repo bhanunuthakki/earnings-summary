@@ -8,7 +8,7 @@ import math
 import sqlite3
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from time import perf_counter
@@ -149,6 +149,26 @@ def test_kpi_observation_dimensions_use_only_current_semantic_head() -> None:
         "unit_scale": "millions",
     }
     conn.close()
+
+
+def _after_latest_system_clock(conn: sqlite3.Connection, floor: datetime) -> datetime:
+    """Return a cutoff after every capture clock the as-known reader compares.
+
+    Capture triggers stamp fact links with SQLite's real clock, so a fixed date
+    cannot sit between capture and a later recorded change on every run day.
+    """
+
+    clocks = [floor]
+    for (value,) in conn.execute(
+        "SELECT captured_at FROM fact_observation_revisions "
+        "UNION ALL SELECT recorded_at FROM reported_observations "
+        "UNION ALL SELECT recorded_at FROM observation_resolution_revisions "
+        "UNION ALL SELECT recorded_at FROM fact_resolution_outcomes "
+        "UNION ALL SELECT created_at FROM kpi_fact_semantic_contexts"
+    ):
+        clock = datetime.fromisoformat(str(value))
+        clocks.append(clock if clock.tzinfo is not None else clock.replace(tzinfo=UTC))
+    return max(clocks) + timedelta(seconds=1)
 
 
 def _config(path: Path) -> Config:
@@ -1549,14 +1569,14 @@ def test_typed_kpi_child_requires_source_bound_definition_revision(
             conn,
             kpi_fact_id=child_id,
             context=original_context.context,
-            knowledge_at=datetime(2027, 1, 1, tzinfo=UTC),
+            knowledge_at=datetime(2026, 10, 24, tzinfo=UTC),
             kpi_definition_revision_id=revision.kpi_definition_revision_id,
         )
         child_result = resolve_fact_row(
             conn,
             fact_table="kpi_facts",
             fact_row_id=child_id,
-            knowledge_cutoff=datetime(2027, 1, 1, tzinfo=UTC),
+            knowledge_cutoff=datetime(2026, 10, 24, tzinfo=UTC),
         )
         assert child_result is not None
         assert child_result.selected_observation_id is not None, child_result
@@ -1610,7 +1630,7 @@ def test_typed_kpi_child_requires_source_bound_definition_revision(
                 conn,
                 fact_table="kpi_facts",
                 fact_row_id=output_id,
-                knowledge_cutoff=datetime(2027, 1, 1, tzinfo=UTC),
+                knowledge_cutoff=datetime(2026, 10, 24, tzinfo=UTC),
             )
             is not None
         )
@@ -1627,7 +1647,7 @@ def test_typed_kpi_child_requires_source_bound_definition_revision(
         assert json.loads(str(captured_dimensions[0])) == [
             {"key": "kpi_definition_id", "value": "706"}
         ]
-        before_change = datetime(2027, 1, 1, tzinfo=UTC)
+        before_change = _after_latest_system_clock(conn, datetime(2026, 10, 25, tzinfo=UTC))
         if monetary:
             captured_currency = conn.execute(
                 "SELECT currency FROM reported_observations WHERE observation_id=?",
@@ -1711,7 +1731,7 @@ def test_typed_kpi_child_requires_source_bound_definition_revision(
                 known_at=before_change,
             )
         ] == [child_id, output_id]
-        quarantine_at = datetime(2027, 1, 2, tzinfo=UTC)
+        quarantine_at = before_change + timedelta(days=7)
         conn.execute(
             "INSERT INTO document_semantic_disposition_revisions "
             "(assessment_id,idempotency_key,document_version_id,revision,semantic_status,"
@@ -1733,7 +1753,7 @@ def test_typed_kpi_child_requires_source_bound_definition_revision(
                 known_at=before_change,
             )
         ] == [child_id, output_id]
-        release_at = datetime(2027, 1, 3, tzinfo=UTC)
+        release_at = before_change + timedelta(days=9)
         conn.execute(
             "INSERT INTO document_semantic_disposition_revisions "
             "(assessment_id,idempotency_key,document_version_id,revision,semantic_status,"
@@ -1755,7 +1775,7 @@ def test_typed_kpi_child_requires_source_bound_definition_revision(
             conn,
             kpi_fact_id=child_id,
             context=current_context.context,
-            knowledge_at=datetime(2027, 1, 4, tzinfo=UTC),
+            knowledge_at=before_change + timedelta(days=10),
             kpi_definition_revision_id=None,
         )
         assert [int(row[0]) for row in conn.execute(f"SELECT id FROM {relation.sql}")] == [child_id]
