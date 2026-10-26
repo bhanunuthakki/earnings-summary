@@ -67,9 +67,8 @@ _BASE_ALLOWED_FUNCTIONS: frozenset[str] = (
     | frozenset({"iif", "ifnull", "instr", "julianday", "length", "like", "lower", "ltrim"})
     | frozenset({"json_array_length", "json_extract", "json_type", "json_valid"})
     | frozenset({"max", "min", "nullif", "replace", "round", "rtrim"})
-    | frozenset(
-        {"strftime", "substr", "sum", "time", "total", "trim", "typeof", "unicode", "upper"}
-    )
+    | frozenset({"strftime", "substr", "sum", "time", "total", "trim"})
+    | frozenset({"typeof", "unicode", "upper"})
 )
 
 
@@ -77,10 +76,8 @@ class ReadCaptureUnavailableError(RuntimeError):
     """Typed capture refusal. Never a partial receipt or a degraded result."""
 
     def __init__(self, reason_code: str, detail: str | None = None) -> None:
-        message = f"report read capture unavailable: {reason_code}"
-        if detail is not None:
-            message = f"{message} ({detail})"
-        super().__init__(message)
+        extra = f" ({detail})" if detail is not None else ""
+        super().__init__(f"report read capture unavailable: {reason_code}{extra}")
         self.reason_code = reason_code
         self.detail = detail
 
@@ -801,7 +798,7 @@ class RecordingManagedConnection(ManagedConnection):
         super().__setattr__(name, value)
 
     def _guard_callback_owner(
-        self, kind: str, attr: str, args: tuple[Any, ...], kwargs: dict[str, Any]
+        self, kind: str, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> None:
         rec = self._recorder()
         if rec is not None and rec.capturing:
@@ -809,32 +806,31 @@ class RecordingManagedConnection(ManagedConnection):
         if args:
             cb: object = args[0]
         elif kind == "authorizer":
-            cb = (
-                kwargs.get("authorizer_callback")
-                if "authorizer_callback" in kwargs
-                else kwargs.get("callback")
-            )
+            cb = kwargs.get("authorizer_callback", kwargs.get("callback"))
         else:
-            cb = (
-                kwargs.get("progress_handler")
-                if "progress_handler" in kwargs
-                else kwargs.get("callback")
-                if "callback" in kwargs
-                else next((v for k, v in kwargs.items() if k != "n"), None)
-            )
+            fallback = next((v for k, v in kwargs.items() if k != "n"), None)
+            cb = kwargs.get("progress_handler", kwargs.get("callback", fallback))
+        is_auth = kind == "authorizer"
+        current = self.capture_authorizer_owner if is_auth else self.capture_progress_owner
         if callable(cb):
-            if getattr(self, attr) is not None:
+            if current is not None:
                 raise ReadCaptureUnavailable("capture_callback_conflict", kind)
-            setattr(self, attr, "user")
-        elif cb is None and getattr(self, attr) == "user":
-            setattr(self, attr, None)
+            val: str | None = "user"
+        elif cb is None and current == "user":
+            val = None
+        else:
+            return
+        if is_auth:
+            self.capture_authorizer_owner = val
+        else:
+            self.capture_progress_owner = val
 
     def set_authorizer(self, *args: Any, **kwargs: Any) -> None:
-        self._guard_callback_owner("authorizer", "capture_authorizer_owner", args, kwargs)
+        self._guard_callback_owner("authorizer", args, kwargs)
         sqlite3.Connection.set_authorizer(self, *args, **kwargs)
 
     def set_progress_handler(self, *args: Any, **kwargs: Any) -> None:
-        self._guard_callback_owner("progress_handler", "capture_progress_owner", args, kwargs)
+        self._guard_callback_owner("progress_handler", args, kwargs)
         sqlite3.Connection.set_progress_handler(self, *args, **kwargs)
 
     def cursor(self, factory: Any = RecordingCursor) -> sqlite3.Cursor:

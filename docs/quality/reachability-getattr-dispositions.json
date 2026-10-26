@@ -43,8 +43,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal near-growth scenario attribute tuple.",
-      "fingerprint": "54d2b4e7321f233189f3c83c5aacfd57eb99e34c61104986a01ef3b25c3b90f0",
-      "line": 304,
+      "fingerprint": "8737c35f6aa9eecf17f2fd4d3c0cc7cad73e0bfdd9c1ac9dcb4228144d43acc3",
+      "line": 368,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_g_near",
@@ -55,8 +55,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal terminal-growth scenario attribute tuple.",
-      "fingerprint": "d70adba3ed237213ca3fd18b60248cb2a0f27c57a535b4debd0b127531dfe441",
-      "line": 306,
+      "fingerprint": "b87ffe526991899bfc3cc9102cea5943a0d0783595fc95f7025efca79c9473ad",
+      "line": 370,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_g_term",
@@ -67,8 +67,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal near-margin scenario attribute tuple.",
-      "fingerprint": "f7af3358ca33401448c5593530f6ac9ecd570ec07fb956c0c189a6eb06e98361",
-      "line": 308,
+      "fingerprint": "f36ea4729875acc0ac04dd4769bffecea5821349f6ea06898e70727c8078a2b1",
+      "line": 372,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_margin_near",
@@ -79,8 +79,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal terminal-margin scenario attribute tuple.",
-      "fingerprint": "c59470bbe6ee9fb2699eb3b5207c33077604a974a3d3f057c4982ea6cf0cec0e",
-      "line": 310,
+      "fingerprint": "e385cc08b953d5221bb06a939e0eb2ecaebbfca7a23a03968b0046d6e8162c9c",
+      "line": 374,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_margin_term",
@@ -205,8 +205,8 @@
     {
       "disposition": "runtime_registry",
       "evidence": "getattr resolves only Windows kernel32 API names.",
-      "fingerprint": "f0ed194d7f0d4de9095cac088eb289434073edf76c2471d9f8b3bcdea0d976f5",
-      "line": 85,
+      "fingerprint": "aad5dd2563f2961af287cbe742c2c8e13959429ba12177d65566cd648c5bb656",
+      "line": 96,
       "path": "src/compute/evidence_snapshot.py",
       "targets": [
         "kernel32"
@@ -215,8 +215,8 @@
     {
       "disposition": "runtime_registry",
       "evidence": "getattr resolves only Windows kernel32 API names.",
-      "fingerprint": "c538fde6859a21840128a476bf3ea8b118d3a5f40c9771bec013b0db2649067a",
-      "line": 89,
+      "fingerprint": "7d8adb78f26cd948ecb5cdf0e1e6be373384ae4d635c92cf43215d4c797c8cfb",
+      "line": 100,
       "path": "src/compute/evidence_snapshot.py",
       "targets": [
         "kernel32"
@@ -1091,7 +1091,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "f147f20ccb3b474ae9d83f236aa4eaab743665597fb518723b081752d8bb966e",
+      "source_sha256": "6efcca836a3f793a0b42440de5ebb06a098fb16c53b39a9c5e571b55a28ac096",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

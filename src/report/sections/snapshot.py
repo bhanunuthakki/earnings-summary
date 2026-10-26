@@ -260,21 +260,21 @@ def _valuation_snapshot(
     # miss the priced_in/scenario_prior blocks the newest refresh persisted.
     # Same current-run selection every other dcf_runs reader already uses
     # (build_per_metric below, synthesis lenses, standup signals).
-    select_columns = f"""
-        SELECT valuation_date, wacc, terminal_growth, npv, npv_per_share,
-               shares_outstanding, breakdown_json,
-               live_price, live_price_at, over_under_pct, mos_bar_used,
-               assumption_snapshot_json{sync_select}{sanity_select}
-        FROM dcf_runs
-    """
+    select_columns = (
+        "SELECT valuation_date, wacc, terminal_growth, npv, npv_per_share, "  # nosec B608
+        "shares_outstanding, breakdown_json, "
+        "live_price, live_price_at, over_under_pct, mos_bar_used, "
+        f"assumption_snapshot_json{sync_select}{sanity_select} "
+        "FROM dcf_runs"
+    )
     if model_run_id is not None:
         cursor.execute(
-            f"{select_columns} WHERE ticker = ? AND id = ? LIMIT 1",  # nosec B608 -- trusted column fragments selected only by schema presence; parameters stay bound
+            f"{select_columns} WHERE ticker = ? AND id = ? LIMIT 1",
             (ticker.upper(), model_run_id),
         )
     else:
         cursor.execute(
-            f"{select_columns} WHERE ticker = ? ORDER BY valuation_date DESC, id DESC LIMIT 1",  # nosec B608 -- trusted column fragments selected only by schema presence; parameters stay bound
+            f"{select_columns} WHERE ticker = ? ORDER BY valuation_date DESC, id DESC LIMIT 1",
             (ticker.upper(),),
         )
     row = cursor.fetchone()

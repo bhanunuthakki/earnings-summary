@@ -188,8 +188,11 @@ class DirectorySelectionCommitment(BaseModel):
 
     @model_validator(mode="after")
     def _freeze_mappings(self) -> Self:
-        for f in ("directory_states", "member_sha256s", "effective_winners"):
-            object.__setattr__(self, f, MappingProxyType(dict(getattr(self, f))))
+        object.__setattr__(self, "directory_states", MappingProxyType(dict(self.directory_states)))
+        object.__setattr__(self, "member_sha256s", MappingProxyType(dict(self.member_sha256s)))
+        object.__setattr__(
+            self, "effective_winners", MappingProxyType(dict(self.effective_winners))
+        )
         return self
 
     @field_serializer("directory_states", "member_sha256s", "effective_winners")
@@ -214,8 +217,8 @@ class FileCaptureReceipt(BaseModel):
 
     @model_validator(mode="after")
     def _freeze_mappings(self) -> Self:
-        for f in ("files", "selections"):
-            object.__setattr__(self, f, MappingProxyType(dict(getattr(self, f))))
+        object.__setattr__(self, "files", MappingProxyType(dict(self.files)))
+        object.__setattr__(self, "selections", MappingProxyType(dict(self.selections)))
         return self
 
     @field_serializer("files", "selections")
@@ -893,19 +896,17 @@ def replay_file_capture(
     )
 
     try:
-        attrs = (
-            "directory_exists",
-            "directory_states",
-            "selected_relative_paths",
-            "member_sha256s",
-            "effective_winners",
-            "selection_digest",
-        )
         for sel_key, exp_sel in receipt.selections.items():
             act_sel = session.record_directory_selection(exp_sel.selector_id, exp_sel.ticker)
-            for attr in attrs:
-                if getattr(act_sel, attr) != getattr(exp_sel, attr):
-                    raise FileCaptureMismatchError(f"selection {sel_key} {attr} mismatch")
+            if (
+                act_sel.directory_exists != exp_sel.directory_exists
+                or act_sel.directory_states != exp_sel.directory_states
+                or act_sel.selected_relative_paths != exp_sel.selected_relative_paths
+                or act_sel.member_sha256s != exp_sel.member_sha256s
+                or act_sel.effective_winners != exp_sel.effective_winners
+                or act_sel.selection_digest != exp_sel.selection_digest
+            ):
+                raise FileCaptureMismatchError(f"selection {sel_key} mismatch")
 
         for rel_path, exp_file in receipt.files.items():
             if exp_file.file_exists:

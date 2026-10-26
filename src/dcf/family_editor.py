@@ -501,15 +501,14 @@ class ActiveFamilyPointer(FrozenModel):
 
     @model_validator(mode="after")
     def _validate_pointer_digests(self) -> Self:
-        for field_name in (
-            "proposal_id",
-            "proposal_sha256",
-            "input_sha256",
-            "workbook_sha256",
-            "assumption_snapshot_sha256",
+        for val, field_name in (
+            (self.proposal_id, "proposal_id"),
+            (self.proposal_sha256, "proposal_sha256"),
+            (self.input_sha256, "input_sha256"),
+            (self.workbook_sha256, "workbook_sha256"),
+            (self.assumption_snapshot_sha256, "assumption_snapshot_sha256"),
         ):
-            val = getattr(self, field_name)
-            if not isinstance(val, str) or not _SHA256_RE.match(val):
+            if not _SHA256_RE.match(val):
                 raise ValueError(f"invalid_sha256_digest:{field_name}")
         return self
 
