@@ -176,3 +176,89 @@ def test_session_start_prunes_earlier_runs_from_the_controller(tmp_path: Path) -
     assert not old.exists()
     claimed = [path for path in system_temp.glob("earnings-summary-pytest-controller-*")]
     assert len(claimed) == 1 and (claimed[0] / retention.MANIFEST_NAME).exists()
+
+
+def test_failed_run_payload_is_trimmed_after_grace_and_evidence_kept(
+    base: Path, ledger: Path, tmp_path: Path
+) -> None:
+    """A failed run whose owner is gone keeps only review evidence after an hour:
+    a full-suite failure otherwise held tens of gigabytes for the whole week."""
+    root = _run(base, "earnings-summary-pytest-controller-failpay", "failed", timedelta(hours=2))
+    (root / "fixtures" / "junit.xml").write_text("<testsuite/>", encoding="utf-8")
+    (root / "session.log").write_text("FAILED", encoding="utf-8")
+    (root / "fixtures" / "events.jsonl").write_text("{}\n", encoding="utf-8")
+    receipts = root / ".earnings-temp-retirement"
+    receipts.mkdir()
+    (receipts / "receipt.json").write_text("{}", encoding="utf-8")
+    outside = tmp_path / "outside.db"
+    outside.write_bytes(b"keep")
+    (root / "fixtures" / "linked.db").symlink_to(outside)
+
+    result = _prune(base, ledger)
+
+    assert root.exists() and root not in result.removed
+    assert result.trimmed == (root,)
+    assert result.trimmed_bytes >= 1
+    assert not (root / "fixtures" / "payload.db").exists()
+    assert not (root / "fixtures" / "linked.db").is_symlink()
+    assert outside.read_bytes() == b"keep"
+    for kept in (
+        root / retention.MANIFEST_NAME,
+        root / "fixtures" / "junit.xml",
+        root / "session.log",
+        root / "fixtures" / "events.jsonl",
+        receipts / "receipt.json",
+    ):
+        assert kept.exists(), kept
+
+
+@pytest.mark.parametrize(
+    ("status", "age"), [("failed", timedelta(minutes=30)), ("active", timedelta(minutes=20))]
+)
+def test_recent_failed_or_crashed_payload_waits_for_the_grace_period(
+    base: Path, ledger: Path, status: Status, age: timedelta
+) -> None:
+    root = _run(base, f"earnings-summary-pytest-controller-{status}recent", status, age)
+    result = _prune(base, ledger)
+    assert (root / "fixtures" / "payload.db").exists()
+    assert result.trimmed == ()
+
+
+def test_crashed_active_run_payload_is_trimmed(base: Path, ledger: Path) -> None:
+    root = _run(base, "earnings-summary-pytest-controller-crash2h", "active", timedelta(hours=2))
+    result = _prune(base, ledger)
+    assert result.trimmed == (root,)
+    assert not (root / "fixtures" / "payload.db").exists()
+    assert (root / retention.MANIFEST_NAME).exists()
+
+
+def test_live_lease_run_payload_is_never_trimmed(base: Path, ledger: Path) -> None:
+    root = _run(base, "earnings-summary-pytest-controller-leasedpay", "failed", timedelta(days=2))
+    token = storage.reserve_peak(root, 1, host_limit=10, reserve_bytes=0, store=ledger)
+    try:
+        result = _prune(base, ledger)
+        assert result.trimmed == ()
+        assert (root / "fixtures" / "payload.db").exists()
+    finally:
+        storage.release_peak(root, token, store=ledger)
+
+
+def test_trim_preview_reports_without_deleting(base: Path, ledger: Path) -> None:
+    root = _run(base, "earnings-summary-pytest-controller-failprev", "failed", timedelta(hours=3))
+    result = _prune(base, ledger, apply=False)
+    assert result.trimmed == (root,)
+    assert (root / "fixtures" / "payload.db").exists()
+
+
+def test_future_timestamp_does_not_keep_a_bare_folder_forever(base: Path, ledger: Path) -> None:
+    """Some tests stamp fixtures years ahead; that is not a recent change."""
+    root = _run(base, "earnings-summary-pytest-controller-futurebare", None, timedelta(days=3))
+    future = root / "fixtures" / "future.db"
+    future.write_bytes(b"x")
+    ahead = (NOW + timedelta(days=6 * 365)).timestamp()
+    os.utime(future, (ahead, ahead))
+    stamp = (NOW - timedelta(days=3)).timestamp()
+    for path in (root / "fixtures", root):
+        os.utime(path, (stamp, stamp))
+    result = _prune(base, ledger)
+    assert root in result.removed and not root.exists()
