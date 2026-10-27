@@ -211,6 +211,7 @@ def test_original_pdf_extraction_preserves_duration_precision_and_novel_counts(
             "period_role": role,
             "accounting_basis": "gaap",
             "consolidation_scope": "consolidated",
+            "reporting_consolidation_scope": "unknown",
             "source_unit_scale": "none",
             "source_precision": {
                 "kind": precision_kind,
@@ -227,6 +228,7 @@ def test_original_pdf_extraction_preserves_duration_precision_and_novel_counts(
             "period_role": "current",
             "accounting_basis": "management",
             "consolidation_scope": "consolidated",
+            "reporting_consolidation_scope": "unknown",
             "source_unit_scale": "millions",
         },
     ]

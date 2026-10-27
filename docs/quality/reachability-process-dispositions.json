@@ -12,16 +12,6 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "Argv invokes fixed PROJECT_ROOT/execution/grade_decisions.py through managed_python_prefix. Explicit --db-path and --repo-root carry the selected database and artifact root; the artifact root no longer selects executable code. No new script target.",
-      "fingerprint": "791b308d3812f4ad27eaa588d20753ecd45284694053ace77e7e40c091164a03",
-      "line": 53,
-      "path": "execution/backfill_seed_decisions.py",
-      "targets": [
-        "execution/grade_decisions.py"
-      ]
-    },
-    {
-      "disposition": "internal_python_target",
       "evidence": "Fixed ingest_transcripts_state.py retained; adds selected --db while --repo-root, owner-requested and exact receipt IDs remain.",
       "fingerprint": "cae3bc3f56397fb13baf7a46b2b3f189c25ad552db76318dc66479aefafa57ec",
       "line": 843,
@@ -75,8 +65,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "The checked-in _TICKER_SPECIFIC_EXTRACTORS registry selects this fixed NVO script; the managed Python command joins the registry script under execution/.",
-      "fingerprint": "45d6b197f52773e9dc242d314d3c159c03474059a08caf24903257e32313f821",
-      "line": 155,
+      "fingerprint": "169809b4280a2a7cbc012af009c7f67c33d671617f99756704d1947234d88f34",
+      "line": 156,
       "path": "execution/build_artifacts.py",
       "targets": [
         "execution/extract_nvo_patent_timeline_state.py"
@@ -585,8 +575,8 @@
     {
       "disposition": "external_process",
       "evidence": "_call_claude invokes the resolved Claude CLI path after setup validation; the command list fixes the executable and arguments.",
-      "fingerprint": "c6a8a1fe062420e26ca0dfd2f26ed6d977ceb76edea4b08cc5de351b136a4e61",
-      "line": 1224,
+      "fingerprint": "414165c4afef5eaaa6516439f847ab8fee17b5ad0fb054bd1b8dd0581b7ce9cc",
+      "line": 1216,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -595,8 +585,8 @@
     {
       "disposition": "external_process",
       "evidence": "The streaming path obtains claude with shutil.which and passes that fixed executable as cmd[0] to Popen.",
-      "fingerprint": "8ad801d9b864776ed033c67f892104bd614fc9b29e31a7c2ccf32d611ab99b22",
-      "line": 2236,
+      "fingerprint": "db039567a99e874ea9c4aef67ae143339e68b45f66018b37de1d5016c5e16626",
+      "line": 2228,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -605,8 +595,8 @@
     {
       "disposition": "external_process",
       "evidence": "The web path invokes the resolved Claude CLI path in a fixed command list; enabled tools are separately allowlisted.",
-      "fingerprint": "dfbd2df2a9e1dedd47e8ca2dfefee529b9cbb3c39ecb413d5b79cc8d2050419b",
-      "line": 2688,
+      "fingerprint": "2dc9dd3855e49132b25c2cdf37cc1ffe5a30cf826dbf96bd9f5da50fe884da9f",
+      "line": 2680,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -1014,7 +1004,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "eb109dcf7dcb433b204e4a05eaa7762e7e9cd05b5e33777a5d88bdf1b9f4b9f5",
+      "source_sha256": "5852f639cab8f704283fd4cfde02d244c5359fa33663d1cebfcb964e733968f2",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

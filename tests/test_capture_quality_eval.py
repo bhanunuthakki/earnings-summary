@@ -65,7 +65,7 @@ def test_registered_eval_mode_debt_is_fully_paid_down(tmp_path: Path) -> None:
 
 def test_specs_are_prioritized_and_performance_bounded() -> None:
     # The owner retired exercise, coach-reply and dedicated ETF generation.
-    assert len(CAPTURE_QUALITY_SPECS) == 59
+    assert len(CAPTURE_QUALITY_SPECS) == 57
     assert not {
         "advisor_socratic_questions",
         "advisor_socratic_memo",
@@ -75,6 +75,8 @@ def test_specs_are_prioritized_and_performance_bounded() -> None:
         "weekly_packet_predraft",
         "research_triage",
         "musing_decision_extract",
+        "theme_seed_cluster",
+        "theme_synthesis",
         "capture_intent",
         "triage_route_suggest",
         "behavior_distill",

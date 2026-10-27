@@ -81,6 +81,7 @@ from report.file_capture import (
     replay_file_capture,
 )
 from report.generation_context import DBSnapshotRef
+from report.legacy_body import extract_legacy_reader_body
 from report.models import ReportFlavor
 from report.read_capture import (
     CaptureLimits,
@@ -370,6 +371,9 @@ def build_candidate_artifact(
         if _resolve_kind(repo_root, symbol) is InstrumentType.ETF:
             raise ValueError("candidate_etf_unsupported")
         configure_artifact_runtime(repo_root)
+        authority_sha256 = canonical_digest(
+            source_context.model_dump(mode="json") if source_context is not None else None
+        )
         read_session = ReadCaptureSession(active_db, limits=CaptureLimits())
         file_session = ReportFileCaptureSession(repo_root=repo_root)
         conn = read_session.open()
@@ -409,6 +413,7 @@ def build_candidate_artifact(
                 if (
                     isinstance(cand_ctx, ReportGenerationContext)
                     and cand_ctx.model == binding
+                    and cand_ctx.source_authority_sha256 == authority_sha256
                     and (
                         expected_current_artifact_id is None
                         or cand_ctx.expected_current_artifact_id == expected_current_artifact_id
@@ -431,24 +436,14 @@ def build_candidate_artifact(
                         try:
                             replay_read_capture(active_db, cand_capture, limits=CaptureLimits())
                             replay_file_capture(cand_file_receipt, repo_root)
-                            read_session.abort()
-                            return {
-                                "status": "reused",
-                                "reused": True,
-                                "ticker": symbol,
-                                "artifact_id": latest_cand.artifact_id,
-                                "context_sha256": cand_ctx.sha256,
-                                "body_sha256": latest_cand.body_sha256,
-                                "candidate_review": cand_review.model_dump(mode="json"),
-                            }
+                            # Reuse the captured clock, then prepare retained inputs
+                            # again. SQL replay cannot verify source or product bytes.
+                            cutoff_at = cand_ctx.cutoff_at
                         except (ReadCaptureUnavailable, FileCaptureMismatchError, OSError):
                             pass
 
         for sel in (
-            "quarterly_summaries_tmp_v1",
-            "saydo_cards_tmp_v1",
             "transcripts_dual_dir_v1",
-            "ir_briefs_tmp_v1",
             "fmp_price_chart_v1",
         ):
             file_session.record_directory_selection(sel, symbol)
@@ -467,20 +462,6 @@ def build_candidate_artifact(
             f"data/filing_intelligence/{symbol}.json",
             f"data/qa_topics/{symbol}.json",
         ]
-        tmp_dir = repo_root / ".tmp"
-        if tmp_dir.is_dir():
-            for p in sorted(tmp_dir.iterdir()):
-                if p.is_file() and (
-                    p.name.upper().startswith(f"{symbol}_")
-                    or p.name.upper().startswith(f"SAYDO_{symbol}_")
-                ):
-                    candidate_file_targets.append(f".tmp/{p.name}")
-        for subdir in ("processed", "raw"):
-            tr_dir = repo_root / "transcripts" / subdir
-            if tr_dir.is_dir():
-                for p in sorted(tr_dir.iterdir()):
-                    if p.is_file() and p.name.upper().startswith(f"{symbol}_"):
-                        candidate_file_targets.append(f"transcripts/{subdir}/{p.name}")
         for target in candidate_file_targets:
             with suppress(FileNotFoundError):
                 file_session.read_bytes(target)
@@ -528,13 +509,47 @@ def build_candidate_artifact(
             ),
             report_date=spec.generation_date,
             coverage_role=("evaluation" if spec.flavor is ReportFlavor.EVALUATION else "portfolio"),
-            source_authority_sha256=hashlib.sha256(str(repo_root).encode("utf-8")).hexdigest(),
+            source_authority_sha256=authority_sha256,
+        )
+        final_body_html = temp_body.body_html.replace(
+            "__CANDIDATE_CONTEXT_PLACEHOLDER__", generation_context.sha256
+        )
+        report_body = RenderedReportBody.from_html(
+            ticker=temp_body.ticker,
+            report_date=temp_body.report_date,
+            body_html=final_body_html,
+            sections=temp_body.sections,
+            interaction_manifest=temp_body.interaction_manifest,
+            fiscal_period_label=temp_body.fiscal_period_label,
         )
         existing = find_matching_candidate_artifact(
             repo_root, ticker=symbol, context_sha256=generation_context.sha256
         )
         if existing is not None:
             existing_review = load_report_candidate_review(repo_root, symbol, existing.artifact_id)
+            with connect_sqlite(active_db, role=SQLiteConnectionRole.READ_ONLY) as assess_conn:
+                readiness = assess_candidate_decision_brief(
+                    assess_conn,
+                    repo_root=repo_root,
+                    artifact=existing,
+                    as_of=generation_context.cutoff_at,
+                    source_context=source_context,
+                )
+            if (
+                existing.body_sha256
+                != extract_legacy_reader_body(
+                    report_body.body_html, artifact_id=report_body.artifact_id
+                ).body_sha256
+                or existing_review is None
+                or readiness.reason_codes != existing_review.reason_codes
+                or (readiness.status == "verified" and not readiness.reason_codes)
+                != existing_review.ready
+            ):
+                return {
+                    "status": "capture_unavailable",
+                    "ticker": symbol,
+                    "reason": "candidate_source_evidence_changed",
+                }
             return {
                 "status": "reused",
                 "reused": True,
@@ -547,17 +562,6 @@ def build_candidate_artifact(
                 ),
             }
 
-        final_body_html = temp_body.body_html.replace(
-            "__CANDIDATE_CONTEXT_PLACEHOLDER__", generation_context.sha256
-        )
-        report_body = RenderedReportBody.from_html(
-            ticker=temp_body.ticker,
-            report_date=temp_body.report_date,
-            body_html=final_body_html,
-            sections=temp_body.sections,
-            interaction_manifest=temp_body.interaction_manifest,
-            fiscal_period_label=temp_body.fiscal_period_label,
-        )
         standalone_html = render_standalone_report(
             spec,
             report_body,

@@ -47,22 +47,19 @@ def register_core_routes(app: Flask, ctx: ServerContext) -> None:
             "needs_ticker": result.needs_ticker,
         }
 
-    @app.route("/api/reconcile/<kind>/<int:item_id>/<verdict>", methods=["POST", "OPTIONS"])
-    def reconcile_verdict(kind: str, item_id: int, verdict: str):
+    @app.route("/api/reconcile/note/<int:item_id>/<verdict>", methods=["POST", "OPTIONS"])
+    def reconcile_verdict(item_id: int, verdict: str):
         """Seed-corpus freshness pass: stamp a one-tap verdict on a seed note or
-        theme. The coach only leans on items that survived this list. CSRF-guarded
+        note. Retained decisions keep their explicit review state. CSRF-guarded
         by the global Origin check."""
         if request.method == "OPTIONS":
             return ("", 204)
-        from synthesis.reconcile import RECONCILE_VERDICTS, reconcile_note, reconcile_theme
+        from synthesis.reconcile import RECONCILE_VERDICTS, reconcile_note
 
-        if kind not in ("note", "theme"):
-            return ({"error": f"unknown kind {kind!r}"}, 400)
         if verdict not in RECONCILE_VERDICTS:
             return ({"error": f"unknown verdict {verdict!r}"}, 400)
-        fn = reconcile_note if kind == "note" else reconcile_theme
         bump_activation_count(f"act:reconcile:{verdict}")
-        ok = fn(item_id, verdict, db_path=db_path)
+        ok = reconcile_note(item_id, verdict, db_path=db_path)
         if not ok:
             return ({"ok": False}, 404)
         # Consequence receipt: what the verdict means for whether the coach can

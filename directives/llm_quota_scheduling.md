@@ -55,8 +55,9 @@ this file; the canonical release must verify stopped services and retired tasks.
 ## On-demand process research (October 25, 2026)
 
 The dedicated `ledger_synthesis`, `red_team`, `tenet_accountability` and
-`thesis_collision` schedules are retired from source. Explicit backend invocations
-remain. This change does not unregister their live tasks or reclaim a protected
+`thesis_collision` schedules are retired from source. Generated standing-stance
+synthesis is retired, including its manual command. The other explicit backend
+invocations remain. This change does not unregister their live tasks or reclaim a protected
 window. Canonical-host retirement must verify the installed owners.
 
 ## Pairwise SayDo narrative retirement (October 26, 2026)

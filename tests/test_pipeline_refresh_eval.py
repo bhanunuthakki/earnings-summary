@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from compute.fmp_derived_kpis import FmpDerivationReason
 from models.kpis import BreachStatus
 from pipeline.refresh_eval import refresh_for_tickers
 from tests.kpi_semantic_support import admit_all_kpi_facts
@@ -194,3 +195,20 @@ def test_refresh_for_tickers_breach_propagates(conn: sqlite3.Connection, tmp_pat
 
     results = refresh_for_tickers(conn, tickers=["Z"], holdings_dir=tmp_path)
     assert results[0].eval_status == BreachStatus.BREACH
+
+
+def test_refresh_preserves_unavailable_derivation_receipt(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    _seed_facts(conn, "GAP")
+    _write_holdings(tmp_path, "GAP")
+
+    conn.execute("UPDATE financial_facts SET currency=NULL WHERE ticker='GAP'")
+    conn.commit()
+    result = refresh_for_tickers(conn, tickers=["GAP"], holdings_dir=tmp_path)[0]
+    assert result.derived_kpi_rows_inserted == 0
+    assert result.derivation is not None
+    assert result.derivation.not_computable == 1
+    assert result.derivation.reasons == (FmpDerivationReason.MISSING_MONETARY_CURRENCY,)
+    assert result.eval_error is None
+    assert conn.execute("SELECT COUNT(*) FROM thesis_evaluations").fetchone()[0] == 1

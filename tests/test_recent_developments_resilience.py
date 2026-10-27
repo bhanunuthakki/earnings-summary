@@ -62,7 +62,7 @@ def test_build_stores_typed_output_and_cache(
     assert section.events[0].url == "https://example.com/news"
     assert section.content_md is not None
     cache_path = tmp_path / recent_developments.NEWS_CACHE_DIRNAME / "NU.json"
-    cached = getattr(recent_developments, "_read_cache")(cache_path, ttl_days=7)
+    cached = getattr(recent_developments, "_read_cache")(tmp_path, cache_path, ttl_days=7)
     assert cached is not None
     assert cached.structured_output == response
     assert section.cached_at is not None

@@ -2,7 +2,7 @@
 
 Called by extract_facts and extract_kpis_from_ir when --with-eval is set.
 Sequence per ticker:
-  1. derive_kpis_from_fmp.derive_for_ticker (idempotent — only inserts new rows)
+  1. fmp_derived_kpis.derive_for_ticker_outcome (idempotent — only inserts new rows)
   2. thesis_evaluator.evaluate_ticker_thesis + persist_verdict (appends history row)
 
 Skips tickers whose holdings JSON is missing (e.g. tracked but not thesis-tracked).
@@ -14,7 +14,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from compute.fmp_derived_kpis import derive_for_ticker
+from compute.fmp_derived_kpis import FmpDerivationOutcome, derive_for_ticker_outcome
 from compute.thesis_evaluator import evaluate_ticker_thesis, persist_verdict
 from models.kpis import BreachStatus
 
@@ -27,6 +27,7 @@ class TickerRefreshResult:
     derived_kpi_rows_inserted: int
     eval_status: BreachStatus | None
     eval_error: str | None
+    derivation: FmpDerivationOutcome | None = None
 
 
 def refresh_for_tickers(
@@ -41,14 +42,15 @@ def refresh_for_tickers(
     for ticker in tickers:
         derived_inserted = 0
         try:
-            _, derived_inserted = derive_for_ticker(conn, ticker)
+            derivation = derive_for_ticker_outcome(conn, ticker)
+            derived_inserted = derivation.rows_inserted
         except (ValueError, KeyError) as e:
             results.append(
                 TickerRefreshResult(
                     ticker=ticker.upper(),
                     derived_kpi_rows_inserted=0,
                     eval_status=None,
-                    eval_error=f"derive_for_ticker failed: {type(e).__name__}: {e}"[:300],
+                    eval_error=f"derive_for_ticker_outcome failed: {type(e).__name__}: {e}"[:300],
                 )
             )
             continue
@@ -60,6 +62,7 @@ def refresh_for_tickers(
                 TickerRefreshResult(
                     ticker=ticker.upper(),
                     derived_kpi_rows_inserted=derived_inserted,
+                    derivation=derivation,
                     eval_status=None,
                     eval_error="holdings_spec_not_found",
                 )
@@ -70,6 +73,7 @@ def refresh_for_tickers(
                 TickerRefreshResult(
                     ticker=ticker.upper(),
                     derived_kpi_rows_inserted=derived_inserted,
+                    derivation=derivation,
                     eval_status=None,
                     eval_error=f"evaluate failed: {type(e).__name__}: {e}"[:300],
                 )
@@ -81,6 +85,7 @@ def refresh_for_tickers(
             TickerRefreshResult(
                 ticker=ticker.upper(),
                 derived_kpi_rows_inserted=derived_inserted,
+                derivation=derivation,
                 eval_status=verdict.overall_status,
                 eval_error=None,
             )

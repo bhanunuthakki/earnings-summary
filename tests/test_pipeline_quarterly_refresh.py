@@ -803,3 +803,27 @@ def test_cli_human_output_redacts_all_stage_notes(
     assert output.count('"receipt"') == 1
     assert leak_sentinel not in output
     assert output.count("api_key=***") >= 3
+
+
+def test_derivation_stage_reports_missing_canonical_input_pins(
+    conn: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from compute import fmp_derived_kpis
+    from provenance.financial_fact_resolution import CanonicalFactSelectionAsKnown
+
+    _seed_thesis_state(conn, "X")
+    _seed_quarterly_income(conn, "X", sec_official=True)
+    _write_holdings(tmp_path, "X", threshold=50)
+
+    def unavailable(*_args: object, **_kwargs: object) -> tuple[CanonicalFactSelectionAsKnown, ...]:
+        return ()
+
+    monkeypatch.setattr(fmp_derived_kpis, "canonical_fact_selections_as_known", unavailable)
+    report = refresh_ticker(
+        conn, ticker="X", project_root=tmp_path, holdings_dir=tmp_path, run_id="missing-pins"
+    )
+    stage = next(stage for stage in report.stages if stage.name is StageName.DERIVE_FMP_KPIS)
+    assert stage.status is StageStatus.SKIPPED and stage.rows_processed == 0
+    assert stage.notes is not None
+    assert "missing_canonical_input_reference" in stage.notes
+    assert "data on disk" not in stage.notes

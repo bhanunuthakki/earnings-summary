@@ -55,12 +55,12 @@ from report.artifacts import (
     load_report_candidate_review,
     load_report_capture_receipt,
     load_report_file_capture_receipt,
-    publish_report_candidate,
     resolve_report_model_binding,
 )
 from report.file_capture import replay_file_capture
 from report.generation_context import ReportModelBinding
 from report.read_capture import CaptureLimits, replay_read_capture
+from research.decision_brief import publish_report_candidate
 
 # Self-hosted webfonts vendored under src/ui/vendor/fonts/, beside the inlined
 # Alpine asset. The Work OS shell's @font-face rules reference these exact
@@ -373,6 +373,7 @@ def _register_report_sync_routes(app: Flask, context: ContentRouteContext) -> No
                 artifact_id=artifact_id_val,
                 expected_current_artifact_id=expected_current,
                 owner_action_id=owner_action_val,
+                source_context=context.source_context,
             )
         except ReportPublicationConflictError as exc:
             return Response(

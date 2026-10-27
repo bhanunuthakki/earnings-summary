@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Literal, cast
 
 from identity import DEFAULT_USER_ID
+from llm.anchors import load_owner_profile_anchor, load_worldview_anchor
+from llm.untrusted import spotlight
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # Caps keep the portfolio system prompt interactive-sized even when the
@@ -111,7 +113,7 @@ def _thesis_one_liners(repo_root: Path, tickers: list[str]) -> list[str]:
 
 
 def _owner_memory_block(repo_root: Path) -> str:
-    """The owner's standing memory — Worldview tenets + themes + affirmed
+    """The owner's standing memory — Worldview tenets + affirmed
     profile facts — for the OPEN-ENDED portfolio scope.
 
     2026-07-19 review, gap G3: these anchors rode only the retired report chat, so
@@ -121,16 +123,12 @@ def _owner_memory_block(repo_root: Path) -> str:
     compose_anchor_block); every loader degrades to "" and never raises, so a
     bare install renders the prompt unchanged."""
     bits: list[str] = []
-    for loader_name, source in (
-        ("load_worldview_anchor", "the investor's Worldview tenets"),
-        ("load_themes_anchor", "the investor's standing themes"),
-        ("load_owner_profile_anchor", "the owner's affirmed profile facts"),
+    for loader, source in (
+        (load_worldview_anchor, "the investor's Worldview tenets"),
+        (load_owner_profile_anchor, "the owner's affirmed profile facts"),
     ):
         try:
-            from llm import anchors as anchors_mod
-            from llm.untrusted import spotlight
-
-            raw = getattr(anchors_mod, loader_name)(repo_root)
+            raw = loader(repo_root)
             if raw:
                 bits.append(spotlight(raw, source=source))
         except Exception:  # anchor stack must stay unkillable

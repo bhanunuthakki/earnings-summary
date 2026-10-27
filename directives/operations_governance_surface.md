@@ -3026,3 +3026,38 @@ viewer verifies the pinned document version and PDF bytes for both the page
 and image request; mismatch returns 404. No new scheduled job, store, provider
 route, or general trust flag is added. This path does not fill OCR-missed chart
 values or prove whole-document financial completeness.
+
+## Canonical derivation input receipts (2026-10-27)
+
+The existing derivation stage uses its typed outcome directly. It reports
+`missing_canonical_input_reference` when raw fundamentals exist but exact
+canonical input pins are unavailable. It does not label that state as absent
+on-disk data. Current-statement and KPI-transform derivations share one
+input-reference reader and snapshot owner. New lineage records pin the selected
+observation, resolution and source version. This adds no operator action, job,
+store or provider. Legacy unversioned lineage does not gain canonical reader admission.
+
+
+## Optional theme generation retirement (2026-10-27)
+
+Retire `seed_themes.py`, `backfill_seed_decisions.py` and
+`run_ledger_synthesis.py`, their exclusive libraries, model purposes, schemas,
+and evaluation specifications. Keep explicit owner decisions and current process
+tenets. Ask no longer imports generated theme or stance context. Migration
+`0067_retire_theme_generation` removes only the two retired purposes from budgets,
+budget alerts and evaluation verdicts. It checks the schema, inbound foreign keys
+and deletion triggers before mutation. Live history deletion remains a release
+operation. No installed service or task changed.
+
+Report capture no longer selects quarterly narrative caches, extra IR summary
+cards, SayDo narrative cards, or the SayDo filter. Their three exclusive capture
+locks are removed. Retained selector aliases keep their original IDs. Candidate
+builds no longer scan every ticker-prefixed temporary file. They prepare the
+retained inputs before reuse and compare the canonical reader body.
+
+The source authority digest now binds the actual explicit `SourceReadContext`.
+The existing bounded source verifier checks original financial bytes, including
+approved roots outside the output root. The research publisher supplies the
+content assessor to the existing atomic artifact commit. Assessment runs under
+that commit's writer snapshot. A changed or unavailable source blocks reuse or
+publication. This adds no operator action, provider, job, source copy or store.

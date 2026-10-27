@@ -322,6 +322,14 @@ def _apply_manifest(
                     "derived_kpi_rows_inserted": r.derived_kpi_rows_inserted,
                     "eval_status": r.eval_status.value if r.eval_status is not None else None,
                     "eval_error": r.eval_error,
+                    "derivation_not_computable": (
+                        r.derivation.not_computable if r.derivation is not None else None
+                    ),
+                    "derivation_reasons": (
+                        [reason.value for reason in r.derivation.reasons]
+                        if r.derivation is not None
+                        else None
+                    ),
                 }
             )
 

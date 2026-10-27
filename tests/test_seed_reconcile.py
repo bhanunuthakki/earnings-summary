@@ -17,32 +17,7 @@ from synthesis.reconcile import (
     falsifier_action,
     list_unreconciled,
     reconcile_note,
-    reconcile_theme,
 )
-from synthesis.seed_decisions import backfill_seed_decisions
-
-_SEED = {
-    "decisions": [
-        {
-            "ticker": "MU",
-            "action": "buy",
-            "approx_date": "2025-07",
-            "conviction": "high",
-            "rationale": "Memory upcycle.",
-            "falsifier": "Memory pricing cycle rolls over. (inferred)",
-        },
-        {
-            "ticker": "NU",
-            "action": "add",
-            "approx_date": "2026-03",
-            "conviction": "high",
-            "rationale": "Credit book holding.",
-            "falsifier": "15-90d NPL >5% for 2Q",
-        },
-    ],
-    "musings": [],
-    "themes": [],
-}
 
 
 @pytest.fixture
@@ -55,18 +30,26 @@ def db_path(tmp_path: Path, migrated_db: Callable[[Path], Path]) -> Path:
             "VALUES ('musing','I sell winners too early','capture','seed:musing:1',"
             "'2026-07-01','2026-07-01')"
         )
-        conn.execute(
-            "INSERT INTO insight_notes (scope_key, kind, body_md, provenance, as_of, created_at, updated_at) "
-            "VALUES ('theme:sell-winners-too-early','theme','Sells winners too early','owner','2026-07-01','2026-07-01','2026-07-01')"
-        )
     return db
 
 
 @pytest.fixture
-def seeded(db_path: Path, tmp_path: Path) -> Path:
-    seed = tmp_path / "seed.json"
-    seed.write_text(json.dumps(_SEED), encoding="utf-8")
-    backfill_seed_decisions(db_path, seed)
+def seeded(db_path: Path) -> Path:
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO analyst_notes(kind,body,source,source_ref,created_at,updated_at) "
+            "VALUES ('musing','Synthetic rejected intent','manual','seed:intent:fixture',"
+            "'2026-07-01','2026-07-01')"
+        )
+        conn.executemany(
+            "INSERT INTO decisions(ticker,recommendation_kind,decided_by,scope,"
+            "falsifier,made_at,created_at) VALUES (?,'buy','owner','ticker',?,"
+            "'2026-07-01','2026-07-01')",
+            [
+                ("MU", "Memory pricing cycle rolls over. (inferred)"),
+                ("NU", "15-90d NPL >5% for 2Q"),
+            ],
+        )
     return db_path
 
 
@@ -77,10 +60,10 @@ def _kinds(db: Path) -> dict[str, int]:
     return out
 
 
-def test_list_unreconciled_covers_notes_themes_falsifiers(seeded: Path) -> None:
+def test_list_unreconciled_covers_notes_and_falsifiers(seeded: Path) -> None:
     # 1 seeded musing + 1 LEAP intent note, 1 theme, 1 inferred falsifier (MU
     # only — NU's falsifier carries no marker and needs no ratification)
-    assert _kinds(seeded) == {"note": 2, "theme": 1, "falsifier": 1}
+    assert _kinds(seeded) == {"note": 2, "falsifier": 1}
 
 
 def test_note_verdicts_stamp_and_drop_off(seeded: Path) -> None:
@@ -103,22 +86,6 @@ def test_note_verdicts_stamp_and_drop_off(seeded: Path) -> None:
             "SELECT status FROM analyst_notes WHERE id=?", (intent.item_id,)
         ).fetchone()[0]
         assert status2 == "resolved"
-    finally:
-        conn.close()
-
-
-def test_theme_verdict_supersedes(seeded: Path) -> None:
-    theme = next(i for i in list_unreconciled(seeded) if i.kind == "theme")
-    assert reconcile_theme(theme.item_id, "superseded", db_path=seeded)
-    assert _kinds(seeded).get("theme", 0) == 0
-    conn = sqlite3.connect(str(seeded))
-    try:
-        assert (
-            conn.execute(
-                "SELECT status FROM insight_notes WHERE id=?", (theme.item_id,)
-            ).fetchone()[0]
-            == "superseded"
-        )
     finally:
         conn.close()
 
@@ -152,8 +119,6 @@ def test_render_reconcile_list_smoke(seeded: Path) -> None:
     for item in list(list_unreconciled(seeded)):
         if item.kind == "note":
             reconcile_note(item.item_id, "live", db_path=seeded)
-        elif item.kind == "theme":
-            reconcile_theme(item.item_id, "live", db_path=seeded)
         else:
             falsifier_action(item.item_id, "ratify", db_path=seeded)
     assert "Corpus reconciled" in render_reconcile_list(seeded)

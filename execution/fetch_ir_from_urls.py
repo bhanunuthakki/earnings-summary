@@ -45,9 +45,9 @@ except ImportError:
     from execution._lib import PROJECT_ROOT
 
 try:
-    from .fetch_ir_documents import process_ticker
+    from .fetch_ir_documents import process_ticker, registered_source_urls
 except ImportError:
-    from fetch_ir_documents import process_ticker
+    from fetch_ir_documents import process_ticker, registered_source_urls
 
 import ir_fetch_status
 from ir_pipeline.manifest import ManifestEntry, merge_write
@@ -241,6 +241,13 @@ def register_urls(
         )
     finally:
         conn.close()
+    if (
+        in_window is not True
+        and urls
+        and set(urls).issubset(registered_source_urls(db_path, ticker, root=repo_root))
+    ):
+        # Inspection of verified existing bytes does not admit a new source.
+        in_window = True
     if in_window is False:
         sys.stderr.write(
             json.dumps(

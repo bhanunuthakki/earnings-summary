@@ -381,7 +381,7 @@ def test_0063_preserves_historical_receipt_and_admits_current_receipt(
         historical_row = dict(
             conn.execute("SELECT * FROM transcript_acquisition_receipts").fetchone()
         )
-    command.upgrade(_config(database), REPORTED_PERIOD_HEAD)
+    migrated_db(database, upgrade_existing=True, target=REPORTED_PERIOD_HEAD)
     with connect_sqlite(database, role=SQLiteConnectionRole.WRITER, schema_preflight=False) as conn:
         assert (
             dict(

@@ -31,7 +31,7 @@ import pytest
 from ask import context as ask_context
 from ask.packs import load_packs
 from db_paths import db_path_context
-from llm.anchors import load_themes_anchor, load_worldview_anchor
+from llm.anchors import load_worldview_anchor
 from macro_store import fetch_sensitivities, persist_rate_sensitivity
 from synthesis.insights import record_insight
 from synthesis.tenets import record_tenet, scope_key_for
@@ -75,34 +75,6 @@ def _record_theme(repo_root: Path, slug: str, body: str) -> None:
 # ---------------------------------------------------------------- themes anchor
 
 
-def test_themes_anchor_empty_when_flag_off(repo_root: Path) -> None:
-    _record_theme(repo_root, "ai-compute-buildout", "AI compute demand outruns supply.")
-    assert load_themes_anchor(repo_root) == ""
-
-
-def test_themes_anchor_renders_current_themes_when_on(
-    repo_root: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("LEDGER_WORLDVIEW_ANCHOR", "1")
-    _record_theme(repo_root, "ai-compute-buildout", "AI compute demand outruns supply.")
-    anchor = load_themes_anchor(repo_root)
-    assert "THEMES ANCHOR" in anchor
-    assert "AI compute demand outruns supply" in anchor
-    assert "theme:ai-compute-buildout" in anchor
-    assert "(since 20" in anchor  # dated for cache stability
-
-
-def test_themes_anchor_empty_without_themes_or_db(
-    repo_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("LEDGER_WORLDVIEW_ANCHOR", "1")
-    assert load_themes_anchor(repo_root) == ""  # table present, zero themes
-    bare = tmp_path / "empty_repo"
-    bare.mkdir()
-    with db_path_context(bare / "data" / "portfolio.db"):
-        assert load_themes_anchor(bare) == ""  # no DB — degrade, never raise
-
-
 # ------------------------------------------------- portfolio scope owner memory
 
 
@@ -114,7 +86,7 @@ def test_portfolio_context_carries_owner_memory_when_on(
     _record_theme(repo_root, "glp1-obesity", "GLP-1 reshapes consumer staples demand.")
     ctx = _portfolio_system_context(repo_root, {"portfolio": ["NU"]})
     assert "sell my winners too early" in ctx
-    assert "GLP-1 reshapes consumer staples" in ctx
+    assert "GLP-1 reshapes consumer staples" not in ctx
     # Sanity: the worldview loader is what fed it (same content, same gate).
     assert load_worldview_anchor(repo_root) != ""
 
@@ -187,11 +159,11 @@ def _seed_macro(repo_root: Path) -> None:
     )
 
 
-def test_macro_pack_levels_betas_and_stances(repo_root: Path) -> None:
+def test_macro_pack_levels_betas_and_process_tenets(repo_root: Path) -> None:
     _seed_macro(repo_root)
     record_insight(
         scope_key="macro:rates-duration",
-        kind="stance",
+        kind="tenet",
         body_md="I expect rates to stay above 4% through 2027; avoid duration bets.",
         source_note_ids=[],
         watermark_id=None,

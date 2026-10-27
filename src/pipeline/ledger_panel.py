@@ -362,7 +362,7 @@ def _missing_falsifier_line(db_path: Path | str | None) -> str:
 
 def _reconcile_card(item: ReconcileItem) -> str:
     """ONE reconcile row's markup — an inferred-falsifier ratify/rewrite/drop
-    card, or a note/theme one-tap verdict card. Carries its own
+    card, or a note one-tap verdict card. Carries its own
     ``data-rec-card``/``data-rec-id`` + action hooks and NO wrapping div or
     ``id`` — shared by ``render_reconcile_list`` (inside the one
     ``#ledger-reconcile`` container). ``_RECONCILE_JS``'s document-level click
@@ -405,14 +405,14 @@ def _reconcile_card(item: ReconcileItem) -> str:
             "you if it triggers. <strong>Drop -&gt;</strong> no tripwire watches this decision.</p>"
             f'<div class="ledger-cap-row">{buttons}</div></div>'
         )
-    rec_kind = "note" if item.kind == "note" else "theme"
+    rec_kind = "note"
     buttons = "".join(
         f'<button type="button" class="k-btn k-btn-sm {cls}" '
         f'data-rec-kind="{rec_kind}" data-rec-id="{item.item_id}" '
         f'data-rec-verdict="{verdict}" title="{escape(hint, quote=True)}">{label}</button>'
         for verdict, label, cls, hint in _RECONCILE_VERDICTS
     )
-    tag = item.label if item.kind == "theme" else (item.source_ref or item.label)
+    tag = item.source_ref or item.label
     head = f"<span class='ledger-chan'>{escape(tag)}</span>"
     return (
         '<div class="ledger-musing">'

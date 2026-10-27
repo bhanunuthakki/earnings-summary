@@ -11,6 +11,7 @@ from collections.abc import Callable
 from contextvars import Context
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -19,6 +20,7 @@ from dcf.provenance import DcfInputProvenance
 from execution.build_artifacts import build_candidate_artifact
 from pipeline.work_os_company import latest_brief
 from report.artifacts import (
+    RenderedReportBody,
     ReportArtifactRef,
     ReportPublicationConflictError,
     ReportRequestConflictError,
@@ -28,10 +30,11 @@ from report.artifacts import (
     hold_report_index,
     latest_report_artifacts_for_tickers,
     load_report_artifact_index,
-    publish_report_candidate,
     reconcile_legacy_workspace_reports,
 )
-from research.decision_brief import DecisionBriefReadiness
+from report.models import ReportSpec
+from report.workspace_models import WorkspaceDelivery
+from research.decision_brief import DecisionBriefReadiness, publish_report_candidate
 from runtime.job_runtime import JobAlreadyRunningError
 
 
@@ -62,6 +65,7 @@ def test_index_lock_is_cross_process_and_follows_resolved_output(tmp_path: Path)
     script = """
 import sys
 from pathlib import Path
+from typing import cast
 from report.artifacts import hold_report_index
 from runtime.job_runtime import JobAlreadyRunningError
 try:
@@ -95,6 +99,7 @@ def test_concurrent_ticker_writers_preserve_each_others_index_entries(tmp_path: 
 import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import cast
 from report.artifacts import (
     RenderedReportBody, ReportInteractionManifest, persist_report_artifact,
 )
@@ -218,6 +223,9 @@ def test_candidate_build_and_publish_lifecycle(
         "execution.build_artifacts.assess_candidate_decision_brief",
         _mock_assess_verified,
     )
+    monkeypatch.setattr(
+        "research.decision_brief.assess_candidate_decision_brief", _mock_assess_verified
+    )
     db_path = migrated_db(tmp_path / "test.db")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -238,12 +246,51 @@ def test_candidate_build_and_publish_lifecycle(
         tmp_path / "output" / "research" / "GOOG" / f"{date.today().isoformat()}_workspace.html"
     ).exists()
 
+    # Retired caches and unrelated task files are not report inputs.
+    old_inputs = (
+        "GOOG_Q1_2025_summary.txt",
+        "GOOG_Q1_2025_press_release_summary.txt",
+        "SayDo_GOOG_Q4_2024_Q1_2025.txt",
+        "GOOG_unrelated_task.txt",
+    )
+    for name in old_inputs:
+        (tmp_path / ".tmp" / name).write_text("retired or unrelated")
     generated_at = datetime.fromisoformat(
         str(load_report_artifact_index(tmp_path).items[0].generated_at)
     )
     reused = build_candidate_artifact("GOOG", tmp_path, db_path=db_path, cutoff_at=generated_at)
     assert reused["reused"] is True
     assert reused["artifact_id"] == res["artifact_id"]
+
+    from execution import build_artifacts
+
+    original_render = build_artifacts.render_report_body
+
+    def changed_retained_input(
+        spec: ReportSpec,
+        *,
+        delivery: WorkspaceDelivery | None = None,
+        generation_context_sha256: str | None = None,
+    ) -> RenderedReportBody:
+        body = original_render(
+            spec, delivery=delivery, generation_context_sha256=generation_context_sha256
+        )
+        return RenderedReportBody.from_html(
+            ticker=body.ticker,
+            report_date=body.report_date,
+            body_html=body.body_html + "<p>Retained product input became unavailable.</p>",
+            sections=body.sections,
+            interaction_manifest=body.interaction_manifest,
+            fiscal_period_label=body.fiscal_period_label,
+        )
+
+    with monkeypatch.context() as patch:
+        patch.setattr(build_artifacts, "render_report_body", changed_retained_input)
+        invalidated = build_candidate_artifact(
+            "GOOG", tmp_path, db_path=db_path, cutoff_at=generated_at
+        )
+    assert invalidated["status"] == "capture_unavailable"
+    assert invalidated["reason"] == "candidate_source_evidence_changed"
 
     _approval, pub_reused = publish_report_candidate(
         tmp_path,
@@ -285,6 +332,9 @@ def test_publish_fences_detect_model_and_file_drift(
     monkeypatch.setattr(
         "execution.build_artifacts.assess_candidate_decision_brief",
         _mock_assess_verified,
+    )
+    monkeypatch.setattr(
+        "research.decision_brief.assess_candidate_decision_brief", _mock_assess_verified
     )
     db_path = migrated_db(tmp_path / "test.db")
     with sqlite3.connect(db_path) as conn:
@@ -366,6 +416,9 @@ def test_unified_current_report_selectors_and_sync_status(
         "execution.build_artifacts.assess_candidate_decision_brief",
         _mock_assess_verified,
     )
+    monkeypatch.setattr(
+        "research.decision_brief.assess_candidate_decision_brief", _mock_assess_verified
+    )
     db_path = migrated_db(tmp_path / "test.db")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -404,6 +457,9 @@ def test_report_sync_api_routes_etag_and_lifecycle(
     monkeypatch.setattr(
         "execution.build_artifacts.assess_candidate_decision_brief",
         _mock_assess_verified,
+    )
+    monkeypatch.setattr(
+        "research.decision_brief.assess_candidate_decision_brief", _mock_assess_verified
     )
     db_path = migrated_db(tmp_path / "test.db")
     with sqlite3.connect(db_path) as conn:
@@ -473,8 +529,10 @@ def test_report_sync_api_routes_etag_and_lifecycle(
     assert res_final.get_json()["report_stale"] is False
 
 
+@pytest.mark.parametrize("source_change", ["unchanged", "changed", "missing"])
+@pytest.mark.parametrize("explicit_cutoff", [False, True])
 def test_populated_canonical_financial_candidate_generation(
-    tmp_path: Path, migrated_db: Callable[[Path], Path]
+    tmp_path: Path, migrated_db: Callable[[Path], Path], source_change: str, explicit_cutoff: bool
 ) -> None:
     from execution import build_artifacts
     from provenance.source_read_context import SourceReadContext
@@ -484,11 +542,13 @@ def test_populated_canonical_financial_candidate_generation(
     from tests.test_report_canonical_financials import STAMP, seed_table
     from tests.test_source_fact_repository import seed_foundation
 
-    root = tmp_path.resolve()
+    root = (tmp_path / "reports").resolve()
+    root.mkdir()
+    source = tmp_path / "approved/document.json"
     db = migrated_db(root / "test.sqlite")
-    authority = SourceReadContext(content_roots=(root / "approved",))
+    authority = SourceReadContext(content_roots=(source.parent,))
     with sqlite3.connect(db) as conn:
-        seed_foundation(conn, source_path=root / "approved/document.json")
+        seed_foundation(conn, source_path=source)
         seed_table(conn, [("revenue", "2025-01-01", "2025-03-31", "Q1", "100000000", "USD")])
         conn.execute(
             "INSERT INTO tracked_companies(ticker,name,list_type) "
@@ -520,3 +580,50 @@ def test_populated_canonical_financial_candidate_generation(
     assert item.body_path is not None
     body: str = (root / item.body_path).read_text(encoding="utf-8")
     assert "$100" in body or "100.0" in body
+
+    if source_change == "changed":
+        source.write_bytes(b"changed filing bytes")
+    elif source_change == "missing":
+        source.unlink()
+    if source_change != "unchanged":
+        # Simulate an earlier successful review. Publication must check current
+        # source bytes even when the stored review claims they passed.
+        review_path = (
+            root / "output/research/SYNTH/artifacts" / artifact_id / "candidate_review.json"
+        )
+        from report.generation_context import ReportCandidateReview
+
+        prior = ReportCandidateReview.model_validate_json(review_path.read_text())
+        review_path.write_text(
+            prior.model_copy(update={"ready": True, "reason_codes": ()}).model_dump_json()
+        )
+        with pytest.raises(ReportPublicationConflictError) as exc:
+            publish_report_candidate(
+                root,
+                db_path=db,
+                ticker="SYNTH",
+                artifact_id=artifact_id,
+                expected_current_artifact_id=None,
+                owner_action_id="changed-source",
+                source_context=authority,
+            )
+        assert exc.value.reason == "candidate_source_evidence_changed"
+        assert exc.value.detail is not None
+        reasons = exc.value.detail["reason_codes"]
+        assert isinstance(reasons, list)
+        assert "memo_source_bytes_unavailable_or_changed" in cast(list[object], reasons)
+        assert load_report_artifact_index(root).publications == ()
+        review_path.write_text(prior.model_dump_json())
+
+    assert item.generation_context is not None
+    repeat = build_artifacts.build_candidate_artifact(
+        "SYNTH",
+        root,
+        db_path=db,
+        source_context=authority,
+        cutoff_at=item.generation_context.cutoff_at if explicit_cutoff else None,
+    )
+    assert repeat.get("reused", False) is (source_change == "unchanged")
+    if source_change != "unchanged":
+        assert repeat["status"] == "capture_unavailable"
+        assert repeat["reason"] == "candidate_source_evidence_changed"

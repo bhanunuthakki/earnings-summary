@@ -78,11 +78,6 @@ class TenetPayload(TypedDict):
     citations: list[int | str]
 
 
-class ThemeSynthesisPayload(TypedDict):
-    stance: str
-    citations: list[int | str]
-
-
 class TopicVerdictPayload(TypedDict):
     relevant: bool
     rationale: str
@@ -285,7 +280,6 @@ SEMANTIC_TENSION_SCHEMA = TypeAdapter(SemanticTensionPayload)
 SESSION_CANDIDATE_BATCH_SCHEMA = TypeAdapter(list[SessionCandidatePayload])
 TENET_ACCOUNTABILITY_SCHEMA = TypeAdapter(TenetAccountabilityPayload)
 TENET_BATCH_SCHEMA = TypeAdapter(list[TenetPayload])
-THEME_SYNTHESIS_SCHEMA = TypeAdapter(ThemeSynthesisPayload)
 TRANSCRIPT_TONE_SCHEMA = TypeAdapter(TranscriptTonePayload)
 TRANSCRIPT_TOPIC_SCHEMA = TypeAdapter(dict[str, TopicVerdictPayload])
 TRANSCRIPT_METADATA_SCHEMA = TypeAdapter(TranscriptMetadataPayload)

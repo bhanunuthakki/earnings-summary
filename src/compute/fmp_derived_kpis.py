@@ -25,7 +25,7 @@ KPI and persisting both into `kpi_facts`:
   skipped. A spec whose base does not resolve for a ticker simply emits nothing.
 
 Every derived name is registered as a kpi_definition on first emission so
-downstream break_rules can reference it by string match. `derive_for_ticker`
+downstream break_rules can reference it by string match. `derive_for_ticker_outcome`
 runs category 1 first (persisting Revenue YoY Growth), then category 2 (which
 can read that freshly-persisted series as a base).
 """
@@ -41,7 +41,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from compute.kpi_resolver import resolve_kpi_definition_name, semantic_series_identity_sql
 from credibility.observations import KPI_FACTS, record_restatement_observation
@@ -69,6 +69,7 @@ from provenance.financial_fact_resolution import (
 )
 from provenance.overrides import KPI as OVERRIDE_KPI
 from provenance.overrides import active_scalar_override_map
+from provenance.source_fact_publication import publication_verification_scope
 from timeseries.loaders import reader_tier_rank_sql
 
 log = logging.getLogger(__name__)
@@ -150,11 +151,13 @@ class QuarterlyFacts:
     free_cash_flow: Decimal | None = None
     operating_cash_flow: Decimal | None = None
     total_stockholders_equity: Decimal | None = None
+    input_refs: dict[str, DerivedInputRef] | None = None
 
 
 class FmpDerivationReason(StrEnum):
     """Closed, externally reportable reasons for skipped source fundamentals."""
 
+    MISSING_CANONICAL_INPUT_REFERENCE = "missing_canonical_input_reference"
     MISSING_MONETARY_CURRENCY = "missing_monetary_currency"
     INCOMPATIBLE_MONETARY_CURRENCY = "incompatible_monetary_currency"
     MISSING_SEGMENT_CURRENCY = "missing_segment_currency"
@@ -195,7 +198,74 @@ def _fact_doc_id(facts: QuarterlyFacts, line_item: str) -> int:
     return facts.source_doc_id
 
 
+def _canonical_input_refs(
+    conn: sqlite3.Connection,
+    fact_table: Literal["financial_facts", "kpi_facts"],
+    requested: dict[int, tuple[int, str, str]],
+) -> dict[int, DerivedInputRef]:
+    """Pin selected rows to their exact observation, resolution and source version."""
+    if not requested:
+        return {}
+    cutoff = datetime.now(UTC)
+    selections = canonical_fact_selections_as_known(
+        conn, fact_table=fact_table, effective_at=cutoff, known_at=cutoff
+    )
+    selected_by_id = {selection.fact_row_id: selection for selection in selections}
+    selected_ids = [fact_id for fact_id in requested if fact_id in selected_by_id]
+    if not selected_ids:
+        return {}
+    placeholders = ",".join("?" for _ in selected_ids)
+    evidence_rows = conn.execute(
+        "SELECT link.fact_row_id,link.fact_revision,link.observation_id,run.document_version_id "
+        "FROM fact_observation_revisions AS link "
+        "JOIN reported_observations AS observation "
+        "ON observation.observation_id=link.observation_id "
+        "JOIN evidence_nodes AS node ON node.node_id=observation.evidence_node_id "
+        "JOIN evidence_extraction_runs AS run ON run.extraction_run_id=node.extraction_run_id "
+        f"WHERE link.fact_table=? AND link.fact_row_id IN ({placeholders})",
+        (fact_table, *selected_ids),
+    ).fetchall()
+    versions = {
+        (int(row["fact_row_id"]), int(row["fact_revision"]), str(row["observation_id"])): str(
+            row["document_version_id"]
+        )
+        for row in evidence_rows
+    }
+    result: dict[int, DerivedInputRef] = {}
+    for fact_id, (doc_id, item, period_end) in requested.items():
+        selection = selected_by_id.get(fact_id)
+        version = (
+            versions.get((fact_id, selection.fact_revision, selection.observation_id))
+            if selection
+            else None
+        )
+        if selection is None or not version or selection.source_document_id != doc_id:
+            continue
+        result[fact_id] = DerivedInputRef(
+            ref="legacy_canonical_fact",
+            fact_table=fact_table,
+            fact_id=fact_id,
+            fact_revision=selection.fact_revision,
+            observation_id=selection.observation_id,
+            resolution_id=selection.resolution_id,
+            resolution_revision=selection.resolution_revision,
+            doc_id=doc_id,
+            document_version_id=version,
+            item=item,
+            period_end=period_end,
+        )
+    return result
+
+
 def _fetch_quarterly_facts(
+    conn: sqlite3.Connection, ticker: str
+) -> tuple[list[QuarterlyFacts], list[FmpDerivationReason]]:
+    """Keep fundamental values and immutable input references in one snapshot."""
+    with publication_verification_scope(conn):
+        return _fetch_quarterly_facts_in_snapshot(conn, ticker)
+
+
+def _fetch_quarterly_facts_in_snapshot(
     conn: sqlite3.Connection, ticker: str
 ) -> tuple[list[QuarterlyFacts], list[FmpDerivationReason]]:
     """Pull standalone-quarter fundamentals for a ticker.
@@ -235,10 +305,11 @@ def _fetch_quarterly_facts(
     all_line_items = _REQUIRED_LINE_ITEMS + _OPTIONAL_LINE_ITEMS + _BALANCE_LINE_ITEMS
     placeholders = ",".join("?" * len(all_line_items))
     tier_rank = reader_tier_rank_sql(conn)
-    fact_relation = canonical_fact_relation(conn, "financial_facts").sql
+    relation = canonical_fact_relation(conn, "financial_facts")
+    fact_relation = relation.sql
     cur = conn.execute(
         f"""
-        SELECT ff.period_end, ff.fiscal_period_type, ff.line_item, ff.value, ff.currency,
+        SELECT ff.id, ff.period_end, ff.fiscal_period_type, ff.line_item, ff.value, ff.currency,
                ff.source_doc_id
         FROM {fact_relation} ff
         JOIN documents d ON d.id = ff.source_doc_id
@@ -255,13 +326,36 @@ def _fetch_quarterly_facts(
         """,
         (ticker.upper(), *all_line_items),
     )
+    selected_rows = cur.fetchall()
+    input_refs = (
+        _canonical_input_refs(
+            conn,
+            "financial_facts",
+            {
+                int(row["id"]): (
+                    int(row["source_doc_id"]),
+                    str(row["line_item"]),
+                    str(row["period_end"])[:10],
+                )
+                for row in selected_rows
+            },
+        )
+        if relation.selection_mode == "resolved_view"
+        else None
+    )
+    references: dict[tuple[datetime, str], dict[str, DerivedInputRef]] = {}
     grouped: dict[tuple[datetime, str], dict[str, object]] = {}
-    for row in cur.fetchall():
+    for row in selected_rows:
         pe = row["period_end"]
         if isinstance(pe, str):
             pe = datetime.fromisoformat(pe)
         key = (pe, row["fiscal_period_type"])
         bucket = grouped.setdefault(key, {})
+        if input_refs is not None:
+            refs = references.setdefault(key, {})
+            refs.pop(str(row["line_item"]), None)
+            if (reference := input_refs.get(int(row["id"]))) is not None:
+                refs[str(row["line_item"])] = reference
         # These are monetary source facts. Do not let the historic FMP
         # deriver manufacture a ratio from a missing or incompatible currency:
         # a percentage is dimensionless, but its numerator and denominator are
@@ -286,6 +380,12 @@ def _fetch_quarterly_facts(
     degradations: list[FmpDerivationReason] = []
     for (pe, fpt), bucket in sorted(grouped.items(), key=lambda kv: kv[0][0]):
         if not all(li in bucket for li in _REQUIRED_LINE_ITEMS):
+            continue
+        period_refs = references.get((pe, fpt), {}) if input_refs is not None else None
+        if period_refs is not None and any(
+            item not in period_refs for item in _REQUIRED_LINE_ITEMS
+        ):
+            degradations.append(FmpDerivationReason.MISSING_CANONICAL_INPUT_REFERENCE)
             continue
         required_cells = [
             _monetary_fact_cell(bucket[line_item]) for line_item in _REQUIRED_LINE_ITEMS
@@ -347,6 +447,15 @@ def _fetch_quarterly_facts(
         # moves something.
         if ocf == Decimal(0) and capex == Decimal(0) and fcf == Decimal(0):
             ocf = capex = fcf = None
+        if period_refs is not None:
+            if "operating_cash_flow" not in period_refs:
+                ocf = None
+            if "capital_expenditure" not in period_refs:
+                capex = None
+            if "free_cash_flow" not in period_refs:
+                fcf = None
+            if "total_stockholders_equity" not in period_refs:
+                equity_dec = None
         results.append(
             QuarterlyFacts(
                 ticker=ticker.upper(),
@@ -366,6 +475,7 @@ def _fetch_quarterly_facts(
                 free_cash_flow=fcf,
                 operating_cash_flow=ocf,
                 total_stockholders_equity=equity_dec,
+                input_refs=period_refs,
             )
         )
     return results, degradations
@@ -409,6 +519,12 @@ def _input_ref(ref: str, item: str, period_end: datetime, doc_id: int) -> dict[s
     }
 
 
+def _financial_input_ref(facts: QuarterlyFacts, item: str) -> dict[str, object]:
+    if facts.input_refs is not None:
+        return facts.input_refs[item].model_dump(mode="json", exclude_none=True)
+    return _input_ref("financial_fact", item, facts.period_end, _fact_doc_id(facts, item))
+
+
 def _pct(numerator: Decimal, denominator: Decimal) -> Decimal:
     """Return numerator / denominator * 100 as a Decimal (safe for zero-revenue guard already applied)."""
     return (numerator / denominator) * Decimal(100)
@@ -440,15 +556,8 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                 computed_from=_lineage(
                     "operating_income ÷ revenue (%)",
                     [
-                        _input_ref(
-                            "financial_fact",
-                            "operating_income",
-                            f.period_end,
-                            _fact_doc_id(f, "operating_income"),
-                        ),
-                        _input_ref(
-                            "financial_fact", "revenue", f.period_end, _fact_doc_id(f, "revenue")
-                        ),
+                        _financial_input_ref(f, "operating_income"),
+                        _financial_input_ref(f, "revenue"),
                     ],
                 ),
             )
@@ -464,15 +573,8 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                 computed_from=_lineage(
                     "net_income ÷ revenue (%)",
                     [
-                        _input_ref(
-                            "financial_fact",
-                            "net_income",
-                            f.period_end,
-                            _fact_doc_id(f, "net_income"),
-                        ),
-                        _input_ref(
-                            "financial_fact", "revenue", f.period_end, _fact_doc_id(f, "revenue")
-                        ),
+                        _financial_input_ref(f, "net_income"),
+                        _financial_input_ref(f, "revenue"),
                     ],
                 ),
             )
@@ -488,15 +590,8 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                 computed_from=_lineage(
                     "gross_profit ÷ revenue (%)",
                     [
-                        _input_ref(
-                            "financial_fact",
-                            "gross_profit",
-                            f.period_end,
-                            _fact_doc_id(f, "gross_profit"),
-                        ),
-                        _input_ref(
-                            "financial_fact", "revenue", f.period_end, _fact_doc_id(f, "revenue")
-                        ),
+                        _financial_input_ref(f, "gross_profit"),
+                        _financial_input_ref(f, "revenue"),
                     ],
                 ),
             )
@@ -515,18 +610,8 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                     computed_from=_lineage(
                         "|capital_expenditure| ÷ revenue (%)",
                         [
-                            _input_ref(
-                                "financial_fact",
-                                "capital_expenditure",
-                                f.period_end,
-                                _fact_doc_id(f, "capital_expenditure"),
-                            ),
-                            _input_ref(
-                                "financial_fact",
-                                "revenue",
-                                f.period_end,
-                                _fact_doc_id(f, "revenue"),
-                            ),
+                            _financial_input_ref(f, "capital_expenditure"),
+                            _financial_input_ref(f, "revenue"),
                         ],
                     ),
                 )
@@ -543,18 +628,8 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                     computed_from=_lineage(
                         "free_cash_flow ÷ revenue (%)",
                         [
-                            _input_ref(
-                                "financial_fact",
-                                "free_cash_flow",
-                                f.period_end,
-                                _fact_doc_id(f, "free_cash_flow"),
-                            ),
-                            _input_ref(
-                                "financial_fact",
-                                "revenue",
-                                f.period_end,
-                                _fact_doc_id(f, "revenue"),
-                            ),
+                            _financial_input_ref(f, "free_cash_flow"),
+                            _financial_input_ref(f, "revenue"),
                         ],
                     ),
                 )
@@ -582,18 +657,8 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                     computed_from=_lineage(
                         "revenue vs same quarter 1y prior (%)",
                         [
-                            _input_ref(
-                                "financial_fact",
-                                "revenue",
-                                f.period_end,
-                                _fact_doc_id(f, "revenue"),
-                            ),
-                            _input_ref(
-                                "financial_fact",
-                                "revenue",
-                                prior.period_end,
-                                _fact_doc_id(prior, "revenue"),
-                            ),
+                            _financial_input_ref(f, "revenue"),
+                            _financial_input_ref(prior, "revenue"),
                         ],
                     ),
                 )
@@ -619,18 +684,8 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                         computed_from=_lineage(
                             "operating_cash_flow vs same quarter 1y prior (%)",
                             [
-                                _input_ref(
-                                    "financial_fact",
-                                    "operating_cash_flow",
-                                    f.period_end,
-                                    _fact_doc_id(f, "operating_cash_flow"),
-                                ),
-                                _input_ref(
-                                    "financial_fact",
-                                    "operating_cash_flow",
-                                    prior.period_end,
-                                    _fact_doc_id(prior, "operating_cash_flow"),
-                                ),
+                                _financial_input_ref(f, "operating_cash_flow"),
+                                _financial_input_ref(prior, "operating_cash_flow"),
                             ],
                         ),
                     )
@@ -659,23 +714,8 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                 source_doc_id=cur.source_doc_id,
                 computed_from=_lineage(
                     "TTM net_income ÷ total_stockholders_equity (%)",
-                    [
-                        _input_ref(
-                            "financial_fact",
-                            "net_income",
-                            q.period_end,
-                            _fact_doc_id(q, "net_income"),
-                        )
-                        for q in window
-                    ]
-                    + [
-                        _input_ref(
-                            "financial_fact",
-                            "total_stockholders_equity",
-                            cur.period_end,
-                            _fact_doc_id(cur, "total_stockholders_equity"),
-                        )
-                    ],
+                    [_financial_input_ref(q, "net_income") for q in window]
+                    + [_financial_input_ref(cur, "total_stockholders_equity")],
                 ),
             )
         )
@@ -1267,61 +1307,18 @@ def _fetch_full_kpi_series_in_snapshot(
         )
     cur = conn.execute(query, (ticker.upper(), resolved))
     rows = cur.fetchall()
-    selected_inputs: dict[int, DerivedInputRef] = {}
-    if fact_relation.selection_mode == "resolved_view" and rows:
-        cutoff = datetime.now(UTC)
-        selections = canonical_fact_selections_as_known(
-            conn, fact_table="kpi_facts", effective_at=cutoff, known_at=cutoff
+    selected_inputs = (
+        _canonical_input_refs(
+            conn,
+            "kpi_facts",
+            {
+                int(row["id"]): (int(row["source_doc_id"]), base_label, str(row["period_end"])[:10])
+                for row in rows
+            },
         )
-        selected_by_id = {selection.fact_row_id: selection for selection in selections}
-        selected_ids = [int(row["id"]) for row in rows if int(row["id"]) in selected_by_id]
-        if selected_ids:
-            placeholders = ",".join("?" for _ in selected_ids)
-            evidence_rows = conn.execute(
-                "SELECT link.fact_row_id,link.fact_revision,link.observation_id,run.document_version_id "
-                "FROM fact_observation_revisions AS link "
-                "JOIN reported_observations AS observation "
-                "ON observation.observation_id=link.observation_id "
-                "JOIN evidence_nodes AS node ON node.node_id=observation.evidence_node_id "
-                "JOIN evidence_extraction_runs AS run ON run.extraction_run_id=node.extraction_run_id "
-                f"WHERE link.fact_table='kpi_facts' AND link.fact_row_id IN ({placeholders})",
-                selected_ids,
-            ).fetchall()
-            versions = {
-                (
-                    int(row["fact_row_id"]),
-                    int(row["fact_revision"]),
-                    str(row["observation_id"]),
-                ): str(row["document_version_id"])
-                for row in evidence_rows
-            }
-            for row in rows:
-                fact_id = int(row["id"])
-                selection = selected_by_id.get(fact_id)
-                version = (
-                    versions.get((fact_id, selection.fact_revision, selection.observation_id))
-                    if selection is not None
-                    else None
-                )
-                if (
-                    selection is None
-                    or not version
-                    or selection.source_document_id != int(row["source_doc_id"])
-                ):
-                    continue
-                selected_inputs[fact_id] = DerivedInputRef(
-                    ref="legacy_canonical_fact",
-                    fact_table="kpi_facts",
-                    fact_id=fact_id,
-                    fact_revision=selection.fact_revision,
-                    observation_id=selection.observation_id,
-                    resolution_id=selection.resolution_id,
-                    resolution_revision=selection.resolution_revision,
-                    doc_id=selection.source_document_id,
-                    document_version_id=version,
-                    item=base_label,
-                    period_end=str(row["period_end"])[:10],
-                )
+        if fact_relation.selection_mode == "resolved_view"
+        else {}
+    )
     points: list[KpiSeriesPoint] = []
     for row in rows:
         if base_unit is not None and Unit(row["unit"]) is not base_unit:
@@ -1354,15 +1351,8 @@ def _fetch_full_kpi_series(
     base_unit: Unit | None = Unit.PERCENT,
 ) -> list[KpiSeriesPoint]:
     """Read the base rows and their exact ledger pins in one SQLite snapshot."""
-    conn.execute("SAVEPOINT kpi_derived_series_read")
-    try:
-        points = _fetch_full_kpi_series_in_snapshot(conn, ticker, base_label, base_unit)
-    except BaseException:
-        conn.execute("ROLLBACK TO SAVEPOINT kpi_derived_series_read")
-        conn.execute("RELEASE SAVEPOINT kpi_derived_series_read")
-        raise
-    conn.execute("RELEASE SAVEPOINT kpi_derived_series_read")
-    return points
+    with publication_verification_scope(conn):
+        return _fetch_full_kpi_series_in_snapshot(conn, ticker, base_label, base_unit)
 
 
 fetch_selected_kpi_series = _fetch_full_kpi_series
@@ -1556,7 +1546,7 @@ def _derived_semantic_context(
     # lineage stays explicit legacy_unknown and therefore fails closed for
     # decision-grade consumers.
     if (
-        refs == {"financial_fact"}
+        refs in ({"financial_fact"}, {"legacy_canonical_fact"})
         and doc_ids
         and all(
             tier_by_doc.get(doc_id) == SourceQualityTier.SEC_OFFICIAL.value for doc_id in doc_ids
@@ -1619,9 +1609,3 @@ def derive_for_ticker_outcome(conn: sqlite3.Connection, ticker: str) -> FmpDeriv
         not_computable=len(degradations),
         reasons=tuple(degradations),
     )
-
-
-def derive_for_ticker(conn: sqlite3.Connection, ticker: str) -> tuple[int, int]:
-    """Compatibility wrapper returning ``(rows_emitted, rows_inserted)``."""
-    outcome = derive_for_ticker_outcome(conn, ticker)
-    return (outcome.rows_emitted, outcome.rows_inserted)

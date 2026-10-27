@@ -7,7 +7,7 @@ import json
 import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import closing
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -22,12 +22,15 @@ from compute.fmp_derived_kpis import (
     FmpDerivationReason,
     QuarterlyFacts,
     derive_for_facts,
-    derive_for_ticker,
     derive_for_ticker_outcome,
 )
-from models.facts import FiscalPeriodType, Unit
+from models.facts import DerivedInputRef, FiscalPeriodType, Unit
 from provenance.evidence_backfill import ensure_legacy_document_evidence
-from provenance.financial_fact_resolution import resolve_fact_row
+from provenance.financial_fact_resolution import (
+    CanonicalFactSelectionAsKnown,
+    canonical_fact_selections_as_known,
+    resolve_fact_row,
+)
 
 
 @pytest.fixture
@@ -245,9 +248,11 @@ def test_derive_for_ticker_excludes_annual_and_ttm_fiscal_periods(conn: sqlite3.
         )
     conn.commit()
 
-    emitted, inserted = derive_for_ticker(conn, "X")
-    assert emitted == 3  # OpMargin + NetMargin + GrossMargin (no YoY without prior year)
-    assert inserted == 3
+    outcome = derive_for_ticker_outcome(conn, "X")
+    assert (
+        outcome.rows_emitted == 3
+    )  # OpMargin + NetMargin + GrossMargin (no YoY without prior year)
+    assert outcome.rows_inserted == 3
     rows = conn.execute(
         "SELECT kd.name, kf.value FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
         "WHERE kf.ticker='X' ORDER BY kd.name"
@@ -298,7 +303,7 @@ def test_derived_lineage_preserves_each_winning_cell_document(
     )
     conn.commit()
 
-    derive_for_ticker(conn, "MIX")
+    derive_for_ticker_outcome(conn, "MIX")
     raw = conn.execute(
         "SELECT kf.computed_from FROM kpi_facts kf "
         "JOIN kpi_definitions kd ON kd.id=kf.kpi_definition_id "
@@ -308,6 +313,39 @@ def test_derived_lineage_preserves_each_winning_cell_document(
     assert raw is not None
     inputs = {entry["item"]: entry["doc_id"] for entry in json.loads(str(raw))["inputs"]}
     assert inputs == {"operating_income": sec_doc, "revenue": fmp_doc}
+    cutoff = datetime.now(UTC)
+    selected = {
+        ref.fact_row_id: ref
+        for ref in canonical_fact_selections_as_known(
+            conn, fact_table="financial_facts", effective_at=cutoff, known_at=cutoff
+        )
+    }
+    for raw_input in json.loads(str(raw))["inputs"]:
+        reference = DerivedInputRef.model_validate(raw_input)
+        assert reference.ref == "legacy_canonical_fact"
+        assert reference.fact_table == "financial_facts"
+        assert reference.fact_id is not None
+        pin = selected[reference.fact_id]
+        assert (
+            reference.fact_revision,
+            reference.observation_id,
+            reference.resolution_id,
+            reference.resolution_revision,
+            reference.doc_id,
+        ) == (
+            pin.fact_revision,
+            pin.observation_id,
+            pin.resolution_id,
+            pin.resolution_revision,
+            pin.source_document_id,
+        )
+        assert (
+            conn.execute(
+                "SELECT legacy_document_id FROM evidence_document_versions WHERE document_version_id=?",
+                (reference.document_version_id,),
+            ).fetchone()[0]
+            == reference.doc_id
+        )
 
 
 def test_derive_for_ticker_idempotent(conn: sqlite3.Connection) -> None:
@@ -331,10 +369,10 @@ def test_derive_for_ticker_idempotent(conn: sqlite3.Connection) -> None:
         )
     conn.commit()
 
-    _, inserted_first = derive_for_ticker(conn, "Y")
-    _, inserted_second = derive_for_ticker(conn, "Y")
-    assert inserted_first == 3
-    assert inserted_second == 0
+    first = derive_for_ticker_outcome(conn, "Y")
+    second = derive_for_ticker_outcome(conn, "Y")
+    assert first.rows_inserted == 3
+    assert second.rows_inserted == 0
 
 
 def test_derive_for_ticker_rejects_incompatible_required_monetary_currency(
@@ -387,9 +425,9 @@ def test_derive_for_ticker_skips_period_missing_required_line_items(
         )
     conn.commit()
 
-    emitted, inserted = derive_for_ticker(conn, "Z")
-    assert emitted == 0
-    assert inserted == 0
+    outcome = derive_for_ticker_outcome(conn, "Z")
+    assert outcome.rows_emitted == 0
+    assert outcome.rows_inserted == 0
 
 
 def test_derive_for_ticker_skips_when_revenue_zero(conn: sqlite3.Connection) -> None:
@@ -412,8 +450,8 @@ def test_derive_for_ticker_skips_when_revenue_zero(conn: sqlite3.Connection) -> 
             source_doc_id=doc_id,
         )
     conn.commit()
-    emitted, _inserted = derive_for_ticker(conn, "Z")
-    assert emitted == 0
+    outcome = derive_for_ticker_outcome(conn, "Z")
+    assert outcome.rows_emitted == 0
 
 
 def test_derive_drops_cashflow_when_all_three_line_items_are_zero(
@@ -446,11 +484,11 @@ def test_derive_drops_cashflow_when_all_three_line_items_are_zero(
         )
     conn.commit()
 
-    emitted, inserted = derive_for_ticker(conn, "NTDOY")
+    outcome = derive_for_ticker_outcome(conn, "NTDOY")
     # Should emit only the three income-statement margins, NOT FCF margin
     # or Capex/Revenue. (No YoY without a prior year.)
-    assert emitted == 3
-    assert inserted == 3
+    assert outcome.rows_emitted == 3
+    assert outcome.rows_inserted == 3
     names = [
         r["name"]
         for r in conn.execute(
@@ -490,7 +528,7 @@ def test_derive_does_not_drop_cashflow_when_only_capex_is_zero(
         )
     conn.commit()
 
-    derive_for_ticker(conn, "Y")
+    derive_for_ticker_outcome(conn, "Y")
     names = [
         r["name"]
         for r in conn.execute(
@@ -719,3 +757,39 @@ def test_derive_roe_skipped_when_period_end_equity_missing() -> None:
         _qf(2025, 4, Decimal(5), None),
     ]
     assert not [r for r in derive_for_facts(facts) if r.name == KPI_ROE]
+
+
+def test_derivation_requires_canonical_input_pins(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from compute import fmp_derived_kpis
+
+    doc_id = _insert_doc(conn, "PIN", "data/historical/fmp/PIN_income_statement_quarterly.json")
+    for item, value in (
+        ("revenue", 100),
+        ("operating_income", 20),
+        ("net_income", 15),
+        ("gross_profit", 40),
+    ):
+        _insert_fact(
+            conn,
+            ticker="PIN",
+            period_end=datetime(2024, 12, 31),
+            fpt="Q4",
+            line_item=item,
+            value=value,
+            source_doc_id=doc_id,
+        )
+    conn.commit()
+
+    def unavailable(*_args: object, **_kwargs: object) -> tuple[CanonicalFactSelectionAsKnown, ...]:
+        return ()
+
+    monkeypatch.setattr(fmp_derived_kpis, "canonical_fact_selections_as_known", unavailable)
+    result = derive_for_ticker_outcome(conn, "PIN")
+    assert result.rows_emitted == result.rows_inserted == 0
+    assert result.reasons == (FmpDerivationReason.MISSING_CANONICAL_INPUT_REFERENCE,)
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts WHERE ticker='PIN'").fetchone()[0] == 0
+    assert (
+        conn.execute("SELECT COUNT(*) FROM financial_facts WHERE ticker='PIN'").fetchone()[0] == 4
+    )

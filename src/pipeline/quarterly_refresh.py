@@ -34,7 +34,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from compute.evidence_snapshot import recorded_evidence_location
-from compute.fmp_derived_kpis import derive_for_ticker
+from compute.fmp_derived_kpis import derive_for_ticker_outcome
 from compute.say_do import match_pending as match_commitments_pending
 from compute.thesis_evaluator import (
     evaluate_ticker_thesis,
@@ -347,7 +347,7 @@ def _stage_ingest_ir_transcripts(
 def _stage_derive_kpis(conn: sqlite3.Connection, *, ticker: str) -> StageResult:
     """Derive standard KPIs from FMP financial_facts for the ticker."""
     try:
-        emitted, inserted = derive_for_ticker(conn, ticker)
+        outcome = derive_for_ticker_outcome(conn, ticker)
     except (ValueError, KeyError) as e:
         return StageResult(
             name=StageName.DERIVE_FMP_KPIS,
@@ -355,18 +355,27 @@ def _stage_derive_kpis(conn: sqlite3.Connection, *, ticker: str) -> StageResult:
             rows_processed=0,
             notes=f"{type(e).__name__}: {e}"[:200],
         )
-    if emitted == 0:
+    skipped = (
+        f"{outcome.not_computable} not computable "
+        f"({', '.join(sorted({reason.value for reason in outcome.reasons}))})"
+        if outcome.not_computable
+        else ""
+    )
+    if outcome.rows_emitted == 0:
         return StageResult(
             name=StageName.DERIVE_FMP_KPIS,
             status=StageStatus.SKIPPED,
             rows_processed=0,
-            notes="no quarterly fmp_income_statement data on disk",
+            notes=skipped or "no quarterly fmp_income_statement data on disk",
         )
     return StageResult(
         name=StageName.DERIVE_FMP_KPIS,
         status=StageStatus.OK,
-        rows_processed=inserted,
-        notes=f"{emitted} rows derived; {inserted} new (others already present)",
+        rows_processed=outcome.rows_inserted,
+        notes=(
+            f"{outcome.rows_emitted} rows derived; {outcome.rows_inserted} new "
+            f"(others already present)" + (f"; {skipped}" if skipped else "")
+        ),
     )
 
 

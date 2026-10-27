@@ -59,13 +59,12 @@ def test_both_parent_histories_upgrade_to_one_head(
     tmp_path: Path, migrated_db: Callable[..., Path], predecessor: str
 ) -> None:
     db = migrated_db(tmp_path / "parent-history.db", target=predecessor)
-    config = _config(db)
     with sqlite3.connect(db) as conn:
         before = conn.execute(
             "SELECT monthly_cap_usd, on_exceed FROM llm_budgets "
             "WHERE purpose='post_earnings_readout'"
         ).fetchone()
-    command.upgrade(config, "head")
+    migrated_db(db, upgrade_existing=True, target="head")
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT version_num FROM alembic_version").fetchall() == [
             (expected_head(),)

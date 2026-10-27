@@ -30,6 +30,11 @@ from pipeline.source_policy import ArtifactKind, CollectionSource, StoredCollect
 from provenance.document_evidence_pipeline import DocumentEvidenceItem, DocumentEvidenceResult
 
 
+def _qualified_period(*_args: object, **_kwargs: object) -> bool:
+    """Publication mechanics start after the separately tested source-period gate."""
+    return True
+
+
 def _no_sleep(_seconds: float) -> None:
     return None
 
@@ -71,6 +76,9 @@ def state(
             "VALUES ('MELI','MercadoLibre','portfolio','12-31','equity')"
         )
     monkeypatch.setattr(fetch.time, "sleep", _no_sleep)
+    monkeypatch.setattr(fetch, "reported_quarter_selection_in_connection", _qualified_period)
+    monkeypatch.setattr(manual, "reported_quarter_selection_in_connection", _qualified_period)
+    monkeypatch.setattr(managed, "reported_quarter_selection", _qualified_period)
     monkeypatch.setattr("ir_uploads._RUNTIME_REGISTRY", None)
     return root, database
 
@@ -907,28 +915,34 @@ def test_postcommit_projection_lock_contention_reports_and_recovers(
     assert classifications == before
 
 
-def test_invalid_selected_period_returns_failure_before_collection(
+def test_unknown_manifest_period_retains_raw_without_publication(
     state: tuple[Path, Path],
     transport: list[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root, database = state
-    _manifest(root, ["https://issuer.test/q2.pdf"])
+    url = "https://issuer.test/q2.pdf"
+    _manifest(root, [url])
 
-    def invalid_period(_entry: dict[str, object]) -> None:
+    def unknown_period(_entry: dict[str, object]) -> None:
         return None
 
-    def selected(
-        entries: list[dict[str, object]], *, max_quarters: int
-    ) -> tuple[list[dict[str, object]], int]:
-        assert max_quarters > 0
-        return entries, 0
-
-    monkeypatch.setattr(fetch, "_reported_quarter", invalid_period)
-    monkeypatch.setattr(fetch, "_bounded_manifest_entries", selected)
+    monkeypatch.setattr(fetch, "_reported_quarter", unknown_period)
     summary = _auto(root, database)
-    assert (summary["status"], summary["failed"], summary["downloaded"]) == ("failed", 1, 0)
-    assert transport == []
+    assert (summary["status"], summary["failed"], summary["downloaded"]) == (
+        "period_selection_pending",
+        0,
+        1,
+    )
+    assert summary["registration_missing"] is None
+    assert summary["registered"] == summary["ready"] == 0
+    assert transport == [url]
+    with sqlite3.connect(database) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM managed_ir_publications").fetchone()[0] == 0
+    sidecar = json.loads(fetch.incoming_urls_path(root).read_text())
+    retained = sidecar["__fetch_progress_v1__"]["MELI"]["retained"][url]
+    assert (root / "ir_documents" / "MELI" / retained["filename"]).read_bytes()
 
 
 @pytest.mark.parametrize("route", ["automatic", "manual"])
@@ -1800,3 +1814,37 @@ def test_discovery_repair_only_completes_deterministic_effects_and_defers_models
         assert conn.execute("SELECT brief_dirty FROM tracked_companies").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
     assert '"event": "ir_model_summaries_deferred"' in capsys.readouterr().out
+
+
+def test_current_period_denial_does_not_hide_verified_existing_registration(
+    state: tuple[Path, Path],
+    transport: list[str],
+    classifications: list[tuple[str | None, str | None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, database = state
+    url = "https://issuer.test/registered-q2.pdf"
+    _manifest(root, [url])
+    assert _auto(root, database)["ready"] == 1
+    before_classifications = list(classifications)
+
+    def denied(*_args: object, **_kwargs: object) -> bool:
+        return False
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("verified historical inspection entered current publication admission")
+
+    monkeypatch.setattr(fetch, "reported_quarter_selection_in_connection", denied)
+    monkeypatch.setattr(manual, "reported_quarter_selection_in_connection", denied)
+    monkeypatch.setattr(managed, "_policy", forbidden)
+    result = _auto(root, database)
+    assert (result["ready_existing"], result["downloaded"], result["failed"]) == (1, 0, 0)
+    assert (
+        manual.register_urls(
+            "MELI", [url], repo_root=root, db_path=database, year=2026, quarter=2, process=False
+        )
+        == 1
+    )
+    assert transport == [url]
+    assert classifications == before_classifications
+    assert not fetch.incoming_urls_path(root).exists()

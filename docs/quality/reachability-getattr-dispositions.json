@@ -181,18 +181,6 @@
       ]
     },
     {
-      "disposition": "runtime_registry",
-      "evidence": "getattr selects only the three checked-in anchor loaders.",
-      "fingerprint": "7b35aebe06e32ac2b07c5b3b99bd88636016b0a6253dbc51de1aa58fc2a15bf2",
-      "line": 133,
-      "path": "src/ask/context.py",
-      "targets": [
-        "load_worldview_anchor",
-        "load_themes_anchor",
-        "load_owner_profile_anchor"
-      ]
-    },
-    {
       "disposition": "schema_field",
       "evidence": "getattr reads only line_item_spec provider fields.",
       "fingerprint": "27c20b90bc592025a43ab28dcec4880af3ee5636c7d4043a90ede08e3cff2cf7",
@@ -1102,7 +1090,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "eb109dcf7dcb433b204e4a05eaa7762e7e9cd05b5e33777a5d88bdf1b9f4b9f5",
+      "source_sha256": "5852f639cab8f704283fd4cfde02d244c5359fa33663d1cebfcb964e733968f2",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

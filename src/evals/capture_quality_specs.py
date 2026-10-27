@@ -413,22 +413,6 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "Missing a segment-boundary change or inferring an undisclosed definition.",
     ),
     _q(
-        "theme_seed_cluster",
-        "P1",
-        "cold",
-        "classification",
-        "Cluster evidence into coherent, distinct themes without losing contradictory items.",
-        "Merging unrelated drivers or excluding disconfirming evidence.",
-    ),
-    _q(
-        "theme_synthesis",
-        "P1",
-        "warm",
-        "synthesis",
-        "Synthesize recurring themes with evidence, evolution, and decision relevance.",
-        "Generic themes with no evidence or temporal change.",
-    ),
-    _q(
         "transcript_qa_judgment",
         "P1",
         "hot",

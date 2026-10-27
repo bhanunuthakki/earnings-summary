@@ -23,10 +23,11 @@ Ask but invisible in the brief. These tests pin:
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 from io import StringIO
 from pathlib import Path
 
+from report.builder import prepare_workspace_report
 from report.models import PortfolioPositionSection, ReportSpec, SectionStatus
 from report.renderers.workspace_data import (
     StandingRuleRow,
@@ -299,7 +300,10 @@ def test_markdown_mirror_renders_rules_from_same_loader(tmp_path: Path) -> None:
         "[draft, pending owner review] Add-rung: add <$10.32 -> +1% of book.",
     )
     out = StringIO()
-    spec = ReportSpec.model_construct(ticker="TEST", repo_root=str(tmp_path), db_path=str(db))
+    spec = ReportSpec.model_construct(
+        ticker="TEST", repo_root=str(tmp_path), db_path=str(db), generation_date=date(2026, 10, 27)
+    )
+    spec = spec.model_copy(update={"workspace": prepare_workspace_report(spec)})
     render_standing_rules(out, spec)
     s = out.getvalue()
     assert "**Standing rules**" in s

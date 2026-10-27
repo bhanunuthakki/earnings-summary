@@ -226,7 +226,7 @@ def _ext_from_headers(url: str, content_disposition: str, content_type: str) -> 
     return ".pdf"
 
 
-def _registered_source_urls(db_path: Path, ticker: str, *, root: Path) -> set[str]:
+def registered_source_urls(db_path: Path, ticker: str, *, root: Path) -> set[str]:
     """Return URLs with an admitted IR row and matching retained source bytes."""
     if not db_path.exists():
         return set()
@@ -669,12 +669,16 @@ def process_ticker(
         return empty
     # Manifest labels are discovery guesses. Do not evict an older actual
     # reported quarter before the complete source population is proved.
+    already = registered_source_urls(db_path, ticker, root=root)
     policy_skipped = 0
     pending_period_selection = False
     selected: list[dict[str, object]] = []
     conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
         for entry in entries:
+            if str(entry.get("url") or "") in already:
+                selected.append(entry)
+                continue
             period = _reported_quarter(entry)
             decision = (
                 None
@@ -695,7 +699,6 @@ def process_ticker(
             selected.append(entry)
     finally:
         conn.close()
-    already = _registered_source_urls(db_path, ticker, root=root)
     sidecar_state = _load_incoming_sidecar(root)
     all_progress = sidecar_state.get(_FETCH_PROGRESS_KEY)
     ticker_progress = (
@@ -928,7 +931,7 @@ def process_ticker(
         finally:
             time.sleep(_RATE_LIMIT_S)
 
-    if not dry_run:
+    if not dry_run and (sidecar or retained or deferred_count or progress):
         _write_incoming_sidecar(
             root, sidecar, ticker=ticker, next_index=next_index, retained=retained
         )
@@ -958,9 +961,9 @@ def process_ticker(
         cat_rc = 1 if legacy_failed else 0
 
     registration_missing: int | None = None
-    if categorize and not dry_run and legacy_downloaded_urls:
+    if categorize and not dry_run and not pending_period_selection and legacy_downloaded_urls:
         registration_missing = len(
-            legacy_downloaded_urls - _registered_source_urls(db_path, ticker, root=root)
+            legacy_downloaded_urls - registered_source_urls(db_path, ticker, root=root)
         )
     status = (
         "partial"
@@ -1008,7 +1011,7 @@ def verify_ticker(root: Path, db_path: Path, ticker: str) -> None:
     """Report which manifest URLs are registered in the ``documents`` table."""
     ticker = ticker.upper()
     entries = load_url_manifest(root, ticker)
-    registered = _registered_source_urls(db_path, ticker, root=root)
+    registered = registered_source_urls(db_path, ticker, root=root)
     if not entries:
         print(f"[{ticker}] no manifest.")
         return

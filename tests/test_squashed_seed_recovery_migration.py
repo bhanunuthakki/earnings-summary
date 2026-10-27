@@ -125,6 +125,8 @@ def test_fresh_upgrade_restores_migration_owned_defaults(
         "triage_route_suggest",
         "musing_decision_extract",
         "behavior_distill",
+        "theme_seed_cluster",
+        "theme_synthesis",
     }
     assert {row[0] for row in seeded_budgets if row[0] in retired_capture_budgets} == {
         "capture_triage",
@@ -132,8 +134,10 @@ def test_fresh_upgrade_restores_migration_owned_defaults(
         "research_triage",
         "capture_intent",
         "behavior_distill",
+        "theme_seed_cluster",
+        "theme_synthesis",
     }
-    assert budget_count == (63,)
+    assert budget_count == (61,)
     assert budgets == sorted(
         [row for row in seeded_budgets if row[0] not in retired_capture_budgets]
         + [("transcript_summary_claim_audit", 5.0, "block")]
@@ -179,7 +183,7 @@ def test_fresh_upgrade_restores_migration_owned_defaults(
             ).fetchone()
             is not None
         )
-        assert conn.execute("SELECT COUNT(*) FROM llm_budgets").fetchone() == (63,)
+        assert conn.execute("SELECT COUNT(*) FROM llm_budgets").fetchone() == (61,)
         assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (_ACTIVE_HEAD,)
 
 

@@ -1,7 +1,7 @@
 {
   "schema_version": "operational-reachability-raw/v1",
-  "subject_commit": "229b7857c0b55a239b2fe21ec1cc3ece2a83feef",
-  "source_manifest_sha256": "07e910e9a8bf0ac421a4dd587bea400b2cb77eb0e5f9532dc50c1af10d0e4946",
+  "subject_commit": "e8df59ee16f157844830f47b50c38fe0fd2e1eb4",
+  "source_manifest_sha256": "24831b44539feceefb547632dda764c820ed216c92ad9ac74179a787d0120211",
   "scanner_sha256": "c9ec98b1cbcdf93c9b890d9a8a8c59ef6109598f67b1739c38463d79d5986175",
   "scanner_version": "1.3.0",
   "python_version": "3.14.7 (main, Aug  5 2026, 10:29:49) [Clang 21.0.0 (clang-2100.1.1.101)]",
@@ -120,6 +120,7 @@
     "alembic/versions/0064_retired_capture_coaching_stores.py",
     "alembic/versions/0065_retire_optional_research_history.py",
     "alembic/versions/0066_merge_retirement_main.py",
+    "alembic/versions/0067_retire_theme_generation.py",
     "alembic/versions_archived/0000_baseline.py",
     "alembic/versions_archived/0001_companies_provenance.py",
     "alembic/versions_archived/0002_documents_table.py",
@@ -703,7 +704,6 @@
     "execution/backfill_recorded_subject_bindings.py",
     "execution/backfill_report_fiscal_periods.py",
     "execution/backfill_sec_companyfacts_evidence.py",
-    "execution/backfill_seed_decisions.py",
     "execution/backfill_strip_markdown_scalars.py",
     "execution/backfill_transcripts.py",
     "execution/backtest_prompt_candidate.py",
@@ -1013,7 +1013,6 @@
     "execution/run_calibration_grading.py",
     "execution/run_disclosure_change_sweep.py",
     "execution/run_discovery.py",
-    "execution/run_ledger_synthesis.py",
     "execution/run_lens.py",
     "execution/run_llm_evals.py",
     "execution/run_model_eval_sweep.py",
@@ -1041,7 +1040,6 @@
     "execution/seal_archive_generation.py",
     "execution/seed_entity_graph.py",
     "execution/seed_kpi_definitions.py",
-    "execution/seed_themes.py",
     "execution/serve_portfolio_tracker.py",
     "execution/serve_research_tools.py",
     "execution/session_context_pack.py",
@@ -2048,13 +2046,10 @@
     "src/synthesis/lenses/thesis_drift_qoq.py",
     "src/synthesis/lenses/underweighted_facts.py",
     "src/synthesis/reconcile.py",
-    "src/synthesis/seed.py",
-    "src/synthesis/seed_decisions.py",
     "src/synthesis/semantic_tension.py",
     "src/synthesis/tenet_accountability.py",
     "src/synthesis/tenet_distill.py",
     "src/synthesis/tenets.py",
-    "src/synthesis/theme_synth.py",
     "src/synthesis/wix_avdv_postmortem.py",
     "src/synthesis_lenses.py",
     "src/table_extractors/__init__.py",
@@ -2882,7 +2877,6 @@
     "tests/test_ledger_insights.py",
     "tests/test_ledger_packet.py",
     "tests/test_ledger_panel.py",
-    "tests/test_ledger_seed.py",
     "tests/test_ledger_ux_overhaul.py",
     "tests/test_legacy_canonical_fact_parity.py",
     "tests/test_legacy_chat_session_removed.py",
@@ -3370,7 +3364,6 @@
     "tests/test_sector_benchmark_map.py",
     "tests/test_secure_file_install.py",
     "tests/test_security_audit_fixes.py",
-    "tests/test_seed_decisions_backfill.py",
     "tests/test_seed_kpi_definitions.py",
     "tests/test_seed_kpi_registry.py",
     "tests/test_seed_kpi_registry_auto.py",
@@ -3470,7 +3463,7 @@
     "tests/test_tenet_distill.py",
     "tests/test_tenets.py",
     "tests/test_test_harness_isolation.py",
-    "tests/test_theme_synth.py",
+    "tests/test_theme_generation_retirement_migration.py",
     "tests/test_thesis_artifact.py",
     "tests/test_thesis_collision.py",
     "tests/test_thesis_episode_attention.py",
@@ -4521,6 +4514,11 @@
     {
       "path": "alembic/versions/0066_merge_retirement_main.py",
       "content_sha256": "e08c8e7296bdcede2e00b4b29285fd668442ee1b79e9d0fbb6f72b4e9902a446",
+      "error": null
+    },
+    {
+      "path": "alembic/versions/0067_retire_theme_generation.py",
+      "content_sha256": "7c7738bf951fb0cfb354155e9ae18fa7d96fc41a394dc51d58ced744209deed8",
       "error": null
     },
     {
@@ -5850,7 +5848,7 @@
     },
     {
       "path": "config/architecture_boundaries.json",
-      "content_sha256": "98683f9e1d68fa627181862f6281c5062b6b2d44edc1d1f9a00277c99ca91df6",
+      "content_sha256": "271ec570e86a2a16ea9f72792eb443dab179d9a3afb84f0c205ef408cf3be529",
       "error": null
     },
     {
@@ -6620,7 +6618,7 @@
     },
     {
       "path": "directives/llm_quota_scheduling.md",
-      "content_sha256": "6402627fc078f8f0993326805b296771e662f2bbe319ad6f0c6ef1d81bf42d92",
+      "content_sha256": "257367e8cc384e3d54241fda43dc8844f412bef74f458f0f2f999650911918d3",
       "error": null
     },
     {
@@ -6690,7 +6688,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "content_sha256": "dc5bbbe069a9bb966f24aef4737c48b6794e25b3cdab2bb008681265c6ec13ea",
+      "content_sha256": "23925ebb45af0f8d1277f21f174a02324f3debf54a4ef1016bff57c4f3b5af04",
       "error": null
     },
     {
@@ -6780,7 +6778,7 @@
     },
     {
       "path": "docs/architecture/backend-retirement-execution-plan.md",
-      "content_sha256": "beb1435879bb28b41604f3871f1169d8ba971920f0cf1ec598e7671300ecee46",
+      "content_sha256": "107261f982118c5eeaa3cdded474e6c51d9f5ea8ea4a511b505a8514af1143f7",
       "error": null
     },
     {
@@ -7439,11 +7437,6 @@
       "error": null
     },
     {
-      "path": "execution/backfill_seed_decisions.py",
-      "content_sha256": "d338a5faacd9154b3f89679b047f46dff8e18a112e9a10762b0a238c4e1e34ab",
-      "error": null
-    },
-    {
       "path": "execution/backfill_strip_markdown_scalars.py",
       "content_sha256": "2d3585275be792074c7e44cc9b883eeb60e5a67976e8440f0048545c04a6cea6",
       "error": null
@@ -7515,7 +7508,7 @@
     },
     {
       "path": "execution/build_artifacts.py",
-      "content_sha256": "792c0d5395a75d69db608103ca59b76f95a6d2f40446c190d93af450dff08f45",
+      "content_sha256": "7cc92ad9cf5f964b3845b2005f3e8ff73897aead7817ffe63870182626596731",
       "error": null
     },
     {
@@ -7770,7 +7763,7 @@
     },
     {
       "path": "execution/comments_server_content_routes.py",
-      "content_sha256": "de9b04bc7f497b12e4d5fda7850ed4c669747803a35260ee3f9449a372a41c6e",
+      "content_sha256": "b01a6fbba0e04c162a1815351c51882572ea344d078bd13f952ac27533cdc7a6",
       "error": null
     },
     {
@@ -7780,7 +7773,7 @@
     },
     {
       "path": "execution/comments_server_core_routes.py",
-      "content_sha256": "a7f0578aad54346fdd1ed465270f417903494bf4625faeb8a61c986a45215c22",
+      "content_sha256": "af5e49b3cbea24f5be3e06f47b6af06c99e6784666a3b742ed1f5285776ca8c3",
       "error": null
     },
     {
@@ -8125,7 +8118,7 @@
     },
     {
       "path": "execution/extract_kpis_from_ir.py",
-      "content_sha256": "3c80898cdae163fe57874ff1f3ff16ebda990b8d79ec177365e8ec154f99a21e",
+      "content_sha256": "c03cb12751ac5fc32fb895c6ba9219a13b3c0db686bed4f4dffbd602ff5ca2a7",
       "error": null
     },
     {
@@ -8220,12 +8213,12 @@
     },
     {
       "path": "execution/fetch_ir_documents.py",
-      "content_sha256": "51cbbe63f91c1f707669e7e82482ba64bd6b2586b7f5c830f6111bbe42ecf914",
+      "content_sha256": "161fe9601086f821e694d53ed85706f96b9be4b8beff716f739d49acf594c2ad",
       "error": null
     },
     {
       "path": "execution/fetch_ir_from_urls.py",
-      "content_sha256": "ee02031e23fa481f4e8a34ce80e25d94224837f7eb84d1c927def0365796bb69",
+      "content_sha256": "85d84269593931905e573ca138d629c23158f01b90aaeea3ab05d6409c5dc516",
       "error": null
     },
     {
@@ -8989,11 +8982,6 @@
       "error": null
     },
     {
-      "path": "execution/run_ledger_synthesis.py",
-      "content_sha256": "7b36736fc26b16c0e0a2259cdf70fc1d2a965fe493f727dad4b28741f9944789",
-      "error": null
-    },
-    {
       "path": "execution/run_lens.py",
       "content_sha256": "e21a6cd28e235626751185d843978144a9d11127ee8718c64d1befd889f8fccd",
       "error": null
@@ -9126,11 +9114,6 @@
     {
       "path": "execution/seed_kpi_definitions.py",
       "content_sha256": "6f526a74501949cadeb2707ae5a5a66718f7c35d9b8f7f770192e32d950499f9",
-      "error": null
-    },
-    {
-      "path": "execution/seed_themes.py",
-      "content_sha256": "386ef799b181641014e731258961f2d377661043d6c5ec527aece287250ae868",
       "error": null
     },
     {
@@ -9840,7 +9823,7 @@
     },
     {
       "path": "src/ask/context.py",
-      "content_sha256": "eed629070ef50be77fdddd8886fd5d1e1360b8008a06112ee816022e4b489d35",
+      "content_sha256": "311238c1940d0e95cbd0afc6c21c650560c0ef7690c585f73bd307a999a6dd15",
       "error": null
     },
     {
@@ -9875,7 +9858,7 @@
     },
     {
       "path": "src/ask/packs.py",
-      "content_sha256": "64561a38ea2ca4e5f985969dcc70c2d7e9e3d6b469004adfacf4dee28717d984",
+      "content_sha256": "57595a8b47fc84a530cb636015524e1cf54bca8b3d687672a4230966044cb76b",
       "error": null
     },
     {
@@ -10090,7 +10073,7 @@
     },
     {
       "path": "src/compute/fmp_derived_kpis.py",
-      "content_sha256": "5fd1f6bbffca055f13533a1d506493fd8e2a5b1ec1833755108a91d13eec3b93",
+      "content_sha256": "7ef026bf00b5776487ddbdc747175d05faa9cd8484627089ffdf5b19a0f59910",
       "error": null
     },
     {
@@ -10750,7 +10733,7 @@
     },
     {
       "path": "src/evals/capture_quality_specs.py",
-      "content_sha256": "c692bfad7f869a9e4f6ffcaa87e1d1f77a80ecd36911c4a2e7e87f3385957777",
+      "content_sha256": "bee833aeb9c7e1d07af96e47ba36f31b680e4bcd5efcb7d4597d1701c21b0088",
       "error": null
     },
     {
@@ -11225,7 +11208,7 @@
     },
     {
       "path": "src/llm/anchors.py",
-      "content_sha256": "1666731233518cbfc176fad9397f77cf16f44a12ae0e4a5db0a28038e4227a96",
+      "content_sha256": "1afb5ca507974215f260a9706df8059f450fafd37a21e1d6bb12b5eb907b1fb8",
       "error": null
     },
     {
@@ -11245,7 +11228,7 @@
     },
     {
       "path": "src/llm/cli.py",
-      "content_sha256": "0f8fdbcfdde87ef993415966bc7c7a38cd353ddd8b7ca759e1f67606bd686f00",
+      "content_sha256": "e6bed50a58bdc02d424920b2f1294f63f3a68348a60844fee32e7641c5a1d959",
       "error": null
     },
     {
@@ -11255,7 +11238,7 @@
     },
     {
       "path": "src/llm/contracts.py",
-      "content_sha256": "631a78b21c6de533524f2c2185f875e0aa3fa2f250d4f903e36ff86062c09a9e",
+      "content_sha256": "a5286dc94becc3359198b118fc14bce6dec5d267cb65e71c017675dc550e220d",
       "error": null
     },
     {
@@ -11350,7 +11333,7 @@
     },
     {
       "path": "src/llm/prompt_versions.py",
-      "content_sha256": "80f5e6f600718ab83c8e3fff6bb4021e4ac247ff480bab1fd532281c99a93439",
+      "content_sha256": "0020dfe21f6896ce727e5da04d8412f02c9c08ad3c6ef71bee7c5a6c8c2b405d",
       "error": null
     },
     {
@@ -12025,7 +12008,7 @@
     },
     {
       "path": "src/pipeline/ledger_panel.py",
-      "content_sha256": "b0a6b6f15242832f442c8d8ecfaaee957cd7603c83ffaa8dd70a3d138a49f584",
+      "content_sha256": "e9bbb6800d3346d1f37f38c92a5f11ed39cb80913a35faa3b6d1289d9b7a8aef",
       "error": null
     },
     {
@@ -12130,7 +12113,7 @@
     },
     {
       "path": "src/pipeline/quarterly_refresh.py",
-      "content_sha256": "7c9aa6ff60da773623fdd1c500e8d91ee4f4596235f5f92fc61a5d766ec54c96",
+      "content_sha256": "7f93fe4a46a1e6f5352d454b44eedeb17c509bfc657567778ea7296e8bceb890",
       "error": null
     },
     {
@@ -12150,7 +12133,7 @@
     },
     {
       "path": "src/pipeline/refresh_eval.py",
-      "content_sha256": "fba85342f3d3db9dd40bfc86019ca5776db5c31e66583b928cb9c6c7bc3b4c39",
+      "content_sha256": "ce1af1f6e7a73ae19f631df4e87b15bf6ff7475b6d20d250e27f63aa3ef0b030",
       "error": null
     },
     {
@@ -13205,7 +13188,7 @@
     },
     {
       "path": "src/report/artifacts.py",
-      "content_sha256": "bec51e42187d5cc0f56c0c564b5c2d30c1e907a559cde45b70b663153eb9cfc8",
+      "content_sha256": "73ff6c7cba5e1b09f5df29399f414f183fe04add1049054f5ef6a5ad983acf9d",
       "error": null
     },
     {
@@ -13215,7 +13198,7 @@
     },
     {
       "path": "src/report/file_capture.py",
-      "content_sha256": "2e3405351280f49ffb6861b75d385d2557cc3658ee6b89e2bf4f02da6c32c24f",
+      "content_sha256": "d1a9d86a1cd1669d1c901559e5252d7109444c21152255901e921ee30afae65c",
       "error": null
     },
     {
@@ -13590,7 +13573,7 @@
     },
     {
       "path": "src/research/decision_brief.py",
-      "content_sha256": "1d7ea52d15a15cc4cc5675879d21b8f405391aae473e19776139f64670d8b792",
+      "content_sha256": "ca479b237f72a47318a5f14688e6c826f4796533d5cce0295facf400cb0d0719",
       "error": null
     },
     {
@@ -14160,17 +14143,7 @@
     },
     {
       "path": "src/synthesis/reconcile.py",
-      "content_sha256": "778db5609949897eb6c43cf4bed6206ba2459e38bec14fc1a803563aa4e288b3",
-      "error": null
-    },
-    {
-      "path": "src/synthesis/seed.py",
-      "content_sha256": "512261507a16a44804a0c4011541c766ea678e8d39f9c3782d9396580d8e3af6",
-      "error": null
-    },
-    {
-      "path": "src/synthesis/seed_decisions.py",
-      "content_sha256": "d01dbdc4762fffe3dd39e0a1e1ab8035f0d7ba0b31ecf7abadf92b37a4daa17b",
+      "content_sha256": "3dc76a66910087ca0b2a57740d1e7c19a5538b7b8c83d5d670cd0ef3b3f18cc4",
       "error": null
     },
     {
@@ -14191,11 +14164,6 @@
     {
       "path": "src/synthesis/tenets.py",
       "content_sha256": "3fb0a476d8a0c62183aa0748bded329666523afc2a75127dcefb914b205bb416",
-      "error": null
-    },
-    {
-      "path": "src/synthesis/theme_synth.py",
-      "content_sha256": "fe54f98ca648f17e6790fa758915fa882e6fed9bfcd5c096b46692e25c4b0f00",
       "error": null
     },
     {
@@ -15560,7 +15528,7 @@
     },
     {
       "path": "tests/test_b2_unified_anchors.py",
-      "content_sha256": "bc8d9c582a411d3fad17937c7733fc2593e22b4afd3d5ef3e2fd42fa5d9cab72",
+      "content_sha256": "72e6360854f9f1d88f61a5d7d41d41c98c49c3f90acac232b6c4ecdc8f7df970",
       "error": null
     },
     {
@@ -15880,7 +15848,7 @@
     },
     {
       "path": "tests/test_capture_quality_eval.py",
-      "content_sha256": "d8ee83f2dbdea04d903368230b2dcc57e56c82808bba413865fe766847730242",
+      "content_sha256": "988c1f5a8d4d8afb1b574304856da117cefedeece76dd62d7a2dc3d24e7e9021",
       "error": null
     },
     {
@@ -16200,7 +16168,7 @@
     },
     {
       "path": "tests/test_compute_fmp_derived_kpis.py",
-      "content_sha256": "5e0d2c4e3a8bf747a571f92724087f7301d709d29058ab2b7d4d8a7369c56e2b",
+      "content_sha256": "7d9d26cd24e9d21be563b60e91c7ed9e846e1bfd93e65e658c43a6e7a9190f0f",
       "error": null
     },
     {
@@ -16215,7 +16183,7 @@
     },
     {
       "path": "tests/test_compute_kpi_transform_derivers.py",
-      "content_sha256": "d5e07c1a15749b680ad52ce8b2f9dbc457693faafb9e25be3ff1d9f8b84a68a7",
+      "content_sha256": "7e94102638c306bbd59c537f48684d6434b0fc7af512d950421963398679c5a0",
       "error": null
     },
     {
@@ -17340,7 +17308,7 @@
     },
     {
       "path": "tests/test_fetch_ir_documents.py",
-      "content_sha256": "37826b673f3033a03188374915767adf8f05a7409aec771f51e81c5f457c8d89",
+      "content_sha256": "5e9f412a18363bbc3b528c0ef57e3569ef77715148f789493d0933c259369e3e",
       "error": null
     },
     {
@@ -18060,7 +18028,7 @@
     },
     {
       "path": "tests/test_ir_presentation_intake.py",
-      "content_sha256": "0990ee3584c1262d0446396ee33f969092ae8b80eacf28118ae7664b3135f6ca",
+      "content_sha256": "6bc58ccf60f355f0b300670e3e9d55198836dc7dbf9a9ea34dc2e82b950cdee2",
       "error": null
     },
     {
@@ -18305,7 +18273,7 @@
     },
     {
       "path": "tests/test_kpi_source_precision.py",
-      "content_sha256": "d27e512e0206a2658bd185f6b2b9f54f4910df1458b108d6df97ce1373ad914d",
+      "content_sha256": "f5a6eb9dc7447f8c6ff0c5659a97cbd32598444e6b6ca8ec6d0b147f511e8e34",
       "error": null
     },
     {
@@ -18331,11 +18299,6 @@
     {
       "path": "tests/test_ledger_panel.py",
       "content_sha256": "2e00fc559b2e23689c21784c09b3b2f384feb24b665a09361f0495b18a1fce00",
-      "error": null
-    },
-    {
-      "path": "tests/test_ledger_seed.py",
-      "content_sha256": "0c0b8eee74383da69c5c386a40b6eb01abd67288e0306a45a4e397d5d128b8e9",
       "error": null
     },
     {
@@ -19400,12 +19363,12 @@
     },
     {
       "path": "tests/test_pipeline_quarterly_refresh.py",
-      "content_sha256": "aa27573926ef392334dbc4173181878bc0de6713aa53a4b4445172687edc92d0",
+      "content_sha256": "d58545afb9d66cedcf71457e5482971ee35fc44eca18d694832187bb8a42ac0f",
       "error": null
     },
     {
       "path": "tests/test_pipeline_refresh_eval.py",
-      "content_sha256": "0a5bc65a0ccfeed8088f33389657b5452f2f66dbb40a7f63b7304d76584eb4df",
+      "content_sha256": "bb4e7abbdc3cbd89ab9bdb80767f9bf1e0cbbe1a966c79d922d0b1b2eeaad7aa",
       "error": null
     },
     {
@@ -19700,7 +19663,7 @@
     },
     {
       "path": "tests/test_post_earnings_readout_budget_migration.py",
-      "content_sha256": "4778c39612fa8c89c64293295c025c35f70e94265958eb2f42f59e2d3ad0321b",
+      "content_sha256": "d81a0409db0a00c8596674fbebd752dfaa2f756715b3cff995ef33e9d1f968d8",
       "error": null
     },
     {
@@ -19935,7 +19898,7 @@
     },
     {
       "path": "tests/test_recent_developments_resilience.py",
-      "content_sha256": "22ec3f61c95ba3c813e8629dda488e9f3f5a83d85471666ec91751d939092e2f",
+      "content_sha256": "88db096723132874f15da9fe51f2b14636d00701b0e66d9fad9075b4e7df4f42",
       "error": null
     },
     {
@@ -20100,7 +20063,7 @@
     },
     {
       "path": "tests/test_report_file_capture.py",
-      "content_sha256": "d44c0995940d493b1ab306feccc89409d2c3a091dc089aba150ffd72a152987f",
+      "content_sha256": "a87105b9ca62278c2a4eede44af4309ed1c93ff76aae314959649b437667fba2",
       "error": null
     },
     {
@@ -20155,7 +20118,7 @@
     },
     {
       "path": "tests/test_report_sync.py",
-      "content_sha256": "1a22aeb9a49f07d3664d7bffc8e741e8845b4107fa8bf07389f982ec50d5413f",
+      "content_sha256": "f01d45f65decdf5e7dae2b692577e2e75ecd7b6fd4344480c82c797ebe8bb179",
       "error": null
     },
     {
@@ -20300,7 +20263,7 @@
     },
     {
       "path": "tests/test_retained_tool_database_authority.py",
-      "content_sha256": "36dff6e8562fd0c6b2570c9d24d49623abea308639200352f3f0a0f2bba91a25",
+      "content_sha256": "7d79af55f2e4bba3baed91231091e51545ae49252da07e533af1ed783a0e014f",
       "error": null
     },
     {
@@ -20774,11 +20737,6 @@
       "error": null
     },
     {
-      "path": "tests/test_seed_decisions_backfill.py",
-      "content_sha256": "0c5409108bdd2aa69525661a439c58530b96a75ed57f47d188970defc7928191",
-      "error": null
-    },
-    {
       "path": "tests/test_seed_kpi_definitions.py",
       "content_sha256": "253b2c1c2e56472c58d227c7d6ea622823fa622f60913ccf511d5a451ba7b9ea",
       "error": null
@@ -20795,7 +20753,7 @@
     },
     {
       "path": "tests/test_seed_reconcile.py",
-      "content_sha256": "f32e7c958ad17b451232718c7e14dcdc5437d04ccf6e1d2f4f7a13a50b7e70c1",
+      "content_sha256": "fd8a43ba24d7d99adc2d0e40eeff75daa563d1316f2219fe7f3242c893ae460b",
       "error": null
     },
     {
@@ -21140,7 +21098,7 @@
     },
     {
       "path": "tests/test_squashed_seed_recovery_migration.py",
-      "content_sha256": "aa9703f9f310972dbeac4a9bc7a1b039f2cde526721f845fc6d6c8678e40e60d",
+      "content_sha256": "fbc100b95e9c13259360c208720170f31f67c79b6af033f3410dd3679cb9ad1f",
       "error": null
     },
     {
@@ -21155,7 +21113,7 @@
     },
     {
       "path": "tests/test_standing_rules_panel.py",
-      "content_sha256": "2efcc1759ec0e5861180984e39c6ad2eb8cc46e62aee7fc26329dbe76b6fc6a1",
+      "content_sha256": "1c53e6476d75ffff07e2c24567a5e09dcc26c06c54ba0236e449ea587a79449a",
       "error": null
     },
     {
@@ -21274,8 +21232,8 @@
       "error": null
     },
     {
-      "path": "tests/test_theme_synth.py",
-      "content_sha256": "e2d4ca58f4a09edf6878fcd9805d30e7f618c3902f90a2c6afefcefa18c4adce",
+      "path": "tests/test_theme_generation_retirement_migration.py",
+      "content_sha256": "7b8fd63494d770a3be49a1c030f3998d9a8986a78ec88eeb51f774d4b2fa6c74",
       "error": null
     },
     {
@@ -21420,7 +21378,7 @@
     },
     {
       "path": "tests/test_transcript_acquisition_receipt_migration.py",
-      "content_sha256": "3a30391998a552c3cbac0e6a0b6f4d04092748930b08ecc871d4f478976b71cd",
+      "content_sha256": "59b091b02ab7247bf5f731ca34e788a4d12988ccdcb9cd4c0bf4e6fd2d233113",
       "error": null
     },
     {
@@ -21595,7 +21553,7 @@
     },
     {
       "path": "tests/test_upgrade_phase0_reuse.py",
-      "content_sha256": "0eec40f30dab801d29b771ad46308e48d5352f3f69083646ea243adbfec1295c",
+      "content_sha256": "213990a567c8513f7d7a10bb9bf0520c144b762f80bd919350d1eff9c860ecaa",
       "error": null
     },
     {
@@ -21977,8 +21935,8 @@
     "name": "ast+xml+literal-scanner",
     "version": "1.3.0",
     "python": ">=3.11",
-    "source_sha256": "eb109dcf7dcb433b204e4a05eaa7762e7e9cd05b5e33777a5d88bdf1b9f4b9f5",
-    "dispositions_sha256": "cf220bbf70fcc6f3f0c0f94b4d625f32224cefd3099cfc7f00ea235179d3cf89"
+    "source_sha256": "5852f639cab8f704283fd4cfde02d244c5359fa33663d1cebfcb964e733968f2",
+    "dispositions_sha256": "53d7a3327587f8d11ebcfd8bfd1516b0c56860c4dd0d0db96be3ff4aadf420c6"
   },
   "nodes": [
     {
@@ -22371,6 +22329,10 @@
     },
     {
       "id": "alembic/versions/0066_merge_retirement_main.py",
+      "kind": "python"
+    },
+    {
+      "id": "alembic/versions/0067_retire_theme_generation.py",
       "kind": "python"
     },
     {
@@ -24442,10 +24404,6 @@
       "kind": "python"
     },
     {
-      "id": "execution/backfill_seed_decisions.py",
-      "kind": "python"
-    },
-    {
       "id": "execution/backfill_strip_markdown_scalars.py",
       "kind": "python"
     },
@@ -25674,10 +25632,6 @@
       "kind": "python"
     },
     {
-      "id": "execution/run_ledger_synthesis.py",
-      "kind": "python"
-    },
-    {
       "id": "execution/run_lens.py",
       "kind": "python"
     },
@@ -25783,10 +25737,6 @@
     },
     {
       "id": "execution/seed_kpi_definitions.py",
-      "kind": "python"
-    },
-    {
-      "id": "execution/seed_themes.py",
       "kind": "python"
     },
     {
@@ -29642,14 +29592,6 @@
       "kind": "python"
     },
     {
-      "id": "src/synthesis/seed.py",
-      "kind": "python"
-    },
-    {
-      "id": "src/synthesis/seed_decisions.py",
-      "kind": "python"
-    },
-    {
       "id": "src/synthesis/semantic_tension.py",
       "kind": "python"
     },
@@ -29663,10 +29605,6 @@
     },
     {
       "id": "src/synthesis/tenets.py",
-      "kind": "python"
-    },
-    {
-      "id": "src/synthesis/theme_synth.py",
       "kind": "python"
     },
     {
@@ -32738,10 +32676,6 @@
       "kind": "python"
     },
     {
-      "id": "tests/test_ledger_seed.py",
-      "kind": "python"
-    },
-    {
       "id": "tests/test_ledger_ux_overhaul.py",
       "kind": "python"
     },
@@ -34690,10 +34624,6 @@
       "kind": "python"
     },
     {
-      "id": "tests/test_seed_decisions_backfill.py",
-      "kind": "python"
-    },
-    {
       "id": "tests/test_seed_kpi_definitions.py",
       "kind": "python"
     },
@@ -35090,7 +35020,7 @@
       "kind": "python"
     },
     {
-      "id": "tests/test_theme_synth.py",
+      "id": "tests/test_theme_generation_retirement_migration.py",
       "kind": "python"
     },
     {
@@ -37826,6 +37756,26 @@
       "evidence": "external import __future__",
       "confidence": "high",
       "line": 7,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "alembic/versions/0067_retire_theme_generation.py",
+      "target": "<external:__future__>",
+      "kind": "import",
+      "evidence": "external import __future__",
+      "confidence": "high",
+      "line": 7,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "alembic/versions/0067_retire_theme_generation.py",
+      "target": "<external:alembic>",
+      "kind": "import",
+      "evidence": "external import alembic",
+      "confidence": "high",
+      "line": 9,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -59070,96 +59020,6 @@
       "reviewed_disposition": null
     },
     {
-      "source": "execution/backfill_seed_decisions.py",
-      "target": "<external:__future__>",
-      "kind": "import",
-      "evidence": "external import __future__",
-      "confidence": "high",
-      "line": 15,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/backfill_seed_decisions.py",
-      "target": "<external:argparse>",
-      "kind": "import",
-      "evidence": "external import argparse",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/backfill_seed_decisions.py",
-      "target": "<external:pathlib>",
-      "kind": "import",
-      "evidence": "external import pathlib",
-      "confidence": "high",
-      "line": 20,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/backfill_seed_decisions.py",
-      "target": "<external:subprocess>",
-      "kind": "import",
-      "evidence": "external import subprocess",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/backfill_seed_decisions.py",
-      "target": "<external:sys>",
-      "kind": "import",
-      "evidence": "external import sys",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/backfill_seed_decisions.py",
-      "target": "execution/grade_decisions.py",
-      "kind": "unknown",
-      "evidence": "subprocess/runpy expression; reviewed as internal_python_target in docs/quality/reachability-process-dispositions.json: Argv invokes fixed PROJECT_ROOT/execution/grade_decisions.py through managed_python_prefix. Explicit --db-path and --repo-root carry the selected database and artifact root; the artifact root no longer selects executable code. No new script target.",
-      "confidence": "medium",
-      "line": 53,
-      "unknown": false,
-      "reviewed_disposition": "internal_python_target"
-    },
-    {
-      "source": "execution/backfill_seed_decisions.py",
-      "target": "src/db_paths.py",
-      "kind": "import",
-      "evidence": "from db_paths",
-      "confidence": "high",
-      "line": 24,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/backfill_seed_decisions.py",
-      "target": "src/runtime/python_process.py",
-      "kind": "import",
-      "evidence": "from runtime.python_process",
-      "confidence": "high",
-      "line": 25,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/backfill_seed_decisions.py",
-      "target": "src/synthesis/seed_decisions.py",
-      "kind": "import",
-      "evidence": "from synthesis.seed_decisions",
-      "confidence": "high",
-      "line": 26,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
       "source": "execution/backfill_strip_markdown_scalars.py",
       "target": "<attribute:reconfigure>",
       "kind": "getattr",
@@ -61365,7 +61225,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 307,
+      "line": 308,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61375,7 +61235,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 297,
+      "line": 298,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61525,7 +61385,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression; reviewed as internal_python_target in docs/quality/reachability-process-dispositions.json: The checked-in _TICKER_SPECIFIC_EXTRACTORS registry selects this fixed NVO script; the managed Python command joins the registry script under execution/.",
       "confidence": "medium",
-      "line": 155,
+      "line": 156,
       "unknown": false,
       "reviewed_disposition": "internal_python_target"
     },
@@ -61671,11 +61531,21 @@
     },
     {
       "source": "execution/build_artifacts.py",
+      "target": "src/report/legacy_body.py",
+      "kind": "import",
+      "evidence": "from report.legacy_body",
+      "confidence": "high",
+      "line": 84,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/build_artifacts.py",
       "target": "src/report/models.py",
       "kind": "import",
       "evidence": "from report.models",
       "confidence": "high",
-      "line": 84,
+      "line": 85,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61685,7 +61555,7 @@
       "kind": "import",
       "evidence": "from report.read_capture",
       "confidence": "high",
-      "line": 85,
+      "line": 86,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61695,7 +61565,7 @@
       "kind": "import",
       "evidence": "from report.render_clock",
       "confidence": "high",
-      "line": 91,
+      "line": 92,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61705,7 +61575,7 @@
       "kind": "import",
       "evidence": "from report.renderers.markdown",
       "confidence": "high",
-      "line": 92,
+      "line": 93,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61715,7 +61585,7 @@
       "kind": "import",
       "evidence": "from report.renderers.sections_json",
       "confidence": "high",
-      "line": 93,
+      "line": 94,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61725,7 +61595,7 @@
       "kind": "import",
       "evidence": "from report.renderers.workspace_html",
       "confidence": "high",
-      "line": 94,
+      "line": 95,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61735,17 +61605,7 @@
       "kind": "import",
       "evidence": "from report.sections",
       "confidence": "high",
-      "line": 99,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/build_artifacts.py",
-      "target": "src/report/sections/__init__.py",
-      "kind": "import",
-      "evidence": "from report.sections",
-      "confidence": "high",
-      "line": 109,
+      "line": 100,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61756,6 +61616,16 @@
       "evidence": "from report.sections",
       "confidence": "high",
       "line": 110,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/build_artifacts.py",
+      "target": "src/report/sections/__init__.py",
+      "kind": "import",
+      "evidence": "from report.sections",
+      "confidence": "high",
+      "line": 111,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61765,7 +61635,7 @@
       "kind": "import",
       "evidence": "from report.sections import appendix",
       "confidence": "high",
-      "line": 99,
+      "line": 100,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61775,7 +61645,7 @@
       "kind": "import",
       "evidence": "from report.sections import bear_case",
       "confidence": "high",
-      "line": 99,
+      "line": 100,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61785,7 +61655,7 @@
       "kind": "import",
       "evidence": "from report.sections import earnings",
       "confidence": "high",
-      "line": 99,
+      "line": 100,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61795,7 +61665,7 @@
       "kind": "import",
       "evidence": "from report.sections import exec_compensation",
       "confidence": "high",
-      "line": 99,
+      "line": 100,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61805,7 +61675,7 @@
       "kind": "import",
       "evidence": "from report.sections import financials",
       "confidence": "high",
-      "line": 109,
+      "line": 110,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61815,7 +61685,7 @@
       "kind": "import",
       "evidence": "from report.sections import qa_roster",
       "confidence": "high",
-      "line": 99,
+      "line": 100,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61825,7 +61695,7 @@
       "kind": "import",
       "evidence": "from report.sections import segments",
       "confidence": "high",
-      "line": 99,
+      "line": 100,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61835,7 +61705,7 @@
       "kind": "import",
       "evidence": "from report.sections import snapshot",
       "confidence": "high",
-      "line": 110,
+      "line": 111,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61845,7 +61715,7 @@
       "kind": "import",
       "evidence": "from report.sections import thesis",
       "confidence": "high",
-      "line": 99,
+      "line": 100,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61855,7 +61725,7 @@
       "kind": "import",
       "evidence": "from report.sections import valuation",
       "confidence": "high",
-      "line": 99,
+      "line": 100,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61865,7 +61735,7 @@
       "kind": "import",
       "evidence": "from research.decision_brief",
       "confidence": "high",
-      "line": 111,
+      "line": 112,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61875,7 +61745,7 @@
       "kind": "import",
       "evidence": "from research.report_contract",
       "confidence": "high",
-      "line": 115,
+      "line": 116,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61885,7 +61755,7 @@
       "kind": "import",
       "evidence": "from runtime.python_process",
       "confidence": "high",
-      "line": 116,
+      "line": 117,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -61895,7 +61765,7 @@
       "kind": "import",
       "evidence": "from sqlite_runtime",
       "confidence": "high",
-      "line": 117,
+      "line": 118,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69755,7 +69625,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 449,
+      "line": 450,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69765,7 +69635,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 531,
+      "line": 532,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69775,7 +69645,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 552,
+      "line": 553,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69785,7 +69655,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 588,
+      "line": 589,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69795,7 +69665,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 597,
+      "line": 598,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69805,7 +69675,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 611,
+      "line": 612,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69815,7 +69685,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 622,
+      "line": 623,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69825,7 +69695,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 631,
+      "line": 632,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69835,7 +69705,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 640,
+      "line": 641,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69845,7 +69715,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 649,
+      "line": 650,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69855,7 +69725,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 660,
+      "line": 661,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69865,7 +69735,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 673,
+      "line": 674,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69875,7 +69745,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 697,
+      "line": 698,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69885,7 +69755,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 721,
+      "line": 722,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69895,7 +69765,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 736,
+      "line": 737,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69905,7 +69775,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 748,
+      "line": 749,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69915,7 +69785,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 760,
+      "line": 761,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69925,7 +69795,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 785,
+      "line": 786,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69935,7 +69805,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 800,
+      "line": 801,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69945,7 +69815,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 809,
+      "line": 810,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69955,7 +69825,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 859,
+      "line": 860,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69965,7 +69835,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 875,
+      "line": 876,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69975,7 +69845,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 883,
+      "line": 884,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69985,7 +69855,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 981,
+      "line": 982,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -69995,7 +69865,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 995,
+      "line": 996,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -70005,7 +69875,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 1035,
+      "line": 1036,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -70015,7 +69885,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 1083,
+      "line": 1084,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -70025,7 +69895,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 1137,
+      "line": 1138,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -70035,7 +69905,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 1145,
+      "line": 1146,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -70045,7 +69915,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 1160,
+      "line": 1161,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -70195,7 +70065,7 @@
       "kind": "import",
       "evidence": "from comments_server_financial_evidence_routes",
       "confidence": "high",
-      "line": 389,
+      "line": 390,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -70205,7 +70075,7 @@
       "kind": "import",
       "evidence": "from dcf.availability",
       "confidence": "high",
-      "line": 1151,
+      "line": 1152,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -70225,207 +70095,207 @@
       "kind": "import",
       "evidence": "from pipeline.pdf_render",
       "confidence": "high",
-      "line": 555,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/comments_server_content_routes.py",
-      "target": "src/pipeline/peeks.py",
-      "kind": "import",
-      "evidence": "from pipeline.peeks",
-      "confidence": "high",
-      "line": 590,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/comments_server_content_routes.py",
-      "target": "src/pipeline/peeks.py",
-      "kind": "import",
-      "evidence": "from pipeline.peeks",
-      "confidence": "high",
-      "line": 599,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/comments_server_content_routes.py",
-      "target": "src/pipeline/peeks.py",
-      "kind": "import",
-      "evidence": "from pipeline.peeks",
-      "confidence": "high",
-      "line": 613,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/comments_server_content_routes.py",
-      "target": "src/pipeline/peeks.py",
-      "kind": "import",
-      "evidence": "from pipeline.peeks",
-      "confidence": "high",
-      "line": 624,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/comments_server_content_routes.py",
-      "target": "src/pipeline/peeks.py",
-      "kind": "import",
-      "evidence": "from pipeline.peeks",
-      "confidence": "high",
-      "line": 633,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/comments_server_content_routes.py",
-      "target": "src/pipeline/peeks.py",
-      "kind": "import",
-      "evidence": "from pipeline.peeks",
-      "confidence": "high",
-      "line": 642,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/comments_server_content_routes.py",
-      "target": "src/pipeline/peeks.py",
-      "kind": "import",
-      "evidence": "from pipeline.peeks",
-      "confidence": "high",
-      "line": 651,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/comments_server_content_routes.py",
-      "target": "src/pipeline/peeks.py",
-      "kind": "import",
-      "evidence": "from pipeline.peeks",
-      "confidence": "high",
-      "line": 662,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/comments_server_content_routes.py",
-      "target": "src/pipeline/peeks.py",
-      "kind": "import",
-      "evidence": "from pipeline.peeks",
-      "confidence": "high",
-      "line": 675,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/comments_server_content_routes.py",
-      "target": "src/pipeline/peeks.py",
-      "kind": "import",
-      "evidence": "from pipeline.peeks",
-      "confidence": "high",
-      "line": 699,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/comments_server_content_routes.py",
-      "target": "src/pipeline/peeks.py",
-      "kind": "import",
-      "evidence": "from pipeline.peeks",
-      "confidence": "high",
-      "line": 738,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/comments_server_content_routes.py",
-      "target": "src/pipeline/peeks.py",
-      "kind": "import",
-      "evidence": "from pipeline.peeks",
-      "confidence": "high",
-      "line": 750,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/comments_server_content_routes.py",
-      "target": "src/pipeline/peeks.py",
-      "kind": "import",
-      "evidence": "from pipeline.peeks",
-      "confidence": "high",
-      "line": 762,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/comments_server_content_routes.py",
-      "target": "src/pipeline/peeks.py",
-      "kind": "import",
-      "evidence": "from pipeline.peeks",
-      "confidence": "high",
-      "line": 787,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/comments_server_content_routes.py",
-      "target": "src/pipeline/peeks.py",
-      "kind": "import",
-      "evidence": "from pipeline.peeks",
-      "confidence": "high",
-      "line": 802,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/comments_server_content_routes.py",
-      "target": "src/pipeline/peeks.py",
-      "kind": "import",
-      "evidence": "from pipeline.peeks",
-      "confidence": "high",
-      "line": 811,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/comments_server_content_routes.py",
-      "target": "src/pipeline/source_viewers.py",
-      "kind": "import",
-      "evidence": "from pipeline.source_viewers",
-      "confidence": "high",
-      "line": 452,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/comments_server_content_routes.py",
-      "target": "src/pipeline/source_viewers.py",
-      "kind": "import",
-      "evidence": "from pipeline.source_viewers",
-      "confidence": "high",
-      "line": 540,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/comments_server_content_routes.py",
-      "target": "src/pipeline/source_viewers.py",
-      "kind": "import",
-      "evidence": "from pipeline.source_viewers",
-      "confidence": "high",
       "line": 556,
       "unknown": false,
       "reviewed_disposition": null
     },
     {
       "source": "execution/comments_server_content_routes.py",
+      "target": "src/pipeline/peeks.py",
+      "kind": "import",
+      "evidence": "from pipeline.peeks",
+      "confidence": "high",
+      "line": 591,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/comments_server_content_routes.py",
+      "target": "src/pipeline/peeks.py",
+      "kind": "import",
+      "evidence": "from pipeline.peeks",
+      "confidence": "high",
+      "line": 600,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/comments_server_content_routes.py",
+      "target": "src/pipeline/peeks.py",
+      "kind": "import",
+      "evidence": "from pipeline.peeks",
+      "confidence": "high",
+      "line": 614,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/comments_server_content_routes.py",
+      "target": "src/pipeline/peeks.py",
+      "kind": "import",
+      "evidence": "from pipeline.peeks",
+      "confidence": "high",
+      "line": 625,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/comments_server_content_routes.py",
+      "target": "src/pipeline/peeks.py",
+      "kind": "import",
+      "evidence": "from pipeline.peeks",
+      "confidence": "high",
+      "line": 634,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/comments_server_content_routes.py",
+      "target": "src/pipeline/peeks.py",
+      "kind": "import",
+      "evidence": "from pipeline.peeks",
+      "confidence": "high",
+      "line": 643,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/comments_server_content_routes.py",
+      "target": "src/pipeline/peeks.py",
+      "kind": "import",
+      "evidence": "from pipeline.peeks",
+      "confidence": "high",
+      "line": 652,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/comments_server_content_routes.py",
+      "target": "src/pipeline/peeks.py",
+      "kind": "import",
+      "evidence": "from pipeline.peeks",
+      "confidence": "high",
+      "line": 663,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/comments_server_content_routes.py",
+      "target": "src/pipeline/peeks.py",
+      "kind": "import",
+      "evidence": "from pipeline.peeks",
+      "confidence": "high",
+      "line": 676,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/comments_server_content_routes.py",
+      "target": "src/pipeline/peeks.py",
+      "kind": "import",
+      "evidence": "from pipeline.peeks",
+      "confidence": "high",
+      "line": 700,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/comments_server_content_routes.py",
+      "target": "src/pipeline/peeks.py",
+      "kind": "import",
+      "evidence": "from pipeline.peeks",
+      "confidence": "high",
+      "line": 739,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/comments_server_content_routes.py",
+      "target": "src/pipeline/peeks.py",
+      "kind": "import",
+      "evidence": "from pipeline.peeks",
+      "confidence": "high",
+      "line": 751,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/comments_server_content_routes.py",
+      "target": "src/pipeline/peeks.py",
+      "kind": "import",
+      "evidence": "from pipeline.peeks",
+      "confidence": "high",
+      "line": 763,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/comments_server_content_routes.py",
+      "target": "src/pipeline/peeks.py",
+      "kind": "import",
+      "evidence": "from pipeline.peeks",
+      "confidence": "high",
+      "line": 788,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/comments_server_content_routes.py",
+      "target": "src/pipeline/peeks.py",
+      "kind": "import",
+      "evidence": "from pipeline.peeks",
+      "confidence": "high",
+      "line": 803,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/comments_server_content_routes.py",
+      "target": "src/pipeline/peeks.py",
+      "kind": "import",
+      "evidence": "from pipeline.peeks",
+      "confidence": "high",
+      "line": 812,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/comments_server_content_routes.py",
       "target": "src/pipeline/source_viewers.py",
       "kind": "import",
       "evidence": "from pipeline.source_viewers",
       "confidence": "high",
-      "line": 812,
+      "line": 453,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/comments_server_content_routes.py",
+      "target": "src/pipeline/source_viewers.py",
+      "kind": "import",
+      "evidence": "from pipeline.source_viewers",
+      "confidence": "high",
+      "line": 541,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/comments_server_content_routes.py",
+      "target": "src/pipeline/source_viewers.py",
+      "kind": "import",
+      "evidence": "from pipeline.source_viewers",
+      "confidence": "high",
+      "line": 557,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/comments_server_content_routes.py",
+      "target": "src/pipeline/source_viewers.py",
+      "kind": "import",
+      "evidence": "from pipeline.source_viewers",
+      "confidence": "high",
+      "line": 813,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -70495,7 +70365,7 @@
       "kind": "import",
       "evidence": "from report.file_capture",
       "confidence": "high",
-      "line": 61,
+      "line": 60,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -70505,7 +70375,7 @@
       "kind": "import",
       "evidence": "from report.generation_context",
       "confidence": "high",
-      "line": 62,
+      "line": 61,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -70515,7 +70385,7 @@
       "kind": "import",
       "evidence": "from report.read_capture",
       "confidence": "high",
-      "line": 63,
+      "line": 62,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -70525,7 +70395,17 @@
       "kind": "import",
       "evidence": "from report.renderers.workspace_reader_assets",
       "confidence": "high",
-      "line": 1139,
+      "line": 1140,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "execution/comments_server_content_routes.py",
+      "target": "src/research/decision_brief.py",
+      "kind": "import",
+      "evidence": "from research.decision_brief",
+      "confidence": "high",
+      "line": 63,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -70535,7 +70415,7 @@
       "kind": "import",
       "evidence": "from sources.report_financials",
       "confidence": "high",
-      "line": 813,
+      "line": 814,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -70545,7 +70425,7 @@
       "kind": "import",
       "evidence": "from ui.prose",
       "confidence": "high",
-      "line": 723,
+      "line": 724,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -71005,7 +70885,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 78,
+      "line": 75,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -71015,7 +70895,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 125,
+      "line": 122,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -71025,7 +70905,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 144,
+      "line": 141,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -71035,7 +70915,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 149,
+      "line": 146,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -71045,7 +70925,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 169,
+      "line": 166,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -71055,7 +70935,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 182,
+      "line": 179,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -71065,7 +70945,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 196,
+      "line": 193,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -71075,7 +70955,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 216,
+      "line": 213,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -71085,7 +70965,7 @@
       "kind": "route",
       "evidence": "route decorator",
       "confidence": "medium",
-      "line": 223,
+      "line": 220,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -71105,7 +70985,7 @@
       "kind": "import",
       "evidence": "external import dataclasses",
       "confidence": "high",
-      "line": 189,
+      "line": 186,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -71165,7 +71045,7 @@
       "kind": "import",
       "evidence": "from dashboard.cio_export",
       "confidence": "high",
-      "line": 204,
+      "line": 201,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -71175,7 +71055,7 @@
       "kind": "import",
       "evidence": "from decision_conditions",
       "confidence": "high",
-      "line": 111,
+      "line": 108,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -71205,7 +71085,7 @@
       "kind": "import",
       "evidence": "from pipeline.since_last",
       "confidence": "high",
-      "line": 158,
+      "line": 155,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -71225,7 +71105,7 @@
       "kind": "import",
       "evidence": "from sources.registry",
       "confidence": "high",
-      "line": 191,
+      "line": 188,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -71245,7 +71125,7 @@
       "kind": "import",
       "evidence": "from synthesis.reconcile",
       "confidence": "high",
-      "line": 95,
+      "line": 92,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -106720,76 +106600,6 @@
       "reviewed_disposition": null
     },
     {
-      "source": "execution/run_ledger_synthesis.py",
-      "target": "<external:__future__>",
-      "kind": "import",
-      "evidence": "external import __future__",
-      "confidence": "high",
-      "line": 13,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/run_ledger_synthesis.py",
-      "target": "<external:argparse>",
-      "kind": "import",
-      "evidence": "external import argparse",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/run_ledger_synthesis.py",
-      "target": "<external:logging>",
-      "kind": "import",
-      "evidence": "external import logging",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/run_ledger_synthesis.py",
-      "target": "<external:pathlib>",
-      "kind": "import",
-      "evidence": "external import pathlib",
-      "confidence": "high",
-      "line": 18,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/run_ledger_synthesis.py",
-      "target": "<external:sys>",
-      "kind": "import",
-      "evidence": "external import sys",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/run_ledger_synthesis.py",
-      "target": "src/synthesis/__init__.py",
-      "kind": "import",
-      "evidence": "from synthesis",
-      "confidence": "high",
-      "line": 25,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/run_ledger_synthesis.py",
-      "target": "src/synthesis/theme_synth.py",
-      "kind": "import",
-      "evidence": "from synthesis import theme_synth",
-      "confidence": "high",
-      "line": 25,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
       "source": "execution/run_lens.py",
       "target": "<external:__future__>",
       "kind": "import",
@@ -111486,66 +111296,6 @@
       "evidence": "from pipeline.queries",
       "confidence": "high",
       "line": 50,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/seed_themes.py",
-      "target": "<external:__future__>",
-      "kind": "import",
-      "evidence": "external import __future__",
-      "confidence": "high",
-      "line": 12,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/seed_themes.py",
-      "target": "<external:argparse>",
-      "kind": "import",
-      "evidence": "external import argparse",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/seed_themes.py",
-      "target": "<external:pathlib>",
-      "kind": "import",
-      "evidence": "external import pathlib",
-      "confidence": "high",
-      "line": 16,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/seed_themes.py",
-      "target": "<external:sys>",
-      "kind": "import",
-      "evidence": "external import sys",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/seed_themes.py",
-      "target": "src/synthesis/__init__.py",
-      "kind": "import",
-      "evidence": "from synthesis",
-      "confidence": "high",
-      "line": 23,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "execution/seed_themes.py",
-      "target": "src/synthesis/seed.py",
-      "kind": "import",
-      "evidence": "from synthesis import seed",
-      "confidence": "high",
-      "line": 23,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -123541,16 +123291,6 @@
     },
     {
       "source": "src/ask/context.py",
-      "target": "<dynamic attribute>",
-      "kind": "getattr",
-      "evidence": "dynamic getattr expression; reviewed as runtime_registry in docs/quality/reachability-getattr-dispositions.json: getattr selects only the three checked-in anchor loaders.",
-      "confidence": "medium",
-      "line": 133,
-      "unknown": false,
-      "reviewed_disposition": "runtime_registry"
-    },
-    {
-      "source": "src/ask/context.py",
       "target": "<external:__future__>",
       "kind": "import",
       "evidence": "external import __future__",
@@ -123631,21 +123371,11 @@
     },
     {
       "source": "src/ask/context.py",
-      "target": "src/llm/__init__.py",
+      "target": "src/llm/anchors.py",
       "kind": "import",
-      "evidence": "from llm",
+      "evidence": "from llm.anchors",
       "confidence": "high",
-      "line": 130,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/ask/context.py",
-      "target": "src/llm/__init__.py",
-      "kind": "reexport",
-      "evidence": "from-import binding",
-      "confidence": "medium",
-      "line": 130,
+      "line": 12,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -123653,9 +123383,9 @@
       "source": "src/ask/context.py",
       "target": "src/llm/anchors.py",
       "kind": "reexport",
-      "evidence": "from llm import anchors",
-      "confidence": "high",
-      "line": 130,
+      "evidence": "from-import binding",
+      "confidence": "medium",
+      "line": 12,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -123665,7 +123395,7 @@
       "kind": "import",
       "evidence": "from llm.untrusted",
       "confidence": "high",
-      "line": 131,
+      "line": 13,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -123675,7 +123405,7 @@
       "kind": "reexport",
       "evidence": "from-import binding",
       "confidence": "medium",
-      "line": 131,
+      "line": 13,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -123685,7 +123415,7 @@
       "kind": "import",
       "evidence": "from sqlite_runtime",
       "confidence": "high",
-      "line": 12,
+      "line": 14,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -123695,7 +123425,7 @@
       "kind": "reexport",
       "evidence": "from-import binding",
       "confidence": "medium",
-      "line": 12,
+      "line": 14,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -130551,11 +130281,21 @@
     },
     {
       "source": "src/compute/fmp_derived_kpis.py",
+      "target": "src/provenance/source_fact_publication.py",
+      "kind": "import",
+      "evidence": "from provenance.source_fact_publication",
+      "confidence": "high",
+      "line": 72,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "src/compute/fmp_derived_kpis.py",
       "target": "src/timeseries/loaders.py",
       "kind": "import",
       "evidence": "from timeseries.loaders",
       "confidence": "high",
-      "line": 72,
+      "line": 73,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -157825,7 +157565,7 @@
       "kind": "import",
       "evidence": "from llm.untrusted",
       "confidence": "high",
-      "line": 804,
+      "line": 760,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -157835,7 +157575,7 @@
       "kind": "import",
       "evidence": "from owner_profile.store",
       "confidence": "high",
-      "line": 747,
+      "line": 703,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -157846,16 +157586,6 @@
       "evidence": "from sqlite_runtime",
       "confidence": "high",
       "line": 65,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/llm/anchors.py",
-      "target": "src/synthesis/insights.py",
-      "kind": "import",
-      "evidence": "from synthesis.insights",
-      "confidence": "high",
-      "line": 691,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158205,7 +157935,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 2024,
+      "line": 2016,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158215,7 +157945,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 1072,
+      "line": 1064,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158225,7 +157955,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 1075,
+      "line": 1067,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158235,7 +157965,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression; reviewed as external_process in docs/quality/reachability-process-dispositions.json: _call_claude invokes the resolved Claude CLI path after setup validation; the command list fixes the executable and arguments.",
       "confidence": "medium",
-      "line": 1224,
+      "line": 1216,
       "unknown": false,
       "reviewed_disposition": "external_process"
     },
@@ -158245,7 +157975,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression; reviewed as external_process in docs/quality/reachability-process-dispositions.json: The streaming path obtains claude with shutil.which and passes that fixed executable as cmd[0] to Popen.",
       "confidence": "medium",
-      "line": 2236,
+      "line": 2228,
       "unknown": false,
       "reviewed_disposition": "external_process"
     },
@@ -158255,7 +157985,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression; reviewed as external_process in docs/quality/reachability-process-dispositions.json: The web path invokes the resolved Claude CLI path in a fixed command list; enabled tools are separately allowlisted.",
       "confidence": "medium",
-      "line": 2688,
+      "line": 2680,
       "unknown": false,
       "reviewed_disposition": "external_process"
     },
@@ -158445,7 +158175,7 @@
       "kind": "import",
       "evidence": "from db_paths",
       "confidence": "high",
-      "line": 1104,
+      "line": 1096,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158455,7 +158185,7 @@
       "kind": "import",
       "evidence": "from db_paths",
       "confidence": "high",
-      "line": 1575,
+      "line": 1567,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158465,7 +158195,7 @@
       "kind": "import",
       "evidence": "from db_paths",
       "confidence": "high",
-      "line": 1774,
+      "line": 1766,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158485,7 +158215,7 @@
       "kind": "import",
       "evidence": "from llm.codex_backend",
       "confidence": "high",
-      "line": 1369,
+      "line": 1361,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158495,7 +158225,7 @@
       "kind": "import",
       "evidence": "from llm.codex_backend",
       "confidence": "high",
-      "line": 1819,
+      "line": 1811,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158505,7 +158235,7 @@
       "kind": "import",
       "evidence": "from llm.codex_backend",
       "confidence": "high",
-      "line": 2526,
+      "line": 2518,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158525,7 +158255,7 @@
       "kind": "import",
       "evidence": "from llm.gemini_backend",
       "confidence": "high",
-      "line": 1871,
+      "line": 1863,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158545,7 +158275,7 @@
       "kind": "import",
       "evidence": "from llm.model_ladder",
       "confidence": "high",
-      "line": 1809,
+      "line": 1801,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158555,7 +158285,7 @@
       "kind": "import",
       "evidence": "from llm.model_ladder",
       "confidence": "high",
-      "line": 1810,
+      "line": 1802,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158565,7 +158295,7 @@
       "kind": "import",
       "evidence": "from llm.model_ladder",
       "confidence": "high",
-      "line": 1811,
+      "line": 1803,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158575,7 +158305,7 @@
       "kind": "import",
       "evidence": "from llm.model_ladder",
       "confidence": "high",
-      "line": 2170,
+      "line": 2162,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158585,7 +158315,7 @@
       "kind": "import",
       "evidence": "from llm.model_ladder",
       "confidence": "high",
-      "line": 2171,
+      "line": 2163,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158595,7 +158325,7 @@
       "kind": "import",
       "evidence": "from llm.model_overrides",
       "confidence": "high",
-      "line": 725,
+      "line": 717,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158605,7 +158335,7 @@
       "kind": "import",
       "evidence": "from llm.openrouter_backend",
       "confidence": "high",
-      "line": 1411,
+      "line": 1403,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158615,7 +158345,7 @@
       "kind": "import",
       "evidence": "from llm.openrouter_backend",
       "confidence": "high",
-      "line": 1465,
+      "line": 1457,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158625,7 +158355,7 @@
       "kind": "import",
       "evidence": "from llm.openrouter_backend",
       "confidence": "high",
-      "line": 1927,
+      "line": 1919,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158635,7 +158365,7 @@
       "kind": "import",
       "evidence": "from llm.prompt_ab",
       "confidence": "high",
-      "line": 1604,
+      "line": 1596,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158645,7 +158375,7 @@
       "kind": "import",
       "evidence": "from llm.prompt_ab",
       "confidence": "high",
-      "line": 2505,
+      "line": 2497,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158655,7 +158385,7 @@
       "kind": "import",
       "evidence": "from llm.prompt_registry",
       "confidence": "high",
-      "line": 1620,
+      "line": 1612,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158665,7 +158395,7 @@
       "kind": "import",
       "evidence": "from llm.prompt_registry",
       "confidence": "high",
-      "line": 2179,
+      "line": 2171,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158675,7 +158405,7 @@
       "kind": "import",
       "evidence": "from llm.prompt_registry",
       "confidence": "high",
-      "line": 2517,
+      "line": 2509,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158685,7 +158415,7 @@
       "kind": "import",
       "evidence": "from llm.prompt_versions",
       "confidence": "high",
-      "line": 1570,
+      "line": 1562,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158705,7 +158435,7 @@
       "kind": "import",
       "evidence": "from llm.resolver",
       "confidence": "high",
-      "line": 1159,
+      "line": 1151,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158715,7 +158445,7 @@
       "kind": "import",
       "evidence": "from llm.resolver",
       "confidence": "high",
-      "line": 1451,
+      "line": 1443,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158725,7 +158455,7 @@
       "kind": "import",
       "evidence": "from llm.resolver",
       "confidence": "high",
-      "line": 1571,
+      "line": 1563,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158735,7 +158465,7 @@
       "kind": "import",
       "evidence": "from llm.resolver",
       "confidence": "high",
-      "line": 1812,
+      "line": 1804,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158745,7 +158475,7 @@
       "kind": "import",
       "evidence": "from llm.resolver",
       "confidence": "high",
-      "line": 2484,
+      "line": 2476,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158765,7 +158495,7 @@
       "kind": "import",
       "evidence": "from llm_budget",
       "confidence": "high",
-      "line": 957,
+      "line": 949,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158775,7 +158505,7 @@
       "kind": "import",
       "evidence": "from llm_budget",
       "confidence": "high",
-      "line": 1043,
+      "line": 1035,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158785,7 +158515,7 @@
       "kind": "import",
       "evidence": "from llm_call_ledger",
       "confidence": "high",
-      "line": 1179,
+      "line": 1171,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158795,7 +158525,7 @@
       "kind": "import",
       "evidence": "from llm_call_ledger",
       "confidence": "high",
-      "line": 2103,
+      "line": 2095,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158805,7 +158535,7 @@
       "kind": "import",
       "evidence": "from llm_call_ledger",
       "confidence": "high",
-      "line": 2619,
+      "line": 2611,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158815,7 +158545,7 @@
       "kind": "import",
       "evidence": "import llm_client",
       "confidence": "high",
-      "line": 924,
+      "line": 916,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158825,7 +158555,7 @@
       "kind": "import",
       "evidence": "import llm_client",
       "confidence": "high",
-      "line": 1165,
+      "line": 1157,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158835,7 +158565,7 @@
       "kind": "import",
       "evidence": "import llm_client",
       "confidence": "high",
-      "line": 2607,
+      "line": 2599,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158845,7 +158575,7 @@
       "kind": "import",
       "evidence": "from log_redact",
       "confidence": "high",
-      "line": 1608,
+      "line": 1600,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158855,7 +158585,7 @@
       "kind": "import",
       "evidence": "from log_redact",
       "confidence": "high",
-      "line": 1855,
+      "line": 1847,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158865,7 +158595,7 @@
       "kind": "import",
       "evidence": "from log_redact",
       "confidence": "high",
-      "line": 1913,
+      "line": 1905,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158875,7 +158605,7 @@
       "kind": "import",
       "evidence": "from log_redact",
       "confidence": "high",
-      "line": 1958,
+      "line": 1950,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158885,7 +158615,7 @@
       "kind": "import",
       "evidence": "from log_redact",
       "confidence": "high",
-      "line": 2038,
+      "line": 2030,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158895,7 +158625,7 @@
       "kind": "import",
       "evidence": "from log_redact",
       "confidence": "high",
-      "line": 2062,
+      "line": 2054,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158905,7 +158635,7 @@
       "kind": "import",
       "evidence": "from log_redact",
       "confidence": "high",
-      "line": 2136,
+      "line": 2128,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158915,7 +158645,7 @@
       "kind": "import",
       "evidence": "from log_redact",
       "confidence": "high",
-      "line": 2172,
+      "line": 2164,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158925,7 +158655,7 @@
       "kind": "import",
       "evidence": "from log_redact",
       "confidence": "high",
-      "line": 2509,
+      "line": 2501,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158935,7 +158665,7 @@
       "kind": "import",
       "evidence": "from log_redact",
       "confidence": "high",
-      "line": 2588,
+      "line": 2580,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158945,7 +158675,7 @@
       "kind": "import",
       "evidence": "from pipeline.db_writer_gate",
       "confidence": "high",
-      "line": 1091,
+      "line": 1083,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -158955,7 +158685,7 @@
       "kind": "import",
       "evidence": "from telemetry_health",
       "confidence": "high",
-      "line": 1105,
+      "line": 1097,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -211925,7 +211655,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 521,
+      "line": 489,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -211935,7 +211665,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 521,
+      "line": 489,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -211945,7 +211675,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 509,
+      "line": 477,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -211955,7 +211685,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 567,
+      "line": 535,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -220965,7 +220695,7 @@
       "kind": "import",
       "evidence": "from dcf.readiness",
       "confidence": "high",
-      "line": 25,
+      "line": 30,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -220975,7 +220705,7 @@
       "kind": "import",
       "evidence": "from provenance.canonical_fact_resolution",
       "confidence": "high",
-      "line": 26,
+      "line": 31,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -220985,7 +220715,7 @@
       "kind": "import",
       "evidence": "from provenance.evidence_native_candidates",
       "confidence": "high",
-      "line": 27,
+      "line": 32,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -220995,7 +220725,7 @@
       "kind": "import",
       "evidence": "from provenance.fact_read_model",
       "confidence": "high",
-      "line": 31,
+      "line": 36,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221005,7 +220735,7 @@
       "kind": "import",
       "evidence": "from provenance.immutable_artifact",
       "confidence": "high",
-      "line": 32,
+      "line": 37,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221015,7 +220745,7 @@
       "kind": "import",
       "evidence": "from provenance.issuer_registry",
       "confidence": "high",
-      "line": 37,
+      "line": 42,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221025,7 +220755,7 @@
       "kind": "import",
       "evidence": "from provenance.research_snapshot",
       "confidence": "high",
-      "line": 38,
+      "line": 43,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221035,7 +220765,7 @@
       "kind": "import",
       "evidence": "from provenance.sec_filing_xbrl_ingest",
       "confidence": "high",
-      "line": 42,
+      "line": 47,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221045,7 +220775,7 @@
       "kind": "import",
       "evidence": "from report.artifacts",
       "confidence": "high",
-      "line": 43,
+      "line": 48,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221055,7 +220785,7 @@
       "kind": "import",
       "evidence": "from report.legacy_body",
       "confidence": "high",
-      "line": 48,
+      "line": 55,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221065,7 +220795,7 @@
       "kind": "import",
       "evidence": "from research.memo_claim_support",
       "confidence": "high",
-      "line": 49,
+      "line": 56,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221075,7 +220805,7 @@
       "kind": "import",
       "evidence": "from research.memo_model_evidence",
       "confidence": "high",
-      "line": 61,
+      "line": 68,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221085,7 +220815,7 @@
       "kind": "import",
       "evidence": "from research.memo_report_evidence",
       "confidence": "high",
-      "line": 69,
+      "line": 76,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221095,7 +220825,7 @@
       "kind": "import",
       "evidence": "from research.nu_earnings_evidence",
       "confidence": "high",
-      "line": 74,
+      "line": 81,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221105,7 +220835,7 @@
       "kind": "import",
       "evidence": "from search.canonical_fact_projection",
       "confidence": "high",
-      "line": 84,
+      "line": 91,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221115,7 +220845,7 @@
       "kind": "import",
       "evidence": "from search.request_verification",
       "confidence": "high",
-      "line": 88,
+      "line": 95,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -221125,7 +220855,7 @@
       "kind": "import",
       "evidence": "from sources.report_financials",
       "confidence": "high",
-      "line": 89,
+      "line": 96,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -235270,176 +235000,6 @@
       "reviewed_disposition": null
     },
     {
-      "source": "src/synthesis/seed.py",
-      "target": "<external:__future__>",
-      "kind": "import",
-      "evidence": "external import __future__",
-      "confidence": "high",
-      "line": 16,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/seed.py",
-      "target": "<external:collections.abc>",
-      "kind": "import",
-      "evidence": "external import collections.abc",
-      "confidence": "high",
-      "line": 20,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/seed.py",
-      "target": "<external:json>",
-      "kind": "import",
-      "evidence": "external import json",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/seed.py",
-      "target": "<external:pathlib>",
-      "kind": "import",
-      "evidence": "external import pathlib",
-      "confidence": "high",
-      "line": 21,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/seed.py",
-      "target": "<external:sqlite3>",
-      "kind": "import",
-      "evidence": "external import sqlite3",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/seed.py",
-      "target": "<external:typing>",
-      "kind": "import",
-      "evidence": "external import typing",
-      "confidence": "high",
-      "line": 22,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/seed.py",
-      "target": "src/identity.py",
-      "kind": "import",
-      "evidence": "from identity",
-      "confidence": "high",
-      "line": 24,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/seed.py",
-      "target": "src/synthesis/insights.py",
-      "kind": "import",
-      "evidence": "from synthesis.insights",
-      "confidence": "high",
-      "line": 25,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/seed.py",
-      "target": "src/user_state/notes.py",
-      "kind": "import",
-      "evidence": "from user_state.notes",
-      "confidence": "high",
-      "line": 26,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/seed_decisions.py",
-      "target": "<external:__future__>",
-      "kind": "import",
-      "evidence": "external import __future__",
-      "confidence": "high",
-      "line": 33,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/seed_decisions.py",
-      "target": "<external:json>",
-      "kind": "import",
-      "evidence": "external import json",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/seed_decisions.py",
-      "target": "<external:pathlib>",
-      "kind": "import",
-      "evidence": "external import pathlib",
-      "confidence": "high",
-      "line": 38,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/seed_decisions.py",
-      "target": "<external:re>",
-      "kind": "import",
-      "evidence": "external import re",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/seed_decisions.py",
-      "target": "<external:sqlite3>",
-      "kind": "import",
-      "evidence": "external import sqlite3",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/seed_decisions.py",
-      "target": "<external:typing>",
-      "kind": "import",
-      "evidence": "external import typing",
-      "confidence": "high",
-      "line": 39,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/seed_decisions.py",
-      "target": "src/user_state/_db.py",
-      "kind": "import",
-      "evidence": "from user_state._db",
-      "confidence": "high",
-      "line": 41,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/seed_decisions.py",
-      "target": "src/user_state/notes.py",
-      "kind": "import",
-      "evidence": "from user_state.notes",
-      "confidence": "high",
-      "line": 42,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
       "source": "src/synthesis/semantic_tension.py",
       "target": "<external:__future__>",
       "kind": "import",
@@ -235936,126 +235496,6 @@
       "evidence": "from user_state._db",
       "confidence": "high",
       "line": 25,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/theme_synth.py",
-      "target": "<external:__future__>",
-      "kind": "import",
-      "evidence": "external import __future__",
-      "confidence": "high",
-      "line": 19,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/theme_synth.py",
-      "target": "<external:collections.abc>",
-      "kind": "import",
-      "evidence": "external import collections.abc",
-      "confidence": "high",
-      "line": 22,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/theme_synth.py",
-      "target": "<external:logging>",
-      "kind": "import",
-      "evidence": "external import logging",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/theme_synth.py",
-      "target": "<external:pathlib>",
-      "kind": "import",
-      "evidence": "external import pathlib",
-      "confidence": "high",
-      "line": 23,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/theme_synth.py",
-      "target": "<external:typing>",
-      "kind": "import",
-      "evidence": "external import typing",
-      "confidence": "high",
-      "line": 24,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/theme_synth.py",
-      "target": "src/identity.py",
-      "kind": "import",
-      "evidence": "from identity",
-      "confidence": "high",
-      "line": 26,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/theme_synth.py",
-      "target": "src/llm/contracts.py",
-      "kind": "import",
-      "evidence": "from llm.contracts",
-      "confidence": "high",
-      "line": 51,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/theme_synth.py",
-      "target": "src/llm/structured.py",
-      "kind": "import",
-      "evidence": "from llm.structured",
-      "confidence": "high",
-      "line": 52,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/theme_synth.py",
-      "target": "src/llm/structured.py",
-      "kind": "import",
-      "evidence": "from llm.structured",
-      "confidence": "high",
-      "line": 85,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/theme_synth.py",
-      "target": "src/log_redact.py",
-      "kind": "import",
-      "evidence": "from log_redact",
-      "confidence": "high",
-      "line": 27,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/theme_synth.py",
-      "target": "src/synthesis/insights.py",
-      "kind": "import",
-      "evidence": "from synthesis.insights",
-      "confidence": "high",
-      "line": 28,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "src/synthesis/theme_synth.py",
-      "target": "src/user_state/notes.py",
-      "kind": "import",
-      "evidence": "from user_state.notes",
-      "confidence": "high",
-      "line": 29,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -263625,7 +263065,7 @@
       "kind": "import",
       "evidence": "from evals",
       "confidence": "high",
-      "line": 333,
+      "line": 335,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -263675,7 +263115,7 @@
       "kind": "import",
       "evidence": "from evals import harness",
       "confidence": "high",
-      "line": 333,
+      "line": 335,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -271391,6 +270831,16 @@
     },
     {
       "source": "tests/test_compute_fmp_derived_kpis.py",
+      "target": "src/compute/__init__.py",
+      "kind": "import",
+      "evidence": "from compute",
+      "confidence": "high",
+      "line": 765,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_compute_fmp_derived_kpis.py",
       "target": "src/compute/fmp_derived_kpis.py",
       "kind": "import",
       "evidence": "from compute.fmp_derived_kpis",
@@ -271405,7 +270855,7 @@
       "kind": "import",
       "evidence": "from compute.fmp_derived_kpis",
       "confidence": "high",
-      "line": 575,
+      "line": 613,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -271415,7 +270865,17 @@
       "kind": "import",
       "evidence": "from compute.fmp_derived_kpis",
       "confidence": "high",
-      "line": 651,
+      "line": 689,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_compute_fmp_derived_kpis.py",
+      "target": "src/compute/fmp_derived_kpis.py",
+      "kind": "import",
+      "evidence": "from compute import fmp_derived_kpis",
+      "confidence": "high",
+      "line": 765,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -271425,7 +270885,7 @@
       "kind": "import",
       "evidence": "from models.facts",
       "confidence": "high",
-      "line": 28,
+      "line": 27,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -271435,7 +270895,7 @@
       "kind": "import",
       "evidence": "from provenance.evidence_backfill",
       "confidence": "high",
-      "line": 29,
+      "line": 28,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -271445,7 +270905,7 @@
       "kind": "import",
       "evidence": "from provenance.financial_fact_resolution",
       "confidence": "high",
-      "line": 30,
+      "line": 29,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -298555,7 +298015,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 1612,
+      "line": 1610,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -318955,7 +318415,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 854,
+      "line": 862,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -318965,7 +318425,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 235,
+      "line": 243,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -318975,7 +318435,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 722,
+      "line": 730,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -318985,7 +318445,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 1695,
+      "line": 1709,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -318995,7 +318455,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 1782,
+      "line": 1796,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319005,7 +318465,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 896,
+      "line": 904,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319015,7 +318475,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 500,
+      "line": 508,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319025,7 +318485,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 581,
+      "line": 589,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319035,7 +318495,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 623,
+      "line": 631,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319045,7 +318505,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 460,
+      "line": 468,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319055,7 +318515,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 678,
+      "line": 686,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319065,7 +318525,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 578,
+      "line": 586,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319295,7 +318755,7 @@
       "kind": "import",
       "evidence": "import index_manager",
       "confidence": "high",
-      "line": 205,
+      "line": 213,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319305,7 +318765,7 @@
       "kind": "import",
       "evidence": "import index_manager",
       "confidence": "high",
-      "line": 261,
+      "line": 269,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319315,7 +318775,7 @@
       "kind": "import",
       "evidence": "import index_manager",
       "confidence": "high",
-      "line": 295,
+      "line": 303,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319325,7 +318785,7 @@
       "kind": "import",
       "evidence": "import index_manager",
       "confidence": "high",
-      "line": 751,
+      "line": 759,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319335,7 +318795,7 @@
       "kind": "import",
       "evidence": "import index_manager",
       "confidence": "high",
-      "line": 1163,
+      "line": 1177,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319345,7 +318805,7 @@
       "kind": "import",
       "evidence": "import index_manager",
       "confidence": "high",
-      "line": 1627,
+      "line": 1641,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319355,7 +318815,7 @@
       "kind": "import",
       "evidence": "import index_manager",
       "confidence": "high",
-      "line": 1749,
+      "line": 1763,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319385,7 +318845,7 @@
       "kind": "import",
       "evidence": "import ir_uploads",
       "confidence": "high",
-      "line": 843,
+      "line": 851,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319395,7 +318855,7 @@
       "kind": "import",
       "evidence": "import issuer_registry",
       "confidence": "high",
-      "line": 296,
+      "line": 304,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319405,7 +318865,7 @@
       "kind": "import",
       "evidence": "import issuer_registry",
       "confidence": "high",
-      "line": 844,
+      "line": 852,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319415,7 +318875,7 @@
       "kind": "import",
       "evidence": "import issuer_registry",
       "confidence": "high",
-      "line": 1275,
+      "line": 1289,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319485,7 +318945,7 @@
       "kind": "import",
       "evidence": "from runtime.job_runtime",
       "confidence": "high",
-      "line": 657,
+      "line": 665,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319495,7 +318955,7 @@
       "kind": "import",
       "evidence": "from runtime.job_runtime",
       "confidence": "high",
-      "line": 888,
+      "line": 896,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -319505,7 +318965,7 @@
       "kind": "import",
       "evidence": "from tests.test_managed_ir_sources",
       "confidence": "high",
-      "line": 1382,
+      "line": 1396,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -328825,7 +328285,7 @@
       "kind": "import",
       "evidence": "from provenance.evidence_ledger",
       "confidence": "high",
-      "line": 258,
+      "line": 260,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -329356,146 +328816,6 @@
       "evidence": "from pipeline.ledger_panel",
       "confidence": "high",
       "line": 55,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_ledger_seed.py",
-      "target": "<external:__future__>",
-      "kind": "import",
-      "evidence": "external import __future__",
-      "confidence": "high",
-      "line": 3,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_ledger_seed.py",
-      "target": "<external:collections.abc>",
-      "kind": "import",
-      "evidence": "external import collections.abc",
-      "confidence": "high",
-      "line": 6,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_ledger_seed.py",
-      "target": "<external:json>",
-      "kind": "import",
-      "evidence": "external import json",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_ledger_seed.py",
-      "target": "<external:pathlib>",
-      "kind": "import",
-      "evidence": "external import pathlib",
-      "confidence": "high",
-      "line": 7,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_ledger_seed.py",
-      "target": "<external:pytest>",
-      "kind": "import",
-      "evidence": "external import pytest",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_ledger_seed.py",
-      "target": "src/capture/__init__.py",
-      "kind": "import",
-      "evidence": "from capture",
-      "confidence": "high",
-      "line": 11,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_ledger_seed.py",
-      "target": "src/capture/ingest.py",
-      "kind": "import",
-      "evidence": "from capture import ingest",
-      "confidence": "high",
-      "line": 11,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_ledger_seed.py",
-      "target": "src/capture/matcher.py",
-      "kind": "import",
-      "evidence": "from capture.matcher",
-      "confidence": "high",
-      "line": 12,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_ledger_seed.py",
-      "target": "src/synthesis/__init__.py",
-      "kind": "import",
-      "evidence": "from synthesis",
-      "confidence": "high",
-      "line": 13,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_ledger_seed.py",
-      "target": "src/synthesis/insights.py",
-      "kind": "import",
-      "evidence": "from synthesis import insights",
-      "confidence": "high",
-      "line": 13,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_ledger_seed.py",
-      "target": "src/synthesis/seed.py",
-      "kind": "import",
-      "evidence": "from synthesis import seed",
-      "confidence": "high",
-      "line": 13,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_ledger_seed.py",
-      "target": "src/user_state/__init__.py",
-      "kind": "import",
-      "evidence": "from user_state",
-      "confidence": "high",
-      "line": 14,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_ledger_seed.py",
-      "target": "src/user_state/notes.py",
-      "kind": "import",
-      "evidence": "from user_state import notes",
-      "confidence": "high",
-      "line": 14,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_ledger_seed.py",
-      "target": "src/user_state/notes.py",
-      "kind": "import",
-      "evidence": "from user_state.notes",
-      "confidence": "high",
-      "line": 15,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -356291,6 +355611,26 @@
     },
     {
       "source": "tests/test_pipeline_quarterly_refresh.py",
+      "target": "src/compute/__init__.py",
+      "kind": "import",
+      "evidence": "from compute",
+      "confidence": "high",
+      "line": 811,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_pipeline_quarterly_refresh.py",
+      "target": "src/compute/fmp_derived_kpis.py",
+      "kind": "import",
+      "evidence": "from compute import fmp_derived_kpis",
+      "confidence": "high",
+      "line": 811,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_pipeline_quarterly_refresh.py",
       "target": "src/models/kpis.py",
       "kind": "import",
       "evidence": "from models.kpis",
@@ -356450,6 +355790,16 @@
       "reviewed_disposition": null
     },
     {
+      "source": "tests/test_pipeline_quarterly_refresh.py",
+      "target": "src/provenance/financial_fact_resolution.py",
+      "kind": "import",
+      "evidence": "from provenance.financial_fact_resolution",
+      "confidence": "high",
+      "line": 812,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
       "source": "tests/test_pipeline_refresh_eval.py",
       "target": "<external:__future__>",
       "kind": "import",
@@ -356511,11 +355861,21 @@
     },
     {
       "source": "tests/test_pipeline_refresh_eval.py",
+      "target": "src/compute/fmp_derived_kpis.py",
+      "kind": "import",
+      "evidence": "from compute.fmp_derived_kpis",
+      "confidence": "high",
+      "line": 12,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_pipeline_refresh_eval.py",
       "target": "src/models/kpis.py",
       "kind": "import",
       "evidence": "from models.kpis",
       "confidence": "high",
-      "line": 12,
+      "line": 13,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -356525,7 +355885,7 @@
       "kind": "import",
       "evidence": "from pipeline.refresh_eval",
       "confidence": "high",
-      "line": 13,
+      "line": 14,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -356535,7 +355895,7 @@
       "kind": "import",
       "evidence": "from tests.kpi_semantic_support",
       "confidence": "high",
-      "line": 14,
+      "line": 15,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -374875,7 +374235,7 @@
       "kind": "import",
       "evidence": "external import concurrent.futures",
       "confidence": "high",
-      "line": 991,
+      "line": 942,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -374885,7 +374245,7 @@
       "kind": "import",
       "evidence": "external import datetime",
       "confidence": "high",
-      "line": 1021,
+      "line": 972,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -374895,7 +374255,7 @@
       "kind": "import",
       "evidence": "external import io",
       "confidence": "high",
-      "line": 1022,
+      "line": 973,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -374975,7 +374335,7 @@
       "kind": "import",
       "evidence": "external import typing",
       "confidence": "high",
-      "line": 1023,
+      "line": 974,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -374995,7 +374355,7 @@
       "kind": "import",
       "evidence": "from report.file_capture",
       "confidence": "high",
-      "line": 993,
+      "line": 944,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -375005,7 +374365,7 @@
       "kind": "import",
       "evidence": "from report.models",
       "confidence": "high",
-      "line": 1025,
+      "line": 976,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -375015,7 +374375,7 @@
       "kind": "import",
       "evidence": "from report.renderers.workspace_sections.boot",
       "confidence": "high",
-      "line": 1032,
+      "line": 983,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -375025,7 +374385,7 @@
       "kind": "import",
       "evidence": "from report.sections",
       "confidence": "high",
-      "line": 1033,
+      "line": 984,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -375035,7 +374395,7 @@
       "kind": "import",
       "evidence": "from report.sections import bear_case",
       "confidence": "high",
-      "line": 1033,
+      "line": 984,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -375045,7 +374405,7 @@
       "kind": "import",
       "evidence": "from report.sections.snapshot",
       "confidence": "high",
-      "line": 1150,
+      "line": 1101,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -375055,7 +374415,7 @@
       "kind": "import",
       "evidence": "from report.sections.snapshot",
       "confidence": "high",
-      "line": 1172,
+      "line": 1123,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -375065,7 +374425,7 @@
       "kind": "import",
       "evidence": "from runtime.job_runtime",
       "confidence": "high",
-      "line": 994,
+      "line": 945,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -375075,7 +374435,7 @@
       "kind": "import",
       "evidence": "from server_runtime.access",
       "confidence": "high",
-      "line": 1034,
+      "line": 985,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -376715,7 +376075,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression",
       "confidence": "low",
-      "line": 74,
+      "line": 78,
       "unknown": true,
       "reviewed_disposition": null
     },
@@ -376725,7 +376085,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression",
       "confidence": "low",
-      "line": 121,
+      "line": 126,
       "unknown": true,
       "reviewed_disposition": null
     },
@@ -376841,11 +376201,11 @@
     },
     {
       "source": "tests/test_report_sync.py",
-      "target": "execution/__init__.py",
+      "target": "<external:typing>",
       "kind": "import",
-      "evidence": "from execution",
+      "evidence": "external import typing",
       "confidence": "high",
-      "line": 402,
+      "line": 14,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -376855,7 +376215,27 @@
       "kind": "import",
       "evidence": "from execution",
       "confidence": "high",
-      "line": 479,
+      "line": 265,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_report_sync.py",
+      "target": "execution/__init__.py",
+      "kind": "import",
+      "evidence": "from execution",
+      "confidence": "high",
+      "line": 455,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_report_sync.py",
+      "target": "execution/__init__.py",
+      "kind": "import",
+      "evidence": "from execution",
+      "confidence": "high",
+      "line": 537,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -376865,7 +376245,7 @@
       "kind": "import",
       "evidence": "from execution.build_artifacts",
       "confidence": "high",
-      "line": 19,
+      "line": 20,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -376875,7 +376255,17 @@
       "kind": "import",
       "evidence": "from execution import build_artifacts",
       "confidence": "high",
-      "line": 479,
+      "line": 265,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_report_sync.py",
+      "target": "execution/build_artifacts.py",
+      "kind": "import",
+      "evidence": "from execution import build_artifacts",
+      "confidence": "high",
+      "line": 537,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -376885,7 +376275,7 @@
       "kind": "import",
       "evidence": "from execution import comments_server",
       "confidence": "high",
-      "line": 402,
+      "line": 455,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -376895,7 +376285,7 @@
       "kind": "import",
       "evidence": "from dcf.persist",
       "confidence": "high",
-      "line": 17,
+      "line": 18,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -376905,7 +376295,7 @@
       "kind": "import",
       "evidence": "from dcf.provenance",
       "confidence": "high",
-      "line": 18,
+      "line": 19,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -376915,7 +376305,7 @@
       "kind": "import",
       "evidence": "from pipeline.work_os_company",
       "confidence": "high",
-      "line": 20,
+      "line": 21,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -376925,7 +376315,7 @@
       "kind": "import",
       "evidence": "from provenance.source_read_context",
       "confidence": "high",
-      "line": 480,
+      "line": 538,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -376935,7 +376325,7 @@
       "kind": "import",
       "evidence": "from report.artifacts",
       "confidence": "high",
-      "line": 21,
+      "line": 22,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -376945,7 +376335,7 @@
       "kind": "import",
       "evidence": "from report.artifacts",
       "confidence": "high",
-      "line": 481,
+      "line": 539,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -376955,7 +376345,27 @@
       "kind": "import",
       "evidence": "from report.file_capture",
       "confidence": "high",
-      "line": 482,
+      "line": 540,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_report_sync.py",
+      "target": "src/report/generation_context.py",
+      "kind": "import",
+      "evidence": "from report.generation_context",
+      "confidence": "high",
+      "line": 594,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_report_sync.py",
+      "target": "src/report/models.py",
+      "kind": "import",
+      "evidence": "from report.models",
+      "confidence": "high",
+      "line": 35,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -376965,7 +376375,7 @@
       "kind": "import",
       "evidence": "from report.sections",
       "confidence": "high",
-      "line": 483,
+      "line": 541,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -376975,7 +376385,17 @@
       "kind": "import",
       "evidence": "from report.sections import financials",
       "confidence": "high",
-      "line": 483,
+      "line": 541,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_report_sync.py",
+      "target": "src/report/workspace_models.py",
+      "kind": "import",
+      "evidence": "from report.workspace_models",
+      "confidence": "high",
+      "line": 36,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -376985,7 +376405,7 @@
       "kind": "import",
       "evidence": "from research.decision_brief",
       "confidence": "high",
-      "line": 34,
+      "line": 37,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -376995,7 +376415,7 @@
       "kind": "import",
       "evidence": "from runtime.job_runtime",
       "confidence": "high",
-      "line": 35,
+      "line": 38,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -377005,7 +376425,7 @@
       "kind": "import",
       "evidence": "from tests.test_report_canonical_financials",
       "confidence": "high",
-      "line": 484,
+      "line": 542,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -377015,7 +376435,7 @@
       "kind": "import",
       "evidence": "from tests.test_source_fact_repository",
       "confidence": "high",
-      "line": 485,
+      "line": 543,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -380745,7 +380165,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression",
       "confidence": "low",
-      "line": 182,
+      "line": 137,
       "unknown": true,
       "reviewed_disposition": null
     },
@@ -380816,26 +380236,6 @@
       "evidence": "external import subprocess",
       "confidence": "high",
       "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_retained_tool_database_authority.py",
-      "target": "<external:sys>",
-      "kind": "import",
-      "evidence": "external import sys",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_retained_tool_database_authority.py",
-      "target": "execution/backfill_seed_decisions.py",
-      "kind": "import",
-      "evidence": "import backfill_seed_decisions",
-      "confidence": "high",
-      "line": 137,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -392900,96 +392300,6 @@
       "reviewed_disposition": null
     },
     {
-      "source": "tests/test_seed_decisions_backfill.py",
-      "target": "<external:__future__>",
-      "kind": "import",
-      "evidence": "external import __future__",
-      "confidence": "high",
-      "line": 7,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_seed_decisions_backfill.py",
-      "target": "<external:collections.abc>",
-      "kind": "import",
-      "evidence": "external import collections.abc",
-      "confidence": "high",
-      "line": 11,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_seed_decisions_backfill.py",
-      "target": "<external:json>",
-      "kind": "import",
-      "evidence": "external import json",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_seed_decisions_backfill.py",
-      "target": "<external:pathlib>",
-      "kind": "import",
-      "evidence": "external import pathlib",
-      "confidence": "high",
-      "line": 12,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_seed_decisions_backfill.py",
-      "target": "<external:pytest>",
-      "kind": "import",
-      "evidence": "external import pytest",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_seed_decisions_backfill.py",
-      "target": "<external:sqlite3>",
-      "kind": "import",
-      "evidence": "external import sqlite3",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_seed_decisions_backfill.py",
-      "target": "src/synthesis/seed_decisions.py",
-      "kind": "import",
-      "evidence": "from synthesis.seed_decisions",
-      "confidence": "high",
-      "line": 16,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_seed_decisions_backfill.py",
-      "target": "src/user_state/__init__.py",
-      "kind": "import",
-      "evidence": "from user_state",
-      "confidence": "high",
-      "line": 17,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_seed_decisions_backfill.py",
-      "target": "src/user_state/notes.py",
-      "kind": "import",
-      "evidence": "from user_state import notes",
-      "confidence": "high",
-      "line": 17,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
       "source": "tests/test_seed_kpi_definitions.py",
       "target": "<external:__future__>",
       "kind": "import",
@@ -393385,7 +392695,7 @@
       "kind": "import",
       "evidence": "from pipeline.ledger_panel",
       "confidence": "high",
-      "line": 147,
+      "line": 114,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -393396,16 +392706,6 @@
       "evidence": "from synthesis.reconcile",
       "confidence": "high",
       "line": 16,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_seed_reconcile.py",
-      "target": "src/synthesis/seed_decisions.py",
-      "kind": "import",
-      "evidence": "from synthesis.seed_decisions",
-      "confidence": "high",
-      "line": 22,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -400701,9 +400001,9 @@
     },
     {
       "source": "tests/test_standing_rules_panel.py",
-      "target": "src/report/models.py",
+      "target": "src/report/builder.py",
       "kind": "import",
-      "evidence": "from report.models",
+      "evidence": "from report.builder",
       "confidence": "high",
       "line": 30,
       "unknown": false,
@@ -400711,11 +400011,11 @@
     },
     {
       "source": "tests/test_standing_rules_panel.py",
-      "target": "src/report/renderers/markdown.py",
+      "target": "src/report/models.py",
       "kind": "import",
-      "evidence": "from report.renderers.markdown",
+      "evidence": "from report.models",
       "confidence": "high",
-      "line": 287,
+      "line": 31,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -400725,7 +400025,17 @@
       "kind": "import",
       "evidence": "from report.renderers.markdown",
       "confidence": "high",
-      "line": 312,
+      "line": 288,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_standing_rules_panel.py",
+      "target": "src/report/renderers/markdown.py",
+      "kind": "import",
+      "evidence": "from report.renderers.markdown",
+      "confidence": "high",
+      "line": 316,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -400735,7 +400045,7 @@
       "kind": "import",
       "evidence": "from report.renderers.workspace_data",
       "confidence": "high",
-      "line": 31,
+      "line": 32,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -400745,7 +400055,7 @@
       "kind": "import",
       "evidence": "from report.renderers.workspace_sections.position",
       "confidence": "high",
-      "line": 36,
+      "line": 37,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -403630,7 +402940,7 @@
       "reviewed_disposition": null
     },
     {
-      "source": "tests/test_theme_synth.py",
+      "source": "tests/test_theme_generation_retirement_migration.py",
       "target": "<external:__future__>",
       "kind": "import",
       "evidence": "external import __future__",
@@ -403640,7 +402950,7 @@
       "reviewed_disposition": null
     },
     {
-      "source": "tests/test_theme_synth.py",
+      "source": "tests/test_theme_generation_retirement_migration.py",
       "target": "<external:collections.abc>",
       "kind": "import",
       "evidence": "external import collections.abc",
@@ -403650,17 +402960,7 @@
       "reviewed_disposition": null
     },
     {
-      "source": "tests/test_theme_synth.py",
-      "target": "<external:logging>",
-      "kind": "import",
-      "evidence": "external import logging",
-      "confidence": "high",
-      "line": null,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_theme_synth.py",
+      "source": "tests/test_theme_generation_retirement_migration.py",
       "target": "<external:pathlib>",
       "kind": "import",
       "evidence": "external import pathlib",
@@ -403670,7 +402970,7 @@
       "reviewed_disposition": null
     },
     {
-      "source": "tests/test_theme_synth.py",
+      "source": "tests/test_theme_generation_retirement_migration.py",
       "target": "<external:pytest>",
       "kind": "import",
       "evidence": "external import pytest",
@@ -403680,102 +402980,12 @@
       "reviewed_disposition": null
     },
     {
-      "source": "tests/test_theme_synth.py",
-      "target": "src/capture/__init__.py",
+      "source": "tests/test_theme_generation_retirement_migration.py",
+      "target": "<external:sqlite3>",
       "kind": "import",
-      "evidence": "from capture",
+      "evidence": "external import sqlite3",
       "confidence": "high",
-      "line": 11,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_theme_synth.py",
-      "target": "src/capture/ingest.py",
-      "kind": "import",
-      "evidence": "from capture import ingest",
-      "confidence": "high",
-      "line": 11,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_theme_synth.py",
-      "target": "src/capture/matcher.py",
-      "kind": "import",
-      "evidence": "from capture.matcher",
-      "confidence": "high",
-      "line": 12,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_theme_synth.py",
-      "target": "src/llm/structured.py",
-      "kind": "import",
-      "evidence": "from llm.structured",
-      "confidence": "high",
-      "line": 78,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_theme_synth.py",
-      "target": "src/synthesis/__init__.py",
-      "kind": "import",
-      "evidence": "from synthesis",
-      "confidence": "high",
-      "line": 13,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_theme_synth.py",
-      "target": "src/synthesis/insights.py",
-      "kind": "import",
-      "evidence": "from synthesis import insights",
-      "confidence": "high",
-      "line": 13,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_theme_synth.py",
-      "target": "src/synthesis/theme_synth.py",
-      "kind": "import",
-      "evidence": "from synthesis import theme_synth",
-      "confidence": "high",
-      "line": 13,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_theme_synth.py",
-      "target": "src/user_state/__init__.py",
-      "kind": "import",
-      "evidence": "from user_state",
-      "confidence": "high",
-      "line": 14,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_theme_synth.py",
-      "target": "src/user_state/notes.py",
-      "kind": "import",
-      "evidence": "from user_state import notes",
-      "confidence": "high",
-      "line": 14,
-      "unknown": false,
-      "reviewed_disposition": null
-    },
-    {
-      "source": "tests/test_theme_synth.py",
-      "target": "src/user_state/notes.py",
-      "kind": "import",
-      "evidence": "from user_state.notes",
-      "confidence": "high",
-      "line": 15,
+      "line": null,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -412111,11 +411321,21 @@
     },
     {
       "source": "tests/test_upgrade_phase0_reuse.py",
+      "target": "src/schema_compat.py",
+      "kind": "import",
+      "evidence": "from schema_compat",
+      "confidence": "high",
+      "line": 17,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_upgrade_phase0_reuse.py",
       "target": "src/sqlite_snapshot.py",
       "kind": "import",
       "evidence": "from sqlite_snapshot",
       "confidence": "high",
-      "line": 17,
+      "line": 18,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -420838,7 +420058,6 @@
     "execution/backfill_recorded_subject_bindings.py",
     "execution/backfill_report_fiscal_periods.py",
     "execution/backfill_sec_companyfacts_evidence.py",
-    "execution/backfill_seed_decisions.py",
     "execution/backfill_strip_markdown_scalars.py",
     "execution/backfill_transcripts.py",
     "execution/backtest_prompt_candidate.py",
@@ -421146,7 +420365,6 @@
     "execution/run_calibration_grading.py",
     "execution/run_disclosure_change_sweep.py",
     "execution/run_discovery.py",
-    "execution/run_ledger_synthesis.py",
     "execution/run_lens.py",
     "execution/run_llm_evals.py",
     "execution/run_model_eval_sweep.py",
@@ -421174,7 +420392,6 @@
     "execution/seal_archive_generation.py",
     "execution/seed_entity_graph.py",
     "execution/seed_kpi_definitions.py",
-    "execution/seed_themes.py",
     "execution/serve_portfolio_tracker.py",
     "execution/serve_research_tools.py",
     "execution/session_context_pack.py",
@@ -422405,7 +421622,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression",
       "confidence": "low",
-      "line": 74,
+      "line": 78,
       "unknown": true,
       "reviewed_disposition": null
     },
@@ -422415,7 +421632,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression",
       "confidence": "low",
-      "line": 121,
+      "line": 126,
       "unknown": true,
       "reviewed_disposition": null
     },
@@ -422445,7 +421662,7 @@
       "kind": "unknown",
       "evidence": "subprocess/runpy expression",
       "confidence": "low",
-      "line": 182,
+      "line": 137,
       "unknown": true,
       "reviewed_disposition": null
     },
@@ -422992,8 +422209,8 @@
   ],
   "hold": false,
   "stats": {
-    "files": 3414,
-    "edges": 38507,
+    "files": 3407,
+    "edges": 38436,
     "unknown": 176,
     "diagnostics": 0,
     "production_unknown": 0,

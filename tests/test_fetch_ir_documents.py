@@ -72,7 +72,7 @@ class _FakeOpener:
 
 
 def _no_registered_urls(*_a: object, **_k: object) -> set[str]:
-    """Typed stand-in for _registered_source_urls (a bare lambda trips pyright)."""
+    """Typed stand-in for registered_source_urls (a bare lambda trips pyright)."""
     return set()
 
 
@@ -197,7 +197,7 @@ def test_downloader_sends_browser_user_agent(
     db = tmp_path / "p.db"
     _make_policy_db(db, [("BN", "portfolio")])
     _write_manifest(root, "BN", "https://bam.brookfield.com/x/Q1-26-BAM-Press-Release.pdf")
-    monkeypatch.setattr("execution.fetch_ir_documents._registered_source_urls", _no_registered_urls)
+    monkeypatch.setattr("execution.fetch_ir_documents.registered_source_urls", _no_registered_urls)
     monkeypatch.setattr(fid, "ensure_safe_public_url", _allow_safe_url)
     monkeypatch.setattr(fid, "curl_resolve_entries", _no_curl_resolve_entries)
     captured: dict[str, str | None] = {}
@@ -234,7 +234,7 @@ def test_downloader_halts_on_explicit_auth_denial(
     db = tmp_path / "p.db"
     _make_policy_db(db, [("ZZ", "portfolio")])
     _write_manifest(root, "ZZ", "https://blocked.example/Q1.pdf")
-    monkeypatch.setattr("execution.fetch_ir_documents._registered_source_urls", _no_registered_urls)
+    monkeypatch.setattr("execution.fetch_ir_documents.registered_source_urls", _no_registered_urls)
 
     def _raise_auth(req: urllib.request.Request, timeout: float | None = None) -> _FakeResp:
         _ = timeout
@@ -281,7 +281,7 @@ def test_downloader_falls_back_to_curl_cffi_on_timeout(
     db = tmp_path / "p.db"
     _make_policy_db(db, [("LLY", "portfolio")])
     _write_manifest(root, "LLY", "https://investor.lilly.com/static-files/uuid-1")
-    monkeypatch.setattr("execution.fetch_ir_documents._registered_source_urls", _no_registered_urls)
+    monkeypatch.setattr("execution.fetch_ir_documents.registered_source_urls", _no_registered_urls)
     monkeypatch.setattr(fid, "ensure_safe_public_url", _allow_safe_url)
     monkeypatch.setattr(fid, "curl_resolve_entries", _no_curl_resolve_entries)
 
@@ -1254,9 +1254,7 @@ def test_discovered_managed_press_release_skips_sidecar_and_legacy_categorizer(
     assert candidate_calls == [True, True]
     assert summary["managed_registered"] == 1
     assert summary["legacy_outcomes"] == []
-    sidecar = json.loads(fid.incoming_urls_path(root).read_text())
-    assert set(sidecar) == {"__fetch_progress_v1__"}
-    assert sidecar["__fetch_progress_v1__"]["PORT"]["retained"] == {}
+    assert not fid.incoming_urls_path(root).exists()
 
 
 def test_preparation_accepts_actual_xlsx_supplement(
@@ -1734,7 +1732,7 @@ def test_registered_prefix_does_not_starve_manifest_entry_after_attempt_budget(
         assert root == tmp_path
         return set(urls[:100])
 
-    monkeypatch.setattr(fid, "_registered_source_urls", registered_prefix)
+    monkeypatch.setattr(fid, "registered_source_urls", registered_prefix)
     monkeypatch.setattr(fid.time, "sleep", _no_sleep)
     downloaded: list[str] = []
 
@@ -1775,7 +1773,7 @@ def test_pending_retained_prefix_advances_and_replays_without_redownload(
         return None
 
     monkeypatch.setattr(fid, "reported_quarter_selection_in_connection", unknown_period)
-    monkeypatch.setattr(fid, "_registered_source_urls", _no_registered_urls)
+    monkeypatch.setattr(fid, "registered_source_urls", _no_registered_urls)
     monkeypatch.setattr(fid.time, "sleep", _no_sleep)
     calls: list[str] = []
 
@@ -1828,7 +1826,7 @@ def test_failed_prefix_advances_retry_cursor_to_later_manifest_url(
         encoding="utf-8",
     )
     monkeypatch.setattr(fid, "reported_quarter_selection_in_connection", _source_qualified_period)
-    monkeypatch.setattr(fid, "_registered_source_urls", _no_registered_urls)
+    monkeypatch.setattr(fid, "registered_source_urls", _no_registered_urls)
     monkeypatch.setattr(fid.time, "sleep", _no_sleep)
     calls: list[str] = []
 
@@ -1862,7 +1860,7 @@ def test_fetch_progress_keeps_legacy_url_map_and_separates_roots_and_issuers(
         for ticker in tickers:
             host = "other.example" if root == second_root else "issuer.example"
             _write_manifest(root, ticker, f"https://{host}/{ticker}.pdf")
-    monkeypatch.setattr(fid, "_registered_source_urls", _no_registered_urls)
+    monkeypatch.setattr(fid, "registered_source_urls", _no_registered_urls)
     monkeypatch.setattr(fid, "reported_quarter_selection_in_connection", _source_qualified_period)
     monkeypatch.setattr(fid.time, "sleep", _no_sleep)
 

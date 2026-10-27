@@ -26,7 +26,7 @@ from compute.fmp_derived_kpis import (
     KpiSeriesPoint,
     TransformKind,
     compute_yoy_transform,
-    derive_for_ticker,
+    derive_for_ticker_outcome,
     derive_kpi_transforms,
 )
 from compute.kpi_resolver import resolve_kpi_definition_name
@@ -444,7 +444,7 @@ def test_transform_does_not_admit_definition_or_label_discontinuity(
 
 
 # ---------------------------------------------------------------------------
-# DB-backed: base resolution + derive_for_ticker materialization
+# DB-backed: base resolution + derive_for_ticker_outcome materialization
 # ---------------------------------------------------------------------------
 
 
@@ -587,7 +587,7 @@ def test_transform_rejects_override_unit_mismatch(conn: sqlite3.Connection) -> N
     assert all(row.name != KPI_RISK_ADJ_NIM_YOY_BPS for row in rows)
 
 
-def test_derive_for_ticker_persists_transform_series(conn: sqlite3.Connection) -> None:
+def test_derive_for_ticker_outcome_persists_transform_series(conn: sqlite3.Connection) -> None:
     """End-to-end persist: the derived NIM series lands in kpi_facts under the
     canonical name, tagged extracted_by='kpi_transform_derived'."""
     _seed_base_kpi(
@@ -596,7 +596,7 @@ def test_derive_for_ticker_persists_transform_series(conn: sqlite3.Connection) -
         _NIM_BASE,
         [("2023-12-31", "Q4", 10.0), ("2024-12-31", "Q4", 9.0), ("2025-12-31", "Q4", 8.0)],
     )
-    derive_for_ticker(conn, "NU")
+    derive_for_ticker_outcome(conn, "NU")
     rows = conn.execute(
         "SELECT kf.value, kf.unit, kf.extracted_by FROM kpi_facts kf "
         "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
@@ -608,7 +608,7 @@ def test_derive_for_ticker_persists_transform_series(conn: sqlite3.Connection) -
     assert all(dict(r)["extracted_by"] == "kpi_transform_derived" for r in rows)
 
 
-def test_derive_for_ticker_transforms_are_idempotent(conn: sqlite3.Connection) -> None:
+def test_derive_for_ticker_outcome_transforms_are_idempotent(conn: sqlite3.Connection) -> None:
     """Re-running inserts no duplicate derived rows (UNIQUE index dedupes)."""
     _seed_base_kpi(
         conn,
@@ -616,10 +616,10 @@ def test_derive_for_ticker_transforms_are_idempotent(conn: sqlite3.Connection) -
         _NIM_BASE,
         [("2023-12-31", "Q4", 10.0), ("2024-12-31", "Q4", 9.0), ("2025-12-31", "Q4", 8.0)],
     )
-    _, inserted_first = derive_for_ticker(conn, "NU")
-    _, inserted_second = derive_for_ticker(conn, "NU")
-    assert inserted_first >= 2  # at least the 2 NIM-YoY rows
-    assert inserted_second == 0
+    first = derive_for_ticker_outcome(conn, "NU")
+    second = derive_for_ticker_outcome(conn, "NU")
+    assert first.rows_inserted >= 2  # at least the 2 NIM-YoY rows
+    assert second.rows_inserted == 0
 
 
 def test_revenue_deceleration_fails_closed_on_legacy_derived_input(
@@ -637,7 +637,7 @@ def test_revenue_deceleration_fails_closed_on_legacy_derived_input(
             ("2026-12-31", "Q4", 312.0),  # YoY +20%
         ],
     )
-    derive_for_ticker(conn, "NU")
+    derive_for_ticker_outcome(conn, "NU")
     decel = conn.execute(
         "SELECT kf.period_end, kf.value FROM kpi_facts kf "
         "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
@@ -679,7 +679,7 @@ def test_exact_npl_base_resolves_but_yields_no_derived_rows(
     # identity. Semantic parentheticals are not stripped by fuzzy normalization.
     assert resolve_kpi_definition_name(conn, "NU", _NPL_BASE_FULL) == _NPL_BASE_FULL
     # But no YoY pairs -> no derived NPL series materialized.
-    derive_for_ticker(conn, "NU")
+    derive_for_ticker_outcome(conn, "NU")
     npl_def = conn.execute(
         "SELECT 1 FROM kpi_definitions WHERE ticker = 'NU' AND name = ?",
         (KPI_NPL_15D_TOTAL_YOY_PP,),
@@ -727,7 +727,7 @@ def test_legacy_transform_remains_unresolved_after_derivation(
     before_nim = before.rule_evaluations[0]
     assert before_nim.status is BreachStatus.UNRESOLVED
     assert before_nim.observations == ()
-    derive_for_ticker(conn, "NU")
+    derive_for_ticker_outcome(conn, "NU")
     after = evaluate_ticker_thesis(conn, ticker="NU", holdings_dir=tmp_path)
     after_nim = after.rule_evaluations[0]
     assert after_nim.status is BreachStatus.UNRESOLVED
@@ -751,7 +751,7 @@ def test_legacy_single_breaching_quarter_stays_unresolved(
         [("2023-12-31", "Q4", 10.0), ("2024-12-31", "Q4", 9.0), ("2025-12-31", "Q4", 9.5)],
     )
     _write_nim_holdings(tmp_path)
-    derive_for_ticker(conn, "NU")
+    derive_for_ticker_outcome(conn, "NU")
     verdict = evaluate_ticker_thesis(conn, ticker="NU", holdings_dir=tmp_path)
     nim_eval = verdict.rule_evaluations[0]
     assert nim_eval.status is BreachStatus.UNRESOLVED
@@ -767,7 +767,7 @@ def test_legacy_expanding_nim_stays_unresolved(conn: sqlite3.Connection, tmp_pat
         [("2023-12-31", "Q4", 8.0), ("2024-12-31", "Q4", 9.0), ("2025-12-31", "Q4", 10.0)],
     )
     _write_nim_holdings(tmp_path)
-    derive_for_ticker(conn, "NU")
+    derive_for_ticker_outcome(conn, "NU")
     verdict = evaluate_ticker_thesis(conn, ticker="NU", holdings_dir=tmp_path)
     nim_eval = verdict.rule_evaluations[0]
     assert nim_eval.status is BreachStatus.UNRESOLVED

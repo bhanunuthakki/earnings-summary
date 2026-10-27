@@ -21,7 +21,12 @@ from bs4 import BeautifulSoup, Comment, Tag
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from dcf.grade_evidence import load_dcf_verification_evidence
-from dcf.input_evidence import ModelInputReceipt, SourceReadContext, verify_source_coverage
+from dcf.input_evidence import (
+    ModelInputReceipt,
+    SourceReadContext,
+    canonical_digest,
+    verify_source_coverage,
+)
 from dcf.readiness import load_valuation_readiness
 from provenance.canonical_fact_resolution import MAX_DERIVATION_DEPTH, MAX_DERIVATION_NODES
 from provenance.evidence_native_candidates import (
@@ -42,6 +47,8 @@ from provenance.research_snapshot import (
 from provenance.sec_filing_xbrl_ingest import file_uri_path
 from report.artifacts import (
     ReportArtifactRef,
+    ReportPublicationApproval,
+    commit_report_candidate,
     publication_eligibility,
     validate_report_artifact_path,
 )
@@ -425,17 +432,15 @@ def _verify_report_pdf_node(
             raise MemoEvidenceError("memo_report_deferred_pdf_page_used")
 
 
-def _verify_report_pdf_observation(
+def _verify_report_observation_sources(
     conn: sqlite3.Connection,
     observation_id: str,
-    snapshot: ResearchSnapshotRequest,
+    snapshot: ResearchSnapshotRequest | None,
     *,
     cutoff: datetime,
     source_context: SourceReadContext | None = None,
-) -> None:
-    analysis = snapshot.research_universe.analysis_scope
-    if analysis is None or not analysis.request.report_pdf_tables:
-        return
+) -> tuple[str, ...]:
+    documents: set[str] = set()
     pending = [(observation_id, frozenset[str]())]
     verified: set[str] = set()
     reader = FactReadModel(conn, source_context=source_context)
@@ -450,7 +455,9 @@ def _verify_report_pdf_observation(
             raise MemoEvidenceError("memo_report_source_derivation_node_limit")
         bundle = reader.provenance_bundle(identity, cutoff=cutoff)
         if bundle.evidence is not None:
-            _verify_report_pdf_node(conn, bundle.evidence.evidence_node_id, snapshot)
+            documents.add(bundle.evidence.document_version_id)
+            if snapshot is not None:
+                _verify_report_pdf_node(conn, bundle.evidence.evidence_node_id, snapshot)
         elif bundle.derivation is None:
             raise MemoEvidenceError("memo_report_source_leaf_unavailable")
         if bundle.derivation is not None:
@@ -458,6 +465,7 @@ def _verify_report_pdf_observation(
                 (source, ancestors | {identity})
                 for source in bundle.derivation.input_observation_ids
             )
+    return tuple(sorted(documents))
 
 
 def verify_memo_snapshot_reference(
@@ -469,7 +477,7 @@ def verify_memo_snapshot_reference(
     *,
     source_context: SourceReadContext | None = None,
 ) -> None:
-    _verify_report_pdf_observation(
+    _verify_report_observation_sources(
         conn,
         reference.observation_id,
         snapshot,
@@ -579,7 +587,7 @@ def read_memo_observation_sum(
             or cell.unit_key != "USD"
         ):
             raise MemoEvidenceError("memo_observation_sum_source_scope_mismatch")
-        _verify_report_pdf_observation(
+        _verify_report_observation_sources(
             conn,
             ref.observation_id,
             snapshot,
@@ -1105,7 +1113,7 @@ def verify_memo_claims(
             for reference in support.financial_references + tuple(
                 value.reference for value in support.values
             ):
-                _verify_report_pdf_observation(
+                _verify_report_observation_sources(
                     conn,
                     reference.observation_id,
                     snapshot,
@@ -1242,7 +1250,7 @@ def _verify_report_source_population(
         for node in requirement.evidence_node_ids:
             verify_memo_snapshot_node(conn, node, snapshot, cutoff)
         for observation in requirement.observation_ids:
-            _verify_report_pdf_observation(
+            _verify_report_observation_sources(
                 conn,
                 observation,
                 snapshot,
@@ -1341,6 +1349,7 @@ def _assess_report_content(
     )
     references: dict[tuple[str, str], FinancialEvidenceReference] = {}
     used_contexts: set[str] = set()
+    source_document_ids: set[str] = set()
     for anchor in soup.select('a[href*="/api/peek/canonical-financial?"]'):
         try:
             href = str(anchor.get("href", ""))
@@ -1359,6 +1368,15 @@ def _assess_report_content(
             cell = _read_memo_financial_cell(conn, reference, source_context=source_context)
             if cell is None:
                 raise MemoEvidenceError("memo_financial_reference_not_admitted")
+            source_document_ids.update(
+                _verify_report_observation_sources(
+                    conn,
+                    reference.observation_id,
+                    None,
+                    cutoff=reference.as_of,
+                    source_context=source_context,
+                )
+            )
             # A chip on a row label supplies provenance for a calculated
             # growth series. A chip inside a numeric cell must reconstruct
             # that reported number under the renderer's display contract.
@@ -1382,6 +1400,16 @@ def _assess_report_content(
             reasons.add("memo_financial_reference_not_admitted")
     if not any(context_id == "primary" for context_id, _ref in references):
         reasons.add("memo_canonical_financial_references_missing")
+
+    if source_document_ids:
+        try:
+            verify_memo_context_source_bytes(
+                conn, tuple(sorted(source_document_ids)), source_context
+            )
+        except MemoEvidenceError as exc:
+            reasons.add(exc.reason_code)
+        except (OSError, ValueError, RuntimeError, sqlite3.Error):
+            reasons.add("memo_source_bytes_unavailable_or_changed")
 
     readiness_profile: Literal["complete_report_evidence/v1"] | None = None
     report_evidence: MemoReportEvidencePopulation | None = None
@@ -1481,7 +1509,7 @@ def _assess_report_content(
             verify_memo_section_population(soup, artifact.section_ids)
             for (context_id, _reference_key), reference in references.items():
                 context_snapshot, context_ticker = snapshots[context_id]
-                _verify_report_pdf_observation(
+                _verify_report_observation_sources(
                     conn,
                     reference.observation_id,
                     snapshot,
@@ -1608,7 +1636,7 @@ def _assess_report_content(
             if verified_member_sha != member_sha:
                 raise MemoEvidenceError("memo_model_source_commitment_mismatch")
             for fact in receipt.request.facts.values():
-                _verify_report_pdf_observation(
+                _verify_report_observation_sources(
                     conn,
                     fact.observation_id,
                     verified,
@@ -1793,3 +1821,42 @@ def persist_decision_brief_readiness(repo_root: Path, receipt: DecisionBriefRead
         raise ValueError("readiness artifact escaped retained state") from None
     publish_text_no_clobber(path.resolve(), payload)
     return path
+
+
+def publish_report_candidate(
+    repo_root: Path,
+    *,
+    db_path: Path,
+    ticker: str,
+    artifact_id: str,
+    expected_current_artifact_id: str | None,
+    owner_action_id: str,
+    approved_at: datetime | None = None,
+    source_context: SourceReadContext | None = None,
+) -> tuple[ReportPublicationApproval, bool]:
+    """Verify current source content inside the atomic publication boundary."""
+
+    def assess(conn: sqlite3.Connection, artifact: ReportArtifactRef) -> DecisionBriefReadiness:
+        if artifact.generation_context is None:
+            raise MemoEvidenceError("memo_generation_context_missing")
+        return assess_candidate_decision_brief(
+            conn,
+            repo_root=repo_root,
+            artifact=artifact,
+            as_of=artifact.generation_context.cutoff_at,
+            source_context=source_context,
+        )
+
+    return commit_report_candidate(
+        repo_root,
+        db_path=db_path,
+        ticker=ticker,
+        artifact_id=artifact_id,
+        expected_current_artifact_id=expected_current_artifact_id,
+        owner_action_id=owner_action_id,
+        approved_at=approved_at,
+        source_authority_sha256=canonical_digest(
+            source_context.model_dump(mode="json") if source_context is not None else None
+        ),
+        assess=assess,
+    )

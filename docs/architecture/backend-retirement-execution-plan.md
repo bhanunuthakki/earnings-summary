@@ -666,3 +666,67 @@ source gate, unknown-period behavior and replay paths need reconciliation. This
 is an incomplete failed gate, not release acceptance. The local merge checkpoint
 is committed to give source-attestation tests an exact candidate. No publication,
 production migration, task retirement or deployment follows from that commit.
+
+The follow-up owning batch passed 246 intake/source-policy tests. Presentation
+fixtures now declare that source-period admission is tested by its owning suite;
+they still exercise actual managed publication and recovery. Unknown manifest
+periods retain raw bytes with zero catalog/ready claims. Managed-only completion
+and rejection create no legacy URL sidecar. Verified existing registrations stay
+available for inspection outside the current collection window. New URLs still
+use that window. Both pending-period truth and historical replay have fail-before
+regressions. The follow-up source changes require a fresh final gate and commit.
+
+
+## October 27 optional producer and capture cleanup
+
+The local source now removes historical theme seeding, decision backfill and
+generated standing stances. It keeps explicit decision records and current
+process tenets. Ask does not read generated themes or stance rows. Migration
+0067 removes the two retired purpose budgets, alerts and evaluation verdicts.
+The original 67-row seed receipt is unchanged; current budgets exclude these
+two purposes. No canonical data deletion has run.
+
+The four retired narrative selectors and three exclusive capture locks are
+removed. All retained aliases keep their original numbers. Generic allocation,
+path, byte, directory replay and immutability tests now use retained inputs.
+Fresh candidates ignore retired caches and unrelated ticker-prefixed task files.
+
+A new external-source regression proved that SQL/file-cache replay could reuse
+a draft after original financial bytes changed or disappeared. Candidate reuse
+now prepares retained inputs and compares the canonical reader body. Existing
+bounded source verification also runs before reuse and within atomic publication.
+The authority digest binds explicit source roots and limits. The fix uses the
+existing read and artifact owners, with no new source store or model call.
+
+The owning batch passed 159 tests. Strict types passed for the new source
+boundaries. The architecture gate passed after the publisher's verification
+entry point moved to its existing research owner; no cycle baseline was raised.
+Final integrated checks, native qualification and independent acceptance remain
+open. The separate Recent developments and four-quarter theme-rollup choices
+remain pending. Individual transcript summaries and source-linked SayDo stay.
+
+
+### Stored-input candidates still retained (read-only census, October 27)
+
+The bounded host census found 102 calls for retired automation purposes, four
+legacy memo/view proposals without owner authorization or decision receipts,
+18 old research tasks, 19 empty raw-capture receipts and 25 capture audit rows.
+Registered scalar and JSON call-reference owners have zero references to the
+102 calls. This is a candidate census, not a deletion or a claim that arbitrary
+JSON has no other references. Resolve the remaining owner contracts in the
+successor cleanup migration.
+
+Three approved proposals have actual owner authorizations and decision receipts;
+they remain with current thesis/KPI provenance. A status of approved did not
+protect the four old proposals. The census also found 25 capacity-profile rows
+used by the on-demand position-review capacity block and the owner-profile
+anchor. These remain cleanup candidates, including imported household context;
+their current readers are the concrete remaining dependency. Current owner
+process rules and allocation settings need a separate exact disposition from
+those imported inputs. No historical retention exemption is inferred.
+
+At 23:33 UTC, the actual dashboard and poller remained Running/Auto and 44
+Scheduler tasks remained registered. No host data, service, task, model or
+policy changed. The shared membership window remained exhausted, with the
+observed reset at 00:52:33 UTC October 28 (17:52 PDT October 27). Current
+independent review and native execution remain pending.
