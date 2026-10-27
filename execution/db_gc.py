@@ -612,7 +612,7 @@ def _upgrade_legacy_archive(
     _log("gc_archive_upgraded_to_run_keyed", table=table, backfilled_run_id=legacy_run)
 
 
-def archive_doomed(
+def _archive_doomed(
     conn: sqlite3.Connection,
     *,
     table: str,
@@ -754,7 +754,7 @@ def _delete_batches(
         _log("gc_batch_commit", policy=policy, table=table, rows=n, rows_total=total)
 
 
-def reset_doomed(conn: sqlite3.Connection, name: str = "_gc_doomed") -> None:
+def _reset_doomed(conn: sqlite3.Connection, name: str = "_gc_doomed") -> None:
     conn.execute(f'CREATE TEMP TABLE IF NOT EXISTS "{name}" (id INTEGER PRIMARY KEY)')
     conn.execute(f'DELETE FROM "{name}"')  # nosec B608 -- hardcoded temp-table name
 
@@ -911,7 +911,7 @@ def collapse_validation_issues(
           w_all AS (PARTITION BY {_VI_GROUP_KEY})
         """  # nosec B608 -- _VI_GROUP_KEY is a module constant; no user input
     )
-    reset_doomed(conn)
+    _reset_doomed(conn)
     conn.execute(
         """
         INSERT INTO _gc_doomed (id)
@@ -988,7 +988,7 @@ def collapse_validation_issues(
                 "INSERT INTO _gc_doomed (id) VALUES (?)", [(issue_id,) for issue_id in collided]
             )
         if doomed_total or collided:
-            archive_doomed(
+            _archive_doomed(
                 conn, table="validation_issues", run_at=run_at, policy="validation-issues"
             )
             _delete_batches(
@@ -1055,14 +1055,14 @@ def telemetry_retention(
         cols = {r[1] for r in conn.execute(f'PRAGMA table_info("{table}")')}
         if "id" not in cols:
             id_col = "rowid"
-        reset_doomed(conn)
+        _reset_doomed(conn)
         conn.execute(
             f'INSERT INTO _gc_doomed (id) SELECT "{id_col}" FROM "{table}" WHERE "{ts_col}" < ?',  # nosec B608 -- identifiers from the internal policy registry; cutoff bound
             (cutoff,),
         )
         n = conn.execute("SELECT COUNT(*) FROM _gc_doomed").fetchone()[0]
         if apply and n:
-            archive_doomed(conn, table=table, run_at=run_at, policy="telemetry", id_col=id_col)
+            _archive_doomed(conn, table=table, run_at=run_at, policy="telemetry", id_col=id_col)
             _delete_batches(
                 conn,
                 table=table,
@@ -1131,8 +1131,7 @@ def _artifact_provenance_ids(conn: sqlite3.Connection) -> set[int]:
                 f"llm_artifacts id={artifact_id} has invalid parent_artifact_ids JSON"
             ) from exc
         if not isinstance(payload, list) or any(
-            not isinstance(value, int) or isinstance(value, bool)
-            for value in cast("list[object]", payload)
+            type(x) is not int for x in cast("list[object]", payload)
         ):
             raise GcAbortedError(
                 f"llm_artifacts id={artifact_id} parent_artifact_ids must be a JSON integer list"
@@ -1142,9 +1141,7 @@ def _artifact_provenance_ids(conn: sqlite3.Connection) -> set[int]:
 
 
 def _json_integer_list(value: object, *, location: str) -> set[int]:
-    if not isinstance(value, list) or any(
-        not isinstance(item, int) or isinstance(item, bool) for item in cast("list[object]", value)
-    ):
+    if not isinstance(value, list) or any(type(x) is not int for x in cast("list[object]", value)):
         raise GcAbortedError(f"{location} must be a JSON integer list")
     return set(cast("list[int]", value))
 
@@ -1259,11 +1256,11 @@ def llm_artifact_retention(
         }
     )
     report.rows_deleted["llm_artifacts"] = len(eligible)
-    reset_doomed(conn)
+    _reset_doomed(conn)
     if eligible:
         conn.executemany("INSERT INTO _gc_doomed (id) VALUES (?)", [(value,) for value in eligible])
     if apply and eligible:
-        archive_doomed(
+        _archive_doomed(
             conn,
             table="llm_artifacts",
             run_at=run_at,
@@ -1407,7 +1404,7 @@ def facts_depth(
     facts_doomed = 0
     attempts_doomed = 0
     per_tier: dict[str, int] = {}
-    reset_doomed(conn)
+    _reset_doomed(conn)
     for t in sorted(fact_tickers):
         ctrl.checkpoint()
         lt = tier.get(t.upper())
@@ -1438,7 +1435,7 @@ def facts_depth(
     # Stage the metric_computation_attempts cascade into its own temp table.
     # The engine discovers periods from financial_facts, so a pruned period is
     # never re-attempted; its grid rows are dead weight once the facts go.
-    reset_doomed(conn, "_gc_doomed_mca")
+    _reset_doomed(conn, "_gc_doomed_mca")
     conn.execute(
         """
         INSERT OR IGNORE INTO _gc_doomed_mca (id)
@@ -1467,9 +1464,9 @@ def facts_depth(
     # --- apply path: archive first, then cascades, then bounded deletes -----
     # Archive both tables BEFORE any mutation so the sidecar copies carry the
     # original values (including supersedes_id, which is nulled below).
-    archive_doomed(conn, table="financial_facts", run_at=run_at, policy="facts-depth")
+    _archive_doomed(conn, table="financial_facts", run_at=run_at, policy="facts-depth")
     if attempts_doomed:
-        archive_doomed(
+        _archive_doomed(
             conn,
             table="metric_computation_attempts",
             run_at=run_at,
@@ -1654,7 +1651,7 @@ def run_gc(
             "destructive facts-depth apply is disabled; immutable "
             "archive-generation migration and cutover are required"
         )
-    return run_gc_implementation(
+    return _run_gc_implementation(
         db_path,
         apply=apply,
         policies=policies,
@@ -1674,7 +1671,7 @@ def run_gc(
     )
 
 
-def run_gc_implementation(
+def _run_gc_implementation(
     db_path: Path,
     *,
     apply: bool,
@@ -1780,7 +1777,7 @@ def run_gc_implementation(
                 # aborted every facts-depth apply ("requires PRAGMA
                 # foreign_keys=ON"). With the index guaranteed, FK checks are
                 # indexed lookups — keep enforcement and drop the pragma.
-            reset_doomed(conn)
+            _reset_doomed(conn)
 
             if "validation-issues" in policies:
                 report.policies.append(
@@ -1840,6 +1837,11 @@ def run_gc_implementation(
         if lock is not None:
             lock.release()
     return report
+
+
+archive_doomed = _archive_doomed
+reset_doomed = _reset_doomed
+run_gc_implementation = _run_gc_implementation
 
 
 def main(argv: list[str] | None = None) -> int:

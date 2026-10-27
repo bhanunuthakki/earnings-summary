@@ -1041,7 +1041,7 @@ class TestIncidentHardening:
                 conn.execute("DROP INDEX ix_0270_financial_facts_supersedes_id")
             return archived
 
-        monkeypatch.setattr(db_gc, "archive_doomed", archive_then_drift)
+        monkeypatch.setattr(db_gc, "_archive_doomed", archive_then_drift)
 
         with pytest.raises(db_gc.GcAbortedError, match="leading supersedes_id"):
             _run(gc_db, apply=True, policies=["facts-depth"])
