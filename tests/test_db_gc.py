@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Tests for execution/db_gc.py — the periodic DB garbage collector.
 
 Fixture DBs deliberately omit alembic_version so schema_compat's write
@@ -11,21 +10,17 @@ import json
 import os
 import re
 import sqlite3
-import sys
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import db_gc
 import pytest
 
+import run_lock
+
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "src"))
-sys.path.insert(0, str(REPO / "execution"))
-
-import db_gc  # noqa: E402
-
-import run_lock  # noqa: E402
 
 
 @pytest.fixture()
@@ -116,7 +111,7 @@ def _run(
         list(policies) if policies is not None else [str(name) for name in db_gc.POLICY_NAMES]
     )
     runner = (
-        db_gc._run_gc_implementation
+        db_gc.run_gc_implementation
         if apply and "facts-depth" in selected_policies
         else db_gc.run_gc
     )
@@ -471,12 +466,13 @@ class TestNullFingerprintBackfill:
 
 class TestTelemetryRetention:
     def test_cutoff_split(self, gc_db: Path) -> None:
+        recent = (datetime.now(UTC) - timedelta(days=1)).isoformat()
         conn = sqlite3.connect(gc_db)
         conn.execute("INSERT INTO stage_transitions (started_at) VALUES ('2026-01-01')")
-        conn.execute("INSERT INTO stage_transitions (started_at) VALUES ('2026-07-29')")
+        conn.execute("INSERT INTO stage_transitions (started_at) VALUES (?)", (recent,))
         conn.execute("INSERT INTO source_calls (called_at) VALUES ('2025-12-01')")
         conn.execute("INSERT INTO ingestion_runs (run_id, started_at) VALUES ('r1', '2026-01-01')")
-        conn.execute("INSERT INTO ingestion_runs (run_id, started_at) VALUES ('r2', '2026-07-29')")
+        conn.execute("INSERT INTO ingestion_runs (run_id, started_at) VALUES ('r2', ?)", (recent,))
         conn.commit()
         conn.close()
         report = _run(gc_db, apply=True, policies=["telemetry"], retention_days=90)
@@ -1022,7 +1018,7 @@ class TestIncidentHardening:
         self._seed_facts(gc_db)
         with sqlite3.connect(gc_db) as conn:
             before = conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0]
-        original = db_gc._archive_doomed
+        original = db_gc.archive_doomed
 
         def archive_then_drift(
             conn: sqlite3.Connection,
@@ -1045,7 +1041,7 @@ class TestIncidentHardening:
                 conn.execute("DROP INDEX ix_0270_financial_facts_supersedes_id")
             return archived
 
-        monkeypatch.setattr(db_gc, "_archive_doomed", archive_then_drift)
+        monkeypatch.setattr(db_gc, "archive_doomed", archive_then_drift)
 
         with pytest.raises(db_gc.GcAbortedError, match="leading supersedes_id"):
             _run(gc_db, apply=True, policies=["facts-depth"])
@@ -1246,7 +1242,7 @@ class TestRunKeyedArchive:
 
     @staticmethod
     def _doom_all_facts(conn: sqlite3.Connection) -> int:
-        db_gc._reset_doomed(conn)
+        db_gc.reset_doomed(conn)
         conn.execute("INSERT INTO _gc_doomed (id) SELECT id FROM financial_facts")
         return conn.execute("SELECT COUNT(*) FROM _gc_doomed").fetchone()[0]
 
@@ -1254,10 +1250,10 @@ class TestRunKeyedArchive:
         conn = self._attached(gc_db)
         _seed_quarters(conn, "EVAL", 4)
         doomed = self._doom_all_facts(conn)
-        first = db_gc._archive_doomed(
+        first = db_gc.archive_doomed(
             conn, table="financial_facts", run_at="r1", policy="facts-depth"
         )
-        second = db_gc._archive_doomed(
+        second = db_gc.archive_doomed(
             conn, table="financial_facts", run_at="r1", policy="facts-depth"
         )
         assert (first, second) == (doomed, 0)
@@ -1278,12 +1274,12 @@ class TestRunKeyedArchive:
         _seed_quarters(conn, "EVAL", 3)
         doomed = self._doom_all_facts(conn)
         assert (
-            db_gc._archive_doomed(conn, table="financial_facts", run_at="r1", policy="facts-depth")
+            db_gc.archive_doomed(conn, table="financial_facts", run_at="r1", policy="facts-depth")
             == doomed
         )
         # Same rows still doomed in a LATER run (post-abort retry next week).
         assert (
-            db_gc._archive_doomed(conn, table="financial_facts", run_at="r2", policy="facts-depth")
+            db_gc.archive_doomed(conn, table="financial_facts", run_at="r2", policy="facts-depth")
             == 0
         )
         total = conn.execute('SELECT COUNT(*) FROM gcarc."financial_facts"').fetchone()[0]
@@ -1296,10 +1292,10 @@ class TestRunKeyedArchive:
             " line_item, value, extracted_by) VALUES"
             " (4242, 'OLD', '2018-12-31', 'Q4', 'revenue', 1, 'fmp')"
         )
-        db_gc._reset_doomed(conn)
+        db_gc.reset_doomed(conn)
         conn.execute("INSERT INTO _gc_doomed (id) VALUES (4242)")
         assert (
-            db_gc._archive_doomed(conn, table="financial_facts", run_at="r1", policy="facts-depth")
+            db_gc.archive_doomed(conn, table="financial_facts", run_at="r1", policy="facts-depth")
             == 1
         )
         conn.execute("DELETE FROM financial_facts WHERE id = 4242")
@@ -1309,10 +1305,10 @@ class TestRunKeyedArchive:
             " line_item, value, extracted_by) VALUES"
             " (4242, 'NEW', '2026-03-31', 'Q1', 'net_income', 99, 'sec_xbrl')"
         )
-        db_gc._reset_doomed(conn)
+        db_gc.reset_doomed(conn)
         conn.execute("INSERT INTO _gc_doomed (id) VALUES (4242)")
         assert (
-            db_gc._archive_doomed(conn, table="financial_facts", run_at="r2", policy="facts-depth")
+            db_gc.archive_doomed(conn, table="financial_facts", run_at="r2", policy="facts-depth")
             == 1
         )
         rows = conn.execute(
@@ -1326,12 +1322,12 @@ class TestRunKeyedArchive:
             "INSERT INTO ingestion_runs (run_id, started_at) VALUES (?, '2026-01-01')",
             [("i1",), ("i2",)],
         )
-        db_gc._reset_doomed(conn)
+        db_gc.reset_doomed(conn)
         conn.execute("INSERT INTO _gc_doomed (id) SELECT rowid FROM ingestion_runs")
-        first = db_gc._archive_doomed(
+        first = db_gc.archive_doomed(
             conn, table="ingestion_runs", run_at="r1", policy="telemetry", id_col="rowid"
         )
-        second = db_gc._archive_doomed(
+        second = db_gc.archive_doomed(
             conn, table="ingestion_runs", run_at="r2", policy="telemetry", id_col="rowid"
         )
         assert (first, second) == (2, 0)
@@ -1344,7 +1340,7 @@ class TestRunKeyedArchive:
         conn = self._attached(gc_db)
         _seed_quarters(conn, "EVAL", 2)
         self._doom_all_facts(conn)
-        db_gc._archive_doomed(conn, table="financial_facts", run_at="r1", policy="facts-depth")
+        db_gc.archive_doomed(conn, table="financial_facts", run_at="r1", policy="facts-depth")
         # A migration lands: main gains a column.
         conn.execute("ALTER TABLE financial_facts ADD COLUMN currency TEXT")
         conn.execute(
@@ -1352,10 +1348,10 @@ class TestRunKeyedArchive:
             " line_item, value, extracted_by, currency) VALUES"
             " (7001, 'EVAL', '2019-03-31', 'Q1', 'revenue', 5, 'fmp', 'USD')"
         )
-        db_gc._reset_doomed(conn)
+        db_gc.reset_doomed(conn)
         conn.execute("INSERT INTO _gc_doomed (id) VALUES (7001)")
         assert (
-            db_gc._archive_doomed(conn, table="financial_facts", run_at="r2", policy="facts-depth")
+            db_gc.archive_doomed(conn, table="financial_facts", run_at="r2", policy="facts-depth")
             == 1
         )
         # New row carries the value under the right NAME; pre-drift rows are NULL.
@@ -1370,11 +1366,11 @@ class TestRunKeyedArchive:
         conn = self._attached(gc_db)
         _seed_quarters(conn, "EVAL", 2)
         self._doom_all_facts(conn)
-        db_gc._archive_doomed(conn, table="financial_facts", run_at="r1", policy="facts-depth")
+        db_gc.archive_doomed(conn, table="financial_facts", run_at="r1", policy="facts-depth")
         conn.execute("ALTER TABLE financial_facts DROP COLUMN extracted_by")
-        db_gc._reset_doomed(conn)
+        db_gc.reset_doomed(conn)
         with pytest.raises(db_gc.GcAbortedError, match="extracted_by"):
-            db_gc._archive_doomed(conn, table="financial_facts", run_at="r2", policy="facts-depth")
+            db_gc.archive_doomed(conn, table="financial_facts", run_at="r2", policy="facts-depth")
 
     def test_legacy_sidecar_upgrades_in_place(self, gc_db: Path) -> None:
         conn = self._attached(gc_db)
@@ -1393,7 +1389,7 @@ class TestRunKeyedArchive:
             (rows,),
         )
         self._doom_all_facts(conn)
-        added = db_gc._archive_doomed(
+        added = db_gc.archive_doomed(
             conn, table="financial_facts", run_at="r9", policy="facts-depth"
         )
         assert added == 0  # everything already archived (post-dedupe, identical)
