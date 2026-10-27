@@ -631,7 +631,7 @@ def load_verified_memo_model(
     as_of: datetime,
     source_context: SourceReadContext | None,
 ) -> VerifiedMemoModel | VerifiedMeliMemoModel:
-    """Require current shared readiness and exact persisted/replayed commitments."""
+    """Replay the committed model; current revision checks belong to publication."""
     commitment = (
         MeliMemoModelCommitment.model_validate(commitment.model_dump())
         if isinstance(commitment, MeliMemoModelCommitment)
@@ -644,11 +644,16 @@ def load_verified_memo_model(
     ):
         raise MemoModelEvidenceError("memo_model_primary_context_mismatch")
     readiness = load_valuation_readiness(
-        conn, ticker, as_of=as_of, purpose="analyst_memo", source_context=source_context
+        conn,
+        ticker,
+        as_of=as_of,
+        purpose="analyst_memo",
+        source_context=source_context,
+        run_id=commitment.run_id,
     )
     if not readiness.ready or readiness.run_id != commitment.run_id:
         raise MemoModelEvidenceError("memo_model_readiness_unverified")
-    grade = load_dcf_verification_evidence(conn, ticker)
+    grade = load_dcf_verification_evidence(conn, ticker, run_id=commitment.run_id)
     if (
         grade.status != "available"
         or grade.projection_status != "complete"

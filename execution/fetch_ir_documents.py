@@ -75,15 +75,19 @@ from pipeline.managed_ir_sources import (
 from pipeline.managed_ir_sources import (
     prepare_issuer_document_sources as prepare_managed_issuer_document_sources,
 )
+from pipeline.reported_period_inventory import (
+    reported_quarter_selection_in_connection,
+)
 from pipeline.source_policy import (
-    SOURCE_POLICY_CONFIG,
     ArtifactKind,
     CollectionSource,
     StoredCollectionAuthorization,
     authorize_stored_collection_target,
+    current_utc_date,
 )
 from provenance.immutable_artifact import (
     ImmutableArtifactConflictError,
+    read_stable_artifact,
     require_no_reparse_points,
 )
 from provenance.secure_file_install import (
@@ -116,6 +120,7 @@ _CONNECT_READ_TIMEOUT = 60
 _RATE_LIMIT_S = 0.5
 _MAX_REDIRECTS = 5
 _QUARTER = re.compile(r"^Q([1-4])$")
+_MAX_MANIFEST_ATTEMPTS = 100
 
 
 class SourceAuthenticationDeniedError(RuntimeError):
@@ -172,22 +177,6 @@ def _reported_quarter(entry: dict[str, object]) -> tuple[int, int] | None:
     return year, int(match.group(1))
 
 
-def _bounded_manifest_entries(
-    entries: list[dict[str, object]],
-    *,
-    max_quarters: int,
-) -> tuple[list[dict[str, object]], int]:
-    """Admit only entries in the newest typed reported-quarter window."""
-
-    periods = sorted(
-        {period for entry in entries if (period := _reported_quarter(entry)) is not None},
-        reverse=True,
-    )
-    admitted_periods = frozenset(periods[:max_quarters])
-    admitted = [entry for entry in entries if _reported_quarter(entry) in admitted_periods]
-    return admitted, len(entries) - len(admitted)
-
-
 def _emit_policy_denial(ticker: str, authorization: StoredCollectionAuthorization) -> None:
     target = authorization.target
     decision = authorization.decision
@@ -237,22 +226,44 @@ def _ext_from_headers(url: str, content_disposition: str, content_type: str) -> 
     return ".pdf"
 
 
-def _registered_source_urls(db_path: Path, ticker: str) -> set[str]:
-    """source_urls already in the ``documents`` table for ``ticker`` (idempotency key)."""
+def _registered_source_urls(db_path: Path, ticker: str, *, root: Path) -> set[str]:
+    """Return URLs with an admitted IR row and matching retained source bytes."""
     if not db_path.exists():
         return set()
     try:
         conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         try:
             rows = conn.execute(
-                "SELECT source_url FROM documents WHERE ticker = ? AND source_url IS NOT NULL",
+                "SELECT source_url,source_type,fetch_status,file_path,sha256,raw_bytes_size "
+                "FROM documents WHERE ticker = ? AND source_url IS NOT NULL",
                 (ticker.upper(),),
             ).fetchall()
         finally:
             conn.close()
     except sqlite3.Error:
         return set()
-    return {str(r[0]) for r in rows if r[0]}
+    verified: set[str] = set()
+    for row in rows:
+        if row[1] != "ir_doc" or row[2] != "ok" or not row[0]:
+            continue
+        try:
+            relative = Path(str(row[3]))
+            size = int(row[5])
+            digest = str(row[4])
+            if (
+                relative.is_absolute()
+                or ".." in relative.parts
+                or "\\" in str(row[3])
+                or size <= 0
+                or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            ):
+                continue
+            snapshot, _ = read_stable_artifact(root / relative, max_bytes=size, allowed_root=root)
+        except (OSError, TypeError, ValueError, ImmutableArtifactConflictError):
+            continue
+        if snapshot.size_bytes == size and snapshot.file_sha256 == digest:
+            verified.add(str(row[0]))
+    return verified
 
 
 # curl_cffi impersonation target — the rolling "latest Chrome" alias replays a
@@ -462,22 +473,69 @@ def _download(
     return dest
 
 
-def _write_incoming_sidecar(root: Path, mapping: dict[str, str]) -> None:
-    """Merge ``{staging_filename: source_url}`` into ``.tmp/ir_incoming_urls.json``."""
-    if not mapping:
-        return
+_FETCH_PROGRESS_KEY = "__fetch_progress_v1__"
+
+
+def _load_incoming_sidecar(root: Path) -> dict[str, object]:
+    path = incoming_urls_path(root)
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return cast("dict[str, object]", loaded) if isinstance(loaded, dict) else {}
+
+
+def _retained_entry_is_valid(
+    root: Path, ticker: str, entry: dict[str, object], retained: object
+) -> bool:
+    if not isinstance(retained, dict):
+        return False
+    value = cast("dict[str, object]", retained)
+    name, digest, size = value.get("filename"), value.get("sha256"), value.get("size_bytes")
+    url = str(entry.get("url") or "")
+    base = _staging_base_name(
+        ticker, str(entry.get("doc_type") or ""), entry.get("year"), entry.get("quarter"), url
+    )
+    if (
+        not isinstance(name, str)
+        or Path(name).name != name
+        or not name.startswith(base + ".")
+        or not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        or type(size) is not int
+        or size <= 0
+    ):
+        return False
+    directory = root / "ir_documents" / ticker
+    try:
+        snapshot, _ = read_stable_artifact(directory / name, max_bytes=size, allowed_root=directory)
+    except (OSError, ValueError, ImmutableArtifactConflictError):
+        return False
+    return snapshot.size_bytes == size and snapshot.file_sha256 == digest
+
+
+def _write_incoming_sidecar(
+    root: Path,
+    mapping: dict[str, str],
+    *,
+    ticker: str,
+    next_index: int,
+    retained: dict[str, object],
+) -> None:
+    """Merge URL hints and bounded retry progress in the existing sidecar."""
     path = incoming_urls_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    existing: dict[str, str] = {}
-    if path.exists():
-        try:
-            loaded = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                existing = {str(k): str(v) for k, v in cast("dict[str, object]", loaded).items()}
-        except (json.JSONDecodeError, OSError):
-            existing = {}
+    existing = _load_incoming_sidecar(root)
     existing.update(mapping)
-    path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    progress_value = existing.get(_FETCH_PROGRESS_KEY)
+    progress: dict[str, object] = (
+        dict(cast("dict[str, object]", progress_value)) if isinstance(progress_value, dict) else {}
+    )
+    progress[ticker] = {"next_index": next_index, "retained": retained}
+    existing[_FETCH_PROGRESS_KEY] = progress
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    os.replace(temporary, path)
 
 
 @dataclass(frozen=True)
@@ -609,24 +667,96 @@ def process_ticker(
         }
         print(json.dumps(empty))
         return empty
-    entries, policy_skipped = _bounded_manifest_entries(
-        entries,
-        max_quarters=SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters,
+    # Manifest labels are discovery guesses. Do not evict an older actual
+    # reported quarter before the complete source population is proved.
+    policy_skipped = 0
+    pending_period_selection = False
+    selected: list[dict[str, object]] = []
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    try:
+        for entry in entries:
+            period = _reported_quarter(entry)
+            decision = (
+                None
+                if period is None
+                else reported_quarter_selection_in_connection(
+                    conn,
+                    ticker=ticker,
+                    fiscal_year=period[0],
+                    fiscal_quarter=period[1],
+                    fiscal_year_end_month=authorization.fiscal_year_end_month,
+                    as_of=current_utc_date(),
+                )
+            )
+            if decision is False:
+                policy_skipped += 1
+                continue
+            pending_period_selection |= decision is None
+            selected.append(entry)
+    finally:
+        conn.close()
+    already = _registered_source_urls(db_path, ticker, root=root)
+    sidecar_state = _load_incoming_sidecar(root)
+    all_progress = sidecar_state.get(_FETCH_PROGRESS_KEY)
+    ticker_progress = (
+        cast("dict[str, object]", all_progress).get(ticker)
+        if isinstance(all_progress, dict)
+        else None
     )
+    progress = (
+        cast("dict[str, object]", ticker_progress) if isinstance(ticker_progress, dict) else {}
+    )
+    prior_retained = progress.get("retained")
+    retained: dict[str, object] = (
+        dict(cast("dict[str, object]", prior_retained)) if isinstance(prior_retained, dict) else {}
+    )
+    # The attempt budget applies to unfinished URLs. A registered prefix must
+    # not starve an unregistered URL on every replay of the same manifest.
+    pending: list[dict[str, object]] = []
+    registered_entries: list[dict[str, object]] = []
+    retained_entries: list[dict[str, object]] = []
+    seen_urls: set[str] = set()
+    skipped = 0
+    retained_urls: set[str] = set()
+    for entry in selected:
+        url = str(entry.get("url") or "")
+        if not url:
+            continue
+        if url in already:
+            retained.pop(url, None)
+            registered_entries.append(entry)
+            continue
+        if url in seen_urls:
+            skipped += 1
+            continue
+        seen_urls.add(url)
+        if _retained_entry_is_valid(root, ticker, entry, retained.get(url)):
+            retained_urls.add(url)
+            retained_entries.append(entry)
+            skipped += 1
+            continue
+        retained.pop(url, None)
+        pending.append(entry)
+    cursor = progress.get("next_index")
+    start = cursor % len(pending) if type(cursor) is int and cursor >= 0 and pending else 0
+    ordered = pending[start:] + pending[:start]
+    # Deferred URLs stay in the append-only manifest for a later bounded run.
+    deferred_count = max(0, len(pending) - _MAX_MANIFEST_ATTEMPTS)
+    entries = ordered[:_MAX_MANIFEST_ATTEMPTS]
+    next_index = (start + len(entries)) % len(pending) if pending else 0
 
-    already = _registered_source_urls(db_path, ticker)
     dest_dir = root / "ir_documents" / ticker
     sidecar: dict[str, str] = {}
     legacy_paths: list[Path] = []
     legacy_downloaded_urls: set[str] = set()
     legacy_classifications: dict[Path, BoundIRClassification] = {}
-    downloaded = skipped = failed = registered = managed_registered = ready = 0
+    downloaded = failed = registered = managed_registered = ready = 0
     projection_repaired = projection_failed = ready_existing = alias_held = transport_skipped = 0
     inspections: dict[str, tuple[PreparedIssuerDocumentPublication, ...]] = {}
     registration_not_reverified = 0
     registered_statuses: dict[str, RegisteredIssuerDocumentStatus] = {}
 
-    for entry in entries:
+    for entry in registered_entries + entries:
         url = str(entry.get("url") or "")
         if not url:
             continue
@@ -682,9 +812,13 @@ def process_ticker(
         download = partial(_download, allow_html_release=True) if allow_html_release else _download
         did_download = False
         try:
-            if categorize and (
-                authorization.fiscal_year_end_month == 12
-                or entry_witness_document_version_id is not None
+            if (
+                categorize
+                and not pending_period_selection
+                and (
+                    authorization.fiscal_year_end_month == 12
+                    or entry_witness_document_version_id is not None
+                )
             ):
                 period = _reported_quarter(entry)
                 if period is None:
@@ -745,6 +879,12 @@ def process_ticker(
                     failed += 1
                     continue
                 downloaded += 1
+            snapshot, _ = read_stable_artifact(dest, allowed_root=dest_dir)
+            retained[url] = {
+                "filename": dest.name,
+                "sha256": snapshot.file_sha256,
+                "size_bytes": snapshot.size_bytes,
+            }
             sidecar[dest.name] = url
             legacy_downloaded_urls.add(url)
             legacy_paths.append(dest)
@@ -789,11 +929,24 @@ def process_ticker(
             time.sleep(_RATE_LIMIT_S)
 
     if not dry_run:
-        _write_incoming_sidecar(root, sidecar)
+        _write_incoming_sidecar(
+            root, sidecar, ticker=ticker, next_index=next_index, retained=retained
+        )
 
     cat_rc: int | None = None
+    if categorize and not dry_run and not pending_period_selection:
+        for entry in retained_entries:
+            url = str(entry["url"])
+            value = retained[url]
+            if not isinstance(value, dict):
+                raise ValueError("retained source metadata changed")
+            name = cast("dict[str, object]", value)["filename"]
+            path = dest_dir / str(name)
+            legacy_paths.append(path)
+            legacy_downloaded_urls.add(url)
+            sidecar[path.name] = url
     legacy_outcomes: tuple[LegacyCategorizationOutcome, ...] = ()
-    if categorize and not dry_run and legacy_paths:
+    if categorize and not dry_run and not pending_period_selection and legacy_paths:
         legacy_outcomes = _run_categorize(
             ticker, root, db_path, calendar, legacy_paths, sidecar, legacy_classifications
         )
@@ -807,7 +960,7 @@ def process_ticker(
     registration_missing: int | None = None
     if categorize and not dry_run and legacy_downloaded_urls:
         registration_missing = len(
-            legacy_downloaded_urls - _registered_source_urls(db_path, ticker)
+            legacy_downloaded_urls - _registered_source_urls(db_path, ticker, root=root)
         )
     status = (
         "partial"
@@ -816,6 +969,10 @@ def process_ticker(
         if failed
         else "recovered"
         if projection_repaired
+        else "period_selection_pending"
+        if pending_period_selection
+        else "partial"
+        if deferred_count
         else "done"
     )
     if (registration_missing and not failed) or (cat_rc not in (None, 0) and not registered):
@@ -825,9 +982,12 @@ def process_ticker(
         "status": status,
         "downloaded": downloaded,
         "skipped": skipped,
+        "retained": len(retained_urls),
         "failed": failed,
         "transport_skipped": transport_skipped,
         "policy_skipped": policy_skipped,
+        "pending_period_selection": pending_period_selection,
+        "deferred": deferred_count,
         "categorize_rc": cat_rc,
         "registered": registered,
         "managed_registered": managed_registered,
@@ -848,7 +1008,7 @@ def verify_ticker(root: Path, db_path: Path, ticker: str) -> None:
     """Report which manifest URLs are registered in the ``documents`` table."""
     ticker = ticker.upper()
     entries = load_url_manifest(root, ticker)
-    registered = _registered_source_urls(db_path, ticker)
+    registered = _registered_source_urls(db_path, ticker, root=root)
     if not entries:
         print(f"[{ticker}] no manifest.")
         return
@@ -861,7 +1021,7 @@ def verify_ticker(root: Path, db_path: Path, ticker: str) -> None:
 def _exit_code(summary: dict[str, object]) -> int:
     if summary.get("status") == "policy_denied":
         return 2
-    return 0 if summary.get("status") in ("done", "recovered") else 1
+    return 0 if summary.get("status") in ("done", "recovered", "period_selection_pending") else 1
 
 
 def main(argv: list[str] | None = None) -> int:

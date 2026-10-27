@@ -594,7 +594,7 @@ def peer_memo(
         repo_root=tmp_path,
         body=body,
         standalone_path=standalone,
-        generated_at=cutoff,
+        generated_at=cutoff - timedelta(minutes=5),
         coverage_role="evaluation",
         title="Synthetic peer evidence",
     )

@@ -16,10 +16,11 @@ Untracked held equities remain review-gated. After inspecting the dry-run,
 validation, issuer-registry sync, and the normal onboarding chain are preserved.
 The scheduled morning run never passes this flag.
 
-The portfolio DB lives in MAIN (``data/`` is gitignored), so when running from a
-worktree pass ``--repo-root <MAIN>`` (or ``--db-path``). The companion tracker DB
-is found at ``<repo-root>/../portfolio-tracker/portfolio.db`` unless
-``--tracker-db`` overrides it.
+The portfolio DB comes from ``--db-path`` or ``EARNINGS_SUMMARY_DB_PATH``.
+``--repo-root`` names a product-state root holding ``data/portfolio.db`` and
+``data/portfolio_pins.json``. Tracker holdings come from the typed localhost
+API; ``--tracker-api-url`` overrides its normal explicit-argument, environment,
+then loopback resolution.
 
 Usage:
     python execution/sync_list_type_from_holdings.py                 # dry-run
@@ -43,11 +44,15 @@ try:
 except ModuleNotFoundError:  # managed script launch adds execution/ as the import root
     from _lib import PROJECT_ROOT
 
+from db_paths import require_product_db_path
 from identity import DEFAULT_USER_ID
+from integrations.portfolio_tracker_v1 import TrackerV1Client
 from list_type_reconcile import (
+    PinsUnreadableError,
     Reclassification,
     apply_reclassification,
     compute_reclassification,
+    holdings_from_tracker_v1,
     load_pins,
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -100,8 +105,8 @@ def print_plan(
 
     if plan.holdings_unavailable:
         print(
-            "\n  [SKIP] tracker reported zero holdings (outage / empty sync) -- "
-            "refusing to reclassify on no data. No changes."
+            f"\n  [SKIP] tracker holdings unavailable ({plan.unavailable_reason}) -- "
+            "refusing to reclassify. No changes."
         )
         return
     if not plan.has_changes and not onboarded_untracked:
@@ -142,8 +147,8 @@ def main() -> int:
     parser.add_argument(
         "--repo-root",
         type=Path,
-        default=PROJECT_ROOT,
-        help="Repo root holding data/portfolio.db (MAIN when run from a worktree).",
+        default=None,
+        help="Product-state root holding data/portfolio.db and data/portfolio_pins.json.",
     )
     parser.add_argument(
         "--db-path",
@@ -152,22 +157,27 @@ def main() -> int:
         help="Override portfolio DB path (wins over --repo-root).",
     )
     parser.add_argument(
-        "--tracker-db", type=Path, default=None, help="Override companion tracker DB path."
+        "--tracker-api-url",
+        default=None,
+        help="Override the portfolio-tracker API base URL (default resolves to loopback).",
     )
     args = parser.parse_args()
     if args.onboard_untracked and not args.apply:
         parser.error("--onboard-untracked requires --apply after reviewing the dry-run")
 
-    repo_root: Path = args.repo_root.resolve()
-    db_path: Path = (
-        args.db_path if args.db_path is not None else repo_root / "data" / "portfolio.db"
+    repo_root: Path | None = args.repo_root
+    explicit = (
+        args.db_path
+        if args.db_path is not None
+        else repo_root / "data" / "portfolio.db"
+        if repo_root is not None
+        else None
     )
-    tracker_db: Path = (
-        args.tracker_db
-        if args.tracker_db is not None
-        else repo_root.parent / "portfolio-tracker" / "portfolio.db"
-    )
-
+    try:
+        db_path = require_product_db_path(PROJECT_ROOT, explicit=explicit)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     if not db_path.exists():
         # The MAIN DB is the world we reconcile — its absence is a real failure
         # (exit 1 so a scheduled run surfaces it).
@@ -176,28 +186,42 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    if not tracker_db.exists():
-        # No holdings to reconcile against → SOFT no-op (exit 0), never a hard
-        # failure. Reclassifying on absent holdings would demote the whole book;
-        # refusing is the safe move. Mirrors position_lifecycle's tracker-offline
-        # degrade. The compute-side holdings_unavailable latch is the second line
-        # of defence for an empty (but present) tracker DB.
+    pins_root: Path
+    if repo_root is None:
+        if db_path.name.casefold() != "portfolio.db" or db_path.parent.name.casefold() != "data":
+            print(
+                "ERROR: portfolio DB must be <product-state-root>/data/portfolio.db.",
+                file=sys.stderr,
+            )
+            return 1
+        pins_root = db_path.parent.parent.resolve()
+    else:
+        pins_root = repo_root
+
+    tracker_client = TrackerV1Client(base_url=args.tracker_api_url)
+    holdings = holdings_from_tracker_v1(
+        tracker_client.get_portfolio_snapshot(),
+        tracker_client.get_securities(),
+    )
+    if holdings.unavailable_reason is not None:
         print(
-            f"WARNING: tracker DB not found at {tracker_db} -- skipping list_type "
-            "reconcile (no holdings to reconcile against; no changes made).",
+            f"ERROR: tracker holdings unavailable ({holdings.unavailable_reason}) -- "
+            "no list_type changes made",
             file=sys.stderr,
         )
-        return 0
+        return 3
 
-    pins = load_pins(repo_root)
+    try:
+        pins = load_pins(pins_root)
+    except PinsUnreadableError as exc:
+        print(f"ERROR: pins unreadable ({exc}) -- no list_type changes made", file=sys.stderr)
+        return 3
     es_conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     es_conn.row_factory = sqlite3.Row
-    tracker_conn = connect_sqlite(tracker_db, role=SQLiteConnectionRole.READ_ONLY)
-    tracker_conn.row_factory = sqlite3.Row
     try:
         plan = compute_reclassification(
             es_conn=es_conn,
-            tracker_conn=tracker_conn,
+            holdings=holdings,
             pins=set(pins),
             min_value=args.min_value,
             user_id=args.user_id,
@@ -207,7 +231,6 @@ def main() -> int:
             print(f"Wrote {tally['promoted']} promotion(s), {tally['demoted']} demotion(s).")
     finally:
         es_conn.close()
-        tracker_conn.close()
 
     onboarded_count = 0
     if args.apply and args.onboard_untracked and plan.untracked_held:
@@ -226,7 +249,7 @@ def main() -> int:
         try:
             import issuer_registry
 
-            result = cast("dict[str, object]", issuer_registry.sync_all(repo_root, db_path=db_path))
+            result = cast("dict[str, object]", issuer_registry.sync_all(pins_root, db_path=db_path))
             print(f"\nIssuer registry synced: {result}")
         except Exception as exc:  # pragma: no cover - best-effort, never fail the reconcile
             print(

@@ -12,24 +12,25 @@ import argparse
 import hashlib
 import json
 import sqlite3
-import sys
 from calendar import monthrange
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    import _lib as execution_lib
+except ImportError:
+    from execution import _lib as execution_lib
 
-from aggregator_sources import SOURCES as TRANSCRIPT_SOURCES  # noqa: E402
-from compute.evidence_snapshot import snapshot_recorded_evidence  # noqa: E402
-from earnings_surprise_store import verify_persisted_observation_row  # noqa: E402
-from llm.prompt_versions import prompt_version_for  # noqa: E402
-from pipeline.commitment_scan_receipts import (  # noqa: E402
+from aggregator_sources import SOURCES as TRANSCRIPT_SOURCES
+from compute.evidence_snapshot import snapshot_recorded_evidence
+from earnings_surprise_store import verify_persisted_observation_row
+from llm.prompt_versions import prompt_version_for
+from pipeline.commitment_scan_receipts import (
     CommitmentScanCoverageState,
     commitment_scan_coverage,
 )
-from pipeline.data_coverage_dispositions import (  # noqa: E402
+from pipeline.data_coverage_dispositions import (
     COMMITMENT_SCAN_POLICY_NAME,
     COMMITMENT_SCAN_POLICY_PROVIDERS,
     COMMITMENT_SCAN_POLICY_VERSION,
@@ -44,16 +45,18 @@ from pipeline.data_coverage_dispositions import (  # noqa: E402
     fiscal_quarter_period_end,
     policy_config_sha256,
 )
-from pipeline.transcript_acquisition import COMBINED_SOURCE_REGIME_IDENTITY  # noqa: E402
-from provenance.selection import selected_transcripts_relation  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
-from transcripts.acquisition_semantics import (  # noqa: E402
+from pipeline.transcript_acquisition import COMBINED_SOURCE_REGIME_IDENTITY
+from provenance.selection import selected_transcripts_relation
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from transcripts.acquisition_semantics import (
     TRANSCRIPT_ACQUISITION_POLICY_VERSION,
     ExistingArtifactBehavior,
     TranscriptAcquisitionEntrypoint,
     TranscriptAcquisitionRequest,
     transcript_authorization_idempotency_key,
 )
+
+PROJECT_ROOT = execution_lib.PROJECT_ROOT
 
 _ARTIFACT_ORDER = (
     CoverageArtifactKind.TEXT_TRANSCRIPT,
@@ -296,7 +299,7 @@ def _reason_matches_status(
 
 
 def _transcript_authorization_keys(
-    *, ticker: str, fiscal_year: int, fiscal_quarter: int, period_end: date
+    *, ticker: str, fiscal_year: int, fiscal_quarter: int, period_end: date, current: bool = False
 ) -> dict[str, str]:
     keys: dict[str, str] = {}
     for source in TRANSCRIPT_SOURCES:
@@ -315,7 +318,11 @@ def _transcript_authorization_keys(
             source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
             source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
         )
-        keys[source.name] = transcript_authorization_idempotency_key(request)
+        keys[source.name] = transcript_authorization_idempotency_key(
+            request.model_copy(update={"schema_version": "transcript-acquisition-request@2"})
+            if current
+            else request
+        )
     return keys
 
 
@@ -481,9 +488,17 @@ def _latest_disposition(
             fiscal_quarter=fiscal_quarter,
             period_end=period_end,
         )
+        current_keys = _transcript_authorization_keys(
+            ticker=ticker,
+            fiscal_year=fiscal_year,
+            fiscal_quarter=fiscal_quarter,
+            period_end=period_end,
+            current=True,
+        )
         if any(
             attempt.provider in expected_keys
-            and attempt.authorization_key != expected_keys[attempt.provider]
+            and attempt.authorization_key
+            not in {expected_keys[attempt.provider], current_keys[attempt.provider]}
             for attempt in latest_request.attempts
         ):
             reasons.append("attempt_authorization_identity_mismatch")

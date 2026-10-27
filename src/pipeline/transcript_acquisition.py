@@ -13,7 +13,7 @@ import os
 import re
 import sqlite3
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal, Self
@@ -22,17 +22,20 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from models.documents import DocType, SourceType
+from pipeline.reported_period_inventory import reported_period_window_from_inventory
 from pipeline.source_policy import (
     ArtifactKind,
     AuthorizationReason,
     CollectionSource,
+    ReportedPeriodStatus,
+    ReportedPeriodWindow,
     StoredIdentityStatus,
     authorize_collection_target_in_connection,
     canonical_https_url,
     decision_for,
+    fiscal_quarter_end,
     ir_url_is_authorized,
     issuer_policy,
-    reported_quarter_is_in_window,
 )
 from provenance.source_regime import SourceRegime, contract_for, receipt_identity
 from runtime.deterministic import canonical_json_ascii as _canonical_json
@@ -43,6 +46,7 @@ from transcripts.acquisition_semantics import (
     TranscriptAcquisitionAuthorization,
     TranscriptAcquisitionEntrypoint,
     TranscriptAcquisitionRequest,
+    TranscriptAuthorizationReason,
     TranscriptAuthorizationStatus,
     TranscriptProvider,
     TranscriptReportingStatus,
@@ -70,6 +74,15 @@ _UTC_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
 
 class TranscriptAcquisitionDeniedError(PermissionError):
     """The canonical transcript contract denied work before side effects."""
+
+
+def _require_current_source_request(request: TranscriptAcquisitionRequest) -> None:
+    """Keep legacy receipts readable without allowing new calendar-based work."""
+
+    if request.schema_version != "transcript-acquisition-request@2":
+        raise TranscriptAcquisitionDeniedError(
+            "current transcript acquisition requires a source-bound request@2"
+        )
 
 
 class AuthorizedTranscriptArtifact(BaseModel):
@@ -128,6 +141,7 @@ def _stored_target_for_request(
     conn: sqlite3.Connection,
     request: TranscriptAcquisitionRequest,
 ) -> TranscriptStoredTarget:
+    _require_current_source_request(request)
     stored = authorize_collection_target_in_connection(
         conn,
         request.canonical_ticker,
@@ -152,19 +166,44 @@ def _stored_target_for_request(
             requested=request.owner_requested,
         ).allowed
     )
+    reported_window: ReportedPeriodWindow | None = None
+    fiscal_year_end: str | None = None
     if identity_authorized:
         status = StoredTargetStatus.AUTHORIZED
-        if stored.fiscal_year_end_month is None:
-            reporting = TranscriptReportingStatus.FISCAL_CALENDAR_UNAVAILABLE
-        elif reported_quarter_is_in_window(
-            fiscal_year=request.fiscal_year,
-            fiscal_quarter=request.fiscal_quarter,
-            fiscal_year_end_month=stored.fiscal_year_end_month,
-            as_of=request.as_of,
-        ):
-            reporting = TranscriptReportingStatus.ELIGIBLE
+        try:
+            reported_window = reported_period_window_from_inventory(
+                conn, ticker=request.canonical_ticker, as_of=request.as_of
+            )
+        except sqlite3.Error:
+            reported_window = ReportedPeriodWindow(
+                status=ReportedPeriodStatus.UNKNOWN, reason="source_inventory_unavailable"
+            )
+        if reported_window.status is ReportedPeriodStatus.COMPLETE:
+            fiscal_year_end = reported_window.fiscal_year_end
+            if (
+                fiscal_year_end is None
+                or stored.fiscal_year_end_month is None
+                or int(fiscal_year_end[:2]) != stored.fiscal_year_end_month
+            ):
+                reported_window = ReportedPeriodWindow(
+                    status=ReportedPeriodStatus.AMBIGUOUS,
+                    reason="fiscal_profile_mismatch",
+                    snapshot_ids=reported_window.snapshot_ids,
+                )
+                fiscal_year_end = None
+        if fiscal_year_end is None:
+            reporting = TranscriptReportingStatus.PENDING
         else:
-            reporting = TranscriptReportingStatus.OUT_OF_WINDOW
+            target_end = fiscal_quarter_end(
+                fiscal_year=request.fiscal_year,
+                fiscal_quarter=request.fiscal_quarter,
+                fiscal_year_end=fiscal_year_end,
+            )
+            reporting = (
+                TranscriptReportingStatus.ELIGIBLE
+                if reported_window.includes(target_end)
+                else TranscriptReportingStatus.OUT_OF_WINDOW
+            )
     else:
         status = StoredTargetStatus(stored.status.value)
         reporting = TranscriptReportingStatus.NOT_EVALUATED
@@ -176,6 +215,8 @@ def _stored_target_for_request(
         owner_requested=request.owner_requested,
         coverage_role=coverage_role,
         fiscal_year_end_month=stored.fiscal_year_end_month,
+        fiscal_year_end=fiscal_year_end,
+        reported_window=reported_window,
         source_policy_version=request.source_policy_version,
         source_regime_identity=request.source_regime_identity,
         status=status,
@@ -189,6 +230,7 @@ def authorize_transcript_request(
 ) -> TranscriptAcquisitionAuthorization:
     """Project stored identity into the pure canonical contract without writes."""
 
+    _require_current_source_request(request)
     receipt = authorize_transcript_acquisition_request(
         request,
         _stored_target_for_request(conn, request),
@@ -220,6 +262,7 @@ def _stage_authorized_file(
     document_id: int | None,
 ) -> AuthorizedTranscriptArtifact:
     validated = validate_transcript_acquisition_authorization(authorization)
+    _require_current_source_request(validated.request)
     if validated.status is not TranscriptAuthorizationStatus.AUTHORIZED:
         raise TranscriptAcquisitionDeniedError("cannot stage a denied transcript acquisition")
     staged = stage_transcript_artifact(
@@ -250,6 +293,7 @@ def stage_authorized_payload(
     """Stage acquired response bytes only after the exact provider is authorized."""
 
     validated = validate_transcript_acquisition_authorization(authorization)
+    _require_current_source_request(validated.request)
     if validated.status is not TranscriptAuthorizationStatus.AUTHORIZED:
         raise TranscriptAcquisitionDeniedError("cannot stage a denied transcript acquisition")
     if len(payload) > MAX_TRANSCRIPT_BYTES:
@@ -287,7 +331,7 @@ def read_authorized_transcript(
     project_root: Path,
     trusted_staging_root: Path,
 ) -> bytes:
-    """Revalidate identity and consume only the immutable staged snapshot."""
+    """Require current authorization before an active read or canonical write."""
 
     validated = AuthorizedTranscriptArtifact.model_validate(artifact, strict=True)
     current = authorize_transcript_request(conn, validated.authorization.request)
@@ -295,6 +339,24 @@ def read_authorized_transcript(
         raise TranscriptAcquisitionDeniedError(
             "transcript authorization no longer matches stored policy"
         )
+    return _read_transcript_snapshot(
+        conn,
+        validated,
+        project_root=project_root,
+        trusted_staging_root=trusted_staging_root,
+    )
+
+
+def _read_transcript_snapshot(
+    conn: sqlite3.Connection,
+    artifact: AuthorizedTranscriptArtifact,
+    *,
+    project_root: Path,
+    trusted_staging_root: Path,
+) -> bytes:
+    """Read exact bytes from a validated immutable receipt without current policy."""
+
+    validated = AuthorizedTranscriptArtifact.model_validate(artifact, strict=True)
     root = project_root.resolve(strict=True)
     trusted_root = trusted_staging_root.resolve(strict=True)
     trusted_root_stat = trusted_root.stat()
@@ -465,11 +527,11 @@ def _receipt_paths_are_safe(
 def register_transcript_receipt_sqlite_functions(
     conn: sqlite3.Connection,
     *,
-    database_path: str | os.PathLike[str],
+    project_root: Path,
 ) -> None:
     """Register deterministic validation used by the receipt INSERT trigger."""
 
-    project_root = project_root_for_database(database_path)
+    project_root = project_root.resolve(strict=True)
 
     def validate(
         receipt_id: object,
@@ -582,6 +644,7 @@ def persist_authorized_transcript_artifact(
     """Append or exactly replay one durable artifact receipt."""
 
     validated = AuthorizedTranscriptArtifact.model_validate(artifact, strict=True)
+    _require_current_source_request(validated.authorization.request)
     payload = read_authorized_transcript(
         conn,
         validated,
@@ -624,6 +687,7 @@ def persist_authorized_transcript_artifact(
         if tuple(existing) != values:
             raise TranscriptAcquisitionDeniedError("immutable transcript receipt collision")
         return receipt_id
+    register_transcript_receipt_sqlite_functions(conn, project_root=project_root)
     conn.execute(
         "INSERT INTO transcript_acquisition_receipts "
         "(receipt_id,idempotency_key,document_id,canonical_ticker,fiscal_year,fiscal_quarter,"
@@ -731,7 +795,7 @@ def load_authorized_transcript_receipt(
     project_root: Path,
     trusted_staging_root: Path,
 ) -> AuthorizedTranscriptArtifact:
-    """Load one exact durable receipt and revalidate its current authorization and bytes."""
+    """Reconstruct one exact durable receipt and its unchanged artifact bytes."""
 
     try:
         row = conn.execute(
@@ -749,7 +813,7 @@ def load_authorized_transcript_receipt(
     if row is None:
         raise TranscriptAcquisitionDeniedError("transcript acquisition receipt is unavailable")
     artifact = _validate_transcript_receipt_row(row)
-    read_authorized_transcript(
+    _read_transcript_snapshot(
         conn,
         artifact,
         project_root=project_root,
@@ -790,6 +854,7 @@ def _document_request(
     as_of: date,
 ) -> TranscriptAcquisitionRequest:
     return TranscriptAcquisitionRequest(
+        schema_version="transcript-acquisition-request@2",
         entrypoint=entrypoint,
         canonical_ticker=ticker,
         fiscal_year=year,
@@ -814,6 +879,7 @@ def stage_pending_issuer_transcripts(
     private_root: Path,
     entrypoint: TranscriptAcquisitionEntrypoint,
     as_of: date,
+    pending_callback: Callable[[tuple[int, ...]], None] | None = None,
 ) -> dict[int, AuthorizedTranscriptArtifact]:
     """Authorize then stage every pending persisted issuer-IR transcript."""
 
@@ -829,6 +895,7 @@ def stage_pending_issuer_transcripts(
         (SourceType.IR_DOC.value, DocType.IR_TRANSCRIPT.value, *normalized),
     ).fetchall()
     planned: list[tuple[sqlite3.Row, TranscriptAcquisitionAuthorization, Path, Path, int, int]] = []
+    pending_ids: list[int] = []
     for row in rows:
         name = Path(str(row["file_path"])).name
         parts = name.rsplit("_", 2)
@@ -850,7 +917,15 @@ def stage_pending_issuer_transcripts(
             quarter=quarter,
             as_of=as_of,
         )
-        authorization = require_authorized_transcript_request(conn, request)
+        authorization = authorize_transcript_request(conn, request)
+        if authorization.reason is TranscriptAuthorizationReason.REPORTED_QUARTER_WINDOW_PENDING:
+            pending_ids.append(int(row["id"]))
+            continue
+        if authorization.status is not TranscriptAuthorizationStatus.AUTHORIZED:
+            raise TranscriptAcquisitionDeniedError(
+                f"transcript acquisition denied: {authorization.reason.value} "
+                f"({authorization.idempotency_key})"
+            )
         relative = Path(str(row["file_path"]))
         source_path = (project_root / relative).resolve(strict=True)
         try:
@@ -861,6 +936,9 @@ def stage_pending_issuer_transcripts(
             ) from exc
         expected_size = int(row["raw_bytes_size"])
         planned.append((row, authorization, source_path, relative, expected_size, int(row["id"])))
+
+    if pending_ids and pending_callback is not None:
+        pending_callback(tuple(pending_ids))
 
     if planned:
         private_root.mkdir(parents=True, exist_ok=True)

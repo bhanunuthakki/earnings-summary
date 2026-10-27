@@ -522,11 +522,23 @@ def history(
     limit: int = 200,
     since_days: int | None = None,
     db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> list[Decision]:
-    conn = _open(db_path, read_only=True)
+    owned_conn = conn is None
+    if conn is None:
+        conn = _open(db_path, read_only=True)
     if conn is None:
         return []
+    original_factory = conn.row_factory
     try:
+        conn.row_factory = sqlite3.Row
+        if (
+            conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='decisions'"
+            ).fetchone()
+            is None
+        ):
+            return []
         clauses: list[str] = []
         params: list[object] = []
         if ticker is not None:
@@ -548,8 +560,13 @@ def history(
             params,
         ).fetchall()
         return [_row_to_decision(r) for r in rows]
+    except sqlite3.Error:
+        return []
     finally:
-        conn.close()
+        if owned_conn:
+            conn.close()
+        else:
+            conn.row_factory = original_factory
 
 
 # Recommendation kind → the tracker transaction direction it implies. HOLD /

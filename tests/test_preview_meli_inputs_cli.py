@@ -134,7 +134,15 @@ def test_present_invalid_snapshot_keeps_its_original_verification_failure(
     finally:
         source.close()
 
-    def invalid(_conn: sqlite3.Connection, _snapshot_id: str) -> None:
+    def invalid(
+        _conn: sqlite3.Connection,
+        _snapshot_id: str,
+        *,
+        source_context: input_evidence.SourceReadContext | None = None,
+    ) -> None:
+        assert source_context == input_evidence.SourceReadContext.for_product_state_root(
+            tmp_path / "source-state"
+        )
         raise ValueError("invalid sealed snapshot")
 
     monkeypatch.setattr(input_evidence, "verify_research_snapshot", invalid)

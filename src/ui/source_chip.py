@@ -336,6 +336,40 @@ def source_chip_html(src: CellSource, *, link_only: bool = False) -> str:
         if (src.canonical_reference is not None or src.calculation_reference is not None) and viewer
         else viewer
     )
+    analyze_href = (
+        f"/source/version/{src.document_version_id}"
+        if src.document_version_id is not None
+        else viewer
+    )
+    if viewer is not None and not viewer.startswith("/api/peek/"):
+        source_href = viewer
+    elif src.source_url:
+        source_href = src.source_url
+    else:
+        source_href = viewer
+    if analyze_href is not None or source_href is not None:
+        actions: list[str] = []
+        if analyze_href is not None:
+            analyze_peek_attrs = (
+                f' data-peek-url="{_esc(peek_viewer)}"'
+                f' data-peek-title="{_esc(source_hover_title(src))}"'
+                if is_peek and peek_viewer is not None
+                else ""
+            )
+            actions.append(
+                f'<a class="src-pop-action" data-src-action="analyze" '
+                f'href="{_esc(analyze_href)}" target="_blank" rel="noopener"'
+                f"{analyze_peek_attrs}>Analyze</a>"
+            )
+        if source_href is not None:
+            actions.append(
+                f'<a class="src-pop-action" data-src-action="source" '
+                f'href="{_esc(source_href)}" target="_blank" rel="noopener">Source</a>'
+            )
+        rows.append(
+            '<div class="src-pop-row src-pop-actions" role="group" '
+            f'aria-label="Evidence actions">{"".join(actions)}</div>'
+        )
     peek_attrs = (
         f' data-peek-url="{_esc(peek_viewer)}" data-peek-title="{_esc(source_hover_title(src))}"'
         if is_peek and peek_viewer is not None
@@ -364,7 +398,7 @@ SOURCE_CHIP_CSS = """
   color: var(--muted); background: transparent;
   opacity: 0.65; user-select: none;
 }
-.src-chip:hover, .src-pop[open] .src-chip { opacity: 1; }
+.src-chip:hover, .src-chip:focus-visible, .src-pop:focus-within .src-chip, .src-pop[open] .src-chip { opacity: 1; }
 .src-sec-official { color: var(--ok); border-color: var(--ok); }
 .src-fmp-normalized { color: var(--muted); border-color: var(--border-2); }
 .src-llm-extracted { color: var(--warn); border-color: var(--warn); }
@@ -384,6 +418,10 @@ SOURCE_CHIP_CSS = """
 .src-pop-locator { word-break: break-all; }
 .src-pop-locator-raw summary { cursor: pointer; }
 .src-pop-row a { color: var(--accent); }
+.src-pop:hover > .src-pop-body, .src-pop:focus-within > .src-pop-body { display: block; }
+.src-pop-actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--hairline, var(--border)); }
+.src-pop-action { font-weight: 600; text-decoration: none; }
+.src-pop-action:hover, .src-pop-action:focus-visible { text-decoration: underline; }
 /* S2 PR3: unresolved validation issues + derived-from input rows. */
 .src-pop-warn { color: var(--warn); }
 .src-pop-input { display: flex; align-items: center; gap: 5px; }

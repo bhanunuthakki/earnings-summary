@@ -74,4 +74,26 @@ def test_current_codex_candidates_support_complete_document_context(model: str) 
         purpose=None, model=model, backend="codex", capability_profile=profile
     )
     assert (resolved, backend) == (model, "codex")
+
+
+def test_sol_candidate_preserves_exact_id_without_purpose_promotion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from llm import cli, resolver
+
+    incumbent = cli.LLM_MODELS["kpi_summary_enumerate"]
+
+    def candidate_override(purpose: str, **kwargs: object) -> str:
+        return "gpt-6.1-sol"
+
+    monkeypatch.setattr(resolver, "active_override", candidate_override)
+    model, backend = resolve_model_and_backend(
+        "kpi_summary_enumerate",
+        capability_profile=CapabilityProfile(
+            min_context_length=1_050_000, requires_structured_output=True
+        ),
+    )
+    assert (model, backend) == ("gpt-6.1-sol", "codex")
+    assert cli.model_for_subscription_backend(model, backend) == "gpt-6.1-sol"
+    assert cli.LLM_MODELS["kpi_summary_enumerate"] == incumbent
     assert not model_has_capabilities(model, CapabilityProfile(min_context_length=1_050_001))[0]

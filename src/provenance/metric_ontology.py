@@ -536,7 +536,9 @@ class MetricOntology:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA foreign_keys=ON")
+        foreign_keys = self._conn.execute("PRAGMA foreign_keys").fetchone()
+        if foreign_keys is None or foreign_keys[0] != 1:
+            self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.create_function("fact_sha256", 1, _sql_sha256, deterministic=True)
 
     @contextmanager

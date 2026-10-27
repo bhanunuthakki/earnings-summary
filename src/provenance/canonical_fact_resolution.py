@@ -29,6 +29,7 @@ from provenance.source_fact_publication import (
     publication_verification_scope,
     verify_source_fact_publication,
 )
+from provenance.source_read_context import SourceReadContext
 
 Status = Literal["resolved", "unresolved", "retired"]
 MAX_CANDIDATES_PER_CANONICAL_CELL = 500
@@ -231,9 +232,15 @@ class _PreparedResolution:
 class CanonicalFactResolutionEngine:
     """The sole durable cross-cell resolution boundary."""
 
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(
+        self, conn: sqlite3.Connection, *, source_context: SourceReadContext | None = None
+    ) -> None:
         self._conn = conn
-        conn.execute("PRAGMA foreign_keys = ON")
+        self._source_context = source_context
+        foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()
+        if foreign_keys is None or foreign_keys[0] != 1:
+            conn.execute("PRAGMA foreign_keys = ON")
+
         conn.create_function("fact_sha256", 1, _sqlite_sha, deterministic=True)
 
     def resolve(
@@ -436,7 +443,7 @@ class CanonicalFactResolutionEngine:
         observed = cutoff if observed_through is None else _utc(observed_through)
         if observed < cutoff:
             raise ValueError("observed_through must not precede cutoff_at")
-        reader = FactReadModel(self._conn)
+        reader = FactReadModel(self._conn, source_context=self._source_context)
         visiting: set[str] = set()
         verified: dict[str, bool] = {}
         remaining = MAX_DERIVATION_NODES
@@ -597,9 +604,9 @@ class CanonicalFactResolutionEngine:
             )
             bundles = {
                 read.observation_id: read
-                for read in FactReadModel(self._conn).provenance_bundles(
-                    observation_ids, cutoff=cutoff
-                )
+                for read in FactReadModel(
+                    self._conn, source_context=self._source_context
+                ).provenance_bundles(observation_ids, cutoff=cutoff)
             }
             result: list[CanonicalFactRead] = []
             for index, (cell_id, receipt) in enumerate(
@@ -1078,12 +1085,14 @@ class CanonicalFactResolutionEngine:
                    b.binding_revision_id,p.observation_payload_sha256,
                    b.commitment_sha256,mapping.commitment_sha256,
                    o.numeric_value,o.text_value,o.is_nil,c.currency,c.unit_key,
-                   o.effective_at,o.knowledge_at,o.recorded_at
+                   o.effective_at,o.knowledge_at,o.recorded_at,anchor.source_taxonomy_version
             FROM fact_cell_canonical_binding_revisions b
             JOIN fact_observations_v2 o
               ON o.observation_id=b.source_observation_id
              AND o.fact_cell_id=b.fact_cell_id
             JOIN fact_cells_v2 c ON c.fact_cell_id=o.fact_cell_id
+            LEFT JOIN fact_reported_observation_anchors_v2 anchor
+              ON anchor.observation_id=o.observation_id
             JOIN fact_observation_payload_commitments_v2 p ON p.observation_id=o.observation_id
             JOIN metric_mapping_revisions mapping ON mapping.mapping_revision_id=b.mapping_revision_id
             JOIN canonical_metric_cell_seals cell_seal
@@ -1136,7 +1145,9 @@ class CanonicalFactResolutionEngine:
             ).fetchone()
             observation_kind = str(row[2])
             if observation_kind == "derived" and publication is not None:
-                bundle = FactReadModel(self._conn).provenance_bundle(
+                bundle = FactReadModel(
+                    self._conn, source_context=self._source_context
+                ).provenance_bundle(
                     observation_id,
                     cutoff=_utc(cutoff if observed_through is None else observed_through),
                 )
@@ -1168,6 +1179,19 @@ class CanonicalFactResolutionEngine:
                 eligibility = "eligible"
                 reason_code = "sealed_source_publication"
                 lane = "reported_source_publication"
+                if row[15] == "ir-reported-facts-ocr.v1":
+                    try:
+                        FactReadModel(
+                            self._conn, source_context=self._source_context
+                        ).provenance_bundle(
+                            observation_id,
+                            cutoff=_utc(cutoff if observed_through is None else observed_through),
+                        )
+                    except (FactAdmissionError, ValueError):
+                        eligibility = "ineligible"
+                        reason_code = "ir_ocr_source_unavailable"
+                        lane = "ocr_source_exclusion"
+                        publication = None
             filing = None
             if publication is not None:
                 filing = self._conn.execute(

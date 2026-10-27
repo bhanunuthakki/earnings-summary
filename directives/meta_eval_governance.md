@@ -88,18 +88,20 @@ New module `src/llm/workload_inventory.py`:
 @dataclass(frozen=True, slots=True)
 class PurposeWorkload:
     purpose: str
-    incumbent_model: str            # resolved like _model_for: model_pin_overrides -> LLM_MODELS -> DEFAULT_MODEL
+    incumbent_model: (
+        str  # resolved like _model_for: model_pin_overrides -> LLM_MODELS -> DEFAULT_MODEL
+    )
     calls_30d: int
     cost_usd_30d: float
-    distinct_prompts_30d: int       # COUNT(DISTINCT prompt_sha256) — repeat-shape signal
+    distinct_prompts_30d: int  # COUNT(DISTINCT prompt_sha256) — repeat-shape signal
     avg_prompt_chars: float
-    web_scoped: bool                # any scope='web' row: downgrade-INELIGIBLE (structural), A/B-eligible
+    web_scoped: bool  # any scope='web' row: downgrade-INELIGIBLE (structural), A/B-eligible
     cheapest_candidate: str | None  # model_ladder.cheaper_candidates(incumbent)[0] if any
-    headroom_usd_30d: float         # the leverage score, see below
+    headroom_usd_30d: float  # the leverage score, see below
     last_verdicts: tuple[str, ...]  # newest-first per best candidate from model_eval_verdicts,
-                                    # CANDIDATE_ERRORED rows excluded (infra, not quality — #723)
-    eval_modes: tuple[str, ...]     # from evals.coverage (golden/audit/outcome/meta)
-    budget_capped: bool             # llm_budgets row with on_exceed != 'warn'
+    # CANDIDATE_ERRORED rows excluded (infra, not quality — #723)
+    eval_modes: tuple[str, ...]  # from evals.coverage (golden/audit/outcome/meta)
+    budget_capped: bool  # llm_budgets row with on_exceed != 'warn'
 ```
 
 Core query (mirrors the audit SQL; naive-UTC cutoff per repo convention):
@@ -544,14 +546,15 @@ instruction scaffold — the parts identical across all captured renders of that
 ```python
 @dataclass(frozen=True, slots=True)
 class PromptEdit:
-    find: str      # must occur EXACTLY ONCE in every sampled rendered prompt
+    find: str  # must occur EXACTLY ONCE in every sampled rendered prompt
     replace: str
+
 
 def apply_edits(prompt: str, edits: tuple[PromptEdit, ...]) -> str:
     out = prompt
     for e in edits:
         if out.count(e.find) != 1:
-            raise EditAnchorError(e.find[:80])   # reject BEFORE any LLM spend
+            raise EditAnchorError(e.find[:80])  # reject BEFORE any LLM spend
         out = out.replace(e.find, e.replace, 1)
     return out
 ```

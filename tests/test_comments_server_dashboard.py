@@ -214,7 +214,7 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # /source/version/<document_version_id>?node=… citations.
     # Approved retirement also removes optional coaching, packet, ETF-workup,
     # README, memo-generation and automatic-distillation actions.
-    assert len(rules) == 159
+    assert len(rules) == 162
     assert not {
         "start_socratic_questions",
         "socratic_questions_result",

@@ -77,7 +77,9 @@ def preview_meli_inputs(
         facts={},
         assumptions={},
     )
-    snapshot, member_sha, _inventories = input_evidence.verify_source_coverage(conn, probe, cutoff)
+    snapshot, member_sha, _inventories = input_evidence.verify_source_coverage(
+        conn, probe, cutoff, source_context=source_context
+    )
     rows = conn.execute(
         "SELECT member.canonical_metric_cell_id,member.canonical_resolution_revision_id,"
         "cell.metric_id FROM canonical_fact_resolution_snapshot_members member "
@@ -85,7 +87,7 @@ def preview_meli_inputs(
         "WHERE member.resolution_snapshot_id=? ORDER BY member.canonical_metric_cell_id",
         (snapshot.canonical_fact_resolution_snapshot_id,),
     ).fetchall()
-    resolver = CanonicalFactResolutionEngine(conn)
+    resolver = CanonicalFactResolutionEngine(conn, source_context=source_context)
     ontology = MetricOntology(conn)
     matches: dict[str, list[input_evidence.FactBinding]] = {item.key: [] for item in requirements}
     candidates: list[

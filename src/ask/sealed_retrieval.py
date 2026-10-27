@@ -28,6 +28,7 @@ from provenance.scope_identity import (
     validate_source_scope_revision_id,
 )
 from provenance.source_fact_publication import record_commitment
+from provenance.source_read_context import SourceReadContext
 from runtime.deterministic import as_utc as _utc
 from runtime.deterministic import parse_iso8601_utc as _datetime
 from runtime.deterministic import require_sha256
@@ -1430,6 +1431,7 @@ def load_verified_trace_evidence(
     start_number: int = 1,
     local_vector_runtime: LocalVectorRuntimeConfig | None = None,
     verification: RequestVerificationCache | None = None,
+    source_context: SourceReadContext | None = None,
 ) -> tuple[SealedEvidenceItem, ...]:
     """Load prompt/UI DTOs only after strict verification of the persisted trace."""
 
@@ -1477,7 +1479,12 @@ def load_verified_trace_evidence(
         observation_ids = tuple(
             dict.fromkeys(str(row["selected_observation_id"]) for row in fact_entries.values())
         )
-        reads = FactReadModel(conn).provenance_bundles(
+        reader = (
+            FactReadModel(conn)
+            if source_context is None
+            else FactReadModel(conn, source_context=source_context)
+        )
+        reads = reader.provenance_bundles(
             observation_ids,
             cutoff=observed_through,
         )

@@ -23,8 +23,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Fixed ingest_transcripts_state.py retained; adds selected --db while --repo-root, owner-requested and exact receipt IDs remain.",
-      "fingerprint": "f08c9ae3a71fa0425da13817bd4b4d8816a339d93f89e8b0f970c3bdd3ac796b",
-      "line": 786,
+      "fingerprint": "cae3bc3f56397fb13baf7a46b2b3f189c25ad552db76318dc66479aefafa57ec",
+      "line": 843,
       "path": "execution/backfill_transcripts.py",
       "targets": [
         "execution/ingest_transcripts_state.py"
@@ -33,8 +33,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Fixed extract_commitments_from_transcript.py retained; --auto/exact transcript ID remain; --db now uses db.DB_PATH rather than derived state-local portfolio.db.",
-      "fingerprint": "056ffa4f740ecec463ae86b574bbba0a406fb7950a140d07fa945fd821c68f27",
-      "line": 816,
+      "fingerprint": "513a89938d3585430cfc43d86489f15d7b00e79c05b0275caf94de84daae0d11",
+      "line": 873,
       "path": "execution/backfill_transcripts.py",
       "targets": [
         "execution/extract_commitments_from_transcript.py"
@@ -75,8 +75,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "The checked-in _TICKER_SPECIFIC_EXTRACTORS registry selects this fixed NVO script; the managed Python command joins the registry script under execution/.",
-      "fingerprint": "d5aaa4216220c0da03d63fada58c726facbaa677979f408caf69c5ce749b2fbf",
-      "line": 117,
+      "fingerprint": "45d6b197f52773e9dc242d314d3c159c03474059a08caf24903257e32313f821",
+      "line": 155,
       "path": "execution/build_artifacts.py",
       "targets": [
         "execution/extract_nvo_patent_timeline_state.py"
@@ -218,8 +218,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_FMP_SCRIPT still names PROJECT_ROOT/execution/save_fmp_data.py; adds explicit state root/database.",
-      "fingerprint": "9f9ae83a24e93c895c7d3d86292da2b1a2e1485aa85ddb2e0e39d26b83b74452",
-      "line": 485,
+      "fingerprint": "efcae282419ea17e0860c6fac3e32f44d1ee5fef42f58470a336a7751c0133b8",
+      "line": 486,
       "path": "execution/onboard_ticker.py",
       "targets": [
         "execution/save_fmp_data.py"
@@ -228,8 +228,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_BACKFILL_SCRIPT still names PROJECT_ROOT/execution/backfill_transcripts.py; adds state/database and optional --skip-extract for skip_llm.",
-      "fingerprint": "56631d7ce4dcde43daa41a66bdaaa0bc7a6e168d58770e40bc7ed9428610a29c",
-      "line": 507,
+      "fingerprint": "9f777cd8c9ce0206671537608922e89724ed5632f5bfc70f74037e91588729f3",
+      "line": 508,
       "path": "execution/onboard_ticker.py",
       "targets": [
         "execution/backfill_transcripts.py"
@@ -238,8 +238,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "The onboarding path invokes only the fixed transcript-summary processor through managed_python_prefix; ticker, database, state root, and repository root are arguments, not executable selectors.",
-      "fingerprint": "0163662a05bde5c504f53afb294b9cd6690af604bce7cdfe18991e51f9586a02",
-      "line": 584,
+      "fingerprint": "b2acc095827812e432b7d6e5fdb1bb0ec9c3b1b63b23006fca9deca2dd38d4fa",
+      "line": 585,
       "path": "execution/onboard_ticker.py",
       "targets": [
         "execution/process_ir_documents.py"
@@ -290,8 +290,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_bank runs the fixed _BANK_BUILDER via managed_python_prefix.",
-      "fingerprint": "c5aed4f4552fcbe3f6bc411a473ce676f5f29559a783b09892190ce6394f38c4",
-      "line": 900,
+      "fingerprint": "99c3d08efa16361e43086e82181cf95ed50c111524daf237a4af0c8a576b72aa",
+      "line": 915,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_bank_dcf.py"
@@ -300,8 +300,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_holdco runs the fixed _HOLDCO_BUILDER via managed_python_prefix.",
-      "fingerprint": "725df3a3153f2ac364f26187f49da214bec88151584237fdf67e19e362727bee",
-      "line": 945,
+      "fingerprint": "979a260a68d088238c3e6c92f5ce07dc1a7dfacece661e46e88e4603b1550e30",
+      "line": 960,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_holdco_sotp.py"
@@ -310,8 +310,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_fintech_sotp runs the fixed _FINTECH_BUILDER via managed_python_prefix.",
-      "fingerprint": "15bb5101cb173a2bd131f54eb7a286da8a3efab20d77a7a7e321767cb7c187f4",
-      "line": 998,
+      "fingerprint": "c2584c4acf97bdc09c07ff1e5081acbc18cbc84a12b78ab12dc4059bf2b50c65",
+      "line": 1013,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_fintech_sotp.py"
@@ -320,8 +320,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_platform runs the fixed _PLATFORM_BUILDER via managed_python_prefix.",
-      "fingerprint": "78a9c9389a18a29edc93536184746683c16953e4c05c29c9c4bc294dba820fad",
-      "line": 1051,
+      "fingerprint": "f9006e0c0fe80606603efd1856d747bb9d026ab7347668467c29d478db35b2e2",
+      "line": 1074,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_nu_platform_dcf.py"
@@ -330,8 +330,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_meli_sotp runs the fixed _MELI_SOTP_BUILDER via managed_python_prefix.",
-      "fingerprint": "43f03110dae9b35e5994a3b6c45d2b9168afb2b8e3e839215c3f697e7ec925cf",
-      "line": 1145,
+      "fingerprint": "cce7ce50f07e5b90231a5e3cc7737cef586de1e2c1bec13908389d9bf1f86070",
+      "line": 1168,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_meli_platform_dcf.py"
@@ -340,8 +340,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_onon runs only the fixed _ONON_BUILDER execution/build_onon_dcf.py through managed_python_prefix; the explicit hash-bound reviewed input artifact supplies model inputs, not executable code.",
-      "fingerprint": "e88329abcf7a2b54b4a0ac5a08a84a703ab9aa37077d1875d26082a3b6681567",
-      "line": 1238,
+      "fingerprint": "a19811d3e58c0ff0e94bb4e7664235ac10d63b13ab1ea64c8c8285a3d3d2f220",
+      "line": 1261,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_onon_dcf.py"
@@ -350,8 +350,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_builder runs the fixed _BUILDER_SCRIPT via managed_python_prefix.",
-      "fingerprint": "686a0bea793861f3a3cce02b7b5ee7d05756887778651f48ee811f6908f62d66",
-      "line": 1303,
+      "fingerprint": "cf205bb2c7840f5e9150c83509340741a94fd63fcc2b7f286439d37eae4a33ce",
+      "line": 1326,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_redesigned_dcf.py"
@@ -676,8 +676,8 @@
     {
       "disposition": "external_process",
       "evidence": "Provider renders pages with its configured, resolved pdftoppm executable. The descriptor records the executable version and SHA256; this disposition classifies the external process and does not approve an executable pin.",
-      "fingerprint": "315ebd2eae1964b0e05f595e67194de1d3aaa0202c6e1607a10b9861fe0a46fa",
-      "line": 379,
+      "fingerprint": "9b2e7d18a61d559a756ed1bbab2a67cd865a41c5812d6a9914ee2345fe04345e",
+      "line": 419,
       "path": "src/provenance/ocr_extraction.py",
       "targets": [
         "pdftoppm"
@@ -686,8 +686,8 @@
     {
       "disposition": "external_process",
       "evidence": "Provider extracts text with its configured, resolved tesseract executable. The descriptor records the executable version and SHA256; this disposition classifies the external process and does not approve an executable pin.",
-      "fingerprint": "83cb3561425089f3670567ca499ecdb8e33a7cb8af72532cf711a97e2f996b71",
-      "line": 402,
+      "fingerprint": "3d2110e84d6d64df8300dd8a0aca6e6aea7c05a1c08ce02eec09b1af612bbf92",
+      "line": 470,
       "path": "src/provenance/ocr_extraction.py",
       "targets": [
         "tesseract"
@@ -696,8 +696,8 @@
     {
       "disposition": "external_process",
       "evidence": "_binary_version probes the configured, resolved OCR executable with the constructor's fixed version arguments. This is an external process identity probe, not an executable approval.",
-      "fingerprint": "047e33bca82660d15b0d651e87966ca67ccbffc2cb7c0524465964ca197ec4f7",
-      "line": 1409,
+      "fingerprint": "d1ed2be33cef232e14070b781a70d130852eabe8efcbdc4d277b562dff5a6a74",
+      "line": 1685,
       "path": "src/provenance/ocr_extraction.py",
       "targets": [
         "ocr executable"
@@ -960,8 +960,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "The synthetic HTML-release registration regression invokes only fixed execution/sqlite_bootstrap.py and fixed execution/categorize_ir_uploads.py through sys.executable. Its explicit database, source directory and relative root belong to pytest tmp_path. It verifies retained publisher bytes and source URL without live state, network collection or model calls. Arguments cannot select a different script.",
-      "fingerprint": "a9be80fc7e4580eed44692048ed179e1ec9fc8a7c082364755e39957aaa43129",
-      "line": 240,
+      "fingerprint": "d3be7ca8e9a14e5114819d7ebea9b46566178ac27726b24a199c33690e4b41c7",
+      "line": 270,
       "path": "tests/test_ir_autofetch_registration.py",
       "targets": [
         "execution/sqlite_bootstrap.py",
@@ -983,8 +983,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "The private test helper launches the fixed third-party detect_secrets.pre_commit_hook.main entrypoint. Its optional --filter argument loads this fixed repository callback, so retain that local-code edge. Other arguments are test-controlled scanner flags/fixture paths; --no-verify disables provider verification.",
-      "fingerprint": "8a4efa34a6b3c7e4e174c012df24c87de23eb0fca6ece1e52ac492c1dd351040",
-      "line": 217,
+      "fingerprint": "d994679e8531b07603b4d3d9bfd984a658428d55fb8e873a072dc8a90ea712d7",
+      "line": 244,
       "path": "tests/test_quality_hash_filter.py",
       "targets": [
         ".github/scripts/quality_hash_filter.py"
@@ -1014,7 +1014,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "bc7d6c0f69fffcda7404b3f41a3343db2452a425864b3cdba148327acd1ec7dd",
+      "source_sha256": "eb109dcf7dcb433b204e4a05eaa7762e7e9cd05b5e33777a5d88bdf1b9f4b9f5",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

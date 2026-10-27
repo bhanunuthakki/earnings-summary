@@ -851,8 +851,15 @@ def real_inputs(
     seal_model_projection_context(conn, snapshot)
 
     def coverage(
-        _conn: sqlite3.Connection, _request: evidence.ModelInputRequest, _cutoff: datetime
+        _conn: sqlite3.Connection,
+        _request: evidence.ModelInputRequest,
+        _cutoff: datetime,
+        *,
+        source_context: evidence.SourceReadContext | None = None,
     ) -> tuple[ResearchSnapshotRequest, str, tuple[str, ...]]:
+        # Direct preview tests pass SEC roots, while the CLI supplies product roots.
+        # The byte-verification assertions below exercise each supplied root.
+        del source_context
         return snapshot, "b" * 64, ("inventory",)
 
     monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
@@ -877,8 +884,13 @@ def shared_revenue_inputs(
     seal_model_projection_context(conn, snapshot)
 
     def coverage(
-        _conn: sqlite3.Connection, _request: evidence.ModelInputRequest, _cutoff: datetime
+        _conn: sqlite3.Connection,
+        _request: evidence.ModelInputRequest,
+        _cutoff: datetime,
+        *,
+        source_context: evidence.SourceReadContext | None = None,
     ) -> tuple[ResearchSnapshotRequest, str, tuple[str, ...]]:
+        del source_context
         return snapshot, "b" * 64, ("inventory",)
 
     monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
@@ -1088,6 +1100,7 @@ def test_model_input_reviewed_pdf_pages(
                 # Isolate the source-membership call: skipping the earlier
                 # observation check must still reject the exact evidence node.
                 shared_guard = evidence.require_included_pdf_pages
+                source_context_fixture = source_context
 
                 def node_only_guard(
                     conn: sqlite3.Connection,
@@ -1096,9 +1109,17 @@ def test_model_input_reviewed_pdf_pages(
                     evidence_node_ids: tuple[str, ...] = (),
                     observation_ids: tuple[str, ...] = (),
                     cutoff: datetime,
+                    source_context: evidence.SourceReadContext | None = None,
                 ) -> None:
                     del observation_ids
-                    shared_guard(conn, scopes, evidence_node_ids=evidence_node_ids, cutoff=cutoff)
+                    assert source_context == source_context_fixture
+                    shared_guard(
+                        conn,
+                        scopes,
+                        evidence_node_ids=evidence_node_ids,
+                        cutoff=cutoff,
+                        source_context=source_context,
+                    )
 
                 monkeypatch.setattr(evidence, "require_included_pdf_pages", node_only_guard)
                 with pytest.raises(
@@ -1706,7 +1727,14 @@ def _coverage_fixture(monkeypatch: pytest.MonkeyPatch) -> sqlite3.Connection:
         (NOW.isoformat(), NOW.isoformat()),
     )
 
-    def verify(_conn: sqlite3.Connection, _snapshot_id: str) -> SimpleNamespace:
+    def verify(
+        _conn: sqlite3.Connection,
+        _snapshot_id: str,
+        *,
+        source_context: evidence.SourceReadContext | None = None,
+    ) -> SimpleNamespace:
+        if source_context is not None:
+            assert source_context.ocr_state_root is not None
         return SimpleNamespace(member_set_sha256="b" * 64)
 
     monkeypatch.setattr(evidence, "verify_research_snapshot", verify)
@@ -2159,9 +2187,13 @@ def test_input_preview_rejects_missing_source_coverage_before_reading_candidates
         _conn: sqlite3.Connection,
         _request: evidence.ModelInputRequest,
         _cutoff: datetime,
+        *,
+        source_context: evidence.SourceReadContext | None = None,
     ) -> tuple[ResearchSnapshotRequest, str, tuple[str, ...]]:
+        assert source_context == source_context_fixture
         raise evidence.InputEvidenceError("current_sec_inventory_missing")
 
+    source_context_fixture = source_context
     monkeypatch.setattr(evidence, "verify_source_coverage", unavailable)
     with pytest.raises(evidence.InputEvidenceError, match="current_sec_inventory_missing"):
         preview_meli_inputs(
@@ -2184,6 +2216,20 @@ def test_input_preview_cli_reads_explicit_database_and_preserves_existing_output
     database = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
     output = tmp_path / "preview.json"
     monkeypatch.setattr(preview_cli, "PROJECT_ROOT", tmp_path)
+    original_coverage = evidence.verify_source_coverage
+    seen_contexts: list[evidence.SourceReadContext | None] = []
+
+    def coverage(
+        source_conn: sqlite3.Connection,
+        probe: evidence.ModelInputRequest,
+        cutoff: datetime,
+        *,
+        source_context: evidence.SourceReadContext | None = None,
+    ) -> tuple[ResearchSnapshotRequest, str, tuple[str, ...]]:
+        seen_contexts.append(source_context)
+        return original_coverage(source_conn, probe, cutoff, source_context=source_context)
+
+    monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
     arguments = [
         "--state-root",
         str(source_context.content_roots[0].parents[2]),
@@ -2199,6 +2245,10 @@ def test_input_preview_cli_reads_explicit_database_and_preserves_existing_output
         str(output),
     ]
     assert preview_cli.main(arguments) == 0
+    product_context = evidence.SourceReadContext.for_product_state_root(
+        source_context.content_roots[0].parents[2]
+    )
+    assert seen_contexts == [product_context, product_context]
     result = json.loads(output.read_text())
     assert result["model_ready"] is False
     assert len(result["facts"]) == 28

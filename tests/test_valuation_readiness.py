@@ -410,7 +410,8 @@ def test_onon_readiness_replays_bridge_outputs_and_explicit_review(
         ),
     )
 
-    def load(*args: object) -> DcfGradeEvidence:
+    def load(*args: object, run_id: int | None = None) -> DcfGradeEvidence:
+        assert run_id is None
         return evidence
 
     def numeric(*args: object) -> dict[str, float]:

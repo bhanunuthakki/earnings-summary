@@ -102,6 +102,33 @@ HASH64_KEYS = (
 UNRECOGNIZED_MEMBER = "unrecognized_hash"
 
 
+def test_ir_authority_golden_identity_accepts_only_its_named_digest() -> None:
+    digest = hashlib.sha256(b"public authority identity fixture").hexdigest()
+    assert FILTER.is_quality_evidence_hash(
+        "tests/test_ir_authority_capture.py",
+        f'    expected_ir_sha256 = "{digest}"',
+    )
+
+
+@pytest.mark.parametrize(
+    ("filename", "line"),
+    (
+        ("other/tests/test_ir_authority_capture.py", f'expected_ir_sha256 = "{"a" * 64}"'),
+        ("./tests/test_ir_authority_capture.py", f'expected_ir_sha256 = "{"a" * 64}"'),
+        ("tests/test_ir_authority_capture.py", f'credential = "{"a" * 64}"'),
+        ("tests/test_ir_authority_capture.py", f'expected_ir_sha256 = "{"A" * 64}"'),
+        ("tests/test_ir_authority_capture.py", f'expected_ir_sha256 = "{"a" * 63}"'),
+        ("tests/test_ir_authority_capture.py", f'expected_ir_sha256 = "{"a" * 65}"'),
+        (
+            "tests/test_ir_authority_capture.py",
+            f'expected_ir_sha256 = "{"a" * 64}"; credential = "other"',
+        ),
+    ),
+)
+def test_ir_authority_golden_identity_does_not_mask_other_content(filename: str, line: str) -> None:
+    assert not FILTER.is_quality_evidence_hash(filename, line)
+
+
 @pytest.mark.parametrize("filename", CANONICAL_PATHS)
 @pytest.mark.parametrize("key", HASH40_KEYS)
 def test_all_canonical_paths_accept_each_40_character_hash_key(filename: str, key: str) -> None:
@@ -600,17 +627,37 @@ PDF_IDENTITY_HASH_KEYS = {
     "current_source_sha256": 64,
     "baseline_source_sha256": 64,
 }
+OCR_GROWTH = "docs/quality/ocr-reviewed-facts-growth-20261024.json"
+OCR_GROWTH_HASH_KEYS = {
+    "source_commit": 40,
+    "independent_review_sha256": 64,
+    "baseline_before_sha256": 64,
+    "measurement_source_sha256": 64,
+    "reachability_parser_source_sha256": 64,
+    "old_fingerprint": 64,
+    "new_fingerprint": 64,
+}
 
 
-@pytest.mark.parametrize(("key", "length"), PDF_IDENTITY_HASH_KEYS.items())
+@pytest.mark.parametrize(
+    ("filename", "key", "length"),
+    [
+        (filename, key, length)
+        for filename, keys in (
+            (PDF_IDENTITY_GROWTH, PDF_IDENTITY_HASH_KEYS),
+            (OCR_GROWTH, OCR_GROWTH_HASH_KEYS),
+        )
+        for key, length in keys.items()
+    ],
+)
 @pytest.mark.parametrize("delimiter", (":", "="))
 def test_pdf_identity_growth_accepts_only_exact_digest_members(
-    key: str, length: int, delimiter: str
+    filename: str, key: str, length: int, delimiter: str
 ) -> None:
     digest = hashlib.sha256(b"public PDF identity quality fixture").hexdigest()[:length]
     line = f'  "{key}" {delimiter} "{digest}",\n'
-    assert FILTER.is_quality_evidence_hash(PDF_IDENTITY_GROWTH, line)
-    for path in ("other/" + PDF_IDENTITY_GROWTH, "./" + PDF_IDENTITY_GROWTH):
+    assert FILTER.is_quality_evidence_hash(filename, line)
+    for path in ("other/" + filename, "./" + filename):
         assert not FILTER.is_quality_evidence_hash(path, line)
     for malformed in (
         line.replace(key, "unrecognized_hash"),
@@ -619,19 +666,22 @@ def test_pdf_identity_growth_accepts_only_exact_digest_members(
         line.replace(digest, digest[:-1]),
         line.rstrip() + ' "token": "secret"',
     ):
-        assert not FILTER.is_quality_evidence_hash(PDF_IDENTITY_GROWTH, malformed)
+        assert not FILTER.is_quality_evidence_hash(filename, malformed)
 
 
-def test_actual_detector_preserves_secrets_adjacent_to_pdf_identity_hashes(tmp_path: Path) -> None:
-    fixture = tmp_path / PDF_IDENTITY_GROWTH
+@pytest.mark.parametrize("filename", (PDF_IDENTITY_GROWTH, OCR_GROWTH))
+def test_actual_detector_preserves_secrets_adjacent_to_pdf_identity_hashes(
+    tmp_path: Path, filename: str
+) -> None:
+    fixture = tmp_path / filename
     fixture.parent.mkdir(parents=True)
-    original = (ROOT / PDF_IDENTITY_GROWTH).read_text(encoding="utf-8")
+    original = (ROOT / filename).read_text(encoding="utf-8")
     fixture.write_text(original, encoding="utf-8")
-    assert _run_detect_secrets(tmp_path, PDF_IDENTITY_GROWTH, filtered=False).returncode == 1
-    assert _run_detect_secrets(tmp_path, PDF_IDENTITY_GROWTH, filtered=True).returncode == 0
+    assert _run_detect_secrets(tmp_path, filename, filtered=False).returncode == 1
+    assert _run_detect_secrets(tmp_path, filename, filtered=True).returncode == 0
     digest = hashlib.sha256(b"public adjacent PDF scanner fixture").hexdigest()
     for key, value in ((SCANNER_FIELD_NAME, "ghp_" + digest[:36]), (UNRECOGNIZED_MEMBER, digest)):
         payload = json.loads(original)
         payload[key] = value
         fixture.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        assert _run_detect_secrets(tmp_path, PDF_IDENTITY_GROWTH, filtered=True).returncode == 1
+        assert _run_detect_secrets(tmp_path, filename, filtered=True).returncode == 1

@@ -783,19 +783,22 @@ def _load_topics_cache(repo_root: Path, ticker: str, cache_key: str) -> list[dic
 def _save_topics_cache(
     repo_root: Path, ticker: str, cache_key: str, items: list[dict[str, str]]
 ) -> None:
+    from report.file_capture import hold_capture_write_set
+
     path = _topics_cache_path(repo_root, ticker)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    existing: dict[str, object] = {"by_key": {}}
-    if path.exists():
-        try:
-            loaded = cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
-            if isinstance(loaded.get("by_key"), dict):
-                existing = loaded
-        except (OSError, json.JSONDecodeError):
-            pass
-    by_key = cast("dict[str, object]", existing["by_key"])
-    by_key[cache_key] = items
-    path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    with hold_capture_write_set(repo_root, "capture-qa-topics"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existing: dict[str, object] = {"by_key": {}}
+        if path.exists():
+            try:
+                loaded = cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
+                if isinstance(loaded.get("by_key"), dict):
+                    existing = loaded
+            except (OSError, json.JSONDecodeError):
+                pass
+        by_key = cast("dict[str, object]", existing["by_key"])
+        by_key[cache_key] = items
+        path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
 
 
 def _parse_topics_response(raw: str) -> list[dict[str, str]]:

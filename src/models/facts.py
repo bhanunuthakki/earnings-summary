@@ -11,6 +11,7 @@ import json
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import cast
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -141,17 +142,59 @@ class DerivedInputRef(BaseModel):
     existing inputs[] shape, promoted into the typed locator union."""
 
     ref: str
+    fact_table: str | None = None
     fact_id: int | None = None
+    fact_revision: int | None = None
     item: str
     period_end: str | None = None
     doc_id: int | None = None
     tier: str | None = None
     observation_id: str | None = None
+    resolution_id: str | None = None
+    resolution_revision: int | None = None
     resolution_revision_id: str | None = None
     fact_cell_id: str | None = None
     metric_definition_revision_id: str | None = None
     observation_payload_sha256: str | None = None
     document_version_id: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_legacy_canonical_namespace(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        raw = cast("dict[str, object]", value)
+        if raw.get("ref") != "legacy_canonical_fact":
+            return raw
+        identity = {
+            "fact_table",
+            "fact_id",
+            "fact_revision",
+            "observation_id",
+            "resolution_id",
+            "resolution_revision",
+            "doc_id",
+            "document_version_id",
+        }
+        allowed = identity | {"ref", "item", "period_end", "tier"}
+        if set(raw) - allowed or not (identity | {"item"}).issubset(raw):
+            raise ValueError("legacy canonical input has missing required or extra fields")
+        if raw["fact_table"] not in ("financial_facts", "kpi_facts"):
+            raise ValueError("legacy canonical input has invalid fact table")
+        for field in ("fact_id", "fact_revision", "resolution_revision", "doc_id"):
+            field_value = raw[field]
+            if not isinstance(field_value, int) or type(field_value) is not int or field_value <= 0:
+                raise ValueError(f"legacy canonical input has invalid {field}")
+        for field in ("observation_id", "resolution_id", "document_version_id"):
+            if type(raw[field]) is not str or not raw[field]:
+                raise ValueError(f"legacy canonical input has invalid {field}")
+        if type(raw["item"]) is not str or not raw["item"]:
+            raise ValueError("legacy canonical input has invalid item")
+        if "period_end" in raw and (type(raw["period_end"]) is not str or not raw["period_end"]):
+            raise ValueError("legacy canonical input has invalid period_end")
+        if "tier" in raw and raw["tier"] is not None and type(raw["tier"]) is not str:
+            raise ValueError("legacy canonical input has invalid tier")
+        return raw
 
 
 class DerivedRef(BaseModel):

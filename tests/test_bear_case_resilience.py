@@ -145,7 +145,16 @@ def test_build_serves_cache_without_llm(tmp_path: Path, monkeypatch: pytest.Monk
     failure modes sat on disk."""
     cache = tmp_path / "data" / "bear_case"
     cache.mkdir(parents=True)
-    vars(bear_case)["_cache_bear_response"]("NU", tmp_path, _VALID_RESPONSE)
+    digest = vars(bear_case)["_bear_inputs_sha256"](
+        ticker="NU",
+        repo_root=tmp_path,
+        thesis=_thesis(),
+        financials=FinancialsSection(status=SectionStatus.MISSING_DATA),
+        segments=SegmentsSection(status=SectionStatus.MISSING_DATA),
+        earnings=EarningsSection(status=SectionStatus.MISSING_DATA),
+        conn=None,
+    )
+    vars(bear_case)["_cache_bear_response"]("NU", tmp_path, _VALID_RESPONSE, input_digest=digest)
 
     # The LLM must NOT be called when a fresh cache exists.
     def _boom(*args: object, **kwargs: object) -> str:

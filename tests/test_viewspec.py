@@ -10,12 +10,16 @@ it (json_valid CHECK + (user_id, name) uniqueness).
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from provenance.evidence_ledger import EvidenceLedger, EvidenceNode, ExtractionRun
+from provenance.financial_fact_resolution import capture_fact_row_observation, resolve_fact_row
 from report.models import CellSource
 from tests.kpi_semantic_support import admit_all_kpi_facts
 from tests.test_report_canonical_financials import database as database
@@ -269,6 +273,49 @@ def canonical_db(database: sqlite3.Connection, tmp_path: Path) -> Path:
         "INSERT INTO documents(id,ticker,source_type,doc_type,file_path,sha256,fetched_at,fetch_status,raw_bytes_size) VALUES(2,'TST','fmp','fmp_income_statement','synthetic','synthetic','2025-12-31','ok',1)"
     )
     seed_table(database, rows, ticker="TST", legacy_document_id=2)
+    database.row_factory = sqlite3.Row
+    source = database.execute(
+        "SELECT version.document_version_id, version.blob_sha256, blob.byte_size "
+        "FROM evidence_document_versions AS version "
+        "JOIN evidence_content_blobs AS blob ON blob.sha256=version.blob_sha256 "
+        "WHERE version.legacy_document_id=2 AND version.ticker='TST'"
+    ).fetchone()
+    assert source is not None
+    database.execute(
+        "UPDATE documents SET sha256=?, raw_bytes_size=? WHERE id=2", (source[1], source[2])
+    )
+    stamp = datetime.now(UTC)
+    config_sha = hashlib.sha256(b"viewspec-kpi-fixture").hexdigest()
+    ledger = EvidenceLedger(database)
+    ledger.persist(
+        ExtractionRun(
+            extraction_run_id="viewspec-kpi-run",
+            idempotency_key="viewspec-kpi-run",
+            document_version_id=str(source[0]),
+            input_sha256=str(source[1]),
+            extractor_name="test-fixture",
+            extractor_config_sha256=config_sha,
+            extractor_code_version="test@1",
+            output_sha256=config_sha,
+            started_at=stamp,
+            completed_at=stamp,
+            outcome="succeeded",
+        )
+    )
+    ledger.persist(
+        EvidenceNode(
+            node_id="viewspec-kpi-document",
+            evidence_key="viewspec-kpi-document",
+            revision=1,
+            extraction_run_id="viewspec-kpi-run",
+            parent_node_id=None,
+            supersedes_node_id=None,
+            node_kind="document",
+            text="filing bytes",
+            locator=None,
+            recorded_at=stamp,
+        )
+    )
     definition = database.execute(
         "INSERT INTO kpi_definitions(ticker,name,unit,primary_source) VALUES('TST','ROE','percent','synthetic')"
     )
@@ -281,15 +328,19 @@ def canonical_db(database: sqlite3.Connection, tmp_path: Path) -> Path:
         ],
     )
     admit_all_kpi_facts(database)
-    # This renderer fixture covers admitted KPI units beside real canonical
-    # financial points. The production KPI cutover view needs publication
-    # receipts that are outside this formatting fixture (as in cockpit tests).
-    database.execute("DROP VIEW IF EXISTS v_kpi_facts_resolved_current")
-    database.execute(
-        "CREATE VIEW v_kpi_facts_resolved_current AS "
-        "SELECT fact.*, CAST(NULL AS TEXT) AS reported_observation_id "
-        "FROM kpi_facts AS fact WHERE ticker='TST'"
-    )
+    # Keep the real cutover view. The source table and semantic context are
+    # only usable after their immutable observations have a resolved identity.
+    for (fact_id,) in database.execute(
+        "SELECT id FROM kpi_facts WHERE ticker='TST' ORDER BY id"
+    ).fetchall():
+        assert capture_fact_row_observation(
+            database,
+            fact_table="kpi_facts",
+            fact_row_id=int(fact_id),
+            recorded_at=datetime.now(UTC),
+        )
+        result = resolve_fact_row(database, fact_table="kpi_facts", fact_row_id=int(fact_id))
+        assert result is not None and result.resolution_status == "resolved"
     database.commit()
     return tmp_path / "source-fact-repository.db"
 

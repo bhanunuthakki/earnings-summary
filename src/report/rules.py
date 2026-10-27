@@ -28,6 +28,8 @@ from typing import cast
 
 from pydantic import BaseModel, Field
 
+from report.file_capture import read_captured_text
+
 _GLOBAL_DENYLIST_PATTERNS: list[str] = [
     "[Abstract]",
     "Reconciling items",
@@ -80,10 +82,14 @@ def load_rules(ticker: str, repo_root: Path) -> TickerRules:
 
 def _read_rules_block(ticker: str, repo_root: Path) -> dict[str, object]:
     path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
-    if not path.exists():
+    try:
+        raw_text = read_captured_text(repo_root, path)
+    except FileNotFoundError:
         return {}
-    with open(path, encoding="utf-8") as f:
-        holdings = json.load(f)
+    try:
+        holdings = json.loads(raw_text)
+    except (json.JSONDecodeError, OSError):
+        return {}
     if not isinstance(holdings, dict):
         return {}
     rules: object = cast("dict[object, object]", holdings).get("data_rules") or {}

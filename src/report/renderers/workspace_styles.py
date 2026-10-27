@@ -136,7 +136,7 @@ body { font-family: var(--sans); font-size: var(--fs-body); line-height: 1.5; di
   color: var(--muted); background: transparent;
   opacity: 0.65; user-select: none;
 }
-.src-chip:hover, .src-pop[open] .src-chip { opacity: 1; }
+.src-chip:hover, .src-chip:focus-visible, .src-pop:focus-within .src-chip, .src-pop[open] .src-chip { opacity: 1; }
 .src-sec-official { color: var(--ok); border-color: var(--ok); }
 .src-fmp-normalized { color: var(--accent); border-color: var(--accent); }
 .src-llm-extracted { color: var(--warn); border-color: var(--warn); }
@@ -155,6 +155,10 @@ body { font-family: var(--sans); font-size: var(--fs-body); line-height: 1.5; di
 .src-pop-row.mono { font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted); }
 .src-pop-locator { word-break: break-all; }
 .src-pop-row a { color: var(--accent); }
+.src-pop:hover > .src-pop-body, .src-pop:focus-within > .src-pop-body { display: block; }
+.src-pop-actions { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-1); padding-top: var(--sp-1); border-top: var(--bw-thin) solid var(--hairline); }
+.src-pop-action { font-weight: 600; text-decoration: none; }
+.src-pop-action:hover, .src-pop-action:focus-visible { text-decoration: underline; }
 /* S2 PR3: unresolved validation issues + derived-from input rows. */
 .src-pop-warn { color: var(--warn); }
 .src-pop-input { display: flex; align-items: center; gap: var(--sp-1); }
@@ -2155,6 +2159,12 @@ DCF_CSS = """
 .dcf-edit-field input.dcf-injected { outline: var(--bw-thick) solid var(--accent); outline-offset: var(--bw-thin);
   background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .dcf-inject-btn { color: var(--accent); margin-left: var(--sp-1); white-space: nowrap; }
+.dcf-report-sync { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-2); margin-bottom: var(--sp-2); padding: var(--sp-2) var(--sp-3); }
+.dcf-report-sync-status { font-size: var(--fs-caption); color: var(--fg-soft); }
+.dcf-report-sync-status[data-sync-state="stale"], .dcf-report-sync-status[data-sync-state="candidate_blocked"] { color: var(--warn); }
+.dcf-report-sync-status[data-sync-state="current"], .dcf-report-sync-status[data-sync-state="candidate_ready"] { color: var(--ok); }
+.dcf-report-sync-status[data-sync-state="error"] { color: var(--bad); }
+.dcf-report-sync-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
 """
 READER_OVERRIDE_CSS = """
 :host {

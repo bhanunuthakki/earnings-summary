@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from models.companies import ListType
 from models.documents import DocType, SourceType
+from pipeline.source_policy import ReportedPeriodStatus, ReportedPeriodWindow
 from provenance.source_regime import (
     SourceRegime,
     SourceRegimeReceiptIdentity,
@@ -28,6 +29,7 @@ from transcripts.acquisition_semantics import (
     TranscriptProvider,
     TranscriptReportingStatus,
     TranscriptStoredTarget,
+    authorize_transcript_acquisition_request,
     transcript_authorization_idempotency_key,
     validate_transcript_acquisition_authorization,
 )
@@ -141,6 +143,56 @@ def test_valid_authorization_is_deterministic_and_dormant() -> None:
         transcript_authorization_idempotency_key(request)
     )
     assert authorization.idempotency_key.startswith("transcript:")
+
+
+def test_current_transcript_receipt_keeps_unknown_source_window_pending() -> None:
+    request = _request().model_copy(update={"schema_version": "transcript-acquisition-request@2"})
+    target = _stored_target(request).model_copy(
+        update={
+            "reported_window": ReportedPeriodWindow(
+                status=ReportedPeriodStatus.UNKNOWN, reason="source_inventory_missing"
+            ),
+            "reporting_status": TranscriptReportingStatus.PENDING,
+        }
+    )
+    receipt = authorize_transcript_acquisition_request(request, target)
+
+    assert receipt.schema_version == "transcript-acquisition-authorization@2"
+    assert receipt.status is TranscriptAuthorizationStatus.DENIED
+    assert receipt.reason is TranscriptAuthorizationReason.REPORTED_QUARTER_WINDOW_PENDING
+    assert validate_transcript_acquisition_authorization(receipt) == receipt
+    assert receipt.idempotency_key != transcript_authorization_idempotency_key(_request())
+    forged = target.model_copy(update={"reporting_status": TranscriptReportingStatus.OUT_OF_WINDOW})
+    with pytest.raises(ValidationError):
+        TranscriptStoredTarget.model_validate(forged.model_dump(mode="python"))
+
+
+def test_current_transcript_receipt_uses_fifth_source_reported_period() -> None:
+    request = _request().model_copy(update={"schema_version": "transcript-acquisition-request@2"})
+    target = _stored_target(request).model_copy(
+        update={
+            "fiscal_year_end": "12-31",
+            "reported_window": ReportedPeriodWindow(
+                status=ReportedPeriodStatus.COMPLETE,
+                period_ends=(
+                    date(2026, 6, 30),
+                    date(2026, 3, 31),
+                    date(2025, 12, 31),
+                    date(2025, 9, 30),
+                    date(2025, 6, 30),
+                ),
+                snapshot_ids=("sec-snapshot", "ir-snapshot"),
+                fiscal_year_end="12-31",
+                proof_sha256="a" * 64,
+                reason="sealed_source_population",
+            ),
+        }
+    )
+    receipt = authorize_transcript_acquisition_request(request, target)
+
+    assert receipt.status is TranscriptAuthorizationStatus.AUTHORIZED
+    assert validate_transcript_acquisition_authorization(receipt) == receipt
+    assert "reported_window" not in _stored_target(_request()).model_dump(mode="json")
 
 
 def test_request_issuer_ir_cannot_carry_youtube_provenance() -> None:

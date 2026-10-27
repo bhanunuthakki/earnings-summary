@@ -688,3 +688,89 @@ def test_chain_writer_close_observer_failure_releases_gate(
         recovered = connect_sqlite(path, role=SQLiteConnectionRole.WRITER, schema_preflight=False)
         recovered.close()
     assert not writer_gate_path_for(path).exists()
+
+
+class _ProbeManagedConnection(ManagedConnection):
+    """Read-only extension seam probe; the policy itself must stay intact."""
+
+
+@pytest.mark.parametrize(
+    "role",
+    [SQLiteConnectionRole.READ_ONLY, SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY],
+)
+def test_connection_factory_is_honored_for_read_only_roles(
+    tmp_path: Path, role: SQLiteConnectionRole
+) -> None:
+    path = tmp_path / "portfolio.db"
+    writer = sqlite3.connect(path)
+    try:
+        writer.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
+        writer.execute("INSERT INTO sample VALUES (1)")
+        writer.commit()
+    finally:
+        writer.close()
+
+    conn = connect_sqlite(
+        path,
+        role=role,
+        connection_factory=_ProbeManagedConnection,
+    )
+    try:
+        assert isinstance(conn, _ProbeManagedConnection)
+        # The full connection policy still runs on the factory connection.
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30_000
+        assert conn.execute("SELECT id FROM sample").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_connection_factory_defaults_to_managed_connection(tmp_path: Path) -> None:
+    path = tmp_path / "portfolio.db"
+    writer = sqlite3.connect(path)
+    try:
+        writer.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
+        writer.commit()
+    finally:
+        writer.close()
+
+    conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
+    try:
+        assert type(conn) is ManagedConnection
+    finally:
+        conn.close()
+
+
+def test_connection_factory_refuses_writer_role(tmp_path: Path) -> None:
+    path = tmp_path / "portfolio.db"
+    writer = sqlite3.connect(path)
+    try:
+        writer.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
+        writer.commit()
+    finally:
+        writer.close()
+
+    with pytest.raises(ValueError, match="supported only for read-only roles"):
+        connect_sqlite(
+            path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=False,
+            connection_factory=_ProbeManagedConnection,
+        )
+
+
+def test_connection_factory_refuses_non_managed_subclass(tmp_path: Path) -> None:
+    path = tmp_path / "portfolio.db"
+    writer = sqlite3.connect(path)
+    try:
+        writer.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
+        writer.commit()
+    finally:
+        writer.close()
+
+    with pytest.raises(TypeError, match="must be a ManagedConnection subclass"):
+        connect_sqlite(
+            path,
+            role=SQLiteConnectionRole.READ_ONLY,
+            connection_factory=sqlite3.Connection,
+        )

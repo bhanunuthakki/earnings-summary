@@ -156,7 +156,10 @@ op.create_table(
     # 'Leases - Future Minimum Lease Payments (Details) - USD ($) $ in Millions'.
     sa.Column("extracted_at", sa.DateTime(), nullable=False),
     sa.UniqueConstraint(
-        "ticker", "fiscal_year", "lease_type", "ladder_year",
+        "ticker",
+        "fiscal_year",
+        "lease_type",
+        "ladder_year",
         name="uq_lease_commitments",
     ),
 )
@@ -279,12 +282,12 @@ def extract(
     *,
     ticker: str,
     fiscal_year: int | None,
-    fmp_payload: dict[str, object] | None,    # the parsed form_10k JSON (None for narrative-only kinds)
-    sec_text: FilingTextResult | None,         # the cached SEC text (None when not needed)
+    fmp_payload: dict[str, object]
+    | None,  # the parsed form_10k JSON (None for narrative-only kinds)
+    sec_text: FilingTextResult | None,  # the cached SEC text (None when not needed)
     db_path: Path,
     repo_root: Path,
-) -> ExtractionOutcome:
-    ...
+) -> ExtractionOutcome: ...
 ```
 
 `ExtractionOutcome` is a dataclass with `n_rows_proposed`, `n_rows_inserted`, `n_extractions_logged`, `n_mapping_proposals`, `status ∈ {'ok','skipped','no_data','llm_failed','parse_failed'}`, `notes`.
@@ -310,6 +313,7 @@ def iter_xbrl_table(
     that scope this concrete row. The first item in `section` provides the header
     label + unit; the second (if present) provides `items` (period column labels).
     """
+
 
 def parse_units(section_title: str) -> Units:
     """Returns Units(currency='USD', scale='millions') by regex over the title

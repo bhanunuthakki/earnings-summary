@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from runtime.deterministic import as_utc as _utc
 from runtime.deterministic import canonical_json_model as canonical_json
+from sqlite_runtime import ManagedConnection
 
 PublicationMemberKind = Literal[
     "fact_cell",
@@ -557,9 +558,10 @@ _publication_read_scope: ContextVar[_PublicationReadScope | None] = ContextVar(
 def publication_verification_scope(conn: sqlite3.Connection) -> Generator[None]:
     """Reuse full verification inside one synchronous read snapshot.
 
-    Individual membership and admission checks still run. A savepoint detects
-    transaction replacement before a result can escape; writes invalidate the
-    scope. No verification survives the call or crosses connection boundaries.
+    Individual membership and admission checks still run. A protected caller
+    snapshot is borrowed without transaction commands. Otherwise a savepoint
+    detects transaction replacement before a result can escape. Writes invalidate
+    the scope. No verification survives the call or crosses connection boundaries.
     At most 4096 distinct publication/K/O keys may be verified. An additional
     key aborts the operation without eviction or repeated verification.
     """
@@ -569,12 +571,18 @@ def publication_verification_scope(conn: sqlite3.Connection) -> Generator[None]:
         yield
         existing.assert_unchanged()
         return
+    borrow_protected_snapshot = (
+        isinstance(conn, ManagedConnection) and conn.protected_read_snapshot_active
+    )
     owns_snapshot = not conn.in_transaction
+    if borrow_protected_snapshot and owns_snapshot:
+        raise RuntimeError("protected publication snapshot is not active")
     if owns_snapshot:
         conn.execute("BEGIN")
     scope = _PublicationReadScope(conn)
     try:
-        conn.execute("SAVEPOINT publication_verification_scope")
+        if not borrow_protected_snapshot:
+            conn.execute("SAVEPOINT publication_verification_scope")
     except BaseException:
         if owns_snapshot:
             conn.rollback()
@@ -585,18 +593,21 @@ def publication_verification_scope(conn: sqlite3.Connection) -> Generator[None]:
     try:
         yield
         scope.assert_unchanged()
-        try:
-            conn.execute("RELEASE SAVEPOINT publication_verification_scope")
-        except sqlite3.OperationalError as exc:
-            original_snapshot = False
-            raise RuntimeError("publication verification scope changed transaction state") from exc
+        if not borrow_protected_snapshot:
+            try:
+                conn.execute("RELEASE SAVEPOINT publication_verification_scope")
+            except sqlite3.OperationalError as exc:
+                original_snapshot = False
+                raise RuntimeError(
+                    "publication verification scope changed transaction state"
+                ) from exc
         completed = True
     finally:
         _publication_read_scope.reset(token)
         scope.verified.clear()
         if conn.row_factory is not scope.initial_factory:
             conn.row_factory = scope.initial_factory
-        if not completed and conn.in_transaction:
+        if not completed and conn.in_transaction and not borrow_protected_snapshot:
             try:
                 conn.execute("ROLLBACK TO SAVEPOINT publication_verification_scope")
                 conn.execute("RELEASE SAVEPOINT publication_verification_scope")

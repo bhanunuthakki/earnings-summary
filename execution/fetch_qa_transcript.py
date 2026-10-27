@@ -33,149 +33,58 @@ from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
-SRC_DIR = PROJECT_ROOT / "src"
-__all__ = [
-    "COMBINED_SOURCE_REGIME_IDENTITY",
-    "SOURCES",
-    "TRANSCRIPT_ACQUISITION_POLICY_VERSION",
-    "AggregatorHit",
-    "AggregatorSource",
-    "AuthorizedTranscriptArtifact",
-    "ExistingArtifactBehavior",
-    "SQLiteConnectionRole",
-    "TranscriptAcquisitionAuthorization",
-    "TranscriptAcquisitionDeniedError",
-    "TranscriptAcquisitionEntrypoint",
-    "TranscriptAcquisitionRequest",
-    "TranscriptAuthorizationStatus",
-    "TranscriptProvider",
-    "authorize_transcript_request",
-    "connect_sqlite",
-    "db",
-    "index_manager",
-    "install_transcript_output",
-    "issuer_transcript_source_url_is_authorized",
-    "load_authorized_transcript_replay",
-    "persist_authorized_transcript_artifact",
-    "project_root_for_database",
-    "read_authorized_transcript",
-    "resolve_ticker",
-    "stage_authorized_payload",
-    "transcript_acquisition_receipt_id",
-    "validate_synthesized_transcript",
-]
-if TYPE_CHECKING:
-    import db
-    import index_manager
-    from aggregator_sources import SOURCES, AggregatorHit, AggregatorSource
-    from alias_manager import resolve_ticker
-    from pipeline.transcript_acquisition import (
-        COMBINED_SOURCE_REGIME_IDENTITY,
-        AuthorizedTranscriptArtifact,
-        TranscriptAcquisitionDeniedError,
-        authorize_transcript_request,
-        issuer_transcript_source_url_is_authorized,
-        load_authorized_transcript_replay,
-        persist_authorized_transcript_artifact,
-        project_root_for_database,
-        read_authorized_transcript,
-        stage_authorized_payload,
-        transcript_acquisition_receipt_id,
-    )
-    from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
-    from transcript_qa import validate_synthesized_transcript
-    from transcripts.acquisition_semantics import (
-        TRANSCRIPT_ACQUISITION_POLICY_VERSION,
-        ExistingArtifactBehavior,
-        TranscriptAcquisitionAuthorization,
-        TranscriptAcquisitionEntrypoint,
-        TranscriptAcquisitionRequest,
-        TranscriptAuthorizationStatus,
-        TranscriptProvider,
-    )
-    from transcripts.immutable_staging import install_transcript_output
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-
-def _bootstrap_project_imports() -> None:
-    """Load project modules after adding ``src`` for direct CLI execution."""
-    sys.path.append(str(SRC_DIR))
-    import db
-    import index_manager
-    from aggregator_sources import SOURCES, AggregatorHit, AggregatorSource
-    from alias_manager import resolve_ticker
-    from pipeline.transcript_acquisition import (
-        COMBINED_SOURCE_REGIME_IDENTITY,
-        AuthorizedTranscriptArtifact,
-        TranscriptAcquisitionDeniedError,
-        authorize_transcript_request,
-        issuer_transcript_source_url_is_authorized,
-        load_authorized_transcript_replay,
-        persist_authorized_transcript_artifact,
-        project_root_for_database,
-        read_authorized_transcript,
-        stage_authorized_payload,
-        transcript_acquisition_receipt_id,
-    )
-    from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
-    from transcript_qa import validate_synthesized_transcript
-    from transcripts.acquisition_semantics import (
-        TRANSCRIPT_ACQUISITION_POLICY_VERSION,
-        ExistingArtifactBehavior,
-        TranscriptAcquisitionAuthorization,
-        TranscriptAcquisitionEntrypoint,
-        TranscriptAcquisitionRequest,
-        TranscriptAuthorizationStatus,
-        TranscriptProvider,
-    )
-    from transcripts.immutable_staging import install_transcript_output
-
-    _ = (
-        db,
-        index_manager,
-        SOURCES,
-        AggregatorHit,
-        AggregatorSource,
-        resolve_ticker,
-        COMBINED_SOURCE_REGIME_IDENTITY,
-        AuthorizedTranscriptArtifact,
-        TranscriptAcquisitionDeniedError,
-        authorize_transcript_request,
-        issuer_transcript_source_url_is_authorized,
-        load_authorized_transcript_replay,
-        persist_authorized_transcript_artifact,
-        project_root_for_database,
-        read_authorized_transcript,
-        stage_authorized_payload,
-        transcript_acquisition_receipt_id,
-        SQLiteConnectionRole,
-        connect_sqlite,
-        validate_synthesized_transcript,
-        TRANSCRIPT_ACQUISITION_POLICY_VERSION,
-        ExistingArtifactBehavior,
-        TranscriptAcquisitionAuthorization,
-        TranscriptAcquisitionEntrypoint,
-        TranscriptAcquisitionRequest,
-        TranscriptAuthorizationStatus,
-        TranscriptProvider,
-        install_transcript_output,
-    )
-    globals().update(locals())
-
-
-_bootstrap_project_imports()
+import db
+import index_manager
+from aggregator_sources import (
+    SOURCES,
+    AggregatorHit,
+    AggregatorSource,
+)
+from alias_manager import resolve_ticker
+from pipeline.source_policy import current_utc_date
+from pipeline.transcript_acquisition import (
+    COMBINED_SOURCE_REGIME_IDENTITY,
+    AuthorizedTranscriptArtifact,
+    TranscriptAcquisitionDeniedError,
+    authorize_transcript_request,
+    issuer_transcript_source_url_is_authorized,
+    load_authorized_transcript_replay,
+    persist_authorized_transcript_artifact,
+    project_root_for_database,
+    read_authorized_transcript,
+    stage_authorized_payload,
+    transcript_acquisition_receipt_id,
+)
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from transcript_qa import (
+    validate_synthesized_transcript,
+)
+from transcripts.acquisition_semantics import (
+    TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+    ExistingArtifactBehavior,
+    TranscriptAcquisitionAuthorization,
+    TranscriptAcquisitionEntrypoint,
+    TranscriptAcquisitionRequest,
+    TranscriptAuthorizationReason,
+    TranscriptAuthorizationStatus,
+    TranscriptProvider,
+)
+from transcripts.immutable_staging import install_transcript_output
 
 RAW_DIR = PROJECT_ROOT / "transcripts" / "raw"
 STAGING_DIR = PROJECT_ROOT / ".tmp" / "transcript-acquisition"
 
 
 def _policy_today() -> date:
-    return date.today()
+    return current_utc_date()
 
 
 class FetchQaSpec(BaseModel):
@@ -204,6 +113,7 @@ class FetchQaResult:
 
 class FetchQaAttemptStatus(StrEnum):
     DENIED = "denied"
+    PENDING = "period_selection_pending"
     PROVIDER_MISS = "provider_miss"
     ACQUIRED = "acquired"
     IDEMPOTENT_REPLAY = "idempotent_replay"
@@ -211,6 +121,7 @@ class FetchQaAttemptStatus(StrEnum):
 
 class FetchQaStatus(StrEnum):
     DENIED = "denied"
+    PENDING = "period_selection_pending"
     PROVIDER_MISS = "provider_miss"
     ACQUIRED = "acquired"
     IDEMPOTENT_REPLAY = "idempotent_replay"
@@ -244,6 +155,7 @@ def _request_for_source(
         raise TypeError("source must be an AggregatorSource")
     canonical = resolve_ticker(spec.ticker)
     return TranscriptAcquisitionRequest(
+        schema_version="transcript-acquisition-request@2",
         entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
         canonical_ticker=canonical,
         fiscal_year=spec.year,
@@ -394,6 +306,14 @@ def fetch_qa(
             authorization = authorize_transcript_request(conn, request)
             last_key = authorization.idempotency_key
             if authorization.status is TranscriptAuthorizationStatus.DENIED:
+                if (
+                    authorization.reason
+                    is TranscriptAuthorizationReason.REPORTED_QUARTER_WINDOW_PENDING
+                ):
+                    attempts.append(
+                        FetchQaAttempt(source.name, FetchQaAttemptStatus.PENDING, last_key)
+                    )
+                    continue
                 _log_denial(authorization)
                 attempts.append(FetchQaAttempt(source.name, FetchQaAttemptStatus.DENIED, last_key))
                 continue
@@ -498,6 +418,22 @@ def fetch_qa(
         )
         return FetchQaOutcome(FetchQaStatus.ACQUIRED, last_key, tuple(attempts), result)
 
+    if any(item.status is FetchQaAttemptStatus.PENDING for item in attempts):
+        print(
+            json.dumps(
+                {
+                    "event": "reported_period_selection_pending",
+                    "ticker": canonical,
+                    "fiscal_year": spec.year,
+                    "fiscal_quarter": spec.quarter,
+                    "deferred_sources": sum(
+                        item.status is FetchQaAttemptStatus.PENDING for item in attempts
+                    ),
+                },
+                sort_keys=True,
+            )
+        )
+        return FetchQaOutcome(FetchQaStatus.PENDING, last_key, tuple(attempts))
     if attempts and all(item.status is FetchQaAttemptStatus.DENIED for item in attempts):
         return FetchQaOutcome(FetchQaStatus.DENIED, last_key, tuple(attempts))
     tried = [attempt.provider for attempt in attempts]

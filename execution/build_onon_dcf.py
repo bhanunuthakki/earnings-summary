@@ -386,7 +386,7 @@ def _main_owned() -> int:
     )
     source_root = os.environ.get("DCF_SOURCE_STATE_ROOT")
     source_context = (
-        SourceReadContext.for_sec_state_root(Path(source_root)) if source_root else None
+        SourceReadContext.for_product_state_root(Path(source_root)) if source_root else None
     )
     inputs, receipt, payload = load_verified_inputs(
         db_path=db,

@@ -19,6 +19,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from provenance.source_read_context import SourceReadContext
 from sources.report_financials import (
     FinancialEvidenceReference,
     FinancialTableCell,
@@ -219,6 +220,7 @@ def verify_reported_memo_claim(
     values: tuple[MemoReportedValue, ...] = (),
     *,
     calculated_values: tuple[str, ...] = (),
+    source_context: SourceReadContext | None = None,
 ) -> None:
     """Reject unsupported numbers and non-exact node-backed reported wording.
 
@@ -243,7 +245,10 @@ def verify_reported_memo_claim(
     source_text = read_evidence_node_texts(conn, evidence_node_ids)
     if source_text and text not in _source_forms(source_text):
         raise MemoClaimSupportError("memo_reported_passage_not_reconstructed")
-    declared = [*calculated_values, *(verified_value_display(conn, item) for item in values)]
+    declared = [
+        *calculated_values,
+        *(verified_value_display(conn, item, source_context=source_context) for item in values),
+    ]
     verify_memo_numeric_population(text, tuple(declared), source_wording_verified=bool(source_text))
 
 
@@ -257,11 +262,16 @@ def read_evidence_node_texts(conn: sqlite3.Connection, node_ids: tuple[str, ...]
     return texts
 
 
-def verified_value_display(conn: sqlite3.Connection, item: MemoReportedValue) -> str:
+def verified_value_display(
+    conn: sqlite3.Connection,
+    item: MemoReportedValue,
+    *,
+    source_context: SourceReadContext | None = None,
+) -> str:
     # Series values use native units, outside the memo's table display contract.
     if item.reference.reader_kind != "report_table":
         raise MemoClaimSupportError("memo_financial_series_reference_unsupported")
-    cell = read_financial_evidence(conn, item.reference)
+    cell = read_financial_evidence(conn, item.reference, source_context=source_context)
     if cell is not None and not isinstance(cell, FinancialTableCell):
         raise MemoClaimSupportError("memo_financial_series_reference_unsupported")
     if cell is None or cell.display_value is None:

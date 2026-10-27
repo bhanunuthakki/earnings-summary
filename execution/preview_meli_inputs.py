@@ -120,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--state-root", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        source_context = SourceReadContext.for_sec_state_root(args.state_root)
+        source_context = SourceReadContext.for_product_state_root(args.state_root)
     except ValueError:
         return _unavailable(args, "source_authority_unavailable", "not_performed")
     output = validate_protected_receipt_path(

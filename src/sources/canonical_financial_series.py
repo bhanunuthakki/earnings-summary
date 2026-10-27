@@ -23,6 +23,7 @@ from provenance.metric_ontology import (
 )
 from provenance.overrides import DEFAULT_USER_ID, FINANCIAL_FACT, chip_override_map, qualify_note
 from provenance.source_fact_publication import publication_verification_scope
+from provenance.source_read_context import SourceReadContext
 
 FINANCIAL_CONCEPT_NAMESPACE = "urn:earnings-summary:legacy:financial"
 _QUARTER_DAYS = (70, 105)
@@ -323,13 +324,20 @@ def discover_canonical_financial_tickers(
 class CanonicalFinancialSeriesReader:
     """Read admitted actuals at one caller-owned cutoff and SQLite snapshot."""
 
-    def __init__(self, conn: sqlite3.Connection, ticker: str, *, cutoff: datetime) -> None:
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        ticker: str,
+        *,
+        cutoff: datetime,
+        source_context: SourceReadContext | None = None,
+    ) -> None:
         if cutoff.tzinfo is None:
             raise ValueError("canonical financial cutoff must be timezone-aware")
         self._conn = conn
         self._ticker = ticker.upper()
         self._cutoff = cutoff.astimezone(UTC)
-        self._resolver = CanonicalFactResolutionEngine(conn)
+        self._resolver = CanonicalFactResolutionEngine(conn, source_context=source_context)
         self._ontology = MetricOntology(conn)
         self._bundles: dict[str, ProvenanceBundle] = {}
         self._cache: dict[
@@ -1287,6 +1295,7 @@ def read_financial_consumer_series(
     cutoff: datetime,
     cadence: FinancialCadence,
     continuity: SeriesContinuity = SeriesContinuity.WINDOWED,
+    source_context: SourceReadContext | None = None,
 ) -> FinancialConsumerSeries:
     """Admit a complete financial population and retain source evidence once."""
     if cutoff.tzinfo is None or cutoff > datetime.now(UTC):
@@ -1296,7 +1305,9 @@ def read_financial_consumer_series(
     try:
         conn.row_factory = sqlite3.Row
         with publication_verification_scope(conn):
-            reader = CanonicalFinancialSeriesReader(conn, ticker, cutoff=cutoff)
+            reader = CanonicalFinancialSeriesReader(
+                conn, ticker, cutoff=cutoff, source_context=source_context
+            )
             series, coordinates = reader.read_with_coordinates(metric, cadence, continuity)
             reason = None
             override_reason = _financial_override_reason(conn, ticker, metric, cutoff)

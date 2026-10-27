@@ -12,6 +12,7 @@ import json
 import sqlite3
 from dataclasses import dataclass, replace
 from datetime import datetime
+from pathlib import Path
 from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
@@ -34,11 +35,11 @@ from provenance.native_pdf_transcript import (
 from provenance.native_pdf_transcript import EXTRACTOR_NAME as PDF_TRANSCRIPT_EXTRACTOR_NAME
 from provenance.native_pdf_transcript import EXTRACTOR_VERSION as PDF_TRANSCRIPT_EXTRACTOR_VERSION
 from provenance.native_pdf_transcript import verify_native_pdf_transcript
-from provenance.ocr_extraction import normalize_extracted_text
 from provenance.pdf_table_extraction import PdfTableExtractionArtifact
 from runtime.deterministic import as_utc as _utc
 from runtime.deterministic import canonical_json as _canonical_json
 from runtime.deterministic import content_sha256_or_text as _digest
+from runtime.deterministic import normalize_extracted_text
 
 DocumentProcessingLane = Literal[
     "html_native_hierarchy",
@@ -151,6 +152,23 @@ class VerifiedDocumentProcessingEvidence(_FrozenModel):
     knowledge_at: datetime
     recorded_at: datetime
     sealed_at: datetime
+
+
+class GovernedOCRPageProjection(_FrozenModel):
+    source_representation: Literal["governed_ocr"] = "governed_ocr"
+    document_version_id: str
+    source_sha256: str
+    evidence_seal_id: str
+    extraction_run_id: str
+    page_number: int = Field(gt=0)
+    page_result_id: str
+    page_node_id: str
+    text: str
+    text_sha256: str
+    layout_node_id: str
+    layout_sha256: str
+    layout_json: str
+    engine_config_sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -329,7 +347,11 @@ def _run(
 
 
 def _all_run_nodes(
-    conn: sqlite3.Connection, run: dict[str, object], cutoff_at: datetime
+    conn: sqlite3.Connection,
+    run: dict[str, object],
+    cutoff_at: datetime,
+    *,
+    verify_output: bool = True,
 ) -> list[dict[str, object]]:
     rows = _rows(
         conn,
@@ -403,7 +425,9 @@ def _all_run_nodes(
                 recorded_at=recorded_at,
             )
         )
-    if _legacy_extraction_output_sha256(models) != _require_sha(run, "output_sha256"):
+    if verify_output and _legacy_extraction_output_sha256(models) != _require_sha(
+        run, "output_sha256"
+    ):
         raise DocumentProcessingEvidenceIntegrityError(
             "native_extraction_output_commitment_mismatch"
         )
@@ -1358,7 +1382,10 @@ def _ocr_derived(
     governance_at = _datetime(governance["recorded_at"], "governance.recorded_at")
     if max(assessed_at, governance_at) > _utc(cutoff_at):
         raise DocumentProcessingEvidenceIntegrityError("ocr_parent_after_cutoff")
-    nodes = _all_run_nodes(conn, run, cutoff_at)
+    layout_run = (
+        is_pdf and _require_text(run, "extractor_code_version") == "governed-pdf-ocr@2-layout"
+    )
+    nodes = _all_run_nodes(conn, run, cutoff_at, verify_output=not is_pdf)
     node_by_id = {_require_text(row, "node_id"): row for row in nodes}
     results = _rows(
         conn,
@@ -1375,6 +1402,50 @@ def _ocr_derived(
         required_pages = [1]
     if [_require_int(row, "page_number") for row in results] != required_pages:
         raise DocumentProcessingEvidenceMissingError("ocr_result_page_set_incomplete")
+    layout_by_page: dict[int, dict[str, object]] = {}
+    if is_pdf:
+        page_nodes = {
+            str(result["node_id"]): _require_int(result, "page_number")
+            for result in results
+            if result["node_id"] is not None
+        }
+        for node in nodes:
+            parent_id = node["parent_node_id"]
+            if parent_id in page_nodes and node["node_kind"] == "passage":
+                page_number = page_nodes[str(parent_id)]
+                if page_number in layout_by_page:
+                    raise DocumentProcessingEvidenceIntegrityError("ocr_layout_ambiguous")
+                layout_by_page[page_number] = node
+        if layout_run and len(nodes) != 1 + len(results) + len(layout_by_page):
+            raise DocumentProcessingEvidenceIntegrityError("ocr_layout_node_population_mismatch")
+        result_commitment = [
+            {
+                "page_number": _require_int(result, "page_number"),
+                "outcome": result["outcome"],
+                "output_sha256": result["output_sha256"],
+                "mean_confidence": result["mean_confidence"],
+                "locator_sha256": result["locator_sha256"],
+                "reason_code": result["reason_code"],
+                "layout_sha256": (
+                    None
+                    if _require_int(result, "page_number") not in layout_by_page
+                    else _digest(
+                        _require_text(layout_by_page[_require_int(result, "page_number")], "text")
+                    )
+                ),
+            }
+            for result in results
+        ]
+        if layout_run:
+            if _digest(result_commitment) != _require_sha(run, "output_sha256"):
+                raise DocumentProcessingEvidenceIntegrityError("ocr_layout_run_commitment_mismatch")
+        else:
+            legacy_result_commitment = [
+                {key: value for key, value in row.items() if key != "layout_sha256"}
+                for row in result_commitment
+            ]
+            if _digest(legacy_result_commitment) != _require_sha(run, "output_sha256"):
+                _all_run_nodes(conn, run, cutoff_at)
     members: list[_NativeMember] = []
     for result in results:
         if result["outcome"] != "accepted" or result["node_id"] is None:
@@ -1390,15 +1461,30 @@ def _ocr_derived(
             raise DocumentProcessingEvidenceIntegrityError("ocr_result_node_locator_mismatch")
         if _digest(_require_text(node, "text")) != _require_sha(result, "output_sha256"):
             raise DocumentProcessingEvidenceIntegrityError("ocr_result_output_mismatch")
+        layout_node = layout_by_page.get(_require_int(result, "page_number"))
+        if (
+            layout_node is not None
+            and _canonical_locator(layout_node["locator_json"])[0] != locator_json
+        ):
+            raise DocumentProcessingEvidenceIntegrityError("ocr_layout_locator_mismatch")
         result_recorded = _datetime(result["recorded_at"], "result.recorded_at")
         if result_recorded > _utc(cutoff_at):
             raise DocumentProcessingEvidenceIntegrityError("ocr_result_after_cutoff")
-        commitment = {
+        commitment: dict[str, object] = {
             "governance_sha256": _digest(_scope_row(governance)),
             "lane": lane,
             "node_sha256": _digest(_node_member(node, run, lane=lane).native_commitment_json),
             "result": _scope_row(result),
         }
+        if layout_run:
+            commitment["layout_sha256"] = (
+                None if layout_node is None else _digest(_require_text(layout_node, "text"))
+            )
+            commitment["layout_node_sha256"] = (
+                None
+                if layout_node is None
+                else _digest(_node_member(layout_node, run, lane=lane).native_commitment_json)
+            )
         members.append(
             _NativeMember(
                 native_table=result_table,
@@ -1761,14 +1847,16 @@ def record_pdf_table_extraction_artifact(
     )
 
 
-def _pdf_table_derived(
+def _verified_pdf_table_parts(
     conn: sqlite3.Connection,
     document: dict[str, object],
     cutoff_at: datetime,
     pinned_run_id: str | None,
     pinned_artifact_id: str | None,
     report_pdf_table_scope: ReportPdfTableScope | None = None,
-) -> _Derived:
+    *,
+    allow_quarantine: bool = False,
+) -> tuple[PdfTableExtractionArtifact, dict[str, object], dict[str, object], list[_NativeMember]]:
     clauses = [
         "header.document_version_id=?",
         "(?=1 OR header.disposition='sealed')",
@@ -1776,7 +1864,7 @@ def _pdf_table_derived(
     ]
     parameters: list[object] = [
         _require_text(document, "document_version_id"),
-        int(report_pdf_table_scope is not None),
+        int(report_pdf_table_scope is not None or allow_quarantine),
         _iso(cutoff_at),
     ]
     if report_pdf_table_scope is not None:
@@ -1813,9 +1901,13 @@ def _pdf_table_derived(
         raise DocumentProcessingEvidenceIntegrityError(
             "pdf_table_artifact_schema_or_commitment_invalid"
         ) from exc
-    if report_pdf_table_scope is None and (
-        artifact.disposition != "sealed"
-        or any(page.disposition == "quarantined" for page in artifact.pages)
+    if (
+        not allow_quarantine
+        and report_pdf_table_scope is None
+        and (
+            artifact.disposition != "sealed"
+            or any(page.disposition == "quarantined" for page in artifact.pages)
+        )
     ):
         raise DocumentProcessingEvidenceMissingError("pdf_table_artifact_not_publishable")
     if report_pdf_table_scope is not None:
@@ -1961,6 +2053,45 @@ def _pdf_table_derived(
         or _datetime(artifact_row["sealed_at"], "artifact.sealed_at") != artifact_recorded
     ):
         raise DocumentProcessingEvidenceIntegrityError("pdf_table_member_set_mismatch")
+    return artifact, artifact_row, run, members
+
+
+def read_pdf_table_artifact(
+    conn: sqlite3.Connection,
+    *,
+    document_version_id: str,
+    artifact_id: str,
+    cutoff_at: datetime,
+) -> PdfTableExtractionArtifact:
+    """Verify a pinned inventory, including quarantine; grant no processing admission."""
+    artifact, _, _, _ = _verified_pdf_table_parts(
+        conn,
+        _document_context(conn, document_version_id),
+        _utc(cutoff_at),
+        None,
+        artifact_id,
+        allow_quarantine=True,
+    )
+    return artifact
+
+
+def _pdf_table_derived(
+    conn: sqlite3.Connection,
+    document: dict[str, object],
+    cutoff_at: datetime,
+    pinned_run_id: str | None,
+    pinned_artifact_id: str | None,
+    report_pdf_table_scope: ReportPdfTableScope | None = None,
+) -> _Derived:
+    _, artifact_row, run, members = _verified_pdf_table_parts(
+        conn,
+        document,
+        cutoff_at,
+        pinned_run_id,
+        pinned_artifact_id,
+        report_pdf_table_scope,
+    )
+    artifact_id = _require_text(artifact_row, "artifact_id")
     native_scope: dict[str, object] = {"artifact": _scope_row(artifact_row)}
     if report_pdf_table_scope is not None:
         required_pages = {
@@ -2505,3 +2636,148 @@ def verify_document_processing_evidence(
         recorded_at=_datetime(header["recorded_at"], "header.recorded_at"),
         sealed_at=_datetime(seal["sealed_at"], "seal.sealed_at"),
     )
+
+
+def resolve_governed_ocr_pages(
+    conn: sqlite3.Connection,
+    *,
+    repo_root: Path,
+    document_version_id: str,
+    source_sha256: str,
+    evidence_seal_id: str,
+    extraction_run_id: str,
+    page_result_ids: tuple[str, ...],
+    cutoff_at: datetime,
+) -> tuple[GovernedOCRPageProjection, ...]:
+    """Read an exact, sealed word-backed OCR page population without running OCR."""
+
+    from provenance.evidence_native_candidates import resolve_local_storage_uri
+    from provenance.immutable_artifact import ImmutableArtifactConflictError, read_stable_artifact
+    from provenance.ocr_layout import OCRLayoutError, OCRPageLayout, verify_ocr_layout_bytes
+
+    verified = verify_document_processing_evidence(
+        conn,
+        evidence_seal_id,
+        document_version_id=document_version_id,
+        processing_lane="pdf_ocr",
+        cutoff_at=cutoff_at,
+    )
+    if (
+        verified.input_blob_sha256 != source_sha256
+        or verified.extraction_run_id != extraction_run_id
+    ):
+        raise DocumentProcessingEvidenceIntegrityError("ocr_projection_source_or_run_mismatch")
+    run = _one(
+        conn,
+        "SELECT extractor_code_version,extractor_config_sha256 FROM evidence_extraction_runs WHERE extraction_run_id=?",
+        (extraction_run_id,),
+        "ocr_projection_run_missing",
+    )
+    if run["extractor_code_version"] != "governed-pdf-ocr@2-layout":
+        raise DocumentProcessingEvidenceMissingError("ocr_projection_text_only_history")
+    results = _rows(
+        conn,
+        "SELECT * FROM ocr_page_results WHERE extraction_run_id=? ORDER BY page_number",
+        (extraction_run_id,),
+    )
+    actual_ids = tuple(f"{extraction_run_id}:{_require_int(row, 'page_number')}" for row in results)
+    if (
+        not page_result_ids
+        or len(page_result_ids) != len(set(page_result_ids))
+        or actual_ids != page_result_ids
+    ):
+        raise DocumentProcessingEvidenceMissingError("ocr_projection_page_set_mismatch")
+    blob_root = repo_root.resolve() / "data" / "ocr_evidence"
+
+    def retained_bytes(digest: str, media_type: str, cap: int) -> bytes:
+        row = _one(
+            conn,
+            "SELECT byte_size,media_type,storage_uri FROM evidence_content_blobs WHERE sha256=?",
+            (digest,),
+            "ocr_projection_blob_missing",
+        )
+        if row["media_type"] != media_type:
+            raise DocumentProcessingEvidenceIntegrityError("ocr_projection_blob_media_mismatch")
+        path = resolve_local_storage_uri(str(row["storage_uri"]), allowed_roots=(blob_root,))
+        expected = blob_root / digest[:2] / digest
+        if path is None or path != expected:
+            raise DocumentProcessingEvidenceIntegrityError("ocr_projection_blob_location_mismatch")
+        try:
+            snapshot, raw = read_stable_artifact(path, allowed_root=blob_root, max_bytes=cap)
+        except (OSError, ValueError, ImmutableArtifactConflictError) as exc:
+            raise DocumentProcessingEvidenceMissingError("ocr_projection_blob_unavailable") from exc
+        if snapshot.file_sha256 != digest or snapshot.size_bytes != _require_int(row, "byte_size"):
+            raise DocumentProcessingEvidenceIntegrityError("ocr_projection_blob_bytes_mismatch")
+        return raw
+
+    projections: list[GovernedOCRPageProjection] = []
+    for result, result_id in zip(results, actual_ids, strict=True):
+        page_number = _require_int(result, "page_number")
+        page_node_id = _require_text(result, "node_id")
+        page_node = _one(
+            conn,
+            "SELECT text,locator_json FROM evidence_nodes WHERE node_id=? AND extraction_run_id=? AND node_kind='pdf_page'",
+            (page_node_id, extraction_run_id),
+            "ocr_projection_page_node_missing",
+        )
+        text = _require_text(page_node, "text")
+        if _digest(text) != _require_sha(result, "output_sha256"):
+            raise DocumentProcessingEvidenceIntegrityError("ocr_projection_text_mismatch")
+        layouts = _rows(
+            conn,
+            "SELECT node_id,text,locator_json FROM evidence_nodes WHERE extraction_run_id=? AND parent_node_id=? AND node_kind='passage'",
+            (extraction_run_id, page_node_id),
+        )
+        if len(layouts) != 1:
+            raise DocumentProcessingEvidenceMissingError(
+                "ocr_projection_layout_missing_or_ambiguous"
+            )
+        layout_node = layouts[0]
+        if (
+            _canonical_locator(layout_node["locator_json"])[0]
+            != _canonical_locator(page_node["locator_json"])[0]
+        ):
+            raise DocumentProcessingEvidenceIntegrityError("ocr_projection_layout_locator_mismatch")
+        layout_json = _require_text(layout_node, "text")
+        try:
+            layout = OCRPageLayout.model_validate_json(layout_json)
+        except ValueError as exc:
+            raise DocumentProcessingEvidenceIntegrityError("ocr_projection_layout_invalid") from exc
+        if _canonical_json(layout.model_dump(mode="json")) != layout_json:
+            raise DocumentProcessingEvidenceIntegrityError("ocr_projection_layout_noncanonical")
+        try:
+            raw_tsv = retained_bytes(layout.tsv_sha256, "text/tab-separated-values", 20_000_000)
+            render_png = retained_bytes(layout.render_sha256, "image/png", 100_000_000)
+            reconstructed = verify_ocr_layout_bytes(layout, raw_tsv, render_png)
+        except OCRLayoutError as exc:
+            raise DocumentProcessingEvidenceIntegrityError(exc.reason_code) from exc
+        recorded_confidence = result["mean_confidence"]
+        if not isinstance(recorded_confidence, (int, float)) or (
+            reconstructed.mean_confidence != recorded_confidence
+        ):
+            raise DocumentProcessingEvidenceIntegrityError("ocr_projection_confidence_mismatch")
+        if reconstructed.text != text or any(
+            word.ordinal != index or text[word.char_start : word.char_end] != word.text
+            for index, word in enumerate(layout.words)
+        ):
+            raise DocumentProcessingEvidenceIntegrityError(
+                "ocr_projection_words_do_not_reconstruct_text"
+            )
+        projections.append(
+            GovernedOCRPageProjection(
+                document_version_id=document_version_id,
+                source_sha256=source_sha256,
+                evidence_seal_id=evidence_seal_id,
+                extraction_run_id=extraction_run_id,
+                page_number=page_number,
+                page_result_id=result_id,
+                page_node_id=page_node_id,
+                text=text,
+                text_sha256=_digest(text),
+                layout_node_id=_require_text(layout_node, "node_id"),
+                layout_sha256=_digest(layout_json),
+                layout_json=layout_json,
+                engine_config_sha256=_require_sha(run, "extractor_config_sha256"),
+            )
+        )
+    return tuple(projections)

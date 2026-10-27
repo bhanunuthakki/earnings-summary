@@ -8,8 +8,9 @@ from html import escape
 
 from flask import Flask, Response, request
 
-from pipeline.peeks import render_canonical_financial_peek
+from pipeline.peeks import ocr_pdf_document_id, render_canonical_financial_peek
 from pipeline.source_viewers import render_record_view
+from provenance.source_read_context import SourceReadContext
 from report.sections.financials import read_growth_evidence
 from sources.financial_growth_evidence import GROWTH_FORMULAS, FinancialGrowthReference
 
@@ -19,6 +20,7 @@ def register_growth_evidence_routes(
     *,
     get_read_db: Callable[[], sqlite3.Connection],
     safe_ticker: Callable[[str], str],
+    source_context: SourceReadContext | None = None,
 ) -> None:
     @app.route("/api/peek/financial-calculation", methods=["GET"])
     def peek_financial_calculation() -> Response:
@@ -36,8 +38,9 @@ def register_growth_evidence_routes(
                 raise ValueError("invalid ticker")
         except ValueError:
             return Response("Invalid calculation reference.", status=400, mimetype="text/html")
+        conn = get_read_db()
         try:
-            result = read_growth_evidence(get_read_db(), reference)
+            result = read_growth_evidence(conn, reference, source_context=source_context)
         except (OSError, RuntimeError, sqlite3.Error):
             result = None
         fragment = request.args.get("fragment") == "1"
@@ -61,7 +64,11 @@ def register_growth_evidence_routes(
                 '<div class="cc-prov-row">Reported inputs and comparison continuity</div></div>'
             )
             for cell, input_reference in zip(cells, reference.inputs, strict=True):
-                body += render_canonical_financial_peek(cell, input_reference)
+                body += render_canonical_financial_peek(
+                    cell,
+                    input_reference,
+                    ocr_pdf_document_id=ocr_pdf_document_id(conn, cell),
+                )
             response = Response(
                 render_record_view(
                     "Evidence for the selected calculation", body, fragment=fragment

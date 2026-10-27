@@ -79,7 +79,7 @@ class DecisionBriefPreparationRequest(_Closed):
     @classmethod
     def explicit_source_authority(cls, root: Path | None) -> Path | None:
         if root is not None:
-            SourceReadContext.for_sec_state_root(root)
+            SourceReadContext.for_product_state_root(root)
         return root
 
 
@@ -845,7 +845,9 @@ def _prepare_decision_brief(
                     artifact=artifact,
                     as_of=datetime.now(UTC),
                     context_review=context,
-                    source_context=SourceReadContext.for_sec_state_root(request.source_state_root)
+                    source_context=SourceReadContext.for_product_state_root(
+                        request.source_state_root
+                    )
                     if request.source_state_root is not None
                     else None,
                 )

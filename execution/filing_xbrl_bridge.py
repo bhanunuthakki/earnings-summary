@@ -543,6 +543,9 @@ def _facts_from_model(
 ) -> tuple[ExtractedFact, ...]:
     raw_facts = cast("list[object] | set[object]", getattr(model, "factsInInstance", ()))
     ordered = sorted(raw_facts, key=_fact_sort_key)
+    keys = [_fact_sort_key(fact) for fact in ordered]
+    if len(set(keys)) != len(keys):
+        raise ValueError("Arelle facts have ambiguous source ordering identities")
     fiscal_year, fiscal_period, filing_period_end = _filing_focus(ordered)
     accounting_basis = _accounting_basis(ordered)
     return tuple(
@@ -908,7 +911,7 @@ def _element_path(fact: object, ordinal: int) -> str:
     return path
 
 
-def _fact_sort_key(fact: object) -> tuple[str, int, str, str, str, str]:
+def _fact_sort_key(fact: object) -> tuple[str, int, str, str, str, str, str, str]:
     document = getattr(fact, "modelDocument", None)
     qname = getattr(fact, "qname", None)
     return (
@@ -918,6 +921,9 @@ def _fact_sort_key(fact: object) -> tuple[str, int, str, str, str, str]:
         str(getattr(qname, "localName", "")),
         str(getattr(fact, "contextID", "")),
         str(getattr(fact, "value", "")),
+        # Minified filings contain distinct facts with every preceding key equal.
+        _element_path(fact, 0),
+        str(getattr(fact, "id", "") or ""),
     )
 
 

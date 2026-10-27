@@ -191,6 +191,10 @@ def test_default_purpose_routes_to_codex_before_claude(
         return "codex answer"
 
     monkeypatch.setattr(codex_backend, "call_codex_llm", fake_codex)
+
+    def fixture_callback_1(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("Claude must not run when the Codex primary succeeds")
+
     monkeypatch.setattr(
         llm_cli,
         "_call_claude",
@@ -286,6 +290,10 @@ def test_explicit_claude_model_bypasses_codex_primary(
         return "explicit Claude"
 
     monkeypatch.setattr(llm_cli, "_call_claude", fake_claude)
+
+    def fixture_callback_1(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("an explicit Claude model is a forced-family request")
+
     monkeypatch.setattr(
         codex_backend,
         "call_codex_llm",
@@ -320,7 +328,11 @@ def _web_claude_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
     capture_web_cmd fixture."""
     monkeypatch.setattr(llm_client, "_setup_verified", True)
     monkeypatch.setattr(llm_client, "_claude_cli_path", r"C:\fake\claude.cmd")
-    monkeypatch.setattr(llm_cli, "quota_block_active", lambda: None)
+
+    def fixture_callback_1(**_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(llm_cli, "quota_block_active", fixture_callback_1)
 
 
 def test_web_default_purpose_routes_to_codex_before_claude(
@@ -334,6 +346,10 @@ def test_web_default_purpose_routes_to_codex_before_claude(
         return "codex web answer https://reuters.com/x"
 
     monkeypatch.setattr(codex_backend, "call_codex_llm", fake_codex)
+
+    def fixture_callback_1(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("Claude web subprocess must not run when Codex primary succeeds")
+
     monkeypatch.setattr(
         llm_cli.subprocess,
         "run",
@@ -429,6 +445,9 @@ def test_web_explicit_claude_model_bypasses_codex_primary(
 ) -> None:
     monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
     _web_claude_fixture(monkeypatch)
+
+    def fixture_callback_1(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("an explicit Claude model on the web path is a forced-family request")
 
     monkeypatch.setattr(
         codex_backend,
@@ -665,6 +684,10 @@ def test_cited_codex_web_answer_is_served_without_fallback(
         return "should not be reached"
 
     monkeypatch.setattr(codex_backend, "call_codex_llm", fake_codex)
+
+    def fixture_callback_1(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("grounded Codex answer must not reach the Claude web leg")
+
     monkeypatch.setattr(
         llm_cli.subprocess,
         "run",
@@ -674,3 +697,47 @@ def test_cited_codex_web_answer_is_served_without_fallback(
     out = llm_cli.call_llm_with_web("brief please", purpose="recent_developments")
     assert calls == ["codex"], f"grounded Codex answer must not fall back, got {calls}"
     assert "ft.com" in out
+
+
+@pytest.mark.parametrize(
+    ("input_tokens", "cached_tokens", "output_tokens", "expected"),
+    [(100_000, 20_000, 10_000, 0.262), (300_000, 20_000, 10_000, 1.274)],
+)
+def test_sol_candidate_public_accounting_preserves_long_context_rates(
+    input_tokens: int, cached_tokens: int, output_tokens: int, expected: float
+) -> None:
+    assert codex_backend.estimate_api_equivalent_cost_usd(
+        model="gpt-6.1-sol",
+        input_tokens=input_tokens,
+        cached_input_tokens=cached_tokens,
+        output_tokens=output_tokens,
+    ) == pytest.approx(expected)
+
+
+def test_sol_candidate_reaches_existing_wrapper_without_down_tiering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested: list[str] = []
+    recorded: list[dict[str, object]] = []
+
+    def candidate(prompt: str, *, model: str, **kwargs: object) -> SimpleNamespace:
+        requested.append(model)
+        return SimpleNamespace(
+            text="[]",
+            usage=SimpleNamespace(input_tokens=10, cached_input_tokens=0, output_tokens=1),
+        )
+
+    monkeypatch.setattr(codex_backend, "_load_wrapper", lambda: candidate)
+
+    def record_candidate(**kwargs: object) -> None:
+        recorded.append(kwargs)
+
+    monkeypatch.setattr("llm.ledger.record_llm_call", record_candidate)
+    assert (
+        codex_backend.call_codex_llm("source", purpose="kpi_summary_enumerate", model="gpt-6.1-sol")
+        == "[]"
+    )
+    assert requested == ["gpt-6.1-sol"]
+    assert recorded[0]["model"] == "codex:gpt-6.1-sol"
+    assert recorded[0]["provider"] == "openai"
+    assert recorded[0]["transport"] == "subscription_cli"

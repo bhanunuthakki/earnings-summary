@@ -47,14 +47,13 @@ def semantic_recording_clock(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(semantics_module, "datetime", FixtureDatetime)
 
 
-def revision_database(path: Path | None = None) -> sqlite3.Connection:
+def revision_database(path: Path | None = None, *, real_value: bool = False) -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:" if path is None else path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     if path is not None:
         assert str(conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower() == "wal"
-    conn.executescript(
-        """
+    schema = """
         CREATE TABLE kpi_definitions(
             id INTEGER PRIMARY KEY,ticker TEXT NOT NULL,name TEXT NOT NULL,unit TEXT NOT NULL
         );
@@ -133,7 +132,8 @@ def revision_database(path: Path | None = None) -> sqlite3.Connection:
         CREATE TABLE reported_observations(
             observation_id TEXT PRIMARY KEY,ticker TEXT NOT NULL,concept_key TEXT NOT NULL,
             period_end TEXT NOT NULL,fiscal_period_type TEXT NOT NULL,numeric_value TEXT NOT NULL,
-            currency TEXT,unit TEXT NOT NULL,available_at TEXT NOT NULL,recorded_at TEXT NOT NULL
+            currency TEXT,unit TEXT NOT NULL,available_at TEXT NOT NULL,recorded_at TEXT NOT NULL,
+            method_version TEXT NOT NULL
         );
         CREATE TABLE fact_observation_revisions(
             fact_table TEXT NOT NULL,fact_row_id INTEGER NOT NULL,fact_revision INTEGER NOT NULL,
@@ -165,7 +165,12 @@ def revision_database(path: Path | None = None) -> sqlite3.Connection:
             UNIQUE(kpi_fact_id,revision)
         );
         """
-    )
+    if real_value:
+        schema = schema.replace(
+            "kpi_definition_id INTEGER NOT NULL,value TEXT NOT NULL",
+            "kpi_definition_id INTEGER NOT NULL,value NUMERIC NOT NULL",
+        )
+    conn.executescript(schema)
     conn.execute("INSERT INTO kpi_definitions VALUES (1,'NU','Monthly ARPAC','actual')")
     conn.execute(
         "CREATE TABLE tracked_companies("
@@ -302,7 +307,7 @@ def fact_fixture(
     resolution_id = f"kpi-resolution-{key}-{revision}"
     clock = known_at.isoformat()
     conn.execute(
-        "INSERT INTO reported_observations VALUES (?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO reported_observations VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (
             observation_id,
             "NU",
@@ -314,6 +319,7 @@ def fact_fixture(
             "actual",
             clock,
             clock,
+            "fixture-v1",
         ),
     )
     conn.execute(

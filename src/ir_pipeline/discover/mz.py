@@ -35,7 +35,7 @@ from ir_pipeline.discover._docmeta import classify, filename_for_url
 
 # Runs in the page: visible (offsetParent != null) anchors → their hrefs.
 _VISIBLE_HREFS_JS = "els => els.filter(a => a.offsetParent !== null).map(a => a.href)"
-_MAX_CATALOG_BYTES = 2 * 1024 * 1024
+MZ_CATALOG_MAX_BYTES = 2 * 1024 * 1024
 _CATALOG_DOC_TYPES = {
     "apresentacao_resultados": "deck",
     "release_resultados": "press_release",
@@ -75,8 +75,8 @@ def _read_bounded(response: object) -> bytes:
     read = getattr(response, "read", None)
     if not callable(read):
         raise ValueError("MZ response has no readable body")
-    body = cast(bytes, read(_MAX_CATALOG_BYTES + 1))
-    if len(body) > _MAX_CATALOG_BYTES:
+    body = cast(bytes, read(MZ_CATALOG_MAX_BYTES + 1))
+    if len(body) > MZ_CATALOG_MAX_BYTES:
         raise ValueError("MZ response exceeds the 2 MiB limit")
     return body
 
@@ -133,6 +133,76 @@ def _catalog_config(page_html: str) -> tuple[str, str, list[str]]:
     return base_match.group(1).rstrip("/"), issuer_match.group(1), categories
 
 
+def catalog_config(page_html: str) -> tuple[str, str, list[str]]:
+    """Read the publisher's MZ endpoint and category scope from retained HTML."""
+
+    return _catalog_config(page_html)
+
+
+def catalog_post_request(
+    base: str,
+    issuer_id: str,
+    categories: tuple[str, ...],
+    *,
+    year: int | None,
+) -> tuple[str, bytes]:
+    """Return the exact endpoint and JSON bytes used by this adapter."""
+
+    if year is None:
+        url = f"{base}/company/{issuer_id}/categoryInternalName/document/language/years"
+    else:
+        url = f"{base}/company/{issuer_id}/filter/categories/year/meta"
+    return url, catalog_post_body(categories, year=year)
+
+
+def catalog_post_body(categories: tuple[str, ...], *, year: int | None) -> bytes:
+    return json.dumps(catalog_post_payload(categories, year=year)).encode("utf-8")
+
+
+def catalog_post_payload(categories: tuple[str, ...], *, year: int | None) -> dict[str, object]:
+    if year is None:
+        payload: dict[str, object] = {
+            "categoryInternalNames": list(categories),
+            "language_code": "en_US",
+        }
+    else:
+        payload = {
+            "year": str(year),
+            "categories": list(categories),
+            "language": "en_US",
+            "published": True,
+        }
+    return payload
+
+
+def catalog_years(body: bytes) -> tuple[int, ...]:
+    envelope = _YearsEnvelope.model_validate_json(body, strict=True)
+    if (
+        not envelope.success
+        or not envelope.data
+        or len(envelope.data) > 30
+        or len(envelope.data) != len(set(envelope.data))
+        or any(year < 2000 or year > 2100 for year in envelope.data)
+    ):
+        raise ValueError("MZ catalog did not return a unique nonempty year set")
+    return tuple(envelope.data)
+
+
+def catalog_document_urls(body: bytes) -> tuple[str, ...]:
+    envelope = _DocumentsEnvelope.model_validate_json(body, strict=True)
+    if not envelope.success:
+        raise ValueError("MZ catalog document response was not successful")
+    urls: list[str] = []
+    for document in envelope.data.document_metas:
+        url = document.link_url or document.permalink
+        if url is None:
+            raise ValueError("MZ catalog document has no URL")
+        urls.append(url)
+    if len(urls) != len(set(urls)):
+        raise ValueError("MZ catalog returned duplicate document URLs")
+    return tuple(urls)
+
+
 # Public, typed seams used by boundary tests and adapter callers.
 get_text = _get_text
 post_json = _post_json
@@ -140,26 +210,25 @@ post_json = _post_json
 
 def _catalog_documents(results_center_url: str) -> dict[str, str]:
     base, issuer_id, categories = _catalog_config(_get_text(results_center_url))
-    years_url = f"{base}/company/{issuer_id}/categoryInternalName/document/language/years"
+    category_names = tuple(categories)
+    years_url, _years_body = catalog_post_request(base, issuer_id, category_names, year=None)
     years = _YearsEnvelope.model_validate(
         _post_json(
             years_url,
-            {"categoryInternalNames": categories, "language_code": "en_US"},
+            catalog_post_payload(category_names, year=None),
         )
     )
     if not years.success or not years.data:
         return {}
 
-    documents_url = f"{base}/company/{issuer_id}/filter/categories/year/meta"
+    current_year = max(years.data)
+    documents_url, _documents_body = catalog_post_request(
+        base, issuer_id, category_names, year=current_year
+    )
     documents = _DocumentsEnvelope.model_validate(
         _post_json(
             documents_url,
-            {
-                "year": str(max(years.data)),
-                "categories": categories,
-                "language": "en_US",
-                "published": True,
-            },
+            catalog_post_payload(category_names, year=current_year),
         )
     )
     if not documents.success:

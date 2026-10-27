@@ -180,8 +180,10 @@ def _expected_document_family(
     if record.source_kind == "earnings_call":
         return "issuer_earnings_materials"
     document_type = record.document_type.strip().lower()
-    if document_type == "earnings_announcement":
-        return None  # Retain supporting calendar notices without a financial duty.
+    if document_type in {"earnings_announcement", "ir_document"}:
+        # Retain notices and unclassified crawl candidates without inventing
+        # a financial source duty from a filename or link-text guess.
+        return None
     families = {
         "annual_report": "issuer_financial_statements",
         "earnings_material": "issuer_earnings_materials",

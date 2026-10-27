@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -15,10 +16,14 @@ from compute.metrics_engine.io import compute_for_ticker, read_attempt_result
 from compute.metrics_engine.registry import ReasonCode
 from provenance.fact_plane_v2 import (
     CanonicalJSONObject,
+    DerivationInputV2,
+    DerivationSealV2,
     DerivedFactObservationV2,
     ExtractionRunCompletenessSealV2,
+    FactCellV2,
     FactPlaneV2,
 )
+from provenance.fact_read_model import FactReadModel
 from provenance.integrity_audit import AuditOptions, audit_connection
 from provenance.population_canonical_resolution import (
     CanonicalResolutionPopulationRequest,
@@ -29,13 +34,14 @@ from provenance.population_metric_ontology import (
     populate_metric_ontology,
 )
 from provenance.source_fact_repository import (
+    DerivedSourceFact,
     ReportedSourceFact,
     SourceFactPublication,
     SourceFactRepository,
 )
 from tests import test_source_fact_repository as foundation
 from tests.test_report_canonical_financials import STAMP, seed_table
-from timeseries.loaders import load_kpi_series_with_provenance
+from timeseries.loaders import load_kpi_series, load_kpi_series_with_provenance
 
 
 @pytest.fixture(scope="module")
@@ -399,7 +405,7 @@ def test_later_restatement_creates_new_output_and_preserves_prior_publication(
 def test_bridge_projects_kpi_and_timeseries_with_full_canonical_locator(
     conn: sqlite3.Connection,
 ) -> None:
-    _seed_filing_bridge(
+    document_id = _seed_filing_bridge(
         conn,
         rows=_revenue_rows(),
         publication_prefix="bridge",
@@ -418,6 +424,22 @@ def test_bridge_projects_kpi_and_timeseries_with_full_canonical_locator(
     database_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
     series = load_kpi_series_with_provenance("SYNTH", "revenue_yoy", db_path=database_path)
     assert series[-1].value == 10.0
+    assert series[-1].provenance["source"] == "canonical_metrics_engine"
+    assert series[-1].provenance["fact_id"] is None
+    assert series[-1].provenance["fact_table"] is None
+    assert series[-1].provenance["output_observation_id"] == attempt["output_observation_id"]
+    assert series[-1].provenance["source_doc_id"] == document_id
+    source_url = conn.execute(
+        "SELECT source_url FROM evidence_source_observations WHERE observation_id='bridge-source'"
+    ).fetchone()[0]
+    assert series[-1].provenance["source_url"] == source_url
+    inputs = series[-1].provenance["canonical_inputs"]
+    assert isinstance(inputs, tuple)
+    assert len(cast(tuple[object, ...], inputs)) == 2
+    plain = load_kpi_series("SYNTH", "revenue_yoy", db_path=database_path)
+    assert [(point.period_end, point.value) for point in plain] == [
+        (point.period_end, point.value) for point in series
+    ]
 
 
 def test_invalid_output_id_never_falls_back_to_legacy_kpi(
@@ -440,6 +462,121 @@ def test_invalid_output_id_never_falls_back_to_legacy_kpi(
 
     assert result is not None and result.status == "unavailable"
     assert result.reason_code == "canonical_output_unavailable"
+    conn.commit()
+    database_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+    assert load_kpi_series_with_provenance("SYNTH", "revenue_yoy", db_path=database_path) == []
+    assert load_kpi_series("SYNTH", "revenue_yoy", db_path=database_path) == []
+
+
+def test_canonical_attempt_cannot_read_another_issuer_output(
+    conn: sqlite3.Connection,
+) -> None:
+    _seed_filing_bridge(conn, rows=_revenue_rows(), publication_prefix="issuer-bound")
+    compute_for_ticker(conn, "SYNTH", source_cutoff=STAMP)
+    attempt = _attempts(conn)[-1]
+    assert attempt["output_observation_id"] is not None
+    conn.execute(
+        "INSERT INTO metric_computation_attempts "
+        "(ticker,period_end,fiscal_period_type,formula_id,status,reason_code,reason_detail,"
+        "kpi_fact_id,input_fingerprint,engine_version,computed_at,output_observation_id) "
+        "SELECT 'OTHER',period_end,fiscal_period_type,formula_id,status,reason_code,"
+        "reason_detail,NULL,input_fingerprint,engine_version,computed_at,"
+        "output_observation_id FROM metric_computation_attempts WHERE id=?",
+        (attempt["id"],),
+    )
+    conn.commit()
+    database_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+    assert load_kpi_series_with_provenance("OTHER", "revenue_yoy", db_path=database_path) == []
+    assert load_kpi_series("OTHER", "revenue_yoy", db_path=database_path) == []
+
+
+def test_canonical_attempt_respects_aware_as_of_offset(
+    conn: sqlite3.Connection,
+) -> None:
+    _seed_filing_bridge(conn, rows=_revenue_rows(), publication_prefix="offset")
+    compute_for_ticker(conn, "SYNTH", source_cutoff=STAMP)
+    attempt = _attempts(conn)[-1]
+    assert attempt["output_observation_id"] is not None
+    conn.execute(
+        "UPDATE metric_computation_attempts SET computed_at=? WHERE id=?",
+        ("2026-10-25T10:00:00+00:00", attempt["id"]),
+    )
+    conn.commit()
+    database_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+    assert (
+        load_kpi_series(
+            "SYNTH", "revenue_yoy", db_path=database_path, as_of_date="2026-10-25T12:00:00+05:00"
+        )
+        == []
+    )
+
+
+def test_derived_revenue_input_retains_reported_source_leaf(
+    conn: sqlite3.Connection,
+) -> None:
+    source_publication = foundation.make_publication()
+    SourceFactRepository(conn).publish(source_publication)
+    reported = source_publication.reported_facts[0].observation
+    derived_cell = FactCellV2.model_validate(
+        {
+            **foundation.make_cell("derived-revenue-leaf").model_dump(),
+            "concept_name": "AdjustedRevenue",
+            "semantic_key_sha256": None,
+        }
+    )
+    derived = DerivedFactObservationV2(
+        observation_id="derived-revenue-leaf",
+        idempotency_key="derived-revenue-leaf",
+        fact_cell_id=derived_cell.fact_cell_id,
+        observation_kind="derived",
+        value_kind="numeric",
+        numeric_value="100",
+        method_name="reviewed-formula",
+        method_version="v1",
+        method_config_sha256=foundation.sha256("derived-revenue-method"),
+        revision_kind="initial",
+        effective_at=STAMP,
+        knowledge_at=STAMP,
+        recorded_at=STAMP,
+        formula_id="revenue-adjustment",
+        formula_version="v1",
+    )
+    edge = DerivationInputV2(
+        edge_id="derived-revenue-leaf-edge",
+        idempotency_key="derived-revenue-leaf-edge",
+        derived_observation_id=derived.observation_id,
+        input_position=0,
+        input_observation_id=reported.observation_id,
+        input_role="reported_revenue",
+        recorded_at=STAMP,
+    )
+    seal = DerivationSealV2(
+        derivation_seal_id="derived-revenue-leaf-seal",
+        idempotency_key="derived-revenue-leaf-seal",
+        derived_observation_id=derived.observation_id,
+        ordered_inputs=(edge,),
+        input_basis="as_reported",
+        formula_definition_sha256=foundation.sha256("revenue-adjustment-definition"),
+        formula_config_sha256=foundation.sha256("revenue-adjustment-config"),
+        seal_method="canonical-json",
+        seal_method_version="v1",
+        effective_at=STAMP,
+        knowledge_at=STAMP,
+        recorded_at=STAMP,
+    )
+    SourceFactRepository(conn).publish(
+        SourceFactPublication(
+            publication_id="derived-revenue-leaf-publication",
+            idempotency_key="derived-revenue-leaf-publication",
+            derived_facts=(DerivedSourceFact(cell=derived_cell, observation=derived),),
+            derivations=(seal,),
+        )
+    )
+    leaves = FactReadModel(conn).reported_source_leaves((derived.observation_id,), cutoff=STAMP)
+    assert len(leaves) == 1
+    assert leaves[0].observation.observation_id == reported.observation_id
+    assert leaves[0].evidence is not None
+    assert leaves[0].evidence.document_version_id == reported.document_version_id
 
 
 def test_direct_unsealed_output_never_satisfies_public_attempt_reader(

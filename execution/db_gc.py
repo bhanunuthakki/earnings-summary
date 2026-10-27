@@ -1131,8 +1131,7 @@ def _artifact_provenance_ids(conn: sqlite3.Connection) -> set[int]:
                 f"llm_artifacts id={artifact_id} has invalid parent_artifact_ids JSON"
             ) from exc
         if not isinstance(payload, list) or any(
-            not isinstance(value, int) or isinstance(value, bool)
-            for value in cast("list[object]", payload)
+            type(x) is not int for x in cast("list[object]", payload)
         ):
             raise GcAbortedError(
                 f"llm_artifacts id={artifact_id} parent_artifact_ids must be a JSON integer list"
@@ -1142,9 +1141,7 @@ def _artifact_provenance_ids(conn: sqlite3.Connection) -> set[int]:
 
 
 def _json_integer_list(value: object, *, location: str) -> set[int]:
-    if not isinstance(value, list) or any(
-        not isinstance(item, int) or isinstance(item, bool) for item in cast("list[object]", value)
-    ):
+    if not isinstance(value, list) or any(type(x) is not int for x in cast("list[object]", value)):
         raise GcAbortedError(f"{location} must be a JSON integer list")
     return set(cast("list[int]", value))
 
@@ -1840,6 +1837,11 @@ def _run_gc_implementation(
         if lock is not None:
             lock.release()
     return report
+
+
+archive_doomed = _archive_doomed
+reset_doomed = _reset_doomed
+run_gc_implementation = _run_gc_implementation
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -1095,7 +1095,9 @@ def _load_open_notes(ticker: str, conn: sqlite3.Connection) -> list[AnalystNoteR
     return sorted(rows, key=lambda note: kind_rank.get(note.kind, 9))
 
 
-def load_graded_sell_base_rate(ticker: str, db_path: Path) -> str | None:
+def load_graded_sell_base_rate(
+    ticker: str, db_path: Path | None, *, conn: sqlite3.Connection | None = None
+) -> str | None:
     """The graded-sells base-rate line for the Position-tab coaching block, or
     None when unavailable.
 
@@ -1104,7 +1106,7 @@ def load_graded_sell_base_rate(ticker: str, db_path: Path) -> str | None:
     renderer never hard-depends on a module that may not exist yet. Any
     failure (missing module, missing DB, missing table) degrades to None and
     the caller skips the line silently (spec: "do not fail if it's missing")."""
-    if not db_path.exists():
+    if conn is None and (db_path is None or not db_path.exists()):
         return None
     try:
         from advisor.position_review import graded_sell_record
@@ -1115,7 +1117,7 @@ def load_graded_sell_base_rate(ticker: str, db_path: Path) -> str | None:
         # sell/trim pattern, not this name) — ``ticker`` stays in this loader's
         # signature for the per-ticker P3 call shape but doesn't scope the SQL.
         del ticker
-        result = cast("object", graded_sell_record(db_path))
+        result = cast("object", graded_sell_record(db_path, conn=conn))
     except sqlite3.Error:
         return None
     return cast("str | None", result)

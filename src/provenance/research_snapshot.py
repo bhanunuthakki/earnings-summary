@@ -40,6 +40,7 @@ from provenance.source_fact_publication import (
     VerifiedSourceFactPublication,
     verify_source_fact_publication,
 )
+from provenance.source_read_context import SourceReadContext
 from runtime.deterministic import as_utc as _utc
 from runtime.deterministic import canonical_json_model as canonical_json
 from runtime.deterministic import content_sha256_model as _digest
@@ -238,6 +239,7 @@ def require_included_pdf_pages(
     evidence_node_ids: tuple[str, ...] = (),
     observation_ids: tuple[str, ...] = (),
     cutoff: datetime,
+    source_context: SourceReadContext | None = None,
 ) -> None:
     """Reject deferred/unknown pages, including the leaves of derived anchors.
 
@@ -280,7 +282,7 @@ def require_included_pdf_pages(
     for node_id in evidence_node_ids:
         require_node(node_id)
 
-    reader = FactReadModel(conn)
+    reader = FactReadModel(conn, source_context=source_context)
     heights: dict[str, int] = {}
     visiting: set[str] = set()
     discovered: set[str] = set()
@@ -1822,6 +1824,9 @@ def _required_source_fact_publications(
 
 
 class _DefaultResearchReferenceVerifier:
+    def __init__(self, source_context: SourceReadContext | None = None) -> None:
+        self.source_context = source_context
+
     @staticmethod
     def publication_reference(
         verified: VerifiedSourceFactPublication,
@@ -1971,7 +1976,9 @@ class _DefaultResearchReferenceVerifier:
                 recorded_at=max(_parse_time(row[1]), _parse_time(row[3])),
             )
         if requested_lane == "canonical_fact_resolution_snapshot":
-            verified = CanonicalFactResolutionEngine(conn).verify_snapshot(
+            verified = CanonicalFactResolutionEngine(
+                conn, source_context=self.source_context
+            ).verify_snapshot(
                 reference_id,
                 cutoff_at,
                 observed_through=request.recorded_at,
@@ -2342,6 +2349,7 @@ class _VerifiedNativeReferences:
 def _verify_analysis_fact_source_closure(
     conn: sqlite3.Connection,
     request: ResearchSnapshotRequest,
+    source_context: SourceReadContext | None = None,
 ) -> _VerifiedNativeReferences | None:
     """Prove selected-source closure without changing resolution policy.
 
@@ -2357,7 +2365,9 @@ def _verify_analysis_fact_source_closure(
         return None
     with _savepoint(conn, "analysis_fact_source_closure"):
         universe = request.research_universe
-        verified = CanonicalFactResolutionEngine(conn).verify_snapshot(
+        verified = CanonicalFactResolutionEngine(
+            conn, source_context=source_context
+        ).verify_snapshot(
             request.canonical_fact_resolution_snapshot_id,
             request.cutoff_at,
             observed_through=request.recorded_at,
@@ -2404,7 +2414,7 @@ def _verify_analysis_fact_source_closure(
             raise ValueError("analysis_research_fact_derivation_bounds")
         discovered = set(observation_ids)
         closed: dict[str, int] = {}
-        reader = FactReadModel(conn)
+        reader = FactReadModel(conn, source_context=source_context)
         ordered = tuple(sorted(observation_ids))
         bundles = {
             bundle.observation.observation_id: bundle
@@ -2471,6 +2481,7 @@ def _verify_research_universe(
     *,
     verify_fact_subjects: bool,
     require_current_inventory: bool = True,
+    source_context: SourceReadContext | None = None,
 ) -> _VerifiedNativeReferences | None:
     native = None
     analysis = request.research_universe.analysis_scope
@@ -2478,7 +2489,7 @@ def _verify_research_universe(
         analysis.request.historical_reconstruction is not None
         or analysis.request.readiness_profile is not None
     ):
-        native = _verify_analysis_fact_source_closure(conn, request)
+        native = _verify_analysis_fact_source_closure(conn, request, source_context=source_context)
     required = {
         "document_processing_snapshot_members",
         "expected_document_obligation_bindings",
@@ -2738,10 +2749,17 @@ def _verify_research_references_in_snapshot(
         request,
         verify_fact_subjects=isinstance(verifier, _DefaultResearchReferenceVerifier),
         require_current_inventory=require_current_inventory,
+        source_context=(
+            verifier.source_context
+            if isinstance(verifier, _DefaultResearchReferenceVerifier)
+            else None
+        ),
     )
     verified_resolution = None if native is None else native.resolution
     if isinstance(verifier, _DefaultResearchReferenceVerifier) and verified_resolution is None:
-        verified_resolution = CanonicalFactResolutionEngine(conn).verify_snapshot(
+        verified_resolution = CanonicalFactResolutionEngine(
+            conn, source_context=verifier.source_context
+        ).verify_snapshot(
             request.canonical_fact_resolution_snapshot_id,
             request.cutoff_at,
             observed_through=request.recorded_at,
@@ -2773,7 +2791,15 @@ def _verify_research_references_in_snapshot(
                 return verifier.resolution_reference(verified_resolution, lane, reference_id)
             if lane.startswith("source_fact_publication:") and reference_id in publications:
                 return verifier.publication_reference(publications[reference_id], lane, request)
-        selected = _DefaultResearchReferenceVerifier() if lane == "research_universe" else verifier
+        selected = (
+            _DefaultResearchReferenceVerifier(
+                verifier.source_context
+                if isinstance(verifier, _DefaultResearchReferenceVerifier)
+                else None
+            )
+            if lane == "research_universe"
+            else verifier
+        )
         return selected.verify(
             conn,
             requested_lane=lane,
@@ -3035,20 +3061,24 @@ def _verify_research_snapshot_with_verifier(
 def build_research_snapshot(
     conn: sqlite3.Connection,
     request: ResearchSnapshotRequest,
+    *,
+    source_context: SourceReadContext | None = None,
 ) -> ResearchSnapshotAdmission:
     return _build_research_snapshot_with_verifier(
-        conn, request, verifier=_DefaultResearchReferenceVerifier()
+        conn, request, verifier=_DefaultResearchReferenceVerifier(source_context)
     )
 
 
 def verify_research_snapshot(
     conn: sqlite3.Connection,
     research_snapshot_id: str,
+    *,
+    source_context: SourceReadContext | None = None,
 ) -> ResearchSnapshotAdmission:
     return _verify_research_snapshot_with_verifier(
         conn,
         research_snapshot_id,
-        verifier=_DefaultResearchReferenceVerifier(),
+        verifier=_DefaultResearchReferenceVerifier(source_context),
     )
 
 

@@ -616,3 +616,53 @@ The one-time legacy sidecar-cache importer has no retained caller and is removed
 ### October 27 optional schedule audit
 
 Retire the recurring advisor-stance scorecard, business-factor taxonomy refresh and scenario-prior refresh. Retain their manual backend commands for targeted chat work. These changes remove three source declarations, leaving 29. The read-only Windows observation found 44 installed project tasks; 15 are outside this candidate set. The Telegram poller service was running. These are observed retirement targets, not completed live actions.
+
+## October 27 integration checkpoint
+
+The retirement candidate is being merged with `origin/main` at
+`3b0885deceb0b1f1a22beaef974aedf854332dee`. The local pre-merge checkpoint is
+`229b7857c0b55a239b2fe21ec1cc3ece2a83feef`. Neither version is a deployed release.
+All 49 merge conflicts are resolved. Retired ETF products, extra document cards,
+SayDo pairwise narrative and coaching paths remain removed.
+
+The combined implementation retains main's source-context, reported-period,
+reviewed OCR, DCF candidate and immutable report-capture contracts. Financial
+reads keep one batch materialization. The shared publication scope borrows a
+protected snapshot without transaction-control statements. Report source and
+panel reads run during preparation on the selected connection. Both preparation
+paths reject a mismatched or transient connection before source reads. Rendering
+uses prepared values. Candidate rendering cannot read or create a report
+capability. The migration join preserves both parent histories and refuses
+downgrade before revision metadata can change.
+
+The local owning batches passed: financial readers (68 passed, one historical
+performance comparison skipped), intake/report repairs (271 passed), and final
+report/migration/golden checks (94 passed). The source graph has no production
+unknown or unresolved edges. The measured static census is 1,226 diagnostics and
+1,303 suppressions; every subsystem is at or below its previous ceiling. The
+full integrated project gate and current independent acceptance remain pending.
+These local checks do not establish Windows qualification or live deployment.
+
+The next optional-input batch is flagged for removal: historical interview/theme
+seeding, the one-time hardcoded decision importer, and generated standing-stance
+synthesis. Preserve the actual owner decision records and current process tenets.
+Their exact dependency closure and independent plan review remain open. The
+separate generated Recent developments card awaits the owner's scope answer;
+raw news and source access remain retained in either case.
+
+The first merged full gate stopped at import-cycle checks. The repair moves four
+comparison data types into the existing prepared-model owner and uses the shared
+UTF-8 hash helper in SQLite. It preserves the protected connection type check.
+The architecture comparison now passes without a ceiling change: 558,197
+noncomment lines, 23 modules above 2,000 lines, 56 modules in cycles, and a largest
+cycle of 12 modules. The repair batch passed 173 tests with one historical
+performance comparison skipped. The full integrated gate must run again.
+
+The full test run was interrupted after 129 failures, 4,513 passes and two skips.
+All observed failures were in GC recovery and presentation intake. GC recovery
+correctly refused source bytes that differed from the committed Git version.
+Presentation fixtures predate main's source-bound reported-period window. Their
+source gate, unknown-period behavior and replay paths need reconciliation. This
+is an incomplete failed gate, not release acceptance. The local merge checkpoint
+is committed to give source-attestation tests an exact candidate. No publication,
+production migration, task retirement or deployment follows from that commit.

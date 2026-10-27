@@ -19,10 +19,12 @@ import json
 import logging
 import sqlite3
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import cast
 
 from llm_client import is_hard_stop
+from report.file_capture import read_captured_text
 from report.models import (
     ExecCompRowModel,
     ExecCompSectionModel,
@@ -43,13 +45,16 @@ def build(
     insider_window_days: int = 365,
     force_budget_bypass: bool = False,
     conn: sqlite3.Connection | None = None,
+    as_of: datetime | None = None,
 ) -> ExecCompSectionModel:
     """Build the §13 Executive Compensation section for one ticker."""
     ticker = ticker.upper()
     db_path = repo_root / "data" / "portfolio.db"
 
     packages = _load_packages(ticker, db_path, conn=conn)
-    insider_signals = _load_insider_signals(ticker, db_path, insider_window_days, conn=conn)
+    insider_signals = _load_insider_signals(
+        ticker, db_path, insider_window_days, conn=conn, as_of=as_of
+    )
     holdings_kpis = _load_thesis_kpis(ticker, repo_root)
 
     if not packages and not insider_signals:
@@ -199,8 +204,9 @@ def _load_insider_signals(
     window_days: int,
     *,
     conn: sqlite3.Connection | None = None,
+    as_of: datetime | None = None,
 ) -> list[InsiderSignalRowModel]:
-    if not db_path.exists():
+    if conn is None and not db_path.exists():
         return []
     # Late import so this section module can be imported without sys.path being set
     sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
@@ -214,6 +220,7 @@ def _load_insider_signals(
         window_days=window_days,
         db_path=db_path,
         conn=conn,
+        as_of=as_of,
     )
     return [
         InsiderSignalRowModel(
@@ -232,11 +239,13 @@ def _load_insider_signals(
 
 def _load_thesis_kpis(ticker: str, repo_root: Path) -> list[str]:
     """Tier-1 KPI names from holdings JSON — used to test alignment."""
-    holdings = repo_root / "micro_thesis" / "holdings" / f"{ticker}.json"
-    if not holdings.exists():
+    holdings = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
+    try:
+        raw_text = read_captured_text(repo_root, holdings)
+    except FileNotFoundError:
         return []
     try:
-        raw_data = json.loads(holdings.read_text(encoding="utf-8"))
+        raw_data = json.loads(raw_text)
     except (OSError, json.JSONDecodeError):
         return []
     if not isinstance(raw_data, dict):

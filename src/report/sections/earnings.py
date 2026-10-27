@@ -39,6 +39,7 @@ from llm_client import is_hard_stop
 from pipeline.transcript_summary import read_transcript_summary
 from pipeline.transcript_summary_verification import TranscriptSummaryVerifier
 from provenance.selection import selected_transcripts_relation
+from report.file_capture import current_file_capture_session, read_captured_text
 from report.models import (
     EarningsSection,
     QuarterlyEarningsCard,
@@ -369,7 +370,17 @@ def _scan_transcripts(tr_root: Path, ticker: str) -> dict[tuple[int, int], str]:
     `raw/` second and only fill slots that processed/ left empty, matching the
     dual-dir convention `ingest_transcripts.py` already uses.
     """
-    out: dict[tuple[int, int], str] = {}
+    session = current_file_capture_session()
+    if session is not None:
+        comm = session.get_directory_selection("transcripts_dual_dir_v1", ticker)
+        if comm is not None:
+            out: dict[tuple[int, int], str] = {}
+            for rel_path in comm.effective_winners.values():
+                m = _TRANSCRIPT_RX.match(Path(rel_path).name)
+                if m:
+                    out[(int(m.group("q")), int(m.group("y")))] = str(session.repo_root / rel_path)
+            return out
+    out = {}
     upper = ticker.upper()
     for subdir in ("processed", "raw"):
         d = tr_root / subdir
@@ -681,10 +692,12 @@ def _earnings_metric_names(ticker: str, repo_root: Path) -> list[str]:
         "gross_profit",
     ]
     holdings_path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
-    if not holdings_path.exists():
+    try:
+        raw_text = read_captured_text(repo_root, holdings_path)
+    except FileNotFoundError:
         return names
     try:
-        holdings = cast("dict[str, object]", json.loads(holdings_path.read_text(encoding="utf-8")))
+        holdings = cast("dict[str, object]", json.loads(raw_text))
     except (OSError, json.JSONDecodeError):
         return names
     raw_kpis = holdings.get("tier_1_kpis")

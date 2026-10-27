@@ -62,7 +62,11 @@ _PERIOD_RESULTS_RX = re.compile(
     re.IGNORECASE,
 )
 _HTML_LISTING_PAGE_RX = re.compile(
-    r"/(?:default|index)(?:\.[a-z0-9]+)?/?$",
+    r"/(?:default|index)(?:\.[a-z0-9]+)?/?$|/press[-_]releases/?$",
+    re.IGNORECASE,
+)
+_STATIC_ASSET_RX = re.compile(
+    r"\.(?:css|js|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|eot|map)$",
     re.IGNORECASE,
 )
 
@@ -217,7 +221,7 @@ def discover_document_inventory(
             target = _document_url(urllib.parse.urljoin(page_url, href))
             if (
                 href
-                and _is_document_anchor(
+                and is_document_anchor(
                     target,
                     text,
                     publisher_host=base_host,
@@ -230,7 +234,7 @@ def discover_document_inventory(
         if depth < _MAX_DEPTH:
             for href, text in anchors:
                 target = _document_url(urllib.parse.urljoin(page_url, href))
-                if not href or _is_document_anchor(
+                if not href or is_document_anchor(
                     target,
                     text,
                     publisher_host=base_host,
@@ -391,7 +395,7 @@ def _document_url(url: str) -> str:
     return urllib.parse.urlunparse(parsed._replace(fragment=""))
 
 
-def _is_document_anchor(
+def is_document_anchor(
     url: str,
     text: str,
     *,
@@ -406,6 +410,7 @@ def _is_document_anchor(
         or parsed.port is not None
         or parsed.username is not None
         or parsed.password is not None
+        or _STATIC_ASSET_RX.search(parsed.path)
     ):
         return False
     authorized = _hostname(url) == publisher_host or any(
@@ -414,7 +419,9 @@ def _is_document_anchor(
     if not authorized:
         # Observed binary links are discovery candidates only. They never attest
         # publisher authority. The strict evidence-inventory default stays closed.
-        if candidate_link_scope != "observed_binary" or not _has_doc_ext(parsed.path):
+        if candidate_link_scope != "observed_binary" or not (
+            _has_doc_ext(parsed.path) or _DOC_HREF_RX.search(url)
+        ):
             return False
         try:
             ensure_safe_public_url(url)

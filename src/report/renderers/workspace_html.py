@@ -24,6 +24,7 @@ output byte-for-byte across both.
 
 from __future__ import annotations
 
+import sqlite3
 from io import StringIO
 
 from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
@@ -320,14 +321,32 @@ __all__ = [
 ]
 
 
-def render(spec: ReportSpec) -> str:
+def render(
+    spec: ReportSpec,
+    *,
+    candidate_mode: bool = False,
+    report_capability: str | None = None,
+    generation_context_sha256: str | None = None,
+) -> str:
     return render_standalone_report(
-        spec, render_report_body(spec, delivery=prepare_report_delivery(spec))
+        spec,
+        render_report_body(
+            spec,
+            delivery=prepare_report_delivery(
+                spec, candidate_mode=candidate_mode, report_capability=report_capability
+            ),
+            generation_context_sha256=generation_context_sha256,
+        ),
+        candidate_mode=candidate_mode,
+        generation_context_sha256=generation_context_sha256,
     )
 
 
 def render_report_body(
-    spec: ReportSpec, *, delivery: WorkspaceDelivery | None = None
+    spec: ReportSpec,
+    *,
+    delivery: WorkspaceDelivery | None = None,
+    generation_context_sha256: str | None = None,
 ) -> RenderedReportBody:
     """Render every applicable section without document-level chrome."""
 
@@ -351,7 +370,12 @@ def render_report_body(
         for sid, slabel, _scount, _render_fn in sections
     )
     _tabs(body, groups, ticker=spec.ticker)
-    body.write('<div class="l1-root">')
+    if generation_context_sha256:
+        body.write(
+            f'<div class="l1-root" data-generation-context-sha256="{_esc(generation_context_sha256)}">'
+        )
+    else:
+        body.write('<div class="l1-root">')
     _identity(body, spec, spec.saydo.verdicts)
     if (
         PanelAvailability.UNAVAILABLE in p3.availability.values()
@@ -418,12 +442,23 @@ def render_report_body(
     )
 
 
-def render_standalone_report(spec: ReportSpec, body: RenderedReportBody) -> str:
+def render_standalone_report(
+    spec: ReportSpec,
+    body: RenderedReportBody,
+    *,
+    candidate_mode: bool = False,
+    generation_context_sha256: str | None = None,
+) -> str:
     """Wrap a shared report body in the standalone document assets."""
 
     if body.ticker != spec.ticker.upper() or body.report_date != spec.generation_date:
         raise ValueError("report body identity does not match ReportSpec")
-    return _document(spec, body.body_html)
+    document = _document(spec, body.body_html)
+    if candidate_mode and generation_context_sha256 is not None:
+        document = document.replace(
+            "<body", f'<body data-candidate-context="{generation_context_sha256}"', 1
+        )
+    return document
 
 
 def _document(spec: ReportSpec, body: str) -> str:
@@ -479,7 +514,9 @@ def _comps_tab(body: StringIO, rows: list[PeerCompRow]) -> None:
     body.write("</div>")
 
 
-def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
+def _tab_defs(
+    spec: ReportSpec, p3: WorkspaceP3Panels, *, conn: sqlite3.Connection | None = None
+) -> list[TabDef]:
     """Return every section tab as [(tab_id, label, count_or_None, render_fn), ...].
 
     This is the flat per-section inventory; ``_tab_groups`` folds it into the
@@ -650,9 +687,11 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
     return tabs
 
 
-def _tab_groups(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabGroup]:
+def _tab_groups(
+    spec: ReportSpec, p3: WorkspaceP3Panels, *, conn: sqlite3.Connection | None = None
+) -> list[TabGroup]:
     """Fold report depth into the prototype's exact six-group brief canvas."""
-    by_id = {t[0]: t for t in _tab_defs(spec, p3)}
+    by_id = {t[0]: t for t in _tab_defs(spec, p3, conn=conn)}
     thesis_risk_ids = ["thesis", "bear"]
     if "position" in by_id:
         thesis_risk_ids.append("position")

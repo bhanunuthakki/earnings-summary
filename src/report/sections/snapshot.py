@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal, cast
 
+from report.file_capture import current_file_capture_session, read_captured_text
 from report.models import (
     DecisionBadge,
     KpiSnapshotRow,
@@ -25,7 +26,18 @@ from report.models import (
 )
 from report.rules import load_rules
 from report.sections._common import has_table, missing, open_repo_db
-from report.sections.thesis import _split_stub_warning
+from report.sections.thesis import split_stub_warning
+
+
+def _validated_model_run_id(model_run_id: int | None) -> int | None:
+    """Reject non-positive, non-integer explicit DCF row ids without coercion."""
+    if model_run_id is None:
+        return None
+    # Exact-type check (not isinstance) so a bool or a JSON-parsed float is
+    # rejected rather than silently coerced to an int row id.
+    if type(model_run_id) is not int or model_run_id <= 0:
+        raise ValueError("model_run_id must be a positive integer")
+    return model_run_id
 
 
 def build(
@@ -35,6 +47,7 @@ def build(
     *,
     held: bool = False,
     conn: sqlite3.Connection | None = None,
+    model_run_id: int | None = None,
 ) -> SnapshotSection:
     holdings = _read_holdings(ticker, repo_root)
     rules = load_rules(ticker, repo_root)
@@ -51,10 +64,11 @@ def build(
         sheet_url,
         held=held,
         conn=conn,
+        model_run_id=model_run_id,
     )
     verdict, verdict_as_of = _verdict(ticker, repo_root, conn=conn)
     tier_1_strip = _tier_1_strip(holdings)
-    recent_decisions = _recent_decisions(ticker, repo_root)
+    recent_decisions = _recent_decisions(ticker, repo_root, conn=conn)
 
     if holdings is None and valuation.consolidated_npv_per_share is None:
         return SnapshotSection(
@@ -72,7 +86,7 @@ def build(
             recent_decisions=recent_decisions,
         )
 
-    thesis_clean, _ = _split_stub_warning(holdings or {})
+    thesis_clean, _ = split_stub_warning(holdings or {})
     return SnapshotSection(
         status=SectionStatus.OK if valuation.consolidated_npv_per_share else SectionStatus.PARTIAL,
         ticker=ticker.upper(),
@@ -88,10 +102,14 @@ def build(
 
 def _read_holdings(ticker: str, repo_root: Path) -> dict[str, object] | None:
     path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
-    if not path.exists():
+    try:
+        raw_text = read_captured_text(repo_root, path)
+    except FileNotFoundError:
         return None
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        return cast("dict[str, object]", json.loads(raw_text))
+    except (json.JSONDecodeError, OSError):
+        return None
 
 
 def _linked_sheet_url(holdings: dict[str, object] | None) -> str | None:
@@ -131,39 +149,70 @@ def _company_name(
     return row["name"] if row else None
 
 
-def _latest_price(ticker: str, repo_root: Path) -> float | None:
+def latest_price(ticker: str, repo_root: Path) -> float | None:
     """Most recent close price from the FMP price-chart JSON, or None."""
+    session = current_file_capture_session()
+    if session is not None:
+        comm = session.get_directory_selection("fmp_price_chart_v1", ticker)
+        if comm is not None:
+            for rel_path in comm.effective_winners.values():
+                try:
+                    raw_text = session.read_text(rel_path)
+                    price = _parse_latest_close(raw_text)
+                    if price is not None:
+                        return price
+                except (FileNotFoundError, OSError):
+                    continue
+            return None
     fmp_dir = repo_root / "data" / "historical" / "fmp"
     if not fmp_dir.exists():
         return None
     upper = ticker.upper()
     candidates = [p for p in fmp_dir.glob(f"{upper}_*price_chart*.json")]
-    candidates.extend(fmp_dir.glob(f"{upper}L_*price_chart*.json"))  # GOOG ↔ GOOGL alias
+    if upper == "GOOG":
+        candidates.extend(fmp_dir.glob("GOOGL_*price_chart*.json"))  # GOOG ↔ GOOGL alias
+    candidates.sort(key=lambda p: (0 if p.name.startswith(f"{upper}_") else 1, p.name))
     for path in candidates:
-        price = _read_latest_close(path)
+        price = _read_latest_close(path, repo_root)
         if price is not None:
             return price
     return None
 
 
-def _read_latest_close(path: Path) -> float | None:
+_latest_price = latest_price
+
+
+def _read_latest_close(path: Path, repo_root: Path) -> float | None:
     try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
+        raw_text = read_captured_text(repo_root, path)
+    except (FileNotFoundError, OSError):
+        return None
+    return _parse_latest_close(raw_text)
+
+
+def _parse_latest_close(raw_text: str) -> float | None:
+    try:
+        data: object = json.loads(raw_text)
     except (OSError, json.JSONDecodeError):
         return None
-    records = (
-        data
-        if isinstance(data, list)
-        else data.get("historical")
-        if isinstance(data, dict)
-        else None
-    )
-    if not isinstance(records, list) or not records:
+    if isinstance(data, list):
+        raw_records: object = cast("list[object]", data)
+    elif isinstance(data, dict):
+        d_dict = cast("dict[str, object]", data)
+        raw_records = d_dict.get("historical")
+    else:
         return None
+    if not isinstance(raw_records, list) or not raw_records:
+        return None
+    records: list[object] = cast("list[object]", raw_records)
+    valid_records: list[dict[str, object]] = [
+        cast("dict[str, object]", r)
+        for r in records
+        if isinstance(r, dict) and isinstance(r.get("date"), str)
+    ]
     sorted_records = sorted(
-        (r for r in records if isinstance(r, dict) and isinstance(r.get("date"), str)),
-        key=lambda r: r["date"],
+        valid_records,
+        key=lambda r: str(r.get("date") or ""),
         reverse=True,
     )
     for r in sorted_records:
@@ -183,7 +232,9 @@ def _valuation_snapshot(
     sheet_url: str | None = None,
     held: bool = False,
     conn: sqlite3.Connection | None = None,
+    model_run_id: int | None = None,
 ) -> ValuationSnapshot:
+    model_run_id = _validated_model_run_id(model_run_id)
     db_conn = open_repo_db(repo_root, conn)
     if db_conn is None or not has_table(db_conn, "dcf_runs"):
         if db_conn is not None and conn is None:
@@ -209,19 +260,23 @@ def _valuation_snapshot(
     # miss the priced_in/scenario_prior blocks the newest refresh persisted.
     # Same current-run selection every other dcf_runs reader already uses
     # (build_per_metric below, synthesis lenses, standup signals).
-    cursor.execute(
-        f"""
-        SELECT valuation_date, wacc, terminal_growth, npv, npv_per_share,
-               shares_outstanding, breakdown_json,
-               live_price, live_price_at, over_under_pct, mos_bar_used,
-               assumption_snapshot_json{sync_select}{sanity_select}
-        FROM dcf_runs
-        WHERE ticker = ?
-        ORDER BY valuation_date DESC, id DESC
-        LIMIT 1
-        """,
-        (ticker.upper(),),
+    select_columns = (
+        "SELECT valuation_date, wacc, terminal_growth, npv, npv_per_share, "  # nosec B608
+        "shares_outstanding, breakdown_json, "
+        "live_price, live_price_at, over_under_pct, mos_bar_used, "
+        f"assumption_snapshot_json{sync_select}{sanity_select} "
+        "FROM dcf_runs"
     )
+    if model_run_id is not None:
+        cursor.execute(
+            f"{select_columns} WHERE ticker = ? AND id = ? LIMIT 1",
+            (ticker.upper(), model_run_id),
+        )
+    else:
+        cursor.execute(
+            f"{select_columns} WHERE ticker = ? ORDER BY valuation_date DESC, id DESC LIMIT 1",
+            (ticker.upper(),),
+        )
     row = cursor.fetchone()
     if conn is None:
         db_conn.close()
@@ -527,21 +582,25 @@ def _sum_of_segments_npv_per_share(
         return None
     if not isinstance(components, list):
         return None
+    comp_list: list[object] = cast("list[object]", components)
     seg_npv_total = 0.0
     found_segment = False
-    for c in components:
+    for c in comp_list:
         if not isinstance(c, dict):
             continue
-        if c.get("component_type") != "segment":
+        c_dict = cast("dict[str, object]", c)
+        if c_dict.get("component_type") != "segment":
             continue
-        npv = c.get("npv")
+        npv = c_dict.get("npv")
         if isinstance(npv, (int, float)):
             seg_npv_total += float(npv)
             found_segment = True
     if not found_segment:
         return None
     try:
-        shares = float(shares_outstanding) if shares_outstanding is not None else None
+        shares = (
+            float(shares_outstanding) if isinstance(shares_outstanding, (int, float, str)) else None
+        )
     except (TypeError, ValueError):
         shares = None
     if not shares or shares <= 0:
@@ -591,7 +650,9 @@ _VALID_OUTCOME_LABELS: frozenset[str] = frozenset(
 _RATIONALE_MAX_CHARS = 80
 
 
-def _recent_decisions(ticker: str, repo_root: Path) -> list[DecisionBadge]:
+def _recent_decisions(
+    ticker: str, repo_root: Path, *, conn: sqlite3.Connection | None = None
+) -> list[DecisionBadge]:
     """Return the 3 most-recent decisions for `ticker` as DecisionBadge rows.
 
     Reads via decision_extractor.history so we inherit its db-absent / table-
@@ -603,7 +664,7 @@ def _recent_decisions(ticker: str, repo_root: Path) -> list[DecisionBadge]:
     except ImportError:
         return []
     db_path = repo_root / "data" / "portfolio.db"
-    rows = decision_history(ticker=ticker.upper(), limit=3, db_path=db_path)
+    rows = decision_history(ticker=ticker.upper(), limit=3, db_path=db_path, conn=conn)
     badges: list[DecisionBadge] = []
     for r in rows:
         raw = r.outcome_label if r.outcome_label in _VALID_OUTCOME_LABELS else "pending"
@@ -632,16 +693,21 @@ def _tier_1_strip(holdings: dict[str, object] | None) -> list[KpiSnapshotRow]:
     if holdings is None:
         return []
     rows: list[KpiSnapshotRow] = []
-    kpis = holdings.get("tier_1_kpis") or []
-    if not isinstance(kpis, list):
+    raw_kpis = holdings.get("tier_1_kpis")
+    if not isinstance(raw_kpis, list):
         return []
+    kpis: list[object] = cast("list[object]", raw_kpis)
     for k in kpis:
         if not isinstance(k, dict):
             continue
+        k_dict = cast("dict[str, object]", k)
+        k_name = str(k_dict.get("name") or "")
+        k_break = k_dict.get("break")
+        threshold = str(k_break) if k_break else None
         rows.append(
             KpiSnapshotRow(
-                name=str(k.get("name", "")),
-                threshold=str(k.get("break")) if k.get("break") else None,
+                name=k_name,
+                threshold=threshold,
                 status="unknown",  # populated by §2 builder when KPI facts exist
             )
         )
@@ -653,6 +719,7 @@ def build_per_metric(
     repo_root: Path,
     *,
     conn: sqlite3.Connection | None = None,
+    model_run_id: int | None = None,
 ) -> dict[str, dict[str, object]]:
     """Per-metric provenance for the §1 snapshot.
 
@@ -670,6 +737,7 @@ def build_per_metric(
 
     Returns {} when no DCF row exists for the ticker.
     """
+    model_run_id = _validated_model_run_id(model_run_id)
     db_conn = open_repo_db(repo_root, conn)
     if db_conn is None:
         return {}
@@ -677,12 +745,19 @@ def build_per_metric(
         if not has_table(db_conn, "dcf_runs"):
             return {}
         cursor = db_conn.cursor()
-        cursor.execute(
-            "SELECT id, valuation_date, created_at, live_price_at "
-            "FROM dcf_runs WHERE ticker = ? "
-            "ORDER BY valuation_date DESC, id DESC LIMIT 1",
-            (ticker.upper(),),
-        )
+        if model_run_id is not None:
+            cursor.execute(
+                "SELECT id, valuation_date, created_at, live_price_at "
+                "FROM dcf_runs WHERE ticker = ? AND id = ? LIMIT 1",
+                (ticker.upper(), model_run_id),
+            )
+        else:
+            cursor.execute(
+                "SELECT id, valuation_date, created_at, live_price_at "
+                "FROM dcf_runs WHERE ticker = ? "
+                "ORDER BY valuation_date DESC, id DESC LIMIT 1",
+                (ticker.upper(),),
+            )
         row = cursor.fetchone()
     finally:
         if conn is None:

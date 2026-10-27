@@ -7,8 +7,79 @@ from datetime import date, datetime
 from enum import StrEnum
 
 from llm.calibration import VersionSummary
-from report.sections.comp_set_context import CompSetContextSection
 from user_state.notes import AnalystNoteRow
+
+
+@dataclass(frozen=True)
+class CompSetMetricLine:
+    """One metric's subject-vs-comp-set-vs-scope reading for the card."""
+
+    metric: str
+    label: str
+    is_pct: bool
+    subject_value: float | None
+    median_value: float | None
+    aggregate_value: float | None
+    n_members: int
+    n_valid_median: int
+    coverage_pct_median: float
+    flags: tuple[str, ...] = ()
+    provider: str | None = None
+    period_basis: str | None = None
+    estimate_observed_min: date | None = None
+    estimate_observed_max: date | None = None
+    target_period_min: date | None = None
+    target_period_max: date | None = None
+    currency: str | None = None
+    unit: str | None = None
+    subject_unavailable_reason: str | None = None
+    unavailable_reasons: tuple[tuple[str, int], ...] = ()
+    secondary: bool = False
+
+
+@dataclass(frozen=True)
+class CompSetScopeSummary:
+    """Pool-wide industry/sector slice reading (§6) -- the multiples
+    benchmark per §4.1, point 2 (NOT derived from the ETF's holdings)."""
+
+    scope_type: str  # 'industry'|'sector'
+    scope_key: str
+    as_of_date: date | None
+    n_members: int
+    pe_ttm_median: float | None
+    pe_ntm_median: float | None
+    pe_ntm_n_valid: int
+    pe_ntm_unavailable_reasons: tuple[tuple[str, int], ...]
+    stale: bool
+
+
+@dataclass(frozen=True)
+class CompSetMemberRef:
+    ticker: str
+    name: str | None
+    membership_reason: str
+    context_only: bool
+
+
+@dataclass(frozen=True)
+class CompSetContextSection:
+    ticker: str
+    comparable_set_id: str
+    method_version: int
+    metric_class: str  # 'operating'|'financial'|'reit'
+    as_of_date: date | None
+    stale: bool
+    n_members: int
+    primary_metrics: tuple[CompSetMetricLine, ...]
+    secondary_metrics: tuple[CompSetMetricLine, ...]
+    industry: str | None
+    sector: str | None
+    industry_scope: CompSetScopeSummary | None
+    sector_scope: CompSetScopeSummary | None
+    benchmark_etf: str | None
+    benchmark_sector_etf: str | None
+    benchmark_note: str
+    members: tuple[CompSetMemberRef, ...]
 
 
 @dataclass(frozen=True)

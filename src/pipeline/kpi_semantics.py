@@ -9,7 +9,9 @@ against the unchanged fact row.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
+import unicodedata
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
@@ -144,20 +146,229 @@ def normalize_source_numeric(value: Decimal, *, unit: Unit, unit_scale: KpiUnitS
     return value * _COUNT_SOURCE_SCALE_MULTIPLIERS[unit_scale]
 
 
-def parse_source_numeric(value: str) -> Decimal:
-    """Parse one exact source-number token without applying presentation scale."""
+def source_numeric_token_occurs(token: str, quote: str, *, row_label: str | None = None) -> bool:
+    """Scan opaque numeric envelopes between closed, known-safe delimiters.
 
-    stripped = value.strip().replace(",", "")
-    if stripped.endswith("%"):
-        stripped = stripped[:-1].strip()
-    if stripped.startswith("(") and stripped.endswith(")"):
-        stripped = "-" + stripped[1:-1]
-    for prefix in ("$", "€", "£"):
-        stripped = stripped.removeprefix(prefix).strip()
+    Unknown punctuation, Unicode signs and controls stay attached until the
+    closed parser rejects the complete envelope. No rejected interior restarts.
+    """
+    quotes = "\"'\u2018\u2019\u201c\u201d"
+    wrappers = {"(": ")", "[": "]", "{": "}"}
+    percent_label_is_exact = bool(
+        row_label is not None and row_label.endswith("%") and quote.startswith(row_label)
+    )
+    safe_percent_label = bool(
+        percent_label_is_exact
+        and row_label is not None
+        and re.fullmatch(r"[A-Za-z][A-Za-z \n-]*[ \n]%", row_label) is not None
+    )
+    if percent_label_is_exact and not safe_percent_label:
+        # Do not recover a later cell from a malformed numeric row label.
+        return False
+
+    def opaque_symbol(char: str) -> bool:
+        category = unicodedata.category(char)
+        return (
+            category in {"Pd", "Sm", "Sk", "Cf", "Cs"}
+            or (category == "Cc" and not char.isspace())
+            or unicodedata.normalize("NFKC", char) in {"+", "-"}
+        )
+
+    def delimiter(index: int, envelope_start: int | None = None) -> bool:
+        char = quote[index]
+        # The source row label can end with a standalone percent marker. Only
+        # its exact, closed label and two-space table gap separate the next cell.
+        if (
+            char == "%"
+            and safe_percent_label
+            and row_label is not None
+            and index == len(row_label) - 1
+            and quote[index + 1 : index + 3] == "  "
+            and index + 3 < len(quote)
+            and quote[index + 3] in "0123456789"
+        ):
+            return True
+        # A standalone em dash between table column gaps is an empty cell,
+        # never a sign. Single spaces and attached dashes remain opaque.
+        if (
+            char == "—"
+            and (index == 0 or quote[max(0, index - 2) : index] == "  ")
+            and (index == len(quote) - 1 or quote[index + 1 : index + 3] == "  ")
+        ):
+            return True
+        if (
+            char.isspace()
+            or char in quotes
+            or unicodedata.category(char) in {"Pi", "Pf"}
+            or char in ":;!?="
+        ):
+            return True
+        if char in ".,":
+            before = quote[index - 1 : index] if index else ""
+            after = quote[index + 1 : index + 2]
+            # Prose punctuation may follow a complete percent/parenthesized
+            # literal. Parse the whole prefix; never discard a malformed sign,
+            # grouping, control character or wrapper to recover its interior.
+            if before in {"%", ")"} and envelope_start is not None:
+                try:
+                    parse_source_numeric(quote[envelope_start:index])
+                except ValueError:
+                    return False
+                return not after or after.isspace()
+            return bool(
+                before
+                and (
+                    before.isalnum()
+                    or before in quotes
+                    or unicodedata.category(before) in {"Pi", "Pf"}
+                )
+                and (not after or after.isspace())
+            )
+        return False
+
+    cursor = 0
+    previous_end: int | None = None
+    previous_start: int | None = None
+    while cursor < len(quote):
+        char = quote[cursor]
+        if char == "-" and previous_end is not None and not quote[previous_end:cursor].strip():
+            cursor += 1  # A second minus remains part of the next endpoint.
+            previous_end = None
+            continue
+        if delimiter(cursor, previous_start if previous_end == cursor else None):
+            cursor += 1
+            continue
+        if (char.isalpha() or char == "_") and not opaque_symbol(char):
+            while (
+                cursor < len(quote)
+                and (
+                    quote[cursor].isalnum()
+                    or quote[cursor] == "_"
+                    or (quote[cursor] in ".," and quote[cursor + 1 : cursor + 2].isalnum())
+                )
+                and not opaque_symbol(quote[cursor])
+            ):
+                cursor += 1
+            continue
+        start = cursor
+        # Once an envelope starts, punctuation/controls/whitespace before its
+        # number are never thrown away, even if normally delimiters outside it.
+        while cursor < len(quote):
+            char = quote[cursor]
+            if char in wrappers or unicodedata.category(char) == "Ps":
+                break
+            if (char.isalnum() or char == "_") and not opaque_symbol(char):
+                break
+            cursor += 1
+        if cursor >= len(quote):
+            break
+        if not (
+            quote[cursor].isdigit()
+            or quote[cursor] in wrappers
+            or unicodedata.category(quote[cursor]) == "Ps"
+        ):
+            while cursor < len(quote) and not quote[cursor].isspace():
+                cursor += 1
+            previous_end = None
+            continue
+        exponent_seen = False
+        while cursor < len(quote):
+            char = quote[cursor]
+            if char in wrappers:
+                opening, closing = char, wrappers[char]
+                depth = 1
+                cursor += 1
+                while cursor < len(quote) and depth:
+                    depth += (quote[cursor] == opening) - (quote[cursor] == closing)
+                    cursor += 1
+                continue
+            if unicodedata.category(char) == "Ps":
+                # Unknown wrapper grammar: keep the rest opaque, not its digits.
+                cursor = len(quote)
+                break
+            if (char.isalnum() or char == "_") and not opaque_symbol(char):
+                exponent_seen = exponent_seen or char in "eE"
+                cursor += 1
+                continue
+            if char in "+-":
+                if exponent_seen:
+                    cursor += 1
+                    continue
+                break
+            if char.isspace():
+                suffix = cursor
+                while suffix < len(quote) and quote[suffix].isspace():
+                    suffix += 1
+                following = quote[suffix : suffix + 1]
+                if following and (
+                    following == "%"
+                    or (
+                        opaque_symbol(following)
+                        and following not in "+-="
+                        and not delimiter(suffix)
+                    )
+                    or (exponent_seen and (following.isdigit() or following in "+-"))
+                ):
+                    cursor = suffix
+                    continue
+                break
+            if delimiter(cursor, start):
+                break
+            # Every other attached character belongs to this envelope. The
+            # parser, not a permissive restart, decides whether it is supported.
+            cursor += 1
+        lexeme = quote[start:cursor]
+        try:
+            parse_source_numeric(lexeme)
+        except ValueError:
+            previous_end = None
+            continue
+        previous_end = cursor
+        previous_start = start
+        if token == lexeme:
+            return True
+        if lexeme[:1] in {"$", "€", "£"} and token == lexeme[1:].lstrip():
+            return True
+    return False
+
+
+def parse_source_numeric(value: str) -> Decimal:
+    """Parse one complete literal without applying presentation scale.
+
+    ASCII sign/currency prefixes in either order and numeric parentheses are
+    supported. Scientific notation and malformed/unknown envelopes fail closed.
+    The original source token remains unchanged in its owning observation.
+    """
+    literal = value.strip()
+    outer_percent = literal.endswith("%")
+    if outer_percent:
+        literal = literal[:-1].rstrip()
+    wrapped = literal.startswith("(") and literal.endswith(")")
+    if wrapped:
+        literal = literal[1:-1].strip()
+    match = re.fullmatch(
+        r"(?P<prefix>(?:[+$€£-]\s*){0,2})"
+        r"(?P<number>(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?|\.[0-9]+)"
+        r"(?P<percent>\s*%)?",
+        literal,
+    )
+    if match is None:
+        raise ValueError("source value text is not numeric")
+    prefix = match.group("prefix")
+    signs = [char for char in prefix if char in "+-"]
+    currencies = [char for char in prefix if char in "$€£"]
+    if (
+        len(signs) > 1
+        or len(currencies) > 1
+        or (wrapped and signs)
+        or (outer_percent and match.group("percent"))
+    ):
+        raise ValueError("source value text is not numeric")
     try:
-        return Decimal(stripped)
+        number = Decimal(match.group("number").replace(",", ""))
     except InvalidOperation as exc:
         raise ValueError("source value text is not numeric") from exc
+    return -number if wrapped or signs == ["-"] else number
 
 
 _LANE_BY_ROLE: Mapping[str, KpiPublicationLane] = {

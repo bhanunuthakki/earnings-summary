@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import hashlib
+import json
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -38,7 +39,28 @@ from pipeline.work_os_briefs import (
 )
 from pipeline.work_os_company import build_company_desk
 from pipeline.work_os_decisions import build_decision_projection
-from report.artifacts import load_report_artifact_index
+from provenance.evidence_native_candidates import (
+    read_verified_local_evidence_bytes,
+    select_evidence_native_candidates_by_id,
+)
+from provenance.source_read_context import SourceReadContext
+from report.artifacts import (
+    ReportPublicationConflictError,
+    begin_or_reuse_report_request,
+    build_report_sync_status,
+    claim_drifted_report_request,
+    complete_report_request,
+    latest_report_artifacts_for_tickers,
+    load_report_artifact_index,
+    load_report_candidate_review,
+    load_report_capture_receipt,
+    load_report_file_capture_receipt,
+    publish_report_candidate,
+    resolve_report_model_binding,
+)
+from report.file_capture import replay_file_capture
+from report.generation_context import ReportModelBinding
+from report.read_capture import CaptureLimits, replay_read_capture
 
 # Self-hosted webfonts vendored under src/ui/vendor/fonts/, beside the inlined
 # Alpine asset. The Work OS shell's @font-face rules reference these exact
@@ -59,6 +81,7 @@ class ContentRouteContext:
     probe_tracker: Callable[[], tuple[bool, str]]
     fetch_live_portfolio: Callable[[], LivePortfolio]
     default_user_id: str
+    source_context: SourceReadContext | None = None
 
 
 def _parse_bbox_param(raw: str | None) -> tuple[float, float, float, float] | None:
@@ -75,11 +98,301 @@ def _parse_bbox_param(raw: str | None) -> tuple[float, float, float, float] | No
     return (x0, y0, x1, y1)
 
 
+def _pinned_ocr_pdf_bytes(
+    context: ContentRouteContext, doc_id: int, version_id: str, source_sha256: str
+) -> bytes:
+    authority = context.source_context
+    if authority is None or authority.ocr_state_root is None:
+        raise ValueError("OCR PDF source authority is unavailable")
+    if len(version_id) > 128 or len(source_sha256) != 64:
+        raise ValueError("OCR PDF source identity is invalid")
+    conn = context.get_read_db()
+    row = conn.execute(
+        "SELECT version.blob_sha256,document.sha256 FROM evidence_document_versions version "
+        "JOIN documents document ON document.id=version.legacy_document_id "
+        "WHERE version.document_version_id=? AND version.legacy_document_id=? "
+        "AND version.document_type='ir_supplement'",
+        (version_id, doc_id),
+    ).fetchone()
+    if row is None or row[0] != source_sha256 or row[1] != source_sha256:
+        raise ValueError("OCR PDF source document identity changed")
+    candidates = select_evidence_native_candidates_by_id(
+        conn, document_version_ids=(version_id,), include_legacy=True
+    )
+    if len(candidates) != 1 or candidates[0].media_type != "application/pdf":
+        raise ValueError("OCR PDF source bytes are unavailable")
+    candidate = candidates[0]
+    if (
+        candidate.blob_sha256 != source_sha256
+        or candidate.byte_size > authority.max_document_bytes
+        or candidate.byte_size > authority.max_total_bytes
+    ):
+        raise ValueError("OCR PDF source byte bound changed")
+    return read_verified_local_evidence_bytes(
+        conn,
+        storage_uri=candidate.storage_uri,
+        expected_sha256=source_sha256,
+        expected_byte_size=candidate.byte_size,
+        allowed_roots=authority.content_roots,
+        document_version_id=version_id,
+    ).raw_bytes
+
+
+def _register_report_sync_routes(app: Flask, context: ContentRouteContext) -> None:
+    repo_root = context.repo_root
+    db_path = context.db_path
+
+    @app.route("/api/report-sync/<ticker>", methods=["GET"])
+    def report_sync_status(ticker: str):
+        try:
+            validated = context.safe_ticker(ticker)
+        except ValueError:
+            abort(400)
+        status = build_report_sync_status(
+            repo_root,
+            validated,
+            conn=context.get_read_db(),
+            candidate_artifact_id=request.args.get("candidate_artifact_id"),
+        )
+        etag = str(status["etag"])
+        if request.headers.get("If-None-Match", "").strip('"') == etag:
+            return Response(status=304, headers={"ETag": f'"{etag}"'})
+        response = Response(json.dumps(status), mimetype="application/json")
+        response.headers["ETag"] = f'"{etag}"'
+        return response
+
+    @app.route("/api/report-sync/<ticker>/candidate", methods=["POST"])
+    def report_sync_candidate(ticker: str):
+        try:
+            validated = context.safe_ticker(ticker)
+        except ValueError:
+            abort(400)
+        raw_payload = request.get_json(silent=True)
+        payload: dict[str, object] = (
+            cast(dict[str, object], raw_payload) if isinstance(raw_payload, dict) else {}
+        )
+        if_match = request.headers.get("If-Match")
+        if if_match:
+            clean_if_match = if_match.strip('"')
+            live = build_report_sync_status(repo_root, validated, conn=context.get_read_db())
+            valid_etags = {str(live["etag"])}
+            cand_id = (
+                request.args.get("candidate_artifact_id")
+                or payload.get("candidate_artifact_id")
+                or payload.get("artifact_id")
+            )
+            if cand_id:
+                live_cand = build_report_sync_status(
+                    repo_root,
+                    validated,
+                    conn=context.get_read_db(),
+                    candidate_artifact_id=str(cand_id),
+                )
+                valid_etags.add(str(live_cand["etag"]))
+            for item in load_report_artifact_index(repo_root).items:
+                if item.ticker == validated and item.publication_status == "draft_preview":
+                    status_cand = build_report_sync_status(
+                        repo_root,
+                        validated,
+                        conn=context.get_read_db(),
+                        candidate_artifact_id=item.artifact_id,
+                    )
+                    valid_etags.add(str(status_cand["etag"]))
+            if clean_if_match not in valid_etags:
+                return Response(
+                    json.dumps({"error": "etag_mismatch"}), status=412, mimetype="application/json"
+                )
+        owner_action_raw = request.headers.get("X-Owner-Action-Id") or payload.get(
+            "owner_action_id"
+        )
+        owner_action_id = str(owner_action_raw) if owner_action_raw is not None else None
+        expected_raw = request.args.get("expected_current_artifact_id") or payload.get(
+            "expected_current_artifact_id"
+        )
+        expected_current = str(expected_raw) if expected_raw is not None else None
+
+        binding = resolve_report_model_binding(repo_root, validated, conn=context.get_read_db())
+        model_key = binding.row_id if isinstance(binding, ReportModelBinding) else "nomodel"
+        semantic_key = f"candidate_refresh:{validated}:{model_key}:{expected_current or ''}"
+
+        record, req_reused = begin_or_reuse_report_request(
+            repo_root,
+            semantic_request_key=semantic_key,
+            kind="candidate_refresh",
+            ticker=validated,
+            owner_action_id=owner_action_id,
+        )
+        if req_reused:
+            if record.status == "running":
+                return Response(
+                    json.dumps(
+                        {
+                            "status": "running",
+                            "message": "candidate refresh in progress",
+                            "ticker": validated,
+                        }
+                    ),
+                    status=202,
+                    mimetype="application/json",
+                )
+            if record.status == "completed" and record.result_payload:
+                cand_id = record.artifact_id or str(record.result_payload.get("artifact_id") or "")
+                is_valid = False
+                if cand_id:
+                    cand_capture = load_report_capture_receipt(repo_root, validated, cand_id)
+                    cand_file = load_report_file_capture_receipt(repo_root, validated, cand_id)
+                    cand_rev = load_report_candidate_review(repo_root, validated, cand_id)
+                    if cand_capture is not None and cand_file is not None and cand_rev is not None:
+                        try:
+                            active_db = db_path
+                            if active_db.is_file():
+                                replay_read_capture(active_db, cand_capture, limits=CaptureLimits())
+                                replay_file_capture(cand_file, repo_root)
+                                is_valid = True
+                        except Exception:
+                            is_valid = False
+                if is_valid:
+                    cached_payload = dict(record.result_payload)
+                    cached_payload["reused"] = True
+                    cached_payload["status"] = "reused"
+                    return Response(
+                        json.dumps(cached_payload, default=str),
+                        status=200,
+                        mimetype="application/json",
+                    )
+                record, already_running = claim_drifted_report_request(
+                    repo_root,
+                    semantic_request_key=semantic_key,
+                    ticker=validated,
+                    owner_action_id=owner_action_id,
+                )
+                if already_running:
+                    return Response(
+                        json.dumps(
+                            {
+                                "status": "running",
+                                "message": "candidate refresh in progress",
+                                "ticker": validated,
+                            }
+                        ),
+                        status=202,
+                        mimetype="application/json",
+                    )
+
+        try:
+            from execution.build_artifacts import build_candidate_artifact
+        except ImportError:
+            from build_artifacts import build_candidate_artifact
+
+        try:
+            result = build_candidate_artifact(
+                validated,
+                repo_root,
+                db_path=db_path,
+                source_context=context.source_context,
+                expected_current_artifact_id=expected_current,
+            )
+            complete_report_request(
+                repo_root,
+                semantic_request_key=semantic_key,
+                status="completed" if result.get("status") in ("ok", "reused") else "failed",
+                artifact_id=str(result.get("artifact_id") or "") or None,
+                result_payload=result,
+            )
+        except Exception:
+            complete_report_request(
+                repo_root,
+                semantic_request_key=semantic_key,
+                status="failed",
+            )
+            raise
+
+        status_code = (
+            409
+            if result.get("status") == "capture_unavailable"
+            else (200 if result.get("reused") else 201)
+        )
+        return Response(
+            json.dumps(result, default=str), status=status_code, mimetype="application/json"
+        )
+
+    @app.route("/api/report-sync/<ticker>/publish", methods=["POST"])
+    def report_sync_publish(ticker: str):
+        try:
+            validated = context.safe_ticker(ticker)
+        except ValueError:
+            abort(400)
+        raw_payload = request.get_json(silent=True)
+        payload: dict[str, object] = (
+            cast(dict[str, object], raw_payload) if isinstance(raw_payload, dict) else {}
+        )
+        artifact_id_val = str(payload.get("artifact_id") or "")
+        expected_raw = payload.get("expected_current_artifact_id")
+        expected_current = str(expected_raw) if expected_raw is not None else None
+        owner_action_val = str(payload.get("owner_action_id") or "")
+        if owner_action_val:
+            index = load_report_artifact_index(repo_root)
+            existing = next(
+                (item for item in index.publications if item.owner_action_id == owner_action_val),
+                None,
+            )
+            if existing is not None:
+                if (existing.artifact_id, existing.expected_current_artifact_id) == (
+                    artifact_id_val,
+                    expected_current,
+                ):
+                    return Response(
+                        existing.model_dump_json(), status=200, mimetype="application/json"
+                    )
+                return Response(
+                    json.dumps({"error": "owner_action_id_conflict"}),
+                    status=409,
+                    mimetype="application/json",
+                )
+        if_match = request.headers.get("If-Match")
+        if if_match:
+            clean_if_match = if_match.strip('"')
+            live_with_candidate = build_report_sync_status(
+                repo_root,
+                validated,
+                conn=context.get_read_db(),
+                candidate_artifact_id=artifact_id_val or None,
+            )
+            live_plain = build_report_sync_status(repo_root, validated, conn=context.get_read_db())
+            candidate_etag = str(live_with_candidate.get("etag") or "")
+            plain_etag = str(live_plain.get("etag") or "")
+            if clean_if_match != candidate_etag and clean_if_match != plain_etag:
+                return Response(
+                    json.dumps({"error": "etag_mismatch"}), status=412, mimetype="application/json"
+                )
+        try:
+            approval, reused = publish_report_candidate(
+                repo_root,
+                db_path=db_path,
+                ticker=validated,
+                artifact_id=artifact_id_val,
+                expected_current_artifact_id=expected_current,
+                owner_action_id=owner_action_val,
+            )
+        except ReportPublicationConflictError as exc:
+            return Response(
+                json.dumps({"error": exc.reason, "detail": exc.detail}),
+                status=409,
+                mimetype="application/json",
+            )
+        return Response(
+            approval.model_dump_json(), status=200 if reused else 201, mimetype="application/json"
+        )
+
+
 def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
     from comments_server_financial_evidence_routes import register_growth_evidence_routes
 
     register_growth_evidence_routes(
-        app, get_read_db=context.get_read_db, safe_ticker=context.safe_ticker
+        app,
+        get_read_db=context.get_read_db,
+        safe_ticker=context.safe_ticker,
+        source_context=context.source_context,
     )
     """Register read-only content routes without changing Flask contracts."""
     repo_root = context.repo_root
@@ -144,6 +457,32 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             render_statement_json_page,
             render_transcript_page,
         )
+
+        version_id = request.args.get("version")
+        source_sha256 = request.args.get("sha256")
+        if version_id is not None or source_sha256 is not None:
+            if version_id is None or source_sha256 is None:
+                abort(404)
+            try:
+                pinned_bytes = _pinned_ocr_pdf_bytes(context, doc_id, version_id, source_sha256)
+                pinned_query = urlencode({"version": version_id, "sha256": source_sha256})
+                pinned_html = render_pdf_page_view(
+                    repo_root,
+                    db_path,
+                    doc_id,
+                    request.args.get("page", type=int),
+                    bbox=_parse_bbox_param(request.args.get("bbox")),
+                    fragment=request.args.get("fragment") == "1",
+                    raw_bytes=pinned_bytes,
+                    pinned_query=pinned_query,
+                )
+            except (OSError, RuntimeError, ValueError, sqlite3.Error):
+                abort(404)
+            if pinned_html is None:
+                abort(404)
+            return Response(
+                pinned_html, mimetype="text/html", headers={"Cache-Control": "no-store"}
+            )
 
         fragment = request.args.get("fragment") == "1"
         html = render_transcript_page(repo_root, db_path, doc_id, fragment=fragment)
@@ -213,8 +552,22 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
     @app.route("/source/<int:doc_id>/page/<int:page>.png", methods=["GET"])
     def source_pdf_page_image(doc_id: int, page: int):
         """Serve one lazily rendered, content-addressed PDF page image."""
-        from pipeline.pdf_render import render_page_image
+        from pipeline.pdf_render import render_page_image, render_verified_page_bytes
         from pipeline.source_viewers import load_document
+
+        version_id = request.args.get("version")
+        source_sha256 = request.args.get("sha256")
+        if version_id is not None or source_sha256 is not None:
+            if version_id is None or source_sha256 is None:
+                abort(404)
+            try:
+                pinned_bytes = _pinned_ocr_pdf_bytes(context, doc_id, version_id, source_sha256)
+                rendered = render_verified_page_bytes(pinned_bytes, page=page)
+            except (OSError, RuntimeError, ValueError, sqlite3.Error):
+                abort(404)
+            if rendered is None:
+                abort(404)
+            return Response(rendered, mimetype="image/png", headers={"Cache-Control": "no-store"})
 
         doc = load_document(db_path, doc_id)
         if doc is None or not doc.file_path.lower().endswith(".pdf") or not doc.sha256:
@@ -455,7 +808,7 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
 
     @app.route("/api/peek/canonical-financial", methods=["GET"])
     def peek_canonical_financial():
-        from pipeline.peeks import render_canonical_financial_peek
+        from pipeline.peeks import ocr_pdf_document_id, render_canonical_financial_peek
         from pipeline.source_viewers import render_record_view
         from sources.report_financials import FinancialEvidenceReference, read_financial_evidence
 
@@ -476,9 +829,12 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
         # The reference selects its complete table or series admission owner.
         # Both preserve the request read snapshot and perform no writes.
         try:
-            cell = read_financial_evidence(context.get_read_db(), reference)
+            conn = context.get_read_db()
+            cell = read_financial_evidence(conn, reference, source_context=context.source_context)
+            source_doc_id = ocr_pdf_document_id(conn, cell) if cell is not None else None
         except (OSError, RuntimeError, sqlite3.Error):
             cell = None
+            source_doc_id = None
         if cell is None:
             return Response(
                 render_record_view(
@@ -492,7 +848,7 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
         response = Response(
             render_record_view(
                 "Evidence for the selected value",
-                render_canonical_financial_peek(cell, reference),
+                render_canonical_financial_peek(cell, reference, ocr_pdf_document_id=source_doc_id),
                 fragment=request.args.get("fragment") == "1",
             ),
             mimetype="text/html",
@@ -526,6 +882,24 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
 
     @app.route("/reports/<ticker>", methods=["GET"])
     def latest_report_for_ticker(ticker: str):
+        artifact = resolve_report_artifact(repo_root, ticker)
+        if artifact is not None:
+            if artifact.reader_mode == "shared_body" and request.args.get("standalone") != "1":
+                return redirect(
+                    "/?"
+                    + urlencode(
+                        {
+                            "ticker": artifact.ticker,
+                            "work_os_brief": artifact.ticker,
+                            "work_os_brief_artifact": artifact.artifact_id,
+                        }
+                    )
+                    + "#screen-workspace"
+                )
+            artifact_path = repo_root / artifact.standalone_path
+            if not artifact_path.is_file():
+                abort(404)
+            return send_file(artifact_path)
         try:
             validated = context.safe_ticker(ticker)
         except ValueError:
@@ -535,6 +909,24 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             artifact = resolve_report_artifact(repo_root, artifact_id)
             if artifact is None or artifact.ticker != validated:
                 abort(404)
+            artifact_path = repo_root / artifact.standalone_path
+            if not artifact_path.is_file():
+                abort(404)
+            if artifact.reader_mode == "shared_body" and request.args.get("standalone") != "1":
+                return redirect(
+                    "/?"
+                    + urlencode(
+                        {
+                            "ticker": validated,
+                            "work_os_brief": validated,
+                            "work_os_brief_artifact": artifact.artifact_id,
+                        }
+                    )
+                    + "#screen-workspace"
+                )
+            return send_file(artifact_path)
+        artifact = latest_report_artifacts_for_tickers(repo_root, (validated,)).get(validated)
+        if artifact is not None and (repo_root / artifact.standalone_path).is_file():
             artifact_path = repo_root / artifact.standalone_path
             if not artifact_path.is_file():
                 abort(404)
@@ -583,6 +975,8 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
                 + "#screen-workspace"
             )
         return send_file(matches[-1])
+
+    _register_report_sync_routes(app, context)
 
     @app.route("/api/work-os/briefs/<artifact_id>", methods=["GET"])
     def brief_descriptor_api(artifact_id: str):

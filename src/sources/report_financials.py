@@ -31,6 +31,7 @@ from provenance.financial_statement_admission import (
     verify_reviewed_financial_role,
 )
 from provenance.source_fact_publication import publication_verification_scope
+from provenance.source_read_context import SourceReadContext
 from sources.canonical_financial_series import (
     CanonicalFinancialSeriesReader,
     FinancialCadence,
@@ -329,6 +330,7 @@ def read_financial_table(
     *,
     as_of: datetime,
     resolution_observed_through: datetime | None = None,
+    source_context: SourceReadContext | None = None,
 ) -> FinancialTableProjection:
     """Read facts at K, with an optional later resolution-materialization clock.
 
@@ -382,8 +384,12 @@ def read_financial_table(
                     cutoff.isoformat(),
                 ),
             ).fetchall()
-            series = CanonicalFinancialSeriesReader(conn, ticker, cutoff=cutoff)
-            reads = CanonicalFactResolutionEngine(conn).read_as_known_outcomes(
+            series = CanonicalFinancialSeriesReader(
+                conn, ticker, cutoff=cutoff, source_context=source_context
+            )
+            reads = CanonicalFactResolutionEngine(
+                conn, source_context=source_context
+            ).read_as_known_outcomes(
                 tuple(str(row[0]) for row in rows),
                 cutoff,
                 observed_through=resolution_observed_through,
@@ -448,7 +454,10 @@ def read_financial_table(
 
 
 def read_financial_evidence(
-    conn: sqlite3.Connection, reference: FinancialEvidenceReference
+    conn: sqlite3.Connection,
+    reference: FinancialEvidenceReference,
+    *,
+    source_context: SourceReadContext | None = None,
 ) -> FinancialTableCell | FinancialConsumerPoint | None:
     """Re-admit the exact report selection without a current or legacy fallback.
 
@@ -465,6 +474,7 @@ def read_financial_evidence(
             cutoff=reference.as_of,
             cadence=reference.cadence,
             continuity=reference.continuity,
+            source_context=source_context,
         )
         for point in result.points:
             item = point.observation
@@ -482,6 +492,7 @@ def read_financial_evidence(
         reference.ticker,
         as_of=reference.as_of,
         resolution_observed_through=reference.resolution_observed_through,
+        source_context=source_context,
     )
     for cell in projection.cells:
         if (

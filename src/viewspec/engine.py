@@ -359,6 +359,9 @@ def _cell_source(prov: dict[str, object]) -> CellSource:
     )
 
 
+cell_source_from_provenance = _cell_source
+
+
 def _load_row_data(
     ticker: str,
     metric: MetricRef,

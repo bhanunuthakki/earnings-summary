@@ -36,7 +36,6 @@ import json
 import sqlite3
 import subprocess
 import sys
-from datetime import date
 from pathlib import Path
 from typing import cast
 
@@ -58,11 +57,12 @@ from pipeline.managed_ir_sources import (
     IssuerDocumentPreparationError,
     resolve_fiscal_period_witness,
 )
+from pipeline.reported_period_inventory import reported_quarter_selection_in_connection
 from pipeline.source_policy import (
     ArtifactKind,
     CollectionSource,
     authorize_stored_collection_target,
-    reported_quarter_is_in_window,
+    current_utc_date,
 )
 from runtime.python_process import managed_python_prefix
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -229,13 +229,19 @@ def register_urls(
         if fiscal_witness is not None
         else authorization.fiscal_year_end_month
     )
-    in_window = fiscal_year_end_month is not None and reported_quarter_is_in_window(
-        fiscal_year=year,
-        fiscal_quarter=quarter,
-        fiscal_year_end_month=fiscal_year_end_month,
-        as_of=date.today(),
-    )
-    if not in_window:
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    try:
+        in_window = reported_quarter_selection_in_connection(
+            conn,
+            ticker=ticker,
+            fiscal_year=year,
+            fiscal_quarter=quarter,
+            fiscal_year_end_month=fiscal_year_end_month,
+            as_of=current_utc_date(),
+        )
+    finally:
+        conn.close()
+    if in_window is False:
         sys.stderr.write(
             json.dumps(
                 {
@@ -260,6 +266,31 @@ def register_urls(
     ]
     added, total = merge_write(repo_root, ticker, entries)
     sys.stdout.write(f"[{ticker}] manifest: +{added} new, {total} total\n")
+
+    if in_window is None:
+        summary = process_ticker(
+            ticker,
+            root=repo_root,
+            db_path=db_path,
+            categorize=False,
+            calendar=None,
+            owner_requested=True,
+        )
+        downloaded = summary.get("downloaded")
+        downloaded_n = downloaded if type(downloaded) is int else 0
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "event": "reported_period_selection_pending",
+                    "ticker": ticker,
+                    "retained_candidates": len(urls),
+                    "downloaded_raw": downloaded_n,
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        return downloaded_n
 
     calendar = calendar_id_from_fye(
         fiscal_witness.fiscal_year_end

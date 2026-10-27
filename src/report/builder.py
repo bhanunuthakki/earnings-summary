@@ -8,14 +8,15 @@ direct DB / filesystem coupling in the renderer layer.
 from __future__ import annotations
 
 import sqlite3
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from industry_classifier import suppressed_sections_for_ticker
 from llm.calibration import daily_avg_scores, summarize_by_prompt_version
 from pipeline.you_said import render_you_said_strip, render_you_said_strip_for_path
+from provenance.source_read_context import SourceReadContext
 from report.models import BudgetSkip, ReportFlavor, ReportSpec
-from report.render_clock import render_now, render_today
+from report.render_clock import render_today
 from report.sections import (
     appendix,
     bear_case,
@@ -44,6 +45,20 @@ from ui.controls import k_empty
 from ui.earnings_audio import google_finance_earnings_url
 
 
+def _report_database_path(conn: sqlite3.Connection | None, db_path: Path | None) -> Path | None:
+    """Validate the caller's database authority before any report source read."""
+    if conn is None:
+        return db_path
+    connected = next(
+        (row[2] for row in conn.execute("PRAGMA database_list") if row[1] == "main"), ""
+    )
+    if db_path is not None and not connected:
+        raise ValueError("Report connection has no main database file")
+    if db_path is not None and Path(connected).resolve() != db_path.resolve():
+        raise ValueError("Report connection and database path disagree")
+    return Path(connected) if connected else None
+
+
 def build_report(
     ticker: str,
     repo_root: Path,
@@ -58,6 +73,10 @@ def build_report(
     conn: sqlite3.Connection | None = None,
     generation_date: date | None = None,
     db_path: Path | None = None,
+    source_context: SourceReadContext | None = None,
+    model_run_id: int | None = None,
+    candidate_mode: bool = False,
+    cutoff_at: datetime | None = None,
 ) -> ReportSpec:
     """Build the unified ReportSpec for one ticker.
 
@@ -84,27 +103,31 @@ def build_report(
     build (the "run anyway, ignore caps" path), so analyses that a `skip`-mode
     cap would forgo are run regardless. See report.sections._common.budget_gate.
     """
-    # Every prepared analytical read uses the report caller's database authority.
-    if conn is not None:
-        connected = next(
-            (row[2] for row in conn.execute("PRAGMA database_list") if row[1] == "main"), ""
-        )
-        if db_path is not None and connected and Path(connected).resolve() != db_path.resolve():
-            raise ValueError("Report connection and database path disagree")
-        db_path = Path(connected) if connected else None
+    db_path = _report_database_path(conn, db_path)
     ticker = ticker.upper()
     portfolio_position_section = portfolio_position.build(ticker, repo_root)
     snapshot_section = snapshot.build(
-        ticker, repo_root, model_link, held=portfolio_position_section.held, conn=conn
+        ticker,
+        repo_root,
+        model_link,
+        held=portfolio_position_section.held,
+        conn=conn,
+        model_run_id=model_run_id,
     )
     evaluation_snapshot_section = (
-        evaluation_snapshot.build(ticker, repo_root, conn=conn)
+        evaluation_snapshot.build(ticker, repo_root, as_of=cutoff_at, conn=conn)
         if flavor == ReportFlavor.EVALUATION
         else None
     )
     company_description_section = company_description.build(ticker, repo_root, conn=conn)
     thesis_section = thesis.build(ticker, repo_root, conn=conn)
-    financials_section = financials.build(ticker, repo_root, conn=conn)
+    financials_section = financials.build(
+        ticker,
+        repo_root,
+        as_of=cutoff_at,
+        conn=conn,
+        source_context=source_context,
+    )
     signals_section = signals.build(ticker, repo_root, conn=conn)
     segments_section = segments.build(ticker, repo_root, conn=conn)
     earnings_section = earnings.build(
@@ -136,6 +159,7 @@ def build_report(
         force_refresh=force_refresh,
         force_budget_bypass=force_budget_bypass,
         conn=conn,
+        candidate_mode=candidate_mode,
     )
     provenance_section = provenance.build(ticker, repo_root, conn=conn)
     appendix_section = appendix.build(earnings_section)
@@ -160,6 +184,7 @@ def build_report(
         enable_llm=enable_llm,
         force_budget_bypass=force_budget_bypass,
         conn=conn,
+        as_of=cutoff_at,
     )
     synthesis_section = synthesis.build(ticker, repo_root, conn=conn)
     # Read-only for BOTH flavors (P1.1, PRD §8.1) — generation happens at the
@@ -225,17 +250,9 @@ def prepare_workspace_report(
     """Prepare optional analytical values once under the report caller's DB authority."""
     root = Path(spec.repo_root)
     db_path = Path(spec.db_path) if spec.db_path is not None else None
-    if conn is not None:
-        connected = next(
-            (row[2] for row in conn.execute("PRAGMA database_list") if row[1] == "main"), ""
-        )
-        if db_path is not None and (
-            not connected or Path(connected).resolve() != db_path.resolve()
-        ):
-            raise ValueError("Report connection and database path disagree")
-        db_path = Path(connected) if connected else None
+    db_path = _report_database_path(conn, db_path)
     p3 = load_workspace_p3_panels(spec.ticker, root, db_path=db_path, conn=conn)
-    graded = load_graded_sell_base_rate(spec.ticker, db_path) if db_path is not None else None
+    graded = load_graded_sell_base_rate(spec.ticker, db_path, conn=conn)
     previous_factory = conn.row_factory if conn is not None else None
     try:
         if conn is not None:
@@ -252,10 +269,14 @@ def prepare_workspace_report(
     finally:
         if conn is not None:
             conn.row_factory = previous_factory
-    since = render_now().replace(tzinfo=None) - timedelta(days=30)
+    since = datetime.combine(spec.generation_date, datetime.min.time()) - timedelta(days=30)
     try:
-        summaries = summarize_by_prompt_version(db_path=db_path, since=since) if db_path else []
-        daily = daily_avg_scores(db_path=db_path, since=since) if db_path and summaries else {}
+        summaries = (
+            summarize_by_prompt_version(db_path=db_path, conn=conn, since=since)
+            if db_path is not None or conn is not None
+            else []
+        )
+        daily = daily_avg_scores(db_path=db_path, conn=conn, since=since) if summaries else {}
     except (sqlite3.Error, OSError):
         summaries, daily = [], {}
         p3.availability["prompt_quality"] = PanelAvailability.UNAVAILABLE

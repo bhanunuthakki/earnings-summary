@@ -28,6 +28,10 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from alembic.script import ScriptDirectory
 from alembic.util.exc import CommandError
+from backup_restore_readiness_receipt import (
+    BackupRestoreReadinessReceipt,
+    validate_receipt_for_source,
+)
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Connection, Engine
@@ -74,6 +78,8 @@ class UpgradeReceipt(BaseModel):
     to_revision: str
     backup_path: str | None
     completed_at: str
+    backup_reused: bool = False
+    backup_restore_evidence_id: str | None = None
 
 
 def trusted_account_home() -> Path:
@@ -398,6 +404,35 @@ def _bridge_hero_revision(db_path: Path, repo_root: Path, script: ScriptDirector
     )
 
 
+def _reuse_phase0_backup(
+    receipt_path: Path,
+    *,
+    db_path: Path,
+    source_revision: str,
+    readiness_evidence_id: str | None,
+    readiness_receipt_path: str | None,
+) -> tuple[Path, str]:
+    """Re-prove the exact locked readiness snapshot; never accept an arbitrary backup."""
+    try:
+        receipt = BackupRestoreReadinessReceipt.model_validate_json(receipt_path.read_bytes())
+    except (OSError, ValueError) as exc:
+        raise UpgradeDatabaseError("Phase-0 backup reuse receipt is invalid") from exc
+    if (
+        readiness_evidence_id != receipt.evidence_id
+        or readiness_receipt_path is None
+        or Path(readiness_receipt_path).resolve() != receipt_path.resolve()
+    ):
+        raise UpgradeDatabaseError("Phase-0 backup reuse differs from locked readiness evidence")
+    reasons = validate_receipt_for_source(
+        receipt,
+        source_db=db_path,
+        source_revision=source_revision,
+    )
+    if reasons:
+        raise UpgradeDatabaseError("Phase-0 backup reuse failed: " + ",".join(reasons))
+    return Path(receipt.snapshot_resolved_path).resolve(), receipt.evidence_id
+
+
 def upgrade_database(
     db_path: Path,
     *,
@@ -406,6 +441,7 @@ def upgrade_database(
     backup_path: Path | None = None,
     phase0_backup_restore_receipt: Path | None = None,
     allow_isolated_db: bool = False,
+    reuse_phase0_snapshot: bool = False,
 ) -> UpgradeReceipt:
     """Upgrade ``db_path`` and return a validated receipt."""
 
@@ -432,6 +468,13 @@ def upgrade_database(
         raise UpgradeDatabaseError(
             "target database does not match the runtime database; "
             "isolated databases require explicit allow_isolated_db=True"
+        )
+
+    if reuse_phase0_snapshot and (
+        not live_database or phase0_backup_restore_receipt is None or backup_path is not None
+    ):
+        raise UpgradeDatabaseError(
+            "Phase-0 backup reuse requires the canonical live DB, its receipt, and no backup-path override"
         )
 
     origin_observation = None
@@ -524,7 +567,20 @@ def upgrade_database(
         if existed and from_revision is not None:
             chosen_backup = (backup_path or _default_backup_path(db_path)).resolve()
 
-        if chosen_backup is not None:
+        reused_evidence_id: str | None = None
+        if reuse_phase0_snapshot:
+            if readiness is None or from_revision is None or phase0_backup_restore_receipt is None:
+                raise UpgradeDatabaseError(
+                    "Phase-0 backup reuse requires locked migration readiness"
+                )
+            chosen_backup, reused_evidence_id = _reuse_phase0_backup(
+                phase0_backup_restore_receipt,
+                db_path=db_path,
+                source_revision=from_revision,
+                readiness_evidence_id=readiness.backup_restore_evidence_id,
+                readiness_receipt_path=readiness.backup_restore_receipt_path,
+            )
+        elif chosen_backup is not None:
             _backup_database(db_path, chosen_backup)
 
         if from_revision == _HERO_REVISION:
@@ -577,6 +633,8 @@ def upgrade_database(
             to_revision=active_head,
             backup_path=str(chosen_backup) if chosen_backup is not None else None,
             completed_at=datetime.now(UTC).isoformat(),
+            backup_reused=reused_evidence_id is not None,
+            backup_restore_evidence_id=reused_evidence_id,
         )
 
 
@@ -604,6 +662,11 @@ def main() -> int:
         action="store_true",
         help="Explicitly permit a non-runtime database for tests or rehearsals.",
     )
+    parser.add_argument(
+        "--reuse-phase0-snapshot",
+        action="store_true",
+        help="Reuse only the current canonical DB snapshot sealed by locked Phase-0 readiness.",
+    )
     args = parser.parse_args()
     try:
         receipt = upgrade_database(
@@ -613,6 +676,7 @@ def main() -> int:
             backup_path=args.backup_path,
             phase0_backup_restore_receipt=args.phase0_backup_restore_receipt,
             allow_isolated_db=args.allow_isolated_db,
+            reuse_phase0_snapshot=args.reuse_phase0_snapshot,
         )
     except (OSError, RuntimeError, sqlite3.Error, CommandError) as exc:
         log_event("database_upgrade_failed", error=f"{type(exc).__name__}: {exc}")

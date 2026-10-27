@@ -27,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         source_context = (
-            SourceReadContext.for_sec_state_root(args.state_root) if args.state_root else None
+            SourceReadContext.for_product_state_root(args.state_root) if args.state_root else None
         )
     except ValueError:
         print(json.dumps({"status": "unavailable", "reason_code": "source_authority_unavailable"}))

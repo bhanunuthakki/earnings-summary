@@ -14,6 +14,7 @@ from earnings_brief import SECTION_TITLES as PRE_TITLES
 from earnings_brief import BriefCandidate
 from earnings_readout import SECTION_TITLES as POST_TITLES
 from earnings_readout import ReportedQuarter, pre_call_baseline
+from provenance.source_read_context import SourceReadContext
 from research.report_contract import (
     BoundReport,
     ReportBindingError,
@@ -36,7 +37,11 @@ class BoundPostReport(BaseModel):
 
 
 def bind_pre_earnings_draft(
-    conn: sqlite3.Connection, draft: ReportDraft, candidate: BriefCandidate
+    conn: sqlite3.Connection,
+    draft: ReportDraft,
+    candidate: BriefCandidate,
+    *,
+    source_context: SourceReadContext | None = None,
 ) -> BoundReport:
     if (
         draft.family != "pre"
@@ -44,11 +49,15 @@ def bind_pre_earnings_draft(
         or draft.event_date != candidate.er_date
     ):
         raise ReportBindingError("pre_report_event_mismatch")
-    return bind_report_draft(conn, draft, required_titles=PRE_TITLES)
+    return bind_report_draft(conn, draft, required_titles=PRE_TITLES, source_context=source_context)
 
 
 def bind_post_earnings_draft(
-    conn: sqlite3.Connection, draft: ReportDraft, quarter: ReportedQuarter
+    conn: sqlite3.Connection,
+    draft: ReportDraft,
+    quarter: ReportedQuarter,
+    *,
+    source_context: SourceReadContext | None = None,
 ) -> BoundPostReport:
     if draft.family != "post" or draft.ticker != quarter.ticker:
         raise ReportBindingError("post_report_identity_mismatch")
@@ -58,7 +67,9 @@ def bind_post_earnings_draft(
         raise ReportBindingError("post_report_event_mismatch")
     with report_read_snapshot(conn):
         baseline = pre_call_baseline(conn, quarter)
-        report = bind_report_draft(conn, draft, required_titles=POST_TITLES)
+        report = bind_report_draft(
+            conn, draft, required_titles=POST_TITLES, source_context=source_context
+        )
         selected = baseline.get("status") == "selected"
         artifact_id = baseline.get("artifact_id")
         if selected and (type(artifact_id) is not int or artifact_id <= 0):

@@ -35,10 +35,11 @@ from __future__ import annotations
 import json
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import openpyxl
 from openpyxl.styles import Border, Font, PatternFill, Side
@@ -58,6 +59,11 @@ from dcf.artifact_promotion import (
     promotion_from_env,
     run_dcf_entrypoint,
 )
+from dcf.family_editor import (
+    NU_FAMILY,
+    normalize_family_vector,
+    require_workbook_authority,
+)
 from dcf.provenance import build_file_provenance, schema_supports_provenance
 from dcf.specialized_price import (
     SpecializedPriceObservation,
@@ -66,6 +72,10 @@ from dcf.specialized_price import (
 )
 from pipeline.db_writer_gate import hold_writer_gate
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from ticker_validation import safe_ticker
+
+if TYPE_CHECKING:
+    from dcf.persist import DcfPersistenceResult, DcfRunRevision, DcfRunRow
 
 try:  # persistence is best-effort -- the workbook builds without a DB
     from dcf import persist as _persist_module
@@ -314,14 +324,84 @@ def reverse_valuation(s: Assum, m: Mirror) -> dict[str, object] | None:
     ).to_snapshot_dict()
 
 
-def load_assumptions(ticker: str) -> Assum:
+def _owner_root(repo_root: Path | None) -> Path:
+    return Path(repo_root) if repo_root is not None else REPO
+
+
+def _owner_ticker(ticker: str | None, *, explicit: bool) -> str:
+    if ticker is None:
+        return "NU" if explicit else T
+    if not explicit:
+        return ticker
+    normalized = safe_ticker(ticker)
+    if normalized != "NU":
+        raise ValueError(f"NU platform owner requires ticker 'NU', got {normalized!r}")
+    return normalized
+
+
+def _owner_explicit_injection(
+    ticker: str | None,
+    repo_root: Path | None,
+    db_path: Path | None,
+    workbook_path: Path | None,
+    workbook_locator_path: Path | None,
+) -> bool:
+    """New owner-authority mode: any explicit injection parameter.
+
+    Every one of these is new authority for this owner, so any explicit value
+    switches the call out of legacy ambient-default resolution.
+    """
+    return any(
+        value is not None
+        for value in (ticker, repo_root, db_path, workbook_path, workbook_locator_path)
+    )
+
+
+def _owner_assumptions_db_path(repo_root: Path | None, db_path: Path | None) -> Path:
+    if db_path is not None:
+        return Path(db_path).expanduser()
+    if repo_root is not None:
+        raise ValueError(
+            "explicit repo_root authority requires an explicit db_path; refusing to "
+            "infer the checkout data/portfolio.db"
+        )
+    return cast("Path", resolve_db_path(None, configured_root=REPO))
+
+
+def _owner_persistence_db_path(repo_root: Path | None, db_path: Path | None) -> Path:
+    return require_db_path(_owner_assumptions_db_path(repo_root, db_path))
+
+
+def _owner_workbook_paths(
+    workbook_path: Path | None, workbook_locator_path: Path | None
+) -> tuple[Path, Path]:
+    if workbook_path is not None:
+        workbook = Path(workbook_path)
+        locator = Path(workbook_locator_path) if workbook_locator_path is not None else workbook
+        return workbook, locator
+    return DEST, (
+        Path(workbook_locator_path)
+        if workbook_locator_path is not None
+        else live_path_from_env(DEST)
+    )
+
+
+def load_assumptions(
+    ticker: str,
+    *,
+    repo_root: Path | None = None,
+    db_path: Path | None = None,
+) -> Assum:
     """Assum defaults overridden by data/bank_assumptions/<T>_platform.json."""
+    explicit_authority = repo_root is not None or db_path is not None
+    issuer = _owner_ticker(ticker, explicit=explicit_authority)
+    root = _owner_root(repo_root)
     s = Assum()
     # Seed the editable global tax default before the per-ticker JSON below, so
     # an unpinned platform name tracks the dashboard-set global while a pinned
     # tax still wins (NU pins 0.28 -- a genuinely company-specific Brazilian rate).
     global_loaded = (
-        global_dcf.load_with_provenance(db_path=resolve_db_path(None, configured_root=REPO))
+        global_dcf.load_with_provenance(db_path=_owner_assumptions_db_path(repo_root, db_path))
         if global_dcf is not None
         else None
     )
@@ -334,7 +414,7 @@ def load_assumptions(ticker: str) -> Assum:
             "status": "module_unavailable",
             "observed_at": None,
         }
-    p = REPO / "data" / "bank_assumptions" / f"{ticker}_platform.json"
+    p = root / "data" / "bank_assumptions" / f"{issuer}_platform.json"
     if p.exists():
         try:
             ov: Any = json.loads(p.read_text(encoding="utf-8"))
@@ -346,7 +426,7 @@ def load_assumptions(ticker: str) -> Assum:
                     setattr(s, k, v)
                     if k == "price":
                         s.price_seed_source = "owner_assumptions"
-                        s.price_seed_path = f"data/bank_assumptions/{ticker}_platform.json"
+                        s.price_seed_path = f"data/bank_assumptions/{issuer}_platform.json"
     # Opt-in: derive ke from the global risk-free/ERP when the name asks for it.
     # Runs after the JSON overrides so beta / CRP / the flag can be tuned per name.
     if global_loaded is not None and s.derive_ke_capm:
@@ -355,7 +435,7 @@ def load_assumptions(ticker: str) -> Assum:
             + s.beta * global_loaded.assumptions.equity_risk_premium
             + s.country_risk_premium
         )
-    prof = REPO / "data" / "historical" / "fmp" / f"{ticker}_profile.json"
+    prof = root / "data" / "historical" / "fmp" / f"{issuer}_profile.json"
     if prof.exists():
         try:
             raw_profile: object = json.loads(prof.read_text(encoding="utf-8"))
@@ -367,7 +447,7 @@ def load_assumptions(ticker: str) -> Assum:
                 if d.get("price"):
                     s.price = float(d["price"])
                     s.price_seed_source = "fmp_profile"
-                    s.price_seed_path = f"data/historical/fmp/{ticker}_profile.json"
+                    s.price_seed_path = f"data/historical/fmp/{issuer}_profile.json"
         except (OSError, json.JSONDecodeError, ValueError, KeyError):
             pass
     return s
@@ -397,8 +477,11 @@ def load_assumptions(ticker: str) -> Assum:
 # "seed" — a labeled fallback, flagged by bear_lint on portfolio names). The
 # arithmetic is deliberately coarse: an honest thesis-break bear, not precision.
 # --------------------------------------------------------------------------- #
-def _load_holdings(ticker: str) -> dict[str, object] | None:
-    path = REPO / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
+def _load_holdings(
+    ticker: str | None = None, *, repo_root: Path | None = None
+) -> dict[str, object] | None:
+    issuer = _owner_ticker(ticker, explicit=repo_root is not None)
+    path = _owner_root(repo_root) / "micro_thesis" / "holdings" / f"{issuer.upper()}.json"
     if not path.exists():
         return None
     try:
@@ -510,7 +593,26 @@ R = {
 }
 
 
-def build(s: Assum, m: Mirror, dest: Path, holdings: dict[str, object] | None = None) -> None:
+def out_path(state_root: Path | None = None) -> Path:
+    if state_root is not None:
+        return Path(state_root) / "dcf" / f"{T}.xlsx"
+    return DEST
+
+
+def build(
+    s: Assum,
+    m: Mirror | None = None,
+    dest: Path | None = None,
+    holdings: dict[str, object] | None = None,
+    *,
+    ticker: str | None = None,
+    repo_root: Path | None = None,
+    db_path: Path | None = None,
+    workbook_path: Path | None = None,
+    workbook_locator_path: Path | None = None,
+    out_path: Path | None = None,
+    state_root: Path | None = None,
+) -> None:
     """``holdings`` (Monthly Red Team PR10) is the already-loaded
     ``micro_thesis/holdings/<T>.json`` dict, threaded through so the Scenario
     sheet's Bear/Bull rows derive from the SAME ``scenario_assumptions()`` call
@@ -519,10 +621,28 @@ def build(s: Assum, m: Mirror, dest: Path, holdings: dict[str, object] | None = 
     red-team evidence packs) disagrees with. ``None`` (no holdings on file / not
     passed) degrades to the generic ``BEAR_SEED`` fallback, same as
     ``scenarios_block``."""
+    issuer = _owner_ticker(
+        ticker,
+        explicit=_owner_explicit_injection(
+            ticker, repo_root, db_path, workbook_path, workbook_locator_path
+        ),
+    )
+    if m is None:
+        m = mirror(s)
+    if out_path is not None:
+        target_dest = Path(out_path)
+    elif workbook_path is not None:
+        target_dest = Path(workbook_path)
+    elif dest is not None:
+        target_dest = Path(dest)
+    elif state_root is not None:
+        target_dest = Path(state_root) / "dcf" / f"{issuer}.xlsx"
+    else:
+        target_dest = DEST
     wb = openpyxl.Workbook()
     dash = wb.active
     if not isinstance(dash, Worksheet):
-        raise RuntimeError(f"{T} workbook requires an active worksheet")
+        raise RuntimeError(f"{issuer} workbook requires an active worksheet")
     dash.title = "Dashboard"
     mod = wb.create_sheet("Model")
     val = wb.create_sheet("Valuation")
@@ -530,7 +650,7 @@ def build(s: Assum, m: Mirror, dest: Path, holdings: dict[str, object] | None = 
     D = "Dashboard"
 
     # ---------- Dashboard ----------
-    _hdr(dash, "A1", f"{T} - Customer-Driven Platform DCF | Dashboard")
+    _hdr(dash, "A1", f"{issuer} - Customer-Driven Platform DCF | Dashboard")
     dash["A2"] = "Engine: customers x ARPAC -> revenue; Credit/Float/Fee gross profit"
     dash["A2"].font = SUB_FONT
     rows = [
@@ -583,7 +703,7 @@ def build(s: Assum, m: Mirror, dest: Path, holdings: dict[str, object] | None = 
     dash.column_dimensions["B"].width = 14
 
     # ---------- Model (formula-first engine) ----------
-    _hdr(mod, "A1", f"{T} - Platform engine (formula-first; $M)")
+    _hdr(mod, "A1", f"{issuer} - Platform engine (formula-first; $M)")
     n = s.years
     col0 = 3  # column C = Y1
 
@@ -656,7 +776,7 @@ def build(s: Assum, m: Mirror, dest: Path, holdings: dict[str, object] | None = 
     mod.column_dimensions["B"].width = 20
 
     # ---------- Valuation ----------
-    _hdr(val, "A1", f"{T} - Valuation ($M)")
+    _hdr(val, "A1", f"{issuer} - Valuation ($M)")
     cN = cl(col0 + n - 1)
     c1 = cl(col0)
     vrows = [
@@ -776,35 +896,45 @@ def build(s: Assum, m: Mirror, dest: Path, holdings: dict[str, object] | None = 
     scn.column_dimensions["A"].width = 36
     scn.column_dimensions["B"].width = 22
 
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(dest)
+    target_dest.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(target_dest)
 
 
-def persist_dcf_run(
+def _prepare_nu_persist_row(
     s: Assum,
     m: Mirror,
-    holdings: dict[str, object] | None = None,
-    price_observation: SpecializedPriceObservation | None = None,
+    holdings: dict[str, object] | None,
+    price_observation: SpecializedPriceObservation | None,
     *,
-    artifact_promotion: ArtifactPromotion | None = None,
-) -> bool:
-    """``holdings=None`` (the pre-PR10 2-arg call shape every test/caller uses)
-    loads ``micro_thesis/holdings/<T>.json`` itself, same as before. ``main()``
-    now passes the SAME dict ``build()``'s Scenario sheet used, so a mid-run
-    file edit can never make the sheet and the persisted snapshot disagree —
-    a ticker with genuinely no holdings JSON still resolves to ``None`` either
-    way, so this collapses "not passed" and "no holdings on file" safely."""
-    db = require_db_path(resolve_db_path(None, configured_root=REPO))
+    ticker: str | None,
+    repo_root: Path | None,
+    db_path: Path | None,
+    workbook_path: Path | None,
+    workbook_locator_path: Path | None,
+    artifact_promotion: ArtifactPromotion | None,
+) -> tuple[Path, DcfRunRow] | None:
+    explicit_owner = _owner_explicit_injection(
+        ticker, repo_root, db_path, workbook_path, workbook_locator_path
+    )
+    if explicit_owner and db_path is None:
+        raise ValueError(
+            "explicit NU owner authority requires an explicit db_path; refusing to "
+            "select an ambient or checkout database"
+        )
+    db = _owner_persistence_db_path(repo_root, db_path)
     if persist_mod is None or not db.exists() or not m.vps:
-        return False
+        return None
+    issuer = _owner_ticker(ticker, explicit=explicit_owner)
+    root = _owner_root(repo_root)
+    workbook, live_workbook = _owner_workbook_paths(workbook_path, workbook_locator_path)
+    require_workbook_authority(workbook, live_workbook, artifact_promotion)
     if holdings is None:
-        holdings = _load_holdings(T)
+        holdings = _load_holdings(issuer, repo_root=repo_root)
     mos: object = holdings.get("mos_bar") if holdings else None
     observed_at = price_observation.observed_at if price_observation is not None else None
     price_source = (
         price_observation.source_name if price_observation is not None else "assumption_seed"
     )
-    live_workbook = live_path_from_env(DEST)
     snap_payload: dict[str, object] = {
         "model": "platform_dcf",
         "value_per_share_fcfe": m.vps,
@@ -817,7 +947,7 @@ def persist_dcf_run(
         "ke": s.ke,
         "workbook": str(live_workbook),
         "assumption_provenance": {
-            "authority": f"data/bank_assumptions/{T}_platform.json",
+            "authority": f"data/bank_assumptions/{issuer}_platform.json",
             "workbook_capture": "unsupported",
             "sync_status": "not_applicable",
         },
@@ -827,11 +957,16 @@ def persist_dcf_run(
     reverse = reverse_valuation(s, m)
     if reverse is not None:
         snap_payload["reverse_valuation"] = reverse
+    snap_payload["committed_inputs"] = {
+        "schema_version": "dcf_committed_inputs.v1",
+        "family": NU_FAMILY,
+        "inputs": normalize_family_vector(NU_FAMILY, asdict(s)),
+    }
     snap = json.dumps(snap_payload, indent=2)
     provenance = build_file_provenance(
-        ticker=T,
-        repo_root=REPO,
-        workbook_path=DEST,
+        ticker=issuer,
+        repo_root=root,
+        workbook_path=workbook,
         workbook_locator_path=live_workbook,
         engine_version="nu_platform_fcfe_v1",
         effective_inputs=asdict(s),
@@ -840,10 +975,13 @@ def persist_dcf_run(
         live_price_at=observed_at,
         live_price_source=price_source,
         source_files=(
-            (REPO / "data" / "bank_assumptions" / f"{T}_platform.json", "owner_assumptions"),
-            (REPO / "micro_thesis" / "holdings" / f"{T}.json", "holding_policy"),
+            (
+                root / "data" / "bank_assumptions" / f"{issuer}_platform.json",
+                "owner_assumptions",
+            ),
+            (root / "micro_thesis" / "holdings" / f"{issuer}.json", "holding_policy"),
             *(
-                price_seed_source_files(REPO, price_observation)
+                price_seed_source_files(root, price_observation)
                 if price_observation is not None
                 else ()
             ),
@@ -852,7 +990,7 @@ def persist_dcf_run(
         equity_direct_archetype="platform_fcfe",
     )
     row = persist_mod.DcfRunRow(
-        ticker=T,
+        ticker=issuer,
         valuation_date=date.today(),
         horizon_years=s.years,
         wacc=s.ke,
@@ -867,8 +1005,68 @@ def persist_dcf_run(
         notes=f"workbook={live_workbook.name} (customer-driven platform DCF)",
         provenance=provenance,
     )
+    return db, row
+
+
+def prepare_persist_row(
+    s: Assum,
+    m: Mirror,
+    holdings: dict[str, object] | None,
+    price_observation: SpecializedPriceObservation | None,
+    *,
+    ticker: str | None,
+    repo_root: Path | None,
+    db_path: Path | None,
+    workbook_path: Path | None,
+    workbook_locator_path: Path | None,
+    artifact_promotion: ArtifactPromotion | None,
+) -> tuple[Path, DcfRunRow] | None:
+    """Public typed seam: the exact (db, row) a family save would persist."""
+    return _prepare_nu_persist_row(
+        s,
+        m,
+        holdings,
+        price_observation,
+        ticker=ticker,
+        repo_root=repo_root,
+        db_path=db_path,
+        workbook_path=workbook_path,
+        workbook_locator_path=workbook_locator_path,
+        artifact_promotion=artifact_promotion,
+    )
+
+
+def _persist_nu_result(
+    s: Assum,
+    m: Mirror,
+    holdings: dict[str, object] | None,
+    price_observation: SpecializedPriceObservation | None,
+    *,
+    ticker: str | None,
+    repo_root: Path | None,
+    db_path: Path | None,
+    workbook_path: Path | None,
+    workbook_locator_path: Path | None,
+    artifact_promotion: ArtifactPromotion | None,
+    pointer_promotion_factory: Callable[[DcfRunRevision], ArtifactPromotion] | None = None,
+) -> DcfPersistenceResult | None:
+    prepared = _prepare_nu_persist_row(
+        s,
+        m,
+        holdings,
+        price_observation,
+        ticker=ticker,
+        repo_root=repo_root,
+        db_path=db_path,
+        workbook_path=workbook_path,
+        workbook_locator_path=workbook_locator_path,
+        artifact_promotion=artifact_promotion,
+    )
+    if prepared is None or persist_mod is None:
+        return None
+    db, row = prepared
     with (
-        hold_writer_gate(db, owner=f"build_nu_platform_dcf:{T}"),
+        hold_writer_gate(db, owner=f"build_nu_platform_dcf:{row.ticker}"),
         connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn,
     ):
         # The cross-process writer gate serializes this upsert against the
@@ -879,16 +1077,86 @@ def persist_dcf_run(
                 json.dumps(
                     {
                         "event": "dcf_provenance_not_persisted",
-                        "ticker": T,
+                        "ticker": row.ticker,
                         "reason": "database schema lacks provenance columns",
                     }
                 )
                 + "\n"
             )
             row = replace(row, provenance=None)
+        if pointer_promotion_factory is not None:
+            return persist_mod.persist_run(
+                conn,
+                row,
+                artifact_promotion=artifact_promotion,
+                pointer_promotion_factory=pointer_promotion_factory,
+            )
         if artifact_promotion is None:
-            return persist_mod.upsert(conn, row)
-        return persist_mod.upsert(conn, row, artifact_promotion=artifact_promotion)
+            return persist_mod.persist_run(conn, row)
+        return persist_mod.persist_run(conn, row, artifact_promotion=artifact_promotion)
+
+
+def persist_dcf_run(
+    s: Assum,
+    m: Mirror,
+    holdings: dict[str, object] | None = None,
+    price_observation: SpecializedPriceObservation | None = None,
+    *,
+    artifact_promotion: ArtifactPromotion | None = None,
+    ticker: str | None = None,
+    repo_root: Path | None = None,
+    db_path: Path | None = None,
+    workbook_path: Path | None = None,
+    workbook_locator_path: Path | None = None,
+) -> bool:
+    """Legacy bool wrapper; keeps the historical False/no-op behavior."""
+    result = _persist_nu_result(
+        s,
+        m,
+        holdings,
+        price_observation,
+        ticker=ticker,
+        repo_root=repo_root,
+        db_path=db_path,
+        workbook_path=workbook_path,
+        workbook_locator_path=workbook_locator_path,
+        artifact_promotion=artifact_promotion,
+    )
+    return result.written if result is not None else False
+
+
+def persist_dcf_run_with_receipt(
+    s: Assum,
+    m: Mirror,
+    holdings: dict[str, object] | None = None,
+    price_observation: SpecializedPriceObservation | None = None,
+    *,
+    ticker: str,
+    repo_root: Path,
+    db_path: Path,
+    workbook_path: Path,
+    workbook_locator_path: Path | None = None,
+    artifact_promotion: ArtifactPromotion | None = None,
+    pointer_promotion_factory: Callable[[DcfRunRevision], ArtifactPromotion] | None = None,
+) -> DcfPersistenceResult | None:
+    """Persist under explicit NU owner authority and return the exact receipt.
+
+    ``None`` means the persistence dependency, database, or model value was
+    unavailable; callers must not treat that as a successful save.
+    """
+    return _persist_nu_result(
+        s,
+        m,
+        holdings,
+        price_observation,
+        ticker=ticker,
+        repo_root=repo_root,
+        db_path=db_path,
+        workbook_path=workbook_path,
+        workbook_locator_path=workbook_locator_path,
+        artifact_promotion=artifact_promotion,
+        pointer_promotion_factory=pointer_promotion_factory,
+    )
 
 
 def _main_owned() -> int:

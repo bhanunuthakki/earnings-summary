@@ -756,7 +756,7 @@ def test_historical_grade_stays_bounded_when_other_assessment_gates_pass(
             status="ready",
         )
 
-    def grade(*_args: object) -> DcfGradeEvidence:
+    def grade(*_args: object, **_kwargs: object) -> DcfGradeEvidence:
         return DcfGradeEvidence(
             status="available",
             ticker="NU",

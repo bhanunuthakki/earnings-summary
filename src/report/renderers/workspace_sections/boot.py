@@ -30,21 +30,31 @@ def _script_json(payload: object) -> str:
     return json.dumps(payload).replace("<", "\\u003c")
 
 
-def prepare_report_delivery(spec: ReportSpec) -> WorkspaceDelivery:
-    """Read fresh comment/capability state outside analytical rendering."""
+def prepare_report_delivery(
+    spec: ReportSpec,
+    *,
+    candidate_mode: bool = False,
+    report_capability: str | None = None,
+) -> WorkspaceDelivery:
+    """Prepare fresh delivery state; candidate reports cannot create a capability."""
     from comments import load_store, to_json_payload
 
-    capability_store = ReportCapabilityStore(Path(spec.repo_root))
-    report_capability = (
-        capability_store.load()
-        if os.environ.get("EARNINGS_OFFLINE_RENDER") == "1"
-        else capability_store.load_or_create()
-    )
+    if candidate_mode:
+        resolved_capability = ""
+    elif report_capability is not None:
+        resolved_capability = report_capability
+    else:
+        capability_store = ReportCapabilityStore(Path(spec.repo_root))
+        resolved_capability = (
+            capability_store.load()
+            if os.environ.get("EARNINGS_OFFLINE_RENDER") == "1"
+            else capability_store.load_or_create()
+        ) or ""
     boot: dict[str, object] = {
         "ticker": spec.ticker,
         "report_date": spec.generation_date.isoformat(),
         "server_url": "http://localhost:7421",
-        "report_capability": report_capability or "",
+        "report_capability": resolved_capability,
     }
     payload: dict[str, object]
     try:

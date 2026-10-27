@@ -6,17 +6,11 @@ import argparse
 import json
 import sqlite3
 import sys
+from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from provenance.integrity_audit import (  # noqa: E402
-    AuditOptions,
-    audit_connection,
-    exit_code,
-)
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def _event(event: str, **fields: object) -> None:
@@ -39,6 +33,10 @@ def configure_read_only_audit_connection(
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Standalone execution adds src/ above; keep these imports after that setup.
+    from provenance.integrity_audit import AuditOptions, audit_connection, exit_code
+    from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
     parser = argparse.ArgumentParser(
         description="Read-only investor-grade evidence integrity audit"
     )
@@ -58,6 +56,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cache-mib", type=int, default=256)
     parser.add_argument("--mmap-mib", type=int, default=1024)
     parser.add_argument("--strict", action="store_true")
+    parser.add_argument("--fact-drift-effective-at", type=datetime.fromisoformat)
+    parser.add_argument("--fact-drift-known-at", type=datetime.fromisoformat)
+    parser.add_argument("--fact-drift-only", action="store_true")
     args = parser.parse_args(argv)
     options = AuditOptions(
         sample_limit=args.sample_limit,
@@ -66,6 +67,9 @@ def main(argv: list[str] | None = None) -> int:
         repo_root=args.repo_root,
         content_roots=tuple(args.content_root),
         max_verify_bytes=args.max_verify_bytes,
+        fact_drift_effective_at=args.fact_drift_effective_at,
+        fact_drift_known_at=args.fact_drift_known_at,
+        fact_drift_only=args.fact_drift_only,
     )
     _event(
         "evidence_integrity_audit_started",
@@ -79,6 +83,15 @@ def main(argv: list[str] | None = None) -> int:
         ],
         cache_mib=args.cache_mib,
         mmap_mib=args.mmap_mib,
+        fact_drift_mode=("drift_only" if args.fact_drift_only else "full"),
+        fact_drift_effective_at=(
+            None
+            if args.fact_drift_effective_at is None
+            else args.fact_drift_effective_at.isoformat()
+        ),
+        fact_drift_known_at=(
+            None if args.fact_drift_known_at is None else args.fact_drift_known_at.isoformat()
+        ),
     )
     conn = connect_sqlite(args.db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:

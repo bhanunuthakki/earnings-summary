@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("An explicit configured portfolio database is required")
     source_root = args.state_root or os.environ.get("DCF_SOURCE_STATE_ROOT")
     source_context = (
-        SourceReadContext.for_sec_state_root(Path(source_root)) if source_root else None
+        SourceReadContext.for_product_state_root(Path(source_root)) if source_root else None
     )
     database = require_db_path(configured)
     request = PreparedCashflowDcfRequest.model_validate_json(args.request.read_bytes())

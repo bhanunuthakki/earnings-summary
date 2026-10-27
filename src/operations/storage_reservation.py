@@ -75,9 +75,7 @@ def _locked(directory: Path) -> Generator[None]:
             import msvcrt
 
             handle.seek(0)
-            handle.write(b"0")
-            handle.flush()
-            handle.seek(0)
+            # Windows permits byte-range locks past EOF; never write before ownership.
             msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
         else:
             import fcntl

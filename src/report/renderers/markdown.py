@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from io import StringIO
-from pathlib import Path
 
 from report.models import (
     AppendixSection,
@@ -44,7 +43,6 @@ from report.models import (
     ValuationSnapshot,
 )
 from report.renderers.numfmt import fmt_compact_usd as _fmt_compact_usd
-from report.renderers.workspace_data import load_standing_rules
 
 
 def render(spec: ReportSpec) -> str:
@@ -219,11 +217,9 @@ def _portfolio_position(out: StringIO, spec: ReportSpec) -> None:
 def render_standing_rules(out: StringIO, spec: ReportSpec) -> None:
     """Standing sizing rules (Monthly Red Team PR10 — surface wiring): the
     markdown mirror of the workspace Position tab's Standing-rules block, from
-    the same ``load_standing_rules`` loader (one query, one draft parse).
+    the prepared report input. Rendering does not read the database.
     Silent when no rows are on file — same hide-don't-stub as the HTML."""
-    if spec.db_path is None:
-        return
-    rules = load_standing_rules(spec.ticker, Path(spec.db_path), Path(spec.repo_root))
+    rules = spec.workspace.p3.standing_rules if spec.workspace is not None else None
     if rules is None or not rules.rows:
         return
     out.write("**Standing rules**")

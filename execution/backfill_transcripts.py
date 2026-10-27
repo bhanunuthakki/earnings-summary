@@ -4,9 +4,8 @@ Scheduled runs cover non-archived portfolio, evaluation, and watchlist equities
 and ADRs. Stored identity, instrument applicability, and the source policy are
 checked before enqueueing; index members and unknown instruments are excluded.
 
-  1. Compute the last N (default and maximum 5) fiscal-quarter end dates that have already
-     passed, using `tracked_companies.fiscal_year_end` to map fiscal-quarter
-     index -> calendar quarter end.
+  1. Select the latest N actually reported quarters from sealed SEC and IR source
+     inventories. An unknown source window leaves this ticker pending.
   2. For each period with no exact DB/path/SHA evidence receipt, invoke
      `fetch_qa_transcript.fetch_qa()` to reacquire or replay an authorized Q&A
      artifact. Unreceipted local files never bypass source authorization.
@@ -79,12 +78,16 @@ from pipeline.data_coverage_dispositions import (
     append_data_coverage_disposition,
     policy_config_sha256,
 )
+from pipeline.reported_period_inventory import reported_period_window_from_inventory
 from pipeline.source_policy import (
     SOURCE_POLICY_CONFIG,
     ArtifactKind,
     CollectionSource,
     CollectionTarget,
+    ReportedPeriodStatus,
+    ReportedPeriodWindow,
     authorize_collection_target_in_connection,
+    current_utc_date,
     select_collection_targets,
 )
 from pipeline.transcript_acquisition import (
@@ -169,6 +172,41 @@ def recent_fiscal_quarters(fye_month: int, today: date, n: int) -> list[tuple[in
     return out
 
 
+def _source_reported_quarters(
+    conn: sqlite3.Connection, *, ticker: str, fye_month: int, today: date, lookback: int
+) -> tuple[ReportedPeriodWindow, tuple[tuple[int, int], ...]]:
+    """Map a sealed source window to fiscal labels without inventing a quarter."""
+    try:
+        window = reported_period_window_from_inventory(
+            conn, ticker=ticker, as_of=today, max_quarters=lookback
+        )
+    except sqlite3.Error:
+        window = ReportedPeriodWindow(
+            status=ReportedPeriodStatus.UNKNOWN, reason="source_inventory_unavailable"
+        )
+    if window.status is not ReportedPeriodStatus.COMPLETE:
+        return window, ()
+    mapped: list[tuple[int, int]] = []
+    for period_end in window.period_ends:
+        labels = [
+            (year, quarter)
+            for year in range(today.year - 2, today.year + 2)
+            for quarter in range(1, 5)
+            if quarter_end_date(year, quarter, fye_month) == period_end
+        ]
+        if len(labels) != 1:
+            return (
+                ReportedPeriodWindow(
+                    status=ReportedPeriodStatus.AMBIGUOUS,
+                    snapshot_ids=window.snapshot_ids,
+                    reason="fiscal_profile_mapping_mismatch",
+                ),
+                (),
+            )
+        mapped.append(labels[0])
+    return window, tuple(mapped)
+
+
 @dataclass(frozen=True)
 class FetchedTranscriptIdentity:
     label: str
@@ -209,6 +247,9 @@ class CommitmentScanSelectionError(RuntimeError):
 class TickerBackfillResult:
     ticker: str
     fye_month: int
+    period_selection_status: str = "historical_calendar"
+    period_selection_reason: str = ""
+    selected_quarters: tuple[tuple[int, int], ...] | None = None
     fetched: list[str] = field(default_factory=list[str])
     skipped_existing: list[str] = field(default_factory=list[str])
     aggregator_misses: list[str] = field(default_factory=list[str])
@@ -443,11 +484,23 @@ def _backfill_one(
     dry_run: bool,
     db_path: Path,
     owner_requested: bool,
+    selected_quarters: tuple[tuple[int, int], ...] | None = None,
 ) -> TickerBackfillResult:
     if lookback < 1 or lookback > _DEFAULT_LOOKBACK:
         raise ValueError(f"lookback must be between 1 and {_DEFAULT_LOOKBACK}")
-    result = TickerBackfillResult(ticker=ticker, fye_month=fye_month)
-    quarters = recent_fiscal_quarters(fye_month, today, lookback)
+    result = TickerBackfillResult(
+        ticker=ticker,
+        fye_month=fye_month,
+        period_selection_status=(
+            "complete" if selected_quarters is not None else "historical_calendar"
+        ),
+        selected_quarters=selected_quarters,
+    )
+    quarters = (
+        selected_quarters
+        if selected_quarters is not None
+        else tuple(recent_fiscal_quarters(fye_month, today, lookback))
+    )
     for y, q in quarters:
         label = _qlabel(y, q)
         observed_at = datetime.now(UTC)
@@ -547,6 +600,10 @@ def _backfill_one(
                     f"{label}: coverage disposition: {type(disposition_exc).__name__}: "
                     f"{disposition_exc}"[:200]
                 )
+            continue
+        if hit.status is FetchQaStatus.PENDING:
+            result.period_selection_status = "unknown"
+            result.period_selection_reason = "reported_quarter_window_pending"
             continue
         if hit.status in {FetchQaStatus.ACQUIRED, FetchQaStatus.IDEMPOTENT_REPLAY}:
             if hit.result is None:
@@ -902,7 +959,11 @@ def _commitment_scan_targets(
 
     pending: list[CommitmentScanTarget] = []
     for result in results:
-        for year, quarter in recent_fiscal_quarters(result.fye_month, today, lookback):
+        for year, quarter in (
+            result.selected_quarters
+            if result.selected_quarters is not None
+            else recent_fiscal_quarters(result.fye_month, today, lookback)
+        ):
             try:
                 transcript_id = _transcript_id_for_period(
                     result.ticker,
@@ -1002,7 +1063,11 @@ def _persist_commitment_scan_coverage(
         policy_version=COMMITMENT_SCAN_POLICY_VERSION,
         providers=COMMITMENT_SCAN_POLICY_PROVIDERS,
     )
-    for year, quarter in recent_fiscal_quarters(result.fye_month, today, lookback):
+    for year, quarter in (
+        result.selected_quarters
+        if result.selected_quarters is not None
+        else recent_fiscal_quarters(result.fye_month, today, lookback)
+    ):
         label = _qlabel(year, quarter)
         evidence = _commitment_scan_evidence(result.ticker, year, quarter, result.fye_month)
         scan_coverage = _commitment_scan_coverage(result.ticker, year, quarter, result.fye_month)
@@ -1208,7 +1273,7 @@ def main() -> int:
     selected_db_path = require_db_path(args.db)
     _retarget_paths(repo_root, db_path=selected_db_path)
 
-    today = date.today()
+    today = current_utc_date()
     tickers = _resolve_tickers(args.ticker)
     if not tickers:
         print(json.dumps({"event": "no_tickers"}))
@@ -1221,18 +1286,41 @@ def main() -> int:
         file=sys.stderr,
     )
     for ticker, fye_month in tickers:
-        r = _backfill_one(
-            ticker,
-            fye_month,
-            args.lookback_quarters,
-            today,
-            args.dry_run,
-            selected_db_path,
-            args.ticker is not None,
-        )
+        conn = db.get_connection()
+        try:
+            window, selected_quarters = _source_reported_quarters(
+                conn,
+                ticker=ticker,
+                fye_month=fye_month,
+                today=today,
+                lookback=args.lookback_quarters,
+            )
+        finally:
+            conn.close()
+        if window.status is ReportedPeriodStatus.COMPLETE:
+            r = _backfill_one(
+                ticker,
+                fye_month,
+                args.lookback_quarters,
+                today,
+                args.dry_run,
+                selected_db_path,
+                args.ticker is not None,
+                selected_quarters=selected_quarters,
+            )
+            r.period_selection_reason = window.reason
+        else:
+            r = TickerBackfillResult(
+                ticker=ticker,
+                fye_month=fye_month,
+                period_selection_status=window.status.value,
+                period_selection_reason=window.reason,
+                selected_quarters=(),
+            )
         per_ticker.append(r)
         print(
             f"  {ticker:6s} fye={fye_month:02d}  "
+            f"period_selection={r.period_selection_status}  "
             f"fetched={len(r.fetched)}  "
             f"skipped_existing={len(r.skipped_existing)}  "
             f"misses={len(r.aggregator_misses)}  "
@@ -1348,6 +1436,9 @@ def main() -> int:
             "skipped_existing": sum(len(r.skipped_existing) for r in per_ticker),
             "aggregator_misses": sum(len(r.aggregator_misses) for r in per_ticker),
             "errors": sum(len(r.errors) for r in per_ticker),
+            "period_selection_pending": sum(
+                r.period_selection_status != "complete" for r in per_ticker
+            ),
         },
     }
     print(json.dumps(summary, indent=2))

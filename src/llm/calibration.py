@@ -144,7 +144,8 @@ def _percentile(values: list[float], pct: float) -> float:
 
 def summarize_by_prompt_version(
     *,
-    db_path: Path | str,
+    db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
     purpose: str | None = None,
     ticker: str | None = None,
     since: datetime | None = None,
@@ -160,10 +161,16 @@ def summarize_by_prompt_version(
     summary carries count/avg/min/max plus p25/p50/p75 and the latest
     ``scored_at`` ISO timestamp in the group.
     """
-    conn = _open(db_path, read_only=True)
-    if conn is None or not _table_exists(conn):
+    owned_conn = conn is None
+    if conn is None and db_path is not None:
+        conn = _open(db_path, read_only=True)
+    if conn is None:
         return []
+    original_factory = conn.row_factory
     try:
+        conn.row_factory = sqlite3.Row
+        if not _table_exists(conn):
+            return []
         where: list[str] = []
         params: list[object] = []
         if purpose is not None:
@@ -185,8 +192,13 @@ def summarize_by_prompt_version(
             """,
             params,
         ).fetchall()
+    except sqlite3.Error:
+        return []
     finally:
-        conn.close()
+        if owned_conn:
+            conn.close()
+        else:
+            conn.row_factory = original_factory
 
     groups: dict[tuple[str, str], list[tuple[float, str | None]]] = {}
     for r in rows:
@@ -226,7 +238,8 @@ def summarize_by_prompt_version(
 
 def daily_avg_scores(
     *,
-    db_path: Path | str,
+    db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
     since: datetime,
     purpose: str | None = None,
     ticker: str | None = None,
@@ -236,10 +249,16 @@ def daily_avg_scores(
     Used by the dashboard sparkline. Returns an empty dict when the DB / table
     is missing so the consumer can degrade gracefully.
     """
-    conn = _open(db_path, read_only=True)
-    if conn is None or not _table_exists(conn):
+    owned_conn = conn is None
+    if conn is None and db_path is not None:
+        conn = _open(db_path, read_only=True)
+    if conn is None:
         return {}
+    original_factory = conn.row_factory
     try:
+        conn.row_factory = sqlite3.Row
+        if not _table_exists(conn):
+            return {}
         where: list[str] = ["scored_at >= ?"]
         params: list[object] = [since.isoformat()]
         if purpose is not None:
@@ -260,8 +279,13 @@ def daily_avg_scores(
             """,
             params,
         ).fetchall()
+    except sqlite3.Error:
+        return {}
     finally:
-        conn.close()
+        if owned_conn:
+            conn.close()
+        else:
+            conn.row_factory = original_factory
 
     out: dict[tuple[str, str], list[tuple[str, float]]] = {}
     for r in rows:

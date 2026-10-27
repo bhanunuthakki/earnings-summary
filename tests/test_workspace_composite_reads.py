@@ -354,7 +354,11 @@ def test_report_preparation_preserves_caller_connection(
     with sqlite3.connect(workspace_database) as conn:
         conn.execute("UPDATE advisor_memos SET body_md='pending synthetic update' WHERE id=1")
         assert conn.in_transaction
-        spec = ReportSpec.model_construct(ticker="TEST", repo_root=str(tmp_path), db_path=None)
+        from datetime import date
+
+        spec = ReportSpec.model_construct(
+            ticker="TEST", repo_root=str(tmp_path), db_path=None, generation_date=date(2026, 10, 27)
+        )
         prepared = prepare_workspace_report(spec, conn=conn)
         assert prepared.p3.position_review_count == 1000
         assert conn.row_factory is None
