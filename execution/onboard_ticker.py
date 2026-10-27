@@ -11,9 +11,9 @@ UTC daily acquisition window prevents an old successful attempt from suppressing
 later discovery. This scheduling key is not source Content Identity.
 
 Dedicated ETF research is retired. Optional stages use existing transcript,
-IR-document and Say-Do interfaces. ``--industry-template`` remains an explicit
+IR-document and Transcript summary interfaces. ``--industry-template`` remains an explicit
 request. Onboarding does not approve a thesis or certify report completeness.
-``--skip-llm`` preserves source collection and skips commitment extraction and Say-Do.
+``--skip-llm`` preserves source collection and skips commitment extraction and Transcript summary.
 
 Usage:
     python execution/onboard_ticker.py --ticker NEW --project-root STATE --db DB
@@ -210,8 +210,8 @@ def _onboard_invocation_inputs(
         "skip_llm": bool(getattr(args, "skip_llm", False)),
         "skip_transcripts": bool(args.skip_transcripts),
         "skip_ir": bool(args.skip_ir),
-        "skip_saydo": bool(args.skip_saydo),
-        "force_saydo": bool(args.force_saydo),
+        "skip_transcript_summaries": bool(args.skip_transcript_summaries),
+        "force_transcript_summaries": bool(args.force_transcript_summaries),
         "industry_template": args.industry_template,
         "instrument_override": args.instrument,
         "resolved_instrument": instrument,
@@ -554,7 +554,7 @@ def _lookup_list_type(ticker: str) -> str | None:
     """Return tracked_companies.list_type for the ticker, or None if absent.
 
     Reads the same list_type used for schedule classification. Used to gate the
-    Say-Do onboarding step to evaluation-list names.
+    Transcript summary onboarding step to evaluation-list names.
     """
     if not _DB_PATH.exists():
         return None
@@ -572,57 +572,42 @@ def _lookup_list_type(ticker: str) -> str | None:
         return None
 
 
-def _run_saydo(ticker: str) -> int:
-    """Generate per-quarter transcript summaries + Say-Do pairs for a ticker.
+def _run_transcript_summaries(ticker: str) -> int:
+    """Generate registered transcript summaries for a ticker.
 
-    Closes the gap that leaves §6 Say-Do empty for freshly-onboarded names:
-    transcripts are registered processed=True at ingest without a summary ever
-    being written, so the normal pipeline never summarizes them. This runs
-    `process_ir_documents.py --regenerate-missing` (cache-aware — only writes
-    summaries that are absent, never re-bills existing ones) then
-    `build_saydo_pairs.py` to pair consecutive quarters into the §6 cards.
+    The transcript processor resolves current registered versions and reuses
+    qualified artifacts.
 
     Returns the first non-zero subprocess exit code, or 0 on success.
     """
     process_ir = PROJECT_ROOT / "execution" / "process_ir_documents.py"
-    build_saydo = PROJECT_ROOT / "execution" / "build_saydo_pairs.py"
-    rc = subprocess.run(
+    return subprocess.run(
         [
             *managed_python_prefix(PROJECT_ROOT),
             str(process_ir),
             "--ticker",
             ticker,
-            "--regenerate-missing",
-            "--repo-root",
+            "--state-root",
             str(_STATE_ROOT),
+            "--repo-root",
+            str(PROJECT_ROOT),
             "--db",
             str(_DB_PATH),
         ],
         cwd=str(PROJECT_ROOT),
     ).returncode
-    if rc != 0:
-        return rc
-    return subprocess.run(
-        [
-            *managed_python_prefix(PROJECT_ROOT),
-            str(build_saydo),
-            "--ticker",
-            ticker,
-            "--repo-root",
-            str(_STATE_ROOT),
-        ],
-        cwd=str(PROJECT_ROOT),
-    ).returncode
 
 
-def _saydo_should_run(list_type: str | None, *, force: bool, instrument: str | None = None) -> bool:
-    """Say-Do generation runs for evaluation-list names (the gap this closes)
+def _transcript_summaries_should_run(
+    list_type: str | None, *, force: bool, instrument: str | None = None
+) -> bool:
+    """Transcript summary generation runs for evaluation-list names (the gap this closes)
     or for any name when forced (e.g. backfilling an already-onboarded ticker).
 
     Never for ETFs — funds hold no earnings calls, so there are no
-    management commitments to pair. Belt-and-braces: the ETF onboarding
+    company transcripts to summarize. Belt-and-braces: the ETF onboarding
     branch in ``main`` returns before this gate is ever consulted, but a
-    ``--force-saydo`` on an ETF must still be a no-op.
+    ``--force-transcript-summaries`` on an ETF must still be a no-op.
     """
     if instrument == "etf":
         return False
@@ -655,7 +640,7 @@ def main() -> int:
     ap.add_argument(
         "--skip-llm",
         action="store_true",
-        help="Collect sources without LLM commitment extraction or Say-Do generation",
+        help="Collect sources without LLM commitment extraction or Transcript summary generation",
     )
     ap.add_argument(
         "--skip-transcripts",
@@ -668,14 +653,14 @@ def main() -> int:
         help="Skip the IR-document discover+fetch step (e.g. no `ir` extra installed)",
     )
     ap.add_argument(
-        "--skip-saydo",
+        "--skip-transcript-summaries",
         action="store_true",
-        help="Skip the Say-Do step (per-quarter transcript summaries + pairwise cards).",
+        help="Skip the Transcript summary step (registered transcript summaries).",
     )
     ap.add_argument(
-        "--force-saydo",
+        "--force-transcript-summaries",
         action="store_true",
-        help="Run the Say-Do step regardless of list_type (default: evaluation "
+        help="Run the Transcript summary step regardless of list_type (default: evaluation "
         "names only). Useful for backfilling an already-onboarded name.",
     )
     ap.add_argument(
@@ -962,29 +947,31 @@ def _onboard(args: argparse.Namespace) -> int:
                 flush=True,
             )
 
-    # Say-Do: per-quarter transcript summaries + pairwise §6 cards. Gated to
-    # evaluation-list names (per onboarding policy) unless --force-saydo. Runs
-    # after transcripts are ingested + registered so --regenerate-missing finds
-    # them. Best-effort — LLM-bound and tolerant of coverage gaps.
-    if not args.skip_saydo and not getattr(args, "skip_llm", False):
+    # Transcript summary: registered transcript summaries. Gated to
+    # evaluation-list names (per onboarding policy) unless --force-transcript-summaries. Runs
+    # after transcripts are ingested and registered. Best-effort — generation
+    # is verifier-bound and tolerant of coverage gaps.
+    if not args.skip_transcript_summaries and not getattr(args, "skip_llm", False):
         list_type = _lookup_list_type(ticker)
-        if _saydo_should_run(
+        if _transcript_summaries_should_run(
             list_type,
-            force=args.force_saydo,
+            force=args.force_transcript_summaries,
             instrument=str(instrument_value or "").lower() or None,
         ):
-            print(f"[onboard] {ticker} stage=saydo (list_type={list_type})", flush=True)
-            saydo_rc = _run_saydo(ticker)
-            if saydo_rc != 0:
+            print(
+                f"[onboard] {ticker} stage=transcript_summaries (list_type={list_type})", flush=True
+            )
+            transcript_summaries_rc = _run_transcript_summaries(ticker)
+            if transcript_summaries_rc != 0:
                 print(
-                    f"[onboard] {ticker} saydo returned rc={saydo_rc}; "
-                    f"continuing (Say-Do generation is best-effort)",
+                    f"[onboard] {ticker} transcript_summaries returned rc={transcript_summaries_rc}; "
+                    f"continuing (Transcript summary generation is best-effort)",
                     flush=True,
                 )
         else:
             print(
-                f"[onboard] {ticker} stage=saydo SKIPPED "
-                f"(list_type={list_type}, not evaluation; use --force-saydo to override)",
+                f"[onboard] {ticker} stage=transcript_summaries SKIPPED "
+                f"(list_type={list_type}, not evaluation; use --force-transcript-summaries to override)",
                 flush=True,
             )
 

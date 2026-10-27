@@ -274,7 +274,7 @@ class TierConfig:
 _UNLIMITED = sys.maxsize
 
 TIERS: dict[str, TierConfig] = {
-    # free == post-downgrade: 250/day, and save_fmp_data/fetch_etf_data drop the
+    # free == post-downgrade: 250/day, and save_fmp_data drop the
     # v3/v4 rungs (they 403 globally on free) when FMP_TIER=free is propagated.
     "free": TierConfig("free", calls_per_day=250, calls_per_sec=4.0),
     "basic": TierConfig("basic", calls_per_day=250, calls_per_sec=4.0),

@@ -472,7 +472,8 @@ def test_0049_upgrade_downgrade_reupgrade_round_trip(
     migrated_db: Callable[..., Path],
     tmp_path: Path,
 ) -> None:
-    path = migrated_db(tmp_path / "selection-roundtrip.db")
+    revision = "0049_current_fact_selection"
+    path = migrated_db(tmp_path / "selection-roundtrip.db", target=revision)
     config = Config(str(PROJECT_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{path.as_posix()}")
@@ -513,7 +514,7 @@ def test_0049_upgrade_downgrade_reupgrade_round_trip(
     finally:
         conn.close()
 
-    migrated_db(path, target="head", upgrade_existing=True)
+    migrated_db(path, target=revision, upgrade_existing=True)
     conn = _connect(path)
     try:
         assert (

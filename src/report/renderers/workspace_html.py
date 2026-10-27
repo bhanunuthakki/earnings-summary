@@ -25,11 +25,9 @@ output byte-for-byte across both.
 from __future__ import annotations
 
 from io import StringIO
-from pathlib import Path
 
 from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
 from pipeline.cc_overlay import CC_OVERLAY_JS
-from pipeline.you_said import render_you_said_strip_for_path
 from report.artifacts import (
     RenderedReportBody,
     ReportInteractionManifest,
@@ -42,8 +40,6 @@ from report.renderers.workspace_comments import JS as COMMENTS_JS
 from report.renderers.workspace_data import (
     PanelAvailability,
     WorkspaceP3Panels,
-    load_graded_sell_base_rate,
-    load_workspace_p3_panels,
 )
 from report.renderers.workspace_dcf import JS as DCF_JS
 from report.renderers.workspace_decision_card import JS as DECISION_CARD_JS
@@ -76,6 +72,7 @@ from report.renderers.workspace_sections.boot import (
     _chat_drawer_shell,
     _comment_boot_data,
     _comment_sidebar_shell,
+    prepare_report_delivery,
 )
 from report.renderers.workspace_sections.chrome import (
     _decision_card_strip,
@@ -155,10 +152,6 @@ from report.renderers.workspace_sections.position import (
 from report.renderers.workspace_sections.saydo import (
     _fmt_made_period,
     _outcome_pill,
-    _rating_pill,
-    _saydo_historical_ledger,
-    _saydo_print_vs_guide,
-    _saydo_summary_table,
     _saydo_tab,
     _saydo_verdicts_panel,
 )
@@ -190,6 +183,7 @@ from report.renderers.workspace_sections.thesis_risk import (
 from report.renderers.workspace_sections.valuation import _TIMES, _valuation_tab
 from report.renderers.workspace_styles import CHAT_CSS, COMMENTS_CSS, CSS, DCF_CSS
 from report.sections.p3_data import PeerCompRow
+from report.workspace_models import WorkspaceDelivery
 from ui.controls import controls_css, controls_js, icon_svg, k_empty
 from ui.living_grid import head_assets as _living_grid_head_assets
 from ui.source_chip import SOURCE_CHIP_JS
@@ -278,13 +272,9 @@ __all__ = [
     "_qa_roster_panel",
     "_qa_row",
     "_quarter_selector",
-    "_rating_pill",
     "_render_filing_intelligence",
     "_render_markdown",
     "_reread_strip",
-    "_saydo_historical_ledger",
-    "_saydo_print_vs_guide",
-    "_saydo_summary_table",
     "_saydo_tab",
     "_saydo_verdicts_panel",
     "_scenario_range_block",
@@ -331,24 +321,28 @@ __all__ = [
 
 
 def render(spec: ReportSpec) -> str:
-    return render_standalone_report(spec, render_report_body(spec))
+    return render_standalone_report(
+        spec, render_report_body(spec, delivery=prepare_report_delivery(spec))
+    )
 
 
-def render_report_body(spec: ReportSpec) -> RenderedReportBody:
+def render_report_body(
+    spec: ReportSpec, *, delivery: WorkspaceDelivery | None = None
+) -> RenderedReportBody:
     """Render every applicable section without document-level chrome."""
 
     body = StringIO()
     # Comments + chat boot data: inlined as JSON so the JS UI can render
     # pins without a server fetch. Server is needed for posting NEW
     # comments + chat, but read-only display works file://.
-    _comment_boot_data(body, spec)
+    _comment_boot_data(body, spec, delivery)
 
     # Resolve navigation before the shell so the persistent Work OS sidebar
     # can own the report's top-level destinations without changing pane ids.
     p3 = (
-        load_workspace_p3_panels(spec.ticker, Path(spec.repo_root), db_path=Path(spec.db_path))
-        if spec.db_path is not None
-        else load_workspace_p3_panels(spec.ticker, Path(spec.repo_root))
+        spec.workspace.p3
+        if spec.workspace is not None
+        else WorkspaceP3Panels.empty(PanelAvailability.UNAVAILABLE)
     )
     groups = _tab_groups(spec, p3)
     section_refs = tuple(
@@ -525,7 +519,13 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
             "Earnings",
             len(spec.earnings.full_quarters) + len(spec.earnings.digest_quarters),
             lambda b: _earnings_tab(
-                b, spec.earnings, spec.financials, spec.qa_roster, spec.ticker, spec.repo_root
+                b,
+                spec.earnings,
+                spec.financials,
+                spec.qa_roster,
+                spec.ticker,
+                spec.repo_root,
+                audio_url=spec.workspace.earnings_audio_url if spec.workspace is not None else None,
             ),
         ),
         (
@@ -537,7 +537,7 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
         (
             "saydo",
             "Say · Do",
-            len(spec.saydo.cards),
+            len(spec.saydo.verdicts),
             lambda b: _saydo_tab(b, spec.saydo),
         ),
         (
@@ -571,7 +571,6 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
             lambda b: _company_tab(
                 b,
                 spec.company_description,
-                spec.ir_docs,
                 spec.filing_intelligence,
                 p3.strategic_targets,
                 p3.customer_concentrations,
@@ -620,13 +619,8 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
             or bool(pos.recent_transactions or pos.open_decisions or pos.closed_decisions)
         )
     ) or (standing is not None and standing.rows):
-        db_path = Path(spec.db_path) if spec.db_path is not None else None
-        graded_sell_line = load_graded_sell_base_rate(spec.ticker, db_path) if db_path else None
-        # "You said" strip (owner-ratified design review, 2026-08-02):
-        # pre-computed here (not inside _position_tab) so the section stays a
-        # pure renderer over already-fetched data, matching graded_sell_line's
-        # own convention.
-        you_said_html = render_you_said_strip_for_path(db_path, spec.ticker)
+        graded_sell_line = spec.workspace.graded_sell_line if spec.workspace is not None else None
+        you_said_html = spec.workspace.you_said_html if spec.workspace is not None else ""
         tabs.append(
             (
                 "position",
@@ -648,7 +642,9 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
             "sources",
             "Sources",
             len(spec.appendix.transcripts) if spec.appendix else None,
-            lambda b: _sources_tab(b, spec.provenance, spec.appendix, spec.repo_root),
+            lambda b: _sources_tab(
+                b, spec.provenance, spec.appendix, spec.repo_root, spec.workspace
+            ),
         )
     )
     return tabs

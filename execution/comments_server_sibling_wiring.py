@@ -19,7 +19,6 @@ from comments_server_proposal_routes import (
     ResearchProposalRouteContext,
     register_research_proposal_routes,
 )
-from comments_server_research_routes import ResearchTaskRouteContext, register_research_task_routes
 from comments_server_settings_routes import SettingsRouteContext, register_settings_routes
 from comments_server_shared import (
     dcf_recompute_payload,
@@ -41,7 +40,6 @@ def register_sibling_routes(app: Flask, ctx: ServerContext) -> None:
     internal_failure = ctx.internal_failure
     log_redacted_failure = ctx.log_redacted_failure
     open_db = ctx.open_db
-    start_background_task = ctx.start_background_task
     db_path = ctx.db_path
     get_read_db = ctx.get_read_db
     panel_cache = ctx.panel_cache
@@ -72,16 +70,6 @@ def register_sibling_routes(app: Flask, ctx: ServerContext) -> None:
             db_path=db_path,
             owner_actor=DEFAULT_USER_ID,
             get_read_db=get_read_db,
-        ),
-    )
-    register_research_task_routes(
-        app,
-        ResearchTaskRouteContext(
-            repo_root=repo_root,
-            db_path=db_path,
-            start_background_task=start_background_task,
-            bump_activation_count=bump_activation_count,
-            log_redacted_failure=log_redacted_failure,
         ),
     )
     register_research_proposal_routes(

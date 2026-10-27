@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path, PurePath
 from typing import Literal, Self, cast
+from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel,
@@ -31,9 +32,11 @@ from models.ir_uploads import CategorizationResult
 from pipeline.issuer_document_inventory import (
     ExpectedIssuerDocument,
     FiscalPeriodWitness,
+    IssuerDocumentInventoryError,
     IssuerDocumentInventoryReceipt,
     IssuerDocumentInventoryRequest,
     build_issuer_document_inventory,
+    resolve_registered_document_period,
     validate_fiscal_period_witness,
 )
 from pipeline.source_policy import (
@@ -67,6 +70,58 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 log = logging.getLogger(__name__)
 
 _OPERATION = "managed_issuer_document_publication.v1"
+_CALENDAR_QUARTER_DOCUMENT_SUFFIXES: dict[str, frozenset[str]] = {
+    "ir_presentation": frozenset({".pdf"}),
+    "ir_press_release": frozenset({".pdf"}),
+    "ir_supplement": frozenset({".pdf", ".xlsx"}),
+    "ir_investor_update": frozenset({".pdf"}),
+    "ir_transcript": frozenset({".pdf"}),
+    "sec_10q": frozenset({".pdf"}),
+}
+_FISCAL_WITNESS_DOCUMENT_TYPES = frozenset({"sec_10q", "sec_10k", "sec_20f", "sec_40f"})
+
+
+def resolve_fiscal_period_witness(
+    conn: sqlite3.Connection,
+    document_version_id: str,
+    *,
+    ticker: str,
+    fiscal_year: int,
+    fiscal_quarter: int,
+) -> FiscalPeriodWitness:
+    """Resolve an exact current SEC filing as the fiscal-period witness."""
+    try:
+        resolved = resolve_registered_document_period(
+            conn,
+            document_version_id,
+            fiscal_year=fiscal_year,
+            fiscal_quarter=fiscal_quarter,
+        )
+    except IssuerDocumentInventoryError as exc:
+        raise IssuerDocumentPreparationError(f"fiscal_witness_{exc.reason_code}") from exc
+
+    if resolved.request.ticker != ticker.strip().upper():
+        raise IssuerDocumentPreparationError("fiscal_witness_ticker_mismatch")
+    if (
+        resolved.request.fiscal_year != fiscal_year
+        or resolved.request.fiscal_quarter != fiscal_quarter
+    ):
+        raise IssuerDocumentPreparationError("fiscal_witness_period_mismatch")
+    witness = resolved.request.fiscal_period_witness
+    if witness is None:
+        raise IssuerDocumentPreparationError("fiscal_witness_missing")
+    if witness.document_version_id != document_version_id:
+        raise IssuerDocumentPreparationError("fiscal_witness_document_mismatch")
+    expected = resolved.request.expected_documents[0]
+    parsed_url = urlsplit(expected.source_url)
+    if (
+        expected.document_type not in _FISCAL_WITNESS_DOCUMENT_TYPES
+        or parsed_url.scheme != "https"
+        or parsed_url.hostname not in {"sec.gov", "www.sec.gov"}
+        or not parsed_url.path.startswith("/Archives/edgar/data/")
+    ):
+        raise IssuerDocumentPreparationError("fiscal_witness_source_unsupported")
+    return witness
 
 
 def _json(value: object) -> str:
@@ -2505,20 +2560,47 @@ def prepare_issuer_document_candidate(
     fiscal_quarter: int,
     legacy_base_name: str,
     download: Callable[[str, Path, str], Path | None],
+    fiscal_witness_document_version_id: str | None = None,
 ) -> tuple[Path, IssuerDocumentStagingRequest | None, BoundIRClassification | None]:
-    """Download once, then seal only the qualified calendar-year PDF presentation family.
+    """Download once, then seal qualified quarterly IR documents.
 
     A returned path without a request needs the existing legacy registration
     route with its byte-bound classification. Rejected managed input remains
     in owned attempt staging for repair.
-    No caller can supply unchecked local bytes to this preparation operation.
+    Only exact quarter-end classifications with a managed document type and media
+    suffix enter managed publication. Non-calendar periods require an exact
+    current SEC filing witness for the same fiscal period.
     """
     root = state_root.resolve(strict=True)
     authorization = _authorize_staging(root, db_path, ticker, owner_requested)
-    if authorization.fiscal_year_end_month is None or not reported_quarter_is_in_window(
+    fiscal_witness: FiscalPeriodWitness | None = None
+    if fiscal_witness_document_version_id is not None:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        try:
+            fiscal_witness = resolve_fiscal_period_witness(
+                conn,
+                fiscal_witness_document_version_id,
+                ticker=ticker,
+                fiscal_year=fiscal_year,
+                fiscal_quarter=fiscal_quarter,
+            )
+        finally:
+            conn.close()
+        witness_month = int(fiscal_witness.fiscal_year_end[:2])
+        if (
+            authorization.fiscal_year_end_month is not None
+            and authorization.fiscal_year_end_month != witness_month
+        ):
+            raise IssuerDocumentPreparationError("fiscal_witness_calendar_mismatch")
+    fiscal_year_end_month = (
+        int(fiscal_witness.fiscal_year_end[:2])
+        if fiscal_witness is not None
+        else authorization.fiscal_year_end_month
+    )
+    if fiscal_year_end_month is None or not reported_quarter_is_in_window(
         fiscal_year=fiscal_year,
         fiscal_quarter=fiscal_quarter,
-        fiscal_year_end_month=authorization.fiscal_year_end_month,
+        fiscal_year_end_month=fiscal_year_end_month,
         as_of=date.today(),
     ):
         raise IssuerDocumentPreparationError("reported_quarter_window_denied")
@@ -2564,21 +2646,37 @@ def prepare_issuer_document_candidate(
             source_url,
         )
         if isinstance(outcome, CategorizationFailure):
+            if fiscal_witness is not None:
+                raise IssuerDocumentPreparationError(
+                    "fiscal_witness_classification_failed",
+                    phase="classify",
+                    residue_paths=_retained_staging_names(objects),
+                )
             return (
                 _legacy_candidate(destination, root / "ir_documents" / ticker, legacy_base_name),
                 None,
                 classified,
             )
-        quarter_ends = {
-            date(outcome.period_end.year, month, day)
-            for month, day in ((3, 31), (6, 30), (9, 30), (12, 31))
-        }
+        document_type = outcome.doc_type.value
+        suffix = destination.suffix.lower()
+        expected_period_end = fiscal_quarter_end(
+            fiscal_year=fiscal_year,
+            fiscal_quarter=fiscal_quarter,
+            fiscal_year_end=(
+                fiscal_witness.fiscal_year_end if fiscal_witness is not None else "12-31"
+            ),
+        )
         if (
-            outcome.period_end not in quarter_ends
-            or authorization.fiscal_year_end_month != 12
-            or destination.suffix.lower() != ".pdf"
-            or outcome.doc_type.value != "ir_presentation"
+            outcome.period_end != expected_period_end
+            or (fiscal_witness is None and authorization.fiscal_year_end_month != 12)
+            or suffix not in _CALENDAR_QUARTER_DOCUMENT_SUFFIXES.get(document_type, frozenset())
         ):
+            if fiscal_witness is not None:
+                raise IssuerDocumentPreparationError(
+                    "fiscal_witness_classification_mismatch",
+                    phase="classify",
+                    residue_paths=_retained_staging_names(objects),
+                )
             return (
                 _legacy_candidate(destination, root / "ir_documents" / ticker, legacy_base_name),
                 None,
@@ -2594,12 +2692,13 @@ def prepare_issuer_document_candidate(
         try:
             inventory = IssuerDocumentInventoryRequest(
                 ticker=ticker,
-                fiscal_year=outcome.period_end.year,
-                fiscal_quarter=(outcome.period_end.month - 1) // 3 + 1,
+                fiscal_year=fiscal_year,
+                fiscal_quarter=fiscal_quarter,
                 period_end=outcome.period_end,
                 expected_documents=(
-                    ExpectedIssuerDocument(source_url=source_url, document_type="ir_presentation"),
+                    ExpectedIssuerDocument(source_url=source_url, document_type=document_type),
                 ),
+                fiscal_period_witness=fiscal_witness,
             )
             request = IssuerDocumentStagingRequest(
                 attempt_id=attempt,
@@ -2616,7 +2715,7 @@ def prepare_issuer_document_candidate(
                 residue_paths=_retained_staging_names(objects),
             ) from exc
         document = _staged_document(
-            request, destination, outcome, source_url, "ir_presentation", objects, classified_bytes
+            request, destination, outcome, source_url, document_type, objects, classified_bytes
         )
         _seal_prepared_staging(request, [document], root, db_path, objects)
         return destination, request, None

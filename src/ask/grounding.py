@@ -456,6 +456,10 @@ class StrictEvidenceConnection:
         except sqlite3.Error as exc:
             raise GroundingRetrievalError("grounded evidence query failed") from exc
 
+    def getlimit(self, category: int) -> int:
+        """Read the native connection limit without bypassing query checks."""
+        return self._connection.getlimit(category)
+
     def close(self) -> None:
         self._connection.close()
 

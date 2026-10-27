@@ -165,7 +165,7 @@ def test_durable_processor_subgate_checks_exact_unit_closure(
 def test_integrity_audit_reconstructs_v2_helper_contract_and_downgrade_holds(
     tmp_path: Path, migrated_db: Callable[..., Path], missing_helper: bool
 ) -> None:
-    path = migrated_db(tmp_path / "audit.db")
+    path = migrated_db(tmp_path / "audit.db", target=REVISION)
     manifest = cast(
         dict[str, object],
         json.loads((ROOT / "config" / "filing_xbrl_processor_bundle.json").read_text()),

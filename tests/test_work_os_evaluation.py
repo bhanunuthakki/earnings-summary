@@ -135,7 +135,7 @@ def test_mixed_company_and_etf_preserve_input_order_and_user_doorways(
     assert payload.count == 2
     assert [item.ticker for item in payload.items] == ["VDE", "MELI"]
     assert payload.items[0].instrument_type == "etf"
-    assert payload.items[0].workup_url == "/api/peek/etf_workup?ticker=VDE"
+    assert not hasattr(payload.items[0], "workup_url")
     assert payload.items[0].company_desk_url is None
     assert payload.items[0].dcf_url is None
     assert payload.items[0].dcf_upside_pct is None

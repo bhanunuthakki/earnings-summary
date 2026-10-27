@@ -18,7 +18,6 @@ REGISTERED_EXTRACTOR_LOCATOR_VERSIONS: dict[str, int] = {
     "compute.as_reported": 2,
     "compute.s1_financials": 1,
     "ir_pipeline.ingest": 1,
-    "compute.kpi_extract_summaries": 1,
     "competitive.transcript_mentions": 1,
     "competitive.category_share": 1,
     "pipeline.sec_fpi_ingest": 1,

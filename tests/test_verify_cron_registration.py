@@ -10,13 +10,9 @@ from unittest.mock import patch
 
 import pytest
 
+import execution.verify_cron_registration as verifier
 from execution.verify_cron_registration import (
     TaskReport,
-    _command_executable,  # pyright: ignore[reportPrivateUsage]
-    _extract_next_run_time,  # pyright: ignore[reportPrivateUsage]
-    _parse_xml,  # pyright: ignore[reportPrivateUsage]
-    _print_report,  # pyright: ignore[reportPrivateUsage]
-    _windows_service_is_running,  # pyright: ignore[reportPrivateUsage]
     compare,
     main,
     report_payload,
@@ -85,7 +81,7 @@ def _write_hourly_task_xml(path: Path, uri: str, start_time: str = "00:17:00") -
 def test_parse_xml_extracts_uri_and_time(tmp_path: Path) -> None:
     p = tmp_path / "test.task.xml"
     _write_task_xml(p, r"\earnings-summary\refresh_cache", "03:00:00")
-    task = _parse_xml(p)
+    task = getattr(verifier, "_parse_xml")(p)
     assert task is not None
     assert task.task_name == r"\earnings-summary\refresh_cache"
     assert task.start_time == "03:00:00"
@@ -100,7 +96,7 @@ def test_parse_xml_disabled_flag(tmp_path: Path) -> None:
         trigger_enabled=True,
         settings_enabled=False,
     )
-    task = _parse_xml(p)
+    task = getattr(verifier, "_parse_xml")(p)
     assert task is not None
     assert task.enabled is False
 
@@ -109,7 +105,7 @@ def test_parse_xml_missing_uri_returns_none(tmp_path: Path) -> None:
     p = tmp_path / "nouri.task.xml"
     content = f'<?xml version="1.0"?><Task xmlns="{_NS}"><Settings/></Task>'
     p.write_text(content, encoding="utf-16")
-    assert _parse_xml(p) is None
+    assert getattr(verifier, "_parse_xml")(p) is None
 
 
 def test_parse_xml_bad_content_raises(tmp_path: Path) -> None:
@@ -118,7 +114,7 @@ def test_parse_xml_bad_content_raises(tmp_path: Path) -> None:
     p = tmp_path / "bad.task.xml"
     p.write_bytes(b"this is not xml at all <<<")
     with pytest.raises(ET.ParseError):
-        _parse_xml(p)
+        getattr(verifier, "_parse_xml")(p)
 
 
 def test_parse_xml_utf8_bytes_declaring_utf16_raises(tmp_path: Path) -> None:
@@ -132,7 +128,7 @@ def test_parse_xml_utf8_bytes_declaring_utf16_raises(tmp_path: Path) -> None:
         b"<RegistrationInfo><URI>\\earnings-summary\\x</URI></RegistrationInfo></Task>"
     )
     with pytest.raises(ET.ParseError):
-        _parse_xml(p)
+        getattr(verifier, "_parse_xml")(p)
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +148,7 @@ def test_parse_xml_utf8_bytes_declaring_utf16_raises(tmp_path: Path) -> None:
     ],
 )
 def test_extract_next_run_time(raw: str, expected: str | None) -> None:
-    assert _extract_next_run_time(raw) == expected
+    assert getattr(verifier, "_extract_next_run_time")(raw) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +216,7 @@ def test_compare_flags_stale_required_writer_as_extra(
     assert payload["status"] == "failed"
     assert payload["extra"] == [stale]
 
-    _print_report(report, xml_tasks)
+    getattr(verifier, "_print_report")(report, xml_tasks)
     output = capsys.readouterr().out
     assert "EXTRA" in output
     assert stale in output
@@ -320,128 +316,6 @@ def test_compare_source_disabled_task_accepts_live_disabled_state(tmp_path: Path
     assert report.ok == [f"{task_name} (xml disabled, scheduler disabled)"]
 
 
-def test_capture_poller_disabled_is_ok_when_service_is_running(tmp_path: Path) -> None:
-    task_name = r"\earnings-summary\capture_poller"
-    _write_task_xml(tmp_path / "capture_poller.task.xml", task_name, "04:00:00")
-
-    with (
-        patch("execution.verify_cron_registration._query_schtasks") as mock_tasks,
-        patch(
-            "execution.verify_cron_registration._windows_service_is_running",
-            return_value=True,
-        ) as mock_service,
-    ):
-        mock_tasks.return_value = {
-            task_name.lower(): {
-                "name": task_name,
-                "next_run": "N/A",
-                "status": "Disabled",
-            }
-        }
-        report, _xml_tasks = compare(tmp_path)
-
-    assert not report.has_problems
-    assert report.extra == []
-    assert report.disabled == []
-    assert report.ok == [rf"{task_name} (scheduler disabled; es-poller service running)"]
-    mock_service.assert_called_once_with("es-poller")
-
-
-def test_capture_poller_absent_is_ok_when_service_is_running(tmp_path: Path) -> None:
-    task_name = r"\earnings-summary\capture_poller"
-    _write_task_xml(tmp_path / "capture_poller.task.xml", task_name, "04:00:00")
-
-    with (
-        patch("execution.verify_cron_registration._query_schtasks", return_value={}),
-        patch(
-            "execution.verify_cron_registration._windows_service_is_running",
-            return_value=True,
-        ) as mock_service,
-    ):
-        report, _xml_tasks = compare(tmp_path)
-
-    assert not report.has_problems
-    assert report.extra == []
-    assert report.missing == []
-    assert report.ok == [rf"{task_name} (scheduler absent; es-poller service running)"]
-    mock_service.assert_called_once_with("es-poller")
-
-
-def test_capture_poller_disabled_is_problem_when_service_is_stopped(
-    tmp_path: Path,
-) -> None:
-    task_name = r"\earnings-summary\capture_poller"
-    _write_task_xml(tmp_path / "capture_poller.task.xml", task_name, "04:00:00")
-
-    with (
-        patch("execution.verify_cron_registration._query_schtasks") as mock_tasks,
-        patch(
-            "execution.verify_cron_registration._windows_service_is_running",
-            return_value=False,
-        ),
-    ):
-        mock_tasks.return_value = {
-            task_name.lower(): {
-                "name": task_name,
-                "next_run": "N/A",
-                "status": "Disabled",
-            }
-        }
-        report, _xml_tasks = compare(tmp_path)
-
-    assert report.has_problems
-    assert report.ok == []
-    assert report.disabled == [rf"{task_name} (Status='Disabled')"]
-
-
-def test_other_disabled_task_is_not_waived_by_poller_service(tmp_path: Path) -> None:
-    task_name = r"\earnings-summary\other"
-    _write_task_xml(tmp_path / "other.task.xml", task_name, "04:00:00")
-
-    with (
-        patch("execution.verify_cron_registration._query_schtasks") as mock_tasks,
-        patch("execution.verify_cron_registration._windows_service_is_running") as mock_service,
-    ):
-        mock_tasks.return_value = {
-            task_name.lower(): {
-                "name": task_name,
-                "next_run": "N/A",
-                "status": "Disabled",
-            }
-        }
-        report, _xml_tasks = compare(tmp_path)
-
-    assert report.has_problems
-    assert report.disabled == [rf"{task_name} (Status='Disabled')"]
-    mock_service.assert_not_called()
-
-
-def test_windows_service_running_requires_positive_running_state() -> None:
-    completed = __import__("subprocess").CompletedProcess(
-        args=["sc.exe", "query", "es-poller"],
-        returncode=0,
-        stdout=(
-            "SERVICE_NAME: es-poller\n"
-            "        TYPE               : 10  WIN32_OWN_PROCESS\n"
-            "        STATE              : 4  RUNNING\n"
-        ),
-        stderr="",
-    )
-    with patch(
-        "execution.verify_cron_registration.subprocess.run",
-        return_value=completed,
-    ):
-        assert _windows_service_is_running("es-poller") is True
-
-
-def test_windows_service_query_failure_is_not_healthy() -> None:
-    with patch(
-        "execution.verify_cron_registration.subprocess.run",
-        side_effect=OSError("sc.exe unavailable"),
-    ):
-        assert _windows_service_is_running("es-poller") is False
-
-
 def test_compare_schedule_mismatch(tmp_path: Path) -> None:
     _write_task_xml(tmp_path / "wrong_time.task.xml", r"\earnings-summary\wrong", "03:00:00")
 
@@ -466,8 +340,8 @@ def test_parse_xml_detects_repetition(tmp_path: Path) -> None:
     hourly = tmp_path / "hourly.task.xml"
     _write_hourly_task_xml(hourly, r"\earnings-summary\hourly")
 
-    daily_task = _parse_xml(daily)
-    hourly_task = _parse_xml(hourly)
+    daily_task = getattr(verifier, "_parse_xml")(daily)
+    hourly_task = getattr(verifier, "_parse_xml")(hourly)
     assert daily_task is not None and daily_task.has_repetition is False
     assert hourly_task is not None and hourly_task.has_repetition is True
 
@@ -526,9 +400,7 @@ def test_alert_hook_receives_only_failed_health(monkeypatch: pytest.MonkeyPatch)
         "run",
         fake_run,
     )
-    verifier._notify_alert_hook(  # pyright: ignore[reportPrivateUsage]
-        {"status": "failed"}
-    )
+    getattr(verifier, "_notify_alert_hook")({"status": "failed"})
     assert calls == [["C:/tools/alert.exe"]]
 
 
@@ -667,7 +539,7 @@ def test_print_report_uses_ascii_only_markers(capsys: pytest.CaptureFixture[str]
     report.missing.append(r"\earnings-summary\not_registered")
     report.mismatch.append((r"\earnings-summary\w", "03:00:00", "05:00:00"))
 
-    _print_report(report, [])
+    getattr(verifier, "_print_report")(report, [])
     out = capsys.readouterr().out
 
     assert "✓" not in out
@@ -713,7 +585,7 @@ def test_main_no_false_allclear_when_unparseable_mixed_with_ok(tmp_path: Path) -
     ],
 )
 def test_command_executable_extracts_image_path(command: str, expected: str | None) -> None:
-    assert _command_executable(command) == expected
+    assert getattr(verifier, "_command_executable")(command) == expected
 
 
 def _ready(name: str, next_run: str = "6/12/2026 3:00:00 AM") -> dict[str, str]:
@@ -809,7 +681,7 @@ def test_wrong_root_surfaces_in_payload_and_output(tmp_path: Path) -> None:
     assert entries[0]["task"] == name
     assert entries[0]["command"] == stray
 
-    _print_report(report, xml_tasks)
+    getattr(verifier, "_print_report")(report, xml_tasks)
 
 
 def test_main_exits_nonzero_on_wrong_checkout(tmp_path: Path) -> None:

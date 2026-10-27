@@ -123,8 +123,6 @@ def test_company_cache_changes_for_displayed_names_method_and_profile(
     monkeypatch.setattr(company, "segment_names_from_db", Mock(return_value=names))
     for attr in (
         "_load_thesis",
-        "_load_recent_earnings_md",
-        "_load_recent_ir_docs_md",
         "load_ir_anchor",
     ):
         monkeypatch.setattr(company, attr, Mock(return_value=""))

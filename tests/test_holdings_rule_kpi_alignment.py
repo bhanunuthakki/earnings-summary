@@ -1,27 +1,10 @@
-"""Guard against dead break-rules in the re-encoded holdings.
+"""Check declared rule vocabulary in the private re-encoded holdings.
 
-A break-rule / business-model-rule references a KPI by ``kpi_name``. At
-evaluation time ``thesis_evaluator._fetch_kpi_history`` resolves that label
-through ``kpi_resolver`` (a parenthetical-insensitive, normalized match) against
-the stored ``kpi_definitions``. Those definitions only ever get populated from
-two sources:
-
-  * ``compute.fmp_derived_kpis`` — metrics computed from ``financial_facts``
-    (the ``_DERIVED_KPI_NAMES`` tuple), and
-  * ``compute.kpi_extract_summaries`` — operational KPIs the LLM extracts, which
-    reads the ``tier_1/2/3`` KPI *names* from the same holdings file.
-
-So a rule whose ``kpi_name`` normalizes to neither a derived metric nor a tier
-KPI in its own file can never resolve: it silently evaluates OK forever (a dead
-rule). This test pins that invariant for the seven holdings re-encoded from the
-user's thesis blurbs (2026-06-01).
-
-The six pre-existing dormant rules in the populated RBRK/NOW/WIX files reference
-metrics that need a dedicated extractor/deriver not built yet (tracked in the
-deferred-followups memory); they are pinned in ``NARRATIVE_ALLOWLIST``. Pinning
-the exact set makes the test fail if a NEW dead rule is introduced *or* if an
-allowlisted one is later wired (shrinking the set) — either way forcing a
-deliberate update rather than letting a dead rule slip in unnoticed.
+Rules should use a declared tier KPI name or a standard derived metric. This
+checks the holdings contract only. It does not prove that a stored value exists,
+that an extractor covers it, or that an undeclared metric can never be supplied.
+Explicit original-source manifests can add reviewed KPI definitions and values.
+The exact narrative exception set records rules that still need owner review.
 """
 
 from __future__ import annotations

@@ -7,7 +7,7 @@ sites (roic.ai → stockanalysis.com → tickertrends.io). First hit wins.
 Why Q&A only:
   - Prepared remarks are reproducible from the press release + investor deck,
     which `execution/process_ir_documents.py` already summarizes via
-    `generate_press_release_summary` / `generate_presentation_brief`.
+    separate generated document summaries.
   - The Q&A segment is the unique audio-only content — analysts probing the
     edges of management's prepared message — and is exactly what say-do
     consistency analysis needs.
@@ -33,49 +33,142 @@ from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 SRC_DIR = PROJECT_ROOT / "src"
-sys.path.append(str(SRC_DIR))
+__all__ = [
+    "COMBINED_SOURCE_REGIME_IDENTITY",
+    "SOURCES",
+    "TRANSCRIPT_ACQUISITION_POLICY_VERSION",
+    "AggregatorHit",
+    "AggregatorSource",
+    "AuthorizedTranscriptArtifact",
+    "ExistingArtifactBehavior",
+    "SQLiteConnectionRole",
+    "TranscriptAcquisitionAuthorization",
+    "TranscriptAcquisitionDeniedError",
+    "TranscriptAcquisitionEntrypoint",
+    "TranscriptAcquisitionRequest",
+    "TranscriptAuthorizationStatus",
+    "TranscriptProvider",
+    "authorize_transcript_request",
+    "connect_sqlite",
+    "db",
+    "index_manager",
+    "install_transcript_output",
+    "issuer_transcript_source_url_is_authorized",
+    "load_authorized_transcript_replay",
+    "persist_authorized_transcript_artifact",
+    "project_root_for_database",
+    "read_authorized_transcript",
+    "resolve_ticker",
+    "stage_authorized_payload",
+    "transcript_acquisition_receipt_id",
+    "validate_synthesized_transcript",
+]
+if TYPE_CHECKING:
+    import db
+    import index_manager
+    from aggregator_sources import SOURCES, AggregatorHit, AggregatorSource
+    from alias_manager import resolve_ticker
+    from pipeline.transcript_acquisition import (
+        COMBINED_SOURCE_REGIME_IDENTITY,
+        AuthorizedTranscriptArtifact,
+        TranscriptAcquisitionDeniedError,
+        authorize_transcript_request,
+        issuer_transcript_source_url_is_authorized,
+        load_authorized_transcript_replay,
+        persist_authorized_transcript_artifact,
+        project_root_for_database,
+        read_authorized_transcript,
+        stage_authorized_payload,
+        transcript_acquisition_receipt_id,
+    )
+    from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+    from transcript_qa import validate_synthesized_transcript
+    from transcripts.acquisition_semantics import (
+        TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+        ExistingArtifactBehavior,
+        TranscriptAcquisitionAuthorization,
+        TranscriptAcquisitionEntrypoint,
+        TranscriptAcquisitionRequest,
+        TranscriptAuthorizationStatus,
+        TranscriptProvider,
+    )
+    from transcripts.immutable_staging import install_transcript_output
 
-import db  # noqa: E402
-import index_manager  # noqa: E402
-from aggregator_sources import (  # noqa: E402
-    SOURCES,
-    AggregatorHit,
-    AggregatorSource,
-)
-from alias_manager import resolve_ticker  # noqa: E402
-from pipeline.transcript_acquisition import (  # noqa: E402
-    COMBINED_SOURCE_REGIME_IDENTITY,
-    AuthorizedTranscriptArtifact,
-    TranscriptAcquisitionDeniedError,
-    authorize_transcript_request,
-    issuer_transcript_source_url_is_authorized,
-    load_authorized_transcript_replay,
-    persist_authorized_transcript_artifact,
-    project_root_for_database,
-    read_authorized_transcript,
-    stage_authorized_payload,
-    transcript_acquisition_receipt_id,
-)
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
-from transcript_qa import (  # noqa: E402
-    validate_synthesized_transcript,
-)
-from transcripts.acquisition_semantics import (  # noqa: E402
-    TRANSCRIPT_ACQUISITION_POLICY_VERSION,
-    ExistingArtifactBehavior,
-    TranscriptAcquisitionAuthorization,
-    TranscriptAcquisitionEntrypoint,
-    TranscriptAcquisitionRequest,
-    TranscriptAuthorizationStatus,
-    TranscriptProvider,
-)
-from transcripts.immutable_staging import install_transcript_output  # noqa: E402
+
+def _bootstrap_project_imports() -> None:
+    """Load project modules after adding ``src`` for direct CLI execution."""
+    sys.path.append(str(SRC_DIR))
+    import db
+    import index_manager
+    from aggregator_sources import SOURCES, AggregatorHit, AggregatorSource
+    from alias_manager import resolve_ticker
+    from pipeline.transcript_acquisition import (
+        COMBINED_SOURCE_REGIME_IDENTITY,
+        AuthorizedTranscriptArtifact,
+        TranscriptAcquisitionDeniedError,
+        authorize_transcript_request,
+        issuer_transcript_source_url_is_authorized,
+        load_authorized_transcript_replay,
+        persist_authorized_transcript_artifact,
+        project_root_for_database,
+        read_authorized_transcript,
+        stage_authorized_payload,
+        transcript_acquisition_receipt_id,
+    )
+    from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+    from transcript_qa import validate_synthesized_transcript
+    from transcripts.acquisition_semantics import (
+        TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+        ExistingArtifactBehavior,
+        TranscriptAcquisitionAuthorization,
+        TranscriptAcquisitionEntrypoint,
+        TranscriptAcquisitionRequest,
+        TranscriptAuthorizationStatus,
+        TranscriptProvider,
+    )
+    from transcripts.immutable_staging import install_transcript_output
+
+    _ = (
+        db,
+        index_manager,
+        SOURCES,
+        AggregatorHit,
+        AggregatorSource,
+        resolve_ticker,
+        COMBINED_SOURCE_REGIME_IDENTITY,
+        AuthorizedTranscriptArtifact,
+        TranscriptAcquisitionDeniedError,
+        authorize_transcript_request,
+        issuer_transcript_source_url_is_authorized,
+        load_authorized_transcript_replay,
+        persist_authorized_transcript_artifact,
+        project_root_for_database,
+        read_authorized_transcript,
+        stage_authorized_payload,
+        transcript_acquisition_receipt_id,
+        SQLiteConnectionRole,
+        connect_sqlite,
+        validate_synthesized_transcript,
+        TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+        ExistingArtifactBehavior,
+        TranscriptAcquisitionAuthorization,
+        TranscriptAcquisitionEntrypoint,
+        TranscriptAcquisitionRequest,
+        TranscriptAuthorizationStatus,
+        TranscriptProvider,
+        install_transcript_output,
+    )
+    globals().update(locals())
+
+
+_bootstrap_project_imports()
 
 RAW_DIR = PROJECT_ROOT / "transcripts" / "raw"
 STAGING_DIR = PROJECT_ROOT / ".tmp" / "transcript-acquisition"

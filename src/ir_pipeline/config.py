@@ -31,7 +31,7 @@ class SheetKpi:
     """Where one KPI lives in an IR historical-data spreadsheet.
 
     Two flavours, distinguished by ``origin`` (the capture-every-number program,
-    `directives/capture_every_number_program.md`):
+    `directives/data_provenance.md`):
 
     * ``origin="analyst"`` (default) — a curated tier/holdings KPI. ``kpi_name``
       is the canonical ``kpi_definitions.name`` (the long ``tier_1_kpis`` form,

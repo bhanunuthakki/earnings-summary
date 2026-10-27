@@ -118,9 +118,9 @@ def test_registry_is_frozen_typed_and_complete() -> None:
         assert producer not in registry.REGISTERED
     # The manual draft renderer uses the existing report visual family.
     assert "report/renderers/bound_draft.py" in registry.REGISTERED
-    assert len(registry.REGISTERED) == 113
+    assert len(registry.REGISTERED) == 107
     assert "pipeline/calibration_receipt.py" not in registry.REGISTERED
-    assert len(registry.VISUAL_EMITTER_MANIFEST) == 161
+    assert len(registry.VISUAL_EMITTER_MANIFEST) == 151
     calculation_evidence = next(
         entry
         for entry in registry.VISUAL_EMITTER_MANIFEST
@@ -146,7 +146,7 @@ def test_registry_is_frozen_typed_and_complete() -> None:
     assert workbook_adapter.adapter_kinds == frozenset({registry.EvidenceAdapter.PYTHON_CSS})
     assert workbook_adapter.owner == "dcf-workbook"
     assert workbook_adapter.path not in registry.GOVERNED
-    assert len(registry.GOVERNED) == 134
+    assert len(registry.GOVERNED) == 128
     assert (
         frozenset(
             {
@@ -189,7 +189,7 @@ def test_registry_is_frozen_typed_and_complete() -> None:
     assert len(registry.BESPOKE_BUTTON_APPROVALS) == 17
     assert len(registry.MONO_TABLE_APPROVALS) == 1
     assert registry.SURFACE_SANCTIONS == ()
-    assert len(registry.CCACTION_REGRESSION_FLOOR) == 26
+    assert len(registry.CCACTION_REGRESSION_FLOOR) == 24
     for name in (
         "CHROME_TOKENS",
         "INDENT_TOKENS",

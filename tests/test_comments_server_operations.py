@@ -281,8 +281,9 @@ def test_operations_panel_route_is_get_only_app_cached_and_one_connection_per_mi
             job_receipt_roots=job_receipt_roots,
         )
 
-    def render(view: OperationsPanelView) -> str:
-        return render_operations_panel(view)
+    def render(view: OperationsPanelView, *, diagnostics_html: str = "") -> str:
+        assert "Observed by server" in diagnostics_html
+        return render_operations_panel(view, diagnostics_html=diagnostics_html)
 
     collect_snapshot = Mock(side_effect=collect)
     render_panel = Mock(side_effect=render)
@@ -1149,100 +1150,6 @@ def test_operations_route_projects_cached_scheduler_receipt_states(
     assert expected in response.get_data(as_text=True)
 
 
-def test_readme_update_action_dispatches_preview_and_exact_approved_apply(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    code_root = tmp_path / "code"
-    runtime_root = tmp_path / "runtime"
-    code_root.mkdir()
-    runtime_root.mkdir()
-    (code_root / "README.md").write_text("# Current\n", encoding="utf-8")
-    registry = build_operations_registry(PROJECT_ROOT)
-    jobs = Mock()
-    jobs.start.return_value = Mock(
-        job_id="job_readme",
-        ticker="_REPO",
-        kind="readme-preview",
-        started_at=datetime(2026, 8, 13, tzinfo=UTC),
-    )
-
-    def fake_managed_python_argv(*args: object) -> list[str]:
-        return [str(arg) for arg in args]
-
-    patch_server_seam(monkeypatch, "managed_python_argv", fake_managed_python_argv)
-
-    app = comments_server.create_app(
-        runtime_root,
-        code_root=code_root,
-        db_path=runtime_root / "portfolio.db",
-        registry=jobs,
-        operations_registry=registry,
-    )
-    client = app.test_client()
-
-    preview = client.post("/actions/readme-update", json={"action": "preview"})
-
-    assert preview.status_code == 201
-    preview_call = jobs.start.call_args
-    assert preview_call.kwargs["ticker"] == "_REPO"
-    assert preview_call.kwargs["kind"] == "readme-preview"
-    assert preview_call.kwargs["write_sets"] == ["portfolio-db", "readme-updater"]
-    assert "--apply-run" not in preview_call.kwargs["argv"]
-
-    run_id = "d" * 32
-    patch_server_seam(
-        monkeypatch,
-        "collect_readme_governance_status",
-        Mock(return_value=Mock(state="approved_preview", run_id=run_id, can_apply=True)),
-    )
-    jobs.start.return_value.kind = "readme-apply"
-    applied = client.post("/actions/readme-update", json={"action": "apply", "run_id": run_id})
-
-    assert applied.status_code == 201
-    apply_call = jobs.start.call_args
-    assert apply_call.kwargs["kind"] == "readme-apply"
-    assert apply_call.kwargs["argv"][-2:] == ["--apply-run", run_id]
-    assert apply_call.kwargs["write_sets"] == ["portfolio-db", "readme-updater"]
-
-
-def test_readme_apply_route_rejects_unknown_or_stale_receipt(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    registry = build_operations_registry(PROJECT_ROOT)
-    jobs = Mock()
-    patch_server_seam(
-        monkeypatch,
-        "collect_readme_governance_status",
-        Mock(return_value=Mock(state="stale", run_id="e" * 32, can_apply=False)),
-    )
-    client = comments_server.create_app(
-        tmp_path, registry=jobs, operations_registry=registry
-    ).test_client()
-
-    invalid = client.post(
-        "/actions/readme-update", json={"action": "apply", "run_id": "../receipt"}
-    )
-    stale = client.post("/actions/readme-update", json={"action": "apply", "run_id": "e" * 32})
-
-    assert invalid.status_code == 400
-    assert stale.status_code == 409
-    jobs.start.assert_not_called()
-
-
-def test_readme_update_action_rejects_non_object_json(tmp_path: Path) -> None:
-    registry = build_operations_registry(PROJECT_ROOT)
-    jobs = Mock()
-    client = comments_server.create_app(
-        tmp_path, registry=jobs, operations_registry=registry
-    ).test_client()
-
-    response = client.post("/actions/readme-update", json=["preview"])
-
-    assert response.status_code == 400
-    assert response.get_json()["error"] == "JSON request body must be an object"
-    jobs.start.assert_not_called()
-
-
 @pytest.mark.parametrize("job", ["morning_pipeline", "prepare-kpi-semantic-review"])
 def test_job_receipt_declared_writer_root_has_no_other_root_fallback(
     tmp_path: Path, job: str
@@ -1304,3 +1211,25 @@ def test_job_receipt_declared_writer_root_has_no_other_root_fallback(
         receipt = next(item for item in missing.job_receipts if item.job == job)
         assert receipt.state == "missing"
         assert receipt.evidence_source == str(latest)
+
+
+@pytest.mark.parametrize("action", ["preview", "apply"])
+def test_retired_readme_action_does_not_dispatch_or_modify_saved_files(
+    tmp_path: Path, action: str
+) -> None:
+    saved = tmp_path / ".tmp" / "readme_updater" / ("a" * 32)
+    saved.mkdir(parents=True)
+    receipt = saved / "receipt.json"
+    receipt.write_text('{"historical": true}', encoding="utf-8")
+    readme = tmp_path / "README.md"
+    readme.write_text("# Saved README\n", encoding="utf-8")
+    jobs = Mock()
+    client = comments_server.create_app(
+        tmp_path, registry=jobs, operations_registry=build_operations_registry(PROJECT_ROOT)
+    ).test_client()
+    response = client.post("/actions/readme-update", json={"action": action})
+    assert response.status_code == 404
+    assert client.get("/api/readme-governance/status").status_code == 404
+    jobs.start.assert_not_called()
+    assert readme.read_text(encoding="utf-8") == "# Saved README\n"
+    assert receipt.read_text(encoding="utf-8") == '{"historical": true}'

@@ -44,6 +44,7 @@ refactor — zero behavior change).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -53,15 +54,18 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 from collections.abc import Iterator
+from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
-from llm.capture import capture_exchange
+from llm.capture import capture_exchange as _capture_exchange
 from llm.fleet_policy import policy_environment_names, subscription_route
 from llm.ledger import record_llm_call
-from llm.resolver import validate_purpose
+from llm.resolver import CapabilityProfile, validate_purpose
 from llm.transport import (
     FailureInfo,
     LLMQuotaExhausted,
@@ -71,10 +75,6 @@ from llm.transport import (
     record_quota_exhausted,
     retry_budget,
 )
-
-if TYPE_CHECKING:
-    from llm.resolver import CapabilityProfile
-
 
 # Backoff base for transient-class retries (llm.transport.retry_budget owns the
 # per-class attempt counts). attempt 1 → ~3s, attempt 2 → ~6s, + up to 1s jitter.
@@ -192,54 +192,6 @@ LLM_MODELS: dict[str, str] = {
     # Tenet is proposed). Analytical synthesis-with-citations, batch/optional +
     # owner-tapped (never automatic), budget-capped skip-mode (0132) → Sonnet.
     "tenet_distill": DEFAULT_MODEL,
-    # The session-distill tap (B4 keystone, 2026-07-19 program overhaul). One
-    # conversation (a thin Ask thread or a bridged deep Claude session) in,
-    # at most 5 deterministically-grounded candidates out — the same
-    # analytical synthesis-with-citations shape as tenet_distill, just fed by
-    # the FULL conversational stream (idle Ask threads + landed transcripts)
-    # rather than owner-flagged musings alone. Batch (daily 18:00 cron), not
-    # latency-sensitive → Sonnet; budget-capped warn-mode (0190).
-    "session_distill": DEFAULT_MODEL,
-    # The Ledger intent tap (research.intent). A closed enum classification —
-    # observation/wondering/brief_artifact/stress_artifact — over one short musing,
-    # run on EVERY owner musing (no lexical pre-gate) → the cheap FAST tier; the
-    # golden set (evals/golden/capture_intent.json) is its bar.
-    "capture_intent": FAST_CLASSIFIER_MODEL,
-    # The B7 routing triage behind a positive wondering verdict (research.triage,
-    # called from research.proposals.detect_and_create_task). A closed 3-way
-    # route — answer_now/belief_candidate/research_task — over one short musing;
-    # fails OPEN to research_task (today's pre-B7 behavior) on any failure →
-    # the cheap FAST tier. Budget-capped, warn mode (0194).
-    "research_triage": FAST_CLASSIFIER_MODEL,
-    # The Ledger reply router (onmymind.reply). A closed enum classification —
-    # research/save/worldview/dismiss/question/note — over one owner reply to a
-    # feed card (the reply box replaced the per-card verb buttons). Fails open
-    # to 'question' (converse, never act) → the cheap FAST tier.
-    "ledger_reply_intent": FAST_CLASSIFIER_MODEL,
-    # The Triage second-pass router (user_state.triage_suggest). Given the FULL
-    # routable-intent menu, which route would the owner pick for a parked
-    # comment, and how sure are we? high → auto-route, low → one-tap suggestion,
-    # park/failure → unchanged. Closed enum → the cheap FAST tier.
-    "triage_route_suggest": FAST_CLASSIFIER_MODEL,
-    # The capture->answer primary gate (capture.triage, B3). A closed 3-way
-    # route — answer_now/contradiction/plain — over one short musing plus its
-    # rendered Worldview/decisions/recent-musings context; NEVER raises (any
-    # LLM-layer failure degrades to the regex fallback). Closed enum, short
-    # input → the cheap FAST tier; the golden set
-    # (evals/golden/capture_triage.json) is its bar.
-    "capture_triage": FAST_CLASSIFIER_MODEL,
-    # The Sunday packet's per-item verdict pre-draft (pipeline.weekly_packet,
-    # PR2 — navigation_ia.md §3.1). A short, closed-shape suggestion
-    # ("ratify|drop|defer - <reason>") grounded ONLY in the item text it's
-    # given — no web, no open-ended reasoning → the cheap FAST tier. Runs
-    # once per packet item, once a week; per-item degrade (a failure ships
-    # the item without a draft, never blocks the packet). Budget-capped,
-    # warn mode (0149).
-    "weekly_packet_predraft": FAST_CLASSIFIER_MODEL,
-    # The Ledger artifact brief (research.brief). Analytical writing — takeaways +
-    # bull/bear (+ stress: falsifiers, second-order, portfolio map) over an extracted
-    # article/deck → the default analytical tier (Sonnet). Budget-capped (0139).
-    "artifact_brief": DEFAULT_MODEL,
     # The Ledger Phase-1 research loop (the two-pass trifecta firebreak): fetch
     # (web on, no writer) / adversarial assess / narrate (no web). Sonnet-tier
     # reasoning + web orchestration; monthly budgets seeded warn/warn/skip (0124),
@@ -247,9 +199,6 @@ LLM_MODELS: dict[str, str] = {
     "research_fetch": DEFAULT_MODEL,
     "research_adversarial_assess": DEFAULT_MODEL,
     "research_narrate": DEFAULT_MODEL,
-    # The Ledger decision extractor structures a free-text owner musing into a
-    # decision. Short, closed extraction uses the cheap FAST tier.
-    "musing_decision_extract": FAST_CLASSIFIER_MODEL,
     # Decision Draft parse (P2.1, personal_investment_partner_prd.md §9.2) — the
     # async tap that turns a landed free-text/voice capture into a confirmable
     # Owner Decision draft. Pinned to Opus (not the FAST tier): the input is
@@ -290,15 +239,6 @@ LLM_MODELS: dict[str, str] = {
     # from judged failure evidence — judgment-tier work, Opus-pinned like its
     # edit-splice predecessor.
     "prompt_reflect_rewrite": "claude-opus-4-8",
-    # Project README maintenance (readme_updater.py): one bounded, on-demand
-    # drafting call over allowlisted repository evidence, followed by a
-    # mandatory independent judgment call. Drafting uses the balanced
-    # analytical tier; the release judge uses the strongest judgment tier.
-    # Both ride meta_eval scope, are capture-denied, and have a hard two-
-    # candidate run budget in the orchestrator (structured repairs remain
-    # attributable attempts in the central ledger).
-    "readme_update": DEFAULT_MODEL,
-    "readme_update_judge": "claude-opus-4-8",
     # The Ledger Phase-1 artifact drafters (web-less, feed the gated mutating kinds).
     # thesis_entry_draft distills a memo + evidence into an append-only ledger entry;
     # research_code_spec drafts an inert, human-reviewed code-change spec. Both are
@@ -319,19 +259,6 @@ LLM_MODELS: dict[str, str] = {
     # code and the owner's workbook edit always wins, so a bad call can't swing the
     # book; the scenario_prior golden set grades the directional skew.
     "scenario_prior": DEFAULT_MODEL,
-    # Positioning coach (src/positioning/coach_pack.py via ask.engine): the
-    # standing conversation about the book's SHAPE — socratic push-back,
-    # inconsistency-spotting against the live book, iterating owner intent
-    # toward concrete targets. Judgment-heavy dialogue with the ask_answer
-    # quality bar -> Sonnet-tier; owner-initiated turns only, never scheduled.
-    "positioning_coach_turn": DEFAULT_MODEL,
-    # Positioning encode (src/positioning/encode.py): one structured call that
-    # turns a converged coach thread into a PositioningProfile PROPOSAL.
-    # Deterministic validation backstops it (Pydantic bounds + closed
-    # vocabularies) and the owner's approval-form edits always win, so a bad
-    # encode can never silently become the target book — but the extraction
-    # itself is nuance-sensitive (emit ONLY expressed dimensions) -> Sonnet.
-    "positioning_encode": DEFAULT_MODEL,
     # Whole-book thesis-collision audit (src/thesis_collision.py): one call over
     # every portfolio name's thesis + tier-1 break-rule drivers, flagging
     # shared-driver concentration and directly contradictory theses. Cross-name
@@ -366,9 +293,6 @@ LLM_MODELS: dict[str, str] = {
     "post_earnings_readout": DEFAULT_MODEL,
     # Long-context analytical writing
     "transcript_summary": DEFAULT_MODEL,
-    "press_release_summary": DEFAULT_MODEL,
-    "presentation_brief": DEFAULT_MODEL,
-    "pairwise_analysis": DEFAULT_MODEL,
     "strategic_analysis": DEFAULT_MODEL,
     "thesis_pass_a": DEFAULT_MODEL,
     "thesis_pass_b": DEFAULT_MODEL,
@@ -435,7 +359,6 @@ LLM_MODELS: dict[str, str] = {
     # timing out on long 10-Ks; Haiku produces the same shape ~5x faster.
     "platform_diagram": FAST_CLASSIFIER_MODEL,
     "qa_topics": DEFAULT_MODEL,
-    "saydo_filter": DEFAULT_MODEL,
     # SayDo commitment extraction — full-transcript (25-50K chars) scan for
     # quantitative forward-looking guidance, constrained to the ticker's KPI
     # catalog (src/compute/say_do_extractor.py). Ran UNGOVERNED via the private
@@ -446,17 +369,13 @@ LLM_MODELS: dict[str, str] = {
     "saydo_commitment_extract": DEFAULT_MODEL,
     # Cross-quarter theme rollup over 4 transcripts, split into prepared /
     # Q&A buckets. Long-context analytical writing → Sonnet matches
-    # transcript_summary and pairwise_analysis (the other prompts that
-    # ingest several transcripts at once).
+    # transcript_summary (another long-context transcript prompt).
     "earnings_themes_split": DEFAULT_MODEL,
     # Valuation multiple selection is a sector/business-model judgment that
     # benefits from Opus's wider sector knowledge (knowing P/TBV is the right
     # bank lens, EV/NTM Revenue for SaaS, P/E for cyclicals, etc.). One call
     # per ticker, cached on disk — cost is bounded.
     "valuation_basis": "claude-opus-4-8",
-    # SayDo importance ordering — judgmental sort across many commitments,
-    # benefits from Opus's stronger ranking discipline.
-    "saydo_importance": "claude-opus-4-8",
     # Auto KPI-registry seeding — proposes which KPIs load-bear the thesis,
     # their polarity, and grounded breaker thresholds with NO human review
     # gate (scratch/seed_kpi_registry.py --auto). The registry decides which
@@ -524,14 +443,6 @@ LLM_MODELS: dict[str, str] = {
     # on_exceed='skip' (migration 0190) — per-ticker batch build work should
     # degrade one card at a time, not block the whole evaluation build.
     "investment_decision_card": "claude-opus-4-8",
-    # Calibration coach (close_the_loops L8): names the owner's recurring biases
-    # and proposes a behavioural experiment from his OWN graded track record —
-    # the highest-judgement, lowest-volume call in the repo (monthly + on a
-    # decision, off the hot path). Same Opus tier as the advisor memos it sits
-    # beside; its output is eval-gated by the calibration_coach mode-B rubric
-    # before it ever reaches the owner, so a cheaper model can only be promoted
-    # in once that gate confirms parity.
-    "calibration_coach": "claude-opus-4-8",
     # Short, structured, batch classifiers — Haiku tier. Promoted to Gemini Flash
     # (#538), reverted 2026-07-02: the metered Gemini backend is off the active
     # pareto (owner opted out of paying for it). A cheaper open-weight candidate
@@ -650,6 +561,9 @@ LLM_MODELS: dict[str, str] = {
     # fails closed to answer-level citations (the pre-S8 behavior); budget
     # row seeded by alembic 0090 (skip mode).
     "ask_claim_grounding": FAST_CLASSIFIER_MODEL,
+    # Retained transcript-summary claim audit. This is an explicit golden
+    # evaluation route and does not change the interactive Ask grounding pin.
+    "transcript_summary_claim_audit": "gpt-6.1-sol",
     # Ask conversational answer (close_the_loops L3): the PRIMARY pass-1
     # narrative answer of the ask path — both the report-drawer chat and the
     # Ask's narrative path streams through ask.narrative_transport.stream_llm_text.
@@ -714,15 +628,6 @@ LLM_MODELS: dict[str, str] = {
     # eval coverage is an explicitly tracked follow-up (not this PR).
     "red_team_attack": DEFAULT_MODEL,
     "red_team_cross_book": DEFAULT_MODEL,
-    # Annual letter-to-self (monthly_red_team.md Phase 3, PR7): ONE call/year
-    # drafting a letter from a fully deterministic evidence pack (the year's
-    # ledger entries, position_entries changes, red-team response log,
-    # calibration/Brier trajectory, decision P&L rows) — judgment-heavy
-    # synthesis in the owner's voice, latency irrelevant, ~1 call/year -> Sonnet
-    # (cheapest-at-parity starting point, like red_team_attack/scenario_prior).
-    # The owner edits/signs the output file directly; a bad draft costs nothing
-    # but a re-run.
-    "annual_letter": DEFAULT_MODEL,
     # 10-Q segment quarterly period-axis disambiguation (docs/design/
     # segment_quarterly_framework.md §2.4, compute.segment_quarterly_10q):
     # Stage B fallback when the deterministic column-header parser can't
@@ -746,12 +651,11 @@ LLM_MODELS: dict[str, str] = {
     # a claimed outcome label per citation) than tenet_distill's freer belief
     # synthesis; re-evaluate via the model-downgrade eval loop if quality
     # regresses once a golden/audit corpus accrues.
-    "behavior_distill": FAST_CLASSIFIER_MODEL,
     # Semantic tenet-tension detection (B5, synthesis.semantic_tension): a
     # closed "restate/contradict which ONE shown tenet, or null" classification
     # over <=15 rendered tenets, deterministically grounded before use (a
     # fabricated token never resolves) — short, closed-schema, same shape as
-    # capture_triage's own contradiction classification -> the cheap FAST tier.
+    # the bounded contradiction classifier uses the existing FAST tier.
     "tenet_semantic_tension": FAST_CLASSIFIER_MODEL,
     # Tenet accountability ledger (B5, synthesis.tenet_accountability — the
     # sibling B5 workstream's file; registered here since this file is the one
@@ -790,7 +694,6 @@ LLM_MODELS: dict[str, str] = {
     # Legacy private callers migrated to the governed entrypoint.  These are
     # short, schema-bound document extractors; each has a golden/eval registry
     # entry and a versioned prompt identity.
-    "kpi_summary_extract": FAST_CLASSIFIER_MODEL,
     "kpi_summary_enumerate": FAST_CLASSIFIER_MODEL,
     "segment_definition_extract": FAST_CLASSIFIER_MODEL,
     "segment_crosstab_extract": FAST_CLASSIFIER_MODEL,
@@ -948,10 +851,6 @@ def primary_subscription_backend() -> str:
         return subscription_route()[0]
     except (RuntimeError, ValueError) as exc:
         raise LLMSetupError(str(exc)) from None
-
-
-def _primary_subscription_backend() -> str:
-    return primary_subscription_backend()
 
 
 def subscription_fallback_disabled() -> bool:
@@ -1547,6 +1446,246 @@ call_claude = _call_claude
 # an actual Gemini attempt writes its own ledger row (fallback_used='gemini').
 
 
+def routing_config_snapshot(purpose: str) -> dict[str, object]:
+    """Describe effective non-secret routing and fallback controls."""
+    from llm.resolver import primary_tier_model_policy_enabled
+
+    payload: dict[str, object] = {
+        "subscription_route": subscription_route(),
+        "purpose_pin": LLM_MODELS.get(purpose),
+        "default_model": DEFAULT_MODEL,
+        "codex_tiers": _CODEX_MODEL_BY_CAPABILITY_TIER,
+        "claude_tiers": _CLAUDE_MODEL_BY_CAPABILITY_TIER,
+        "metered_fallback_purposes": sorted(OPENROUTER_FALLBACK_PURPOSES),
+        "primary_tier_policy": primary_tier_model_policy_enabled(),
+        "legacy_fallback_disabled": os.environ.get("LLM_FALLBACK_DISABLED", "").lower()
+        in {"1", "true", "yes"},
+    }
+    if purpose in OPENROUTER_FALLBACK_PURPOSES:
+        from llm.openrouter_backend import openrouter_model_for
+
+        payload["metered_fallback_model"] = openrouter_model_for(purpose)
+    return payload
+
+
+def routing_config_sha256(purpose: str) -> str:
+    """Seal the effective non-secret route and all in-process fallback mappings."""
+    return hashlib.sha256(
+        json.dumps(routing_config_snapshot(purpose), sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedLLMCall:
+    """Effective prompt and initial route, resolved once before generation."""
+
+    prompt: str
+    purpose: str
+    scope: str | None
+    model: str
+    backend: str
+    requested_backend: str | None
+    capability_profile: CapabilityProfile
+    db_path: Path | str | None
+    prompt_version: str
+    fallback_disabled: bool
+    routing_config_sha256: str
+
+    @property
+    def prompt_sha256(self) -> str:
+        return hashlib.sha256(self.prompt.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class LLMCallReceipt:
+    generation_id: str
+    purpose: str
+    prompt_sha256: str
+    response_sha256: str
+    model: str
+    backend: str
+    generated_at: datetime
+    routing_config_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class LLMCallResult:
+    text: str
+    receipt: LLMCallReceipt
+
+
+_RECEIPTS: ContextVar[list[LLMCallReceipt] | None] = ContextVar("llm_call_receipts", default=None)
+
+
+def capture_exchange(
+    *,
+    prompt: str,
+    response: str,
+    purpose: str | None,
+    ticker: str | None,
+    scope: str | None,
+    model: str,
+    run_id: str | None,
+    backend: str = "claude",
+    prompt_version: str | None = None,
+) -> None:
+    receipts = _RECEIPTS.get()
+    if receipts is not None:
+        receipts.append(
+            LLMCallReceipt(
+                generation_id=str(uuid.uuid4()),
+                purpose=purpose or "",
+                prompt_sha256=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                response_sha256=hashlib.sha256(response.encode("utf-8")).hexdigest(),
+                model=model,
+                backend=backend,
+                generated_at=datetime.now(UTC),
+                routing_config_sha256=routing_config_sha256(purpose or ""),
+            )
+        )
+    _capture_exchange(
+        prompt=prompt,
+        response=response,
+        purpose=purpose,
+        ticker=ticker,
+        scope=scope,
+        model=model,
+        run_id=run_id,
+        backend=backend,
+        prompt_version=prompt_version,
+    )
+
+
+def prepare_llm_call(
+    prompt: str,
+    *,
+    purpose: str,
+    model: str | None = None,
+    backend: str | None = None,
+    scope: str | None = None,
+    capability_profile: CapabilityProfile | None = None,
+    db_path: Path | str | None = None,
+) -> PreparedLLMCall:
+    """Prepare without provider calls; seal the actual prompt and selected route."""
+    from llm.prompt_versions import prompt_version_for
+    from llm.resolver import resolve_model_and_backend
+
+    purpose = validate_purpose(purpose, model=model)
+    if db_path is not None:
+        from db_paths import db_path_context
+
+        with db_path_context(db_path):
+            prepared = prepare_llm_call(
+                prompt,
+                purpose=purpose,
+                model=model,
+                backend=backend,
+                scope=scope,
+                capability_profile=capability_profile,
+            )
+        return PreparedLLMCall(
+            prompt=prepared.prompt,
+            purpose=prepared.purpose,
+            scope=prepared.scope,
+            model=prepared.model,
+            backend=prepared.backend,
+            requested_backend=backend,
+            capability_profile=prepared.capability_profile,
+            db_path=db_path,
+            prompt_version=prepared.prompt_version,
+            fallback_disabled=prepared.fallback_disabled,
+            routing_config_sha256=prepared.routing_config_sha256,
+        )
+    # Apply production prompt experiments before any provider is selected so
+    # Codex, Claude, Gemini, and OpenRouter all receive the same governed
+    # prompt. Eval scopes deliberately bypass the override in
+    # apply_prompt_override so captured replays remain byte-identical.
+    try:
+        from llm.prompt_ab import apply_prompt_override
+
+        prompt = apply_prompt_override(purpose, scope, prompt)
+    except Exception as hook_exc:
+        from log_redact import redact
+
+        log.debug(
+            {
+                "event": "prompt_override_hook_failed",
+                "error": redact(f"{type(hook_exc).__name__}: {hook_exc}")[:120],
+            }
+        )
+
+    # Attribute the legacy/plain-string majority at the canonical seam.
+    # Registered RenderedPrompt objects pass through unchanged; raw prompts
+    # gain a purpose version and immutable body hash without caller churn.
+    from llm.prompt_registry import attribute_plain_prompt
+
+    prompt = attribute_plain_prompt(prompt, purpose=purpose)
+
+    profile = capability_profile or CapabilityProfile()
+    resolved_model, resolved_backend = resolve_model_and_backend(
+        purpose=purpose,
+        model=model,
+        backend=backend,
+        capability_profile=profile,
+    )
+    return PreparedLLMCall(
+        prompt=prompt,
+        purpose=purpose,
+        scope=scope,
+        model=resolved_model,
+        backend=resolved_backend,
+        requested_backend=backend,
+        capability_profile=profile,
+        db_path=None,
+        prompt_version=prompt_version_for(purpose),
+        fallback_disabled=subscription_fallback_disabled(),
+        routing_config_sha256=routing_config_sha256(purpose),
+    )
+
+
+def execute_prepared_call(
+    prepared: PreparedLLMCall,
+    *,
+    ticker: str | None = None,
+    run_id: str | None = None,
+    timeout_seconds: int | None = None,
+) -> LLMCallResult:
+    """Execute the prepared call and return its successful physical route receipt."""
+    receipts: list[LLMCallReceipt] = []
+    token = _RECEIPTS.set(receipts)
+    try:
+        text = call_llm(
+            prepared.prompt,
+            purpose=prepared.purpose,
+            model=prepared.model,
+            backend=prepared.requested_backend,
+            scope=prepared.scope,
+            ticker=ticker,
+            run_id=run_id,
+            timeout_seconds=timeout_seconds,
+            db_path=prepared.db_path,
+            capability_profile=prepared.capability_profile,
+            _prepared_call=prepared,
+        )
+        if len(receipts) != 1:
+            raise RuntimeError("prepared LLM call has no unique successful route receipt")
+        receipt = receipts[0]
+        if (
+            receipt.routing_config_sha256 != prepared.routing_config_sha256
+            or routing_config_sha256(prepared.purpose) != prepared.routing_config_sha256
+        ):
+            raise ValueError("prepared LLM routing configuration changed during execution")
+        if (
+            receipt.prompt_sha256 != prepared.prompt_sha256
+            or receipt.response_sha256 != hashlib.sha256(text.encode("utf-8")).hexdigest()
+            or receipt.purpose != prepared.purpose
+        ):
+            raise RuntimeError("prepared LLM call receipt does not match its result")
+        return LLMCallResult(text, receipt)
+    finally:
+        _RECEIPTS.reset(token)
+
+
 def call_llm(
     prompt: str,
     *,
@@ -1560,6 +1699,7 @@ def call_llm(
     backend: str | None = None,
     db_path: Path | str | None = None,
     capability_profile: CapabilityProfile | None = None,
+    _prepared_call: PreparedLLMCall | None = None,
 ) -> str:
     """Public single-shot LLM call. CANONICAL entry point for ALL LLM calls in
     this repo — including from `execution/` scripts, `src/report/sections/`, and
@@ -1645,57 +1785,31 @@ def call_llm(
                 force_budget_bypass=force_budget_bypass,
                 backend=backend,
                 capability_profile=capability_profile,
+                _prepared_call=_prepared_call,
             )
 
-    # Apply production prompt experiments before any provider is selected so
-    # Codex, Claude, Gemini, and OpenRouter all receive the same governed
-    # prompt. Eval scopes deliberately bypass the override in
-    # apply_prompt_override so captured replays remain byte-identical.
-    try:
-        from llm.prompt_ab import apply_prompt_override
-
-        prompt = apply_prompt_override(purpose, scope, prompt)
-    except Exception as hook_exc:
-        from log_redact import redact
-
-        log.debug(
-            {
-                "event": "prompt_override_hook_failed",
-                "error": redact(f"{type(hook_exc).__name__}: {hook_exc}")[:120],
-            }
-        )
-
-    # Attribute the legacy/plain-string majority at the canonical seam.
-    # Registered RenderedPrompt objects pass through unchanged; raw prompts
-    # gain a purpose version and immutable body hash without caller churn.
-    from llm.prompt_registry import attribute_plain_prompt
-
-    prompt = attribute_plain_prompt(prompt, purpose=purpose)
-
-    from llm.model_ladder import (
-        GEMINI as _GEMINI_FAMILY,
-    )
-    from llm.model_ladder import (
-        OPENROUTER as _OPENROUTER_FAMILY,
-    )
-    from llm.model_ladder import (
-        family_of,
-    )
-    from llm.resolver import (
-        CapabilityProfile,
-        require_model_capabilities,
-        resolve_model_and_backend,
-    )
-
-    effective_profile = capability_profile or CapabilityProfile()
-
-    # Model and backend resolution via canonical single-point resolver
-    resolved_model, resolved_backend = resolve_model_and_backend(
+    prepared = _prepared_call or prepare_llm_call(
+        prompt,
         purpose=purpose,
         model=model,
         backend=backend,
-        capability_profile=effective_profile,
+        scope=scope,
+        capability_profile=capability_profile,
     )
+    if prepared.purpose != purpose or prepared.scope != scope:
+        raise ValueError("prepared LLM call attribution mismatch")
+    if (
+        prepared.fallback_disabled != subscription_fallback_disabled()
+        or prepared.routing_config_sha256 != routing_config_sha256(prepared.purpose)
+    ):
+        raise ValueError("prepared LLM routing policy changed before execution")
+    prompt = prepared.prompt
+    resolved_model, resolved_backend = prepared.model, prepared.backend
+    effective_profile = prepared.capability_profile
+    from llm.model_ladder import GEMINI as _GEMINI_FAMILY
+    from llm.model_ladder import OPENROUTER as _OPENROUTER_FAMILY
+    from llm.model_ladder import family_of
+    from llm.resolver import require_model_capabilities
 
     codex_fell_back = False
     primary_codex_error: Exception | None = None
@@ -1881,7 +1995,7 @@ def call_llm(
             run_id=run_id,
             force_budget_bypass=force_budget_bypass,
             fallback_used="claude" if fallback_from_provider is not None else None,
-            allow_codex_fallback=not codex_fell_back,
+            allow_codex_fallback=backend is None and not codex_fell_back,
             fallback_from_provider=fallback_from_provider,
             fallback_from_transport=fallback_from_transport,
             capability_profile=effective_profile,
@@ -2325,7 +2439,7 @@ def call_llm_with_web(
     selects that provider. This facade supports only the Codex and Claude web
     transports, so other provider families fail before dispatch. For a normal
     purpose-resolved Claude-family pin, whenever
-    ``_primary_subscription_backend() == "codex"`` (as selected by the shared
+    ``primary_subscription_backend() == "codex"`` (as selected by the shared
     fleet policy),
     the Codex membership wrapper runs FIRST with ``web_search="live"`` so it
     can fetch fresh pages. An OPERATIONAL Codex failure — never a routing

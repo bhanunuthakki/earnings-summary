@@ -1,12 +1,12 @@
 """The /review capacity block (tenet-2 Phase 2, §4 delivery seam 1 of
 docs/design/tenet2_advisory_program.md) — build_capacity_context +
-render_capacity_lines + their wiring into render_pre_analysis_chat/plain.
+render_capacity_lines + their wiring into render_pre_analysis_chat.
 
 Covers: absent-when-unaffirmed (a proposed-only fact contributes nothing),
 the dated life-event horizon-window filter (a baby in 2031 doesn't show on a
 review run "today"; a 2027 work-break does), the human-capital bucket match
 (ticker IS / IS NOT a member), and the byte-identical-when-empty guarantee —
-render_pre_analysis_chat/plain must render EXACTLY as they did before Phase 2
+render_pre_analysis_chat must render EXACTLY as they did before Phase 2
 when nothing is affirmed.
 """
 
@@ -27,7 +27,6 @@ from advisor.position_review import (
     build_capacity_context,
     render_capacity_lines,
     render_pre_analysis_chat,
-    render_pre_analysis_plain,
 )
 from owner_profile.store import affirm_fact, append_fact
 
@@ -68,8 +67,24 @@ def conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
     c.close()
 
 
-def _affirm(conn: sqlite3.Connection, **kwargs: object) -> int:
-    fact_id = append_fact(conn, status="proposed", **kwargs)  # type: ignore[arg-type]
+def _affirm(
+    conn: sqlite3.Connection,
+    *,
+    category: str,
+    key: str,
+    value: dict[str, object],
+    narrative: str,
+    provenance: str,
+) -> int:
+    fact_id = append_fact(
+        conn,
+        category=category,
+        key=key,
+        value=value,
+        narrative=narrative,
+        provenance=provenance,
+        status="proposed",
+    )
     affirm_fact(conn, fact_id)
     conn.commit()
     return fact_id
@@ -265,7 +280,7 @@ def test_render_capacity_lines_full_context() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# byte-identical-when-empty: render_pre_analysis_chat/plain
+# byte-identical-when-empty: render_pre_analysis_chat
 # --------------------------------------------------------------------------- #
 
 _PRE_DEFAULT = PreAnalysis(
@@ -302,12 +317,6 @@ def test_chat_render_byte_identical_capacity_none_vs_empty_context() -> None:
     pre_none = _PRE_DEFAULT
     pre_empty = replace(_PRE_DEFAULT, capacity=CapacityContext())
     assert render_pre_analysis_chat(pre_none) == render_pre_analysis_chat(pre_empty)
-
-
-def test_plain_render_byte_identical_capacity_none_vs_empty_context() -> None:
-    pre_none = _PRE_DEFAULT
-    pre_empty = replace(_PRE_DEFAULT, capacity=CapacityContext())
-    assert render_pre_analysis_plain(pre_none) == render_pre_analysis_plain(pre_empty)
 
 
 def test_chat_render_no_capacity_lines_when_empty() -> None:

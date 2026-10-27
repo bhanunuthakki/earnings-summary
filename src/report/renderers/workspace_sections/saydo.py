@@ -1,173 +1,52 @@
-"""Say-Do tab: pairwise cards, print-vs-guide, verdicts overlay, historical ledger.
-
-Split out of ``workspace_html.py`` (S13 renderer modularization). The
-public entry point and output contract live in ``workspace_html``;
-names here keep their original (underscore) spellings and are exported
-via ``__all__`` for the package-internal imports and the back-compat
-re-exports in ``workspace_html``."""
+"""Say-Do tab for recorded commitments and guidance outcomes."""
 
 from __future__ import annotations
 
 from datetime import date, datetime
 from io import StringIO
 
-from report.models import (
-    PrintVsGuideRow,
-    SayDoCard,
-    SayDoHistoricalMetric,
-    SayDoSection,
-    SayDoVerdictRow,
-)
+from report.models import CellSource, SayDoHistoricalMetric, SayDoSection, SayDoVerdictRow
 from report.render_clock import render_today
-from report.renderers.workspace_charts import verdict_bar
 from report.renderers.workspace_sections._shared import (
     _esc,
     _inline_md,
     _missing_panel,
     _panel_head,
-    _quarter_selector,
-    _render_markdown,
 )
 from ui import living_grid as lg
+from ui.source_chip import viewer_href
 
-__all__ = [
-    "_fmt_made_period",
-    "_outcome_pill",
-    "_rating_pill",
-    "_saydo_historical_ledger",
-    "_saydo_print_vs_guide",
-    "_saydo_summary_table",
-    "_saydo_tab",
-    "_saydo_verdicts_panel",
-]
+__all__ = ["_fmt_made_period", "_outcome_pill", "_saydo_tab", "_saydo_verdicts_panel"]
 
 
-def _saydo_tab(
-    body: StringIO,
-    section: SayDoSection,
-) -> None:
-    cards = section.cards
-    verdicts = section.verdicts
+def _saydo_tab(body: StringIO, section: SayDoSection) -> None:
     body.write('<div class="tab-body">')
-    if not cards:
+    if section.status.value != "ok":
         _missing_panel(body, section.status, section.missing)
-        # Even on a stub SayDo, if verdicts exist they're worth surfacing.
-        if verdicts:
-            _saydo_verdicts_panel(body, verdicts)
-        body.write("</div>")
-        return
-    ratings = [c.rating for c in cards][::-1]
-    # Section eyebrow + the cross-quarter verdict trajectory (global), then a
-    # quarter selector. The per-quarter detail blocks below swap on click — so
-    # "Q1 2026" lands on the Q1 2026-vs-Q4 2025 read — mirroring the earnings
-    # tab's quarter toggles.
-    body.write('<div class="row-split"><div>')
-    body.write('<div class="eyebrow">Say · Do · Track</div>')
-    body.write("</div>")
-    body.write('<div class="saydo-meta"><div class="saydo-history">')
-    body.write(verdict_bar(ratings))
-    body.write(
-        f'<div class="kpi-axis"><span>{len(ratings)} quarters tracked</span>'
-        "<span>most recent →</span></div>"
-    )
-    body.write("</div></div></div>")
-    _quarter_selector(body, [f"{c.current_quarter} {c.current_year}" for c in cards], group="saydo")
-
-    # Cross-card panels are global (one trajectory, not per-quarter).
-    if len(cards) >= 2:
-        _saydo_summary_table(body, cards)
+    _saydo_verdicts_panel(body, section.verdicts)
     if section.historical_metrics:
         _saydo_historical_ledger(body, section.historical_metrics)
-
-    # Per-quarter detail blocks — one visible at a time, swapped by the selector.
-    for i, card in enumerate(cards):
-        hidden = "" if i == 0 else " hidden"
-        qid = f"{card.current_quarter} {card.current_year}"
-        body.write(
-            f'<div data-quarter-card data-quarter-group="saydo" data-quarter="{_esc(qid)}"{hidden}>'
-        )
-        body.write('<div class="row-split"><div>')
-        body.write(
-            '<h2 class="section-title">'
-            f"{_esc(card.prior_quarter)} {card.prior_year} → "
-            f"{_esc(card.current_quarter)} {card.current_year}"
-            "</h2>"
-        )
-        if card.thesis_view:
-            body.write(f'<p class="lede">{_inline_md(card.thesis_view)}</p>')
-        body.write("</div>")
-        body.write('<div class="saydo-meta">')
-        body.write(_rating_pill(card.rating))
-        body.write('<div class="saydo-meta-label">vs prior-quarter guide</div>')
-        body.write("</div></div>")
-
-        if card.print_vs_guide_rows:
-            selected = [card.print_vs_guide_rows[index] for index in card.selected_row_indices]
-            _saydo_print_vs_guide(
-                body,
-                card,
-                selected,
-                total_parsed=len(card.print_vs_guide_rows),
-                llm_filtered=card.selection_disposition in {"model", "cache"},
-            )
-        # (No parsed print-vs-guide table → no panel; the full narrative
-        # below carries the comparison in prose. P4.2 hide-don't-stub.)
-
-        body.write('<div class="grid-2col">')
-        body.write(_panel_head("Thesis view", sub="Post-print read-through"))
-        body.write(
-            f'<div class="prose-pad">{_render_markdown(card.thesis_view or "—")}</div></div>'
-        )
-        body.write(_panel_head("Attribution", sub="Execution · exogenous · luck"))
-        body.write(
-            f'<div class="prose-pad">{_render_markdown(card.attribution or "—")}</div></div>'
-        )
-        body.write("</div>")
-
-        body.write(
-            _panel_head(
-                "Full Say·Do narrative",
-                sub=f"{card.current_quarter} {card.current_year}",
-            )
-        )
-        body.write(f'<div class="prose-pad">{_render_markdown(card.saydo_md)}</div></div>')
-        body.write("</div>")
-
-    # P3-21 grading overlay — management commitments + outcome ledger (global).
-    _saydo_verdicts_panel(body, verdicts or [])
-
     body.write("</div>")
 
 
 def _saydo_verdicts_panel(body: StringIO, rows: list[SayDoVerdictRow]) -> None:
-    """P3-21 management-commitments verdict ledger.
-
-    Lays the audit-trail outcomes alongside the narrative. Rows arrive
-    newest-first from ``load_saydo_verdicts``; we render them in that order.
-    Hidden when the table has no rows for this ticker (P4.2 hide-don't-stub
-    — the Governance coverage report carries the gap).
-    """
+    """Render the source-linked management commitment ledger."""
     if not rows:
         return
     today = render_today()
-    graded = sum(1 for r in rows if r.outcome is not None)
-    n = len(rows)
+    graded = sum(1 for row in rows if row.outcome is not None)
     body.write(
         _panel_head(
-            "Say·Do verdict ledger",
-            sub=f"{n} commitment{'s' if n != 1 else ''} tracked · {graded} with a reported result",
+            "Say·Do commitment ledger",
+            sub=f"{len(rows)} commitment{'s' if len(rows) != 1 else ''} tracked · "
+            f"{graded} with a reported result",
             classes="saydo-verdicts-panel",
         )
     )
     if graded == 0:
-        # All commitments are still open — the target quarters haven't reported
-        # yet (or the reported figure hasn't matched). This is a legitimate
-        # "not due yet" state, NOT missing data — owner feedback 2026-07-14:
-        # the bare "0 graded / NO DATA" read as broken.
         body.write(
-            '<p class="muted saydo-pending-note">None have a reported result yet — '
-            "each commitment is graded automatically once its target quarter prints. "
-            "The status column shows how long each has to run.</p>"
+            '<p class="muted saydo-pending-note">None have a reported result yet. '
+            "The status column shows how long each commitment has to run.</p>"
         )
     body.write(lg.grid_open())
     body.write(lg.filter_bar(len(rows), noun="commitments"))
@@ -176,202 +55,130 @@ def _saydo_verdicts_panel(body: StringIO, rows: list[SayDoVerdictRow]) -> None:
         + lg.th("Made", "made", "text", num=False)
         + lg.th("Target period", "target", "text", num=False)
         + lg.th("KPI", "kpi", "text", num=False)
-        + "<th>Promised</th>"
-        + "<th>Realized</th>"
+        + "<th>Promised</th><th>Realized</th>"
         + lg.th("Verdict", "verdict", "text", num=False)
+        + "<th>Source</th>"
         + "</tr></thead><tbody>"
     )
     comp_map = {"ge": "≥", "gt": ">", "le": "≤", "lt": "<", "eq": "≈"}
-    for r in rows:
-        promise = f"{comp_map.get(r.comparator.lower(), r.comparator)} {r.target_value:g} {r.unit}"
-        if r.realized_value is not None:
-            realized = f"{r.realized_value:g} {r.unit}"
-        else:
-            realized = '<span class="muted">—</span>'
-        outcome = r.outcome if r.outcome else "no_data"
+    for row in rows:
+        promise = f"{comp_map.get(row.comparator.lower(), row.comparator)} {row.target_value:g} {row.unit}"
+        realized = (
+            f"{row.realized_value:g} {_esc(row.unit)}"
+            if row.realized_value is not None
+            else '<span class="muted">—</span>'
+        )
+        outcome = row.outcome or "no_data"
         outcome_pill = (
             _outcome_pill(outcome)
-            if r.outcome
-            else _saydo_pending_pill(r.period_target.date(), today)
+            if row.outcome
+            else _saydo_pending_pill(row.period_target.date(), today)
         )
-        made_label = _fmt_made_period(r.period_made)
-        target_label = _fmt_made_period(r.period_target)
-        # data-made/-target are ISO dates so the text sort orders chronologically
-        # (the displayed cell is the quarter label).
+        made_label = _fmt_made_period(row.period_made)
+        target_label = _fmt_made_period(row.period_target)
         data = (
-            lg.data_text(f"{made_label} {r.kpi_name} {promise} {outcome}")
-            + lg.data_text_key("made", r.period_made.isoformat())
-            + lg.data_text_key("target", r.period_target.isoformat())
-            + lg.data_text_key("kpi", r.kpi_name)
+            lg.data_text(f"{made_label} {row.kpi_name} {promise} {outcome}")
+            + lg.data_text_key("made", row.period_made.isoformat())
+            + lg.data_text_key("target", row.period_target.isoformat())
+            + lg.data_text_key("kpi", row.kpi_name)
             + lg.data_text_key("verdict", outcome)
         )
         body.write(f"<tr{data}>")
         body.write(f'<td class="mono xsmall">{_esc(made_label)}</td>')
         body.write(f'<td class="mono xsmall">{_esc(target_label)}</td>')
-        body.write(f'<td class="saydo-metric">{_inline_md(r.kpi_name)}</td>')
+        body.write(f'<td class="saydo-metric">{_inline_md(row.kpi_name)}</td>')
         body.write(f'<td class="saydo-guide">{_esc(promise)}</td>')
         body.write(f'<td class="saydo-actual"><strong>{realized}</strong></td>')
         body.write(f"<td>{outcome_pill}</td>")
-        body.write("</tr>")
+        source = CellSource(
+            source="transcript",
+            doc_id=row.source_document_id,
+            source_url=row.source_url,
+        )
+        source_href = viewer_href(source)
+        source_cell = (
+            f'<a href="{_esc(source_href)}" target="_blank" rel="noopener">Transcript ↗</a>'
+            if source_href is not None
+            else '<span class="muted">Source unavailable</span>'
+        )
+        body.write(f"<td>{source_cell}</td></tr>")
     body.write("</tbody></table>")
     body.write(lg.grid_close())
     body.write("</div>")
 
 
-def _fmt_made_period(dt: datetime) -> str:
-    """Quarter-style label for a datetime: ``Q3 '25``."""
-    quarter = (dt.month - 1) // 3 + 1
-    return f"Q{quarter} {chr(0x2019)}{str(dt.year)[2:]}"
-
-
-def _saydo_summary_table(body: StringIO, cards: list[SayDoCard]) -> None:
-    """All SayDo cards on one row each: pair → rating → attribution → thesis view.
-
-    The detail panels below show the latest card in full; this table is the
-    historical trajectory. Cards are newest-first per the section builder.
-    """
-    body.write(
-        _panel_head("SayDo summary — all tracked pairs", sub=f"{len(cards)} pairs · newest first")
-        + '<table class="tbl"><thead><tr>'
-        "<th>Pair</th><th>Rating</th><th>Attribution</th><th>Thesis view</th>"
-        "</tr></thead><tbody>"
-    )
-    for c in cards:
-        body.write(
-            "<tr>"
-            f'<td class="saydo-metric mono">{_esc(c.prior_quarter)} {c.prior_year} '
-            f"→ {_esc(c.current_quarter)} {c.current_year}</td>"
-            f"<td>{_rating_pill(c.rating)}</td>"
-            f'<td class="saydo-guide">{_inline_md((c.attribution or "—")[:140])}</td>'
-            f'<td class="saydo-guide">{_inline_md((c.thesis_view or "—")[:140])}</td>'
-            "</tr>"
-        )
-    body.write("</tbody></table></div>")
-
-
-def _saydo_print_vs_guide(
-    body: StringIO,
-    card: SayDoCard,
-    rows: list[PrintVsGuideRow],
-    *,
-    total_parsed: int,
-    llm_filtered: bool,
-) -> None:
-    if llm_filtered and total_parsed > len(rows):
-        dropped = total_parsed - len(rows)
-        sub = (
-            f"showing {len(rows)} of {total_parsed} — {dropped} set aside as not "
-            "thesis-relevant (not missing data)"
-        )
-    else:
-        sub = f"{len(rows)} commitments scored"
-    body.write(_panel_head("Print vs guide", sub=sub))
-    body.write('<table class="tbl"><thead><tr>')
-    body.write("<th>Metric</th>")
-    body.write(f"<th>{_esc(card.prior_quarter)} {card.prior_year} actual</th>")
-    body.write(f"<th>{_esc(card.current_quarter)} {card.current_year} actual</th>")
-    body.write("<th>Verdict</th></tr></thead><tbody>")
-    for r in rows:
-        body.write("<tr>")
-        body.write(f'<td class="saydo-metric">{_inline_md(r.metric)}</td>')
-        body.write(f'<td class="saydo-guide">{_inline_md(r.guide)}</td>')
-        body.write(f'<td class="saydo-actual"><strong>{_inline_md(r.actual)}</strong></td>')
-        body.write(f"<td>{_rating_pill(r.verdict)}</td>")
-        body.write("</tr>")
-    body.write("</tbody></table></div>")
-
-
-# Only ok/warn/bad carry a kit chip tone; neutral/muted ride the tone-less
-# k-chip-mono (the report's old pill-neutral/-muted had no status color).
-_CHIP_TONE = {"ok": " k-chip-ok", "warn": " k-chip-warn", "bad": " k-chip-bad"}
-
-
-def _rating_pill(rating: str) -> str:
-    mapping = {
-        "EXCEEDED": "ok",
-        "MET": "neutral",
-        "MIXED": "warn",
-        "MISSED": "bad",
-        "REVISED UP": "warn",
-        "unknown": "muted",
-    }
-    tone = _CHIP_TONE.get(mapping.get(rating, "muted"), "")
-    return f'<span class="k-chip k-chip-mono{tone}">{_esc(rating)}</span>'
+def _fmt_made_period(value: datetime) -> str:
+    quarter = (value.month - 1) // 3 + 1
+    return f"Q{quarter} {chr(0x2019)}{str(value.year)[2:]}"
 
 
 def _outcome_pill(outcome: str) -> str:
     mapping = {
         "beat": ("ok", "BEAT"),
         "hit": ("ok", "HIT"),
+        "met": ("ok", "MET"),
         "miss": ("bad", "MISS"),
+        "missed": ("bad", "MISSED"),
+        "mixed": ("warn", "MIXED"),
+        "partial": ("warn", "PARTIAL"),
         "no_data": ("muted", "NO DATA"),
     }
-    tone_name, label = mapping.get(outcome.lower(), ("muted", outcome.upper()))
-    tone = _CHIP_TONE.get(tone_name, "")
-    return f'<span class="k-chip k-chip-mono{tone}">{_esc(label)}</span>'
+    tone, label = mapping.get(outcome.lower(), ("muted", outcome.upper()))
+    tone_class = {"ok": " k-chip-ok", "warn": " k-chip-warn", "bad": " k-chip-bad"}.get(tone, "")
+    return f'<span class="k-chip k-chip-mono{tone_class}">{_esc(label)}</span>'
 
 
 def _saydo_pending_pill(period_target: date, today: date) -> str:
-    """A self-explanatory pill for an as-yet-ungraded commitment.
-
-    Replaces the bare "NO DATA" (owner feedback 2026-07-14: it read as broken
-    data). A commitment is ungraded because its target quarter either hasn't
-    arrived (AWAITING) or has passed without a matched print yet (PENDING) —
-    both legitimate open states, distinguished so the reader can tell "not due"
-    from "overdue".
-    """
     if period_target > today:
-        label, title = "AWAITING", f"Target {_quarter_label(period_target)} hasn't reported yet"
+        label, title = "AWAITING", f"Target {_quarter_label(period_target)} has not reported yet"
     else:
-        label, title = (
-            "PENDING",
-            f"Target {_quarter_label(period_target)} has passed — awaiting the reported figure",
-        )
+        label, title = "PENDING", f"Target {_quarter_label(period_target)} has passed"
     return f'<span class="k-chip k-chip-mono" title="{_esc(title)}">{label}</span>'
 
 
-def _quarter_label(d: date) -> str:
-    """``Q3 '25`` from a date (mirrors ``_fmt_made_period`` for a plain date)."""
-    quarter = (d.month - 1) // 3 + 1
-    return f"Q{quarter} {chr(0x2019)}{str(d.year)[2:]}"
+def _quarter_label(value: date) -> str:
+    quarter = (value.month - 1) // 3 + 1
+    return f"Q{quarter} {chr(0x2019)}{str(value.year)[2:]}"
 
 
 def _saydo_historical_ledger(body: StringIO, metrics: list[SayDoHistoricalMetric]) -> None:
-    """Persistent guidance-outcomes ledger sourced from saydo_historical_metrics."""
+    """Render the retained guidance outcomes history."""
     body.write(
         _panel_head(
-            "Persistent guidance outcomes ledger",
-            sub=f"{len(metrics)} tracked commitments",
+            "Historical guidance comparisons",
+            sub=f"{len(metrics)} recorded commitments",
         )
     )
     body.write('<table class="tbl"><thead><tr>')
-    body.write("<th>Metric</th>")
-    body.write("<th>Comparator</th>")
-    body.write("<th>Guidance Target</th>")
-    body.write("<th>Realized Value</th>")
-    body.write("<th>Outcome</th>")
-    body.write("<th>Guidance Period</th>")
-    body.write("<th>Target Period</th>")
+    body.write("<th>Metric</th><th>Comparator</th><th>Guidance target</th>")
+    body.write(
+        "<th>Realized value</th><th>Outcome</th><th>Guidance period</th><th>Target period</th>"
+    )
     body.write("</tr></thead><tbody>")
-
     comp_map = {"ge": "≥", "gt": ">", "le": "≤", "lt": "<", "eq": "≈"}
-
-    def _fmt_period(dt: datetime) -> str:
-        quarter = (dt.month - 1) // 3 + 1
-        return f"Q{quarter} '{str(dt.year)[2:]}"
-
-    for m in metrics:
-        comp_symbol = comp_map.get(m.comparator.lower(), m.comparator)
-        target_display = f"{m.target_value:.2f}%"
-        realized_display = f"{m.realized_value:.2f}%" if m.realized_value is not None else "—"
-        outcome_label = m.outcome if m.outcome else "no_data"
+    for metric in metrics:
+        comparator = comp_map.get(metric.comparator.lower(), metric.comparator)
+        target = f"{metric.target_value:g}"
+        realized = f"{metric.realized_value:g}" if metric.realized_value is not None else "—"
         body.write("<tr>")
-        body.write(f'<td class="saydo-metric">{_inline_md(m.kpi_name)}</td>')
-        body.write(f'<td class="mono">{_esc(comp_symbol)}</td>')
-        body.write(f'<td class="saydo-guide">{_esc(target_display)}</td>')
-        body.write(f'<td class="saydo-actual"><strong>{_esc(realized_display)}</strong></td>')
-        body.write(f"<td>{_outcome_pill(outcome_label)}</td>")
-        body.write(f'<td class="saydo-guide">{_esc(_fmt_period(m.period_made))}</td>')
-        body.write(f'<td class="saydo-actual">{_esc(_fmt_period(m.period_target))}</td>')
+        body.write(f'<td class="saydo-metric">{_inline_md(metric.kpi_name)}</td>')
+        body.write(f'<td class="mono">{_esc(comparator)}</td>')
+        body.write(
+            '<td class="saydo-guide">'
+            f'{_esc(target)} <span class="muted xsmall">(unit unavailable)</span>'
+        )
+        if metric.guidance_narrative:
+            body.write(f'<div class="muted xsmall">{_esc(metric.guidance_narrative)}</div>')
+        body.write("</td>")
+        body.write(
+            '<td class="saydo-actual"><strong>'
+            f'{_esc(realized)}</strong> <span class="muted xsmall">(unit unavailable)</span>'
+        )
+        if metric.realized_narrative:
+            body.write(f'<div class="muted xsmall">{_esc(metric.realized_narrative)}</div>')
+        body.write("</td>")
+        body.write(f"<td>{_outcome_pill(metric.outcome or 'no_data')}</td>")
+        body.write(f'<td class="saydo-guide">{_esc(_fmt_made_period(metric.period_made))}</td>')
+        body.write(f'<td class="saydo-actual">{_esc(_fmt_made_period(metric.period_target))}</td>')
         body.write("</tr>")
     body.write("</tbody></table></div>")

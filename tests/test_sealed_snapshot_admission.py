@@ -106,7 +106,7 @@ def _bind_native_source(conn: sqlite3.Connection) -> str:
 def ontology_db(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> Iterator[tuple[sqlite3.Connection, MetricOntology]]:
-    path = migrated_db(tmp_path / "ontology.db")
+    path = migrated_db(tmp_path / "ontology.db", target="0058_sealed_snapshot_admission_fences")
     conn = sqlite3.connect(path)
     repository = MetricOntology(conn)
     repository.persist_metric(_metric())

@@ -34,9 +34,9 @@ is on file); otherwise ``generate_card`` returns an explicit
 ``CardResult(failure_reason=...)`` â€” never a fake-empty artifact. Any
 ``is_hard_stop`` exception (auth/setup) propagates loud.
 
-``act_on_card`` is the ONE action core for the four owner verbs
-(pass/watch/research_further/promote â€” PRD Â§8.1 disposition semantics),
-reachable from both the HTTP route and any future Telegram dispatcher.
+``act_on_card`` is the ONE action core for the three owner actions
+(pass/watch/promote â€” PRD Â§8.1 disposition semantics),
+reachable from the retained HTTP route and explicit backend calls.
 """
 
 from __future__ import annotations
@@ -1076,12 +1076,8 @@ def _persist(
 # Disposition action core (PRD Â§8.1 disposition semantics)
 # --------------------------------------------------------------------------- #
 
-ActionVerb = Literal["pass", "watch", "research_further", "promote"]
-ACTION_VERBS: tuple[str, ...] = ("pass", "watch", "research_further", "promote")
-
-# research_further deliberately excluded: it writes a research_tasks row, NOT
-# a decisions row (PRD Â§8.1: "this is not an Owner Decision").
-_DECISION_VERBS: tuple[str, ...] = ("pass", "watch", "promote")
+ActionVerb = Literal["pass", "watch", "promote"]
+ACTION_VERBS: tuple[str, ...] = ("pass", "watch", "promote")
 
 
 class CardActionError(RuntimeError):
@@ -1144,19 +1140,10 @@ def act_on_card(
     notes: str | None = None,
     _connection: sqlite3.Connection | None = None,
 ) -> str:
-    """The ONE action core for the four Â§8.1 owner verbs. Returns a short
-    status string:
+    """Apply one of the three explicit owner actions: pass, watch, or promote.
 
-      'pass'              -> 'pass_recorded' (new decision + archived) | 'already_pass'
-      'watch'             -> 'watch_recorded' (new decision + watchlist) | 'already_watch'
-      'promote'           -> 'promote_recorded' (new decision only) | 'already_promote'
-      'research_further'  -> 'research_task_created:<id>' | 'already_proposed:<id>'
-                              (NO decision row â€” PRD Â§8.1: not an Owner Decision)
-
-    Raises :class:`CardActionError` for an unknown verb or a missing/
-    mismatched-purpose artifact â€” never a silent no-op on a bad input.
-    Idempotent: a second call for the same (artifact_id, verb) does not
-    write a duplicate row.
+    Raises :class:`CardActionError` for an unknown action or a missing or
+    mismatched-purpose artifact. A repeated action does not write a duplicate.
     """
     if verb not in ACTION_VERBS:
         raise CardActionError(f"unknown verb {verb!r}; expected one of {ACTION_VERBS}")
@@ -1167,22 +1154,6 @@ def act_on_card(
         artifact = _load_artifact(conn, artifact_id)
         ticker = str(artifact["ticker"]).upper()
         rationale = _hypothesis_excerpt(artifact["content_json"])
-
-        if verb == "research_further":
-            if not owns_connection:
-                raise CardActionError("research_further cannot share an owner-decision transaction")
-            claim = rationale or f"Research further: {ticker} (Investment Decision Card)"
-            existing = conn.execute(
-                "SELECT id FROM research_tasks WHERE UPPER(ticker) = ? AND claim = ? "
-                "AND status = 'proposed'",
-                (ticker, claim),
-            ).fetchone()
-            if existing is not None:
-                return f"already_proposed:{int(existing['id'])}"
-            from research.proposals import create_task
-
-            task_id = create_task(note_id=None, claim=claim, ticker=ticker, db_path=db_path)
-            return f"research_task_created:{task_id}"
 
         kind = verb  # 'pass' | 'watch' | 'promote' â€” the recommendation_kind verbatim
         existing_id = _existing_decision_id(conn, artifact_id, kind)

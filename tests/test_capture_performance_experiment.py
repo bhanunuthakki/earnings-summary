@@ -604,7 +604,7 @@ def test_smoke_adapter_binds_selected_and_executed_nodes(
         junit_arg = next(value for value in argv if value.startswith("--junitxml="))
         junit = Path(junit_arg.split("=", 1)[1])
         cases = "".join(
-            f'<testcase classname="tests.test_capture_poller" name="{node.rsplit("::", 1)[1]}" />'
+            f'<testcase classname="tests.test_job_runtime" name="{node.rsplit("::", 1)[1]}" />'
             for node in smoke.SELECTED_NODES
         )
         junit.write_text(f"<testsuites><testsuite>{cases}</testsuite></testsuites>")
@@ -684,7 +684,7 @@ def test_smoke_adapter_rejects_xml_entities(
         junit_arg = next(value for value in argv if value.startswith("--junitxml="))
         junit = Path(junit_arg.split("=", 1)[1])
         cases = "".join(
-            f'<testcase classname="tests.test_capture_poller" name="{node.rsplit("::", 1)[1]}" />'
+            f'<testcase classname="tests.test_job_runtime" name="{node.rsplit("::", 1)[1]}" />'
             for node in smoke.SELECTED_NODES
         )
         junit.write_text(

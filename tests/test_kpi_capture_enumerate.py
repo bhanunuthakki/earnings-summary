@@ -1,7 +1,4 @@
-"""Tests for the Stage-B capture-every-number enumerate mode in
-compute.kpi_extract_summaries — the no-allowlist path that recovers the numbers
-the tier_1 allowlist drops.
-"""
+"""Tests for governed capture and review of original IR supplement PDFs."""
 
 from __future__ import annotations
 
@@ -21,17 +18,9 @@ from pydantic import TypeAdapter, ValidationError
 import compute.kpi_extract_summaries as kes
 from compute.kpi_extract_summaries import (
     capture_for_ir_pdf_docs,
-    capture_for_ticker,
 )
-from models.facts import FiscalPeriodType, Unit
-from models.kpis import DefinitionOrigin
-from models.runs import StageStatus
-from pipeline.kpi_persistence import KpiExtractionManifest
-from pipeline.run_accounting import PipelineRunSuppressedError
+from models.facts import Unit
 
-_build_capture_manifest = cast(
-    Callable[..., KpiExtractionManifest], getattr(kes, "_build_capture_manifest")
-)
 _llm_extract_enumerate = cast(
     Callable[..., list[dict[str, object]]], getattr(kes, "_llm_extract_enumerate")
 )
@@ -51,7 +40,7 @@ def _const_caller(response: str) -> Callable[..., object]:
 
 
 # ---------------------------------------------------------------------------
-# _llm_extract_enumerate — the no-allowlist prompt + parser
+# _llm_extract_enumerate — the original-PDF prompt + parser
 # ---------------------------------------------------------------------------
 
 _ENUMERATE_JSON = (
@@ -127,74 +116,6 @@ def test_enumerate_rejects_malformed_items(monkeypatch: pytest.MonkeyPatch) -> N
         _llm_extract_enumerate("NU", "Q1 2025", "text")
 
 
-# ---------------------------------------------------------------------------
-# _build_capture_manifest
-# ---------------------------------------------------------------------------
-
-
-def test_build_capture_manifest_is_capture_origin_and_parses_rows() -> None:
-    rows: list[dict[str, object]] = [
-        {
-            "label": "Revenue",
-            "value": 1200000000,
-            "unit": "actual",
-            "currency": "USD",
-            "source_excerpt": "x",
-        },
-        {"label": "Bad value", "value": "N/A", "unit": "actual"},  # unparseable -> skipped
-        {"label": "", "value": 5, "unit": "actual"},  # blank label -> skipped
-        {
-            "label": "Take rate",
-            "value": 1.5,
-            "unit": "bogus",
-            "currency": "USD",
-        },  # bad unit -> ACTUAL fallback
-    ]
-    m = _build_capture_manifest("NU", datetime(2025, 3, 31), FiscalPeriodType.Q1, 42, rows)
-    assert m.origin is DefinitionOrigin.CAPTURE
-    assert m.source_doc_id == 42
-    names = {v.name: v for v in m.values}
-    assert set(names) == {"Revenue", "Take rate"}
-    assert names["Revenue"].value == Decimal("1200000000")
-    assert names["Take rate"].unit is Unit.ACTUAL  # bad token fell back
-
-
-def test_build_capture_manifest_verifies_excerpt_against_source_text() -> None:
-    """Phase C (§3.3): passing `source_text` upgrades a verbatim excerpt to a
-    real `html_span` locator; without it (today's default), the escape hatch
-    is unchanged."""
-    from models.facts import FactLocator, LegacyEscapeHatch, LocatorKind
-
-    rows: list[dict[str, object]] = [
-        {
-            "label": "GMV",
-            "value": 1200000000,
-            "unit": "actual",
-            "currency": "USD",
-            "source_excerpt": "GMV was $1.2B",
-        },
-    ]
-    no_text = _build_capture_manifest("NU", datetime(2025, 3, 31), FiscalPeriodType.Q1, 42, rows)
-    assert isinstance(no_text.values[0].locator, LegacyEscapeHatch)
-
-    with_text = _build_capture_manifest(
-        "NU",
-        datetime(2025, 3, 31),
-        FiscalPeriodType.Q1,
-        42,
-        rows,
-        source_text="Key Business Metrics\nGMV was $1.2B this quarter.\n",
-    )
-    loc = with_text.values[0].locator
-    assert isinstance(loc, FactLocator)
-    assert loc.effective_kind() == LocatorKind.HTML_SPAN
-    assert loc.html_span is not None and loc.html_span.doc_id == 42
-
-
-# ---------------------------------------------------------------------------
-# capture_for_ticker — end-to-end against a file DB + a .tmp brief
-# ---------------------------------------------------------------------------
-
 _PROVENANCE_UNIQUE = (
     "CREATE UNIQUE INDEX uq_kpi_facts_provenance "
     "ON kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, source_doc_id)"
@@ -210,8 +131,7 @@ def _make_capture_db(db_path: Path) -> None:
             ticker TEXT NOT NULL, name TEXT NOT NULL, unit TEXT NOT NULL,
             primary_source TEXT NOT NULL, fallback_source TEXT, ir_url TEXT,
             threshold_tier TEXT, threshold_low FLOAT, threshold_high FLOAT, notes TEXT,
-            definition_origin TEXT NOT NULL DEFAULT 'analyst',
-            UNIQUE(ticker, name)
+            definition_origin TEXT NOT NULL DEFAULT 'analyst', UNIQUE(ticker, name)
         );
         CREATE TABLE kpi_facts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -222,25 +142,14 @@ def _make_capture_db(db_path: Path) -> None:
             locator TEXT, source_excerpt TEXT, supersedes_id INTEGER
         );
         CREATE TABLE kpi_fact_semantic_contexts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            kpi_fact_id INTEGER NOT NULL,
-            revision INTEGER NOT NULL,
-            supersedes_context_id INTEGER,
-            metric_name_as_reported TEXT NOT NULL,
-            reported_period_end TEXT,
-            period_role TEXT NOT NULL,
-            publication_lane TEXT NOT NULL,
-            accounting_basis TEXT NOT NULL,
-            consolidation_scope TEXT NOT NULL,
-            dimensions_json TEXT NOT NULL,
-            unit_scale TEXT NOT NULL,
-            source_row_label TEXT,
-            source_column_header TEXT,
-            source_value_text TEXT,
-            status TEXT NOT NULL,
-            reason_code TEXT,
-            reviewed_by TEXT NOT NULL,
-            knowledge_at TEXT NOT NULL,
+            id INTEGER PRIMARY KEY AUTOINCREMENT, kpi_fact_id INTEGER NOT NULL,
+            revision INTEGER NOT NULL, supersedes_context_id INTEGER,
+            metric_name_as_reported TEXT NOT NULL, reported_period_end TEXT,
+            period_role TEXT NOT NULL, publication_lane TEXT NOT NULL,
+            accounting_basis TEXT NOT NULL, consolidation_scope TEXT NOT NULL,
+            dimensions_json TEXT NOT NULL, unit_scale TEXT NOT NULL, source_row_label TEXT,
+            source_column_header TEXT, source_value_text TEXT, status TEXT NOT NULL,
+            reason_code TEXT, reviewed_by TEXT NOT NULL, knowledge_at TEXT NOT NULL,
             UNIQUE(kpi_fact_id, revision)
         );
         CREATE TABLE validation_issues (
@@ -261,174 +170,6 @@ def _make_capture_db(db_path: Path) -> None:
     )
     conn.execute(_PROVENANCE_UNIQUE)
     conn.commit()
-    conn.close()
-
-
-def _write_brief(repo_root: Path) -> None:
-    tmp = repo_root / ".tmp"
-    tmp.mkdir(parents=True, exist_ok=True)
-    (tmp / "NU_Q1_2025_press_release_summary.txt").write_text(
-        "Revenue was $1.2 billion. NIM of 17.8%. We ended with 118 million customers.",
-        encoding="utf-8",
-    )
-
-
-def test_capture_for_ticker_persists_capture_facts_and_canonicalizes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    _make_capture_db(db)
-    _write_brief(tmp_path)
-
-    # Seed an analyst "Revenue" definition — the enumerated "Revenue" must
-    # canonicalize onto it (persist origin=CAPTURE), not mint a duplicate.
-    conn = sqlite3.connect(str(db))
-    conn.row_factory = sqlite3.Row
-    conn.execute(
-        "INSERT INTO kpi_definitions (ticker, name, unit, primary_source, definition_origin) "
-        "VALUES ('NU', 'Revenue', 'actual', 'llm_extracted', 'analyst')"
-    )
-    conn.commit()
-
-    calls: list[int] = []
-
-    def fake_call(prompt: str, **_: object) -> object:
-        calls.append(1)
-        return json.loads(_ENUMERATE_JSON)
-
-    monkeypatch.setattr(kes, "call_llm_structured", fake_call)
-
-    log = capture_for_ticker("NU", tmp_path, conn, source_group="ir")
-    assert log.kpis_inserted_total == 3
-    assert len(calls) == 1
-
-    defs = {
-        str(r["name"]): str(r["definition_origin"])
-        for r in conn.execute("SELECT name, definition_origin FROM kpi_definitions").fetchall()
-    }
-    # "Revenue" stayed analyst (captured value collapsed onto it); the two new
-    # metrics minted as capture.
-    assert defs == {
-        "Revenue": "analyst",
-        "Net interest margin": "capture",
-        "Customers": "capture",
-    }
-    # Facts carry provenance back to the registered brief doc.
-    fact_count = conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0]
-    assert fact_count == 3
-    customer = conn.execute(
-        "SELECT f.value,c.unit_scale,c.source_value_text,f.source_excerpt "
-        "FROM kpi_facts f JOIN kpi_definitions d ON d.id=f.kpi_definition_id "
-        "JOIN kpi_fact_semantic_contexts c ON c.kpi_fact_id=f.id "
-        "WHERE d.name='Customers'"
-    ).fetchone()
-    assert Decimal(str(customer["value"])) == Decimal("118000000")
-    assert tuple(customer)[1:] == ("millions", "118", "118 million customers")
-    assert [
-        row[0]
-        for row in conn.execute(
-            "SELECT status FROM ingestion_runs WHERE directive='capture_kpis_from_ir'"
-        ).fetchall()
-    ] == ["ok"]
-
-    # PR3: a Stage-B coverage record was written (3 seen, 3 captured).
-    from pipeline.capture_coverage import load_coverage
-
-    cov = load_coverage(tmp_path)
-    assert len(cov) == 1
-    assert cov[0].stage == "enumerate_capture"
-    assert cov[0].source == "ir"
-    assert cov[0].seen == 3
-    assert cov[0].captured == 3
-
-    # Idempotent: a second run skips the doc without another LLM call.
-    log2 = capture_for_ticker("NU", tmp_path, conn, source_group="ir")
-    assert log2.kpis_inserted_total == 0
-    assert len(calls) == 1  # no new model call
-    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 3
-    # No second coverage record (nothing was seen on the skipped re-run).
-    assert len(load_coverage(tmp_path)) == 1
-    conn.close()
-
-
-# An enumerate batch where one ACTUAL value is an absurd magnitude — a share count
-# the LLM emitted as a whole-dollar figure (e.g. a x1e6 mis-read). The persist-time
-# ACTUAL magnitude cap must drop it while the sane Revenue fact lands.
-_ABSURD_ENUMERATE_JSON = (
-    "[\n"
-    '  {"label": "Revenue", "value": 1200000000, "unit": "actual", "currency": "USD", "source_excerpt": "x", "reported_period_end": "2025-03-31", "period_role": "current", "accounting_basis": "gaap", "consolidation_scope": "consolidated", "source_unit_scale": "none"},\n'
-    '  {"label": "Treasury stock", "value": 4609988545000000, "unit": "actual", "currency": "USD", "source_excerpt": "y", "reported_period_end": "2025-03-31", "period_role": "current", "accounting_basis": "gaap", "consolidation_scope": "consolidated", "source_unit_scale": "none"}\n'
-    "]"
-)
-
-
-def test_capture_for_ticker_drops_absurd_actual_magnitude(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The persist-time ACTUAL magnitude cap protects the Stage-B enumerate path
-    too: an absurd whole-dollar value is dropped-with-log, the sane fact stored,
-    and the coverage record reflects the drop (never silent)."""
-    db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    _make_capture_db(db)
-    _write_brief(tmp_path)
-    conn = sqlite3.connect(str(db))
-    conn.row_factory = sqlite3.Row
-
-    monkeypatch.setattr(kes, "call_llm_structured", _const_caller(_ABSURD_ENUMERATE_JSON))
-
-    log = capture_for_ticker("NU", tmp_path, conn, source_group="ir")
-    assert log.kpis_inserted_total == 1  # only the sane Revenue fact
-    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 1
-
-    from pipeline.capture_coverage import load_coverage
-
-    cov = load_coverage(tmp_path)
-    assert len(cov) == 1
-    assert cov[0].seen == 2
-    assert cov[0].captured == 1
-    assert cov[0].dropped_validation == 1  # the absurd value, accounted for
-    conn.close()
-
-
-def test_capture_surfaces_accounting_suppression(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    _make_capture_db(db)
-    _write_brief(tmp_path)
-    conn = sqlite3.connect(str(db))
-    conn.row_factory = sqlite3.Row
-    monkeypatch.setattr(kes, "call_llm_structured", _const_caller(_ENUMERATE_JSON))
-    suppressed = PipelineRunSuppressedError(
-        pipeline_key="pipeline_test",
-        attempt_id="attempt_live",
-        status=StageStatus.IN_PROGRESS,
-    )
-
-    captured: dict[str, object] = {}
-
-    def suppress(*_: object, **kwargs: object) -> str:
-        captured.update(kwargs)
-        raise suppressed
-
-    monkeypatch.setattr(kes, "start_run", suppress)
-    with pytest.raises(PipelineRunSuppressedError) as exc_info:
-        capture_for_ticker("NU", tmp_path, conn, source_group="ir", refresh=True)
-    assert exc_info.value is suppressed
-    inputs_obj = captured["invocation_inputs"]
-    assert isinstance(inputs_obj, dict)
-    inputs = cast(dict[str, object], inputs_obj)
-    source_obj = inputs["source"]
-    assert isinstance(source_obj, dict)
-    source = cast(dict[str, object], source_obj)
-    assert isinstance(source["sha256"], str)
-    assert inputs["source_group"] == "ir"
-    assert inputs["max_facts_per_doc"] == cast(int, getattr(kes, "_CAPTURE_MAX_FACTS"))
-    assert captured["deduplicate_completed"] is True
-    assert captured["force"] is True
     conn.close()
 
 

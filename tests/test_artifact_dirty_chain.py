@@ -19,7 +19,7 @@ from llm_artifact_store import (
 
 
 def _build_artifacts_schema(db_path: Path) -> sqlite3.Connection:
-    """Minimal llm_artifacts schema sufficient for mark_dirty."""
+    """Minimal current non-document artifact schema sufficient for mark_dirty."""
     conn = sqlite3.connect(str(db_path))
     conn.execute(
         """
@@ -27,6 +27,7 @@ def _build_artifacts_schema(db_path: Path) -> sqlite3.Connection:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT,
             scope TEXT NOT NULL DEFAULT 'ticker',
+            document_version_id TEXT,
             purpose TEXT NOT NULL,
             fiscal_period TEXT,
             content_md TEXT,

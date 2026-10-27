@@ -25,7 +25,6 @@ _SECTIONS = (
     "evals",
     "ir_coverage",
     "source_calls",
-    "cron_health",
     "dcf_coverage",
     "restatements",
 )
@@ -77,7 +76,7 @@ def test_assembler_initializes_every_diagnostic_with_native_loading_states(
     """Every builder degrades to a stub on missing tables — the console renders
     rather than crashing on a bare DB."""
     html = render_provenance_panel(_empty_db(tmp_path), tmp_path)
-    assert html.count('data-prov-endpoint="/api/panel/') == 11
+    assert html.count('data-prov-endpoint="/api/panel/') == 10
     assert 'data-prov-endpoint="/api/panel/section_coverage"' in html
     assert 'data-prov-endpoint="/api/panel/validation"' in html
     assert 'data-prov-endpoint="/api/panel/credibility"' in html
@@ -261,22 +260,16 @@ def test_provenance_route_renders(tmp_path: Path) -> None:
     assert 'id="prov-coverage"' in body
 
 
-def test_cron_health_route_serves_a_pollable_live_fragment(tmp_path: Path) -> None:
-    (tmp_path / "data").mkdir()
-    _empty_db(tmp_path / "data")
-    client = comments_server.create_app(tmp_path).test_client()
+def test_cron_health_route_uses_operations_without_an_independent_poller(tmp_path: Path) -> None:
+    import comments_server
 
+    app = comments_server.create_app(tmp_path, db_path=_empty_db(tmp_path))
+    client = app.test_client()
     panel = client.get("/api/panel/cron_health").get_data(as_text=True)
-    fragment = client.get("/api/panel/cron_health?fragment=live")
-
-    assert 'data-cron-fragment-url="/api/panel/cron_health?fragment=live"' in panel
-    assert 'data-refresh-ms="60000"' in panel
-    assert fragment.status_code == 200
-    assert fragment.headers["Cache-Control"] == "no-store"
-    fragment_body = fragment.get_data(as_text=True)
-    assert "No pipeline run rows yet" in fragment_body
-    assert "Observed by server" in fragment_body
-    assert "<section" not in fragment_body
+    assert 'id="operations-title"' in panel
+    assert "data-cron-fragment-url" not in panel
+    assert "No pipeline run rows yet" in panel
+    assert "Observed by server" in panel
 
 
 def test_old_system_panel_routes_still_serve(tmp_path: Path) -> None:

@@ -1,5 +1,100 @@
 # Operations & Governance Surface Impact
 
+## Retained transcript audit qualification — October 27, 2026
+
+Disposition: **bounded backend command, no new dashboard action or schedule**.
+The existing `run_llm_evals.py` CLI exposes `transcript_summary_claim_audit`.
+Native source cases require explicit `--db`, `--source-db`, `--source-state-root`
+and `--proof-state-root`. The ledger and proof root are isolated fixtures; original
+sources and their database remain read-only. Source/ledger aliases, live data
+locations and broad proof roots fail before budgets or provider work. The dashboard
+run bar and its action reject this native qualification purpose. Existing run
+history and call-health observations remain visible.
+
+`llm_budget` requires an explicit finite positive blocking budget. The migration
+seeds the new purpose at $5 API-equivalent per month without overwriting an existing
+owner row. `evals.harness` owns stable private-proof reads. The configured state
+root owns the active bundle; an explicit temporary proof root supports native tests.
+The reader creates no files or databases. Source collection, factual admission and
+new summary generation remain separate actions. Qualification needs complete
+actual-route results and independent context adjudication; metadata, synthetic
+fixtures and advisory code review do not qualify it. The release must verify the
+actual native fleet client and preserve existing operating holds.
+
+Evidence includes the transcript route, proof reconstruction, native-source,
+evaluation CLI, budget, panel and action tests. Native execution, model qualification
+and production activation remain open. This adds no dedicated batch runner.
+
+## Explicit Notes logging and legacy research retirement — October 27, 2026
+
+Notes capture stores the note and returns its receipt. It does not infer intent,
+triage a research request, extract a pledge, annotate a pending decision, suggest a
+parked-note route or generate a behavioral rule. Explicit typed decision capture,
+owner process controls, recorded outcomes and affirmed owner facts remain.
+
+The legacy research run/status/reject routes and singular proposal-action route
+are removed. `fragment=research` is unsupported. Governed Ask proposal detail and
+decision routes remain. Card actions are Pass, Watch and Promote; a stale
+`research_further` action fails before writes. The analyst's readable suggestion
+can still say `research_further`. On-demand backend research remains available.
+
+`record_decisions.py` requires an existing explicit or configured database. Every
+retained recording step receives that same path. Code-root and state-root inputs
+cannot select a checkout-local database. Migration 0065 also removes the five
+retired automation purposes from configuration and exclusive generated context;
+retained note bodies and known process/decision dependencies remain. It removes
+unaffirmed derived behavioral rules and exact retired-purpose model verdicts. A
+retained profile successor link blocks the migration before writes; affirmed
+settings are unchanged. All 61 migration/profile checks pass locally. Broader input
+and history deletion still requires the reference census and concrete release.
+
+Local proof: 192 owning tests pass. Synthetic Notes and card browser checks cover
+1280/768 widths, capture failures and retries, ticker attribution and the removed
+card action. They do not establish live cockpit parity. No service, schedule,
+production row or installed library changed.
+
+## On-demand process research source retirement — October 25, 2026
+
+The `ledger_synthesis`, `red_team`, `tenet_accountability` and `thesis_collision`
+task declarations and wrappers are removed. Their explicit backend runners stay.
+This supersedes the historical held-disabled disposition for those four jobs.
+Canonical Scheduler retirement remains a release action; no host task was changed.
+
+
+## October 25 simplification: source retirement in progress
+
+This amendment supersedes earlier retained-history and Telegram/coaching sections
+where they conflict. The owner approved removal of the retired features and their
+in-scope inputs, data, history, pending state, exclusive readers and libraries.
+Current theses, owner process settings and decision time series remain the named
+exceptions. See `docs/architecture/backend-retirement-execution-plan.md` for the
+single execution and release boundary.
+
+The source no longer declares Telegram capture, `es-poller`, automatic coaching
+pings, decision nudges, weekly personal-review packets, monthly calibration
+narratives, annual letters, README generation, automatic session distillation or
+the proactive standup. Their exclusive transports, callbacks and front cards are
+removed. Normal collection and earnings briefs remain. Direct note and decision
+logging stays explicit and uses a configured database. No replacement producer
+is scheduled.
+
+The legacy On My Mind feed, per-card replies and answer poll are removed from
+source. Its `/api/onmymind/*` routes return normal missing-route responses;
+`fragment=onmymind` and `fragment=card` are unsupported. Basic Notes capture,
+ticker attribution, decision logging and explicit Ask remain. The exclusive
+answer/contradiction classifier, reply classifier, saved-artifact brief and
+arbitrary reading extractor are removed. Migration 0065 removes their generated
+note context while retaining note bodies, other context and process/decision
+links. It checks known note triggers and context-reading views before mutation. Unknown
+or changed dependencies hold the migration. Invalid JSON context remains unchanged and needs its own
+source disposition; it is not erased or treated as an empty object.
+
+Source registration expects only `es-dashboard` as a managed service and no
+service-owned Scheduler exception. A leftover poller task is undeclared drift.
+Canonical service/task/data removal and installed-library cleanup have not run;
+this amendment makes no live-retirement claim.
+
+
 **2026-10-24 disposition:** two dedicated lens declarations/runners were removed locally; manual engine/cache/history access and the separate dirty-artifact refresh are retained. Declared Jobs rows disappear; still-installed jobs show unexpected. No live/deploy change or new control.
 
 The active runtime policy also removes both retired job names. A stale invocation
@@ -42,12 +137,14 @@ Company brief and candidate-fit batches exclude ETFs. General book weights,
 prices, correlation and risk calculations still include held funds.
 
 The dedicated ETF role writer, score/style/what-if materializer and acquisition
-adapters are retired. The three old direct commands fail before provider or
-state access. The previous Create/Refresh and capture-prerequisite proposals are
+adapters are retired. The old dedicated commands are removed. The previous Create/Refresh and capture-prerequisite proposals are
 superseded. No replacement ETF workflow is added.
 
-The old ETF peek reads saved narrative history only. Stored reports, source
-bytes, profiles, holdings, notes, reviews and all narrative versions remain.
+The old ETF peek and dedicated saved-workup readers are retired. Optional ETF
+reports, profiles, reviews and narrative history are canonical-cleanup candidates.
+Retain shared portfolio holdings and only the source bytes or notes that support
+an actual retained decision, thesis or financial-provenance dependency. Source
+retirement does not delete canonical files. No history viewer is promised.
 Stale caches cannot populate active ETF scoring, labels or sizing advice.
 A dated basket P/E retains its point-in-time meaning; unsupported long-term
 multiples remain unavailable. The same financial-grounding contract applies.
@@ -82,6 +179,13 @@ is removed; explicit local-upload CLI ingestion remains. Actual owner-requested
 policy and calendar are sealed through preparation and validation. Old default
 request serialization is preserved. Legacy staging copies remain because the path
 callback has no deletion authority.
+
+Explicit URL intake also accepts `--document-version-id`. This option names one
+current registered SEC filing that proves the requested issuer and fiscal quarter.
+It does not select a filing automatically. The witness applies only to the supplied
+URLs. Preparation checks its source, fiscal calendar and classified period before
+managed publication. A witness mismatch fails the attempt; it cannot enter legacy
+registration. HTML, event and annual-document intake contracts are unchanged.
 
 Completed registrations use a read-only recorded-status check, memoized for one
 operation. It reads all subject attempts, small completion metadata, current rows
@@ -287,18 +391,18 @@ stops. Previously committed documents remain intact. If failure bookkeeping also
 fails, the command reports that failure and preserves the original exception.
 Freeze triggers, source admission and observation history are unchanged.
 
-`extract_kpis_from_summaries` now uses `require_db_path` once, with optional
-`--db-path`, and shares the target across roster reads, extraction and scoped LLM
-bookkeeping. `--repo-root` selects source/artifact files only. The command rejects
-an unavailable or prohibited checkout database before extraction. Existing
-dispatcher and comment-processing invocations remain valid with the configured
-database. No collection, schedule, model, prompt or analysis-depth change is made.
+The owner retired generated-summary KPI extraction on October 26. Its CLI and
+refresh step are removed. Explicit original-source manifests and original PDF
+capture remain under `extract_kpis_from_ir`; source identity, semantic admission
+and locator checks remain required. No automatic transcript numeric extraction
+is implied. Evaluation commands use an explicit/configured database and scoped
+ledger context; source roots do not select a database.
 
 The unreferenced `src/parser.py` filename parser and automatic renaming function
 are removed. PDF/text readers, the filing-section filename parser and the
 registered metadata classifier remain. Validation belongs to
 `test_restatement_detector.py`, `test_extract_facts_database_failure.py`,
-`test_summary_kpi_database_authority.py` and the retained intake, IR, filing,
+the retained intake, IR, filing,
 summary-KPI and dispatch suites.
 
 The existing daily database backup and weekly filesystem cleanup jobs own file
@@ -582,12 +686,10 @@ tests cover these boundaries. No operator action, registry entry, scheduler,
 service, schema or source authority changes.
 
 Application read-performance changes preserve the existing Operations registry,
-Jobs, Sources, Data, Actions, and README approval boundaries. Independent panel
-loading, bounded reads, cache-busy responses, and retry controls change delivery
-and recovery of read-only observations. They do not add an operator action,
-scheduler, writer, or service-health claim. A failed README status read disables
-Apply until the current status is verified. Route and read-lifecycle tests cover
-these preserved boundaries.
+Jobs, Sources, Data and Actions boundaries. Independent panel loading, bounded
+reads, cache-busy responses and retry controls change delivery and recovery of
+read-only observations. They do not add an operator action, scheduler, writer or
+service-health claim. Route and read-lifecycle tests cover these boundaries.
 
 Company Desk loading and same-company Retry preserve the prior company identity
 and evidence until the response identity validates. The additive selected-observation
@@ -704,23 +806,12 @@ envelope. The envelope binds all current source bytes and the extraction method.
 An unreadable, changed, or missing preferred source produces an explicit context
 gap. Legacy text caches remain retained but cannot supply prompt text.
 
-The existing summary-KPI CLI requires the configured database or an explicit
-`--db-path`; `--repo-root` selects source files only. Allowlist extraction checks
-existing evidence before a model call. It registers the exact summary bytes and
-uses the existing document-evidence coordinator for that document ID when
-deterministic preparation is needed. Registration and preparation share the exact
-database writer lock; the lock is released before model work. Invalid explicit
-bindings fail closed. Failed preparation makes no model call and remains
-retryable. Missing issuer-inventory linkage for a derived summary stays degraded;
-it does not become an acquisition-completeness claim. The existing run ledger binds
-each completed attempt to its exact source, parent, holdings, and model route.
-Empty and partial responses record bounded processing; unreturned metrics remain
-unknown. `--refresh` repeats completed work but cannot replace an active writer.
-The capture/enumeration path is unchanged. `--requested` carries explicit owner
-request context for a selected ticker or document. Resume receipts bind that
-context. Existing automatic role policy is unchanged. Derived summaries do not
-gain financial admission from this completion record. No scheduler task or service
-was added.
+Generated-summary KPI extraction is retired. The CLI, optional refresh step and
+Explore extraction control are removed. Explicit reviewed manifests use original
+documents through `extract_kpis_from_ir`; original supplement PDF capture remains.
+Neither manual application nor numeric capture proves disclosure completeness or
+semantic admission. No source collection or live scheduler change follows from
+this source retirement.
 
 ### Legacy evidence backfill and managed IR byte admission
 
@@ -1011,16 +1102,29 @@ does not emit calibration. Successful outcomes retain a versioned input manifest
 in their notes; source capture freshness remains explicitly unverified. This
 changes the existing manual grader only, without activating a run or schedule.
 
-### README generation contract evidence
+### README application feature retired (October 25, 2026)
 
-The existing README update action retains a compact attestation for each generator
-and judge call, binding its registered purpose, prompt and schema versions, source
-hashes and observed provider attempt. The facade is limited to the existing
-`meta_eval` scope; prompt drift fails closed and missing usage, cost or effective
-prompt verification remains unknown. Setup, schema and budget failures cannot
-enter provider fallback. This changes evidence retained by the existing action;
-it adds no Operations control, schedule, provider activation or live execution.
-Other LLM consumers remain outside this migrated tranche.
+The owner approved removal of README generation, judging, apply and status
+collection. The CLI, two active model purposes and exclusive eval registrations
+are removed. The former action and status routes return 404. Operations has four
+tabs and performs no README repository-evidence scan. Manual README editing stays
+outside the application. Existing README bytes, candidates, receipts, call records
+and migration history remain. Retired judge calls retain their historical
+meta-purpose classification. No live state or scheduler was changed.
+
+### Automatic decision prompts retired from source (October 25, 2026)
+
+The owner requested basic logging and decision tracking without automatic coaching.
+The decision-nudge runner, module, source task and wrapper are removed. New weekly
+packets do not create missing-field decision prompts. Old `dn` callbacks are inert;
+a pending `decision_fill_in` does not consume the owner's next message or modify
+its historical pending row. The raw note and explicit typed decision logging paths remain. The later Notes
+amendment above removes pledge parsing and historical packet actions.
+
+Basic frontend capture no longer starts a challenge or an unsolicited answer job.
+It retains note ingestion. Explicit typed decision actions own decision writes.
+Explicit targeted questions use the existing chat engine and backend skills.
+Canonical-host task retirement remains a separate unverified deployment step.
 
 `execution/grade_predictions.py` uses the same explicit/configured database
 boundary. It grades only uniquely identified, admitted revision-aware KPI facts
@@ -2245,44 +2349,18 @@ window changed. Regression evidence: `tests/test_storage_reservation.py`,
 
 
 
-### Owner-approved exercise and Telegram coaching retirement — 2026-10-23
+### Coaching and Telegram retirement — current source disposition
 
-Disposition: **retire new guided exercises and Telegram coaching delivery/actions**.
-The new-exercise generator, CLI, four routes, controller, report doorways, exclusive
-style and calibration prose projection are removed. The three retired LLM purposes
-leave the active model, prompt-version and eval registries. The Ask instruction
-keeps the no-in-chat-stance boundary and refers to the existing governed `/review`
-command; its prompt version is now v2. Saved answers, advisor memo kinds, notes,
-ledger links, historical grading, decision recording, research Q&A and direct
-position reviews remain. No rows, historical identities, budgets or migrations
-are deleted.
+Telegram transport, polling, bot credentials, pending reply handling, proactive
+coaching, weekly packets, nudges and annual/calibration narratives are retired.
+There is no legacy callback or delivery mode. Basic explicit note/decision logging,
+owner annotations and targeted research through chat remain. New migrations remove
+the dedicated stores after the decision journal no longer joins them. Mixed-store
+history cleanup requires the reviewed exact dependency plan and release boundary.
+Source removal does not stop a deployed service or unregister a task.
 
-`execution/run_coach_pings.py` keeps the existing reconciliation and dashboard
-findings pass, write lane and cadence. It no longer resolves Telegram credentials
-or constructs a sender. The governor retains the quiet digest, freshness, mute,
-priority, capacity-alert and thesis-attention rules. Its unused send mode is
-retired; new eligible findings enter the digest directly. Old pending delivery
-rows retain the existing expiry/recovery rule and conditional retry fence. Sent,
-acted and dismissed history stays intact. Normal Telegram capture keeps old reply
-text without coach interpretation. Old coach buttons acknowledge retirement and
-perform no coach mutation. Ordinary Telegram cards and manual `/review` remain.
-The old `--dry-run` CLI spelling is accepted with a write warning; reconciliation
-and digest accounting still write state. This flag does not select a send mode.
-
-The checked-in coach task changes its Description only. URI, action, cadence,
-principal, settings and enabled state stay intact. No installed task, service,
-production database, provider call or Telegram message is changed by this source
-retirement. The earlier delivery-confirmation repair remains in Git history; it
-is not an active coaching transport contract after this retirement.
-
-The cockpit fundamentals cache retains its separate repair: it binds the canonical
-financial revision with values in one committed read transaction and rejects
-changed revisions. Snapshot replacement requires an explicit derived-cache refresh.
-Evidence uses the exercise/history/direct-review, governor/capacity/attention,
-capture-poller, callback, registry and workspace/design suites. Source and rendered
-receipts live in the implementation checkpoint. Hosted native Windows coverage
-and live activation remain separate from local source acceptance.
-
+The cockpit fundamentals cache retains its separate revision-consistency guard.
+Snapshot replacement requires an explicit derived-cache refresh.
 
 ### Owner-reviewed governed proposal registration — 2026-10-21
 
@@ -2718,20 +2796,20 @@ focused qualification exercises zero event generation, mixed-input order and
 failure handling, retained source/history bytes and quarterly replay/repair.
 
 
-### Explicit summary-KPI candidate procedure — 2026-10-24
+### Original-source KPI extraction — October 26 scope
 
-Disposition: **owner-approved on-command behavior**. Summary-derived numeric
-candidate extraction remains available through its existing backend CLI and valid
-explicit refresh selection. Routine refresh and automatic comment rebuilds do not
-invoke it. Comment processing retains definition seeding, thesis evaluation and
-report rebuild. Omitted refresh steps use the normal default chain without numeric
-summary extraction. Explicit null, empty, blank, non-list or unknown steps are rejected; excluding
-all selected steps must not fall back to the default collection chain.
+The owner superseded the October 24 summary-candidate procedure. Summary-derived
+extraction, its CLI, refresh membership, Explore control and unused histories are
+retired. Explicit original-source manifests and original PDF capture remain.
+Manifest application validates issuer, document type and period. A transcript
+value also requires an exact stored source segment and consistent quote/locator.
+Automatic transcript numeric extraction remains unavailable. Retained historical
+financial observations keep their actual source dependencies until resolved.
 
-Explore projects the existing report, Analytics, grounded Ask and manual extraction
-paths. Its manual refresh adapter supports configured earnings-summary extraction
-only. IR and novel-capture modes remain backend CLI capabilities. A job accepted by
-the existing registry is not finished work or admitted evidence. Saved candidates,
-reviews, corrections and history remain. Summary-derived candidates remain subject
-to primary-source review; execution grants no financial admission. There is no new
-store, scheduler, collection permission, model route or live operation.
+## SayDo narrative retirement (October 26, 2026)
+
+The SayDo report reads source-linked commitments, guidance-versus-actual comparisons and recorded verdicts. It makes no pairwise narrative or row-selection model call. The dedicated batch task and refresh/onboarding pairwise paths are removed from source. Onboarding retains exact registered transcript summaries through `process_ir_documents.py`; its CLI options are `--skip-transcript-summaries` and `--force-transcript-summaries`. Dirty-artifact regeneration excludes the retired pair/filter purposes. Migration 0065 retires their unlinked non-document cache rows, with the existing retained-reference and provenance guards. These source changes do not stop or unregister the installed Windows task. Earlier enabled-state and cadence entries are historical evidence.
+
+## Optional analysis cadence retirement (October 27, 2026)
+
+The source manifest retires `weekly_score_stances`, `refresh_business_factors` and `refresh_scenario_priors` and their exclusive wrappers/XML. Manual `score_advisor_stances.py`, `refresh_business_factors.py` and `set_scenario_priors.py` remain for explicit backend work. Source declarations fall from 32 to 29. Financial acquisition, earnings briefs, explicit decision grading and model-quality checks remain. Live registrations and enabled states are unchanged. The Jobs projection continues to show installed retired jobs as unexpected.

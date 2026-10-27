@@ -285,3 +285,86 @@ def test_documents_count_by_doc_type(conn: sqlite3.Connection) -> None:
     counts = dict(histogram)
     assert counts[DocType.FMP_INCOME_STATEMENT.value] == 2
     assert counts[DocType.FMP_BALANCE_SHEET.value] == 1
+
+
+def test_owned_completion_preserves_caller_transaction_and_row_factory(
+    conn: sqlite3.Connection,
+) -> None:
+    from pipeline.run_accounting import end_run_owned
+
+    run_id = start_run(
+        conn,
+        directive="owned",
+        ticker_scope=["SYNTH"],
+        invocation_inputs={"document": "version-a"},
+        deduplicate_completed=False,
+    )
+    row = conn.execute(
+        "SELECT pipeline_key FROM pipeline_attempts WHERE attempt_id=?", (run_id,)
+    ).fetchone()
+    assert row is not None
+    pipeline_key = str(row[0])
+    conn.row_factory = None
+    conn.execute("BEGIN IMMEDIATE")
+    end_run_owned(conn, run_id=run_id, pipeline_key=pipeline_key, status=StageStatus.OK)
+    assert conn.in_transaction
+    assert conn.row_factory is None
+    assert conn.execute(
+        "SELECT status FROM pipeline_attempts WHERE attempt_id=?", (run_id,)
+    ).fetchone() == (StageStatus.OK.value,)
+    conn.rollback()
+    assert conn.execute(
+        "SELECT status FROM pipeline_attempts WHERE attempt_id=?", (run_id,)
+    ).fetchone() == (StageStatus.IN_PROGRESS.value,)
+    assert conn.execute(
+        "SELECT status FROM ingestion_runs WHERE run_id=?", (run_id,)
+    ).fetchone() == (StageStatus.IN_PROGRESS.value,)
+
+
+def test_owned_completion_rejects_replaced_attempt(conn: sqlite3.Connection) -> None:
+    from pipeline.run_accounting import end_run_owned
+
+    inputs = {"document": "version-a"}
+    previous = start_run(
+        conn,
+        directive="owned",
+        ticker_scope=["SYNTH"],
+        invocation_inputs=inputs,
+        deduplicate_completed=False,
+    )
+    key_row = conn.execute(
+        "SELECT pipeline_key FROM pipeline_attempts WHERE attempt_id=?", (previous,)
+    ).fetchone()
+    assert key_row is not None
+    current = start_run(
+        conn,
+        directive="owned",
+        ticker_scope=["SYNTH"],
+        invocation_inputs=inputs,
+        deduplicate_completed=False,
+        force=True,
+    )
+    conn.execute("BEGIN IMMEDIATE")
+    with pytest.raises(RuntimeError, match="no longer owned"):
+        end_run_owned(conn, run_id=previous, pipeline_key=str(key_row[0]), status=StageStatus.OK)
+    conn.rollback()
+    statuses = dict(
+        conn.execute(
+            "SELECT attempt_id,status FROM pipeline_attempts WHERE pipeline_key=?", (key_row[0],)
+        ).fetchall()
+    )
+    assert statuses == {
+        previous: StageStatus.ABANDONED.value,
+        current: StageStatus.IN_PROGRESS.value,
+    }
+
+
+def test_owned_completion_requires_caller_transaction(conn: sqlite3.Connection) -> None:
+    from pipeline.run_accounting import end_run_owned
+
+    run_id = start_run(
+        conn, directive="owned", ticker_scope=["SYNTH"], invocation_inputs={"document": "version-a"}
+    )
+    with pytest.raises(ValueError, match="caller-owned transaction"):
+        end_run_owned(conn, run_id=run_id, pipeline_key="wrong", status=StageStatus.OK)
+    assert not conn.in_transaction

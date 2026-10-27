@@ -1,12 +1,52 @@
 # Research platform: backend and ingestion retirement roadmap
 
-### Current local checkpoint: ETF capture prerequisite (October 24)
+### Current execution plan (October 25)
+
+The owner approved the remaining backend work and all proposed product removals.
+The [execution plan](backend-retirement-execution-plan.md) now owns their sequence,
+batch verification and release preparation. The latest direction also retires
+most coaching. Keep basic chat logging, dated decision history and deterministic
+time-series tracking. Targeted analysis uses backend skills through chat. The
+plan has independent advisory review. Implementation and release checks remain
+in progress. This is not a release claim.
+
+### Current local checkpoint (October 26)
+
+The owner retains earnings transcript summaries and SayDo. Separate generated
+press-release, presentation and investor-update write-ups/cards are retired.
+Summary-derived KPI extraction is retired; retained explicit extraction uses
+original documents. Cleanup includes optional historical inputs and outputs.
+The old history-preservation statements below do not override this direction.
+
+Migration 0065 prepares removal of unlinked optional research and Telegram history.
+It preserves explicit decisions, current approved tenets, exact document products,
+stage receipts and their source dependencies. It has not run on production.
+The integrated local checkpoint passed 266 tests. Later migration hardening also
+passed its seven dedicated tests. Final whole-project and native-host gates remain.
+
+The latest R6 replay preserves complete results on all three measured populations.
+SELECT counts fall from 1,660 to 639 for WIX-21 and from 649 to 257 for each
+SYNTH-8 clock case. Full recursive publication verification falls to one per
+operation. Five alternating samples per side show lower median times. These are
+synthetic consumer comparisons, not live service latency. The named obsolete
+consumer loops and duplicate batch reader are gone; required scalar admission and
+series evidence remain with their existing owners.
+
+R2 now supports explicit URL intake with an exact registered SEC fiscal witness
+for non-calendar quarters. HTML, events, annual documents and remaining legacy
+registration cells still need their own parity proof. R3 model qualification is
+open. R5 remains blocked by missing typed source context and population/disposition
+receipts in existing producers. The owner retired R7 pairwise SayDo narrative generation and its row-selection filter. Source-linked commitments, comparisons and recorded verdicts remain; no second narrative qualification is required.
+Do not delete guarded financial acquisition paths or claim terminal R1–R7 closure
+from these checkpoints.
+
+### Historical checkpoint: ETF capture prerequisite (October 24; superseded)
 
 The local optional FMP path now retains actual response bytes and separate receive clocks through the existing immutable snapshot and evidence owners. It binds five existing label fields to their source locations, removes mutable live cache publication, and rolls back the complete optional unit without committing caller work. Saved caches remain readable and unverified. The six pure parser functions and three shared coercions retain their behavior. Both CLIs require an existing database bound to the explicit/configured state root.
 
 Independent Sol scored the adopted corrected PRD 88 and implementation 89, with no material blockers in this scope. The 13-file owning suite passed 241 tests. Final source and gate evidence is owned by `.tmp/cleanup-open-model-execution/etf-capture-final-acceptance.json`. The architecture/release HOLD remains. No deletion credit is claimed for this prerequisite. The approved read-only AVDV/AVUV/VDE check found no current usable capture witness in that sample. New collection, live qualification, financial narrative and manual ETF Create/Refresh remain open and unauthorized here.
 
-### Current local checkpoint: dedicated lens batches (October 24)
+### Historical local checkpoint: dedicated lens batches (October 24)
 
 The owner approved on-demand research lenses. Two dedicated batch runners and their schedule declarations are retired locally. Manual procedures and saved results remain. The 42 retained task specifications are unchanged. The existing Jobs projection continues to expose retired tasks as unexpected when host evidence still lists them. The scheduler runbook contains the separate deployment/rollback candidate. Source removal does not disable Windows tasks.
 
@@ -308,53 +348,22 @@ that matrix. Count model calls: adoption, unchanged replay and projection-only
 repair each require zero; an authorized cold/dirty generation makes no more calls
 than its qualified predecessor for the same product, unless separately approved.
 
-### R4 — Explicit research procedures with one evidence interface
+### R4 — Explicit research with original evidence
 
-**2026-10-24 owner decision:** retain summary-to-KPI generation as a backend
-procedure triggered on command. The earlier full retirement proposal is superseded.
-Its estimated 1,450–1,600-line cut is withdrawn, not credited as achieved savings.
-This preserves configured extraction and novel discovery, including explicit reruns
-of saved summaries. The backend CLI, source modes and provenance guards remain.
+October 26 scope supersedes the earlier summary-lane preservation decision.
+Retire the summary-KPI CLI, its refresh step, its exclusive candidate engine,
+and separate generated release/deck/investor-update summaries and cards.
+Retain earnings transcript summaries, SayDo, original source access and explicit
+KPI manifests/capture from original evidence. No legacy summary adoption or
+filename-derived identity is required. Historical derived financial observations
+keep their actual evidence until their dependencies are resolved.
 
-**Cut:** remove summary KPI extraction from routine refresh defaults and both
-automatic comment-rebuild branches. Keep definition seeding, thesis evaluation,
-report generation and narrative products. An explicit extraction request uses the
-existing command dispatcher and job owner. No replacement workflow engine, evidence
-store, execution catalog or implicit collection path is needed.
-
-Omitted refresh steps retain their documented default behavior, except summary KPI
-extraction. An explicit null, empty, blank, non-list or unknown HTTP selection fails before
-job dispatch.
-A selection that excludes every step performs no work; it must never fall back to
-source collection. Direct CLI invocation and a valid explicit extraction selection
-remain callable. Preserve explicit source/state/database arguments and failures.
-
-**Interface MVP:** use Explore for open-ended grounded questions and its existing
-Analytics workbench. Add a compact map to saved PRE/POST and research reports and
-the available manual procedure. Keep the question central. Use existing navigation,
-registered controls, the job lifecycle and the existing evidence resolver. Label
-summary-derived output as candidates requiring primary review. Job acceptance is
-not completion, financial admission, source completeness or a decision-grade result.
-The existing refresh extraction step supports configured earnings extraction only;
-IR and novel modes remain available through the retained backend CLI unless their
-interface adapters are separately implemented and tested. Do not imply broader UI
-coverage. Missing evidence stays explicit; new collection still needs its approved
-scope. No typed question silently launches extraction or acquisition.
-
-**Preservation references:** use corrected October 23 NU PRE/POST and expanded
-MELI packets. Their manifest/body/context identities are pinned by the held
-reconciliation. This selects engineering outputs to preserve; it does not establish
-financial acceptance, decision-grade coverage, automated extraction recall or
-missing original-source lineage. Historical raw-summary replay gaps remain separate.
-
-**MVP/proof:** automatic refresh and comment paths make zero summary-extraction
-calls; explicit commands retain configured/novel source behavior and quarantine.
-Prove invalid selections start no job or collection, retained child order/failures,
-saved candidate/review/correction/history parity and unchanged selected reference
-bytes. Observe the interface before/after at supported widths, including empty,
-loading, accepted-job, conflict and error states. Ask, Analytics and saved report
-navigation must reuse their existing owners. Measure actual source cuts after the
-patch; retained capability receives no deletion credit.
+Research lenses are on demand. Targeted questions use existing backend skills
+and grounded chat. Invalid or empty selections must not start collection. No
+new workflow engine, evidence store, transport or automatic coaching writer.
+Original transcript numeric automation remains unavailable until exact version
+and source-segment mapping is proved. Typed manual manifests must validate the
+original source identity, excerpt and locator before persistence.
 
 ### R5 — Retire active legacy financial and KPI write/bridge lanes
 
@@ -580,7 +589,7 @@ reduction credit; later wave accounting records actual deletion minus additions.
 | R1 | `_run_extraction`, `_safe_extract`, `_stage_extract_fmp_facts`: 3 bodies, 104 lines; duplicated 11-entry dispatch and 2 overrides counted separately as ownership, not extra measured lines. |
 | R2 | `_run_categorize` and `process_ticker`: 2 mixed adapter/orchestration bodies, 112 lines. Retain needed transport/input adapters; only obsolete registration decisions count as cuts. |
 | R3 | State adapter: 91-line file; four index processing procedures: 51 body lines. Replacement completion code offsets these gross spans. |
-| R4 | Automatic summary-KPI refresh membership and two comment-rebuild spawn blocks. Retain `extract_for_ticker`, `capture_for_ticker` and their CLI under the October 24 owner decision; their bodies no longer count as planned deletions. |
+| R4 | Automatic summary-KPI refresh membership and two comment-rebuild spawn blocks. The October 26 decision retires `extract_for_ticker`, `capture_for_ticker` and their summary CLI; keep shared original PDF capture helpers. |
 | R5 | `ingest_spreadsheet_kpis`: 79-line first-producer span. The separately measured terminal inventory identifies 10 disjoint financial/KPI write/bridge bodies totaling 1,645 baseline body lines, including 878 shared financial/KPI lines. Shared bodies earn deletion credit only after all writer and historical-reader obligations clear. |
 | R6 | `_BatchFactReadModel`: 38-line class, plus the named consumer loops/cache whose separate deletable spans need cutover accounting. |
 | R7 | Say/Do parser and filter: 2 bodies, 109 lines. Moving them to preparation earns zero net credit; structured generation and remaining render-path retirement must remove the round trip. |
@@ -613,7 +622,7 @@ Seed that assessment with these existing operator surfaces, not analytical conte
 |---|---|---|
 | Separate `fetch_ir_documents.py` and `fetch_ir_from_urls.py` CLI surfaces alongside `manage_issuer_document_sources.py` | Actual scheduled, script and owner invocations; argument/FYE/request-mode parity; denial and recovery behavior | One managed command with discovered/explicit-input adapters. Keep a thin old command if it has a distinct supported use; delete duplicate orchestration regardless. |
 | `process_ir_documents --regenerate-missing` as an independent completion/repair mode | Real operator use and callers; legacy-adoption and missing-projection recovery results | Existing artifact/attempt repair through the same processing owner, with zero regeneration for a committed body. Retain the user operation if needed, remove its file-existence success engine. |
-| Automatic summary-number refresh/comment actions | Owner approved on-command behavior October 24; prove zero automatic calls and explicit command parity | Keep the backend CLI, configured/novel extraction, saved candidates and review. Remove automatic coupling; expose truthful scope through Explore. |
+| Summary-number extraction | October 26 owner direction retires the summary-derived lane | Remove the CLI/refresh action/Explore button and exclusive engine; retain explicit original-source manifests and PDF capture. |
 
 These are assessment candidates, not approved feature deletions. If none removes
 real user friction or redundant ownership, retain the interfaces and still execute
@@ -638,8 +647,7 @@ require it; remove duplicated business logic, not purposeful process boundaries.
 First slices are milestones, not terminal acceptance. The per-unit populations above
 must have explicit remaining entries until their old procedures are deleted. Do
 not close the roadmap after its easy adapters/helpers move while automatic R4
-coupling or competing completion/publication owners remain. The optional summary
-candidate procedure is intentionally retained. Missing source pairs still limit
+coupling or competing completion/publication owners remain. The October 26 scope retires the optional summary-derived candidate procedure. Missing source pairs still limit
 financial/native qualification; they do not authorize retiring that capability.
 Where the lossless R5 capture gate blocks a deletion, bring the exact decision to
 the owner and continue another qualified population. Do not add an alternate
@@ -667,8 +675,8 @@ require an actual net cut after all named lane retirements. That distinction is 
 |---|---|
 | R1 ownership | Two active batch engines become one: one dispatch/override registry, selection/order policy and executor. Delete the other active implementations and migrate callers. Test malformed income then valid segments: affected prerequisite-unavailable coordinates are blocked/degraded, never OK; independent periods and legitimate zeros stay usable. Audit extractor/receipt commit closures and preserve caller-pending work. |
 | R2 registration | For each supported family/media/calendar/input cell, move `process_ticker`, `register_urls` and applicable local-input callers to one managed registration owner; delete that cell's sidecar/categorizer success branch. Test denied automatic requested=False, real FYE, existing/changed bytes, partial commit, transport gaps, projection/effect recovery, foreign aliases and corrupt-index HOLD. Full closure requires the complete supported population, not the first calendar PDF cell. |
-| R3 adapter/completion | First delete `process_ir_documents_state.py` and move discovery/onboarding/refresh callers with explicit DB/state parity. Separately migrate quarter/event processing selectors and repair/history consumers; then delete processed-flag/file-existence completion decisions. Adopt legacy bytes as unknown-provenance history with zero model calls and no exact-key reuse. Prove same-quarter identity, stale readability, atomic output/attempt persistence and zero-call replay/repair before completion cutover. |
-| R4 explicit procedures | Routine refresh/comment paths make zero summary-KPI calls. Valid explicit CLI/step requests preserve configured/novel extraction and quarantine; empty/unknown selections start no default collection. Keep saved history and narrative producers. Explore maps existing reports, manual procedures, Analytics and grounded Ask without a new execution or evidence owner. Verify real interaction, failure states and actual source cuts. |
+| R3 adapter/completion | First delete `process_ir_documents_state.py` and move discovery/onboarding/refresh callers with explicit DB/state parity. Separately migrate quarter/event processing selectors and repair/history consumers; then delete processed-flag/file-existence completion decisions. Do not adopt legacy generated summaries. Remove unused history; preserve only actual retained financial provenance dependencies. Prove same-quarter identity, stale readability, atomic output/attempt persistence and zero-call replay/repair before completion cutover. |
+| R4 explicit procedures | Routine refresh/comment paths make zero summary-KPI calls. Retained explicit original-source extraction preserves context and quarantine; empty/unknown selections start no default collection. Retire unused history and extra narrative producers. Explore maps existing reports, manual procedures, Analytics and grounded Ask without a new execution or evidence owner. Verify real interaction, failure states and actual source cuts. |
 | R5 financial/KPI publication | Qualify every named financial and KPI producer through existing native publication/admission/resolution, with source/context, unknown/rejected capture, historical selection, correction, replay and transaction recovery parity. Full active-lane closure requires zero inventoried legacy product writes and zero product-time bridge population. Delete producer-specific legacy sequencing; delete the named shared bridge/resolution bodies only after their historical consumers qualify. Retained historical compatibility earns no deletion credit; §11 physical retirement remains separate. |
 | R7 prepared analysis | Close the full IO inventory reachable from `render_report_body`, including Say/Do, news, P3, graded-sell, you-said and comment boot data. Move calls to preparation or explicitly bounded delivery composition; delete render-time IO/context/filter procedures. A full-workspace renderer test must forbid DB/file/model/cache access, not just test one section. Prove full argument, selection, availability and citations across supported views; qualify structured new generation before claiming round-trip retirement. |
 | R6 reported populations | On the exact WIX-21 and SYNTH-8 populations in `.tmp/reader-reuse-comparison.json`, direct consumer rereads become zero and full-publication verification becomes once per distinct complete verifier-input key inside the operation. Keys include publication, semantic clock inputs and snapshot; K/O partitions remain distinct. Require at least 20% fewer SELECTs on each reported population. |
@@ -747,3 +755,7 @@ were ambition 91/92/91 and effectiveness 87/88/84, all REVISE. This revision add
 their required plan changes; that is a root disposition, not a new panel verdict.
 Those historical judgments do not establish the current proxy acceptance gate or
 replace deterministic implementation checks.
+
+### October 26 SayDo scope clarification
+
+The owner keeps source-linked SayDo commitments, guidance-versus-actual comparisons and recorded verdicts. The separate generated pairwise narrative and row-selection filter are retired, including their exclusive cache history, runners and schedule declarations. Retained commitment and comparison ledgers remain. This source change does not stop the live Windows task; canonical retirement remains a release step.

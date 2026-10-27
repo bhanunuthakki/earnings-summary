@@ -1,281 +1,49 @@
-"""Tests for `process_ir_documents.py --regenerate-missing` (run_for_ticker).
-
-Regression coverage for the gap that leaves §6 Say-Do empty: transcripts are
-registered processed=True at ingest (index_manager.register_transcript, "legacy
-flow already processed") without a `_summary.txt` ever being written, so the
-default get_unprocessed_documents path skips them forever — no summary, no
-build_saydo_pairs input, no §6 cards.
-
-`--regenerate-missing` re-includes registered quarterly docs whose summary cache
-file is ABSENT (keyed on cache-file existence, not the processed flag), while
-the existing process_document cache-hit early-return skips docs that already
-have a summary (no re-billing).
-"""
+"""CLI validation for the registered transcript processor."""
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
-from typing import cast
 
 import pytest
 
-from execution import process_ir_documents as pir
-
-# --- typed test doubles (pyright-strict friendly; no bare untyped lambdas) ----
+from execution import process_ir_documents as processor
 
 
-def _noop(*_args: object, **_kwargs: object) -> None:
-    return None
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [],
+        ["--ticker", "NU", "--all"],
+        ["--ticker", "NU", "--regenerate-missing"],
+    ],
+)
+def test_cli_requires_one_supported_selection_mode(argv: list[str]) -> None:
+    with pytest.raises(SystemExit):
+        processor.main(argv)
 
 
-def _empty_anchor(*_args: object, **_kwargs: object) -> str:
-    return ""
-
-
-def _fixed_transcript_text(*_args: object, **_kwargs: object) -> str:
-    return "transcript body"
-
-
-def _upper(ticker: str) -> str:
-    return ticker.upper()
-
-
-class _Patched:
-    """What the `patched` fixture exposes: the isolated cache dir + a recorder
-    of every transcript body handed to the (faked) summary function."""
-
-    def __init__(self, cache_dir: Path, llm_calls: list[str]) -> None:
-        self.cache_dir = cache_dir
-        self.llm_calls = llm_calls
-
-
-@pytest.fixture
-def patched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Patched:
-    """Use an explicit cache root and stub the LLM call, anchor IO, rate-limit sleep,
-    index writes, and ticker resolution so run_for_ticker is hermetic."""
-    cache = tmp_path / ".tmp"
-    cache.mkdir()
-    llm_calls: list[str] = []
-
-    def fake_summary(text: str, anchor_block: str = "") -> str:
-        llm_calls.append(text)
-        return "SUMMARY: " + text[:20]
-
-    monkeypatch.setattr(pir, "resolve_ticker", _upper)
-    monkeypatch.setattr(pir.time, "sleep", _noop)
-    monkeypatch.setattr(pir, "compose_anchor_block", _empty_anchor)
-    monkeypatch.setattr(pir, "load_thesis_anchor", _empty_anchor)
-    monkeypatch.setattr(pir, "load_bear_anchor", _empty_anchor)
-    monkeypatch.setattr(pir, "load_ir_anchor", _empty_anchor)
-    monkeypatch.setattr(pir, "_mark_processed", _noop)
-    monkeypatch.setattr(pir, "extract_text", _fixed_transcript_text)
-    monkeypatch.setitem(
-        cast("dict[str, object]", pir.DOC_TYPE_CONFIG["transcript"]), "llm_fn", fake_summary
-    )
-    return _Patched(cache, llm_calls)
-
-
-def _transcript_doc(
-    tmp_path: Path, ticker: str = "UBER", year: int = 2026, quarter: str = "Q1"
-) -> dict[str, object]:
-    """A registered transcript doc dict (processed=True) with a real local_path."""
-    f = tmp_path / f"{ticker}_{quarter}_{year}.txt"
-    f.write_text("raw transcript", encoding="utf-8")
-    return {
-        "ticker": ticker,
-        "year": year,
-        "quarter": quarter,
-        "doc_type": "transcript",
-        "local_path": str(f),
-        "processed": True,
-    }
-
-
-def test_regenerate_missing_summarizes_processed_doc_without_cache(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, patched: _Patched
+@pytest.mark.parametrize(
+    ("ticker", "all_tickers", "year", "quarter", "message"),
+    [
+        ("NU", False, 2027, None, "--year and --quarter must be supplied together"),
+        ("NU", False, None, 2, "--year and --quarter must be supplied together"),
+        ("NU", False, 1800, 2, "--year must be between 1900 and 2200"),
+        ("NU", False, 2027, 5, "--quarter must be 1, 2, 3, or 4"),
+    ],
+)
+def test_selector_rejects_unproved_or_invalid_coordinates_before_database_access(
+    tmp_path: Path,
+    ticker: str | None,
+    all_tickers: bool,
+    year: int | None,
+    quarter: int | None,
+    message: str,
 ) -> None:
-    doc = _transcript_doc(tmp_path)
-
-    def fake_all(_ticker: str, **_kwargs: object) -> list[dict[str, object]]:
-        return [doc]
-
-    def fake_unprocessed(_ticker: str | None = None, **_kwargs: object) -> list[dict[str, object]]:
-        return []
-
-    monkeypatch.setattr(pir.index_manager, "get_documents_for_ticker", fake_all)
-    # Prove the default path would have skipped it (processed=True).
-    monkeypatch.setattr(pir.index_manager, "get_unprocessed_documents", fake_unprocessed)
-
-    pir.run_for_ticker("UBER", regenerate_missing=True, repo_root=tmp_path)
-
-    out = patched.cache_dir / "UBER_Q1_2026_summary.txt"
-    assert out.exists(), "a processed transcript with no summary cache should be regenerated"
-    assert out.read_text(encoding="utf-8").startswith("SUMMARY:")
-    assert patched.llm_calls == ["transcript body"]
-
-
-def test_regenerate_missing_skips_doc_with_existing_cache(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, patched: _Patched
-) -> None:
-    doc = _transcript_doc(tmp_path)
-    assert pir.process_document(doc, repo_root=tmp_path)
-    patched.llm_calls.clear()
-
-    def fake_all(_ticker: str, **_kwargs: object) -> list[dict[str, object]]:
-        return [doc]
-
-    monkeypatch.setattr(pir.index_manager, "get_documents_for_ticker", fake_all)
-
-    pir.run_for_ticker("UBER", regenerate_missing=True, repo_root=tmp_path)
-
-    assert patched.llm_calls == [], "a doc that already has a summary must not be re-summarized"
-    assert (
-        (patched.cache_dir / "UBER_Q1_2026_summary.txt")
-        .read_text(encoding="utf-8")
-        .startswith("SUMMARY:")
-    )
-
-
-def test_default_path_skips_processed_doc(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, patched: _Patched
-) -> None:
-    """Without --regenerate-missing, a processed doc is never summarized — the
-    bug this whole change exists to fix, pinned so a future refactor can't
-    silently reintroduce it."""
-
-    def fake_unprocessed(_ticker: str | None = None, **_kwargs: object) -> list[dict[str, object]]:
-        return []
-
-    monkeypatch.setattr(pir.index_manager, "get_unprocessed_documents", fake_unprocessed)
-
-    pir.run_for_ticker("UBER", regenerate_missing=False, repo_root=tmp_path)
-
-    assert patched.llm_calls == []
-    assert not (patched.cache_dir / "UBER_Q1_2026_summary.txt").exists()
-
-
-def test_regenerate_missing_excludes_events(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, patched: _Patched
-) -> None:
-    """The regenerate path is scoped to quarterly docs (the Say-Do inputs); an
-    `event` doc (separate keyspace, no quarter) must not be pulled in."""
-    transcript = _transcript_doc(tmp_path)
-    event: dict[str, object] = {
-        "ticker": "UBER",
-        "doc_type": "event",
-        "event_date": "2026-05-01",
-        "local_path": str(tmp_path / "evt.txt"),
-        "processed": True,
-    }
-
-    def fake_all(_ticker: str, **_kwargs: object) -> list[dict[str, object]]:
-        return [transcript, event]
-
-    monkeypatch.setattr(pir.index_manager, "get_documents_for_ticker", fake_all)
-
-    pir.run_for_ticker("UBER", regenerate_missing=True, repo_root=tmp_path)
-
-    # Only the transcript was summarized; the event was filtered out (no KeyError
-    # on its missing quarter/year).
-    assert patched.llm_calls == ["transcript body"]
-    assert (patched.cache_dir / "UBER_Q1_2026_summary.txt").exists()
-
-
-def test_extract_text_rejects_unsupported_binary_inputs(tmp_path: Path) -> None:
-    for suffix in (".xlsx", ".zip"):
-        source = tmp_path / ("source" + suffix)
-        source.write_bytes(b"unsupported binary")
-        with pytest.raises(ValueError, match="unsupported_source_text_format"):
-            pir.extract_text(str(source))
-
-
-@pytest.mark.parametrize("doc_type", ["press_release", "transcript"])
-def test_ir_summary_cache_tracks_source_content(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, patched: _Patched, doc_type: str
-) -> None:
-    doc = _transcript_doc(tmp_path)
-    doc["doc_type"] = doc_type
-    monkeypatch.setitem(
-        pir.DOC_TYPE_CONFIG["press_release"], "llm_fn", pir.DOC_TYPE_CONFIG["transcript"]["llm_fn"]
-    )
-    cache = pir.cache_path_for(doc, repo_root=tmp_path)
-    cache.write_text("unverified legacy summary")
-    assert pir.process_document(doc, repo_root=tmp_path)
-    assert len(patched.llm_calls) == 1
-    assert pir.process_document(doc, repo_root=tmp_path)
-    assert len(patched.llm_calls) == 1
-    Path(str(doc["local_path"])).write_text("revised source")
-    assert pir.process_document(doc, repo_root=tmp_path)
-    assert len(patched.llm_calls) == 2
-
-
-@pytest.mark.parametrize("suffix", [".html", ".htm"])
-def test_html_text_excludes_noncontent(tmp_path: Path, suffix: str) -> None:
-    source = tmp_path / ("release" + suffix)
-    source.write_text(
-        "<html><style>style noise</style><script>script noise</script>"
-        "<body><h1>Quarter results</h1><p>Revenue $100 million</p>"
-        "</body></html>"
-    )
-    text = pir.extract_text(str(source))
-    assert "Quarter results" in text
-    assert "Revenue $100 million" in text
-    assert "noise" not in text
-
-
-@pytest.mark.parametrize("succeeds", [False, True])
-def test_run_status_tracks_document_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, succeeds: bool
-) -> None:
-    doc = _transcript_doc(tmp_path)
-
-    def documents(*args: object, **kwargs: object) -> list[dict[str, object]]:
-        return [doc]
-
-    def process(*args: object, **kwargs: object) -> bool:
-        return succeeds
-
-    monkeypatch.setattr(pir.index_manager, "get_unprocessed_documents", documents)
-    monkeypatch.setattr(pir, "process_document", process)
-    assert pir.run_for_ticker("UBER", repo_root=tmp_path) == int(not succeeds)
-
-
-def test_no_documents_is_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def empty(*args: object, **kwargs: object) -> list[dict[str, object]]:
-        return []
-
-    monkeypatch.setattr(pir.index_manager, "get_unprocessed_documents", empty)
-    assert pir.run_for_ticker("UBER", repo_root=tmp_path) == 0
-
-
-def test_main_all_retains_failure_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def documents(*args: object, **kwargs: object) -> list[dict[str, object]]:
-        return [{"ticker": "AAA"}, {"ticker": "ZZZ"}]
-
-    def run(ticker: str, *args: object, **kwargs: object) -> int:
-        return int(ticker == "AAA")
-
-    monkeypatch.setattr(sys, "argv", ["process_ir_documents.py", "--all"])
-    monkeypatch.setattr(pir.index_manager, "get_unprocessed_documents", documents)
-    monkeypatch.setattr(pir, "run_for_ticker", run)
-    database = tmp_path / "explicit.sqlite"
-    database.touch()
-    monkeypatch.setattr(pir, "load_project_env", _noop)
-    assert pir.main(["--all", "--repo-root", str(tmp_path), "--db", str(database)]) == 1
-
-
-def test_projection_identity_change_invalidates_summary_cache(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, patched: _Patched
-) -> None:
-    doc = _transcript_doc(tmp_path)
-    assert pir.process_document(doc, repo_root=tmp_path)
-    assert pir.process_document(doc, repo_root=tmp_path)
-    assert len(patched.llm_calls) == 1
-
-    def changed_identity(_source_ref: str) -> str:
-        return "new-projection-identity"
-
-    monkeypatch.setattr(pir, "source_text_projection_identity", changed_identity)
-    assert pir.process_document(doc, repo_root=tmp_path)
-    assert len(patched.llm_calls) == 2
+    with pytest.raises(ValueError, match=message):
+        processor.select_registered_transcripts(
+            tmp_path / "no-database.sqlite",
+            ticker=ticker,
+            all_tickers=all_tickers,
+            fiscal_year=year,
+            fiscal_quarter=quarter,
+        )

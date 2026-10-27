@@ -26,7 +26,6 @@ from operations.models import (
     ServiceRow,
     ServiceState,
 )
-from operations.readme_governance import ReadmeGovernanceStatus
 from pipeline.operations_styles import OPERATIONS_STYLE
 from pipeline.provenance_panel import PROVENANCE_SECTIONS
 from runtime.portfolio_tracker import health_is_healthy
@@ -44,7 +43,7 @@ class SurfaceDisposition(_ViewModel):
 
     field: str
     destination: Literal[
-        "overview", "attention", "jobs", "runtime_recovery", "governance", "linked_view", "internal"
+        "overview", "attention", "jobs", "runtime_recovery", "linked_view", "internal"
     ]
     targets: tuple[str, ...] = ()
     rationale: str
@@ -197,9 +196,8 @@ OPERATIONS_SNAPSHOT_SURFACE_DISPOSITIONS = (
     ),
     SurfaceDisposition(
         field="database_runs",
-        destination="linked_view",
-        targets=("provenance:cron_health",),
-        rationale="Data provenance and Cron Health own detailed ingestion-run history.",
+        destination="jobs",
+        rationale="Jobs includes the existing seven-day ingestion history and operational alarms.",
     ),
     SurfaceDisposition(
         field="source_calls",
@@ -257,11 +255,6 @@ OPERATIONS_AUXILIARY_SURFACE_DISPOSITIONS = (
         destination="runtime_recovery",
         rationale="Portfolio Tracker runtime evidence is rendered as a linked runtime row without authorizing activation.",
     ),
-    SurfaceDisposition(
-        field="readme_status",
-        destination="governance",
-        rationale="README stewardship status and its guarded preview/apply actions are visible.",
-    ),
 )
 
 
@@ -313,7 +306,6 @@ class OperationsPanelView(_ViewModel):
     runtime_summary_tone: Tone
     tasks: tuple[TaskView, ...]
     runtime_rows: tuple[RuntimeRowView, ...]
-    readme_status: ReadmeGovernanceStatus | None = None
     portfolio_tracker_runtime: EvidenceView | None = None
     attention: AttentionPanelView | None = None
     host_runtime_state: State | None = None
@@ -672,94 +664,44 @@ def build_operations_panel_view(
     registry: OperationsRegistry,
     snapshot: OperationsSnapshot,
     *,
-    readme_status: ReadmeGovernanceStatus | None = None,
     attention: AttentionPanelView | None = None,
     host_runtime: tuple[State, HostReceipt | None] | None = None,
 ) -> OperationsPanelView:
     """Join declared task ownership to bounded observations without doing I/O."""
 
     scheduler_rows = {row.task_name: row for row in snapshot.scheduler.values}
-    service_rows = {row.name: row for row in snapshot.services.values}
     receipts = {row.job: row for row in snapshot.job_receipts}
-    capture_service = next(
-        (service for service in registry.services if service.role == "capture_poller"), None
-    )
     tasks: list[TaskView] = []
     for task in registry.scheduled_tasks:
         steps = tuple(step for step in registry.job_steps if step.wrapper == task.wrapper)
         service_runtime_state: ServiceState | None
         service_runtime_tone: Tone | None
         scheduler_row = scheduler_rows.get(task.task_name)
-        if task.service_owned:
-            declared_owner = "Managed service"
-            runtime_owner = (
-                f"Managed service · {capture_service.name}"
-                if capture_service is not None
-                else "Managed service · unavailable"
-            )
-            scheduler_evidence_current = snapshot.scheduler.state == "current"
-            observed_scheduler_state = (
-                scheduler_row.state if scheduler_row is not None else "Missing"
-            )
-            if not scheduler_evidence_current:
-                scheduler_state = "Unavailable"
-            elif observed_scheduler_state == "Missing":
-                scheduler_state = "Absent (service-owned)"
-            else:
-                scheduler_state = f"{observed_scheduler_state} (forbidden for service-owned task)"
-            service_row = service_rows.get(capture_service.name) if capture_service else None
-            service_observation_current = snapshot.services.state == "current"
-            service_runtime_state = (
-                service_row.state
-                if service_observation_current and service_row is not None
-                else None
-            )
-            service_runtime_tone = (
-                _service_tone(service_runtime_state) if service_runtime_state is not None else None
-            )
-            runtime_attention = (
-                scheduler_evidence_current
-                and scheduler_row is not None
-                and scheduler_row.expectation_match is False
-            ) or (
-                service_observation_current
-                and (service_runtime_state is None or service_runtime_state != "Running")
-            )
-            runtime = (
-                _service_evidence(snapshot.services, service_row)
-                if scheduler_evidence_current and not service_observation_current
-                else _evidence(snapshot.services)
-                if scheduler_evidence_current
-                else _scheduler_task_evidence(snapshot.scheduler)
+        declared_owner = "Windows Task Scheduler"
+        runtime_owner = f"Scheduled task · {task.task_name}"
+        scheduler_evidence_current = snapshot.scheduler.state == "current"
+        observed_scheduler_state = scheduler_row.state if scheduler_row is not None else "Missing"
+        if not scheduler_evidence_current:
+            scheduler_state = "Unavailable"
+        elif (
+            observed_scheduler_state == "Disabled"
+            and task.scheduler_expectation == "required_disabled"
+        ):
+            scheduler_state = "Disabled (expected)"
+        elif scheduler_row is not None and scheduler_row.expectation_match is False:
+            scheduler_state = (
+                f"{observed_scheduler_state} (forbidden for {task.scheduler_expectation})"
             )
         else:
-            declared_owner = "Windows Task Scheduler"
-            runtime_owner = f"Scheduled task · {task.task_name}"
-            scheduler_evidence_current = snapshot.scheduler.state == "current"
-            observed_scheduler_state = (
-                scheduler_row.state if scheduler_row is not None else "Missing"
-            )
-            if not scheduler_evidence_current:
-                scheduler_state = "Unavailable"
-            elif (
-                observed_scheduler_state == "Disabled"
-                and task.scheduler_expectation == "required_disabled"
-            ):
-                scheduler_state = "Disabled (expected)"
-            elif scheduler_row is not None and scheduler_row.expectation_match is False:
-                scheduler_state = (
-                    f"{observed_scheduler_state} (forbidden for {task.scheduler_expectation})"
-                )
-            else:
-                scheduler_state = observed_scheduler_state
-            runtime_attention = scheduler_evidence_current and scheduler_state not in {
-                "Ready",
-                "Running",
-                "Disabled (expected)",
-            }
-            service_runtime_state = None
-            service_runtime_tone = None
-            runtime = _scheduler_task_evidence(snapshot.scheduler)
+            scheduler_state = observed_scheduler_state
+        runtime_attention = scheduler_evidence_current and scheduler_state not in {
+            "Ready",
+            "Running",
+            "Disabled (expected)",
+        }
+        service_runtime_state = None
+        service_runtime_tone = None
+        runtime = _scheduler_task_evidence(snapshot.scheduler)
         step_views = tuple(
             StepView(
                 ordinal=step.ordinal,
@@ -784,11 +726,10 @@ def build_operations_panel_view(
             )
             for observation in (receipts[step.job] for step in steps)
         )
-        stopped_service = service_runtime_state == "Stopped"
         task_attention = runtime_attention or receipt_attention
         if not task_attention:
             attention_rank = 4
-        elif bad_terminal or scheduler_state in {"Disabled", "Unknown"} or stopped_service:
+        elif bad_terminal or scheduler_state in {"Disabled", "Unknown"}:
             attention_rank = 0
         elif any("invalid" in state for state in observation_states):
             attention_rank = 1
@@ -808,7 +749,7 @@ def build_operations_panel_view(
                 task_name=task.task_name,
                 wrapper=task.wrapper,
                 schedule_label=_schedule_label(task),
-                service_owned=task.service_owned,
+                service_owned=False,
                 declared_owner=declared_owner,
                 runtime_owner=runtime_owner,
                 scheduler_state=scheduler_state,
@@ -927,8 +868,6 @@ def build_operations_panel_view(
         )
     attention_count += snapshot.scheduler.state == "invalid"
     attention_count += snapshot.services.state == "invalid"
-    if readme_status is None or readme_status.state in {"rejected", "invalid"}:
-        attention_count += 1
     attention_count += snapshot.data_coverage.attention_count
     gap_states = {"missing", "stale", "unavailable"}
     evidence_gap_keys: set[tuple[str, str]] = set()
@@ -950,8 +889,6 @@ def build_operations_panel_view(
         evidence_gap_keys.add(("runtime", "portfolio_tracker"))
     # These two explicit, intentionally unavailable runtime rows are separately visible.
     evidence_gap_keys.update({("runtime", "backups"), ("runtime", "write_locks")})
-    if readme_status is not None and readme_status.state in {"not_run", "stale"}:
-        evidence_gap_keys.add(("governance", "readme"))
     evidence_gap_count = len(evidence_gap_keys) + snapshot.data_coverage.unknown_freshness_count
     return OperationsPanelView(
         observed_label=_clock(snapshot.observed_at, prefix="Observed"),
@@ -968,7 +905,6 @@ def build_operations_panel_view(
             sorted(tasks, key=lambda task: (task.attention_rank, task.task_name.casefold()))
         ),
         runtime_rows=runtime_rows,
-        readme_status=readme_status,
         portfolio_tracker_runtime=portfolio_tracker_runtime,
         attention=attention,
         host_runtime_state=host_runtime[0] if host_runtime else None,
@@ -989,7 +925,7 @@ def _state_pill(state: str, tone: Tone) -> str:
 def _evidence_html(evidence: EvidenceView) -> str:
     return (
         '<div class="k-card-meta">'
-        f"{_html(evidence.label)} · {_html(evidence.observed_label)} · "
+        f"{_html(evidence.label)} · {_html(evidence.state)} · {_html(evidence.observed_label)} · "
         f"{_html(evidence.recorded_label)}</div>"
         f'<div class="k-card-meta">{_html(evidence.detail)}</div>'
     )
@@ -1112,7 +1048,7 @@ def _overview(view: OperationsPanelView) -> str:
         "</div>"
         '<div class="k-well k-well-warn"><div class="k-card-row-title">Attention is evidence-based</div>'
         f"<p>{_html(view.data_coverage_summary)}</p>"
-        f"<p>{view.attention_count} operational or governance observation(s) need attention. {view.evidence_gap_count} stale or missing evidence gap(s) remain visible as informational; current invalid or failed evidence requires action.</p></div>"
+        f"<p>{view.attention_count} operational observation(s) need attention. {view.evidence_gap_count} stale or missing evidence gap(s) remain visible as informational; current invalid or failed evidence requires action.</p></div>"
     )
 
 
@@ -1195,47 +1131,6 @@ def _runtime(view: OperationsPanelView) -> str:
     )
 
 
-def _governance(view: OperationsPanelView) -> str:
-    status = view.readme_status
-    labels = {
-        "not_run": "Not run",
-        "approved_preview": "Approved preview",
-        "applied": "Current",
-        "rejected": "Needs revision",
-        "stale": "Stale",
-        "invalid": "Invalid",
-    }
-    state = status.state if status is not None else "invalid"
-    tone = status.tone if status is not None else "bad"
-    state_label = labels[state]
-    run_id = status.run_id if status is not None and status.run_id is not None else ""
-    current_sha = (
-        status.current_sha256[:12]
-        if status is not None and status.current_sha256 is not None
-        else "Unavailable"
-    )
-    run_label = run_id[:12] if run_id else "No judged run"
-    apply_disabled = "" if status is not None and status.can_apply else " disabled"
-    return (
-        '<article class="k-well" data-readme-governance="true">'
-        '<div class="k-toolbar"><div>'
-        '<div class="k-card-row-title">README stewardship</div>'
-        '<div class="k-card-meta">Project evidence, independent judgment, and guarded atomic apply</div>'
-        f'</div><span class="k-pill k-pill-{tone}" data-readme-state>{_html(state_label)}</span></div>'
-        "<p>Preview first. The generator collects bounded repository evidence and every candidate is independently judged. Apply accepts only that exact approved run and refuses a stale README.</p>"
-        '<div class="ops-readme-facts">'
-        f'<div><span class="k-label">README SHA</span><div data-readme-sha>{_html(current_sha)}</div></div>'
-        f'<div><span class="k-label">Latest judged run</span><div data-readme-run>{_html(run_label)}</div></div>'
-        "</div>"
-        '<div class="ops-governance-actions">'
-        '<button type="button" class="k-btn k-btn-primary" data-readme-action="preview">Preview &amp; judge</button>'
-        f'<button type="button" class="k-btn k-btn-quiet" data-readme-action="apply" data-run-id="{_html(run_id)}"{apply_disabled}>Apply approved candidate</button>'
-        '<span class="k-card-meta" role="status" aria-live="polite" data-readme-action-status></span>'
-        '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-readme-status-retry hidden>Retry status</button>'
-        "</div></article>"
-    )
-
-
 def render_host_runtime(state: State, receipt: HostReceipt | None) -> str:
     """Linked read-only projection; every value is typed and HTML escaped."""
     rows = ""
@@ -1266,7 +1161,7 @@ def render_host_runtime(state: State, receipt: HostReceipt | None) -> str:
     )
 
 
-def render_operations_panel(view: OperationsPanelView) -> str:
+def render_operations_panel(view: OperationsPanelView, *, diagnostics_html: str = "") -> str:
     """Render only the supplied projection; no database, filesystem, or network access."""
 
     related_views = "".join(
@@ -1296,15 +1191,13 @@ def render_operations_panel(view: OperationsPanelView) -> str:
     <button type="button" class="k-chip k-chip-btn k-chip-tab operations-tab" id="operations-tab-attention" role="tab" aria-selected="false" aria-controls="operations-pane-attention" tabindex="-1">Attention</button>
     <button type="button" class="k-chip k-chip-btn k-chip-tab operations-tab" id="operations-tab-jobs" role="tab" aria-selected="false" aria-controls="operations-pane-jobs" tabindex="-1">Jobs</button>
     <button type="button" class="k-chip k-chip-btn k-chip-tab operations-tab" id="operations-tab-runtime" role="tab" aria-selected="false" aria-controls="operations-pane-runtime" tabindex="-1">Runtime &amp; Recovery</button>
-    <button type="button" class="k-chip k-chip-btn k-chip-tab operations-tab" id="operations-tab-governance" role="tab" aria-selected="false" aria-controls="operations-pane-governance" tabindex="-1">Governance</button>
   </div>
   <div class="k-well" role="status" aria-live="polite" data-operations-refresh-status hidden></div>
   <button type="button" class="k-btn k-btn-quiet k-btn-sm" data-operations-refresh-retry hidden>Retry refresh</button>
   <div id="operations-pane-overview" role="tabpanel" aria-labelledby="operations-tab-overview">{_overview(view)}</div>
   <div id="operations-pane-attention" role="tabpanel" aria-labelledby="operations-tab-attention" hidden>{_attention(view)}</div>
-  <div id="operations-pane-jobs" role="tabpanel" aria-labelledby="operations-tab-jobs" hidden>{_jobs(view)}</div>
+  <div id="operations-pane-jobs" role="tabpanel" aria-labelledby="operations-tab-jobs" hidden>{_jobs(view)}{diagnostics_html}</div>
   <div id="operations-pane-runtime" role="tabpanel" aria-labelledby="operations-tab-runtime" hidden>{_runtime(view)}</div>
-  <div id="operations-pane-governance" role="tabpanel" aria-labelledby="operations-tab-governance" hidden>{_governance(view)}</div>
 </section>
 <script>
 (() => {{
@@ -1476,100 +1369,6 @@ def render_operations_panel(view: OperationsPanelView) -> str:
     }}));
   }});
 
-  const readmeButtons = Array.from(root.querySelectorAll('[data-readme-action]'));
-  const readmeStatus = root.querySelector('[data-readme-action-status]');
-  const applyReadme = root.querySelector('[data-readme-action="apply"]');
-  let readmeCanApply = Boolean(applyReadme && !applyReadme.disabled);
-  const setReadmeButtons = (busy) => readmeButtons.forEach((candidate) => {{
-    candidate.disabled = busy || (candidate.dataset.readmeAction === 'apply' && !readmeCanApply);
-  }});
-  const readmeRetry = root.querySelector('[data-readme-status-retry]');
-  let readmeGeneration = 0;
-  let readmeController = null;
-  const refreshReadmeStatus = () => {{
-    const request = ++readmeGeneration;
-    if (readmeController) readmeController.abort();
-    readmeController = new AbortController();
-    return window.uiFetch('/api/readme-governance/status', {{signal: readmeController.signal}})
-    .then((response) => response.json().then((body) => ({{ok: response.ok, body}})))
-    .then((result) => {{
-      if (request !== readmeGeneration || !root.isConnected) return;
-      if (!result.ok) throw new Error(result.body.error || 'Status refresh failed');
-      const body = result.body;
-      const labels = {{
-        not_run: 'Not run', approved_preview: 'Approved preview', applied: 'Current',
-        rejected: 'Needs revision', stale: 'Stale', invalid: 'Invalid'
-      }};
-      const pill = root.querySelector('[data-readme-state]');
-      if (pill) {{
-        pill.textContent = labels[body.state] || 'Invalid';
-        pill.classList.remove('k-pill-ok', 'k-pill-warn', 'k-pill-bad');
-        if (body.tone === 'ok') pill.classList.add('k-pill-ok');
-        else if (body.tone === 'warn') pill.classList.add('k-pill-warn');
-        else pill.classList.add('k-pill-bad');
-      }}
-      const sha = root.querySelector('[data-readme-sha]');
-      if (sha) sha.textContent = body.current_sha256 ? body.current_sha256.slice(0, 12) : 'Unavailable';
-      const run = root.querySelector('[data-readme-run]');
-      if (run) run.textContent = body.run_id ? body.run_id.slice(0, 12) : 'No judged run';
-      if (applyReadme) {{
-        applyReadme.dataset.runId = body.run_id || '';
-        readmeCanApply = Boolean(body.can_apply);
-      }}
-      setReadmeButtons(false);
-      readmeRetry.hidden = true;
-    }}).catch((error) => {{
-      if (request !== readmeGeneration || !root.isConnected) return;
-      readmeCanApply = false; setReadmeButtons(false);
-      readmeRetry.hidden = false;
-      if (readmeStatus) readmeStatus.textContent = 'README status could not refresh. Apply is unavailable until status is verified.';
-      throw error;
-    }});
-  }};
-  readmeRetry.addEventListener('click', () => refreshReadmeStatus().catch(() => {{}}));
-  const runReadmeAction = (button) => {{
-    const action = button.dataset.readmeAction || '';
-    if (action === 'apply' && !window.confirm('Apply this exact judged README candidate?')) return;
-    const payload = {{action}};
-    if (action === 'apply') payload.run_id = button.dataset.runId || '';
-    if (action === 'apply') {{
-      readmeCanApply = false;
-      button.dataset.runId = '';
-    }}
-    setReadmeButtons(true);
-    if (readmeStatus) readmeStatus.textContent = action === 'preview' ? 'Generating and judging…' : 'Applying approved candidate…';
-    fetch('/actions/readme-update', {{
-      method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(payload)
-    }}).then((response) => response.json().then((body) => ({{ok: response.ok, body}})))
-      .then((result) => {{
-        if (!result.ok) throw new Error(result.body.error || 'README action failed');
-        const stream = new EventSource(result.body.stream_url);
-        stream.onmessage = (event) => {{
-          let message;
-          try {{ message = JSON.parse(event.data); }} catch (_) {{ return; }}
-          if (message.event !== 'done') return;
-          stream.close();
-          refreshReadmeStatus().then(() => {{
-            if (readmeStatus) readmeStatus.textContent = message.exit_code === 0 ? 'Complete.' : 'Stopped without applying. Review the judged status.';
-          }}).catch((error) => {{
-            readmeCanApply = false;
-            setReadmeButtons(false);
-            if (readmeStatus) readmeStatus.textContent = error.message;
-          }});
-        }};
-        stream.onerror = () => {{
-          stream.close();
-          readmeCanApply = false;
-          setReadmeButtons(false);
-          if (readmeStatus) readmeStatus.textContent = 'Status stream interrupted.';
-        }};
-      }}).catch((error) => {{
-        readmeCanApply = false;
-        setReadmeButtons(false);
-        if (readmeStatus) readmeStatus.textContent = error.message;
-      }});
-  }};
-  readmeButtons.forEach((button) => button.addEventListener('click', () => runReadmeAction(button)));
 }})();
 </script>
     """

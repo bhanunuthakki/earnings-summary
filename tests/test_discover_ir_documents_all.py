@@ -779,8 +779,9 @@ def test_summaries_flag_runs_process_ir_documents(
     batch.main(["--repo-root", str(tmp_path), "--db", str(db), "--summaries"])
     command = next(c for c in fake.calls if _script_of(c) == "process_ir_documents.py")
     assert command[command.index("--db") + 1] == str(db)
-    assert command[command.index("--repo-root") + 1] == str(tmp_path)
-    assert "--regenerate-missing" in command
+    assert command[command.index("--state-root") + 1] == str(tmp_path)
+    assert command[command.index("--repo-root") + 1] == str(batch.PROJECT_ROOT)
+    assert "--regenerate-missing" not in command
 
 
 def test_existing_uncached_narrative_is_processed_without_new_downloads(

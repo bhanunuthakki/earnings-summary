@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
+import comments_server
 import pytest
 from alembic.config import Config
 from flask.testing import FlaskClient
@@ -27,9 +27,6 @@ from sqlite_runtime import register_sqlite_integrity_functions
 from viewspec.spec import ViewSpec
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import comments_server  # noqa: E402
 
 _DDL = """
 CREATE TABLE documents (
@@ -211,11 +208,9 @@ def test_compile_empty_query(db: Path) -> None:
 
 
 def test_query_ticker_resolution(db: Path) -> None:
-    tracked = nlc._tracked_tickers(db)  # pyright: ignore[reportPrivateUsage]
+    tracked = getattr(nlc, "_tracked_tickers")(db)
     assert tracked == {"TST"}
-    named = nlc._tickers_in_query(  # pyright: ignore[reportPrivateUsage]
-        "compare TST against SPY and apple", tracked
-    )
+    named = getattr(nlc, "_tickers_in_query")("compare TST against SPY and apple", tracked)
     assert named == ["TST"]  # only tracked symbols resolve
 
 
@@ -345,6 +340,8 @@ def test_compile_route_requires_query(client: FlaskClient) -> None:
 
 def test_panel_carries_nl_box(db: Path) -> None:
     html_out = render_explore_panel(db)
-    assert 'id="ask-q"' in html_out
+    assert 'id="vx-ask-copilot"' in html_out
     assert 'id="vx-workbench-q"' in html_out
     assert "/api/viewspec/compile" in html_out
+    assert 'id="ask-q"' not in html_out
+    assert "ask.run" not in html_out

@@ -4,6 +4,26 @@
 the embedded contract below. Runtime-only directories may be absent in a clean
 checkout and are created only by their named producer.
 
+## Owner cleanup policy
+
+The owner confirmed on October 25, 2026 that approval of a cleanup includes the
+in-scope feature's existing inputs, stored data, history, pending state and unused
+libraries. Do not retain compatibility code, old outputs or inputs solely because
+they existed before the cleanup. Identify retained categories and active
+dependencies so the owner can name exceptions. Future cleanup requests use this
+default unless the owner explicitly requests retention.
+
+Current theses, owner process settings and the decision time series are the
+provisional retained product scope. Most other inputs are cleanup candidates.
+If removal affects an active fact, report or calculation, identify that dependency
+and remove or revise the dependent product in the same scoped change. Do not leave
+broken references or present missing evidence as verified. A retirement must stop
+its producer as well as remove accumulated state.
+
+This policy does not expand a cleanup to unrelated user work or credentials.
+Canonical-host, current-version deployment and active-writer boundaries still
+apply. Source retirement and actual canonical data deletion are separate states.
+
 ## Machine contract
 
 <!-- folder-contract:start -->
@@ -83,6 +103,17 @@ tool/runtime directories such as `.git`, `.venv`, and caches.
 | `design-system/`, `.design-sync/` | Design-system source and generated-sync metadata; `.design-sync/` is a registered tooling root. |
 | `scratch/` | Registered compatibility exception for still-referenced one-offs and historical plans. New durable product logic is prohibited here. |
 | `outputs/` | Registered artifact-tool output. It is not the application `output/` destination and must not be read by product code. |
+
+Transcript audit qualification evidence lives only under the configured state
+root at `data/model_evals/transcript_summary_qualification/`. The evaluation
+harness owns stable proof reads; the original transcript store retains source
+bytes. Public `evals/` files contain the frozen index, hashes and qualification
+metadata. Native gold prose and raw audit exchanges remain on the canonical host.
+Keep the active route-set bundle and one candidate while qualification or release
+is open. Retire superseded candidate payload through the existing cleanup owner
+once necessary failure or recovery evidence is retained. The reader never creates
+this directory, a database, or a source copy. Hermetic tests use the same subtree
+inside an explicit disposable state root.
 
 The design artifact inventory in `docs/architecture/design_artifact_lifecycle.md`
 distinguishes the active runtime master, tested references and retained alternatives.

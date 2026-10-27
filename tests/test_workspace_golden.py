@@ -12,10 +12,8 @@ Mechanics
 - Two deterministic fixture specs: a rich PORTFOLIO held spec exercising
   every tab with data, and an EVALUATION-flavor spec (research-first group
   order, eval screen panels inside the Company tab, standalone Decisions
-  group). P3 panel rows are injected by patching
-  ``workspace_html.load_workspace_p3_panels`` — ``render()`` resolves that
-  name from its own module globals, and a seam-guard test below fails if
-  the injected content stops reaching the document.
+  group). P3 panel rows enter the prepared ``ReportSpec.workspace`` contract.
+  A seam-guard test fails if the supplied content stops reaching the document.
 - The document is decomposed into named parts: ``styles`` (the <style>
   blocks), ``styles_sorted`` (same rules, whitespace-normalized and sorted —
   survives reordering/moving rules between modules while still catching
@@ -44,10 +42,11 @@ from datetime import UTC, date, datetime
 from itertools import islice
 from pathlib import Path
 from typing import Literal, TypedDict, cast
-from unittest import mock
 
 import pytest
 
+from llm.contracts import RecentDevelopmentsPayload
+from pipeline.you_said import render_you_said_strip_for_path
 from report.models import (
     AppendixSection,
     BearCaseSection,
@@ -69,7 +68,6 @@ from report.models import (
     GrowthMetrics,
     InsiderSignalRowModel,
     InvestmentSignalDetail,
-    IrDocsSection,
     KpiLedgerRow,
     KpiSeries,
     KpiSnapshotRow,
@@ -89,7 +87,6 @@ from report.models import (
     RecentDevelopmentsSection,
     ReportFlavor,
     ReportSpec,
-    SayDoCard,
     SayDoHistoricalMetric,
     SayDoSection,
     SectionStatus,
@@ -130,7 +127,7 @@ from report.sections.p3_data import (
     SayDoVerdictRow,
     StrategicTargetRow,
 )
-from report.sections.saydo import prepare_cards
+from report.workspace_models import WorkspacePrepared
 from user_state.notes import AnalystNoteRow
 
 GOLDEN_DIR = Path(__file__).resolve().parent / "golden" / "workspace"
@@ -676,39 +673,10 @@ def _qa_roster() -> QARosterSection:
 
 
 def _saydo() -> SayDoSection:
-    section = SayDoSection(
+    return SayDoSection(
         status=SectionStatus.OK,
-        cards=[
-            SayDoCard(
-                current_quarter="Q1",
-                current_year=2026,
-                prior_quarter="Q4",
-                prior_year=2025,
-                saydo_md=(
-                    "## Print vs guide\n\n"
-                    "| Metric | Guide | Actual | Verdict |\n"
-                    "| --- | --- | --- | --- |\n"
-                    "| Revenue | $1.76-1.79B | $1.81B | beat |\n"
-                    "| Operating margin | ~24% | 24.8% | beat |\n"
-                    "| FY26 revenue | $7.4B | raised to $7.5B | in-line |\n\n"
-                    "Management delivered above the top end of its own range.\n\n"
-                    "Performance Rating: EXCEEDED\n\nThesis View: Bullish\n\n"
-                    "Attribution: Guidance conservatism plus genuine demand pull-forward."
-                ),
-                rating="EXCEEDED",
-                thesis_view="Bullish",
-                attribution="Guidance conservatism plus genuine demand pull-forward.",
-            ),
-            SayDoCard(
-                current_quarter="Q4",
-                current_year=2025,
-                prior_quarter="Q3",
-                prior_year=2025,
-                saydo_md="Narrative-only quarter: commitments tracked qualitatively.",
-                rating="MET",
-                thesis_view="Neutral",
-            ),
-        ],
+        verdicts=_saydo_verdicts(),
+        verdicts_availability="present",
         historical_metrics=[
             SayDoHistoricalMetric(
                 id=1,
@@ -735,11 +703,6 @@ def _saydo() -> SayDoSection:
             ),
         ],
     )
-
-    prepare_cards("ACME", Path("."), section.cards)
-    section.verdicts = _saydo_verdicts()
-    section.verdicts_availability = "present"
-    return section
 
 
 def _valuation_basis() -> ValuationBasisSection:
@@ -1072,16 +1035,12 @@ def _provenance() -> ProvenanceSection:
                 has_transcript_file=True,
                 has_release_file=True,
                 has_slides_file=True,
-                step_saydo_analyzed=True,
-                step_llm_summarized=True,
             ),
             CoverageRow(
                 quarter="Q4",
                 year=2025,
                 has_transcript_file=True,
                 has_release_file=True,
-                step_saydo_analyzed=True,
-                step_llm_summarized=True,
             ),
         ],
         source_docs=[
@@ -1137,6 +1096,56 @@ def _provenance() -> ProvenanceSection:
 
 
 def _news() -> RecentDevelopmentsSection:
+    structured = RecentDevelopmentsPayload.model_validate(
+        {
+            "search_status": "events_found",
+            "window_start": "2026-06-04",
+            "window_end": "2026-06-11",
+            "queries_run": ["TEST recent material news"],
+            "sources_opened": [
+                "https://example.com/copilot",
+                "https://example.com/marketplace",
+                "https://example.com/suit",
+            ],
+            "events": [
+                {
+                    "category": "material_news",
+                    "tag": "NEWS",
+                    "headline": "TEST ships AI workflow copilot to all tiers",
+                    "published_at": "2026-06-09",
+                    "publisher": "TechWire",
+                    "url": "https://example.com/copilot",
+                    "factual_summary": (
+                        "General availability lands two quarters ahead of the original roadmap."
+                    ),
+                    "thesis_implication": "",
+                    "tone": "neu",
+                },
+                {
+                    "category": "material_news",
+                    "tag": "NARRATIVE",
+                    "headline": "Marketplace crosses 1,000 certified integrations",
+                    "published_at": "2026-06-06",
+                    "publisher": "Company IR",
+                    "url": "https://example.com/marketplace",
+                    "factual_summary": "Ecosystem expansion supports the pricing-power thesis.",
+                    "thesis_implication": "",
+                    "tone": "pos",
+                },
+                {
+                    "category": "material_news",
+                    "tag": "LEGAL",
+                    "headline": "Patent suit from RIVL survives motion to dismiss",
+                    "published_at": "2026-06-05",
+                    "publisher": "CourtWatch",
+                    "url": "https://example.com/suit",
+                    "factual_summary": ("Damages exposure unquantified; trial date not yet set."),
+                    "thesis_implication": "",
+                    "tone": "neg",
+                },
+            ],
+        }
+    )
     return RecentDevelopmentsSection(
         status=SectionStatus.OK,
         cached_at=_TS,
@@ -1154,6 +1163,7 @@ def _news() -> RecentDevelopmentsSection:
             "unquantified; trial date not yet set. "
             "[Source: CourtWatch, 2026-06-05, https://example.com/suit]\n"
         ),
+        structured_output=structured,
     )
 
 
@@ -1204,6 +1214,7 @@ def _saydo_verdicts() -> list[SayDoVerdictRow]:
             realized_value=1810.0,
             outcome="met",
             evaluated_at=_TS,
+            source_ref="transcript_segment:9001",
         ),
         SayDoVerdictRow(
             period_made=datetime(2026, 2, 4),
@@ -1454,7 +1465,6 @@ def _portfolio_spec(repo_root: str) -> ReportSpec:
         segments=_segments(),
         earnings=_earnings(),
         saydo=_saydo(),
-        ir_docs=IrDocsSection(status=SectionStatus.OK),
         recent_developments=_news(),
         bear_case=_bear(),
         provenance=_provenance(),
@@ -1689,9 +1699,12 @@ def _render_parts(flavor: str, repo_root: Path) -> dict[str, str]:
     is_portfolio = flavor == "portfolio"
     spec = _portfolio_spec(root) if is_portfolio else _evaluation_spec(root)
     loader = _patched_p3_loader if is_portfolio else _patched_p3_loader_no_rules
-    with mock.patch.object(workspace_html, "load_workspace_p3_panels", loader):
-        doc = workspace_html.render(spec)
-        doc_again = workspace_html.render(spec)
+    spec.workspace = WorkspacePrepared(
+        p3=loader(spec.ticker, repo_root),
+        you_said_html=render_you_said_strip_for_path(None, spec.ticker),
+    )
+    doc = workspace_html.render(spec)
+    doc_again = workspace_html.render(spec)
     # Determinism guard: two renders of the same spec must be identical after
     # reltime normalization (catches accidental wall-clock / ordering leaks).
     assert _RELTIME_RX.sub("[RELTIME]", doc) == _RELTIME_RX.sub("[RELTIME]", doc_again)
@@ -1866,10 +1879,8 @@ def test_shared_pane_flavor_independence(
 
 
 def test_p3_seam_reaches_document(portfolio_parts: dict[str, str]) -> None:
-    """The p3 injection seam (mock of workspace_html.load_workspace_p3_panels)
-    must actually feed the render — if the renderer stops resolving that name
-    from its module globals, the patch silently no-ops and the rich panels
-    vanish. Anchor on content that ONLY the patched p3 provides."""
+    """The prepared P3 population must reach the document unchanged.
+    Anchor on content that only the supplied P3 fixture provides."""
     assert "Reach 40% operating margin by FY2028 at scale." in portfolio_parts["pane_company"]
     assert (
         "Watch management&#x27;s Q&amp;A handling of seat-compression questions."
@@ -1915,5 +1926,48 @@ def test_standalone_workspace_wraps_the_shared_report_body(tmp_path: Path) -> No
         "company",
         "financials",
         "thesis",
+        "sources",
+    }
+
+
+@pytest.mark.parametrize("flavor", ["portfolio", "evaluation"])
+def test_complete_prepared_body_performs_no_io(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flavor: str
+) -> None:
+    """All populated tabs render with every file/database/model boundary forbidden."""
+    import builtins
+    import sqlite3
+
+    from llm import cli
+    from report import builder
+    from report.renderers.workspace_sections import boot
+    from report.sections import p3_data
+
+    spec = (
+        _portfolio_spec(str(tmp_path)) if flavor == "portfolio" else _evaluation_spec(str(tmp_path))
+    )
+    spec.llm_enabled = True
+    spec.workspace = WorkspacePrepared(p3=_p3_rich(), you_said_html="Prepared owner decision")
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("render_report_body performed IO")
+
+    with monkeypatch.context() as guard:
+        guard.setattr(builtins, "open", forbidden)
+        for name in ("open", "read_text", "read_bytes", "exists", "is_file", "stat"):
+            guard.setattr(Path, name, forbidden)
+        guard.setattr(sqlite3, "connect", forbidden)
+        guard.setattr(cli, "call_llm", forbidden)
+        guard.setattr(p3_data, "connect_sqlite", forbidden)
+        guard.setattr(builder, "prepare_workspace_report", forbidden)
+        guard.setattr(boot, "prepare_report_delivery", forbidden)
+        body = workspace_html.render_report_body(spec)
+    assert "workspace" not in spec.model_dump()
+    assert "Reach 40% operating margin by FY2028 at scale." in body.body_html
+    assert ("Prepared owner decision" in body.body_html) is (flavor == "portfolio")
+    assert {section.section_id for section in body.sections} >= {
+        "company",
+        "position",
+        "earnings",
         "sources",
     }

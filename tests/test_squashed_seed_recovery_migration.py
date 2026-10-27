@@ -44,7 +44,14 @@ def test_fresh_upgrade_restores_migration_owned_defaults(
     db_path = tmp_path / "fresh.db"
     cfg = _config(repo_root, db_path)
 
-    migrated_db(db_path, target="head")
+    migrated_db(db_path, target="0062_explicit_decision_journal")
+    with sqlite3.connect(db_path) as connection:
+        seeded_budgets = connection.execute(
+            "SELECT purpose, CAST(monthly_cap_usd AS REAL), on_exceed "
+            "FROM llm_budgets ORDER BY purpose"
+        ).fetchall()
+    assert len(seeded_budgets) == 67
+    command.upgrade(cfg, "head")
 
     with sqlite3.connect(db_path) as conn:
         revision = conn.execute("SELECT version_num FROM alembic_version").fetchone()
@@ -109,10 +116,31 @@ def test_fresh_upgrade_restores_migration_owned_defaults(
         "risk_free_rate": 0.043,
         "tax_rate": 0.24,
     }
-    assert budget_count == (67,)
+    retired_capture_budgets = {
+        "ledger_reply_intent",
+        "capture_triage",
+        "artifact_brief",
+        "capture_intent",
+        "research_triage",
+        "triage_route_suggest",
+        "musing_decision_extract",
+        "behavior_distill",
+    }
+    assert {row[0] for row in seeded_budgets if row[0] in retired_capture_budgets} == {
+        "capture_triage",
+        "artifact_brief",
+        "research_triage",
+        "capture_intent",
+        "behavior_distill",
+    }
+    assert budget_count == (63,)
+    assert budgets == sorted(
+        [row for row in seeded_budgets if row[0] not in retired_capture_budgets]
+        + [("transcript_summary_claim_audit", 5.0, "block")]
+    )
     # Sealed full-set receipts, derived from the pre-squash migration chain.
     digests = {
-        "budgets": _digest_rows(budgets),
+        "budgets": _digest_rows(seeded_budgets),
         "discovery": _digest_rows(discovery),
         "kpi_routes": _digest_rows(kpi_routes),
     }
@@ -141,16 +169,18 @@ def test_fresh_upgrade_restores_migration_owned_defaults(
     assert llm_index == (1,)
     assert model_pin_alert == ("model_pin_switch",)
 
-    command.downgrade(cfg, "0002_drop_dead_tables")
+    with pytest.raises(RuntimeError, match="Restore a reviewed predecessor database snapshot"):
+        command.downgrade(cfg, "0002_drop_dead_tables")
     with sqlite3.connect(db_path) as conn:
         assert (
             conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='index' "
                 "AND name='ix_llm_calls_purpose_called_at'"
             ).fetchone()
-            is None
+            is not None
         )
-        assert conn.execute("SELECT COUNT(*) FROM llm_budgets").fetchone() == (68,)
+        assert conn.execute("SELECT COUNT(*) FROM llm_budgets").fetchone() == (63,)
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (_ACTIVE_HEAD,)
 
 
 def test_upgrade_preserves_operator_owned_values(

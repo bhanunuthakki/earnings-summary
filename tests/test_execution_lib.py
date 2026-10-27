@@ -90,7 +90,6 @@ def test_migrated_commands_own_no_sys_path_or_checkout_default_derivation() -> N
         "execution/provenance_coverage_report.py",
         "execution/filing_sections_report.py",
         "execution/audit_transcript_evidence.py",
-        "execution/expire_stale_research.py",
     )
     for rel in adopted:
         text = (PROJECT_ROOT / rel).read_text(encoding="utf-8")

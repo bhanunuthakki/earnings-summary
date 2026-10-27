@@ -1,8 +1,7 @@
 """Integration tests for the /actions/* endpoints on comments_server.py.
 
 The registry is injected with `spawn=False` semantics — we never actually
-fork subprocesses here. Live-subprocess behavior is covered separately by
-the smoke test against `data/portfolio.db` post-merge.
+fork subprocesses here. Native deployment behavior requires separate host proof.
 """
 
 from __future__ import annotations
@@ -391,6 +390,9 @@ def test_run_eval_action_validates_and_starts_job(client: FlaskClient) -> None:
     bad_body = cast("dict[str, str]", bad.get_json())
     assert "purpose must be one of" in bad_body["error"]
 
+    native = client.post("/actions/run-eval", json={"purpose": "transcript_summary_claim_audit"})
+    assert native.status_code == 400
+
     resp = client.post("/actions/run-eval", json={"purpose": "bear_case"})
     assert resp.status_code == 201
     body = cast("dict[str, str]", resp.get_json())
@@ -435,7 +437,7 @@ def test_position_review_action_conflict_for_same_ticker(client: FlaskClient) ->
     assert resp2.status_code == 409
 
 
-@pytest.mark.parametrize("steps", [None, [], [""], [" "], ["dcf", ""], ["bogus"]])
+@pytest.mark.parametrize("steps", [None, [], [""], [" "], ["dcf", ""], ["bogus"], ["extract_kpis"]])
 def test_refresh_invalid_selection_starts_no_job(
     client: FlaskClient, steps: list[str] | None
 ) -> None:
@@ -446,8 +448,3 @@ def test_refresh_invalid_selection_starts_no_job(
     response = client.post("/actions/refresh", json={"ticker": "NU", "steps": steps})
     assert response.status_code == 400
     assert registry.list_jobs() == before
-
-
-def test_refresh_explicit_kpi_step_is_preserved(client: FlaskClient) -> None:
-    argv = _refresh_argv(client, ticker="NU", steps=["extract_kpis"])
-    assert argv[argv.index("--steps") + 1] == "extract_kpis"

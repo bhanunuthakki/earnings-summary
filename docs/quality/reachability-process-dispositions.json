@@ -74,7 +74,7 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "_TICKER_SPECIFIC_EXTRACTORS remains one NVO extract_nvo_patent_timeline_state.py entry; adds require_db_path() --db. Optional LLM gating is separate caller behavior.",
+      "evidence": "The checked-in _TICKER_SPECIFIC_EXTRACTORS registry selects this fixed NVO script; the managed Python command joins the registry script under execution/.",
       "fingerprint": "d5aaa4216220c0da03d63fada58c726facbaa677979f408caf69c5ce749b2fbf",
       "line": 117,
       "path": "execution/build_artifacts.py",
@@ -144,9 +144,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "The fixed subprocess target remains src/compute/ir_narrative.py through managed_python_prefix. _run_narrative now catches OSError and reports returncode success instead of ignoring completion; ticker and repo-root remain arguments, not executable selectors.",
-      "fingerprint": "97a7f4256c7767ea62989960cd8a47b478202f76d5986e7ecc91e35644aff767",
-      "line": 109,
+      "evidence": "The on-demand URL registrar invokes the fixed src/compute/ir_narrative.py anchor extractor through managed_python_prefix; ticker and repo-root are input arguments, not executable selectors.",
+      "fingerprint": "435c9440c743d8a0678ee5527542479ae5b0ead180731c90149333b3826274a5",
+      "line": 114,
       "path": "execution/fetch_ir_from_urls.py",
       "targets": [
         "src/compute/ir_narrative.py"
@@ -174,19 +174,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "Chain runs the fixed execution/process_ir_documents.py via managed_python_prefix.",
-      "fingerprint": "eb6de4ba6cfc849f78d1c37bc3f24ee7756c564ecb8524c9a0628ba8fe720164",
-      "line": 119,
-      "path": "execution/intake_documents.py",
-      "targets": [
-        "execution/process_ir_documents.py"
-      ]
-    },
-    {
-      "disposition": "internal_python_target",
-      "evidence": "Chain runs the fixed execution/ingest_transcripts.py via managed_python_prefix.",
-      "fingerprint": "c25dfa25da2ec49475e512723dc183ab237e13080d76c56582fa64fb2114e86b",
-      "line": 134,
+      "evidence": "The transcript_tickers loop invokes the fixed ingest_script assigned to execution/ingest_transcripts.py through managed_python_prefix.",
+      "fingerprint": "91b181777d38a8e0b7450f70996832d888b5a32b8a8916b0c30e7ac16842ee64",
+      "line": 116,
       "path": "execution/intake_documents.py",
       "targets": [
         "execution/ingest_transcripts.py"
@@ -194,9 +184,19 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "Chain runs the fixed execution/extract_commitments_from_transcript.py via managed_python_prefix.",
-      "fingerprint": "1c499de0808594180d18d0ca06b08e8dbacaed281057b2fed746533ed69f61b5",
-      "line": 164,
+      "evidence": "The ingested ticker loop invokes the fixed process_script assigned to execution/process_ir_documents.py through managed_python_prefix.",
+      "fingerprint": "70f4c9fe01e37a9bdb6fe4d84939ffd07fe84f118f855c922d0f50b5b948e45b",
+      "line": 151,
+      "path": "execution/intake_documents.py",
+      "targets": [
+        "execution/process_ir_documents.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "The post-ingest loop invokes the fixed commitments_script assigned to execution/extract_commitments_from_transcript.py through managed_python_prefix.",
+      "fingerprint": "8529c00057ac4a4773caff6b55f7300cad1d012399680dc8a35d0cd1fd55631f",
+      "line": 177,
       "path": "execution/intake_documents.py",
       "targets": [
         "execution/extract_commitments_from_transcript.py"
@@ -237,22 +237,12 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "The fixed process_ir variable names execution/process_ir_documents.py directly. Missing-summary repair retains explicit --repo-root and --db arguments and the managed subprocess boundary. This replaces the retired process_ir_documents_state.py adapter; ticker/state/database values never select code.",
-      "fingerprint": "7d100eaf31aac9d69336bf2e74582f0da4cd75d757d5a9f7c8597c8a270849ac",
-      "line": 589,
+      "evidence": "The onboarding path invokes only the fixed transcript-summary processor through managed_python_prefix; ticker, database, state root, and repository root are arguments, not executable selectors.",
+      "fingerprint": "0163662a05bde5c504f53afb294b9cd6690af604bce7cdfe18991e51f9586a02",
+      "line": 584,
       "path": "execution/onboard_ticker.py",
       "targets": [
         "execution/process_ir_documents.py"
-      ]
-    },
-    {
-      "disposition": "internal_python_target",
-      "evidence": "build_saydo still names PROJECT_ROOT/execution/build_saydo_pairs.py; adds --repo-root. First-stage failure still prevents this stage.",
-      "fingerprint": "a5d1b382412c63c61ad4b79919da88f1856057d87f9f1362bca31017fad2611c",
-      "line": 605,
-      "path": "execution/onboard_ticker.py",
-      "targets": [
-        "execution/build_saydo_pairs.py"
       ]
     },
     {
@@ -369,34 +359,31 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "Drain invokes only the _PURPOSE_TO_REGENERATOR fixed scripts via managed_python_argv.",
-      "fingerprint": "930be8fd00242613eee301e1815a7460deed67664bbc8e1c1b1190469be3e4eb",
-      "line": 309,
+      "evidence": "Drain routes only the four fixed purpose regenerators in _PURPOSE_TO_REGENERATOR through managed_python_argv; retired SayDo generation is absent.",
+      "fingerprint": "bef121df4883252b822d39342aaa0c38edd5632a3602cea2c4b39e57b26999c7",
+      "line": 294,
       "path": "execution/refresh_dirty_artifacts.py",
       "targets": [
         "execution/build_artifacts.py",
         "execution/extract_company_description.py",
         "execution/analyze_filing_intelligence.py",
-        "execution/build_saydo_pairs.py",
         "execution/build_investment_decision_card.py"
       ]
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "Dispatcher argv builders select only the nine fixed STEP_NAMES scripts via managed_python_argv, including execution/process_ir_documents.py directly after its state adapter retirement. Ticker and state arguments do not select executable identity.",
-      "fingerprint": "23d2044431983651cc6fc7d0b20b90a1ceaf40a9d4dc4103f06208838e4c86ae",
-      "line": 296,
+      "evidence": "The dispatcher validates the selected names against STEP_NAMES and invokes only its seven fixed managed-Python step builders through _default_runner; retired SayDo generation is absent.",
+      "fingerprint": "865e2d938852cb68e7169d1a35041b01f1f01b9e95fc1539a2b46afd32b0cacc",
+      "line": 291,
       "path": "execution/refresh_dispatch.py",
       "targets": [
         "execution/fetch_fmp_historical_data.py",
         "execution/backfill_transcripts.py",
         "execution/process_ir_documents.py",
         "execution/fetch_news.py",
-        "execution/extract_kpis_from_summaries.py",
-        "execution/build_saydo_pairs.py",
-        "execution/build_artifacts.py",
         "execution/refresh_dcf.py",
-        "execution/run_thesis_evaluator.py"
+        "execution/run_thesis_evaluator.py",
+        "execution/build_artifacts.py"
       ]
     },
     {
@@ -441,47 +428,45 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "_run_grader runs only the _GRADERS fixed scripts via managed_python_prefix.",
-      "fingerprint": "7877688fcd35fdd87fd70a2b753b238b407fa3682557ef4e9d8dcacfb45e0f00",
-      "line": 209,
+      "evidence": "The retained outcome and audit _GRADERS entries select these fixed scripts through managed_python_prefix. Automatic behavioral-rule generation is retired.",
+      "fingerprint": "9573cd126306636f15750586ca6b736236878b937d59b680c2314c237ad23ef9",
+      "line": 174,
       "path": "execution/run_calibration_grading.py",
       "targets": [
         "execution/prune_llm_capture.py",
         "execution/grade_predictions.py",
         "execution/grade_decisions.py",
         "execution/grade_bear_cases.py",
-        "execution/run_llm_evals.py",
-        "execution/run_behavior_distill.py"
+        "execution/run_llm_evals.py"
       ]
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "Add execution/process_document_evidence.py to existing closed STAGE_MANIFEST dispatch. _selected_specs chooses manifest members; _build_stages resolves execution/spec.script via managed_python_argv. New deterministic stage is --apply --resume --batch-size 100, timeout600s; depends on preflight/list identity only and has DB_AND_STATE_ROOT argument profile. The target does no LLM/narrative dispatch and no arbitrary process invocation. This is a reviewed change to target scope, not a line-only refresh.",
+      "evidence": "The typed STAGE_MANIFEST contains the exact script paths for all 20 stages; run_morning_pipeline dispatches each selected StageSpec through managed_python_argv.",
       "fingerprint": "d08725bbef5a507796d87403796b5843f460192e630e88410c66df2195e67e89",
       "line": 404,
       "path": "execution/run_morning_pipeline.py",
       "targets": [
-        "execution/validate_environment.py",
-        "execution/fetch_news.py",
-        "execution/sync_list_type_from_holdings.py",
-        "execution/record_decisions.py",
-        "execution/sync_position_lifecycle.py",
-        "execution/reconcile_decision_actions.py",
-        "execution/refresh_cockpit_fundamentals.py",
-        "execution/process_document_evidence.py",
-        "execution/compute_derived_metrics.py",
-        "execution/reprice_dcf.py",
-        "execution/refresh_candidate_fit.py",
-        "execution/fetch_factor_proxies.py",
-        "execution/refresh_position_guard.py",
-        "execution/refresh_portfolio_risk_snapshot.py",
-        "execution/refresh_wealth_context_snapshot.py",
-        "execution/run_triggers.py",
-        "execution/run_standup.py",
-        "execution/generate_pre_earnings_briefs.py",
-        "execution/generate_post_earnings_readouts.py",
         "execution/build_alert_feed.py",
-        "execution/run_validation_engine.py"
+        "execution/compute_derived_metrics.py",
+        "execution/fetch_factor_proxies.py",
+        "execution/fetch_news.py",
+        "execution/generate_post_earnings_readouts.py",
+        "execution/generate_pre_earnings_briefs.py",
+        "execution/process_document_evidence.py",
+        "execution/reconcile_decision_actions.py",
+        "execution/record_decisions.py",
+        "execution/refresh_candidate_fit.py",
+        "execution/refresh_cockpit_fundamentals.py",
+        "execution/refresh_portfolio_risk_snapshot.py",
+        "execution/refresh_position_guard.py",
+        "execution/refresh_wealth_context_snapshot.py",
+        "execution/reprice_dcf.py",
+        "execution/run_triggers.py",
+        "execution/run_validation_engine.py",
+        "execution/sync_list_type_from_holdings.py",
+        "execution/sync_position_lifecycle.py",
+        "execution/validate_environment.py"
       ]
     },
     {
@@ -517,9 +502,9 @@
     },
     {
       "disposition": "external_process",
-      "evidence": "_notify_alert_hook executes the operator-configured ES_CRON_ALERT_HOOK executable without a shell.",
-      "fingerprint": "62ef3b4515133edb8cf41be023c4273c0e4615e15f2e2b1de133b30a0c20f5ca",
-      "line": 600,
+      "evidence": "_notify_alert_hook invokes only the operator-configured ES_CRON_ALERT_HOOK executable, without a shell, and passes a JSON health record on stdin.",
+      "fingerprint": "9107a93909e80415de7fead1f24cf97f31b5dbde31558afc50f5afdd407e4bd1",
+      "line": 548,
       "path": "execution/verify_cron_registration.py",
       "targets": [
         "ES_CRON_ALERT_HOOK"
@@ -537,9 +522,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "Windows launch still uses fixed managed onboard_ticker.py; explicit DB_PATH/STATE_ROOT added; working directory/logs changed to STATE_ROOT.",
-      "fingerprint": "7cf660f88798861027fde2d5673fb2ee84bc2dec17519d22aba22d92502c78d0",
-      "line": 632,
+      "evidence": "_spawn_onboard_async constructs the fixed execution/onboard_ticker.py path and uses it as the target of managed_python_argv.",
+      "fingerprint": "b0185ed60a552efe411a604f04db0202f4f111d1d60a0ede902cd889f0e293a3",
+      "line": 624,
       "path": "src/db.py",
       "targets": [
         "execution/onboard_ticker.py"
@@ -547,9 +532,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "POSIX launch uses same fixed managed onboard_ticker.py with explicit selectors; working directory/logs changed to STATE_ROOT.",
-      "fingerprint": "5667ae7c8f60606636d8f69a961e2efdf64018e589a2d1008e561bbd1eada78b",
-      "line": 642,
+      "evidence": "_spawn_onboard_async constructs the fixed execution/onboard_ticker.py path and uses it as the target of managed_python_argv.",
+      "fingerprint": "1cd156fc2cf888925953d9a23e450b9d2a5e7dec6a0460464c159452fb793d70",
+      "line": 634,
       "path": "src/db.py",
       "targets": [
         "execution/onboard_ticker.py"
@@ -599,9 +584,9 @@
     },
     {
       "disposition": "external_process",
-      "evidence": "_call_claude spawns the fixed claude CLI executable.",
-      "fingerprint": "1a171203f671dad37704eacb455ad66a865c16ddb1a0df77803f37501d8459f0",
-      "line": 1325,
+      "evidence": "_call_claude invokes the resolved Claude CLI path after setup validation; the command list fixes the executable and arguments.",
+      "fingerprint": "c6a8a1fe062420e26ca0dfd2f26ed6d977ceb76edea4b08cc5de351b136a4e61",
+      "line": 1224,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -609,9 +594,9 @@
     },
     {
       "disposition": "external_process",
-      "evidence": "Streaming path spawns the fixed claude CLI executable.",
-      "fingerprint": "b738b491f3ddb8e158a6a311b8d48a2251ac19e5c420b460b64a206d9ef4f349",
-      "line": 2122,
+      "evidence": "The streaming path obtains claude with shutil.which and passes that fixed executable as cmd[0] to Popen.",
+      "fingerprint": "8ad801d9b864776ed033c67f892104bd614fc9b29e31a7c2ccf32d611ab99b22",
+      "line": 2236,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -619,9 +604,9 @@
     },
     {
       "disposition": "external_process",
-      "evidence": "Web path spawns the fixed claude CLI with WebSearch tools.",
-      "fingerprint": "8b07c0a17ed2122e9336e88b807e3515560f50aa997f5e3e3db96d557e844076",
-      "line": 2574,
+      "evidence": "The web path invokes the resolved Claude CLI path in a fixed command list; enabled tools are separately allowlisted.",
+      "fingerprint": "dfbd2df2a9e1dedd47e8ca2dfefee529b9cbb3c39ecb413d5b79cc8d2050419b",
+      "line": 2688,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -862,9 +847,9 @@
     },
     {
       "disposition": "operator_supplied_process",
-      "evidence": "Same operator-supplied command in no-owner/no-deadline branch; now forwards optional stdout/stderr. It is not a closed internal Python target.",
-      "fingerprint": "d30eedebaaef0d4c9bfeb16d27b5f0295412899d29a06e1da3425042c2398d8b",
-      "line": 976,
+      "evidence": "This branch executes the operator-supplied command argv in the no-owner/no-timeout path; it is not a repository script target.",
+      "fingerprint": "273b67c8af4f820564d78fb2486735050ebe572e2b488d9caeb664cad880aadd",
+      "line": 970,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -872,9 +857,9 @@
     },
     {
       "disposition": "operator_supplied_process",
-      "evidence": "Old single Popen becomes two branches: no redirection and stdout/stderr redirection. Both retain command/cwd/env/suspended-create flags and owned job-tree lifecycle; each requires a separate disposition.",
-      "fingerprint": "3b4307629e099396122a99b74118b0ef3a2867c0136977b4f7e940370b43c1c0",
-      "line": 983,
+      "evidence": "This branch launches the operator-supplied command argv with the owned process-tree creation flags.",
+      "fingerprint": "36eaf319cd7715372aefc720e749a757895e9daba5de6744f99f89d38d6daa49",
+      "line": 977,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -882,9 +867,9 @@
     },
     {
       "disposition": "operator_supplied_process",
-      "evidence": "Old single Popen becomes two branches: no redirection and stdout/stderr redirection. Both retain command/cwd/env/suspended-create flags and owned job-tree lifecycle; each requires a separate disposition.",
-      "fingerprint": "4d54ac997b94ef9cba860a3cff8fe1e07e4e8724c20d4878837e4d24fc3833c2",
-      "line": 985,
+      "evidence": "This branch launches the operator-supplied command argv with optional stdout/stderr redirection and owned process-tree cleanup.",
+      "fingerprint": "abc3fc268a1342ae5852471f5d4b7de19594184e36b88e05757b3ed880049741",
+      "line": 979,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -1014,20 +999,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "Fixed literal synthetic child runs the managed SQLite preload and compute.kpi_extract_summaries with its model call replaced by a local empty extractor. Arguments are exact disposable database and fixture-root paths. It proves real ancestor-lock inheritance versus contention; no command, module, provider or source URL comes from user data.",
-      "fingerprint": "e21627c525b338f142cf15b157f0b626a8e3faa56268c2c8c2be980ef04ba7a9",
-      "line": 929,
-      "path": "tests/test_summary_kpi_completion.py",
-      "targets": [
-        "execution/sqlite_bootstrap.py",
-        "src/compute/kpi_extract_summaries.py"
-      ]
-    },
-    {
-      "disposition": "internal_python_target",
       "evidence": "Synthetic export regression invokes only the fixed managed SQLite bootstrap and checked-in shareable-report CLI through sys.executable. Input and destination are pytest-owned synthetic files; neither executable target is supplied by report content.",
-      "fingerprint": "4ffea625a31b5b62431db948e677e0e7b7543f309b66ade3e53277627b211813",
-      "line": 196,
+      "fingerprint": "590a96948414cbc66394fe2624f5c27db78a660cc56c3149ef3ffee1859fd8f0",
+      "line": 197,
       "path": "tests/test_shareable_report.py",
       "targets": [
         "execution/sqlite_bootstrap.py",
@@ -1039,9 +1013,9 @@
     "input_scope": "scanner-consumed-inputs/v1",
     "parser": {
       "name": "ast+xml+literal-scanner",
-      "version": "1.3.0",
       "python": ">=3.11",
-      "source_sha256": "657a7a0e72930dba5568e7a1638b3d225861524ce438df44c8658b80ccc72492"
+      "source_sha256": "bc7d6c0f69fffcda7404b3f41a3343db2452a425864b3cdba148327acd1ec7dd",
+      "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c9ec98b1cbcdf93c9b890d9a8a8c59ef6109598f67b1739c38463d79d5986175",

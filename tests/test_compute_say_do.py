@@ -340,13 +340,14 @@ def test_match_pending_full_cycle(conn: sqlite3.Connection) -> None:
 
 
 def _seed_llm_artifacts(conn: sqlite3.Connection) -> None:
-    """A minimal llm_artifacts shape (only the columns the dirty-marker touches)."""
+    """Minimal current llm_artifacts shape needed by the dirty-marker owner."""
     conn.executescript(
         """
         CREATE TABLE llm_artifacts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT,
             scope TEXT NOT NULL DEFAULT 'ticker',
+            document_version_id TEXT,
             purpose TEXT NOT NULL,
             superseded_by_id INTEGER,
             dirty INTEGER NOT NULL DEFAULT 0,

@@ -473,9 +473,7 @@ def test_direct_capture_retains_distinct_candidates_without_legacy_projection(
         from llm.ledger import record_llm_call
         from llm.structured import StructuredCallResult
 
-        prompt = getattr(summaries, "_enumerate_prompt")(
-            ticker, period, text, 200, source_scope="direct_pdf_rich"
-        )
+        prompt = getattr(summaries, "_enumerate_prompt")(ticker, period, text, 200)
         raw = json.dumps(rows)
         record_llm_call(
             started_at=datetime.now(UTC),
@@ -613,77 +611,6 @@ def test_retained_native_page_assessment_blocks_known_unresolved_pages(
     with pytest.raises(ValueError, match="existing native-page"):
         capture.capture(source.read_bytes())
     assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == 0
-
-
-def test_financial_manifest_late_failure_rolls_back_partial_write(
-    conn: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from datetime import datetime
-
-    import compute.kpi_extract_summaries as summaries
-    from models.documents import SourceType
-    from models.facts import FiscalPeriodType
-    from pipeline.kpi_persistence import persist_manifest as real_persist
-
-    _retained_source(conn, tmp_path)
-    build = getattr(summaries, "_build_capture_manifest")
-    manifest = build(
-        "TEST",
-        datetime(2026, 6, 30),
-        FiscalPeriodType.Q2,
-        1,
-        [{"label": "Margin", "value": 10, "unit": "percent", "source_excerpt": "10%"}],
-        primary_source=SourceType.IR_DOC,
-    )
-
-    def fail_after_write(*args: object, **kwargs: object) -> object:
-        real_persist(conn, run_id=str(kwargs["run_id"]), manifest=manifest, commit=False)
-        assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 1
-        raise ValueError("late persistence failure")
-
-    monkeypatch.setattr(summaries, "persist_manifest", fail_after_write)
-    persist = getattr(summaries, "_persist_accounted")
-    with pytest.raises(ValueError, match="late persistence failure"):
-        persist(
-            conn,
-            directive="test_atomic_manifest",
-            ticker="TEST",
-            invocation_inputs={},
-            manifest=manifest,
-        )
-    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
-    assert (
-        conn.execute("SELECT COUNT(*) FROM kpi_definitions WHERE ticker='TEST'").fetchone()[0] == 0
-    )
-    assert conn.execute("SELECT status FROM pipeline_attempts").fetchone()[0] == "failed"
-
-
-def test_financial_persistence_rejects_unrelated_open_transaction(
-    conn: sqlite3.Connection,
-) -> None:
-    from datetime import datetime
-
-    import compute.kpi_extract_summaries as summaries
-    from models.facts import FiscalPeriodType
-
-    build = getattr(summaries, "_build_capture_manifest")
-    manifest = build("TEST", datetime(2026, 6, 30), FiscalPeriodType.Q2, 1, [])
-    conn.execute("CREATE TABLE owner_work (value TEXT)")
-    conn.commit()
-    conn.execute("INSERT INTO owner_work VALUES ('uncommitted')")
-    with pytest.raises(ValueError, match="owned transaction boundary"):
-        getattr(summaries, "_persist_accounted")(
-            conn,
-            directive="test_atomic_manifest",
-            ticker="TEST",
-            invocation_inputs={},
-            manifest=manifest,
-        )
-    assert conn.in_transaction
-    assert conn.execute("SELECT value FROM owner_work").fetchone()[0] == "uncommitted"
-    assert conn.execute("SELECT COUNT(*) FROM pipeline_attempts").fetchone()[0] == 0
-    conn.rollback()
-    assert conn.execute("SELECT COUNT(*) FROM owner_work").fetchone()[0] == 0
 
 
 def test_pinned_byte_locator_ignores_replacement_pdf(tmp_path: Path) -> None:
@@ -851,24 +778,21 @@ def test_live_prompt_override_repair_and_fallback_metadata_bind_cache(
     assert len(calls) == 4
 
 
-@pytest.mark.parametrize("capture_name", ["capture_for_ticker", "capture_for_ir_pdf_docs"])
-def test_capture_rejects_caller_transaction_before_source_preparation(
+def test_ir_pdf_capture_rejects_caller_transaction_before_source_preparation(
     conn: sqlite3.Connection,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capture_name: str,
 ) -> None:
     import compute.kpi_extract_summaries as summaries
 
     def no_sources(*args: object, **kwargs: object) -> object:
         pytest.fail("caller transaction must be rejected before source preparation")
 
-    monkeypatch.setattr(summaries, "_list_sources", no_sources)
     monkeypatch.setattr(summaries, "_list_ir_capture_pdf_docs", no_sources)
     conn.execute("CREATE TABLE owner_work (value TEXT)")
     conn.commit()
     conn.execute("INSERT INTO owner_work VALUES ('uncommitted')")
-    result = getattr(summaries, capture_name)("TEST", tmp_path, conn)
+    result = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn)
     assert result.error and "before source preparation" in result.error
     assert conn.in_transaction
     assert conn.execute("SELECT value FROM owner_work").fetchone()[0] == "uncommitted"

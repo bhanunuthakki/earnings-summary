@@ -26,7 +26,6 @@ import pytest
 
 from synthesis.exit_postmortem import (
     Draft,
-    _compose_batch_summary,  # unit-tested directly
     apply_draft,
     draft_postmortem,
     drafted_awaiting_glance,
@@ -471,20 +470,6 @@ def test_revert_draft_never_touches_owner_grading(db_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_compose_batch_summary() -> None:
-    text = _compose_batch_summary([("NU", "broke"), ("WIX", "played_out")])
-    assert "Drafted 2 exit post-mortems" in text
-    assert "NU (broke)" in text
-    assert "WIX (played_out)" in text
-    assert "revertible" in text
-
-
-def test_compose_batch_summary_singular() -> None:
-    text = _compose_batch_summary([("NU", "broke")])
-    assert "Drafted 1 exit post-mortem:" in text
-    assert "post-mortems" not in text.split(":")[0]
-
-
 # ---------------------------------------------------------------------------
 # run_postmortem_drafts — pacing, batch, counts
 # ---------------------------------------------------------------------------
@@ -508,7 +493,7 @@ def test_run_postmortem_drafts_paces_to_max_per_run(
     assert len(pending_postmortems(db_path)) == 3  # the rest stay pending
 
 
-def test_run_postmortem_drafts_batch_drafts_all_and_sends_summary(
+def test_run_postmortem_drafts_batch_drafts_all(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("PORTFOLIO_TRACKER_API_URL", raising=False)
@@ -519,25 +504,10 @@ def test_run_postmortem_drafts_batch_drafts_all_and_sends_summary(
     def _stub(prompt: str) -> dict[str, object]:
         return {"exit_reason": "x", "lessons": "y", "outcome_vs_thesis": "mixed"}
 
-    sent: list[tuple[str, str, str]] = []
-
-    def _fake_send(token: str, chat_id: str, text: str, **kwargs: object) -> object:
-        sent.append((token, chat_id, text))
-        return object()
-
-    import capture.telegram as telegram_mod
-    import capture.token_store as token_store_mod
-
-    monkeypatch.setattr(telegram_mod, "send_message", _fake_send)
-    monkeypatch.setattr(token_store_mod, "load_token", lambda *a, **k: "fake-token")
-    monkeypatch.setattr(token_store_mod, "load_chat_id", lambda *a, **k: "123")
-
     counts = run_postmortem_drafts(db_path, call=_stub, batch=True)
     assert counts["pending"] == 3
     assert counts["drafted"] == 3
     assert pending_postmortems(db_path) == []
-    assert len(sent) == 1
-    assert "Drafted 3 exit post-mortems" in sent[0][2]
 
 
 def test_run_postmortem_drafts_skips_no_evidence(db_path: Path) -> None:

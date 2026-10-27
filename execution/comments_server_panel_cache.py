@@ -216,7 +216,6 @@ FAMILY_PANEL_DECISIONS = (
     "/api/panel/decisions_record",
     "/api/panel/thesis_ledger",
     "/api/panel/ledger_decisions",
-    "/api/panel/advisor_memos",
 )
 
 # Journal/notes panels: analyst notes, the Ledger console, triage, and the
@@ -368,23 +367,12 @@ MUTATION_ROUTE_CACHE_REGISTRY: dict[str, CacheFamily] = {
         WORK_OS_BRIEFS_KIND,
         *FAMILY_PANEL_DECISIONS,
     ),
-    "/api/research/proposal/<int:proposal_id>/<verb>": (
-        *FAMILY_PANEL_OVERVIEW,
-        WORK_OS_EVALUATION_KIND,
-        *FAMILY_PANEL_DECISIONS,
-        *FAMILY_PANEL_JOURNAL,
-    ),
     "/api/research/proposals/<int:proposal_id>/decision": (
         *FAMILY_PANEL_OVERVIEW,
         WORK_OS_EVALUATION_KIND,
         *FAMILY_PANEL_DECISIONS,
         *FAMILY_PANEL_JOURNAL,
     ),
-    "/api/research/task/<int:task_id>/run": (
-        WORK_OS_EVALUATION_KIND,
-        *FAMILY_PANEL_JOURNAL,
-    ),
-    "/api/research/task/<int:task_id>/reject": (*FAMILY_PANEL_JOURNAL,),
     "/api/research/investment-profile/<ticker>/labels/<label>/<action>": (WORK_OS_EVALUATION_KIND,),
     # ---- Journal / capture / notes ----
     "/api/capture/text": (
@@ -393,18 +381,6 @@ MUTATION_ROUTE_CACHE_REGISTRY: dict[str, CacheFamily] = {
         WORK_OS_EVALUATION_KIND,
         WORK_OS_DESK_KIND,
         *FAMILY_PANEL_DECISIONS,
-    ),
-    "/api/onmymind/<int:note_id>/reply": (
-        *FAMILY_PANEL_OVERVIEW,
-        *FAMILY_PANEL_JOURNAL,
-        WORK_OS_EVALUATION_KIND,
-        WORK_OS_DESK_KIND,
-    ),
-    "/api/onmymind/<int:note_id>/<verb>": (
-        *FAMILY_PANEL_OVERVIEW,
-        *FAMILY_PANEL_JOURNAL,
-        WORK_OS_EVALUATION_KIND,
-        WORK_OS_DESK_KIND,
     ),
     "/api/reconcile/<kind>/<int:item_id>/<verdict>": (
         *FAMILY_PANEL_OVERVIEW,
@@ -485,9 +461,7 @@ MUTATION_ROUTE_CACHE_REGISTRY: dict[str, CacheFamily] = {
         WORK_OS_DESK_KIND,
     ),
     "/api/positioning/approve": (*FAMILY_PANEL_PORTFOLIO, WORK_OS_EVALUATION_KIND),
-    "/api/positioning/coach": (*FAMILY_PANEL_PORTFOLIO, WORK_OS_EVALUATION_KIND),
     "/api/positioning/confirm-posture": (*FAMILY_PANEL_PORTFOLIO, WORK_OS_EVALUATION_KIND),
-    "/api/positioning/propose": (*FAMILY_PANEL_PORTFOLIO,),
     "/api/positioning/simulate": NO_CACHE_FAMILY,  # read-only pre-trade projection
     "/api/sizing-intents": (
         *FAMILY_PANEL_DECISIONS,
@@ -532,8 +506,6 @@ MUTATION_ROUTE_CACHE_REGISTRY: dict[str, CacheFamily] = {
         WORK_OS_EVALUATION_KIND,
     ),
     "/api/red_team/<int:item_id>/respond": (*FAMILY_PANEL_PORTFOLIO, *FAMILY_PANEL_DECISIONS),
-    "/api/coach/unmute": (WORK_OS_EVALUATION_KIND, *FAMILY_PANEL_DECISIONS),
-    "/api/coach/attest-change": (*FAMILY_PANEL_DECISIONS, *FAMILY_PANEL_PORTFOLIO),
     # ---- Ask / sessions (session rename/delete changes Evaluation Dialogues
     # linkage; Ask stream and distill already cover the evaluation family) ----
     "/api/ask/sessions/<session_id>": (WORK_OS_EVALUATION_DIALOGUES_KIND,),
@@ -544,14 +516,6 @@ MUTATION_ROUTE_CACHE_REGISTRY: dict[str, CacheFamily] = {
         WORK_OS_DESK_KIND,
         *FAMILY_PANEL_DECISIONS,
     ),
-    "/api/ask/sessions/<session_id>/distill": (
-        *FAMILY_PANEL_OVERVIEW,
-        *FAMILY_PANEL_JOURNAL,
-        WORK_OS_EVALUATION_KIND,
-        *FAMILY_PANEL_DECISIONS,
-    ),
-    # ---- Operations attention (invalidates precisely at its OWN success
-    # moment inside the route; the global hook stays a no-op for it) ----
     "/api/operations/attention/<action_name>": NO_CACHE_FAMILY,
     # ---- Telemetry: observational, must never evict ----
     "/api/metrics/panel": NO_CACHE_FAMILY,
@@ -571,7 +535,6 @@ MUTATION_ROUTE_CACHE_REGISTRY: dict[str, CacheFamily] = {
     "/actions/resolve-issue": (*FAMILY_PANEL_OPERATIONS,),
     "/actions/run-eval": (*FAMILY_PANEL_OPERATIONS,),
     "/actions/run-scenario": (*FAMILY_PANEL_PORTFOLIO,),
-    "/actions/advisor-memo": (*FAMILY_PANEL_DECISIONS, *FAMILY_PANEL_PORTFOLIO),
     "/actions/position-review": (*FAMILY_PANEL_DECISIONS, *FAMILY_PANEL_PORTFOLIO),
     "/actions/discovery-run": (*FAMILY_PANEL_OPERATIONS,),
     "/actions/discovery-build": (
@@ -586,7 +549,6 @@ MUTATION_ROUTE_CACHE_REGISTRY: dict[str, CacheFamily] = {
         WORK_OS_EVALUATION_KIND,
         *FAMILY_PANEL_PORTFOLIO,
     ),
-    "/actions/readme-update": (*FAMILY_PANEL_OPERATIONS,),
 }
 
 

@@ -8,15 +8,13 @@ re-exports in ``workspace_html``."""
 
 from __future__ import annotations
 
-from datetime import timedelta
 from io import StringIO
-from pathlib import Path
 
-from llm.calibration import VersionSummary, daily_avg_scores, summarize_by_prompt_version
+from llm.calibration import VersionSummary
 from report.models import AppendixSection, ProvenanceSection
-from report.render_clock import render_now
 from report.renderers.workspace_charts import SparklineSize, sparkline
 from report.renderers.workspace_sections._shared import _esc, _panel_head
+from report.workspace_models import WorkspacePrepared
 from ui import living_grid as lg
 from ui.controls import prov_severity_tick
 
@@ -38,6 +36,7 @@ def _sources_tab(
     prov: ProvenanceSection,
     app: AppendixSection,
     repo_root: str,
+    prepared: WorkspacePrepared | None = None,
 ) -> None:
     body.write('<div class="tab-body">')
     body.write('<div class="row-split"><div>')
@@ -134,8 +133,6 @@ def _sources_tab(
             ("transcript", "Transcript"),
             ("release", "Release"),
             ("slides", "Slides"),
-            ("saydo", "SayDo"),
-            ("summary", "Summary"),
         )
         body.write('<div class="table-scroll"><table class="tbl coverage-table"><thead><tr>')
         body.write(lg.th("Quarter", "quarter", "text", num=False))
@@ -154,8 +151,6 @@ def _sources_tab(
                 c.has_transcript_file,
                 c.has_release_file,
                 c.has_slides_file,
-                c.step_saydo_analyzed,
-                c.step_llm_summarized,
             )
             data = lg.data_text(f"{c.quarter} {c.year}") + lg.data_text_key(
                 "quarter", f"{c.year} {c.quarter}"
@@ -235,25 +230,18 @@ def _sources_tab(
         body.write(lg.grid_close())
         body.write("</div>")
 
-    _prompt_quality_panel(body, Path(repo_root) / "data" / "portfolio.db")
+    if prepared is not None:
+        _prompt_quality_panel(body, prepared.prompt_summaries, prepared.prompt_daily)
     body.write("</div>")
 
 
-def _prompt_quality_panel(body: StringIO, db_path: Path) -> None:
-    """Surface the prompt_calibration_scores table — grouped by (purpose,
-    prompt_version) so the analyst can see whether each prompt version is
-    improving over time without spelunking the per-call ledger.
-
-    The graders (grade_bear_cases, grade_decisions) write the rows; this
-    panel is the consumer side. Best-effort: missing DB / empty table
-    degrades to a small "no data yet" stub rather than breaking the page.
-    """
+def _prompt_quality_panel(
+    body: StringIO,
+    summaries: list[VersionSummary],
+    daily: dict[tuple[str, str], list[tuple[str, float]]],
+) -> None:
+    """Display the prepared thirty-day prompt-quality population."""
     window_days = 30
-    # Stored scored_at is naive UTC ISO; compare with a naive cutoff so the
-    # SQL string comparison is well-defined.
-    since = render_now().replace(tzinfo=None) - timedelta(days=window_days)
-    summaries: list[VersionSummary] = summarize_by_prompt_version(db_path=db_path, since=since)
-
     if not summaries:
         # P4.2 hide-don't-stub: no graded outputs in the window → no panel.
         return
@@ -265,7 +253,6 @@ def _prompt_quality_panel(body: StringIO, db_path: Path) -> None:
         )
     )
 
-    daily = daily_avg_scores(db_path=db_path, since=since)
     body.write(lg.grid_open())
     body.write(lg.filter_bar(len(summaries), noun="versions"))
     body.write(

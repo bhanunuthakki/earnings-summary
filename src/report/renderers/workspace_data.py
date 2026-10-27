@@ -2,9 +2,9 @@
 
 Two jobs:
 
-1. **News structurer** — re-shapes the free-markdown
-   ``RecentDevelopmentsSection.content_md`` into the design's tile layout
-   (date / tag / source / headline / gloss / tone).
+1. **News structurer** — maps validated events from
+   ``RecentDevelopmentsSection.structured_output`` into the design's tile
+   layout (date / tag / source / headline / gloss / tone).
 2. **KPI-strip picker** — selects up to N tier-1 KPI ledger rows that have
    enough history for a sparkline, and normalizes their formatting.
 
@@ -14,54 +14,30 @@ renderer can fall through to a stub panel instead of crashing.
 
 from __future__ import annotations
 
-import logging
 import re
-import sqlite3
-from collections.abc import Callable
-from dataclasses import dataclass, field, replace
-from datetime import date, datetime, timedelta
-from enum import StrEnum
-from pathlib import Path
-from typing import TypeVar, cast
+from dataclasses import dataclass
+from datetime import date, timedelta
 
-from advisor.store import count_memos
 from report.models import (
     KpiLedgerRow,
     RecentDevelopmentsSection,
 )
 from report.renderers.charts_v2 import fmt_compact
-from report.sections.comp_set_context import (
-    CompSetContextSection,
-    load_comp_set_context,
-)
 from report.sections.p3_data import (
-    CustomerConcentrationRow,
-    DecisionHistorySummary,
-    LeaseLadderRow,
-    MacroSensitivityRow,
-    PeerCompRow,
-    StrategicTargetRow,
-    load_customer_concentrations,
-    load_decision_history,
-    load_lease_ladder,
-    load_macro_sensitivities,
-    load_peer_comp,
-    load_strategic_targets,
+    PanelAvailability,
+    StandingRuleRow,
+    StandingRulesPanel,
+    WorkspaceP3Panels,
+    load_graded_sell_base_rate,
+    load_standing_rules,
+    load_workspace_p3_panels,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
-from user_state.notes import AnalystNoteRow, list_notes
-
-log = logging.getLogger(__name__)
-_ReadResult = TypeVar("_ReadResult")
 
 # Editorial-typography characters hoisted to module constants so the call
 # sites don't trip ruff's RUF001 (ambiguous unicode in code). Built via chr()
 # so the source text itself stays ASCII-only.
 _RSQUO = chr(0x2019)  # right single quote, short year prefix
 _TIMES = chr(0x00D7)  # multiplication sign, ratio multiplier
-_EMDASH = chr(0x2014)
-_ENDASH = chr(0x2013)
-_DASH_CHARS = _EMDASH + _ENDASH + "-"
 
 
 # ---------------------------------------------------------------------------
@@ -80,105 +56,15 @@ class NewsTile:
     url: str | None = None
 
 
-# Bullet shape:
-#   - **Headline text** — Gloss text. [Source: Publisher, YYYY-MM-DD, https://url]
-# Tolerant of em / en / hyphen dashes and missing URL.
-_NEWS_BULLET_RX = re.compile(
-    rf"""
-    ^\s*[-*]\s+               # bullet marker
-    \*\*(?P<headline>[^*]+)\*\*  # bold headline
-    \s*[{_DASH_CHARS}]+\s*    # em / en / hyphen separator
-    (?P<gloss>.+?)            # gloss text (lazy)
-    (?:\s*\[Source:\s*
-        (?P<source>[^,\]]+?)
-        (?:\s*,\s*(?P<date>\d{{4}}-\d{{2}}-\d{{2}}))?
-        (?:\s*,\s*(?P<url>https?://[^\]\s]+))?
-    \s*\])?                   # optional [Source: ...] tail
-    \s*$
-    """,
-    re.MULTILINE | re.VERBOSE,
-)
-
-
-# Lightweight tone classifier — only material/tags keywords. Sentence-level
-# parsing not worth the complexity for a 1-line gloss.
-_POS_WORDS = {
-    "rally",
-    "growth",
-    "wins",
-    "beat",
-    "exceed",
-    "accelerat",
-    "upgrade",
-    "expansion",
-    "record",
-    "all-time",
-    "tailwind",
-    "strong",
+_NEWS_SECTION_TITLES = {
+    "material_news": "Material events",
+    "sector_context": "Sector / regulatory context",
+    "watch_this_week": "Watch this week",
 }
-_NEG_WORDS = {
-    "damages",
-    "fine",
-    "suit",
-    "antitrust",
-    "lawsuit",
-    "downgrade",
-    "miss",
-    "decel",
-    "warn",
-    "outage",
-    "breach",
-    "risk",
-    "regulator",
-}
-_OPT_WORDS = {
-    "plan",
-    "intends",
-    "expects",
-    "guide",
-    "raised",
-    "yen bond",
-    "issuance",
-    "intent",
-    "deploy",
-    "preview",
-    "unveil",
-}
-
-# Tag inference from headline keywords. Same idea as tone but coarser.
-_TAG_RULES: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"\bcapex|capital|bond|fund(ing|s)?\b", re.IGNORECASE), "CAPITAL"),
-    (re.compile(r"\bantitrust|suit|fine|regulator|court|FTC|EU|UK\b", re.IGNORECASE), "LEGAL"),
-    (re.compile(r"\bcloud|backlog|data center|infrastructure|TPU|GPU\b", re.IGNORECASE), "INFRA"),
-    (re.compile(r"\bgemini|model|chip|launch|product|release|app\b", re.IGNORECASE), "PRODUCT"),
-    (re.compile(r"\bearnings|revenue|guidance|forecast\b", re.IGNORECASE), "EARNINGS"),
-    (re.compile(r"\bcap|valuation|stock|market|rally\b", re.IGNORECASE), "NARRATIVE"),
-]
-
-
-def _classify_tone(headline: str, gloss: str) -> str:
-    text = (headline + " " + gloss).lower()
-    if any(w in text for w in _NEG_WORDS):
-        return "neg"
-    if any(w in text for w in _POS_WORDS):
-        return "pos"
-    if any(w in text for w in _OPT_WORDS):
-        return "opt"
-    return "neu"
-
-
-def _classify_tag(headline: str) -> str:
-    for pattern, tag in _TAG_RULES:
-        if pattern.search(headline):
-            return tag
-    return "NEWS"
-
-
-_NEWS_SECTION_HEADER_RX = re.compile(r"^###\s+(?P<title>.+?)\s*$", re.MULTILINE)
 
 
 def structure_news(section: RecentDevelopmentsSection, limit: int = 5) -> list[NewsTile]:
-    """Back-compat single-list parse of the first section of ``content_md``."""
+    """Return the first event category for older single-list callers."""
     by_section = structure_news_by_section(section, limit_per_section=limit)
     if not by_section:
         return []
@@ -188,57 +74,28 @@ def structure_news(section: RecentDevelopmentsSection, limit: int = 5) -> list[N
 def structure_news_by_section(
     section: RecentDevelopmentsSection, limit_per_section: int = 8
 ) -> dict[str, list[NewsTile]]:
-    """Parse ``content_md`` into ``{section_title: [NewsTile, ...]}`` mapping.
-
-    Splits the markdown on H3 (``### title``) headers and runs the bullet
-    parser against each chunk's body. Sections with no recognisable bullets
-    are dropped. Section title order is preserved from the source.
-    """
-    md = section.content_md or ""
-    if not md:
+    """Map validated generated events into the renderer's section layout."""
+    if section.structured_output is None:
         return {}
-    headers = list(_NEWS_SECTION_HEADER_RX.finditer(md))
-    if not headers:
-        # Source has no H3 sections — fall back to a single "Material events"
-        # bucket so the renderer still has something to show.
-        tiles = _parse_news_bullets(md, limit_per_section)
-        return {"Material events": tiles} if tiles else {}
-    out: dict[str, list[NewsTile]] = {}
-    for i, h in enumerate(headers):
-        title = h.group("title").strip()
-        body_start = h.end()
-        body_end = headers[i + 1].start() if i + 1 < len(headers) else len(md)
-        chunk = md[body_start:body_end]
-        tiles = _parse_news_bullets(chunk, limit_per_section)
-        if tiles:
-            out[title] = tiles
-    return out
-
-
-def _parse_news_bullets(chunk: str, limit: int) -> list[NewsTile]:
-    tiles: list[NewsTile] = []
-    for m in _NEWS_BULLET_RX.finditer(chunk):
-        headline = m.group("headline").strip()
-        gloss = m.group("gloss").strip().rstrip(".")
-        gloss = re.sub(r"\*\*([^*]+)\*\*", r"\1", gloss)
-        gloss = re.sub(r"\*([^*]+)\*", r"\1", gloss)
-        date = (m.group("date") or "").strip()
-        source = (m.group("source") or "").strip()
-        url = (m.group("url") or "").strip() or None
-        tiles.append(
+    grouped: dict[str, list[NewsTile]] = {}
+    for event in section.structured_output.events:
+        title = _NEWS_SECTION_TITLES[event.category]
+        rows = grouped.setdefault(title, [])
+        if len(rows) >= limit_per_section:
+            continue
+        gloss = f"{event.factual_summary} {event.thesis_implication}".strip().rstrip(".")
+        grouped[title].append(
             NewsTile(
-                tag=_classify_tag(headline),
-                date=date,
-                source=source,
-                headline=headline,
+                tag=event.tag,
+                date=event.published_at[:10],
+                source=event.publisher,
+                headline=event.headline,
                 gloss=gloss,
-                tone=_classify_tone(headline, gloss),
-                url=url,
+                tone=event.tone,
+                url=event.url,
             )
         )
-        if len(tiles) >= limit:
-            break
-    return tiles
+    return grouped
 
 
 # ---------------------------------------------------------------------------
@@ -552,429 +409,6 @@ def quarter_short(label: str) -> str:
     return label
 
 
-# ---------------------------------------------------------------------------
-# P3 panel bundle (P4-A1)
-# ---------------------------------------------------------------------------
-#
-# The P3 accessors in src/report/sections/p3_data.py return typed rows for
-# six "captured but not surfaced" subsystems. The workspace renderer needs
-# them spread across multiple tabs (Thesis / Company / Decisions / SayDo /
-# Eval) so the cleanest wiring is: load every panel's rows up-front, hand
-# the bundle to the tab dispatcher, let each tab pull what it needs.
-#
-# Why dataclass not Pydantic: same convention as ``KpiStripTile`` / ``NewsTile``
-# in this module — render-side shaping, not a section boundary. Pydantic
-# at the section boundary (ReportSpec); dataclasses for renderer-internal
-# data movement.
-
-
-class PanelAvailability(StrEnum):
-    PRESENT = "present"
-    EMPTY = "empty"
-    NOT_CONFIGURED = "not_configured"
-    UNAVAILABLE = "unavailable"
-
-
-_DATABASE_PANELS = (
-    "macro_sensitivities",
-    "strategic_targets",
-    "customer_concentrations",
-    "lease_ladder",
-    "decision_history",
-    "open_notes",
-    "position_review_count",
-    "standing_rules",
-    "comp_set_context",
-    "peer_comp",
-)
-
-
-def _new_availability() -> dict[str, PanelAvailability]:
-    return {}
-
-
-def _new_open_notes() -> list[AnalystNoteRow]:
-    return []
-
-
-@dataclass(frozen=True)
-class WorkspaceP3Panels:
-    """All P3 accessor rows for one (ticker, repo) render, pre-loaded.
-
-    Availability records distinguish successful empty reads from unconfigured
-    or unavailable sources. Data fields retain the renderer's empty shapes;
-    review counts stay None unless their source was successfully read.
-    """
-
-    macro_sensitivities: list[MacroSensitivityRow]
-    strategic_targets: list[StrategicTargetRow]
-    customer_concentrations: list[CustomerConcentrationRow]
-    lease_ladder: list[LeaseLadderRow]
-    decision_history: DecisionHistorySummary
-    peer_comp: list[PeerCompRow]
-    # P4.4: the owner's open analyst notes for this name — new builds lead
-    # with the standing watch-items (the strip under the thesis lede).
-    open_notes: list[AnalystNoteRow] = field(default_factory=_new_open_notes)
-    # Position-tab coaching line (REQ-3/REQ-6): count of advisor_memos rows
-    # with kind='position_review' for this ticker — "Guard: never run on this
-    # name · N position reviews". None means the history was not available;
-    # zero is reserved for a successful count with no matching rows.
-    position_review_count: int | None = None
-    # PR10 (Monthly Red Team surface wiring): the ticker's standing sizing
-    # rules (position_sizing_intent history + guard coverage read) for the
-    # Position tab's Standing-rules block. None = no rows on file / DB absent
-    # (the block hides, hide-don't-stub). StandingRulesPanel is defined later
-    # in this module — fine under `from __future__ import annotations`.
-    standing_rules: StandingRulesPanel | None = None
-    # Phase 3 (comparable_sets_bottoms_up.md §11): the Company tab's "Sector
-    # context" card — subject vs comp-set median/aggregate vs pool-wide
-    # industry/sector benchmark, reading comp_set_metrics_daily. None = no
-    # frozen comparable set for this ticker yet (hide-don't-stub — most of
-    # the pool, on a phased rollout).
-    comp_set_context: CompSetContextSection | None = None
-
-    availability: dict[str, PanelAvailability] = field(default_factory=_new_availability)
-
-    @classmethod
-    def empty(
-        cls, status: PanelAvailability = PanelAvailability.NOT_CONFIGURED
-    ) -> WorkspaceP3Panels:
-        return cls(
-            macro_sensitivities=[],
-            strategic_targets=[],
-            customer_concentrations=[],
-            lease_ladder=[],
-            decision_history=DecisionHistorySummary(
-                total=0,
-                by_kind={},
-                by_conviction={},
-                win_rate_overall=None,
-                rows=[],
-            ),
-            peer_comp=[],
-            open_notes=[],
-            position_review_count=None,
-            availability=dict.fromkeys(_DATABASE_PANELS, status),
-        )
-
-
-def _load_open_notes(ticker: str, conn: sqlite3.Connection) -> list[AnalystNoteRow]:
-    rows = list_notes(ticker=ticker, status="open", limit=12, conn=conn)
-    kind_rank = {"watch": 0, "question": 1}
-    return sorted(rows, key=lambda note: kind_rank.get(note.kind, 9))
-
-
-def load_graded_sell_base_rate(ticker: str, db_path: Path) -> str | None:
-    """The graded-sells base-rate line for the Position-tab coaching block, or
-    None when unavailable.
-
-    ``advisor.position_review.graded_sell_record`` is being built on a
-    parallel branch (not yet merged as of this PR) — a guarded import so this
-    renderer never hard-depends on a module that may not exist yet. Any
-    failure (missing module, missing DB, missing table) degrades to None and
-    the caller skips the line silently (spec: "do not fail if it's missing")."""
-    if not db_path.exists():
-        return None
-    try:
-        from advisor.position_review import graded_sell_record
-    except ImportError:
-        return None
-    try:
-        # The record is deliberately portfolio-wide (it grades the OWNER's
-        # sell/trim pattern, not this name) — ``ticker`` stays in this loader's
-        # signature for the per-ticker P3 call shape but doesn't scope the SQL.
-        del ticker
-        result = cast("object", graded_sell_record(db_path))
-    except sqlite3.Error:
-        return None
-    return cast("str | None", result)
-
-
-# ---------------------------------------------------------------------------
-# Standing rules (Monthly Red Team PR10 — surface wiring)
-# ---------------------------------------------------------------------------
-#
-# The per-ticker brief's Position tab historically rendered zero
-# ``position_sizing_intent`` content — the FLKR exit ladder, RBRK/BKNG target
-# weights and the DRAFT add-rungs were visible to the Risk panel, /review and
-# Ask but invisible in the brief. This loader reads the ticker's full intent
-# history (the same table + row shape ``position_guard`` reads) and derives
-# the coverage line via ``position_guard.evaluate_downside_trigger`` /
-# ``evaluate_add_trigger`` — the naked-position gate's OWN detection logic,
-# never re-derived.
-
-# The DRAFT provenance prefixes the red-team write paths stamp on narratives:
-# PR9's data pass writes "[draft, pending owner review] ..." and
-# redteam.response._accept writes "[red-team accepted, pending owner edit] ..."
-# — both are machine-proposed rows awaiting the owner, rendered as a quiet
-# DRAFT chip (the bracketed prefix is stripped from the displayed narrative —
-# the chip IS the prefix) rather than blended in with owner-authored rules.
-_DRAFT_NARRATIVE_RE = re.compile(
-    r"^\s*\[\s*(?:draft\b|red-team accepted\b)[^\]]*\]\s*", re.IGNORECASE
-)
-
-
-@dataclass(frozen=True)
-class StandingRuleRow:
-    """One ``position_sizing_intent`` row, render-ready."""
-
-    intent_kind: str
-    intent_value: float | None
-    narrative: str
-    is_draft: bool
-    updated_at: datetime
-
-
-@dataclass(frozen=True)
-class StandingRulesPanel:
-    """The Position tab's Standing-rules block: every sizing intent on file
-    for one ticker, newest first, plus the guard's coverage read.
-
-    ``downside_passed`` / ``add_passed`` are ``None`` when the guard module
-    was unavailable (guarded import), never a guess. ``add_is_draft`` marks an
-    add-rung whose only evidence rows are machine-proposed drafts."""
-
-    rows: list[StandingRuleRow]
-    downside_passed: bool | None
-    add_passed: bool | None
-    add_is_draft: bool = False
-
-
-def _parse_intent_dt(raw: object) -> datetime | None:
-    if raw is None or raw == "":
-        return None
-    try:
-        dt = datetime.fromisoformat(str(raw))
-    except ValueError:
-        return None
-    # Naive-UTC convention (reference_naive_utc): strip any aware offset so
-    # pre-migration rows compare/render like the naive rows.
-    return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
-
-
-def load_standing_rules(
-    ticker: str, db_path: Path | None, repo_root: Path, *, conn: sqlite3.Connection | None = None
-) -> StandingRulesPanel | None:
-    """The ticker's ``position_sizing_intent`` history as a render-ready
-    panel, or ``None`` when there are no rows on file (hide-don't-stub) or the
-    DB/table is absent — the same best-effort degrade contract as every other
-    loader in this module."""
-    if conn is None and (db_path is None or not db_path.exists()):
-        return None
-    try:
-        db_conn = (
-            conn
-            if conn is not None
-            else connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
-        )
-    except sqlite3.Error:
-        return None
-    original_factory = db_conn.row_factory
-    db_conn.row_factory = sqlite3.Row
-    try:
-        raw_rows = db_conn.execute(
-            "SELECT intent_kind, intent_value, narrative, updated_at "
-            "FROM position_sizing_intent WHERE ticker = ? "
-            "ORDER BY updated_at DESC, id DESC",
-            (ticker.upper().strip(),),
-        ).fetchall()
-    except sqlite3.Error:
-        if conn is not None:
-            raise
-        return None
-    finally:
-        if conn is None:
-            db_conn.close()
-        else:
-            db_conn.row_factory = original_factory
-    if not raw_rows:
-        return None
-
-    rows: list[StandingRuleRow] = []
-    for r in raw_rows:
-        narrative = str(r["narrative"]) if r["narrative"] is not None else ""
-        is_draft = bool(_DRAFT_NARRATIVE_RE.match(narrative))
-        if is_draft:
-            # The DRAFT chip carries the provenance — strip the raw prefix
-            # from the displayed narrative so it isn't said twice.
-            narrative = _DRAFT_NARRATIVE_RE.sub("", narrative, count=1)
-        updated_at = _parse_intent_dt(r["updated_at"]) or datetime(1970, 1, 1)
-        rows.append(
-            StandingRuleRow(
-                intent_kind=str(r["intent_kind"]),
-                intent_value=(float(r["intent_value"]) if r["intent_value"] is not None else None),
-                narrative=narrative,
-                is_draft=is_draft,
-                updated_at=updated_at,
-            )
-        )
-
-    # Coverage line — reuse position_guard's exact detection (never
-    # re-derived). Guarded import so this renderer never hard-depends on the
-    # guard module's transitive imports; a failure degrades the coverage line
-    # to absent, never the whole panel.
-    downside_passed: bool | None = None
-    add_passed: bool | None = None
-    add_is_draft = False
-    try:
-        from position_guard import IntentRow, evaluate_add_trigger, evaluate_downside_trigger
-
-        intents = [
-            IntentRow(intent_kind=row.intent_kind, narrative=row.narrative or None) for row in rows
-        ]
-        downside_passed = evaluate_downside_trigger(
-            intents, repo_root=repo_root, ticker=ticker
-        ).passed
-        add_passed = evaluate_add_trigger(intents).passed
-        if add_passed:
-            # The add check passed — draft iff NO non-draft row alone passes
-            # it, i.e. the pre-commitment currently rests on machine-proposed
-            # rows awaiting owner review.
-            non_draft = [
-                IntentRow(intent_kind=row.intent_kind, narrative=row.narrative or None)
-                for row in rows
-                if not row.is_draft
-            ]
-            add_is_draft = not evaluate_add_trigger(non_draft).passed
-    except ImportError:
-        pass
-    return StandingRulesPanel(
-        rows=rows,
-        downside_passed=downside_passed,
-        add_passed=add_passed,
-        add_is_draft=add_is_draft,
-    )
-
-
-def load_workspace_p3_panels(
-    ticker: str,
-    repo_root: Path,
-    *,
-    db_path: Path | None = None,
-    conn: sqlite3.Connection | None = None,
-) -> WorkspaceP3Panels:
-    """Read the optional panels through one connection with explicit availability.
-
-    A supplied connection remains caller-owned. Optional data failures do not
-    erase successfully read panels or become evidence of an empty history.
-    """
-    if db_path is None and conn is None:
-        return WorkspaceP3Panels.empty()
-    try:
-        db_conn = (
-            conn
-            if conn is not None
-            else connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
-        )
-    except (sqlite3.Error, OSError):
-        log.warning({"event": "workspace_database_unavailable"})
-        return WorkspaceP3Panels.empty(PanelAvailability.UNAVAILABLE)
-    original_factory = db_conn.row_factory
-    db_conn.row_factory = sqlite3.Row
-    try:
-        try:
-            tables = {
-                str(row[0])
-                for row in db_conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type IN ('table','view')"
-                )
-            }
-        except sqlite3.Error:
-            log.warning({"event": "workspace_database_unavailable"})
-            return WorkspaceP3Panels.empty(PanelAvailability.UNAVAILABLE)
-        availability: dict[str, PanelAvailability] = {}
-
-        def read(
-            name: str,
-            table: str,
-            loader: Callable[[], _ReadResult],
-            fallback: _ReadResult,
-            has_data: Callable[[_ReadResult], bool] = bool,
-        ) -> _ReadResult:
-            if table not in tables:
-                availability[name] = PanelAvailability.UNAVAILABLE
-                log.warning({"event": "workspace_panel_unavailable", "panel": name})
-                return fallback
-            try:
-                result = loader()
-            except (sqlite3.Error, OSError, ValueError, KeyError):
-                availability[name] = PanelAvailability.UNAVAILABLE
-                log.warning({"event": "workspace_panel_unavailable", "panel": name})
-                return fallback
-            availability[name] = (
-                PanelAvailability.PRESENT if has_data(result) else PanelAvailability.EMPTY
-            )
-            return result
-
-        empty = WorkspaceP3Panels.empty()
-        panels = WorkspaceP3Panels(
-            macro_sensitivities=read(
-                "macro_sensitivities",
-                "macro_sensitivities",
-                lambda: load_macro_sensitivities(ticker, conn=db_conn),
-                [],
-            ),
-            strategic_targets=read(
-                "strategic_targets",
-                "strategic_targets",
-                lambda: load_strategic_targets(ticker, conn=db_conn),
-                [],
-            ),
-            customer_concentrations=read(
-                "customer_concentrations",
-                "customer_concentrations",
-                lambda: load_customer_concentrations(ticker, conn=db_conn),
-                [],
-            ),
-            lease_ladder=read(
-                "lease_ladder",
-                "lease_commitments",
-                lambda: load_lease_ladder(ticker, conn=db_conn),
-                [],
-            ),
-            decision_history=read(
-                "decision_history",
-                "decisions",
-                lambda: load_decision_history(ticker, conn=db_conn),
-                empty.decision_history,
-                lambda history: history.total > 0,
-            ),
-            peer_comp=read(
-                "peer_comp",
-                "tracked_companies",
-                lambda: load_peer_comp(ticker, repo_root=repo_root, conn=db_conn),
-                [],
-            ),
-            open_notes=read(
-                "open_notes", "analyst_notes", lambda: _load_open_notes(ticker, db_conn), []
-            ),
-            position_review_count=read(
-                "position_review_count",
-                "advisor_memos",
-                lambda: count_memos(kind="position_review", ticker=ticker, conn=db_conn),
-                None,
-            ),
-            standing_rules=read(
-                "standing_rules",
-                "position_sizing_intent",
-                lambda: load_standing_rules(ticker, db_path, repo_root, conn=db_conn),
-                None,
-            ),
-            comp_set_context=read(
-                "comp_set_context",
-                "comparable_sets",
-                lambda: load_comp_set_context(ticker, repo_root=repo_root, conn=db_conn),
-                None,
-            ),
-        )
-        return replace(panels, availability=availability)
-    finally:
-        if conn is None:
-            db_conn.close()
-        else:
-            db_conn.row_factory = original_factory
-
-
 __all__ = [
     "KpiStripTile",
     "NewsTile",
@@ -983,6 +417,7 @@ __all__ = [
     "StandingRulesPanel",
     "WorkspaceP3Panels",
     "format_ledger_value",
+    "load_graded_sell_base_rate",
     "load_standing_rules",
     "load_workspace_p3_panels",
     "quarter_short",

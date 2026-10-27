@@ -186,58 +186,6 @@ def test_peek_memo_unknown_kind_and_missing_row_404(client: FlaskClient) -> None
     assert client.get("/api/peek/memo/swap_check").status_code == 404
 
 
-def _seed_review_memo(
-    db_path: Path, *, verdict_source: str, attested: bool = False, ticker: str = "NU"
-) -> None:
-    import json
-
-    ctx: dict[str, object] = {"verdict_source": verdict_source}
-    if attested:
-        ctx["owner_attested_change"] = True
-    conn = sqlite3.connect(db_path)
-    try:
-        conn.execute(
-            "INSERT INTO advisor_memos (user_id, kind, ticker, title, body_md, context_json, "
-            "created_at) VALUES ('bhanu', 'position_review', ?, 'Position review: NU', 'body', "
-            "?, '2026-06-10 12:00:00')",
-            (ticker, json.dumps(ctx)),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def test_peek_memo_review_shows_attest_button_for_guard_override(
-    client: FlaskClient, db_path: Path
-) -> None:
-    """A guard_override position-review memo peek carries the owner's one-click
-    'this review changed my call' attestation (the only surface that moves the
-    Coach P&L's Q3'26 bar)."""
-    _seed_review_memo(db_path, verdict_source="guard_override")
-    body = client.get("/api/peek/memo/position_review").data.decode()
-    assert "This review changed my call" in body
-    assert "data-attest-memo-id" in body
-    assert "/api/coach/attest-change" in body
-
-
-def test_peek_memo_review_already_attested_shows_confirmation(
-    client: FlaskClient, db_path: Path
-) -> None:
-    _seed_review_memo(db_path, verdict_source="guard_override", attested=True)
-    body = client.get("/api/peek/memo/position_review").data.decode()
-    assert "changed your call" in body  # the confirmation line
-    assert "This review changed my call" not in body  # button gone once attested
-
-
-def test_peek_memo_review_no_button_for_plain_llm_verdict(
-    client: FlaskClient, db_path: Path
-) -> None:
-    _seed_review_memo(db_path, verdict_source="llm")
-    body = client.get("/api/peek/memo/position_review").data.decode()
-    assert "This review changed my call" not in body
-    assert "data-attest-memo-id" not in body
-
-
 # ----------------------------------------------------------------------------
 # /api/peek/review (PR5 — the instant position-review read + escalation button)
 # ----------------------------------------------------------------------------
@@ -1141,7 +1089,8 @@ def _seed_brief_artifact(db_path: Path, ticker: str, er_iso: str, body: str) -> 
             "ticker TEXT, expected_date TEXT);"
             "CREATE TABLE IF NOT EXISTS llm_artifacts ("
             "id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, "
-            "scope TEXT NOT NULL DEFAULT 'ticker', purpose TEXT NOT NULL, "
+            "scope TEXT NOT NULL DEFAULT 'ticker', document_version_id TEXT, "
+            "purpose TEXT NOT NULL, "
             "fiscal_period TEXT, content_md TEXT, content_json TEXT, "
             "input_sha256 TEXT NOT NULL, output_sha256 TEXT, model TEXT, "
             "prompt_version TEXT NOT NULL DEFAULT 'v1', "
@@ -1280,7 +1229,8 @@ def _seed_readout_ticker(
             "text TEXT NOT NULL);"
             "CREATE TABLE IF NOT EXISTS llm_artifacts ("
             "id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, "
-            "scope TEXT NOT NULL DEFAULT 'ticker', purpose TEXT NOT NULL, "
+            "scope TEXT NOT NULL DEFAULT 'ticker', document_version_id TEXT, "
+            "purpose TEXT NOT NULL, "
             "fiscal_period TEXT, content_md TEXT, content_json TEXT, "
             "input_sha256 TEXT NOT NULL, output_sha256 TEXT, model TEXT, "
             "prompt_version TEXT NOT NULL DEFAULT 'v1', "
@@ -1497,38 +1447,3 @@ def test_earnings_readout_peek_degrades_without_quarter_data(repo: Path, db_path
 # ----------------------------------------------------------------------------
 # /api/peek/weekly-packet (wave3b Task 3 — the Sunday-packet band's doorway)
 # ----------------------------------------------------------------------------
-
-
-def test_weekly_packet_peek_route_no_run_this_week(client: FlaskClient) -> None:
-    """No web reply surface exists for the packet — the route always 200s
-    with a read-only note, never a 404 (there's nothing to look up BY id)."""
-    resp = client.get("/api/peek/weekly-packet")
-    assert resp.status_code == 200
-    assert "No Sunday packet run yet" in resp.data.decode()
-
-
-def test_weekly_packet_peek_route_serves_current_week(client: FlaskClient, db_path: Path) -> None:
-    now = datetime.now(UTC).replace(tzinfo=None)
-    iso_year, iso_week, _ = now.isocalendar()
-    conn = sqlite3.connect(db_path)
-    try:
-        cur = conn.execute(
-            "INSERT INTO weekly_packet_runs (iso_year, iso_week, status, total_items, "
-            "created_at, updated_at) VALUES (?, ?, 'open', 1, ?, ?)",
-            (iso_year, iso_week, now.isoformat(), now.isoformat()),
-        )
-        run_id = cur.lastrowid
-        conn.execute(
-            "INSERT INTO weekly_packet_items (run_id, item_kind, ref_id, ticker, title, "
-            "order_index, created_at) VALUES (?, 'proposal', 1, 'NU', 'steer proposal', 0, ?)",
-            (run_id, now.isoformat()),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    resp = client.get("/api/peek/weekly-packet")
-    assert resp.status_code == 200
-    body = resp.data.decode()
-    assert "steer proposal" in body
-    assert "given on Telegram" in body

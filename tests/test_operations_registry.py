@@ -107,7 +107,6 @@ def test_registry_projects_every_manifest_task_and_wrapper_step() -> None:
         if task.task_name == r"\earnings-summary\portfolio_tracker_api"
     )
     assert tracker_api.schedule.trigger == "BootTrigger"
-    assert tracker_api.service_owned is False
     assert tracker_api.scheduler_expectation == "required_enabled"
     tracker_api_step = next(
         step for step in registry.job_steps if step.job == "portfolio-tracker-api"
@@ -122,8 +121,8 @@ def test_registry_projects_every_manifest_task_and_wrapper_step() -> None:
 def test_registry_projects_canonical_services_llm_sources_and_schema() -> None:
     registry = build_operations_registry(PROJECT_ROOT)
     assert tuple(service.name for service in registry.services) == managed_service_names()
-    assert tuple(service.role for service in registry.services) == ("dashboard", "capture_poller")
-    assert managed_service_for_role(ServiceRole.CAPTURE_POLLER).name == "es-poller"
+    assert tuple(service.role for service in registry.services) == ("dashboard",)
+    assert managed_service_for_role(ServiceRole.DASHBOARD).name == "es-dashboard"
     assert registry.llm_purposes == tuple(sorted(set(LLM_MODELS) | set(registered_purposes())))
     assert tuple((pin.purpose, pin.model) for pin in registry.llm_model_pins) == tuple(
         sorted(LLM_MODELS.items())

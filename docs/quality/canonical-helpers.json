@@ -3,7 +3,7 @@
   "generated_at": "2026-10-09T15:00:01.249634+00:00",
   "generated_commit": "f9cf291b425aaeef444fc9d4951770b8cb5211cc",
   "reconciliation": {
-    "scope": "Refresh five changed retained source captures, preserve their historical originals, and disposition six upstream financial hash/validator boundaries. Runtime and test definitions are unchanged.",
+    "scope": "Refresh five changed retained source captures, preserve their historical originals, and disposition six upstream financial hash/validator boundaries. Runtime and test definitions are unchanged. Retired owners are marked collapsed; exact transcript document artifact and verifier hash helpers are separately retained with byte-equivalent canonical mappings. Removed obsolete captures for deleted source files because the tree-state oracle requires captured sites to have a source file. Refreshed the daily ticker selector capture after its current tracked-company query changed.",
     "source_commit": "7c4182a539a35e2be45f16adf0b02a6f6cb74228",
     "updated_sites": [
       "execution/extract_company_description.py:103:_resolve_tickers",
@@ -17,7 +17,19 @@
       "src/provenance/meli_reported_statements.py:124:_sha",
       "src/provenance/reviewed_sec_financial_tables.py:53:_sha",
       "src/provenance/financial_derivations.py:71:_digest",
-      "execution/extract_kpis_from_summaries.py:152:_resolve_tickers"
+      "execution/extract_kpis_from_summaries.py:152:_resolve_tickers",
+      "src/llm_artifact_store.py:228:_canonical_json",
+      "src/llm_artifact_store.py:232:_sha256_text",
+      "src/pipeline/transcript_summary.py:95:_canonical_json",
+      "src/pipeline/transcript_summary.py:99:_sha256",
+      "src/pipeline/transcript_summary_verification.py:67:_sha"
+    ],
+    "removed_sites": [
+      "execution/build_saydo_pairs.py",
+      "execution/extract_kpis_from_summaries.py",
+      "src/llm/contract.py",
+      "src/operations/readme_governance.py",
+      "src/standup/ledger.py"
     ]
   },
   "schema_version": "1",
@@ -845,34 +857,6 @@
     },
     {
       "canonical_extra": null,
-      "canonical_target": null,
-      "disposition": "retained",
-      "end_line": 196,
-      "family": "tickers",
-      "file": "execution/build_saydo_pairs.py",
-      "line": 184,
-      "name": "_resolve_tickers",
-      "referenced": {
-        "SQLiteConnectionRole": {
-          "import_module": "sqlite_runtime",
-          "import_name": "SQLiteConnectionRole"
-        },
-        "connect_sqlite": {
-          "import_module": "sqlite_runtime",
-          "import_name": "connect_sqlite"
-        },
-        "db": {
-          "import_module": "db",
-          "import_name": "db"
-        }
-      },
-      "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
-      "scope": "module",
-      "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
-      "unresolved": []
-    },
-    {
-      "canonical_extra": null,
       "canonical_target": "clock.now_iso",
       "disposition": "retained",
       "end_line": 75,
@@ -954,7 +938,7 @@
       "canonical_extra": null,
       "canonical_target": null,
       "disposition": "retained",
-      "end_line": 371,
+      "end_line": 373,
       "family": "tickers",
       "file": "execution/daily_fetch_and_brief.py",
       "line": 340,
@@ -967,8 +951,9 @@
       },
       "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
       "scope": "module",
-      "source": "def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:\n    \"\"\"Tickers to refresh this run. Explicit > all-tracked > brief_dirty queue + P1.\"\"\"\n    cursor = conn.cursor()\n    if args.ticker:\n        return [args.ticker.upper()]\n    if args.all_tracked:\n        cursor.execute(\n            f\"SELECT ticker FROM tracked_companies \"\n            f\"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} \"\n            f\"AND (archived_at IS NULL) \"\n            f\"ORDER BY ticker\"\n        )\n    else:\n        # Dirty queue plus every P1 name. The schedule-cadence gate documents \"P1\n        # always runs daily\", but a dirty-only candidate set leaves P1 out on\n        # days when no fact write happens to land (e.g. every statement\n        # endpoint tier-blocked on the free FMP plan). Gates B + C still make\n        # a no-change P1 day a cheap skip \u2014 and the skip itself records\n        # last_built_at, which is what the dashboard's daily-freshness strip\n        # measures.\n        cursor.execute(\n            \"SELECT ticker FROM tracked_companies \"\n            \"WHERE (brief_dirty = 1 OR list_type = 'portfolio') \"\n            f\"AND list_type IN {db.BRIEFED_LIST_TYPES_SQL} \"\n            \"AND (archived_at IS NULL) \"\n            \"ORDER BY ticker\"\n        )\n    rows = cursor.fetchall()\n    tickers = [str(r[\"ticker\"]).upper() for r in rows]\n    if args.limit > 0:\n        tickers = tickers[: args.limit]\n    return tickers",
-      "unresolved": []
+      "source": "def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:\n    \"\"\"Tickers to refresh this run. Explicit > all-tracked > brief_dirty queue + P1.\"\"\"\n    cursor = conn.cursor()\n    if args.ticker:\n        return [args.ticker.upper()]\n    if args.all_tracked:\n        cursor.execute(\n            f\"SELECT ticker FROM tracked_companies \"\n            f\"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} \"\n            f\"AND (archived_at IS NULL) \"\n            \"AND LOWER(COALESCE(instrument_type,'')) <> 'etf' \"\n            f\"ORDER BY ticker\"\n        )\n    else:\n        # Dirty queue plus every P1 name. The schedule-cadence gate documents \"P1\n        # always runs daily\", but a dirty-only candidate set leaves P1 out on\n        # days when no fact write happens to land (e.g. every statement\n        # endpoint tier-blocked on the free FMP plan). Gates B + C still make\n        # a no-change P1 day a cheap skip — and the skip itself records\n        # last_built_at, which is what the dashboard's daily-freshness strip\n        # measures.\n        cursor.execute(\n            \"SELECT ticker FROM tracked_companies \"\n            \"WHERE (brief_dirty = 1 OR list_type = 'portfolio') \"\n            f\"AND list_type IN {db.BRIEFED_LIST_TYPES_SQL} \"\n            \"AND (archived_at IS NULL) \"\n            \"AND LOWER(COALESCE(instrument_type,'')) <> 'etf' \"\n            \"ORDER BY ticker\"\n        )\n    rows = cursor.fetchall()\n    tickers = [str(r[\"ticker\"]).upper() for r in rows]\n    if args.limit > 0:\n        tickers = tickers[: args.limit]\n    return tickers",
+      "unresolved": [],
+      "source_revision_note": "Working-tree capture refreshed after the tracked-company selector changed; this is not a committed revision."
     },
     {
       "canonical_extra": null,
@@ -1045,7 +1030,7 @@
           },
           "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
           "scope": "module",
-          "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    # `--all` is scoped to BRIEFED_LIST_TYPES (portfolio + evaluation) \u2014 these\n    # are the names that auto-produce briefs and therefore need a \u00a72 company\n    # description. Watchlist names are a holding pen; if you want to backfill\n    # one, pass it explicitly via `--ticker`.\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
+          "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    # `--all` is scoped to BRIEFED_LIST_TYPES (portfolio + evaluation) — these\n    # are the names that auto-produce briefs and therefore need a §2 company\n    # description. Watchlist names are a holding pen; if you want to backfill\n    # one, pass it explicitly via `--ticker`.\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
           "unresolved": []
         }
       ],
@@ -1067,7 +1052,7 @@
       },
       "retained_reason": "Retain the governed roster boundary: this CLI accepts an already-resolved database path, selects BRIEFED_LIST_TYPES (portfolio and evaluation), and permits an explicit ticker. Its authority and list-type scope differ from active-roster and SEC collection selectors. Main removed the checkout-default database inference; the previous capture is preserved as history, not labeled as a canonical collapse.",
       "scope": "module",
-      "source": "def _resolve_tickers(db_path: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    # `--all` is scoped to BRIEFED_LIST_TYPES (portfolio + evaluation) \u2014 these\n    # are the names that auto-produce briefs and therefore need a \u00a72 company\n    # description. Watchlist names are a holding pen; if you want to backfill\n    # one, pass it explicitly via `--ticker`.\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
+      "source": "def _resolve_tickers(db_path: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    # `--all` is scoped to BRIEFED_LIST_TYPES (portfolio + evaluation) — these\n    # are the names that auto-produce briefs and therefore need a §2 company\n    # description. Watchlist names are a holding pen; if you want to backfill\n    # one, pass it explicitly via `--ticker`.\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
       "source_commit": "7c4182a539a35e2be45f16adf0b02a6f6cb74228",
       "unresolved": []
     },
@@ -1157,91 +1142,8 @@
       },
       "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
       "scope": "module",
-      "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    # `--all` is scoped to briefed list types (portfolio + evaluation) \u2014 the\n    # names that carry a DIY picker key-metrics row.\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
+      "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    # `--all` is scoped to briefed list types (portfolio + evaluation) — the\n    # names that carry a DIY picker key-metrics row.\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
       "unresolved": []
-    },
-    {
-      "canonical_extra": null,
-      "canonical_target": null,
-      "disposition": "retained",
-      "end_line": 170,
-      "family": "tickers",
-      "file": "execution/extract_kpis_from_summaries.py",
-      "historical_captures": [
-        {
-          "canonical_extra": null,
-          "canonical_target": null,
-          "capture_commit": "95d69f8274f21ae4d227584540bdcbff7d1235fe",
-          "capture_status": "historical retained implementation superseded by shared database ownership",
-          "disposition": "retained",
-          "end_line": 154,
-          "family": "tickers",
-          "file": "execution/extract_kpis_from_summaries.py",
-          "line": 142,
-          "name": "_resolve_tickers",
-          "referenced": {
-            "SQLiteConnectionRole": {
-              "import_module": "sqlite_runtime",
-              "import_name": "SQLiteConnectionRole"
-            },
-            "connect_sqlite": {
-              "import_module": "sqlite_runtime",
-              "import_name": "connect_sqlite"
-            },
-            "db": {
-              "import_module": "db",
-              "import_name": "db"
-            }
-          },
-          "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
-          "scope": "module",
-          "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
-          "unresolved": []
-        },
-        {
-          "canonical_extra": null,
-          "canonical_target": null,
-          "capture_commit": "93703523577c96a2a62b15be528b1dba6401afdc",
-          "capture_status": "historical retained implementation superseded by explicit configured database authority",
-          "disposition": "retained",
-          "end_line": 154,
-          "family": "tickers",
-          "file": "execution/extract_kpis_from_summaries.py",
-          "line": 142,
-          "name": "_resolve_tickers",
-          "referenced": {
-            "SQLiteConnectionRole": {
-              "import_module": "sqlite_runtime",
-              "import_name": "SQLiteConnectionRole"
-            },
-            "connect_sqlite": {
-              "import_module": "sqlite_runtime",
-              "import_name": "connect_sqlite"
-            },
-            "db": {
-              "import_module": "db",
-              "import_name": "db"
-            }
-          },
-          "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
-          "scope": "module",
-          "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
-          "unresolved": []
-        }
-      ],
-      "line": 161,
-      "name": "_resolve_tickers",
-      "referenced": {
-        "db": {
-          "import_module": "db",
-          "import_name": "db"
-        }
-      },
-      "retained_reason": "Retain the governed roster selection: the CLI supplies its resolved shared connection, an explicit ticker is uppercased, and roster selection preserves DISTINCT, ACTIVE_LIST_TYPES_SQL, and ORDER BY ticker. These selection semantics are unchanged; only database ownership moves to the caller. The previous checkout-default capture is preserved as history.",
-      "scope": "module",
-      "source": "def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    cur = conn.cursor()\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    return [r[0] for r in rows]",
-      "unresolved": [],
-      "source_commit": "231b42c024064479bbb16982fd2eabe9443c8543"
     },
     {
       "canonical_extra": null,
@@ -1268,7 +1170,7 @@
       },
       "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
       "scope": "module",
-      "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    # `--all` is scoped to briefed list types (portfolio + evaluation) \u2014 the\n    # names that auto-produce briefs and therefore carry a peer-comp panel.\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
+      "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    # `--all` is scoped to briefed list types (portfolio + evaluation) — the\n    # names that auto-produce briefs and therefore carry a peer-comp panel.\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
       "unresolved": []
     },
     {
@@ -1306,7 +1208,7 @@
           },
           "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
           "scope": "module",
-          "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    # `--all` is scoped to BRIEFED_LIST_TYPES (portfolio + evaluation) \u2014 these\n    # are the names that auto-produce briefs and therefore need a \u00a72 platform\n    # diagram. Watchlist names are a holding pen; backfill explicitly via --ticker.\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
+          "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    # `--all` is scoped to BRIEFED_LIST_TYPES (portfolio + evaluation) — these\n    # are the names that auto-produce briefs and therefore need a §2 platform\n    # diagram. Watchlist names are a holding pen; backfill explicitly via --ticker.\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
           "unresolved": []
         }
       ],
@@ -1328,7 +1230,7 @@
       },
       "retained_reason": "Retain the governed roster boundary: this CLI accepts an already-resolved database path and selects BRIEFED_LIST_TYPES (portfolio and evaluation), with an explicit-ticker bypass. Its selection policy differs from the active-roster and SEC collection paths. Main removed checkout-default database inference; retain the previous capture as history without claiming a canonical collapse.",
       "scope": "module",
-      "source": "def _resolve_tickers(db_path: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    # `--all` is scoped to BRIEFED_LIST_TYPES (portfolio + evaluation) \u2014 these\n    # are the names that auto-produce briefs and therefore need a \u00a72 platform\n    # diagram. Watchlist names are a holding pen; backfill explicitly via --ticker.\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
+      "source": "def _resolve_tickers(db_path: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    # `--all` is scoped to BRIEFED_LIST_TYPES (portfolio + evaluation) — these\n    # are the names that auto-produce briefs and therefore need a §2 platform\n    # diagram. Watchlist names are a holding pen; backfill explicitly via --ticker.\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
       "source_commit": "7c4182a539a35e2be45f16adf0b02a6f6cb74228",
       "unresolved": []
     },
@@ -1802,7 +1704,7 @@
       },
       "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
       "scope": "module",
-      "source": "def _resolve_tickers(db_path: str, arg_tickers: list[str] | None) -> list[str]:\n    \"\"\"Active tracked universe (portfolio/watchlist/evaluation, non-archived) \u2014\n    same selection rule as execution/backfill_earnings_surprises.py.\n    ``db.get_connection`` resolves from the module-level ``db.DB_PATH``, so a\n    ``--db-path``/``--repo-root`` override re-points it via ``db.set_db_path``\n    (the repo's standard convention for CLIs that accept ``--db-path``).\"\"\"\n    if arg_tickers:\n        return [t.upper() for t in arg_tickers]\n    db.set_db_path(db_path)\n    conn = db.get_connection()\n    try:\n        cur = conn.execute(\n            f\"SELECT ticker FROM tracked_companies \"\n            f\"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} \"\n            f\"AND archived_at IS NULL ORDER BY ticker\"\n        )\n        return [str(row[\"ticker\"]) for row in cur.fetchall()]\n    finally:\n        conn.close()",
+      "source": "def _resolve_tickers(db_path: str, arg_tickers: list[str] | None) -> list[str]:\n    \"\"\"Active tracked universe (portfolio/watchlist/evaluation, non-archived) —\n    same selection rule as execution/backfill_earnings_surprises.py.\n    ``db.get_connection`` resolves from the module-level ``db.DB_PATH``, so a\n    ``--db-path``/``--repo-root`` override re-points it via ``db.set_db_path``\n    (the repo's standard convention for CLIs that accept ``--db-path``).\"\"\"\n    if arg_tickers:\n        return [t.upper() for t in arg_tickers]\n    db.set_db_path(db_path)\n    conn = db.get_connection()\n    try:\n        cur = conn.execute(\n            f\"SELECT ticker FROM tracked_companies \"\n            f\"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} \"\n            f\"AND archived_at IS NULL ORDER BY ticker\"\n        )\n        return [str(row[\"ticker\"]) for row in cur.fetchall()]\n    finally:\n        conn.close()",
       "unresolved": []
     },
     {
@@ -2147,10 +2049,10 @@
           "import_name": "CollectionSource"
         },
         "_TickerJob": {
-          "source": "class _TickerJob:\n    \"\"\"One ticker's refresh plan.\n\n    ``file_path is None`` \u2192 refresh via ``--discover`` (a configured ticker\n    re-resolves its current spreadsheet URL). ``file_path`` set \u2192 bootstrap an\n    un-configured ticker from that on-disk spreadsheet via ``--file`` (its parser\n    config is auto-built on first run).\n    \"\"\"\n\n    ticker: str\n    file_path: Path | None"
+          "source": "class _TickerJob:\n    \"\"\"One ticker's refresh plan.\n\n    ``file_path is None`` → refresh via ``--discover`` (a configured ticker\n    re-resolves its current spreadsheet URL). ``file_path`` set → bootstrap an\n    un-configured ticker from that on-disk spreadsheet via ``--file`` (its parser\n    config is auto-built on first run).\n    \"\"\"\n\n    ticker: str\n    file_path: Path | None"
         },
         "_spreadsheet_tickers": {
-          "source": "def _spreadsheet_tickers(repo_root: Path) -> dict[str, Path]:\n    \"\"\"``{TICKER: newest .xlsx}`` for every ticker with a downloaded IR spreadsheet.\n\n    The fetch pipeline drops files under ``data/ir_spreadsheets/<TICKER>/``. A\n    ticker with a spreadsheet here but no parser config can still be refreshed \u2014\n    its config is auto-built from the file on first run \u2014 which is what lifts the\n    configured-only (historically NU-only) ceiling. Excel lock files (``~$``) are\n    ignored; the newest by mtime wins when a folder holds several quarters.\n    \"\"\"\n    base = repo_root / \"data\" / \"ir_spreadsheets\"\n    if not base.is_dir():\n        return {}\n    out: dict[str, Path] = {}\n    for sub in sorted(base.iterdir()):\n        if not sub.is_dir():\n            continue\n        files = [p for p in sub.glob(\"*.xlsx\") if p.is_file() and not p.name.startswith(\"~$\")]\n        if files:\n            out[sub.name.upper()] = max(files, key=lambda p: p.stat().st_mtime)\n    return out"
+          "source": "def _spreadsheet_tickers(repo_root: Path) -> dict[str, Path]:\n    \"\"\"``{TICKER: newest .xlsx}`` for every ticker with a downloaded IR spreadsheet.\n\n    The fetch pipeline drops files under ``data/ir_spreadsheets/<TICKER>/``. A\n    ticker with a spreadsheet here but no parser config can still be refreshed —\n    its config is auto-built from the file on first run — which is what lifts the\n    configured-only (historically NU-only) ceiling. Excel lock files (``~$``) are\n    ignored; the newest by mtime wins when a folder holds several quarters.\n    \"\"\"\n    base = repo_root / \"data\" / \"ir_spreadsheets\"\n    if not base.is_dir():\n        return {}\n    out: dict[str, Path] = {}\n    for sub in sorted(base.iterdir()):\n        if not sub.is_dir():\n            continue\n        files = [p for p in sub.glob(\"*.xlsx\") if p.is_file() and not p.name.startswith(\"~$\")]\n        if files:\n            out[sub.name.upper()] = max(files, key=lambda p: p.stat().st_mtime)\n    return out"
         },
         "authorize_stored_collection_target": {
           "import_module": "pipeline.source_policy",
@@ -2163,7 +2065,7 @@
       },
       "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
       "scope": "module",
-      "source": "def _resolve_tickers(\n    *, repo_root: Path, db_path: Path, requested: list[str] | None\n) -> tuple[list[_TickerJob], list[str]]:\n    \"\"\"Return ``(jobs, skipped)``.\n\n    The refresh universe is every CONFIGURED ticker (refreshed via ``--discover``)\n    plus every ticker with a downloaded IR spreadsheet but no config (bootstrapped\n    via ``--file``); a configured ticker always discovers even if a file is also on\n    disk. ``skipped`` are explicitly-requested tickers in neither set (logged,\n    never run). With no ``--tickers`` filter the whole universe runs.\n    \"\"\"\n    configured = set(configured_tickers(repo_root))\n    on_disk = _spreadsheet_tickers(repo_root)\n\n    def _job(ticker: str) -> _TickerJob:\n        # Configured \u2192 discover (file_path None); else bootstrap from the on-disk file.\n        return _TickerJob(ticker, None if ticker in configured else on_disk.get(ticker))\n\n    universe = configured | set(on_disk)\n    candidates = sorted({t.upper() for t in requested}) if requested else sorted(universe)\n    selected: list[str] = []\n    skipped: list[str] = []\n    for ticker in candidates:\n        authorization = authorize_stored_collection_target(\n            db_path,\n            ticker,\n            requested=requested is not None,\n            source=CollectionSource.IR,\n            artifact_kind=ArtifactKind.IR_DOCUMENT,\n        )\n        if not authorization.allowed or ticker not in universe:\n            skipped.append(ticker)\n            continue\n        selected.append(ticker)\n    return [_job(t) for t in selected], skipped",
+      "source": "def _resolve_tickers(\n    *, repo_root: Path, db_path: Path, requested: list[str] | None\n) -> tuple[list[_TickerJob], list[str]]:\n    \"\"\"Return ``(jobs, skipped)``.\n\n    The refresh universe is every CONFIGURED ticker (refreshed via ``--discover``)\n    plus every ticker with a downloaded IR spreadsheet but no config (bootstrapped\n    via ``--file``); a configured ticker always discovers even if a file is also on\n    disk. ``skipped`` are explicitly-requested tickers in neither set (logged,\n    never run). With no ``--tickers`` filter the whole universe runs.\n    \"\"\"\n    configured = set(configured_tickers(repo_root))\n    on_disk = _spreadsheet_tickers(repo_root)\n\n    def _job(ticker: str) -> _TickerJob:\n        # Configured → discover (file_path None); else bootstrap from the on-disk file.\n        return _TickerJob(ticker, None if ticker in configured else on_disk.get(ticker))\n\n    universe = configured | set(on_disk)\n    candidates = sorted({t.upper() for t in requested}) if requested else sorted(universe)\n    selected: list[str] = []\n    skipped: list[str] = []\n    for ticker in candidates:\n        authorization = authorize_stored_collection_target(\n            db_path,\n            ticker,\n            requested=requested is not None,\n            source=CollectionSource.IR,\n            artifact_kind=ArtifactKind.IR_DOCUMENT,\n        )\n        if not authorization.allowed or ticker not in universe:\n            skipped.append(ticker)\n            continue\n        selected.append(ticker)\n    return [_job(t) for t in selected], skipped",
       "unresolved": []
     },
     {
@@ -2488,7 +2390,7 @@
       },
       "retained_reason": null,
       "scope": "module",
-      "source": "def _now_iso() -> str:\n    \"\"\"Naive-UTC ISO string \u2014 the repo-wide convention for TEXT timestamps.\"\"\"\n    return now_iso()",
+      "source": "def _now_iso() -> str:\n    \"\"\"Naive-UTC ISO string — the repo-wide convention for TEXT timestamps.\"\"\"\n    return now_iso()",
       "unresolved": []
     },
     {
@@ -2573,7 +2475,7 @@
           "source": "_MONTH_NUM: dict[str, int] = {\n    \"Jan\": 1,\n    \"Feb\": 2,\n    \"Mar\": 3,\n    \"Apr\": 4,\n    \"May\": 5,\n    \"Jun\": 6,\n    \"Jul\": 7,\n    \"Aug\": 8,\n    \"Sep\": 9,\n    \"Oct\": 10,\n    \"Nov\": 11,\n    \"Dec\": 12,\n}"
         }
       },
-      "retained_reason": "None-passthrough Optional parser (None in, None out) \u2014 not the fail-closed canonical instant-parser semantics",
+      "retained_reason": "None-passthrough Optional parser (None in, None out) — not the fail-closed canonical instant-parser semantics",
       "scope": "module",
       "source": "def _parse_date(s: str) -> datetime | None:\n    \"\"\"Parse 'Dec. 31, 2024' / 'December 31, 2024' / 'Sept. 28, 2024' to datetime.\"\"\"\n    m = _DATE_RX.match(s.strip())\n    if m is None:\n        return None\n    mon = _MONTH_NUM.get(m.group(1))\n    if mon is None:\n        return None\n    return datetime(int(m.group(3)), mon, int(m.group(2)))",
       "unresolved": []
@@ -2640,7 +2542,7 @@
       },
       "retained_reason": null,
       "scope": "module",
-      "source": "def _now_iso() -> str:\n    \"\"\"Naive-UTC ISO stamp \u2014 the repo storage convention.\"\"\"\n    return now_naive_utc().isoformat(sep=\" \", timespec=\"seconds\")",
+      "source": "def _now_iso() -> str:\n    \"\"\"Naive-UTC ISO stamp — the repo storage convention.\"\"\"\n    return now_naive_utc().isoformat(sep=\" \", timespec=\"seconds\")",
       "unresolved": []
     },
     {
@@ -2791,7 +2693,7 @@
           "source": "def _clean(value: object) -> str:\n    if isinstance(value, str):\n        return _WS_RX.sub(\" \", value.replace(_NBSP, \" \")).strip()\n    if value is None:\n        return \"\"\n    return str(value)"
         }
       },
-      "retained_reason": "None-passthrough Optional parser (None in, None out) \u2014 not the fail-closed canonical instant-parser semantics",
+      "retained_reason": "None-passthrough Optional parser (None in, None out) — not the fail-closed canonical instant-parser semantics",
       "scope": "module",
       "source": "def _parse_date(text: str) -> datetime | None:\n    \"\"\"Parse FMP's cover-page date renderings (\"Dec. 31,  2025\", ISO).\n\n    Returns None rather than raising: a missing period-end is a degraded but\n    workable row (fiscal year still resolves from the payload's own ``year``),\n    whereas a raised error would drop an otherwise-good filing.\n    \"\"\"\n    cleaned = _clean(text)\n    iso = _ISO_DATE_RX.search(cleaned)\n    if iso is not None:\n        try:\n            return datetime(int(iso.group(1)), int(iso.group(2)), int(iso.group(3)))\n        except ValueError:\n            return None\n    m = _DATE_RX.search(cleaned)\n    if m is None:\n        return None\n    month = _MONTHS.get(m.group(1).lower()[:4]) or _MONTHS.get(m.group(1).lower()[:3])\n    if month is None:\n        return None\n    try:\n        return datetime(int(m.group(3)), month, int(m.group(2)))\n    except ValueError:\n        return None",
       "unresolved": []
@@ -2893,7 +2795,7 @@
       },
       "retained_reason": "second-precision stamp variant specific to the ir_fetch_status store",
       "scope": "module",
-      "source": "def _now_iso() -> str:\n    \"\"\"Naive-UTC ISO timestamp (repo convention \u2014 never store an aware stamp).\"\"\"\n    return now_naive_utc().isoformat(timespec=\"seconds\")",
+      "source": "def _now_iso() -> str:\n    \"\"\"Naive-UTC ISO timestamp (repo convention — never store an aware stamp).\"\"\"\n    return now_naive_utc().isoformat(timespec=\"seconds\")",
       "unresolved": []
     },
     {
@@ -2971,21 +2873,6 @@
       "retained_reason": "hardcoded single-argument table check",
       "scope": "module",
       "source": "def _table_exists(conn: sqlite3.Connection) -> bool:\n    row = conn.execute(\n        \"SELECT name FROM sqlite_master WHERE type='table' \"\n        \"AND name='prompt_calibration_scores' LIMIT 1\"\n    ).fetchone()\n    return row is not None",
-      "unresolved": []
-    },
-    {
-      "canonical_extra": null,
-      "canonical_target": "sha256_text",
-      "disposition": "collapsed",
-      "end_line": 46,
-      "family": "sha",
-      "file": "src/llm/contract.py",
-      "line": 45,
-      "name": "_sha",
-      "referenced": {},
-      "retained_reason": null,
-      "scope": "module",
-      "source": "def _sha(value: str) -> str:\n    return hashlib.sha256(value.encode(\"utf-8\")).hexdigest()",
       "unresolved": []
     },
     {
@@ -3181,7 +3068,7 @@
       "referenced": {},
       "retained_reason": null,
       "scope": "module",
-      "source": "def _now_iso() -> str:\n    \"\"\"Naive-UTC ISO 8601 \u2014 matches the schema's canonical TEXT-timestamp format.\"\"\"\n    return datetime.now(UTC).replace(tzinfo=None).isoformat()",
+      "source": "def _now_iso() -> str:\n    \"\"\"Naive-UTC ISO 8601 — matches the schema's canonical TEXT-timestamp format.\"\"\"\n    return datetime.now(UTC).replace(tzinfo=None).isoformat()",
       "unresolved": []
     },
     {
@@ -3422,21 +3309,6 @@
       "retained_reason": "class/instance method shape (pydantic validator or model API)",
       "scope": "method",
       "source": "def _aware(cls, value: datetime) -> datetime:\n        if value.tzinfo is None:\n            raise ValueError(\"circuit timestamp must be timezone-aware\")\n        return value",
-      "unresolved": []
-    },
-    {
-      "canonical_extra": null,
-      "canonical_target": "sha256_bytes",
-      "disposition": "collapsed",
-      "end_line": 60,
-      "family": "sha",
-      "file": "src/operations/readme_governance.py",
-      "line": 59,
-      "name": "_sha256",
-      "referenced": {},
-      "retained_reason": null,
-      "scope": "module",
-      "source": "def _sha256(payload: bytes) -> str:\n    return hashlib.sha256(payload).hexdigest()",
       "unresolved": []
     },
     {
@@ -3784,7 +3656,7 @@
       "line": 431,
       "name": "_utc",
       "referenced": {},
-      "retained_reason": "aware inputs are returned unchanged (no UTC conversion) \u2014 distinct from as_utc",
+      "retained_reason": "aware inputs are returned unchanged (no UTC conversion) — distinct from as_utc",
       "scope": "module",
       "source": "def _utc(value: datetime) -> datetime:\n    \"\"\"Normalize both caller and SQLite timestamps to comparable UTC instants.\"\"\"\n    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)",
       "unresolved": []
@@ -3904,7 +3776,7 @@
       "line": 494,
       "name": "_parse_datetime",
       "referenced": {},
-      "retained_reason": "field-specific ValueError messages with strip/Z handling \u2014 domain parser",
+      "retained_reason": "field-specific ValueError messages with strip/Z handling — domain parser",
       "scope": "module",
       "source": "def _parse_datetime(raw: object, *, field: str) -> datetime:\n    if isinstance(raw, datetime):\n        parsed = raw\n    else:\n        text = str(raw).strip()\n        if not text:\n            raise ValueError(f\"source document {field} is missing\")\n        try:\n            parsed = datetime.fromisoformat(text.replace(\"Z\", \"+00:00\"))\n        except ValueError as exc:\n            raise ValueError(f\"source document {field} is not ISO-like\") from exc\n    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)",
       "unresolved": []
@@ -4260,7 +4132,7 @@
       "line": 214,
       "name": "_parse_date",
       "referenced": {},
-      "retained_reason": "None-passthrough Optional parser (None in, None out) \u2014 not the fail-closed canonical instant-parser semantics",
+      "retained_reason": "None-passthrough Optional parser (None in, None out) — not the fail-closed canonical instant-parser semantics",
       "scope": "module",
       "source": "def _parse_date(value: object) -> date | None:\n    if value is None:\n        return None\n    try:\n        return date.fromisoformat(str(value)[:10])\n    except ValueError:\n        return None",
       "unresolved": []
@@ -4953,7 +4825,7 @@
       "line": 2111,
       "name": "_datetime",
       "referenced": {},
-      "retained_reason": "keyword-only field name with ValueError messages \u2014 distinct error contract",
+      "retained_reason": "keyword-only field name with ValueError messages — distinct error contract",
       "scope": "module",
       "source": "def _datetime(value: object, *, field: str) -> datetime:\n    if isinstance(value, datetime):\n        return value\n    if isinstance(value, str):\n        try:\n            return datetime.fromisoformat(value.replace(\"Z\", \"+00:00\"))\n        except ValueError as exc:\n            raise ValueError(f\"{field} must be an ISO datetime\") from exc\n    raise ValueError(f\"{field} must be an ISO datetime\")",
       "unresolved": []
@@ -5141,7 +5013,7 @@
       "line": 1257,
       "name": "_utc",
       "referenced": {},
-      "retained_reason": "unconditional astimezone treats naive inputs as local time \u2014 distinct from as_utc which assumes UTC",
+      "retained_reason": "unconditional astimezone treats naive inputs as local time — distinct from as_utc which assumes UTC",
       "scope": "module",
       "source": "def _utc(value: datetime) -> datetime:\n    return value.astimezone(UTC)",
       "unresolved": []
@@ -5508,7 +5380,7 @@
       },
       "retained_reason": null,
       "scope": "module",
-      "source": "def _now_iso() -> str:\n    \"\"\"Naive-UTC ISO stamp \u2014 the repo storage convention.\"\"\"\n    return now_naive_utc().isoformat(sep=\" \", timespec=\"seconds\")",
+      "source": "def _now_iso() -> str:\n    \"\"\"Naive-UTC ISO stamp — the repo storage convention.\"\"\"\n    return now_naive_utc().isoformat(sep=\" \", timespec=\"seconds\")",
       "unresolved": []
     },
     {
@@ -5984,7 +5856,7 @@
       "line": 1586,
       "name": "_parse_datetime",
       "referenced": {},
-      "retained_reason": "None-passthrough Optional parser (None in, None out) \u2014 not the fail-closed canonical instant-parser semantics",
+      "retained_reason": "None-passthrough Optional parser (None in, None out) — not the fail-closed canonical instant-parser semantics",
       "scope": "module",
       "source": "def _parse_datetime(value: object) -> datetime | None:\n    if value is None:\n        return None\n    parsed = datetime.fromisoformat(str(value))\n    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)",
       "unresolved": []
@@ -6641,7 +6513,7 @@
       "line": 78,
       "name": "_sha",
       "referenced": {},
-      "retained_reason": "non-compact (default) separators with default=str \u2014 distinct byte form",
+      "retained_reason": "non-compact (default) separators with default=str — distinct byte form",
       "scope": "module",
       "source": "def _sha(value: object) -> str:\n    return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()",
       "unresolved": []
@@ -7136,21 +7008,6 @@
       "retained_reason": null,
       "scope": "module",
       "source": "def _sha256(path: Path) -> str:\n    digest = hashlib.sha256()\n    with path.open(\"rb\") as handle:\n        for chunk in iter(lambda: handle.read(1024 * 1024), b\"\"):\n            digest.update(chunk)\n    return digest.hexdigest()",
-      "unresolved": []
-    },
-    {
-      "canonical_extra": null,
-      "canonical_target": null,
-      "disposition": "retained",
-      "end_line": 70,
-      "family": "time",
-      "file": "src/standup/ledger.py",
-      "line": 69,
-      "name": "_now_iso",
-      "referenced": {},
-      "retained_reason": "accepts a datetime argument and strips tzinfo without UTC conversion \u2014 distinct from clock.to_naive_utc which converts first",
-      "scope": "module",
-      "source": "def _now_iso(now: datetime) -> str:\n    return now.replace(tzinfo=None).isoformat()",
       "unresolved": []
     },
     {
@@ -7877,43 +7734,118 @@
       "scope": "module",
       "source": "def _sha256(path: Path) -> str:\n    return hashlib.sha256(path.read_bytes()).hexdigest()",
       "unresolved": []
+    },
+    {
+      "canonical_extra": null,
+      "canonical_target": "canonical_json",
+      "disposition": "retained",
+      "end_line": 229,
+      "family": "json",
+      "file": "src/llm_artifact_store.py",
+      "line": 228,
+      "name": "_canonical_json",
+      "referenced": {},
+      "retained_reason": "The exact document artifact input manifest is a persisted cryptographic identity. Keep this small helper beside the envelope validator. Its bytes match canonical_json, and the equivalence oracle checks that mapping.",
+      "scope": "module",
+      "source": "def _canonical_json(value: object) -> str:\n    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(\",\", \":\"))",
+      "source_commit": "0c22d6e478b33e20f0e75a055457ccf28599cd35",
+      "unresolved": []
+    },
+    {
+      "canonical_extra": null,
+      "canonical_target": "sha256_text",
+      "disposition": "retained",
+      "end_line": 233,
+      "family": "sha",
+      "file": "src/llm_artifact_store.py",
+      "line": 232,
+      "name": "_sha256_text",
+      "referenced": {},
+      "retained_reason": "The document artifact store hashes persisted UTF-8 text at its strict storage boundary. Keep the named operation beside its caller. Its bytes match sha256_text, and the equivalence oracle checks that mapping.",
+      "scope": "module",
+      "source": "def _sha256_text(value: str) -> str:\n    return hashlib.sha256(value.encode(\"utf-8\")).hexdigest()",
+      "source_commit": "0c22d6e478b33e20f0e75a055457ccf28599cd35",
+      "unresolved": []
+    },
+    {
+      "canonical_extra": null,
+      "canonical_target": "canonical_json",
+      "disposition": "retained",
+      "end_line": 96,
+      "family": "json",
+      "file": "src/pipeline/transcript_summary.py",
+      "line": 95,
+      "name": "_canonical_json",
+      "referenced": {},
+      "retained_reason": "The transcript generation input manifest is a persisted cryptographic identity. Keep this helper beside the manifest producer. Its bytes match canonical_json, and the equivalence oracle checks that mapping.",
+      "scope": "module",
+      "source": "def _canonical_json(value: object) -> str:\n    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(\",\", \":\"))",
+      "source_commit": "0c22d6e478b33e20f0e75a055457ccf28599cd35",
+      "unresolved": []
+    },
+    {
+      "canonical_extra": null,
+      "canonical_target": "sha256_bytes",
+      "disposition": "retained",
+      "end_line": 100,
+      "family": "sha",
+      "file": "src/pipeline/transcript_summary.py",
+      "line": 99,
+      "name": "_sha256",
+      "referenced": {},
+      "retained_reason": "The transcript producer hashes exact body and source bytes. Keep this operation beside its source and output boundary. Its bytes match sha256_bytes, and the equivalence oracle checks that mapping.",
+      "scope": "module",
+      "source": "def _sha256(data: bytes) -> str:\n    return hashlib.sha256(data).hexdigest()",
+      "source_commit": "0c22d6e478b33e20f0e75a055457ccf28599cd35",
+      "unresolved": []
+    },
+    {
+      "canonical_extra": null,
+      "canonical_target": "sha256_bytes",
+      "disposition": "retained",
+      "end_line": 68,
+      "family": "sha",
+      "file": "src/pipeline/transcript_summary_verification.py",
+      "line": 67,
+      "name": "_sha",
+      "referenced": {},
+      "retained_reason": "The verifier hashes exact source, prompt, and audit bytes during zero-call replay. Keep this operation beside its verification boundary. Its bytes match sha256_bytes, and the equivalence oracle checks that mapping.",
+      "scope": "module",
+      "source": "def _sha(data: bytes) -> str:\n    return hashlib.sha256(data).hexdigest()",
+      "source_commit": "0c22d6e478b33e20f0e75a055457ccf28599cd35",
+      "unresolved": []
     }
   ],
   "summary": {
     "json": {
+      "total": 77,
+      "mappable": 54,
       "collapsed": 49,
-      "mappable": 52,
-      "module": 53,
-      "retained": 26,
-      "total": 75
+      "retained": 28
     },
     "sha": {
-      "collapsed": 66,
-      "mappable": 82,
-      "module": 128,
-      "retained": 72,
-      "total": 138
+      "total": 139,
+      "mappable": 83,
+      "collapsed": 64,
+      "retained": 75
     },
     "tables": {
-      "collapsed": 31,
+      "total": 72,
       "mappable": 36,
-      "module": 71,
-      "retained": 41,
-      "total": 72
+      "collapsed": 31,
+      "retained": 41
     },
     "tickers": {
-      "collapsed": 0,
+      "total": 27,
       "mappable": 0,
-      "module": 29,
-      "retained": 29,
-      "total": 29
+      "collapsed": 0,
+      "retained": 27
     },
     "time": {
-      "collapsed": 53,
+      "total": 115,
       "mappable": 63,
-      "module": 93,
-      "retained": 63,
-      "total": 116
+      "collapsed": 53,
+      "retained": 62
     }
   },
   "pipeline_completion_reconciliation": {

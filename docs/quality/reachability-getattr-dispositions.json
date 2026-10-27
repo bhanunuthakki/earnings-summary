@@ -90,9 +90,9 @@
     },
     {
       "disposition": "schema_field",
-      "evidence": "_section_status reads only the closed report-spec section fields.",
-      "fingerprint": "e25bcf6625fe877527e9165b20ec3d370db906db6d8fab7b19fd3ee97c20dbbb",
-      "line": 249,
+      "evidence": "_section_status reads only the literal report-spec section field tuple declared in the function.",
+      "fingerprint": "852469d4f61487b19667d32e3494fc0e3ae3d4375320216fb6c16d5fd2885fa7",
+      "line": 248,
       "path": "execution/build_offline_artifact.py",
       "targets": [
         "spec"
@@ -100,9 +100,9 @@
     },
     {
       "disposition": "external_adapter",
-      "evidence": "Dynamic level selects only standard logging adapter methods.",
-      "fingerprint": "aff809d7cc8990c92c22780b759c44f804010c9908e7c16aa2d2ba9383df6a1f",
-      "line": 220,
+      "evidence": "The local redacted-failure helper resolves the default error level on the Flask application logger; its sole caller uses that default.",
+      "fingerprint": "0b9fc969bafaac156ed0081d0a8b3f77af937fc883e9d428124432c142b0ff0e",
+      "line": 206,
       "path": "execution/comments_server_context.py",
       "targets": [
         "logging"
@@ -110,9 +110,9 @@
     },
     {
       "disposition": "closed_literal_set",
-      "evidence": "getattr validates only the checked-in positive_fields argparse tuple.",
-      "fingerprint": "c70b5957ba0d6c00d40a9ec2b9499515b9c87c5b5814a9f4fc24c389edd59923",
-      "line": 1346,
+      "evidence": "getattr validates only fields in the function-local positive_fields tuple before argparse range checks.",
+      "fingerprint": "22ad17b5049e5490a682aa27b4ab2ab807f2ee758a81bb229ef9976c1af536e3",
+      "line": 1347,
       "path": "execution/discover_ir_documents_all.py",
       "targets": [
         "positive_fields"
@@ -656,12 +656,34 @@
     },
     {
       "disposition": "schema_field",
-      "evidence": "getattr reads only _COMPARE_METRIC_ROWS TickerMetrics fields.",
-      "fingerprint": "315dd482a78aca75ffa6cce99af686ae92e73c81cae9913a8195434af51c7dd8",
-      "line": 1977,
+      "evidence": "The renderer calls this helper only while iterating the checked-in _COMPARE_METRIC_ROWS field tuple.",
+      "fingerprint": "602c11283c6e3c52df69b274f66506129c97fa62603696a63bdd7c17d2988899",
+      "line": 1899,
       "path": "src/pipeline/peeks.py",
       "targets": [
         "_COMPARE_METRIC_ROWS"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "The verifier compares a fixed field-name tuple between schema-validated TranscriptAuditEvaluation and TranscriptAuditQualification models.",
+      "fingerprint": "04389a54673a0dfd08ddcad6fa6c2b5e945892c7592caa5687df933517eb913a",
+      "line": 370,
+      "path": "src/pipeline/transcript_summary_verification.py",
+      "targets": [
+        "TranscriptAuditEvaluation",
+        "TranscriptAuditQualification"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Repeat validation compares exactly seven literal route and corpus fields between closed TranscriptAuditRepeat and TranscriptAuditQualification schemas; no dynamic execution target is selected.",
+      "fingerprint": "ed48fbf977cc106b3489d9e0b109cd29988eb3a03f585c6712b49f44e2fc05f4",
+      "line": 397,
+      "path": "src/pipeline/transcript_summary_verification.py",
+      "targets": [
+        "TranscriptAuditRepeat",
+        "TranscriptAuditQualification"
       ]
     },
     {
@@ -789,6 +811,22 @@
       ]
     },
     {
+      "disposition": "closed_literal_set",
+      "evidence": "Replay validation iterates only the seven literal IrRawExchange fields declared immediately above this call. It compares retained governed response metadata with the schema-validated producing exchange; no attribute name comes from source content or a model response.",
+      "fingerprint": "5d1f791a2465e6b2620582e71c269205ce1799b6c39e610fa33d3283bda1687a",
+      "line": 522,
+      "path": "src/provenance/ir_reported_facts.py",
+      "targets": [
+        "llm_call_id",
+        "raw_response",
+        "response_sha256",
+        "prompt_sha256",
+        "model",
+        "provider",
+        "transport"
+      ]
+    },
+    {
       "disposition": "schema_field",
       "evidence": "getattr reads the typed registry spec id_column.",
       "fingerprint": "4bc18e5e5aecfdda815219257c5768bac4de18e093411803652ed8e1e868bf62",
@@ -898,8 +936,8 @@
     {
       "disposition": "runtime_registry",
       "evidence": "getattr resolves only Windows kernel32 API names.",
-      "fingerprint": "83f9b6fcb00d476e0b01364ebbe8722d91b5629316823852df8c3c69976aecc8",
-      "line": 552,
+      "fingerprint": "2c619acef5063dce11978ab5ce2b6eb31df9fbdb691b18bbee81ed08ea459aa1",
+      "line": 551,
       "path": "src/report/offline_artifact.py",
       "targets": [
         "kernel32"
@@ -1057,31 +1095,15 @@
         "FMP_DIR",
         "STATE_ROOT"
       ]
-    },
-    {
-      "disposition": "closed_literal_set",
-      "evidence": "Replay validation iterates only the seven literal IrRawExchange fields declared immediately above this call. It compares retained governed response metadata with the schema-validated producing exchange; no attribute name comes from source content or a model response.",
-      "fingerprint": "5d1f791a2465e6b2620582e71c269205ce1799b6c39e610fa33d3283bda1687a",
-      "line": 522,
-      "path": "src/provenance/ir_reported_facts.py",
-      "targets": [
-        "llm_call_id",
-        "raw_response",
-        "response_sha256",
-        "prompt_sha256",
-        "model",
-        "provider",
-        "transport"
-      ]
     }
   ],
   "graph_provenance": {
     "input_scope": "scanner-consumed-inputs/v1",
     "parser": {
       "name": "ast+xml+literal-scanner",
-      "version": "1.3.0",
       "python": ">=3.11",
-      "source_sha256": "657a7a0e72930dba5568e7a1638b3d225861524ce438df44c8658b80ccc72492"
+      "source_sha256": "bc7d6c0f69fffcda7404b3f41a3343db2452a425864b3cdba148327acd1ec7dd",
+      "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c9ec98b1cbcdf93c9b890d9a8a8c59ef6109598f67b1739c38463d79d5986175",

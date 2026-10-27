@@ -160,14 +160,6 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "Recording aspiration as commitment or assigning the wrong speaker, metric, or deadline.",
     ),
     _q(
-        "saydo_filter",
-        "P0",
-        "hot",
-        "classification",
-        "Select only commitments that are decision-relevant and auditable for the current company.",
-        "Dropping a material commitment or retaining vague/non-auditable statements.",
-    ),
-    _q(
         "strategic_analysis",
         "P0",
         "cold",
@@ -349,36 +341,12 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "Missing a headline KPI or inventing one not present in the source.",
     ),
     _q(
-        "kpi_summary_extract",
-        "P1",
-        "cold",
-        "extraction",
-        "Extract KPI values, units, periods, and comparison basis exactly.",
-        "Wrong value, scale, period, or cumulative-versus-quarterly interpretation.",
-    ),
-    _q(
         "market_signals",
         "P1",
         "cold",
         "synthesis",
         "Summarize market signals while separating observation, interpretation, and uncertainty.",
         "Presenting noisy price action or consensus as causal fact.",
-    ),
-    _q(
-        "pairwise_analysis",
-        "P1",
-        "warm",
-        "judgment",
-        "Compare two alternatives consistently against the stated investment criteria.",
-        "Changing criteria between alternatives or choosing without evidence.",
-    ),
-    _q(
-        "press_release_summary",
-        "P1",
-        "warm",
-        "synthesis",
-        "Summarize material release facts, changes, and caveats without promotional framing.",
-        "Omitting a negative change or presenting adjusted figures without qualification.",
     ),
     _q(
         "recent_developments",
@@ -403,14 +371,6 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "synthesis",
         "Synthesize research evidence into claims, uncertainty, and remaining gaps.",
         "A narrative that outruns its sources or hides unresolved contradictions.",
-    ),
-    _q(
-        "research_triage",
-        "P1",
-        "cold",
-        "classification",
-        "Route a research request to the smallest sufficient evidence workflow.",
-        "Routing a high-stakes question to an insufficient or unauthorised workflow.",
     ),
     _q(
         "risk_factor_classify",
@@ -487,22 +447,6 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
     # P2: low-frequency communication, coaching, and presentation surfaces.
     # Quality matters, but failures are reversible and rarely mutate data.
     _q(
-        "annual_letter",
-        "P2",
-        "cold",
-        "synthesis",
-        "Summarize the year with evidence, attribution, mistakes, and forward decision rules.",
-        "Performance storytelling that hides errors or lacks evidence.",
-    ),
-    _q(
-        "artifact_brief",
-        "P2",
-        "cold",
-        "synthesis",
-        "Brief a research artifact with provenance, relevance, and next action.",
-        "A summary that obscures the source or invents an implication.",
-    ),
-    _q(
         "event_brief",
         "P2",
         "cold",
@@ -517,14 +461,6 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "coaching",
         "Draft a candid exit postmortem separating process, evidence, luck, and learning.",
         "Outcome bias or invented rationale that was not present at decision time.",
-    ),
-    _q(
-        "musing_decision_extract",
-        "P2",
-        "cold",
-        "extraction",
-        "Extract a tentative decision from free text while preserving ambiguity and corrections.",
-        "Turning a question or musing into a falsely executed decision.",
     ),
     _q(
         "patent_timeline",
@@ -543,22 +479,6 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "A diagram that implies nonexistent flows or omits a critical dependency.",
     ),
     _q(
-        "positioning_coach_turn",
-        "P2",
-        "cold",
-        "coaching",
-        "Give role-positioning guidance grounded in demonstrated scope and target requirements.",
-        "Generic advice or inflated claims unsupported by the user's record.",
-    ),
-    _q(
-        "positioning_encode",
-        "P2",
-        "cold",
-        "extraction",
-        "Encode positioning evidence into stable structured claims with provenance.",
-        "Overstating scope, decision rights, or impact.",
-    ),
-    _q(
         "pre_earnings_brief",
         "P2",
         "cold",
@@ -575,14 +495,6 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "Retrospective invented expectations, unsupported non-answer/tone judgments, blurred current versus call evidence, or no public next check.",
     ),
     _q(
-        "presentation_brief",
-        "P2",
-        "cold",
-        "synthesis",
-        "Create an audience-specific presentation brief with one decision narrative.",
-        "A diffuse brief with no decision, audience, or evidence hierarchy.",
-    ),
-    _q(
         "research_code_spec",
         "P2",
         "cold",
@@ -597,22 +509,6 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "synthesis",
         "Explain why a tracked commitment is due using the original horizon and current evidence.",
         "Inventing a deadline or claiming fulfillment without matching evidence.",
-    ),
-    _q(
-        "saydo_importance",
-        "P2",
-        "cold",
-        "classification",
-        "Rank commitments by decision relevance, materiality, and auditability.",
-        "High importance assigned to vague or economically immaterial statements.",
-    ),
-    _q(
-        "session_distill",
-        "P2",
-        "cold",
-        "synthesis",
-        "Distill a session into durable decisions, evidence, uncertainties, and follow-ups.",
-        "Losing a decision qualifier or recording discussion as settled fact.",
     ),
     _q(
         "tenet_accountability",
@@ -645,14 +541,6 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "synthesis",
         "Draft a thesis entry with claim, evidence, uncertainty, falsifier, and provenance.",
         "A claim without falsifier or evidence presented as certainty.",
-    ),
-    _q(
-        "weekly_packet_predraft",
-        "P2",
-        "cold",
-        "synthesis",
-        "Prepare a concise weekly packet that prioritizes material decisions and changes.",
-        "Attention overload or omission of a decision-critical change.",
     ),
     # Dynamic lens calls share one generator and quality contract.
     _q(

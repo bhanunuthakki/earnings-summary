@@ -151,11 +151,8 @@ def test_escaped_entity_titles_are_not_re_escaped() -> None:
 # hand-reverted panel) fails here instead of re-seeding the duplication.
 
 _MIGRATED_PANEL_MODULES: tuple[str, ...] = (
-    "advisor_memos_panel.py",
     "allocation_decisions_panel.py",
-    "annual_letter_panel.py",
     "attribution_panel.py",
-    "calibration_scorecard_panel.py",
     "credibility_panel.py",
     "cron_health_panel.py",
     "dcf_coverage_panel.py",
@@ -171,7 +168,6 @@ _MIGRATED_PANEL_MODULES: tuple[str, ...] = (
     "portfolio_panel.py",
     "position_lifecycle_panel.py",
     "positioning_panel.py",
-    "redteam_pnl_panel.py",
     "restatements_panel.py",
     "section_coverage_panel.py",
     "source_calls_panel.py",

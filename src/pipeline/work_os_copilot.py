@@ -510,6 +510,7 @@ WORK_OS_COPILOT_JS = r"""
       fragment.textContent = 'Restoring saved view...';
       host.appendChild(fragment);
       restoreSavedView(fragment, artifact.view_spec, loadToken);
+      appendAnalysisAction(host, '', artifact.view_spec, currentSessionContext && currentSessionContext.company_ticker || '');
     }
     if (Array.isArray(artifact.citations) && artifact.citations.length &&
         !host.querySelector('.work-os-copilot-citations')) {
@@ -1141,6 +1142,7 @@ WORK_OS_COPILOT_JS = r"""
         break;
       case 'fragment':
         lastSpec = event.spec || lastSpec;
+        state.analysisSpec = event.spec || state.analysisSpec;
         state.fragment.innerHTML = event.html || '';
         break;
       case 'final':
@@ -1160,6 +1162,7 @@ WORK_OS_COPILOT_JS = r"""
       case 'artifacts':
         var artifacts = event.artifacts || event;
         lastSpec = artifacts.view_spec || lastSpec;
+        state.analysisSpec = artifacts.view_spec || state.analysisSpec;
         break;
       case 'proposal_ref':
         var ref = normalizeProposalRef(event.proposal_ref || event.ref);
@@ -1174,6 +1177,30 @@ WORK_OS_COPILOT_JS = r"""
     }
   }
 
+  function appendAnalysisAction(turn, query, spec, company) {
+    if (!query && !spec) return;
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'k-btn k-btn-quiet k-btn-sm';
+    button.textContent = 'Work with data';
+    button.addEventListener('click', function () {
+      if (typeof window.workOsOpenAnalysis !== 'function') {
+        status.textContent = 'The data workbench is unavailable.';
+        return;
+      }
+      button.disabled = true;
+      copilotOverlay.close();
+      Promise.resolve(window.workOsOpenAnalysis({query: query, spec: spec, company: company, opener: button}))
+        .then(function (opened) {
+          if (!opened) throw new Error('Workbench unavailable');
+        }).catch(function () {
+          copilotOverlay.open();
+          status.textContent = 'The data workbench could not open. Try again.';
+        }).finally(function () { button.disabled = false; });
+    });
+    turn.appendChild(button);
+  }
+
   function finishCopilotTurn(state) {
     busy = false;
     send.disabled = false;
@@ -1182,6 +1209,7 @@ WORK_OS_COPILOT_JS = r"""
       state.copy.setAttribute('role', 'alert');
       state.copy.textContent = state.error;
     }
+    if (!state.error) appendAnalysisAction(state.turn, state.query, state.analysisSpec, state.company);
     if (state.citations.length) renderCitationRow(state.turn, state.citations);
     state.proposals.forEach(function (proposal) { renderCopilotProposal(state.turn, proposal); });
     state.proposalErrors.forEach(function (proposalError) {
@@ -1280,6 +1308,9 @@ WORK_OS_COPILOT_JS = r"""
     if (!currentSessionContext) currentSessionContext = buildNewSessionContext();
     renderCopilotContext();
     var company = currentSessionContext.company_ticker || '';
+    state.query = query;
+    state.company = company;
+    state.analysisSpec = null;
     status.textContent = 'Researching...';
     fetch('/api/ask/stream', {
       method: 'POST', headers: {'Content-Type': 'application/json', Accept: 'text/event-stream'},

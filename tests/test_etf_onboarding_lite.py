@@ -4,7 +4,7 @@
   (FMP chart wins when both exist; proxy carries ETFs the plan doesn't).
 - dcf.universe.dcf_universe: evaluation ETFs are excluded from the DCF
   universe; a pre-0044 substrate without instrument_type keeps old behavior.
-- onboard_ticker rails: _saydo_should_run never fires for an ETF (even
+- onboard_ticker rails: _transcript_summaries_should_run never fires for an ETF (even
   forced); company-fit refresh excludes the retired ETF tail.
 """
 
@@ -24,7 +24,9 @@ from allocation.price_history import load_daily_closes
 from dcf.universe import dcf_universe
 from execution import onboard_ticker as onboard_ticker_mod
 
-_saydo_should_run = cast(Callable[..., bool], getattr(onboard_ticker_mod, "_saydo_should_run"))
+_transcript_summaries_should_run = cast(
+    Callable[..., bool], getattr(onboard_ticker_mod, "_transcript_summaries_should_run")
+)
 
 # ---------------------------------------------------------------------------
 # price_history proxy-store fallback
@@ -115,12 +117,12 @@ def test_dcf_universe_tolerates_missing_instrument_column(tmp_path: Path) -> Non
 # ---------------------------------------------------------------------------
 
 
-def test_saydo_never_runs_for_etf() -> None:
-    assert _saydo_should_run("evaluation", force=False, instrument="etf") is False
-    assert _saydo_should_run("evaluation", force=True, instrument="etf") is False
-    assert _saydo_should_run("evaluation", force=False, instrument="equity") is True
-    assert _saydo_should_run("watchlist", force=False, instrument=None) is False
-    assert _saydo_should_run("watchlist", force=True, instrument=None) is True
+def test_transcript_summaries_never_runs_for_etf() -> None:
+    assert _transcript_summaries_should_run("evaluation", force=False, instrument="etf") is False
+    assert _transcript_summaries_should_run("evaluation", force=True, instrument="etf") is False
+    assert _transcript_summaries_should_run("evaluation", force=False, instrument="equity") is True
+    assert _transcript_summaries_should_run("watchlist", force=False, instrument=None) is False
+    assert _transcript_summaries_should_run("watchlist", force=True, instrument=None) is True
 
 
 def test_refresh_candidate_fit_rejects_retired_synthesis_flag(

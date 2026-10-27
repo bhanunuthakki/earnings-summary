@@ -97,8 +97,8 @@ def test_portfolio_copilot_home_composes_live_sortable_holdings_and_bounded_dial
     workup_runtime = html.split("function workOsOpenEvaluationWorkup(button)", 1)[1].split(
         "function workOsCompareEvaluation", 1
     )[0]
-    assert "instrument !== 'stock' && instrument !== 'etf'" in workup_runtime
-    assert "'/api/peek/etf_workup?ticker='" in workup_runtime
+    assert "instrument !== 'stock'" in workup_runtime
+    assert "'/api/peek/etf_workup?ticker='" not in workup_runtime
     assert "window.switchCompanyWorkspace(safeTicker)" in workup_runtime
     compare_runtime = html.split("function workOsCompareEvaluation(ticker)", 1)[1].split(
         "document.addEventListener('click'", 1
@@ -161,7 +161,7 @@ def test_evaluation_is_a_complete_live_research_destination() -> None:
     assert "if (value == null || String(value).trim() === '') return null;" in html
     assert "workOsFetch('/api/work-os/evaluation'" in html
     assert "Company Desk" in html
-    assert "Saved ETF research" in html
+    assert "Saved ETF research" not in html
     assert "ETF workup" not in html
     assert "if (!opened) window.location.assign(target.getAttribute('href'));" in html
     assert "Open a side peek for rationale and evidence" in evaluation
@@ -914,14 +914,15 @@ def test_l1_dismissal_transition_survives_the_later_controls_cascade() -> None:
 def test_legacy_search_ask_drawer_and_non_durable_runtime_are_removed() -> None:
     html = render_work_os_shell()
 
-    assert "ask-copilot" not in html
+    assert "vx-ask-copilot" in html
+    assert "openDrillDrawer('ask-copilot')" not in html
+    assert "type === 'ask-copilot'" not in html
     assert "executeCopilotQuery" not in html
     assert "copilotInput" not in html
     assert "copilotResponse" not in html
     assert "fetch('/api/ask'," not in html
-    # One governed stream belongs to the global Copilot and one to the
-    # narrative-first Explore surface; neither is the retired Ask drawer.
-    assert html.count("fetch('/api/ask/stream'") == 2
+    # Explore opens the existing global Copilot stream.
+    assert html.count("fetch('/api/ask/stream'") == 1
     assert "work-os:ask-session" not in html
     assert "AI COPILOT ANALYSIS" not in html
     assert "Grounded Citations: doc:bcb_jun26_p4" not in html

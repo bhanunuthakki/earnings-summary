@@ -668,13 +668,6 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "news rows already exist.",
     )
     parser.add_argument(
-        "--skip-standup",
-        action="store_true",
-        help="Skip stage 1b (the proactive analyst standup). The standup composes "
-        "an eval-gated, rate-limited advisory brief per surviving trip through the "
-        "Ask engine — skip it to run the trigger sweep without the paid standup leg.",
-    )
-    parser.add_argument(
         "--skip-validation",
         action="store_true",
         help="Skip stage 4 (the data-validation gate). The gate runs the "
@@ -808,7 +801,6 @@ def _run_pipeline(args: argparse.Namespace, *, db_path: Path, t0: float) -> int:
                     "from_stage": args.from_stage or "",
                     "run_date": run_date.isoformat(),
                     "skip_news": args.skip_news,
-                    "skip_standup": args.skip_standup,
                     "skip_triggers": args.skip_triggers,
                     "skip_validation": args.skip_validation,
                     "user_id": args.user_id,

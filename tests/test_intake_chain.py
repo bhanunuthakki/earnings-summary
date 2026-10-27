@@ -1,7 +1,7 @@
 """Tests for execution/intake_documents.py chain wiring.
 
-`chain_processing` must route non-event newly-filed docs through the LLM summarizer
-(`process_ir_documents.py`), and additionally bridge transcripts into the
+`chain_processing` keeps non-transcript documents as source material, and bridges
+transcripts into the
 `transcripts` + `transcript_segments` tables (`ingest_transcripts.py
 --include-ir-transcripts`) and trigger Say-Do extraction
 (`extract_commitments_from_transcript.py --auto`) so manual drops match what
@@ -21,6 +21,11 @@ import pytest
 from execution import intake_documents
 from intake import IntakeClassification, IntakeResult
 from models.documents import DocType
+
+
+@pytest.fixture(autouse=True)
+def _explicit_test_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(intake_documents, "require_db_path", lambda: tmp_path / "portfolio.sqlite")
 
 
 def _result(ticker: str, doc_type: DocType, *, skipped: bool = False) -> IntakeResult:
@@ -58,7 +63,7 @@ def _ticker_for_call(call_args: list[str]) -> str:
     return call_args[idx + 1]
 
 
-def test_chain_processing_runs_only_summarizer_for_non_transcript_docs() -> None:
+def test_chain_processing_keeps_press_release_as_source_only() -> None:
     results = [_result("NU", DocType.IR_PRESS_RELEASE)]
     with patch.object(
         intake_documents.subprocess,
@@ -66,10 +71,10 @@ def test_chain_processing_runs_only_summarizer_for_non_transcript_docs() -> None
         return_value=subprocess.CompletedProcess[str]([], 0),
     ) as mock_run:
         intake_documents.chain_processing(results)
-    assert _called_script_names(mock_run) == ["process_ir_documents.py"]
+    mock_run.assert_not_called()
 
 
-def test_chain_processing_runs_only_summarizer_for_presentation_docs() -> None:
+def test_chain_processing_keeps_presentation_as_source_only() -> None:
     results = [_result("MELI", DocType.IR_PRESENTATION)]
     with patch.object(
         intake_documents.subprocess,
@@ -77,7 +82,7 @@ def test_chain_processing_runs_only_summarizer_for_presentation_docs() -> None:
         return_value=subprocess.CompletedProcess[str]([], 0),
     ) as mock_run:
         intake_documents.chain_processing(results)
-    assert _called_script_names(mock_run) == ["process_ir_documents.py"]
+    mock_run.assert_not_called()
 
 
 def test_chain_processing_bridges_transcripts_into_transcripts_table() -> None:
@@ -90,12 +95,19 @@ def test_chain_processing_bridges_transcripts_into_transcripts_table() -> None:
         intake_documents.chain_processing(results)
 
     assert _called_script_names(mock_run) == [
-        "process_ir_documents.py",
         "ingest_transcripts.py",
+        "process_ir_documents.py",
         "extract_commitments_from_transcript.py",
     ]
-    ingest_argv = mock_run.mock_calls[1].args[0]
+    ingest_argv = mock_run.mock_calls[0].args[0]
     assert "--include-ir-transcripts" in ingest_argv
+    process_argv = mock_run.mock_calls[1].args[0]
+    assert process_argv[process_argv.index("--db") + 1].endswith("portfolio.sqlite")
+    assert process_argv[process_argv.index("--state-root") + 1] == str(
+        intake_documents.PROJECT_ROOT
+    )
+    assert process_argv[process_argv.index("--repo-root") + 1] == str(intake_documents.PROJECT_ROOT)
+    assert "--regenerate-missing" not in process_argv
     commit_argv = mock_run.mock_calls[2].args[0]
     assert "--auto" in commit_argv
 
@@ -103,14 +115,12 @@ def test_chain_processing_bridges_transcripts_into_transcripts_table() -> None:
 def test_chain_processing_stops_before_say_do_when_ingest_fails() -> None:
     results = [_result("META", DocType.EARNINGS_CALL_TRANSCRIPT)]
     completed: list[subprocess.CompletedProcess[str]] = [
-        intake_documents.subprocess.CompletedProcess([], 0),
         intake_documents.subprocess.CompletedProcess([], 7),
     ]
     with patch.object(intake_documents.subprocess, "run", side_effect=completed) as mock_run:
         result = intake_documents.chain_processing(results)
 
     assert _called_script_names(mock_run) == [
-        "process_ir_documents.py",
         "ingest_transcripts.py",
     ]
     assert result.ingest_failures == 1
@@ -133,8 +143,7 @@ def test_chain_processing_returns_commitment_failure() -> None:
 
 
 def test_chain_processing_handles_mixed_doctype_batch() -> None:
-    """Press release for NU + transcript for META: both get summarizer; only META
-    gets the transcripts-table bridge + Say-Do extraction."""
+    """Only META's transcript gets summary and Say-Do processing."""
     results = [
         _result("NU", DocType.IR_PRESS_RELEASE),
         _result("META", DocType.EARNINGS_CALL_TRANSCRIPT),
@@ -162,7 +171,7 @@ def test_chain_processing_handles_mixed_doctype_batch() -> None:
         if _managed_target(c.args[0]).name == "extract_commitments_from_transcript.py"
     }
 
-    assert process_tickers == {"NU", "META"}
+    assert process_tickers == {"META"}
     assert ingest_tickers == {"META"}
     assert commit_tickers == {"META"}
 
@@ -181,8 +190,8 @@ def test_chain_processing_deduplicates_multiple_transcripts_for_same_ticker() ->
         intake_documents.chain_processing(results)
 
     assert _called_script_names(mock_run) == [
-        "process_ir_documents.py",
         "ingest_transcripts.py",
+        "process_ir_documents.py",
         "extract_commitments_from_transcript.py",
     ]
 
@@ -264,9 +273,8 @@ def test_event_intake_keeps_core_chain_without_event_synthesis(include_core: boo
     ]
     assert calls == (
         [
-            ("process_ir_documents.py", "META"),
-            ("process_ir_documents.py", "NU"),
             ("ingest_transcripts.py", "META"),
+            ("process_ir_documents.py", "META"),
             ("extract_commitments_from_transcript.py", "META"),
         ]
         if include_core

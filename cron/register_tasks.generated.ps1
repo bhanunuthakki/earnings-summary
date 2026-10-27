@@ -41,10 +41,6 @@ $existing = Get-ScheduledTask -TaskName 'check_comp_set_drift' -TaskPath '\earni
 if ($existing) { Export-ScheduledTask -TaskName 'check_comp_set_drift' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'check_comp_set_drift.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'check_comp_set_drift' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'check_comp_set_drift.task.xml')
 & $taskSecurityScript -TaskPath '\earnings-summary\check_comp_set_drift' -RenderedXmlPath (Join-Path $renderDir 'check_comp_set_drift.task.xml')
-$existing = Get-ScheduledTask -TaskName 'coach_pings' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
-if ($existing) { Export-ScheduledTask -TaskName 'coach_pings' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'coach_pings.task.xml') -Encoding Unicode }
-Register-ManifestTask -TaskName 'coach_pings' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'coach_pings.task.xml')
-& $taskSecurityScript -TaskPath '\earnings-summary\coach_pings' -RenderedXmlPath (Join-Path $renderDir 'coach_pings.task.xml')
 $existing = Get-ScheduledTask -TaskName 'collect_operations_runtime_observations' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
 if ($existing) { Export-ScheduledTask -TaskName 'collect_operations_runtime_observations' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'collect_operations_runtime_observations.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'collect_operations_runtime_observations' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'collect_operations_runtime_observations.task.xml')
@@ -57,10 +53,6 @@ $existing = Get-ScheduledTask -TaskName 'db_gc' -TaskPath '\earnings-summary\' -
 if ($existing) { Export-ScheduledTask -TaskName 'db_gc' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'db_gc.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'db_gc' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'db_gc.task.xml')
 & $taskSecurityScript -TaskPath '\earnings-summary\db_gc' -RenderedXmlPath (Join-Path $renderDir 'db_gc.task.xml')
-$existing = Get-ScheduledTask -TaskName 'decision_nudge' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
-if ($existing) { Export-ScheduledTask -TaskName 'decision_nudge' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'decision_nudge.task.xml') -Encoding Unicode }
-Register-ManifestTask -TaskName 'decision_nudge' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'decision_nudge.task.xml')
-& $taskSecurityScript -TaskPath '\earnings-summary\decision_nudge' -RenderedXmlPath (Join-Path $renderDir 'decision_nudge.task.xml')
 $existing = Get-ScheduledTask -TaskName 'disclosure_change_sweep' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
 if ($existing) { Export-ScheduledTask -TaskName 'disclosure_change_sweep' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'disclosure_change_sweep.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'disclosure_change_sweep' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'disclosure_change_sweep.task.xml')
@@ -89,18 +81,10 @@ $existing = Get-ScheduledTask -TaskName 'grade_calibration' -TaskPath '\earnings
 if ($existing) { Export-ScheduledTask -TaskName 'grade_calibration' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'grade_calibration.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'grade_calibration' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'grade_calibration.task.xml')
 & $taskSecurityScript -TaskPath '\earnings-summary\grade_calibration' -RenderedXmlPath (Join-Path $renderDir 'grade_calibration.task.xml')
-$existing = Get-ScheduledTask -TaskName 'ledger_synthesis' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
-if ($existing) { Export-ScheduledTask -TaskName 'ledger_synthesis' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'ledger_synthesis.task.xml') -Encoding Unicode }
-Register-ManifestTask -TaskName 'ledger_synthesis' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'ledger_synthesis.task.xml')
-& $taskSecurityScript -TaskPath '\earnings-summary\ledger_synthesis' -RenderedXmlPath (Join-Path $renderDir 'ledger_synthesis.task.xml')
 $existing = Get-ScheduledTask -TaskName 'model_eval_sweep' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
 if ($existing) { Export-ScheduledTask -TaskName 'model_eval_sweep' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'model_eval_sweep.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'model_eval_sweep' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'model_eval_sweep.task.xml')
 & $taskSecurityScript -TaskPath '\earnings-summary\model_eval_sweep' -RenderedXmlPath (Join-Path $renderDir 'model_eval_sweep.task.xml')
-$existing = Get-ScheduledTask -TaskName 'monthly_calibration_scorecard' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
-if ($existing) { Export-ScheduledTask -TaskName 'monthly_calibration_scorecard' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'monthly_calibration_scorecard.task.xml') -Encoding Unicode }
-Register-ManifestTask -TaskName 'monthly_calibration_scorecard' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'monthly_calibration_scorecard.task.xml')
-& $taskSecurityScript -TaskPath '\earnings-summary\monthly_calibration_scorecard' -RenderedXmlPath (Join-Path $renderDir 'monthly_calibration_scorecard.task.xml')
 $existing = Get-ScheduledTask -TaskName 'onboard_pending' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
 if ($existing) { Export-ScheduledTask -TaskName 'onboard_pending' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'onboard_pending_tickers.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'onboard_pending' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'onboard_pending_tickers.task.xml')
@@ -113,14 +97,6 @@ $existing = Get-ScheduledTask -TaskName 'prepare_kpi_semantic_review' -TaskPath 
 if ($existing) { Export-ScheduledTask -TaskName 'prepare_kpi_semantic_review' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'prepare_kpi_semantic_review.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'prepare_kpi_semantic_review' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'prepare_kpi_semantic_review.task.xml')
 & $taskSecurityScript -TaskPath '\earnings-summary\prepare_kpi_semantic_review' -RenderedXmlPath (Join-Path $renderDir 'prepare_kpi_semantic_review.task.xml')
-$existing = Get-ScheduledTask -TaskName 'red_team' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
-if ($existing) { Export-ScheduledTask -TaskName 'red_team' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'red_team.task.xml') -Encoding Unicode }
-Register-ManifestTask -TaskName 'red_team' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'red_team.task.xml')
-& $taskSecurityScript -TaskPath '\earnings-summary\red_team' -RenderedXmlPath (Join-Path $renderDir 'red_team.task.xml')
-$existing = Get-ScheduledTask -TaskName 'refresh_business_factors' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
-if ($existing) { Export-ScheduledTask -TaskName 'refresh_business_factors' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'refresh_business_factors.task.xml') -Encoding Unicode }
-Register-ManifestTask -TaskName 'refresh_business_factors' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'refresh_business_factors.task.xml')
-& $taskSecurityScript -TaskPath '\earnings-summary\refresh_business_factors' -RenderedXmlPath (Join-Path $renderDir 'refresh_business_factors.task.xml')
 $existing = Get-ScheduledTask -TaskName 'refresh_cache' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
 if ($existing) { Export-ScheduledTask -TaskName 'refresh_cache' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'refresh_cache.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'refresh_cache' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'refresh_cache.task.xml')
@@ -137,10 +113,6 @@ $existing = Get-ScheduledTask -TaskName 'refresh_portfolio_tracker' -TaskPath '\
 if ($existing) { Export-ScheduledTask -TaskName 'refresh_portfolio_tracker' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'refresh_portfolio_tracker.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'refresh_portfolio_tracker' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'refresh_portfolio_tracker.task.xml')
 & $taskSecurityScript -TaskPath '\earnings-summary\refresh_portfolio_tracker' -RenderedXmlPath (Join-Path $renderDir 'refresh_portfolio_tracker.task.xml')
-$existing = Get-ScheduledTask -TaskName 'refresh_scenario_priors' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
-if ($existing) { Export-ScheduledTask -TaskName 'refresh_scenario_priors' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'refresh_scenario_priors.task.xml') -Encoding Unicode }
-Register-ManifestTask -TaskName 'refresh_scenario_priors' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'refresh_scenario_priors.task.xml')
-& $taskSecurityScript -TaskPath '\earnings-summary\refresh_scenario_priors' -RenderedXmlPath (Join-Path $renderDir 'refresh_scenario_priors.task.xml')
 $existing = Get-ScheduledTask -TaskName 'restore_drill' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
 if ($existing) { Export-ScheduledTask -TaskName 'restore_drill' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'restore_drill.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'restore_drill' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'restore_drill.task.xml')
@@ -153,18 +125,6 @@ $existing = Get-ScheduledTask -TaskName 'scan_ir_transcripts' -TaskPath '\earnin
 if ($existing) { Export-ScheduledTask -TaskName 'scan_ir_transcripts' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'scan_ir_transcripts.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'scan_ir_transcripts' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'scan_ir_transcripts.task.xml')
 & $taskSecurityScript -TaskPath '\earnings-summary\scan_ir_transcripts' -RenderedXmlPath (Join-Path $renderDir 'scan_ir_transcripts.task.xml')
-$existing = Get-ScheduledTask -TaskName 'submit_saydo_batch' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
-if ($existing) { Export-ScheduledTask -TaskName 'submit_saydo_batch' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'submit_saydo_batch.task.xml') -Encoding Unicode }
-Register-ManifestTask -TaskName 'submit_saydo_batch' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'submit_saydo_batch.task.xml')
-& $taskSecurityScript -TaskPath '\earnings-summary\submit_saydo_batch' -RenderedXmlPath (Join-Path $renderDir 'submit_saydo_batch.task.xml')
-$existing = Get-ScheduledTask -TaskName 'tenet_accountability' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
-if ($existing) { Export-ScheduledTask -TaskName 'tenet_accountability' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'tenet_accountability.task.xml') -Encoding Unicode }
-Register-ManifestTask -TaskName 'tenet_accountability' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'tenet_accountability.task.xml')
-& $taskSecurityScript -TaskPath '\earnings-summary\tenet_accountability' -RenderedXmlPath (Join-Path $renderDir 'tenet_accountability.task.xml')
-$existing = Get-ScheduledTask -TaskName 'thesis_collision' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
-if ($existing) { Export-ScheduledTask -TaskName 'thesis_collision' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'thesis_collision.task.xml') -Encoding Unicode }
-Register-ManifestTask -TaskName 'thesis_collision' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'thesis_collision.task.xml')
-& $taskSecurityScript -TaskPath '\earnings-summary\thesis_collision' -RenderedXmlPath (Join-Path $renderDir 'thesis_collision.task.xml')
 $existing = Get-ScheduledTask -TaskName 'track_comp_metrics' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
 if ($existing) { Export-ScheduledTask -TaskName 'track_comp_metrics' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'track_comp_metrics.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'track_comp_metrics' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'track_comp_metrics.task.xml')
@@ -177,14 +137,6 @@ $existing = Get-ScheduledTask -TaskName 'weekly_cleanup' -TaskPath '\earnings-su
 if ($existing) { Export-ScheduledTask -TaskName 'weekly_cleanup' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'weekly_cleanup.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'weekly_cleanup' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'weekly_cleanup.task.xml')
 & $taskSecurityScript -TaskPath '\earnings-summary\weekly_cleanup' -RenderedXmlPath (Join-Path $renderDir 'weekly_cleanup.task.xml')
-$existing = Get-ScheduledTask -TaskName 'weekly_packet' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
-if ($existing) { Export-ScheduledTask -TaskName 'weekly_packet' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'weekly_packet.task.xml') -Encoding Unicode }
-Register-ManifestTask -TaskName 'weekly_packet' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'weekly_packet.task.xml')
-& $taskSecurityScript -TaskPath '\earnings-summary\weekly_packet' -RenderedXmlPath (Join-Path $renderDir 'weekly_packet.task.xml')
-$existing = Get-ScheduledTask -TaskName 'weekly_score_stances' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
-if ($existing) { Export-ScheduledTask -TaskName 'weekly_score_stances' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'weekly_score_stances.task.xml') -Encoding Unicode }
-Register-ManifestTask -TaskName 'weekly_score_stances' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'weekly_score_stances.task.xml')
-& $taskSecurityScript -TaskPath '\earnings-summary\weekly_score_stances' -RenderedXmlPath (Join-Path $renderDir 'weekly_score_stances.task.xml')
 $existing = Get-ScheduledTask -TaskName 'weekly_validation' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
 if ($existing) { Export-ScheduledTask -TaskName 'weekly_validation' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'weekly_validation.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'weekly_validation' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'weekly_validation.task.xml')

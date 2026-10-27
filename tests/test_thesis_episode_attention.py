@@ -82,13 +82,6 @@ def test_acknowledgement_is_global_quiet_without_writing_thesis_ledger(
         "VALUES ('bhanu','WIX','thesis_drift',?,'pending','{}',?,?,'initial')",
         (NOW.isoformat(), "1" * 64, "episode-1"),
     )
-    connection.execute(
-        "INSERT INTO coach_pings "
-        '(class_,"key",ticker,body,status,created_at,updated_at,'
-        "thesis_evaluation_episode_id,review_cycle_id) "
-        "VALUES ('falsifier_breach','episode-1','WIX','review','sent',?,?,?,'initial')",
-        (NOW.isoformat(), NOW.isoformat(), "episode-1"),
-    )
     ledger_before = connection.execute("SELECT COUNT(*) FROM thesis_ledger_entries").fetchone()[0]
 
     due = NOW + timedelta(days=30)
@@ -107,14 +100,13 @@ def test_acknowledgement_is_global_quiet_without_writing_thesis_ledger(
         should_prompt(
             connection,
             "episode-1",
-            channel="telegram",
-            surface="coach",
+            channel="web",
+            surface="journal",
             now=NOW,
         )
         is False
     )
     assert connection.execute("SELECT status FROM alerts").fetchone()[0] == "dismissed"
-    assert connection.execute("SELECT status FROM coach_pings").fetchone()[0] == "acted"
     assert (
         connection.execute("SELECT COUNT(*) FROM thesis_ledger_entries").fetchone()[0]
         == ledger_before
@@ -142,16 +134,16 @@ def test_due_review_cycle_delivers_once_and_failed_send_can_retry(
     first = reserve_delivery(
         connection,
         "episode-1",
-        channel="telegram",
-        surface="coach",
+        channel="web",
+        surface="journal",
         reserved_at=cycle_time,
     )
     assert first is not None and first.claimed is True
     duplicate = reserve_delivery(
         connection,
         "episode-1",
-        channel="telegram",
-        surface="coach",
+        channel="web",
+        surface="journal",
         reserved_at=cycle_time,
     )
     assert duplicate is not None and duplicate.claimed is False
@@ -167,8 +159,8 @@ def test_due_review_cycle_delivers_once_and_failed_send_can_retry(
     retry = reserve_delivery(
         connection,
         "episode-1",
-        channel="telegram",
-        surface="coach",
+        channel="web",
+        surface="journal",
         reserved_at=cycle_time + timedelta(minutes=5),
     )
     assert retry is not None and retry.claimed is True
@@ -186,8 +178,8 @@ def test_due_review_cycle_delivers_once_and_failed_send_can_retry(
         should_prompt(
             connection,
             "episode-1",
-            channel="telegram",
-            surface="coach",
+            channel="web",
+            surface="journal",
             now=cycle_time + timedelta(minutes=7),
         )
         is False
@@ -203,8 +195,8 @@ def test_expired_reservation_is_reclaimed_and_old_attempt_cannot_complete(
     first = reserve_delivery(
         connection,
         "episode-1",
-        channel="telegram",
-        surface="coach",
+        channel="web",
+        surface="journal",
         reserved_at=NOW,
         lease_for=timedelta(minutes=5),
     )
@@ -213,8 +205,8 @@ def test_expired_reservation_is_reclaimed_and_old_attempt_cannot_complete(
         should_prompt(
             connection,
             "episode-1",
-            channel="telegram",
-            surface="coach",
+            channel="web",
+            surface="journal",
             now=NOW + timedelta(minutes=4),
         )
         is False
@@ -223,8 +215,8 @@ def test_expired_reservation_is_reclaimed_and_old_attempt_cannot_complete(
         should_prompt(
             connection,
             "episode-1",
-            channel="telegram",
-            surface="coach",
+            channel="web",
+            surface="journal",
             now=NOW + timedelta(minutes=6),
         )
         is True
@@ -233,8 +225,8 @@ def test_expired_reservation_is_reclaimed_and_old_attempt_cannot_complete(
     retry = reserve_delivery(
         connection,
         "episode-1",
-        channel="telegram",
-        surface="coach",
+        channel="web",
+        surface="journal",
         reserved_at=NOW + timedelta(minutes=6),
     )
     assert retry is not None and retry.claimed is True
@@ -419,44 +411,3 @@ def test_episode_alert_is_one_carrier_per_actionable_review_cycle(
             "FROM alerts WHERE trigger_kind='thesis_drift'"
         ).fetchone()
     ) == (1, "episode-1", "initial")
-
-
-def test_linked_coach_ack_delegates_but_legacy_routed_row_does_not(
-    tmp_path: Path,
-    migrated_db: Callable[..., Path],
-) -> None:
-    from research.governor import mark_ping_acted
-
-    database = tmp_path / "linked-coach.db"
-    migrated_db(database, target="head")
-    with sqlite3.connect(database) as connection:
-        _seed_episode(connection, "episode-1", semantic_digit="a")
-        _seed_episode(connection, "episode-2", semantic_digit="b")
-        first = connection.execute(
-            "INSERT INTO coach_pings "
-            '(class_,"key",ticker,body,status,created_at,updated_at,'
-            "thesis_evaluation_episode_id,review_cycle_id) "
-            "VALUES ('falsifier_breach','episode-1','WIX','review','sent',?,?,"
-            "'episode-1','initial')",
-            (NOW.isoformat(), NOW.isoformat()),
-        )
-        second = connection.execute(
-            "INSERT INTO coach_pings "
-            '(class_,"key",ticker,body,status,created_at,updated_at,'
-            "thesis_evaluation_episode_id,review_cycle_id) "
-            "VALUES ('post_mortem','episode-2','WIX','review','routed_to_brief',?,?,"
-            "'episode-2','initial')",
-            (NOW.isoformat(), NOW.isoformat()),
-        )
-        first_id = int(first.lastrowid or 0)
-        assert int(second.lastrowid or 0) > 0
-        connection.commit()
-
-    assert mark_ping_acted(first_id, db_path=database) is True
-    with sqlite3.connect(database) as connection:
-        states = dict(
-            connection.execute(
-                "SELECT episode_id,attention_state FROM thesis_evaluation_episodes"
-            ).fetchall()
-        )
-    assert states == {"episode-1": "acknowledged", "episode-2": "unreviewed"}

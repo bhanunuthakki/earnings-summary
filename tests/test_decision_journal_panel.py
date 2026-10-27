@@ -1,16 +1,7 @@
-"""Tests for the decision-journal panel section (tenet-2 Phase 5 §5.2) --
-``pipeline.allocation_decisions_panel.render_decision_journal_section``.
-
-Builds the same alembic-migrated DB pattern as ``test_decision_journal_view.py``
-(so the section renders against the real ``v_decision_journal`` view) and
-covers: the empty state, a populated row with every advice-before marker
-present, the NULL-tolerant bare row, and that ``compose_decisions_page``
-wires the section in at all (default "" doesn't break existing callers).
-"""
+"""Tests for the owner decision journal panel."""
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
@@ -20,101 +11,71 @@ from pipeline.allocation_decisions_panel import (
     compose_decisions_page,
     render_decision_journal_section,
 )
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+from pipeline.decision_journal_panel import render_decision_journal_panel
 
 
 def _build_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db_dir = tmp_path / "data"
     db_dir.mkdir(parents=True, exist_ok=True)
-    db_path = db_dir / "portfolio.db"
-    return migrated_db(db_path)
+    return migrated_db(db_dir / "portfolio.db")
 
 
-def test_empty_state_renders_one_line(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
-    db_path = _build_db(tmp_path, migrated_db)
-    html = render_decision_journal_section(db_path)
+def test_empty_state_renders_owner_journal(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    html = render_decision_journal_section(_build_db(tmp_path, migrated_db))
     assert "Owner Decision journal" in html
     assert "No Owner Decisions recorded yet." in html
 
 
-def test_populated_row_renders_advice_disposition_outcome(
+def test_panel_renders_confirmed_owner_decision_only(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
     db_path = _build_db(tmp_path, migrated_db)
-    conn = sqlite3.connect(str(db_path))
-    try:
-        cur = conn.execute(
-            "INSERT INTO advisor_memos (user_id, kind, ticker, title, body_md, context_json, "
-            "stance, score_status, created_at) VALUES ('bhanu','position_review','NU','t','b',"
-            "?,'hold','scored','2026-06-01T00:00:00')",
-            (json.dumps({"verdict_source": "guard_override", "owner_attested_change": True}),),
-        )
-        memo_id = cur.lastrowid
+    with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO coach_pings (class_, key, ticker, body, status, created_at, "
-            "updated_at) VALUES ('falsifier_breach','k1','NU','b','sent',"
-            "'2026-06-05T00:00:00','2026-06-05T00:00:00')"
+            "INSERT INTO decisions (ticker, recommendation_kind, decided_by, made_at, created_at, "
+            "user_action_kind, user_acted_at, outcome_label, outcome_pct, outcome_at, "
+            "process_quality) VALUES ('NU','hold','owner','2026-06-10T00:00:00',"
+            "'2026-06-10T00:00:00','followed','2026-06-10T00:01:00','correct',5.5,"
+            "'2026-09-10T00:00:00','sound')"
         )
         conn.execute(
-            "INSERT INTO decisions (ticker, recommendation_kind, decided_by, made_at, "
-            "created_at, source_memo_id, user_action_kind, outcome_label, outcome_pct) VALUES "
-            "('NU','hold','owner','2026-06-10T00:00:00','2026-06-10T00:00:00', ?, "
-            "'followed', 'correct', 5.5)",
-            (memo_id,),
-        )
-        dec_id = conn.execute("SELECT id FROM decisions WHERE ticker='NU'").fetchone()[0]
-        conn.execute(
-            "INSERT INTO decision_nudges (decision_id, status, sent_at) VALUES (?, 'sent', "
-            "'2026-06-10T00:00:00')",
-            (dec_id,),
+            "INSERT INTO decisions (ticker, recommendation_kind, decided_by, made_at, created_at) "
+            "VALUES ('WIX','avoid','advisor','2026-06-11T00:00:00','2026-06-11T00:00:00')"
         )
         conn.commit()
-    finally:
-        conn.close()
 
     html = render_decision_journal_section(db_path)
     assert "NU" in html
     assert "owner: hold" in html
-    assert "position_review" in html
-    assert "guard" in html
-    assert "attested" in html
-    assert "ping" in html
-    assert "nudge" in html
     assert "followed" in html
     assert "correct" in html
     assert "+5.5%" in html
-    assert 'data-peek-url="/api/peek/memo/position_review"' in html
-
-
-def test_bare_decision_with_no_advice_renders_dashes(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
-    db_path = _build_db(tmp_path, migrated_db)
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.execute(
-            "INSERT INTO decisions (ticker, recommendation_kind, decided_by, made_at, "
-            "created_at) VALUES ('WIX','sell','owner','2026-07-01T00:00:00',"
-            "'2026-07-01T00:00:00')"
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    html = render_decision_journal_section(db_path)
-    assert "WIX" in html
-    assert "owner: sell" in html
-    assert "pending" in html  # no outcome yet
-    assert "&mdash;" in html  # no advice, no disposition
+    assert "sound" in html
+    assert "WIX" not in html
+    assert "advisor history" not in html
+    assert "attested" not in html
+    assert "ping" not in html
+    assert "nudge" not in html
 
 
 def test_missing_view_degrades_to_empty_state(tmp_path: Path) -> None:
-    """A DB with no v_decision_journal (pre-0179, or a bare hand-DDL fixture)
-    must render the section's empty state, never raise."""
     db_path = tmp_path / "bare.db"
-    sqlite3.connect(str(db_path)).close()
+    sqlite3.connect(db_path).close()
     html = render_decision_journal_section(db_path)
     assert "No Owner Decisions recorded yet." in html
+
+
+def test_filter_chips_only_offer_owner_and_process_lessons(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    panel = render_decision_journal_panel(_build_db(tmp_path, migrated_db))
+    assert 'data-dj-filter="owner"' in panel
+    assert 'data-dj-filter="lessons"' in panel
+    assert "adopted" not in panel
+    assert "coaching" not in panel
+    assert "All advice artifacts" not in panel
 
 
 def test_compose_page_wires_journal_section_when_provided() -> None:

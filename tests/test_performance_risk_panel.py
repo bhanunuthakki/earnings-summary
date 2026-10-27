@@ -124,7 +124,8 @@ def test_unified_panel_composes_read_only_sections_and_correlation_first(
     assert "Portfolio Allocation" in html
     assert "US ETF" in html and "Intl Equity" in html
     assert "Cash" in html and "Unclassified" in html
-    assert "Next dollar" not in html and "Risk Budget" not in html
+    assert "Next dollar" not in html
+    assert "Risk Budget" in html and "No risk snapshot yet" in html
     assert 'data-pr-tab="correlation" aria-selected="true"' in html
     assert 'data-src="/api/panel/performance_risk?fragment=correlation"' in html
     assert "Policy mix unavailable from the tracker" in html

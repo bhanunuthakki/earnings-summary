@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
+import pytest
 from alembic.config import Config
 
 from alembic import command
@@ -20,12 +22,13 @@ def _config(path: Path) -> Config:
     return config
 
 
-def test_current_head_seeds_skip_mode_budget_and_downgrade_preserves_it(
+def test_current_head_seeds_skip_mode_budget_and_holds_downgrade(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
     db = tmp_path / "readout-budget.db"
+    migrated_db(db, target="head")
     config = _config(db)
-    command.upgrade(config, "head")
 
     with sqlite3.connect(db) as conn:
         revision = conn.execute("SELECT version_num FROM alembic_version").fetchone()
@@ -36,8 +39,12 @@ def test_current_head_seeds_skip_mode_budget_and_downgrade_preserves_it(
     assert revision == (expected_head(),)
     assert row == (5, 0.80, 0, "skip")
 
-    command.downgrade(config, "0002_drop_dead_tables")
+    with pytest.raises(RuntimeError, match="Restore a reviewed predecessor database snapshot"):
+        command.downgrade(config, "0002_drop_dead_tables")
     with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            expected_head(),
+        )
         assert conn.execute(
             "SELECT monthly_cap_usd, on_exceed FROM llm_budgets "
             "WHERE purpose='post_earnings_readout'"

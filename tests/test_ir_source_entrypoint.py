@@ -231,9 +231,7 @@ def _entrypoint_fixture(
                     },
                 ]
             )
-        prompt = getattr(summaries, "_enumerate_prompt")(
-            ticker, period, text, 200, source_scope="direct_pdf_rich"
-        )
+        prompt = getattr(summaries, "_enumerate_prompt")(ticker, period, text, 200)
         raw = json.dumps(rows)
         record_llm_call(
             started_at=datetime.now(UTC),

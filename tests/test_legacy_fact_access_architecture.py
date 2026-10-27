@@ -105,7 +105,7 @@ AUDITED_LEGACY_FACT_READS = {
     "src/allocation/eligibility.py": 1,
     "src/bear_case_grader.py": 1,
     "src/competitive/holdings_sync.py": 1,
-    "src/compute/kpi_extract_summaries.py": 2,
+    "src/compute/kpi_extract_summaries.py": 1,
     "src/compute/metrics_engine/io.py": 6,
     "src/credibility/observations.py": 3,
     "src/decision_conditions.py": 2,

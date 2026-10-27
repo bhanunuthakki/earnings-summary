@@ -1,357 +1,236 @@
-"""
-execution/process_ir_documents.py
------------------------------------
-Layer 3 CLI: LLM-process downloaded IR documents (press_release, presentation, transcript).
+"""Generate a retained summary for one exact registered transcript version."""
 
-For each unprocessed document registered in document_index.json:
-  - press_release  → generate_press_release_summary()  → .tmp/<TICKER>_<Q>_<Y>_press_release_summary.txt
-  - presentation   → generate_presentation_brief()      → .tmp/<TICKER>_<Q>_<Y>_presentation_brief.txt
-  - transcript     → generate_summary()                 → .tmp/<TICKER>_<Q>_<Y>_summary.txt  (existing)
-
-Respects the same rate-limit pause and cache idempotency as the existing transcript pipeline.
-
-Usage:
-    python execution/process_ir_documents.py --ticker GOOG
-    python execution/process_ir_documents.py --ticker GOOG --quarter Q3 --year 2025
-    python execution/process_ir_documents.py --all
-    python execution/process_ir_documents.py --dry-run --all
-"""
+from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import logging
 import sys
-import time
 from pathlib import Path
-from typing import Any
 
 try:
     from _lib import PROJECT_ROOT
 except ImportError:
     from execution._lib import PROJECT_ROOT
 
-import index_manager
 from alias_manager import resolve_ticker
 from db_paths import db_path_context, require_db_path
-from llm_client import (
-    compose_anchor_block,
-    generate_presentation_brief,
-    generate_press_release_summary,
-    generate_summary,
-    load_bear_anchor,
-    load_ir_anchor,
-    load_thesis_anchor,
+from pipeline.issuer_document_inventory import (
+    IssuerDocumentInventoryError,
+    resolve_registered_document_period,
 )
-from provenance.fulltext_backfill import project_source_text, source_text_projection_identity
+from pipeline.transcript_summary import (
+    TranscriptSummaryVerifier,
+    generate_transcript_summary,
+)
 from runtime.secrets import load_project_env
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-LOG_FORMAT = json.dumps({"level": "%(levelname)s", "ts": "%(asctime)s", "msg": "%(message)s"})
-logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, stream=sys.stderr)
-log = logging.getLogger(__name__)
-
-# Seconds to sleep between LLM calls to avoid rate limiting
-RATE_LIMIT_SLEEP = 15
-
-# `uses_anchor` marks doc types whose LLM prompt accepts a thesis/bear-case
-# anchor block (transcripts → analytical takeaway needs KPI anchor).
-# Press-release and presentation
-# briefs are pure structured-data summaries — no anchor needed; their job is
-# to be factual condensers, not to render thesis judgments.
-DOC_TYPE_CONFIG: dict[str, dict[str, Any]] = {
-    "press_release": {
-        "cache_suffix": "press_release_summary.txt",
-        "llm_fn": generate_press_release_summary,
-        "label": "Press Release Summary",
-        "uses_anchor": False,
-    },
-    "presentation": {
-        "cache_suffix": "presentation_brief.txt",
-        "llm_fn": generate_presentation_brief,
-        "label": "Presentation Brief",
-        "uses_anchor": False,
-    },
-    "transcript": {
-        "cache_suffix": "summary.txt",
-        "llm_fn": generate_summary,
-        "label": "Transcript Summary",
-        "uses_anchor": True,
-    },
-    # Letters to shareholders / investor updates summarize quarter highlights, so they
-    # share the press-release LLM path. The cache suffix differs to keep artifacts distinct.
-    "investor_update": {
-        "cache_suffix": "investor_update_summary.txt",
-        "llm_fn": generate_press_release_summary,
-        "label": "Investor Update Summary",
-        "uses_anchor": False,
-    },
-}
-
-
-def _is_event(doc: dict[str, Any]) -> bool:
-    return doc.get("doc_type") == "event"
-
-
-def cache_path_for(doc: dict[str, Any], *, repo_root: Path = PROJECT_ROOT) -> Path:
-    cache_dir = repo_root / ".tmp"
-    ticker = doc["ticker"]
-    if _is_event(doc):
-        # Event index entries have `event_date` instead of (year, quarter); the registered
-        # local_path's filename ends in `__<sha8>.pdf` which we surface in the cache name.
-        suffix = "event_brief.txt"  # Retained historical projection name.
-        event_date = doc["event_date"]
-        sha8 = Path(doc["local_path"]).stem.split("__")[-1]
-        return cache_dir / f"{ticker}_event_{event_date}_{sha8}_{suffix}"
-    suffix = DOC_TYPE_CONFIG[doc["doc_type"]]["cache_suffix"]
-    quarter = doc["quarter"]
-    year = doc["year"]
-    return cache_dir / f"{ticker}_{quarter}_{year}_{suffix}"
-
-
-def _mark_processed(doc: dict[str, Any], *, repo_root: Path = PROJECT_ROOT) -> None:
-    index_path = repo_root / ".tmp" / "document_index.json"
-    index_manager.mark_document_processed(
-        doc["ticker"],
-        doc["year"],
-        doc["quarter"],
-        doc["doc_type"],
-        document_index_path=index_path,
-    )
-
-
-def _doc_log_fields(doc: dict[str, Any]) -> dict[str, Any]:
-    if _is_event(doc):
-        return {"ticker": doc["ticker"], "event_date": doc["event_date"], "doc_type": "event"}
-    return {
-        "ticker": doc["ticker"],
-        "quarter": doc["quarter"],
-        "year": doc["year"],
-        "doc_type": doc["doc_type"],
-    }
-
-
-def extract_text(local_path: str) -> str:
-    path = Path(local_path)
-    return project_source_text(path.read_bytes(), str(path))
-
-
-def _summary_source_matches(cache: Path, source: Path) -> bool:
-    try:
-        receipt = json.loads(cache.with_suffix(".source.json").read_text(encoding="utf-8"))
-        return (
-            receipt["source_text_identity"] == source_text_projection_identity(str(source))
-            and receipt["source_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
-            and receipt["summary_sha256"] == hashlib.sha256(cache.read_bytes()).hexdigest()
-        )
-    except (OSError, ValueError, TypeError, KeyError):
-        return False
+_TRANSCRIPT_TYPES = ("transcript", "ir_transcript", "earnings_call_transcript")
 
 
 def process_document(
-    doc: dict[str, Any],
-    dry_run: bool = False,
+    document_version_id: str,
     *,
-    repo_root: Path = PROJECT_ROOT,
-    db_path: Path | None = None,
-) -> bool:
-    """
-    Process a single document entry. Returns True if processed successfully.
-    Idempotent: skips if cache already exists.
-    """
-    doc_type = doc["doc_type"]
-    local_path = doc.get("local_path")
-    if local_path and not Path(local_path).is_absolute():
-        local_path = str(repo_root / local_path)
-    log_fields = _doc_log_fields(doc)
+    db_path: Path,
+    state_root: Path,
+    verifier: TranscriptSummaryVerifier,
+) -> dict[str, object]:
+    """Process one explicitly selected canonical transcript version."""
+    result = generate_transcript_summary(
+        document_version_id,
+        db_path=db_path,
+        state_root=state_root,
+        verifier=verifier,
+    )
+    return {
+        "status": result.status,
+        "document_version_id": result.document_version_id,
+        "artifact_id": result.artifact_id,
+        "projection_path": (
+            None if result.projection_path is None else str(result.projection_path)
+        ),
+    }
 
-    config = DOC_TYPE_CONFIG.get(doc_type)
-    if config is None:
-        log.warning({"event": "unknown_doc_type", **log_fields})
-        return False
 
-    if not local_path or not Path(local_path).exists():
-        log.warning({"event": "local_path_missing", **log_fields})
-        return False
-
-    cache = cache_path_for(doc, repo_root=repo_root)
-
-    if cache.exists() and _summary_source_matches(cache, Path(local_path)):
-        log.info({"event": "cache_hit", "cache": str(cache)})
-        _mark_processed(doc, repo_root=repo_root)
-        return True
-
-    log.info({"event": "processing", "label": config["label"], **log_fields})
-
-    if dry_run:
-        print(f"[DRY RUN] Would process: {log_fields} -> {cache.name}")
-        return True
-
-    try:
-        source_sha256 = hashlib.sha256(Path(local_path).read_bytes()).hexdigest()
-        text = extract_text(local_path)
-        if not text.strip():
-            log.error({"event": "empty_text", "local_path": local_path})
-            return False
-
+def select_registered_transcripts(
+    db_path: Path,
+    *,
+    ticker: str | None,
+    all_tickers: bool,
+    fiscal_year: int | None,
+    fiscal_quarter: int | None,
+) -> list[str]:
+    """Select current registered transcript versions and prove their fiscal keys."""
+    if (ticker is None and not all_tickers) or (ticker is not None and all_tickers):
+        raise ValueError("select exactly one of --ticker or --all")
+    if (fiscal_year is None) != (fiscal_quarter is None):
+        raise ValueError("--year and --quarter must be supplied together")
+    if fiscal_year is not None and not 1900 <= fiscal_year <= 2200:
+        raise ValueError("--year must be between 1900 and 2200")
+    if fiscal_quarter is not None and fiscal_quarter not in {1, 2, 3, 4}:
+        raise ValueError("--quarter must be 1, 2, 3, or 4")
+    if ticker is None:
+        canonical_ticker = None
+    else:
         with db_path_context(db_path):
-            if config.get("uses_anchor", False):
-                anchor_block = compose_anchor_block(
-                    load_thesis_anchor(repo_root, doc["ticker"]),
-                    load_bear_anchor(repo_root, doc["ticker"]),
-                    load_ir_anchor(repo_root, doc["ticker"]),
-                )
-                result_text = config["llm_fn"](text, anchor_block=anchor_block)
-            else:
-                result_text = config["llm_fn"](text)
+            canonical_ticker = resolve_ticker(ticker).upper()
+        if not canonical_ticker:
+            raise ValueError("--ticker is empty")
 
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        pending_cache = cache.with_suffix(".pending")
-        try:
-            pending_cache.write_text(result_text, encoding="utf-8")
-            pending_cache.replace(cache)
-        finally:
-            pending_cache.unlink(missing_ok=True)
-
-        cache.with_suffix(".source.json").write_text(
-            json.dumps(
-                {
-                    "source_text_identity": source_text_projection_identity(local_path),
-                    "source_sha256": source_sha256,
-                    "summary_sha256": hashlib.sha256(cache.read_bytes()).hexdigest(),
-                }
-            ),
-            encoding="utf-8",
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
+        query = (
+            "SELECT current.document_version_id,current.ticker "
+            "FROM v_evidence_document_current AS current "
+            "JOIN v_evidence_document_versions_canonical AS canonical "
+            "ON canonical.document_version_id=current.document_version_id "
+            "WHERE lower(current.document_type) IN (?,?,?)"
         )
-        log.info({"event": "cached", "cache": str(cache)})
-        _mark_processed(doc, repo_root=repo_root)
-        time.sleep(RATE_LIMIT_SLEEP)
-        return True
-
-    except Exception as e:
-        log.error({"event": "processing_failed", "error": str(e), **log_fields})
-        return False
+        params: list[object] = list(_TRANSCRIPT_TYPES)
+        if canonical_ticker is not None:
+            query += " AND current.ticker=?"
+            params.append(canonical_ticker)
+        query += " ORDER BY current.ticker,current.period_end,current.document_version_id"
+        rows = conn.execute(query, tuple(params)).fetchall()
+        selected: list[str] = []
+        for row in rows:
+            document_version_id, document_ticker = str(row[0]), str(row[1])
+            if canonical_ticker is not None and document_ticker != canonical_ticker:
+                continue
+            try:
+                registered = resolve_registered_document_period(
+                    conn,
+                    document_version_id,
+                )
+            except IssuerDocumentInventoryError as exc:
+                raise IssuerDocumentInventoryError(
+                    f"selection_deferred:{document_version_id}:{exc.reason_code}"
+                ) from exc
+            if (fiscal_year is None or registered.request.fiscal_year == fiscal_year) and (
+                fiscal_quarter is None or registered.request.fiscal_quarter == fiscal_quarter
+            ):
+                selected.append(document_version_id)
+        return selected
 
 
 def run_for_ticker(
     ticker: str,
-    quarter: str | None = None,
-    year: str | None = None,
-    dry_run: bool = False,
-    regenerate_missing: bool = False,
+    quarter: str | int | None = None,
+    year: str | int | None = None,
     *,
-    repo_root: Path = PROJECT_ROOT,
-    db_path: Path | None = None,
+    db_path: Path,
+    state_root: Path,
+    verifier: TranscriptSummaryVerifier,
 ) -> int:
-    index_path = repo_root / ".tmp" / "document_index.json"
-    ticker = resolve_ticker(ticker).upper()
-    if regenerate_missing:
-        # Self-heal: re-include every registered quarterly doc regardless of its
-        # `processed` flag. A transcript registered processed=True at ingest
-        # (index_manager.register_transcript) whose `_summary.txt` was never
-        # written is otherwise skipped forever by get_unprocessed_documents —
-        # the gap that leaves §6 Say-Do empty for freshly-onboarded names.
-        # process_document early-returns on cache-hit, so docs that already have
-        # a current source-bound summary are skipped; stale artifacts regenerate.
-        docs = [
-            d
-            for d in index_manager.get_documents_for_ticker(
-                ticker, document_index_path=index_path, quarterly_only=True
-            )
-            if d.get("doc_type") in DOC_TYPE_CONFIG
-            and d.get("doc_type") != "event"
-            and d.get("local_path")
-        ]
-    else:
-        docs = index_manager.get_unprocessed_documents(ticker, document_index_path=index_path)
-
-    if quarter:
-        docs = [d for d in docs if d["quarter"].upper() == quarter.upper()]
-    if year:
-        docs = [d for d in docs if str(d["year"]) == str(year)]
-
-    if not docs:
-        print(f"[{ticker}] No unprocessed documents found.")
-        return 0
-
-    print(f"[{ticker}] Processing {len(docs)} document(s)...")
-    success = 0
-    for doc in docs:
-        ok = process_document(doc, dry_run=dry_run, repo_root=repo_root, db_path=db_path)
-        if ok:
-            success += 1
-
-    print(
-        json.dumps(
-            {
-                "ticker": ticker,
-                "total": len(docs),
-                "success": success,
-                "failed": len(docs) - success,
-            }
-        )
+    """Process exact current transcript versions selected by fiscal coordinates."""
+    fiscal_quarter = _parse_quarter(quarter)
+    fiscal_year = None if year is None else int(year)
+    document_version_ids = select_registered_transcripts(
+        db_path,
+        ticker=ticker,
+        all_tickers=False,
+        fiscal_year=fiscal_year,
+        fiscal_quarter=fiscal_quarter,
     )
-    return int(success != len(docs))
+    results = [
+        process_document(
+            document_version_id,
+            db_path=db_path,
+            state_root=state_root,
+            verifier=verifier,
+        )
+        for document_version_id in document_version_ids
+    ]
+    print(json.dumps({"ticker": ticker, "results": results}, sort_keys=True))
+    return int(any(result["status"] == "failed" for result in results))
+
+
+def _parse_quarter(value: str | int | None) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip().upper()
+    if text.startswith("Q"):
+        text = text[1:]
+    quarter = int(text)
+    if quarter not in {1, 2, 3, 4}:
+        raise ValueError("quarter must be 1, 2, 3, or 4")
+    return quarter
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="LLM-process downloaded IR documents.")
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--ticker", type=str, help="Company ticker to process")
-    group.add_argument(
-        "--all", action="store_true", help="Process all tickers with unprocessed documents"
+    parser = argparse.ArgumentParser(
+        description="Generate transcript summaries from exact registered document versions."
     )
-    parser.add_argument("--quarter", type=str, help="Filter to a specific quarter (e.g. Q3)")
-    parser.add_argument("--year", type=str, help="Filter to a specific year (e.g. 2025)")
-    parser.add_argument(
-        "--dry-run", action="store_true", help="Show what would be processed without calling LLM"
-    )
-    parser.add_argument(
-        "--regenerate-missing",
-        action="store_true",
-        help="Re-include every registered quarterly doc whose summary cache file "
-        "is absent, even if marked processed. Self-heals transcripts registered "
-        "processed=True without a summary ever being written (the gap that leaves "
-        "§6 Say-Do empty). Reuses only summaries bound to the current source bytes. "
-        "Intended with --ticker.",
-    )
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--document-version-id")
+    selection.add_argument("--ticker")
+    selection.add_argument("--all", action="store_true", dest="all_tickers")
+    parser.add_argument("--quarter")
+    parser.add_argument("--year", type=int)
+    parser.add_argument("--db", type=Path, required=True)
+    parser.add_argument("--state-root", type=Path, required=True)
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
-    parser.add_argument("--db", type=Path)
     args = parser.parse_args(argv)
-    repo_root = args.repo_root.resolve()
+    repo_root = args.repo_root.expanduser().resolve()
+    database = require_db_path(args.db)
+    state_root = args.state_root.expanduser().resolve(strict=True)
     load_project_env(repo_root)
-    database = require_db_path(args.db) if args.db is not None or not args.dry_run else None
-    index_path = repo_root / ".tmp" / "document_index.json"
 
-    if args.all:
-        unprocessed = index_manager.get_unprocessed_documents(document_index_path=index_path)
-        tickers = sorted({d["ticker"] for d in unprocessed})
-        if not tickers:
-            print("No unprocessed documents found.")
-            return 0
-        status = 0
-        for t in tickers:
-            status = max(
-                status,
-                run_for_ticker(
-                    t,
-                    args.quarter,
-                    args.year,
-                    args.dry_run,
-                    args.regenerate_missing,
-                    repo_root=repo_root,
-                    db_path=database,
-                ),
+    try:
+        from pipeline.transcript_summary_verification import (
+            TranscriptSummaryVerifier as AuditAdapter,
+        )
+
+        verifier = AuditAdapter(db_path=database, state_root=state_root)
+    except Exception as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked_qualified_verifier_unavailable",
+                    "reason": f"{type(exc).__name__}: {exc}",
+                    "document_version_id": args.document_version_id,
+                },
+                sort_keys=True,
             )
-        return status
-    return run_for_ticker(
-        args.ticker,
-        args.quarter,
-        args.year,
-        args.dry_run,
-        args.regenerate_missing,
-        repo_root=repo_root,
-        db_path=database,
-    )
+        )
+        return 2
+
+    try:
+        if args.document_version_id is not None:
+            if args.year is not None or args.quarter is not None:
+                raise ValueError("--year and --quarter apply only to --ticker or --all")
+            document_version_ids = [args.document_version_id]
+        else:
+            document_version_ids = select_registered_transcripts(
+                database,
+                ticker=args.ticker,
+                all_tickers=args.all_tickers,
+                fiscal_year=args.year,
+                fiscal_quarter=_parse_quarter(args.quarter),
+            )
+        results = [
+            process_document(
+                document_version_id,
+                db_path=database,
+                state_root=state_root,
+                verifier=verifier,
+            )
+            for document_version_id in document_version_ids
+        ]
+    except Exception as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "failed",
+                    "reason": f"{type(exc).__name__}: {exc}",
+                    "document_version_id": args.document_version_id,
+                },
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    print(json.dumps({"status": "complete", "results": results}, sort_keys=True))
+    return 0
 
 
 if __name__ == "__main__":

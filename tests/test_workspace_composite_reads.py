@@ -172,7 +172,6 @@ def test_missing_configuration_and_unavailable_authority_are_distinct(tmp_path: 
 def test_partial_failure_preserves_available_panels_and_owned_connection_closes(
     workspace_database: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from report.renderers import workspace_data
     from report.renderers.workspace_data import PanelAvailability
 
     conn = sqlite3.connect(workspace_database)
@@ -182,7 +181,7 @@ def test_partial_failure_preserves_available_panels_and_owned_connection_closes(
     def opened(_path: str, *, role: SQLiteConnectionRole) -> sqlite3.Connection:
         return conn
 
-    monkeypatch.setattr(workspace_data, "connect_sqlite", opened)
+    monkeypatch.setattr(p3_data, "connect_sqlite", opened)
     panels = load_workspace_p3_panels("TEST", tmp_path, db_path=workspace_database)
     assert panels.position_review_count is None
     assert panels.availability["position_review_count"] is PanelAvailability.UNAVAILABLE
@@ -329,7 +328,6 @@ def test_position_coaching_does_not_turn_unavailable_history_into_zero(
 def test_unexpected_loader_failure_closes_owned_bundle_connection(
     workspace_database: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from report.renderers import workspace_data
 
     conn = sqlite3.connect(workspace_database)
 
@@ -339,9 +337,43 @@ def test_unexpected_loader_failure_closes_owned_bundle_connection(
     def broken(*_args: object, **_kwargs: object) -> list[p3_data.MacroSensitivityRow]:
         raise RuntimeError("synthetic programming failure")
 
-    monkeypatch.setattr(workspace_data, "connect_sqlite", opened)
-    monkeypatch.setattr(workspace_data, "load_macro_sensitivities", broken)
+    monkeypatch.setattr(p3_data, "connect_sqlite", opened)
+    monkeypatch.setattr(p3_data, "load_macro_sensitivities", broken)
     with pytest.raises(RuntimeError, match="synthetic programming failure"):
         load_workspace_p3_panels("TEST", tmp_path, db_path=workspace_database)
     with pytest.raises(sqlite3.ProgrammingError, match="closed"):
         conn.execute("SELECT 1")
+
+
+def test_report_preparation_preserves_caller_connection(
+    workspace_database: Path, tmp_path: Path
+) -> None:
+    from report.builder import prepare_workspace_report
+    from report.models import ReportSpec
+
+    with sqlite3.connect(workspace_database) as conn:
+        conn.execute("UPDATE advisor_memos SET body_md='pending synthetic update' WHERE id=1")
+        assert conn.in_transaction
+        spec = ReportSpec.model_construct(ticker="TEST", repo_root=str(tmp_path), db_path=None)
+        prepared = prepare_workspace_report(spec, conn=conn)
+        assert prepared.p3.position_review_count == 1000
+        assert conn.row_factory is None
+        assert conn.in_transaction
+        conn.rollback()
+        assert conn.execute("SELECT 1").fetchone() == (1,)
+
+
+def test_report_preparation_rejects_conflicting_database_authority(
+    workspace_database: Path, tmp_path: Path
+) -> None:
+    from report.builder import prepare_workspace_report
+    from report.models import ReportSpec
+
+    spec = ReportSpec.model_construct(
+        ticker="TEST", repo_root=str(tmp_path), db_path=str(tmp_path / "other.sqlite")
+    )
+    with (
+        sqlite3.connect(workspace_database) as conn,
+        pytest.raises(ValueError, match="database path disagree"),
+    ):
+        prepare_workspace_report(spec, conn=conn)

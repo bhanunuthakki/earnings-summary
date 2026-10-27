@@ -4,19 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from research.artifact import ArtifactFetchError, fetch_url_text, is_safe_url
 from server_runtime.access import is_allowed_origin
 from ui.cite_marks import linkify
-
-
-def test_h1_ssrf_url_guard():
-    assert is_safe_url("https://www.google.com") is True
-    assert is_safe_url("http://127.0.0.1") is False
-    assert is_safe_url("http://localhost/secret") is False
-    assert is_safe_url("http://169.254.169.254/latest/meta-data/") is False
-
-    with pytest.raises(ArtifactFetchError):
-        fetch_url_text("http://127.0.0.1:8080/admin")
 
 
 def test_m3_cors_null_origin():

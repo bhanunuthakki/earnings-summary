@@ -1357,7 +1357,7 @@ def reporting_cadence_for(
 # `resolve_kpi_definition_name` (above) and `canonical_metric_name` now share the
 # same conservative key: only unit surface variants may collapse. The WRITE side
 # is used by the
-# "capture every reported number" program (directives/capture_every_number_program.md)
+# source-provenance contract (directives/data_provenance.md)
 # routes every freshly-extracted label through it BEFORE persisting, to decide
 # whether the value joins an existing kpi_definitions row or mints a new one.
 #

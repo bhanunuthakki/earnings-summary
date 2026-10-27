@@ -21,7 +21,7 @@ REM Harvest the report-critical paths this job already executes. Capture is a
 REM local append only in the private retention-bounded archive outside the repo.
 if not defined LLM_CAPTURE_DIR set "LLM_CAPTURE_DIR=%LOCALAPPDATA%\earnings-summary\llm_capture"
 if not defined EARNINGS_SUMMARY_CAPTURE_RETENTION_DAYS set EARNINGS_SUMMARY_CAPTURE_RETENTION_DAYS=90
-set LLM_CAPTURE_PURPOSES=saydo_filter,valuation_basis,exec_comp_alignment,company_description,recent_developments
+set LLM_CAPTURE_PURPOSES=valuation_basis,exec_comp_alignment,company_description,recent_developments
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
 REM wmic was removed from Windows 11 24H2+; use PowerShell for the UTC stamp.

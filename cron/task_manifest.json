@@ -48,21 +48,6 @@
    }
   },
   {
-   "task_name": "\\earnings-summary\\capture_poller",
-   "xml": "capture_poller.task.xml",
-   "wrapper": "run_capture_poller.bat",
-   "schedule": {
-    "trigger": "LogonTrigger",
-    "start_boundary": null,
-    "repetition_interval": null,
-    "days_interval": null,
-    "weeks_interval": null,
-    "days_of_week": [],
-    "days_of_month": [],
-    "months": []
-   }
-  },
-  {
    "task_name": "\\earnings-summary\\check_comp_set_drift",
    "xml": "check_comp_set_drift.task.xml",
    "wrapper": "run_check_comp_set_drift.bat",
@@ -75,21 +60,6 @@
     "days_of_week": [
      "Sunday"
     ],
-    "days_of_month": [],
-    "months": []
-   }
-  },
-  {
-   "task_name": "\\earnings-summary\\coach_pings",
-   "xml": "coach_pings.task.xml",
-   "wrapper": "run_coach_pings.bat",
-   "schedule": {
-    "trigger": "CalendarTrigger",
-    "start_boundary": "2026-07-03T07:15:00",
-    "repetition_interval": null,
-    "days_interval": 1,
-    "weeks_interval": null,
-    "days_of_week": [],
     "days_of_month": [],
     "months": []
    }
@@ -137,21 +107,6 @@
     "days_of_week": [
      "Sunday"
     ],
-    "days_of_month": [],
-    "months": []
-   }
-  },
-  {
-   "task_name": "\\earnings-summary\\decision_nudge",
-   "xml": "decision_nudge.task.xml",
-   "wrapper": "run_decision_nudge.bat",
-   "schedule": {
-    "trigger": "CalendarTrigger",
-    "start_boundary": "2026-07-14T17:00:00",
-    "repetition_interval": null,
-    "days_interval": 1,
-    "weeks_interval": null,
-    "days_of_week": [],
     "days_of_month": [],
     "months": []
    }
@@ -273,21 +228,6 @@
    }
   },
   {
-   "task_name": "\\earnings-summary\\ledger_synthesis",
-   "xml": "ledger_synthesis.task.xml",
-   "wrapper": "run_ledger_synthesis.bat",
-   "schedule": {
-    "trigger": "CalendarTrigger",
-    "start_boundary": "2026-06-29T06:45:00",
-    "repetition_interval": null,
-    "days_interval": 1,
-    "weeks_interval": null,
-    "days_of_week": [],
-    "days_of_month": [],
-    "months": []
-   }
-  },
-  {
    "task_name": "\\earnings-summary\\model_eval_sweep",
    "xml": "model_eval_sweep.task.xml",
    "wrapper": "run_weekly_model_eval.bat",
@@ -302,36 +242,6 @@
     ],
     "days_of_month": [],
     "months": []
-   }
-  },
-  {
-   "task_name": "\\earnings-summary\\monthly_calibration_scorecard",
-   "xml": "monthly_calibration_scorecard.task.xml",
-   "wrapper": "run_monthly_calibration_scorecard.bat",
-   "schedule": {
-    "trigger": "CalendarTrigger",
-    "start_boundary": "2026-07-02T07:30:00",
-    "repetition_interval": null,
-    "days_interval": null,
-    "weeks_interval": null,
-    "days_of_week": [],
-    "days_of_month": [
-     2
-    ],
-    "months": [
-     "January",
-     "February",
-     "March",
-     "April",
-     "May",
-     "June",
-     "July",
-     "August",
-     "September",
-     "October",
-     "November",
-     "December"
-    ]
    }
   },
   {
@@ -375,40 +285,6 @@
     "days_interval": 1,
     "weeks_interval": null,
     "days_of_week": [],
-    "days_of_month": [],
-    "months": []
-   }
-  },
-  {
-   "task_name": "\\earnings-summary\\red_team",
-   "xml": "red_team.task.xml",
-   "wrapper": "run_red_team.bat",
-   "schedule": {
-    "trigger": "CalendarTrigger",
-    "start_boundary": "2026-08-01T10:00:00",
-    "repetition_interval": null,
-    "days_interval": null,
-    "weeks_interval": 1,
-    "days_of_week": [
-     "Saturday"
-    ],
-    "days_of_month": [],
-    "months": []
-   }
-  },
-  {
-   "task_name": "\\earnings-summary\\refresh_business_factors",
-   "xml": "refresh_business_factors.task.xml",
-   "wrapper": "run_refresh_business_factors.bat",
-   "schedule": {
-    "trigger": "CalendarTrigger",
-    "start_boundary": "2026-07-27T11:30:00",
-    "repetition_interval": null,
-    "days_interval": null,
-    "weeks_interval": 1,
-    "days_of_week": [
-     "Sunday"
-    ],
     "days_of_month": [],
     "months": []
    }
@@ -476,36 +352,6 @@
    }
   },
   {
-   "task_name": "\\earnings-summary\\refresh_scenario_priors",
-   "xml": "refresh_scenario_priors.task.xml",
-   "wrapper": "run_refresh_scenario_priors.bat",
-   "schedule": {
-    "trigger": "CalendarTrigger",
-    "start_boundary": "2026-08-01T03:40:00",
-    "repetition_interval": null,
-    "days_interval": null,
-    "weeks_interval": null,
-    "days_of_week": [],
-    "days_of_month": [
-     1
-    ],
-    "months": [
-     "January",
-     "February",
-     "March",
-     "April",
-     "May",
-     "June",
-     "July",
-     "August",
-     "September",
-     "October",
-     "November",
-     "December"
-    ]
-   }
-  },
-  {
    "task_name": "\\earnings-summary\\restore_drill",
    "xml": "restore_drill.task.xml",
    "wrapper": "run_restore_drill.bat",
@@ -566,57 +412,6 @@
    }
   },
   {
-   "task_name": "\\earnings-summary\\submit_saydo_batch",
-   "xml": "submit_saydo_batch.task.xml",
-   "wrapper": "run_submit_saydo_batch.bat",
-   "schedule": {
-    "trigger": "CalendarTrigger",
-    "start_boundary": "2026-05-30T02:20:00",
-    "repetition_interval": null,
-    "days_interval": null,
-    "weeks_interval": 1,
-    "days_of_week": [
-     "Saturday"
-    ],
-    "days_of_month": [],
-    "months": []
-   }
-  },
-  {
-   "task_name": "\\earnings-summary\\tenet_accountability",
-   "xml": "tenet_accountability.task.xml",
-   "wrapper": "run_tenet_accountability.bat",
-   "schedule": {
-    "trigger": "CalendarTrigger",
-    "start_boundary": "2026-07-25T09:00:00",
-    "repetition_interval": null,
-    "days_interval": null,
-    "weeks_interval": 1,
-    "days_of_week": [
-     "Saturday"
-    ],
-    "days_of_month": [],
-    "months": []
-   }
-  },
-  {
-   "task_name": "\\earnings-summary\\thesis_collision",
-   "xml": "thesis_collision.task.xml",
-   "wrapper": "run_thesis_collision.bat",
-   "schedule": {
-    "trigger": "CalendarTrigger",
-    "start_boundary": "2026-07-25T11:00:00",
-    "repetition_interval": null,
-    "days_interval": null,
-    "weeks_interval": 1,
-    "days_of_week": [
-     "Saturday"
-    ],
-    "days_of_month": [],
-    "months": []
-   }
-  },
-  {
    "task_name": "\\earnings-summary\\track_comp_metrics",
    "xml": "track_comp_metrics.task.xml",
    "wrapper": "run_track_comp_metrics.bat",
@@ -655,40 +450,6 @@
    "schedule": {
     "trigger": "CalendarTrigger",
     "start_boundary": "2026-08-02T13:00:00",
-    "repetition_interval": null,
-    "days_interval": null,
-    "weeks_interval": 1,
-    "days_of_week": [
-     "Sunday"
-    ],
-    "days_of_month": [],
-    "months": []
-   }
-  },
-  {
-   "task_name": "\\earnings-summary\\weekly_packet",
-   "xml": "weekly_packet.task.xml",
-   "wrapper": "run_weekly_packet.bat",
-   "schedule": {
-    "trigger": "CalendarTrigger",
-    "start_boundary": "2026-07-19T08:00:00",
-    "repetition_interval": null,
-    "days_interval": null,
-    "weeks_interval": 1,
-    "days_of_week": [
-     "Sunday"
-    ],
-    "days_of_month": [],
-    "months": []
-   }
-  },
-  {
-   "task_name": "\\earnings-summary\\weekly_score_stances",
-   "xml": "weekly_score_stances.task.xml",
-   "wrapper": "run_weekly_score_stances.bat",
-   "schedule": {
-    "trigger": "CalendarTrigger",
-    "start_boundary": "2026-06-14T06:30:00",
     "repetition_interval": null,
     "days_interval": null,
     "weeks_interval": 1,

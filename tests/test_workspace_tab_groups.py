@@ -13,25 +13,17 @@ group. These tests pin:
 from __future__ import annotations
 
 import dataclasses
-import sys
 from datetime import date
 from io import StringIO
 from pathlib import Path
 
-import pytest
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import report.renderers.workspace_html as workspace_html  # noqa: E402
-from report.models import (  # noqa: E402
+from report.models import (
     AppendixSection,
     BearCaseSection,
     CompanyDescriptionSection,
     EarningsSection,
     EvaluationSnapshotSection,
     FinancialsSection,
-    IrDocsSection,
     KpiLedgerRow,
     MissingReason,
     PortfolioPositionSection,
@@ -46,33 +38,19 @@ from report.models import (  # noqa: E402
     ThesisSection,
     ValuationSnapshot,
 )
-from report.renderers.workspace_data import WorkspaceP3Panels  # noqa: E402
-from report.renderers.workspace_html import (  # noqa: E402
-    _tab_groups,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
-    _tabs,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
+from report.renderers.workspace_data import WorkspaceP3Panels
+from report.renderers.workspace_html import (
+    _tab_groups,
+    _tabs,
     render,
 )
-from report.renderers.workspace_script import JS  # noqa: E402
-from report.renderers.workspace_styles import CSS  # noqa: E402
-from report.sections.p3_data import DecisionHistorySummary  # noqa: E402
+from report.renderers.workspace_script import JS
+from report.renderers.workspace_styles import CSS
+from report.sections.p3_data import DecisionHistorySummary
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def _isolate_tab_group_tests_from_live_database(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep markup-only tests independent of production-owned database readers."""
-
-    def _no_sell_base_rate(*_args: object) -> None:
-        return None
-
-    def _no_you_said_strip(*_args: object) -> str:
-        return ""
-
-    monkeypatch.setattr(workspace_html, "load_graded_sell_base_rate", _no_sell_base_rate)
-    monkeypatch.setattr(workspace_html, "render_you_said_strip_for_path", _no_you_said_strip)
 
 
 def _make_spec(
@@ -113,7 +91,6 @@ def _make_spec(
         segments=SegmentsSection(status=SectionStatus.OK),
         earnings=EarningsSection(status=SectionStatus.OK),
         saydo=SayDoSection(status=SectionStatus.OK),
-        ir_docs=IrDocsSection(status=SectionStatus.OK),
         recent_developments=RecentDevelopmentsSection(status=SectionStatus.OK),
         bear_case=BearCaseSection(status=SectionStatus.OK),
         provenance=ProvenanceSection(status=SectionStatus.OK),

@@ -17,14 +17,13 @@ import candidate_fit_cache
 from allocation.candidate_fit import BookContext, CandidateFit
 from execution import (
     build_artifacts,
-    build_etf_workup,
     daily_fetch_and_brief,
-    fetch_etf_data,
-    fetch_etf_published_data,
     onboard_ticker,
     refresh_candidate_fit,
 )
 from pipeline.research_cockpit import build_cockpit_rows
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 _onboard: Callable[[argparse.Namespace], int] = getattr(onboard_ticker, "_onboard")
 _all_tracked: Callable[[Path], list[str]] = getattr(build_artifacts, "_all_tracked")
@@ -256,21 +255,12 @@ def test_held_etf_weight_survives_without_candidate_fit(
 
 
 @pytest.mark.parametrize(
-    "run",
+    "entrypoint",
     [
-        build_etf_workup.main,
-        fetch_etf_data.main,
-        fetch_etf_published_data.main,
+        "build_etf_workup.py",
+        "fetch_etf_data.py",
+        "fetch_etf_published_data.py",
     ],
 )
-def test_retired_etf_commands_stop_without_creating_state(
-    run: Callable[[], int],
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sqlite3, "connect", _forbidden)
-    assert run() == 2
-    assert "retired" in capsys.readouterr().out
-    assert list(tmp_path.iterdir()) == []
+def test_retired_etf_command_entrypoints_are_removed(entrypoint: str) -> None:
+    assert not (PROJECT_ROOT / "execution" / entrypoint).exists()

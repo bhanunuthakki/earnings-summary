@@ -106,7 +106,7 @@ A supported, dated basket P/E is a point-in-time characteristic. A long-term
 multiple or growth rate may be an explicit scenario assumption. Do not relabel
 one P/E as a long-term average or invent an earnings series. Missing support is
 unavailable; this route does not authorize a new collector or a lower evidence
-standard. Saved ETF research is historical reading, not a current verdict.
+standard. Dedicated ETF workups and their saved-history interface are retired.
 
 ## Portfolio risk
 

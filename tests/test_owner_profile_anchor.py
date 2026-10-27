@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from db_paths import db_path_context
 from llm.anchors import (
     OWNER_PROFILE_ANCHOR_CHAR_CAP,
     compose_anchor_block,
@@ -55,7 +56,8 @@ def repo_root(tmp_path: Path) -> Iterator[Path]:
     conn.executescript(_DDL)
     conn.commit()
     conn.close()
-    yield tmp_path
+    with db_path_context(data_dir / "portfolio.db"):
+        yield tmp_path
 
 
 def _db(repo_root: Path) -> Path:
@@ -164,7 +166,9 @@ def test_anchor_only_affirmed_not_proposed_or_rejected(repo_root: Path) -> None:
 
 
 def test_anchor_missing_db_degrades(tmp_path: Path) -> None:
-    assert load_owner_profile_anchor(tmp_path) == ""  # no data/portfolio.db, never raises
+    missing_db = tmp_path / "unavailable" / "portfolio.db"
+    with db_path_context(missing_db):
+        assert load_owner_profile_anchor(tmp_path) == ""  # never raises
 
 
 def test_anchor_is_deterministic(repo_root: Path) -> None:

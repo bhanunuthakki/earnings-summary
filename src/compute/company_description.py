@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import sqlite3
 import time
 from dataclasses import asdict, dataclass, field
@@ -152,14 +151,9 @@ def extract_for_ticker(
         relevant_text = ""
         year = None
 
-    # Investor-material inputs — these give the LLM something to anchor an
-    # analytical writeup on, instead of paraphrasing the 10-K. We hash them
-    # into the cache key so a fresh earnings call (or a fresh IR-deck cache)
-    # invalidates the cached description (the prompt's analytical anchor will
-    # have shifted).
+    # The cache binds the owner's thesis and verified IR anchor through the
+    # exact assembled prompt. Legacy generated summary files are not inputs.
     thesis_text = _load_thesis(repo_root, ticker)
-    recent_earnings_md = _load_recent_earnings_md(repo_root, ticker, n=2)
-    recent_ir_md = _load_recent_ir_docs_md(repo_root, ticker, n=3)
     ir_anchor_md = load_ir_anchor(repo_root, ticker)
     segment_names = segment_names_from_db(db_conn, ticker, metric="revenue_by_product")
     geo_names = segment_names_from_db(db_conn, ticker, metric="revenue_by_geography")
@@ -174,10 +168,8 @@ def extract_for_ticker(
         segment_names,
         geo_names,
         year,
-        thesis_text,
-        recent_earnings_md,
-        recent_ir_md,
-        ir_anchor_md,
+        thesis_text=thesis_text,
+        ir_anchor_md=ir_anchor_md,
     )
     composite_sha = hashlib.sha256(
         json.dumps(
@@ -203,8 +195,6 @@ def extract_for_ticker(
         geo_names=geo_names,
         fiscal_year=year,
         thesis_text=thesis_text,
-        recent_earnings_md=recent_earnings_md,
-        recent_ir_md=recent_ir_md,
         ir_anchor_md=ir_anchor_md,
     )
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
@@ -385,8 +375,6 @@ def _call_llm(
     geo_names: list[str],
     fiscal_year: int | None,
     thesis_text: str = "",
-    recent_earnings_md: str = "",
-    recent_ir_md: str = "",
     ir_anchor_md: str = "",
 ) -> _ParsedLLMOutput:
     """Call the LLM with the component-based schema and assemble the prose.
@@ -408,8 +396,6 @@ def _call_llm(
         geo_names=geo_names,
         fiscal_year=fiscal_year,
         thesis_text=thesis_text,
-        recent_earnings_md=recent_earnings_md,
-        recent_ir_md=recent_ir_md,
         ir_anchor_md=ir_anchor_md,
     ).strip()
     if raw.startswith("```"):
@@ -532,81 +518,6 @@ def _load_thesis(repo_root: Path, ticker: str) -> str:
         if isinstance(v, str) and v.strip():
             return v.strip()
     return ""
-
-
-_TMP_SUMMARY_RX = re.compile(
-    r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})_"
-    r"(?:investor_update_)?summary\.txt$"
-)
-_TMP_IR_DOC_RX = re.compile(
-    r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})_"
-    r"(?P<kind>press_release_summary|presentation_brief)\.txt$"
-)
-
-
-def _load_recent_earnings_md(repo_root: Path, ticker: str, n: int = 2) -> str:
-    """Most-recent N per-quarter earnings summaries concatenated, newest first.
-
-    Source: `.tmp/{TICKER}_Q{N}_{YEAR}_summary.txt` files written by
-    ``execution/process_ir_documents.py``. Returns empty string when nothing's
-    on file — the prompt's recent-earnings block is then suppressed and the
-    LLM has to lean harder on the 10-K factual baseline.
-    """
-    tmp = repo_root / ".tmp"
-    if not tmp.exists():
-        return ""
-    upper = ticker.upper()
-    hits: list[tuple[int, int, Path]] = []
-    for p in tmp.iterdir():
-        m = _TMP_SUMMARY_RX.match(p.name)
-        if not m or m.group("ticker") != upper:
-            continue
-        hits.append((int(m.group("y")), int(m.group("q")), p))
-    if not hits:
-        return ""
-    hits.sort(reverse=True)
-    chunks: list[str] = []
-    for y, q, p in hits[:n]:
-        try:
-            body = p.read_text(encoding="utf-8").strip()
-        except OSError:
-            continue
-        if len(body) < 200:
-            continue
-        chunks.append(f"### Q{q} {y}\n{body}")
-    return "\n\n---\n\n".join(chunks)
-
-
-def _load_recent_ir_docs_md(repo_root: Path, ticker: str, n: int = 3) -> str:
-    """Recent press-release + presentation summaries, newest first.
-
-    Source: ``.tmp/{TICKER}_Q{N}_{YEAR}_{press_release_summary,presentation_brief}.txt``.
-    Useful for catching management's NARRATIVE framing of the business
-    between earnings calls.
-    """
-    tmp = repo_root / ".tmp"
-    if not tmp.exists():
-        return ""
-    upper = ticker.upper()
-    hits: list[tuple[int, int, str, Path]] = []
-    for p in tmp.iterdir():
-        m = _TMP_IR_DOC_RX.match(p.name)
-        if not m or m.group("ticker") != upper:
-            continue
-        hits.append((int(m.group("y")), int(m.group("q")), m.group("kind"), p))
-    if not hits:
-        return ""
-    hits.sort(reverse=True)
-    chunks: list[str] = []
-    for y, q, kind, p in hits[:n]:
-        try:
-            body = p.read_text(encoding="utf-8").strip()
-        except OSError:
-            continue
-        if len(body) < 200:
-            continue
-        chunks.append(f"### {kind} · Q{q} {y}\n{body}")
-    return "\n\n---\n\n".join(chunks)
 
 
 def _str_or_none(v: object) -> str | None:

@@ -23,6 +23,9 @@ _RAW_RELATION = re.compile(r"\b(?:FROM|JOIN)\s+(?:transcripts|filing_sections)\b
 AUDITED_RAW_RELATION_READS = {
     "execution/audit_transcript_evidence.py": 1,
     "execution/dedupe_transcripts.py": 1,
+    # Exact registered document identity validation for a submitted historical
+    # KPI manifest; it does not select a current transcript for analysis.
+    "execution/extract_kpis_from_ir.py": 1,
     "execution/ingest_filing_sections.py": 1,
     "execution/refetch_aggregator_transcripts.py": 1,
     "execution/repair_document_parent_links.py": 1,

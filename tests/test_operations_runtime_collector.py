@@ -225,20 +225,14 @@ def test_current_receipts_drive_truthful_service_owned_and_expected_disabled_dis
         for task in registry.scheduled_tasks
         if task.scheduler_expectation == "required_disabled"
     )
-    capture_service = next(
-        service for service in registry.services if service.role == "capture_poller"
-    )
+    capture_service = next(service for service in registry.services if service.role == "dashboard")
     scheduler_receipt = SchedulerRuntimeReceipt.success(
         observed_at=OBSERVED_AT,
         tasks=tuple(
             SchedulerTaskReceipt(
                 task_name=task.task_name,
                 state=(
-                    "Missing"
-                    if task.service_owned
-                    else "Disabled"
-                    if task.scheduler_expectation == "required_disabled"
-                    else "Ready"
+                    "Disabled" if task.scheduler_expectation == "required_disabled" else "Ready"
                 ),
             )
             for task in registry.scheduled_tasks
@@ -293,15 +287,16 @@ def test_current_receipts_drive_truthful_service_owned_and_expected_disabled_dis
     disabled_task = next(
         item for item in view.tasks if item.task_name == expected_disabled.task_name
     )
-    service_owned_task = next(item for item in view.tasks if item.service_owned)
+    service_runtime = next(
+        row for row in view.runtime_rows if row.label == "Managed service · es-dashboard"
+    )
 
     assert snapshot.scheduler.state == "current"
     assert snapshot.services.state == "current"
     assert disabled_task.scheduler_state == "Disabled (expected)"
     assert disabled_task.attention is False
-    assert service_owned_task.scheduler_state == "Absent (service-owned)"
-    assert service_owned_task.service_runtime_state == "Running"
-    assert service_owned_task.attention is False
+    assert service_runtime.evidence.state == "Running"
+    assert service_runtime.evidence.tone == "ok"
 
 
 def test_runtime_receipt_freshness_is_distinct_from_current_state(tmp_path: Path) -> None:
@@ -315,11 +310,7 @@ def test_runtime_receipt_freshness_is_distinct_from_current_state(tmp_path: Path
                 SchedulerTaskReceipt(
                     task_name=task.task_name,
                     state=(
-                        "Missing"
-                        if task.service_owned
-                        else "Disabled"
-                        if task.scheduler_expectation == "required_disabled"
-                        else "Ready"
+                        "Disabled" if task.scheduler_expectation == "required_disabled" else "Ready"
                     ),
                 )
                 for task in registry.scheduled_tasks
@@ -337,19 +328,12 @@ def test_runtime_receipt_freshness_is_distinct_from_current_state(tmp_path: Path
 
     assert snapshot.scheduler.state == "stale"
     assert all(
-        row.state
-        == (
-            "Missing"
-            if task.service_owned
-            else "Disabled"
-            if task.scheduler_expectation == "required_disabled"
-            else "Ready"
-        )
+        row.state == ("Disabled" if task.scheduler_expectation == "required_disabled" else "Ready")
         for row, task in zip(snapshot.scheduler.values, registry.scheduled_tasks, strict=True)
     )
 
 
-def test_scheduler_policy_alerts_on_enabled_disabled_and_service_owned_conflicts(
+def test_scheduler_policy_alerts_on_enabled_disabled_conflicts(
     tmp_path: Path,
 ) -> None:
     registry = build_operations_registry(PROJECT_ROOT)
@@ -358,10 +342,7 @@ def test_scheduler_policy_alerts_on_enabled_disabled_and_service_owned_conflicts
         for task in registry.scheduled_tasks
         if task.scheduler_expectation == "required_disabled"
     )
-    service_owned_task = next(task for task in registry.scheduled_tasks if task.service_owned)
-    capture_service = next(
-        service for service in registry.services if service.role == "capture_poller"
-    )
+    capture_service = next(service for service in registry.services if service.role == "dashboard")
     scheduler_path = scheduler_receipt_path(tmp_path)
     service_path = service_receipt_path(tmp_path)
     write_atomic_receipt(
@@ -373,7 +354,7 @@ def test_scheduler_policy_alerts_on_enabled_disabled_and_service_owned_conflicts
                     task_name=task.task_name,
                     state=(
                         "Ready"
-                        if task in (disabled_task, service_owned_task)
+                        if task == disabled_task
                         else "Ready"
                         if task.scheduler_expectation == "required_enabled"
                         else "Disabled"
@@ -409,12 +390,6 @@ def test_scheduler_policy_alerts_on_enabled_disabled_and_service_owned_conflicts
     disabled_row = next(
         row for row in snapshot.scheduler.values if row.task_name == disabled_task.task_name
     )
-    service_row = next(
-        row for row in snapshot.scheduler.values if row.task_name == service_owned_task.task_name
-    )
-    service_task = next(
-        task for task in view.tasks if task.task_name == service_owned_task.task_name
-    )
     disabled_task_view = next(
         task for task in view.tasks if task.task_name == disabled_task.task_name
     )
@@ -422,11 +397,6 @@ def test_scheduler_policy_alerts_on_enabled_disabled_and_service_owned_conflicts
     assert snapshot.scheduler.state == "current"
     assert disabled_row.state == "Ready"
     assert disabled_row.expectation_match is False
-    assert service_row.state == "Ready"
-    assert service_row.expectation_match is False
-    assert service_task.scheduler_state == "Ready (forbidden for service-owned task)"
-    assert service_task.service_runtime_state == "Running"
-    assert service_task.attention is True
     assert disabled_task_view.scheduler_state == "Ready (forbidden for required_disabled)"
     assert disabled_task_view.attention is True
 
@@ -967,8 +937,19 @@ def test_mixed_service_missing_and_launch_failure_is_fail_closed(
     monkeypatch: MonkeyPatch,
 ) -> None:
     from execution import collect_operations_runtime_observations as collector
+    from operations.models import ServiceDefinition
 
     registry = build_operations_registry(PROJECT_ROOT)
+    registry = registry.model_copy(
+        update={
+            "services": (
+                *registry.services,
+                ServiceDefinition(
+                    role="test_worker", name="es-test-worker", purpose="probe failure fixture"
+                ),
+            )
+        }
+    )
     calls = 0
 
     def mixed(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:

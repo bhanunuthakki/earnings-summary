@@ -98,13 +98,12 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("surface", ["research", "reconcile", "worldview"])
+@pytest.mark.parametrize("surface", ["reconcile", "worldview"])
 def test_fragment_refresh_failure_preserves_rows_and_has_read_only_retry(surface: str) -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is required for inline request lifecycle evidence")
     module, constant = {
-        "research": (ledger_panel, "_RESEARCH_JS"),
         "reconcile": (ledger_panel, "_RECONCILE_JS"),
         "worldview": (worldview_panel, "_WORLDVIEW_JS"),
     }[surface]

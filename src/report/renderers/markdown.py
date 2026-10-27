@@ -7,6 +7,7 @@ to first; content density grows as upstream sections fill in.
 
 from __future__ import annotations
 
+from datetime import datetime
 from io import StringIO
 from pathlib import Path
 
@@ -20,7 +21,6 @@ from report.models import (
     EarningsSection,
     EvaluationSnapshotSection,
     FinancialsSection,
-    IrDocsSection,
     KpiLedgerRow,
     ProvenanceSection,
     QuarterlyEarningsCard,
@@ -64,7 +64,6 @@ def render(spec: ReportSpec) -> str:
     _segments(out, spec.segments)
     _earnings(out, spec.earnings)
     _saydo(out, spec.saydo)
-    _ir_docs(out, spec.ir_docs)
     _recent_developments(out, spec.recent_developments)
     _bear_case(out, spec.bear_case)
     _provenance(out, spec.provenance)
@@ -933,27 +932,47 @@ def _saydo(out: StringIO, s: SayDoSection) -> None:
     _section_header(out, 7, "Say-Do analysis", s.status)
     if _missing_block(out, s.status, s.missing):
         return
-    for c in s.cards:
-        out.write(
-            f"### {c.current_quarter} {c.current_year} vs {c.prior_quarter} {c.prior_year}\n\n"
-        )
-        out.write(c.saydo_md.strip() + "\n\n")
-
-
-def _ir_docs(out: StringIO, s: IrDocsSection) -> None:
-    _section_header(out, 8, "IR documents", s.status)
-    if _missing_block(out, s.status, s.missing):
+    if not s.verdicts and not s.historical_metrics:
+        out.write("No management commitments are recorded.\n\n")
         return
-    for c in s.cards:
-        out.write(f"### {c.quarter} {c.year} — {c.doc_type}\n\n")
-        if c.source_url:
-            out.write(f"_Source: [open source]({c.source_url})_\n\n")
-        if c.summary_md:
-            out.write(c.summary_md.strip() + "\n\n")
+    out.write("| Made | Target | Commitment | Guidance | Actual | Verdict | Source |\n")
+    out.write("|---|---|---|---:|---:|---|---|\n")
+    comp_map = {"ge": "≥", "gt": ">", "le": "≤", "lt": "<", "eq": "≈"}
+    for row in s.verdicts:
+        comparator = comp_map.get(row.comparator.lower(), row.comparator)
+        guidance = f"{comparator} {row.target_value:g} {row.unit}"
+        actual = f"{row.realized_value:g} {row.unit}" if row.realized_value is not None else "—"
+        outcome = row.outcome or "pending"
+        source = (
+            f"[Transcript](/source/{row.source_document_id})"
+            if row.source_document_id is not None
+            else "Source unavailable"
+        )
+        out.write(
+            f"| {_fmt_saydo_period(row.period_made)} | {_fmt_saydo_period(row.period_target)} "
+            f"| {row.kpi_name} | {guidance} | {actual} | {outcome} | {source} |\n"
+        )
+    out.write("\n")
+    if s.historical_metrics:
+        out.write("### Historical guidance comparisons\n\n")
+        for row in s.historical_metrics:
+            actual = f"{row.realized_value:g}" if row.realized_value is not None else "pending"
+            out.write(
+                f"- {_fmt_saydo_period(row.period_made)} → "
+                f"{_fmt_saydo_period(row.period_target)}: {row.kpi_name}, "
+                f"{row.comparator} {row.target_value:g} → {actual} (unit unavailable); "
+                f"{row.outcome or 'pending'}.\n"
+            )
+        out.write("\n")
+
+
+def _fmt_saydo_period(value: datetime) -> str:
+    quarter = (value.month - 1) // 3 + 1
+    return f"Q{quarter} {value.year}"
 
 
 def _recent_developments(out: StringIO, s: RecentDevelopmentsSection) -> None:
-    _section_header(out, 9, "Recent developments", s.status)
+    _section_header(out, 8, "Recent developments", s.status)
     if _missing_block(out, s.status, s.missing):
         return
     if s.cached_at is not None:
@@ -968,7 +987,7 @@ def _recent_developments(out: StringIO, s: RecentDevelopmentsSection) -> None:
 
 
 def _bear_case(out: StringIO, s: BearCaseSection) -> None:
-    _section_header(out, 10, "Bear case", s.status)
+    _section_header(out, 9, "Bear case", s.status)
     if _missing_block(out, s.status, s.missing):
         return
     for i, fm in enumerate(s.failure_modes, 1):
@@ -987,18 +1006,17 @@ def _bear_case(out: StringIO, s: BearCaseSection) -> None:
 
 
 def _provenance(out: StringIO, s: ProvenanceSection) -> None:
-    _section_header(out, 11, "Provenance & data quality", s.status)
+    _section_header(out, 10, "Provenance & data quality", s.status)
     if _missing_block(out, s.status, s.missing):
         return
     if s.coverage:
         out.write("### Coverage matrix\n\n")
-        out.write("| Quarter | Audio | Transcript | Release | Slides | Say-Do | LLM summary |\n")
-        out.write("|---|---|---|---|---|---|---|\n")
+        out.write("| Quarter | Audio | Transcript | Release | Slides |\n")
+        out.write("|---|---|---|---|---|\n")
         for c in s.coverage:
             out.write(
                 f"| {c.quarter} {c.year} | {_chk(c.has_audio_file)} | {_chk(c.has_transcript_file)} | "
-                f"{_chk(c.has_release_file)} | {_chk(c.has_slides_file)} | "
-                f"{_chk(c.step_saydo_analyzed)} | {_chk(c.step_llm_summarized)} |\n"
+                f"{_chk(c.has_release_file)} | {_chk(c.has_slides_file)} |\n"
             )
         out.write("\n")
     if s.source_docs:

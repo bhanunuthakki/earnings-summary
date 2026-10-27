@@ -27,9 +27,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -65,6 +66,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         + "id INTEGER PRIMARY KEY AUTOINCREMENT, "
         + "ticker TEXT, "
         + "scope TEXT NOT NULL DEFAULT 'ticker', "
+        + "document_version_id TEXT, "
         + "purpose TEXT NOT NULL, "
         + "fiscal_period TEXT, "
         + "content_md TEXT, "
@@ -326,9 +328,13 @@ def _patch_anchor(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub the anchor loaders for a scan test (hermetic, deterministic). Only
     the thesis anchor returns content; bear/IR return empty so the composed
     anchor equals the thesis — the historical shape these scan tests assert."""
+
+    def empty_anchor(_repo_root: Path, _ticker: str) -> str:
+        return ""
+
     monkeypatch.setattr("triggers.material_news.load_thesis_anchor", _anchor_stub)
-    monkeypatch.setattr("triggers.material_news.load_bear_anchor", lambda *_a, **_k: "")
-    monkeypatch.setattr("triggers.material_news.load_ir_anchor", lambda *_a, **_k: "")
+    monkeypatch.setattr("triggers.material_news.load_bear_anchor", empty_anchor)
+    monkeypatch.setattr("triggers.material_news.load_ir_anchor", empty_anchor)
 
 
 def test_load_anchor_composes_thesis_bear_and_ir(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -336,11 +342,22 @@ def test_load_anchor_composes_thesis_bear_and_ir(monkeypatch: pytest.MonkeyPatch
     narrative), not just the thesis — so a story that validates a named bear
     hypothesis or undercuts management's own IR framing can be judged material.
     All three blocks must reach the anchor that frames the classification."""
-    monkeypatch.setattr("triggers.material_news.load_thesis_anchor", lambda *_a, **_k: "THESIS-XYZ")
-    monkeypatch.setattr("triggers.material_news.load_bear_anchor", lambda *_a, **_k: "BEAR-XYZ")
-    monkeypatch.setattr("triggers.material_news.load_ir_anchor", lambda *_a, **_k: "IR-XYZ")
 
-    anchor = MaterialNewsTrigger()._load_anchor("BN")
+    def thesis_anchor(_repo_root: Path, _ticker: str) -> str:
+        return "THESIS-XYZ"
+
+    def bear_anchor(_repo_root: Path, _ticker: str) -> str:
+        return "BEAR-XYZ"
+
+    def ir_anchor(_repo_root: Path, _ticker: str, _char_cap: int = 6_000) -> str:
+        return "IR-XYZ"
+
+    monkeypatch.setattr("triggers.material_news.load_thesis_anchor", thesis_anchor)
+    monkeypatch.setattr("triggers.material_news.load_bear_anchor", bear_anchor)
+    monkeypatch.setattr("triggers.material_news.load_ir_anchor", ir_anchor)
+
+    load_anchor = cast(Callable[[str], str], getattr(MaterialNewsTrigger(), "_load_anchor"))
+    anchor = load_anchor("BN")
 
     assert "THESIS-XYZ" in anchor
     assert "BEAR-XYZ" in anchor

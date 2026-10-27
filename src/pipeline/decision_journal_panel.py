@@ -1,38 +1,12 @@
-"""Ledger -> Decisions fragment (P2.1, PRD Sec 9.3 "owner-first decision journal").
+"""Ledger -> Decisions fragment for confirmed owner decisions.
 
-A NEW reader over v_decision_journal (migration 0179/0188/0195 -- the SQL
-view itself stays untouched; owner-first behavior belongs in this renderer's
-DEFAULT, not in the view). This is deliberately a SEPARATE module from
-pipeline.journal_panel (the analyst_notes lifecycle UI -- a different
-table entirely) and from
-pipeline.allocation_decisions_panel.render_decision_journal_section (an
-existing compact "recent decisions" teaser on the Allocation page, unfiltered
-and un-chipped) -- this fragment is the Ledger console's own full, filtered
-decision journal.
+This is deliberately separate from ``pipeline.journal_panel``, which owns the
+analyst-notes lifecycle, and from the Allocation page's compact decision list.
+This fragment is the Ledger console's full owner-decision timeline.
 
-Default filter: Owner Decisions (decided_by = 'owner') -- historical
-advisor-extracted rows are preserved but no longer dominate the default
-timeline. Five chips select the PRD's five lenses:
-
-  * owner       -- decided_by = 'owner' (default);
-  * adopted     -- advisor-extracted rows the owner has since ADOPTED (a
-                  followed user_action_kind or an explicit
-                  owner_attested_change) -- "gradeable advisor views";
-  * all         -- every row, unfiltered (the pre-P2.1 timeline);
-  * lessons     -- rows with a scored process_quality (sound/flawed);
-  * coaching    -- rows with a coach ping or a decision-nudge trail attached.
-
-Process-quality prompt (Sec 9.3): a MATURED row (outcome_at set) with
-process_quality still NULL gets an inline three-way prompt -- Sound /
-Flawed / Need more evidence. Sound/Flawed POST the existing
-/api/decisions/<id>/process-quality route (decision_extractor.
-record_process_quality -- unchanged); "Need more evidence" writes NOTHING
-(the PRD: "leave null and schedule no repeated pestering") and simply
-dismisses the prompt client-side for this render -- there is deliberately no
-nudge/suppression machinery, so the prompt is free to render again on a
-future visit rather than needing a persisted "asked" flag. lucky is
-NEVER offered here -- it stays a system-only outcome-aware calibration label
-(PRD Sec 9.3), never a user-facing process choice.
+The filters show owner decisions and decisions with a recorded process grade.
+An owner can record Sound or Flawed for a matured decision. Need more evidence
+leaves the process grade empty. Lucky remains a system-only outcome label.
 """
 
 from __future__ import annotations
@@ -47,23 +21,15 @@ from ui.controls import panel_toolbar, ticker_label
 
 _PANEL_STYLE = RESEARCH_PANEL_STYLE
 
-_FILTERS: tuple[str, ...] = ("owner", "adopted", "all", "lessons", "coaching")
+_FILTERS: tuple[str, ...] = ("owner", "lessons")
 _FILTER_LABEL: dict[str, str] = {
     "owner": "Owner Decisions",
-    "adopted": "Adopted advisor views",
-    "all": "All advice artifacts",
     "lessons": "Process lessons",
-    "coaching": "Coaching history",
 }
 
 _WHERE_BY_FILTER: dict[str, str] = {
     "owner": "decided_by = 'owner'",
-    "adopted": (
-        "decided_by != 'owner' AND (user_action_kind = 'followed' OR owner_attested_change = 1)"
-    ),
-    "all": "1 = 1",
-    "lessons": "process_quality IS NOT NULL",
-    "coaching": "(coach_ping_class IS NOT NULL OR decision_nudge_id IS NOT NULL)",
+    "lessons": "decided_by = 'owner' AND process_quality IS NOT NULL",
 }
 
 
@@ -75,22 +41,6 @@ def _open(db_path: Path) -> sqlite3.Connection | None:
         return conn
     except sqlite3.Error:
         return None
-
-
-def _advice_chip(r: sqlite3.Row) -> str:
-    bits: list[str] = []
-    if r["advice_purpose"]:
-        preceded = " (preceded)" if r["advice_preceded"] else ""
-        bits.append(
-            f'<span class="k-chip k-chip-mono">{escape(str(r["advice_purpose"]))}{preceded}</span>'
-        )
-    if r["source_draft_channel"]:
-        bits.append(f'<span class="k-chip">via {escape(str(r["source_draft_channel"]))}</span>')
-    if r["coach_ping_class"]:
-        bits.append(f'<span class="k-chip">ping: {escape(str(r["coach_ping_class"]))}</span>')
-    if r["decision_nudge_id"] is not None:
-        bits.append('<span class="k-chip">nudged</span>')
-    return "".join(bits) if bits else '<span class="dj-advice">&mdash; no advice on record</span>'
 
 
 def _process_quality_prompt(decision_id: int) -> str:
@@ -131,15 +81,13 @@ def _row_html(r: sqlite3.Row) -> str:
         f'<div class="dj-row" data-decision-id="{int(r["decision_id"])}">'
         f'<span class="dj-when">{escape(made_at)}</span>'
         f"{ticker_html}{kind_chip}{outcome}{pq}"
-        f"{_advice_chip(r)}"
         f"{falsifier}"
         "</div>"
     )
 
 
 def render_decision_journal_list(db_path: Path, *, filter_: str = "owner", limit: int = 100) -> str:
-    """Just the filtered row list (the fragment /api/panel/ledger_decisions?fragment=list
-    swaps in place). Best-effort empty state on any read failure / pre-0195 schema."""
+    """Render a filtered row list, with an empty state when the view is unavailable."""
     if filter_ not in _FILTERS:
         filter_ = "owner"
     conn = _open(db_path)

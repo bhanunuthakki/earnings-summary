@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import math
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import date, timedelta
 from pathlib import Path
 from typing import cast
@@ -30,6 +30,7 @@ import pytest
 
 from ask import context as ask_context
 from ask.packs import load_packs
+from db_paths import db_path_context
 from llm.anchors import load_themes_anchor, load_worldview_anchor
 from macro_store import fetch_sensitivities, persist_rate_sensitivity
 from synthesis.insights import record_insight
@@ -45,9 +46,10 @@ PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 
 @pytest.fixture
-def repo_root(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
-    migrated_db(tmp_path / "data" / "portfolio.db", stamp=PRIOR_HEAD)
-    return tmp_path
+def repo_root(tmp_path: Path, migrated_db: Callable[..., Path]) -> Iterator[Path]:
+    db_path = migrated_db(tmp_path / "data" / "portfolio.db", stamp=PRIOR_HEAD)
+    with db_path_context(db_path):
+        yield tmp_path
 
 
 def _db(repo_root: Path) -> Path:
@@ -97,7 +99,8 @@ def test_themes_anchor_empty_without_themes_or_db(
     assert load_themes_anchor(repo_root) == ""  # table present, zero themes
     bare = tmp_path / "empty_repo"
     bare.mkdir()
-    assert load_themes_anchor(bare) == ""  # no DB at all — degrade, never raise
+    with db_path_context(bare / "data" / "portfolio.db"):
+        assert load_themes_anchor(bare) == ""  # no DB — degrade, never raise
 
 
 # ------------------------------------------------- portfolio scope owner memory

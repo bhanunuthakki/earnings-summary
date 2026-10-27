@@ -20,7 +20,7 @@ REM
 REM Runs Saturday 01:40 — clear of the Sunday maintenance block (refresh_ir_kpis
 REM 01:00, discover_ir_documents 01:30, git cleanup 03:00), after the Friday P2
 REM lens dispatch stops (01:35), and staggered ahead of the other overnight DB
-REM writers (backfill_transcripts 02:00, submit_saydo_batch 02:20) so their
+REM writer (backfill_transcripts 02:00) so their
 REM starts no longer stack on the single-writer database. Edit
 REM fetch_sec_xbrl.task.xml to change cadence, then re-register from the MAIN
 REM checkout (editing the XML alone does NOT update the live task):

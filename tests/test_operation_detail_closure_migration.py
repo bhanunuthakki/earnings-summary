@@ -228,6 +228,7 @@ def test_0012_downgrade_keeps_irreversibly_withheld_detail(
 ) -> None:
     db_path = migrated_db(
         tmp_path / "detail-closure-down.db",
+        target=_REVISION_0012,
         upgrade_from=_REVISION_0011,
         before_upgrade=_seed_0011_events,
     )

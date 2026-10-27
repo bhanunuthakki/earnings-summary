@@ -47,7 +47,7 @@ from report.models import (
 )
 from report.renderers.workspace_sections._shared import _esc, _inline_md
 from report.renderers.workspace_sections.earnings import _earnings_tab
-from report.renderers.workspace_sections.saydo import _saydo_summary_table
+from report.renderers.workspace_sections.saydo import _saydo_verdicts_panel
 from report.renderers.workspace_sections.thesis_risk import _failure_mode_card
 from report.renderers.workspace_styles import CSS as WORKSPACE_CSS
 from ui.controls import controls_css as _controls_css
@@ -387,24 +387,25 @@ def test_rendered_text_scanner_ignores_attributes_but_not_text_nodes() -> None:
     ],
 )
 def test_saydo_metric_cell_strips_raw_markdown(poisoned: str) -> None:
-    """(d) Say-Do table metric/attribution/thesis-view cells route stored
-    LLM/analyst text through the inline prose boundary — design_language
-    §9's "one render boundary per content-kind", scoped to table-cell /
-    label contexts via ``_inline_md`` (the block form would inject an
-    illegal nested ``<p>`` inside these ``<td>``/``<p>`` containers)."""
-    from report.models import SayDoCard
+    """Say-Do commitment labels use the inline prose boundary."""
+    from datetime import datetime
 
-    card = SayDoCard(
-        current_quarter="Q1",
-        current_year=2026,
-        prior_quarter="Q4",
-        prior_year=2025,
-        saydo_md="n/a",
-        attribution=poisoned,
-        thesis_view=poisoned,
+    from report.models import SayDoVerdictRow
+
+    row = SayDoVerdictRow(
+        period_made=datetime(2025, 10, 30),
+        period_target=datetime(2025, 12, 31),
+        kpi_name=poisoned,
+        comparator="ge",
+        target_value=30,
+        unit="percent",
+        narrative="Source text",
+        realized_value=32,
+        outcome="met",
+        evaluated_at=datetime(2026, 1, 30),
     )
     body = StringIO()
-    _saydo_summary_table(body, [card])
+    _saydo_verdicts_panel(body, [row])
     html = body.getvalue()
     assert not _rendered_text_has_raw_markdown(html), f"raw markdown leaked: {html}"
     assert "<strong>" in html or "<em>" in html or "<code>" in html

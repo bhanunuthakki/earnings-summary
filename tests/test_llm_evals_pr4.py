@@ -127,10 +127,14 @@ def test_checked_in_classifier_golden_sets_load() -> None:
 
 def test_pr4_wiring_is_consistent() -> None:
     runner = _load_execution_module("run_llm_evals", "run_llm_evals_pr4_check")
+    assert {"capture_intent", "triage_route_suggest"}.isdisjoint(CLASSIFIER_PURPOSES)
     assert set(CLASSIFIER_PURPOSES) <= set(runner.GOLDEN_PURPOSES)
+    from evals.run_registry import PANEL_PURPOSES
+    from evals.run_registry import RUNNABLE_PURPOSES as CLI_PURPOSES
     from pipeline.evals_panel import RUNNABLE_PURPOSES
 
-    assert set(RUNNABLE_PURPOSES) == set(runner.PURPOSES)
+    assert set(RUNNABLE_PURPOSES) == set(PANEL_PURPOSES)
+    assert set(CLI_PURPOSES) == set(runner.PURPOSES)
     assert set(CLASSIFIER_PURPOSES) <= registered_purposes()
 
 
@@ -346,7 +350,7 @@ def test_eval_coverage_gate_blocks_new_model_and_prompt_registrations(
 def test_eval_coverage_gate_has_no_exemption_when_capture_eval_is_removed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    purpose = "annual_letter"
+    purpose = "pre_earnings_brief"
     assert purpose not in GRANDFATHERED_UNCOVERED_PURPOSES
     monkeypatch.delitem(coverage_module.CAPTURE_QUALITY_SPECS, purpose)
 
@@ -412,7 +416,9 @@ def test_capture_audit_cli_fails_loudly_when_explicitly_bounded_to_zero(
         [
             "run_llm_evals.py",
             "--purpose",
-            "annual_letter",
+            "pre_earnings_brief",
+            "--db",
+            str(data_dir / "portfolio.db"),
             "--repo-root",
             str(tmp_path),
             "--limit",

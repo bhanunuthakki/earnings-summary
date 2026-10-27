@@ -188,8 +188,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Wrapper loads codex_cli from the external snippets directory.",
-      "fingerprint": "b42694dd000d71a07ea99a9e5e094557736dd7149c5eab7e5419921e9d13f1dc",
-      "line": 136,
+      "fingerprint": "2474ec16a6d90f291b3b206405bf541db25d5924e2b65c14a86004d05ee05735",
+      "line": 142,
       "path": "src/llm/codex_backend.py",
       "targets": [
         "codex_cli"
@@ -198,8 +198,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Auth probe loads the same external codex_cli module.",
-      "fingerprint": "a897c3daef10d6d6126799b0655817949347ca7a70fc9b3c68e5412a5c4db838",
-      "line": 150,
+      "fingerprint": "3977a2f9614244094727aeefe614bef6775d7865ee2fa09df8c84e363bba3888",
+      "line": 169,
       "path": "src/llm/codex_backend.py",
       "targets": [
         "codex_cli"
@@ -265,8 +265,7 @@
       "line": 26,
       "path": "tests/test_runtime_state_authority.py",
       "targets": [
-        "execution/comments_server.py",
-        "execution/capture_poller.py"
+        "execution/comments_server.py"
       ]
     },
     {
@@ -276,8 +275,7 @@
       "line": 51,
       "path": "tests/test_runtime_state_authority.py",
       "targets": [
-        "execution/comments_server.py",
-        "execution/capture_poller.py"
+        "execution/comments_server.py"
       ]
     },
     {
@@ -287,8 +285,7 @@
       "line": 76,
       "path": "tests/test_runtime_state_authority.py",
       "targets": [
-        "execution/comments_server.py",
-        "execution/capture_poller.py"
+        "execution/comments_server.py"
       ]
     }
   ],
@@ -296,9 +293,9 @@
     "input_scope": "scanner-consumed-inputs/v1",
     "parser": {
       "name": "ast+xml+literal-scanner",
-      "version": "1.3.0",
       "python": ">=3.11",
-      "source_sha256": "657a7a0e72930dba5568e7a1638b3d225861524ce438df44c8658b80ccc72492"
+      "source_sha256": "bc7d6c0f69fffcda7404b3f41a3343db2452a425864b3cdba148327acd1ec7dd",
+      "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "c9ec98b1cbcdf93c9b890d9a8a8c59ef6109598f67b1739c38463d79d5986175",

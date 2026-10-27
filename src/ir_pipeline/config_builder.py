@@ -1,7 +1,7 @@
 """Generate a ticker's IR-spreadsheet parser config — every row, not just the watchlist.
 
 An issuer's "historical data" spreadsheet is its own audited numeric source, so
-the capture-every-number program (`directives/capture_every_number_program.md`)
+the source-provenance contract (`directives/data_provenance.md`)
 wants EVERY labeled data row in it — not only the handful of curated tier KPIs.
 A config therefore carries two layers of ``SheetKpi`` (see ``config.SheetKpi``):
 

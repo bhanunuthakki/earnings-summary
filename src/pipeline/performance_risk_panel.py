@@ -29,6 +29,9 @@ from ui.panel import panel_empty, panel_section
 _POLICY_TICKERS: tuple[str, ...] = ("QQQ", "SGOV", "VTI", "VWO")
 
 _TABS: tuple[tuple[str, str, str], ...] = (
+    ("thesis", "Theses", "thesis"),
+    ("collisions", "Collisions", "collisions"),
+    ("bets", "Bets", "bets"),
     ("exposure", "Exposure", "exposure"),
     ("drawdown", "Drawdown", "drawdown"),
     ("correlation", "Correlation", "correlation"),
@@ -477,6 +480,7 @@ def render_performance_risk_panel(
             ("performance", "Index Benchmarking"),
             ("posture", "Portfolio Posture"),
             ("allocation", "Portfolio Allocation"),
+            ("targets", "Portfolio Targets"),
         )
         return (
             portfolio_css()
@@ -526,7 +530,17 @@ def render_performance_risk_panel(
         + allocation_card
         + "</div>"
         + _risk_explorer()
+        + _targets(db_path, repo_root)
         + "</div>"
+    )
+
+
+def _targets(db_path: Path, repo_root: Path) -> str:
+    from pipeline.portfolio_decision_support import render_risk_budget_section
+    from pipeline.positioning_panel import render_positioning_panel
+
+    return render_risk_budget_section(db_path, repo_root) + render_positioning_panel(
+        db_path, repo_root
     )
 
 
@@ -540,6 +554,8 @@ def render_performance_risk_fragment(
     include_backfill: bool = False,
 ) -> str:
     """Render independent performance sections through their existing owners."""
+    if fragment == "targets":
+        return portfolio_css() + _targets(db_path, repo_root)
     if fragment == "allocation":
         return portfolio_css() + render_allocation_card(fetch_portfolio_allocation())
     if fragment == "posture":

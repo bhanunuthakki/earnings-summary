@@ -126,6 +126,14 @@ def _capture_call_llm(monkeypatch: pytest.MonkeyPatch, captured: list[str]) -> N
                 '"snippet":"Queries run: NU news; Window covered: 2026-07-27 through '
                 '2026-08-03","source":"SEARCH_EVIDENCE"}]'
             )
+        if _kw.get("purpose") == "recent_developments":
+            return (
+                '{"search_status":"no_qualifying_events",'
+                '"window_start":"2026-07-27","window_end":"2026-08-03",'
+                '"queries_run":["NU recent developments"],'
+                '"sources_opened":["https://example.com/dated-source"],'
+                '"events":[]}'
+            )
         return "[]"  # compact placeholder for non-news callers using this helper
 
     monkeypatch.setattr(llm_client, "call_llm", fake)

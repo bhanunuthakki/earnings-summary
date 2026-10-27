@@ -11,7 +11,8 @@ It adds no artifact schema, accepted threshold, acquisition route or write permi
    and portfolio/evaluation status. Recover the accepted thesis or label the
    evaluation hypothesis as draft. Identify the current model and dated prior
    review. Do not treat a missing prior review as evidence of no change.
-2. Establish the evidence package through existing readers. Record document
+2. Establish the evidence package through existing readers. Keep original-source
+   document links and coverage in Sources. Record document
    identity, date, fiscal basis and page/table/segment locators. Keep acquisition,
    extraction and semantic admission separate. For transcripts, record prepared
    remarks and question-and-answer (Q&A) coverage, included/omitted ranges and
@@ -22,6 +23,8 @@ It adds no artifact schema, accepted threshold, acquisition route or write permi
    before generation and agree on a bounded source/period/effort plan before new
    collection or lower-coverage research. Honor the exact scope already approved.
    A shorter ad hoc window lowers coverage, not the accuracy of included facts.
+   Use only a verified transcript summary and its SayDo evidence when available;
+   do not substitute unverified generated summaries or historical memo files.
 3. Select the questions that could change a thesis pillar, forecast assumption,
    risk assessment or research decision. Test each against supporting evidence,
    contrary evidence and the strongest plausible alternative cause. Distinguish

@@ -265,11 +265,28 @@ def test_decision_history_aggregates_and_computes_win_rate(tmp_path: Path) -> No
     assert abs(hist.win_rate_overall - 0.75) < 1e-9
 
 
-def test_saydo_verdicts_returns_typed_rows(tmp_path: Path) -> None:
+def test_saydo_verdicts_link_only_proven_transcript_documents(tmp_path: Path) -> None:
     db = tmp_path / "portfolio.db"
     conn = sqlite3.connect(str(db))
-    conn.execute(
+    conn.executescript(
         """
+        CREATE TABLE documents (
+            id INTEGER PRIMARY KEY,
+            ticker TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            doc_type TEXT NOT NULL
+        );
+        CREATE TABLE transcripts (
+            id INTEGER PRIMARY KEY,
+            document_id INTEGER NOT NULL,
+            ticker TEXT NOT NULL,
+            source_url TEXT,
+            is_current INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE transcript_segments (
+            id INTEGER PRIMARY KEY,
+            transcript_id INTEGER NOT NULL
+        );
         CREATE TABLE management_commitments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT NOT NULL,
@@ -282,23 +299,74 @@ def test_saydo_verdicts_returns_typed_rows(tmp_path: Path) -> None:
             unit TEXT NOT NULL,
             narrative TEXT NOT NULL,
             realized_value NUMERIC,
-            realized_doc_id INTEGER,
             outcome TEXT,
             evaluated_at TIMESTAMP,
             created_at TIMESTAMP NOT NULL
-        )
+        );
+        INSERT INTO documents VALUES
+            (700, 'GOOG', 'transcript_audio', 'earnings_call_transcript'),
+            (701, 'META', 'transcript_audio', 'earnings_call_transcript'),
+            (702, 'MSFT', 'transcript_audio', 'earnings_call_transcript'),
+            (703, 'GOOG', 'fmp', 'fmp_income_statement'),
+            (704, 'GOOGL', 'transcript_audio', 'earnings_call_transcript');
+        INSERT INTO transcripts VALUES
+            (10, 700, 'gOoG', 'https://example.test/transcript/700', 0),
+            (11, 701, 'META', 'https://example.test/transcript/701', 1),
+            (12, 702, 'GOOG', 'https://example.test/transcript/702', 1),
+            (13, 703, 'GOOG', 'https://example.test/transcript/703', 1),
+            (14, 799, 'GOOG', 'https://example.test/transcript/799', 1),
+            (15, 704, 'GOOGL', 'https://example.test/transcript/704', 1);
+        INSERT INTO transcript_segments VALUES
+            (1, 10), (2, 11), (3, 12), (4, 13), (5, 14), (6, 15);
         """
     )
-    conn.execute(
+    for index, segment_id in enumerate((1, 2, 3, 4, 5, 6, 999), start=1):
+        conn.execute(
+            "INSERT INTO management_commitments "
+            "(ticker, period_made, transcript_segment_id, period_target, kpi_name, comparator, "
+            "target_value, unit, narrative, realized_value, outcome, evaluated_at, created_at) "
+            "VALUES (?, ?, ?, '2025-12-31', 'Cloud growth', '>=', 30, 'percent', "
+            "'Original wording', 32, 'met', '2026-01-30', '2025-10-30')",
+            ("gOoG" if index == 1 else "GOOG", f"2025-10-{index + 10:02d}", segment_id),
+        )
+    conn.commit()
+    conn.close()
+
+    out = load_saydo_verdicts("GOOG", db_path=db)
+    by_segment = {row.source_ref: row for row in out}
+    assert len(out) == 7
+    assert by_segment["transcript_segment:1"].source_document_id == 700
+    assert by_segment["transcript_segment:1"].source_url == "https://example.test/transcript/700"
+    assert by_segment["transcript_segment:1"].source_ref == "transcript_segment:1"
+    for segment_id in (2, 3, 4, 5, 6, 999):
+        row = by_segment[f"transcript_segment:{segment_id}"]
+        assert row.source_document_id is None
+        assert row.source_url is None
+
+
+def test_saydo_verdicts_without_identity_schema_keep_rows_unlinked(tmp_path: Path) -> None:
+    db = tmp_path / "portfolio.db"
+    conn = sqlite3.connect(str(db))
+    conn.executescript(
         """
-        INSERT INTO management_commitments
-          (ticker, period_made, transcript_segment_id, period_target,
-           kpi_name, comparator, target_value, unit, narrative,
-           realized_value, outcome, evaluated_at, created_at)
-        VALUES ('GOOG', '2025-10-30 00:00:00', 1, '2025-12-31 00:00:00',
-                'Cloud revenue growth', '>=', 30.0, 'percent',
-                'Cloud growth at the prior quarter pace through year-end',
-                32.0, 'met', '2026-01-30 00:00:00', '2025-10-30 00:00:00')
+        CREATE TABLE management_commitments (
+            id INTEGER PRIMARY KEY,
+            ticker TEXT NOT NULL,
+            period_made TEXT NOT NULL,
+            transcript_segment_id INTEGER NOT NULL,
+            period_target TEXT NOT NULL,
+            kpi_name TEXT NOT NULL,
+            comparator TEXT NOT NULL,
+            target_value REAL NOT NULL,
+            unit TEXT NOT NULL,
+            narrative TEXT NOT NULL,
+            realized_value REAL,
+            outcome TEXT,
+            evaluated_at TEXT
+        );
+        INSERT INTO management_commitments VALUES
+            (1, 'GOOG', '2025-10-30', 77, '2025-12-31', 'Cloud growth', 'ge',
+             30, 'percent', 'Original wording', 32, 'met', '2026-01-30');
         """
     )
     conn.commit()
@@ -306,9 +374,9 @@ def test_saydo_verdicts_returns_typed_rows(tmp_path: Path) -> None:
 
     out = load_saydo_verdicts("GOOG", db_path=db)
     assert len(out) == 1
-    assert out[0].kpi_name == "Cloud revenue growth"
-    assert out[0].outcome == "met"
-    assert out[0].realized_value == 32.0
+    assert out[0].source_ref == "transcript_segment:77"
+    assert out[0].source_document_id is None
+    assert out[0].source_url is None
 
 
 def test_peer_comp_returns_empty_when_files_missing(tmp_path: Path) -> None:

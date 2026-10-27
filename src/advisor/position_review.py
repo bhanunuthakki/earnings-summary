@@ -70,7 +70,6 @@ __all__ = [
     "CAPACITY_HORIZON_DAYS",
     "CONFIDENCES",
     "DEFAULT_MOS_BAR",
-    "OWNER_ATTESTED_KEY",
     "POSITION_REVIEW_PURPOSE",
     "REVIEW_SOURCES",
     "REVIEW_SOURCE_KEY",
@@ -85,7 +84,6 @@ __all__ = [
     "VerdictOutput",
     "apply_behavioral_guard",
     "assemble_pre_analysis",
-    "attest_review_changed",
     "behavioral_rules_block",
     "build_capacity_context",
     "build_pre_analysis",
@@ -98,7 +96,6 @@ __all__ = [
     "parse_verdict_output",
     "render_capacity_lines",
     "render_pre_analysis_chat",
-    "render_pre_analysis_plain",
     "render_risk_lines",
     "render_tax_lines",
     "resolve_review_target",
@@ -1029,11 +1026,7 @@ POSITION_REVIEW_PURPOSE = "position_review"
 # so an automated smoke run can never inflate the coach's scoreboard.
 REVIEW_SOURCE_KEY = "source"
 AGENT_SOURCE = "agent"
-REVIEW_SOURCES: tuple[str, ...] = ("doorway", "cli", "telegram", AGENT_SOURCE)
-# Set True only by :func:`attest_review_changed` (the owner's one-click "this
-# review changed my call"); the Q3'26 "changed >= 1" bar counts these alone.
-OWNER_ATTESTED_KEY = "owner_attested_change"
-
+REVIEW_SOURCES: tuple[str, ...] = ("doorway", "cli", AGENT_SOURCE)
 CONFIDENCES: tuple[str, ...] = ("high", "medium", "low")
 SUGGESTED_EXPRESSIONS: tuple[str, ...] = (
     "trim-to-target",
@@ -1572,67 +1565,6 @@ def _tax_context(tax: PositionTaxView | None) -> dict[str, object] | None:
     return out
 
 
-def attest_review_changed(
-    db_path: Path | str | None, memo_id: int, *, user_id: str = DEFAULT_USER_ID
-) -> bool:
-    """Record the owner's explicit attestation that a position-review memo
-    changed their call — merges ``owner_attested_change=True`` into the memo's
-    ``context_json``.
-
-    This is the SOLE input that moves the Coach P&L's Q3'26 "changed >= 1" bar:
-    the silence-implies-heeded window heuristic feeds only the separate
-    "candidate" line, never the target counter (see
-    ``pipeline.allocation_decisions_panel._coach_change_tally``). So attestation
-    must be an explicit owner action, not something an agent run or the passage
-    of time can synthesize.
-
-    Returns True when a matching, not-yet-attested ``position_review`` memo owned
-    by ``user_id`` was updated; False on any miss (unknown / other-kind /
-    other-owner memo, already attested, or a DB/JSON error). Never raises and
-    never fabricates a positive — the counter it feeds must stay honest.
-    """
-    from db_paths import resolve_db_path
-
-    resolved = resolve_db_path(db_path)
-    if resolved is None or not Path(resolved).exists():
-        return False
-    try:
-        conn = connect_sqlite(
-            resolved,
-            role=SQLiteConnectionRole.WRITER,
-            schema_preflight=True,
-        )
-    except sqlite3.Error:
-        return False
-    try:
-        row = conn.execute(
-            "SELECT context_json FROM advisor_memos WHERE id = ? AND user_id = ? AND kind = ?",
-            (memo_id, user_id, POSITION_REVIEW_PURPOSE),
-        ).fetchone()
-        if row is None:
-            return False
-        ctx: dict[str, object] = {}
-        if row[0]:
-            try:
-                parsed = json.loads(str(row[0]))
-            except ValueError:
-                parsed = None
-            if isinstance(parsed, dict):
-                ctx = cast("dict[str, object]", parsed)
-        if ctx.get(OWNER_ATTESTED_KEY) is True:
-            return False  # idempotent — a second click is not a second changed decision
-        ctx[OWNER_ATTESTED_KEY] = True
-        conn.execute(
-            "UPDATE advisor_memos SET context_json = ? WHERE id = ?", (json.dumps(ctx), memo_id)
-        )
-        conn.commit()
-        return True
-    except sqlite3.Error:
-        return False
-    finally:
-        conn.close()
-
-
 def _persist_review(
     pre: PreAnalysis,
     out: VerdictOutput,
@@ -1803,18 +1735,14 @@ def mechanical_read(pre: PreAnalysis) -> str:
     )
 
 
-def render_tax_lines(tax: PositionTaxView | None, *, plain: bool = False) -> list[str]:
+def render_tax_lines(tax: PositionTaxView | None) -> list[str]:
     """Markdown bullets for the tax block — shared by the chat reply, the CLI
     summary, and the persisted memo body. Empty for a pre-tax-stage
     :class:`PreAnalysis` (``tax=None``); a single honest line when the tracker
     couldn't supply a view; the dense block otherwise.
 
-    ``plain=True`` (the Telegram surface) drops the ``_footnote_`` Markdown
-    italics — the one marker the caller's plain-ASCII pass CAN'T strip, since an
-    underscore is ASCII and indistinguishable from data. The unicode separators
-    (``→``/``·``/``—``) are left as-is for :func:`render_pre_analysis_plain`'s
-    single ASCII pass to normalize. The default Markdown form is unchanged for
-    the web chat, the CLI, and the persisted memo, which render Markdown."""
+    Web chat, the CLI and persisted memos use the same Markdown block.
+    """
     if tax is None:
         return []
     if not tax.available:
@@ -1846,7 +1774,7 @@ def render_tax_lines(tax: PositionTaxView | None, *, plain: bool = False) -> lis
     if tax.approximate and tax.approx_reasons:
         lines.append(f"- Tax approx because: {'; '.join(tax.approx_reasons[:2])}")
     if tax.footnote:
-        lines.append(f"- {tax.footnote}" if plain else f"- _{tax.footnote}_")
+        lines.append(f"- _{tax.footnote}_")
     return lines
 
 
@@ -1890,71 +1818,6 @@ def render_pre_analysis_chat(pre: PreAnalysis, *, db_path: Path | str | None = N
             f"`python execution/review_position.py {pre.ticker}{at_flag}`",
         ]
     )
-
-
-# Non-ASCII glyphs the Markdown renderers use for polish (em/en dashes, arrow,
-# middot, ellipsis) mapped to their ASCII equivalents. Applied once to the
-# assembled Telegram reply so it is truly plain-ASCII regardless of which shared
-# helper (mechanical_read, render_tax_lines, a break-rule detail, ...) produced
-# the glyph -- one normalization point instead of ASCII-handling scattered across
-# every helper. send_message sets no parse_mode, so this is cosmetic on Telegram;
-# the pass just keeps the plain surface consistent and dependable. Keys use chr()
-# code points so the source carries no ambiguous-character glyphs (ruff RUF001).
-_PLAIN_ASCII: dict[str, str] = {
-    chr(0x2014): "-",  # em dash
-    chr(0x2013): "-",  # en dash
-    chr(0x2192): "->",  # right arrow
-    chr(0x00B7): "-",  # middle dot
-    chr(0x2026): "...",  # ellipsis
-}
-
-
-def _to_plain_ascii(text: str) -> str:
-    """Fold the cosmetic non-ASCII glyphs in ``text`` to ASCII (see ``_PLAIN_ASCII``)."""
-    for glyph, ascii_equiv in _PLAIN_ASCII.items():
-        text = text.replace(glyph, ascii_equiv)
-    return text
-
-
-def render_pre_analysis_plain(pre: PreAnalysis, *, db_path: Path | str | None = None) -> str:
-    """Plain-ASCII reply for the ``/review`` command on Telegram — the SAME
-    grounded facts as :func:`render_pre_analysis_chat` (including the live
-    graded-sells base rate), with no ``**``/backtick Markdown markers
-    (Telegram's ``send_message`` never sets ``parse_mode``, so a
-    Markdown-shaped body arrives as a raw text wall — literal asterisks and
-    backticks). Also drops the CLI pointer line: ``python execution/...`` is a
-    broken instruction in a chat channel with no shell. Ends instead with a
-    pointer to the calibrated review surface in the web app.
-
-    A final :func:`_to_plain_ascii` pass folds the cosmetic non-ASCII glyphs the
-    shared helpers emit (``mechanical_read``'s em dashes, the tax block's ``→``/
-    ``·``) so the whole reply is plain-ASCII, and ``render_tax_lines(plain=True)``
-    drops the one Markdown marker that pass can't (the ``_footnote_`` italics)."""
-    wt = f"{pre.weight_pct:.1f}%" if pre.weight_pct is not None else "-"
-    conc = _render_zone(pre)
-    fv = f"${pre.npv_per_share:,.2f}" if pre.npv_per_share is not None else "-"
-    asked = f"${pre.at_price:,.2f}" if pre.at_price is not None else "-"
-    gap = f"{pre.dcf_gap_pct:+.1f}%" if pre.dcf_gap_pct is not None else "-"
-    watch = f" - watch: {'; '.join(pre.tripped_rules)}" if pre.tripped_rules else ""
-    graded_line = graded_sell_record(db_path)
-    body = "\n".join(
-        [
-            f"{pre.ticker} - position review (deterministic read; weight source: "
-            f"{pre.weight_source})",
-            f"- Sizing: {wt} of book - concentration: {conc} - band: {pre.weight_vs_band}",
-            f"- Fundamentals: thesis {pre.verdict_label or '-'} - "
-            f"break-rules {pre.break_rule_status}{watch}",
-            f"- Valuation: fair {fv} vs asked {asked} -> {gap} (+ = over-valued) - "
-            f"ladder: {pre.valuation_verdict}",
-            *render_tax_lines(pre.tax, plain=True),
-            *render_capacity_lines(pre.capacity),
-            *render_risk_lines(pre.risk),
-            f"- Mechanical read: {mechanical_read(pre)}",
-            *([f"- {graded_line}"] if graded_line is not None else []),
-            "- Full calibrated review: from the desk (Holding -> Review).",
-        ]
-    )
-    return _to_plain_ascii(body)
 
 
 def _resolve_review_target(body: str, roster: RosterIndex | None) -> str:
@@ -2038,29 +1901,9 @@ def resolve_review_target(repo_root: Path, text: str) -> tuple[str, float | None
     return parse_review_command(text, roster=_load_review_roster(repo_root))
 
 
-def review_reply_text(repo_root: Path, text: str, *, plain: bool = False) -> str:
-    """``/review <TICKER> [at $PRICE]`` end-to-end: parse the ticker + at-price
-    out of ``text`` and return the rendered instant pre-analysis reply.
-
-    The ONE place that renders this command shape — the Ask-tab chat command
-    (``ask.commands._review_command``) and the Telegram poller both call this
-    instead of each re-implementing the parsing, so the at-price regex and the
-    usage/error copy can never drift between the two surfaces. LLM-free and
-    fast: ``build_pre_analysis`` never imports a model client.
-
-    ``plain=True`` (the Telegram callers) renders via
-    :func:`render_pre_analysis_plain` — no Markdown, since ``send_message``
-    never sets ``parse_mode`` there. The web chat (Ask tab) keeps the default
-    Markdown variant, which its renderer displays properly.
-
-    The target is resolved through the roster (:func:`resolve_review_target`) so
-    a company NAME works, not just a ticker symbol — ``/review Rubrik`` reviews
-    ``RBRK`` — on both the Telegram and web surfaces.
-    """
-    if plain:
-        usage = "Usage: /review <NAME|TICKER> [at $PRICE] - e.g. /review Rubrik at $70."
-    else:
-        usage = "Usage: /review <NAME|TICKER> [at $PRICE] — e.g. `/review Rubrik at $70`."
+def review_reply_text(repo_root: Path, text: str) -> str:
+    """Render the instant, model-free review for a roster name or ticker."""
+    usage = "Usage: /review <NAME|TICKER> [at $PRICE] — e.g. `/review Rubrik at $70`."
     parsed = resolve_review_target(repo_root, text)
     if parsed is None:
         return usage
@@ -2070,8 +1913,6 @@ def review_reply_text(repo_root: Path, text: str, *, plain: bool = False) -> str
         pre = build_pre_analysis(repo_root, ticker, at_price=at_price, db_path=db_path)
     except Exception as exc:
         return f"Couldn't build a review for {ticker}: {type(exc).__name__}: {exc}"
-    if plain:
-        return render_pre_analysis_plain(pre, db_path=db_path)
     return render_pre_analysis_chat(pre, db_path=db_path)
 
 

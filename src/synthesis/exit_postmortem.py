@@ -524,10 +524,6 @@ def revert_draft(entry_id: int, *, db_path: Path | str) -> bool:
     LLM draft (:func:`_is_llm_draft`) -- an owner's own manually-typed
     grading is never touched, since it carries no such note.
 
-    UI hook (not built in this PR): a Revert button on the holding-page
-    lifecycle panel / journal, wired the same way ``synthesis.adoption_notify``'s
-    Telegram Revert routes through ``capture.research_notify.dispatch_callback``,
-    would call this with the ping's referenced ``entry_id``.
     """
     if not _is_llm_draft(entry_id, db_path=db_path):
         return False
@@ -536,47 +532,11 @@ def revert_draft(entry_id: int, *, db_path: Path | str) -> bool:
     )
 
 
-def _compose_batch_summary(drafted: list[tuple[str, str]]) -> str:
-    items = "; ".join(f"{ticker} ({outcome})" for ticker, outcome in drafted)
-    n = len(drafted)
-    noun = "post-mortem" if n == 1 else "post-mortems"
-    return f"Drafted {n} exit {noun}: {items} -- review in the journal; each is revertible."
-
-
-def _send_batch_summary(text: str, *, db_path: Path | str, repo_root: Path | str | None) -> None:
-    """Best-effort single Telegram push for the batch-drafted post-mortems
-    (owner ruling: one burst, receipts visible, no drip nagging -- see
-    module docstring "Pacing"). Mirrors
-    ``synthesis.adoption_notify.announce_adoption``'s config-skip contract
-    exactly: a missing bot token/chat id degrades to a silent skip, never a
-    raised exception into the caller's sweep."""
-    try:
-        from capture import telegram
-        from capture.token_store import CaptureSetupError, load_chat_id, load_token
-
-        root = Path(repo_root) if repo_root is not None else Path(db_path).resolve().parent.parent
-        try:
-            token = load_token()
-        except CaptureSetupError:
-            token = None
-        chat_id = load_chat_id(root / "data" / "capture" / "telegram_chat_id.json")
-        if not token or not chat_id:
-            log.info(
-                {"event": "exit_postmortem_batch_summary_skipped", "reason": "no_telegram_config"}
-            )
-            return
-        telegram.send_message(token, chat_id, text)
-        log.info({"event": "exit_postmortem_batch_summary_sent"})
-    except Exception as exc:  # best-effort -- never break the caller's sweep
-        log.warning({"event": "exit_postmortem_batch_summary_failed", "error": str(exc)})
-
-
 def run_postmortem_drafts(
     db_path: Path | str,
     *,
     call: DraftCall | None = None,
     batch: bool = False,
-    repo_root: Path | str | None = None,
     max_per_run: int = _DEFAULT_MAX_PER_RUN,
 ) -> dict[str, int]:
     """Sweep pending post-mortems: gather -> draft -> apply, one Sonnet call
@@ -584,8 +544,7 @@ def run_postmortem_drafts(
 
     ``batch=False`` (the nightly leg) drafts at most ``max_per_run`` pending
     entries, oldest-selection-order first, and never sends a summary.
-    ``batch=True`` (``--postmortem-backfill``) drafts EVERY pending entry and,
-    if at least one drafted, sends ONE Telegram summary.
+    ``batch=True`` drafts every pending entry.
 
     A per-entry bug is logged and skipped (one bad entry never sinks the
     sweep); a hard stop propagates out of the sweep entirely -- systemic
@@ -596,7 +555,6 @@ def run_postmortem_drafts(
     pending = pending_postmortems(db_path)
     counts = {"pending": len(pending), "drafted": 0, "deferred_transient": 0, "skipped": 0}
     targets = pending if batch else pending[:max_per_run]
-    landed: list[tuple[str, str]] = []
 
     for entry in targets:
         try:
@@ -610,7 +568,6 @@ def run_postmortem_drafts(
                 continue
             if apply_draft(entry, draft, db_path=db_path):
                 counts["drafted"] += 1
-                landed.append((entry.ticker, draft.outcome_vs_thesis))
             else:
                 counts["skipped"] += 1  # raced with a manual grade in between
         except Exception as exc:
@@ -625,8 +582,5 @@ def run_postmortem_drafts(
                 }
             )
             continue
-
-    if batch and landed:
-        _send_batch_summary(_compose_batch_summary(landed), db_path=db_path, repo_root=repo_root)
 
     return counts

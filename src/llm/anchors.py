@@ -61,12 +61,23 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from compute.ir_narrative import load_latest_narrative
+from db_paths import require_db_path
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 if TYPE_CHECKING:
     from timeseries import Observation
 
 log = logging.getLogger(__name__)
+
+
+def _anchor_db_path() -> Path | None:
+    """Resolve the active state DB without falling back to checkout files."""
+    try:
+        return require_db_path()
+    except (FileNotFoundError, OSError, RuntimeError) as exc:
+        log.debug({"event": "anchor_database_unavailable", "error": str(exc)})
+        return None
+
 
 # Hard cap on the assembled anchor blocks so a verbose holdings JSON cannot
 # blow the prompt budget on any single prompt. Trim is deterministic
@@ -93,7 +104,7 @@ PRIORS_ANCHOR_CHAR_CAP = 2000
 # owner's consolidated ~6-tenet Worldview renders whole — the header alone is
 # ~330 chars, and a silently truncated belief list is worse than a longer one.
 # Portfolio-level (cross-company), gated by LEDGER_WORLDVIEW_ANCHOR, dated for
-# cache stability. See directives/thought_partner_build_plan.md P3.
+# cache stability. Keep this deterministic so anchor changes track note changes.
 WORLDVIEW_ANCHOR_CHAR_CAP = 1500
 
 _WORLDVIEW_ANCHOR_ON = frozenset({"1", "true", "yes", "on"})
@@ -282,6 +293,10 @@ def statistical_patterns_block(
     """Run detect_trend + detect_inflection on the canonical line items and
     any per-ticker registered KPIs. Returns markdown lines, empty when no
     series load (missing DB, unknown ticker)."""
+    db_path = _anchor_db_path()
+    if db_path is None:
+        return []
+
     try:
         from timeseries import load_financial_series, load_kpi_series
     except ImportError:
@@ -290,7 +305,7 @@ def statistical_patterns_block(
     lines: list[str] = []
     for line_item in _STATS_LINE_ITEMS:
         try:
-            s = load_financial_series(ticker=ticker, line_item=line_item, repo_root=repo_root)
+            s = load_financial_series(ticker=ticker, line_item=line_item, db_path=db_path)
         except Exception as exc:  # never block anchor build
             log.debug(
                 {
@@ -310,41 +325,39 @@ def statistical_patterns_block(
     # Per-ticker registered KPIs (from kpi_definitions). Tier-1 KPIs from the
     # holdings JSON would be ideal here but holdings names rarely match the
     # registry verbatim — use the registry as the source of truth.
-    db_path = repo_root / "data" / "portfolio.db"
-    if db_path.exists():
+    try:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         try:
-            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-            try:
-                rows = conn.execute(
-                    "SELECT name FROM kpi_definitions WHERE ticker = ? LIMIT 4",
-                    (ticker.upper(),),
-                ).fetchall()
-            finally:
-                conn.close()
-        except sqlite3.Error as exc:
-            log.debug({"event": "stats_kpi_def_lookup_failed", "error": str(exc)})
-            rows = []
-        for (kpi_name,) in rows:
-            if not isinstance(kpi_name, str) or not kpi_name.strip():
-                continue
-            try:
-                s_kpi = load_kpi_series(ticker=ticker, kpi_name=kpi_name, repo_root=repo_root)
-            except Exception as exc:  # best-effort
-                log.debug(
-                    {
-                        "event": "stats_load_kpi_failed",
-                        "ticker": ticker,
-                        "kpi": kpi_name,
-                        "error": str(exc),
-                    }
-                )
-                continue
-            if not s_kpi:
-                continue
-            short_label = kpi_name if len(kpi_name) <= 60 else kpi_name[:57] + "…"
-            rendered = _stats_block_from_series(short_label, s_kpi)
-            if rendered:
-                lines.append(rendered)
+            rows = conn.execute(
+                "SELECT name FROM kpi_definitions WHERE ticker = ? LIMIT 4",
+                (ticker.upper(),),
+            ).fetchall()
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error) as exc:
+        log.debug({"event": "stats_kpi_def_lookup_failed", "error": str(exc)})
+        rows = []
+    for (kpi_name,) in rows:
+        if not isinstance(kpi_name, str) or not kpi_name.strip():
+            continue
+        try:
+            s_kpi = load_kpi_series(ticker=ticker, kpi_name=kpi_name, db_path=db_path)
+        except Exception as exc:  # best-effort
+            log.debug(
+                {
+                    "event": "stats_load_kpi_failed",
+                    "ticker": ticker,
+                    "kpi": kpi_name,
+                    "error": str(exc),
+                }
+            )
+            continue
+        if not s_kpi:
+            continue
+        short_label = kpi_name if len(kpi_name) <= 60 else kpi_name[:57] + "…"
+        rendered = _stats_block_from_series(short_label, s_kpi)
+        if rendered:
+            lines.append(rendered)
 
     # Reference payload so linters know it's intentional (reserved for
     # future use: cross-check tier-1 KPI names against the registry)
@@ -557,8 +570,8 @@ def load_priors_anchor(repo_root: Path, ticker: str, char_cap: int = PRIORS_ANCH
     text, so every rendered element must be stable until the notes actually
     change — lines carry the note's creation DATE, never a relative age.
     """
-    db_path = repo_root / "data" / "portfolio.db"
-    if not db_path.exists():
+    db_path = _anchor_db_path()
+    if db_path is None:
         return ""
     try:
         from user_state.notes import list_notes
@@ -628,8 +641,8 @@ def load_worldview_anchor(repo_root: Path, char_cap: int = WORLDVIEW_ANCHOR_CHAR
     """
     if not _worldview_anchor_enabled():
         return ""
-    db_path = repo_root / "data" / "portfolio.db"
-    if not db_path.exists():
+    db_path = _anchor_db_path()
+    if db_path is None:
         return ""
     try:
         from synthesis.tenets import list_tenets
@@ -671,8 +684,8 @@ def load_themes_anchor(repo_root: Path, char_cap: int = WORLDVIEW_ANCHOR_CHAR_CA
     """
     if not _worldview_anchor_enabled():
         return ""
-    db_path = repo_root / "data" / "portfolio.db"
-    if not db_path.exists():
+    db_path = _anchor_db_path()
+    if db_path is None:
         return ""
     try:
         from synthesis.insights import list_insights
@@ -727,8 +740,8 @@ def load_owner_profile_anchor(
     rows are sorted by id — so caches keying on the composed anchor text stay
     stable until the set of affirmed facts actually changes.
     """
-    db_path = repo_root / "data" / "portfolio.db"
-    if not db_path.exists():
+    db_path = _anchor_db_path()
+    if db_path is None:
         return ""
     try:
         from owner_profile.store import get_current_profile

@@ -16,7 +16,6 @@ instead of duplicating the full cross-portfolio memo.
 
 from __future__ import annotations
 
-import re
 import threading
 import time
 from pathlib import Path
@@ -29,8 +28,7 @@ from integrations.portfolio_tracker_client import LivePortfolio, PortfolioAnalyt
 from pipeline.analytical_dashboard import AnalyticalDashboard
 from pipeline.console_scaffold import ConsoleSection
 from pipeline.portfolio_console_panel import (
-    render_portfolio_allocation_panel,
-    render_portfolio_health_panel,
+    render_portfolio_record_panel,
 )
 
 _DOWN = (False, "http://127.0.0.1:8000")
@@ -49,73 +47,10 @@ def probe_down(monkeypatch: pytest.MonkeyPatch) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_health_console_is_brief_plus_two_chip_cards(tmp_path: Path, probe_down: None) -> None:
-    """Health redesign (owner directive 2026-07-30): the read, then exactly
-    TWO chip-tab cards — no more vertical stack of a dozen sections."""
-    html = render_portfolio_health_panel(tmp_path / "missing.db")
-    assert 'class="k-card k-card-section console-health-brief"' in html
-    assert 'class="console-brief"' in html
-    assert 'class="console-grid"' in html
-    assert html.count('class="console-sec hc-card k-card k-card-section"') == 2
-    # Legacy deep-link anchors survive on the cards (#portfolio_synthesis /
-    # #portfolio_risk still land on the right card via the shell ANCHORS map).
-    assert 'id="csec-synthesis"' in html and 'id="csec-risk"' in html
-    # 3 + 4 chips — never more than 4 per card.
-    assert html.count("data-hc-pane=") == 7
-    # Every pane lazy-fetches its fragment; the default pane of each card is
-    # visible (loads on wire-up), the rest are hidden until their chip.
-    for key in ("thesis", "exposure", "collisions", "bets", "drawdown", "crowding", "tail"):
-        assert f'data-src="/api/panel/portfolio_health?fragment={key}"' in html
-    assert '<div class="hc-pane" id="hcp-thesis" data-src=' in html
-    assert '<div class="hc-pane" id="hcp-exposure" hidden data-src=' in html
-    assert '<div class="hc-pane" id="hcp-bets" data-src=' in html
-    assert '<div class="hc-pane" id="hcp-drawdown" hidden data-src=' in html
-    # No builder ran inline — the console shell paints instantly.
-    assert "Whole-book macro stress" not in html
-
-
 def test_console_grid_uses_registry_large_card_track(tmp_path: Path, probe_down: None) -> None:
-    html = render_portfolio_health_panel(tmp_path / "missing.db")
+    html = render_portfolio_record_panel(tmp_path / "missing.db")
     compact = " ".join(html.split())
     assert "grid-template-columns:repeat(auto-fit,minmax(var(--grid-card-lg),1fr))" in compact
-
-
-def test_health_pane_switcher_is_sticky_with_underline_active_chips(
-    tmp_path: Path, probe_down: None
-) -> None:
-    """Owner directive 2026-08-02: each card's pane-switcher chip row pins
-    below the shell topbar (``.k-chip-tabs-sticky``, the bare-row sibling of
-    ``.k-toolbar-sticky``) since a fetched pane can run well past one screen,
-    and the default-active chip carries the shared underline modifier
-    (``.k-chip-tab`` + ``.is-on``) instead of a filled-pill recolor. The
-    ``data-hc-pane`` switcher hook must survive untouched."""
-    html = render_portfolio_health_panel(tmp_path / "missing.db")
-    assert html.count('class="hc-tabs k-chip-tabs-sticky"') == 2
-    assert 'class="k-chip k-chip-btn k-chip-tab is-on" data-hc-pane="hcp-thesis"' in html
-    assert 'class="k-chip k-chip-btn k-chip-tab is-on" data-hc-pane="hcp-bets"' in html
-    assert 'class="k-chip k-chip-btn k-chip-tab" data-hc-pane="hcp-exposure"' in html
-
-
-def test_health_console_cut_sections_became_ask_doorways(tmp_path: Path, probe_down: None) -> None:
-    """Red Team and the macro-stress lens are on-demand Ask questions now
-    (Law-2 data-ask-q doorways on the brief), not standing sections."""
-    html = render_portfolio_health_panel(tmp_path / "missing.db")
-    assert "/api/panel/red_team" not in html
-    assert "/api/panel/portfolio_risk" not in html
-    assert "csec-red_team" not in html
-    assert html.count("data-ask-q=") == 2
-    assert "Red-team my portfolio" in html
-    assert "macro shock" in html
-
-
-def test_allocation_console_resolves_performance_without_htmx(
-    tmp_path: Path, probe_down: None
-) -> None:
-    html = render_portfolio_allocation_panel(tmp_path / "missing.db")
-    assert 'id="csec-positioning"' in html and 'id="csec-performance"' in html
-    assert 'hx-get="/api/panel/portfolio"' not in html
-    assert 'class="cc-loading"' not in html
-    assert "pf-live-offline" in html
 
 
 # --------------------------------------------------------------------------- #
@@ -246,29 +181,6 @@ def test_health_synthesis_without_cached_memo_keeps_the_run_hint(
 # --------------------------------------------------------------------------- #
 
 
-def test_allocation_console_is_brief_plus_grid(tmp_path: Path, probe_down: None) -> None:
-    html = render_portfolio_allocation_panel(tmp_path / "missing.db")
-    # Band 1: the read leads, then ONE grid wraps the tiles.
-    assert 'class="console-grid"' in html
-    assert 'id="csec-brief"' in html
-    assert html.index('id="csec-brief"') < html.index('id="csec-risk_budget"')
-    # Wide spans: brief + performance; Risk Budget / Posture / Positioning are
-    # tiles (no csec-wide on their wrappers).
-    assert 'class="console-sec csec-wide k-card k-card-section" id="csec-brief"' in html
-    assert 'class="console-sec csec-wide k-card k-card-section" id="csec-performance"' in html
-    assert 'class="console-sec k-card k-card-section" id="csec-risk_budget"' in html
-    assert 'class="console-sec k-card k-card-section" id="csec-positioning"' in html
-    assert "csec-allocation_recommendation" not in html
-
-
-def test_allocation_console_whatif_signpost_is_gone(tmp_path: Path, probe_down: None) -> None:
-    """The retired recommendation and its old signpost stay absent."""
-    html = render_portfolio_allocation_panel(tmp_path / "missing.db")
-    assert "csec-whatif_pointer" not in html
-    assert "Simulate a weight change or compare candidates" not in html
-    assert "What-if / Compare" not in html
-
-
 def test_record_console_is_brief_plus_grid(tmp_path: Path, probe_down: None) -> None:
     from pipeline.portfolio_console_panel import render_portfolio_record_panel
 
@@ -276,8 +188,6 @@ def test_record_console_is_brief_plus_grid(tmp_path: Path, probe_down: None) -> 
     assert 'class="console-grid"' in html
     assert 'class="console-sec csec-wide k-card k-card-section" id="csec-brief"' in html
     assert 'class="console-sec csec-wide k-card k-card-section" id="csec-decisions"' in html
-    # Memos + Triggers sit side-by-side as tiles.
-    assert 'class="console-sec k-card k-card-section" id="csec-memos"' in html
     assert 'class="console-sec k-card k-card-section" id="csec-triggers"' in html
 
 
@@ -286,12 +196,6 @@ def test_briefs_degrade_to_quiet_line_on_missing_db(tmp_path: Path, probe_down: 
     console or leaks a traceback."""
     from pipeline.portfolio_console_panel import render_portfolio_record_panel
 
-    alloc = render_portfolio_allocation_panel(tmp_path / "missing.db")
-    assert 'class="console-brief"' in alloc
-    assert 'class="panel console-brief"' not in alloc
-    assert "Not enough live data for a read yet" in alloc
-    assert "next-dollar recommendation" not in alloc.lower()
-    assert "Traceback" not in alloc
     # Record has nothing to say → the one-line quiet state, never a blank.
     record = render_portfolio_record_panel(tmp_path / "missing.db")
     assert 'class="console-brief"' in record
@@ -304,14 +208,6 @@ def test_briefs_degrade_to_quiet_line_on_missing_db(tmp_path: Path, probe_down: 
 # Health redesign (2026-07-30): the brief leads the two-card grid, and the
 # chip fragments each render standalone (with their own CSS block).
 # --------------------------------------------------------------------------- #
-
-
-def test_health_brief_leads_the_cards(tmp_path: Path, probe_down: None) -> None:
-    html = render_portfolio_health_panel(tmp_path / "missing.db")
-    assert html.index('class="k-card k-card-section console-health-brief"') < html.index(
-        'id="csec-synthesis"'
-    )
-    assert html.index('id="csec-synthesis"') < html.index('id="csec-risk"')
 
 
 def test_health_fragment_thesis_quiet_plus_memo_doorway(
@@ -345,56 +241,10 @@ def test_health_fragment_crowding_and_tail_empty_states(tmp_path: Path, probe_do
     assert "Whole-book macro stress" not in tail
 
 
-def test_health_cards_cover_exactly_the_fragment_keys(tmp_path: Path, probe_down: None) -> None:
-    """The owner's caps are structural: exactly 2 cards, ≤4 chips each, and
-    every chip key is a served fragment (and vice versa)."""
-    html = render_portfolio_health_panel(tmp_path / "missing.db")
-    cards = re.findall(
-        r'<article class="[^"]*\bhc-card\b[^"]*"[^>]*>(.*?)</article>', html, re.DOTALL
-    )
-    tabs = [re.findall(r'data-hc-pane="hcp-([^"]+)"', card) for card in cards]
-    assert len(cards) == 2
-    assert all(len(card_tabs) <= 4 for card_tabs in tabs)
-    keys = [key for card_tabs in tabs for key in card_tabs]
-    assert keys == list(pp.HEALTH_FRAGMENTS)
-
-
 def test_health_fragment_unknown_key_is_a_quiet_note(tmp_path: Path) -> None:
     html = pp.render_health_fragment(tmp_path / "missing.db", "nope")
     assert "Unknown Health fragment" in html
     assert "Traceback" not in html
-
-
-def test_health_brief_counts_real_theses_only(tmp_path: Path, probe_down: None) -> None:
-    """The thesis-health line uses the non-stub predicate — bulk-onboarded
-    STUB rows must not read as phantom breaches."""
-    import sqlite3 as _sq
-
-    db = tmp_path / "health.db"
-    conn = _sq.connect(str(db))
-    conn.executescript(
-        "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT);"
-        "CREATE TABLE thesis_state (ticker TEXT, thesis TEXT, breach_status TEXT);"
-    )
-    rows = [
-        ("NU", "portfolio", "Real thesis.", "ok"),
-        ("MELI", "portfolio", "Real thesis two.", "breach"),
-        ("STB", "evaluation", "STUB: needs user-authored thesis", "breach"),
-        ("WCH", "watchlist", "Watchlist thesis (out of scope).", "breach"),
-    ]
-    for t, lt, thesis, status in rows:
-        conn.execute("INSERT INTO tracked_companies (ticker, list_type) VALUES (?, ?)", (t, lt))
-        conn.execute(
-            "INSERT INTO thesis_state (ticker, thesis, breach_status) VALUES (?, ?, ?)",
-            (t, thesis, status),
-        )
-    conn.commit()
-    conn.close()
-
-    html = render_portfolio_health_panel(db)
-    assert "Thesis health needs eyes:" in html
-    assert "1 breach" in html  # MELI only — STB (stub) and WCH (watchlist) excluded
-    assert "1 ok" in html
 
 
 def test_lazy_record_shell_defers_every_builder(

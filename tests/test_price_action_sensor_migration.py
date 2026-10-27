@@ -98,7 +98,9 @@ def test_price_action_kind_and_sensor_tables_are_at_head(
 def test_sensor_migration_round_trips_on_a_clean_database(
     migrated_db: Callable[..., Path], tmp_path: Path
 ) -> None:
-    path = migrated_db(tmp_path / "price-action-round-trip.db", target="head")
+    path = migrated_db(
+        tmp_path / "price-action-round-trip.db", target="0023_add_price_action_sensor_state"
+    )
     cfg = Config(str(ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(ROOT / "alembic"))
     cfg.set_main_option("sqlalchemy.url", f"sqlite:///{path.as_posix()}")
@@ -113,7 +115,7 @@ def test_sensor_migration_round_trips_on_a_clean_database(
         )
     finally:
         conn.close()
-    migrated_db(path, target="head", upgrade_existing=True)
+    migrated_db(path, target="0023_add_price_action_sensor_state", upgrade_existing=True)
     conn = sqlite3.connect(path)
     try:
         assert (

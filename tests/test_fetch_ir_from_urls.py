@@ -9,15 +9,18 @@ the wiring around it (manifest write, brief_dirty, status, URL dedup).
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from execution import fetch_ir_from_urls as mod
 from ir_pipeline.manifest import load_manifest
+from pipeline.issuer_document_inventory import FiscalPeriodWitness
+from pipeline.managed_ir_sources import IssuerDocumentPreparationError
 
 
-def _make_db(db: Path, *, role: str = "portfolio") -> None:
+def _make_db(db: Path, *, role: str = "portfolio", fiscal_year_end: str = "12-31") -> None:
     db.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db))
     conn.execute(
@@ -25,9 +28,8 @@ def _make_db(db: Path, *, role: str = "portfolio") -> None:
         "fiscal_year_end TEXT, brief_dirty INTEGER DEFAULT 0, instrument_type TEXT DEFAULT 'equity')"
     )
     conn.execute(
-        "INSERT INTO tracked_companies (ticker, list_type, fiscal_year_end) "
-        "VALUES ('NOW', ?, '12-31')",
-        (role,),
+        "INSERT INTO tracked_companies (ticker, list_type, fiscal_year_end) VALUES ('NOW', ?, ?)",
+        (role, fiscal_year_end),
     )
     conn.execute(
         "CREATE TABLE ir_fetch_status (ticker TEXT PRIMARY KEY, last_attempt_at TEXT, "
@@ -52,11 +54,15 @@ def _install_fake_process(
         categorize: bool,
         calendar: str | None,
         owner_requested: bool,
+        fiscal_witness_document_version_id: str | None,
+        fiscal_witness_urls: frozenset[str],
     ) -> dict[str, object]:
         captured["calendar"] = calendar
         captured["categorize"] = categorize
         captured["root"] = root
         captured["owner_requested"] = owner_requested
+        captured["fiscal_witness_document_version_id"] = fiscal_witness_document_version_id
+        captured["fiscal_witness_urls"] = fiscal_witness_urls
         return {
             "ticker": ticker,
             "status": "done",
@@ -89,6 +95,8 @@ def test_register_urls_writes_manifest_registers_and_anchors(
     assert n == 2
     assert captured["categorize"] is True  # docs are content-classified, not trusted blindly
     assert captured["owner_requested"] is True
+    assert captured["fiscal_witness_document_version_id"] is None
+    assert captured["fiscal_witness_urls"] == frozenset()
     # The provided URLs are persisted to the canonical manifest.
     assert {e.url for e in load_manifest(tmp_path, "NOW")} == set(urls)
     conn = sqlite3.connect(str(db))
@@ -101,6 +109,84 @@ def test_register_urls_writes_manifest_registers_and_anchors(
     conn.close()
     assert brief_dirty == 1  # queued for the daily --enable-llm rebuild
     assert status == ("ok", 2, 2)  # recovery surfaced in the dashboard's coverage tab
+
+
+def test_register_urls_uses_exact_fiscal_witness_for_noncalendar_intake(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = tmp_path / "data" / "portfolio.db"
+    _make_db(db, fiscal_year_end="06-30")
+    witness = FiscalPeriodWitness(
+        issuer_id="issuer-now",
+        profile_revision_id="profile-now-1",
+        fiscal_year_end="06-30",
+        document_version_id="doc-version-now-q2",
+        document_sha256="a" * 64,
+        knowledge_cutoff=datetime(2026, 1, 1, tzinfo=UTC),
+        observed_through=datetime(2026, 1, 2, tzinfo=UTC),
+    )
+
+    def resolve_witness(
+        _conn: sqlite3.Connection,
+        document_version_id: str,
+        *,
+        ticker: str,
+        fiscal_year: int,
+        fiscal_quarter: int,
+    ) -> FiscalPeriodWitness:
+        assert document_version_id == "doc-version-now-q2"
+        assert ticker == "NOW" and fiscal_year == 2026 and fiscal_quarter == 2
+        return witness
+
+    monkeypatch.setattr(mod, "resolve_fiscal_period_witness", resolve_witness)
+    captured: dict[str, object] = {}
+    _install_fake_process(monkeypatch, downloaded=1, captured=captured)
+
+    n = mod.register_urls(
+        "NOW",
+        ["https://issuer.example/q2-results.pdf"],
+        repo_root=tmp_path,
+        db_path=db,
+        year=2026,
+        quarter=2,
+        process=False,
+        document_version_id="doc-version-now-q2",
+    )
+
+    assert n == 1
+    assert captured["calendar"] == "fye_06"
+    assert captured["fiscal_witness_document_version_id"] == "doc-version-now-q2"
+    assert captured["fiscal_witness_urls"] == frozenset({"https://issuer.example/q2-results.pdf"})
+
+
+def test_register_urls_rejects_invalid_witness_before_manifest_or_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = tmp_path / "data" / "portfolio.db"
+    _make_db(db, fiscal_year_end="06-30")
+
+    def reject_witness(*_args: object, **_kwargs: object) -> FiscalPeriodWitness:
+        raise IssuerDocumentPreparationError(
+            "fiscal_witness_registered_document_missing_or_ambiguous"
+        )
+
+    monkeypatch.setattr(mod, "resolve_fiscal_period_witness", reject_witness)
+    captured: dict[str, object] = {}
+    _install_fake_process(monkeypatch, downloaded=1, captured=captured)
+
+    n = mod.register_urls(
+        "NOW",
+        ["https://issuer.example/q2-results.pdf"],
+        repo_root=tmp_path,
+        db_path=db,
+        year=2026,
+        quarter=2,
+        document_version_id="missing-version",
+    )
+
+    assert n == 0
+    assert not load_manifest(tmp_path, "NOW")
+    assert captured == {}
 
 
 def test_register_urls_no_downloads_marks_failed_and_skips_anchor(

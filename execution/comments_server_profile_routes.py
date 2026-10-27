@@ -127,7 +127,7 @@ def register_profile_routes(app: Flask, context: ProfileRouteContext) -> None:
             {
                 "ok": True,
                 "status": row.status,
-                "receipt": "Affirmed — the coach may now cite this when reviewing your trades",
+                "receipt": "Affirmed — saved as a confirmed profile fact",
             },
             200,
         )
@@ -179,7 +179,7 @@ def register_profile_routes(app: Flask, context: ProfileRouteContext) -> None:
         bump_activation_count("act:profile:retire")
         if not ok:
             return ({"ok": False}, 404)
-        return ({"ok": True, "receipt": "Dropped — the coach will stop citing this fact"}, 200)
+        return ({"ok": True, "receipt": "Dropped — this fact is no longer active"}, 200)
 
     @app.route("/api/profile/fact/<int:fact_id>/update", methods=["POST", "OPTIONS"])
     def profile_fact_update(fact_id: int):
@@ -212,7 +212,7 @@ def register_profile_routes(app: Flask, context: ProfileRouteContext) -> None:
             {
                 "ok": True,
                 "new_fact_id": new_id,
-                "receipt": "Saved — your edit awaits your affirm next walk",
+                "receipt": "Saved — confirm the updated profile fact",
             },
             200,
         )

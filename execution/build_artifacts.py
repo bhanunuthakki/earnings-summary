@@ -59,6 +59,7 @@ from report.models import ReportFlavor
 from report.renderers.markdown import render as render_markdown
 from report.renderers.sections_json import render as render_sections_json
 from report.renderers.workspace_html import (
+    prepare_report_delivery,
     render_report_body,
     render_standalone_report,
 )
@@ -68,7 +69,6 @@ from report.sections import (
     earnings,
     exec_compensation,
     qa_roster,
-    saydo,
     segments,
     thesis,
     valuation,
@@ -313,7 +313,7 @@ def _regenerate_native_purpose(
             "status": "unsupported",
             "reason": (
                 "dedicated ETF brief generation is retired; "
-                "saved ETF reports remain readable as history"
+                "use portfolio diversification and supported earnings-multiple context"
             ),
             "instrument_kind": InstrumentType.ETF.value,
         }
@@ -373,15 +373,6 @@ def _regenerate_native_purpose(
                 force_budget_bypass=effective_bypass,
                 force_refresh=True,
                 conn=conn,
-            )
-        elif purpose == "saydo_filter":
-            section = saydo.build(
-                ticker,
-                repo_root,
-                conn=conn,
-                enable_llm=True,
-                force_refresh=True,
-                strict_refresh=True,
             )
         elif purpose == "exec_comp_alignment":
             section = exec_compensation.build(
@@ -460,7 +451,6 @@ def _parse_args() -> argparse.Namespace:
             "bear_case",
             "exec_comp_alignment",
             "qa_topics",
-            "saydo_filter",
             "valuation_basis",
         ),
         default=None,
@@ -569,7 +559,7 @@ def _build_one(
             "status": "unsupported",
             "reason": (
                 "dedicated ETF brief generation is retired; "
-                "saved ETF reports remain readable as history"
+                "use portfolio diversification and supported earnings-multiple context"
             ),
             "instrument_kind": InstrumentType.ETF.value,
         }
@@ -651,7 +641,7 @@ def _build_one(
         if report_conn is not None:
             report_conn.close()
 
-    report_body = render_report_body(spec)
+    report_body = render_report_body(spec, delivery=prepare_report_delivery(spec))
     workspace_html_path.write_text(render_standalone_report(spec, report_body), encoding="utf-8")
     _emit(
         "wrote_workspace_html",
@@ -672,7 +662,6 @@ def _build_one(
         "segments": spec.segments.status.value,
         "earnings": spec.earnings.status.value,
         "saydo": spec.saydo.status.value,
-        "ir_docs": spec.ir_docs.status.value,
         "recent_developments": spec.recent_developments.status.value,
         "bear_case": spec.bear_case.status.value,
         "provenance": spec.provenance.status.value,

@@ -18,7 +18,6 @@ from typing import Protocol, cast
 import pytest
 
 from ask.packs import load_packs
-from calibration_coach import CoachInputs, grounding_block
 from decision_calibration import (
     CalibrationStats,
     OmissionMiss,
@@ -196,15 +195,6 @@ def _stats_with_omissions() -> CalibrationStats:
         time_to_outcome=[],
         omissions=_om(12, 5),
     )
-
-
-def test_coach_grounding_carries_omissions() -> None:
-    block = grounding_block(
-        CoachInputs(calibration=_stats_with_omissions(), skill=None, closed_lessons=[], n_graded=14)
-    )
-    assert "OMISSIONS —" in block
-    assert "ran away from you" in block
-    assert "NVDA +50%" in block  # the named miss the coach can ground a bias in
 
 
 def test_calibration_pack_carries_omissions(tmp_path: Path) -> None:

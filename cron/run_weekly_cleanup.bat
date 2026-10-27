@@ -1,7 +1,6 @@
 @echo off
-REM Sunday 13:00 local: expire allowlisted transient artifacts, then stale research state.
-REM Filesystem cleanup uses its own single-flight lane; the state-expiry step is
-REM bounded DB-only work and retains portfolio-db. Cleanup failure prevents expiry.
+REM Sunday 13:00 local: remove allowlisted transient artifacts.
+REM Filesystem cleanup uses its own single-flight lane.
 
 setlocal EnableExtensions
 set "PYTHONUTF8=1"
@@ -17,14 +16,6 @@ set "LOG_FILE=%LOG_DIR%\weekly_cleanup_%TS%.log"
 cd /d "%PROJECT_ROOT%"
 > "%LOG_FILE%" echo === weekly cleanup ===
 call "%PROJECT_ROOT%\cron\run_python.bat" "weekly-cleanup" "filesystem-maintenance" execution\run_weekly_cleanup.py --apply >> "%LOG_FILE%" 2>&1
-if not errorlevel 1 goto expire_research
-set "EXIT_CODE=%ERRORLEVEL%"
-goto done
-
-:expire_research
->> "%LOG_FILE%" echo === stale research expiry ===
-call "%PROJECT_ROOT%\cron\run_python.bat" "weekly-cleanup-expire-research" "portfolio-db" execution\expire_stale_research.py --apply >> "%LOG_FILE%" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 
-:done
 endlocal & exit /b %EXIT_CODE%

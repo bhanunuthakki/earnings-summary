@@ -485,20 +485,6 @@ def _isolate_default_database(
 
 
 @pytest.fixture(autouse=True)
-def _no_real_capture_triage_llm(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Block unmocked capture classification like the other offline LLM paths."""
-    import capture.triage as capture_triage
-
-    def _blocked(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError(
-            "real capture triage invoked in a test — inject call= or monkeypatch "
-            "capture.triage._default_call"
-        )
-
-    monkeypatch.setattr(capture_triage, "_default_call", _blocked)
-
-
-@pytest.fixture(autouse=True)
 def _no_real_chat_llm_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     """The suite never spends: any test that reaches the claude-CLI chat
     transport unpatched fails loudly instead of launching a real subprocess.

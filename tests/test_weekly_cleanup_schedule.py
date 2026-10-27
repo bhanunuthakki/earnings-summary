@@ -64,15 +64,12 @@ def test_weekly_cleanup_wrapper_runs_ordered_locked_stages_without_raw_deletes()
     normalized = wrapper.lower()
 
     cleanup = 'call "%project_root%\\cron\\run_python.bat" "weekly-cleanup" "filesystem-maintenance" execution\\run_weekly_cleanup.py --apply'
-    expiry = 'call "%project_root%\\cron\\run_python.bat" "weekly-cleanup-expire-research" "portfolio-db" execution\\expire_stale_research.py --apply'
     assert cleanup in normalized
-    assert expiry in normalized
-    assert normalized.index(cleanup) < normalized.index(expiry)
-    assert "if not errorlevel 1 goto expire_research" in normalized
+    assert "expire_stale_research" not in normalized
+    assert "weekly-cleanup-expire-research" not in normalized
     assert "exit /b %exit_code%" in normalized
     assert ".tmp\\cron_logs" in normalized
     assert "filesystem cleanup uses its own single-flight lane" in normalized
-    assert "state-expiry step is" in normalized and "bounded db-only work" in normalized
     assert "del " not in normalized
     assert "rmdir " not in normalized
     assert "remove-item" not in normalized

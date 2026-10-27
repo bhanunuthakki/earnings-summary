@@ -121,7 +121,6 @@ class WorkOsEvaluationItem(BaseModel):
     thesis_excerpt: str | None = Field(default=None, max_length=_EXCERPT_LIMIT)
     source: ThesisSource = "unavailable"
     company_desk_url: str | None = None
-    workup_url: str | None = None
     dcf_url: str | None = None
     report_url: str | None = None
 
@@ -457,9 +456,6 @@ def build_work_os_evaluation(
                 thesis_excerpt=thesis_excerpt,
                 source=source,
                 company_desk_url=(f"/ticker/{ticker}" if instrument_type == "company" else None),
-                workup_url=(
-                    f"/api/peek/etf_workup?ticker={ticker}" if instrument_type == "etf" else None
-                ),
                 dcf_url=dcf_url,
                 report_url=report_urls.get(ticker),
             )

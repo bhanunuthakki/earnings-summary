@@ -64,3 +64,14 @@ def test_forced_fallback_allowed_env(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setenv("LLM_ALLOW_FORCED_FALLBACK", "0")
     assert is_forced_fallback_allowed() is False
+
+
+@pytest.mark.parametrize("model", ["gpt-6-luna", "gpt-6.1-sol"])
+def test_current_codex_candidates_support_complete_document_context(model: str) -> None:
+    profile = CapabilityProfile(min_context_length=1_050_000, requires_structured_output=True)
+    assert model_has_capabilities(model, profile) == (True, "OK")
+    resolved, backend = resolve_model_and_backend(
+        purpose=None, model=model, backend="codex", capability_profile=profile
+    )
+    assert (resolved, backend) == (model, "codex")
+    assert not model_has_capabilities(model, CapabilityProfile(min_context_length=1_050_001))[0]

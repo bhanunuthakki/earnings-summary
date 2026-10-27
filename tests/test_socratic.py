@@ -44,4 +44,4 @@ def test_retired_exercise_routes_are_absent_without_dispatch(
     assert list_memos(db_path=db) == []
     rules = {rule.rule for rule in app.url_map.iter_rules()}
     assert "/actions/position-review" in rules
-    assert "/actions/advisor-memo" in rules
+    assert "/actions/advisor-memo" not in rules

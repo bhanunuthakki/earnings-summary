@@ -5,7 +5,7 @@ no-migration interim instead; revisit the full spine only on a concrete
 dogfooding trigger (§9).
 **Owner:** bhanu · **Session:** S8 (exploration/decision) of the
 `capture_every_number` program · **Model:** Opus
-**Companion directives:** `capture_every_number_program.md` (§1 locked this as
+**Companion directives:** `data_provenance.md` (§1 locked this as
 S8's question), `reference_platform_invariants` (FK-poisoning), `data_provenance.md`.
 
 > The owner asked to "spawn a session to thoroughly explore this." This file is

@@ -7,37 +7,10 @@ checks remain in each feature after validation.
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Literal, NotRequired, Self, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
-
-
-class ArtifactBriefPayload(TypedDict):
-    takeaways: list[str]
-    bull: NotRequired[str]
-    bear: NotRequired[str]
-    changes_mind: NotRequired[str]
-    second_order: NotRequired[str]
-    portfolio_map: NotRequired[str]
-
-
-class DecisionExtractionPayload(TypedDict):
-    ticker: str | None
-    direction: str | None
-    size_pct: NotRequired[float | None]
-    conviction: NotRequired[str | None]
-    falsifier: NotRequired[str | None]
-
-
-class IntentPayload(TypedDict):
-    intent: Literal["observation", "wondering", "brief_artifact", "stress_artifact"]
-    claim: NotRequired[str]
-    ticker: NotRequired[str | None]
-
-
-class ResearchTriagePayload(TypedDict):
-    route: Literal["answer_now", "belief_candidate", "research_task"]
-    why: NotRequired[str]
 
 
 class ResearchAssessPayload(TypedDict):
@@ -66,18 +39,6 @@ class ThesisEntryPayload(TypedDict):
 class QualityScorePayload(TypedDict):
     id: int
     quality_score: float
-
-
-class BehaviorCitationPayload(TypedDict):
-    decision_id: int
-    outcome: Literal["correct", "wrong", "mixed", "unfalsifiable"]
-
-
-class BehaviorRulePayload(TypedDict):
-    key: str
-    rule_text: str
-    citations: list[BehaviorCitationPayload]
-    confidence_note: NotRequired[str]
 
 
 class ExitPostmortemPayload(TypedDict):
@@ -136,18 +97,68 @@ class TranscriptTonePayload(TypedDict):
     tone: dict[str, ToneVerdictPayload]
 
 
-class TriageSuggestionPayload(TypedDict):
-    intent: str
-    confidence: Literal["high", "low"]
-    reason: NotRequired[str]
-
-
-class AnnualLetterPayload(TypedDict):
-    letter_md: str
-
-
 class _ClosedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
+class RecentDevelopmentEventPayload(_ClosedPayload):
+    category: Literal["material_news", "sector_context", "watch_this_week"]
+    tag: Literal["CAPITAL", "LEGAL", "INFRA", "PRODUCT", "EARNINGS", "NARRATIVE", "NEWS"]
+    headline: str = Field(min_length=1, max_length=500)
+    published_at: str = Field(pattern=r"^20\d{2}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?$")
+    publisher: str = Field(min_length=1, max_length=120)
+    url: str = Field(pattern=r"^https?://[^\s]+$")
+    factual_summary: str = Field(min_length=1, max_length=2_000)
+    thesis_implication: str = Field(max_length=2_000)
+    tone: Literal["pos", "opt", "neu", "neg"]
+
+    @field_validator("published_at")
+    @classmethod
+    def _valid_publication_date(cls, value: str) -> str:
+        try:
+            datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("published_at must be a real calendar date and optional time") from exc
+        return value
+
+
+class RecentDevelopmentsPayload(_ClosedPayload):
+    """Typed, cited events plus explicit search coverage for the report."""
+
+    search_status: Literal["events_found", "no_qualifying_events"]
+    window_start: str = Field(pattern=r"^20\d{2}-\d{2}-\d{2}$")
+    window_end: str = Field(pattern=r"^20\d{2}-\d{2}-\d{2}$")
+    queries_run: list[str] = Field(min_length=1, max_length=2)
+    sources_opened: list[str] = Field(min_length=1, max_length=7)
+    events: list[RecentDevelopmentEventPayload] = Field(max_length=11)
+
+    @model_validator(mode="after")
+    def _status_matches_events(self) -> Self:
+        if self.search_status == "events_found" and not self.events:
+            raise ValueError("events_found requires at least one event")
+        if self.search_status == "no_qualifying_events" and self.events:
+            raise ValueError("no_qualifying_events must not carry events")
+        if self.window_start > self.window_end:
+            raise ValueError("search window start must not follow its end")
+        opened_urls = set(self.sources_opened)
+        for event in self.events:
+            if not self.window_start <= event.published_at[:10] <= self.window_end:
+                raise ValueError("event publication date must fall within the searched window")
+            if event.url not in opened_urls:
+                raise ValueError("every event URL must appear in sources_opened")
+        return self
+
+    @field_validator("window_start", "window_end")
+    @classmethod
+    def _valid_window_date(cls, value: str) -> str:
+        try:
+            date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError("search window dates must be real calendar dates") from exc
+        return value
+
+
+RECENT_DEVELOPMENTS_SCHEMA = TypeAdapter(RecentDevelopmentsPayload)
 
 
 class TranscriptMetadataPayload(_ClosedPayload):
@@ -264,16 +275,11 @@ class DcfAssumptionsPayload(_ClosedPayload):
         return self
 
 
-ARTIFACT_BRIEF_SCHEMA = TypeAdapter(ArtifactBriefPayload)
-DECISION_EXTRACTION_SCHEMA = TypeAdapter(DecisionExtractionPayload)
-INTENT_SCHEMA = TypeAdapter(IntentPayload)
-RESEARCH_TRIAGE_SCHEMA = TypeAdapter(ResearchTriagePayload)
 RESEARCH_ASSESS_SCHEMA = TypeAdapter(ResearchAssessPayload)
 RESEARCH_NARRATIVE_SCHEMA = TypeAdapter(ResearchNarrativePayload)
 RESEARCH_CODE_SPEC_SCHEMA = TypeAdapter(ResearchCodeSpecPayload)
 THESIS_ENTRY_SCHEMA = TypeAdapter(ThesisEntryPayload)
 QUALITY_SCORE_BATCH_SCHEMA = TypeAdapter(list[QualityScorePayload])
-BEHAVIOR_RULE_BATCH_SCHEMA = TypeAdapter(list[BehaviorRulePayload])
 EXIT_POSTMORTEM_SCHEMA = TypeAdapter(ExitPostmortemPayload)
 SEMANTIC_TENSION_SCHEMA = TypeAdapter(SemanticTensionPayload)
 SESSION_CANDIDATE_BATCH_SCHEMA = TypeAdapter(list[SessionCandidatePayload])
@@ -282,8 +288,6 @@ TENET_BATCH_SCHEMA = TypeAdapter(list[TenetPayload])
 THEME_SYNTHESIS_SCHEMA = TypeAdapter(ThemeSynthesisPayload)
 TRANSCRIPT_TONE_SCHEMA = TypeAdapter(TranscriptTonePayload)
 TRANSCRIPT_TOPIC_SCHEMA = TypeAdapter(dict[str, TopicVerdictPayload])
-TRIAGE_SUGGESTION_SCHEMA = TypeAdapter(TriageSuggestionPayload)
-ANNUAL_LETTER_SCHEMA = TypeAdapter(AnnualLetterPayload)
 TRANSCRIPT_METADATA_SCHEMA = TypeAdapter(TranscriptMetadataPayload)
 PRESSURE_TEST_SCHEMA = TypeAdapter(PressureTestPayload)
 RISK_FACTOR_CATEGORIES_SCHEMA = TypeAdapter(dict[str, RiskFactorCategory])

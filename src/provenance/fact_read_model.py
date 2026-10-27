@@ -464,19 +464,33 @@ class FactReadModel:
         cutoff: datetime,
     ) -> ProvenanceBundle:
         row = self._fetchone(
+            self._provenance_bundle_select()
+            + "WHERE observation.observation_id = ? "
+            + "AND observation.knowledge_at <= ? "
+            + "AND observation.recorded_at <= ?",
+            (observation_id, cutoff, cutoff),
+        )
+        if row is None:
+            raise ObservationUnavailableError(observation_id)
+        return self._provenance_bundle_from_row(row, cutoff=cutoff)
+
+    @staticmethod
+    def _provenance_bundle_select() -> str:
+        return (
             "SELECT observation.*, payload.payload_version, "
             "payload.canonical_payload_json, "
             "payload.observation_payload_sha256 "
             "FROM fact_observations_v2 AS observation "
             "JOIN fact_observation_payload_commitments_v2 AS payload "
             "ON payload.observation_id = observation.observation_id "
-            "WHERE observation.observation_id = ? "
-            "AND observation.knowledge_at <= ? "
-            "AND observation.recorded_at <= ?",
-            (observation_id, cutoff, cutoff),
         )
-        if row is None:
-            raise ObservationUnavailableError(observation_id)
+
+    def _provenance_bundle_from_row(
+        self,
+        row: dict[str, object],
+        *,
+        cutoff: datetime,
+    ) -> ProvenanceBundle:
         loaded = self._load_observation(row)
         self._admit_observation_graph(loaded, cutoff=cutoff)
         cell = self.cell(str(row["fact_cell_id"]), cutoff=cutoff)
@@ -491,7 +505,7 @@ class FactReadModel:
             observation_payload_sha256=str(row["observation_payload_sha256"]),
             evidence=observation.evidence,
             derivation=observation.derivation,
-            relations=self.relations(observation_id, cutoff=cutoff),
+            relations=self.relations(loaded.observation_id, cutoff=cutoff),
         )
 
     def required_provenance_bundles(
@@ -539,10 +553,31 @@ class FactReadModel:
         if not observation_ids:
             return ()
         with publication_verification_scope(self._conn):
+            unique_ids = tuple(dict.fromkeys(observation_ids))
+            variable_limit = self._conn.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)
+            if variable_limit < 3:
+                raise RuntimeError("SQLite variable limit cannot fit a provenance bundle lookup")
+            chunk_size = min(900, variable_limit - 2)
+            rows_by_id: dict[str, dict[str, object]] = {}
+            select = self._provenance_bundle_select()
+            for start in range(0, len(unique_ids), chunk_size):
+                chunk = unique_ids[start : start + chunk_size]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = self._fetchall(
+                    select
+                    + f"WHERE observation.observation_id IN ({placeholders}) "
+                    + "AND observation.knowledge_at <= ? "
+                    + "AND observation.recorded_at <= ?",
+                    (*chunk, cutoff, cutoff),
+                )
+                rows_by_id.update((str(row["observation_id"]), row) for row in rows)
             results: list[ProvenanceBundleRead] = []
             for observation_id in observation_ids:
                 try:
-                    bundle = self.provenance_bundle(observation_id, cutoff=cutoff)
+                    row = rows_by_id.get(observation_id)
+                    if row is None:
+                        raise ObservationUnavailableError(observation_id)
+                    bundle = self._provenance_bundle_from_row(row, cutoff=cutoff)
                 except FactAdmissionError as exc:
                     results.append(
                         ProvenanceBundleRead(

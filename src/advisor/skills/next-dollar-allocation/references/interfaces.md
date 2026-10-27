@@ -36,9 +36,8 @@ Use these existing GET routes when direct canonical-host interfaces are unavaila
   verification state. An unverified checkpoint is not proof the target was attained.
 - `/api/peek/review/<TICKER>`: deterministic position/tax pre-analysis. Ticker is a
   path segment, not a `?ticker=` query. This may be slow; bound reads and failures.
-- `/api/peek/etf_workup?ticker=<TICKER>`: saved ETF research history only. ETF
-  support otherwise stays at portfolio diversification commentary and simple
-  supported earnings-multiple context. Do not start dedicated ETF research.
+- ETF support stays at portfolio diversification commentary and simple supported
+  earnings-multiple context. Dedicated ETF research and saved workups are retired.
 
 If full account holdings cannot be reached through these projections, use a
 provenance-bearing export through the live host owner. Do not infer omitted small

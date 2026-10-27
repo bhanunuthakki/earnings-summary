@@ -59,7 +59,6 @@ def _registry() -> OperationsRegistry:
                     days_of_month=(),
                     months=(),
                 ),
-                service_owned=False,
                 scheduler_expectation="required_enabled",
             ),
         ),
@@ -424,7 +423,7 @@ def test_pin_enrollment_rejects_missing_database_lineage() -> None:
         seal_windows_review_pins(bundle=bundle, approved_by="owner", approved_at=NOW)
 
 
-def test_pin_enrollment_ignores_unexpected_and_intentional_absent_tasks() -> None:
+def test_pin_enrollment_ignores_unexpected_tasks() -> None:
     from execution.fetch_windows_review_bundle import (
         seal_windows_review_pins,
         validate_pinned_identity,
@@ -443,16 +442,7 @@ def test_pin_enrollment_ignores_unexpected_and_intentional_absent_tasks() -> Non
         state="Running",
         registry_match="unexpected",
     )
-    intentional_absent = ReviewSchedulerTask(
-        task_name=r"\earnings-summary\service_owned",
-        state="Missing",
-        registry_match="expected",
-        scheduler_expectation="absent_service_owned",
-        expectation_match=True,
-    )
-    enriched = _bundle_with_scheduler_tasks(
-        bundle, (bundle.scheduler.tasks[0], unexpected, intentional_absent)
-    )
+    enriched = _bundle_with_scheduler_tasks(bundle, (bundle.scheduler.tasks[0], unexpected))
 
     pins = seal_windows_review_pins(bundle=enriched, approved_by="owner", approved_at=NOW)
 

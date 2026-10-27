@@ -184,7 +184,7 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # (/api/ask, /api/cockpit, /api/cron-health). +1 lazy shared-reader stylesheet.
     # +1 governed IR owner-decision action route.
     # +2 governed Work OS question draft/approval routes.
-    # +2 governed README status/preview-or-apply routes.
+    # README status and preview/apply routes are retired.
     # +1 thesis-episode acknowledgement route.
     # +2 governed alert lifecycle routes (action and evidence).
     # +1 governed portfolio policy write proxy.
@@ -212,13 +212,31 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # +1 exact-edition descriptor for shared-reader reload and historical links.
     # +1 sealed evidence citation source-version viewer: the destination for
     # /source/version/<document_version_id>?node=… citations.
-    # Owner retired only the four guided-exercise routes; history stays readable.
-    assert len(rules) == 176
+    # Approved retirement also removes optional coaching, packet, ETF-workup,
+    # README, memo-generation and automatic-distillation actions.
+    assert len(rules) == 159
     assert not {
         "start_socratic_questions",
         "socratic_questions_result",
         "socratic_memo",
         "socratic_page",
+        "start_readme_update",
+        "readme_governance_status",
+        "start_advisor_memo",
+        "peek_weekly_packet",
+        "peek_etf_workup",
+        "coach_unmute_api",
+        "coach_attest_change_api",
+        "positioning_coach",
+        "positioning_propose",
+        "ask_session_distill",
+        "onmymind_reply",
+        "onmymind_answer",
+        "onmymind_act",
+        "research_run",
+        "research_task_status",
+        "research_reject",
+        "research_proposal_act",
     }.intersection(rules)
     assert rules["peek_canonical_financial"] == "/api/peek/canonical-financial"
     assert rules["peek_financial_calculation"] == "/api/peek/financial-calculation"
@@ -248,8 +266,8 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     assert rules["work_os_open_loops_api"] == "/api/work-os/open-loops"
     assert rules["positioning_simulate_api"] == "/api/positioning/simulate"
     assert rules["evaluation_dialogues_api"] == "/api/work-os/evaluation-dialogues"
-    assert rules["readme_governance_status"] == "/api/readme-governance/status"
-    assert rules["start_readme_update"] == "/actions/readme-update"
+    assert "readme_governance_status" not in rules
+    assert "start_readme_update" not in rules
     assert rules["ir_approval_action"] == ("/api/ir-approval/candidates/<candidate_id>/<action>")
     assert rules["question_proposals_api"] == "/api/work-os/question-proposals"
     assert rules["approve_question_proposal_api"] == (
@@ -273,7 +291,6 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
             "peek_earnings_readout",
             "peek_news_events",
             "peek_whatif",
-            "peek_etf_workup",
             "peek_discovery_compare",
             "peek_fact_provenance",
             "ticker_api",
@@ -318,7 +335,6 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
         "peek_earnings_readout": "/api/peek/earnings-readout",
         "peek_news_events": "/api/peek/news-events",
         "peek_whatif": "/api/peek/whatif",
-        "peek_etf_workup": "/api/peek/etf_workup",
         "peek_discovery_compare": "/api/peek/discovery-compare",
         "peek_fact_provenance": "/api/peek/provenance/<fact_ref>",
         "ticker_api": "/api/ticker/<ticker>",
@@ -467,7 +483,7 @@ def test_dashboard_page_returns_shell(client: FlaskClient) -> None:
     health = client.get("/api/panel/portfolio_health")
     assert health.status_code == 200
     health_body = health.get_data(as_text=True)
-    assert 'data-src="/api/panel/portfolio_health?fragment=thesis"' in health_body
+    assert 'data-src="/api/panel/performance_risk?fragment=thesis"' in health_body
 
     health_fragment = client.get("/api/panel/portfolio_health?fragment=thesis")
     assert health_fragment.status_code == 200
@@ -484,6 +500,7 @@ def test_work_os_portfolio_api_hydrates_only_portfolio_companies(
             id INTEGER PRIMARY KEY,
             ticker TEXT,
             scope TEXT NOT NULL DEFAULT 'ticker',
+            document_version_id TEXT,
             purpose TEXT NOT NULL,
             fiscal_period TEXT,
             content_md TEXT,
@@ -884,13 +901,16 @@ def test_work_os_portfolio_api_includes_latest_persisted_earnings_readout(
             id INTEGER PRIMARY KEY,
             ticker TEXT,
             scope TEXT NOT NULL DEFAULT 'ticker',
+            document_version_id TEXT,
             purpose TEXT NOT NULL,
             fiscal_period TEXT,
             content_md TEXT,
             generated_at TEXT,
             superseded_by_id INTEGER
         );
-        INSERT INTO llm_artifacts VALUES (
+        INSERT INTO llm_artifacts (
+            id, ticker, scope, purpose, fiscal_period, content_md, generated_at, superseded_by_id
+        ) VALUES (
             44, 'NU', 'ticker', 'post_earnings_readout', '2026-06-30',
             'persisted readout', '2026-08-14T11:44:51Z', NULL
         );

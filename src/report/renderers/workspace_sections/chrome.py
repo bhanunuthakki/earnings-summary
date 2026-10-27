@@ -63,14 +63,11 @@ __all__ = [
     "_verdict_badge",
 ]
 
-# suggested_disposition -> which verb button gets the primary treatment;
-# every other verb renders quiet. All four verbs always render — the card's
-# suggestion only styles the row, it never hides a verb (PRD §8.1: the owner
-# picks; the model suggests).
+# The model suggestion only styles a matching explicit owner action. It does
+# not select or hide an action (PRD §8.1: the owner picks; the model suggests).
 _DISPOSITION_VERBS: tuple[tuple[str, str], ...] = (
     ("promote", "Promote"),
     ("watch", "Watch"),
-    ("research_further", "Research further"),
     ("pass", "Pass"),
 )
 

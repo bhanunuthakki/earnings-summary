@@ -79,14 +79,14 @@ def _seed_db(db_path: Path) -> None:
             cost_estimate_usd REAL,
             called_at TIMESTAMP
         );
-        -- Faithful mirror of migration 0035 (see tests/test_llm_artifact_store.py).
-        -- The Risk panel reads this table via llm_artifact_store.read_current,
-        -- whose query references fiscal_period/scope — a stale minimal schema here
-        -- 500s that panel (regression: test_panel_fragment_portfolio_risk_offline).
+        -- Minimal read_current schema, including the nullable document-version
+        -- discriminator added by migration 0063. The Risk panel reads this table;
+        -- missing fiscal_period, scope, or document_version_id breaks its cache read.
         CREATE TABLE llm_artifacts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker VARCHAR(16),
             scope VARCHAR(64) NOT NULL DEFAULT 'ticker',
+            document_version_id TEXT,
             purpose VARCHAR(64) NOT NULL,
             fiscal_period VARCHAR(10),
             content_md TEXT,

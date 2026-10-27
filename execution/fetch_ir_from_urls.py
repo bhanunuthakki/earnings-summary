@@ -53,6 +53,11 @@ except ImportError:
 import ir_fetch_status
 from ir_pipeline.manifest import ManifestEntry, merge_write
 from ir_uploads import calendar_id_from_fye
+from pipeline.issuer_document_inventory import FiscalPeriodWitness
+from pipeline.managed_ir_sources import (
+    IssuerDocumentPreparationError,
+    resolve_fiscal_period_witness,
+)
 from pipeline.source_policy import (
     ArtifactKind,
     CollectionSource,
@@ -150,6 +155,7 @@ def register_urls(
     year: int,
     quarter: int,
     process: bool = True,
+    document_version_id: str | None = None,
 ) -> int:
     """Return ready URL entries, including repaired/unchanged registrations.
 
@@ -165,23 +171,77 @@ def register_urls(
         source=CollectionSource.IR,
         artifact_kind=ArtifactKind.IR_DOCUMENT,
     )
-    in_window = authorization.fiscal_year_end_month is not None and reported_quarter_is_in_window(
-        fiscal_year=year,
-        fiscal_quarter=quarter,
-        fiscal_year_end_month=authorization.fiscal_year_end_month,
-        as_of=date.today(),
-    )
-    if not authorization.allowed or not in_window:
+    if not authorization.allowed:
         sys.stderr.write(
             json.dumps(
                 {
                     "event": "source_collection_policy_denied",
                     "ticker": ticker,
-                    "reason": (
-                        "reported_quarter_window_denied"
-                        if authorization.allowed
-                        else authorization.status.value
-                    ),
+                    "reason": authorization.status.value,
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        return 0
+    fiscal_witness: FiscalPeriodWitness | None = None
+    if document_version_id is not None:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        try:
+            fiscal_witness = resolve_fiscal_period_witness(
+                conn,
+                document_version_id,
+                ticker=ticker,
+                fiscal_year=year,
+                fiscal_quarter=quarter,
+            )
+            witness_month = int(fiscal_witness.fiscal_year_end[:2])
+            if (
+                authorization.fiscal_year_end_month is not None
+                and authorization.fiscal_year_end_month != witness_month
+            ):
+                raise IssuerDocumentPreparationError("fiscal_witness_calendar_mismatch")
+        except IssuerDocumentPreparationError as exc:
+            sys.stderr.write(
+                json.dumps(
+                    {
+                        "event": "fiscal_witness_rejected",
+                        "ticker": ticker,
+                        "reason": exc.code,
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            ir_fetch_status.record_attempt(
+                db_path,
+                ticker,
+                status="failed",
+                discovered=len(urls),
+                downloaded=0,
+                reason=exc.code,
+            )
+            return 0
+        finally:
+            conn.close()
+    fiscal_year_end_month = (
+        int(fiscal_witness.fiscal_year_end[:2])
+        if fiscal_witness is not None
+        else authorization.fiscal_year_end_month
+    )
+    in_window = fiscal_year_end_month is not None and reported_quarter_is_in_window(
+        fiscal_year=year,
+        fiscal_quarter=quarter,
+        fiscal_year_end_month=fiscal_year_end_month,
+        as_of=date.today(),
+    )
+    if not in_window:
+        sys.stderr.write(
+            json.dumps(
+                {
+                    "event": "source_collection_policy_denied",
+                    "ticker": ticker,
+                    "reason": "reported_quarter_window_denied",
                 },
                 sort_keys=True,
             )
@@ -201,7 +261,11 @@ def register_urls(
     added, total = merge_write(repo_root, ticker, entries)
     sys.stdout.write(f"[{ticker}] manifest: +{added} new, {total} total\n")
 
-    calendar = calendar_id_from_fye(_ticker_fye(db_path, ticker))
+    calendar = calendar_id_from_fye(
+        fiscal_witness.fiscal_year_end
+        if fiscal_witness is not None
+        else _ticker_fye(db_path, ticker)
+    )
     summary = process_ticker(
         ticker,
         root=repo_root,
@@ -209,6 +273,8 @@ def register_urls(
         categorize=True,
         calendar=calendar,
         owner_requested=True,
+        fiscal_witness_document_version_id=document_version_id,
+        fiscal_witness_urls=frozenset(urls) if document_version_id is not None else frozenset(),
     )
     downloaded = summary.get("downloaded")
     downloaded_n = downloaded if isinstance(downloaded, int) else 0
@@ -280,6 +346,7 @@ def main(argv: list[str] | None = None) -> int:
         year=cast("int", args.year),
         quarter=cast("int", args.quarter),
         process=not cast("bool", args.no_process),
+        document_version_id=cast("str | None", args.document_version_id),
     )
     return 0 if registered else 1
 
@@ -291,6 +358,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--ticker", required=True, help="Ticker to register documents for")
     p.add_argument("--year", required=True, type=int, help="Reported fiscal year")
     p.add_argument("--quarter", required=True, type=int, choices=[1, 2, 3, 4])
+    p.add_argument(
+        "--document-version-id",
+        help="Exact current SEC filing version that proves this fiscal period.",
+    )
     p.add_argument("--url", action="append", help="A document URL (repeatable)")
     p.add_argument(
         "--urls-file", type=Path, help="File with one document URL per line (# comments ok)"

@@ -1,4 +1,4 @@
-"""research_tasks / research_proposals store + the fire-and-forget detection tap.
+"""research_tasks / research_proposals stores and explicit proposal actions.
 
 Follows the codebase store convention (writers own a connection + commit; readers
 best-effort ``[]`` on a missing table, the ``signals/store.py`` pattern). It owns
@@ -6,21 +6,11 @@ the two Phase-1 lifecycles and exposes ``act_on_proposal`` — the ONE action co
 both the inbox form route and the Telegram callback dispatch call (no logic
 duplication).
 
-The detection tap (``detect_and_create_task``) is fire-and-forget: it classifies
-a freshly-landed musing by INTENT (``research.intent.classify_intent``) and routes
-— a ``wondering`` runs a SECOND routing triage (``research.triage.classify_triage``,
-B7) that decides ``answer_now`` / ``belief_candidate`` / ``research_task`` (only the
-last of these writes a ``proposed`` task — the inert chip); a
-``brief_artifact``/``stress_artifact`` records an engage-intent on the note for the
-artifact pipeline; an ``observation`` is inert. It NEVER auto-runs the research
-pass, and a detection failure NEVER affects capture (it swallows errors, returns
-None).
-
 The legacy physical ``research_tasks`` columns ``cost_usd`` and ``run_id`` map
 to the clearer API fields ``estimated_cost_usd`` and decoded ``metadata``.
 Keeping the storage names avoids a risky historical migration rewrite while
-making their current semantics explicit: ``cost_usd`` holds the triage's STATED
-cost estimate for the RUN button/packet line, and ``run_id`` holds a small JSON metadata blob
+making their current semantics explicit: ``cost_usd`` holds the estimated
+research cost for the RUN button/packet line, and ``run_id`` holds a small JSON metadata blob
 (``{"session_prompt": ..., "packeted_at": ...,
 "unanswered_weeks": ...}``) — see :func:`_encode_task_metadata` /
 :func:`_decode_task_metadata` and
@@ -29,7 +19,6 @@ cost estimate for the RUN button/packet line, and ``run_id`` holds a small JSON 
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import sqlite3
@@ -37,10 +26,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
-from research.intent import IntentCall, classify_intent
-from research.triage import TriageCall, build_session_prompt, classify_triage, estimate_cost_usd
 from user_state._db import now_iso, open_conn, open_read_conn
-from user_state.notes import get_note, patch_note_context
+from user_state.notes import get_note
 
 TASK_STATUSES: tuple[str, ...] = (
     "proposed",
@@ -55,18 +42,8 @@ TASK_STATUSES: tuple[str, ...] = (
 )
 PROPOSAL_VERBS: tuple[str, ...] = ("approve", "further", "steer", "reject")
 
-# The detection tap runs by default (the regex pre-gate keeps it cheap — only
-# wondering-shaped musings reach the LLM). Set LEDGER_RESEARCH_TAP=0 to disable.
-_TAP_OFF = frozenset({"0", "false", "no", ""})
-
-
-def tap_enabled() -> bool:
-    return os.environ.get("LEDGER_RESEARCH_TAP", "1").strip().lower() not in _TAP_OFF
-
-
-# The research RUN (the expensive web pass) is OFF by default — detection produces
-# inert chips, but nothing spends research $ until the owner opts in. The run route
-# and the "Research it" button are both gated on this.
+# The research RUN (the expensive web pass) is OFF by default. Its explicit run
+# route stays gated so task creation does not authorize a live research pass.
 _RUN_ON = frozenset({"1", "true", "yes", "on"})
 
 
@@ -261,13 +238,10 @@ def ensure_task_for_note(
     ticker: str | None = None,
     db_path: Path | str | None = None,
 ) -> int | None:
-    """Find-or-create the research_task for a note (IDEMPOTENT per note_id).
+    """Find-or-create a task for an explicitly selected note.
 
-    The On My Mind 'incorporate-into-research' button and the capture-time auto-tap
-    (:func:`detect_and_create_task`) both converge here, so one wondering never
-    yields two tasks — ``create_task`` has no uniqueness guard, so idempotency is
-    enforced in code (single-user localhost; no cross-process race to guard).
-    Returns the task id, or None when the note is missing.
+    ``create_task`` has no uniqueness guard, so this keeps the operation
+    idempotent per note. Returns the task id, or None when the note is missing.
     """
     existing = get_task_for_note(note_id, db_path=db_path)
     if existing is not None:
@@ -662,206 +636,3 @@ def act_on_proposal(
     finally:
         conn.close()
     return status
-
-
-def _audit_tap(
-    *,
-    note_id: int,
-    channel: str,
-    detail: str,
-    llm_ran: bool,
-    db_path: Path | str | None,
-) -> None:
-    """Best-effort tap-outcome audit row (action='tapped'). Without this trail a
-    dormant tap and a broken tap are indistinguishable (2026-07-02 audit: zero
-    detect calls ever, no way to tell which). Never raises."""
-    try:
-        from capture.audit import write_audit
-
-        write_audit(
-            channel=channel,
-            action="tapped",
-            utterance_summary=f"capture tap: {detail}",
-            note_id=note_id,
-            detail=detail,
-            purpose="capture_intent" if llm_ran else None,
-            db_path=db_path,
-        )
-    except Exception:  # observability must never affect capture
-        pass
-
-
-def _route_wondering(
-    *,
-    note_id: int,
-    claim: str,
-    ticker: str | None,
-    channel: str,
-    llm_ran: bool,
-    triage_call: TriageCall | None,
-    db_path: Path | str | None,
-) -> int | None:
-    """B7: the routing triage over a positive wondering verdict. Fails OPEN to
-    ``research_task`` (today's pre-B7 behavior) on any triage error — see
-    :func:`research.triage.classify_triage`. Returns the new task id for the
-    ``research_task`` route, else None (``answer_now`` / ``belief_candidate``
-    create no task)."""
-    triage = classify_triage(claim, ticker=ticker, call=triage_call)
-
-    if triage.route == "answer_now":
-        # No task; the INDEPENDENT capture_triage/onmymind.respond answer tap
-        # (B3) already runs its own answer-or-not gate on every landed
-        # capture — this route just gets out of its way (see this module's
-        # docstring + research.triage's module docstring for the interplay).
-        # research_route_why (added post-#971) is a separate field, not a
-        # reshape of research_route — two tests pin research_route as a bare
-        # string (test_research_proposals.py), and the feed read model
-        # (onmymind.feed._wondering_route_and_why) only needs the reason for
-        # the badge tooltip, not a structural change to what's already pinned.
-        with contextlib.suppress(Exception):
-            patch_note_context(
-                note_id,
-                {"research_route": "answer_now", "research_route_why": triage.why},
-                db_path=db_path,
-            )
-        _audit_tap(
-            note_id=note_id, channel=channel, detail="answer_now", llm_ran=llm_ran, db_path=db_path
-        )
-        return None
-
-    if triage.route == "belief_candidate":
-        # No task; flag into the Worldview distill ladder (B4's tenet_distill
-        # sweep reads context['ladder'] in _FLAGGED_LADDERS).
-        with contextlib.suppress(Exception):
-            patch_note_context(
-                note_id,
-                {
-                    "ladder": "saved",
-                    "research_route": "belief_candidate",
-                    "research_route_why": triage.why,
-                },
-                db_path=db_path,
-            )
-        _audit_tap(
-            note_id=note_id,
-            channel=channel,
-            detail="belief_candidate",
-            llm_ran=llm_ran,
-            db_path=db_path,
-        )
-        return None
-
-    # research_task (explicit route or triage fail-open) — today's pre-B7
-    # behavior, now carrying a stated cost + a formatted deep-session prompt.
-    estimated_cost_usd = estimate_cost_usd(ticker)
-    session_prompt = build_session_prompt(claim, ticker=ticker)
-    task_id = create_task(
-        note_id=note_id,
-        claim=claim,
-        ticker=ticker,
-        estimated_cost_usd=estimated_cost_usd,
-        metadata={"session_prompt": session_prompt},
-        db_path=db_path,
-    )
-    _audit_tap(
-        note_id=note_id, channel=channel, detail=f"task:{task_id}", llm_ran=llm_ran, db_path=db_path
-    )
-    return task_id
-
-
-def detect_and_create_task(
-    note_id: int,
-    *,
-    db_path: Path | str | None = None,
-    call: IntentCall | None = None,
-    triage_call: TriageCall | None = None,
-    channel: str = "capture",
-) -> int | None:
-    """The fire-and-forget tap: classify a freshly-landed musing by INTENT and route.
-    A ``wondering`` runs the B7 routing triage (``research.triage.classify_triage``):
-    ``answer_now`` and ``belief_candidate`` create NO task (see :func:`_route_wondering`);
-    only ``research_task`` creates a ``proposed`` task (the inert chip) and returns its
-    id. A ``brief_artifact``/``stress_artifact`` records an engage-intent on the note
-    (the artifact pipeline picks it up) and returns None; an ``observation`` is inert.
-    NEVER raises — a detection failure must not affect capture.
-
-    Every invocation on a real musing leaves one ``tapped`` audit row whose
-    ``detail`` names the outcome (task:<id> | answer_now | belief_candidate |
-    engage:<mode> | observation | trust_zone | error:<Type>) — the tap's
-    liveness signal."""
-    note = get_note(note_id, db_path=db_path)
-    if note is None or note.kind != "musing":
-        return None
-    try:
-        # Captured musings are owner-authored — provenance 'derived'; the
-        # 'contains_fetched' inert marker is only ever on research proposals.
-        verdict = classify_intent(note.body, kind=note.kind, provenance="derived", call=call)
-    except Exception as exc:
-        _audit_tap(
-            note_id=note_id,
-            channel=channel,
-            detail=f"error:{type(exc).__name__}",
-            llm_ran=True,
-            db_path=db_path,
-        )
-        return None
-
-    llm_ran = verdict.gate == "llm"
-
-    if verdict.is_wondering:
-        claim = verdict.claim.strip() or note.body[:200]
-        return _route_wondering(
-            note_id=note_id,
-            claim=claim,
-            ticker=verdict.ticker,
-            channel=channel,
-            llm_ran=llm_ran,
-            triage_call=triage_call,
-            db_path=db_path,
-        )
-
-    if verdict.is_artifact:
-        mode = "stress" if verdict.intent == "stress_artifact" else "brief"
-        _record_engage_intent(note_id, verdict, mode, db_path=db_path)
-        _audit_tap(
-            note_id=note_id,
-            channel=channel,
-            detail=f"engage:{mode}",
-            llm_ran=llm_ran,
-            db_path=db_path,
-        )
-        return None
-
-    # observation — inert. 'trust_zone' distinguishes a pre-gate-filtered non-musing
-    # (no LLM) from a model-classified flat observation, for the tap-health line.
-    _audit_tap(
-        note_id=note_id,
-        channel=channel,
-        detail="trust_zone" if verdict.gate == "trust_zone" else "observation",
-        llm_ran=llm_ran,
-        db_path=db_path,
-    )
-    return None
-
-
-def _record_engage_intent(
-    note_id: int, verdict: object, mode: str, *, db_path: Path | str | None
-) -> None:
-    """Stamp the artifact-engage intent onto the note's context so the artifact
-    pipeline (Phase 2/3) can bind and brief it. Best-effort — never blocks the tap."""
-    from research.intent import IntentVerdict
-
-    if not isinstance(verdict, IntentVerdict):
-        return
-    patch_note_context(
-        note_id,
-        {
-            "engage_intent": {
-                "intent": verdict.intent,
-                "mode": mode,
-                "claim": verdict.claim,
-                "ticker": verdict.ticker,
-            }
-        },
-        db_path=db_path,
-    )

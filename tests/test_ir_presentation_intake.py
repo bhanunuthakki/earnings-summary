@@ -804,7 +804,7 @@ def test_legacy_file_failure_reports_partial_after_prior_managed_commit(
         return _classification(
             doc_type=DocType.IR_PRESENTATION
             if b"managed.pdf" in path.read_bytes()
-            else DocType.IR_PRESS_RELEASE
+            else DocType.IR_EVENT
         )
 
     monkeypatch.setattr(managed, "classify_ir_file", classify)
@@ -859,7 +859,7 @@ def test_legacy_classifier_uses_state_registry_and_restores_it_after_failure(
         return local
 
     def classify(*_args: object, **_kwargs: object) -> CategorizationResult:
-        return _classification(doc_type=DocType.IR_PRESS_RELEASE)
+        return _classification(doc_type=DocType.IR_EVENT)
 
     def fail(*_args: object, **_kwargs: object) -> dict[str, object]:
         assert get_registry() == local
@@ -1286,7 +1286,7 @@ def test_supported_legacy_fallback_is_limited_to_the_downloaded_file(
         if family in {"noncalendar", "noncalendar_period"}
         else DocType.IR_EVENT
         if family == "event"
-        else DocType.IR_PRESS_RELEASE
+        else DocType.IR_EARNINGS_ANNOUNCEMENT
     )
     seen: list[tuple[Path, str | None]] = []
 
@@ -1329,7 +1329,8 @@ def test_supported_legacy_fallback_is_limited_to_the_downloaded_file(
         assert row[1].startswith(period.isoformat())
         assert row[2] == url
         assert conn.execute("SELECT COUNT(*) FROM managed_ir_publications").fetchone()[0] == 0
-    assert (root / ".tmp" / "document_index.json").exists()
+    # Supporting calendar notices are registered but have no quarterly product index.
+    assert (root / ".tmp" / "document_index.json").exists() is (family != "unsupported")
 
 
 def test_denied_policy_does_not_download_or_stage(

@@ -390,9 +390,15 @@ Two additional wrinkles worth knowing about, both distinct from the mis-stamping
 
 **Historical fix (2026-07-02)**: `compute/kpi_extract_summaries.py::_TICKER_QUARTER_PERIOD_END` carried an explicit `year_offset` per quarter (not inferred from the month — Jan-FYE's Q4 and Oct-FYE's Q1 both land in January but roll to a different calendar year) and covers `AMAT`/`TOL`. `execution/backfill_fiscal_period_stamps.py` re-derives and corrects `documents.period_end` (and any dependent `kpi_facts.period_end` — `fiscal_period_type` is unaffected) for rows stamped before the fix; re-running `execution/backfill_llm_extracted_parents.py --apply` afterward resolves their `parent_document_id`.
 
-**Current owner (2026-10-22)**: `src/compute/fiscal_calendar.py::period_end_for` owns the shared endpoint calculation. `FILENAME_CALENDARS` owns the existing four filename overrides. Transcript and IR labels use the fiscal ending year. Summary filenames add one to the January-FYE label year before calling the shared calculation. Other summary/transcript tickers retain their calendar-year fallback. Existing IR helper imports remain available through `ir_uploads`.
+**Historical filename adapter owner (2026-10-22)**: `src/compute/fiscal_calendar.py::period_end_for` owns the shared endpoint calculation. `FILENAME_CALENDARS` owns the existing four filename overrides. Transcript and IR labels use the fiscal ending year. Summary filenames add one to the January-FYE label year before calling the shared calculation. Other summary/transcript tickers retain their calendar-year fallback. Existing IR helper imports remain available through `ir_uploads`.
 
 When extending filename coverage, update the shared membership and verify both filename conventions against the same calendar dates. Do not restore per-consumer date tables or infer a label convention from the month alone. The historical backfill description above records past repairs; `backfill_fiscal_period_stamps.py` is now read-only and rejects in-place writes.
+
+**Current document products (2026-10-26):** new transcript summaries use registered
+issuer bindings and source-backed fiscal selection. They do not derive identity
+or fiscal coordinates from summary filenames. Summary-derived KPI extraction is
+retired. The filename and parent-resolution notes above remain historical lineage
+for existing financial observations; they do not authorize new summary inputs.
 
 ## 3. Conflict resolution when sources disagree
 
@@ -518,7 +524,7 @@ Rules:
 | FMP statement extractors (`compute/income_statement`, `balance_sheet`, `cashflow`) | `json_path = "[<i>].<fmpField>"` — record index + field in the cached endpoint response | n/a (financial_facts has no excerpt column) |
 | `compute/as_reported.py` | `json_path = "[<i>].data.<xbrl_tag>"` | n/a |
 | `pipeline/sec_xbrl.py` (companyfacts) | `json_path = "facts.<ns>.<tag>.units.<unit>[<i>]"` | n/a |
-| `compute/kpi_extract_summaries.py` (LLM over quarterly summaries) | none (the source is a derived summary doc — quote is the anchor) | **yes** — the LLM returns the verbatim snippet per KPI; persisted clipped to 1024 chars |
+| Retired summary-derived KPI producer (historical observations only) | Existing derived-document parent/quote lineage remains explicit | Preserve the actual stored quote and required source bytes until dependency resolution |
 | `execution/extract_kpis_from_ir.py` (in-session PDF readout) | `pdf_page` via per-value `"locator"` in the manifest JSON | yes, via per-value `"source_excerpt"` |
 | `compute/fmp_derived_kpis.py` | none **by design** — derived series have no single source position; provenance is the chain of source facts | n/a |
 | `ir_pipeline/ingest.py` (IR spreadsheet) | none — spreadsheet cells have no JSON/PDF position in the contract | n/a (deterministic parse, no quote) |

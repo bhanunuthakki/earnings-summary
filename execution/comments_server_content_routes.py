@@ -404,16 +404,6 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
         response.headers["Cache-Control"] = "no-store"
         return response
 
-    @app.route("/api/peek/weekly-packet", methods=["GET"])
-    def peek_weekly_packet():
-        """Task 3 (wave3b): the read-only quick-look behind the Home
-        open-loops band's Sunday-packet line — no web reply surface exists
-        (verdicts are given on Telegram), so the doorway peeks the packet
-        state instead of navigating anywhere. Always 200s; never raises."""
-        from pipeline.open_loops import render_weekly_packet_peek
-
-        return Response(render_weekly_packet_peek(db_path), mimetype="text/html")
-
     @app.route("/api/peek/whatif", methods=["GET"])
     def peek_whatif():
         from pipeline.peeks import render_what_if_peek
@@ -435,25 +425,6 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             funding_mode=funding_mode,
             db_path=db_path,
         )
-        if html is None:
-            abort(404)
-        return Response(html, mimetype="text/html")
-
-    @app.route("/api/peek/etf_workup", methods=["GET"])
-    def peek_etf_workup():
-        from pipeline.etf_workup import render_etf_workup
-
-        try:
-            ticker = context.safe_ticker(request.args.get("ticker") or "")
-        except ValueError:
-            abort(404)
-        try:
-            page = int(request.args.get("page", "0"))
-        except (TypeError, ValueError):
-            abort(404)
-        if page < 0:
-            abort(404)
-        html = render_etf_workup(context.get_read_db(), repo_root, db_path, ticker, page=page)
         if html is None:
             abort(404)
         return Response(html, mimetype="text/html")

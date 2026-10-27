@@ -58,11 +58,7 @@ CLASSIFIER_PURPOSES: tuple[str, ...] = (
     "intake_classifier",
     "news_structuring",
     "decision_conditions_extract",
-    "capture_intent",
-    "ledger_reply_intent",
-    "triage_route_suggest",
     "segment_10q_period_disambiguate",
-    "capture_triage",
     # Decision Draft parse (P2.1, personal_investment_partner_prd.md §9.2/§10.5)
     # — the async capture-triage tap that turns a landed free-text/voice
     # musing into a confirmable decision draft. Golden set covers the PRD's
@@ -239,168 +235,6 @@ def load_decision_conditions_golden(path: Path) -> list[ClassifierCase]:
                 list(cast("list[object]", expected)),
             )
         )
-    if errors:
-        raise ValueError(f"golden file invalid at {path}: " + "; ".join(errors))
-    return cases
-
-
-def load_capture_intent_golden(path: Path) -> list[ClassifierCase]:
-    """Cases for research.intent.classify_intent_for_eval: a musing ``text``;
-    ``expected`` is ``{intent: <one of INTENTS>, ticker: str|None}`` (the fields the
-    intent gate routes on). A wrong intent routes the musing to the wrong action —
-    the whole failure mode — so it is what's pinned."""
-    from research.intent import INTENTS
-
-    errors: list[str] = []
-    seen: set[str] = set()
-    cases: list[ClassifierCase] = []
-    for i, c in enumerate(load_golden_doc(path, purpose="capture_intent")):
-        label = f"cases[{i}]"
-        case_id = _require_str(c, "id", label, errors)
-        if case_id in seen:
-            errors.append(f"{label}: duplicate id {case_id!r}")
-        seen.add(case_id)
-        text = _require_str(c, "text", label, errors)
-        expected = c.get("expected")
-        if not isinstance(expected, dict):
-            errors.append(f"{label} ({case_id}): `expected` must be an object")
-            expected = {}
-        exp = cast("dict[str, object]", expected)
-        intent = exp.get("intent")
-        if not isinstance(intent, str) or intent not in INTENTS:
-            errors.append(f"{label} ({case_id}): expected.intent must be one of {list(INTENTS)}")
-        cases.append(ClassifierCase(case_id, {"text": text}, exp))
-    if errors:
-        raise ValueError(f"golden file invalid at {path}: " + "; ".join(errors))
-    return cases
-
-
-def load_ledger_reply_intent_golden(path: Path) -> list[ClassifierCase]:
-    """Cases for onmymind.reply.classify_reply_for_eval: a feed ``card_text`` +
-    the owner's ``reply_text``; ``expected`` is ``{intent: <one of REPLY_INTENTS>}``.
-    A wrong intent routes the reply to the wrong action (research/save/worldview/
-    dismiss vs converse), so the intent enum is the only pinned field."""
-    from onmymind.reply import REPLY_INTENTS
-
-    errors: list[str] = []
-    seen: set[str] = set()
-    cases: list[ClassifierCase] = []
-    for i, c in enumerate(load_golden_doc(path, purpose="ledger_reply_intent")):
-        label = f"cases[{i}]"
-        case_id = _require_str(c, "id", label, errors)
-        if case_id in seen:
-            errors.append(f"{label}: duplicate id {case_id!r}")
-        seen.add(case_id)
-        card_text = _require_str(c, "card_text", label, errors)
-        reply_text = _require_str(c, "reply_text", label, errors)
-        expected = c.get("expected")
-        if not isinstance(expected, dict):
-            errors.append(f"{label} ({case_id}): `expected` must be an object")
-            expected = {}
-        exp = cast("dict[str, object]", expected)
-        intent = exp.get("intent")
-        if not isinstance(intent, str) or intent not in REPLY_INTENTS:
-            errors.append(
-                f"{label} ({case_id}): expected.intent must be one of {list(REPLY_INTENTS)}"
-            )
-        cases.append(
-            ClassifierCase(case_id, {"card_text": card_text, "reply_text": reply_text}, exp)
-        )
-    if errors:
-        raise ValueError(f"golden file invalid at {path}: " + "; ".join(errors))
-    return cases
-
-
-def load_triage_route_suggest_golden(path: Path) -> list[ClassifierCase]:
-    """Cases for user_state.triage_suggest.suggest_route_for_eval: a parked
-    ``comment_text`` (+ optional ``context_line``); ``expected`` is
-    ``{intent: <a ROUTABLE_INTENTS member OR null for park>}``. A null intent is a
-    VALID graded outcome (the comment should stay a manual pick) — the loader
-    accepts it exactly like capture_intent's null ticker."""
-    from user_state.notes import ROUTABLE_INTENTS
-
-    errors: list[str] = []
-    seen: set[str] = set()
-    cases: list[ClassifierCase] = []
-    for i, c in enumerate(load_golden_doc(path, purpose="triage_route_suggest")):
-        label = f"cases[{i}]"
-        case_id = _require_str(c, "id", label, errors)
-        if case_id in seen:
-            errors.append(f"{label}: duplicate id {case_id!r}")
-        seen.add(case_id)
-        comment_text = _require_str(c, "comment_text", label, errors)
-        context_raw = c.get("context_line", "")
-        context_line = context_raw if isinstance(context_raw, str) else ""
-        expected = c.get("expected")
-        if not isinstance(expected, dict):
-            errors.append(f"{label} ({case_id}): `expected` must be an object")
-            expected = {}
-        exp = cast("dict[str, object]", expected)
-        # `intent` must be present; None (park) is valid, else a ROUTABLE member.
-        if "intent" not in exp:
-            errors.append(f"{label} ({case_id}): expected.intent missing (use null for park)")
-        else:
-            intent = exp.get("intent")
-            if intent is not None and (
-                not isinstance(intent, str) or intent not in ROUTABLE_INTENTS
-            ):
-                errors.append(
-                    f"{label} ({case_id}): expected.intent must be null (park) or one of "
-                    f"{list(ROUTABLE_INTENTS)}"
-                )
-        cases.append(
-            ClassifierCase(
-                case_id, {"comment_text": comment_text, "context_line": context_line}, exp
-            )
-        )
-    if errors:
-        raise ValueError(f"golden file invalid at {path}: " + "; ".join(errors))
-    return cases
-
-
-def load_capture_triage_golden(path: Path) -> list[ClassifierCase]:
-    """Cases for capture.triage.classify_capture_triage_for_eval: a case dict
-    carrying its own ``text`` + ``context`` (tenets/stances/musings/decisions —
-    the same shape ``capture.triage._gather_from_case`` renders), so the golden
-    set never needs a fixture DB. ``expected`` is ``{route: <one of ROUTES>,
-    conflicts_with: <token or null>}`` — a wrong route OR a wrong/fabricated
-    citation IS the failure mode this classifier exists to prevent."""
-    from capture.triage import ROUTES
-
-    errors: list[str] = []
-    seen: set[str] = set()
-    cases: list[ClassifierCase] = []
-    for i, c in enumerate(load_golden_doc(path, purpose="capture_triage")):
-        label = f"cases[{i}]"
-        case_id = _require_str(c, "id", label, errors)
-        if case_id in seen:
-            errors.append(f"{label}: duplicate id {case_id!r}")
-        seen.add(case_id)
-        text = _require_str(c, "text", label, errors)
-        context_raw = c.get("context")
-        if not isinstance(context_raw, dict):
-            errors.append(f"{label} ({case_id}): `context` must be an object")
-        context: dict[str, object] = (
-            cast("dict[str, object]", context_raw) if isinstance(context_raw, dict) else {}
-        )
-        expected = c.get("expected")
-        if not isinstance(expected, dict):
-            errors.append(f"{label} ({case_id}): `expected` must be an object")
-            expected = {}
-        exp = cast("dict[str, object]", expected)
-        route = exp.get("route")
-        if not isinstance(route, str) or route not in ROUTES:
-            errors.append(f"{label} ({case_id}): expected.route must be one of {list(ROUTES)}")
-        if "conflicts_with" not in exp:
-            errors.append(f"{label} ({case_id}): expected.conflicts_with missing (use null)")
-        else:
-            conflicts_with = exp.get("conflicts_with")
-            if conflicts_with is not None and not isinstance(conflicts_with, str):
-                errors.append(
-                    f"{label} ({case_id}): expected.conflicts_with must be a string or null"
-                )
-        case_payload: dict[str, object] = {"text": text, "context": context}
-        cases.append(ClassifierCase(case_id, {"case": case_payload}, exp))
     if errors:
         raise ValueError(f"golden file invalid at {path}: " + "; ".join(errors))
     return cases
@@ -734,199 +568,6 @@ def grade_news_structuring_case(
         actual_json=dumps_compact({"n_rows": n, "violations": violations[:10]}),
         failure_stage=None if passed else "contract",
         judge_rationale=(f"{n} rows, all contract-valid" if passed else "; ".join(violations[:5])),
-        latency_ms=latency_ms,
-    )
-
-
-def grade_capture_intent_case(
-    case: ClassifierCase, *, fn: Callable[..., dict[str, object]]
-) -> CaseResult:
-    """The intent gate: the returned ``intent`` enum must match (a wrong intent
-    routes the musing to the wrong action — observation/wondering/brief/stress each
-    fire a different downstream). When the golden pins a ticker, a ticker mismatch
-    drops a full pass to partial credit 0.5 (right intent, wrong name)."""
-    expected = cast("dict[str, object]", case.expected)
-    exp_intent = str(expected.get("intent") or "")
-    t0 = time.monotonic()
-    try:
-        actual = fn(cast("str", case.inputs["text"]))
-    except Exception as exc:
-        _abort_on_hard_stop(exc, "capture_intent", case.case_id)
-        raise
-    latency_ms = int((time.monotonic() - t0) * 1000)
-    act = actual  # fn is typed dict[str, object]; classify_intent_for_eval returns one
-    act_intent = str(act.get("intent") or "")
-    intent_ok = act_intent == exp_intent
-    exp_ticker = expected.get("ticker")
-    ticker_ok = True
-    if intent_ok and isinstance(exp_ticker, str) and exp_ticker.strip():
-        act_ticker = act.get("ticker")
-        ticker_ok = (
-            isinstance(act_ticker, str) and act_ticker.strip().upper() == exp_ticker.strip().upper()
-        )
-    passed = intent_ok and ticker_ok
-    score = 1.0 if passed else (0.5 if intent_ok else 0.0)
-    return CaseResult(
-        case_id=case.case_id,
-        question=f"capture_intent/{case.case_id}",
-        passed=passed,
-        score=score,
-        expected_json=dumps_compact({"intent": exp_intent, "ticker": exp_ticker}),
-        actual_json=dumps_compact(act),
-        failure_stage=None if passed else ("ticker" if intent_ok else "intent"),
-        judge_rationale=None
-        if passed
-        else f"expected intent={exp_intent!r} ticker={exp_ticker!r}, got {act_intent!r}",
-        latency_ms=latency_ms,
-    )
-
-
-def grade_ledger_reply_intent_case(
-    case: ClassifierCase, *, fn: Callable[..., dict[str, object]]
-) -> CaseResult:
-    """The reply router: the returned ``intent`` enum must exactly match. Each of
-    the six intents (research/save/worldview/dismiss/question/note) fires a
-    different downstream, so a wrong intent IS the whole failure mode — exact
-    match, score 1.0/0.0, no partial credit."""
-    expected = cast("dict[str, object]", case.expected)
-    exp_intent = str(expected.get("intent") or "")
-    t0 = time.monotonic()
-    try:
-        actual = fn(
-            cast("str", case.inputs["card_text"]),
-            cast("str", case.inputs["reply_text"]),
-        )
-    except Exception as exc:
-        _abort_on_hard_stop(exc, "ledger_reply_intent", case.case_id)
-        raise
-    latency_ms = int((time.monotonic() - t0) * 1000)
-    act = actual  # fn is typed dict[str, object]; classify_reply_for_eval returns one
-    act_intent = str(act.get("intent") or "")
-    passed = act_intent == exp_intent
-    return CaseResult(
-        case_id=case.case_id,
-        question=f"ledger_reply_intent/{case.case_id}",
-        passed=passed,
-        score=1.0 if passed else 0.0,
-        expected_json=dumps_compact({"intent": exp_intent}),
-        actual_json=dumps_compact(act),
-        failure_stage=None if passed else "intent",
-        judge_rationale=None if passed else f"expected intent={exp_intent!r}, got {act_intent!r}",
-        latency_ms=latency_ms,
-    )
-
-
-def grade_capture_triage_case(
-    case: ClassifierCase, *, fn: Callable[..., dict[str, object]]
-) -> CaseResult:
-    """The capture->answer primary gate: ``route`` must match exactly (each of
-    the three routes fires a completely different downstream — answer via the
-    engine, a deterministic challenge, or nothing at all). When the expected
-    route is ``contradiction``, a route match with the WRONG (or a fabricated/
-    missing) ``conflicts_with`` token drops to partial credit — the grounding
-    gate is what stops a hallucinated citation, so route-right/citation-wrong
-    is a real miss, not a full pass."""
-    expected = cast("dict[str, object]", case.expected)
-    exp_route = str(expected.get("route") or "")
-    exp_token = expected.get("conflicts_with")
-    t0 = time.monotonic()
-    try:
-        actual = fn(cast("dict[str, object]", case.inputs["case"]))
-    except Exception as exc:
-        _abort_on_hard_stop(exc, "capture_triage", case.case_id)
-        raise
-    latency_ms = int((time.monotonic() - t0) * 1000)
-    act = actual  # fn is typed dict[str, object]; classify_capture_triage_for_eval returns one
-    act_route = str(act.get("route") or "")
-    route_ok = act_route == exp_route
-    token_ok = True
-    if (
-        route_ok
-        and exp_route == "contradiction"
-        and isinstance(exp_token, str)
-        and exp_token.strip()
-    ):
-        act_token = act.get("conflicts_with")
-        token_ok = isinstance(act_token, str) and act_token.strip() == exp_token.strip()
-    passed = route_ok and token_ok
-    score = 1.0 if passed else (0.5 if route_ok else 0.0)
-    return CaseResult(
-        case_id=case.case_id,
-        question=f"capture_triage/{case.case_id}",
-        passed=passed,
-        score=score,
-        expected_json=dumps_compact({"route": exp_route, "conflicts_with": exp_token}),
-        actual_json=dumps_compact(act),
-        failure_stage=None if passed else ("conflicts_with" if route_ok else "route"),
-        judge_rationale=None
-        if passed
-        else f"expected route={exp_route!r} conflicts_with={exp_token!r}, got {act_route!r}",
-        latency_ms=latency_ms,
-    )
-
-
-def grade_triage_route_suggest_case(
-    case: ClassifierCase, *, fn: Callable[..., dict[str, object]]
-) -> CaseResult:
-    """Second-chance routing for parked comments. Intent-correctness is the whole
-    grade, weighted by HARM asymmetry (a wrong high-confidence answer auto-routes —
-    the worst outcome):
-
-      * intent correct (incl. park==park)            → 1.0
-      * model parked when a route was expected       → 0.5 (safe miss: stays manual)
-      * wrong route, LOW confidence                  → 0.25 (only a suggestion)
-      * wrong route, HIGH confidence                 → 0.0 (auto-routes wrongly — worst)
-
-    ``expected.intent`` is ``None`` for a park case; the model returns ``intent``
-    None too when it parks."""
-    expected = cast("dict[str, object]", case.expected)
-    exp_intent_raw = expected.get("intent")
-    exp_intent = exp_intent_raw if isinstance(exp_intent_raw, str) else None
-    t0 = time.monotonic()
-    try:
-        actual = fn(
-            cast("str", case.inputs["comment_text"]),
-            cast("str", case.inputs["context_line"]),
-        )
-    except Exception as exc:
-        _abort_on_hard_stop(exc, "triage_route_suggest", case.case_id)
-        raise
-    latency_ms = int((time.monotonic() - t0) * 1000)
-    act = actual  # fn is typed dict[str, object]; suggest_route_for_eval returns one
-    act_intent_raw = act.get("intent")
-    act_intent = act_intent_raw if isinstance(act_intent_raw, str) else None
-    act_conf = str(act.get("confidence") or "low").strip().lower()
-
-    if act_intent == exp_intent:
-        score, stage, why = 1.0, None, None
-    elif act_intent is None:
-        # Model parked when a route was expected — a recall miss, but harmless
-        # (the row stays a manual pick, nothing is mis-filed).
-        score, stage, why = 0.5, "under_route", f"parked; expected route {exp_intent!r}"
-    elif act_conf == "high":
-        # Wrong route at high confidence — the sweep auto-files it. Worst case.
-        score, stage, why = (
-            0.0,
-            "auto_route",
-            f"wrong HIGH-confidence route {act_intent!r}, expected {exp_intent!r}",
-        )
-    else:
-        # Wrong route at low confidence — surfaces only as a one-tap suggestion.
-        score, stage, why = (
-            0.25,
-            "route",
-            f"wrong low-confidence route {act_intent!r}, expected {exp_intent!r}",
-        )
-    passed = score == 1.0
-    return CaseResult(
-        case_id=case.case_id,
-        question=f"triage_route_suggest/{case.case_id}",
-        passed=passed,
-        score=score,
-        expected_json=dumps_compact({"intent": exp_intent}),
-        actual_json=dumps_compact(act),
-        failure_stage=stage,
-        judge_rationale=why,
         latency_ms=latency_ms,
     )
 
@@ -1388,26 +1029,10 @@ def _production_fn(purpose: str) -> Callable[..., object]:
         import decision_conditions
 
         return cast("Callable[..., object]", decision_conditions.extract_conditions)
-    if purpose == "capture_intent":
-        import research.intent as intent
-
-        return cast("Callable[..., object]", intent.classify_intent_for_eval)
-    if purpose == "ledger_reply_intent":
-        import onmymind.reply as reply
-
-        return cast("Callable[..., object]", reply.classify_reply_for_eval)
-    if purpose == "triage_route_suggest":
-        import user_state.triage_suggest as triage_suggest
-
-        return cast("Callable[..., object]", triage_suggest.suggest_route_for_eval)
     if purpose == "segment_10q_period_disambiguate":
         import compute.segment_quarterly_10q as segment_quarterly_10q
 
         return cast("Callable[..., object]", segment_quarterly_10q.disambiguate_periods_for_eval)
-    if purpose == "capture_triage":
-        import capture.triage as triage
-
-        return cast("Callable[..., object]", triage.classify_capture_triage_for_eval)
     if purpose == "decision_draft_parse":
         import capture.decision_draft as decision_draft
 
@@ -1447,21 +1072,9 @@ def run_classifier_eval(
     elif purpose == "decision_conditions_extract":
         cases = load_decision_conditions_golden(golden_path)
         grade = grade_decision_conditions_case
-    elif purpose == "capture_intent":
-        cases = load_capture_intent_golden(golden_path)
-        grade = grade_capture_intent_case
-    elif purpose == "ledger_reply_intent":
-        cases = load_ledger_reply_intent_golden(golden_path)
-        grade = grade_ledger_reply_intent_case
-    elif purpose == "triage_route_suggest":
-        cases = load_triage_route_suggest_golden(golden_path)
-        grade = grade_triage_route_suggest_case
     elif purpose == "segment_10q_period_disambiguate":
         cases = load_segment_10q_period_disambiguate_golden(golden_path)
         grade = grade_segment_10q_period_disambiguate_case
-    elif purpose == "capture_triage":
-        cases = load_capture_triage_golden(golden_path)
-        grade = grade_capture_triage_case
     elif purpose == "decision_draft_parse":
         cases = load_decision_draft_parse_golden(golden_path)
         grade = grade_decision_draft_parse_case

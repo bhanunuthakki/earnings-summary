@@ -19,7 +19,6 @@ from operations.models import (
     ServiceRow,
     ServiceState,
 )
-from operations.readme_governance import ReadmeGovernanceStatus
 from operations.registry import build_operations_registry
 from operations.snapshot import collect_operations_snapshot
 from pipeline.operations_panel import (
@@ -58,23 +57,6 @@ def _view(tmp_path: Path) -> OperationsPanelView:
     return build_operations_panel_view(registry, snapshot)
 
 
-def _readme_status(
-    state: Literal["not_run", "approved_preview", "applied", "rejected", "stale", "invalid"],
-    tone: Literal["ok", "warn", "bad"],
-) -> ReadmeGovernanceStatus:
-    return ReadmeGovernanceStatus(
-        state=state,
-        tone=tone,
-        run_id=None if state == "not_run" else "a" * 32,
-        verdict=None if state == "not_run" else ("pass" if tone == "ok" else "revise"),
-        attempts=0 if state == "not_run" else 1,
-        current_sha256="b" * 64,
-        candidate_sha256=None if state == "not_run" else "c" * 64,
-        can_apply=state == "approved_preview",
-        recorded_at=None if state == "not_run" else OBSERVED_AT,
-    )
-
-
 def test_operations_projection_groups_every_declared_task_wrapper_and_step(
     tmp_path: Path,
 ) -> None:
@@ -87,13 +69,11 @@ def test_operations_projection_groups_every_declared_task_wrapper_and_step(
         task.wrapper for task in registry.scheduled_tasks
     }
     assert all(task.steps for task in view.tasks)
-    capture = next(task for task in view.tasks if task.service_owned)
-    assert capture.declared_owner == "Managed service"
-    assert capture.scheduler_state == "Unavailable"
-    assert capture.runtime.state == "Unavailable"
-    assert capture.runtime.recorded_label == "Evidence time unavailable"
-    assert capture.attention is False
-    assert capture.runtime_owner.startswith("Managed service")
+    assert all(task.declared_owner == "Windows Task Scheduler" for task in view.tasks)
+    assert all(task.scheduler_state == "Unavailable" for task in view.tasks)
+    assert all(task.runtime.state == "Unavailable" for task in view.tasks)
+    assert all(task.runtime.recorded_label == "Evidence time unavailable" for task in view.tasks)
+    assert not any(task.attention for task in view.tasks)
     assert all(step.execution_rails for task in view.tasks for step in task.steps)
 
 
@@ -132,7 +112,6 @@ def test_missing_scheduler_receipt_is_unavailable_for_every_expectation_policy(
     assert {task.scheduler_expectation for task in registry.scheduled_tasks} == {
         "required_enabled",
         "required_disabled",
-        "absent_service_owned",
     }
 
 
@@ -140,9 +119,7 @@ def test_noncurrent_service_observation_cannot_promote_retained_running_to_green
     tmp_path: Path,
 ) -> None:
     registry = build_operations_registry(PROJECT_ROOT)
-    capture_service = next(
-        service for service in registry.services if service.role == "capture_poller"
-    )
+    capture_service = next(service for service in registry.services if service.role == "dashboard")
     base = collect_operations_snapshot(
         registry,
         repo_root=tmp_path,
@@ -159,7 +136,7 @@ def test_noncurrent_service_observation_cannot_promote_retained_running_to_green
                 values=tuple(
                     SchedulerTaskRow(
                         task_name=task.task_name,
-                        state="Missing" if task.service_owned else "Ready",
+                        state="Ready",
                         registry_match="expected",
                         scheduler_expectation=task.scheduler_expectation,
                         expectation_match=True,
@@ -184,16 +161,15 @@ def test_noncurrent_service_observation_cannot_promote_retained_running_to_green
         }
     )
 
-    task = next(
-        task for task in build_operations_panel_view(registry, snapshot).tasks if task.service_owned
+    row = next(
+        row
+        for row in build_operations_panel_view(registry, snapshot).runtime_rows
+        if row.label == "Managed service · es-dashboard"
     )
 
-    assert task.runtime.state == "Unavailable"
-    assert task.runtime.tone == "warn"
-    assert task.runtime.recorded_label == "Evidence time 2026-08-13 11:30 UTC"
-    assert task.service_runtime_state is None
-    assert task.service_runtime_tone is None
-    assert task.attention is False
+    assert row.evidence.state == "Unavailable"
+    assert row.evidence.tone == "warn"
+    assert row.evidence.recorded_label == "Evidence time 2026-08-13 11:30 UTC"
 
 
 def test_invalid_runtime_domains_count_once_without_task_fanout(tmp_path: Path) -> None:
@@ -277,79 +253,18 @@ def test_linked_dispositions_resolve_to_reachable_related_views_and_sections(
         assert f"workOsOpenRelatedView('{item.endpoint}', '{item.label}')" in html
 
 
-@pytest.mark.parametrize(
-    ("state", "tone"),
-    (
-        ("not_run", "warn"),
-        ("stale", "warn"),
-        ("rejected", "warn"),
-        ("invalid", "bad"),
-    ),
-)
-def test_readme_governance_failures_contribute_to_headline_attention(
-    tmp_path: Path,
-    state: Literal["not_run", "stale", "rejected", "invalid"],
-    tone: Literal["warn", "bad"],
-) -> None:
-    registry = build_operations_registry(PROJECT_ROOT)
-    snapshot = collect_operations_snapshot(
-        registry,
-        repo_root=tmp_path,
-        conn=sqlite3.connect(":memory:"),
-        observed_at=OBSERVED_AT,
-    )
-    baseline = build_operations_panel_view(
-        registry, snapshot, readme_status=_readme_status("applied", "ok")
-    )
-    status = _readme_status(state, tone)
-
-    view = build_operations_panel_view(registry, snapshot, readme_status=status)
-    html = render_operations_panel(view)
-
-    if state in {"not_run", "stale"}:
-        assert view.attention_count == baseline.attention_count
-        assert view.evidence_gap_count == baseline.evidence_gap_count + 1
-    else:
-        assert view.attention_count == baseline.attention_count + 1
-        assert view.evidence_gap_count == baseline.evidence_gap_count
-    assert view.runtime_summary_tone == "warn"
-    assert "operational or governance observation(s) need attention" in html
-
-
-def test_missing_readme_governance_status_is_invalid_and_contributes_attention(
-    tmp_path: Path,
-) -> None:
-    registry = build_operations_registry(PROJECT_ROOT)
-    snapshot = collect_operations_snapshot(
-        registry,
-        repo_root=tmp_path,
-        conn=sqlite3.connect(":memory:"),
-        observed_at=OBSERVED_AT,
-    )
-    healthy = build_operations_panel_view(
-        registry, snapshot, readme_status=_readme_status("applied", "ok")
-    )
-
-    missing = build_operations_panel_view(registry, snapshot)
-    html = render_operations_panel(missing)
-
-    assert missing.attention_count == healthy.attention_count + 1
-    governance = html.split('id="operations-pane-governance"', 1)[1]
-    assert "Invalid" in governance
-
-
-def test_operations_renderer_has_governance_tab_and_related_views(
+def test_operations_renderer_has_four_tabs_and_related_views(
     tmp_path: Path,
 ) -> None:
     html = render_operations_panel(_view(tmp_path))
     tablist = html.split('role="tablist"', 1)[1].split("</div>", 1)[0]
 
-    assert tablist.count('role="tab"') == 5
+    assert tablist.count('role="tab"') == 4
     assert ">Overview</button>" in tablist
     assert ">Attention</button>" in tablist
     assert ">Jobs</button>" in tablist
     assert ">Runtime &amp; Recovery</button>" in tablist
-    assert ">Governance</button>" in tablist
+    assert ">Governance</button>" not in tablist
     assert ">Settings</a>" not in tablist
     assert ">Data provenance</a>" not in tablist
     assert ">Settings</button>" in html
@@ -366,15 +281,9 @@ def test_operations_renderer_has_governance_tab_and_related_views(
     assert "k-chip-tab" in tablist
     assert ".operations-tab{min-block-size:var(--touch-target-size)}" in OPERATIONS_STYLE
     assert 'data-operations-task-card="true"' in html
-    assert 'id="operations-pane-governance"' in html
-    assert "README stewardship" in html
-    assert 'data-readme-action="preview"' in html
-    assert 'data-readme-action="apply"' in html
-    assert "Preview &amp; judge" in html
-    assert "Apply approved candidate" in html
-    assert "fetch('/actions/readme-update'" in html
-    assert "readmeCanApply = false" in html
-    assert "new EventSource" in html
+    assert "data-readme-" not in html
+    assert "/actions/readme-update" not in html
+    assert "/api/readme-governance/status" not in html
 
 
 def test_operations_renderer_uses_card_title_for_the_card_heading(tmp_path: Path) -> None:
@@ -397,7 +306,7 @@ def test_operations_health_views_remain_read_only_truthful_and_sanitize_evidence
     assert str(tmp_path) not in html
     assert "canonical job receipt" in html
     assert "No runtime receipt supplied" in html
-    health_views = html.split('id="operations-pane-governance"', 1)[0]
+    health_views = html
     assert "<form" not in health_views
     assert 'method="post"' not in health_views.casefold()
     assert "/actions/" not in health_views
@@ -665,9 +574,7 @@ def test_service_runtime_state_is_separate_from_receipt_freshness(
         conn=sqlite3.connect(":memory:"),
         observed_at=OBSERVED_AT,
     )
-    capture_service = next(
-        service for service in registry.services if service.role == "capture_poller"
-    )
+    capture_service = next(service for service in registry.services if service.role == "dashboard")
     snapshot = snapshot.model_copy(
         update={
             "services": ServiceObservation(
@@ -687,10 +594,10 @@ def test_service_runtime_state_is_separate_from_receipt_freshness(
                 values=tuple(
                     SchedulerTaskRow(
                         task_name=task.task_name,
-                        state="Missing" if task.service_owned else "Ready",
+                        state="Ready",
                         registry_match="expected",
                         scheduler_expectation=task.scheduler_expectation,
-                        expectation_match=task.service_owned,
+                        expectation_match=True,
                     )
                     for task in registry.scheduled_tasks
                 ),
@@ -699,12 +606,11 @@ def test_service_runtime_state_is_separate_from_receipt_freshness(
     )
 
     view = build_operations_panel_view(registry, snapshot)
-    task = next(item for item in view.tasks if item.service_owned)
+    row = next(row for row in view.runtime_rows if row.label == "Managed service · es-dashboard")
     html = render_operations_panel(view)
 
-    assert task.runtime.state == "Current"
-    assert task.service_runtime_state == state
-    assert task.service_runtime_tone == tone
+    assert row.evidence.state == state
+    assert row.evidence.tone == tone
     assert f">{state}</span>" in html
     assert "Managed-service cached receipt" in html
 
@@ -719,9 +625,6 @@ def test_residual_service_attention_sorts_before_healthy_tasks(
         repo_root=tmp_path,
         conn=sqlite3.connect(":memory:"),
         observed_at=OBSERVED_AT,
-    )
-    capture_service = next(
-        service for service in registry.services if service.role == "capture_poller"
     )
     healthy_receipts = tuple(
         JobReceiptObservation(
@@ -765,7 +668,7 @@ def test_residual_service_attention_sorts_before_healthy_tasks(
                 evidence_source="service:cached",
                 evidence_recorded_at=OBSERVED_AT,
                 values=(
-                    ServiceRow(name=capture_service.name, state=state, registry_match="expected"),
+                    ServiceRow(name="unexpected-service", state=state, registry_match="unexpected"),
                 ),
             ),
             "job_receipts": healthy_receipts,
@@ -777,7 +680,7 @@ def test_residual_service_attention_sorts_before_healthy_tasks(
     healthy_tasks = tuple(task for task in view.tasks if not task.attention)
 
     assert service_task.attention is True
-    assert service_task.attention_rank == 3
+    assert service_task.attention_rank == 0
     assert healthy_tasks
     assert all(service_task.attention_rank < task.attention_rank for task in healthy_tasks)
     assert view.tasks.index(service_task) < min(view.tasks.index(task) for task in healthy_tasks)
@@ -877,9 +780,7 @@ def test_every_registered_service_is_visible_and_nonrunning_state_gets_attention
                     SchedulerTaskRow(
                         task_name=task.task_name,
                         state=(
-                            "Missing"
-                            if task.service_owned
-                            else "Disabled"
+                            "Disabled"
                             if task.scheduler_expectation == "required_disabled"
                             else "Ready"
                         ),
@@ -899,9 +800,7 @@ def test_every_registered_service_is_visible_and_nonrunning_state_gets_attention
             ),
         }
     )
-    running = build_operations_panel_view(
-        registry, running_snapshot, readme_status=_readme_status("applied", "ok")
-    )
+    running = build_operations_panel_view(registry, running_snapshot)
     dashboard = next(service for service in registry.services if service.role == "dashboard")
     stopped_rows = tuple(
         row.model_copy(update={"state": "Stopped"}) if row.name == dashboard.name else row
@@ -911,9 +810,7 @@ def test_every_registered_service_is_visible_and_nonrunning_state_gets_attention
         update={"services": running_snapshot.services.model_copy(update={"values": stopped_rows})}
     )
 
-    stopped = build_operations_panel_view(
-        registry, stopped_snapshot, readme_status=_readme_status("applied", "ok")
-    )
+    stopped = build_operations_panel_view(registry, stopped_snapshot)
     html = render_operations_panel(stopped)
     runtime = html.split('id="operations-pane-runtime"', 1)[1]
 
@@ -982,8 +879,7 @@ def test_jobs_have_attention_filter_search_and_responsive_cards(tmp_path: Path) 
     assert 'aria-live="polite"' in html
     assert ":focus-visible" in html
     # The manual-only backfill has no Scheduler or Operations task card.
-    # On-demand lens retirement leaves 42 tasks, including semantic review.
-    assert html.count('data-operations-task-card="true"') == 42
+    assert html.count('data-operations-task-card="true"') == 29
     assert "monthly_p3_refresh" not in html
     assert "weekly_synthesis" not in html
     assert "weekly_p2_lens_refresh" not in html

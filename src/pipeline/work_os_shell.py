@@ -261,7 +261,7 @@ def _render_evaluation_shell() -> str:
     <div>
       <div class="k-card-meta">Research Engine · Company research and portfolio context</div>
       <h1 class="k-card-title" id="workOsEvaluationSurfaceHeading">Evaluation</h1>
-      <p class="k-card-meta">Review company candidates. ETFs retain portfolio context and saved research.</p>
+      <p class="k-card-meta">Review company candidates. ETFs remain available for portfolio context.</p>
     </div>
     <div class="research-actions">
       <span class="k-pill" id="workOsEvaluationSurfaceCount">Loading</span>

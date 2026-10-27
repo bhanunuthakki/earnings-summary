@@ -218,15 +218,13 @@ def test_tracked_complete_collection_still_holds_for_deferred_verification(
     receipt = capture_compatibility_evidence(root, baseline)
     receipts = receipt.legacy_route_golden
 
-    assert len(receipts) == 25
-    assert sum(receipt.cases for receipt in receipts) == 324
+    assert len(receipts) == 23
+    assert sum(receipt.cases for receipt in receipts) == 279
     assert {item.path: item.cases for item in receipts} == {
         "evals/golden/ask_claim_audit.json": 10,
         "evals/golden/ask_claim_grounding.json": 18,
         "evals/golden/ask_evidence_followup.json": 6,
         "evals/golden/ask_pack_router.json": 26,
-        "evals/golden/capture_intent.json": 20,
-        "evals/golden/capture_triage.json": 15,
         "evals/golden/decision_conditions_extract.json": 12,
         "evals/golden/decision_draft_parse.json": 19,
         "evals/golden/disclosure_item_specificity_triage.json": 25,
@@ -235,7 +233,6 @@ def test_tracked_complete_collection_still_holds_for_deferred_verification(
         "evals/golden/intake_classifier.json": 6,
         "evals/golden/key_metrics.json": 6,
         "evals/golden/kpi_repair_judge.json": 24,
-        "evals/golden/ledger_reply_intent.json": 22,
         "evals/golden/metric_lifecycle_triage.json": 20,
         "evals/golden/news_structuring.json": 6,
         "evals/golden/peer_selection.json": 12,
@@ -244,7 +241,8 @@ def test_tracked_complete_collection_still_holds_for_deferred_verification(
         "evals/golden/sector_benchmark_proposal.json": 8,
         "evals/golden/segment_10q_period_disambiguate.json": 3,
         "evals/golden/transcript_metadata.json": 6,
-        "evals/golden/triage_route_suggest.json": 24,
+        "evals/golden/transcript_summary_grounding.json": 32,
+        "evals/golden/transcript_summary_grounding_context.json": 4,
         "evals/golden/viewspec_compile.json": 16,
     }
     # Four cadence cases extend the eight retained decision-condition cases.

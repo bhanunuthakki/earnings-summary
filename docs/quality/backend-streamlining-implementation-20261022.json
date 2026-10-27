@@ -4757,5 +4757,69 @@
       "instructions": "47instruction maintenance tests pass."
     },
     "skill_hash_baseline": "59source hashes already drifted at predecessorHEAD;62currently drift. ActiveETF prose updated. No bulk recertification of unrelated sources."
+  },
+  "october25_retirement_continuation": {
+    "status": "uncommitted source implementation; full outcome and release remain open",
+    "head": "0c22d6e478b33e20f0e75a055457ccf28599cd35",
+    "plan": "docs/architecture/backend-retirement-execution-plan.md",
+    "advisory_plan_scores": [
+      92,
+      93,
+      94
+    ],
+    "qualification": "advisory only; no final implementation/deployment verdict",
+    "proof": {
+      "telegram_coaching_batch": "617 passed",
+      "integrated_batch": "1785 passed, 7 failed; later corrections checked separately",
+      "final_owning_recheck": "196 passed",
+      "changed_strict_types": "135 files, 0 errors",
+      "architecture_boundaries": "pass",
+      "architecture_ratchet": "pass on the final staged source",
+      "reconstruction": "11/11 pass",
+      "design_sync": "pass",
+      "goldens": "comparison mode; no regeneration",
+      "browser": "Capture8/Operations2/Explore4 scenes at1280/768; zero browser errors or horizontal overflow; Explore before/after confirms sole Copilot doorway"
+    },
+    "evidence_root": ".tmp/cleanup-open-model-execution/",
+    "source_retirements": [
+      "Telegram client/poller/commands/callbacks/notifications/setup",
+      "README generator and neutral facade",
+      "weekly personal-review packet and pending replies",
+      "decision nudges",
+      "annual letters and calibration narratives",
+      "coach governor and capacity prompts",
+      "proactive standup",
+      "automatic session transcript/distillation/adoption",
+      "Positioning coach/proposer",
+      "Portfolio Health/Allocation outer assemblers",
+      "memo frontend/launcher",
+      "legacy Ledger console and review packet",
+      "Explore duplicate conversation",
+      "separate Cron Health wrapper/poller/navigation",
+      "unused reportlab/Pillow dependency declarations"
+    ],
+    "retained_exceptions": [
+      "current theses",
+      "owner process settings",
+      "decision time series",
+      "financial inputs needed by retained observations/products",
+      "earnings audio acquisition dependencies with actual callers"
+    ],
+    "production": "read-only inventory only; es-poller Running/Auto; dedicated lens batches enabled; no deployment/scheduler/token/data mutation",
+    "pending": [
+      "R2 remaining family/fiscal route qualification and retirement",
+      "R3 exact forward document completion",
+      "R5 native publication with plausibility/admission guards",
+      "R6 terminal repeated-read targets",
+      "R7 structured new SayDo/news generation and full acceptance",
+      "remaining history/ETF/legacy readers and exact canonical deletion manifest",
+      "external daily-storage Sunday expiry owner reconciliation",
+      "one complete applicable check matrix",
+      "additional integrated browser path evidence",
+      "independent final implementation/deployment review",
+      "native Windows checks, exact-candidate approval, merge/install/live verification"
+    ],
+    "resource_closure": "All delegated agents, test wrappers and browser scripts completed; no application server, provider worker or canonical mutation was started",
+    "staged_paths": 238
   }
 }

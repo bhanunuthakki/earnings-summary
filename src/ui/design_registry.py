@@ -482,12 +482,6 @@ SURFACE_SANCTIONS: tuple[SurfaceSanction, ...] = ()
 
 CCACTION_REGRESSION_FLOOR = (
     CCActionRegressionFloor(
-        "pipeline/advisor_memos_panel.py", "work-os", "Current CCAction adopter."
-    ),
-    CCActionRegressionFloor(
-        "pipeline/allocation_decisions_panel.py", "work-os", "Current CCAction adopter."
-    ),
-    CCActionRegressionFloor(
         "pipeline/portfolio_decision_support.py", "work-os", "Current CCAction adopter."
     ),
     CCActionRegressionFloor("pipeline/cc_action.py", "work-os", "Current CCAction adopter."),
@@ -552,12 +546,10 @@ _BHA_92_SURFACES = frozenset(
         "dashboard/_styles.py",
         "dashboard/inbox.py",
         "dashboard/upcoming.py",
-        "pipeline/advisor_memos_panel.py",
         "pipeline/allocation_decisions_panel.py",
         "pipeline/portfolio_decision_support.py",
         "pipeline/analytical_dashboard_html.py",
         "pipeline/attribution_panel.py",
-        "pipeline/calibration_scorecard_panel.py",
         "pipeline/cc_action.py",
         "pipeline/cc_overlay.py",
         "pipeline/credibility_panel.py",
@@ -569,7 +561,6 @@ _BHA_92_SURFACES = frozenset(
         "pipeline/decision_journal_panel.py",
         "pipeline/diet_panel.py",
         "pipeline/discovery_panel.py",
-        "pipeline/etf_workup.py",
         "pipeline/evals_panel.py",
         "pipeline/explore_panel.py",
         "pipeline/explore_panel_runtime.py",
@@ -585,7 +576,6 @@ _BHA_92_SURFACES = frozenset(
         "pipeline/portfolio_panel.py",
         "pipeline/position_lifecycle_panel.py",
         "pipeline/positioning_panel.py",
-        "pipeline/redteam_pnl_panel.py",
         "pipeline/research_cockpit.py",
         "pipeline/restatements_panel.py",
         "pipeline/section_coverage_panel.py",
@@ -628,7 +618,6 @@ _BHA_89_TO_92_ADDITIONAL_EMITTERS = (
     "dashboard/feed.py",
     "execution/comments_server_work_os_routes.py",
     "execution/comments_server_financial_evidence_routes.py",
-    "pipeline/annual_letter_panel.py",
     "pipeline/analysis_styles.py",
     "pipeline/console_scaffold.py",
     "pipeline/ir_approval_panel.py",
@@ -699,10 +688,8 @@ _NONVISUAL_CENSUS_CLASSIFICATIONS = (
     "decision_extractor.py",
     "earnings_brief.py",  # Section-title placeholders are prompt text, not product markup.
     "earnings_readout.py",  # Section-title placeholders are prompt text, not product markup.
-    "etf_sources/nport.py",
     "execution/comments_server_panel_cache.py",
     "execution/design_route_canaries.py",
-    "execution/land_session_notes.py",
     "execution/verify_design_conformance.py",
     "execution/sync_list_type_from_holdings.py",
     "filing_text_fetcher.py",
@@ -711,9 +698,7 @@ _NONVISUAL_CENSUS_CLASSIFICATIONS = (
     "ir_uploads.py",
     "llm_client.py",
     "operations/backup_observer.py",  # Named regex groups parse backup logs; no markup is emitted.
-    "redteam/telegram_cmd.py",
     "report/sections/qa_roster.py",
-    "report/renderers/workspace_data.py",
     "scheduler_manifest.py",
     "transcript_qa.py",
     "synthesis/tenet_accountability.py",
@@ -726,12 +711,10 @@ _PYTHON_CSS_SURFACES = frozenset(
         "compute/soft_rule_evaluator.py",
         "dashboard/_styles.py",
         "dashboard/feed.py",
-        "etf_sources/nport.py",
         "execution/build_earnings_calendar.py",
         "execution/comments_server_alert_routes.py",
         "execution/design_route_canaries.py",
         "execution/verify_design_conformance.py",
-        "pipeline/advisor_memos_panel.py",
         "pipeline/allocation_decisions_panel.py",
         "pipeline/portfolio_decision_support.py",
         "pipeline/analysis_styles.py",
@@ -739,7 +722,6 @@ _PYTHON_CSS_SURFACES = frozenset(
         "pipeline/cc_action.py",
         "pipeline/cc_overlay.py",
         "pipeline/console_scaffold.py",
-        "pipeline/cron_health_panel.py",
         "pipeline/dashboard_html.py",
         "pipeline/dcf_globals_panel.py",
         "pipeline/decision_journal_panel.py",
@@ -755,7 +737,6 @@ _PYTHON_CSS_SURFACES = frozenset(
         "pipeline/peeks.py",
         "pipeline/performance_risk_panel.py",
         "pipeline/portfolio_panel.py",
-        "pipeline/portfolio_console_panel.py",  # Reuses canonical portfolio console CSS.
         "pipeline/portfolio_styles.py",
         "pipeline/position_lifecycle_panel.py",
         "pipeline/positioning_panel.py",
@@ -798,11 +779,9 @@ _NON_HTML_PYTHON_SURFACES = frozenset(
         "advisor/memos.py",
         "compute/soft_rule_evaluator.py",
         "dashboard/_styles.py",
-        "execution/land_session_notes.py",
         "execution/verify_design_conformance.py",
         "operations/backup_observer.py",
         "pipeline/cc_overlay.py",
-        "redteam/telegram_cmd.py",
         "report/renderers/workspace_chat.py",
         "report/renderers/workspace_decision_card.py",
         "scheduler_manifest.py",
@@ -815,12 +794,10 @@ _RUNTIME_JS_SURFACES = frozenset(
     {
         "dashboard/inbox.py",
         "execution/verify_design_conformance.py",
-        "pipeline/advisor_memos_panel.py",
         "pipeline/allocation_decisions_panel.py",
         "pipeline/cc_action.py",
         "pipeline/cc_overlay.py",
         "pipeline/console_scaffold.py",
-        "pipeline/cron_health_panel.py",
         "pipeline/decision_journal_panel.py",
         "pipeline/dashboard_html.py",
         "pipeline/diet_panel.py",
@@ -832,7 +809,6 @@ _RUNTIME_JS_SURFACES = frozenset(
         "pipeline/ledger_panel.py",
         "pipeline/operations_panel.py",
         "pipeline/performance_risk_panel.py",
-        "pipeline/portfolio_console_panel.py",
         "pipeline/portfolio_panel.py",
         "pipeline/position_lifecycle_panel.py",
         "pipeline/positioning_panel.py",
@@ -857,11 +833,9 @@ _RUNTIME_JS_SURFACES = frozenset(
 
 _SVG_SURFACES = frozenset(
     {
-        "execution/land_session_notes.py",
         "operations/backup_observer.py",
         "pipeline/allocation_decisions_panel.py",
         "pipeline/portfolio_panel.py",
-        "redteam/telegram_cmd.py",
         "report/renderers/charts_v2.py",
         "report/renderers/workspace_charts.py",
         "scheduler_manifest.py",
@@ -1053,9 +1027,10 @@ _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
         "design-system/src/tokens/tokens.css": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",  # pragma: allowlist secret
         "execution/build_earnings_calendar.py": "a2257779753cf8476f0ab93478569ffbd1d116856e596b46d12afcf8e45de114",  # pragma: allowlist secret
         "pipeline/analysis_styles.py": "75476869a35c0e1f08ba3faa1d35c1f08d5e506efe77ed3b1a52f33bc937942a",  # pragma: allowlist secret
-        "pipeline/operations_styles.py": "137755c548ddc80fa25d51832b0b3de479a8c159864696f1deb10a5d34c10c5e",  # pragma: allowlist secret
-        "pipeline/portfolio_styles.py": "88c95e4bbb36e9e2a24411a50420723e636af0aec9ad3f3cdb07897fc21638ff",  # pragma: allowlist secret
-        "pipeline/research_panel_styles.py": "d96812258b5b52e07525a58768ff33de9b2a52fd54fdaf1cbbd2f813a4a4fcbe",  # pragma: allowlist secret
+        "pipeline/operations_styles.py": "25ac8767dbe7aa83b41902fdaded9f6ec60482850f02c4ba93996ff8ff7544e7",  # pragma: allowlist secret
+        "pipeline/portfolio_styles.py": "71c0ce48fe31845c25f187338910ee641aea618a297b4762af009654aa50ded8",  # pragma: allowlist secret
+        # Retire legacy feed, answer, packet and queue rules; keep shared Notes/research geometry.
+        "pipeline/research_panel_styles.py": "151ac641212c81a534a028a6472526f4f5ee372207927435cd1d3cbb426f44e6",  # pragma: allowlist secret
         # Work OS retains its family geometry after the standalone page CSS retired; this digest covers that retained geometry.
         "pipeline/work_os_styles.py": "42f32470f84e129f39682d482cbe5cbf60a458ac3f91b23fdf26dfc0c3c24d82",  # pragma: allowlist secret
         "report/renderers/workspace_charts.py": "e55dff6926088b1c08aa42dc69fad725a1f55c15d46a8d9f5c60e60f1773b13a",  # pragma: allowlist secret
@@ -1090,16 +1065,14 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         # registered master, so the dynamic-visual recipe shrank to the
         # panel_section call. Rendered bytes are unchanged (VAL-DEDUP-004
         # panel capture: zero diff).
-        "pipeline/advisor_memos_panel.py": "e0eab65a8729ce3215ea8fc8dc04a6b0571651398d3f425e07ed96b829f882d0",  # pragma: allowlist secret
-        "pipeline/allocation_decisions_panel.py": "d6d9f74f8d6282f475b9250a1949ead4bb7a5a9966ad1fd3bf3772f1f562fc4b",  # pragma: allowlist secret
-        "pipeline/calibration_scorecard_panel.py": "1edfbfb1291c38be645133eaab45f78343920da72bf42b3e96c1a36e60a91eac",  # pragma: allowlist secret
+        "pipeline/allocation_decisions_panel.py": "24fac44f498f7f1341a94fac4c59d7ae7c87816cfe1888d8ab5ecce8d4b9963f",  # pragma: allowlist secret
         # Composite section loading reads governed panel HTML. Its fallback
         # mount preserves server-owned markup; status and Retry use kit classes.
         "pipeline/console_scaffold.py": "d0949ff412286e9ecccdc606ab4709f3f10fc222183c3a6a599d16cbefd8518d",  # pragma: allowlist secret
         "pipeline/cron_health_panel.py": "084eb62653f0ea3583f0c8347e7b12626f8235b0498e3c4c3141b1723eec490c",  # pragma: allowlist secret
         "pipeline/explore_panel.py": "fc1dd2e109d4f31a63e523c6f6ba3bc016b10b1faa443d32240e35fabed2fa8c",  # pragma: allowlist secret
         "pipeline/model_eval_panel.py": "f4af1f25d2641ba46a64a043073730df7b11ef1e96f3b3ad4d71801e17c3e983",  # pragma: allowlist secret
-        "pipeline/peeks.py": "7fbafbddbf7948c8f1f05feb6b7805006e295d5bbd3bc62275f9cfa6acc83908",  # pragma: allowlist secret
+        "pipeline/peeks.py": "1db77d4486a882a2fed77b43b1f59a5cfa7b29df8e940e97ed1cfcf6cbdfef4a",  # pragma: allowlist secret
         "pipeline/performance_risk_panel.py": "f4399458107940b948664fe2e664892e2390d0f100cc1ad6f300e5233e2dd831",  # pragma: allowlist secret
         "pipeline/portfolio_panel.py": "40bb72a454e55db7fdced77d585085713bc682fd68625dd204a7ddc311273e65",  # pragma: allowlist secret
         "pipeline/portfolio_styles.py": "397f25bbb814a248a8c887faf5ac75284c69d2e22336f7cb04c7b7d020f72ab6",  # pragma: allowlist secret

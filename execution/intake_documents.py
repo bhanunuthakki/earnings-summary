@@ -7,8 +7,8 @@ Files filed by this command:
   PDF / TXT  →  ir_documents/<TICKER>/<period_end>/ir_<doctype>__<sha8>.<ext>
   Audio      →  transcripts/raw/<TICKER>_Q<n>_<YYYY>.<ext>
 
-After filing, optionally chains into `process_ir_documents.py` for each
-ticker that received new IR documents (`--process` flag).
+After filing, optionally chains registered transcript versions into the
+retained transcript summary and Say-Do paths (`--process` flag).
 
 Usage:
     python execution/intake_documents.py
@@ -33,6 +33,7 @@ try:
 except ImportError:
     from execution._lib import PROJECT_ROOT
 
+from db_paths import require_db_path
 from intake import INBOX_DIR, IntakeResult, scan_inbox
 from models.documents import DocType
 from runtime.python_process import managed_python_prefix
@@ -75,8 +76,8 @@ def chain_processing(
 ) -> ChainResult:
     """Run downstream pipelines for each ticker that got new IR docs.
 
-    Tickers with new non-event docs get `process_ir_documents.py` (LLM summary).
-    Event documents remain registered raw sources without automatic synthesis.
+    Only newly filed earnings transcripts enter the retained summary route.
+    Other documents remain registered source material without generated cards.
     Tickers that received transcripts additionally get
     `ingest_transcripts.py --include-ir-transcripts` (bridges intake-filed
     transcripts into the `transcripts` + `transcript_segments` tables) and
@@ -90,13 +91,6 @@ def chain_processing(
         print("[intake] No newly-filed IR documents — skipping process chain.", file=sys.stderr)
         return ChainResult()
 
-    tickers = sorted(
-        {
-            r.classification.ticker
-            for r in new_filings
-            if r.classification and r.classification.doc_type != DocType.IR_EVENT
-        }
-    )
     transcript_tickers = sorted(
         {
             r.classification.ticker
@@ -105,26 +99,14 @@ def chain_processing(
         }
     )
 
-    process_script = SCRIPT_DIR / "process_ir_documents.py"
     ingest_script = SCRIPT_DIR / "ingest_transcripts.py"
     commitments_script = SCRIPT_DIR / "extract_commitments_from_transcript.py"
+    process_script = SCRIPT_DIR / "process_ir_documents.py"
     process_failures = 0
     ingest_failures = 0
     commitment_failures = 0
     exit_code = 0
-
-    if process_documents:
-        for ticker in tickers:
-            print(f"[intake] Chaining: process_ir_documents.py --ticker {ticker}", file=sys.stderr)
-            completed = subprocess.run(
-                [*managed_python_prefix(PROJECT_ROOT), str(process_script), "--ticker", ticker],
-                check=False,
-            )
-            child_rc = completed.returncode
-            if child_rc != 0:
-                process_failures += 1
-                if exit_code == 0:
-                    exit_code = child_rc
+    ingested: list[str] = []
 
     for ticker in transcript_tickers if include_ir_transcripts else ():
         print(
@@ -157,6 +139,37 @@ def chain_processing(
                 + "\n"
             )
             continue
+        ingested.append(ticker)
+
+    # Only registered transcript versions feed retained transcript summaries.
+    # Press releases, presentations, investor updates, and events remain source
+    # documents and do not enter a separate generated-summary route.
+    if process_documents and ingested:
+        database = require_db_path()
+        for ticker in ingested:
+            print(f"[intake] Chaining: process_ir_documents.py --ticker {ticker}", file=sys.stderr)
+            completed = subprocess.run(
+                [
+                    *managed_python_prefix(PROJECT_ROOT),
+                    str(process_script),
+                    "--ticker",
+                    ticker,
+                    "--db",
+                    str(database),
+                    "--state-root",
+                    str(PROJECT_ROOT),
+                    "--repo-root",
+                    str(PROJECT_ROOT),
+                ],
+                check=False,
+            )
+            child_rc = completed.returncode
+            if child_rc != 0:
+                process_failures += 1
+                if exit_code == 0:
+                    exit_code = child_rc
+
+    for ticker in ingested:
         print(
             f"[intake] Chaining: extract_commitments_from_transcript.py --auto --ticker {ticker}",
             file=sys.stderr,
@@ -207,7 +220,7 @@ def main() -> int:
     parser.add_argument(
         "--process",
         action="store_true",
-        help="After filing, run process_ir_documents.py for each affected ticker",
+        help="After filing, process registered transcript versions for affected tickers",
     )
     parser.add_argument(
         "--include-ir-transcripts",

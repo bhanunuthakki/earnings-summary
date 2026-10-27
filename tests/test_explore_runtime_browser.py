@@ -91,6 +91,72 @@ def test_explore_defers_catalog_and_rejects_late_company_response(tmp_path: Path
             browser.close()
 
 
+def test_explore_copilot_handoff_does_not_read_catalog_or_create_a_session(tmp_path: Path) -> None:
+    fixture = r"""
+    window.copilotCalls=[];window.requests=[];
+    window.openWorkOsCopilot=function(context){window.copilotCalls.push(context);};
+    window.fetch=function(url){window.requests.push(String(url));return Promise.reject(new Error('catalog offline'));};
+    """
+    with sync_playwright() as playwright:
+        browser = _launch(playwright)
+        try:
+            page = browser.new_page()
+            _load(page, _document(tmp_path, fixture))
+            page.locator("#vx-ask-copilot").click()
+            context = page.evaluate("window.copilotCalls[0]")
+            assert context["company_ticker"] == "CANARY"
+            assert context["context_kind"] == "company"
+            assert "CANARY" in context["prompt"]
+            assert "context_spec" not in context
+            assert "session_id" not in context
+            assert page.evaluate("window.requests") == []
+            assert page.locator("#ask-thread").count() == 0
+        finally:
+            browser.close()
+
+
+def test_explore_answer_handoff_preserves_peers_window_and_copilot_context(tmp_path: Path) -> None:
+    fixture = r"""
+    window.copilotCalls=[];window.requests=[];
+    window.openWorkOsCopilot=function(context){window.copilotCalls.push(context);};
+    window.fetch=function(url,options){
+      window.requests.push({url:String(url),body:options&&options.body});
+      if(String(url).includes('/catalog'))return Promise.resolve(new Response(JSON.stringify({
+        fin:[{token:'fin:revenue',label:'Synthetic revenue',tickers:2}],kpi:[],seg:[],detail:[]
+      }),{headers:{'Content-Type':'application/json'}}));
+      return Promise.resolve(new Response('<div class="vx-result">Synthetic peer calculation</div>'));
+    };
+    """
+    with sync_playwright() as playwright:
+        browser = _launch(playwright)
+        try:
+            page = browser.new_page()
+            _load(page, _document(tmp_path, fixture))
+            page.evaluate("""document.getElementById('vx-root').dispatchEvent(new CustomEvent(
+              'work-os-explore-analysis',{detail:{query:'Compare synthetic revenue',spec:{
+                tickers:['CANARY','OTHER'],metrics:['fin:revenue'],transform:'yoy',
+                cadence:'annual',periods:5,cagr_years:3
+              }}}))""")
+            page.locator("#vx-result").get_by_text("Synthetic peer calculation").wait_for()
+            assert page.locator("#vx-transform").input_value() == "yoy"
+            assert page.locator("#vx-cadence").input_value() == "annual"
+            assert page.locator("#vx-periods").input_value() == "5"
+            request = page.evaluate(
+                "JSON.parse(window.requests.find(r=>r.url==='/api/viewspec/run').body)"
+            )
+            assert request["spec"]["tickers"] == ["CANARY", "OTHER"]
+            page.locator("#vx-workbench-copilot").click()
+            context = page.evaluate("window.copilotCalls[0]")
+            assert context["company_ticker"] == "CANARY"
+            assert "Compare synthetic revenue" in context["prompt"]
+            assert '"OTHER"' in context["prompt"]
+            assert '"periods":5' in context["prompt"]
+            assert "context_spec" not in context
+            assert not page.locator("#vx-workbench").evaluate("node=>node.open")
+        finally:
+            browser.close()
+
+
 def test_explore_analysis_timeout_recovers_and_close_rejects_late_result(tmp_path: Path) -> None:
     fixture = r"""
     const originalTimeout=window.setTimeout;
@@ -318,95 +384,21 @@ window.resolveProcedure=function(status,payload){
 """
 
 
-def test_explore_summary_procedure_is_explicit_and_acceptance_is_not_completion(
-    tmp_path: Path,
-) -> None:
+def test_explore_retires_summary_extraction_action_and_keeps_research_links(tmp_path: Path) -> None:
     with sync_playwright() as playwright:
         browser = _launch(playwright)
         try:
             page = browser.new_page()
             _load(page, _document(tmp_path, _PROCEDURE_FIXTURE))
             assert page.locator("#vx-procedures").count() == 1
-            page.locator("#ask-q").fill("Keep this question")
+            assert page.locator("#vx-procedure-run").count() == 0
+            assert page.locator("#vx-procedure-operation").count() == 0
             page.locator("#vx-procedures summary").click()
-            assert page.locator("#ask-q").input_value() == "Keep this question"
+            assert page.locator("#vx-ask-copilot").is_enabled()
             assert page.evaluate("window.requests") == []
             page.locator("#vx-procedure-reports").click()
             assert page.evaluate("window.navigation") == ["screen-brief-library"]
-            page.locator("#vx-procedure-run").click()
-            assert page.locator("#vx-procedure-run").is_disabled()
-            page.locator("#vx-procedure-run").evaluate("node=>node.click()")
-            assert page.evaluate("window.requests.length") == 1
-            assert page.evaluate("window.requests") == [
-                {
-                    "url": "/actions/refresh",
-                    "body": '{"ticker":"CANARY","steps":["extract_kpis"]}',
-                }
-            ]
-            page.evaluate(
-                "window.resolveProcedure(201,{job_id:'job_synthetic',stream_url:'https://untrusted.invalid/'})"
-            )
-            page.locator("#vx-procedure-operation").wait_for(state="visible")
-            assert page.locator("#vx-procedure-operation").get_attribute("href") == (
-                "/actions/stream/job_synthetic"
-            )
-            assert "not yet complete" in page.locator("#vx-procedure-status").inner_text()
-            assert "primary-source review" in page.locator("#vx-procedure-status").inner_text()
-            page.wait_for_function("!document.getElementById('vx-procedure-run').disabled")
-            page.locator("#vx-procedure-run").click()
-            assert page.evaluate("window.requests[1]") == page.evaluate("window.requests[0]")
-            assert page.evaluate("window.requests.length") == 2
-        finally:
-            browser.close()
-
-
-@pytest.mark.parametrize("status", [409, 403, 500])
-def test_explore_summary_procedure_handles_refusal(tmp_path: Path, status: int) -> None:
-    with sync_playwright() as playwright:
-        browser = _launch(playwright)
-        try:
-            page = browser.new_page()
-            _load(page, _document(tmp_path, _PROCEDURE_FIXTURE))
-            page.locator("#vx-procedures summary").click()
-            page.locator("#vx-procedure-run").click()
-            page.evaluate("status=>window.resolveProcedure(status,{error:'refused'})", status)
-            page.wait_for_function("!document.getElementById('vx-procedure-run').disabled")
-            message = page.locator("#vx-procedure-status").inner_text()
-            assert ("active" if status == 409 else "rejected") in message
-            assert not page.locator("#vx-procedure-operation").is_visible()
-        finally:
-            browser.close()
-
-
-def test_explore_summary_procedure_rejects_late_company_and_detached_responses(
-    tmp_path: Path,
-) -> None:
-    with sync_playwright() as playwright:
-        browser = _launch(playwright)
-        try:
-            page = browser.new_page()
-            errors: list[str] = []
-            page.on("pageerror", lambda error: errors.append(str(error)))
-            _load(page, _document(tmp_path, _PROCEDURE_FIXTURE))
-            page.locator("#vx-procedures summary").click()
-            page.locator("#vx-procedure-run").click()
-            page.evaluate(
-                "document.getElementById('vx-root').dispatchEvent(new CustomEvent('work-os-explore-tickers',{detail:{tickers:['OTHER']}}))"
-            )
-            page.evaluate("window.resolveProcedure(201,{job_id:'job_old'})")
-            page.wait_for_timeout(30)
-            assert not page.locator("#vx-procedure-operation").is_visible()
-            assert page.locator("#vx-procedure-ticker").inner_text() == "OTHER"
-            assert page.locator("#vx-procedure-run").is_enabled()
-            page.locator("#vx-procedure-run").click()
-            assert page.evaluate("JSON.parse(window.requests[1].body)") == {
-                "ticker": "OTHER",
-                "steps": ["extract_kpis"],
-            }
-            page.evaluate("document.getElementById('vx-root').remove()")
-            page.evaluate("window.resolveProcedure(201,{job_id:'job_detached'})")
-            page.wait_for_timeout(30)
-            assert errors == []
+            assert page.evaluate("window.requests") == []
         finally:
             browser.close()
 
@@ -417,7 +409,6 @@ def test_explore_procedure_analytics_reuses_workbench_and_restores_focus(tmp_pat
         try:
             page = browser.new_page()
             _load(page, _document(tmp_path, _PROCEDURE_FIXTURE))
-            page.locator("#ask-q").fill("Keep this question")
             page.locator("#vx-procedures summary").click()
             page.locator("#vx-procedure-analytics").click()
             assert page.locator("#vx-workbench").evaluate("node=>node.open")
@@ -429,30 +420,6 @@ def test_explore_procedure_analytics_reuses_workbench_and_restores_focus(tmp_pat
             assert page.locator("#vx-procedure-analytics").evaluate(
                 "node=>document.activeElement===node"
             )
-            assert page.locator("#ask-q").input_value() == "Keep this question"
-        finally:
-            browser.close()
-
-
-def test_explore_summary_procedure_allows_explicit_retry_after_unknown_outcome(
-    tmp_path: Path,
-) -> None:
-    with sync_playwright() as playwright:
-        browser = _launch(playwright)
-        try:
-            page = browser.new_page()
-            _load(page, _document(tmp_path, _PROCEDURE_FIXTURE))
-            page.locator("#vx-procedures summary").click()
-            page.locator("#vx-procedure-run").click()
-            page.evaluate("window.resolveProcedure(201,{job_id:'invalid'})")
-            page.wait_for_function("!document.getElementById('vx-procedure-run').disabled")
-            assert "status unknown" in page.locator("#vx-procedure-status").inner_text()
-            assert page.evaluate("window.requests.length") == 1
-            page.locator("#vx-procedure-run").click()
-            assert page.evaluate("window.requests.length") == 2
-            assert page.evaluate("JSON.parse(window.requests[1].body)") == {
-                "ticker": "CANARY",
-                "steps": ["extract_kpis"],
-            }
+            assert page.locator("#vx-ask-copilot").is_enabled()
         finally:
             browser.close()

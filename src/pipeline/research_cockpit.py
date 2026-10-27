@@ -1333,14 +1333,8 @@ def _row_sort_data(row: CockpitRow, *, thin: bool) -> str:
 def _render_row(row: CockpitRow, now: datetime, *, thin: bool) -> str:
     t = escape(row.base.ticker)
     name_attr = f" title='{escape(row.name)}'" if row.name else ""
-    # ETFs retain identity and saved history in the mixed table.
-    etf_pill = (
-        f" <a class='k-pill' href='/api/peek/etf_workup?ticker={t}' "
-        f"data-peek-url='/api/peek/etf_workup?ticker={t}' "
-        f"data-peek-title='Saved ETF research · {t}'>ETF · saved research</a>"
-        if row.is_etf
-        else ""
-    )
+    # ETFs keep their identity in the mixed table. The research cell stays empty.
+    etf_pill = " <span class='k-pill'>ETF</span>" if row.is_etf else ""
     if row.held_weight is not None:
         etf_pill += (
             f" <span class='k-chip k-chip-mono' title='current portfolio weight'>"

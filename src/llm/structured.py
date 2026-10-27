@@ -151,10 +151,12 @@ def call_llm_structured(
     expect: Literal["object", "array"] = "object",
     required_keys: tuple[str, ...] = (),
     schema: TypeAdapter[T] | None = None,
+    repair_prompt: Callable[[str], str] | None = None,
     domain_guardrail: Callable[[object], tuple[bool, str]] | None = None,
     max_escalation_tier: int = 0,
     db_path: Path | str | None = None,
     capability_profile: CapabilityProfile | None = None,
+    transport: Callable[..., str] | None = None,
 ) -> T | object:
     """``call_llm`` + strict parse + P3 Cascade Router tier escalation, loud on failure.
 
@@ -164,18 +166,35 @@ def call_llm_structured(
     (e.g., Sonnet/Pro) to complete extraction.
     """
     effective_profile = structured_capability_profile(capability_profile)
-    raw = call_llm(
-        prompt,
-        purpose=purpose,
-        ticker=ticker,
-        scope=scope,
-        run_id=run_id,
-        model=model,
-        backend=backend,
-        timeout_seconds=timeout_seconds,
-        db_path=db_path,
-        capability_profile=effective_profile,
-    )
+
+    def invoke(call_prompt: str, *, selected_model: str | None = model) -> str:
+        if transport is None:
+            return call_llm(
+                call_prompt,
+                purpose=purpose,
+                ticker=ticker,
+                scope=scope,
+                run_id=run_id,
+                model=selected_model,
+                backend=backend,
+                timeout_seconds=timeout_seconds,
+                db_path=db_path,
+                capability_profile=effective_profile,
+            )
+        kwargs: dict[str, object] = {
+            "purpose": purpose,
+            "ticker": ticker,
+            "scope": scope,
+            "run_id": run_id,
+            "capability_profile": effective_profile,
+        }
+        if selected_model is not None:
+            kwargs["model"] = selected_model
+        if timeout_seconds is not None:
+            kwargs["timeout_seconds"] = timeout_seconds
+        return transport(call_prompt, **kwargs)
+
+    raw = invoke(prompt)
     try:
         parsed = parse_json_payload(raw, expect=expect, required_keys=required_keys)
         validated = schema.validate_python(parsed) if schema is not None else parsed
@@ -185,6 +204,7 @@ def call_llm_structured(
                 raise ValueError(f"Domain guardrail validation failed: {g_reason}")
         return validated
     except (ValueError, ValidationError) as first_exc:
+        first_error = str(first_exc)
         log.warning(
             {
                 "event": "llm_structured_parse_failed_retrying",
@@ -195,18 +215,9 @@ def call_llm_structured(
             }
         )
 
-    # Attempt 2: Same tier with repair preamble
-    raw_retry = call_llm(
-        repair_structured_prompt(prompt),
-        purpose=purpose,
-        ticker=ticker,
-        scope=scope,
-        run_id=run_id,
-        model=model,
-        backend=backend,
-        timeout_seconds=timeout_seconds,
-        db_path=db_path,
-        capability_profile=effective_profile,
+    # Attempt 2: Same tier with one bounded repair request.
+    raw_retry = invoke(
+        repair_prompt(first_error) if repair_prompt else repair_structured_prompt(prompt)
     )
     try:
         parsed = parse_json_payload(raw_retry, expect=expect, required_keys=required_keys)
@@ -245,18 +256,7 @@ def call_llm_structured(
                 }
             )
 
-            raw_escalated = call_llm(
-                repair_structured_prompt(prompt),
-                purpose=purpose,
-                model=target_model,
-                backend=None,
-                ticker=ticker,
-                scope=scope,
-                run_id=run_id,
-                timeout_seconds=timeout_seconds,
-                db_path=db_path,
-                capability_profile=effective_profile,
-            )
+            raw_escalated = invoke(repair_structured_prompt(prompt), selected_model=target_model)
             try:
                 parsed_esc = parse_json_payload(
                     raw_escalated, expect=expect, required_keys=required_keys

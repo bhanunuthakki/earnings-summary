@@ -129,12 +129,12 @@ def test_onboard_equity_attempts_sec_after_failed_or_skipped_fmp(
         source_calls.append(("ir", False))
         return 0
 
-    def saydo(_ticker: str) -> int:
-        pytest.fail("--skip-llm must suppress Say-Do even with --force-saydo")
+    def transcript_summaries(_ticker: str) -> int:
+        pytest.fail("--skip-llm must suppress Say-Do even with --force-transcript-summaries")
 
     monkeypatch.setattr(onboard_ticker, "_run_transcript_backfill", transcripts)
     monkeypatch.setattr(onboard_ticker, "_run_ir_documents", ir)
-    monkeypatch.setattr(onboard_ticker, "_run_saydo", saydo)
+    monkeypatch.setattr(onboard_ticker, "_run_transcript_summaries", transcript_summaries)
     args = Namespace(
         ticker="NEW",
         industry_template=None,
@@ -144,8 +144,8 @@ def test_onboard_equity_attempts_sec_after_failed_or_skipped_fmp(
         skip_llm=skip_llm,
         skip_transcripts=not skip_llm,
         skip_ir=not skip_llm,
-        skip_saydo=not skip_llm,
-        force_saydo=True,
+        skip_transcript_summaries=not skip_llm,
+        force_transcript_summaries=True,
     )
     assert onboard(args) == 0
     assert calls == [False]
@@ -228,8 +228,8 @@ def test_sec_discovery_window_replays_daily_and_tracks_identity_and_bytes(
         skip_sec=False,
         skip_transcripts=True,
         skip_ir=True,
-        skip_saydo=True,
-        force_saydo=False,
+        skip_transcript_summaries=True,
+        force_transcript_summaries=False,
         industry_template=None,
         instrument=None,
     )

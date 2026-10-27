@@ -97,7 +97,6 @@ COCKPIT_DATA_MEMO_FAMILIES = frozenset(
 
 
 _BROWSER_USER_AGENT_RX = re.compile(r"(?:mozilla|chrome|chromium|safari|firefox|edg)/", re.I)
-README_RUN_ID_RX = re.compile(r"[0-9a-f]{32}\Z")
 LOGGER = logging.getLogger(__name__)
 
 

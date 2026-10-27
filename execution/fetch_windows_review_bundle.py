@@ -143,29 +143,13 @@ class WindowsReviewPins(BaseModel):
 def _eligible_scheduler_tasks(
     tasks: tuple[ReviewSchedulerTask, ...],
 ) -> tuple[ReviewSchedulerTask, ...]:
-    """Keep only Scheduler rows that represent required trust identities.
-
-    Unexpected rows are observable drift but are not part of the expected
-    identity set.  A task explicitly observed as Missing with a matching
-    expectation is the intentional absence lane for a service-owned task.
-    All other rows remain eligible and must pass the exact identity checks.
-    """
+    """Keep expected Scheduler identities; unexpected rows remain observable drift."""
 
     names = [task.task_name.casefold() for task in tasks]
     if len(names) != len(set(names)):
         raise ValueError("review bundle contains duplicate Scheduler task names")
 
-    return tuple(
-        task
-        for task in tasks
-        if task.registry_match != "unexpected"
-        and not (
-            task.registry_match == "expected"
-            and task.state == "Missing"
-            and task.expectation_match is True
-            and task.scheduler_expectation == "absent_service_owned"
-        )
-    )
+    return tuple(task for task in tasks if task.registry_match != "unexpected")
 
 
 def seal_windows_review_pins(

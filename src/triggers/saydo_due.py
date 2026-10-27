@@ -23,12 +23,11 @@ degrades silently to no-context on any failure. The alert fires regardless.
 
 Self-contained grading
 -----------------------
-The trigger does NOT depend on the heavy SayDo grading pipeline
-(``build_saydo_pairs`` / batch submission) having run. When ``outcome`` is
-already populated (the matcher ran) it is read; when it is absent the verdict is
-computed inline from the comparator arithmetic. Either path yields the same
-normalized verdict vocabulary (MET / MISSED / MIXED). A commitment with no
-``realized_value`` is not gradeable → skipped (no fire).
+The trigger reads recorded Say-Do commitment outcomes. When ``outcome`` is
+already populated it is read; when it is absent the verdict is computed inline
+from the comparator arithmetic. Either path yields the same normalized verdict
+vocabulary (MET / MISSED / MIXED). A commitment with no ``realized_value`` is
+not gradeable and does not fire.
 
 Recency window
 --------------

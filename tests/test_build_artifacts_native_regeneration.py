@@ -138,42 +138,6 @@ def test_targeted_regeneration_calls_only_the_requested_llm_section(
     assert kwargs["force_refresh"] is True
 
 
-def test_saydo_filter_regeneration_forces_only_the_native_filter(
-    builder: Any,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
-
-    def _no_bypass(*args: object, **kwargs: object) -> bool:
-        return False
-
-    def _saydo_section(*args: object, **kwargs: object) -> object:
-        calls.append((args, kwargs))
-        return SimpleNamespace(status=SectionStatus.OK)
-
-    def _bomb(*args: object, **kwargs: object) -> object:
-        raise AssertionError("unrelated LLM/report path was invoked")
-
-    monkeypatch.setattr(builder.ticker_settings, "get_bypass_budget", _no_bypass)
-    monkeypatch.setattr(builder.saydo, "build", _saydo_section)
-    monkeypatch.setattr(builder, "build_report", _bomb)
-
-    result = builder._regenerate_native_purpose(
-        "NU",
-        tmp_path,
-        purpose="saydo_filter",
-        force_budget_bypass=False,
-    )
-
-    assert result == {"ticker": "NU", "purpose": "saydo_filter", "status": "ok"}
-    assert len(calls) == 1
-    assert calls[0][0] == ("NU", tmp_path)
-    assert calls[0][1]["enable_llm"] is True
-    assert calls[0][1]["force_refresh"] is True
-    assert calls[0][1]["strict_refresh"] is True
-
-
 def test_exec_comp_regeneration_calls_only_alignment_section(
     builder: Any,
     tmp_path: Path,
@@ -214,53 +178,3 @@ def test_exec_comp_regeneration_calls_only_alignment_section(
     assert calls[0]["enable_llm"] is True
     assert calls[0]["force_budget_bypass"] is False
     assert isinstance(calls[0]["conn"], sqlite3.Connection)
-
-
-@pytest.mark.parametrize("failure", ["provider", "invalid_ids", "no_rows"])
-def test_saydo_dirty_regeneration_propagates_failure_from_the_preparation_owner(
-    builder: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
-) -> None:
-    source = tmp_path / ".tmp/SayDo_NU_Q1_2026_Q2_2026.txt"
-    source.parent.mkdir(parents=True)
-    source.write_text(
-        "Narrative without a supported table."
-        if failure == "no_rows"
-        else "| Metric | Guide | Actual | Verdict |\n|---|---|---|---|\n| Revenue | $1 | $2 | beat |",
-        encoding="utf-8",
-    )
-
-    def empty(*_args: object, **_kwargs: object) -> str:
-        return ""
-
-    def no_bypass(*_args: object, **_kwargs: object) -> bool:
-        return False
-
-    def generate(*_args: object, **_kwargs: object) -> str:
-        if failure == "provider":
-            raise RuntimeError("synthetic provider unavailable")
-        return '["999"]'
-
-    monkeypatch.setattr(builder.ticker_settings, "get_bypass_budget", no_bypass)
-    for name in (
-        "load_thesis_anchor",
-        "load_bear_anchor",
-        "load_ir_anchor",
-        "load_priors_anchor",
-        "load_worldview_anchor",
-        "load_owner_profile_anchor",
-    ):
-        monkeypatch.setattr(builder.saydo, name, empty)
-    monkeypatch.setattr(builder.saydo, "generate_saydo_filter", generate)
-    expected = {
-        "provider": "synthetic provider unavailable",
-        "invalid_ids": "invalid commitment ids",
-        "no_rows": "no parseable commitments",
-    }[failure]
-    with pytest.raises((RuntimeError, ValueError), match=expected):
-        builder._regenerate_native_purpose(
-            "NU",
-            tmp_path,
-            purpose="saydo_filter",
-            force_budget_bypass=False,
-        )
-    assert not (tmp_path / "data/saydo_filter/NU.json").exists()

@@ -38,7 +38,6 @@ from report.models import (
     CompanyDescriptionSection,
     EarningsSection,
     FinancialsSection,
-    IrDocsSection,
     ProvenanceSection,
     RecentDevelopmentsSection,
     ReportSpec,
@@ -52,6 +51,7 @@ from report.models import (
 from report.renderers.workspace_html import render_report_body
 from report.renderers.workspace_styles import CSS as WORKSPACE_REPORT_CSS
 from report.renderers.workspace_styles import READER_OVERRIDE_CSS
+from report.workspace_models import WorkspacePrepared
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 ROUTE_SCREEN_IDS: dict[str, str] = {
@@ -102,12 +102,12 @@ def _canary_report_body() -> str:
         segments=SegmentsSection(status=SectionStatus.OK),
         earnings=EarningsSection(status=SectionStatus.OK),
         saydo=SayDoSection(status=SectionStatus.OK),
-        ir_docs=IrDocsSection(status=SectionStatus.OK),
         recent_developments=RecentDevelopmentsSection(status=SectionStatus.OK),
         bear_case=BearCaseSection(status=SectionStatus.OK),
         provenance=ProvenanceSection(status=SectionStatus.OK),
         appendix=AppendixSection(status=SectionStatus.OK),
     )
+    spec.workspace = WorkspacePrepared()
     rendered = render_report_body(spec).body_html
     return extract_legacy_reader_body(rendered, artifact_id="design-canary").body_html
 
@@ -407,7 +407,6 @@ def _canary_shell_payloads() -> dict[str, object]:
                     "thesis_excerpt": "Broad energy exposure under evaluation.",
                     "source": "position_entry",
                     "company_desk_url": None,
-                    "workup_url": "/api/peek/etf_workup?ticker=VDE",
                     "dcf_url": None,
                     "report_url": None,
                 },

@@ -15,6 +15,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from llm.contracts import (
+    RecentDevelopmentEventPayload,
+    RecentDevelopmentsPayload,
+)
+from report.workspace_models import WorkspacePrepared
 from sources.discovery_market import DiscoveryMarketContext
 from sources.financial_growth_evidence import FinancialGrowthReference
 from sources.report_financials import FinancialEvidenceReference, FinancialTableProjection
@@ -906,20 +911,6 @@ class EarningsSection(BaseModel):
     themes_note: str | None = None
 
 
-class PrintVsGuideRow(BaseModel):
-    """One supported narrative commitment, preserved before strategic selection."""
-
-    metric: str
-    guide: str
-    actual: str
-    verdict: str
-
-
-SayDoSelectionDisposition = Literal[
-    "model", "cache", "non_llm_fallback", "failed_fallback", "no_parsable_rows"
-]
-
-
 @dataclass(frozen=True)
 class SayDoVerdictRow:
     """One management commitment + outcome — the P3-21 grading-overlay row.
@@ -940,37 +931,13 @@ class SayDoVerdictRow:
     realized_value: float | None
     outcome: str | None
     evaluated_at: datetime | None
-
-
-class SayDoCard(BaseModel):
-    """One pairwise Say-Do analysis: prior-quarter guidance vs current-quarter results.
-
-    `rating` and `thesis_view` are parsed from the saydo_md body (LLM-produced
-    "Performance Rating" + "Thesis View" lines). `unknown` if the prompt format
-    drifts and we can't pin them.
-    """
-
-    current_quarter: str
-    current_year: int
-    prior_quarter: str
-    prior_year: int
-    saydo_md: str
-    rating: Literal["MET", "MISSED", "EXCEEDED", "MIXED", "unknown"] = "unknown"
-    thesis_view: str | None = (
-        None  # "Bullish" / "Bearish" / "Neutral" (free text after "Thesis View:")
-    )
-    attribution: str | None = None  # one-line excerpt after "Attribution:"
-    print_vs_guide_rows: list[PrintVsGuideRow] = Field(default_factory=list[PrintVsGuideRow])
-    selected_row_indices: list[int] = Field(default_factory=list[int])
-    selection_disposition: SayDoSelectionDisposition = "no_parsable_rows"
+    source_ref: str = ""
+    source_document_id: int | None = None
+    source_url: str | None = None
 
 
 class SayDoHistoricalMetric(BaseModel):
-    """One structured guidance→realized row from `saydo_historical_metrics`.
-
-    Populated alongside `SayDoCard` so the renderer can show KPI-grain
-    promise-vs-delivery rows beside the LLM's narrative pairwise cards.
-    """
+    """One preserved guidance-to-realized comparison from the history ledger."""
 
     id: int
     period_made: datetime
@@ -985,12 +952,10 @@ class SayDoHistoricalMetric(BaseModel):
 
 
 class SayDoSection(BaseModel):
-    """§7 — pairwise Say-Do analyses across the available quarter sequence,
-    newest first."""
+    """Recorded commitments, outcomes, and retained guidance comparisons."""
 
     status: SectionStatus
     missing: MissingReason | None = None
-    cards: list[SayDoCard] = Field(default_factory=list[SayDoCard])
     verdicts: list[SayDoVerdictRow] = Field(default_factory=list[SayDoVerdictRow])
     verdicts_availability: Literal["present", "empty", "not_configured", "unavailable"] = (
         "not_configured"
@@ -1051,26 +1016,6 @@ class FilingIntelligenceSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# §8 IR documents
-# ---------------------------------------------------------------------------
-
-
-class IrDocCard(BaseModel):
-    quarter: str
-    year: int
-    doc_type: Literal["press_release", "presentation", "transcript"]
-    summary_md: str | None = None
-    source_url: str | None = None
-    local_path: str | None = None
-
-
-class IrDocsSection(BaseModel):
-    status: SectionStatus
-    missing: MissingReason | None = None
-    cards: list[IrDocCard] = Field(default_factory=list[IrDocCard])
-
-
-# ---------------------------------------------------------------------------
 # §10 Bear case
 # ---------------------------------------------------------------------------
 
@@ -1098,12 +1043,11 @@ class BearCaseSection(BaseModel):
 
 
 class RecentDevelopmentsSection(BaseModel):
-    """News + recent-developments brief sourced via Claude WebSearch.
+    """News + recent-developments brief sourced via grounded web search.
 
     Cached under `.tmp/news_cache/<TICKER>.json` with `cached_at` so that
-    successive brief regenerations within the TTL reuse the cached content.
-    `content_md` is rendered as-is in the HTML (sources inline as URLs in the
-    LLM output); no structural parsing keeps the section schema thin.
+    successive brief regenerations within the TTL reuse the validated typed
+    output. `content_md` is a deterministic text rendering for existing readers.
     """
 
     status: SectionStatus
@@ -1112,6 +1056,11 @@ class RecentDevelopmentsSection(BaseModel):
     cached_at: datetime | None = None
     news_days_window: int = 7
     content_md: str | None = None
+    structured_output: RecentDevelopmentsPayload | None = None
+
+    @property
+    def events(self) -> list[RecentDevelopmentEventPayload]:
+        return self.structured_output.events if self.structured_output is not None else []
 
 
 # ---------------------------------------------------------------------------
@@ -1126,8 +1075,6 @@ class CoverageRow(BaseModel):
     has_transcript_file: bool = False
     has_release_file: bool = False
     has_slides_file: bool = False
-    step_saydo_analyzed: bool = False
-    step_llm_summarized: bool = False
 
 
 class SourceDocRow(BaseModel):
@@ -1599,10 +1546,10 @@ class ReportSpec(BaseModel):
     repo_root: str  # absolute path the build read from
     db_path: str | None = Field(default=None, exclude=True, repr=False)
     run_id: str | None = None  # ingestion_runs.run_id if produced under one
+    workspace: WorkspacePrepared | None = Field(default=None, exclude=True, repr=False)
     flavor: ReportFlavor = ReportFlavor.PORTFOLIO
-    # True when this build was invoked with --enable-llm. Renderers consult
-    # this to decide whether to run optional LLM filters (e.g. SayDo
-    # commitment importance ranking) without requiring per-call wiring.
+    # True when preparation was invoked with --enable-llm. Rendering consumes
+    # the resulting selection and never starts model work.
     llm_enabled: bool = False
     # Sections whose LLM analysis was forgone to stay under a monthly budget cap
     # (on_exceed='skip'). Drives the brief's "forgone due to budget" header
@@ -1627,7 +1574,6 @@ class ReportSpec(BaseModel):
     segments: SegmentsSection
     earnings: EarningsSection
     saydo: SayDoSection
-    ir_docs: IrDocsSection
     recent_developments: RecentDevelopmentsSection
     bear_case: BearCaseSection
     provenance: ProvenanceSection

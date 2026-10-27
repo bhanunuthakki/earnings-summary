@@ -15,7 +15,7 @@ import os
 import sqlite3
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from pathlib import Path
 from types import ModuleType
 
@@ -29,7 +29,6 @@ from evals.corpora import (
     load_advisor_next_dollar_corpus,
     load_ask_advisory_answer_corpus,
     load_bear_case_corpus,
-    load_calibration_coach_corpus,
     load_transcript_summary_corpus,
 )
 from evals.harness import EvalAbortError, now_naive_utc, persist_summary
@@ -45,6 +44,15 @@ from llm.cli import LLMBudgetExceeded
 from llm.prompt_versions import prompt_version_for, registered_purposes
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def explicit_corpus_database(tmp_path: Path) -> Generator[None]:
+    from db_paths import db_path_context
+
+    with db_path_context(tmp_path / "data/portfolio.db"):
+        yield
+
 
 _RUBRIC_MD = """\
 # Rubric: bear_case (v1)
@@ -107,6 +115,8 @@ def test_audit_wiring_is_consistent() -> None:
     # runner CLI exposes exactly the same purposes.
     assert set(AUDIT_SPECS) == set(CORPUS_LOADERS)
     assert set(AUDIT_SPECS) <= registered_purposes()
+    assert "behavior_distill" not in AUDIT_SPECS
+    assert "behavior_distill" not in CORPUS_LOADERS
     runner = _load_execution_module("run_llm_evals")
     assert set(runner.AUDIT_PURPOSES) == set(AUDIT_SPECS)
 
@@ -315,7 +325,7 @@ def test_bear_case_corpus_newest_first_and_skips_corrupt(tmp_path: Path) -> None
     assert "failure_modes" in items[0].content
 
 
-def test_transcript_summary_corpus_fiscal_order(tmp_path: Path) -> None:
+def test_transcript_summary_corpus_ignores_legacy_generated_files(tmp_path: Path) -> None:
     tmp_dir = tmp_path / ".tmp"
     tmp_dir.mkdir()
     (tmp_dir / "NU_Q1_2026_summary.txt").write_text("q1 note", encoding="utf-8")
@@ -327,10 +337,7 @@ def test_transcript_summary_corpus_fiscal_order(tmp_path: Path) -> None:
     now = time.time()
     os.utime(tmp_dir / "NU_Q3_2025_summary.txt", (now, now))
 
-    items = load_transcript_summary_corpus(tmp_path)
-    assert [i.item_id for i in items] == ["NU_Q1_2026", "MELI_Q4_2025", "NU_Q3_2025"]
-    assert items[1].ticker == "MELI"
-    assert items[0].content == "q1 note"
+    assert load_transcript_summary_corpus(tmp_path) == []
 
 
 def test_advisor_corpus_reads_next_dollar_memos(tmp_path: Path) -> None:
@@ -377,27 +384,6 @@ def test_advisor_corpus_tolerates_missing_table_and_db(tmp_path: Path) -> None:
     data.mkdir()
     sqlite3.connect(data / "portfolio.db").close()  # DB, no table
     assert load_advisor_next_dollar_corpus(tmp_path) == []
-
-
-def _write_scorecard(repo: Path, period: str, *, coached: bool) -> None:
-    base = repo / "data" / "calibration_scorecard"
-    base.mkdir(parents=True, exist_ok=True)
-    card: dict[str, object] = {"period": period, "prose": f"Scorecard {period} prose body"}
-    if coached:
-        card["biases"] = [{"name": "x", "pattern": "p", "evidence": ["e"], "tell": "t"}]
-    else:
-        card["biases"] = []
-        card["experiment"] = None
-    (base / f"{period}.json").write_text(json.dumps(card), encoding="utf-8")
-
-
-def test_calibration_coach_corpus_skips_thin_and_missing(tmp_path: Path) -> None:
-    assert load_calibration_coach_corpus(tmp_path) == []  # no dir
-    _write_scorecard(tmp_path, "2026-05", coached=True)
-    _write_scorecard(tmp_path, "2026-06", coached=False)  # thin → nothing to judge
-    items = load_calibration_coach_corpus(tmp_path)
-    assert [i.item_id for i in items] == ["calibration_coach:2026-05"]
-    assert "prose body" in items[0].content
 
 
 def _seed_ask_turns(repo: Path) -> None:
@@ -458,7 +444,10 @@ def test_ask_advisory_answer_corpus_filters_and_orders(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _seed_ask_turns(repo)
 
-    items = load_ask_advisory_answer_corpus(repo)
+    from db_paths import db_path_context
+
+    with db_path_context(repo / "data/portfolio.db"):
+        items = load_ask_advisory_answer_corpus(repo)
     # Only the two genuine advisory answers — the data-view turn and the "ok"
     # ack are excluded — newest (the s2 margins answer) first.
     assert [i.item_id for i in items] == ["ask_turn:7", "ask_turn:2"]

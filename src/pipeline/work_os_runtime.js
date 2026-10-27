@@ -2,7 +2,7 @@
   // comments_server_content_routes.  Full-page detail never upgrades an
   // arbitrary prototype callback or an unregistered endpoint into navigation.
   const WORK_OS_FULL_PAGE_PEEK_PATHS = [
-    new RegExp('^/api/peek/(?:alerts|news-events|documents|earnings-prep|earnings-readout|investment-profile|portfolio-impact|weekly-packet|whatif|etf_workup|discovery-compare)$'),
+    new RegExp('^/api/peek/(?:alerts|news-events|documents|earnings-prep|earnings-readout|investment-profile|portfolio-impact|weekly-packet|whatif|discovery-compare)$'),
     new RegExp('^/api/peek/(?:alert/[0-9]+|ticker/[A-Za-z0-9.=-]+|memo/[a-z_]+|review/[A-Za-z0-9.=-]+|provenance(?:/[A-Za-z0-9_:-]+)?)$'),
     new RegExp('^/api/governed-alerts/[1-9][0-9]*/evidence$'),
     new RegExp('^/source/[0-9]+$')
@@ -2184,7 +2184,7 @@
           dialogueAction = '<button class="k-btn k-btn-quiet k-btn-sm" type="button" disabled title="Dialogue status temporarily unavailable">Dialogue unavailable</button>';
         }
         return '<article class="k-well work-os-evaluation-thread" data-work-os-evaluation-ticker="' + escapeWorkOsHtml(ticker) + '"><div class="work-os-evaluation-copy"><h3 class="k-card-title k-card-row-title work-os-evaluation-title"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(ticker) + '</span> · ' + escapeWorkOsHtml(item.name || ticker) + '</h3><span class="k-chip work-os-evaluation-kind">' + escapeWorkOsHtml(instrument) + '</span>' + (isEtf ? '' : '<span class="' + freshnessClass + ' work-os-evaluation-readiness">' + escapeWorkOsHtml(readiness) + ' workup</span>') + '<div class="k-card-meta work-os-evaluation-meta">' + escapeWorkOsHtml(noteDetail) + (item.latest_note_at ? ' · updated ' + escapeWorkOsHtml(String(item.latest_note_at)) : '') + '</div></div><div class="research-actions work-os-evaluation-actions">' + dialogueAction + '' + (isEtf
-          ? '<a class="k-chip" href="/api/peek/etf_workup?ticker=' + encodeURIComponent(ticker) + '" data-peek-url="/api/peek/etf_workup?ticker=' + encodeURIComponent(ticker) + '" data-peek-title="Saved ETF research — ' + escapeWorkOsHtml(ticker) + '">Saved research</a>'
+          ? ''
           : '<button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-evaluation-workup="' + escapeWorkOsHtml(ticker) + '" data-work-os-evaluation-instrument="' + escapeWorkOsHtml(instrumentValue) + '">Open workup</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-evaluation-compare="' + escapeWorkOsHtml(ticker) + '">Compare</button>') + '</div></article>';
       }).join('');
       target.innerHTML = html;
@@ -2247,9 +2247,6 @@
     const ticker = workOsNormalizeTicker(item.ticker);
     if (item.instrument_type === 'company' && item.company_desk_url) {
       actions.push('<a class="k-btn k-btn-primary k-btn-sm" href="' + escapeWorkOsHtml(item.company_desk_url) + '" data-work-os-evaluation-company="' + escapeWorkOsHtml(ticker) + '">Company Desk</a>');
-    }
-    if (item.instrument_type === 'etf' && item.workup_url) {
-      actions.push('<a class="k-chip" href="' + escapeWorkOsHtml(item.workup_url) + '" data-peek-url="' + escapeWorkOsHtml(item.workup_url) + '" data-peek-title="Saved ETF research — ' + escapeWorkOsHtml(ticker) + '">Saved research</a>');
     }
     if (item.instrument_type === 'company' && item.dcf_url) actions.push('<a class="k-chip" href="' + escapeWorkOsHtml(item.dcf_url) + '">DCF</a>');
     if (item.report_url) actions.push('<a class="k-chip" href="' + escapeWorkOsHtml(item.report_url) + '">Brief</a>');
@@ -2370,7 +2367,7 @@
       const valuationContext = isEtf ? 'Not applicable to ETFs' : 'DCF upside';
       return '<tr data-work-os-evaluation-row="' + escapeWorkOsHtml(ticker) + '" data-profile-labels="' + escapeWorkOsHtml(profileLabels) + '" data-profile-state="' + escapeWorkOsHtml(profileState) + '" data-instrument="' + escapeWorkOsHtml(item.instrument_type) + '">' +
         '<td><div class="k-ticker"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(ticker) + '</span><span class="k-ticker-name">' + escapeWorkOsHtml(workOsHumanCopy(item.name, ticker)) + '</span></div><span class="' + typeClass + '">' + type + '</span></td>' +
-        '<td>' + (isEtf ? '<a class="k-chip" href="/api/peek/etf_workup?ticker=' + encodeURIComponent(ticker) + '" data-peek-url="/api/peek/etf_workup?ticker=' + encodeURIComponent(ticker) + '" data-peek-title="Saved ETF research — ' + escapeWorkOsHtml(ticker) + '">Saved research</a>' : workOsInvestmentProfileCell(item)) + '</td>' +
+        '<td>' + (isEtf ? '<span class="k-card-meta">Portfolio context</span>' : workOsInvestmentProfileCell(item)) + '</td>' +
         '<td>' + (isEtf ? '<span class="k-card-meta">Not applicable to ETF baskets</span>' : workOsBusinessCell(item)) + '</td>' +
         '<td>' + (isEtf ? workOsEtfHeldWeightCell(item) : workOsPortfolioRoleCell(item)) + '</td>' +
         '<td><strong class="t-mono">' + escapeWorkOsHtml(valuationValue) + '</strong><div class="k-card-meta">' + valuationContext + '</div>' + valuationLink + '</td>' +
@@ -2444,11 +2441,7 @@
   function workOsOpenEvaluationWorkup(button) {
     const safeTicker = workOsNormalizeTicker(button.getAttribute('data-work-os-evaluation-workup'));
     const instrument = button.getAttribute('data-work-os-evaluation-instrument');
-    if (!safeTicker || (instrument !== 'stock' && instrument !== 'etf')) return;
-    if (instrument === 'etf') {
-      workOsOpenPeekRoute('/api/peek/etf_workup?ticker=' + encodeURIComponent(safeTicker), 'Saved ETF research — ' + safeTicker);
-      return;
-    }
+    if (!safeTicker || instrument !== 'stock') return;
     window.switchCompanyWorkspace(safeTicker);
   }
 
@@ -2706,6 +2699,18 @@
     if (!workOsWriteCompanyContext(requested, 'analytics-playground', options)) return false;
     window.navigateTo('screen-analytics-playground', { fromHistory: true, companyContextReady: true });
     return workOsRenderFactPlayground();
+  };
+
+  window.workOsOpenAnalysis = async function (input) {
+    const supplied = input || {};
+    const opened = await window.switchFactPlayground(supplied.company);
+    if (!opened) return false;
+    const root = document.getElementById('vx-root');
+    if (!root) return false;
+    root.dispatchEvent(new CustomEvent('work-os-explore-analysis', {detail: {
+      query: String(supplied.query || ''), spec: supplied.spec || null, opener: supplied.opener || null
+    }}));
+    return true;
   };
 
   const workOsFactTicker = document.getElementById('workOsFactTicker');

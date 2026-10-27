@@ -31,17 +31,7 @@ EXPECTED_DISABLED_TASKS = {
     r"\earnings-summary\refresh_ir_kpis",
     r"\earnings-summary\scan_ir_transcripts",
     # Simplification Phase 0 freeze (2026-10-20): outside the core research jobs.
-    r"\earnings-summary\coach_pings",
-    r"\earnings-summary\decision_nudge",
     r"\earnings-summary\grade_calibration",
-    r"\earnings-summary\ledger_synthesis",
-    r"\earnings-summary\monthly_calibration_scorecard",
-    r"\earnings-summary\red_team",
-    r"\earnings-summary\submit_saydo_batch",
-    r"\earnings-summary\tenet_accountability",
-    r"\earnings-summary\thesis_collision",
-    r"\earnings-summary\weekly_packet",
-    r"\earnings-summary\weekly_score_stances",
 }
 
 
@@ -65,6 +55,29 @@ def test_retired_research_lens_batch_jobs_are_absent() -> None:
         assert not (PROJECT_ROOT / relative).exists(), relative
 
 
+def test_retired_score_and_refresh_tasks_are_absent() -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    declared = {task.task_name for task in manifest.tasks}
+    retired = {
+        r"\earnings-summary\weekly_score_stances": (
+            "weekly_score_stances.task.xml",
+            "run_weekly_score_stances.bat",
+        ),
+        r"\earnings-summary\refresh_business_factors": (
+            "refresh_business_factors.task.xml",
+            "run_refresh_business_factors.bat",
+        ),
+        r"\earnings-summary\refresh_scenario_priors": (
+            "refresh_scenario_priors.task.xml",
+            "run_refresh_scenario_priors.bat",
+        ),
+    }
+    for task_name, (xml_name, wrapper_name) in retired.items():
+        assert task_name not in declared
+        assert not (CRON_DIR / xml_name).exists()
+        assert not (CRON_DIR / wrapper_name).exists()
+
+
 def test_manifest_rejects_duplicate_json_keys(tmp_path: Path) -> None:
     manifest_path = tmp_path / "task_manifest.json"
     manifest_path.write_text(
@@ -78,7 +91,7 @@ def test_manifest_rejects_duplicate_json_keys(tmp_path: Path) -> None:
 
 def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     manifest = load_manifest(MANIFEST_PATH)
-    assert len(manifest.tasks) == 42
+    assert len(manifest.tasks) == 29
     assert all(
         task.task_name != r"\earnings-summary\backfill_financial_fact_resolutions"
         for task in manifest.tasks
@@ -266,12 +279,7 @@ def test_generated_registration_and_inventory_are_deterministic_and_current() ->
     assert first_doc == generated_inventory_markdown(load_manifest(MANIFEST_PATH))
     assert (CRON_DIR / "register_tasks.generated.ps1").read_text(encoding="utf-8") == first_script
     assert (CRON_DIR / "TASKS.generated.md").read_text(encoding="utf-8") == first_doc
-    assert "/Create /TN '\\earnings-summary\\capture_poller'" not in first_script
-    registered_tasks = [
-        task
-        for task in manifest.tasks
-        if task.task_name.casefold() != r"\earnings-summary\capture_poller".casefold()
-    ]
+    registered_tasks = list(manifest.tasks)
     assert first_script.count("schtasks.exe /Create") == 1
     assert first_script.count("Failed to register scheduled task") == 1
     tracker_create = (
@@ -292,7 +300,8 @@ def test_generated_registration_and_inventory_are_deterministic_and_current() ->
     assert "-Password $password" in first_script
     assert "scheduler_rollback" in first_script
     assert "Principal.LogonType -ne 'Password'" in first_script
-    assert "| Windows service |" in first_doc
+    assert "| Task Scheduler |" in first_doc
+    assert "| Windows service |" not in first_doc
 
 
 def test_task_security_descriptor_helper_is_fail_closed_and_rollback_safe() -> None:
@@ -332,11 +341,7 @@ def test_operator_runbook_uses_generated_registration_and_safe_recovery_contract
     normalized = runbook.casefold()
     manifest = load_manifest(MANIFEST_PATH)
     generated_registration = (CRON_DIR / "register_tasks.generated.ps1").read_text(encoding="utf-8")
-    scheduler_tasks = [
-        task
-        for task in manifest.tasks
-        if task.task_name.casefold() != r"\earnings-summary\capture_poller".casefold()
-    ]
+    scheduler_tasks = list(manifest.tasks)
 
     assert f"{len(manifest.tasks)} operational declarations" in runbook
     assert f"{len(scheduler_tasks)} Task Scheduler registrations" in runbook
@@ -457,3 +462,14 @@ def test_validation_rejects_wrapper_without_standard_exit_tail(tmp_path: Path) -
     assert any(
         "wrapper does not end with standard 'endlocal & exit /b' exit tail" in err for err in errors
     )
+
+
+def test_retired_saydo_narrative_batch_is_not_shipped() -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    assert r"\earnings-summary\submit_saydo_batch" not in {
+        task.task_name for task in manifest.tasks
+    }
+    for name in ("submit_saydo_batch.task.xml", "run_submit_saydo_batch.bat"):
+        assert not (CRON_DIR / name).exists()
+    for name in ("build_saydo_pairs.py", "submit_saydo_batch.py"):
+        assert not (PROJECT_ROOT / "execution" / name).exists()

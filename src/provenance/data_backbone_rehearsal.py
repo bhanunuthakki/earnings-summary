@@ -33,7 +33,6 @@ PRESERVATION_CRITICAL_TABLES: tuple[str, ...] = (
     "analyst_notes",
     "capture_audit_log",
     "decision_drafts",
-    "decision_nudges",
     "decisions",
     "insight_notes",
     "investor_calibration",

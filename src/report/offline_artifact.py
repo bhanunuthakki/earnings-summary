@@ -44,7 +44,7 @@ class _GUID(ctypes.Structure):
     ]
 
 
-class _WINTRUST_FILE_INFO(ctypes.Structure):  # noqa: N801 - Win32 ABI name
+class _WintrustFileInfo(ctypes.Structure):
     _fields_ = [
         ("cbStruct", wintypes.DWORD),
         ("pcwszFilePath", wintypes.LPCWSTR),
@@ -53,7 +53,7 @@ class _WINTRUST_FILE_INFO(ctypes.Structure):  # noqa: N801 - Win32 ABI name
     ]
 
 
-class _WINTRUST_CATALOG_INFO(ctypes.Structure):  # noqa: N801 - Win32 ABI name
+class _WintrustCatalogInfo(ctypes.Structure):
     _fields_ = [
         ("cbStruct", wintypes.DWORD),
         ("dwCatalogVersion", wintypes.DWORD),
@@ -68,14 +68,14 @@ class _WINTRUST_CATALOG_INFO(ctypes.Structure):  # noqa: N801 - Win32 ABI name
     ]
 
 
-class _CATALOG_INFO(ctypes.Structure):  # noqa: N801 - Win32 ABI name
+class _CatalogInfo(ctypes.Structure):
     _fields_ = [
         ("cbStruct", wintypes.DWORD),
         ("wszCatalogFile", wintypes.WCHAR * 260),
     ]
 
 
-class _WINTRUST_DATA(ctypes.Structure):  # noqa: N801 - Win32 ABI name
+class _WintrustData(ctypes.Structure):
     _fields_ = [
         ("cbStruct", wintypes.DWORD),
         ("pPolicyCallbackData", ctypes.c_void_p),
@@ -187,7 +187,6 @@ _FILESYSTEM_PREFIXES = (
     "data/qa_topics/",
     "data/recent_developments/",
     "data/report_comments/",
-    "data/saydo_filter/",
     "data/segment_definitions/",
     "data/ticker_specific/",
     "data/valuation_basis/",
@@ -598,7 +597,7 @@ def _require_trusted_windows_binary(path: Path) -> None:
         0x11D0,
         (ctypes.c_ubyte * 8)(0x8C, 0xC2, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE),
     )
-    file_info = _WINTRUST_FILE_INFO(ctypes.sizeof(_WINTRUST_FILE_INFO), str(path), None, None)
+    file_info = _WintrustFileInfo(ctypes.sizeof(_WintrustFileInfo), str(path), None, None)
     status = _verify_windows_trust(
         action=action,
         union_choice=1,
@@ -614,8 +613,8 @@ def _require_trusted_windows_binary(path: Path) -> None:
 def _verify_windows_trust(*, action: _GUID, union_choice: int, choice: ctypes.c_void_p) -> int:
     if sys.platform != "win32":
         raise OfflineBoundaryError("Windows trust verification requires Windows")
-    trust_data = _WINTRUST_DATA()
-    trust_data.cbStruct = ctypes.sizeof(_WINTRUST_DATA)
+    trust_data = _WintrustData()
+    trust_data.cbStruct = ctypes.sizeof(_WintrustData)
     trust_data.dwUIChoice = 2
     trust_data.fdwRevocationChecks = 0
     trust_data.dwUnionChoice = union_choice
@@ -624,7 +623,7 @@ def _verify_windows_trust(*, action: _GUID, union_choice: int, choice: ctypes.c_
     trust_data.dwProvFlags = 0x00001000
     wintrust = ctypes.WinDLL("wintrust", use_last_error=True)
     verify = wintrust.WinVerifyTrust
-    verify.argtypes = [wintypes.HWND, ctypes.POINTER(_GUID), ctypes.POINTER(_WINTRUST_DATA)]
+    verify.argtypes = [wintypes.HWND, ctypes.POINTER(_GUID), ctypes.POINTER(_WintrustData)]
     verify.restype = ctypes.c_long
     status = int(verify(wintypes.HWND(-1), ctypes.byref(action), ctypes.byref(trust_data)))
     trust_data.dwStateAction = 2
@@ -708,12 +707,12 @@ def _verify_windows_catalog_trust(path: Path, *, action: _GUID) -> bool:
         )
         if not catalog_context.value:
             return False
-        catalog_info = _CATALOG_INFO()
-        catalog_info.cbStruct = ctypes.sizeof(_CATALOG_INFO)
+        catalog_info = _CatalogInfo()
+        catalog_info.cbStruct = ctypes.sizeof(_CatalogInfo)
         catalog_from_context = wintrust.CryptCATCatalogInfoFromContext
         catalog_from_context.argtypes = [
             wintypes.HANDLE,
-            ctypes.POINTER(_CATALOG_INFO),
+            ctypes.POINTER(_CatalogInfo),
             wintypes.DWORD,
         ]
         catalog_from_context.restype = wintypes.BOOL
@@ -722,8 +721,8 @@ def _verify_windows_catalog_trust(path: Path, *, action: _GUID) -> bool:
                 f"Windows catalog identity failed for {path} ({ctypes.get_last_error()})"
             )
         member_tag = bytes(hash_bytes[: hash_size.value]).hex().upper()
-        catalog_trust = _WINTRUST_CATALOG_INFO()
-        catalog_trust.cbStruct = ctypes.sizeof(_WINTRUST_CATALOG_INFO)
+        catalog_trust = _WintrustCatalogInfo()
+        catalog_trust.cbStruct = ctypes.sizeof(_WintrustCatalogInfo)
         catalog_trust.pcwszCatalogFilePath = catalog_info.wszCatalogFile
         catalog_trust.pcwszMemberTag = member_tag
         catalog_trust.pcwszMemberFilePath = str(path)
@@ -981,7 +980,6 @@ def stage_offline_repository(
         "data/qa_topics",
         "data/recent_developments",
         "data/report_comments",
-        "data/saydo_filter",
         "data/segment_definitions",
         "data/ticker_specific",
         "data/valuation_basis",

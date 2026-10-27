@@ -1,6 +1,6 @@
 """Tests for ``research.investment_decision_card.act_on_card`` — the ONE
-action core for the P1.1 Investment Decision Card's four owner verbs
-(pass/watch/research_further/promote — PRD §8.1 disposition semantics).
+action core for the P1.1 Investment Decision Card's three explicit owner
+actions (pass/watch/promote — PRD §8.1 disposition semantics).
 
 Hand-rolled minimal decisions + llm_artifacts + tracked_companies +
 research_tasks schema, mirroring tests/test_allocation_actions.py's style.
@@ -16,10 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from decision_extractor import (
-    _KIND_DIRECTION,  # pyright: ignore[reportPrivateUsage]  # internal seam under test
-    reconcile_decision_actions,
-)
+from decision_extractor import reconcile_decision_actions
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import LivePortfolio, LiveTransaction
 from research.investment_decision_card import CardActionError, act_on_card
@@ -255,44 +252,23 @@ def test_promote_idempotent_double_post(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# research_further — research_tasks row, NO decision row
+# Retired research_further action — stale calls must not write either store.
 # --------------------------------------------------------------------------- #
 
 
-def test_research_further_creates_task_no_decision_row(tmp_path: Path) -> None:
+def test_research_further_action_is_rejected_without_writes(tmp_path: Path) -> None:
     db_path = _make_db(tmp_path)
     _insert_artifact(db_path, artifact_id=1)
 
-    status = act_on_card(1, "research_further", db_path=db_path)
-
-    assert status.startswith("research_task_created:")
+    with pytest.raises(CardActionError, match="unknown verb"):
+        act_on_card(1, "research_further", db_path=db_path)
     assert _decisions(db_path) == []
     conn = sqlite3.connect(str(db_path))
     try:
-        task = conn.execute("SELECT ticker, status, claim FROM research_tasks").fetchone()
+        count = conn.execute("SELECT COUNT(*) FROM research_tasks").fetchone()[0]
     finally:
         conn.close()
-    assert task is not None
-    assert task[0] == TICKER
-    assert task[1] == "proposed"
-    assert "checkout" in task[2] or "ACME" in task[2]
-
-
-def test_research_further_idempotent_double_post(tmp_path: Path) -> None:
-    db_path = _make_db(tmp_path)
-    _insert_artifact(db_path, artifact_id=1)
-
-    first = act_on_card(1, "research_further", db_path=db_path)
-    second = act_on_card(1, "research_further", db_path=db_path)
-
-    assert first.startswith("research_task_created:")
-    assert second.startswith("already_proposed:")
-    conn = sqlite3.connect(str(db_path))
-    try:
-        n = conn.execute("SELECT COUNT(*) FROM research_tasks").fetchone()[0]
-    finally:
-        conn.close()
-    assert n == 1
+    assert count == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -300,19 +276,15 @@ def test_research_further_idempotent_double_post(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_kind_direction_has_no_entry_for_card_dispositions() -> None:
-    for kind in ("pass", "watch", "promote"):
-        assert _KIND_DIRECTION.get(kind) is None
-
-
-def test_reconciliation_treats_promote_as_non_directional(tmp_path: Path) -> None:
+@pytest.mark.parametrize("action", ["pass", "watch", "promote"])
+def test_reconciliation_treats_card_action_as_non_directional(tmp_path: Path, action: str) -> None:
     """A 'promote' decision with NO fill in its window reconciles through the
     HOLD/AVOID (fill-vs-no-fill) branch — 'followed' once the window elapses
     with nothing traded — never through the buy/sell direction branch (which
     would require a _KIND_DIRECTION entry that doesn't exist)."""
     db_path = _make_db(tmp_path)
     _insert_artifact(db_path, artifact_id=1)
-    act_on_card(1, "promote", db_path=db_path)
+    act_on_card(1, action, db_path=db_path)
     # made_at recorded as "now" by act_on_card — backdate it so the 30d
     # window has already elapsed relative to `now` below.
     conn = sqlite3.connect(str(db_path))
@@ -334,13 +306,16 @@ def test_reconciliation_treats_promote_as_non_directional(tmp_path: Path) -> Non
     assert action == "followed"
 
 
-def test_reconciliation_treats_promote_with_a_fill_as_partial(tmp_path: Path) -> None:
+@pytest.mark.parametrize("action", ["pass", "watch", "promote"])
+def test_reconciliation_treats_card_action_with_a_fill_as_partial(
+    tmp_path: Path, action: str
+) -> None:
     """A 'promote' decision followed by ANY fill (buy or sell) in-window is
     'partial' — the HOLD/AVOID branch's "traded anyway" read — never
     'followed'/'reversed' (those require a _KIND_DIRECTION entry)."""
     db_path = _make_db(tmp_path)
     _insert_artifact(db_path, artifact_id=1)
-    act_on_card(1, "promote", db_path=db_path)
+    act_on_card(1, action, db_path=db_path)
     conn = sqlite3.connect(str(db_path))
     conn.execute("UPDATE decisions SET made_at = '2026-01-10T00:00:00'")
     conn.commit()

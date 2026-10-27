@@ -352,11 +352,8 @@ def _admission(
         tasks=tuple(
             CutoverTaskObservation(path=path, state="Disabled", enabled=False) for path in tasks
         ),
-        expected_service_names=("es-dashboard", "es-poller"),
-        services=(
-            CutoverServiceObservation(name="es-dashboard", state="Stopped"),
-            CutoverServiceObservation(name="es-poller", state="Stopped"),
-        ),
+        expected_service_names=("es-dashboard",),
+        services=(CutoverServiceObservation(name="es-dashboard", state="Stopped"),),
         expected_listener_endpoints=("127.0.0.1:7421",),
         listeners=(
             CutoverListenerObservation(
@@ -518,10 +515,7 @@ def _admission(
         tasks=tuple(
             QuiescedTaskObservation(path=path, state="Disabled", enabled=False) for path in tasks
         ),
-        services=(
-            QuiescedServiceObservation(name="es-dashboard", state="Stopped"),
-            QuiescedServiceObservation(name="es-poller", state="Stopped"),
-        ),
+        services=(QuiescedServiceObservation(name="es-dashboard", state="Stopped"),),
         listeners=(
             QuiescedListenerObservation(
                 host="127.0.0.1",
@@ -612,8 +606,8 @@ def _admission(
         "quiescence_registry_artifact_size_bytes": quiescence_path.stat().st_size,
         "expected_task_paths": tasks,
         "disabled_task_paths": tasks,
-        "expected_service_names": ("es-dashboard", "es-poller"),
-        "stopped_service_names": ("es-dashboard", "es-poller"),
+        "expected_service_names": ("es-dashboard",),
+        "stopped_service_names": ("es-dashboard",),
         "expected_listener_endpoints": ("127.0.0.1:7421",),
         "inactive_listener_endpoints": ("127.0.0.1:7421",),
         "process_census_scope": "all-process-command-lines/v1",
@@ -2239,7 +2233,7 @@ def test_gc_recovery_service_inventory_tracks_dynamic_registry(
     _archive(archive)
     admission, _admission_sha = _admission(current, baseline, archive)
     receipt = GcRecoveryAdmissionReceipt.model_validate_json(admission.read_bytes())
-    services = ("es-dashboard", "es-poller", "es-worker")
+    services = ("es-dashboard", "synthetic-worker", "es-worker")
     monkeypatch.setattr(recovery_module, "managed_service_names", lambda: services)
     payload = receipt.model_dump()
     payload["expected_service_names"] = services

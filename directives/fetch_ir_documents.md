@@ -105,10 +105,10 @@ invocation cannot widen the window.
 | `IR_SUPPLEMENT`    | (none)          | Financial supplement / data workbook (XLSX or PDF) | Medium |
 | `IR_INVESTOR_UPDATE`| (none)         | Shareholder letter, annual report, investor day deck | Medium |
 
-`IR_INVESTOR_UPDATE` uses the legacy summary path. `IR_SUPPLEMENT` does not use
-that summary path; its separate KPI-capture command remains an explicit step.
-Both are first-class citizens of the `documents` table. A cached summary or KPI
-row is not a terminal extraction-completeness receipt.
+Investor updates, press releases and presentations remain original source documents.
+Their separate generated summaries/cards are retired. Transcript summaries remain
+exact-document products with verified completion. Supplement KPI capture remains an
+explicit step. A generated output or KPI row does not prove extraction completeness.
 
 ## Path A: Auto-fetch (headless discovery → download → register)
 

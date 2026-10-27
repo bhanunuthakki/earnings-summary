@@ -93,6 +93,7 @@ def test_brief_library_unifies_persisted_artifact_kinds_and_exact_facets(
             id INTEGER PRIMARY KEY,
             ticker TEXT,
             scope TEXT NOT NULL DEFAULT 'ticker',
+            document_version_id TEXT,
             purpose TEXT NOT NULL,
             fiscal_period TEXT,
             content_md TEXT,

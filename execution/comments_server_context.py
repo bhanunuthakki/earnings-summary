@@ -44,7 +44,6 @@ from comments_server_shared import (
     drain_durable_events,
 )
 from flask import Flask, Response, g, request, stream_with_context
-from update_readme import collect_repository_evidence, current_candidate_violations
 
 from ask.engine import AskTurn, sanitize_history
 from ask.exchange_store import (
@@ -67,13 +66,11 @@ from dispatch_registry import Registry
 from log_redact import redact
 from logging_config import get_correlation_id, set_correlation_id
 from operations.models import OperationsRegistry
-from operations.readme_governance import ReadmeGovernanceStatus, collect_readme_governance_status
 from operations.registry import build_operations_registry
 from operations.review_bundle import review_code_identity
 from pipeline.research_cockpit import CockpitRow, build_cockpit_rows
 from pipeline.tier_runner import tier_coverage_summary
 from pipeline.work_os_overview import render_overview_panel
-from readme_updater import evidence_sha256
 from schema_compat import SchemaRevisionMismatch
 from server_runtime.access import ReportCapabilityStore
 from server_runtime.streaming import drain_events
@@ -105,7 +102,6 @@ class ServerContext:
     panel_metrics: deque[dict[str, object]]
     metric_cache_modes: frozenset[str]
     activation_cache_modes: frozenset[str]
-    collect_current_readme_status: Callable[[], ReadmeGovernanceStatus]
     start_background_task: BackgroundTaskStarter
     client_error: Callable[[str, int], tuple[dict[str, str], int]]
     internal_failure: Callable[..., tuple[dict[str, str], int]]
@@ -178,16 +174,6 @@ def build_server_context(
     operations_review_code_identity = review_code_identity(resolved_code_root)
     app.config["CODE_ROOT"] = resolved_code_root
     app.config["OPERATIONS_REGISTRY"] = declared_operations
-
-    def collect_current_readme_status() -> ReadmeGovernanceStatus:
-        evidence = collect_repository_evidence(resolved_code_root)
-        return collect_readme_governance_status(
-            resolved_code_root,
-            current_evidence_sha256=evidence_sha256(evidence),
-            candidate_validator=lambda markdown: current_candidate_violations(
-                markdown, resolved_code_root
-            ),
-        )
 
     # Dedicated pool so a long-running LLM subprocess doesn't pin a Flask
     # request thread for the full 10-60s of a chat turn. Pool size caps
@@ -662,7 +648,6 @@ def build_server_context(
         panel_metrics=panel_metrics,
         metric_cache_modes=metric_cache_modes,
         activation_cache_modes=activation_cache_modes,
-        collect_current_readme_status=collect_current_readme_status,
         start_background_task=start_background_task,
         client_error=client_error,
         internal_failure=internal_failure,

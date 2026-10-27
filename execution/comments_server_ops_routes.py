@@ -34,7 +34,6 @@ from server_runtime.access import private_mobile_origin
 
 def register_ops_routes(app: Flask, ctx: ServerContext) -> None:
     client_error = ctx.client_error
-    collect_current_readme_status = ctx.collect_current_readme_status
     db_path = ctx.db_path
     declared_operations = ctx.declared_operations
     get_operations_read_db = ctx.get_operations_read_db
@@ -306,10 +305,3 @@ def register_ops_routes(app: Flask, ctx: ServerContext) -> None:
         if not ok:
             return ({"error": "position_entries unavailable (pre-0088 DB?)"}, 500)
         return {"id": entry_id, "ok": True}
-
-    @app.route("/api/readme-governance/status", methods=["GET"])
-    def readme_governance_status():
-        """Return the bounded status projection, never candidate prose or paths."""
-
-        status = collect_current_readme_status()
-        return status.model_dump(mode="json")

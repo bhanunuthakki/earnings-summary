@@ -22,14 +22,18 @@ Helpers serialize / deserialize transparently.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import logging
+import re
 import sqlite3
+import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Literal, Protocol, cast
 
 from db_paths import resolve_db_path
 from pipeline.db_writer_gate import WriterGateHeldError
@@ -40,6 +44,103 @@ log = logging.getLogger(__name__)
 
 class DirtyQueueReadError(RuntimeError):
     """The dirty-artifact queue could not be read reliably."""
+
+
+class DocumentProductStoreError(RuntimeError):
+    """A native document-product artifact is missing, invalid, or ambiguous."""
+
+
+DocumentProduct = Literal["transcript_summary",]
+DocumentPeriodType = Literal["Q1", "Q2", "Q3", "Q4"]
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentProductKey:
+    issuer_id: str
+    document_version_id: str
+    period_start: date | None
+    period_end: date
+    period_type: DocumentPeriodType
+    fiscal_year: int
+    fiscal_quarter: int
+    product: DocumentProduct
+
+    def __post_init__(self) -> None:
+        if not self.issuer_id or not self.document_version_id:
+            raise ValueError("document product identity requires issuer and document IDs")
+        fields: dict[str, object] = {
+            "period_end": self.period_end,
+            "period_start": self.period_start,
+            "fiscal_year": self.fiscal_year,
+            "fiscal_quarter": self.fiscal_quarter,
+        }
+        period_end = fields["period_end"]
+        period_start = fields["period_start"]
+        fiscal_year = fields["fiscal_year"]
+        fiscal_quarter = fields["fiscal_quarter"]
+        if isinstance(period_end, datetime) or not isinstance(period_end, date):
+            raise ValueError("period_end must be a calendar date")
+        if period_start is not None and (
+            isinstance(period_start, datetime) or not isinstance(period_start, date)
+        ):
+            raise ValueError("period_start must be a calendar date or None")
+        if period_start is not None and period_start > period_end:
+            raise ValueError("period_start must not follow period_end")
+        if (
+            not isinstance(fiscal_year, int)
+            or isinstance(fiscal_year, bool)
+            or not isinstance(fiscal_quarter, int)
+            or isinstance(fiscal_quarter, bool)
+            or fiscal_year < 1
+            or fiscal_quarter not in range(1, 5)
+        ):
+            raise ValueError("document product requires a valid fiscal year and quarter")
+        if self.period_type != f"Q{fiscal_quarter}":
+            raise ValueError("fiscal quarter must agree with period type")
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentProductGeneration:
+    input_manifest_json: str
+    input_sha256: str
+    generation_id: str
+    generated_at: str
+    model: str
+    backend: str
+    prompt_version: str
+    prompt_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentProductVerificationReceipt:
+    receipt_json: str
+    receipt_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentProductEnvelope:
+    key: DocumentProductKey
+    generation: DocumentProductGeneration
+    body_bytes: bytes
+    body_sha256: str
+    verification: DocumentProductVerificationReceipt
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentProductArtifact:
+    artifact_id: int
+    key: DocumentProductKey
+    generation: DocumentProductGeneration
+    body_bytes: bytes
+    body_sha256: str
+    input_sha256: str
+    output_sha256: str
+
+
+class DocumentProductVerifier(Protocol):
+    """Existing-owner adapter that validates the complete envelope and source."""
+
+    def __call__(self, conn: sqlite3.Connection, envelope: DocumentProductEnvelope, /) -> None: ...
 
 
 @dataclass(slots=True)
@@ -65,6 +166,13 @@ class Artifact:
     source_doc_ids: list[int] = field(default_factory=list[int])
     parent_artifact_ids: list[int] = field(default_factory=list[int])
     llm_call_id: int | None = None
+    issuer_id: str | None = None
+    document_version_id: str | None = None
+    document_period_start: str | None = None
+    document_period_end: str | None = None
+    document_period_type: str | None = None
+    document_fiscal_year: int | None = None
+    document_fiscal_quarter: int | None = None
 
 
 @dataclass(slots=True)
@@ -115,6 +223,601 @@ def _compute_output_sha256(content_md: str | None, content_json: str | None) -> 
     """Hash the stored Markdown, or exact JSON bytes when Markdown is empty."""
     output = content_md or content_json
     return hashlib.sha256(output.encode("utf-8")).hexdigest() if output else None
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _validate_document_envelope(envelope: DocumentProductEnvelope) -> dict[str, object]:
+    if envelope.key.product not in {
+        "transcript_summary",
+    }:
+        raise DocumentProductStoreError("document product is not supported")
+    if not re.fullmatch(r"[0-9a-f]{64}", envelope.body_sha256):
+        raise DocumentProductStoreError("document body checksum is malformed")
+    body_fields: dict[str, object] = {"body": envelope.body_bytes}
+    body_value = body_fields["body"]
+    if not isinstance(body_value, bytes):
+        raise DocumentProductStoreError("document body must be exact bytes")
+    body_bytes = body_value
+    try:
+        body_text = body_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise DocumentProductStoreError("document body is not UTF-8") from exc
+    if _sha256_text(body_text) != envelope.body_sha256:
+        raise DocumentProductStoreError("document body checksum does not match its bytes")
+    if not re.fullmatch(r"[0-9a-f]{64}", envelope.generation.input_sha256):
+        raise DocumentProductStoreError("document input checksum is malformed")
+    if not re.fullmatch(r"[0-9a-f]{64}", envelope.generation.prompt_sha256):
+        raise DocumentProductStoreError("document prompt checksum is malformed")
+    if not re.fullmatch(r"[0-9a-f]{64}", envelope.verification.receipt_sha256):
+        raise DocumentProductStoreError("document verification checksum is malformed")
+    try:
+        manifest_raw: object = json.loads(envelope.generation.input_manifest_json)
+        receipt_raw: object = json.loads(envelope.verification.receipt_json)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise DocumentProductStoreError("document manifest or receipt is invalid JSON") from exc
+    if not isinstance(manifest_raw, dict) or not isinstance(receipt_raw, dict):
+        raise DocumentProductStoreError("document manifest and receipt must be JSON objects")
+    manifest = cast(dict[str, object], manifest_raw)
+    receipt = cast(dict[str, object], receipt_raw)
+    if _canonical_json(manifest) != envelope.generation.input_manifest_json:
+        raise DocumentProductStoreError("document input manifest is not canonical JSON")
+    if _canonical_json(receipt) != envelope.verification.receipt_json:
+        raise DocumentProductStoreError("document verification receipt is not canonical JSON")
+    if _sha256_text(envelope.verification.receipt_json) != envelope.verification.receipt_sha256:
+        raise DocumentProductStoreError("document verification receipt checksum mismatch")
+    expected_input = compute_input_sha256(
+        prompt_version=envelope.generation.prompt_version,
+        cache_inputs=[envelope.generation.input_manifest_json],
+    )
+    if expected_input != envelope.generation.input_sha256:
+        raise DocumentProductStoreError("document input manifest checksum mismatch")
+    try:
+        prompt_raw = manifest["prompt"]
+        document_raw = manifest["document"]
+        canonical_binding_raw = manifest["canonical_issuer_binding"]
+        fiscal_raw = manifest["fiscal_period_selection"]
+        consumed_text = manifest["consumed_text_sha256"]
+        extraction_raw = manifest["extraction"]
+        anchors_context_raw = manifest["anchors_context"]
+        parent_artifacts = manifest["parent_artifacts"]
+        routing_raw = manifest["routing"]
+        if not all(
+            isinstance(value, dict)
+            for value in (
+                prompt_raw,
+                document_raw,
+                canonical_binding_raw,
+                fiscal_raw,
+                extraction_raw,
+                anchors_context_raw,
+                routing_raw,
+            )
+        ):
+            raise TypeError("document manifest object fields have invalid shapes")
+        prompt = cast(dict[str, object], prompt_raw)
+        document = cast(dict[str, object], document_raw)
+        fiscal = cast(dict[str, object], fiscal_raw)
+        prompt_raw_bytes = prompt["prompt_bytes_base64"]
+        if not isinstance(prompt_raw_bytes, str):
+            raise TypeError("document prompt bytes must be base64 text")
+        prompt_bytes = base64.b64decode(prompt_raw_bytes, validate=True)
+    except (KeyError, TypeError, ValueError, binascii.Error) as exc:
+        raise DocumentProductStoreError("document input manifest is incomplete") from exc
+    if not isinstance(consumed_text, list) or not isinstance(parent_artifacts, list):
+        raise DocumentProductStoreError("document input manifest fields have invalid shapes")
+    try:
+        prompt_text = prompt_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise DocumentProductStoreError("document prompt bytes are not UTF-8") from exc
+    if _sha256_text(prompt_text) != envelope.generation.prompt_sha256:
+        raise DocumentProductStoreError("document prompt checksum does not match manifest bytes")
+    if prompt.get("prompt_version") != envelope.generation.prompt_version:
+        raise DocumentProductStoreError("document prompt version does not match manifest")
+    key = envelope.key
+    expected_fiscal = {
+        "issuer_id": key.issuer_id,
+        "period_start": None if key.period_start is None else key.period_start.isoformat(),
+        "period_end": key.period_end.isoformat(),
+        "period_type": key.period_type,
+        "fiscal_year": key.fiscal_year,
+        "fiscal_quarter": key.fiscal_quarter,
+    }
+    if any(fiscal.get(field) != value for field, value in expected_fiscal.items()):
+        raise DocumentProductStoreError("fiscal selection proof does not match exact key")
+    if (
+        not isinstance(fiscal.get("selection_authority"), str)
+        or not fiscal["selection_authority"]
+        or not isinstance(fiscal.get("selection_proof_sha256"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", str(fiscal["selection_proof_sha256"]))
+    ):
+        raise DocumentProductStoreError("fiscal selection authority proof is missing")
+    if document.get("document_version_id") != key.document_version_id:
+        raise DocumentProductStoreError("document input identity does not match exact key")
+    raw_sha = document.get("raw_blob_sha256")
+    if not isinstance(raw_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", raw_sha):
+        raise DocumentProductStoreError("document raw blob checksum is missing")
+    fields: dict[str, object] = {
+        "generation_id": envelope.generation.generation_id,
+        "model": envelope.generation.model,
+        "backend": envelope.generation.backend,
+        "generated_at": envelope.generation.generated_at,
+    }
+    generation_id = fields["generation_id"]
+    model = fields["model"]
+    backend = fields["backend"]
+    generated_at = fields["generated_at"]
+    if not isinstance(generation_id, str) or not generation_id:
+        raise DocumentProductStoreError("document generation identity is missing")
+    if not isinstance(model, str) or not model:
+        raise DocumentProductStoreError("actual document model is missing")
+    if not isinstance(backend, str) or not backend:
+        raise DocumentProductStoreError("actual document backend is missing")
+    if not isinstance(generated_at, str):
+        raise DocumentProductStoreError("document generation time is malformed")
+    try:
+        generation_time = datetime.fromisoformat(generated_at)
+        uuid.UUID(generation_id)
+    except ValueError as exc:
+        raise DocumentProductStoreError("document generation identity or time is invalid") from exc
+    if generation_time.tzinfo is None:
+        raise DocumentProductStoreError("document generation time must be timezone-aware")
+    return manifest
+
+
+def _document_product_json(envelope: DocumentProductEnvelope) -> str:
+    key = envelope.key
+    generation = envelope.generation
+    payload = {
+        "schema_version": "document-product-envelope@1",
+        "key": {
+            "issuer_id": key.issuer_id,
+            "document_version_id": key.document_version_id,
+            "period_start": None if key.period_start is None else key.period_start.isoformat(),
+            "period_end": key.period_end.isoformat(),
+            "period_type": key.period_type,
+            "fiscal_year": key.fiscal_year,
+            "fiscal_quarter": key.fiscal_quarter,
+            "product": key.product,
+        },
+        "generation": {
+            "input_manifest_json": generation.input_manifest_json,
+            "input_sha256": generation.input_sha256,
+            "generation_id": generation.generation_id,
+            "generated_at": generation.generated_at,
+            "model": generation.model,
+            "backend": generation.backend,
+            "prompt_version": generation.prompt_version,
+            "prompt_sha256": generation.prompt_sha256,
+        },
+        "body_base64": base64.b64encode(envelope.body_bytes).decode("ascii"),
+        "body_sha256": envelope.body_sha256,
+        "verification": {
+            "receipt_json": envelope.verification.receipt_json,
+            "receipt_sha256": envelope.verification.receipt_sha256,
+        },
+    }
+    return _canonical_json(payload)
+
+
+def _required_json_string(payload: dict[str, object], field: str) -> str:
+    value = payload.get(field)
+    if not isinstance(value, str):
+        raise DocumentProductStoreError(f"document envelope field {field} must be text")
+    return value
+
+
+def _document_key_from_payload(payload: object) -> DocumentProductKey:
+    if not isinstance(payload, dict):
+        raise DocumentProductStoreError("document envelope key is not an object")
+    key_data = cast(dict[str, object], payload)
+    try:
+        issuer_id = _required_json_string(key_data, "issuer_id")
+        document_version_id = _required_json_string(key_data, "document_version_id")
+        period_end_text = _required_json_string(key_data, "period_end")
+        period_start_raw = key_data.get("period_start")
+        if period_start_raw is not None and not isinstance(period_start_raw, str):
+            raise TypeError("document start date must be a string or null")
+        fiscal_year_raw = key_data.get("fiscal_year")
+        if not isinstance(fiscal_year_raw, int) or isinstance(fiscal_year_raw, bool):
+            raise TypeError("fiscal year must be an integer")
+        fiscal_quarter_raw = key_data.get("fiscal_quarter")
+        if not isinstance(fiscal_quarter_raw, int) or isinstance(fiscal_quarter_raw, bool):
+            raise TypeError("fiscal quarter must be an integer")
+        period_type = _required_json_string(key_data, "period_type")
+        product = _required_json_string(key_data, "product")
+        key = DocumentProductKey(
+            issuer_id=issuer_id,
+            document_version_id=document_version_id,
+            period_start=(
+                None if period_start_raw is None else date.fromisoformat(period_start_raw)
+            ),
+            period_end=date.fromisoformat(period_end_text),
+            period_type=cast(DocumentPeriodType, period_type),
+            fiscal_year=fiscal_year_raw,
+            fiscal_quarter=fiscal_quarter_raw,
+            product=cast(DocumentProduct, product),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise DocumentProductStoreError("document envelope key is malformed") from exc
+    if key.product not in {
+        "transcript_summary",
+    }:
+        raise DocumentProductStoreError("document product is not supported")
+    return key
+
+
+def _document_envelope_from_json(content_json: str) -> DocumentProductEnvelope:
+    try:
+        payload_raw: object = json.loads(content_json)
+        if not isinstance(payload_raw, dict):
+            raise TypeError("document envelope must be an object")
+        payload = cast(dict[str, object], payload_raw)
+        key_json = payload.get("key")
+        generation_raw = payload.get("generation")
+        verification_raw = payload.get("verification")
+        if not isinstance(generation_raw, dict):
+            raise TypeError("document generation must be an object")
+        if not isinstance(verification_raw, dict):
+            raise TypeError("document verification must be an object")
+        generation_json = cast(dict[str, object], generation_raw)
+        verification_json = cast(dict[str, object], verification_raw)
+        generation = DocumentProductGeneration(
+            input_manifest_json=_required_json_string(generation_json, "input_manifest_json"),
+            input_sha256=_required_json_string(generation_json, "input_sha256"),
+            generation_id=_required_json_string(generation_json, "generation_id"),
+            generated_at=_required_json_string(generation_json, "generated_at"),
+            model=_required_json_string(generation_json, "model"),
+            backend=_required_json_string(generation_json, "backend"),
+            prompt_version=_required_json_string(generation_json, "prompt_version"),
+            prompt_sha256=_required_json_string(generation_json, "prompt_sha256"),
+        )
+        verification = DocumentProductVerificationReceipt(
+            receipt_json=_required_json_string(verification_json, "receipt_json"),
+            receipt_sha256=_required_json_string(verification_json, "receipt_sha256"),
+        )
+        body_base64 = _required_json_string(payload, "body_base64")
+        body_sha256 = _required_json_string(payload, "body_sha256")
+        body_bytes = base64.b64decode(body_base64, validate=True)
+        envelope = DocumentProductEnvelope(
+            key=_document_key_from_payload(key_json),
+            generation=generation,
+            body_bytes=body_bytes,
+            body_sha256=body_sha256,
+            verification=verification,
+        )
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError, binascii.Error) as exc:
+        raise DocumentProductStoreError("document envelope is malformed") from exc
+    if payload.get("schema_version") != "document-product-envelope@1":
+        raise DocumentProductStoreError("document envelope schema is unsupported")
+    if _document_product_json(envelope) != content_json:
+        raise DocumentProductStoreError("document envelope is not canonical or has extra fields")
+    _validate_document_envelope(envelope)
+    return envelope
+
+
+def _document_date_text(value: object, *, field_name: str) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    try:
+        return datetime.fromisoformat(text).date().isoformat()
+    except ValueError:
+        try:
+            return datetime.fromisoformat(f"{text}T00:00:00").date().isoformat()
+        except ValueError as exc:
+            raise DocumentProductStoreError(f"registered {field_name} is malformed") from exc
+
+
+def _validate_registered_document(
+    conn: sqlite3.Connection,
+    envelope: DocumentProductEnvelope,
+    manifest: dict[str, object],
+) -> str | None:
+    rows = conn.execute(
+        "SELECT current.issuer_id AS recorded_issuer_id, current.ticker, "
+        "current.period_start, current.period_end, current.blob_sha256, "
+        "canonical.issuer_id AS canonical_issuer_id, "
+        "COALESCE(subject.binding_revision_id, legacy.binding_revision_id) "
+        "AS binding_revision_id, "
+        "CASE WHEN subject.binding_revision_id IS NOT NULL THEN 'recorded_subject' "
+        "WHEN direct.issuer_id IS NOT NULL THEN 'native' "
+        "WHEN legacy.binding_revision_id IS NOT NULL THEN 'legacy_issuer' "
+        "ELSE 'unresolved' END AS binding_kind "
+        "FROM v_evidence_document_current AS current "
+        "JOIN v_evidence_document_versions_canonical AS canonical "
+        "ON canonical.document_version_id=current.document_version_id "
+        "LEFT JOIN issuer_entities AS direct ON direct.issuer_id=current.issuer_id "
+        "LEFT JOIN v_recorded_subject_bindings_current AS subject "
+        "ON subject.recorded_issuer_id=current.issuer_id AND subject.outcome='selected' "
+        "LEFT JOIN v_legacy_issuer_bindings_current AS legacy "
+        "ON legacy.recorded_issuer_id=current.issuer_id AND legacy.outcome='selected' "
+        "WHERE current.document_version_id = ?",
+        (envelope.key.document_version_id,),
+    ).fetchall()
+    if len(rows) != 1:
+        raise DocumentProductStoreError("registered source document is missing or ambiguous")
+    row = rows[0]
+    key = envelope.key
+    if str(row["canonical_issuer_id"]) != key.issuer_id:
+        raise DocumentProductStoreError("registered canonical issuer does not match exact key")
+    recorded_issuer_id = str(row["recorded_issuer_id"])
+    binding_revision_id = (
+        None if row["binding_revision_id"] is None else str(row["binding_revision_id"])
+    )
+    binding_kind = str(row["binding_kind"])
+    if recorded_issuer_id != key.issuer_id and binding_revision_id is None:
+        raise DocumentProductStoreError(
+            "noncanonical recorded issuer requires a current binding revision"
+        )
+    if _document_date_text(row["period_start"], field_name="period_start") != (
+        None if key.period_start is None else key.period_start.isoformat()
+    ):
+        raise DocumentProductStoreError("registered document start date does not match exact key")
+    if (
+        _document_date_text(row["period_end"], field_name="period_end")
+        != key.period_end.isoformat()
+    ):
+        raise DocumentProductStoreError("registered document end date does not match exact key")
+    document_manifest = manifest["document"]
+    if not isinstance(document_manifest, dict) or document_manifest.get("raw_blob_sha256") != str(
+        row["blob_sha256"]
+    ):
+        raise DocumentProductStoreError("document input manifest does not bind registered bytes")
+    canonical_binding = manifest["canonical_issuer_binding"]
+    if not isinstance(canonical_binding, dict) or canonical_binding != {
+        "recorded_issuer_id": recorded_issuer_id,
+        "canonical_issuer_id": key.issuer_id,
+        "binding_revision_id": binding_revision_id,
+        "binding_kind": binding_kind,
+    }:
+        raise DocumentProductStoreError(
+            "issuer binding proof does not match current canonical view"
+        )
+    return None if row["ticker"] is None else str(row["ticker"])
+
+
+def _document_artifact_from_row(
+    row: sqlite3.Row,
+    *,
+    key: DocumentProductKey,
+    verifier: DocumentProductVerifier,
+    conn: sqlite3.Connection,
+) -> DocumentProductArtifact:
+    if row["content_md"] is not None or row["content_json"] is None:
+        raise DocumentProductStoreError("document artifact is not JSON-envelope storage")
+    envelope = _document_envelope_from_json(str(row["content_json"]))
+    if envelope.key != key:
+        raise DocumentProductStoreError("document envelope key differs from indexed key")
+    if row["scope"] != "document" or row["purpose"] != key.product:
+        raise DocumentProductStoreError("document artifact row metadata differs from its key")
+    if (
+        row["issuer_id"] != key.issuer_id
+        or row["document_version_id"] != key.document_version_id
+        or _document_date_text(row["document_period_start"], field_name="period_start")
+        != (None if key.period_start is None else key.period_start.isoformat())
+        or _document_date_text(row["document_period_end"], field_name="period_end")
+        != key.period_end.isoformat()
+        or row["document_period_type"] != key.period_type
+        or int(row["document_fiscal_year"]) != key.fiscal_year
+        or int(row["document_fiscal_quarter"]) != key.fiscal_quarter
+        or row["fiscal_period"] != f"FY{key.fiscal_year}Q{key.fiscal_quarter}"
+    ):
+        raise DocumentProductStoreError("document artifact indexed key differs from envelope key")
+    if row["input_sha256"] != envelope.generation.input_sha256:
+        raise DocumentProductStoreError("document input hash differs from envelope")
+    if (
+        row["model"] != envelope.generation.model
+        or row["prompt_version"] != envelope.generation.prompt_version
+        or row["generated_at"] != envelope.generation.generated_at
+    ):
+        raise DocumentProductStoreError("document generation metadata differs from envelope")
+    exact_output_sha = _sha256_text(str(row["content_json"]))
+    if row["output_sha256"] != exact_output_sha:
+        raise DocumentProductStoreError("document envelope output checksum mismatch")
+    manifest = _validate_document_envelope(envelope)
+    ticker = _validate_registered_document(conn, envelope, manifest)
+    if row["ticker"] != ticker:
+        raise DocumentProductStoreError("document artifact ticker differs from registered source")
+    try:
+        verifier(conn, envelope)
+    except Exception as exc:
+        raise DocumentProductStoreError("document verification adapter rejected envelope") from exc
+    return DocumentProductArtifact(
+        artifact_id=int(row["id"]),
+        key=key,
+        generation=envelope.generation,
+        body_bytes=envelope.body_bytes,
+        body_sha256=envelope.body_sha256,
+        input_sha256=envelope.generation.input_sha256,
+        output_sha256=exact_output_sha,
+    )
+
+
+def read_document_current(
+    conn: sqlite3.Connection,
+    key: DocumentProductKey,
+    *,
+    expected_input_sha256: str,
+    verifier: DocumentProductVerifier,
+    now: datetime | None = None,
+) -> DocumentProductArtifact | None:
+    """Read one exact, current, semantically reverified document product.
+
+    Missing or stale products return None. Schema, corruption, ambiguity and
+    verifier failures raise. This API never falls back to a quarter alias.
+    """
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_input_sha256):
+        raise DocumentProductStoreError("expected document input checksum is malformed")
+    previous_factory = conn.row_factory
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM llm_artifacts WHERE scope='document' "
+            "AND issuer_id=? AND document_version_id=? "
+            "AND document_period_start IS ? AND document_period_end=? "
+            "AND document_period_type=? AND document_fiscal_year=? "
+            "AND document_fiscal_quarter=? AND purpose=? "
+            "AND superseded_by_id IS NULL ORDER BY id",
+            (
+                key.issuer_id,
+                key.document_version_id,
+                None if key.period_start is None else key.period_start.isoformat(),
+                key.period_end.isoformat(),
+                key.period_type,
+                key.fiscal_year,
+                key.fiscal_quarter,
+                key.product,
+            ),
+        ).fetchall()
+        if len(rows) > 1:
+            raise DocumentProductStoreError(
+                "multiple current artifacts exist for exact document key"
+            )
+        if not rows:
+            return None
+        row = rows[0]
+        if row["dirty"]:
+            return None
+        expires = row["expires_at"]
+        if expires is not None:
+            try:
+                expiry = _parse_dt(expires)
+            except (TypeError, ValueError) as exc:
+                raise DocumentProductStoreError(
+                    "document artifact expiry timestamp is malformed"
+                ) from exc
+            reference = now if now is not None else datetime.now(UTC)
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=UTC)
+            if reference.tzinfo is None:
+                reference = reference.replace(tzinfo=UTC)
+            if expiry <= reference:
+                return None
+        if row["input_sha256"] != expected_input_sha256:
+            return None
+        return _document_artifact_from_row(row, key=key, verifier=verifier, conn=conn)
+    except sqlite3.Error as exc:
+        raise DocumentProductStoreError("document artifact query failed") from exc
+    finally:
+        conn.row_factory = previous_factory
+
+
+def persist_document_generated_strict(
+    conn: sqlite3.Connection,
+    envelope: DocumentProductEnvelope,
+    *,
+    verifier: DocumentProductVerifier,
+) -> DocumentProductArtifact:
+    """Persist and read back a verified document product in caller state.
+
+    The caller owns an active writer transaction and its commit/rollback and
+    connection lifetime. This method uses a savepoint and never commits/closes.
+    """
+    if not conn.in_transaction:
+        raise DocumentProductStoreError("strict document persistence requires caller transaction")
+    previous_factory = conn.row_factory
+    savepoint = f"strict_document_product_{uuid.uuid4().hex}"
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute(f"SAVEPOINT {savepoint}")
+        # Acquire SQLite's writer reservation before validating source identity.
+        conn.execute("UPDATE llm_artifacts SET dirty=dirty WHERE id=-1")
+        manifest = _validate_document_envelope(envelope)
+        ticker = _validate_registered_document(conn, envelope, manifest)
+        verifier(conn, envelope)
+        key = envelope.key
+        current_rows = conn.execute(
+            "SELECT * FROM llm_artifacts WHERE scope='document' "
+            "AND issuer_id=? AND document_version_id=? "
+            "AND document_period_start IS ? AND document_period_end=? "
+            "AND document_period_type=? AND document_fiscal_year=? "
+            "AND document_fiscal_quarter=? AND purpose=? "
+            "AND superseded_by_id IS NULL ORDER BY id",
+            (
+                key.issuer_id,
+                key.document_version_id,
+                None if key.period_start is None else key.period_start.isoformat(),
+                key.period_end.isoformat(),
+                key.period_type,
+                key.fiscal_year,
+                key.fiscal_quarter,
+                key.product,
+            ),
+        ).fetchall()
+        if len(current_rows) > 1:
+            raise DocumentProductStoreError(
+                "multiple current artifacts exist for exact document key"
+            )
+        if current_rows:
+            current = _document_artifact_from_row(
+                current_rows[0], key=key, verifier=verifier, conn=conn
+            )
+            if current.input_sha256 == envelope.generation.input_sha256:
+                conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                return current
+        content_json = _document_product_json(envelope)
+        output_sha = _sha256_text(content_json)
+        cur = conn.execute(
+            "INSERT INTO llm_artifacts (ticker, scope, purpose, fiscal_period, "
+            "content_md, content_json, input_sha256, output_sha256, model, "
+            "prompt_version, generated_at, expires_at, superseded_by_id, dirty, "
+            "dirty_reason, "
+            "issuer_id, document_version_id, document_period_start, document_period_end, "
+            "document_period_type, document_fiscal_year, document_fiscal_quarter) "
+            "VALUES (?, 'document', ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, NULL, 0, NULL, "
+            "?, ?, ?, ?, ?, ?, ?)",
+            (
+                ticker,
+                key.product,
+                f"FY{key.fiscal_year}Q{key.fiscal_quarter}",
+                content_json,
+                envelope.generation.input_sha256,
+                output_sha,
+                envelope.generation.model,
+                envelope.generation.prompt_version,
+                envelope.generation.generated_at,
+                key.issuer_id,
+                key.document_version_id,
+                None if key.period_start is None else key.period_start.isoformat(),
+                key.period_end.isoformat(),
+                key.period_type,
+                key.fiscal_year,
+                key.fiscal_quarter,
+            ),
+        )
+        artifact_id = int(cur.lastrowid or 0)
+        if current_rows:
+            conn.execute(
+                "UPDATE llm_artifacts SET superseded_by_id=? WHERE id=? "
+                "AND superseded_by_id IS NULL AND scope='document'",
+                (artifact_id, int(current_rows[0]["id"])),
+            )
+            if conn.execute("SELECT changes()").fetchone()[0] != 1:
+                raise DocumentProductStoreError("document artifact current predecessor changed")
+        readback = conn.execute("SELECT * FROM llm_artifacts WHERE id=?", (artifact_id,)).fetchone()
+        if readback is None:
+            raise DocumentProductStoreError("document artifact readback is missing")
+        result = _document_artifact_from_row(readback, key=key, verifier=verifier, conn=conn)
+        if result.body_bytes != envelope.body_bytes or result.generation != envelope.generation:
+            raise DocumentProductStoreError("document artifact readback differs from request")
+        conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+        return result
+    except BaseException:
+        try:
+            conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+        except sqlite3.Error:
+            pass
+        raise
+    finally:
+        conn.row_factory = previous_factory
 
 
 def _output_integrity_reason(row: sqlite3.Row) -> str | None:
@@ -176,6 +879,7 @@ def _row_to_artifact(row: sqlite3.Row) -> Artifact:
         except json.JSONDecodeError:
             content_json = None
 
+    available_columns = set(row.keys())
     return Artifact(
         id=int(row["id"]),
         ticker=row["ticker"],
@@ -196,6 +900,31 @@ def _row_to_artifact(row: sqlite3.Row) -> Artifact:
         source_doc_ids=src_ids,
         parent_artifact_ids=par_ids,
         llm_call_id=row["llm_call_id"],
+        issuer_id=(row["issuer_id"] if "issuer_id" in available_columns else None),
+        document_version_id=(
+            row["document_version_id"] if "document_version_id" in available_columns else None
+        ),
+        document_period_start=(
+            row["document_period_start"] if "document_period_start" in available_columns else None
+        ),
+        document_period_end=(
+            row["document_period_end"] if "document_period_end" in available_columns else None
+        ),
+        document_period_type=(
+            row["document_period_type"] if "document_period_type" in available_columns else None
+        ),
+        document_fiscal_year=(
+            None
+            if "document_fiscal_year" not in available_columns
+            or row["document_fiscal_year"] is None
+            else int(row["document_fiscal_year"])
+        ),
+        document_fiscal_quarter=(
+            None
+            if "document_fiscal_quarter" not in available_columns
+            or row["document_fiscal_quarter"] is None
+            else int(row["document_fiscal_quarter"])
+        ),
     )
 
 
@@ -287,7 +1016,10 @@ def read_current(
             """
             SELECT * FROM llm_artifacts
             WHERE COALESCE(ticker,'') = COALESCE(?, '')
-              AND scope = ? AND purpose = ?
+              AND scope = ?
+              AND scope <> 'document'
+              AND document_version_id IS NULL
+              AND purpose = ?
               AND COALESCE(fiscal_period, '') = COALESCE(?, '')
               AND superseded_by_id IS NULL
             ORDER BY generated_at DESC
@@ -321,7 +1053,7 @@ def read_artifact(
     try:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            "SELECT * FROM llm_artifacts WHERE id = ?",
+            "SELECT * FROM llm_artifacts WHERE id = ? AND document_version_id IS NULL",
             (artifact_id,),
         ).fetchone()
         return _readable_artifact(row) if row else None
@@ -367,6 +1099,7 @@ def historical_versions(
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT * FROM llm_artifacts WHERE ticker=? AND scope=? "
+            "AND scope <> 'document' AND document_version_id IS NULL "
             "AND purpose=? AND fiscal_period IS ? ORDER BY id",
             (ticker, scope, purpose, fiscal_period),
         ).fetchall()
@@ -413,6 +1146,8 @@ def upsert(
     no persistence).
     """
     owns_connection = conn is None
+    if req.scope == "document":
+        raise ValueError("document scope is reserved for strict document-product persistence")
     conn = conn or _open(db_path)
     if conn is None:
         return (None, False)
@@ -432,7 +1167,10 @@ def upsert(
             SELECT id, input_sha256, dirty, expires_at,
                    content_md, content_json, output_sha256 FROM llm_artifacts
             WHERE COALESCE(ticker,'') = COALESCE(?, '')
-              AND scope = ? AND purpose = ?
+              AND scope = ?
+              AND scope <> 'document'
+              AND document_version_id IS NULL
+              AND purpose = ?
               AND COALESCE(fiscal_period, '') = COALESCE(?, '')
               AND superseded_by_id IS NULL
             ORDER BY generated_at DESC
@@ -511,7 +1249,8 @@ def upsert(
         new_id = int(cur.lastrowid or 0)
         if existing is not None:
             conn.execute(
-                "UPDATE llm_artifacts SET superseded_by_id = ? WHERE id = ?",
+                "UPDATE llm_artifacts SET superseded_by_id = ? "
+                "WHERE id = ? AND scope <> 'document' AND document_version_id IS NULL",
                 (new_id, int(existing["id"])),
             )
         _supersede_exact_obligations(conn, req=req, successor_id=new_id)
@@ -551,6 +1290,8 @@ def _supersede_exact_obligations(
             UPDATE llm_artifacts
             SET superseded_by_id = ?
             WHERE id = ?
+              AND scope <> 'document'
+              AND document_version_id IS NULL
               AND COALESCE(ticker, '') = COALESCE(?, '')
               AND scope = ?
               AND purpose = ?
@@ -570,7 +1311,8 @@ def _supersede_exact_obligations(
             """
             SELECT id, ticker, scope, purpose, fiscal_period, superseded_by_id
             FROM llm_artifacts
-            WHERE id = ?
+            WHERE id = ? AND scope <> 'document'
+              AND document_version_id IS NULL
             """,
             (predecessor_id,),
         ).fetchone()
@@ -609,7 +1351,6 @@ FACT_DEPENDENT_PURPOSES: tuple[str, ...] = (
     "company_description",
     "filing_intelligence",
     "valuation_basis",
-    "saydo_filter",
     "exec_comp_alignment",
     "qa_topics",
     # Earnings-tone diff caches the LLM comparison of a new transcript
@@ -660,7 +1401,7 @@ FACT_DEPENDENT_PURPOSES: tuple[str, ...] = (
 # Tuned by data sensitivity:
 #   bear_case / company_description: company narrative changes slowly ->
 #     30 days
-#   qa_topics / saydo_filter / exec_comp_alignment / valuation_basis:
+#   qa_topics / exec_comp_alignment / valuation_basis:
 #     anchored to the most recent quarter -> 14 days
 #   filing_intelligence: anchored to a specific 10-K/10-Q -> 60 days
 # A purpose not in this table gets no default TTL (caller must opt in).
@@ -668,16 +1409,9 @@ _DEFAULT_TTL_DAYS: dict[str, int] = {
     "bear_case": 30,
     "company_description": 30,
     "qa_topics": 14,
-    "saydo_filter": 14,
     "exec_comp_alignment": 14,
     "valuation_basis": 14,
     "filing_intelligence": 60,
-    # SayDo pairs are anchored to a specific (prev_q, curr_q) tuple so they
-    # don't age in the usual sense. The TTL is a safety net so that a stale
-    # cached pair gets re-attempted if the operator hasn't touched the
-    # ticker for a while. anchor_sha + summary_sha already drive the
-    # primary invalidation via cache_inputs.
-    "saydo_pair": 60,
     # Earnings-tone diff is anchored to a specific transcript-id tuple
     # (current + prior 4). The TTL acts as a safety net so a months-old
     # cached diff is re-attempted even if the trigger never re-fires;
@@ -765,6 +1499,8 @@ def mark_dirty(
             SET dirty = 1, dirty_reason = ?
             WHERE ticker = ?
               AND purpose IN ({placeholders})
+              AND scope <> 'document'
+              AND document_version_id IS NULL
               AND superseded_by_id IS NULL
               AND dirty = 0
             """,
@@ -829,7 +1565,9 @@ def drain_dirty(
         rows = conn.execute(
             f"""
             SELECT * FROM llm_artifacts
-            WHERE superseded_by_id IS NULL
+            WHERE scope <> 'document'
+              AND document_version_id IS NULL
+              AND superseded_by_id IS NULL
               AND (
                 dirty = 1
                 OR (expires_at IS NOT NULL AND expires_at < ?)
@@ -880,7 +1618,10 @@ def history(
             """
             SELECT * FROM llm_artifacts
             WHERE COALESCE(ticker,'') = COALESCE(?, '')
-              AND scope = ? AND purpose = ?
+              AND scope = ?
+              AND scope <> 'document'
+              AND document_version_id IS NULL
+              AND purpose = ?
               AND COALESCE(fiscal_period, '') = COALESCE(?, '')
             ORDER BY generated_at DESC
             LIMIT ?
@@ -920,7 +1661,10 @@ def quarter_index(
             """
             SELECT * FROM llm_artifacts
             WHERE COALESCE(ticker,'') = COALESCE(?, '')
-              AND scope = ? AND purpose = ?
+              AND scope = ?
+              AND scope <> 'document'
+              AND document_version_id IS NULL
+              AND purpose = ?
               AND fiscal_period IS NOT NULL
               AND superseded_by_id IS NULL
             ORDER BY fiscal_period DESC, generated_at DESC

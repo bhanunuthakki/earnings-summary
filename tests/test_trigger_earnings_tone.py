@@ -74,6 +74,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         + "id INTEGER PRIMARY KEY AUTOINCREMENT, "
         + "ticker TEXT, "
         + "scope TEXT NOT NULL DEFAULT 'ticker', "
+        + "document_version_id TEXT, "
         + "purpose TEXT NOT NULL, "
         + "fiscal_period TEXT, "
         + "content_md TEXT, "

@@ -1,7 +1,7 @@
 """Per-ticker refresh dispatcher with stale-only mode.
 
 Owns the default refresh chain (FMP fetch → transcripts →
-IR-doc summarize → SayDo pairs → report rebuild) as a
+registered transcript summaries → SayDo pairs → report rebuild) as a
 single Python entry point the dashboard and managed runtime can spawn and
 stream output from.
 
@@ -11,8 +11,8 @@ Two modes:
     --mode stale  : skip FMP only if all annual/quarterly core statement
                     receipts are successful, nonempty and fresh. Cheaper steps
                     (transcripts / IR-summarize / SayDo / build)
-                    always run because they're either idempotent skips
-                    on a file-exists check or low-cost LLM calls.
+                    always run because they either reuse verified products or
+                    carry bounded, source-scoped work.
 
 Output is line-buffered to stdout so an SSE forwarder can pipe it through
 to a browser drawer without buffering surprises:
@@ -69,20 +69,17 @@ STEP_NAMES: tuple[str, ...] = (
     "transcripts",
     "process_ir_docs",
     "news",
-    "extract_kpis",
-    "saydo",
     "dcf",
     "thesis_eval",
     "build_report",
 )
 # Default chain when no explicit --steps is given.
-# news / extract_kpis / dcf / thesis_eval are opt-in so a routine refresh isn't
+# news / dcf / thesis_eval are opt-in so a routine refresh isn't
 # silently made heavier / more expensive.
 DEFAULT_STEPS: tuple[str, ...] = (
     "fmp",
     "transcripts",
     "process_ir_docs",
-    "saydo",
     "build_report",
 )
 
@@ -261,8 +258,6 @@ def execute(
         "transcripts": _argv_transcripts(project_root, resolved_state_root, plan.ticker),
         "process_ir_docs": _argv_process_ir(project_root, resolved_state_root, plan.ticker),
         "news": _argv_news(project_root, resolved_state_root, plan.ticker),
-        "extract_kpis": _argv_extract_kpis(project_root, resolved_state_root, plan.ticker),
-        "saydo": _argv_saydo(project_root, resolved_state_root, plan.ticker),
         "dcf": _argv_dcf(
             project_root, resolved_state_root, plan.ticker, source_state_root=source_state_root
         ),
@@ -340,32 +335,12 @@ def _argv_process_ir(project_root: Path, state_root: Path, ticker: str) -> list[
         project_root / "execution" / "process_ir_documents.py",
         "--ticker",
         ticker,
-        "--repo-root",
+        "--db",
+        str(state_root / "data" / "portfolio.db"),
+        "--state-root",
         str(state_root),
-    )
-
-
-def _argv_extract_kpis(project_root: Path, state_root: Path, ticker: str) -> list[str]:
-    return managed_python_argv(
-        project_root,
-        project_root / "execution" / "extract_kpis_from_summaries.py",
-        "--ticker",
-        ticker,
-        "--source",
-        "earnings",
         "--repo-root",
-        str(state_root),
-    )
-
-
-def _argv_saydo(project_root: Path, state_root: Path, ticker: str) -> list[str]:
-    return managed_python_argv(
-        project_root,
-        project_root / "execution" / "build_saydo_pairs.py",
-        "--ticker",
-        ticker,
-        "--repo-root",
-        str(state_root),
+        str(project_root),
     )
 
 

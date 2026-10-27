@@ -80,17 +80,37 @@ def test_transcript_retarget_preserves_explicit_database(
     assert root / "transcripts/processed" == getattr(backfill_transcripts, "_PROCESSED_DIR")
 
 
-def test_ir_job_preserves_database_and_missing_summary_selector(
+def test_transcript_job_preserves_database_and_state_authority(
     state: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root, database = state
-    seen: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    selected: list[tuple[Path, str | None, bool, int | None, int | None]] = []
 
-    def run(*args: object, **kwargs: object) -> int:
-        seen.append((args, kwargs))
-        return 0
+    def select(
+        db_path: Path,
+        *,
+        ticker: str | None,
+        all_tickers: bool,
+        fiscal_year: int | None,
+        fiscal_quarter: int | None,
+    ) -> list[str]:
+        selected.append((db_path, ticker, all_tickers, fiscal_year, fiscal_quarter))
+        return []
 
-    monkeypatch.setattr(process_ir_documents, "run_for_ticker", run)
+    class VerifierStub:
+        def __init__(self, *, db_path: Path, state_root: Path) -> None:
+            self.db_path = db_path
+            self.state_root = state_root
+
+    monkeypatch.setattr(process_ir_documents, "select_registered_transcripts", select)
+
+    def no_process(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {}
+
+    monkeypatch.setattr(process_ir_documents, "process_document", no_process)
+    monkeypatch.setattr(
+        "pipeline.transcript_summary_verification.TranscriptSummaryVerifier", VerifierStub
+    )
     monkeypatch.setattr(process_ir_documents, "load_project_env", _no_environment)
     original_db = db.DB_PATH
     assert (
@@ -102,12 +122,13 @@ def test_ir_job_preserves_database_and_missing_summary_selector(
                 str(root),
                 "--db",
                 str(database),
-                "--regenerate-missing",
+                "--state-root",
+                str(root),
             ]
         )
         == 0
     )
-    assert seen == [(("NEWCO", None, None, False, True), {"repo_root": root, "db_path": database})]
+    assert selected == [(database.resolve(), "NEWCO", False, None, None)]
     assert original_db == db.DB_PATH
 
 

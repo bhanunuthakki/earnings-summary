@@ -157,15 +157,11 @@ class HumanCapitalBucket(BaseModel):
 
 
 class BehavioralRule(BaseModel):
-    """One distilled behavioral rule (Tier C, Phase 4,
-    ``synthesis.behavior_distill``) — the second-person rule text plus the
-    graded ``decisions`` ids it rests on and the wrong/total tally computed
-    IN CODE from those validated citations (never the LLM's own arithmetic;
-    see ``behavior_distill._validate_citations``). ``citations`` are always
-    real, currently-graded ``decisions.id`` values by the time this model is
-    constructed — the producer drops uncited/miscited candidates before
-    validating against this model, mirroring ``thesis_collision``'s
-    hallucinated-ticker guard."""
+    """Stored owner rule with cited decision IDs and recorded outcome counts.
+
+    Existing affirmed owner facts retain this value shape after automatic
+    behavioral-rule generation is retired.
+    """
 
     rule_text: str = Field(min_length=1)
     citations: list[int] = Field(default_factory=list[int])

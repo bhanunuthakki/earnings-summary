@@ -132,7 +132,6 @@ def test_news_pins_do_not_disturb_existing_purposes() -> None:
     assert resolve("company_description") == cli.DEFAULT_MODEL
     # Pre-existing Opus pins — unchanged.
     assert resolve("valuation_basis") == "claude-opus-4-8"
-    assert resolve("saydo_importance") == "claude-opus-4-8"
     assert resolve("kpi_registry_auto_proposal") == "claude-opus-4-8"
     # Gemini un-pinned 2026-07-02 (metered Gemini off the active pareto): these two
     # classifier purposes reverted from Gemini Flash (#538) back to Claude Haiku.
@@ -220,14 +219,9 @@ def test_llm_client_reexports_preserve_caller_imports() -> None:
         "classify_intake_document",
         "generate_bear_case",
         "generate_company_description",
-        "generate_pairwise_analysis",
         "generate_platform_diagram",
-        "generate_press_release_summary",
-        "generate_presentation_brief",
         "generate_qa_topics",
         "generate_recent_developments",
-        "generate_saydo_filter",
-        "generate_saydo_importance",
         "generate_strategic_analysis",
         "generate_summary",
         "generate_thesis_update",

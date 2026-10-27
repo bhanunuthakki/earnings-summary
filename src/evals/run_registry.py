@@ -17,6 +17,7 @@ _SPECIAL_GOLDEN_PURPOSES: tuple[str, ...] = (
     "ask_pack_router",
     "ask_evidence_followup",
     "ask_claim_grounding",
+    "transcript_summary_claim_audit",
     "ask_claim_audit",
     "injection_canaries",
     "provenance_caution",
@@ -37,10 +38,17 @@ RUNNABLE_PURPOSES: tuple[str, ...] = tuple(
     dict.fromkeys(GOLDEN_PURPOSES + AUDIT_PURPOSES + CAPTURE_PURPOSES)
 )
 
+# Native qualification requires explicit isolated ledger, source and proof roots.
+# The dashboard run action cannot supply that boundary.
+PANEL_PURPOSES: tuple[str, ...] = tuple(
+    purpose for purpose in RUNNABLE_PURPOSES if purpose != "transcript_summary_claim_audit"
+)
+
 __all__ = [
     "AUDIT_PURPOSES",
     "CAPTURE_AUDIT_PURPOSES",
     "CAPTURE_PURPOSES",
     "GOLDEN_PURPOSES",
+    "PANEL_PURPOSES",
     "RUNNABLE_PURPOSES",
 ]

@@ -131,6 +131,14 @@ MODEL_CAPABILITIES: dict[str, CapabilityProfile] = {
         min_context_length=1_000_000, requires_vision=True, requires_structured_output=True
     ),
     # Codex models
+    # Candidate support verified against official model pages on 2026-10-26.
+    # Registry membership does not qualify or promote a purpose/model route.
+    "gpt-6-luna": CapabilityProfile(
+        min_context_length=1_050_000, requires_vision=True, requires_structured_output=True
+    ),
+    "gpt-6.1-sol": CapabilityProfile(
+        min_context_length=1_050_000, requires_vision=True, requires_structured_output=True
+    ),
     "gpt-5.6-terra": CapabilityProfile(
         min_context_length=128_000, requires_vision=True, requires_structured_output=True
     ),

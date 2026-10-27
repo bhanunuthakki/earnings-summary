@@ -358,7 +358,6 @@ def test_execute_full_runs_default_steps_without_numeric_extraction(tmp_path: Pa
         "fetch_fmp_historical_data",
         "backfill_transcripts",
         "process_ir_documents",
-        "build_saydo_pairs",
         "build_artifacts",
     ]
 
@@ -379,7 +378,6 @@ def test_execute_stale_skips_fmp_when_planned(tmp_path: Path) -> None:
     assert script_names == [
         "backfill_transcripts",
         "process_ir_documents",
-        "build_saydo_pairs",
         "build_artifacts",
     ]
     assert "step=fmp action=skip reason=fresh" in out.getvalue()
@@ -399,12 +397,12 @@ def test_execute_emits_dispatch_markers(tmp_path: Path) -> None:
 
 def test_execute_keeps_going_after_step_failure(tmp_path: Path) -> None:
     """A failed FMP step must not block independent subsequent steps."""
-    runner = _MockRunner(exit_codes=[1, 0, 0, 0, 0])  # FMP fails, rest succeed
+    runner = _MockRunner(exit_codes=[1, 0, 0, 0])  # FMP fails, rest succeed
     plan = Plan(ticker="NU", mode="full", skip_fmp=False, skip_fmp_reason=None)
     out = io.StringIO()
     rc = execute(plan, project_root=tmp_path, out=out, runner=runner)
     assert rc == 1  # remembered the failure
-    assert len(runner.calls) == 5  # all default steps still attempted
+    assert len(runner.calls) == len(rd.DEFAULT_STEPS)  # all retained steps run
     assert "step=fmp action=end rc=1" in out.getvalue()
 
 
@@ -423,14 +421,20 @@ def test_execute_includes_repo_root_where_needed(tmp_path: Path) -> None:
     execute(plan, project_root=tmp_path, out=io.StringIO(), runner=runner)
     needs_repo_root = {
         "process_ir_documents",
-        "build_saydo_pairs",
         "build_artifacts",
     }
     for call in runner.calls:
         script = Path(call[2]).stem
         if script in needs_repo_root:
             assert "--repo-root" in call
-            assert str(tmp_path) in call
+            assert call[call.index("--repo-root") + 1] == str(tmp_path)
+    transcript_call = next(
+        call for call in runner.calls if Path(call[2]).stem == "process_ir_documents"
+    )
+    assert transcript_call[transcript_call.index("--db") + 1] == str(
+        tmp_path / "data" / "portfolio.db"
+    )
+    assert transcript_call[transcript_call.index("--state-root") + 1] == str(tmp_path)
 
 
 def test_execute_uses_code_root_for_scripts_and_state_root_for_outputs(tmp_path: Path) -> None:
@@ -458,14 +462,15 @@ def test_execute_uses_code_root_for_scripts_and_state_root_for_outputs(tmp_path:
     for script_name in (
         "fetch_fmp_historical_data",
         "backfill_transcripts",
-        "process_ir_documents",
-        "extract_kpis_from_summaries",
-        "build_saydo_pairs",
         "refresh_dcf",
         "build_artifacts",
     ):
         call = next(item for item in runner.calls if script_name in item[2])
         assert call[call.index("--repo-root") + 1] == str(state_root)
+    transcript = next(item for item in runner.calls if Path(item[2]).stem == "process_ir_documents")
+    assert transcript[transcript.index("--repo-root") + 1] == str(code_root)
+    assert transcript[transcript.index("--state-root") + 1] == str(state_root)
+    assert transcript[transcript.index("--db") + 1] == str(state_root / "data" / "portfolio.db")
     news = next(item for item in runner.calls if "fetch_news" in item[2])
     assert news[news.index("--db-path") + 1] == str(state_root / "data/portfolio.db")
     thesis = next(item for item in runner.calls if "run_thesis_evaluator" in item[2])
@@ -530,7 +535,7 @@ def test_cli_invalid_steps_refuse_before_database_or_execution(
     assert exc.value.code == 2
 
 
-@pytest.mark.parametrize("selection", [None, "extract_kpis"])
+@pytest.mark.parametrize("selection", [None, "process_ir_docs"])
 def test_cli_omitted_and_explicit_selection_plan_exact_steps(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -548,9 +553,7 @@ def test_cli_omitted_and_explicit_selection_plan_exact_steps(
     monkeypatch.setattr(sys, "argv", argv)
     assert rd.main() == 0
     plan = json.loads(capsys.readouterr().out)
-    assert plan["steps"] == (["extract_kpis"] if selection else list(rd.DEFAULT_STEPS))
-    if selection is None:
-        assert "extract_kpis" not in plan["steps"]
+    assert plan["steps"] == (["process_ir_docs"] if selection else list(rd.DEFAULT_STEPS))
 
 
 def test_cli_skip_all_does_not_start_default_collection(

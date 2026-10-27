@@ -2,9 +2,11 @@
 execution/fetch_ir_documents.py
 --------------------------------
 Download IR documents from the per-ticker URL manifest. With --categorize,
-calendar-year PDF presentations use managed staging, verification and publication.
-Other supported families retain exact-file legacy categorization. Managed inputs
-never enter the incoming-URL sidecar or a broad categorizer scan.
+calendar-FYE quarter-end presentations, press releases, supplements, investor
+updates, transcripts and SEC 10-Q documents use managed staging, verification and
+publication for supported PDF/XLSX media. Non-calendar periods and other supported
+families retain exact-file legacy categorization. Managed inputs never enter the
+incoming-URL sidecar or a broad categorizer scan.
 
 Idempotent: a URL already present in the ``documents`` table (source_url) is
 skipped. Transport failures remain visible and fail the bounded operation; an explicit
@@ -567,9 +569,15 @@ def process_ticker(
     categorize: bool = False,
     calendar: str | None = None,
     owner_requested: bool = False,
+    fiscal_witness_document_version_id: str | None = None,
+    fiscal_witness_urls: frozenset[str] = frozenset(),
 ) -> dict[str, object]:
     """Download every manifest URL for ``ticker`` into staging; optionally categorize."""
     ticker = ticker.upper()
+    if fiscal_witness_document_version_id is not None and not categorize:
+        raise ValueError("fiscal witness requires categorize=True")
+    if fiscal_witness_document_version_id is not None and not fiscal_witness_urls:
+        raise ValueError("fiscal witness requires exact source URLs")
     authorization = authorize_stored_collection_target(
         db_path,
         ticker,
@@ -622,6 +630,9 @@ def process_ticker(
         url = str(entry.get("url") or "")
         if not url:
             continue
+        entry_witness_document_version_id = (
+            fiscal_witness_document_version_id if url in fiscal_witness_urls else None
+        )
         if url in already:
             skipped += 1
             if categorize and not dry_run:
@@ -671,7 +682,10 @@ def process_ticker(
         download = partial(_download, allow_html_release=True) if allow_html_release else _download
         did_download = False
         try:
-            if categorize and authorization.fiscal_year_end_month == 12:
+            if categorize and (
+                authorization.fiscal_year_end_month == 12
+                or entry_witness_document_version_id is not None
+            ):
                 period = _reported_quarter(entry)
                 if period is None:
                     raise IssuerDocumentPreparationError("reported_quarter_invalid", phase="input")
@@ -685,6 +699,7 @@ def process_ticker(
                     fiscal_year=period[0],
                     fiscal_quarter=period[1],
                     legacy_base_name=base,
+                    fiscal_witness_document_version_id=entry_witness_document_version_id,
                     download=download,
                 )
                 downloaded += 1
@@ -701,19 +716,25 @@ def process_ticker(
                     registered += count
                     managed_registered += count
                     already.add(url)
-                    try:
-                        project_managed_presentation([publication], root, newly_published=True)
-                    except (OSError, ValueError, JobAlreadyRunningError) as exc:
-                        projection_failed += 1
-                        failed += 1
-                        log.error(
-                            {
-                                "event": "committed_document_projection_failed",
-                                "ticker": ticker,
-                                "attempt_id": request.attempt_id,
-                                "error": redact(exc),
-                            }
-                        )
+                    if any(
+                        item.document_type == "ir_presentation"
+                        for item in publication.staging_receipt.documents
+                    ):
+                        try:
+                            project_managed_presentation([publication], root, newly_published=True)
+                        except (OSError, ValueError, JobAlreadyRunningError) as exc:
+                            projection_failed += 1
+                            failed += 1
+                            log.error(
+                                {
+                                    "event": "committed_document_projection_failed",
+                                    "ticker": ticker,
+                                    "attempt_id": request.attempt_id,
+                                    "error": redact(exc),
+                                }
+                            )
+                        else:
+                            ready += count
                     else:
                         ready += count
                     continue

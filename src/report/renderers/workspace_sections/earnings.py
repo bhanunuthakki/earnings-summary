@@ -9,7 +9,6 @@ re-exports in ``workspace_html``."""
 from __future__ import annotations
 
 from io import StringIO
-from pathlib import Path
 
 from report.models import (
     CellSource,
@@ -34,7 +33,6 @@ from report.renderers.workspace_sections._shared import (
     _source_chip_html,
     _xlink_html,
 )
-from ui.earnings_audio import google_finance_earnings_url
 
 __all__ = [
     "_beat_rate_scorecard_panel",
@@ -63,6 +61,8 @@ def _earnings_tab(
     qa: QARosterSection | None,
     ticker: str,
     repo_root: str,
+    *,
+    audio_url: str | None = None,
 ) -> None:
     cards = section.full_quarters + section.digest_quarters
     body.write('<div class="tab-body">')
@@ -100,7 +100,7 @@ def _earnings_tab(
             f'data-quarter="{_esc(qid)}"{hidden}>'
         )
         _financial_highlights_panel(body, card, _financials_for_card(card, financials))
-        _earnings_narrative_panel(body, card, ticker, repo_root)
+        _earnings_narrative_panel(body, card, ticker, repo_root, audio_url=audio_url)
         body.write("</div>")
 
     # design_language §6.2 — the "Analyst Q&A" title is constant metadata; it
@@ -244,7 +244,12 @@ def _ws_period_sort_key(period: str) -> tuple[int, int]:
 
 
 def _earnings_narrative_panel(
-    body: StringIO, card: QuarterlyEarningsCard, ticker: str, repo_root: str
+    body: StringIO,
+    card: QuarterlyEarningsCard,
+    ticker: str,
+    repo_root: str,
+    *,
+    audio_url: str | None = None,
 ) -> None:
     qid = f"{card.quarter} {card.year}"
     sub_parts = ["full" if card.is_recent else "digest"]
@@ -256,7 +261,6 @@ def _earnings_narrative_panel(
             f'<a href="{_esc(as_uri)}" target="_blank" rel="noopener" class="muted">'
             "transcript ↗</a>"
         )
-    audio_url = google_finance_earnings_url(Path(repo_root), ticker)
     if audio_url:
         sub_parts.append(
             f'<a href="{_esc(audio_url)}" target="_blank" rel="noopener" class="muted" '

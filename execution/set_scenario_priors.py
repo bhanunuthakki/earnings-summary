@@ -26,8 +26,8 @@ recomputes that hash from the CURRENT anchors for each name and skips the LLM ca
 entirely when it matches the block on file — mirroring
 ``dcf.compute.peer_selection``'s ``inputs_sha256`` cache-invalidation pattern. A name
 with no prior yet (or an owner-set one, which is never touched anyway) always
-proceeds. The monthly cron (``cron/refresh_scenario_priors.task.xml``) always passes
-``--only-changed --apply``, so a quiet month costs nothing.
+proceeds. This is an on-demand command with no scheduled task. Run it manually
+with ``--only-changed --apply`` when scenario-prior assumptions need a refresh.
 """
 
 from __future__ import annotations
@@ -36,18 +36,13 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from dcf import universe as universe_mod  # noqa: E402
-from dcf.scenario_prior import (  # noqa: E402
-    ScenarioPrior,
-    anchor_block_for_ticker,
-    anchor_inputs_sha256,
-    set_scenario_prior_for_ticker,
-)
+if TYPE_CHECKING:
+    from dcf.scenario_prior import ScenarioPrior
 
 
 def write_scenario_prior_to_json(
@@ -147,6 +142,12 @@ def set_priors(
     LLM spend) and skip straight to ``"skipped_unchanged"`` when it matches the
     ``inputs_sha256`` already on file — the cadence mode. A name with no prior on
     file yet always proceeds (nothing to compare against)."""
+    from dcf.scenario_prior import (
+        anchor_block_for_ticker,
+        anchor_inputs_sha256,
+        set_scenario_prior_for_ticker,
+    )
+
     out: dict[str, str] = {}
     for ticker in tickers:
         t = ticker.upper()
@@ -189,6 +190,8 @@ def _has_redesign_block(path: Path) -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from dcf import universe as universe_mod
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", default=".", help="repo root (holds data/dcf_assumptions)")
     parser.add_argument("--ticker", action="append", help="ticker(s); default = the DCF universe")

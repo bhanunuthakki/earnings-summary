@@ -17,18 +17,16 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import re
 import sqlite3
-import stat
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
-from readme_receipt import StoredReadmeReceipt
-from readme_updater import RepositoryEvidence, evidence_sha256
+from db_paths import require_db_path
+from pipeline.transcript_summary import read_transcript_summary
+from pipeline.transcript_summary_verification import TranscriptSummaryVerifier
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -38,15 +36,6 @@ log = logging.getLogger(__name__)
 # bites pathological files, and the truncation is marked so the judge (and the
 # persisted transcript) can see it happened.
 MAX_CONTENT_CHARS = 30_000
-_README_RUN_ID = re.compile(r"[0-9a-f]{32}\Z")
-_REPARSE_POINT = 0x400
-
-# Mirrors _SUMMARY_RX in src/report/sections/earnings.py (the §5 reader of the
-# same files). Replicated rather than imported: that module pulls the pydantic
-# report stack, which the eval harness doesn't need.
-_SUMMARY_RX = re.compile(
-    r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})_(?:investor_update_)?summary\.txt$"
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,89 +90,6 @@ def _parse_naive_utc(value: object) -> datetime | None:
     return parsed
 
 
-def _read_readme_artifact(path: Path, limit: int) -> bytes:
-    before = path.lstat()
-    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
-        raise ValueError("README eval artifacts must be single-link regular files")
-    if int(getattr(before, "st_file_attributes", 0)) & _REPARSE_POINT:
-        raise ValueError("README eval artifacts may not be reparse points")
-    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(path, flags)
-    try:
-        opened = os.fstat(fd)
-        if (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
-            raise ValueError("README eval artifact changed while opening")
-        payload = os.read(fd, limit + 1)
-        if len(payload) > limit:
-            raise ValueError("README eval artifact exceeds its bounded read limit")
-        return payload
-    finally:
-        os.close(fd)
-
-
-def load_readme_update_corpus(repo_root: Path) -> list[AuditItem]:
-    """Load exact schema-v2 candidate/evidence pairs, newest first."""
-
-    runs_root = repo_root / ".tmp" / "readme_updater"
-    if not runs_root.is_dir():
-        return []
-    try:
-        resolved_runs_root = runs_root.resolve(strict=True)
-    except OSError:
-        return []
-    runs = sorted(
-        (
-            path
-            for path in runs_root.iterdir()
-            if path.is_dir() and _README_RUN_ID.fullmatch(path.name)
-        ),
-        key=lambda path: path.stat().st_mtime_ns,
-        reverse=True,
-    )
-    items: list[AuditItem] = []
-    for run in runs[:100]:
-        try:
-            run_lstat = run.lstat()
-            if (
-                run.is_symlink()
-                or int(getattr(run_lstat, "st_file_attributes", 0)) & _REPARSE_POINT
-                or run.resolve(strict=True).parent != resolved_runs_root
-            ):
-                continue
-            receipt = StoredReadmeReceipt.model_validate_json(
-                _read_readme_artifact(run / "receipt.json", 1_000_000)
-            )
-            evidence = RepositoryEvidence.model_validate_json(
-                _read_readme_artifact(run / "evidence.json", 110_000)
-            )
-            candidate = _read_readme_artifact(run / "candidate.md", 250_000).decode("utf-8")
-            if (
-                receipt.run_id != run.name
-                or evidence_sha256(evidence) != receipt.evidence_sha256
-                or candidate != receipt.result.markdown
-            ):
-                continue
-        except (OSError, UnicodeDecodeError, ValueError):
-            continue
-        items.append(
-            AuditItem(
-                item_id=f"readme-update:{receipt.run_id}",
-                label=f"readme_update/run:{receipt.run_id}",
-                ticker=None,
-                content=json.dumps(
-                    {
-                        "repository_evidence": evidence.model_dump(mode="json"),
-                        "readme_candidate": candidate,
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
-                produced_at=_mtime_naive_utc(run / "receipt.json"),
-            )
-        )
-    return items
-
-
 def load_bear_case_corpus(repo_root: Path) -> list[AuditItem]:
     """Every ``data/bear_case/<TICKER>.json`` sidecar, newest mtime first.
 
@@ -223,52 +129,58 @@ def load_bear_case_corpus(repo_root: Path) -> list[AuditItem]:
     return out
 
 
-def load_transcript_summary_corpus(repo_root: Path) -> list[AuditItem]:
-    """Every per-quarter summary in ``.tmp/``, newest fiscal quarter first.
+def _corpus_database() -> Path | None:
+    try:
+        return require_db_path()
+    except (OSError, RuntimeError):
+        log.info({"event": "eval_corpus_database_unavailable"})
+        return None
 
-    Matches the same filename grammar §5 reads (``_SUMMARY_RX``), so the
-    corpus is exactly the set of notes the report surfaces.
-    """
-    keyed: list[tuple[int, int, AuditItem]] = []
-    tmp_dir = repo_root / ".tmp"
-    if not tmp_dir.is_dir():
+
+def load_transcript_summary_corpus(repo_root: Path) -> list[AuditItem]:
+    """Audit exact current verified document products, with no filename fallback."""
+    database = _corpus_database()
+    if database is None:
         return []
-    for path in sorted(tmp_dir.iterdir()):
-        m = _SUMMARY_RX.match(path.name)
-        if not m:
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError as exc:
-            log.warning(
-                {
-                    "event": "eval_corpus_skip_unreadable",
-                    "purpose": "transcript_summary",
-                    "path": str(path),
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-            )
-            continue
-        if not text.strip():
-            continue
-        ticker = m.group("ticker")
-        q, y = int(m.group("q")), int(m.group("y"))
-        keyed.append(
-            (
-                y,
-                q,
-                AuditItem(
-                    item_id=f"{ticker}_Q{q}_{y}",
-                    label=f"transcript_summary/{ticker} Q{q}'{y % 100:02d} (.tmp/{path.name})",
-                    ticker=ticker,
-                    content=_clip(text),
-                    produced_at=_mtime_naive_utc(path),
-                ),
-            )
+    keyed: list[tuple[int, int, AuditItem]] = []
+    try:
+        verifier = TranscriptSummaryVerifier(database, repo_root)
+        with connect_sqlite(database, role=SQLiteConnectionRole.READ_ONLY) as conn:
+            rows = conn.execute(
+                "SELECT document_version_id FROM v_evidence_document_current "
+                "WHERE lower(document_type) IN ('transcript','ir_transcript','earnings_call_transcript') "
+                "ORDER BY document_version_id"
+            ).fetchall()
+            for row in rows:
+                artifact = read_transcript_summary(
+                    conn,
+                    str(row[0]),
+                    db_path=database,
+                    state_root=repo_root,
+                    verifier=verifier,
+                )
+                if artifact is None:
+                    continue
+                key = artifact.key
+                keyed.append(
+                    (
+                        key.fiscal_year,
+                        key.fiscal_quarter,
+                        AuditItem(
+                            item_id=f"artifact:{artifact.artifact_id}",
+                            label=f"transcript_summary/{key.document_version_id} Q{key.fiscal_quarter} {key.fiscal_year}",
+                            ticker=None,
+                            content=artifact.body_bytes.decode("utf-8", errors="strict"),
+                            produced_at=_parse_naive_utc(artifact.generation.generated_at),
+                        ),
+                    )
+                )
+    except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+        log.warning(
+            {"event": "eval_transcript_corpus_unavailable", "error_class": type(exc).__name__}
         )
-    # Fiscal recency beats file mtime here: a re-rendered old quarter should
-    # not outrank the newest print under --limit.
-    keyed.sort(key=lambda t: (t[0], t[1], t[2].item_id), reverse=True)
+        return []
+    keyed.sort(key=lambda item: (item[0], item[1], item[2].item_id), reverse=True)
     return [item for _, _, item in keyed]
 
 
@@ -280,8 +192,8 @@ def load_advisor_next_dollar_corpus(repo_root: Path) -> list[AuditItem]:
     hasn't run the advisor yet.
     """
     out: list[AuditItem] = []
-    db_path = repo_root / "data" / "portfolio.db"
-    if not db_path.exists():
+    db_path = _corpus_database()
+    if db_path is None:
         return out
     try:
         conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
@@ -409,8 +321,8 @@ def load_ask_advisory_answer_corpus(repo_root: Path) -> list[AuditItem]:
     the freshest and ``--since-days`` scopes the weekly fresh-only run.
     """
     out: list[AuditItem] = []
-    db_path = repo_root / "data" / "portfolio.db"
-    if not db_path.exists():
+    db_path = _corpus_database()
+    if db_path is None:
         return out
     try:
         conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
@@ -462,49 +374,6 @@ def load_ask_advisory_answer_corpus(repo_root: Path) -> list[AuditItem]:
                     produced_at=_parse_naive_utc(turn["created_at"]),
                 )
             )
-    out.sort(key=lambda i: i.produced_at or datetime.min, reverse=True)
-    return out
-
-
-def load_calibration_coach_corpus(repo_root: Path) -> list[AuditItem]:
-    """Every persisted monthly calibration scorecard that carries synthesised
-    coach prose, newest period first (close_the_loops L8).
-
-    Reads ``data/calibration_scorecard/<period>.json`` written by
-    ``calibration_coach.save_scorecard``. The graded text is the denormalised
-    ``prose`` field (named biases + the period's behavioural experiment with
-    their deterministic grounding). Scorecards too thin to coach (no biases, no
-    experiment) carry nothing to judge and are skipped — distinct from a grading
-    failure. Missing directory ⇒ empty corpus (no scorecard generated yet)."""
-    out: list[AuditItem] = []
-    base = Path(repo_root) / "data" / "calibration_scorecard"
-    if not base.is_dir():
-        return out
-    for path in sorted(base.glob("*.json")):
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(raw, dict):
-            continue
-        card = cast("dict[str, object]", raw)
-        biases = card.get("biases")
-        experiment = card.get("experiment")
-        has_biases = isinstance(biases, list) and len(cast("list[object]", biases)) > 0
-        has_coach = has_biases or isinstance(experiment, dict)
-        prose = card.get("prose")
-        if not has_coach or not isinstance(prose, str) or not prose.strip():
-            continue
-        period = str(card.get("period") or path.stem)
-        out.append(
-            AuditItem(
-                item_id=f"calibration_coach:{period}",
-                label=f"calibration_coach/{period}",
-                ticker=None,
-                content=_clip(prose),
-                produced_at=_mtime_naive_utc(path),
-            )
-        )
     out.sort(key=lambda i: i.produced_at or datetime.min, reverse=True)
     return out
 
@@ -641,8 +510,8 @@ def load_position_review_corpus(repo_root: Path) -> list[AuditItem]:
     repo that hasn't produced a review — mirrors load_advisor_next_dollar_corpus.
     """
     out: list[AuditItem] = []
-    db_path = repo_root / "data" / "portfolio.db"
-    if not db_path.exists():
+    db_path = _corpus_database()
+    if db_path is None:
         return out
     try:
         conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
@@ -682,63 +551,6 @@ def load_position_review_corpus(repo_root: Path) -> list[AuditItem]:
     return out
 
 
-def load_behavior_distill_corpus(repo_root: Path) -> list[AuditItem]:
-    """Every staged behavioral rule (``owner_profile_facts`` rows with
-    ``category='behavioral'`` and ``provenance='derived'``, latest-row-only),
-    newest id first.
-
-    Distinct from ``load_position_review_corpus``'s live-memo shape: a
-    behavioral rule's graded citations ARE its evidence, so the judged content
-    is the rule's narrative (which already carries the wrong/total tally
-    computed from validated citations) -- the rubric grades whether the rule
-    reads as a real, falsifiable, second-person pattern grounded in that
-    evidence, not a vague truism. Missing DB / missing table -> empty corpus
-    (nothing distilled yet), mirroring every other loader here.
-    """
-    out: list[AuditItem] = []
-    db_path = repo_root / "data" / "portfolio.db"
-    if not db_path.exists():
-        return out
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error as exc:
-        log.warning({"event": "eval_corpus_db_open_failed", "error": str(exc)})
-        return out
-    try:
-        present = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='owner_profile_facts'"
-        ).fetchone()
-        if present is None:
-            log.info({"event": "eval_corpus_no_owner_profile_facts_table"})
-            return out
-        rows = conn.execute(
-            """
-            SELECT id, key, narrative, created_at
-            FROM owner_profile_facts
-            WHERE category = 'behavioral' AND provenance = 'derived' AND is_latest = 1
-            ORDER BY id DESC
-            """
-        ).fetchall()
-    except sqlite3.Error as exc:
-        log.warning({"event": "eval_corpus_behavior_distill_read_failed", "error": str(exc)})
-        return out
-    finally:
-        conn.close()
-    for fact_id, key, narrative, created_at in rows:
-        if not narrative:
-            continue
-        out.append(
-            AuditItem(
-                item_id=f"owner_profile_fact:{fact_id}",
-                label=f"behavior_distill/{key} (fact:{fact_id})",
-                ticker=None,
-                content=_clip(str(narrative)),
-                produced_at=_parse_naive_utc(created_at),
-            )
-        )
-    return out
-
-
 def load_investment_decision_card_corpus(repo_root: Path) -> list[AuditItem]:
     """Every current (non-superseded) ``investment_decision_card`` artifact,
     newest first (P1.1, personal_investment_partner_prd.md §8.1/§10.5).
@@ -747,8 +559,8 @@ def load_investment_decision_card_corpus(repo_root: Path) -> list[AuditItem]:
     Recommendation). Missing DB/table ⇒ empty corpus, mirroring the other
     llm_artifacts-backed loaders."""
     out: list[AuditItem] = []
-    db_path = repo_root / "data" / "portfolio.db"
-    if not db_path.exists():
+    db_path = _corpus_database()
+    if db_path is None:
         return out
     try:
         conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
@@ -794,18 +606,15 @@ def load_investment_decision_card_corpus(repo_root: Path) -> list[AuditItem]:
 
 
 CORPUS_LOADERS: dict[str, CorpusLoader] = {
-    "readme_update": load_readme_update_corpus,
     "bear_case": load_bear_case_corpus,
     "transcript_summary": load_transcript_summary_corpus,
     "advisor_next_dollar": load_advisor_next_dollar_corpus,
     "investment_decision_card": load_investment_decision_card_corpus,
     "ask_advisory_answer": load_ask_advisory_answer_corpus,
-    "calibration_coach": load_calibration_coach_corpus,
     "peer_selection": load_peer_selection_corpus,
     "earnings_themes_split": load_earnings_themes_corpus,
     "qa_topics": load_qa_topics_corpus,
     "position_review": load_position_review_corpus,
-    "behavior_distill": load_behavior_distill_corpus,
 }
 
 

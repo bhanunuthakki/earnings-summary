@@ -30,12 +30,10 @@ from advisor.scoring import (
 )
 from advisor.store import (
     AdvisorMemoRow,
-    StanceScoreRow,
     get_memo,
     insert_memo,
     list_scores_for_memos,
 )
-from pipeline.advisor_memos_panel import compose_memos_page
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -429,56 +427,3 @@ def test_run_scoring_flips_status_and_is_idempotent(
 # --------------------------------------------------------------------------- #
 # Panel surfacing
 # --------------------------------------------------------------------------- #
-
-
-def test_panel_shows_verdict_pills_and_track_record() -> None:
-    socratic = _memo(memo_id=1, stance="add")
-    swap = _memo(memo_id=2, kind="swap_check", counter="BKNG", stance=None)
-    scores = {
-        1: StanceScoreRow(
-            id=1,
-            memo_id=1,
-            user_id="bhanu",
-            verdict="correct",
-            benchmark_basis="tracker_spy",
-            horizon_days=90,
-            start_date="2026-06-01",
-            end_date="2026-08-30",
-            ticker="NU",
-            counter_ticker=None,
-            ticker_return_pct=20.0,
-            benchmark_return_pct=5.0,
-            excess_return_pct=15.0,
-            counter_return_pct=None,
-            detail=None,
-            created_at=datetime(2026, 9, 1, tzinfo=UTC),
-        ),
-        2: StanceScoreRow(
-            id=2,
-            memo_id=2,
-            user_id="bhanu",
-            verdict="screen_refuted",
-            benchmark_basis="none",
-            horizon_days=90,
-            start_date="2026-06-01",
-            end_date="2026-08-30",
-            ticker="NU",
-            counter_ticker="BKNG",
-            ticker_return_pct=10.0,
-            benchmark_return_pct=None,
-            excess_return_pct=None,
-            counter_return_pct=2.0,
-            detail={"realized_margin_pp": -8.0},
-            created_at=datetime(2026, 9, 1, tzinfo=UTC),
-        ),
-    }
-    html = compose_memos_page([], [socratic, swap], scores=scores)
-    assert "correct +15.0pp vs SPY" in html
-    assert "screen refuted -8.0pp realized" in html
-    assert "Track record" in html
-    assert "Stances: 1/1 correct" in html and "avg excess +15.0pp" in html
-    assert "Swap screens: 0/1 validated" in html
-    # Unscored memos still show the pending state, and no strip without grades.
-    bare = compose_memos_page([], [socratic])
-    assert "Track record" not in bare
-    assert 'title="scoring pending"' in bare

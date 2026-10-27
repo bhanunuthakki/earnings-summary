@@ -1,36 +1,21 @@
-"""owner_profile_facts ratification surface (tenet-2 Phase 1) — the packet-walk
-item source + card, and the affirm/reject routes.
-
-- ``_packet_items`` surfaces every ``proposed`` fact as its own card with
-  Affirm ("Still true") / Reject ("Drop") buttons.
-- ``/api/profile/fact/<id>/affirm`` and ``/reject`` call the store directly
-  and bump ``act:profile:<verb>``.
-- Gated assertion: a fact never appears once it is no longer ``proposed``
-  (affirmed or rejected), and reads degrade to an empty packet on a
-  pre-0159 DB (no owner_profile_facts table yet).
-"""
+"""Explicit profile fact writes remain available without the retired packet UI."""
 
 from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
+import comments_server
 import pytest
 from flask.testing import FlaskClient
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-
-from owner_profile.store import append_fact, list_facts  # noqa: E402
-from pipeline.ledger_panel import render_ledger_panel  # noqa: E402
+from owner_profile.store import append_fact, list_facts
+from pipeline.ledger_panel import render_ledger_panel
 
 _PRIOR_HEAD = "0059_kpi_facts_restatement"  # matches tests/test_ledger_packet.py's baseline
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
@@ -63,16 +48,16 @@ def test_packet_absent_with_no_proposed_facts(ctx: tuple[FlaskClient, Path, Path
     assert 'id="ledger-packet"' not in html
 
 
-def test_proposed_fact_appears_in_packet(ctx: tuple[FlaskClient, Path, Path]) -> None:
+def test_proposed_fact_remains_readable_without_packet(ctx: tuple[FlaskClient, Path, Path]) -> None:
     _client, db, _root = ctx
     _seed_fact(db)
     html = render_ledger_panel(db)
-    assert 'id="ledger-packet"' in html
-    assert "1 needs you" in html
-    assert "Home city: San Francisco." in html
-    assert 'data-profile-action="affirm"' in html
-    assert 'data-profile-action="reject"' in html
-    assert "Still true" in html and "Drop" in html
+    assert 'id="ledger-packet"' not in html
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        assert [fact.narrative for fact in list_facts(conn, status="proposed")] == [
+            "Home city: San Francisco."
+        ]
 
 
 def test_affirm_route_promotes_and_bumps_activation(
@@ -87,7 +72,7 @@ def test_affirm_route_promotes_and_bumps_activation(
     assert body["status"] == "affirmed"
     # Ledger UX overhaul (requirement B): the route itself carries the
     # consequence receipt — the UI never has to guess what registering.
-    assert body["receipt"] == "Affirmed — the coach may now cite this when reviewing your trades"
+    assert body["receipt"] == "Affirmed — saved as a confirmed profile fact"
 
     conn = sqlite3.connect(str(db))
     try:
@@ -198,19 +183,18 @@ def _seed_expired_fact(db: Path, *, key: str = "dry_powder_policy", horizon_days
     return fid
 
 
-def test_expiring_fact_appears_in_packet_with_still_true_update_drop(
+def test_expiring_fact_remains_readable_without_packet(
     ctx: tuple[FlaskClient, Path, Path],
 ) -> None:
     _client, db, _root = ctx
     _seed_expired_fact(db)
     html = render_ledger_panel(db)
-    assert 'id="ledger-packet"' in html
-    assert "1 needs you" in html
-    assert "Dry-powder policy: keep 3 months uninvested." in html
-    assert 'data-profile-action="reaffirm"' in html
-    assert 'data-profile-action="retire"' in html
-    assert "data-profile-update-toggle" in html
-    assert "Still true" in html and "Update" in html and "Drop" in html
+    assert 'id="ledger-packet"' not in html
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        facts = list_facts(conn, status="affirmed")
+        assert len(facts) == 1
+        assert facts[0].narrative == "Dry-powder policy: keep 3 months uninvested."
 
 
 def test_reaffirm_route_bumps_affirmed_at_and_clears_the_packet(
@@ -261,7 +245,7 @@ def test_retire_route_retires_and_bumps_activation(
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["ok"] is True
-    assert body["receipt"] == "Dropped — the coach will stop citing this fact"
+    assert body["receipt"] == "Dropped — this fact is no longer active"
 
     conn = sqlite3.connect(str(db))
     conn.row_factory = sqlite3.Row
@@ -306,7 +290,7 @@ def test_update_route_lands_a_new_proposed_fact_superseding_the_old(
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["ok"] is True
-    assert body["receipt"] == "Saved — your edit awaits your affirm next walk"
+    assert body["receipt"] == "Saved — confirm the updated profile fact"
     new_id = body["new_fact_id"]
     assert new_id != fid
 
@@ -332,8 +316,8 @@ def test_update_route_lands_a_new_proposed_fact_superseding_the_old(
     # The expiring-fact item is gone (old row superseded); the NEW proposed
     # fact appears via the Phase 1 source instead, with its own Affirm/Reject.
     html = render_ledger_panel(db)
-    assert 'data-profile-action="affirm"' in html
-    assert "Dry-powder policy: 4 months now." in html
+    assert 'id="ledger-packet"' not in html
+    assert 'data-profile-action="affirm"' not in html
 
 
 def test_update_route_requires_a_narrative(ctx: tuple[FlaskClient, Path, Path]) -> None:

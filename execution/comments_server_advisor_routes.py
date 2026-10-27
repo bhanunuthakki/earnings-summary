@@ -120,43 +120,6 @@ def register_advisor_routes(app: Flask, ctx: ServerContext) -> None:
             "artifact_id": result.artifact_id,
         }
 
-    @app.route("/actions/advisor-memo", methods=["POST", "OPTIONS"])
-    def start_advisor_memo():
-        """Run an advisor memo generation (master build P2.3) as a streamed
-        single-flight job: {"kind": "next_dollar" | "swap_checks" | "all"}.
-        Runs execution/run_advisor_memos.py; the Memos panel consumes the
-        SSE stream and refetches itself on success."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        body = cast("dict[str, object]", request.get_json(silent=True) or {})
-        memo_kind = str(body.get("kind", ""))
-        if memo_kind not in ("next_dollar", "swap_checks", "all"):
-            return ({"error": "kind must be next_dollar | swap_checks | all"}, 400)
-        argv = managed_python_argv(
-            repo_root,
-            repo_root / "execution" / "run_advisor_memos.py",
-            "--kind",
-            memo_kind,
-            "--repo-root",
-            str(repo_root),
-        )
-        if ctx.source_state_root is not None:
-            argv.extend(("--state-root", str(ctx.source_state_root)))
-        try:
-            job = job_registry.start(ticker="_REPO", kind=f"advisor-{memo_kind}", argv=argv)
-        except RegistryConflict as e:
-            return ({"error": str(e)}, 409)
-        return (
-            {
-                "job_id": job.job_id,
-                "ticker": job.ticker,
-                "kind": job.kind,
-                "stream_url": f"/actions/stream/{job.job_id}",
-                "started_at": job.started_at.isoformat(),
-            },
-            201,
-        )
-
     @app.route("/actions/position-review", methods=["POST", "OPTIONS"])
     def start_position_review():
         """Run the full governed position review (PR5 — the calibration

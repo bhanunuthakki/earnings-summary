@@ -11,7 +11,7 @@ ObservationState = Literal["current", "missing", "stale", "invalid", "unavailabl
 SchedulerTaskState = Literal["Ready", "Running", "Disabled", "Unknown", "Missing"]
 ServiceState = Literal["Running", "Stopped", "Paused", "Unknown", "Missing"]
 RegistryMatch = Literal["expected", "missing", "unexpected"]
-SchedulerExpectation = Literal["required_enabled", "required_disabled", "absent_service_owned"]
+SchedulerExpectation = Literal["required_enabled", "required_disabled"]
 SchedulerAttemptState = Literal["never_attempted", "running", "succeeded", "failed", "unknown"]
 ProbeAvailability = Literal["available", "unavailable"]
 RUNTIME_PAIR_RECEIPT_FILENAME = "operations.runtime.pair.latest.json"
@@ -46,7 +46,6 @@ class ScheduledTaskDefinition(FrozenModel):
     xml: str
     wrapper: str
     schedule: ScheduleDefinition
-    service_owned: bool
     scheduler_expectation: SchedulerExpectation
 
 

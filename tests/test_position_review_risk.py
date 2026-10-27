@@ -1,6 +1,6 @@
 """The C7 risk-aware ``/review`` block — ``RiskContext`` + ``build_risk_context``
 + ``render_risk_lines`` + ``risk_prompt_block``, and their wiring into
-``render_pre_analysis_chat``/``render_pre_analysis_plain``.
+``render_pre_analysis_chat``.
 
 Mirrors ``tests/test_position_review_capacity_block.py``'s shape and its
 byte-identical-when-empty discipline: every sub-leg (book risk share/corr,
@@ -27,7 +27,6 @@ from advisor.position_review import (
     RiskContext,
     build_risk_context,
     render_pre_analysis_chat,
-    render_pre_analysis_plain,
     render_risk_lines,
     risk_prompt_block,
 )
@@ -290,12 +289,6 @@ def test_chat_render_byte_identical_risk_none_vs_empty_context() -> None:
     pre_none = _PRE_DEFAULT
     pre_empty = replace(_PRE_DEFAULT, risk=RiskContext())
     assert render_pre_analysis_chat(pre_none) == render_pre_analysis_chat(pre_empty)
-
-
-def test_plain_render_byte_identical_risk_none_vs_empty_context() -> None:
-    pre_none = _PRE_DEFAULT
-    pre_empty = replace(_PRE_DEFAULT, risk=RiskContext())
-    assert render_pre_analysis_plain(pre_none) == render_pre_analysis_plain(pre_empty)
 
 
 def test_chat_render_no_risk_lines_when_empty() -> None:

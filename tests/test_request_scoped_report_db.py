@@ -121,33 +121,7 @@ def test_build_report_threads_one_borrowed_connection_to_db_sections(
 ) -> None:
     shared = sqlite3.connect(":memory:")
     received: dict[str, sqlite3.Connection | None] = {}
-    saydo_arguments: dict[str, object] = {}
     actual_saydo_build = builder.saydo.build
-    generated: list[str] = []
-    source = tmp_path / ".tmp/SayDo_NU_Q1_2026_Q2_2026.txt"
-    source.parent.mkdir(parents=True)
-    source.write_text(
-        "| Metric | Guide | Actual | Verdict |\n|---|---|---|---|\n| Revenue | $1 | $2 | beat |",
-        encoding="utf-8",
-    )
-
-    def empty_anchor(*_args: object) -> str:
-        return ""
-
-    def generate(*_args: object, **_kwargs: object) -> str:
-        generated.append("selection")
-        return '["0"]'
-
-    for anchor in (
-        "load_thesis_anchor",
-        "load_bear_anchor",
-        "load_ir_anchor",
-        "load_priors_anchor",
-        "load_worldview_anchor",
-        "load_owner_profile_anchor",
-    ):
-        monkeypatch.setattr(builder.saydo, anchor, empty_anchor)
-    monkeypatch.setattr(builder.saydo, "generate_saydo_filter", generate)
     stub = SimpleNamespace(held=False, budget_skip=None)
 
     db_sections = (
@@ -160,7 +134,6 @@ def test_build_report_threads_one_borrowed_connection_to_db_sections(
         builder.segments,
         builder.earnings,
         builder.saydo,
-        builder.ir_docs,
         builder.bear_case,
         builder.provenance,
         builder.valuation,
@@ -176,14 +149,7 @@ def test_build_report_threads_one_borrowed_connection_to_db_sections(
             assert isinstance(value, sqlite3.Connection)
             received[_name] = value
             if _name == builder.saydo.__name__:
-                saydo_arguments.update(kwargs)
-                return actual_saydo_build(
-                    "NU",
-                    tmp_path,
-                    conn=value,
-                    enable_llm=bool(kwargs.get("enable_llm")),
-                    force_refresh=bool(kwargs.get("force_refresh")),
-                )
+                return actual_saydo_build("NU", tmp_path, conn=value)
             return stub
 
         monkeypatch.setattr(module, "build", record)
@@ -204,11 +170,23 @@ def test_build_report_threads_one_borrowed_connection_to_db_sections(
     def no_suppressed_sections(*_args: object) -> set[str]:
         return set()
 
-    def report_spec(**kwargs: object) -> dict[str, object]:
-        return kwargs
+    class CapturedSpec(dict[str, object]):
+        def model_copy(self, *, update: dict[str, object]) -> CapturedSpec:
+            return CapturedSpec({**self, **update})
+
+    def report_spec(**kwargs: object) -> CapturedSpec:
+        return CapturedSpec(kwargs)
+
+    def prepare_workspace(_spec: object, *, conn: sqlite3.Connection) -> object:
+        from report.workspace_models import WorkspacePrepared
+
+        assert conn is shared
+        received["workspace"] = conn
+        return WorkspacePrepared()
 
     monkeypatch.setattr(builder, "suppressed_sections_for_ticker", no_suppressed_sections)
     monkeypatch.setattr(builder, "ReportSpec", report_spec)
+    monkeypatch.setattr(builder, "prepare_workspace_report", prepare_workspace)
 
     result = None
     for _ in range(2):
@@ -223,12 +201,9 @@ def test_build_report_threads_one_borrowed_connection_to_db_sections(
 
     payload = cast("dict[str, object]", result)
     assert payload["ticker"] == "NU"
-    assert received == {module.__name__: shared for module in db_sections}
-    assert saydo_arguments["enable_llm"] is enable_llm
-    assert not saydo_arguments.get("force_refresh", False)
-    assert generated == (["selection"] if enable_llm else [])
+    assert received == {**{module.__name__: shared for module in db_sections}, "workspace": shared}
     section = payload["saydo"]
     assert isinstance(section, SayDoSection)
-    assert section.cards[0].selection_disposition == ("cache" if enable_llm else "non_llm_fallback")
+    assert section.verdicts_availability == "unavailable"
     assert shared.execute("SELECT 1").fetchone() == (1,)
     shared.close()

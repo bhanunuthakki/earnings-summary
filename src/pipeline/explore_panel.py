@@ -1,8 +1,7 @@
-"""Narrative-first Explore with an on-demand analytical Work Bench.
+"""Company analytics workbench with contextual questions handed to Copilot.
 
-Explore renders the governed Ask stream inline. A compact ``Work with data``
-doorway expands the current question or ViewSpec into a full-canvas,
-deterministic analytics workspace. Modeling remains owned by the DCF.
+Governed catalogs, ViewSpec compilation/execution and saved analyses stay here.
+Copilot owns conversations, streaming, sessions and answer history.
 """
 
 from __future__ import annotations
@@ -349,22 +348,14 @@ def render_explore_panel(
     initial_tickers: list[str] | None = None,
     include_runtime: bool = True,
 ) -> str:
-    """Render the consolidated Explore thread and its on-demand Work Bench."""
+    """Render the company workbench and explicit Copilot doorway."""
     tickers = (
         [ticker.strip().upper() for ticker in initial_tickers if ticker.strip()]
         if initial_tickers is not None
         else _default_tickers(db_path, user_id)
     )
     ticker = tickers[0] if tickers else ""
-    # Optional metric discovery belongs to the on-demand Work Bench. The
-    # conversation must remain usable while the governed catalog is expensive
-    # or unavailable; generic questions do not assert any financial facts.
-    company = ticker or "this company"
-    suggestion_chips = (
-        f'<button type="button" class="k-chip k-chip-btn" data-ask-q="What changed most recently for {escape(company)}?">What changed?</button>'
-        f'<button type="button" class="k-chip k-chip-btn" data-ask-q="Tell me about growth for {escape(company)}">Growth</button>'
-        f'<button type="button" class="k-chip k-chip-btn" data-ask-q="What are the key risks for {escape(company)}?">Key risks</button>'
-    )
+    # Optional metric discovery must not block the shell or Copilot doorway.
     transform_options = "".join(
         f'<option value="{escape(value)}"{" selected" if value == "level" else ""}>{escape(value.title())}</option>'
         for value in TRANSFORMS
@@ -384,21 +375,17 @@ def render_explore_panel(
     return f"""{_PANEL_STYLE}
 {cite_assets}
 <div id="vx-root" class="explore-root">
-  <section class="explore-conversation" aria-label="Explore company research">
-    <div class="ask-thread" id="ask-thread"><div class="explore-empty" id="explore-empty"><p>Ask a company question. Explore answers in narrative, grounds material claims in governed data, and offers deeper analysis only when you want it.</p><div class="explore-suggestions" aria-label="Suggested questions">{suggestion_chips}</div></div></div>
-    <div class="explore-compose"><input id="ask-q" aria-label="Ask Explore" autocomplete="off" placeholder="Ask about growth, margins, segment mix, management claims, or what changed…"><button type="button" id="ask-go" class="k-btn k-btn-primary">Ask</button></div>
-    <div class="explore-compose-meta"><span id="explore-status">Grounded in reported facts, source documents, and clearly labeled inference.</span><button type="button" id="vx-open-empty" class="k-chip k-chip-btn">Work with data ↗</button></div>
+  <section class="explore-conversation" aria-label="Company analytics and research">
+    <p>Compare governed company facts in the workbench. Use Copilot for contextual questions.</p>
+    <div class="explore-compose-meta"><button type="button" id="vx-open-empty" class="k-btn k-btn-primary">Work with data</button><button type="button" id="vx-ask-copilot" class="k-btn k-btn-quiet">Ask Copilot</button></div>
+    <p id="vx-copilot-status" role="status" aria-live="polite"></p>
     <details class="k-card k-card-section" id="vx-procedures">
       <summary>Reports and research procedures</summary>
       <ul>
         <li><strong>Saved reports.</strong> Open PRE / POST earnings reports and full research briefs in Brief Library. Each saved edition retains its source scope, identity and coverage gaps. <button type="button" class="k-btn k-btn-quiet k-btn-sm" id="vx-procedure-reports">Open Brief Library</button></li>
         <li><strong>Analytics.</strong> Compare governed company facts with the existing table and chart workbench. <button type="button" class="k-btn k-btn-quiet k-btn-sm" id="vx-procedure-analytics">Work with data</button></li>
-        <li><strong>Extract KPI candidates from earnings summaries.</strong> Run the configured KPI procedure for <span id="vx-procedure-ticker">{escape(ticker or "no selected company")}</span>. This uses saved earnings summaries and may make model calls and write candidates. Primary-source review is required before admission. IR-summary and novel-number modes remain backend CLI procedures.</li>
       </ul>
-      <button type="button" class="k-btn k-btn-quiet k-btn-sm" id="vx-procedure-run" aria-describedby="vx-procedure-status"{"" if ticker else " disabled"}>Run earnings-summary KPI extraction</button>
       <button type="button" class="k-btn k-btn-quiet k-btn-sm" id="vx-procedure-operations">Open Operations</button>
-      <p class="k-card-meta" id="vx-procedure-status" role="status" aria-live="polite">Runs only after you select Run. No source collection is requested.</p>
-      <a class="k-btn k-btn-quiet k-btn-sm" id="vx-procedure-operation" hidden>View operation output</a>
     </details>
   </section>
 
@@ -415,7 +402,7 @@ def render_explore_panel(
       <div class="vx-resizer vx-inspector-resizer" id="vx-inspector-resizer" role="separator" aria-label="Resize metric inspector" aria-orientation="vertical" aria-valuemin="260" aria-valuemax="560" aria-valuenow="340" tabindex="0"></div>
       <aside class="vx-inspector" id="vx-inspector" hidden><div class="vx-rail-head"><div><span class="k-label">Metric definition</span><h2 id="vx-inspector-title">Metric</h2></div><button type="button" class="k-btn k-btn-sm k-btn-quiet" id="vx-inspector-close">Minimize</button></div><p id="vx-inspector-definition"></p><dl class="vx-inspector-facts"><div><dt>Canonical field</dt><dd id="vx-inspector-token"></dd></div><div><dt>Origin</dt><dd id="vx-inspector-origin"></dd></div></dl></aside>
     </div>
-    <footer class="vx-workbench-compose"><div><span class="k-label">Refine this analysis</span><p>Describe a comparison or add a metric; Explore will reshape the governed ViewSpec.</p></div><input id="vx-workbench-q" autocomplete="off" aria-label="Refine analysis" placeholder="e.g. compare segment growth over 8 complete quarters"><button type="button" class="k-btn k-btn-primary" id="vx-workbench-go">Apply</button></footer>
+    <footer class="vx-workbench-compose"><div><span class="k-label">Refine this analysis</span><p>Describe a comparison or add a metric; Explore will reshape the governed ViewSpec.</p></div><input id="vx-workbench-q" autocomplete="off" aria-label="Refine analysis" placeholder="e.g. compare segment growth over 8 complete quarters"><button type="button" class="k-btn k-btn-primary" id="vx-workbench-go">Apply</button><button type="button" class="k-btn k-btn-quiet" id="vx-workbench-copilot">Ask Copilot about this analysis</button></footer>
   </dialog>
   <input id="vx-tickers" type="hidden" value="{escape(ticker)}">
 </div>

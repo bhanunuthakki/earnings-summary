@@ -32,7 +32,6 @@ PROVENANCE_SECTIONS: tuple[_SectionSpec, ...] = (
     ("model_eval", "Optimizer", "model_eval"),
     ("ir_coverage", "IR Docs", "ir_coverage"),
     ("source_calls", "Data Cache", "source_calls"),
-    ("cron_health", "Cron Health", "cron_health"),
     ("dcf_coverage", "DCF Coverage", "dcf_coverage"),
     ("restatements", "Restatements", "restatements"),
     ("overrides", "Overrides", "overrides"),

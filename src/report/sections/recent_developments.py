@@ -17,6 +17,7 @@ import json
 import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 from llm_client import (
     compose_anchor_block,
@@ -28,6 +29,8 @@ from llm_client import (
     load_thesis_anchor,
 )
 from report.models import (
+    RecentDevelopmentEventPayload,
+    RecentDevelopmentsPayload,
     RecentDevelopmentsSection,
     SectionStatus,
 )
@@ -56,6 +59,22 @@ def build(
         cached = _read_cache(cache_path, cache_ttl_days)
         if cached is not None:
             return cached
+        if _is_legacy_markdown_cache(cache_path):
+            return RecentDevelopmentsSection(
+                status=SectionStatus.MISSING_DATA,
+                missing=missing(
+                    stage="SYNTHESIZE(recent_developments_structured)",
+                    fix_command=(
+                        f"python execution/build_artifacts.py --ticker {ticker.upper()} "
+                        "--enable-llm --refresh-news"
+                    ),
+                    detail=(
+                        "The cached news brief uses the retired Markdown-only format. "
+                        "Run an explicit refresh to create a structured report output."
+                    ),
+                ),
+                news_days_window=news_days,
+            )
 
     if not enable_llm:
         return RecentDevelopmentsSection(
@@ -92,7 +111,7 @@ def build(
         load_priors_anchor(repo_root, ticker),
     )
     try:
-        content_md = generate_recent_developments(
+        structured = generate_recent_developments(
             ticker, news_days=news_days, anchor_block=anchor_block
         )
     except Exception as exc:
@@ -129,7 +148,8 @@ def build(
         status=SectionStatus.OK,
         cached_at=render_now(),
         news_days_window=news_days,
-        content_md=content_md,
+        content_md=_render_content(structured),
+        structured_output=structured,
     )
     _write_cache(cache_path, section)
     return section
@@ -144,9 +164,21 @@ def _read_cache(path: Path, ttl_days: int) -> RecentDevelopmentsSection | None:
     if not path.exists():
         return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data_obj: object = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data_obj, dict):
+            return None
+        data = cast("dict[str, object]", data_obj)
+        structured_raw = data.get("structured_output")
+        if structured_raw is None:
+            return None
+        structured = RecentDevelopmentsPayload.model_validate(structured_raw)
         cached_at_raw = data["cached_at"]
+        if not isinstance(cached_at_raw, str):
+            return None
         cached_at = datetime.fromisoformat(cached_at_raw)
+        window_raw = data.get("news_days_window", DEFAULT_NEWS_DAYS_WINDOW)
+        if not isinstance(window_raw, int) or isinstance(window_raw, bool):
+            return None
     except (json.JSONDecodeError, KeyError, ValueError, TypeError):
         return None
     if cached_at.tzinfo is None:
@@ -157,8 +189,9 @@ def _read_cache(path: Path, ttl_days: int) -> RecentDevelopmentsSection | None:
     return RecentDevelopmentsSection(
         status=SectionStatus.OK,
         cached_at=cached_at,
-        news_days_window=int(data.get("news_days_window", DEFAULT_NEWS_DAYS_WINDOW)),
-        content_md=str(data.get("content_md", "")),
+        news_days_window=window_raw,
+        content_md=_render_content(structured),
+        structured_output=structured,
     )
 
 
@@ -167,9 +200,60 @@ def _write_cache(path: Path, section: RecentDevelopmentsSection) -> None:
     payload = {
         "cached_at": section.cached_at.isoformat() if section.cached_at else "",
         "news_days_window": section.news_days_window,
-        "content_md": section.content_md or "",
+        "structured_output": (
+            section.structured_output.model_dump(mode="json")
+            if section.structured_output is not None
+            else None
+        ),
     }
     path.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+
+
+def _is_legacy_markdown_cache(path: Path) -> bool:
+    if not path.exists():
+        return False
+    try:
+        data: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(data, dict) and "content_md" in data and "structured_output" not in data
+
+
+def _render_content(payload: RecentDevelopmentsPayload) -> str:
+    sections = {
+        "material_news": "Material news",
+        "sector_context": "Sector / regulatory context",
+        "watch_this_week": "Watch this week",
+    }
+    grouped: dict[str, list[RecentDevelopmentEventPayload]] = {}
+    for event in payload.events:
+        grouped.setdefault(event.category, []).append(event)
+    lines: list[str] = []
+    for category, title in sections.items():
+        events = grouped.get(category, [])
+        if not events:
+            continue
+        lines.append(f"### {title}")
+        for event in events:
+            citation_date = event.published_at[:10]
+            gloss = f"{event.factual_summary} {event.thesis_implication}"
+            lines.append(
+                f"- **{event.headline}** — {gloss} "
+                f"[Source: {event.publisher}, {citation_date}, {event.url}]"
+            )
+        lines.append("")
+    if payload.search_status == "no_qualifying_events":
+        sources = "; ".join(payload.sources_opened)
+        queries = "; ".join(payload.queries_run)
+        lines.extend(
+            [
+                "### Material news",
+                "*No qualifying material event was identified in the searched window.*",
+                f"Searches run: {queries}. Window covered: {payload.window_start} through "
+                f"{payload.window_end}. Sources opened: {sources}.",
+            ]
+        )
+    return "\n".join(lines).strip()

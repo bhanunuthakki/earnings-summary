@@ -37,17 +37,18 @@ Company brief and fit batches exclude ETF candidates. Explicit ETF brief or
 research requests return an unsupported result. Retired direct commands return
 exit code 2 before any provider or database access.
 
-## Saved data and history
+## Source evidence and retired history
 
-Keep ETF identities, profiles, holdings, source bytes, reports, notes, owner
-reviews, saved narrative versions and dates. No schema or durable-data deletion
-is part of this retirement. Old caches do not supply active ETF scores or labels.
+Do not retain or present old ETF workups, saved research histories or narrative
+versions as a supported product capability. The owner approved retirement of
+optional historical research. Preserve an old record only when an actual retained
+decision, thesis or financial-provenance dependency requires it. Do not infer a
+dependency from a shared reader or a record that could be useful later.
 
-The existing ETF peek is a read-only saved-research viewer. It shows current and
-superseded stored versions as history, with stable IDs and saved dates. An
-unreadable version remains explicitly unavailable. Saved verdicts and proposed
-weights are historical content, not current advice. Saved P/E fields retain
-their original point-in-time meaning; no new series is implied.
+Retain original source bytes only when they support an actual protected financial
+fact or provenance chain. A source file alone does not make a retired research
+artifact current advice. Supported point-in-time P/E evidence keeps its source,
+period and reported basis wherever it is used in retained portfolio context.
 
 ## Operations boundary
 

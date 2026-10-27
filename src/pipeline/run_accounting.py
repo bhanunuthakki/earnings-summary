@@ -373,6 +373,7 @@ def record_stage(
     started_at: datetime | None = None,
     *,
     commit: bool = True,
+    _artifact_receipt: tuple[int, str, str] | None = None,
 ) -> None:
     """Insert one stage_transitions row.
 
@@ -403,10 +404,17 @@ def record_stage(
     }:
         # This FK-backed journal is the durable source for new writers; the
         # original stage_transitions row remains the compatibility projection.
+        artifact_columns = ""
+        artifact_placeholders = ""
+        artifact_values: tuple[int, str, str] | tuple[()] = ()
+        if _artifact_receipt is not None:
+            artifact_columns = ", artifact_id, receipt_json, receipt_sha256"
+            artifact_placeholders = ", ?, ?, ?"
+            artifact_values = _artifact_receipt
         conn.execute(
             "INSERT INTO pipeline_stage_transitions "
-            "(attempt_id, ticker, period_end, stage, status, started_at, ended_at, error_msg) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            f"(attempt_id, ticker, period_end, stage, status, started_at, ended_at, error_msg{artifact_columns}) "
+            f"VALUES (?, ?, ?, ?, ?, ?, ?, ?{artifact_placeholders})",
             (
                 run_id,
                 ticker.upper(),
@@ -416,6 +424,7 @@ def record_stage(
                 _iso_datetime(started_at if started_at is not None else now),
                 _iso_datetime(now if is_terminal else None),
                 error_msg,
+                *artifact_values,
             ),
         )
     if commit:
@@ -427,6 +436,8 @@ def end_run(
     run_id: str,
     status: StageStatus,
     error_summary: str | None = None,
+    *,
+    commit: bool = True,
 ) -> None:
     """Finish a live attempt without reviving one already marked abandoned."""
     require_current_for_write(conn)
@@ -453,7 +464,91 @@ def end_run(
                 StageStatus.IN_PROGRESS.value,
             ),
         )
-    conn.commit()
+    if commit:
+        conn.commit()
+
+
+def assert_attempt_owned(conn: sqlite3.Connection, *, run_id: str, pipeline_key: str) -> None:
+    """Acquire the writer lock and reject replaced owners in a caller transaction."""
+    require_current_for_write(conn)
+    if not conn.in_transaction:
+        raise ValueError("attempt ownership requires a caller-owned transaction")
+    changed = conn.execute(
+        "UPDATE pipeline_attempts SET status=status "
+        "WHERE attempt_id=? AND pipeline_key=? AND status=?",
+        (run_id, pipeline_key, StageStatus.IN_PROGRESS.value),
+    ).rowcount
+    run = conn.execute(
+        "SELECT 1 FROM ingestion_runs WHERE run_id=? AND attempt_id=? "
+        "AND pipeline_key=? AND status=?",
+        (run_id, run_id, pipeline_key, StageStatus.IN_PROGRESS.value),
+    ).fetchone()
+    if changed != 1 or run is None:
+        raise RuntimeError("pipeline attempt is no longer owned by this writer")
+
+
+def end_run_owned(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    pipeline_key: str,
+    status: StageStatus,
+    error_summary: str | None = None,
+) -> None:
+    """Finish the checked owner without committing or closing caller state."""
+    assert_attempt_owned(conn, run_id=run_id, pipeline_key=pipeline_key)
+    end_run(conn, run_id, status, error_summary, commit=False)
+
+
+def record_artifact_stage_owned(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    pipeline_key: str,
+    ticker: str,
+    stage: StageName,
+    artifact_id: int,
+    artifact_output_sha256: str,
+    projection_sha256: str | None = None,
+    period_end: datetime | None = None,
+) -> None:
+    """Link a checked document artifact to its active attempt without committing."""
+    if stage not in {StageName.SYNTHESIZE, StageName.PUBLISH}:
+        raise ValueError("document artifacts require synthesize or publish stage")
+    assert_attempt_owned(conn, run_id=run_id, pipeline_key=pipeline_key)
+    row = conn.execute(
+        "SELECT ticker, output_sha256, json_extract(content_json, '$.body_sha256') "
+        "FROM llm_artifacts WHERE id=? AND scope='document' "
+        "AND document_version_id IS NOT NULL AND superseded_by_id IS NULL",
+        (artifact_id,),
+    ).fetchone()
+    if row is None or str(row[0]).upper() != ticker.upper() or row[1] != artifact_output_sha256:
+        raise ValueError("document stage artifact identity differs from its current stored seal")
+    if stage is StageName.PUBLISH:
+        if projection_sha256 is None or projection_sha256 != row[2]:
+            raise ValueError("document publication receipt requires the exact body projection seal")
+    elif projection_sha256 is not None:
+        raise ValueError("synthesis receipt cannot assert a projection")
+    receipt_json = json.dumps(
+        {
+            "schema_version": "document-product-stage@1",
+            "artifact_id": artifact_id,
+            "artifact_output_sha256": artifact_output_sha256,
+            "projection_sha256": projection_sha256,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    record_stage(
+        conn,
+        run_id,
+        ticker,
+        stage,
+        StageStatus.OK,
+        period_end,
+        commit=False,
+        _artifact_receipt=(artifact_id, receipt_json, sha256(receipt_json.encode()).hexdigest()),
+    )
 
 
 def latest_stage_for(

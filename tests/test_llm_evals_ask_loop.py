@@ -134,6 +134,7 @@ def test_loop_case_fails_when_loop_never_triggers() -> None:
     assert result.judge_rationale is not None
     assert "loop triggered" in result.judge_rationale
     assert "cites round-2" in result.judge_rationale
+    assert result.score is not None
     assert 0.0 < result.score < 1.0  # partial credit: prose/cap checks still pass
 
 
@@ -247,4 +248,8 @@ def test_runner_purpose_lists_stay_in_sync() -> None:
     assert PURPOSE in run_llm_evals.GOLDEN_PURPOSES
     assert PURPOSE in RUNNABLE_PURPOSES
     assert PURPOSE in COVERAGE_GOLDEN
-    assert set(RUNNABLE_PURPOSES) == set(run_llm_evals.PURPOSES)
+    from evals.run_registry import PANEL_PURPOSES
+    from evals.run_registry import RUNNABLE_PURPOSES as CLI_PURPOSES
+
+    assert set(RUNNABLE_PURPOSES) == set(PANEL_PURPOSES)
+    assert set(CLI_PURPOSES) == set(run_llm_evals.PURPOSES)

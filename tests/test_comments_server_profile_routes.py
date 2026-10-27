@@ -3,29 +3,24 @@
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
+import comments_server
+import comments_server_profile_routes
 import pytest
-from flask import Flask
-from flask.testing import FlaskClient
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-import comments_server_profile_routes  # noqa: E402
-from comments_server_profile_routes import (  # noqa: E402
+from comments_server_profile_routes import (
     ProfileRouteContext,
     register_profile_routes,
 )
+from flask import Flask
+from flask.testing import FlaskClient
 
-from owner_profile.store import append_fact  # noqa: E402
-from synthesis.tenets import record_tenet, supersede_tenet  # noqa: E402
+from owner_profile.store import append_fact
+from synthesis.tenets import record_tenet, supersede_tenet
 
 _PRIOR_HEAD = "0059_kpi_facts_restatement"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _noop_activation_count(panel_id: str) -> None:
@@ -249,7 +244,7 @@ def test_profile_fact_routes_keep_http_contract(client: FlaskClient, db_file: Pa
     assert affirmed.get_json() == {
         "ok": True,
         "status": "affirmed",
-        "receipt": "Affirmed — the coach may now cite this when reviewing your trades",
+        "receipt": "Affirmed — saved as a confirmed profile fact",
     }
     assert _activation_count(db_file, "act:profile:affirm") == 1
 
@@ -277,7 +272,7 @@ def test_profile_fact_routes_keep_http_contract(client: FlaskClient, db_file: Pa
     assert retired.status_code == 200
     assert retired.get_json() == {
         "ok": True,
-        "receipt": "Dropped — the coach will stop citing this fact",
+        "receipt": "Dropped — this fact is no longer active",
     }
     assert _activation_count(db_file, "act:profile:retire") == 1
 
@@ -291,6 +286,6 @@ def test_profile_fact_routes_keep_http_contract(client: FlaskClient, db_file: Pa
     assert updated_body == {
         "ok": True,
         "new_fact_id": updated_body["new_fact_id"],
-        "receipt": "Saved — your edit awaits your affirm next walk",
+        "receipt": "Saved — confirm the updated profile fact",
     }
     assert _activation_count(db_file, "act:profile:update") == 1

@@ -65,39 +65,116 @@ import argparse
 import json
 import sqlite3
 import sys
+from datetime import date, datetime
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from pydantic import BaseModel
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+__all__ = [
+    "DocumentCompletenessStatus",
+    "FactLocator",
+    "JsonValue",
+    "KpiExtractionManifest",
+    "KpiValue",
+    "LocatorKind",
+    "PipelineRunSuppressedError",
+    "SourceType",
+    "StageName",
+    "StageStatus",
+    "capture_for_ir_pdf_docs",
+    "document_completeness",
+    "end_run",
+    "files_fingerprint",
+    "find_quote_bbox",
+    "locate_char_span",
+    "open_db",
+    "payload_sha256",
+    "pdf_slide_locator",
+    "persist_manifest",
+    "record_stage",
+    "refresh_for_tickers",
+    "start_run",
+    "suppression_payload",
+    "write_log",
+]
+if TYPE_CHECKING:
+    from compute.kpi_extract_summaries import capture_for_ir_pdf_docs, write_log
+    from models.documents import SourceType
+    from models.facts import FactLocator, LocatorKind
+    from models.runs import StageName, StageStatus
+    from pipeline.document_completeness import DocumentCompletenessStatus, document_completeness
+    from pipeline.invocation_fingerprint import files_fingerprint, payload_sha256
+    from pipeline.kpi_persistence import KpiExtractionManifest, KpiValue, persist_manifest
+    from pipeline.locators import locate_char_span, pdf_slide_locator
+    from pipeline.pdf_render import find_quote_bbox
+    from pipeline.queries import open_db
+    from pipeline.refresh_eval import refresh_for_tickers
+    from pipeline.run_accounting import (
+        JsonValue,
+        PipelineRunSuppressedError,
+        end_run,
+        record_stage,
+        start_run,
+        suppression_payload,
+    )
 
-from compute.kpi_extract_summaries import capture_for_ir_pdf_docs, write_log  # noqa: E402
-from models.facts import FactLocator, LocatorKind  # noqa: E402
-from models.runs import StageName, StageStatus  # noqa: E402
-from pipeline.document_completeness import (  # noqa: E402
-    DocumentCompletenessStatus,
-    document_completeness,
-)
-from pipeline.invocation_fingerprint import files_fingerprint, payload_sha256  # noqa: E402
-from pipeline.kpi_persistence import (  # noqa: E402
-    KpiExtractionManifest,
-    KpiValue,
-    persist_manifest,
-)
-from pipeline.locators import pdf_slide_locator  # noqa: E402
-from pipeline.pdf_render import find_quote_bbox  # noqa: E402
-from pipeline.queries import open_db  # noqa: E402
-from pipeline.refresh_eval import refresh_for_tickers  # noqa: E402
-from pipeline.run_accounting import (  # noqa: E402
-    JsonValue,
-    PipelineRunSuppressedError,
-    end_run,
-    record_stage,
-    start_run,
-    suppression_payload,
-)
+
+def _bootstrap_project_imports() -> None:
+    """Load project modules after adding ``src`` for direct CLI execution."""
+    sys.path.insert(0, str(PROJECT_ROOT / "src"))
+    from compute.kpi_extract_summaries import capture_for_ir_pdf_docs, write_log
+    from models.documents import SourceType
+    from models.facts import FactLocator, LocatorKind
+    from models.runs import StageName, StageStatus
+    from pipeline.document_completeness import DocumentCompletenessStatus, document_completeness
+    from pipeline.invocation_fingerprint import files_fingerprint, payload_sha256
+    from pipeline.kpi_persistence import KpiExtractionManifest, KpiValue, persist_manifest
+    from pipeline.locators import locate_char_span, pdf_slide_locator
+    from pipeline.pdf_render import find_quote_bbox
+    from pipeline.queries import open_db
+    from pipeline.refresh_eval import refresh_for_tickers
+    from pipeline.run_accounting import (
+        JsonValue,
+        PipelineRunSuppressedError,
+        end_run,
+        record_stage,
+        start_run,
+        suppression_payload,
+    )
+
+    _ = (
+        capture_for_ir_pdf_docs,
+        write_log,
+        FactLocator,
+        LocatorKind,
+        SourceType,
+        StageName,
+        StageStatus,
+        DocumentCompletenessStatus,
+        document_completeness,
+        files_fingerprint,
+        payload_sha256,
+        KpiExtractionManifest,
+        KpiValue,
+        persist_manifest,
+        locate_char_span,
+        pdf_slide_locator,
+        find_quote_bbox,
+        open_db,
+        refresh_for_tickers,
+        JsonValue,
+        PipelineRunSuppressedError,
+        end_run,
+        record_stage,
+        start_run,
+        suppression_payload,
+    )
+    globals().update(locals())
+
+
+_bootstrap_project_imports()
 
 _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
 
@@ -260,6 +337,7 @@ def _apply_manifest(
     failed = 0
     for m in manifest_file.manifests:
         try:
+            _validate_manifest_source(conn, m)
             result = persist_manifest(conn, run_id=run_id, manifest=_upgrade_pdf_locators(conn, m))
         except (ValueError, KeyError) as e:
             record_stage(
@@ -314,6 +392,119 @@ def _apply_manifest(
         "with_eval": with_eval,
         "eval_results": eval_results,
     }
+
+
+def _date_from_source(raw: object, *, field: str) -> date:
+    if isinstance(raw, datetime):
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return date.fromisoformat(raw.strip()[:10])
+        except ValueError as exc:
+            raise ValueError(f"source document has invalid {field}") from exc
+    raise ValueError(f"source document has no {field}")
+
+
+def _validate_transcript_locator(
+    conn: sqlite3.Connection,
+    manifest: KpiExtractionManifest,
+    value: KpiValue,
+    transcript_id: int,
+) -> None:
+    locator = value.locator
+    if (
+        not isinstance(locator, FactLocator)
+        or locator.effective_kind() is not LocatorKind.TRANSCRIPT_SPAN
+    ):
+        raise ValueError(f"transcript KPI {value.name!r} requires a transcript-span locator")
+    span = locator.transcript_span
+    excerpt = (value.source_excerpt or "").strip()
+    if span is None or not excerpt:
+        raise ValueError(
+            f"transcript KPI {value.name!r} requires a transcript span and exact excerpt"
+        )
+    if span.doc_id is not None and span.doc_id != manifest.source_doc_id:
+        raise ValueError(f"transcript KPI {value.name!r} locator document ID does not match source")
+    line = span.transcript_line
+    if line is None or (locator.transcript_line is not None and locator.transcript_line != line):
+        raise ValueError(f"transcript KPI {value.name!r} has an inconsistent transcript segment ID")
+    if locator.verbatim_snippet is not None and locator.verbatim_snippet != excerpt:
+        raise ValueError(f"transcript KPI {value.name!r} locator quote differs from source excerpt")
+    row = conn.execute(
+        "SELECT seq, text FROM transcript_segments WHERE transcript_id=? AND seq=?",
+        (transcript_id, line),
+    ).fetchone()
+    if row is None:
+        raise ValueError(
+            f"transcript KPI {value.name!r} locator does not identify a stored segment"
+        )
+    if span.speaker_turn_index is not None and span.speaker_turn_index != int(row["seq"]):
+        raise ValueError(f"transcript KPI {value.name!r} speaker turn does not match segment")
+    quote_span = locate_char_span(excerpt, str(row["text"]), whitespace_only=True)
+    if quote_span is None:
+        raise ValueError(
+            f"transcript KPI {value.name!r} excerpt is absent or ambiguous in its exact segment"
+        )
+    if (span.char_start is None) != (span.char_end is None):
+        raise ValueError(f"transcript KPI {value.name!r} has an incomplete character span")
+    if span.char_start is not None and (span.char_start, span.char_end) != quote_span:
+        raise ValueError(f"transcript KPI {value.name!r} character span does not match its excerpt")
+
+
+def _validate_manifest_source(conn: sqlite3.Connection, manifest: KpiExtractionManifest) -> None:
+    """Bind the submitted manifest to its registered IR document and locator."""
+    row = conn.execute(
+        "SELECT ticker, source_type, doc_type, period_end FROM documents WHERE id=?",
+        (manifest.source_doc_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"source document {manifest.source_doc_id} does not exist")
+    if str(row["ticker"]).upper() != manifest.ticker.upper():
+        raise ValueError("manifest ticker does not match its source document")
+    if str(row["source_type"]) != manifest.primary_source.value:
+        raise ValueError("manifest source type does not match its source document")
+    if (
+        str(row["source_type"]) != SourceType.IR_DOC.value
+        or str(row["doc_type"]) not in _IR_DOC_TYPES
+    ):
+        raise ValueError("manifest source must be a registered IR document")
+    source_period_end = _date_from_source(row["period_end"], field="period end")
+    if source_period_end != manifest.period_end.date():
+        raise ValueError("manifest period does not match its source document")
+
+    transcript_rows = conn.execute(
+        "SELECT id, ticker, period_end, fiscal_period_type FROM transcripts WHERE document_id=?",
+        (manifest.source_doc_id,),
+    ).fetchall()
+    if str(row["doc_type"]) != "ir_transcript":
+        for value in manifest.values:
+            locator = value.locator
+            if (
+                isinstance(locator, FactLocator)
+                and locator.effective_kind() is LocatorKind.TRANSCRIPT_SPAN
+            ):
+                raise ValueError(
+                    "transcript-span locator requires an ir_transcript source document"
+                )
+        return
+    if len(transcript_rows) != 1:
+        raise ValueError("ir_transcript source must resolve to one stored transcript")
+    transcript = transcript_rows[0]
+    if str(transcript["ticker"]).upper() != manifest.ticker.upper():
+        raise ValueError("manifest ticker does not match its stored transcript")
+    transcript_period_end = _date_from_source(
+        transcript["period_end"], field="transcript period end"
+    )
+    if transcript_period_end != source_period_end:
+        raise ValueError("stored transcript period does not match its source document")
+    transcript_period_type = transcript["fiscal_period_type"]
+    if transcript_period_type and str(transcript_period_type) != manifest.fiscal_period_type.value:
+        raise ValueError("manifest fiscal period does not match its stored transcript")
+    transcript_id = int(transcript["id"])
+    for value in manifest.values:
+        _validate_transcript_locator(conn, manifest, value, transcript_id)
 
 
 def _manifest_invocation_inputs(

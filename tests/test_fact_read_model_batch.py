@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import sqlite3
+import statistics
+import subprocess
+import sys
+import tempfile
 from collections.abc import Callable, Generator
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from typing import TypedDict, cast
 
 import pytest
 
@@ -14,7 +22,11 @@ from provenance.fact_plane_v2 import (
     DerivedFactObservationV2,
     FactCellV2,
 )
-from provenance.fact_read_model import FactEvidenceIntegrityError, FactReadModel
+from provenance.fact_read_model import (
+    FactEvidenceIntegrityError,
+    FactReadModel,
+    ObservationUnavailableError,
+)
 from provenance.source_fact_publication import VerifiedSourceFactPublication
 from provenance.source_fact_repository import (
     DerivedSourceFact,
@@ -30,6 +42,228 @@ make_cell = foundation.make_cell
 make_report = foundation.make_report
 make_resolution = foundation.make_resolution
 make_publication = foundation.make_publication
+
+
+class _R6ProbeResult(TypedDict):
+    output: dict[str, object]
+    reference_count: int | None
+    available_count: int | None
+    select_count: int
+    full_verification_count: int
+    elapsed_ns: int
+
+
+class _R6CaseMetrics(TypedDict):
+    selects: dict[str, int]
+    full_recursive_verifications: dict[str, int]
+    median_ns: dict[str, int | float]
+    complete_json_equal: bool
+    resolution_observed_through: str | None
+
+
+_R6_BASELINE = "c978523d84a4efea07858e7029307dd588d2a841"
+_R6_SAMPLE_COUNT = 5
+_R6_PROBE = r"""
+import json
+import sqlite3
+import sys
+import time
+from datetime import date, datetime
+
+import provenance.source_fact_publication as source_publication
+from sources.discovery_financials import read_financial_history
+from sources.report_financials import read_financial_table
+
+verification_count = 0
+original_verify = source_publication._verify_source_fact_publication
+
+def counted_verify(*args, **kwargs):
+    global verification_count
+    verification_count += 1
+    return original_verify(*args, **kwargs)
+
+source_publication._verify_source_fact_publication = counted_verify
+
+def run(request):
+    global verification_count
+    verification_count = 0
+    select_count = 0
+
+    def trace(statement):
+        nonlocal select_count
+        if statement.lstrip().upper().startswith(("SELECT", "WITH")):
+            select_count += 1
+
+    uri = "file:" + request["database"] + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    conn.row_factory = sqlite3.Row
+    conn.set_trace_callback(trace)
+    started = time.perf_counter_ns()
+    if request["operation"] == "discovery":
+        result = read_financial_history(
+            conn, "WIX", as_of=date.fromisoformat(request["as_of"])
+        )
+        reference_count = len(result.references)
+        available_count = None
+    else:
+        observed = request["observed_through"]
+        kwargs = {} if observed is None else {
+            "resolution_observed_through": datetime.fromisoformat(observed)
+        }
+        result = read_financial_table(
+            conn,
+            "SYNTH",
+            as_of=datetime.fromisoformat(request["as_of"]),
+            **kwargs,
+        )
+        reference_count = None
+        available_count = sum(cell.available for cell in result.cells)
+    elapsed_ns = time.perf_counter_ns() - started
+    conn.close()
+    return {
+        "output": result.model_dump(mode="json"),
+        "reference_count": reference_count,
+        "available_count": available_count,
+        "select_count": select_count,
+        "full_verification_count": verification_count,
+        "elapsed_ns": elapsed_ns,
+    }
+
+try:
+    print(json.dumps(run(json.load(sys.stdin)), sort_keys=True), flush=True)
+except BaseException as exc:
+    print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), flush=True)
+"""
+
+
+def _r6_source_digest(source_root: Path) -> str:
+    digest = hashlib.sha256()
+    for package in ("provenance", "sources"):
+        for path in sorted((source_root / package).rglob("*.py")):
+            relative = path.relative_to(source_root).as_posix()
+            digest.update(relative.encode())
+            digest.update(b"\0")
+            digest.update(hashlib.sha256(path.read_bytes()).digest())
+            digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _extract_r6_baseline_source(destination: Path) -> tuple[Path, str]:
+    """Materialize the baseline source packages without changing the checkout."""
+    repo_root = Path(__file__).resolve().parents[1]
+    names = subprocess.run(
+        [
+            "git",
+            "ls-tree",
+            "-r",
+            "--name-only",
+            _R6_BASELINE,
+            "--",
+            "src/provenance",
+            "src/sources",
+        ],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    source_root = destination / "src"
+    for relative in names:
+        if not relative.endswith(".py"):
+            continue
+        content = subprocess.run(
+            ["git", "show", f"{_R6_BASELINE}:{relative}"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+        ).stdout
+        target = source_root / Path(relative).relative_to("src")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+    return source_root, _r6_source_digest(source_root)
+
+
+def _r6_probe(
+    source_roots: tuple[Path, ...],
+    *,
+    database: Path,
+    operation: str,
+    observed_through: datetime | None = None,
+) -> _R6ProbeResult:
+    from tests.test_canonical_growth_screen import STAMP as DISCOVERY_STAMP
+
+    request = {
+        "database": str(database),
+        "operation": operation,
+        "as_of": STAMP.isoformat()
+        if operation == "report"
+        else (DISCOVERY_STAMP + timedelta(days=1)).date().isoformat(),
+        "observed_through": None if observed_through is None else observed_through.isoformat(),
+    }
+    repo_root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(str(path) for path in (*source_roots, repo_root / "src"))
+    completed = subprocess.run(
+        [sys.executable, "-c", _R6_PROBE],
+        cwd=repo_root,
+        env=env,
+        input=json.dumps(request),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+    decoded = json.loads(completed.stdout)
+    if not isinstance(decoded, dict):
+        raise RuntimeError("R6 reader probe returned a non-object result")
+    if "error" in decoded:
+        raise RuntimeError(f"R6 reader probe failed: {decoded['error']}")
+    required_ints = ("select_count", "full_verification_count", "elapsed_ns")
+    if (
+        not isinstance(decoded.get("output"), dict)
+        or any(not isinstance(decoded.get(key), int) for key in required_ints)
+        or (
+            decoded.get("reference_count") is not None
+            and not isinstance(decoded.get("reference_count"), int)
+        )
+        or (
+            decoded.get("available_count") is not None
+            and not isinstance(decoded.get("available_count"), int)
+        )
+    ):
+        raise RuntimeError("R6 reader probe returned invalid measurement fields")
+    return cast(_R6ProbeResult, decoded)
+
+
+def _seed_r6_discovery_database(database: Path, tmp_path: Path) -> None:
+    from tests.test_canonical_growth_screen import seed_growth_graph
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(database) as connection:
+        seed_growth_graph(connection, tmp_path, include_screen_financials=True)
+
+
+def _seed_r6_report_database(database: Path) -> None:
+    from tests.test_report_canonical_financials import seed_table
+
+    with sqlite3.connect(database) as connection:
+        foundation.seed_foundation(connection)
+        periods = (
+            ("2025-01-01", "2025-03-31", "Q1"),
+            ("2025-04-01", "2025-06-30", "Q2"),
+            ("2025-07-01", "2025-09-30", "Q3"),
+            ("2025-10-01", "2025-12-31", "Q4"),
+        )
+        rows = [
+            (concept, start, end, period, str(value), "USD")
+            for concept, values in (
+                ("revenue", (100, 110, 120, 130)),
+                ("gross_profit", (40, 44, 48, 52)),
+            )
+            for (start, end, period), value in zip(periods, values, strict=True)
+        ]
+        seed_table(connection, rows)
+        connection.commit()
 
 
 @pytest.fixture
@@ -212,6 +446,215 @@ def test_large_publication_is_fully_verified_once_per_batch(
     assert len(results) == 24
     assert all(item.bundle is not None for item in results)
     assert verified == [publication.publication_id]
+
+
+def test_batch_bulk_loads_observation_rows_and_preserves_order_duplicates_and_missing(
+    conn: sqlite3.Connection,
+) -> None:
+    publication = _large_publication(8)
+    SourceFactRepository(conn).publish(publication)
+    observation_ids = tuple(item.observation.observation_id for item in publication.reported_facts)
+    requested = (observation_ids[5], observation_ids[1], observation_ids[5], "missing-id")
+    model = FactReadModel(conn)
+    bundle_selects: list[str] = []
+
+    def trace_batch(sql: str) -> None:
+        if (
+            sql.startswith("SELECT observation.*,")
+            and "fact_observation_payload_commitments_v2" in sql
+        ):
+            bundle_selects.append(sql)
+
+    conn.set_trace_callback(trace_batch)
+    results = model.provenance_bundles(requested, cutoff=STAMP)
+    conn.set_trace_callback(None)
+
+    scalar_selects: list[str] = []
+    scalar_results: list[object | None] = []
+
+    def trace_scalar(sql: str) -> None:
+        if (
+            sql.startswith("SELECT observation.*,")
+            and "fact_observation_payload_commitments_v2" in sql
+        ):
+            scalar_selects.append(sql)
+
+    conn.set_trace_callback(trace_scalar)
+    for observation_id in requested:
+        try:
+            scalar_results.append(model.provenance_bundle(observation_id, cutoff=STAMP))
+        except ObservationUnavailableError:
+            scalar_results.append(None)
+    conn.set_trace_callback(None)
+
+    assert len(bundle_selects) == 1
+    assert len(scalar_selects) == len(requested)
+    assert len(bundle_selects) < len(scalar_selects)
+    assert tuple(item.observation_id for item in results) == requested
+    assert [item.bundle for item in results] == scalar_results
+    assert results[3].bundle is None and results[3].failure is not None
+    assert results[3].failure.reason_code == "observation_unavailable_at_cutoff"
+
+
+def test_batch_chunks_bulk_observation_rows_to_sqlite_variable_limit(
+    conn: sqlite3.Connection,
+) -> None:
+    publication = _two_observation_publication()
+    SourceFactRepository(conn).publish(publication)
+    observation_ids = tuple(
+        item.observation.observation_id for item in publication.reported_facts
+    ) + tuple(f"missing-{index}" for index in range(8))
+    original_limit = conn.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)
+    conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 5)
+    bundle_selects: list[str] = []
+
+    def trace_batch(sql: str) -> None:
+        if (
+            sql.startswith("SELECT observation.*,")
+            and "fact_observation_payload_commitments_v2" in sql
+        ):
+            bundle_selects.append(sql)
+
+    conn.set_trace_callback(trace_batch)
+    try:
+        results = FactReadModel(conn).provenance_bundles(observation_ids, cutoff=STAMP)
+    finally:
+        conn.set_trace_callback(None)
+        conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, original_limit)
+
+    assert len(results) == len(observation_ids)
+    assert all(result.bundle is not None for result in results[:2])
+    assert all(
+        result.failure and result.failure.reason_code == "observation_unavailable_at_cutoff"
+        for result in results[2:]
+    )
+    assert len(bundle_selects) == 4
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_R6_COMPARISON") != "1",
+    reason="explicit historical performance comparison; run with RUN_R6_COMPARISON=1",
+)
+def test_replayable_r6_reader_comparison(
+    tmp_path: Path, migrated_db: Callable[[Path], Path]
+) -> None:
+    """Compare complete WIX21/SYNTH8 reads with the frozen pre-R6 source closure.
+
+    Run with `RUN_R6_COMPARISON=1` and:
+    ``pytest -s tests/test_fact_read_model_batch.py -k replayable_r6_reader_comparison``.
+    The baseline packages are loaded from Git into a temporary directory. The
+    checked-out branch and all production data remain unchanged.
+    """
+    discovery_database = migrated_db(tmp_path / "r6-discovery.db")
+    report_database = migrated_db(tmp_path / "r6-report.db")
+    _seed_r6_discovery_database(discovery_database, tmp_path / "inputs")
+    _seed_r6_report_database(report_database)
+    with tempfile.TemporaryDirectory(prefix="r6-reader-baseline-") as baseline_dir:
+        baseline_source, baseline_source_sha256 = _extract_r6_baseline_source(Path(baseline_dir))
+        current_source_sha256 = _r6_source_digest(Path(__file__).resolve().parents[1] / "src")
+        cases: tuple[tuple[str, datetime | None, Path], ...] = (
+            ("discovery", None, discovery_database),
+            ("report", None, report_database),
+            ("report", STAMP + timedelta(seconds=1), report_database),
+        )
+        samples: dict[str, dict[str, list[_R6ProbeResult]]] = {
+            _r6_case_name(operation, observed): {"baseline": [], "current": []}
+            for operation, observed, _database in cases
+        }
+        for operation, observed, database in cases:
+            name = _r6_case_name(operation, observed)
+            for _side, roots in (("baseline", (baseline_source,)), ("current", ())):
+                warmup = _r6_probe(
+                    roots,
+                    database=database,
+                    operation=operation,
+                    observed_through=observed,
+                )
+                _assert_r6_population(name, warmup)
+        for sample in range(_R6_SAMPLE_COUNT):
+            sides = (
+                (("baseline", (baseline_source,)), ("current", ()))
+                if sample % 2 == 0
+                else (("current", ()), ("baseline", (baseline_source,)))
+            )
+            for operation, observed, database in cases:
+                name = _r6_case_name(operation, observed)
+                for side, roots in sides:
+                    samples[name][side].append(
+                        _r6_probe(
+                            roots,
+                            database=database,
+                            operation=operation,
+                            observed_through=observed,
+                        )
+                    )
+        report: dict[str, object] = {
+            "baseline_commit": _R6_BASELINE,
+            "source_package_sha256": {
+                "baseline": baseline_source_sha256,
+                "current": current_source_sha256,
+            },
+            "samples_per_side": _R6_SAMPLE_COUNT,
+            "fixture_counts": {
+                "WIX_discovery_references": 21,
+                "SYNTH_report_available_cells": 8,
+            },
+            "cases": {},
+        }
+        case_report: dict[str, _R6CaseMetrics] = {}
+        for operation, observed, _database in cases:
+            name = _r6_case_name(operation, observed)
+            sides = samples[name]
+            before, after = sides["baseline"], sides["current"]
+            baseline_json = before[0]["output"]
+            current_json = after[0]["output"]
+            assert baseline_json == current_json, f"complete output changed for {name}"
+            assert all(item["output"] == baseline_json for item in before + after)
+            before_selects = {item["select_count"] for item in before}
+            after_selects = {item["select_count"] for item in after}
+            before_verifications = {item["full_verification_count"] for item in before}
+            after_verifications = {item["full_verification_count"] for item in after}
+            assert len(before_selects) == len(after_selects) == 1
+            assert len(before_verifications) == len(after_verifications) == 1
+            before_median = statistics.median(item["elapsed_ns"] for item in before)
+            after_median = statistics.median(item["elapsed_ns"] for item in after)
+            limit = before_median + max(before_median // 10, 5_000_000)
+            assert after_median <= limit, f"median regression exceeded allowance for {name}"
+            metrics: _R6CaseMetrics = {
+                "selects": {
+                    "baseline": before_selects.pop(),
+                    "current": after_selects.pop(),
+                },
+                "full_recursive_verifications": {
+                    "baseline": before_verifications.pop(),
+                    "current": after_verifications.pop(),
+                },
+                "median_ns": {"baseline": before_median, "current": after_median},
+                "complete_json_equal": True,
+                "resolution_observed_through": (None if observed is None else observed.isoformat()),
+            }
+            if name in {"WIX21_discovery", "SYNTH8_report_K_eq_O"}:
+                old_selects = metrics["selects"]["baseline"]
+                new_selects = metrics["selects"]["current"]
+                assert old_selects > 0 and new_selects <= old_selects * 0.8
+            case_report[name] = metrics
+        report["cases"] = case_report
+        print(json.dumps(report, sort_keys=True, separators=(",", ":")))
+
+
+def _r6_case_name(operation: str, observed_through: datetime | None) -> str:
+    if operation == "discovery":
+        return "WIX21_discovery"
+    if observed_through is None:
+        return "SYNTH8_report_K_eq_O"
+    return "SYNTH8_report_K_lt_O"
+
+
+def _assert_r6_population(name: str, result: _R6ProbeResult) -> None:
+    if name == "WIX21_discovery":
+        assert result["reference_count"] == 21
+        return
+    assert result["available_count"] == 8
 
 
 def test_batch_reports_a_future_observation_as_unavailable(

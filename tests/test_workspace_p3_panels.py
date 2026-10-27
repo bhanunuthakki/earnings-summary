@@ -25,10 +25,9 @@ from report.models import (
     BearCaseSection,
     CompanyDescriptionSection,
     EvaluationSnapshotSection,
-    IrDocsSection,
     KpiLedgerRow,
     QuickCategorizationRow,
-    SayDoCard,
+    SayDoHistoricalMetric,
     SayDoSection,
     SectionStatus,
     SnapshotSection,
@@ -428,6 +427,7 @@ def test_saydo_verdicts_panel_renders_rows() -> None:
             realized_value=32.0,
             outcome="met",
             evaluated_at=datetime(2026, 1, 30),
+            source_ref="transcript_segment:9001",
         ),
         SayDoVerdictRow(
             period_made=datetime(2025, 7, 30),
@@ -445,7 +445,7 @@ def test_saydo_verdicts_panel_renders_rows() -> None:
     out = StringIO()
     _saydo_verdicts_panel(out, rows)
     html = out.getvalue()
-    assert "Say·Do verdict ledger" in html
+    assert "Say·Do commitment ledger" in html
     assert "2 commitments" in html
     assert "2 with a reported result" in html
     assert "Cloud revenue growth" in html
@@ -455,6 +455,39 @@ def test_saydo_verdicts_panel_renders_rows() -> None:
     # Outcome pills
     assert "HIT" in html or "MET" in html  # _outcome_pill maps both
     assert "MISS" in html
+    header = html.split("</thead>", 1)[0]
+    assert header.index("Verdict") < header.index("Source")
+    assert "transcript_segment:9001" not in html
+    assert html.index("MET") < html.index("Source unavailable")
+
+
+def test_saydo_historical_values_do_not_assume_a_unit() -> None:
+    section = SayDoSection(
+        status=SectionStatus.OK,
+        historical_metrics=[
+            SayDoHistoricalMetric(
+                id=1,
+                period_made=datetime(2025, 11, 5),
+                period_target=datetime(2026, 3, 31),
+                kpi_name="Revenue",
+                comparator="gte",
+                target_value=1760,
+                realized_value=1810,
+                outcome="met",
+                guidance_narrative="Q1 revenue of $1.76-1.79B.",
+                realized_narrative="Printed $1.81B.",
+            )
+        ],
+    )
+    out = StringIO()
+    _saydo_tab(out, section)
+    html = out.getvalue()
+    assert "1760.00%" not in html
+    assert "1810.00%" not in html
+    assert '1760 <span class="muted xsmall">(unit unavailable)</span>' in html
+    assert '1810</strong> <span class="muted xsmall">(unit unavailable)</span>' in html
+    assert "Q1 revenue of $1.76-1.79B." in html
+    assert "Printed $1.81B." in html
 
 
 def test_saydo_verdicts_panel_hides_when_empty() -> None:
@@ -597,10 +630,6 @@ def _empty_company_description() -> CompanyDescriptionSection:
         sector="Tech",
         industry="Software",
     )
-
-
-def _empty_ir_docs() -> IrDocsSection:
-    return IrDocsSection(status=SectionStatus.OK)
 
 
 def test_thesis_tab_hides_macro_sensitivity_when_cold() -> None:
@@ -779,7 +808,6 @@ def test_company_tab_hides_cold_p3_panels_keeps_concentration_fact() -> None:
     _company_tab(
         out,
         _empty_company_description(),
-        _empty_ir_docs(),
         None,
         [],
         [],
@@ -789,6 +817,7 @@ def test_company_tab_hides_cold_p3_panels_keeps_concentration_fact() -> None:
     assert "Strategic targets" not in html
     assert "Operating lease maturity ladder" not in html
     assert "Customer concentration" in html
+    assert "IR documents" not in html
     assert html.count('<details class="panel panel-empty') == 1
 
 
@@ -797,7 +826,6 @@ def test_company_tab_emits_panels_with_data() -> None:
     _company_tab(
         out,
         _empty_company_description(),
-        _empty_ir_docs(),
         None,
         [
             StrategicTargetRow(
@@ -863,7 +891,6 @@ def test_company_tab_shows_peer_panel_without_eval_snapshot() -> None:
     _company_tab(
         out,
         _empty_company_description(),
-        _empty_ir_docs(),
         None,
         [],
         [],
@@ -886,7 +913,6 @@ def test_company_tab_hides_peer_panel_when_no_peers_and_no_eval_snapshot() -> No
     _company_tab(
         out,
         _empty_company_description(),
-        _empty_ir_docs(),
         None,
         [],
         [],
@@ -927,7 +953,6 @@ def test_company_tab_suppresses_listed_sections() -> None:
     _company_tab(
         out,
         _empty_company_description(),
-        _empty_ir_docs(),
         None,
         [],
         [],
@@ -947,7 +972,6 @@ def test_company_tab_shows_panels_when_suppressed_empty() -> None:
     _company_tab(
         out,
         _empty_company_description(),
-        _empty_ir_docs(),
         None,
         [],
         [],
@@ -970,7 +994,6 @@ def test_company_tab_omits_bank_lease_ladder_end_to_end() -> None:
     _company_tab(
         out,
         _empty_company_description(),
-        _empty_ir_docs(),
         None,
         [],
         [],
@@ -989,7 +1012,6 @@ def test_company_tab_keeps_hyperscaler_lease_ladder_end_to_end() -> None:
     _company_tab(
         out,
         _empty_company_description(),
-        _empty_ir_docs(),
         None,
         [],
         [],
@@ -1004,18 +1026,6 @@ def test_company_tab_keeps_hyperscaler_lease_ladder_end_to_end() -> None:
 def test_saydo_tab_includes_verdicts_panel() -> None:
     section = SayDoSection(
         status=SectionStatus.OK,
-        cards=[
-            SayDoCard(
-                current_quarter="Q1",
-                current_year=2026,
-                prior_quarter="Q4",
-                prior_year=2025,
-                saydo_md="# SayDo\n\nSome narrative.",
-                rating="MET",
-                thesis_view="Bullish",
-                attribution="Execution.",
-            )
-        ],
     )
     verdicts = [
         SayDoVerdictRow(
@@ -1035,7 +1045,7 @@ def test_saydo_tab_includes_verdicts_panel() -> None:
     section.verdicts = verdicts
     _saydo_tab(out, section)
     html = out.getvalue()
-    assert "Say·Do verdict ledger" in html
+    assert "Say·Do commitment ledger" in html
     assert "Cloud growth" in html
 
 
@@ -1195,3 +1205,23 @@ def test_open_items_strip_hides_when_empty() -> None:
     out = StringIO()
     _open_items_strip(out, [])
     assert out.getvalue() == ""
+
+
+def test_saydo_realized_unit_cannot_add_markup() -> None:
+    row = SayDoVerdictRow(
+        period_made=datetime(2026, 1, 1),
+        period_target=datetime(2026, 4, 1),
+        kpi_name="Revenue",
+        comparator="ge",
+        target_value=12,
+        unit='<img src=x onerror="alert(1)">',
+        narrative="Source wording",
+        realized_value=13,
+        outcome="met",
+        evaluated_at=datetime(2026, 4, 2),
+    )
+    out = StringIO()
+    _saydo_verdicts_panel(out, [row])
+    rendered = out.getvalue()
+    assert "<img" not in rendered
+    assert rendered.count("&lt;img") >= 2

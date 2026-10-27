@@ -242,16 +242,14 @@ _QUICK_NOTE_SCRIPT = """<script>
     if (saveBtn.disabled) return;  // Enter + click can't double-submit
     var body = root.querySelector('.qn-body').value.trim();
     if (!body) { msg.textContent = 'write the note first'; return; }
-    // Default (unchecked): journal note, unchanged behavior. Checked: the
-    // SAME text routes to the Ledger capture spine instead (wondering/pledge
-    // taps run) — the endpoint the markup carries via data-musing-endpoint.
+    // Default (unchecked): journal note. Checked: the same text is recorded
+    // as a captured Note by the endpoint in data-musing-endpoint.
     var musing = root.querySelector('.qn-musing');
     var toCaptureSpine = !!(musing && musing.checked);
     var url = toCaptureSpine ? root.getAttribute('data-musing-endpoint') : '/api/notes';
     var t = root.querySelector('.qn-ticker').value.trim().toUpperCase();
-    // The capture spine takes bare text; a typed ticker rides along as a
-    // $-mention so the roster matcher links it (the tray's prefill idiom) —
-    // silently dropping it would land a needs_ticker musing.
+    // The capture endpoint takes bare text; include the typed ticker so the
+    // roster matcher can link the saved Note.
     var payload = toCaptureSpine
       ? { text: (t ? '$' + t + ' ' : '') + body }
       : { kind: root.querySelector('.qn-kind').value, body: body };
@@ -282,10 +280,8 @@ _QUICK_NOTE_SCRIPT = """<script>
 
 
 def _quick_add_form(ticker: str | None) -> str:
-    """Kind · ticker · body → POST /api/notes (source="manual"), OR — when the
-    "musing" toggle is checked — POST /api/capture/text so the same write
-    feeds the Ledger capture spine (wondering/pledge taps run) instead of
-    landing as a plain journal note. The ticker input pre-fills with the
+    """Kind · ticker · body → POST /api/notes, or POST /api/capture/text
+    when the "musing" toggle is checked. The ticker input pre-fills with the
     Holding tab's selection when the drawer opens ticker-scoped, and stays
     editable — a quick note about another name shouldn't need a tab switch.
     ``data-musing-endpoint`` is the alternate-endpoint contract the client JS
@@ -305,8 +301,8 @@ def _quick_add_form(ticker: str | None) -> str:
         "</div>"
         '<textarea class="qn-body" rows="3" '
         'placeholder="What did you notice? Enter saves · Shift+Enter for a newline."></textarea>'
-        '<div class="qn-row"><label class="qn-musing-label" title="Route to the Ledger capture '
-        'spine — wondering/pledge taps run.">'
+        '<div class="qn-row"><label class="qn-musing-label" title="Save as a captured Note '
+        'instead of a journal note.">'
         '<input type="checkbox" class="qn-musing">musing</label>'
         '<button type="button" class="qn-save k-btn k-btn-primary">Add note</button>'
         '<span class="qn-msg muted"></span></div>'

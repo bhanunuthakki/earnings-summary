@@ -90,8 +90,8 @@ def _quiescence_receipt(live: Path, *, valid: bool = True) -> QuiescenceReceipt:
                 "enabled": False,
             },
         ],
-        "expected_service_names": ["es-poller"],
-        "services": [{"name": "es-poller", "state": "Stopped"}],
+        "expected_service_names": ["synthetic-worker"],
+        "services": [{"name": "synthetic-worker", "state": "Stopped"}],
         "expected_listener_endpoints": ["127.0.0.1:7421", "127.0.0.1:8000"],
         "listeners": [
             {"host": "127.0.0.1", "port": 7421, "listening": False, "pid": None},

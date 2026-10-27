@@ -27,10 +27,9 @@ from operations.attention import (
     reconcile_material_evidence,
 )
 from operations.models import OperationsRegistry, OperationsSnapshot
-from schema_compat import expected_head
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = expected_head()
+ATTENTION_REVISION = "0024_add_operations_attention_findings"
 NOW = datetime(2026, 8, 24, 18, 0, tzinfo=UTC)
 
 
@@ -324,11 +323,13 @@ def test_migration_creates_append_only_bounded_attention_receipts(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> None:
-    path = migrated_db(tmp_path / "attention.db")
+    path = migrated_db(tmp_path / "attention.db", target=ATTENTION_REVISION)
     config = _config(path)
 
     with sqlite3.connect(path) as connection:
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (HEAD,)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            ATTENTION_REVISION,
+        )
         tables = {
             row[0]
             for row in connection.execute(

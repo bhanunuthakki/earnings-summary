@@ -14,8 +14,8 @@ flag (migration 0019) PLUS in-file section markers — see
 ``_split_transcript_sections`` for the detection ladder.
 
 Sources:
-  - .tmp/{TICKER}_{Q}_{YEAR}_summary.txt          per-quarter LLM summary (written by execution/process_ir_documents.py)
-  - transcripts/processed/ + transcripts/raw/     path provenance (processed wins on collision)
+  - strict, verified document-product artifacts for exact registered transcript versions
+  - transcripts/processed/ + transcripts/raw/     optional theme-split inputs only
   - earnings_surprises table                       beat-rate header (FMP primary, yfinance fallback)
   - transcripts table                              has_qa_section tri-state flag
 """
@@ -28,14 +28,16 @@ import json
 import logging
 import re
 import sqlite3
-import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
+from compute.earnings_surprise import surprise_scorecard_for
 from llm_client import is_hard_stop
+from pipeline.transcript_summary import read_transcript_summary
+from pipeline.transcript_summary_verification import TranscriptSummaryVerifier
 from provenance.selection import selected_transcripts_relation
 from report.models import (
     EarningsSection,
@@ -52,21 +54,10 @@ from report.sections._ts_signals import (
     load_signals_for_metrics,
 )
 
-# The compute module lives in src/compute/, accessible because src/ is on the
-# sys.path (per pyproject.toml `pythonpath = ["src"]`).
-_PROJECT_SRC = str(Path(__file__).resolve().parents[2])
-if _PROJECT_SRC not in sys.path:
-    sys.path.insert(0, _PROJECT_SRC)
-from compute.earnings_surprise import surprise_scorecard_for  # noqa: E402
-
 log = logging.getLogger(__name__)
 
-# `_summary.txt` is the canonical per-quarter LLM summary; `_investor_update_summary.txt`
-# is the MELI/NU variant (companies that publish investor-update letters in lieu of
-# traditional press-release-plus-call). Both feed §5 the same way.
-_SUMMARY_RX = re.compile(
-    r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})_(?:investor_update_)?summary\.txt$"
-)
+# Legacy quarter summary files are not a source for the retained report section.
+# Transcript file paths remain a separate input for the optional theme analysis.
 _TRANSCRIPT_RX = re.compile(
     r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})\.(?:txt|pdf)$"
 )
@@ -120,10 +111,11 @@ def build(
     standard card assembly. Default off so dev / fresh-checkout builds stay
     cheap and offline-capable (the rest of the section works without LLM).
     """
-    tmp_dir = repo_root / ".tmp"
     tr_root = repo_root / "transcripts"
 
-    summaries = _scan_summaries(tmp_dir, ticker)
+    summaries, transcript_links, summary_detail = _load_verified_document_summaries(
+        ticker, repo_root, conn
+    )
     transcripts = _scan_transcripts(tr_root, ticker)
     surprise_card = _build_surprise_card(ticker, repo_root, conn=conn)
 
@@ -131,18 +123,17 @@ def build(
         return EarningsSection(
             status=SectionStatus.MISSING_DATA,
             missing=missing(
-                stage="SYNTHESIZE(process_ir_documents)",
+                stage="VERIFY(transcript_summary)",
                 fix_command=f"python execution/process_ir_documents.py --ticker {ticker.upper()}",
-                detail="No per-quarter summaries in .tmp/ and no transcripts in transcripts/{processed,raw}/.",
+                detail=summary_detail
+                or "No current verified transcript summary artifacts are available.",
             ),
             surprise_scorecard=surprise_card,
         )
 
     # Oldest → newest first, then take last MAX_CARDS, then reverse for display.
-    keys_old_to_new = sorted(
-        set(summaries.keys()) | set(transcripts.keys()), key=lambda k: (k[1], k[0])
-    )[-MAX_CARDS:]
-    cards_old_to_new = [_make_card(q, y, summaries, transcripts) for q, y in keys_old_to_new]
+    keys_old_to_new = sorted(summaries.keys(), key=lambda k: (k[1], k[0]))[-MAX_CARDS:]
+    cards_old_to_new = [_make_card(q, y, summaries, transcript_links) for q, y in keys_old_to_new]
 
     full_old_to_new = cards_old_to_new[-RECENT_FULL_COUNT:]
     digest_old_to_new = cards_old_to_new[:-RECENT_FULL_COUNT]
@@ -178,7 +169,18 @@ def build(
             conn=conn,
         )
     return EarningsSection(
-        status=SectionStatus.OK if has_any_llm else SectionStatus.PARTIAL,
+        status=SectionStatus.OK
+        if has_any_llm and summary_detail is None
+        else SectionStatus.PARTIAL,
+        missing=(
+            missing(
+                stage="VERIFY(transcript_summary)",
+                fix_command=f"python execution/process_ir_documents.py --ticker {ticker.upper()}",
+                detail=summary_detail,
+            )
+            if summary_detail
+            else None
+        ),
         budget_skip=themes_skip,
         surprise_scorecard=surprise_card,
         full_quarters=list(reversed(full_old_to_new)),
@@ -253,6 +255,88 @@ def _make_card(
     )
 
 
+def _load_verified_document_summaries(
+    ticker: str,
+    state_root: Path,
+    conn: sqlite3.Connection | None,
+) -> tuple[dict[tuple[int, int], str], dict[tuple[int, int], str], str | None]:
+    """Load only exact current summaries for registered transcript versions."""
+    if conn is None:
+        return (
+            {},
+            {},
+            "Current verified summaries require the report's explicit database connection.",
+        )
+    database_text = next(
+        (str(row[2]) for row in conn.execute("PRAGMA database_list") if row[1] == "main"), ""
+    )
+    if not database_text:
+        return {}, {}, "Current verified summaries are unavailable for an in-memory database."
+    try:
+        database = Path(database_text).resolve(strict=True)
+        source_root = state_root.resolve(strict=True)
+        verifier = TranscriptSummaryVerifier(database, source_root)
+        rows = conn.execute(
+            "SELECT document_version_id FROM v_evidence_document_current "
+            "WHERE ticker=? AND lower(document_type) IN (?, ?, ?) "
+            "ORDER BY document_version_id",
+            (ticker.upper(), "transcript", "ir_transcript", "earnings_call_transcript"),
+        ).fetchall()
+    except Exception as exc:
+        reason = str(exc) or type(exc).__name__
+        return {}, {}, f"Current verified transcript summaries are unavailable: {reason}."
+
+    by_period: dict[tuple[int, int], list[tuple[str, str]]] = {}
+    unavailable: list[str] = []
+    for row in rows:
+        document_version_id = str(row[0])
+        try:
+            artifact = read_transcript_summary(
+                conn,
+                document_version_id,
+                db_path=database,
+                state_root=source_root,
+                verifier=verifier,
+            )
+            if artifact is None:
+                unavailable.append(f"{document_version_id}: no current verified summary")
+                continue
+            manifest_raw: object = json.loads(artifact.generation.input_manifest_json)
+            if not isinstance(manifest_raw, dict):
+                unavailable.append(f"{document_version_id}: summary source manifest is malformed")
+                continue
+            manifest = cast(dict[str, object], manifest_raw)
+            document_raw = manifest.get("document")
+            if not isinstance(document_raw, dict):
+                unavailable.append(f"{document_version_id}: summary source identity is missing")
+                continue
+            document = cast(dict[str, object], document_raw)
+            source_ref = document.get("source_ref")
+            if not isinstance(source_ref, str) or not source_ref:
+                unavailable.append(
+                    f"{document_version_id}: original transcript source link is missing"
+                )
+                continue
+            by_period.setdefault(
+                (artifact.key.fiscal_quarter, artifact.key.fiscal_year), []
+            ).append((artifact.body_bytes.decode("utf-8", errors="strict"), source_ref))
+        except Exception as exc:
+            unavailable.append(f"{document_version_id}: {str(exc) or type(exc).__name__}")
+
+    summaries: dict[tuple[int, int], str] = {}
+    transcript_links: dict[tuple[int, int], str] = {}
+    for period, products in by_period.items():
+        if len(products) != 1:
+            unavailable.append(f"Q{period[0]} {period[1]}: multiple current transcript summaries")
+            continue
+        summaries[period] = products[0][0]
+        transcript_links[period] = products[0][1]
+    if not summaries and not unavailable:
+        unavailable.append("No current registered transcript summary artifacts are available")
+    detail = "; ".join(unavailable) if unavailable else None
+    return summaries, transcript_links, detail
+
+
 def _extract_digest(summary_md: str) -> str:
     """Pull just the Executive Summary block from the per-quarter summary.
 
@@ -275,25 +359,6 @@ def _extract_digest(summary_md: str) -> str:
     if extracted:
         return extracted
     return summary_md.strip()[:600]
-
-
-def _scan_summaries(tmp_dir: Path, ticker: str) -> dict[tuple[int, int], str]:
-    out: dict[tuple[int, int], str] = {}
-    if not tmp_dir.exists():
-        return out
-    upper = ticker.upper()
-    for path in tmp_dir.iterdir():
-        if not path.is_file():
-            continue
-        m = _SUMMARY_RX.match(path.name)
-        if not m or m.group("ticker").upper() != upper:
-            continue
-        try:
-            with open(path, encoding="utf-8") as f:
-                out[(int(m.group("q")), int(m.group("y")))] = f.read()
-        except OSError:
-            continue
-    return out
 
 
 def _scan_transcripts(tr_root: Path, ticker: str) -> dict[tuple[int, int], str]:

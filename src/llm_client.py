@@ -42,7 +42,7 @@ from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal, TypedDict, cast
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, field_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 # ---------------------------------------------------------------------------
 # Re-exports from the src/llm/ submodules
@@ -140,7 +140,13 @@ from llm.cli import (
     verify_setup_once as verify_setup_once,
 )
 from llm.contracts import (
+    RECENT_DEVELOPMENTS_SCHEMA as RECENT_DEVELOPMENTS_SCHEMA,
+)
+from llm.contracts import (
     TRANSCRIPT_METADATA_SCHEMA as TRANSCRIPT_METADATA_SCHEMA,
+)
+from llm.contracts import (
+    RecentDevelopmentsPayload as RecentDevelopmentsPayload,
 )
 from llm.contracts import (
     TranscriptMetadataPayload as TranscriptMetadataPayload,
@@ -264,24 +270,6 @@ class _QaTopicWire(BaseModel):
         "CONSUMER",
         "Q&A",
     ]
-
-
-class _SaydoFilterWire(RootModel[list[str]]):
-    @field_validator("root")
-    @classmethod
-    def _bounded_ids(cls, values: list[str]) -> list[str]:
-        if len(values) > 6 or any(not value.strip() for value in values):
-            raise ValueError("saydo filter requires at most six non-empty ids")
-        return values
-
-
-class _SaydoImportanceWire(RootModel[list[str]]):
-    @field_validator("root")
-    @classmethod
-    def _bounded_ids(cls, values: list[str]) -> list[str]:
-        if len(values) > 8 or any(not value.strip() for value in values):
-            raise ValueError("saydo importance requires at most eight non-empty ids")
-        return values
 
 
 class _CompanyParagraphWire(BaseModel):
@@ -408,12 +396,10 @@ class _EarningsThemesWire(BaseModel):
 
 _BEAR_CASE_ADAPTER = TypeAdapter(_BearCaseWire)
 _QA_TOPICS_ADAPTER = TypeAdapter(list[_QaTopicWire])
-_SAYDO_FILTER_ADAPTER = TypeAdapter(_SaydoFilterWire)
 _COMPANY_DESCRIPTION_ADAPTER = TypeAdapter(_CompanyDescriptionWire)
 _PLATFORM_DIAGRAM_ADAPTER = TypeAdapter(_PlatformDiagramWire)
 _INTAKE_CLASSIFICATION_ADAPTER = TypeAdapter(_IntakeClassificationWire)
 _VALUATION_BASIS_ADAPTER = TypeAdapter(_ValuationBasisWire)
-_SAYDO_IMPORTANCE_ADAPTER = TypeAdapter(_SaydoImportanceWire)
 _EARNINGS_THEMES_ADAPTER = TypeAdapter(_EarningsThemesWire)
 
 log = logging.getLogger(__name__)
@@ -462,90 +448,6 @@ class QuarterContext(TypedDict):
 # ---------------------------------------------------------------------------
 
 
-def _build_pairwise_analysis_prompt(
-    prev_summary: Mapping[str, object], curr_summary: Mapping[str, object], anchor_block: str = ""
-) -> str:
-    """Compose the SayDo pairwise prompt without issuing the LLM call.
-
-    Extracted so the synchronous (`generate_pairwise_analysis`) and batch
-    (`src/llm/batch.py`) paths can share the same prompt body. Two paths
-    must produce byte-identical prompts for the batched output to be
-    drop-in compatible with the synchronous .tmp file format.
-    """
-    prev_q_str = f"{prev_summary['quarter']} {prev_summary['year']}"
-    curr_q_str = f"{curr_summary['quarter']} {curr_summary['year']}"
-
-    return f"""
-    You are a Strategic Management Consultant and Senior Equity Analyst.
-    **Task:** Perform a strict "Say-Do" analysis comparing the **Outlook/Guidance** from the Previous Quarter ({prev_q_str}) against the **Actual Results** reported in the Current Quarter ({curr_q_str}).
-
-    **Hard rules — non-negotiable:**
-    - Every numeric figure, dated event, and management quote must be traceable to the input summaries below. If something is not present, write `[not disclosed]`. Do not invent, infer, or back-fill from prior knowledge of this company.
-    - Verbatim quotes belong in quotation marks with a source tag like `[Source: {prev_q_str} prepared remarks]` or `[Source: {curr_q_str} Q&A]`.
-    - The Attribution call (Execution vs. Exogenous) is a judgment, so it MUST go through the adversarial loop below — no shortcut to a verdict.
-    - **Bullet ordering:** Within EVERY section that has bullets (Say, Do, Gap Analysis), order bullets by THESIS IMPACT — most thesis-relevant first, immaterial line items (FX, share count, depreciation timing, tax rate) last. Bullets tied to a TIER-1 KPI from the THESIS ANCHOR (when provided) rank above all others, regardless of magnitude. If you would include a bullet that isn't thesis-relevant AT ALL, drop it instead of relegating it to the bottom.
-
-    {NUMBER_FORMATTING_BLOCK}
-    {anchor_block}**Input Data:**
-    1.  **Previous Quarter ({prev_q_str}) Summary:**
-        {prev_summary["text"]}
-
-    2.  **Current Quarter ({curr_q_str}) Summary:**
-        {curr_summary["text"]}
-
-    **Output Format (Strict Markdown):**
-    ## Analysis: {prev_q_str} vs {curr_q_str}
-
-    ### 1. Say (The Promise — from {prev_q_str})
-    *   **Guidance (quantitative):** [Specific numbers/targets, with quotes + source tags. Use `[not disclosed]` if absent.]
-    *   **Strategy (qualitative):** [Key initiatives promised, quoted with source tags.]
-
-    ### 2. Do (The Reality — reported in {curr_q_str})
-    *   **Performance:** [Actuals with quotes + source tags.]
-    *   **Gap Analysis:** [Specific variances vs. the Say above. State each gap as `metric: guided X → actual Y (delta Z%)`.]
-
-    ### 3. Analyst Verdict
-    *   **Performance Rating:** **MET** / **MISSED** / **EXCEEDED** (choose one — must be defensible from §2 numbers)
-
-    ### 4. Adversarial Loop — Attribution (Execution vs. Exogenous)
-    *   **Primary Thesis:** [Best read of whether the gap is Execution or Exogenous, with the strongest supporting evidence and source tags.]
-    *   **Strongest Counter:** [The most credible alternative read of the same prints. Avoid generic "macro could be different" — name a specific contradicting datapoint, mix effect, or management-credibility caveat from the inputs.]
-    *   **Resolution:** [Reconcile the two sides.] — **Net Conviction:** High / Medium / Low. **Observable that would flip this verdict:** [specific datapoint to watch next quarter].
-    *   **Sensitivity:** [If the primary read is wrong by ±X% on the key variable, what changes about the verdict or thesis impact?]
-
-    ### 5. Thesis Impact
-    *   **Structural vs temporary:** [Must follow from §4, not asserted independently.]
-    *   **Concrete delta:** [Translate the verdict into a quantified thesis impact: e.g., "raises NPV/share by ~$30 if Cloud op margin expansion sustains 200bps/q for 4 more quarters" / "compresses 2026 FCF estimate by ~$8B if capex re-rates above $185B". Show the working chain; the reader should be able to replicate.]
-    *   **Tier-1 KPI implication:** [Reference the THESIS ANCHOR KPIs above by name. For each tier-1 KPI the print materially moves: state the KPI by its exact anchor name + direction (faster / slower / sideways) + how this print changes the distance to its break condition. If no anchor was provided, fall back to "tier-1 KPIs unavailable" rather than inventing KPI names.]
-    *   **Bear-case engagement:** [If a BEAR-CASE ANCHOR was provided above, explicitly state which named failure mode this print confirms, refutes, or leaves unchanged. Cite the failure-mode hypothesis verbatim from the anchor so the reader can map the connection. If no bear anchor, write "no prior bear-case anchor on file" and skip — do not fabricate.]
-    """
-
-
-def generate_pairwise_analysis(
-    prev_summary: Mapping[str, object],
-    curr_summary: Mapping[str, object],
-    anchor_block: str = "",
-    ticker: str | None = None,
-) -> str:
-    """
-    Generates a specific "Say-Do" analysis comparing two sequential quarters.
-
-    ``anchor_block`` is an optional pre-formatted markdown block (typically
-    from ``compose_anchor_block(load_thesis_anchor(...), load_bear_anchor(...))``)
-    that anchors the §5 Thesis Impact section against the analyst's actual
-    tier-1 KPIs and named bear-case failure modes. Empty string → no anchor
-    block injected (back-compat for watchlist tickers).
-    """
-    prompt = _build_pairwise_analysis_prompt(prev_summary, curr_summary, anchor_block=anchor_block)
-    prev_q_str = f"{prev_summary['quarter']} {prev_summary['year']}"
-    curr_q_str = f"{curr_summary['quarter']} {curr_summary['year']}"
-    try:
-        return call_llm(prompt, purpose="pairwise_analysis", ticker=ticker)
-    except Exception as e:
-        log.error(f"Error generating pairwise analysis: {e}")
-        return f"Could not generate analysis for {prev_q_str} -> {curr_q_str}."
-
-
 SUMMARY_TRANSCRIPT_CHAR_CAP = 60_000
 
 
@@ -561,7 +463,7 @@ def bound_summary_transcript(text: str) -> str:
     return text[:head_len] + marker + text[-tail_len:]
 
 
-def generate_summary(text: str, anchor_block: str = "", ticker: str | None = None) -> str:
+def summary_prompt(text: str, anchor_block: str = "") -> str:
     """
     Generates an analyst-grade prose summary of an earnings transcript.
 
@@ -670,102 +572,11 @@ def generate_summary(text: str, anchor_block: str = "", ticker: str | None = Non
     )
     complete_prompt = prompt + body + "\n" + research_method_block("earnings")
     validate_research_input(complete_prompt)
-    try:
-        return call_llm(complete_prompt, purpose="transcript_summary", ticker=ticker)
-    except Exception as e:
-        log.error(f"CRITICAL ERROR: Summary generation failed: {e}")
-        raise
+    return complete_prompt
 
 
-def generate_press_release_summary(text: str, ticker: str | None = None) -> str:
-    """
-    Generates a structured summary from an earnings press release.
-    Press releases are financial-forward — emphasize the numbers table and guidance.
-    """
-    prompt = f"""
-You are an expert financial analyst. Summarize the following earnings press release.
-This is sourced from the company's IR website, so it is the official financial release — be precise.
-
-**STRICT CONSTRAINT:** Do not provide conversational filler. Start your response immediately with the Report Title.
-
-{NUMBER_FORMATTING_BLOCK}
-
-**Output Format (Strict Markdown):**
-
-# Press Release Summary: [Company Ticker] [Quarter] [Year]
-
-## 1. Headline Results
-| Metric | Reported | Guidance/Consensus | Beat/Miss |
-| :--- | :--- | :--- | :--- |
-| **Revenue** | [Value] | [Value if available] | [Result] |
-| **EPS (GAAP)** | [Value] | [Value if available] | [Result] |
-| **EPS (Non-GAAP)** | [Value] | [Value if available] | [Result] |
-| **Operating Income** | [Value] | [Value if available] | [Result] |
-| **Free Cash Flow** | [Value if disclosed] | N/A | N/A |
-
-## 2. Key Business Metrics
-[List 3\u20136 company-specific KPIs disclosed in the release (e.g. DAUs, GMV, RPO, cloud revenue, etc.)]
-
-## 3. Guidance (Next Quarter & Full Year)
-| Metric | Next Quarter | Full Year |
-| :--- | :--- | :--- |
-| **Revenue** | [Range] | [Range] |
-| **EPS** | [Range] | [Range] |
-| **Other** | [Any other metrics guided] | |
-
-## 4. Capital Allocation
-[Buybacks, dividends, debt changes disclosed in this release]
-
-Press Release:
-"""
-    body = spotlight(text, source="earnings press release (issuer-published document)")
-    try:
-        return call_llm(prompt + body, purpose="press_release_summary", ticker=ticker)
-    except Exception as e:
-        log.error(f"CRITICAL ERROR: Press release summary generation failed: {e}")
-        raise
-
-
-def generate_presentation_brief(text: str, ticker: str | None = None) -> str:
-    """
-    Generates a strategic brief from an earnings presentation slide deck.
-    Presentations are typically 20\u201340 pages of slides; extract the key strategic narrative.
-    """
-    prompt = f"""
-You are a senior equity research analyst. The following text was extracted from an earnings presentation slide deck.
-Extract the key strategic narrative — what story is management telling investors?
-
-**STRICT CONSTRAINT:** Do not provide conversational filler. Start your response immediately with the Report Title.
-
-{NUMBER_FORMATTING_BLOCK}
-
-**Output Format (Strict Markdown):**
-
-# Presentation Brief: [Company Ticker] [Quarter] [Year]
-
-## 1. Management Narrative
-[2\u20133 sentences on the central investor story management is presenting this quarter]
-
-## 2. Highlighted Metrics & Charts
-[List key data points, KPIs, or charts that management chose to prominently feature — these signal what they want investors to focus on]
-
-## 3. Strategic Initiatives Featured
-[New products, partnerships, market expansions, or strategic pivots highlighted in the deck]
-
-## 4. Forward-Looking Slides
-[Any slides about market opportunity, TAM, roadmap, or multi-year targets]
-
-## 5. Analyst Watchpoints
-[What is management NOT showing or downplaying? Notable omissions or changed slide topics vs. prior quarters if detectable]
-
-Presentation Text:
-"""
-    body = spotlight(text, source="earnings presentation deck text (issuer-published document)")
-    try:
-        return call_llm(prompt + body, purpose="presentation_brief", ticker=ticker)
-    except Exception as e:
-        log.error(f"CRITICAL ERROR: Presentation brief generation failed: {e}")
-        raise
+def generate_summary(text: str, anchor_block: str = "", ticker: str | None = None) -> str:
+    return call_llm(summary_prompt(text, anchor_block), purpose="transcript_summary", ticker=ticker)
 
 
 def research_method_block(mode: ResearchMode) -> str:
@@ -1352,23 +1163,26 @@ RANKING + filtering rules:
 
 {NUMBER_FORMATTING_BLOCK}
 
-**Output Format (Strict Markdown):**
+**Output format (strict JSON object):**
+Return exactly these keys: `search_status`, `window_start`, `window_end`,
+`queries_run`, `sources_opened`, and `events`. `search_status` is
+`events_found` or `no_qualifying_events`. `queries_run` has one or two exact
+queries. `sources_opened` has the URLs of one to seven dated sources actually
+opened. Never claim no qualifying events without this search evidence.
 
-### Material news
-- **[Headline]** — [1-2 sentences: what happened AND specific implication for the thesis / valuation / KPI trajectory. Quantify the implication where the news supports it.] [Source: outlet, YYYY-MM-DD, URL]
-- ... (3-7 items, ranked by thesis impact)
-
-### Sector / regulatory context
-- [optional 1-3 items: peer earnings prints, FDA / antitrust decisions affecting peers, sector ETF flows, macro shifts that hit this ticker's specific exposures. Each item must have a "why this matters for {ticker}" clause.]
-
-### Watch this week
-- [1-3 items: upcoming earnings calls (this ticker or named peers), scheduled disclosures, investor days, regulatory dockets within the next ~7 days. Format: `**Date · Event** — what to watch for`]
-
-If no material news remains after searching, write `*No material news found.
-Searches run: [query 1]; [query 2]. Window covered: [YYYY-MM-DD] through
-[YYYY-MM-DD]. Sources checked: [outlet, URL]; [...].*` under "Material news"
-and skip the other two sections. This branch still requires dated source URLs.
-Do not pad with stale or low-signal items just to fill the section.
+Each event has exactly these fields: `category` (`material_news`,
+`sector_context`, or `watch_this_week`), `headline`, `published_at`
+(`YYYY-MM-DD` with optional time), `publisher`, `url`, `factual_summary`,
+`thesis_implication`, `tag` (`CAPITAL`, `LEGAL`, `INFRA`, `PRODUCT`,
+`EARNINGS`, `NARRATIVE`, or `NEWS`), and `tone` (`pos`, `opt`, `neu`, or
+`neg`). Keep event
+order by thesis impact. Set `thesis_implication` to an empty string when the
+opened evidence does not support a distinct implication. Cite the dated source
+with its real URL. Every numeric
+claim must be supported by the opened source. Keep the implication distinct
+from the factual summary. Omit items without a known date or canonical source
+URL. A `no_qualifying_events` result has an empty `events` list. Return valid
+JSON only, with no markdown fences or commentary.
 """,
         variables=(
             "ticker",
@@ -1390,8 +1204,8 @@ def generate_recent_developments(
     anchor_block: str = "",
     max_web_results: int = _MAX_WEB_RESULTS_PER_NEWS_CALL,
     max_excerpt_chars: int = _MAX_EXCERPT_CHARS_PER_NEWS_ITEM,
-) -> str:
-    """Recent-developments brief sourced via live web grounding.
+) -> RecentDevelopmentsPayload:
+    """Recent-developments report events sourced via live web grounding.
 
     Routes through `call_llm_with_web` so the model can pull current news
     from Bloomberg / Reuters / CNBC / FT / WSJ / company press releases and
@@ -1399,8 +1213,8 @@ def generate_recent_developments(
     Codex failure falls back to Claude WebSearch/WebFetch, then to plain
     `_call_claude` (no web), then to Gemini per the standard chain.
 
-    Used by the §8 Recent developments section. Output is markdown, with
-    sources as inline links the section renderer passes through unchanged.
+    Used by the §8 Recent developments section. The result carries typed
+    source and thesis fields; presentation code formats it for readers.
 
     ``anchor_block`` (optional) injects the thesis + bear-case anchor so the
     "rank by thesis impact" rule and the per-item implication clauses can
@@ -1424,7 +1238,17 @@ def generate_recent_developments(
         NUMBER_FORMATTING_BLOCK=NUMBER_FORMATTING_BLOCK,
     )
     try:
-        return call_llm_with_web(prompt, purpose="recent_developments", ticker=ticker)
+        decoded = call_llm_structured(
+            prompt,
+            purpose="recent_developments",
+            ticker=ticker,
+            expect="object",
+            schema=RECENT_DEVELOPMENTS_SCHEMA,
+            transport=call_llm_with_web,
+        )
+        if not isinstance(decoded, RecentDevelopmentsPayload):  # pragma: no cover
+            raise TypeError("recent_developments schema returned an unexpected value")
+        return decoded
     except Exception as e:
         log.error(f"CRITICAL ERROR: Recent-developments generation failed for {ticker}: {e}")
         raise
@@ -1807,61 +1631,6 @@ on its own — no "asks about" prefix; just the topic itself.
         raise
 
 
-def generate_saydo_filter(
-    ticker: str,
-    quarter_label: str,
-    rows: list[dict[str, str]],
-    anchor_block: str = "",
-) -> str:
-    """Pick the strategically important commitments out of a print-vs-guide table.
-
-    ``rows`` is ``[{"id": str, "metric": str, "guide": str, "actual": str,
-    "verdict": str}, ...]``. Returns a JSON list of the IDs that matter for
-    the thesis — skips FX trivia, share count noise, and other below-the-line
-    items. Up to 6 rows kept.
-
-    ``anchor_block`` (optional) injects the thesis + tier-1 KPI list so the
-    "matters for the thesis" judgment can be made against the analyst's
-    actual KPIs rather than the model's generic prior about what matters.
-    """
-    payload = json.dumps(rows, ensure_ascii=False)
-    prompt = f"""You are filtering an analyst's print-vs-guide commitments table
-for {ticker} {quarter_label}. Most rows in these tables are noise (FX, share
-count, tax rate, depreciation timing). The reader wants ONLY the commitments
-that move the investment thesis — revenue trajectory, segment growth,
-margin direction, capex / FCF, major product or partnership commitments,
-balance-sheet structural shifts.
-
-{anchor_block}ROWS (JSON):
-{payload}
-
-Return ONLY a JSON array of the IDs to KEEP (up to 6, ordered by importance):
-
-["3", "1", "5"]
-
-Skip anything that's a maintenance/macro line. Prefer rows where the verdict
-is EXCEEDED or MISSED (signal) over rows that are clean MET (less signal).
-
-When a THESIS ANCHOR is provided above, prioritize rows whose metric maps
-to one of the named tier-1 KPIs or business-model rules. Rows that touch a
-tier-1 KPI rank above rows that don't, even if the latter is a bigger
-delta. The point is to filter for THESIS-relevant signal, not generic
-beats/misses.
-"""
-    try:
-        payload = call_llm_structured(
-            prompt,
-            purpose="saydo_filter",
-            ticker=ticker,
-            expect="array",
-            schema=_SAYDO_FILTER_ADAPTER,
-        )
-        return json.dumps(_SaydoFilterWire.model_validate(payload).root, ensure_ascii=False)
-    except Exception as e:
-        log.error(f"CRITICAL ERROR: SayDo filter failed for {ticker}: {e}")
-        raise
-
-
 def build_company_description_prompt(
     ticker: str,
     profile_description: str,
@@ -1873,24 +1642,17 @@ def build_company_description_prompt(
     fiscal_year: int | None,
     thesis_text: str = "",
     recent_earnings_md: str = "",
-    recent_ir_md: str = "",
     ir_anchor_md: str = "",
 ) -> str:
     """Synthesize the §2 Company description as an analyst-grade business writeup.
 
     Inputs go beyond the 10-K — the prompt is fed the user's own thesis
-    statement, the most recent earnings narrative(s), recent IR document
-    condensers (`recent_ir_md`), and the raw IR-deck narrative with
+    statement, the most recent earnings narrative(s), and the raw IR-deck narrative with
     bias-framing (`ir_anchor_md`). The intent is to elicit a *thesis-anchored*
     take on the business (what makes it interesting as an INVESTMENT, where
     the moat actually is, what consensus underweights) rather than a 10-K
     paraphrase — and to force the writeup to engage skeptically with
     management's own positioning rather than parroting it.
-
-    `recent_ir_md` and `ir_anchor_md` are deliberately distinct: the former is
-    a factual condenser of recent IR events (what was disclosed); the latter
-    is raw slide-deck narrative carrying its own bias-framing header so the
-    LLM treats it as company spin, not ground truth.
 
     Returns a JSON string the caller parses. Schema:
       {
@@ -1918,12 +1680,6 @@ def build_company_description_prompt(
         if recent_earnings_md.strip()
         else ""
     )
-    recent_ir_block = (
-        f"RECENT IR DOCUMENT EXCERPTS (press releases, investor day decks):\n"
-        f"{spotlight(recent_ir_md.strip()[:8000], source='recent IR document excerpts (issuer-derived)')}\n"
-        if recent_ir_md.strip()
-        else ""
-    )
     # IR anchor carries its own ## IR ANCHOR (USE WITH SKEPTICISM) heading from
     # load_ir_anchor (bias frame, kept intact); the spotlight wrap additionally
     # marks the company-authored text as data without instruction authority.
@@ -1948,7 +1704,7 @@ push back where the positioning diverges from what the 10-K, segment
 numbers, or competitive dynamics support, and form your own analytical
 POV rather than paraphrasing the deck.
 
-{thesis_block}{recent_earnings_block}{recent_ir_block}{ir_anchor_block}
+{thesis_block}{recent_earnings_block}{ir_anchor_block}
 SEGMENTS this report displays (use these EXACT names):
 {segments_block}
 
@@ -2039,7 +1795,6 @@ def generate_company_description(
     fiscal_year: int | None,
     thesis_text: str = "",
     recent_earnings_md: str = "",
-    recent_ir_md: str = "",
     ir_anchor_md: str = "",
 ) -> str:
     """Generate a company description from the exact cacheable prompt."""
@@ -2054,7 +1809,6 @@ def generate_company_description(
         fiscal_year,
         thesis_text,
         recent_earnings_md,
-        recent_ir_md,
         ir_anchor_md,
     )
     try:
@@ -2322,69 +2076,6 @@ def generate_valuation_basis(
         return _ValuationBasisWire.model_validate(payload).model_dump_json()
     except Exception as e:
         log.error(f"CRITICAL ERROR: Valuation basis generation failed for {ticker}: {e}")
-        raise
-
-
-# ---------------------------------------------------------------------------
-# SayDo importance ranking (Opus orders pairwise SayDo bullets by thesis impact)
-# ---------------------------------------------------------------------------
-
-
-def generate_saydo_importance(
-    ticker: str,
-    quarter_label: str,
-    bullets: list[dict[str, str]],
-    anchor_block: str = "",
-) -> str:
-    """Order a list of SayDo bullet snippets by thesis impact.
-
-    ``bullets`` is ``[{"id": str, "snippet": str}, ...]`` where each snippet
-    is one short paragraph or bullet from the pairwise SayDo analysis (e.g.
-    "Revenue: guided $X, printed $Y, +5% delta..." or "CLIP rollout pace...").
-
-    Returns a JSON list of the IDs in importance order (most thesis-relevant
-    first). Bullets the LLM judges immaterial may be omitted. Up to 8 kept.
-
-    Used by the renderer to sort the pairwise SayDo card before display so
-    the top of each card is what actually matters for the thesis, not what
-    happened to appear first in the LLM's pairwise output.
-    """
-    payload = json.dumps(bullets, ensure_ascii=False)
-    prompt = f"""You are ranking SayDo (commitments vs. delivery) bullets from
-the {ticker} {quarter_label} pairwise analysis BY THESIS IMPACT — what
-moves the investment case the most, not what was disclosed first.
-
-{anchor_block}BULLETS (JSON):
-{payload}
-
-RANKING rules:
-- A bullet that moves a TIER-1 KPI ranks above one that doesn't.
-- A bullet that confirms or refutes a named bear-case failure mode ranks
-  high regardless of magnitude (it resolves analytical uncertainty).
-- Items that are bookkeeping / FX / share-count / tax-rate / one-off
-  accounting noise rank LOW and should be dropped if you have more than 8
-  bullets.
-- Items framed as "what didn't happen" or "what's unchanged" can still be
-  important if the unchanged direction confirms a thesis pillar.
-
-Return ONLY a JSON array of the IDs in importance order (up to 8):
-
-["2", "0", "5", "1", ...]
-
-Echo IDs verbatim from input. Do NOT invent IDs. Do NOT include omitted
-bullets.
-"""
-    try:
-        payload = call_llm_structured(
-            prompt,
-            purpose="saydo_importance",
-            ticker=ticker,
-            expect="array",
-            schema=_SAYDO_IMPORTANCE_ADAPTER,
-        )
-        return json.dumps(_SaydoImportanceWire.model_validate(payload).root, ensure_ascii=False)
-    except Exception as e:
-        log.error(f"CRITICAL ERROR: SayDo importance ranking failed for {ticker}: {e}")
         raise
 
 

@@ -1,5 +1,16 @@
 # Backend streamlining: implementation checkpoints
 
+October 25 continuation: owner-approved cleanup now includes retired inputs,
+history, pending state and unused libraries. Current theses, owner process
+settings and decision time series remain provisional exceptions. Telegram and
+most coaching are retired in the uncommitted source candidate. Earlier history
+preservation statements below are dated checkpoints, not the current scope.
+The current plan is `docs/architecture/backend-retirement-execution-plan.md`.
+Integrated tests, remaining backend R2/R3/R5/R6/R7 work, independent final review,
+Windows checks and exact-candidate deployment remain open. No production or
+Scheduler mutation occurred in this continuation.
+
+
 Status: **October 24 event unit accepted at 96/100; on-command procedure MVP at 95/100; financial-read MVP at 90/100; ETF automatic-generation cut at 94/100. Frontend shell cut at 93/100; legacy company path retirement at 96/100. Combined architecture and release remain HOLD**.
 
 Current ETF scope (October 25): the owner retired dedicated ETF research. The earlier on-demand and capture plans below are historical and superseded. The local implementation removes dedicated acquisition, generation, scoring and active workups. It preserves portfolio weights, shared risk/prices and all saved data/history. Retained commentary must use supported diversification evidence. Earnings-multiple context must use a dated source or an explicit long-term assumption. AVUV is canceled. No production, scheduler or provider-policy change occurred. Final local checks and independent review belong to `.tmp/cleanup-open-model-execution/etf-lightweight-final-acceptance.json`; the complete release remains HOLD.
@@ -993,3 +1004,41 @@ Both operational CLIs bind the existing database to the explicit/configured stat
 The original plan scored 77/HOLD. Root adopted the complete corrected scope, scored 88 by independent Sol. The implementation scored 89 with no material blockers for this prerequisite. The final 13-file owning suite passed 241 tests; the independent subset passed 57. Six pure parser functions and three rehomed coercions match the predecessor AST. Existing evidence, store and published-data owners remain byte-equal. Final exact source bindings, full serial suite result, dependency closure and checks are owned by `.tmp/cleanup-open-model-execution/etf-capture-final-acceptance.json`.
 
 This change adds capture evidence; it claims no deletion credit. The existing architecture gate remains HOLD at 26 oversized modules against 25. It does not qualify a live positive witness, current fund facts, archive completeness, financial narrative, manual ETF Create/Refresh or release. No push, merge, deployment, live scheduler change, collection, financial generation or production write occurred.
+
+## October 25 continuation proof boundary
+
+The Telegram/coaching batch passed 617 tests. The wider integration run passed
+1,785 and found seven failures. After correction, a final owning recheck passed
+196 tests. These populations overlap; they are not a full-suite total. Strict
+Pyright passes all 135 changed Python files. Architecture boundaries, the size
+and duplication ratchets, reconstruction (11/11), and design sync pass at their
+recorded checkpoints. Golden comparisons ran without regeneration. Current
+source remains uncommitted, and full-matrix/final review acceptance is open.
+
+Browser evidence uses isolated synthetic data and no application server. Capture
+receipts/errors and Operations pass at1280/768. Windows was inspected read-only:
+`es-poller` remains Running/Auto, and dedicated lens batches remain enabled. The
+Sunday job is due at23:00Pacific. No production state or scheduler changed.
+R2/R3/R5/R6, structured R7, retained-history closure, external expiry ownership,
+Windows evidence and deployment remain required. The plan owns that open scope.
+
+## October 26 continuation: transcript summary scope
+
+The owner explicitly retained earnings transcript summaries and SayDo, and
+retired separate generated press-release, presentation and investor-update
+summaries/cards. Their source documents remain. The report model/renderer
+interfaces and company-description dependency are removed locally. The producer
+and consumers are being integrated around registered original evidence.
+
+The new exact-document artifact store, fiscal-source selector, strict attempt
+receipts and exclusive-store retirement migration are local candidates. The
+transcript audit has an independent 72-point HOLD review; its identified schema,
+database-routing, inert-heading and replay gaps are under correction. A
+separately reviewed 32-case synthetic Boolean corpus has six supported and 26
+unsupported cases. No actual model execution or qualification has occurred.
+A synthetic Boolean result cannot establish full transcript qualification.
+
+The canonical service/database route was read-only verified again in the
+continuation. No service, scheduler, provider policy or production data changed.
+Full integration, static gates, native Windows tests, final independent review,
+release preparation and deployment remain open.

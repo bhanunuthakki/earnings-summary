@@ -22,14 +22,12 @@ of THREE divergent renderers + ~7 bare-``escape()`` body sites — cannot regres
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
+
+from ui.prose import prose_card_text, render_prose
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC = PROJECT_ROOT / "src"
-sys.path.insert(0, str(SRC))
-
-from ui.prose import render_prose  # noqa: E402
 
 # The tell-tale of a markdown→HTML renderer: the bold-span regex. Present in the
 # Python ``re`` form and the JS ``.replace`` form alike, so one substring scan
@@ -41,10 +39,6 @@ _RENDERER_SIGNATURE = r"\*\*([^*]+)\*\*"
 # exception must be added here WITH its rationale.
 _SIGNATURE_ALLOWLIST: dict[str, str] = {
     "src/ui/prose.py": "the canonical prose render boundary",
-    "src/report/renderers/workspace_data.py": (
-        "markdown STRIPPER (**x** -> plaintext x for a news-tile gloss), not an "
-        "HTML renderer — emits no tags"
-    ),
     "src/llm/postprocess.py": (
         "markdown STRIPPER — strip_inline_markdown reduces LLM output persisted "
         "into SCALAR fields to plaintext at persist time (scalars plain, prose "
@@ -162,7 +156,6 @@ def test_dashboard_light_markdown_delegates_to_boundary() -> None:
 
 # (rel path, must-appear render_prose call, must-be-GONE bare-escape fragment)
 _ROUTED_SURFACES: list[tuple[str, str, str | None]] = [
-    ("src/pipeline/advisor_memos_panel.py", "render_prose(m.body_md", None),
     ("src/pipeline/peeks.py", "render_prose(body_md", None),
     ("src/pipeline/journal_panel.py", "render_prose(n.body)", 'jr-body">{escape(n.body)}'),
     (
@@ -232,8 +225,6 @@ def test_deterministic_fields_keep_escape() -> None:
 # the other half of the §9 promise). These pin that half for the one card
 # body that leaked, plus the helper's own contract.
 # ---------------------------------------------------------------------------
-
-from ui.prose import prose_card_text  # noqa: E402
 
 
 def test_prose_card_text_strips_block_markers_and_keeps_bold() -> None:

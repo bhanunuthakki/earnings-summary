@@ -63,10 +63,8 @@ def test_dashboard_source_authority_reaches_supported_child_arguments(
         root, registry=registry, db_path=tmp_path / "explicit-synthetic.db", source_state_root=state
     )
     client = app.test_client()
-    for route, body in (
-        ("/actions/advisor-memo", {"kind": "next_dollar"}),
-        ("/actions/dcf-import", {"ticker": "META"}),
-    ):
+    assert client.post("/actions/advisor-memo", json={"kind": "next_dollar"}).status_code == 404
+    for route, body in (("/actions/dcf-import", {"ticker": "META"}),):
         response = client.post(route, json=body)
         assert response.status_code == 201
         job = registry.get(response.get_json()["job_id"])

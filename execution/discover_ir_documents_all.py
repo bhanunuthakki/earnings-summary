@@ -416,11 +416,12 @@ def _run_process_stage(
                 str(PROJECT_ROOT / "execution" / "process_ir_documents.py"),
                 "--ticker",
                 ticker,
-                "--repo-root",
-                str(repo_root),
                 "--db",
                 str(db_path),
-                "--regenerate-missing",
+                "--state-root",
+                str(repo_root),
+                "--repo-root",
+                str(PROJECT_ROOT),
             ],
             summary_timeout,
             f"[{ticker}] process_ir_documents",
@@ -1311,7 +1312,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument(
         "--summaries",
         action="store_true",
-        help="Also run process_ir_documents.py (LLM per-doc summaries — the cost step)",
+        help="Also run verified summaries for registered earnings transcripts",
     )
     p.add_argument(
         "--process-timeout",

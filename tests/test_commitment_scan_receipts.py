@@ -763,9 +763,7 @@ def test_migration_retains_legacy_receipt_but_does_not_admit_it_as_complete(
         assert report["targets"] == 0
         assert calls == 0
         assert _load_onboard_script().find_pending_tickers(path) == []
-    command.downgrade(_config(path), "0036_add_data_coverage_dispositions")
     with sqlite3.connect(path) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM commitment_scan_receipts").fetchone()[0] == 2
         trigger_names = {
             row[0]
             for row in conn.execute(
@@ -777,6 +775,10 @@ def test_migration_retains_legacy_receipt_but_does_not_admit_it_as_complete(
             "trg_commitment_scan_receipts_no_delete",
             "trg_commitment_scan_receipts_no_update",
         }
+    with pytest.raises(RuntimeError, match="Restore a reviewed predecessor database snapshot"):
+        command.downgrade(_config(path), "0036_add_data_coverage_dispositions")
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM commitment_scan_receipts").fetchone()[0] == 2
 
 
 def test_valid_legacy_receipt_requires_reaudit_and_is_not_automatically_queued(
@@ -1297,7 +1299,7 @@ def test_downgrade_refuses_after_exact_segment_receipt(
             observed_segments=result.observed_segments,
         )
         conn.commit()
-    with pytest.raises(RuntimeError, match="cannot downgrade"):
+    with pytest.raises(RuntimeError, match="Restore a reviewed predecessor database snapshot"):
         command.downgrade(_config(path), "0036_add_data_coverage_dispositions")
 
 
