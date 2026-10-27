@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "9d6594b583a373f9f7bd1e70cd664d2f5b01db83",
+  "scoped_commit": "96a6a751b7de91f4cb936051526249abf1ef147b",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "4d08563b383ef7b184b60527776da88b9a1df61dbc8819313e4e49c47d6a8484",
+  "source_sha256": "bbcfc741522fb2cfff44eb7392d5a079439f93613f8cabf8794ed3e1866848c5",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1488,
-    "total_noncomment_loc": 584910,
+    "total_noncomment_loc": 584917,
     "modules_over_1000_loc": 118,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 5,
@@ -33,7 +33,7 @@
     "largest_scc": 16,
     "composition_root_loc": {
       "execution/comments_server.py": 183,
-      "src/pipeline/portfolio_panel.py": 3497
+      "src/pipeline/portfolio_panel.py": 3498
     },
     "composition_root_fan_out": {
       "execution/comments_server.py": 8,
@@ -11434,9 +11434,9 @@
         "path": "src/integrations/portfolio_tracker_client.py",
         "module": "integrations.portfolio_tracker_client",
         "lines": {
-          "physical": 3460,
-          "nonblank": 3147,
-          "noncomment": 3007
+          "physical": 3461,
+          "nonblank": 3148,
+          "noncomment": 3008
         },
         "internal_fan_out": 1,
         "responsibilities": [
@@ -14489,9 +14489,9 @@
         "path": "src/pipeline/kpi_semantic_scope.py",
         "module": "pipeline.kpi_semantic_scope",
         "lines": {
-          "physical": 262,
-          "nonblank": 251,
-          "noncomment": 251
+          "physical": 268,
+          "nonblank": 256,
+          "noncomment": 256
         },
         "internal_fan_out": 5,
         "responsibilities": [
@@ -14814,9 +14814,9 @@
         "path": "src/pipeline/portfolio_panel.py",
         "module": "pipeline.portfolio_panel",
         "lines": {
-          "physical": 3925,
-          "nonblank": 3648,
-          "noncomment": 3497
+          "physical": 3926,
+          "nonblank": 3649,
+          "noncomment": 3498
         },
         "internal_fan_out": 28,
         "responsibilities": [

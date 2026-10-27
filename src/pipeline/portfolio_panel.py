@@ -850,6 +850,7 @@ _PERFORMANCE_REASON_LABELS = {
     "external_flow_provenance_source_event_set_digest_mismatch": "cash-flow provenance source-event integrity mismatch",
     "external_flow_provenance_effective_date_basis_mismatch": "cash-flow provenance effective-date basis mismatch",
     "unpriceable_holding_snapshot": "one or more held positions could not be valued",
+    "option_history_reconstruction_unsupported": "option position history cannot be reconstructed",
 }
 
 

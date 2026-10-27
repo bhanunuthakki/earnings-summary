@@ -14,7 +14,7 @@ from pydantic import ValidationError
 
 from identity import DEFAULT_USER_ID
 from models.facts import Unit
-from pipeline.kpi_semantic_scope import scoped_kpi_definitions
+from pipeline.kpi_semantic_scope import portfolio_tickers, scoped_kpi_definitions
 from pipeline.kpi_semantics import (
     KpiAccountingBasis,
     KpiConsolidationScope,
@@ -254,6 +254,41 @@ def test_scope_is_report_union_facts_metrics_for_portfolio_only(tmp_path: Path) 
     assert rows[0].missing_context_count == 0
     assert rows[1].fact_count == 1
     assert rows[1].missing_context_count == 0
+
+
+def test_scope_excludes_portfolio_etfs_without_company_kpis(tmp_path: Path) -> None:
+    # A held ETF has no company KPI report configuration; scoping it raised a
+    # report_configuration_missing HALT for every portfolio ETF.
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        "CREATE TABLE tracked_companies(ticker TEXT,list_type TEXT,user_id TEXT,"
+        "archived_at TEXT,instrument_type TEXT);"
+        "CREATE TABLE kpi_definitions(id INTEGER PRIMARY KEY,ticker TEXT,name TEXT);"
+        "CREATE TABLE kpi_facts(id INTEGER PRIMARY KEY,kpi_definition_id INTEGER,"
+        "source_doc_id INTEGER,unit TEXT NOT NULL);"
+    )
+    _semantic_table(conn)
+    conn.executemany(
+        "INSERT INTO tracked_companies VALUES (?,'portfolio',?,NULL,?)",
+        [
+            ("NU", DEFAULT_USER_ID, "adr"),
+            ("AVUV", DEFAULT_USER_ID, "etf"),
+            ("VDE", DEFAULT_USER_ID, "ETF"),
+            ("MELI", DEFAULT_USER_ID, None),
+        ],
+    )
+    holdings = tmp_path / "micro_thesis" / "holdings"
+    holdings.mkdir(parents=True)
+    (holdings / "NU.json").write_text('{"ticker":"NU","chart_priorities":["NIM"]}')
+
+    assert portfolio_tickers(conn) == ("MELI", "NU")
+    rows = scoped_kpi_definitions(conn, repo_root=tmp_path)
+    # An unclassified instrument still fails closed on its missing configuration.
+    assert [(row.ticker, row.name) for row in rows] == [
+        ("MELI", "<report_configuration>"),
+        ("NU", "NIM"),
+    ]
 
 
 def test_scope_counts_only_current_fact_heads(tmp_path: Path) -> None:

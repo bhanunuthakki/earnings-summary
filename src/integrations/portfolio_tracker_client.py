@@ -150,6 +150,7 @@ _PERFORMANCE_REASON_CODES = frozenset(
         "external_flow_provenance_source_event_set_digest_mismatch",
         "external_flow_provenance_effective_date_basis_mismatch",
         "unpriceable_holding_snapshot",
+        "option_history_reconstruction_unsupported",
     }
 )
 _BETA_REASON_CODES = _POSITION_REASON_CODES | {"insufficient_return_observations"}
