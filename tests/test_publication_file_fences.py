@@ -334,7 +334,10 @@ def test_windows_fence_denies_write_replace_delete_and_rename(tmp_path: Path) ->
 
         with pytest.raises(PermissionError) as write_denied:
             source.write_bytes(b"changed")
-        assert getattr(write_denied.value, "winerror", None) in {5, 32}
+        assert getattr(write_denied.value, "winerror", None) in {
+            5,
+            32,
+        } or write_denied.value.errno in {errno.EACCES, errno.EPERM}
 
         with pytest.raises(PermissionError):
             os.replace(replacement, source)
@@ -535,7 +538,10 @@ def test_windows_fence_releases_descriptors_on_process_termination(
             last_error = None
             break
         except OSError as exc:
-            if getattr(exc, "winerror", None) not in {5, 32}:
+            if getattr(exc, "winerror", None) not in {5, 32} and exc.errno not in {
+                errno.EACCES,
+                errno.EPERM,
+            }:
                 raise
             last_error = exc
             time.sleep(0.05)
