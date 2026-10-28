@@ -169,3 +169,29 @@ def test_upgrade_refuses_view_dependency_without_partial_drop(
 
     with sqlite3.connect(database) as connection:
         assert _table_names(connection) >= RETIRED_TABLES
+
+
+@pytest.mark.parametrize("retired_table", ["coach_pings", "decision_nudges"])
+def test_upgrade_refuses_retained_trigger_dependency_before_any_drop(
+    tmp_path: Path, migrated_db: Callable[..., Path], retired_table: str
+) -> None:
+    database = migrated_db(tmp_path / "retired-stores-trigger.db", target=PREDECESSOR)
+    with sqlite3.connect(database) as connection:
+        _seed_retired_history(connection)
+        connection.execute(
+            "CREATE TRIGGER retained_decision_extension BEFORE INSERT ON decisions "
+            f'BEGIN SELECT COUNT(*) FROM "{retired_table}"; END'
+        )
+        before = {
+            table: connection.execute(f'SELECT * FROM "{table}"').fetchall()
+            for table in RETIRED_TABLES | {"decisions"}
+        }
+
+    with pytest.raises(RuntimeError, match=r"trigger .* still references retired table"):
+        migrated_db(database, upgrade_existing=True, target="0064_retired_capture_coaching_stores")
+
+    with sqlite3.connect(database) as connection:
+        assert _table_names(connection) >= RETIRED_TABLES
+        assert {
+            table: connection.execute(f'SELECT * FROM "{table}"').fetchall() for table in before
+        } == before

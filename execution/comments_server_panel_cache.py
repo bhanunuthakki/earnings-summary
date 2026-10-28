@@ -411,17 +411,6 @@ MUTATION_ROUTE_CACHE_REGISTRY: dict[str, CacheFamily] = {
         WORK_OS_EVALUATION_KIND,
         *FAMILY_PANEL_DECISIONS,
     ),
-    "/api/tenets/distill": (
-        *FAMILY_PANEL_OVERVIEW,
-        *FAMILY_PANEL_JOURNAL,
-        WORK_OS_EVALUATION_KIND,
-        *FAMILY_PANEL_DECISIONS,
-    ),
-    "/api/profile/fact/<int:fact_id>/affirm": (WORK_OS_EVALUATION_KIND,),
-    "/api/profile/fact/<int:fact_id>/reaffirm": (WORK_OS_EVALUATION_KIND,),
-    "/api/profile/fact/<int:fact_id>/reject": (WORK_OS_EVALUATION_KIND,),
-    "/api/profile/fact/<int:fact_id>/retire": (WORK_OS_EVALUATION_KIND,),
-    "/api/profile/fact/<int:fact_id>/update": (WORK_OS_EVALUATION_KIND,),
     # ---- Settings ----
     "/api/dcf-globals": (*FAMILY_PANEL_SETTINGS,),
     "/api/dcf/save": (
@@ -542,7 +531,6 @@ MUTATION_ROUTE_CACHE_REGISTRY: dict[str, CacheFamily] = {
     "/actions/resolve-issue": (*FAMILY_PANEL_OPERATIONS,),
     "/actions/run-eval": (*FAMILY_PANEL_OPERATIONS,),
     "/actions/run-scenario": (*FAMILY_PANEL_PORTFOLIO,),
-    "/actions/position-review": (*FAMILY_PANEL_DECISIONS, *FAMILY_PANEL_PORTFOLIO),
     "/actions/discovery-run": (*FAMILY_PANEL_OPERATIONS,),
     "/actions/discovery-build": (
         *FAMILY_PANEL_OPERATIONS,

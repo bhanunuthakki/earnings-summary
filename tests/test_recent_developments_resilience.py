@@ -1,48 +1,33 @@
-"""Recent-development output remains typed and failures do not populate cache."""
+"""§8 recent-developments must not raise on a transient empty / odd LLM response.
+
+Unlike the §6/§7 LLM sections, recent-developments performs NO structured parse —
+``generate_recent_developments`` returns markdown that is stored verbatim in
+``content_md``. This test pins that contract: an empty / non-JSON / odd response
+is stored as-is and the section builds OK, so the bug class (an unguarded parse
+of a live LLM response aborting ``build_report``) cannot be re-introduced here by
+a future change that starts parsing the response.
+"""
 
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from llm.contracts import RecentDevelopmentsPayload
 from report.models import RecentDevelopmentsSection, SectionStatus
-from report.renderers.workspace_data import structure_news_by_section
 from report.sections import recent_developments
 
 
-def _payload() -> RecentDevelopmentsPayload:
-    return RecentDevelopmentsPayload.model_validate(
-        {
-            "search_status": "events_found",
-            "window_start": "2026-06-01",
-            "window_end": "2026-06-08",
-            "queries_run": ["NU recent issuer news"],
-            "sources_opened": ["https://example.com/news"],
-            "events": [
-                {
-                    "category": "material_news",
-                    "tag": "EARNINGS",
-                    "headline": "NU reports results",
-                    "published_at": "2026-06-06",
-                    "publisher": "Issuer IR",
-                    "url": "https://example.com/news",
-                    "factual_summary": "The issuer reported its quarterly results.",
-                    "thesis_implication": "The report changes the credit growth watch.",
-                    "tone": "neu",
-                }
-            ],
-        }
-    )
-
-
 def _build(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    response: RecentDevelopmentsPayload,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, response: str
 ) -> RecentDevelopmentsSection:
-    def _fake_generate(*args: object, **kwargs: object) -> RecentDevelopmentsPayload:
+    """Run recent_developments.build with the news LLM stubbed to return
+    ``response``. ``force_refresh=True`` bypasses the on-disk cache so the stub
+    always runs; the anchor loaders read ``tmp_path`` and degrade to empty."""
+
+    def _fake_generate(*args: object, **kwargs: object) -> str:
         del args, kwargs
         return response
 
@@ -52,54 +37,43 @@ def _build(
     )
 
 
-def test_build_stores_typed_output_and_cache(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "response",
+    [
+        "",  # empty completion
+        "   \n  ",  # whitespace-only
+        "```json\n```",  # fenced but empty
+        "[1, 2, 3]",  # JSON array — no parse, stored as-is
+        "### Material news\n- **Thing happened** — implication. [Source: X]",  # normal
+    ],
+)
+def test_build_stores_response_verbatim_without_raising(
+    response: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    response = _payload()
     section = _build(monkeypatch, tmp_path, response)
+    # No structured parse → whatever came back is stored as content; the build
+    # never raises regardless of the response's shape.
     assert section.status == SectionStatus.OK
-    assert section.structured_output == response
-    assert section.events[0].url == "https://example.com/news"
-    assert section.content_md is not None
-    cache_path = tmp_path / recent_developments.NEWS_CACHE_DIRNAME / "NU.json"
-    cached = getattr(recent_developments, "_read_cache")(tmp_path, cache_path, ttl_days=7)
-    assert cached is not None
-    assert cached.structured_output == response
+    assert section.content_md == response
     assert section.cached_at is not None
 
 
-def test_legacy_markdown_cache_requires_explicit_refresh(tmp_path: Path) -> None:
+def test_existing_markdown_cache_replays_without_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     cache_path = tmp_path / recent_developments.NEWS_CACHE_DIRNAME / "NU.json"
     cache_path.parent.mkdir(parents=True)
+    content = "### Material news\n- **Existing event** — Recorded context. [Source: Issuer]"
     cache_path.write_text(
-        '{"cached_at":"2026-06-01T00:00:00+00:00","content_md":"old"}',
+        json.dumps({"cached_at": datetime.now(UTC).isoformat(), "content_md": content}),
         encoding="utf-8",
     )
-    section = recent_developments.build("NU", tmp_path, enable_llm=True)
-    assert section.status == SectionStatus.MISSING_DATA
-    assert section.missing is not None
-    assert "--refresh-news" in (section.missing.fix_command or "")
 
+    def no_generation(*args: object, **kwargs: object) -> str:
+        raise AssertionError("Completed Markdown cache must replay without a model call")
 
-def test_workspace_news_uses_typed_events_not_markdown_parse() -> None:
-    section = RecentDevelopmentsSection(
-        status=SectionStatus.OK,
-        content_md="### Legal\n- **untrusted text** — not a typed event",
-        structured_output=_payload(),
-    )
-    tiles = structure_news_by_section(section)
-    assert list(tiles) == ["Material events"]
-    assert tiles["Material events"][0].tag == "EARNINGS"
-    assert tiles["Material events"][0].url == "https://example.com/news"
+    monkeypatch.setattr(recent_developments, "generate_recent_developments", no_generation)
+    section = recent_developments.build("NU", tmp_path, enable_llm=False)
 
-
-def test_invalid_event_date_or_unopened_source_fails_contract() -> None:
-    payload = _payload().model_dump()
-    payload["events"][0]["published_at"] = "2026-99-06"
-    with pytest.raises(ValueError):
-        RecentDevelopmentsPayload.model_validate(payload)
-
-    payload = _payload().model_dump()
-    payload["events"][0]["url"] = "https://example.com/other"
-    with pytest.raises(ValueError):
-        RecentDevelopmentsPayload.model_validate(payload)
+    assert section.status == SectionStatus.OK
+    assert section.content_md == content

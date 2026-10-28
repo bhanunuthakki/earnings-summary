@@ -10,10 +10,8 @@ render as no-ops there by design (see ``tests/test_workspace_golden.py``).
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from datetime import UTC, date, datetime
 from io import StringIO
-from pathlib import Path
 
 from report.models import (
     CellSource,
@@ -29,7 +27,6 @@ from report.renderers.workspace_data import KpiStripTile, select_kpi_strip
 from report.renderers.workspace_html import (
     _kpi_tile,
     _newest_quarter_ingested_at,
-    _position_coaching,
     _reread_strip,
     _verdict_badge,
 )
@@ -267,109 +264,6 @@ def test_quarter_broadcast_js_present() -> None:
     assert "quarterGroups.forEach(function (other)" in JS
     assert "other.querySelector('button[data-quarter=\"' + q + '\"]')" in JS
     assert "swapQuarterGroup(other, q)" in JS
-
-
-# ---------------------------------------------------------------------------
-# 5. Position-tab coaching lines
-# ---------------------------------------------------------------------------
-
-
-def test_position_coaching_keeps_guard_history_without_retired_exercise() -> None:
-    out = StringIO()
-    _position_coaching(out, "TEST", 3, None)
-    html = out.getvalue()
-    # With reviews on record the guard has fired -- the phrase is derived from
-    # the count, so it must NOT still claim the guard "never run" (the bug this
-    # test guards against: a literal "never run" beside a live non-zero count).
-    assert "Guard: consulted during 3 position reviews" in html
-    assert "never run" not in html
-    assert "/socratic/" not in html
-    assert "Review this position" not in html
-    # No graded-sells line yet -- that ledger is a parallel, unmerged PR.
-    assert "graded" not in html.lower()
-
-
-def test_position_coaching_zero_reviews_keeps_honest_never_run() -> None:
-    # Honest-zero starvation wording: no review has ever run the guard here.
-    out = StringIO()
-    _position_coaching(out, "TEST", 0, None)
-    html = out.getvalue()
-    assert "Guard: never run on this name" in html
-    assert "0 position reviews" in html
-    assert "consulted" not in html
-
-
-def test_position_coaching_singular_review_count() -> None:
-    out = StringIO()
-    _position_coaching(out, "TEST", 1, None)
-    html = out.getvalue()
-    assert "Guard: consulted during 1 position review" in html
-    assert "1 position reviews" not in html
-    assert "never run" not in html
-
-
-def test_position_coaching_includes_graded_sell_line_when_provided() -> None:
-    out = StringIO()
-    _position_coaching(out, "TEST", 2, "3 of 4 graded sells beat a 90-day hold (75%).")
-    html = out.getvalue()
-    assert "3 of 4 graded sells beat a 90-day hold (75%)." in html
-
-
-def test_load_graded_sell_base_rate_absent_module_degrades_to_none(tmp_path: Path) -> None:
-    """``advisor.position_review.graded_sell_record`` does not exist on this
-    branch (a parallel PR adds it) -- the guarded import must return None,
-    never raise."""
-    from report.renderers.workspace_data import load_graded_sell_base_rate
-
-    db_path = tmp_path / "portfolio.db"
-    db_path.touch()
-    assert load_graded_sell_base_rate("TEST", db_path) is None
-
-
-def _raw_advisor_memos_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
-    """A minimal ``advisor_memos`` table built with raw sqlite3 (no alembic) --
-    just the columns ``advisor.store.list_memos`` selects, so the count
-    loader can be exercised without the full migration chain."""
-    import sqlite3
-
-    db_path = migrated_db(tmp_path / "portfolio.db")
-    conn = sqlite3.connect(str(db_path))
-    rows = [
-        ("bhanu", "position_review", "TEST", "First review"),
-        ("bhanu", "position_review", "TEST", "Second review"),
-        ("bhanu", "position_review", "OTHER", "Different ticker"),
-        ("bhanu", "next_dollar", "TEST", "Not a position review"),
-    ]
-    for user_id, kind, ticker, title in rows:
-        conn.execute(
-            "INSERT INTO advisor_memos "
-            "(user_id, kind, ticker, title, body_md, score_status, created_at) "
-            "VALUES (?, ?, ?, ?, 'body', 'pending', '2026-06-01T00:00:00')",
-            (user_id, kind, ticker, title),
-        )
-    conn.commit()
-    conn.close()
-    return db_path
-
-
-def test_position_review_count_loader_counts_only_this_tickers_kind(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
-    from advisor.store import count_memos
-
-    db_path = _raw_advisor_memos_db(tmp_path, migrated_db)
-    assert count_memos(ticker="TEST", kind="position_review", db_path=db_path) == 2
-    assert count_memos(ticker="OTHER", kind="position_review", db_path=db_path) == 1
-    assert count_memos(ticker="NOTHELD", kind="position_review", db_path=db_path) == 0
-
-
-def test_position_review_count_loader_reports_unavailable_without_db(tmp_path: Path) -> None:
-    from report.renderers.workspace_data import PanelAvailability, load_workspace_p3_panels
-
-    missing = tmp_path / "does_not_exist.db"
-    panels = load_workspace_p3_panels("TEST", tmp_path, db_path=missing)
-    assert panels.position_review_count is None
-    assert panels.availability["position_review_count"] is PanelAvailability.UNAVAILABLE
 
 
 # ---------------------------------------------------------------------------

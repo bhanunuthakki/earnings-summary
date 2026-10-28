@@ -57,8 +57,7 @@ def test_empty_result_branches_require_search_evidence() -> None:
     structured = NEWS_STRUCTURING_TEMPLATE.body
     research = RESEARCH_FETCH_TEMPLATE.body
 
-    assert "`queries_run`" in recent and "`sources_opened`" in recent
-    assert "no_qualifying_events" in recent and "empty `events` list" in recent
+    assert "Searches run:" in recent and "Window covered:" in recent
     assert "A bare [] is INVALID" in structured
     assert '"source":"SEARCH_EVIDENCE"' in structured
     assert "search_evidence" in research
@@ -100,7 +99,7 @@ def test_news_structuring_search_evidence_guard_rejects_empty_escape_hatch(
 
 
 def test_web_prompt_treatments_bump_human_versions() -> None:
-    assert prompt_version_for("recent_developments") == "v4"
+    assert prompt_version_for("recent_developments") == "v3"
     assert prompt_version_for("news_structuring") == "v3"
     assert prompt_version_for("research_fetch") == "v2"
 

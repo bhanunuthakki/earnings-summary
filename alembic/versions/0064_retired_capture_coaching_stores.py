@@ -45,6 +45,19 @@ def _assert_no_unexpected_dependencies(connection: Connection) -> None:
         raise RuntimeError(f"retired-store migration is missing expected tables: {missing}")
 
     for row in connection.exec_driver_sql(
+        "SELECT name, tbl_name, sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL"
+    ).fetchall():
+        trigger_name, source_table, sql = str(row[0]), str(row[1]), str(row[2])
+        if source_table.lower() in _DROP_ORDER:
+            continue  # SQLite drops these triggers with their owning table.
+        for table_name in _DROP_ORDER:
+            pattern = rf"(?<![A-Za-z0-9_]){re.escape(table_name)}(?![A-Za-z0-9_])"
+            if re.search(pattern, sql, re.I):
+                raise RuntimeError(
+                    f"trigger {trigger_name!r} still references retired table {table_name!r}"
+                )
+
+    for row in connection.exec_driver_sql(
         "SELECT name, sql FROM sqlite_master WHERE type='view' AND sql IS NOT NULL"
     ).fetchall():
         view_name, sql = str(row[0]), str(row[1])

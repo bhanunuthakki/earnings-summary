@@ -1,19 +1,7 @@
-"""Tests for the Claude-session bridge's READ surface (B8,
-execution/session_context_pack.py).
-
-One fully-migrated tmp-db fixture (the ``migrated_db`` template
-pattern — every real migration runs in order against the bootstrap tables
-``db.py``'s ``init_db()`` normally creates, so the pack is validated against
-the true production schema). Seeds one tenet, one stance, one open musing,
-one owner decision; calls ``build_pack`` directly (no subprocess) and asserts each
-section renders its seed, the empty-section behavior for research-task
-prompts (no ``research_tasks`` row carries a ``session_prompt`` in its
-the legacy ``run_id`` metadata field in this fixture), and that the whole build is zero-LLM.
-"""
+"""Read-only chat context: process tenets, explicit notes and decisions."""
 
 from __future__ import annotations
 
-import json
 import sqlite3
 import sys
 from collections.abc import Callable
@@ -85,29 +73,21 @@ def test_pack_renders_seeded_tenet(db_path: Path) -> None:
     assert "`[tenet:exit-discipline]`" in pack
 
 
-def test_pack_renders_seeded_stance(db_path: Path) -> None:
+def test_pack_excludes_retired_generated_context(db_path: Path) -> None:
     record_insight(
         scope_key="MELI",
         kind="stance",
-        body_md="Conviction intact through the guidance cut.",
+        body_md="Obsolete generated conviction.",
         source_note_ids=[],
         watermark_id=None,
         db_path=db_path,
     )
     pack = session_context_pack.build_pack(db_path)
-    assert "### Stances" in pack
-    assert "**MELI**" in pack
-    assert "Conviction intact through the guidance cut." in pack
-
-
-def test_pack_renders_no_themes_as_empty_state(db_path: Path) -> None:
-    pack = session_context_pack.build_pack(db_path)
-    # No theme insight seeded in this fixture at all — the section still
-    # renders with the explicit empty-state note, never a crash or omission.
-    themes_idx = pack.index("### Themes")
-    next_section_idx = pack.index("## Open Questions")
-    themes_block = pack[themes_idx:next_section_idx]
-    assert "_None recorded._" in themes_block
+    assert "### Stances" not in pack
+    assert "### Themes" not in pack
+    assert "Obsolete generated conviction." not in pack
+    assert "## Owner Profile" not in pack
+    assert "## Research Tasks" not in pack
 
 
 def test_pack_renders_open_musing(db_path: Path) -> None:
@@ -146,123 +126,8 @@ def test_pack_renders_owner_decision_with_falsifier(db_path: Path) -> None:
     assert "GPU demand rolls over 2 quarters straight" in pack
 
 
-def test_pack_research_task_prompts_empty_when_none_carry_session_prompt(
-    db_path: Path,
-) -> None:
-    """No research_tasks row in this fixture carries a session_prompt in its
-    run_id metadata field, so the section renders an explicit 'none' note."""
-    pack = session_context_pack.build_pack(db_path)
-    assert "## Research Tasks -> Claude Session" in pack
-    section_idx = pack.index("## Research Tasks -> Claude Session")
-    profile_idx = pack.index("## Owner Profile")
-    block = pack[section_idx:profile_idx]
-    assert ("_None pending._" in block) or ("run_id` metadata column" in block)
-
-
-def test_pack_renders_session_prompt_from_run_id_metadata(db_path: Path) -> None:
-    conn = sqlite3.connect(str(db_path))
-    try:
-        now = "2026-07-20T00:00:00"
-        conn.execute(
-            "INSERT INTO research_tasks "
-            "(claim, ticker, status, run_id, created_at, updated_at) "
-            "VALUES (?, ?, 'proposed', ?, ?, ?)",
-            (
-                "does NU's NIM hold up?",
-                "NU",
-                json.dumps({"session_prompt": "# Research NU NIM\n\nUse primary sources."}),
-                now,
-                now,
-            ),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    pack = session_context_pack.build_pack(db_path)
-
-    assert "### Task #" in pack
-    assert "_Claim:_ does NU's NIM hold up?" in pack
-    assert "# Research NU NIM\n\nUse primary sources." in pack
-
-
-def test_pack_ignores_invalid_or_missing_task_metadata(db_path: Path) -> None:
-    conn = sqlite3.connect(str(db_path))
-    try:
-        now = "2026-07-20T00:00:00"
-        for metadata in ("not-json", json.dumps(["not", "an", "object"]), None):
-            conn.execute(
-                "INSERT INTO research_tasks "
-                "(claim, ticker, status, run_id, created_at, updated_at) "
-                "VALUES (?, ?, 'proposed', ?, ?, ?)",
-                ("unrenderable task", "NU", metadata, now, now),
-            )
-        conn.commit()
-    finally:
-        conn.close()
-
-    pack = session_context_pack.build_pack(db_path)
-    section_idx = pack.index("## Research Tasks -> Claude Session")
-    profile_idx = pack.index("## Owner Profile")
-    block = pack[section_idx:profile_idx]
-
-    assert "_None pending._" in block
-    assert "unrenderable task" not in block
-
-
-def test_pack_limits_to_newest_valid_task_prompts(db_path: Path) -> None:
-    conn = sqlite3.connect(str(db_path))
-    try:
-        now = "2026-07-20T00:00:00"
-        for index in range(12):
-            conn.execute(
-                "INSERT INTO research_tasks "
-                "(claim, ticker, status, run_id, created_at, updated_at) "
-                "VALUES (?, ?, 'proposed', ?, ?, ?)",
-                (
-                    f"valid task {index}",
-                    "NU",
-                    json.dumps({"session_prompt": f"Prompt {index}"}),
-                    now,
-                    now,
-                ),
-            )
-        # Newest row is malformed; it must not displace the newest ten valid
-        # prompts or make the guarded JSON predicate raise.
-        conn.execute(
-            "INSERT INTO research_tasks "
-            "(claim, ticker, status, run_id, created_at, updated_at) "
-            "VALUES (?, ?, 'proposed', ?, ?, ?)",
-            ("invalid newest task", "NU", "not-json", now, now),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    pack = session_context_pack.build_pack(db_path)
-    section_idx = pack.index("## Research Tasks -> Claude Session")
-    profile_idx = pack.index("## Owner Profile")
-    block = pack[section_idx:profile_idx]
-
-    assert block.count("### Task #") == 10
-    for index in range(2, 12):
-        assert f"Prompt {index}" in block
-    assert "\nPrompt 0\n" not in block
-    assert "\nPrompt 1\n" not in block
-    assert "invalid newest task" not in block
-
-
-def test_pack_owner_profile_empty_state(db_path: Path) -> None:
-    pack = session_context_pack.build_pack(db_path)
-    assert "## Owner Profile (affirmed)" in pack
-    assert "_None affirmed yet._" in pack
-
-
-def test_pack_wondering_flag_on_note_with_linked_research_task(db_path: Path) -> None:
-    """A musing with a linked research_tasks row (the 'wondering' outcome of
-    research.proposals.detect_and_create_task) is flagged inline — the note
-    itself never carries a context marker, so the flag is derived from the
-    join, not read off the note."""
+def test_pack_ignores_retired_task_metadata_on_explicit_note(db_path: Path) -> None:
+    """Old automatic task metadata cannot add a nudge to an explicit note."""
     note = create_note(
         ticker=None,
         kind="musing",
@@ -282,7 +147,7 @@ def test_pack_wondering_flag_on_note_with_linked_research_task(db_path: Path) ->
     finally:
         conn.close()
     pack = session_context_pack.build_pack(db_path)
-    assert "`[wondering]`" in pack
+    assert "`[wondering]`" not in pack
     assert "does the NU NPL trend really hold up under stress?" in pack
 
 
@@ -346,3 +211,15 @@ def test_main_writes_to_out_file(
     assert rc == 0
     assert out.exists()
     assert "# Research Session Context Pack" in out.read_text(encoding="utf-8")
+
+
+def test_pack_requires_database_authority(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("EARNINGS_SUMMARY_DB_PATH", raising=False)
+    with pytest.raises(ValueError, match="EARNINGS_SUMMARY_DB_PATH is required"):
+        session_context_pack.build_pack()
+
+
+def test_pack_uses_configured_database(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db_path))
+    record_tenet(body_md="Keep the owner process explicit.", scope_key="process", db_path=db_path)
+    assert "Keep the owner process explicit." in session_context_pack.build_pack()

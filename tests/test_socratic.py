@@ -1,4 +1,4 @@
-"""Retired exercise entrypoints cannot dispatch; stored exercise history survives."""
+"""Retired exercise entrypoints cannot dispatch or create a memo."""
 
 from __future__ import annotations
 
@@ -43,5 +43,6 @@ def test_retired_exercise_routes_are_absent_without_dispatch(
     assert registry.list_jobs() == []
     assert list_memos(db_path=db) == []
     rules = {rule.rule for rule in app.url_map.iter_rules()}
-    assert "/actions/position-review" in rules
+    assert "/actions/position-review" not in rules
+    assert "/api/earnings-readout/generate" in rules
     assert "/actions/advisor-memo" not in rules

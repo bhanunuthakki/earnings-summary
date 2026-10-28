@@ -46,7 +46,6 @@
     "ir_browser_assisted_fetch.md": {"class": "runbook", "summary": "Browser-assisted IR fallback procedure.", "governed_by": ["data_pipeline_dag.md", "data_provenance.md"]},
     "ir_events_ingestion.md": {"class": "draft", "summary": "Unapproved forward IR event ingestion proposal."},
     "key_metrics_picker.md": {"class": "history", "summary": "Shipped key-metrics picker as-built record."},
-    "ledger_seed_2026_06.md": {"class": "history", "summary": "Historical Ledger seed corpus description."},
     "llm_calls.md": {"class": "canonical", "summary": "Live LLM call, transport, ledger, and artifact-lifecycle contract.", "authority_domains": ["llm_runtime"]},
     "llm_evals.md": {"class": "canonical", "summary": "Stage-calibrated LLM quality and failure contract.", "authority_domains": ["llm_quality"]},
     "llm_evals_plan.md": {"class": "history", "summary": "Completed LLM eval build plan."},

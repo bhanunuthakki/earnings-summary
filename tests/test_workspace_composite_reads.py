@@ -74,7 +74,6 @@ def test_composite_connection_measurement(
         panels = load_workspace_p3_panels("TEST", tmp_path, db_path=workspace_database)
         durations.append((perf_counter() - started) * 1000)
         per_run.append(calls - before)
-        assert panels.position_review_count == 1000
         assert len(panels.macro_sensitivities) == 1
     print(
         json.dumps(
@@ -149,7 +148,6 @@ def test_bundle_preserves_borrowed_connection_and_transaction(
         panels = load_workspace_p3_panels("TEST", tmp_path, conn=conn)
         assert panels.availability["macro_sensitivities"] is PanelAvailability.PRESENT
         assert panels.availability["standing_rules"] is PanelAvailability.EMPTY
-        assert panels.position_review_count == 1000
         assert conn.row_factory is None
         assert conn.in_transaction
         assert conn.execute("SELECT 1").fetchone() == (1,)
@@ -164,101 +162,7 @@ def test_missing_configuration_and_unavailable_authority_are_distinct(tmp_path: 
     unavailable = load_workspace_p3_panels("TEST", tmp_path, db_path=tmp_path / "missing.sqlite")
     assert set(offline.availability.values()) == {PanelAvailability.NOT_CONFIGURED}
     assert set(unavailable.availability.values()) == {PanelAvailability.UNAVAILABLE}
-    assert offline.position_review_count is None
-    assert unavailable.position_review_count is None
     assert not (tmp_path / "missing.sqlite").exists()
-
-
-def test_partial_failure_preserves_available_panels_and_owned_connection_closes(
-    workspace_database: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from report.renderers.workspace_data import PanelAvailability
-
-    conn = sqlite3.connect(workspace_database)
-    conn.execute("DROP TABLE advisor_memos")
-    conn.commit()
-
-    def opened(_path: str, *, role: SQLiteConnectionRole) -> sqlite3.Connection:
-        return conn
-
-    monkeypatch.setattr(p3_data, "connect_sqlite", opened)
-    panels = load_workspace_p3_panels("TEST", tmp_path, db_path=workspace_database)
-    assert panels.position_review_count is None
-    assert panels.availability["position_review_count"] is PanelAvailability.UNAVAILABLE
-    assert panels.availability["macro_sensitivities"] is PanelAvailability.PRESENT
-    assert panels.availability["standing_rules"] is PanelAvailability.EMPTY
-    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
-        conn.execute("SELECT 1")
-
-
-def test_query_failure_is_unavailable_and_restores_borrowed_connection(
-    workspace_database: Path, tmp_path: Path
-) -> None:
-    from report.renderers.workspace_data import PanelAvailability
-
-    conn = sqlite3.connect(workspace_database)
-    try:
-        conn.execute("ALTER TABLE advisor_memos RENAME COLUMN kind TO unavailable_kind")
-        panels = load_workspace_p3_panels("TEST", tmp_path, conn=conn)
-        assert panels.availability["position_review_count"] is PanelAvailability.UNAVAILABLE
-        assert panels.availability["macro_sensitivities"] is PanelAvailability.PRESENT
-        assert panels.position_review_count is None
-        assert conn.row_factory is None
-        assert conn.execute("SELECT 1").fetchone() == (1,)
-    finally:
-        conn.close()
-
-
-def test_memo_count_filters_and_has_no_list_limit(workspace_database: Path) -> None:
-    from advisor.store import count_memos
-
-    conn = sqlite3.connect(workspace_database)
-    try:
-        conn.executemany(
-            "INSERT INTO advisor_memos (user_id,kind,ticker,title,body_md,created_at) "
-            "VALUES ('bhanu','position_review','TEST','Synthetic','fixture','2026-05-01')",
-            [()] * 10_001,
-        )
-        conn.executemany(
-            "INSERT INTO advisor_memos (user_id,kind,ticker,title,body_md,created_at) "
-            "VALUES (?,?,?,'Synthetic','fixture','2026-05-01')",
-            [
-                ("other", "position_review", "TEST"),
-                ("bhanu", "socratic", "TEST"),
-                ("bhanu", "position_review", "OTHER"),
-            ],
-        )
-        assert count_memos(ticker="test", kind="position_review", conn=conn) == 11_001
-        assert count_memos(ticker="TEST", kind="position_review", user_id="other", conn=conn) == 1
-        assert count_memos(ticker="TEST", conn=conn) == 11_002
-        assert count_memos(kind="position_review", conn=conn) == 11_002
-        assert count_memos(ticker="NONE", conn=conn) == 0
-        assert conn.in_transaction
-    finally:
-        conn.close()
-
-
-@pytest.mark.parametrize(
-    "load",
-    [
-        p3_data.load_macro_sensitivities,
-        p3_data.load_strategic_targets,
-        p3_data.load_customer_concentrations,
-        p3_data.load_lease_ladder,
-        p3_data.load_decision_history,
-        p3_data.load_saydo_verdicts,
-    ],
-)
-def test_accessors_preserve_borrowed_connection_and_row_factory(
-    workspace_database: Path, load: Callable[..., object]
-) -> None:
-    conn = sqlite3.connect(workspace_database)
-    try:
-        load("TEST", conn=conn)
-        assert conn.row_factory is None
-        assert conn.execute("SELECT 1").fetchone() == (1,)
-    finally:
-        conn.close()
 
 
 def test_peer_tracking_uses_supplied_database(workspace_database: Path, tmp_path: Path) -> None:
@@ -299,32 +203,6 @@ def test_peer_tracking_uses_supplied_database(workspace_database: Path, tmp_path
         conn.close()
 
 
-@pytest.mark.parametrize("review_count", [None, 0, 3])
-def test_position_coaching_does_not_turn_unavailable_history_into_zero(
-    review_count: int | None,
-) -> None:
-    from io import StringIO
-
-    from report.models import PortfolioPositionSection, SectionStatus
-    from report.renderers.workspace_sections.position import _position_tab
-
-    body = StringIO()
-    _position_tab(
-        body,
-        PortfolioPositionSection(status=SectionStatus.OK, held=True, total_quantity=10),
-        ticker="TEST",
-        position_review_count=review_count,
-    )
-    html = body.getvalue()
-    if review_count is None:
-        assert "Position review history is unavailable" in html
-        assert "never run" not in html
-    elif review_count == 0:
-        assert "Guard: never run on this name" in html
-    else:
-        assert "consulted during 3 position reviews" in html
-
-
 def test_unexpected_loader_failure_closes_owned_bundle_connection(
     workspace_database: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -359,8 +237,7 @@ def test_report_preparation_preserves_caller_connection(
         spec = ReportSpec.model_construct(
             ticker="TEST", repo_root=str(tmp_path), db_path=None, generation_date=date(2026, 10, 27)
         )
-        prepared = prepare_workspace_report(spec, conn=conn)
-        assert prepared.p3.position_review_count == 1000
+        prepare_workspace_report(spec, conn=conn)
         assert conn.row_factory is None
         assert conn.in_transaction
         conn.rollback()

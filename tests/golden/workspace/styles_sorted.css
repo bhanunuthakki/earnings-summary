@@ -610,8 +610,6 @@
 .picker-btn { padding: var(--sp-1) var(--sp-2); font-size: var(--fs-caption); }
 .picker-btn { padding: var(--sp-1) var(--sp-2); font-size: var(--fs-caption); }
 .pos { color: var(--ok); }
-.position-coaching .coaching-line { margin: 0; }
-.position-coaching { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; padding: 0 0 var(--gap); }
 .position-stat { background: var(--surface); padding: var(--sp-4) var(--sp-4); }
 .position-stat-label { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: var(--sp-2); }
 .position-stat-sub { font-family: var(--mono); font-size: var(--fs-caption); margin-top: var(--sp-1); color: var(--muted); }

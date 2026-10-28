@@ -21,6 +21,7 @@ Landing notes and checkpoints makes no LLM call. Whole-session transcript captur
 automatic session distillation, Telegram capture, and automatic belief adoption
 are retired. Do not store the full chat as a replacement history library.
 
-`execution/session_context_pack.py` remains a read-only context interface. Its
-output is evidence for the agent; it does not grant collection, generation, or
+`execution/session_context_pack.py` reads current process tenets, explicit notes and
+owner decisions from an explicit or configured database. Generated stances, themes,
+old task prompts and the imported profile library are excluded. Its output is evidence for the agent; it does not grant collection, generation, or
 production-write authority.

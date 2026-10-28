@@ -178,12 +178,6 @@ _CODEX_JUDGMENT_MODEL = "gpt-5.6-sol"
 #       where latency dominates and the task is narrowly scoped
 #       (intake classification, per-line entity extraction).
 LLM_MODELS: dict[str, str] = {
-    # The Worldview distiller (P2). Distils owner-flagged (incorporated/saved)
-    # musings into candidate Tenets — beliefs about HOW the owner invests — each
-    # cited to the musings it rests on (deterministically validated before any
-    # Tenet is proposed). Analytical synthesis-with-citations, batch/optional +
-    # owner-tapped (never automatic), budget-capped skip-mode (0132) → Sonnet.
-    "tenet_distill": DEFAULT_MODEL,
     # The Ledger Phase-1 research loop (the two-pass trifecta firebreak): fetch
     # (web on, no writer) / adversarial assess / narrate (no web). Sonnet-tier
     # reasoning + web orchestration; monthly budgets seeded warn/warn/skip (0124),
@@ -238,16 +232,10 @@ LLM_MODELS: dict[str, str] = {
     # DEFAULT (Sonnet); the code spec is rare and never auto-applies.
     "thesis_entry_draft": DEFAULT_MODEL,
     "research_code_spec": DEFAULT_MODEL,
-    # Position-review verdict (src/advisor/position_review.py, the /review service).
-    # Judgment over the grounded pre-analysis + the owner's convictions, calibrated
-    # to his behavioral patterns → Sonnet-tier reasoning (latency unimportant, one
-    # call per on-demand review). A deterministic behavioral guardrail backstops the
-    # sell-winners-too-early rule regardless of the model's call.
-    "position_review": DEFAULT_MODEL,
     # Per-name DCF scenario prior (src/dcf/scenario_prior.py). Judgment over the
     # thesis/bear/KPI anchors to skew the Bull/Base/Bear weights that move
     # allocation → Sonnet-tier reasoning (one batch call per name, latency
-    # unimportant), like position_review. A non-degenerate simplex is enforced in
+    # unimportant), like scenario_prior. A non-degenerate simplex is enforced in
     # code and the owner's workbook edit always wins, so a bad call can't swing the
     # book; the scenario_prior golden set grades the directional skew.
     "scenario_prior": DEFAULT_MODEL,
@@ -255,7 +243,7 @@ LLM_MODELS: dict[str, str] = {
     # every portfolio name's thesis + tier-1 break-rule drivers, flagging
     # shared-driver concentration and directly contradictory theses. Cross-name
     # judgment over natural-language text -> Sonnet-tier reasoning, like
-    # scenario_prior/position_review; a low-frequency on-demand/cron call (the
+    # scenario_prior; a low-frequency on-demand/cron call (the
     # thesis set changes rarely), never on the render path (cached in
     # llm_artifacts, keyed by a thesis-set hash).
     "thesis_collision": DEFAULT_MODEL,
@@ -264,7 +252,7 @@ LLM_MODELS: dict[str, str] = {
     # controlled taxonomy ("Brazil consumer credit", "digital ad spend", …),
     # grounded in the C2 revenue mix + micro_thesis thesis text. Nuance-
     # sensitive judgment over natural-language + disclosed-mix inputs, same
-    # tier as thesis_collision/scenario_prior/position_review -> Sonnet-tier
+    # tier as thesis_collision/scenario_prior -> Sonnet-tier
     # reasoning. Per-ticker, on-demand/weekly-cron call, never on the render
     # path (cached in llm_artifacts, keyed by a mix+thesis input hash; see
     # that module's compute_input_sha).
@@ -643,26 +631,6 @@ LLM_MODELS: dict[str, str] = {
     # a claimed outcome label per citation) than tenet_distill's freer belief
     # synthesis; re-evaluate via the model-downgrade eval loop if quality
     # regresses once a golden/audit corpus accrues.
-    # Semantic tenet-tension detection (B5, synthesis.semantic_tension): a
-    # closed "restate/contradict which ONE shown tenet, or null" classification
-    # over <=15 rendered tenets, deterministically grounded before use (a
-    # fabricated token never resolves) — short, closed-schema, same shape as
-    # the bounded contradiction classifier uses the existing FAST tier.
-    "tenet_semantic_tension": FAST_CLASSIFIER_MODEL,
-    # Tenet accountability ledger (B5, synthesis.tenet_accountability — the
-    # sibling B5 workstream's file; registered here since this file is the one
-    # source of truth for LLM_MODELS/prompt_versions per the B5 PR split).
-    # Analytical judgment over a Tenet + the decisions it should have governed
-    # -> the default analytical tier (Sonnet), matching tenet_distill /
-    # session_distill's own tier for belief-level synthesis.
-    "tenet_accountability": DEFAULT_MODEL,
-    # Exit post-mortem drafting (B6, 2026-07-19 program overhaul,
-    # synthesis.exit_postmortem — a sibling B-workstream file; registered
-    # here since this file is the one source of truth for LLM_MODELS).
-    # Narrating why a closed position exited and what it taught from the
-    # ticker's own decision trail is judgment-heavy synthesis in the owner's
-    # voice, same shape as tenet_accountability/session_distill -> Sonnet.
-    "exit_postmortem_draft": DEFAULT_MODEL,
     # P3 boilerplate-vs-substance triage (filings.boilerplate_triage,
     # docs/design/disclosure_change_build_stack.md §P3). Deterministic
     # specificity scoring (filings.specificity) already resolves the

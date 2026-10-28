@@ -688,8 +688,9 @@ def test_build_portfolio_pack_grounds_universe_and_theses(tmp_path: Path, tracke
     assert "evaluation: EVA" in ctx
     assert "TST: Compounding test-ware monopoly" in ctx
     assert "/discovery list" in ctx
-    assert "/review <TICKER>" in ctx
-    assert "do not issue an in-chat trading recommendation" in ctx
+    assert "Stances are reserved" not in ctx
+    assert "/review <TICKER>" not in ctx
+    assert "do not issue an in-chat trading recommendation" in " ".join(ctx.split())
     assert "/socratic/" not in ctx
 
 

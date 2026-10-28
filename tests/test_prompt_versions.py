@@ -44,10 +44,15 @@ def test_retired_purposes_leave_the_active_registry() -> None:
         "triage_route_suggest",
         "musing_decision_extract",
         "behavior_distill",
+        "position_review",
+        "tenet_distill",
+        "tenet_accountability",
+        "tenet_semantic_tension",
+        "exit_postmortem_draft",
     }
     assert retired.isdisjoint(LLM_MODELS)
     assert retired.isdisjoint(prompt_versions.registered_purposes())
-    assert prompt_version_for("ask_answer") == "v2"
+    assert prompt_version_for("ask_answer") == "v3"
 
 
 def test_registry_is_the_single_bump_point(monkeypatch: pytest.MonkeyPatch) -> None:

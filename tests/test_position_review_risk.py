@@ -2,8 +2,7 @@
 + ``render_risk_lines`` + ``risk_prompt_block``, and their wiring into
 ``render_pre_analysis_chat``.
 
-Mirrors ``tests/test_position_review_capacity_block.py``'s shape and its
-byte-identical-when-empty discipline: every sub-leg (book risk share/corr,
+Preserves the byte-identical-when-empty discipline: every sub-leg (book risk share/corr,
 crowding cluster, C3 business-factor loadings, C5 event-scenario membership)
 degrades independently and never raises; when EVERY leg comes back empty the
 whole block is absent (``risk=None``) and ``/review`` renders EXACTLY as it
@@ -28,7 +27,6 @@ from advisor.position_review import (
     build_risk_context,
     render_pre_analysis_chat,
     render_risk_lines,
-    risk_prompt_block,
 )
 
 _START = date(2024, 1, 1)
@@ -272,8 +270,6 @@ _PRE_DEFAULT = PreAnalysis(
     at_price=None,
     mos_bar=0.30,
     valuation_verdict="fair",
-    conviction_encoded=True,
-    has_stance=True,
     has_decision_note=True,
     is_index_instrument=False,
 )
@@ -299,11 +295,12 @@ def test_chat_render_no_risk_lines_when_empty() -> None:
     assert "Event scenarios:" not in out
 
 
-def test_chat_render_risk_lines_appear_between_capacity_and_mechanical() -> None:
+def test_chat_render_keeps_risk_without_coaching() -> None:
     risk = RiskContext(risk_share_pct=14.0, corr_to_book=0.62)
     pre = replace(_PRE_DEFAULT, risk=risk)
     out = render_pre_analysis_chat(pre)
-    assert out.index("- Risk:") < out.index("- Mechanical read:")
+    assert "- Risk:" in out
+    assert "Mechanical read:" not in out
 
 
 # --------------------------------------------------------------------------- #
@@ -342,26 +339,3 @@ def test_render_risk_lines_partial_context_only_renders_populated_bits() -> None
 
 
 # --------------------------------------------------------------------------- #
-# risk_prompt_block — the verdict-prompt RISK line
-# --------------------------------------------------------------------------- #
-
-
-def testrisk_prompt_block_empty_for_none_and_empty_context() -> None:
-    assert risk_prompt_block(None) == ""
-    assert risk_prompt_block(RiskContext()) == ""
-
-
-def testrisk_prompt_block_contains_factors_and_scenarios() -> None:
-    risk = RiskContext(
-        risk_share_pct=14.0,
-        corr_to_book=0.62,
-        crowding_cluster="co-moves with NU (avg corr 0.91, 25% combined weight)",
-        top_factors=(("Brazil consumer credit", 0.9), ("LatAm consumer/FX", 0.7)),
-        event_scenarios=("joint_latam",),
-    )
-    block = risk_prompt_block(risk)
-    assert block.startswith("RISK:")
-    assert "14% of book risk" in block
-    assert "cluster: co-moves with NU" in block
-    assert "factors: Brazil consumer credit 0.9, LatAm consumer/FX 0.7" in block
-    assert "scenarios: joint_latam" in block

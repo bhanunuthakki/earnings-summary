@@ -37,13 +37,18 @@ from dcf.input_recipes import (
     verify_model_input_receipt,
 )
 from dcf.scenario_acceptance import ScenarioAcceptance, verify_scenario_acceptance
-from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
+from provenance.canonical_fact_resolution import (
+    CanonicalFactRead,
+    CanonicalFactResolutionEngine,
+)
 from provenance.fact_read_model import (
     FactAdmissionError,
     FactReadModel,
     ObservationUnavailableError,
+    ProvenanceBundleRead,
 )
 from provenance.metric_ontology import MetricOntology
+from provenance.source_fact_publication import publication_verification_scope
 from sources.discovery_financials import GrowthFactReference, read_financial_history
 from sources.market_price_policy import PRICE_STALE_DAYS
 
@@ -123,19 +128,40 @@ def _fact_references(evidence: DcfGradeEvidence) -> tuple[dict[str, object], ...
 
 
 def _admit_input(
-    reader: FactReadModel,
-    resolver: CanonicalFactResolutionEngine,
     ontology: MetricOntology,
     reference: dict[str, object],
     cutoff: datetime,
     canonical_inputs: dict[str, GrowthFactReference],
+    bundle_read: ProvenanceBundleRead | None,
+    current_read: CanonicalFactRead | None,
 ) -> FinancialInputEvidence:
     raw_id = reference.get("reported_observation_id")
     observation_id = raw_id if isinstance(raw_id, str) and raw_id else None
     if observation_id is None:
         return FinancialInputEvidence(status="missing", reason_code="run_input_observation_missing")
+    if bundle_read is None:
+        raise RuntimeError("readiness provenance batch omitted a requested observation")
+    if bundle_read.bundle is None:
+        failure = bundle_read.failure
+        if failure is None:
+            raise RuntimeError("readiness provenance batch returned an empty outcome")
+        if failure.reason_code == "observation_unavailable_at_cutoff":
+            return FinancialInputEvidence(
+                observation_id=observation_id,
+                status="missing",
+                reason_code="run_input_observation_unavailable_at_cutoff",
+            )
+        return FinancialInputEvidence(
+            observation_id=observation_id,
+            status="semantic_gap",
+            reason_code=(
+                "run_input_evidence_invalid"
+                if failure.reason_code == "fact_evidence_malformed"
+                else failure.reason_code
+            ),
+        )
+    bundle = bundle_read.bundle
     try:
-        bundle = reader.provenance_bundle(observation_id, cutoff=cutoff)
         canonical = canonical_inputs.get(observation_id)
         if canonical is None:
             return FinancialInputEvidence(
@@ -143,7 +169,10 @@ def _admit_input(
                 status="semantic_gap",
                 reason_code="run_input_outside_ticker_reported_financial_slice",
             )
-        current = resolver.as_known(canonical.canonical_metric_cell_id, cutoff)
+        if current_read is None:
+            raise RuntimeError("readiness resolver batch omitted a canonical cell")
+        CanonicalFactResolutionEngine.validate_as_known_read(current_read)
+        current = current_read.resolution
         definition = ontology.metric_definition_as_known(canonical.metric_id, cutoff)
         binding = ontology.binding_as_known(observation_id, cutoff)
         if (
@@ -216,29 +245,65 @@ def _legacy_inputs(
     source_context: SourceReadContext | None = None,
 ) -> tuple[FinancialInputEvidence, ...]:
     references = _fact_references(evidence)
-    canonical_inputs: dict[str, GrowthFactReference] = {}
-    if references:
-        history = read_financial_history(
-            conn,
-            ticker,
-            as_of=cutoff.date(),
-            concepts=(
-                "revenue",
-                "gross_profit",
-                "operating_income",
-                "free_cash_flow",
-                "net_income",
-            ),
+    with publication_verification_scope(conn):
+        canonical_inputs: dict[str, GrowthFactReference] = {}
+        if references:
+            history = read_financial_history(
+                conn,
+                ticker,
+                as_of=cutoff.date(),
+                concepts=(
+                    "revenue",
+                    "gross_profit",
+                    "operating_income",
+                    "free_cash_flow",
+                    "net_income",
+                ),
+            )
+            canonical_inputs = {item.observation_id: item for item in history.references}
+            reasons.extend(history.reason_codes)
+
+        reader = FactReadModel(conn, source_context=source_context)
+        resolver = CanonicalFactResolutionEngine(conn, source_context=source_context)
+        ontology = MetricOntology(conn)
+        observation_ids = tuple(
+            dict.fromkeys(
+                raw_id
+                for reference in references
+                if isinstance(raw_id := reference.get("reported_observation_id"), str) and raw_id
+            )
         )
-        canonical_inputs = {item.observation_id: item for item in history.references}
-        reasons.extend(history.reason_codes)
-    reader = FactReadModel(conn, source_context=source_context)
-    resolver = CanonicalFactResolutionEngine(conn, source_context=source_context)
-    ontology = MetricOntology(conn)
-    inputs = tuple(
-        _admit_input(reader, resolver, ontology, item, cutoff, canonical_inputs)
-        for item in references
-    )
+        bundle_reads = {
+            read.observation_id: read
+            for read in reader.provenance_bundles(observation_ids, cutoff=cutoff)
+        }
+        canonical_cell_ids = tuple(
+            dict.fromkeys(
+                canonical_inputs[observation_id].canonical_metric_cell_id
+                for observation_id in observation_ids
+                if observation_id in canonical_inputs
+            )
+        )
+        current_reads = {
+            read.canonical_metric_cell_id: read
+            for read in resolver.read_as_known_outcomes(canonical_cell_ids, cutoff)
+        }
+        inputs_list: list[FinancialInputEvidence] = []
+        for reference in references:
+            raw_id = reference.get("reported_observation_id")
+            observation_id = raw_id if isinstance(raw_id, str) and raw_id else None
+            canonical = canonical_inputs.get(observation_id) if observation_id else None
+            inputs_list.append(
+                _admit_input(
+                    ontology,
+                    reference,
+                    cutoff,
+                    canonical_inputs,
+                    bundle_reads.get(observation_id) if observation_id else None,
+                    current_reads.get(canonical.canonical_metric_cell_id) if canonical else None,
+                )
+            )
+        inputs = tuple(inputs_list)
     if not inputs:
         reasons.append("financial_input_lineage_missing")
     reasons.extend(item.reason_code for item in inputs if item.reason_code is not None)
@@ -631,6 +696,7 @@ def load_valuation_readiness(
         owns_snapshot = not conn.in_transaction
         if owns_snapshot:
             conn.execute("BEGIN")
+        conn.row_factory = sqlite3.Row
         return _assess(conn, ticker, cutoff, source_context, purpose, run_id)
     except sqlite3.Error:
         return ValuationReadiness(

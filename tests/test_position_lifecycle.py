@@ -317,14 +317,10 @@ def test_close_on_portfolio_exit_with_sell_enrichment(repo: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_close_logs_postmortem_pending_without_changing_tally(
+def test_close_records_outcome_without_scheduling_postmortem(
     repo: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The B6 hook fires a ``postmortem_pending`` log event exactly when a
-    close happens this run, carrying the close count — but the reconciler's
-    return contract (the exact tally dict every other test in this file
-    asserts on) is untouched, since drafting itself never runs inline here
-    (see position_lifecycle.py's hook comment)."""
+    """Closing a position preserves the tally without a generated-coaching nudge."""
     import logging
 
     _set_portfolio(repo, ["NU"])
@@ -351,8 +347,7 @@ def test_close_logs_postmortem_pending_without_changing_tally(
         for r in caplog.records
         if isinstance(r.msg, dict) and r.msg.get("event") == "postmortem_pending"
     ]
-    assert len(events) == 1
-    assert events[0]["closed_this_run"] == 1
+    assert events == []
 
 
 def test_no_close_does_not_log_postmortem_pending(

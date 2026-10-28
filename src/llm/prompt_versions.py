@@ -203,7 +203,7 @@ _PROMPT_VERSIONS: dict[str, str] = {
     "event_brief": "v2",  # event document text spotlighted
     # v3 (2026-08-03): transport-neutral search-first obligation and evidenced
     # no-news branch; model and transport are unchanged.
-    "recent_developments": "v4",
+    "recent_developments": "v3",
     "company_description": "v3",  # 10-K excerpts + IR blocks spotlighted
     "platform_diagram": "v2",  # 10-K + transcript excerpts spotlighted
     # The injection-canary golden SET (evals/golden/injection_canaries.json),
@@ -224,11 +224,6 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # materially rewritten and re-run `run_llm_evals.py --purpose <p>`.
     "earnings_themes_split": "v1",
     "qa_topics": "v1",
-    # The Worldview distiller (P2). Bump when the Tenet-distillation prompt is
-    # materially rewritten. v2 (2026-07-19): identity-level bar, conditional
-    # phrasing over flat contradictory rules, standing Tenets ride in and
-    # overlap must revise (reuse scope_key) instead of stacking, max 3.
-    "tenet_distill": "v2",
     # The async Decision Draft parser riding the landed capture note
     # (capture.decision_draft, P2.1 — PRD §9.2/§10.1). Bump with its prompt;
     # re-run `run_llm_evals.py --purpose decision_draft_parse`.
@@ -258,11 +253,6 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # The Ledger Phase-1 artifact drafters (thesis entry + code-change spec).
     "thesis_entry_draft": "v1",
     "research_code_spec": "v1",
-    # Position-review verdict (src/advisor/position_review.py). Bump when
-    # _build_verdict_prompt / _behavioral_rules is materially rewritten.
-    # v2 (PR5): rule 1's evidence is interpolated from the live
-    # graded_sell_record base rate instead of a hardcoded MU/GOOGL/TSM.
-    "position_review": "v2",
     # Per-name DCF scenario prior (src/dcf/scenario_prior.py, mode-A golden set).
     # Bump when the weight-setting prompt (dcf.scenario_prior._PROMPT) is materially
     # rewritten, then re-run `run_llm_evals.py --purpose scenario_prior`.
@@ -285,19 +275,6 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # the prompt is materially rewritten, then re-run
     # `run_llm_evals.py --purpose segment_10q_period_disambiguate`.
     "segment_10q_period_disambiguate": "v1",
-    # Semantic tenet-tension detection (B5, synthesis.semantic_tension._build_prompt).
-    # Bump when the restate/contradict prompt is materially rewritten, then
-    # re-run any golden-set eval added for this purpose.
-    "tenet_semantic_tension": "v1",
-    # Tenet accountability ledger (B5, synthesis.tenet_accountability — the
-    # sibling B5 workstream's file). Registered here since this file is the
-    # one source of truth for prompt versions.
-    "tenet_accountability": "v1",
-    # Exit post-mortem drafting (B6, 2026-07-19 program overhaul,
-    # synthesis.exit_postmortem._build_prompt). Bump when the drafting
-    # prompt is materially rewritten, then re-run any golden-set eval added
-    # for this purpose.
-    "exit_postmortem_draft": "v1",
     # Business-factor taxonomy (C3, 2026-07-19 program overhaul Workstream C
     # keystone, src/risk_factors.py). IS the llm_artifacts cache key
     # alongside the per-ticker mix+thesis input hash — bumping it (e.g. after
@@ -330,7 +307,7 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # capture cohorts and eval attribution auditable.
     "advisor_swap_check": "v1",
     # Retired exercise referrals now use the existing governed /review command.
-    "ask_answer": "v2",
+    "ask_answer": "v3",
     "ask_claim_audit": "v1",
     "bear_case_grading": "v1",
     "canonicalize_segments": "v1",

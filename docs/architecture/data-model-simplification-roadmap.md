@@ -408,6 +408,26 @@ capture/disposition owner and prove read/recovery parity before routing new data
 If existing storage is insufficient, present that exact capability decision; do not
 invent financial context, weaken admission or add a second generic raw store.
 
+**Proposed existing-owner capture contract:** use a versioned typed capture in
+`EvidenceLedger`, with an `ExtractionRun` and locator-backed `EvidenceNode`
+children. The root contains metadata and ordered child IDs/hashes. Missing
+selections have explicit metadata and no invented cell address. Preserve each
+parser value with a tagged representation and retain unavailable dispositions.
+This records configured selections; it does not prove workbook completeness.
+
+Derive capture identity only from issuer/document identity, source bytes, full
+ordered configuration, parser version and selection window. Store the output
+digest separately. Exact replay verifies the complete graph and returns its
+original IDs and clocks. Changed output under the same input identity conflicts.
+Schema sufficiency and the capture reader remain unproved.
+
+Keep separate commit units: acquired source bytes/document; complete configured
+capture plus parse receipt; then one eligible period publication plus its receipt.
+A failed period cannot erase earlier committed periods. Record failure separately
+after rollback. Empty or rejected-only capture publishes no admitted facts and
+reports a skipped publication. Qualify these units through the actual producer,
+including exact replay, corruption and injected failures, before cutover.
+
 **MVP/proof:** same-workbook parser-to-publication equality, unknown/rejected/novel
 retention, exact replay/conflict and supersession results, and tested mid-period
 failure/recovery. Specify the new transaction boundary explicitly; current per-period
@@ -529,232 +549,39 @@ partial R6; terminal closure remains open until the inventory and these cuts qua
 
 ### R7 — Prepared analytical sections; renderers display results
 
-**Cut:** move panel loading and enrichment out of `workspace_html`/`workspace_data`
-into existing section/build owners. Replace Say/Do and news data → Markdown → data
-round trips with structured section output. Remove superseded render-time parsers,
-filter/cache machinery and independent context assembly for migrated sections.
+Move loading and enrichment out of the body renderer into existing build and
+section owners. The complete retained population must perform zero database,
+file, model or cache work from `render_report_body`. Prepare comments and access
+capabilities through their existing delivery owner outside that pure call.
+Retain their separate freshness/access rules and honest partial/unavailable states.
 
-Preserve specialized pre/post research, full narrative, source links and exports.
-Any LLM filtering/selection remains a qualified analytical operation with source,
-owner-context, cost and verification ownership; do not silently delete judgment.
-Historical artifacts retain reconstruction support. Extend existing report section
-models; avoid a parallel presentation fact database.
+The owner retired generated SayDo pairwise narratives, row selection and their
+Markdown/filter caches. Retained SayDo uses source-linked commitments,
+guidance/actual comparisons and recorded verdicts. It has no replacement
+narrative generator or historical narrative-adoption interface.
 
-**First section:** `SayDoSection`, retaining `SayDoCard` narrative and reusing or
-extending its existing structured rows. Do not assume `SayDoHistoricalMetric` alone
-covers every row currently selected from narrative. Prepare the complete supported
-population and owner-context selection before removing its Markdown parser/filter.
-**MVP/proof:** that section supports compact/full/evidence/export views with the
-same values, strategic selection, complete argument and source links. Rendering
-performs zero database/model work. Preserve invalidation on thesis/context/source
-changes and repair/recovery; qualify prompt/schema changes through existing LLM
-ops and financial-grounding gates. Demonstrate the result in the browser.
-The existing durable Copilot handoff stays; no duplicate chat system is proposed.
+The separate Recent developments write-up and four-quarter Q&A rollup are pending
+owner choices. Keep their current behavior until answered. Do not start new news
+or rollup generation, schema work or model qualification while that choice is
+pending. If retained, qualify the changed generation path through existing LLM and
+financial-grounding owners; if retired, remove its exclusive code and eligible
+history. Raw news/source links, individual transcript summaries and source-linked
+SayDo remain either way.
 
-**Terminal population:** Say/Do; Recent Developments/news tiles; and the current
-workspace P3 load population: macro sensitivities, strategic targets, customer
-concentration, leases, decision history, peer comparison, open notes, position
-review counts, standing rules and comparable-set context. Move each section's
-loading/analysis to its existing build owner, retaining availability and provenance.
-Also include graded-sell base rate, the you-said strip and comment boot data.
-The terminal inventory is **all database, file, model and cache work reachable from
-`render_report_body`**, not only this named starting list. Trace callees and assign
-each read to its existing preparation owner. An interactive comment/session boot
-read may belong to delivery composition rather than analysis; record its exact
-purpose and move it outside the pure render call with prepared input. That exception
-cannot hide analytical loading or claim that the end-to-end delivery performs no IO.
-Full R7 closes when these renderers perform no database, file, model or cache work
-and new Say/Do/news generation supplies structured data directly. Delete the
-render-time loaders/parsers/context assembly and redundant selection caches after
-their callers move. Preserve purpose-specific analytical calculations and formatting.
+Prepare retained macro sensitivities, strategic targets, customer concentration,
+leases, decision history, peers, open notes, current process rules and comparable
+context through existing section owners. Retired personal-coaching counts,
+guard/base-rate strips and automatic adoption are removed from this population.
+The terminal inventory is every retained read reachable from the body renderer,
+including comment boot data. Do not substitute a named subset for that closure.
 
-The first Say/Do checkpoint only prepares rows and selection before rendering; new
-generation still emits Markdown and the existing cache remains. It is a partial
-cut. Historical Markdown import remains a bounded compatibility adapter with no
-model call; it cannot qualify the new-generation round-trip retirement. Qualify
-structured generation and exact source/context/prompt/model cache identity through
-the existing section/artifact owners before deleting that import path for new work.
-Do not replace the cache merely during the first move or charge for regeneration
-to make historical artifacts fit a new schema.
-
-## Delivery order, subtraction and scope controls
-
-Gross baseline body sizes bound the candidate cuts below. These are AST physical
-line spans at c978523d (comments/docstrings included), not scanner noncomment LOC,
-net savings or promises to delete retained functionality. Moved bodies earn no net
-reduction credit; later wave accounting records actual deletion minus additions.
-
-| Unit | Named baseline procedures / gross body span |
-|---|---|
-| R1 | `_run_extraction`, `_safe_extract`, `_stage_extract_fmp_facts`: 3 bodies, 104 lines; duplicated 11-entry dispatch and 2 overrides counted separately as ownership, not extra measured lines. |
-| R2 | `_run_categorize` and `process_ticker`: 2 mixed adapter/orchestration bodies, 112 lines. Retain needed transport/input adapters; only obsolete registration decisions count as cuts. |
-| R3 | State adapter: 91-line file; four index processing procedures: 51 body lines. Replacement completion code offsets these gross spans. |
-| R4 | Automatic summary-KPI refresh membership and two comment-rebuild spawn blocks. The October 26 decision retires `extract_for_ticker`, `capture_for_ticker` and their summary CLI; keep shared original PDF capture helpers. |
-| R5 | `ingest_spreadsheet_kpis`: 79-line first-producer span. The separately measured terminal inventory identifies 10 disjoint financial/KPI write/bridge bodies totaling 1,645 baseline body lines, including 878 shared financial/KPI lines. Shared bodies earn deletion credit only after all writer and historical-reader obligations clear. |
-| R6 | `_BatchFactReadModel`: 38-line class, plus the named consumer loops/cache whose separate deletable spans need cutover accounting. |
-| R7 | Say/Do parser and filter: 2 bodies, 109 lines. Moving them to preparation earns zero net credit; structured generation and remaining render-path retirement must remove the round trip. |
-
-The [terminal cut inventory](../quality/backend-ingestion-retirement-inventory.md#measured-terminal-cut-population) uses
-body-only AST intervals, excluding signatures, so its 1,645-line R5 subtotal is
-not added to the table's first-producer span. Its earlier 888-line R4 retirement
-population is historical and superseded by the October 24 owner decision. Retained
-summary jobs, helpers and CLI earn no deletion credit. Gross spans are not net promises.
-
-- **Wave 1:** R1 FMP engine consolidation and R6 read batching, as separate reviewable
-  changes. These are structural cuts without waiting for native table retirement.
-- **Wave 2:** one R2 managed-IR family and R3 explicit-state/completion consolidation;
-  qualify one R7 typed-section frontend MVP alongside them. Make R4 extraction
-  explicit-only and expose its scope alongside existing reports, Ask and Analytics.
-- **Wave 3:** consolidate R5 publication one qualified producer/class at a time.
-  Retain original-source extraction and optional summary candidate discovery under
-  distinct admission rules. Do not require a whole-platform cutover.
-
-After Wave 1, show a cumulative before/after owner map and open feature-pruning
-assessment in parallel with later qualified cuts. Record each candidate's core-task
-use, actual route/scheduler/import dependencies, retained data and replacement.
-Bring concrete feature-removal choices to the owner; static non-reachability alone
-does not prove operational non-use. After an approved cut, remove its UI, route,
-backend and redundant tests together. Preserve unique invariant coverage.
-
-Seed that assessment with these existing operator surfaces, not analytical content:
-
-| Candidate | Evidence needed for an owner choice | Replacement or retained capability |
-|---|---|---|
-| Separate `fetch_ir_documents.py` and `fetch_ir_from_urls.py` CLI surfaces alongside `manage_issuer_document_sources.py` | Actual scheduled, script and owner invocations; argument/FYE/request-mode parity; denial and recovery behavior | One managed command with discovered/explicit-input adapters. Keep a thin old command if it has a distinct supported use; delete duplicate orchestration regardless. |
-| `process_ir_documents --regenerate-missing` as an independent completion/repair mode | Real operator use and callers; legacy-adoption and missing-projection recovery results | Existing artifact/attempt repair through the same processing owner, with zero regeneration for a committed body. Retain the user operation if needed, remove its file-existence success engine. |
-| Summary-number extraction | October 26 owner direction retires the summary-derived lane | Remove the CLI/refresh action/Explore button and exclusive engine; retain explicit original-source manifests and PDF capture. |
-
-These are assessment candidates, not approved feature deletions. If none removes
-real user friction or redundant ownership, retain the interfaces and still execute
-the named backend lane cuts. No analytical panel or depth is sacrificed to meet a
-source-size target. Physical financial-history deletion remains under §11 and its
-separate approval; it is not the mechanism for this roadmap's reduction.
-
-Each change records old procedure → owner, actual callers, old definitions removed,
-new abstractions added, and the remaining compatibility path with an explicit removal
-condition. Maintain one cumulative acquisition/processing/publication/read owner map
-for migrated source classes. Do not preserve the old active engine behind a feature
-flag after parity.
-For each wave, record before/after counts of owning procedures and dual authorities,
-including every addition as well as deletion, plus exact and near-miss duplicate
-scanner totals. Reuse the existing scanners with unchanged scope, rules and identity;
-do not make a changed measurement definition look like a reduction.
-Keep a code revert for code-only changes; persistent cutovers require bounded
-migration, reconciliation and tested rollback without discarding immutable history.
-CLI/process isolation remains where deadlines, native libraries or writer ownership
-require it; remove duplicated business logic, not purposeful process boundaries.
-
-First slices are milestones, not terminal acceptance. The per-unit populations above
-must have explicit remaining entries until their old procedures are deleted. Do
-not close the roadmap after its easy adapters/helpers move while automatic R4
-coupling or competing completion/publication owners remain. The October 26 scope retires the optional summary-derived candidate procedure. Missing source pairs still limit
-financial/native qualification; they do not authorize retiring that capability.
-Where the lossless R5 capture gate blocks a deletion, bring the exact decision to
-the owner and continue another qualified population. Do not add an alternate
-engine to report progress.
-
-The proposed structural exception is reviewed at the next producer-retirement
-checkpoint or **2026-10-30 Pacific**, whichever comes first. Its checkpoint receipt
-records the candidate +1,047 source lines and one additional >2,000-line module;
-these are historical candidate measurements, not permission to absorb later growth.
-At review, measure the current tree, report actual procedure deletions and remaining
-dual authorities, and record one owner disposition: close the exception with
-noncomment source LOC **≤ 562,282** and modules over 2,000 noncomment LOC **≤ 24**;
-otherwise explicitly re-approve the exact remaining delta with a named
-next deletion and review date; or choose a bounded code rollback/re-scope plan.
-No silent extension or automatic baseline refresh is allowed. An overdue review
-remains an open acceptance obligation. The date does not revoke existing code-work
-authorization, trigger automatic rollback/data deletion, start a scheduler or expand
-model/collection authority. Preserve unique history and recovery in any chosen plan.
-The exception's ≤ thresholds restore the original size limits; terminal < thresholds
-require an actual net cut after all named lane retirements. That distinction is deliberate.
-
-## Bounded acceptance scorecard
-
-| Change | Completion condition |
-|---|---|
-| R1 ownership | Two active batch engines become one: one dispatch/override registry, selection/order policy and executor. Delete the other active implementations and migrate callers. Test malformed income then valid segments: affected prerequisite-unavailable coordinates are blocked/degraded, never OK; independent periods and legitimate zeros stay usable. Audit extractor/receipt commit closures and preserve caller-pending work. |
-| R2 registration | For each supported family/media/calendar/input cell, move `process_ticker`, `register_urls` and applicable local-input callers to one managed registration owner; delete that cell's sidecar/categorizer success branch. Test denied automatic requested=False, real FYE, existing/changed bytes, partial commit, transport gaps, projection/effect recovery, foreign aliases and corrupt-index HOLD. Full closure requires the complete supported population, not the first calendar PDF cell. |
-| R3 adapter/completion | First delete `process_ir_documents_state.py` and move discovery/onboarding/refresh callers with explicit DB/state parity. Separately migrate quarter/event processing selectors and repair/history consumers; then delete processed-flag/file-existence completion decisions. Do not adopt legacy generated summaries. Remove unused history; preserve only actual retained financial provenance dependencies. Prove same-quarter identity, stale readability, atomic output/attempt persistence and zero-call replay/repair before completion cutover. |
-| R4 explicit procedures | Routine refresh/comment paths make zero summary-KPI calls. Retained explicit original-source extraction preserves context and quarantine; empty/unknown selections start no default collection. Retire unused history and extra narrative producers. Explore maps existing reports, manual procedures, Analytics and grounded Ask without a new execution or evidence owner. Verify real interaction, failure states and actual source cuts. |
-| R5 financial/KPI publication | Qualify every named financial and KPI producer through existing native publication/admission/resolution, with source/context, unknown/rejected capture, historical selection, correction, replay and transaction recovery parity. Full active-lane closure requires zero inventoried legacy product writes and zero product-time bridge population. Delete producer-specific legacy sequencing; delete the named shared bridge/resolution bodies only after their historical consumers qualify. Retained historical compatibility earns no deletion credit; §11 physical retirement remains separate. |
-| R7 prepared analysis | Close the full IO inventory reachable from `render_report_body`, including Say/Do, news, P3, graded-sell, you-said and comment boot data. Move calls to preparation or explicitly bounded delivery composition; delete render-time IO/context/filter procedures. A full-workspace renderer test must forbid DB/file/model/cache access, not just test one section. Prove full argument, selection, availability and citations across supported views; qualify structured new generation before claiming round-trip retirement. |
-| R6 reported populations | On the exact WIX-21 and SYNTH-8 populations in `.tmp/reader-reuse-comparison.json`, direct consumer rereads become zero and full-publication verification becomes once per distinct complete verifier-input key inside the operation. Keys include publication, semantic clock inputs and snapshot; K/O partitions remain distinct. Require at least 20% fewer SELECTs on each reported population. |
-| R6 derivations/failures | Count all recursive verification, not only outer reader calls. State each required key and any remaining repeated verification explicitly. Qualify an available derived report value plus stale, missing, corrupt and explicit-O cases before closing the unit. A required extra verification is an explicit reviewed exception, not a hidden exclusion from the count. |
-| R6 terminal ownership | Reconcile every actual scalar/batch/bundle/verifier caller against the named R6 inventory. Remove `_BatchFactReadModel`, duplicate snapshot/cache ownership, discovery/report scalar rereads and the named series selection/bundle cache loops; prove DCF/strict-adapter parity through the same owner. Keep R6 terminal status open until all inventoried callers qualify; WIX/SYNTH checkpoint performance alone cannot close it. |
-| Latency/setup | Use balanced paired operation timing, excluding instrumentation/setup, with at least five samples per side. Median operation latency must not regress by more than max(10%, 5 ms); one balanced repeat may resolve noise. Record cold/warm focused-test setup separately, including migrated-template cost. These small synthetic samples establish no production speedup. |
-| Net complexity | Record removed/added owning procedures, public operations, independent write/completion decisions, stores and compatibility paths. At least one old active engine/lane must be gone; moving copies behind a facade fails. No extra independent state/authority is accepted. Review any module/LOC ratchet change explicitly; do not loosen a scanner to pass. |
-| Terminal R1–R7 net reduction | Close every retained terminal population and its named old procedures, excluding the owner-retained R4 candidate engine, then measure noncomment source LOC **< 562,282** and near-miss duplicated LOC **< 9,753** against the retained original baselines. Report exact-duplicate totals and per-wave owner/dual-authority counts too. These are necessary net-cut conditions, not a claim of substantial reduction by themselves: the specified whole-lane retirements and retained analytical-depth gates must also pass. No arbitrary percentage, scanner loosening or physical-history deletion substitutes for them. |
-
-The numeric SELECT threshold is an implementation acceptance target, not an achieved
-result. If it proves incompatible with required integrity work, show the measured
-tradeoff and revise the acceptance decision explicitly. Do not weaken checks or
-count a helper-only change as the completed batch retirement.
-
-## Retained core-task acceptance
-
-Use these bounded cases with the relevant cuts and before feature pruning. They
-test one shared evidence flow; they are not a new test framework. For every affected
-path compare issuer, period/unit/basis, selected observation, cutoff, source links,
-missing/degraded states and retained analytical content. Fixtures remain hermetic.
-
-| Task/reference | Required retained result |
-|---|---|
-| NU PRE: `report_NU_2026-10-20_6c613e17e0dfc741faa5` | Pre-event expectations, watch items, thesis conditions and supporting history use the exact pre-event scope/cutoffs; later evidence cannot leak in. |
-| NU POST: `report_NU_2026-10-20_9998561c61f3404e62c9` | Actual changes versus the prior setup, surprises and thesis implications retain exact source/context links and separate physical/knowledge clocks. |
-| MELI deep research: `report_MELI_2026-10-20_169e43887147a28df9e8` | Retain full thesis/counter-case, assumptions, scenarios and sensitivities. Recalculate the workbook and compare relevant formulas/results with the cited inputs. Compact presentation preserves access to this depth. |
-| Research/Q&A from a selected report | Carry its immutable report identity, issuer, period, facts and citations into the answer context. Deeper work uses the held corpus; missing evidence produces an explicit gap/collection plan. No implicit collection or unrelated latest-report substitution. |
-| Portfolio/threshold decision | Use existing approved snapshot or synthetic holdings/threshold fixtures. Shared facts/calculations must produce the same supported allocation/hold/trim conditions, preserve assumptions and evidence, and expose unavailable inputs. No trade or live state action. |
-
-The retained NU/MELI artifacts are depth/comparison references, not accepted truth
-oracles. Their bytes were reconciled, but native and semantic acceptance remains
-unproved. Correctness comes from verified sources, formulas and applicable review.
-Record unexecuted checks as pending. A section-only render or identical artifact
-bytes cannot establish the broader product endpoint.
-
-Consolidate fixtures/setup with their owner change. Preserve unique financial,
-corruption, clocks, admission and recovery assertions. Use existing migrated_db;
-no new fixture framework or schema rebuilt per test. Run focused serial tests and
-applicable static, architecture, reachability and make check-fast gates. The earlier
-full-suite teardown failure was repaired and verified at a prior frozen checkpoint.
-The later 22,282-test pass binds `17cfdd5f`, not the current cleanup source. The
-current architecture ratchet still fails at 26 modules above 2,000 noncomment lines
-against its limit of 25. `pipeline/managed_ir_sources.py` is the new crossing
-relative to that baseline; moving code between files would not prove simplification.
-Root must complete the applicable integrated gate before release. Focused passing
-checks permit bounded implementation evidence, not an exception to that gate.
-
-For a blocked unit, name the exact missing capability and move to another qualified
-unit. After one bounded feasibility decision, bring the unresolved choice to the
-owner rather than repeat audits or add guards. Feature pruning can proceed from
-actual usage and core-task coverage after initial structural cuts; it does not wait
-for every producer migration or physical table deletion.
-
-No live state changes, collection, application model calls, deployment or physical
-retirement are authorized by this proposal. Legacy fact-plane physical retirement
-retains the §11 observation windows and separate final owner approval. Existing
-source artifacts, unknown/novel observations, histories and financial meanings stay.
-
-## Evidence and current state
-
-[Procedure inventory](../quality/backend-ingestion-retirement-inventory.md) records
-source callers and bounded retirement candidates. Existing test references are not
-new test passes. [Reader evidence](../quality/reader-initialization-evidence.md) and
-[spreadsheet audit](../quality/spreadsheet-publication-parity-audit.md) retain their
-precise proof limits. NU/MELI artifact byte reconciliation is not native/semantic
-acceptance. Report further parity only after it is actually executed.
-
-Groundwork before this execution included shared fiscal calendars, removal of two
-parser helpers, one summary database authority, and source-aware completion and
-correction handling. The first implementation checkpoint covers R1 consolidation
-and bounded R2/R3/R5/R6/R7 slices; R1 dependency truth and R6 terminal ownership remain
-open until the specified proofs and cuts qualify. Its receipt owns validation and review
-status. R4 and the unqualified parts remain open. No overall deletion percentage
-or production speedup is claimed. The three-Sol panel's original scores
-were ambition 91/92/91 and effectiveness 87/88/84, all REVISE. This revision addresses
-their required plan changes; that is a root disposition, not a new panel verdict.
-Those historical judgments do not establish the current proxy acceptance gate or
-replace deterministic implementation checks.
+Prove complete retained reader/export parity, current source/context invalidation,
+repair/recovery, no model calls on completed-product replay and pure rendering.
+Qualify changed owner-retained narratives with source-grounded evaluations, not
+renderer doubles alone. No parallel presentation fact store, automatic deleted
+output regeneration or general preservation of retired cache history is approved.
+Protect only exact retained decision, process, report or financial-source lineage.
+The existing durable Copilot handoff remains the chat owner.
 
 ### October 26 SayDo scope clarification
 

@@ -90,11 +90,6 @@ AUDIT_SPECS: dict[str, AuditSpec] = {
     "investment_decision_card": AuditSpec(
         "investment_decision_card", RUBRICS_DIR / "investment_decision_card.md"
     ),
-    # Position-review verdict (src/advisor/position_review.py, the /review service):
-    # grades the persisted position_review memos on whether the trim/hold/add call
-    # follows from the grounded facts, respects the owner's sell-winners-too-early
-    # calibration, cites a specific driver, and picks a fitting expression.
-    "position_review": AuditSpec("position_review", RUBRICS_DIR / "position_review.md"),
     # Ask advisory answer: the
     # conversational ask path's prose answers (ask_turns), graded on
     # grounding-correctness, risk/reward balance, calibration-vs-evidence, and

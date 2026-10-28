@@ -120,48 +120,6 @@ def register_advisor_routes(app: Flask, ctx: ServerContext) -> None:
             "artifact_id": result.artifact_id,
         }
 
-    @app.route("/actions/position-review", methods=["POST", "OPTIONS"])
-    def start_position_review():
-        """Run the full governed position review (PR5 — the calibration
-        feeder) as a streamed single-flight job: {"ticker": str}. Runs
-        ``execution/review_position.py <TICKER> --verdict`` — the LLM verdict +
-        deterministic behavioral guard, PERSISTING an ``advisor_memos`` row
-        (kind ``position_review``) so the review finally lands a gradeable
-        memo. The review peek's "Full calibrated review (LLM)" button POSTs
-        here and streams the job log in place."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        body = cast("dict[str, object]", request.get_json(silent=True) or {})
-        ticker = str(body.get("ticker", "")).strip().upper()
-        if not ticker:
-            return ({"error": "ticker required"}, 400)
-        argv = managed_python_argv(
-            repo_root,
-            repo_root / "execution" / "review_position.py",
-            ticker,
-            "--verdict",
-            "--db",
-            str(db_path),
-            # An in-app owner click — tag it so it counts in the Coach P&L (the
-            # CLI defaults to 'agent', which would exclude it).
-            "--source",
-            "doorway",
-        )
-        try:
-            job = job_registry.start(ticker=ticker, kind="position-review", argv=argv)
-        except RegistryConflict as e:
-            return ({"error": str(e)}, 409)
-        return (
-            {
-                "job_id": job.job_id,
-                "ticker": job.ticker,
-                "kind": job.kind,
-                "stream_url": f"/actions/stream/{job.job_id}",
-                "started_at": job.started_at.isoformat(),
-            },
-            201,
-        )
-
     @app.route("/actions/run-eval", methods=["POST", "OPTIONS"])
     def start_eval_run():
         """Run one purpose's LLM eval (llm_evals_plan §2.6) as a streamed

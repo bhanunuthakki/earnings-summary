@@ -45,7 +45,6 @@ from typing import Literal, TypedDict, cast
 
 import pytest
 
-from llm.contracts import RecentDevelopmentsPayload
 from pipeline.you_said import render_you_said_strip_for_path
 from report.models import (
     AppendixSection,
@@ -1096,56 +1095,6 @@ def _provenance() -> ProvenanceSection:
 
 
 def _news() -> RecentDevelopmentsSection:
-    structured = RecentDevelopmentsPayload.model_validate(
-        {
-            "search_status": "events_found",
-            "window_start": "2026-06-04",
-            "window_end": "2026-06-11",
-            "queries_run": ["TEST recent material news"],
-            "sources_opened": [
-                "https://example.com/copilot",
-                "https://example.com/marketplace",
-                "https://example.com/suit",
-            ],
-            "events": [
-                {
-                    "category": "material_news",
-                    "tag": "NEWS",
-                    "headline": "TEST ships AI workflow copilot to all tiers",
-                    "published_at": "2026-06-09",
-                    "publisher": "TechWire",
-                    "url": "https://example.com/copilot",
-                    "factual_summary": (
-                        "General availability lands two quarters ahead of the original roadmap."
-                    ),
-                    "thesis_implication": "",
-                    "tone": "neu",
-                },
-                {
-                    "category": "material_news",
-                    "tag": "NARRATIVE",
-                    "headline": "Marketplace crosses 1,000 certified integrations",
-                    "published_at": "2026-06-06",
-                    "publisher": "Company IR",
-                    "url": "https://example.com/marketplace",
-                    "factual_summary": "Ecosystem expansion supports the pricing-power thesis.",
-                    "thesis_implication": "",
-                    "tone": "pos",
-                },
-                {
-                    "category": "material_news",
-                    "tag": "LEGAL",
-                    "headline": "Patent suit from RIVL survives motion to dismiss",
-                    "published_at": "2026-06-05",
-                    "publisher": "CourtWatch",
-                    "url": "https://example.com/suit",
-                    "factual_summary": ("Damages exposure unquantified; trial date not yet set."),
-                    "thesis_implication": "",
-                    "tone": "neg",
-                },
-            ],
-        }
-    )
     return RecentDevelopmentsSection(
         status=SectionStatus.OK,
         cached_at=_TS,
@@ -1163,7 +1112,6 @@ def _news() -> RecentDevelopmentsSection:
             "unquantified; trial date not yet set. "
             "[Source: CourtWatch, 2026-06-05, https://example.com/suit]\n"
         ),
-        structured_output=structured,
     )
 
 

@@ -15,10 +15,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from llm.contracts import (
-    RecentDevelopmentEventPayload,
-    RecentDevelopmentsPayload,
-)
 from report.workspace_models import WorkspacePrepared
 from sources.discovery_market import DiscoveryMarketContext
 from sources.financial_growth_evidence import FinancialGrowthReference
@@ -1043,11 +1039,12 @@ class BearCaseSection(BaseModel):
 
 
 class RecentDevelopmentsSection(BaseModel):
-    """News + recent-developments brief sourced via grounded web search.
+    """News + recent-developments brief sourced via Claude WebSearch.
 
     Cached under `.tmp/news_cache/<TICKER>.json` with `cached_at` so that
-    successive brief regenerations within the TTL reuse the validated typed
-    output. `content_md` is a deterministic text rendering for existing readers.
+    successive brief regenerations within the TTL reuse the cached content.
+    `content_md` is rendered as-is in the HTML (sources inline as URLs in the
+    LLM output); no structural parsing keeps the section schema thin.
     """
 
     status: SectionStatus
@@ -1056,11 +1053,6 @@ class RecentDevelopmentsSection(BaseModel):
     cached_at: datetime | None = None
     news_days_window: int = 7
     content_md: str | None = None
-    structured_output: RecentDevelopmentsPayload | None = None
-
-    @property
-    def events(self) -> list[RecentDevelopmentEventPayload]:
-        return self.structured_output.events if self.structured_output is not None else []
 
 
 # ---------------------------------------------------------------------------

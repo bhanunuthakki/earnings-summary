@@ -187,7 +187,7 @@ def test_peek_memo_unknown_kind_and_missing_row_404(client: FlaskClient) -> None
 
 
 # ----------------------------------------------------------------------------
-# /api/peek/review (PR5 — the instant position-review read + escalation button)
+# /api/peek/review (deterministic position context)
 # ----------------------------------------------------------------------------
 
 
@@ -200,43 +200,11 @@ def test_peek_review_renders_deterministic_pre_analysis(client: FlaskClient) -> 
     assert not body.lstrip().lower().startswith("<!doctype")  # fragment, not a page
     assert "cc-review-peek" in body
     assert "RBRK" in body
-    assert "Mechanical read" in body
-    # The escalation button + its log target ride the footer.
-    assert "Full calibrated review (LLM)" in body
-    assert 'data-review-ticker="RBRK"' in body
-    assert "cc-review-log" in body
-
-
-def test_peek_review_carries_the_live_graded_base_rate(client: FlaskClient, db_path: Path) -> None:
-    conn = sqlite3.connect(str(db_path))
-    try:
-        for t in ("MU", "TSM", "NVDA", "AMZN", "GOOGL"):
-            conn.execute(
-                "INSERT INTO decisions (ticker, recommendation_kind, outcome_label, "
-                "decided_by, made_at, created_at) VALUES (?, 'sell', 'wrong', 'owner', "
-                "'2026-06-01', '2026-06-01')",
-                (t,),
-            )
-        for t in ("RBRK", "WIX", "NOW"):
-            conn.execute(
-                "INSERT INTO decisions (ticker, recommendation_kind, outcome_label, "
-                "decided_by, made_at, created_at) VALUES (?, 'trim', 'correct', 'owner', "
-                "'2026-06-01', '2026-06-01')",
-                (t,),
-            )
-        conn.commit()
-    finally:
-        conn.close()
-    body = client.get("/api/peek/review/RBRK").data.decode()
-    assert "Graded record on sells/trims: 5 of 8 wrong (AMZN, GOOGL, MU, NVDA, TSM)" in body
-    # n=8 < MIN_CONFIDENT_N — the calibration-guard hedge must reach the
-    # rendered surface, not just the raw line.
-    assert "n=8, low confidence" in body
-
-
-def test_peek_review_omits_base_rate_when_nothing_graded(client: FlaskClient) -> None:
-    body = client.get("/api/peek/review/RBRK").data.decode()
-    assert "Graded record on sells/trims" not in body
+    assert "Mechanical read" not in body
+    assert "Fundamentals:" in body
+    assert "Full calibrated review (LLM)" not in body
+    assert 'data-review-ticker="RBRK"' not in body
+    assert "cc-review-log" not in body
 
 
 # ----------------------------------------------------------------------------

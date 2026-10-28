@@ -8,14 +8,20 @@ import sqlite3
 import subprocess
 import sys
 from collections.abc import Callable
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
 
 import pytest
 from pydantic import ValidationError
 
 from execution.backfill_foreign_oracle import main
-from provenance.fact_read_model import FactReadModel
+from provenance.fact_read_model import (
+    FactReadModel,
+    ObservationUnavailableError,
+    ProvenanceBundle,
+)
 from sources.foreign_normalization_run import normalize_foreign_sources
 from sources.foreign_oracle_run import (
     ForeignOracleManifest,
@@ -117,6 +123,64 @@ def test_cli_reads_real_sealed_graph_and_reports_missing_comparison_inputs(
     assert receipt["publication_performed"] is False
     assert hashlib.sha256(database.read_bytes()).hexdigest() == before_hash
     assert "PARTIAL" in capsys.readouterr().out
+
+
+def test_observations_use_ordered_strict_bundle_batch(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sources import foreign_oracle_run
+
+    with sqlite3.connect(migrated_db(tmp_path / "fixture.db")) as conn:
+        manifest = seed_source_oracle(conn, tmp_path)
+        document_version_id = manifest.sources[0].document_version_id
+        read_observation_ids = cast(
+            "Callable[[sqlite3.Connection, str, datetime], tuple[str, ...]]",
+            getattr(foreign_oracle_run, "_observation_ids"),
+        )
+        read_observations = cast(
+            "Callable[[sqlite3.Connection, str, datetime], tuple[ProvenanceBundle, ...]]",
+            getattr(foreign_oracle_run, "_observations"),
+        )
+        retained_ids = read_observation_ids(conn, document_version_id, manifest.cutoff_at)
+        assert retained_ids
+        calls: list[tuple[tuple[str, ...], datetime]] = []
+        original_batch = FactReadModel.required_provenance_bundles
+
+        def reject_scalar(*_args: object, **_kwargs: object) -> ProvenanceBundle:
+            raise AssertionError("foreign oracle observations must use the strict batch API")
+
+        def record_batch(
+            reader: FactReadModel,
+            observation_ids: tuple[str, ...],
+            *,
+            cutoff: datetime,
+        ) -> tuple[ProvenanceBundle, ...]:
+            calls.append((observation_ids, cutoff))
+            return original_batch(reader, observation_ids, cutoff=cutoff)
+
+        requested_ids = (retained_ids[0], retained_ids[0])
+
+        def provide_ids(
+            _conn: sqlite3.Connection, _document_version_id: str, _cutoff: datetime
+        ) -> tuple[str, ...]:
+            return requested_ids
+
+        monkeypatch.setattr(foreign_oracle_run, "_observation_ids", provide_ids)
+        monkeypatch.setattr(FactReadModel, "provenance_bundle", reject_scalar)
+        monkeypatch.setattr(FactReadModel, "required_provenance_bundles", record_batch)
+        before = conn.total_changes
+        bundles = read_observations(conn, document_version_id, manifest.cutoff_at)
+        assert tuple(bundle.observation.observation_id for bundle in bundles) == requested_ids
+        assert calls == [(requested_ids, manifest.cutoff_at)]
+
+        requested_ids = (retained_ids[0], "not-a-retained-observation")
+        with pytest.raises(ObservationUnavailableError) as caught:
+            read_observations(conn, document_version_id, manifest.cutoff_at)
+        assert caught.value.observation_id == requested_ids[1]
+        assert calls[-1] == (requested_ids, manifest.cutoff_at)
+        assert conn.total_changes == before
 
 
 def test_changed_source_bytes_and_unpublished_v2_inputs_fail_closed(

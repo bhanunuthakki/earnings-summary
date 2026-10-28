@@ -2,9 +2,9 @@
 
 Two jobs:
 
-1. **News structurer** — maps validated events from
-   ``RecentDevelopmentsSection.structured_output`` into the design's tile
-   layout (date / tag / source / headline / gloss / tone).
+1. **News structurer** — parses the existing
+   ``RecentDevelopmentsSection.content_md`` into the design's tile layout
+   (date / tag / source / headline / gloss / tone).
 2. **KPI-strip picker** — selects up to N tier-1 KPI ledger rows that have
    enough history for a sparkline, and normalizes their formatting.
 
@@ -28,7 +28,6 @@ from report.sections.p3_data import (
     StandingRuleRow,
     StandingRulesPanel,
     WorkspaceP3Panels,
-    load_graded_sell_base_rate,
     load_standing_rules,
     load_workspace_p3_panels,
 )
@@ -38,6 +37,9 @@ from report.sections.p3_data import (
 # so the source text itself stays ASCII-only.
 _RSQUO = chr(0x2019)  # right single quote, short year prefix
 _TIMES = chr(0x00D7)  # multiplication sign, ratio multiplier
+_EMDASH = chr(0x2014)
+_ENDASH = chr(0x2013)
+_DASH_CHARS = _EMDASH + _ENDASH + "-"
 
 
 # ---------------------------------------------------------------------------
@@ -56,15 +58,105 @@ class NewsTile:
     url: str | None = None
 
 
-_NEWS_SECTION_TITLES = {
-    "material_news": "Material events",
-    "sector_context": "Sector / regulatory context",
-    "watch_this_week": "Watch this week",
+# Bullet shape:
+#   - **Headline text** — Gloss text. [Source: Publisher, YYYY-MM-DD, https://url]
+# Tolerant of em / en / hyphen dashes and missing URL.
+_NEWS_BULLET_RX = re.compile(
+    rf"""
+    ^\s*[-*]\s+               # bullet marker
+    \*\*(?P<headline>[^*]+)\*\*  # bold headline
+    \s*[{_DASH_CHARS}]+\s*    # em / en / hyphen separator
+    (?P<gloss>.+?)            # gloss text (lazy)
+    (?:\s*\[Source:\s*
+        (?P<source>[^,\]]+?)
+        (?:\s*,\s*(?P<date>\d{{4}}-\d{{2}}-\d{{2}}))?
+        (?:\s*,\s*(?P<url>https?://[^\]\s]+))?
+    \s*\])?                   # optional [Source: ...] tail
+    \s*$
+    """,
+    re.MULTILINE | re.VERBOSE,
+)
+
+
+# Lightweight tone classifier — only material/tags keywords. Sentence-level
+# parsing not worth the complexity for a 1-line gloss.
+_POS_WORDS = {
+    "rally",
+    "growth",
+    "wins",
+    "beat",
+    "exceed",
+    "accelerat",
+    "upgrade",
+    "expansion",
+    "record",
+    "all-time",
+    "tailwind",
+    "strong",
 }
+_NEG_WORDS = {
+    "damages",
+    "fine",
+    "suit",
+    "antitrust",
+    "lawsuit",
+    "downgrade",
+    "miss",
+    "decel",
+    "warn",
+    "outage",
+    "breach",
+    "risk",
+    "regulator",
+}
+_OPT_WORDS = {
+    "plan",
+    "intends",
+    "expects",
+    "guide",
+    "raised",
+    "yen bond",
+    "issuance",
+    "intent",
+    "deploy",
+    "preview",
+    "unveil",
+}
+
+# Tag inference from headline keywords. Same idea as tone but coarser.
+_TAG_RULES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bcapex|capital|bond|fund(ing|s)?\b", re.IGNORECASE), "CAPITAL"),
+    (re.compile(r"\bantitrust|suit|fine|regulator|court|FTC|EU|UK\b", re.IGNORECASE), "LEGAL"),
+    (re.compile(r"\bcloud|backlog|data center|infrastructure|TPU|GPU\b", re.IGNORECASE), "INFRA"),
+    (re.compile(r"\bgemini|model|chip|launch|product|release|app\b", re.IGNORECASE), "PRODUCT"),
+    (re.compile(r"\bearnings|revenue|guidance|forecast\b", re.IGNORECASE), "EARNINGS"),
+    (re.compile(r"\bcap|valuation|stock|market|rally\b", re.IGNORECASE), "NARRATIVE"),
+]
+
+
+def _classify_tone(headline: str, gloss: str) -> str:
+    text = (headline + " " + gloss).lower()
+    if any(w in text for w in _NEG_WORDS):
+        return "neg"
+    if any(w in text for w in _POS_WORDS):
+        return "pos"
+    if any(w in text for w in _OPT_WORDS):
+        return "opt"
+    return "neu"
+
+
+def _classify_tag(headline: str) -> str:
+    for pattern, tag in _TAG_RULES:
+        if pattern.search(headline):
+            return tag
+    return "NEWS"
+
+
+_NEWS_SECTION_HEADER_RX = re.compile(r"^###\s+(?P<title>.+?)\s*$", re.MULTILINE)
 
 
 def structure_news(section: RecentDevelopmentsSection, limit: int = 5) -> list[NewsTile]:
-    """Return the first event category for older single-list callers."""
+    """Back-compat single-list parse of the first section of ``content_md``."""
     by_section = structure_news_by_section(section, limit_per_section=limit)
     if not by_section:
         return []
@@ -74,28 +166,57 @@ def structure_news(section: RecentDevelopmentsSection, limit: int = 5) -> list[N
 def structure_news_by_section(
     section: RecentDevelopmentsSection, limit_per_section: int = 8
 ) -> dict[str, list[NewsTile]]:
-    """Map validated generated events into the renderer's section layout."""
-    if section.structured_output is None:
+    """Parse ``content_md`` into ``{section_title: [NewsTile, ...]}`` mapping.
+
+    Splits the markdown on H3 (``### title``) headers and runs the bullet
+    parser against each chunk's body. Sections with no recognisable bullets
+    are dropped. Section title order is preserved from the source.
+    """
+    md = section.content_md or ""
+    if not md:
         return {}
-    grouped: dict[str, list[NewsTile]] = {}
-    for event in section.structured_output.events:
-        title = _NEWS_SECTION_TITLES[event.category]
-        rows = grouped.setdefault(title, [])
-        if len(rows) >= limit_per_section:
-            continue
-        gloss = f"{event.factual_summary} {event.thesis_implication}".strip().rstrip(".")
-        grouped[title].append(
+    headers = list(_NEWS_SECTION_HEADER_RX.finditer(md))
+    if not headers:
+        # Source has no H3 sections — fall back to a single "Material events"
+        # bucket so the renderer still has something to show.
+        tiles = _parse_news_bullets(md, limit_per_section)
+        return {"Material events": tiles} if tiles else {}
+    out: dict[str, list[NewsTile]] = {}
+    for i, h in enumerate(headers):
+        title = h.group("title").strip()
+        body_start = h.end()
+        body_end = headers[i + 1].start() if i + 1 < len(headers) else len(md)
+        chunk = md[body_start:body_end]
+        tiles = _parse_news_bullets(chunk, limit_per_section)
+        if tiles:
+            out[title] = tiles
+    return out
+
+
+def _parse_news_bullets(chunk: str, limit: int) -> list[NewsTile]:
+    tiles: list[NewsTile] = []
+    for m in _NEWS_BULLET_RX.finditer(chunk):
+        headline = m.group("headline").strip()
+        gloss = m.group("gloss").strip().rstrip(".")
+        gloss = re.sub(r"\*\*([^*]+)\*\*", r"\1", gloss)
+        gloss = re.sub(r"\*([^*]+)\*", r"\1", gloss)
+        date = (m.group("date") or "").strip()
+        source = (m.group("source") or "").strip()
+        url = (m.group("url") or "").strip() or None
+        tiles.append(
             NewsTile(
-                tag=event.tag,
-                date=event.published_at[:10],
-                source=event.publisher,
-                headline=event.headline,
+                tag=_classify_tag(headline),
+                date=date,
+                source=source,
+                headline=headline,
                 gloss=gloss,
-                tone=event.tone,
-                url=event.url,
+                tone=_classify_tone(headline, gloss),
+                url=url,
             )
         )
-    return grouped
+        if len(tiles) >= limit:
+            break
+    return tiles
 
 
 # ---------------------------------------------------------------------------
@@ -417,7 +538,6 @@ __all__ = [
     "StandingRulesPanel",
     "WorkspaceP3Panels",
     "format_ledger_value",
-    "load_graded_sell_base_rate",
     "load_standing_rules",
     "load_workspace_p3_panels",
     "quarter_short",

@@ -31,7 +31,6 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import TypeVar, cast
 
-from advisor.store import count_memos
 from macro_store import fetch_sensitivities
 from models.documents import DocType, SourceType
 from report.models import SayDoVerdictRow as SayDoVerdictRow
@@ -1095,34 +1094,6 @@ def _load_open_notes(ticker: str, conn: sqlite3.Connection) -> list[AnalystNoteR
     return sorted(rows, key=lambda note: kind_rank.get(note.kind, 9))
 
 
-def load_graded_sell_base_rate(
-    ticker: str, db_path: Path | None, *, conn: sqlite3.Connection | None = None
-) -> str | None:
-    """The graded-sells base-rate line for the Position-tab coaching block, or
-    None when unavailable.
-
-    ``advisor.position_review.graded_sell_record`` is being built on a
-    parallel branch (not yet merged as of this PR) — a guarded import so this
-    renderer never hard-depends on a module that may not exist yet. Any
-    failure (missing module, missing DB, missing table) degrades to None and
-    the caller skips the line silently (spec: "do not fail if it's missing")."""
-    if conn is None and (db_path is None or not db_path.exists()):
-        return None
-    try:
-        from advisor.position_review import graded_sell_record
-    except ImportError:
-        return None
-    try:
-        # The record is deliberately portfolio-wide (it grades the OWNER's
-        # sell/trim pattern, not this name) — ``ticker`` stays in this loader's
-        # signature for the per-ticker P3 call shape but doesn't scope the SQL.
-        del ticker
-        result = cast("object", graded_sell_record(db_path, conn=conn))
-    except sqlite3.Error:
-        return None
-    return cast("str | None", result)
-
-
 # ---------------------------------------------------------------------------
 # Standing rules (Monthly Red Team PR10 — surface wiring)
 # ---------------------------------------------------------------------------
@@ -1354,12 +1325,6 @@ def load_workspace_p3_panels(
             ),
             open_notes=read(
                 "open_notes", "analyst_notes", lambda: _load_open_notes(ticker, db_conn), []
-            ),
-            position_review_count=read(
-                "position_review_count",
-                "advisor_memos",
-                lambda: count_memos(kind="position_review", ticker=ticker, conn=db_conn),
-                None,
             ),
             standing_rules=read(
                 "standing_rules",

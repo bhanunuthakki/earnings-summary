@@ -7,7 +7,6 @@ checks remain in each feature after validation.
 
 from __future__ import annotations
 
-from datetime import date, datetime
 from typing import Literal, NotRequired, Self, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
@@ -94,66 +93,6 @@ class TranscriptTonePayload(TypedDict):
 
 class _ClosedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-
-class RecentDevelopmentEventPayload(_ClosedPayload):
-    category: Literal["material_news", "sector_context", "watch_this_week"]
-    tag: Literal["CAPITAL", "LEGAL", "INFRA", "PRODUCT", "EARNINGS", "NARRATIVE", "NEWS"]
-    headline: str = Field(min_length=1, max_length=500)
-    published_at: str = Field(pattern=r"^20\d{2}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?$")
-    publisher: str = Field(min_length=1, max_length=120)
-    url: str = Field(pattern=r"^https?://[^\s]+$")
-    factual_summary: str = Field(min_length=1, max_length=2_000)
-    thesis_implication: str = Field(max_length=2_000)
-    tone: Literal["pos", "opt", "neu", "neg"]
-
-    @field_validator("published_at")
-    @classmethod
-    def _valid_publication_date(cls, value: str) -> str:
-        try:
-            datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise ValueError("published_at must be a real calendar date and optional time") from exc
-        return value
-
-
-class RecentDevelopmentsPayload(_ClosedPayload):
-    """Typed, cited events plus explicit search coverage for the report."""
-
-    search_status: Literal["events_found", "no_qualifying_events"]
-    window_start: str = Field(pattern=r"^20\d{2}-\d{2}-\d{2}$")
-    window_end: str = Field(pattern=r"^20\d{2}-\d{2}-\d{2}$")
-    queries_run: list[str] = Field(min_length=1, max_length=2)
-    sources_opened: list[str] = Field(min_length=1, max_length=7)
-    events: list[RecentDevelopmentEventPayload] = Field(max_length=11)
-
-    @model_validator(mode="after")
-    def _status_matches_events(self) -> Self:
-        if self.search_status == "events_found" and not self.events:
-            raise ValueError("events_found requires at least one event")
-        if self.search_status == "no_qualifying_events" and self.events:
-            raise ValueError("no_qualifying_events must not carry events")
-        if self.window_start > self.window_end:
-            raise ValueError("search window start must not follow its end")
-        opened_urls = set(self.sources_opened)
-        for event in self.events:
-            if not self.window_start <= event.published_at[:10] <= self.window_end:
-                raise ValueError("event publication date must fall within the searched window")
-            if event.url not in opened_urls:
-                raise ValueError("every event URL must appear in sources_opened")
-        return self
-
-    @field_validator("window_start", "window_end")
-    @classmethod
-    def _valid_window_date(cls, value: str) -> str:
-        try:
-            date.fromisoformat(value)
-        except ValueError as exc:
-            raise ValueError("search window dates must be real calendar dates") from exc
-        return value
-
-
-RECENT_DEVELOPMENTS_SCHEMA = TypeAdapter(RecentDevelopmentsPayload)
 
 
 class TranscriptMetadataPayload(_ClosedPayload):

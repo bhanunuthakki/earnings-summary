@@ -37,7 +37,6 @@ from integrations.portfolio_tracker_client import fetch_live_portfolio, probe_tr
 def register_sibling_routes(app: Flask, ctx: ServerContext) -> None:
     bump_activation_count = ctx.bump_activation_count
     client_error = ctx.client_error
-    internal_failure = ctx.internal_failure
     log_redacted_failure = ctx.log_redacted_failure
     open_db = ctx.open_db
     db_path = ctx.db_path
@@ -85,9 +84,6 @@ def register_sibling_routes(app: Flask, ctx: ServerContext) -> None:
         app,
         ProfileRouteContext(
             db_path=db_path,
-            default_user_id=DEFAULT_USER_ID,
-            bump_activation_count=bump_activation_count,
-            internal_failure=internal_failure,
         ),
     )
     register_governed_alert_routes(

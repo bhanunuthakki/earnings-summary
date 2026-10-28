@@ -39,7 +39,7 @@ from report.sections import (
     thesis,
     valuation,
 )
-from report.sections.p3_data import load_graded_sell_base_rate, load_workspace_p3_panels
+from report.sections.p3_data import load_workspace_p3_panels
 from report.workspace_models import PanelAvailability, WorkspacePrepared
 from ui.controls import k_empty
 from ui.earnings_audio import google_finance_earnings_url
@@ -252,7 +252,6 @@ def prepare_workspace_report(
     db_path = Path(spec.db_path) if spec.db_path is not None else None
     db_path = _report_database_path(conn, db_path)
     p3 = load_workspace_p3_panels(spec.ticker, root, db_path=db_path, conn=conn)
-    graded = load_graded_sell_base_rate(spec.ticker, db_path, conn=conn)
     previous_factory = conn.row_factory if conn is not None else None
     try:
         if conn is not None:
@@ -282,7 +281,6 @@ def prepare_workspace_report(
         p3.availability["prompt_quality"] = PanelAvailability.UNAVAILABLE
     return WorkspacePrepared(
         p3=p3,
-        graded_sell_line=graded,
         you_said_html=you_said,
         earnings_audio_url=google_finance_earnings_url(root, spec.ticker),
         prompt_summaries=summaries,

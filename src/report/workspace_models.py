@@ -188,7 +188,6 @@ _DATABASE_PANELS = (
     "lease_ladder",
     "decision_history",
     "open_notes",
-    "position_review_count",
     "standing_rules",
     "comp_set_context",
     "peer_comp",
@@ -228,11 +227,6 @@ class WorkspaceP3Panels:
     # P4.4: the owner's open analyst notes for this name — new builds lead
     # with the standing watch-items (the strip under the thesis lede).
     open_notes: list[AnalystNoteRow] = field(default_factory=_new_open_notes)
-    # Position-tab coaching line (REQ-3/REQ-6): count of advisor_memos rows
-    # with kind='position_review' for this ticker — "Guard: never run on this
-    # name · N position reviews". None means the history was not available;
-    # zero is reserved for a successful count with no matching rows.
-    position_review_count: int | None = None
     # PR10 (Monthly Red Team surface wiring): the ticker's standing sizing
     # rules (position_sizing_intent history + guard coverage read) for the
     # Position tab's Standing-rules block. None = no rows on file / DB absent
@@ -266,7 +260,6 @@ class WorkspaceP3Panels:
             ),
             peer_comp=[],
             open_notes=[],
-            position_review_count=None,
             availability=dict.fromkeys(_DATABASE_PANELS, status),
         )
 
@@ -302,7 +295,6 @@ class WorkspacePrepared:
     """Analytical values prepared once by the report build owner."""
 
     p3: WorkspaceP3Panels = field(default_factory=WorkspaceP3Panels.empty)
-    graded_sell_line: str | None = None
     you_said_html: str = ""
     earnings_audio_url: str | None = None
     prompt_summaries: list[VersionSummary] = field(default_factory=lambda: list[VersionSummary]())

@@ -410,33 +410,6 @@ def test_evals_panel_route_serves_fragment(client: FlaskClient) -> None:
     assert "No eval runs recorded yet" in html
 
 
-def test_position_review_action_starts_job(client: FlaskClient) -> None:
-    """/actions/position-review (PR5 — the calibration feeder): starts a
-    registry job running execution/review_position.py <T> --verdict, the
-    full LLM verdict + behavioral guard path that PERSISTS a gradeable
-    position_review memo."""
-    resp = client.post("/actions/position-review", json={"ticker": "rbrk"})
-    assert resp.status_code == 201
-    body = cast("dict[str, str]", resp.get_json())
-    assert body["ticker"] == "RBRK"
-    assert body["kind"] == "position-review"
-    assert body["job_id"].startswith("job_")
-    assert body["stream_url"] == f"/actions/stream/{body['job_id']}"
-
-
-def test_position_review_action_missing_ticker_400(client: FlaskClient) -> None:
-    resp = client.post("/actions/position-review", json={})
-    assert resp.status_code == 400
-    assert "ticker" in cast("dict[str, str]", resp.get_json())["error"]
-
-
-def test_position_review_action_conflict_for_same_ticker(client: FlaskClient) -> None:
-    resp1 = client.post("/actions/position-review", json={"ticker": "RBRK"})
-    assert resp1.status_code == 201
-    resp2 = client.post("/actions/position-review", json={"ticker": "RBRK"})
-    assert resp2.status_code == 409
-
-
 @pytest.mark.parametrize("steps", [None, [], [""], [" "], ["dcf", ""], ["bogus"], ["extract_kpis"]])
 def test_refresh_invalid_selection_starts_no_job(
     client: FlaskClient, steps: list[str] | None
@@ -448,3 +421,9 @@ def test_refresh_invalid_selection_starts_no_job(
     response = client.post("/actions/refresh", json={"ticker": "NU", "steps": steps})
     assert response.status_code == 400
     assert registry.list_jobs() == before
+
+
+@pytest.mark.parametrize("method", ["post", "options"])
+def test_retired_position_verdict_action_is_absent(client: FlaskClient, method: str) -> None:
+    response = getattr(client, method)("/actions/position-review", json={"ticker": "RBRK"})
+    assert response.status_code == 404

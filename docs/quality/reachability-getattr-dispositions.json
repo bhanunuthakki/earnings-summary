@@ -597,8 +597,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only _kind_to_date_attr event date attributes.",
-      "fingerprint": "4bb59fd628fd7cc87cd7521e352acf0aa2c47582c50bcd91588fddd48e201511",
-      "line": 182,
+      "fingerprint": "8099a1781f6cb586851584196c30cd522d2980afab0f410f46c86732107c6d29",
+      "line": 180,
       "path": "src/integrations/wealthplan_capacity.py",
       "targets": [
         "_kind_to_date_attr"
@@ -645,8 +645,8 @@
     {
       "disposition": "schema_field",
       "evidence": "The renderer calls this helper only while iterating the checked-in _COMPARE_METRIC_ROWS field tuple.",
-      "fingerprint": "79173458267b3159aa46771ddc2f27bcc1b570786b1a172d1198c256bed48118",
-      "line": 1982,
+      "fingerprint": "602c11283c6e3c52df69b274f66506129c97fa62603696a63bdd7c17d2988899",
+      "line": 1899,
       "path": "src/pipeline/peeks.py",
       "targets": [
         "_COMPARE_METRIC_ROWS"
@@ -1090,7 +1090,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "9589312b0b6b7fafbddd66d1d3994d35c34723bf838ff828ca5e690b5d265387",
+      "source_sha256": "666795207d619dbdead3f69fa0e2e33e7addf30dc4e1ff7831b78ccf5cad815f",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

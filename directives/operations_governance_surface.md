@@ -3083,3 +3083,14 @@ sidecar. Existing mismatch ordering, source-period selection, PDF/XLSX behavior,
 local HTML/HTM upload and committed recovery remain. This adds no command,
 source fetcher, store, schedule, narrative product or financial-fact writer.
 The implementation and fixtures perform no live collection or host mutation.
+
+## October 28 position-coaching backend retirement
+
+The generated position verdict is retired locally. `/review` returns deterministic
+position facts and starts no background verdict. The `/actions/position-review`
+endpoint, CLI `--verdict` path, fixed behavioral override, frozen seed rules and
+capacity-context read are removed. The normal company, earnings and source
+operations remain. The existing backend reader uses explicit or configured
+database authority. This source change does not stop or alter a canonical-host
+service or task. Frontend, input-library and history closure is still in progress;
+final release evidence must cover the integrated candidate.

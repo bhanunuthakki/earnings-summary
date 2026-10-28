@@ -214,7 +214,8 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # /source/version/<document_version_id>?node=… citations.
     # Approved retirement also removes optional coaching, packet, ETF-workup,
     # README, memo-generation and automatic-distillation actions.
-    assert len(rules) == 162
+    # -7: generated position review, distillation, and direct profile mutations.
+    assert len(rules) == 155
     assert not {
         "start_socratic_questions",
         "socratic_questions_result",
@@ -237,6 +238,13 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
         "research_task_status",
         "research_reject",
         "research_proposal_act",
+        "start_position_review",
+        "tenets_distill",
+        "profile_fact_affirm",
+        "profile_fact_reject",
+        "profile_fact_reaffirm",
+        "profile_fact_retire",
+        "profile_fact_update",
     }.intersection(rules)
     assert rules["peek_canonical_financial"] == "/api/peek/canonical-financial"
     assert rules["peek_financial_calculation"] == "/api/peek/financial-calculation"

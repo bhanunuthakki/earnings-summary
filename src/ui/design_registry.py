@@ -698,10 +698,10 @@ _NONVISUAL_CENSUS_CLASSIFICATIONS = (
     "ir_uploads.py",
     "llm_client.py",
     "operations/backup_observer.py",  # Named regex groups parse backup logs; no markup is emitted.
+    "report/renderers/workspace_data.py",  # Named regex groups parse cached news; no markup is emitted.
     "report/sections/qa_roster.py",
     "scheduler_manifest.py",
     "transcript_qa.py",
-    "synthesis/tenet_accountability.py",
 )
 
 _PYTHON_CSS_SURFACES = frozenset(
@@ -1030,11 +1030,11 @@ _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/operations_styles.py": "25ac8767dbe7aa83b41902fdaded9f6ec60482850f02c4ba93996ff8ff7544e7",  # pragma: allowlist secret
         "pipeline/portfolio_styles.py": "71c0ce48fe31845c25f187338910ee641aea618a297b4762af009654aa50ded8",  # pragma: allowlist secret
         # Retire legacy feed, answer, packet and queue rules; keep shared Notes/research geometry.
-        "pipeline/research_panel_styles.py": "151ac641212c81a534a028a6472526f4f5ee372207927435cd1d3cbb426f44e6",  # pragma: allowlist secret
+        "pipeline/research_panel_styles.py": "95721070567c6e6faf7a65002e23b89b4f8bc395d4f9bf84461b7afe1374d7e2",  # pragma: allowlist secret
         # Work OS retains its family geometry after the standalone page CSS retired; this digest covers that retained geometry.
         "pipeline/work_os_styles.py": "42f32470f84e129f39682d482cbe5cbf60a458ac3f91b23fdf26dfc0c3c24d82",  # pragma: allowlist secret
         "report/renderers/workspace_charts.py": "e55dff6926088b1c08aa42dc69fad725a1f55c15d46a8d9f5c60e60f1773b13a",  # pragma: allowlist secret
-        "report/renderers/workspace_styles.py": "6d6e96d84641aa6af6d9f012c03e9a376e722b062787cd2967ce1216e8990629",  # pragma: allowlist secret
+        "report/renderers/workspace_styles.py": "82c330d136b35a08f482bb2a851308455864df63b611438725d172e9fd5cb3c3",  # pragma: allowlist secret
         "ui/cite_marks.py": "0c45d7eefb5ef340b1ec58036f32ec4042f69c41473850fc8624f4968e95783e",  # pragma: allowlist secret
         "ui/controls.py": "bd7e8e9ed70a1d975f01bc2138b996a859608739fb385760d34480d571bc491a",  # pragma: allowlist secret
         "ui/living_grid.py": "e95fb454ffbc17e2d248d48f9b5e7563ecd7383a063ad94e0b3ef9088dab4374",  # pragma: allowlist secret
@@ -1072,7 +1072,7 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/cron_health_panel.py": "084eb62653f0ea3583f0c8347e7b12626f8235b0498e3c4c3141b1723eec490c",  # pragma: allowlist secret
         "pipeline/explore_panel.py": "fc1dd2e109d4f31a63e523c6f6ba3bc016b10b1faa443d32240e35fabed2fa8c",  # pragma: allowlist secret
         "pipeline/model_eval_panel.py": "f4af1f25d2641ba46a64a043073730df7b11ef1e96f3b3ad4d71801e17c3e983",  # pragma: allowlist secret
-        "pipeline/peeks.py": "1db77d4486a882a2fed77b43b1f59a5cfa7b29df8e940e97ed1cfcf6cbdfef4a",  # pragma: allowlist secret
+        "pipeline/peeks.py": "5296af9517e300c78d8fb8b2929a793f27b3ad98205132dd47754c770c49c7bd",  # pragma: allowlist secret
         "pipeline/performance_risk_panel.py": "f4399458107940b948664fe2e664892e2390d0f100cc1ad6f300e5233e2dd831",  # pragma: allowlist secret
         "pipeline/portfolio_panel.py": "40bb72a454e55db7fdced77d585085713bc682fd68625dd204a7ddc311273e65",  # pragma: allowlist secret
         "pipeline/portfolio_styles.py": "397f25bbb814a248a8c887faf5ac75284c69d2e22336f7cb04c7b7d020f72ab6",  # pragma: allowlist secret
@@ -1097,7 +1097,7 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "report/renderers/workspace_html.py": "867b089ceac45baa3dd1f72d35e74feba80f1af19ae6b8c4f4bdeeb2a5d60c05",  # pragma: allowlist secret
         "report/renderers/workspace_sections/company.py": "a2a7e88bb845c9eafa39e7673ac009ee3220e068430e91dc0160c3ef62b53551",  # pragma: allowlist secret
         "report/renderers/workspace_sections/thesis_risk.py": "ea6efda97e1eba69cdeb02e03744784f89ff7e606dcb86ccddceb1d4d12c0fea",  # pragma: allowlist secret
-        "report/renderers/workspace_styles.py": "cc0c55f03470cc70c4abdcc7792460cb5b56dd228a6730063b9687723219bd3c",  # pragma: allowlist secret
+        "report/renderers/workspace_styles.py": "9bb8c9ac3ab7ed97277caf50f30e6e7697dec9f98dea82d5cc5290863676c824",  # pragma: allowlist secret
         "ui/cite_marks.py": "3f76335ae581654995341743785185a7c317ac131a9c2e95182775ba1c4a6a7d",  # pragma: allowlist secret
         "ui/controls.py": "e4480459ae842f18982fc17967c6c6673a87588887097786508ce94f17e2483d",  # pragma: allowlist secret
         "viewspec/render.py": "7c533b52604f1cd0ad7564644dbeee92631041a047434299cc88fcc32fbf7e74",  # pragma: allowlist secret

@@ -51,13 +51,13 @@
     "src/ui": 0,
     "src/user_state": 0,
     "src/viewspec": 0,
-    "tests": 846
+    "tests": 833
   },
   "suppressions": {
     ".github": 0,
     "alembic": 1,
     "cron": 8,
-    "execution": 672,
+    "execution": 671,
     "instruction_tests": 0,
     "scripts": 4,
     "src": 11,
@@ -104,6 +104,6 @@
     "src/ui": 0,
     "src/user_state": 0,
     "src/viewspec": 0,
-    "tests": 570
+    "tests": 554
   }
 }

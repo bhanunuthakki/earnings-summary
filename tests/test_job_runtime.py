@@ -663,7 +663,7 @@ def test_retired_lens_jobs_preserve_requested_write_sets(job_name: str) -> None:
         "weekly-score-stances",
     ],
 )
-def test_unlisted_manual_job_names_preserve_requested_write_sets(job_name: str) -> None:
+def test_unlisted_and_retired_job_names_preserve_requested_write_sets(job_name: str) -> None:
     assert _scheduler_write_sets(job_name, ["portfolio-db"]) == ["portfolio-db"]
     assert _scheduler_write_sets(job_name, ["operator-explicit"]) == ["operator-explicit"]
 

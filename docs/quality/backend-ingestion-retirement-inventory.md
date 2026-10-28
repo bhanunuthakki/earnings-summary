@@ -45,11 +45,11 @@ Measurement: Python AST top-level function body interval from `body[0].lineno` t
 | `src/provenance/population_source_facts.py::_source_rows` (935–1071) | _population_plan; _build_run_publication_rows; _nearest_prior_eligible_observation_id | 137 → 137 | **Shared financial + KPI bridge.** Direct source facts, without re-reading fact_observation_revisions. | Same shared gate; SQL has no KPI-only filter and joins legacy observations/evidence for all fact tables. |
 | `src/provenance/population_source_facts.py::_source_fact_from_row` (1351–1571) | _population_plan; _build_run_publication_rows | 221 → 221 | **Shared financial + KPI bridge.** Existing ReportedSourceFact/FactCellV2 supplied by source adapter. | Same shared gate; both legacy financial and KPI namespace/basis/dimensions branches must disappear before whole-body retirement. |
 | `src/provenance/financial_fact_resolution.py::resolve_fact_logical_key` (1001–1127) | resolve_fact_row; execute_fact_cutover | 127 → 127 | **Shared financial + KPI resolution.** CanonicalFactResolutionEngine for fully migrated native facts. | All legacy writers and historical reader/cutover obligations retire; preserve selection/conflict/override clocks. Not removed by spreadsheet migration. |
-| `src/compute/kpi_extract_summaries.py::extract_for_ticker` (307–501) | extract_kpis_from_summaries.main (allowlist mode) | 195 → 195 | **R4 summary-exclusive.** Original registered source → existing extract_kpis_from_ir/typed manifest path. | Automatic transcript/text and IR coverage; catalog/one-off, locators/speaker, empty/partial/rejected/replay parity. |
-| `src/compute/kpi_extract_summaries.py::capture_for_ticker` (1270–1360) | extract_kpis_from_summaries.main (--capture) | 91 → 91 | **R4 summary-exclusive.** Original-source capture_for_ir_pdf_docs plus qualified original transcript/text capture. | PDF supplement-only capability is insufficient; preserve long-tail and all actual source groups before removing job. |
-| `src/compute/kpi_extract_summaries.py::_llm_extract` (812–878) | extract_for_ticker only | 67 → 67 | **R4 summary-exclusive.** Original-source extraction call; no second call over narrative summary. | Prove factual/coverage parity. Narrative generation remains; no unconditional total-model-call saving. |
-| `src/compute/kpi_extract_summaries.py::_build_manifest` (971–1040) | extract_for_ticker only | 70 → 70 | **R4 summary-exclusive.** Existing original-source manifest/source-context construction. | Preserve exact unit/currency, source excerpts and non-admitted historical summary dispositions. |
-| `src/provenance/financial_fact_resolution.py::require_summary_anchor_coherence` (1488–1606) | extract_for_ticker only (before/after allowlist call) | 119 → 119 | **R4 summary-exclusive.** Original document identity/locator instead of generated summary parent/period join. | No production caller remains; keep historical summary parent bindings/data. Do not delete shared _evidence_context. |
+| `src/compute/kpi_extract_summaries.py::extract_for_ticker` (307–501) | No production caller; removed | 195 → 0 | **R4 removed.** Original-source PDF capture remains under the existing owner. | Retained original transcript/source qualification remains a separate gate. |
+| `src/compute/kpi_extract_summaries.py::capture_for_ticker` (1270–1360) | No production caller; removed | 91 → 0 | **R4 removed.** Original-source PDF capture remains under the existing owner. | Retained original transcript/source qualification remains a separate gate. |
+| `src/compute/kpi_extract_summaries.py::_llm_extract` (812–878) | No production caller; removed | 67 → 0 | **R4 removed.** Original-source PDF capture remains under the existing owner. | Retained original transcript/source qualification remains a separate gate. |
+| `src/compute/kpi_extract_summaries.py::_build_manifest` (971–1040) | No production caller; removed | 70 → 0 | **R4 removed.** Original-source PDF capture remains under the existing owner. | Retained original transcript/source qualification remains a separate gate. |
+| `src/provenance/financial_fact_resolution.py::require_summary_anchor_coherence` | No caller; removed with its exclusive result type | 119 → 0 | **R4 removed.** Original source identity replaces generated-summary admission. | Shared `_evidence_context`, historical source bindings and fact-write admission remain. |
 
 ## The full sequence and its terminal boundary
 
@@ -63,20 +63,24 @@ All KPI producer migration must include review (`kpi_source_review → persist_k
 
 The present R5 typed parser handoff and issuer-collision guard do not satisfy native-writer qualification. Unknown/rejected observations without a legacy fact ID remain an explicit blocker. Existing document reservation and per-period commits differ from atomic native graph publication; no equivalence is assumed.
 
-## R4 exclusive helper tail and required shared code
+## R4 exclusive helper retirement
 
-Production call search finds this additional summary-exclusive helper tail in `src/compute/kpi_extract_summaries.py` (all baseline/current spans equal):
-- `_allowlist_document_state`: 513–567, **55** gross body lines; caller: extract_for_ticker.
-- `_list_sources`: 573–588, **16** gross body lines; caller: extract_for_ticker and capture_for_ticker.
-- `_tier_1_names`: 592–603, **12** gross body lines; caller: extract_for_ticker.
-- `_fact_units_by_name`: 607–630, **24** gross body lines; caller: extract_for_ticker.
-- `_canonical_units_from_holdings`: 639–701, **63** gross body lines; caller: extract_for_ticker.
-- `_ensure_summary_document_row`: 713–776, **64** gross body lines; caller: extract_for_ticker and capture_for_ticker.
-- `_canonical_summary_period_end`: 786–798, **13** gross body lines; caller: extract_for_ticker and capture_for_ticker.
+The generated-summary extraction entrypoints and their exclusive source-selection,
+unit/period adaptation, summary-document creation and prompt helpers are removed.
+The obsolete `require_summary_anchor_coherence` helper and its exclusive result
+type also have no remaining caller and are removed. The historical baseline
+population was 888 distinct procedure-body lines, including the old CLI; this
+figure is a baseline inventory, not a fresh net-size measurement.
 
-Tail subtotal **247**. Together with the five R4 rows above, this is **789** distinct body lines. The old summary CLI adds `main` **64**, `_parse_args` **26**, `_resolve_tickers` **9** (= **99**, separate non-overlapping intervals), for **888** measured summary-exclusive body lines. This is a bounded population, not the full file size or a promised net cut. CLI callers that must change: `execution/refresh_dispatch.py:343`, `execution/process_report_comments.py:648,674`.
-
-Retain `capture_for_ir_pdf_docs`, `_llm_extract_enumerate`, `_build_capture_manifest`, `_doc_already_captured`, `_persist_accounted`, `_locator_for_excerpt`, numeric/semantic/period helpers, logging and shared models: original PDF capture still calls them (`kpi_extract_summaries.py:1557–1642`, `execution/extract_kpis_from_ir.py:76,360`). Retain summary/narrative cache outputs, source documents, parent bindings, historical rejected/non-admitted observations and receipts. `_llm_extract` and `_build_manifest` are exclusive; the enumerate/capture helpers are not.
+`compute.kpi_extract_summaries` now captures registered original IR supplement
+PDFs. Its filename is historical. The retained production caller is
+`execution/extract_kpis_from_ir.py`. Keep governed original-source enumeration,
+reviewed candidate retention/publication, OCR revalidation and source accounting.
+Shared `_evidence_context` and fact-write guards still protect historical and
+current financial evidence. Retired narrative caches are cleanup candidates;
+only exact retained decision, report or financial-source dependencies protect a
+historical row. Original transcript/source coverage and native qualification are
+still separate open gates; code retirement does not prove them.
 
 ## Gross file context, not additional candidate credit
 

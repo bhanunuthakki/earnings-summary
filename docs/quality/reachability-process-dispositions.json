@@ -575,8 +575,8 @@
     {
       "disposition": "external_process",
       "evidence": "_call_claude invokes the resolved Claude CLI path after setup validation; the command list fixes the executable and arguments.",
-      "fingerprint": "414165c4afef5eaaa6516439f847ab8fee17b5ad0fb054bd1b8dd0581b7ce9cc",
-      "line": 1216,
+      "fingerprint": "88e2da783ae5d43483d77e3e094fa584014a3b1a09747e9958767b03a4ba1eed",
+      "line": 1184,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -585,8 +585,8 @@
     {
       "disposition": "external_process",
       "evidence": "The streaming path obtains claude with shutil.which and passes that fixed executable as cmd[0] to Popen.",
-      "fingerprint": "db039567a99e874ea9c4aef67ae143339e68b45f66018b37de1d5016c5e16626",
-      "line": 2228,
+      "fingerprint": "d6446b5b6d12385718dddc1dd8ac0fc59cbac6095e757cac8ce6c643acd71def",
+      "line": 2196,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -595,8 +595,8 @@
     {
       "disposition": "external_process",
       "evidence": "The web path invokes the resolved Claude CLI path in a fixed command list; enabled tools are separately allowlisted.",
-      "fingerprint": "2dc9dd3855e49132b25c2cdf37cc1ffe5a30cf826dbf96bd9f5da50fe884da9f",
-      "line": 2680,
+      "fingerprint": "932d1707834d4848768011e8059d9257bab85e284d427a9076f176f9ee77a8b6",
+      "line": 2648,
       "path": "src/llm/cli.py",
       "targets": [
         "claude CLI"
@@ -1004,7 +1004,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "9589312b0b6b7fafbddd66d1d3994d35c34723bf838ff828ca5e690b5d265387",
+      "source_sha256": "666795207d619dbdead3f69fa0e2e33e7addf30dc4e1ff7831b78ccf5cad815f",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

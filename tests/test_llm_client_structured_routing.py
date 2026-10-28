@@ -16,7 +16,6 @@ import logging
 import pytest
 
 import llm.structured as structured
-from llm.contracts import RECENT_DEVELOPMENTS_SCHEMA, RecentDevelopmentsPayload
 from llm.structured import StructuredParseError
 from llm_client import generate_qa_topics
 
@@ -65,51 +64,3 @@ def test_structured_failure_diagnostics_redact_secrets(
     assert marker not in caplog.text
     assert marker not in exc_info.value.raw_head
     assert "***" in caplog.text
-
-
-def test_structured_transport_callback_keeps_schema_validation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    payload = {
-        "search_status": "events_found",
-        "window_start": "2026-06-01",
-        "window_end": "2026-06-08",
-        "queries_run": ["issuer news"],
-        "sources_opened": ["https://example.com/ir"],
-        "events": [
-            {
-                "category": "material_news",
-                "tag": "EARNINGS",
-                "headline": "Issuer reports results",
-                "published_at": "2026-06-06",
-                "publisher": "Issuer IR",
-                "url": "https://example.com/ir",
-                "factual_summary": "Issuer reports results.",
-                "thesis_implication": "The report changes the KPI watch.",
-                "tone": "neu",
-            }
-        ],
-    }
-    calls: list[tuple[str, dict[str, object]]] = []
-
-    def forbidden(*_args: object, **_kwargs: object) -> str:
-        raise AssertionError("transport callback must replace only the raw call")
-
-    def transport(prompt: str, **kwargs: object) -> str:
-        calls.append((prompt, kwargs))
-        return json.dumps(payload)
-
-    monkeypatch.setattr(structured, "call_llm", forbidden)
-    result = structured.call_llm_structured(
-        "grounded prompt",
-        purpose="recent_developments",
-        ticker="NU",
-        expect="object",
-        schema=RECENT_DEVELOPMENTS_SCHEMA,
-        transport=transport,
-    )
-    assert isinstance(result, RecentDevelopmentsPayload)
-    assert result.events[0].url == "https://example.com/ir"
-    assert calls[0][0] == "grounded prompt"
-    assert calls[0][1]["purpose"] == "recent_developments"
-    assert calls[0][1]["ticker"] == "NU"

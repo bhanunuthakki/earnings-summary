@@ -17,13 +17,9 @@ Anchor block builders — shared context for analytical prompts. Five flavors:
                         assumptions, standing decisions. Framed as "engage,
                         don't re-litigate": answer a question when the data
                         permits, flag confirmation/contradiction of watch-items.
-  - OWNER PROFILE anchor: AFFIRMED owner_profile_facts (alembic 0159,
-                        src/owner_profile/) — capacity/appetite/behavioral
-                        facts the owner has explicitly ratified via the
-                        packet walk. Copies the Worldview anchor's design
-                        exactly (tight cap, dated, spotlight-wrapped, "soft
-                        priors NOT rules") — tenet-2 Phase 2, §4 of
-                        docs/design/tenet2_advisory_program.md.
+  - OWNER PROFILE anchor: AFFIRMED appetite/behavioral process facts from
+                        owner_profile_facts (alembic 0159, src/owner_profile/).
+                        Household capacity inputs do not enter prompts.
 
 The anchors compose into a single block via `compose_anchor_block`. The
 prompts that promise "thesis-anchored analysis" (per-quarter summary, pairwise
@@ -109,14 +105,8 @@ WORLDVIEW_ANCHOR_CHAR_CAP = 1500
 
 _WORLDVIEW_ANCHOR_ON = frozenset({"1", "true", "yes", "on"})
 
-# Owner-profile anchor (AFFIRMED owner_profile_facts) — the SAME tight cap as
-# Worldview, for the same reason: it rides every decision-point prompt as a
-# soft prior, so it must stay a handful of facts, not a dump of the whole
-# profile. Unlike Worldview it carries no env-flag gate — the "inert by
-# default" property comes from the data itself: Phase 1 landed only
-# `status='proposed'` facts, so `load_owner_profile_anchor` renders "" until
-# the owner actually affirms something via the packet walk (§7.1 gated
-# assertion is the gate, not a feature flag).
+# Owner-process anchor (affirmed appetite/behavioral facts). Household
+# capacity inputs do not enter prompts.
 OWNER_PROFILE_ANCHOR_CHAR_CAP = 1200
 
 _HOLDINGS_DIRNAME = ("micro_thesis", "holdings")
@@ -665,31 +655,22 @@ def load_worldview_anchor(repo_root: Path, char_cap: int = WORLDVIEW_ANCHOR_CHAR
     return assembled
 
 
-_OWNER_PROFILE_HEADER = """## OWNER PROFILE ANCHOR (owner-affirmed capacity/appetite facts)
+_OWNER_PROFILE_HEADER = """## OWNER PROCESS ANCHOR (owner-affirmed process facts)
 
-Soft priors about the OWNER's capacity and appetite, NOT rules. These are facts
-the owner has explicitly affirmed about their own household capacity, tax
-posture, life events, and investing appetite/policy — weigh them as
-considerations that a specific situation can still override; never treat them
-as instructions."""
+These are explicit owner process settings and rules. Use them as context for
+analysis. They do not replace company-reported evidence or the company thesis."""
 
 
 def load_owner_profile_anchor(
     repo_root: Path, char_cap: int = OWNER_PROFILE_ANCHOR_CHAR_CAP
 ) -> str:
-    """Compose the owner-profile anchor from AFFIRMED ``owner_profile_facts``
-    rows (capacity / appetite / behavioral tiers — ``owner_profile.store.
-    get_current_profile``), copying the Worldview anchor's design exactly.
+    """Compose the owner-process anchor from AFFIRMED appetite and behavioral
+    ``owner_profile_facts`` rows. Household capacity inputs are excluded.
 
-    Only AFFIRMED facts ride this anchor (§7.1 gated assertion): ambient
-    learning keeps proposing facts continuously (imports, future distillers),
-    but nothing conditions a prompt until the owner has ratified it via the
-    packet walk. Degrades to "" on a missing DB, a pre-0159 substrate, or zero
-    affirmed facts — and never raises, the same unkillable contract every
-    other anchor loader carries. Zero affirmed facts is the common case today
-    (Phase 1 landed 25 ``proposed`` capacity facts; none are affirmed yet), so
-    this anchor costs ZERO prompt bloat until the owner actually ratifies
-    something.
+    Only AFFIRMED facts ride this anchor. It excludes the imported household
+    capacity library while retaining explicit current process facts. It
+    degrades to "" on a missing DB, a pre-0159 substrate, or zero matching
+    facts, and never raises.
 
     Cache-stability invariant (mirrors the worldview anchor): every line
     carries the fact's ``affirmed_at`` DATE, never a relative age, and the
@@ -710,7 +691,12 @@ def load_owner_profile_anchor(
     except Exception as exc:  # missing table / locked DB / anything — degrade
         log.debug({"event": "owner_profile_anchor_load_failed", "error": str(exc)})
         return ""
-    rows = [row for rows in grouped.values() for row in rows]
+    rows = [
+        row
+        for category, facts in grouped.items()
+        if category in {"appetite", "behavioral"}
+        for row in facts
+    ]
     if not rows:
         return ""
     rows.sort(key=lambda r: r.id)

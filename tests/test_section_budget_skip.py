@@ -154,18 +154,9 @@ def test_qa_roster_drops_topic_llm_on_budget_skip(
 def test_no_skip_without_budget_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Positive control: no portfolio.db → gate is a no-op → the LLM path runs
     # (here it would be called, so we stub a valid response instead of _boom).
-    from llm.contracts import RecentDevelopmentsPayload
-
-    def _ok(*args: object, **kwargs: object) -> RecentDevelopmentsPayload:
+    def _ok(*args: object, **kwargs: object) -> str:
         del args, kwargs
-        return RecentDevelopmentsPayload(
-            search_status="no_qualifying_events",
-            window_start="2026-10-20",
-            window_end="2026-10-27",
-            queries_run=["NU recent developments"],
-            sources_opened=["https://example.com/dated-source"],
-            events=[],
-        )
+        return "### Material news\n- **X** — y. [Source: Z]"
 
     monkeypatch.setattr("report.sections.recent_developments.generate_recent_developments", _ok)
     section = recent_developments.build(

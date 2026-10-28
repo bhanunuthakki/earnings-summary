@@ -4,16 +4,11 @@ buttons on answerable items and the month-status header pill."""
 
 from __future__ import annotations
 
-import sys
 from datetime import datetime
-from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from redteam.brief import LENS_LABEL, render_red_team_brief  # noqa: E402
-from redteam.gate import MonthStatus  # noqa: E402
-from redteam.models import (  # noqa: E402
+from redteam.brief import LENS_LABEL, render_red_team_brief
+from redteam.gate import MonthStatus
+from redteam.models import (
     CROSS_BOOK_LENS_NAMES,
     LENS_NAMES,
     Kind,
@@ -25,7 +20,7 @@ from redteam.models import (  # noqa: E402
 
 def _row(
     *,
-    id: int = 1,  # noqa: A002 - shadows builtin only within this test helper's scope
+    item_id: int = 1,
     ticker: str | None = "NU",
     lens: str = "fx_translation",
     kind: Kind = "per_name",
@@ -33,7 +28,7 @@ def _row(
     status: Status = "open",
 ) -> RedTeamItemRow:
     return RedTeamItemRow(
-        id=id,
+        id=item_id,
         run_key="red_team_2026_08",
         ticker=ticker,
         lens=lens,
@@ -52,11 +47,13 @@ def _row(
 
 def test_every_lens_has_a_display_label() -> None:
     # A lens rendering as its own raw slug (the LENS_LABEL.get fallback) is a
-    # drift signal — every rotation member (per-name + cross-book) should
-    # have a proper label, including the newest (profile_drift, tenet-2
-    # Phase 4).
+    # drift signal — every active rotation member (per-name + cross-book)
+    # should have a proper label.
     for lens in (*LENS_NAMES, *CROSS_BOOK_LENS_NAMES):
         assert lens in LENS_LABEL, f"{lens!r} has no display label in redteam.brief.LENS_LABEL"
+    # Keep readable labels for historical records after these lenses leave
+    # the active rotation.
+    assert {"behavioral_consistency", "profile_drift"}.issubset(LENS_LABEL)
 
 
 def test_empty_state_renders_no_items_message() -> None:
@@ -78,7 +75,7 @@ def test_per_name_item_renders_ticker_severity_and_lens() -> None:
 
 
 def test_cross_book_item_renders_without_a_ticker() -> None:
-    row = _row(id=2, ticker=None, lens="factor_block", kind="cross_book", severity="med")
+    row = _row(item_id=2, ticker=None, lens="factor_block", kind="cross_book", severity="med")
     html = render_red_team_brief([row], run_key="red_team_2026_08")
     assert "Cross-book" in html
     assert "Factor Block" in html
@@ -94,8 +91,8 @@ def test_all_severity_and_status_tones_render_without_error() -> None:
 
 
 def test_items_grouped_per_name_then_cross_book() -> None:
-    per_name = _row(id=1)
-    cross = _row(id=2, ticker=None, lens="style_drift", kind="cross_book")
+    per_name = _row(item_id=1)
+    cross = _row(item_id=2, ticker=None, lens="style_drift", kind="cross_book")
     html = render_red_team_brief([per_name, cross], run_key="red_team_2026_08")
     assert html.index("Per-name") < html.index("Cross-book")
 

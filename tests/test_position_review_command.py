@@ -18,7 +18,6 @@ import pytest
 from advisor import position_review as pr
 from advisor.position_review import (
     PreAnalysis,
-    mechanical_read,
     parse_review_command,
     render_pre_analysis_chat,
     render_tax_lines,
@@ -27,7 +26,7 @@ from advisor.position_review import (
 from advisor.position_tax import PositionTaxView, TrimTaxEstimate, unavailable_tax_view
 from ask.engine import COMMAND_PREFIXES, run_chat_command
 from capture.matcher import DISTINCTIVE_ALIASES, RosterIndex, build_roster_index
-from dispatch_registry import Job, Registry
+from dispatch_registry import Registry
 
 _PRE_DEFAULT = PreAnalysis(
     ticker="RBRK",
@@ -52,8 +51,6 @@ _PRE_DEFAULT = PreAnalysis(
     at_price=None,
     mos_bar=0.30,
     valuation_verdict="fair",
-    conviction_encoded=True,
-    has_stance=True,
     has_decision_note=True,
     is_index_instrument=False,
 )
@@ -68,38 +65,17 @@ def _pre(**overrides: object) -> PreAnalysis:
 # --------------------------------------------------------------------------- #
 
 
-def test_mechanical_read_hold_on_intact_fair_non_oversized() -> None:
-    assert mechanical_read(_pre()).startswith("HOLD")
-
-
-def test_mechanical_read_flags_breach() -> None:
-    assert "BREACHED" in mechanical_read(_pre(break_rule_status="breach"))
-
-
-def test_mechanical_read_flags_overvalued() -> None:
-    assert "Over-valued" in mechanical_read(_pre(valuation_verdict="sell"))
-
-
-def test_mechanical_read_flags_oversized_concentration() -> None:
-    assert "OVERSIZED" in mechanical_read(_pre(concentration_flag=True))
-
-
-def test_mechanical_read_encode_first_for_index() -> None:
-    read = mechanical_read(_pre(thesis_present=False, is_index_instrument=True))
-    assert "encode" in read.lower() and "sleeve" in read.lower()
-
-
 # --------------------------------------------------------------------------- #
 # render_pre_analysis_chat
 # --------------------------------------------------------------------------- #
 
 
-def test_render_chat_contains_grounded_facts_and_cli_pointer() -> None:
+def test_render_chat_contains_grounded_facts_without_coaching() -> None:
     out = render_pre_analysis_chat(_pre(at_price=82.0))
     assert "**RBRK**" in out
-    assert "Mechanical read:" in out
+    assert "Mechanical read:" not in out
     assert "ladder: fair" in out
-    assert "review_position.py RBRK --at-price 82" in out
+    assert "Full calibrated verdict" not in out
 
 
 # --------------------------------------------------------------------------- #
@@ -182,52 +158,6 @@ def test_review_reply_text_resolves_company_name_end_to_end(
     out = review_reply_text(Path("."), "/review Rubrik")
     assert seen["ticker"] == "RBRK"
     assert "RBRK" in out
-
-
-def test_review_command_background_job_uses_resolved_ticker(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The background full-verdict kickoff must schedule the RESOLVED ticker, so
-    '/review Rubrik' reviews AND grades RBRK — never a dangling 'RUBRIK' job."""
-    started: dict[str, object] = {}
-
-    def _fake(*_a: object, **_k: object) -> PreAnalysis:
-        return _pre()
-
-    class _Capturing(_NonSpawningRegistry):
-        def start(
-            self,
-            *,
-            ticker: str,
-            kind: str,
-            argv: list[str],
-            spawn: bool = True,
-            cwd: str | None = None,
-            write_sets: list[str] | None = None,
-            code_root: str | Path | None = None,
-        ) -> Job:
-            started["ticker"] = ticker
-            started["argv"] = argv
-            return super().start(
-                ticker=ticker,
-                kind=kind,
-                argv=argv,
-                spawn=spawn,
-                cwd=cwd,
-                write_sets=write_sets,
-                code_root=code_root,
-            )
-
-    monkeypatch.setattr(pr, "build_pre_analysis", _fake)
-    monkeypatch.setattr(
-        pr,
-        "_load_review_roster",
-        _fake_roster,
-    )
-    run_chat_command(Path("."), "/review Rubrik at $70", _Capturing())
-    assert started["ticker"] == "RBRK"
-    argv = cast("list[str]", started["argv"])
-    assert "RBRK" in argv and "--at-price" in argv and "70.0" in argv
 
 
 # --------------------------------------------------------------------------- #
@@ -320,8 +250,8 @@ def test_render_tax_lines_none_is_empty_and_chat_still_renders() -> None:
 def test_render_chat_includes_tax_block_when_present() -> None:
     out = render_pre_analysis_chat(_pre(tax=_TAX_VIEW))
     assert "- Tax: taxable 60% of position" in out
-    # Tax lines sit above the mechanical read, before the CLI pointer.
-    assert out.index("- Tax:") < out.index("- Mechanical read:")
+    assert "- Mechanical read:" not in out
+    assert "Full calibrated verdict" not in out
 
 
 # --------------------------------------------------------------------------- #
@@ -347,7 +277,7 @@ def test_review_command_dispatches_and_renders(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(pr, "build_pre_analysis", _fake)
     reply = run_chat_command(Path("."), "/review RBRK at $82", cast("Registry", None))
     assert reply is not None
-    assert "**RBRK**" in reply and "Mechanical read:" in reply
+    assert "**RBRK**" in reply and "Mechanical read:" not in reply
 
 
 def test_review_command_parses_at_price_through_dispatch(
@@ -371,154 +301,43 @@ def test_review_command_parses_at_price_through_dispatch(
 # --------------------------------------------------------------------------- #
 
 
-class _NonSpawningRegistry(Registry):
-    """Records `start()` calls without forking a real subprocess."""
-
-    def start(
-        self,
-        *,
-        ticker: str,
-        kind: str,
-        argv: list[str],
-        spawn: bool = True,
-        cwd: str | None = None,
-        write_sets: list[str] | None = None,
-        code_root: str | Path | None = None,
-    ) -> Job:
-        return super().start(
-            ticker=ticker,
-            kind=kind,
-            argv=argv,
-            spawn=False,
-            cwd=cwd,
-            write_sets=write_sets,
-            code_root=code_root,
-        )
+@pytest.fixture(autouse=True)
+def explicit_review_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(tmp_path / "isolated-review.db"))
 
 
-def test_review_command_starts_background_verdict_job_by_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def _fake(*_a: object, **_k: object) -> PreAnalysis:
-        return _pre(at_price=82.0)
+def test_review_never_starts_a_verdict_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    def no_job(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("deterministic review must not start background work")
 
-    monkeypatch.setattr(pr, "build_pre_analysis", _fake)
-    registry = _NonSpawningRegistry()
-    reply = run_chat_command(Path("."), "/review RBRK at $82", registry)
-    assert reply is not None
-    # The instant pre-analysis still renders...
-    assert "**RBRK**" in reply and "Mechanical read:" in reply
-    # ...and the full verdict was kicked off in the background.
-    assert "background" in reply.lower() and "job_" in reply
-    jobs = registry.list_jobs()
-    assert (
-        len(jobs) == 1
-        and jobs[0]["ticker"] == "RBRK"
-        and jobs[0]["kind"] == ("position-review-verdict")
-    )
-
-
-def test_review_command_background_job_argv_carries_verdict_and_at_price(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    started: dict[str, object] = {}
-
-    def _fake(*_a: object, **_k: object) -> PreAnalysis:
+    def facts(*_args: object, **_kwargs: object) -> PreAnalysis:
         return _pre()
 
-    class _Capturing(_NonSpawningRegistry):
-        def start(
-            self,
-            *,
-            ticker: str,
-            kind: str,
-            argv: list[str],
-            spawn: bool = True,
-            cwd: str | None = None,
-            write_sets: list[str] | None = None,
-            code_root: str | Path | None = None,
-        ) -> Job:
-            started["ticker"] = ticker
-            started["argv"] = argv
-            return super().start(
-                ticker=ticker,
-                kind=kind,
-                argv=argv,
-                spawn=spawn,
-                cwd=cwd,
-                write_sets=write_sets,
-                code_root=code_root,
-            )
-
-    monkeypatch.setattr(pr, "build_pre_analysis", _fake)
-    run_chat_command(Path("/repo"), "/review FLKR at $70", _Capturing())
-    argv = cast("list[str]", started["argv"])
-    assert started["ticker"] == "FLKR"
-    assert Path(argv[1]).name == "sqlite_bootstrap.py"
-    assert Path(argv[2]).name == "review_position.py"
-    assert "FLKR" in argv and "--verdict" in argv
-    assert "--at-price" in argv and "70.0" in argv
-
-
-def test_review_command_skips_background_job_without_registry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A surface with no job registry (e.g. the Telegram poller, which is a
-    standalone loop with no Flask action/SSE plumbing to spawn against)
-    degrades to the instant reply only — no crash, no dangling reference."""
-
-    def _fake(*_a: object, **_k: object) -> PreAnalysis:
-        return _pre()
-
-    monkeypatch.setattr(pr, "build_pre_analysis", _fake)
-    reply = run_chat_command(Path("."), "/review RBRK", None)
-    assert reply is not None
-    assert "background" not in reply.lower()
-
-
-def test_review_command_respects_full_verdict_kill_switch(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def _fake(*_a: object, **_k: object) -> PreAnalysis:
-        return _pre()
-
-    monkeypatch.setattr(pr, "build_pre_analysis", _fake)
-    monkeypatch.setenv("REVIEW_FULL_VERDICT", "0")
-    registry = _NonSpawningRegistry()
+    monkeypatch.setattr(pr, "build_pre_analysis", facts)
+    monkeypatch.setattr(Registry, "start", no_job)
+    registry = Registry()
     reply = run_chat_command(Path("."), "/review RBRK", registry)
-    assert reply is not None
-    assert "background" not in reply.lower()
+    assert reply is not None and "**RBRK**" in reply
+    assert "Full calibrated verdict" not in reply
     assert registry.list_jobs() == []
 
 
-def test_review_command_conflict_degrades_to_one_line_note(
-    monkeypatch: pytest.MonkeyPatch,
+def test_review_uses_one_explicit_database_for_roster_and_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A ticker already under review (single-flight slot busy) must not break
-    the instant reply — the background-kickoff failure degrades to a short
-    note, same as every other RegistryConflict caller in this codebase."""
-    from dispatch_registry import RegistryConflict
+    database = tmp_path / "explicit.db"
+    seen: list[Path] = []
 
-    def _fake(*_a: object, **_k: object) -> PreAnalysis:
+    def roster(path: Path) -> RosterIndex:
+        seen.append(path)
+        return _roster()
+
+    def facts(*_args: object, **kwargs: object) -> PreAnalysis:
+        assert kwargs["db_path"] == database
         return _pre()
 
-    class _Busy(_NonSpawningRegistry):
-        def start(
-            self,
-            *,
-            ticker: str,
-            kind: str,
-            argv: list[str],
-            spawn: bool = True,
-            cwd: str | None = None,
-            write_sets: list[str] | None = None,
-            code_root: str | Path | None = None,
-        ) -> Job:
-            del write_sets, code_root
-            raise RegistryConflict("busy")
-
-    monkeypatch.setattr(pr, "build_pre_analysis", _fake)
-    reply = run_chat_command(Path("."), "/review RBRK", _Busy())
-    assert reply is not None
-    assert "already running" in reply.lower()
-    assert "**RBRK**" in reply  # the instant pre-analysis still rendered
+    monkeypatch.setattr(pr, "_load_review_roster", roster)
+    monkeypatch.setattr(pr, "build_pre_analysis", facts)
+    reply = review_reply_text(tmp_path, "/review Rubrik", db_path=database)
+    assert "**RBRK**" in reply
+    assert seen == [database]

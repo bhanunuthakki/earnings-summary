@@ -1,6 +1,6 @@
 """owner_profile_facts store (alembic 0159 + src/owner_profile/).
 
-- Value-shape validators: closed tax-bucket vocabulary, bounds.
+- Value-shape validators: retained next-dollar settings and explicit rules.
 - Store: append -> supersede chain (is_latest flips, superseded_at stamped,
   superseded_by_id back-links), idempotent re-append (unchanged value is a
   no-op; changed value supersedes regardless of prior status), affirm/reject
@@ -14,22 +14,17 @@
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from owner_profile.models import (  # noqa: E402
-    CashBufferMonths,
-    HumanCapitalBucket,
-    TaxBucketBalances,
+from owner_profile.models import (
+    BehavioralRule,
+    NextDollarBlendWeights,
 )
-from owner_profile.store import (  # noqa: E402
+from owner_profile.store import (
     affirm_fact,
     append_fact,
     get_current_profile,
@@ -37,6 +32,8 @@ from owner_profile.store import (  # noqa: E402
     list_facts,
     reject_fact,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 _DDL = """
 CREATE TABLE owner_profile_facts (
@@ -78,27 +75,16 @@ def conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
 # ---------------------------------------------------------------------------
 
 
-def test_tax_bucket_balances_closed_vocab() -> None:
+def test_next_dollar_blend_weights_sum_to_one() -> None:
     with pytest.raises(ValidationError):
-        TaxBucketBalances(balances={"crypto": 100.0}, as_of="2026-06-21")  # type: ignore[arg-type]
-    ok = TaxBucketBalances(balances={"pretax": 100.0, "cash": 10.0}, as_of="2026-06-21")  # type: ignore[arg-type]
-    assert ok.balances["pretax"] == 100.0
+        NextDollarBlendWeights(ret=0.5, div=0.3, macro=0.3)
+    ok = NextDollarBlendWeights(ret=0.5, div=0.3, macro=0.2)
+    assert ok.ret == 0.5
 
 
-def test_tax_bucket_balances_rejects_negative() -> None:
+def test_behavioral_rule_requires_matching_distinct_citations() -> None:
     with pytest.raises(ValidationError):
-        TaxBucketBalances(balances={"cash": -5.0}, as_of="2026-06-21")  # type: ignore[arg-type]
-
-
-def test_cash_buffer_months_bounds() -> None:
-    with pytest.raises(ValidationError):
-        CashBufferMonths(months=-1.0)
-    assert CashBufferMonths(months=6.0).months == 6.0
-
-
-def test_human_capital_bucket_uppercases_members() -> None:
-    b = HumanCapitalBucket(cap_pct=15.0, members=["meta", " googl "])
-    assert b.members == ["META", "GOOGL"]
+        BehavioralRule(rule_text="Sell too early", citations=[1, 1], wrong=0, total=2)
 
 
 # ---------------------------------------------------------------------------

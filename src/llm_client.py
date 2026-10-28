@@ -140,13 +140,7 @@ from llm.cli import (
     verify_setup_once as verify_setup_once,
 )
 from llm.contracts import (
-    RECENT_DEVELOPMENTS_SCHEMA as RECENT_DEVELOPMENTS_SCHEMA,
-)
-from llm.contracts import (
     TRANSCRIPT_METADATA_SCHEMA as TRANSCRIPT_METADATA_SCHEMA,
-)
-from llm.contracts import (
-    RecentDevelopmentsPayload as RecentDevelopmentsPayload,
 )
 from llm.contracts import (
     TranscriptMetadataPayload as TranscriptMetadataPayload,
@@ -1163,26 +1157,23 @@ RANKING + filtering rules:
 
 {NUMBER_FORMATTING_BLOCK}
 
-**Output format (strict JSON object):**
-Return exactly these keys: `search_status`, `window_start`, `window_end`,
-`queries_run`, `sources_opened`, and `events`. `search_status` is
-`events_found` or `no_qualifying_events`. `queries_run` has one or two exact
-queries. `sources_opened` has the URLs of one to seven dated sources actually
-opened. Never claim no qualifying events without this search evidence.
+**Output Format (Strict Markdown):**
 
-Each event has exactly these fields: `category` (`material_news`,
-`sector_context`, or `watch_this_week`), `headline`, `published_at`
-(`YYYY-MM-DD` with optional time), `publisher`, `url`, `factual_summary`,
-`thesis_implication`, `tag` (`CAPITAL`, `LEGAL`, `INFRA`, `PRODUCT`,
-`EARNINGS`, `NARRATIVE`, or `NEWS`), and `tone` (`pos`, `opt`, `neu`, or
-`neg`). Keep event
-order by thesis impact. Set `thesis_implication` to an empty string when the
-opened evidence does not support a distinct implication. Cite the dated source
-with its real URL. Every numeric
-claim must be supported by the opened source. Keep the implication distinct
-from the factual summary. Omit items without a known date or canonical source
-URL. A `no_qualifying_events` result has an empty `events` list. Return valid
-JSON only, with no markdown fences or commentary.
+### Material news
+- **[Headline]** — [1-2 sentences: what happened AND specific implication for the thesis / valuation / KPI trajectory. Quantify the implication where the news supports it.] [Source: outlet, YYYY-MM-DD, URL]
+- ... (3-7 items, ranked by thesis impact)
+
+### Sector / regulatory context
+- [optional 1-3 items: peer earnings prints, FDA / antitrust decisions affecting peers, sector ETF flows, macro shifts that hit this ticker's specific exposures. Each item must have a "why this matters for {ticker}" clause.]
+
+### Watch this week
+- [1-3 items: upcoming earnings calls (this ticker or named peers), scheduled disclosures, investor days, regulatory dockets within the next ~7 days. Format: `**Date · Event** — what to watch for`]
+
+If no material news remains after searching, write `*No material news found.
+Searches run: [query 1]; [query 2]. Window covered: [YYYY-MM-DD] through
+[YYYY-MM-DD]. Sources checked: [outlet, URL]; [...].*` under "Material news"
+and skip the other two sections. This branch still requires dated source URLs.
+Do not pad with stale or low-signal items just to fill the section.
 """,
         variables=(
             "ticker",
@@ -1204,8 +1195,8 @@ def generate_recent_developments(
     anchor_block: str = "",
     max_web_results: int = _MAX_WEB_RESULTS_PER_NEWS_CALL,
     max_excerpt_chars: int = _MAX_EXCERPT_CHARS_PER_NEWS_ITEM,
-) -> RecentDevelopmentsPayload:
-    """Recent-developments report events sourced via live web grounding.
+) -> str:
+    """Recent-developments brief sourced via live web grounding.
 
     Routes through `call_llm_with_web` so the model can pull current news
     from Bloomberg / Reuters / CNBC / FT / WSJ / company press releases and
@@ -1213,8 +1204,8 @@ def generate_recent_developments(
     Codex failure falls back to Claude WebSearch/WebFetch, then to plain
     `_call_claude` (no web), then to Gemini per the standard chain.
 
-    Used by the §8 Recent developments section. The result carries typed
-    source and thesis fields; presentation code formats it for readers.
+    Used by the §8 Recent developments section. Output is markdown, with
+    sources as inline links the section renderer passes through unchanged.
 
     ``anchor_block`` (optional) injects the thesis + bear-case anchor so the
     "rank by thesis impact" rule and the per-item implication clauses can
@@ -1238,17 +1229,7 @@ def generate_recent_developments(
         NUMBER_FORMATTING_BLOCK=NUMBER_FORMATTING_BLOCK,
     )
     try:
-        decoded = call_llm_structured(
-            prompt,
-            purpose="recent_developments",
-            ticker=ticker,
-            expect="object",
-            schema=RECENT_DEVELOPMENTS_SCHEMA,
-            transport=call_llm_with_web,
-        )
-        if not isinstance(decoded, RecentDevelopmentsPayload):  # pragma: no cover
-            raise TypeError("recent_developments schema returned an unexpected value")
-        return decoded
+        return call_llm_with_web(prompt, purpose="recent_developments", ticker=ticker)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Recent-developments generation failed for {ticker}: {e}")
         raise

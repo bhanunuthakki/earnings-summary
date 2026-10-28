@@ -146,7 +146,6 @@ from report.renderers.workspace_sections.financials import (
     _validation_panel,
 )
 from report.renderers.workspace_sections.position import (
-    _position_coaching,
     _position_stat,
     _position_tab,
 )
@@ -266,7 +265,6 @@ __all__ = [
     "_panel_head",
     "_peer_comp_panel",
     "_pos_of_card",
-    "_position_coaching",
     "_position_stat",
     "_position_tab",
     "_prompt_quality_panel",
@@ -656,7 +654,6 @@ def _tab_defs(
             or bool(pos.recent_transactions or pos.open_decisions or pos.closed_decisions)
         )
     ) or (standing is not None and standing.rows):
-        graded_sell_line = spec.workspace.graded_sell_line if spec.workspace is not None else None
         you_said_html = spec.workspace.you_said_html if spec.workspace is not None else ""
         tabs.append(
             (
@@ -667,8 +664,6 @@ def _tab_defs(
                     b,
                     pos,
                     ticker=spec.ticker,
-                    position_review_count=p3.position_review_count,
-                    graded_sell_line=graded_sell_line,
                     standing_rules=standing,
                     you_said_html=you_said_html,
                 ),

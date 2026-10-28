@@ -107,7 +107,7 @@ def _has_llm_calls_table(path: Path) -> bool:
     return row is not None
 
 
-def _record_minimal(purpose: str = "position_review", ticker: str = "RBRK") -> None:
+def _record_minimal(purpose: str = "transcript_summary", ticker: str = "RBRK") -> None:
     """One record_llm_call invocation with the transport's usual arguments —
     note: no db_path parameter exists on this function; it resolves internally."""
     record_llm_call(
@@ -217,7 +217,7 @@ def test_record_llm_call_inside_context_writes_to_explicit_db(
         _record_minimal()
     rows = _ledger_rows(explicit_db)
     assert len(rows) == 1
-    assert rows[0]["purpose"] == "position_review"
+    assert rows[0]["purpose"] == "transcript_summary"
     assert rows[0]["ticker"] == "RBRK"
     assert not _has_llm_calls_table(decoy_global_db)  # decoy untouched
 
@@ -234,7 +234,7 @@ def test_call_llm_structured_explicit_db_path_logs_cost_row(
     land its cost/latency row in THAT db's llm_calls — the smoke-test gap."""
     payload = call_llm_structured(
         "Should I trim RBRK?",
-        purpose="position_review",
+        purpose="transcript_summary",
         ticker="RBRK",
         required_keys=("verdict",),
         db_path=explicit_db,
@@ -245,7 +245,7 @@ def test_call_llm_structured_explicit_db_path_logs_cost_row(
     rows = _ledger_rows(explicit_db)
     assert len(rows) == 1
     row = rows[0]
-    assert row["purpose"] == "position_review"
+    assert row["purpose"] == "transcript_summary"
     assert row["ticker"] == "RBRK"
     assert row["error"] is None
     assert row["cost_estimate_usd"] == pytest.approx(0.001)
@@ -266,7 +266,7 @@ def test_call_llm_structured_without_db_path_keeps_global_resolution(
     symptom, proving db_path= is what routes the row in the test above."""
     payload = call_llm_structured(
         "Should I trim RBRK?",
-        purpose="position_review",
+        purpose="transcript_summary",
         ticker="RBRK",
         required_keys=("verdict",),
     )

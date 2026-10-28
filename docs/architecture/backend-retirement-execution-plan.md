@@ -1,5 +1,24 @@
 # Backend simplification and product retirement execution plan
 
+## Current execution status — October 28, 2026
+
+This table owns current status and next actions. Dated checkpoint sections below
+are historical evidence. They do not select a release candidate or authorize a
+repeated operation.
+
+| Area | Current state | Next action |
+|---|---|---|
+| Source candidate | Local HEAD `67b5562e0` plus the owned coaching/input retirement and bounded R6 consumer changes. No final release candidate selected. | Freeze the batch, complete checks and bind its exact commit. |
+| Retained scope | Original sources, normal company acquisition, earnings briefs, individual transcript summaries, source-linked SayDo, basic Notes/decisions/outcomes, current owner thesis/process settings and on-demand research. | Preserve these paths in the integrated gate. |
+| Pending product choices | The separate Recent developments write-up and four-quarter Q&A theme rollup remain pending. A consolidated scope question is open. | Keep their product behavior while the choice is pending. Do not add replacement generation or qualification. |
+| Source cleanup | Optional producers, Telegram, extra document cards, pairwise SayDo and exclusive personal coaching/input paths are removed locally. Guarded history migrations remain unapplied to production. | Complete source, migration and retained-path validation before release preparation. |
+| Deterministic evidence | The frozen full matrix passed all 22,482 cases with 107 skips. Static gates passed. The command was interrupted during fixture retirement after the tests; it did not exit successfully. Recovery through the unchanged owner completed with zero errors: 24,228 files deleted, 31,080 already missing and 228 guarded files kept. | Bind the completed test evidence and final source graph. Keep the guarded files under the existing one-day completed-run lifecycle. No cleanup guard was weakened. |
+| Independent review | Final source advisory score 92. Earlier findings are resolved. The bounded final source delta also passed advisory review. Overall release remains HOLD. | Review native evidence. No formal purpose-qualified Judge certificate is claimed. |
+| R5 | The existing-owner capture contract specifies encoding, input-only identity, replay and period recovery. The real spreadsheet producer lacks a qualified native publication mapper and a safe period-error classification. | Keep the affected legacy lane until producer-wired capture, context and recovery proof pass. Do not invent financial context. |
+| R6 | Primary batching and DCF readiness have semantic proof. The foreign-oracle consumer now uses the existing strict batch at the same cutoff; all seven owning tests pass. Write/admission validation and bounded recursion have separate dispositions. | Keep the exact terminal inventory and complete the integrated gate. Do not extend the measured speedup to unmeasured families. |
+| Native/release | No bundle, transfer, model qualification, deployment or production mutation. Read-only checks confirm the Windows authority and one native runtime metadata baseline. The isolated controller repairs passed advisory review. The dated dependency-count test now checks exact runtime file membership and hashes through an independent filesystem inventory. Its portable owning tests and changed static gates pass; native behavior remains unproved. | Bind one clean candidate, build its isolated bundle and complete native qualification. Production release needs its exact artifact, effect and recovery boundary. |
+
+
 Owner direction: October 25, 2026. Source baseline: `0c22d6e478b33e20f0e75a055457ccf28599cd35`.
 Status: implementation in progress. The original plan received an independent
 advisory score of 92/100; the input/history amendment received 93/100. This document
@@ -99,7 +118,7 @@ multiples and explicit long-term assumptions. Do not call a dated P/E a long-ter
 average. AVUV collection and the policy exception remain canceled. Research
 lenses remain available on demand; their dedicated batch runners stay retired.
 
-## Current implementation checkpoint
+## Historical implementation checkpoint (superseded by current status)
 
 The source candidate now removes README generation, weekly personal-review
 packets and pending-reply adapters, decision nudges, annual-letter/calibration
@@ -412,8 +431,12 @@ section owners. Prepare request-time comments and capabilities outside the pure
 renderer through their current owner. Keep their distinct freshness and access
 semantics. Do not move writes into another render helper and call the cut done.
 
-Generate structured news products directly for new builds through existing
-typed output boundaries. The owner retired generated SayDo pairwise narratives
+Recent developments and the separate four-quarter Q&A rollup remain unchanged
+while their owner choices are pending. Do not start a replacement news generator,
+schema migration or model qualification for either pending product. If retained,
+qualify its changed generation path; if retired, remove its exclusive population.
+Pure preparation/render separation and source-link protection can proceed
+independently. Raw news/source links remain available either way. The owner retired generated SayDo pairwise narratives
 and row selection. Retained SayDo reads source-linked commitments, comparisons
 and recorded verdicts; it has no replacement narrative generator. Remove obsolete Markdown products and their exclusive
 parsers after identifying retained consumers. Do not regenerate deleted outputs
@@ -421,8 +444,8 @@ automatically. Preserve fact verification,
 context manifests, cost records, invalidation and dirty-job completion. No new
 presentation fact database or persistent selection-cache lifecycle is approved.
 
-Prove no render-time I/O in the complete retained population, new structured
-products without a Markdown round trip, retained consumer parity and zero model
+Prove no render-time I/O in the complete retained population, any owner-retained
+changed structured products without a Markdown round trip, retained consumer parity and zero model
 calls on replay of a retained completed product. Keep optional-panel unavailability visible and nonblocking.
 
 Qualify changed prompts/schemas through LLM ops with representative source-grounded
@@ -750,3 +773,34 @@ change. Discovery success checks that no legacy categorizer or URL sidecar runs.
 No source collection, model call or production write occurred. This closes one
 supported cell; annual, event, local-input and other fiscal/media cells remain
 in the full R2 population. Independent review and final acceptance remain open.
+
+## October 28 active coaching closure
+
+The source audit found coaching still active after the earlier panel cleanup:
+five frozen seed rules, a deterministic verdict override, a background position
+verdict started by `/review`, imported capacity context and generated stance
+readers. The backend generator, fixed override, seed fallback, capacity block,
+stance reads, action endpoint and background kickoff are now removed locally.
+`/review` and the CLI retain deterministic position facts with explicit or
+configured database authority. They do not generate a verdict or write a memo.
+
+The context pack now reads process tenets, explicit notes and owner decisions.
+It excludes generated stances/themes, old task prompts and the imported profile
+library. The old task-prompt reader and unused synthesis watermark query are
+removed. The historical seed-input document is removed. Current owner decisions,
+outcomes, theses and process settings remain.
+
+Next in this same batch: remove the obsolete review escalation control, Position
+coaching history, automatic-adoption/accountability strips, machine tenet
+producers, capacity importer and their exclusive libraries. Narrow the retained
+profile/process interfaces after actual caller checks. Remove retired budgets,
+evaluation registrations and eligible history through guarded migrations. The
+two pending product choices remain unchanged.
+
+The preceding complete test run had 22,649 passes and five failures. All five
+affected files now pass their 116-test repair batch. This removal batch has 140
+backend and 44 context tests passing; focused strict types report zero errors.
+The obsolete generated-summary anchor helper and result type are also removed;
+52 financial-resolution/quarantine tests pass. These are local checks. Final
+source closure, full tests, rendered proof, independent review, native
+qualification and release verification remain open. No production change occurred.

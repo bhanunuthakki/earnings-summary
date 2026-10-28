@@ -18,10 +18,6 @@ Ratified rules this module and its callers must never violate:
      pressure, an affirmed limit, or a superior alternative).
   3. Appreciation-driven drift into a zone gets more tolerance than an
      intentional add — see :func:`classify_entry_method`.
-  4. Zone status alone must NOT bypass the behavioral guard's winner
-     protection (``advisor.position_review.apply_behavioral_guard`` enforces
-     this: reaching a zone through price appreciation, with no intentional
-     add, is still not "sizing justified").
 """
 
 from __future__ import annotations

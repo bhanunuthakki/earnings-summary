@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-import advisor.position_review as advisor_position_review
 import ask.router as ask_router
 import capture.decision_draft as capture_decision_draft
 import dcf.scenario_prior as dcf_scenario_prior
@@ -16,7 +15,6 @@ import risk_factors
 from ask.packs import PACK_KEYS
 from risk_factors import TAXONOMY
 
-_VERDICT_ADAPTER = getattr(advisor_position_review, "_VERDICT_ADAPTER")
 _PACK_ROUTE_ADAPTER = getattr(ask_router, "_PACK_ROUTE_ADAPTER")
 _DECISION_DRAFT_ADAPTER = getattr(capture_decision_draft, "_DECISION_DRAFT_ADAPTER")
 _SCENARIO_PRIOR_ADAPTER = getattr(dcf_scenario_prior, "_SCENARIO_PRIOR_ADAPTER")
@@ -98,25 +96,6 @@ _FACTOR_LOADINGS_ADAPTER = getattr(risk_factors, "_FACTOR_LOADINGS_ADAPTER")
             _FACTOR_LOADINGS_ADAPTER,
             [{"factor": TAXONOMY[0], "loading": 0.7, "rationale": "Grounded exposure."}],
             [{"factor": "invented factor", "loading": 0.7, "rationale": "Ungrounded."}],
-        ),
-        (
-            _VERDICT_ADAPTER,
-            {
-                "verdict": "hold",
-                "size": "No change",
-                "reason": "Valuation and thesis remain aligned.",
-                "confidence": "medium",
-                "behavioral_check": "Do not react to price alone.",
-                "suggested_expression": "do-nothing",
-            },
-            {
-                "verdict": "all-in",
-                "size": "Everything",
-                "reason": "Invalid stance.",
-                "confidence": "certain",
-                "behavioral_check": "None",
-                "suggested_expression": "leverage",
-            },
         ),
     ],
 )

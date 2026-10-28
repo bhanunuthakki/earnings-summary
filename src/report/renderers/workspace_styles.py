@@ -1020,11 +1020,6 @@ details.panel > summary:hover { background: var(--paper); }
   display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2);
 }
 .position-yousaid .k-empty { padding: 0; }
-.position-coaching {
-  display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
-  padding: 0 0 var(--gap);
-}
-.position-coaching .coaching-line { margin: 0; }
 .position-stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));

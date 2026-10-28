@@ -174,7 +174,7 @@ def _run_recent_developments(case: CanaryCase) -> RunnerResult:
     # The anchor block is a real injection surface (anchor chaining): it is
     # interpolated straight into the recent-developments prompt.
     out = llm_client.generate_recent_developments(case.ticker, anchor_block=_poisoned_text(case))
-    return (out.model_dump_json(), None)
+    return (out or "", None)
 
 
 def _run_news_structuring(case: CanaryCase) -> RunnerResult:

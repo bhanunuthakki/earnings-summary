@@ -39,6 +39,10 @@ _RENDERER_SIGNATURE = r"\*\*([^*]+)\*\*"
 # exception must be added here WITH its rationale.
 _SIGNATURE_ALLOWLIST: dict[str, str] = {
     "src/ui/prose.py": "the canonical prose render boundary",
+    "src/report/renderers/workspace_data.py": (
+        "markdown STRIPPER (**x** -> plaintext x for a news-tile gloss), not an "
+        "HTML renderer — emits no tags"
+    ),
     "src/llm/postprocess.py": (
         "markdown STRIPPER — strip_inline_markdown reduces LLM output persisted "
         "into SCALAR fields to plaintext at persist time (scalars plain, prose "

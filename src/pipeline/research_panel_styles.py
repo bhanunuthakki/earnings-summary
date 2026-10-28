@@ -40,12 +40,6 @@ RESEARCH_PANEL_STYLE = (
 .cc-peek-attest-done { color: var(--fg-soft); font-size: var(--fs-caption); }
 .cc-attest-msg { font-size: var(--fs-caption); color: var(--fg-soft); }
 .cc-review-peek .synthesis-body { font-size: var(--fs-body); }
-.cc-review-foot { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hairline);
-  display: flex; flex-direction: column; gap: 8px; }
-.cc-review-log { font-family: var(--mono); font-size: var(--fs-caption); color: var(--fg-soft);
-  background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 8px 10px; margin: 0; max-height: 200px; overflow-y: auto;
-  white-space: pre-wrap; word-break: break-word; }
 .research-card, .jr-note, .dj-row, .vx-builder, .sc-note, .ledger-cap,
 .ledger-stance, .ledger-packet { border:1px solid var(--border); border-radius:var(--radius);
   background:var(--surface); }

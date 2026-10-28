@@ -62,16 +62,6 @@
     },
     {
       "disposition": "external_optional_dependency",
-      "evidence": "Literal optional external owner-model import. stage_wealthplan_facts checks the exact requested wealthplan_root/data/plan.local.json first, inserts that owner src path when absent, imports fixed wealthplan.models, and handles ImportError as an unavailable adapter. _WealthplanModels is a typing Protocol, not repository-owned implementation. Do not classify as internal or infer source-root attestation from import resolution; Python module caching/search-path semantics remain separate. No dynamic module name supplied by data.",
-      "fingerprint": "a7645289be02bd11f3e6997f324d394ebfb778bb614e2a2a6c64d143c8910ab3",
-      "line": 275,
-      "path": "execution/import_owner_capacity.py",
-      "targets": [
-        "wealthplan.models"
-      ]
-    },
-    {
-      "disposition": "external_optional_dependency",
       "evidence": "Windows snapshot path lazily loads the platform msvcrt module.",
       "fingerprint": "d758e8f71a80ee247259df3974392457af1e6105ac484eb6acb4ffaefa87b098",
       "line": 780,
@@ -148,8 +138,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "The cash-need reader loads Wealthplan event classes from the optional sibling checkout through a typed, fail-closed adapter.",
-      "fingerprint": "af4fdc9045ac5658dd8497e820d913750219ff6ebfdf074cc23449ea9dff2a70",
-      "line": 120,
+      "fingerprint": "094f6068ac73a5f0fc501858a3fdca55e3782ba1508df62a32cb17a3f3548fdd",
+      "line": 118,
       "path": "src/integrations/wealthplan_capacity.py",
       "targets": [
         "wealthplan.models"
@@ -158,8 +148,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "The cash-need reader loads the optional Wealthplan persistence adapter and degrades unavailable on import or load failure.",
-      "fingerprint": "f757901bedff3696c102e74b91ec949cf1f8bf2d731892a454a558721c998a64",
-      "line": 121,
+      "fingerprint": "0df2552588c5dc9405dcfa0ed1b759e62c10c44813b2c30f4d6935513460f8b2",
+      "line": 119,
       "path": "src/integrations/wealthplan_capacity.py",
       "targets": [
         "wealthplan.persistence"
@@ -260,7 +250,7 @@
     },
     {
       "disposition": "internal_target",
-      "evidence": "Synthetic service-authority regression imports only the literal pytest entrypoint pair comments_server and execution.capture_poller. Each test disables real environment loading and uses temporary files. The named entrypoints resolve to these exact repository sources; no caller or provider supplies the module name.",
+      "evidence": "Synthetic service-authority regressions use only the literal pytest entrypoint comments_server. They use temporary files and control environment loading in each test. The fixed entrypoint resolves to execution/comments_server.py; no caller or provider supplies the module name.",
       "fingerprint": "b090616c03ef3905aaeafefc22bd1e08fe450a60b4f5ad5ecaf2b92094677540",
       "line": 26,
       "path": "tests/test_runtime_state_authority.py",
@@ -270,7 +260,7 @@
     },
     {
       "disposition": "internal_target",
-      "evidence": "Synthetic service-authority regression imports only the literal pytest entrypoint pair comments_server and execution.capture_poller. Each test disables real environment loading and uses temporary files. The named entrypoints resolve to these exact repository sources; no caller or provider supplies the module name.",
+      "evidence": "Synthetic service-authority regressions use only the literal pytest entrypoint comments_server. They use temporary files and control environment loading in each test. The fixed entrypoint resolves to execution/comments_server.py; no caller or provider supplies the module name.",
       "fingerprint": "79926b8f66057c7dec9cf1791b244b9c1af97e5d259e45f3ffa519cbdf88ab2a",
       "line": 51,
       "path": "tests/test_runtime_state_authority.py",
@@ -280,7 +270,7 @@
     },
     {
       "disposition": "internal_target",
-      "evidence": "Synthetic service-authority regression imports only the literal pytest entrypoint pair comments_server and execution.capture_poller. Each test disables real environment loading and uses temporary files. The named entrypoints resolve to these exact repository sources; no caller or provider supplies the module name.",
+      "evidence": "Synthetic service-authority regressions use only the literal pytest entrypoint comments_server. They use temporary files and control environment loading in each test. The fixed entrypoint resolves to execution/comments_server.py; no caller or provider supplies the module name.",
       "fingerprint": "817077c7a5a5159bc580d9ee69a31a54695cf16ae9b9ec055b9566aeec1a5264",
       "line": 76,
       "path": "tests/test_runtime_state_authority.py",
@@ -294,7 +284,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "9589312b0b6b7fafbddd66d1d3994d35c34723bf838ff828ca5e690b5d265387",
+      "source_sha256": "666795207d619dbdead3f69fa0e2e33e7addf30dc4e1ff7831b78ccf5cad815f",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
