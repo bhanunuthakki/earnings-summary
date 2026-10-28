@@ -615,6 +615,7 @@ def _prepare_staged_supplement(_url: str, objects: Path, _name: str) -> Path:
     [
         (DocType.IR_PRESENTATION, ".pdf"),
         (DocType.IR_PRESS_RELEASE, ".pdf"),
+        (DocType.IR_PRESS_RELEASE, ".html"),
         (DocType.IR_SUPPLEMENT, ".xlsx"),
         (DocType.IR_SUPPLEMENT, ".pdf"),
         (DocType.IR_INVESTOR_UPDATE, ".pdf"),
@@ -657,6 +658,7 @@ def test_candidate_manages_calendar_quarter_documents_by_family_and_media(
 
     class Allowed:
         fiscal_year_end_month: int | None = 12
+        fiscal_year_end = "12-31"
 
     def authorize(*_args: object) -> Allowed:
         return Allowed()
@@ -693,10 +695,13 @@ def test_candidate_manages_calendar_quarter_documents_by_family_and_media(
     assert request.inventory_request.period_end == date(2026, 6, 30)
     assert request.inventory_request.expected_documents[0].document_type == doc_type.value
     staged = cast(managed.StagedIssuerDocument, captured["document"])
-    assert staged.media_type == (
-        "application/pdf"
-        if suffix == ".pdf"
-        else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert (
+        staged.media_type
+        == {
+            ".pdf": "application/pdf",
+            ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ".html": "text/html",
+        }[suffix]
     )
 
 
@@ -736,6 +741,7 @@ def test_candidate_keeps_noncalendar_and_unqualified_cells_on_exact_legacy_hando
     class Allowed:
         def __init__(self) -> None:
             self.fiscal_year_end_month = fiscal_year_end_month
+            self.fiscal_year_end = None
 
     def authorize(*_args: object) -> Allowed:
         return Allowed()
@@ -771,8 +777,10 @@ def test_candidate_keeps_noncalendar_and_unqualified_cells_on_exact_legacy_hando
     assert path.read_bytes() == b"synthetic source"
 
 
+@pytest.mark.parametrize("suffix", [".pdf", ".html"])
+@pytest.mark.parametrize("stored_fye", ["06-30", "12-31"])
 def test_candidate_manages_noncalendar_period_with_exact_registered_witness(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suffix: str, stored_fye: str
 ) -> None:
     witness = FiscalPeriodWitness(
         issuer_id="issuer-port",
@@ -798,11 +806,12 @@ def test_candidate_manages_noncalendar_period_with_exact_registered_witness(
     captured: dict[str, object] = {}
 
     class Allowed:
-        fiscal_year_end_month: int | None = 6
+        fiscal_year_end_month: int | None = int(stored_fye[:2])
+        fiscal_year_end = stored_fye
 
     def download(_url: str, objects: Path, _name: str) -> Path:
         objects.mkdir(parents=True, exist_ok=True)
-        path = objects / "q2.pdf"
+        path = objects / f"q2{suffix}"
         path.write_bytes(b"synthetic source")
         return path
 
@@ -856,19 +865,29 @@ def test_candidate_manages_noncalendar_period_with_exact_registered_witness(
 
     monkeypatch.setattr(managed, "_seal_prepared_staging", seal)
 
-    _path, request, classification = managed.prepare_issuer_document_candidate(
-        "PORT",
-        "https://issuer.test/q2-release.pdf",
-        state_root=tmp_path,
-        db_path=db_path,
-        owner_requested=False,
-        calendar_override="fye_06",
-        fiscal_year=2026,
-        fiscal_quarter=2,
-        legacy_base_name="PORT_q2",
-        fiscal_witness_document_version_id="registered-port-q2",
-        download=download,
-    )
+    try:
+        _path, request, classification = managed.prepare_issuer_document_candidate(
+            "PORT",
+            "https://issuer.test/q2-release.pdf",
+            state_root=tmp_path,
+            db_path=db_path,
+            owner_requested=False,
+            calendar_override="fye_06",
+            fiscal_year=2026,
+            fiscal_quarter=2,
+            legacy_base_name="PORT_q2",
+            fiscal_witness_document_version_id="registered-port-q2",
+            download=download,
+        )
+    except managed.IssuerDocumentPreparationError as exc:
+        if stored_fye == "12-31":
+            assert exc.code == "fiscal_witness_calendar_mismatch"
+        else:
+            assert suffix == ".html"
+            assert exc.code == "fiscal_witness_classification_mismatch"
+        assert not captured
+        return
+    assert stored_fye == "06-30" and suffix == ".pdf"
 
     assert classification is None
     assert request is not None

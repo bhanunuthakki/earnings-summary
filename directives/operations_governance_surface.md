@@ -3061,3 +3061,25 @@ approved roots outside the output root. The research publisher supplies the
 content assessor to the existing atomic artifact commit. Assessment runs under
 that commit's writer snapshot. A changed or unavailable source blocks reuse or
 publication. This adds no operator action, provider, job, source copy or store.
+
+
+## Managed calendar-year HTML releases (2026-10-27)
+
+Discovery can publish the existing manifest `press_release` HTML cell through
+the managed issuer-document owner. The stored full fiscal year end must be
+exactly `12-31`. Any fiscal witness must also be exactly `12-31`. A stored
+month of 12 is insufficient. The authorization result retains its existing
+month field and also carries the validated full calendar.
+
+The existing classifier separates issuer identity text from release body text.
+Linked archive headlines cannot supply the positive release signal. PDF and ZIP
+bytes labeled as HTML are rejected. The single closed media/suffix map admits
+`text/html` and `.html` only for `ir_press_release`. Both preparation routes and
+uncommitted replay use the same admission predicate.
+
+Managed success preserves raw bytes, URL, document inventory and attempt
+accounting. It does not run legacy categorization or create an incoming-URL
+sidecar. Existing mismatch ordering, source-period selection, PDF/XLSX behavior,
+local HTML/HTM upload and committed recovery remain. This adds no command,
+source fetcher, store, schedule, narrative product or financial-fact writer.
+The implementation and fixtures perform no live collection or host mutation.

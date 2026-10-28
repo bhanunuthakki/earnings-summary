@@ -621,13 +621,25 @@ def fingerprint_xlsx(path: Path) -> str:
         wb.close()
 
 
-def fingerprint_html(path: Path) -> str:
-    """Read a release classification view without changing its publisher bytes."""
-    soup = BeautifulSoup(path.read_bytes(), "html.parser")
+def _html_fingerprint_views(path: Path) -> tuple[str, str]:
+    """Keep issuer identity text separate from positive release body text."""
+    raw = path.read_bytes()
+    if raw.lstrip().startswith((b"%PDF-", b"PK\x03\x04")):
+        raise ValueError("binary source is not HTML")
+    soup = BeautifulSoup(raw, "html.parser")
     for node in soup.select("script, style, noscript, template, nav, header, footer"):
         node.decompose()
     content = soup.find("article") or soup.find("main") or soup.body or soup
-    return content.get_text(" ", strip=True)[:_PDF_FINGERPRINT_CHARS]
+    full_text = content.get_text(" ", strip=True)[:_PDF_FINGERPRINT_CHARS]
+    for link in reversed(content.select("a[href]")):
+        if not str(link.get("href", "")).startswith("#"):
+            link.decompose()
+    return full_text, content.get_text(" ", strip=True)[:_PDF_FINGERPRINT_CHARS]
+
+
+def fingerprint_html(path: Path) -> str:
+    """Read a release classification view without changing its publisher bytes."""
+    return _html_fingerprint_views(path)[0]
 
 
 def fingerprint(path: Path) -> str:
@@ -1258,7 +1270,10 @@ def classify_ir_file(
         )
 
     try:
-        raw_text = fingerprint(path)
+        if ext in {".html", ".htm"}:
+            raw_text, release_text = _html_fingerprint_views(path)
+        else:
+            raw_text = release_text = fingerprint(path)
     except Exception as e:  # pypdf / openpyxl can throw a wide tree
         return CategorizationFailure(
             reason=f"fingerprint_error:{type(e).__name__}:{e}",
@@ -1309,7 +1324,7 @@ def classify_ir_file(
         any(
             rule_type is DocType.IR_PRESS_RELEASE
             and label != "press_release_dateline"
-            and pattern.search(text) is not None
+            and pattern.search(re.sub(r"[ \t]+", " ", release_text)) is not None
             for rule_type, pattern, label in _DOC_TYPE_RULES
         )
         if is_html

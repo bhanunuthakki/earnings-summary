@@ -74,12 +74,38 @@ log = logging.getLogger(__name__)
 _OPERATION = "managed_issuer_document_publication.v1"
 _CALENDAR_QUARTER_DOCUMENT_SUFFIXES: dict[str, frozenset[str]] = {
     "ir_presentation": frozenset({".pdf"}),
-    "ir_press_release": frozenset({".pdf"}),
+    "ir_press_release": frozenset({".pdf", ".html"}),
     "ir_supplement": frozenset({".pdf", ".xlsx"}),
     "ir_investor_update": frozenset({".pdf"}),
     "ir_transcript": frozenset({".pdf"}),
     "sec_10q": frozenset({".pdf"}),
 }
+ManagedIssuerMediaType = Literal[
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/html",
+]
+_MANAGED_MEDIA_SUFFIXES: dict[ManagedIssuerMediaType, str] = {
+    "application/pdf": ".pdf",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "text/html": ".html",
+}
+
+
+def _managed_media_allowed(
+    document_type: str,
+    suffix: str,
+    authorization: StoredCollectionAuthorization,
+    witness: FiscalPeriodWitness | None,
+) -> bool:
+    if suffix not in _CALENDAR_QUARTER_DOCUMENT_SUFFIXES.get(document_type, frozenset()):
+        return False
+    return suffix != ".html" or (
+        authorization.fiscal_year_end == "12-31"
+        and (witness is None or witness.fiscal_year_end == "12-31")
+    )
+
+
 _FISCAL_WITNESS_DOCUMENT_TYPES = frozenset({"sec_10q", "sec_10k", "sec_20f", "sec_40f"})
 
 
@@ -248,9 +274,7 @@ class StagedIssuerDocument(_Closed):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     byte_size: int = Field(gt=0)
     fetched_at: datetime
-    media_type: Literal[
-        "application/pdf", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    ]
+    media_type: ManagedIssuerMediaType
     ticker: str
     period_end: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     classification_confidence: Literal["high", "medium", "low"]
@@ -271,10 +295,11 @@ class StagedIssuerDocument(_Closed):
     def validate_path(self) -> Self:
         if self.fetched_at.tzinfo is None or self.fetched_at.utcoffset() != UTC.utcoffset(None):
             raise ValueError("fetched_at must be UTC")
-        if (self.media_type == "application/pdf") != self.object_path.endswith(".pdf"):
-            raise ValueError("media type/object extension mismatch")
-        if self.media_type.endswith("sheet") and not self.object_path.endswith(".xlsx"):
-            raise ValueError("media type/object extension mismatch")
+        suffix = _MANAGED_MEDIA_SUFFIXES[self.media_type]
+        if not self.object_path.endswith(
+            suffix
+        ) or suffix not in _CALENDAR_QUARTER_DOCUMENT_SUFFIXES.get(self.document_type, frozenset()):
+            raise ValueError("document family/media/object extension mismatch")
         return self
 
 
@@ -341,7 +366,7 @@ class PreparedIssuerDocumentPublication(_Closed):
         receipt = self.staging_receipt
         expected_paths = tuple(
             f"ir_documents/{item.ticker}/{item.period_end}/{item.document_type}__{item.sha256[:8]}"
-            f"{'.pdf' if item.media_type == 'application/pdf' else '.xlsx'}"
+            f"{_MANAGED_MEDIA_SUFFIXES[item.media_type]}"
             for item in receipt.documents
         )
         document_set = _document_set(receipt)
@@ -652,7 +677,7 @@ def _configured(root: Path, db_path: Path) -> Path:
 
 def _policy(
     request: IssuerDocumentStagingRequest, db_path: Path, *, permit_pending: bool = False
-) -> None:
+) -> StoredCollectionAuthorization:
     inv = request.inventory_request
     auth = authorize_stored_collection_target(
         db_path,
@@ -683,11 +708,12 @@ def _policy(
             as_of=current_utc_date(),
         )
     if decision is None and permit_pending:
-        return
+        return auth
     if decision is None:
         raise PreparedIssuerDocumentPublisherError("reported_period_selection_pending")
     if not decision:
         raise PreparedIssuerDocumentPublisherError("reported_quarter_window_denied")
+    return auth
 
 
 def issuer_request_period_is_allowed(
@@ -765,7 +791,7 @@ def validate_prepared_staging(
         or receipt.verifier_code_sha256 != verifier_code_identity()
     ):
         raise PreparedIssuerDocumentPublisherError("staging_code_identity_changed")
-    _policy(request, db_path, permit_pending=permit_pending)
+    authorization = _policy(request, db_path, permit_pending=permit_pending)
     staging = root / ".tmp" / "managed_ir_staging" / request.attempt_id
     require_no_reparse_points(staging)
     objects = staging / "objects"
@@ -791,6 +817,13 @@ def validate_prepared_staging(
     if observed != declared:
         raise PreparedIssuerDocumentPublisherError("staged_objects_directory_invalid")
     for item in receipt.documents:
+        if not _managed_media_allowed(
+            item.document_type,
+            Path(item.object_path).suffix,
+            authorization,
+            request.inventory_request.fiscal_period_witness,
+        ):
+            raise PreparedIssuerDocumentPublisherError("staged_media_not_admitted")
         source = staging / item.object_path
         try:
             snap, _raw = read_stable_artifact(source)
@@ -1118,7 +1151,7 @@ def _authority_binding(authority: _Authority) -> str:
 
 
 def _target(root: Path, item: StagedIssuerDocument) -> Path:
-    suffix = ".pdf" if item.media_type == "application/pdf" else ".xlsx"
+    suffix = _MANAGED_MEDIA_SUFFIXES[item.media_type]
     target = (
         root
         / "ir_documents"
@@ -2430,6 +2463,15 @@ def prepare_issuer_document_sources(
                     phase="classify",
                     objects=objects,
                 )
+            if not _managed_media_allowed(
+                expected.document_type,
+                destination.suffix.lower(),
+                authorization,
+                inventory.fiscal_period_witness,
+            ):
+                raise _preparation_failure(
+                    "staging_media_not_admitted", request=request, phase="classify", objects=objects
+                )
             documents.append(
                 _staged_document(
                     request,
@@ -2490,10 +2532,10 @@ def _staged_document(
             sha256=classified_bytes.file_sha256,
             byte_size=classified_bytes.size_bytes,
             fetched_at=datetime.now(UTC),
-            media_type=(
-                "application/pdf"
-                if destination.suffix.lower() == ".pdf"
-                else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            media_type=next(
+                media
+                for media, suffix in _MANAGED_MEDIA_SUFFIXES.items()
+                if suffix == destination.suffix.lower()
             ),
             ticker=outcome.ticker,
             period_end=outcome.period_end.isoformat(),
@@ -2692,7 +2734,7 @@ def prepare_issuer_document_candidate(
         if (
             outcome.period_end != expected_period_end
             or (fiscal_witness is None and authorization.fiscal_year_end_month != 12)
-            or suffix not in _CALENDAR_QUARTER_DOCUMENT_SUFFIXES.get(document_type, frozenset())
+            or not _managed_media_allowed(document_type, suffix, authorization, fiscal_witness)
         ):
             if fiscal_witness is not None:
                 raise IssuerDocumentPreparationError(

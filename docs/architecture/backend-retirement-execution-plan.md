@@ -730,3 +730,23 @@ Scheduler tasks remained registered. No host data, service, task, model or
 policy changed. The shared membership window remained exhausted, with the
 observed reset at 00:52:33 UTC October 28 (17:52 PDT October 27). Current
 independent review and native execution remain pending.
+
+
+### R2 HTML release cell implementation
+
+The local source now routes the supported calendar-year HTML release cell
+through managed staging and publication. One closed MIME/suffix map owns
+receipt validation and canonical paths. A complete stored `12-31` calendar
+and any matching fiscal witness are required. Both preparation paths and
+uncommitted replay check this boundary. Committed recovery keeps its existing
+authority. Unknown reported periods still retain raw candidates only.
+
+The archive and mislabeled-binary regressions failed before correction. The
+classifier now uses release body text for the positive signal while retaining
+linked issuer text for identity. Local HTML/HTM support remains. The real
+publication fixture checks canonical `.html`, `text/html`, original bytes,
+evidence inventory, exact replay and recovery after staging removal/calendar
+change. Discovery success checks that no legacy categorizer or URL sidecar runs.
+No source collection, model call or production write occurred. This closes one
+supported cell; annual, event, local-input and other fiscal/media cells remain
+in the full R2 population. Independent review and final acceptance remain open.

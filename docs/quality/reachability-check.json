@@ -1,7 +1,7 @@
 {
   "schema_version": "operational-reachability-raw/v1",
-  "subject_commit": "e8df59ee16f157844830f47b50c38fe0fd2e1eb4",
-  "source_manifest_sha256": "24831b44539feceefb547632dda764c820ed216c92ad9ac74179a787d0120211",
+  "subject_commit": "9124ad3b4920717a266b43a3ac43f3098f8744de",
+  "source_manifest_sha256": "ebf659cd2bcddda95d17e32b22ce1d933797fcf3b4418e925cab08bf62b898df",
   "scanner_sha256": "c9ec98b1cbcdf93c9b890d9a8a8c59ef6109598f67b1739c38463d79d5986175",
   "scanner_version": "1.3.0",
   "python_version": "3.14.7 (main, Aug  5 2026, 10:29:49) [Clang 21.0.0 (clang-2100.1.1.101)]",
@@ -2938,6 +2938,7 @@
     "tests/test_macro_store.py",
     "tests/test_maintenance_endpoint.py",
     "tests/test_manage_issuer_document_sources.py",
+    "tests/test_managed_ir_html_release.py",
     "tests/test_managed_ir_sources.py",
     "tests/test_management_indicators.py",
     "tests/test_materiality_judgment.py",
@@ -6688,7 +6689,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "content_sha256": "23925ebb45af0f8d1277f21f174a02324f3debf54a4ef1016bff57c4f3b5af04",
+      "content_sha256": "0129fa55458eaf7ba9f374d09faeb26b51291139cec969d711e9109566d3644f",
       "error": null
     },
     {
@@ -6778,7 +6779,7 @@
     },
     {
       "path": "docs/architecture/backend-retirement-execution-plan.md",
-      "content_sha256": "107261f982118c5eeaa3cdded474e6c51d9f5ea8ea4a511b505a8514af1143f7",
+      "content_sha256": "8bcc46b57c17cb8910ab0a59fb06587bab9b3ba04afbfe6c97e4c039ffa864dd",
       "error": null
     },
     {
@@ -11183,7 +11184,7 @@
     },
     {
       "path": "src/ir_uploads.py",
-      "content_sha256": "6eb89db3aa921cde530bfd06c798866a2feab58e8f0afc62c68c180dc0f0b8a0",
+      "content_sha256": "d788c6810c9b5c86bfb7a4f7491a285a804c7fd979318648ee101874bc364729",
       "error": null
     },
     {
@@ -12018,7 +12019,7 @@
     },
     {
       "path": "src/pipeline/managed_ir_sources.py",
-      "content_sha256": "a3813f614fe567540421ae2f0479ea649dec0c78015f6e528eac464c772b3d8f",
+      "content_sha256": "f0030b8469e09204083cb5db88ee25144b3311863f1c1b54a6230e9595eea499",
       "error": null
     },
     {
@@ -12238,7 +12239,7 @@
     },
     {
       "path": "src/pipeline/source_policy.py",
-      "content_sha256": "528f1695a082965612b77168762fc64a541894a466e86ce67428d49ab52fd880",
+      "content_sha256": "45352e90fe5eccd989f77a543b3279d25d0746ce3871d3fcdda35c4754f96e51",
       "error": null
     },
     {
@@ -17308,7 +17309,7 @@
     },
     {
       "path": "tests/test_fetch_ir_documents.py",
-      "content_sha256": "5e9f412a18363bbc3b528c0ef57e3569ef77715148f789493d0933c259369e3e",
+      "content_sha256": "e80a295157d48ed2ca0147802a36c881e08da4ef800bd78f645eecfa65b8c5ea",
       "error": null
     },
     {
@@ -18078,7 +18079,7 @@
     },
     {
       "path": "tests/test_ir_uploads_html.py",
-      "content_sha256": "68c310b87271e72f6f4374fc6813d49a079c19ef8610ad320b472cd61967d9e2",
+      "content_sha256": "8add5bb1ec631f87e559ac3bf55b05e4bc8a8174a90375419d21472d8d629481",
       "error": null
     },
     {
@@ -18604,6 +18605,11 @@
     {
       "path": "tests/test_manage_issuer_document_sources.py",
       "content_sha256": "cc3722b05d1662bda68b0879eb51579383751860f5e9dd333b74c23cef47c276",
+      "error": null
+    },
+    {
+      "path": "tests/test_managed_ir_html_release.py",
+      "content_sha256": "0966b8520668a6de50b694103bd0153a375975e2b0a0cb1720d12c655f505806",
       "error": null
     },
     {
@@ -21013,7 +21019,7 @@
     },
     {
       "path": "tests/test_source_policy_contract.py",
-      "content_sha256": "fb015676255476a062aefa6524c24b014eee5227f0da7e99926d78d8cc7ca3f9",
+      "content_sha256": "35e39dc9798bd7e213e3a326f4c9880046e8289c714012d387f4d865c5895c5a",
       "error": null
     },
     {
@@ -21935,8 +21941,8 @@
     "name": "ast+xml+literal-scanner",
     "version": "1.3.0",
     "python": ">=3.11",
-    "source_sha256": "5852f639cab8f704283fd4cfde02d244c5359fa33663d1cebfcb964e733968f2",
-    "dispositions_sha256": "53d7a3327587f8d11ebcfd8bfd1516b0c56860c4dd0d0db96be3ff4aadf420c6"
+    "source_sha256": "8f3477c03535b5899b8046ae2ec256db9290e917aa682e4cb61451f9221fe246",
+    "dispositions_sha256": "c856de4ab80496cfc7bb163d57a2d0c1eb225f4f09ad8db7f41773d8d1f5a98b"
   },
   "nodes": [
     {
@@ -32917,6 +32923,10 @@
     },
     {
       "id": "tests/test_manage_issuer_document_sources.py",
+      "kind": "python"
+    },
+    {
+      "id": "tests/test_managed_ir_html_release.py",
       "kind": "python"
     },
     {
@@ -176065,7 +176075,7 @@
       "kind": "import",
       "evidence": "import index_manager",
       "confidence": "high",
-      "line": 2798,
+      "line": 2840,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -298015,7 +298025,7 @@
       "kind": "getattr",
       "evidence": "literal getattr attribute",
       "confidence": "medium",
-      "line": 1610,
+      "line": 1629,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -335676,6 +335686,156 @@
       "evidence": "from execution import manage_issuer_document_sources",
       "confidence": "high",
       "line": 12,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_managed_ir_html_release.py",
+      "target": "<external:__future__>",
+      "kind": "import",
+      "evidence": "external import __future__",
+      "confidence": "high",
+      "line": 3,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_managed_ir_html_release.py",
+      "target": "<external:collections.abc>",
+      "kind": "import",
+      "evidence": "external import collections.abc",
+      "confidence": "high",
+      "line": 9,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_managed_ir_html_release.py",
+      "target": "<external:datetime>",
+      "kind": "import",
+      "evidence": "external import datetime",
+      "confidence": "high",
+      "line": 10,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_managed_ir_html_release.py",
+      "target": "<external:hashlib>",
+      "kind": "import",
+      "evidence": "external import hashlib",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_managed_ir_html_release.py",
+      "target": "<external:json>",
+      "kind": "import",
+      "evidence": "external import json",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_managed_ir_html_release.py",
+      "target": "<external:pathlib>",
+      "kind": "import",
+      "evidence": "external import pathlib",
+      "confidence": "high",
+      "line": 11,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_managed_ir_html_release.py",
+      "target": "<external:pydantic>",
+      "kind": "import",
+      "evidence": "external import pydantic",
+      "confidence": "high",
+      "line": 14,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_managed_ir_html_release.py",
+      "target": "<external:pytest>",
+      "kind": "import",
+      "evidence": "external import pytest",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_managed_ir_html_release.py",
+      "target": "<external:shutil>",
+      "kind": "import",
+      "evidence": "external import shutil",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_managed_ir_html_release.py",
+      "target": "<external:sqlite3>",
+      "kind": "import",
+      "evidence": "external import sqlite3",
+      "confidence": "high",
+      "line": null,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_managed_ir_html_release.py",
+      "target": "execution/__init__.py",
+      "kind": "import",
+      "evidence": "from execution",
+      "confidence": "high",
+      "line": 16,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_managed_ir_html_release.py",
+      "target": "execution/fetch_ir_documents.py",
+      "kind": "import",
+      "evidence": "from execution import fetch_ir_documents",
+      "confidence": "high",
+      "line": 16,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_managed_ir_html_release.py",
+      "target": "src/pipeline/__init__.py",
+      "kind": "import",
+      "evidence": "from pipeline",
+      "confidence": "high",
+      "line": 17,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_managed_ir_html_release.py",
+      "target": "src/pipeline/issuer_document_inventory.py",
+      "kind": "import",
+      "evidence": "from pipeline.issuer_document_inventory",
+      "confidence": "high",
+      "line": 18,
+      "unknown": false,
+      "reviewed_disposition": null
+    },
+    {
+      "source": "tests/test_managed_ir_html_release.py",
+      "target": "src/pipeline/managed_ir_sources.py",
+      "kind": "import",
+      "evidence": "from pipeline import managed_ir_sources",
+      "confidence": "high",
+      "line": 17,
       "unknown": false,
       "reviewed_disposition": null
     },
@@ -422209,8 +422369,8 @@
   ],
   "hold": false,
   "stats": {
-    "files": 3407,
-    "edges": 38436,
+    "files": 3408,
+    "edges": 38451,
     "unknown": 176,
     "diagnostics": 0,
     "production_unknown": 0,
