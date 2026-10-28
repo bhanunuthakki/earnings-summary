@@ -62,7 +62,9 @@ def _resolved_quarter(conn: sqlite3.Connection) -> None:
         )
         assert row.lastrowid is not None
         fact_ids.append(int(row.lastrowid))
-    cutoff = datetime.now(UTC) + timedelta(minutes=1)
+    # Admit the synthetic inputs as known now. A future resolution receipt is
+    # not available to the current derivation's immutable-reference lookup.
+    cutoff = datetime.now(UTC)
     for fact_id in fact_ids:
         assert (
             resolve_fact_row(

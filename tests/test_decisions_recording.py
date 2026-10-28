@@ -387,7 +387,7 @@ def test_hit_rate_by_kind_aggregates(db: Path) -> None:
 
 
 def test_outcome_curve_by_conviction(db: Path) -> None:
-    base = datetime(2026, 5, 1, tzinfo=UTC)
+    base = datetime.now(UTC) - timedelta(days=1)
     cases: list[tuple[int, str, OutcomeLabel]] = [
         (10, "high", "correct"),
         (11, "high", "wrong"),

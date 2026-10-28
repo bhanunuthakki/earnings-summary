@@ -306,7 +306,10 @@ def test_derived_financial_leaf_cannot_hide_deferred_pdf_source(
             evidence=None, derivation=SimpleNamespace(input_observation_ids=("reported",))
         ),
         "reported": SimpleNamespace(
-            evidence=SimpleNamespace(evidence_node_id=nodes[1].node_id), derivation=None
+            evidence=SimpleNamespace(
+                evidence_node_id=nodes[1].node_id, document_version_id="scoped-pdf"
+            ),
+            derivation=None,
         ),
     }
 
@@ -315,7 +318,9 @@ def test_derived_financial_leaf_cannot_hide_deferred_pdf_source(
 
     monkeypatch.setattr(briefs.FactReadModel, "provenance_bundle", source_bundle)
     with pytest.raises(briefs.MemoEvidenceError, match="deferred_pdf_page"):
-        getattr(briefs, "_verify_report_pdf_observation")(database, "derived", snapshot, cutoff=T1)
+        getattr(briefs, "_verify_report_observation_sources")(
+            database, "derived", snapshot, cutoff=T1
+        )
 
 
 def test_v7_native_obligations_select_only_the_exact_page_scope(

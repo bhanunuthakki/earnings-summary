@@ -382,7 +382,7 @@ MUTATION_ROUTE_CACHE_REGISTRY: dict[str, CacheFamily] = {
         WORK_OS_DESK_KIND,
         *FAMILY_PANEL_DECISIONS,
     ),
-    "/api/reconcile/<kind>/<int:item_id>/<verdict>": (
+    "/api/reconcile/note/<int:item_id>/<verdict>": (
         *FAMILY_PANEL_OVERVIEW,
         *FAMILY_PANEL_JOURNAL,
         WORK_OS_EVALUATION_KIND,

@@ -744,6 +744,9 @@ def test_historical_grade_stays_bounded_when_other_assessment_gates_pass(
     def pass_gate(*_args: object, **_kwargs: object) -> None:
         return None
 
+    def source_documents(*_args: object, **_kwargs: object) -> tuple[str, ...]:
+        return ()
+
     def raw(*_args: object) -> int:
         return 1
 
@@ -772,6 +775,7 @@ def test_historical_grade_stays_bounded_when_other_assessment_gates_pass(
         return ResearchSnapshotRequest.model_validate_json(row[0]), "d" * 64, ()
 
     monkeypatch.setattr(briefs, "_read_memo_financial_cell", cell)
+    monkeypatch.setattr(briefs, "_verify_report_observation_sources", source_documents)
     monkeypatch.setattr(briefs, "_raw_documents", raw)
     for owner in (
         "verify_memo_claim_population",
