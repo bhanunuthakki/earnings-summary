@@ -34,6 +34,7 @@ from typing import TypeVar
 from compute.kpi_resolver import canonical_metric_name
 from ir_pipeline.config import IrConfig, SheetKpi
 from ir_pipeline.spreadsheet import SpreadsheetCellRead, SpreadsheetParseResult
+from ir_pipeline.spreadsheet_capture import capture_spreadsheet_parse
 from models.documents import SourceType, tier_for_source_type
 from models.facts import Currency, FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import DefinitionOrigin
@@ -202,6 +203,26 @@ def ingest_spreadsheet_kpis(
         if repo_root is None:
             raise ValueError("post-cutover IR spreadsheet ingest requires repo_root")
         ensure_legacy_document_evidence(conn, repo_root=repo_root, document_id=doc_id)
+        if isinstance(parsed, SpreadsheetParseResult):
+            # Keep the acquired document and its evidence anchor durable before
+            # the separate, atomic parser capture begins.
+            conn.commit()
+            document_version_id = f"legacy-doc-{doc_id}"
+            version = conn.execute(
+                "SELECT issuer_id,blob_sha256 FROM evidence_document_versions "
+                "WHERE document_version_id=? AND legacy_document_id=?",
+                (document_version_id, doc_id),
+            ).fetchone()
+            if version is None or str(version[1]) != parsed.workbook_sha256:
+                raise ValueError("spreadsheet document evidence version is unavailable")
+            capture_spreadsheet_parse(
+                conn,
+                ticker=ticker,
+                issuer_id=str(version[0]),
+                document_version_id=document_version_id,
+                config=config,
+                parsed=parsed,
+            )
     if isinstance(parsed, SpreadsheetParseResult):
         series_by_name, unit_by_name, origins, currency_by_name = _canonicalize_parsed(
             conn, ticker, config, parsed.selected_series()

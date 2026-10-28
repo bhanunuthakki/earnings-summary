@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "67b5562e0662555165cee119ed22a605b199ca8c",
+  "scoped_commit": "bedf39e0b000051886cfa798967c93de75eaea08",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "34b602e56ea77416870ac02957b2c77c3c3fda2b4f14e0c346af37e9f5e8ba53",
+  "source_sha256": "6c0b8f474d0c8ffaa67907c5026daebec66f51cc13650b5a0f559286a0f29a6a",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,8 +22,8 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1389,
-    "total_noncomment_loc": 553625,
+    "executable_modules": 1390,
+    "total_noncomment_loc": 554587,
     "modules_over_1000_loc": 116,
     "modules_over_2000_loc": 23,
     "modules_at_least_3000_loc": 5,
@@ -5390,8 +5390,8 @@
         "path": "execution/review_position.py",
         "module": "execution.review_position",
         "lines": {
-          "physical": 111,
-          "nonblank": 96,
+          "physical": 114,
+          "nonblank": 97,
           "noncomment": 96
         },
         "internal_fan_out": 1,
@@ -11080,11 +11080,11 @@
         "path": "src/ir_pipeline/ingest.py",
         "module": "ir_pipeline.ingest",
         "lines": {
-          "physical": 316,
-          "nonblank": 287,
-          "noncomment": 282
+          "physical": 337,
+          "nonblank": 308,
+          "noncomment": 301
         },
-        "internal_fan_out": 12,
+        "internal_fan_out": 13,
         "responsibilities": [
           "database",
           "filesystem",
@@ -11155,6 +11155,22 @@
         ],
         "public_functions": 3,
         "fully_annotated_public_functions": 3
+      },
+      {
+        "path": "src/ir_pipeline/spreadsheet_capture.py",
+        "module": "ir_pipeline.spreadsheet_capture",
+        "lines": {
+          "physical": 1013,
+          "nonblank": 944,
+          "noncomment": 944
+        },
+        "internal_fan_out": 8,
+        "responsibilities": [
+          "database",
+          "network"
+        ],
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
       },
       {
         "path": "src/ir_pipeline/transcript.py",
@@ -19651,9 +19667,9 @@
         "path": "src/sources/foreign_oracle_run.py",
         "module": "sources.foreign_oracle_run",
         "lines": {
-          "physical": 320,
-          "nonblank": 294,
-          "noncomment": 291
+          "physical": 319,
+          "nonblank": 293,
+          "noncomment": 290
         },
         "internal_fan_out": 6,
         "responsibilities": [

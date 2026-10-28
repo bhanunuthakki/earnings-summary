@@ -18,6 +18,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import ParamSpec, TypeVar, cast
 
@@ -37,6 +38,15 @@ _Q = [dt.datetime(2025, 6, 30), dt.datetime(2025, 9, 30), dt.datetime(2025, 12, 
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+
+
+def _stored_json_object(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise AssertionError("stored cell payload must be a JSON object")
+    parsed = cast("dict[object, object]", value)
+    if not all(type(key) is str for key in parsed):
+        raise AssertionError("stored cell payload keys must be strings")
+    return cast("dict[str, object]", parsed)
 
 
 def test_committed_nu_config_declares_monthly_arpac_currency() -> None:
@@ -364,6 +374,7 @@ def test_ir_doc_value_supersedes_llm_incumbent_for_same_metric(tmp_path: Path) -
 def test_post_cutover_ingest_dual_writes_evidence_and_preserves_history(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo_root = tmp_path / "repo"
     db_path = migrated_db(repo_root / "data" / "portfolio.db")
@@ -385,6 +396,15 @@ def test_post_cutover_ingest_dual_writes_evidence_and_preserves_history(
     first_parsed = parse_spreadsheet_source(first_path, cfg, max_quarters=1)
     second_parsed = parse_spreadsheet_source(second_path, cfg, max_quarters=1)
     assert first_parsed.workbook_sha256 != second_parsed.workbook_sha256
+    capture_receipts: list[object] = []
+    real_capture = ingest_module.capture_spreadsheet_parse
+
+    def record_capture(*args: object, **kwargs: object) -> object:
+        receipt = cast("Callable[..., object]", real_capture)(*args, **kwargs)
+        capture_receipts.append(receipt)
+        return receipt
+
+    monkeypatch.setattr(ingest_module, "capture_spreadsheet_parse", record_capture)
 
     conn = connect_sqlite(
         db_path,
@@ -417,6 +437,18 @@ def test_post_cutover_ingest_dual_writes_evidence_and_preserves_history(
             "SELECT id, value, supersedes_id, source_doc_id, locator FROM kpi_facts "
             "WHERE ticker = 'CO' ORDER BY id"
         ).fetchall()
+        original_capture = conn.execute(
+            "SELECT extraction_run_id,started_at,completed_at,output_sha256 "
+            "FROM evidence_extraction_runs WHERE extractor_name=? "
+            "ORDER BY document_version_id",
+            ("ir-spreadsheet-parser-capture",),
+        ).fetchall()
+        original_nodes = conn.execute(
+            "SELECT node_id,text,locator_json,recorded_at FROM evidence_nodes "
+            "WHERE extraction_run_id IN (SELECT extraction_run_id "
+            "FROM evidence_extraction_runs WHERE extractor_name=?) ORDER BY node_id",
+            ("ir-spreadsheet-parser-capture",),
+        ).fetchall()
         from pipeline.run_accounting import PipelineRunSuppressedError
 
         with pytest.raises(PipelineRunSuppressedError):
@@ -424,7 +456,7 @@ def test_post_cutover_ingest_dual_writes_evidence_and_preserves_history(
                 conn,
                 "CO",
                 cfg,
-                second_parsed.numeric_projection(),
+                second_parsed,
                 second_path,
                 repo_root=repo_root,
             )
@@ -432,6 +464,28 @@ def test_post_cutover_ingest_dual_writes_evidence_and_preserves_history(
             "SELECT COUNT(*) FROM evidence_document_versions WHERE legacy_document_id IN (?, ?)",
             (first_doc, second_doc),
         ).fetchone()[0]
+        capture_runs = conn.execute(
+            "SELECT extraction_run_id, document_version_id, input_sha256, outcome "
+            "FROM evidence_extraction_runs WHERE extractor_name = ? "
+            "ORDER BY document_version_id",
+            ("ir-spreadsheet-parser-capture",),
+        ).fetchall()
+        replayed_capture = conn.execute(
+            "SELECT extraction_run_id,started_at,completed_at,output_sha256 "
+            "FROM evidence_extraction_runs WHERE extractor_name=? "
+            "ORDER BY document_version_id",
+            ("ir-spreadsheet-parser-capture",),
+        ).fetchall()
+        replayed_nodes = conn.execute(
+            "SELECT node_id,text,locator_json,recorded_at FROM evidence_nodes "
+            "WHERE extraction_run_id IN (SELECT extraction_run_id "
+            "FROM evidence_extraction_runs WHERE extractor_name=?) ORDER BY node_id",
+            ("ir-spreadsheet-parser-capture",),
+        ).fetchall()
+        capture_attempts = conn.execute(
+            "SELECT status FROM ingestion_runs WHERE directive=? ORDER BY started_at",
+            ("capture_ir_spreadsheet",),
+        ).fetchall()
         revision_count = conn.execute(
             "SELECT COUNT(*) FROM fact_observation_revisions "
             "WHERE fact_table = 'kpi_facts' AND fact_row_id IN (?, ?)",
@@ -442,6 +496,28 @@ def test_post_cutover_ingest_dual_writes_evidence_and_preserves_history(
 
     assert (first_inserted, second_inserted) == (1, 1)
     assert evidence_count == 2
+    assert len(capture_runs) == 2
+    assert {str(row[1]) for row in capture_runs} == {
+        f"legacy-doc-{first_doc}",
+        f"legacy-doc-{second_doc}",
+    }
+    assert {str(row[2]) for row in capture_runs} == {
+        first_parsed.workbook_sha256,
+        second_parsed.workbook_sha256,
+    }
+    assert all(str(row[3]) == "succeeded" for row in capture_runs)
+    assert len(capture_receipts) == 3
+    first_receipt, replay_receipt = capture_receipts[1], capture_receipts[2]
+    assert getattr(replay_receipt, "replayed") is True
+    assert getattr(replay_receipt, "extraction_run_id") == getattr(
+        first_receipt, "extraction_run_id"
+    )
+    assert getattr(replay_receipt, "node_ids") == getattr(first_receipt, "node_ids")
+    assert getattr(replay_receipt, "started_at") == getattr(first_receipt, "started_at")
+    assert getattr(replay_receipt, "completed_at") == getattr(first_receipt, "completed_at")
+    assert [tuple(row) for row in original_capture] == [tuple(row) for row in replayed_capture]
+    assert [tuple(row) for row in original_nodes] == [tuple(row) for row in replayed_nodes]
+    assert [str(row[0]) for row in capture_attempts] == ["ok", "ok", "ok"]
     assert revision_count == 2
     assert len(facts) == 2
     assert facts[1]["supersedes_id"] == facts[0]["id"]
@@ -736,8 +812,10 @@ def test_typed_parser_retains_skips_and_writer_keeps_unknown_and_rejected_states
     wb = openpyxl.load_workbook(path)
     ws = wb["Indicators"]
     ws.cell(6, 4, "pending")
-    ws.cell(4, 6, "undisclosed period")
-    ws.cell(6, 6, 777)
+    ws.cell(4, 6, _Q[-1])
+    ws.cell(6, 6, 121)
+    ws.cell(4, 7, "undisclosed period")
+    ws.cell(6, 7, 777)
     ws.cell(9, 2, "Rejected percentage")
     ws.cell(9, 5, 2001)
     wb.save(path)
@@ -749,8 +827,10 @@ def test_typed_parser_retains_skips_and_writer_keeps_unknown_and_rejected_states
         reporting_currency="USD",
         spreadsheet_kpis=(
             SheetKpi("NII", "Indicators", "NII", "actual"),
+            SheetKpi("NII", "Indicators", "NII", "actual"),
             SheetKpi("Rejected percentage", "Indicators", "Rejected percentage", "percent"),
             SheetKpi("Absent", "Missing", "absent", "ratio"),
+            SheetKpi("Absent row", "Indicators", "absent row", "ratio"),
         ),
     )
     parsed = parse_spreadsheet_source(path, cfg, max_quarters=1)
@@ -782,6 +862,316 @@ def test_typed_parser_retains_skips_and_writer_keeps_unknown_and_rejected_states
         assert issue["rule"] == "plausible_range" and "2001" in issue["raw_value"]
         assert issue["source_doc_id"] == doc_id
         assert parsed.selected_series()["Rejected percentage"][_Q[-1]] == rejected
+        capture_run = conn.execute(
+            "SELECT extraction_run_id FROM evidence_extraction_runs WHERE extractor_name=?",
+            ("ir-spreadsheet-parser-capture",),
+        ).fetchone()
+        assert capture_run is not None
+        capture_nodes = conn.execute(
+            "SELECT node_id,node_kind,text,locator_json FROM evidence_nodes "
+            "WHERE extraction_run_id=?",
+            (capture_run[0],),
+        ).fetchall()
+        root = next(row for row in capture_nodes if row["node_kind"] == "table")
+        root_value = json.loads(root["text"])
+        children = {
+            row["node_id"]: row
+            for row in conn.execute(
+                "SELECT node_id,node_kind,text,locator_json FROM evidence_nodes "
+                "WHERE extraction_run_id=? AND node_kind='table_cell'",
+                (capture_run[0],),
+            )
+        }
+        selections = root_value["selection_manifest"]
+        assert len(selections) == len(parsed.cells)
+        assert root_value["cell_count"] == len(parsed.cells)
+        assert [item["ordinal"] for item in selections] == list(range(len(parsed.cells)))
+        located = [cell for cell in parsed.cells if cell.locator is not None]
+        assert len(children) == len(located)
+        assert root_value["located_cell_count"] == len(located)
+        assert all(len(item["sha256"]) == 64 for item in selections if item["storage"] == "node")
+        captured: list[tuple[dict[str, object], sqlite3.Row | None]] = []
+        for item in selections:
+            if item["storage"] == "inline":
+                captured.append((_stored_json_object(item["payload"]), None))
+            else:
+                node = children[item["node_id"]]
+                captured.append((_stored_json_object(json.loads(node["text"])), node))
+        captured_cells = [item[0] for item in captured]
+        assert [cell["ordinal"] for cell in captured_cells] == list(range(len(parsed.cells)))
+        assert {cell["disposition"] for cell in captured_cells} >= {
+            "selected",
+            "nonnumeric",
+            "unknown_period",
+            "sheet_missing",
+            "row_missing",
+            "overwritten_period",
+            "overwritten_configured_name",
+            "outside_window",
+        }
+        assert any(
+            cell["raw_value"] == {"tag": "int", "decimal": "777"}
+            and cell["disposition"] == "unknown_period"
+            for cell in captured_cells
+        )
+        assert any(
+            cell["disposition"] == "sheet_missing" and node is None for cell, node in captured
+        )
+        assert any(cell["disposition"] == "row_missing" and node is None for cell, node in captured)
+    finally:
+        conn.close()
+
+
+def test_capture_output_conflict_fails_before_legacy_completed_run_suppression(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    repo_root = tmp_path / "repo"
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    path = repo_root / "co.xlsx"
+    _write_sheet(path)
+    cfg = IrConfig(
+        ticker="CO",
+        platform="mz",
+        results_center_url="",
+        reporting_currency="USD",
+        spreadsheet_kpis=(SheetKpi("NII", "Indicators", "NII", "actual"),),
+    )
+    parsed = parse_spreadsheet_source(path, cfg)
+    changed_output = replace(
+        parsed,
+        cells=(replace(parsed.cells[0], disposition="unsupported_value"), *parsed.cells[1:]),
+    )
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        ingest_spreadsheet_kpis(conn, "CO", cfg, parsed, path, repo_root=repo_root)
+        fact_count = conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0]
+        with pytest.raises(ValueError, match="conflicts with its input identity"):
+            ingest_spreadsheet_kpis(conn, "CO", cfg, changed_output, path, repo_root=repo_root)
+        assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == fact_count
+        attempts = conn.execute(
+            "SELECT status FROM ingestion_runs WHERE directive=? ORDER BY started_at",
+            ("capture_ir_spreadsheet",),
+        ).fetchall()
+        assert [str(row[0]) for row in attempts] == ["ok", "failed"]
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM evidence_extraction_runs WHERE extractor_name=?",
+                ("ir-spreadsheet-parser-capture",),
+            ).fetchone()[0]
+            == 1
+        )
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("locator_change", ["address", "removed"])
+def test_capture_replay_rejects_locator_only_output_change(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    locator_change: str,
+) -> None:
+    from models.facts import SpreadsheetCellRef
+
+    repo_root = tmp_path / "repo"
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    path = repo_root / "co.xlsx"
+    _write_sheet(path)
+    cfg = IrConfig(
+        ticker="CO",
+        platform="mz",
+        results_center_url="",
+        reporting_currency="USD",
+        spreadsheet_kpis=(SheetKpi("NII", "Indicators", "NII", "actual"),),
+    )
+    parsed = parse_spreadsheet_source(path, cfg, max_quarters=1)
+    selected_index = next(
+        index for index, cell in enumerate(parsed.cells) if cell.disposition == "selected"
+    )
+    selected = parsed.cells[selected_index]
+    assert selected.locator is not None and selected.locator.spreadsheet_cell is not None
+    changed_locator = (
+        None
+        if locator_change == "removed"
+        else selected.locator.model_copy(
+            update={
+                "spreadsheet_cell": SpreadsheetCellRef(
+                    sheet_name=selected.locator.spreadsheet_cell.sheet_name,
+                    cell_address="G6",
+                )
+            }
+        )
+    )
+    changed_cells = list(parsed.cells)
+    changed_cells[selected_index] = replace(selected, locator=changed_locator)
+    changed_parsed = replace(parsed, cells=tuple(changed_cells))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        ingest_spreadsheet_kpis(conn, "CO", cfg, parsed, path, repo_root=repo_root)
+        facts_before = conn.execute(
+            "SELECT id,value,period_end,locator FROM kpi_facts ORDER BY id"
+        ).fetchall()
+        runs_before = conn.execute(
+            "SELECT extraction_run_id,started_at,completed_at,output_sha256 "
+            "FROM evidence_extraction_runs WHERE extractor_name=?",
+            ("ir-spreadsheet-parser-capture",),
+        ).fetchall()
+        nodes_before = conn.execute(
+            "SELECT node_id,text,locator_json,locator_sha256,recorded_at FROM evidence_nodes "
+            "WHERE extraction_run_id IN (SELECT extraction_run_id FROM evidence_extraction_runs "
+            "WHERE extractor_name=?) ORDER BY node_id",
+            ("ir-spreadsheet-parser-capture",),
+        ).fetchall()
+        with pytest.raises(ValueError, match="conflicts with its input identity"):
+            ingest_spreadsheet_kpis(conn, "CO", cfg, changed_parsed, path, repo_root=repo_root)
+        assert [
+            tuple(row)
+            for row in conn.execute("SELECT id,value,period_end,locator FROM kpi_facts ORDER BY id")
+        ] == [tuple(row) for row in facts_before]
+        assert [
+            tuple(row)
+            for row in conn.execute(
+                "SELECT extraction_run_id,started_at,completed_at,output_sha256 "
+                "FROM evidence_extraction_runs WHERE extractor_name=?",
+                ("ir-spreadsheet-parser-capture",),
+            )
+        ] == [tuple(row) for row in runs_before]
+        assert [
+            tuple(row)
+            for row in conn.execute(
+                "SELECT node_id,text,locator_json,locator_sha256,recorded_at FROM evidence_nodes "
+                "WHERE extraction_run_id IN (SELECT extraction_run_id FROM evidence_extraction_runs "
+                "WHERE extractor_name=?) ORDER BY node_id",
+                ("ir-spreadsheet-parser-capture",),
+            )
+        ] == [tuple(row) for row in nodes_before]
+        assert [
+            str(row[0])
+            for row in conn.execute(
+                "SELECT status FROM ingestion_runs WHERE directive=? ORDER BY started_at",
+                ("capture_ir_spreadsheet",),
+            )
+        ] == ["ok", "failed"]
+    finally:
+        conn.close()
+
+
+def test_capture_effective_window_is_part_of_input_identity(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    repo_root = tmp_path / "repo"
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    path = repo_root / "co.xlsx"
+    _write_sheet(path)
+    cfg = IrConfig(
+        ticker="CO",
+        platform="mz",
+        results_center_url="",
+        reporting_currency="USD",
+        spreadsheet_kpis=(SheetKpi("NII", "Indicators", "NII", "actual"),),
+    )
+    one_quarter = parse_spreadsheet_source(path, cfg, max_quarters=1)
+    two_quarters = parse_spreadsheet_source(path, cfg, max_quarters=2)
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        ingest_spreadsheet_kpis(conn, "CO", cfg, one_quarter, path, repo_root=repo_root)
+        ingest_spreadsheet_kpis(conn, "CO", cfg, two_quarters, path, repo_root=repo_root)
+        captures = conn.execute(
+            "SELECT extraction_run_id,extractor_config_sha256 FROM evidence_extraction_runs "
+            "WHERE extractor_name=? ORDER BY extraction_run_id",
+            ("ir-spreadsheet-parser-capture",),
+        ).fetchall()
+        assert len(captures) == 2
+        assert captures[0][0] != captures[1][0]
+        assert captures[0][1] != captures[1][1]
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("failure_point", ["child", "success_receipt"])
+def test_capture_failure_rolls_back_graph_and_fails_attempt(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    failure_point: str,
+) -> None:
+    import ir_pipeline.spreadsheet_capture as capture_module
+
+    repo_root = tmp_path / "repo"
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    path = repo_root / "co.xlsx"
+    _write_sheet(path)
+    cfg = IrConfig(
+        ticker="CO",
+        platform="mz",
+        results_center_url="",
+        reporting_currency="USD",
+        spreadsheet_kpis=(SheetKpi("NII", "Indicators", "NII", "actual"),),
+    )
+    parsed = parse_spreadsheet_source(path, cfg)
+    if failure_point == "child":
+        original_persist = capture_module.EvidenceLedger.persist
+        failed = False
+
+        def fail_child(self: object, record: object) -> object:
+            nonlocal failed
+            if getattr(record, "node_kind", None) == "table_cell" and not failed:
+                failed = True
+                raise sqlite3.IntegrityError("injected child failure")
+            return cast("Callable[[object, object], object]", original_persist)(self, record)
+
+        monkeypatch.setattr(capture_module.EvidenceLedger, "persist", fail_child)
+    else:
+
+        def fail_receipt(*args: object, **kwargs: object) -> None:
+            del args, kwargs
+            raise sqlite3.IntegrityError("injected success receipt failure")
+
+        monkeypatch.setattr(capture_module, "end_run_owned", fail_receipt)
+
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        with pytest.raises(sqlite3.IntegrityError, match="injected"):
+            ingest_spreadsheet_kpis(conn, "CO", cfg, parsed, path, repo_root=repo_root)
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM evidence_extraction_runs WHERE extractor_name=?",
+                ("ir-spreadsheet-parser-capture",),
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM evidence_nodes WHERE extraction_run_id LIKE 'ir-spreadsheet-capture:%'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
+        attempt = conn.execute(
+            "SELECT status FROM ingestion_runs WHERE directive=?",
+            ("capture_ir_spreadsheet",),
+        ).fetchone()
+        assert attempt is not None and str(attempt[0]) == "failed"
+        monkeypatch.undo()
+        inserted, _ = ingest_spreadsheet_kpis(conn, "CO", cfg, parsed, path, repo_root=repo_root)
+        assert inserted == 3
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM evidence_extraction_runs WHERE extractor_name=?",
+                ("ir-spreadsheet-parser-capture",),
+            ).fetchone()[0]
+            == 1
+        )
+        attempts = conn.execute(
+            "SELECT status FROM ingestion_runs WHERE directive=? ORDER BY started_at",
+            ("capture_ir_spreadsheet",),
+        ).fetchall()
+        assert [str(row[0]) for row in attempts] == ["failed", "ok"]
     finally:
         conn.close()
 
@@ -1012,8 +1402,13 @@ def test_failed_period_rolls_back_partial_writes_before_failure_accounting(
         assert len(retained) == 2
         assert {str(row[2])[:10] for row in retained} == {"2025-06-30"}
         assert not conn.in_transaction
-        run = conn.execute("SELECT status,error_summary FROM ingestion_runs").fetchone()
-        assert run["status"] == "failed" and "synthetic second KPI failure" in run["error_summary"]
+        runs = conn.execute(
+            "SELECT directive,status,error_summary FROM ingestion_runs ORDER BY started_at"
+        ).fetchall()
+        capture_run = next(row for row in runs if row["directive"] == "capture_ir_spreadsheet")
+        failed_period_run = next(row for row in runs if row["status"] == "failed")
+        assert capture_run["status"] == "ok"
+        assert "synthetic second KPI failure" in failed_period_run["error_summary"]
         assert (
             conn.execute(
                 "SELECT COUNT(*) FROM fact_observation_revisions WHERE fact_table='kpi_facts'"
@@ -1032,7 +1427,11 @@ def test_failed_period_rolls_back_partial_writes_before_failure_accounting(
         ] == retained
         assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 6
         assert [
-            row[0] for row in conn.execute("SELECT status FROM ingestion_runs ORDER BY rowid")
+            row[0]
+            for row in conn.execute(
+                "SELECT status FROM ingestion_runs WHERE directive!='capture_ir_spreadsheet' "
+                "ORDER BY rowid"
+            )
         ] == ["failed", "ok"]
     finally:
         conn.close()

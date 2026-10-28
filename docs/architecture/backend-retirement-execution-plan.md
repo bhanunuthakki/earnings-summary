@@ -1,6 +1,6 @@
 # Backend simplification and product retirement execution plan
 
-## Current execution status — October 28, 2026
+## Current execution status — October 27, 2026 (Pacific)
 
 This table owns current status and next actions. Dated checkpoint sections below
 are historical evidence. They do not select a release candidate or authorize a
@@ -8,15 +8,16 @@ repeated operation.
 
 | Area | Current state | Next action |
 |---|---|---|
-| Source candidate | Local HEAD `67b5562e0` plus the owned coaching/input retirement and bounded R6 consumer changes. No final release candidate selected. | Freeze the batch, complete checks and bind its exact commit. |
+| Source candidate | Cleanup checkpoint `bedf39e0b` is committed. The next spreadsheet capture batch is local. Its changed-file strict types and 75 focused tests pass. The independent final delta review accepted the capture-only source and its explicit size increase; integrated gates are pending. No final release candidate is selected. | Complete the final review and integrated gates, then bind the next commit. |
 | Retained scope | Original sources, normal company acquisition, earnings briefs, individual transcript summaries, source-linked SayDo, basic Notes/decisions/outcomes, current owner thesis/process settings and on-demand research. | Preserve these paths in the integrated gate. |
 | Pending product choices | The separate Recent developments write-up and four-quarter Q&A theme rollup remain pending. A consolidated scope question is open. | Keep their product behavior while the choice is pending. Do not add replacement generation or qualification. |
 | Source cleanup | Optional producers, Telegram, extra document cards, pairwise SayDo and exclusive personal coaching/input paths are removed locally. Guarded history migrations remain unapplied to production. | Complete source, migration and retained-path validation before release preparation. |
 | Deterministic evidence | The frozen full matrix passed all 22,482 cases with 107 skips. Static gates passed. The command was interrupted during fixture retirement after the tests; it did not exit successfully. Recovery through the unchanged owner completed with zero errors: 24,228 files deleted, 31,080 already missing and 228 guarded files kept. | Bind the completed test evidence and final source graph. Keep the guarded files under the existing one-day completed-run lifecycle. No cleanup guard was weakened. |
 | Independent review | Final source advisory score 92. Earlier findings are resolved. The bounded final source delta also passed advisory review. Overall release remains HOLD. | Review native evidence. No formal purpose-qualified Judge certificate is claimed. |
-| R5 | The existing-owner capture contract specifies encoding, input-only identity, replay and period recovery. The real spreadsheet producer lacks a qualified native publication mapper and a safe period-error classification. | Keep the affected legacy lane until producer-wired capture, context and recovery proof pass. Do not invent financial context. |
+| R5 | The capture-only implementation has an exact stored decoder, inline missing selections, corruption/round-trip proof and 75 passing focused tests. Replay now checks the complete graph digest, including physical locators; header decoding rejects unknown fields. The native financial publication mapper remains unqualified. | Complete the integrated gates. Keep legacy period publication until native context and recovery qualify. |
 | R6 | Primary batching and DCF readiness have semantic proof. The foreign-oracle consumer now uses the existing strict batch at the same cutoff; all seven owning tests pass. Write/admission validation and bounded recursion have separate dispositions. | Keep the exact terminal inventory and complete the integrated gate. Do not extend the measured speedup to unmeasured families. |
-| Native/release | No bundle, transfer, model qualification, deployment or production mutation. Read-only checks confirm the Windows authority and one native runtime metadata baseline. The isolated controller repairs passed advisory review. The dated dependency-count test now checks exact runtime file membership and hashes through an independent filesystem inventory. Its portable owning tests and changed static gates pass; native behavior remains unproved. | Bind one clean candidate, build its isolated bundle and complete native qualification. Production release needs its exact artifact, effect and recovery boundary. |
+| Native/release | The first isolated attempt stopped before pytest: system SQLite loaded before the managed loader. Outer process stop, all 97,419 permission entries and runtime bytes passed parity checks. The repaired startup passed advisory review and portable checks. The exact 4,218-file payload is retired; native baselines and failure receipts remain. No deployment or production mutation occurred. | Bind the next clean candidate and complete native tests. Preserve the original failed result. Production release still needs its exact artifact, effect and recovery boundary. |
+| Transcript qualification | The three scoped existing transcripts have only `legacy-corpus` source URLs and no original URL in their legacy document rows. The retained source resolver rejects all three with `registered_document_source_invalid`. No source payload, collection or model call followed. | The owner kept source qualification on hold. Make no issuer-source requests or model qualification calls. Preserve the source gap and continue independent local cleanup; do not invent a URL or relax source verification. |
 
 
 Owner direction: October 25, 2026. Source baseline: `0c22d6e478b33e20f0e75a055457ccf28599cd35`.
@@ -804,3 +805,36 @@ The obsolete generated-summary anchor helper and result type are also removed;
 52 financial-resolution/quarantine tests pass. These are local checks. Final
 source closure, full tests, rendered proof, independent review, native
 qualification and release verification remain open. No production change occurred.
+
+## October 27 capture-only validation boundary
+
+The spreadsheet capture adapter uses the existing evidence ledger and run
+accounting. It adds no table, raw-source store, source collector, financial
+publication mapper or compatibility framework. Its standalone reader reconstructs
+the typed parser result from stored evidence. Exact replay checks physical
+locators as well as values. Header decoding rejects unknown fields. Existing
+legacy period publication remains until native context and recovery qualify.
+
+The 75-test owning batch covers ingestion, capture/recovery, parser behavior and
+the existing refresh command and policy. Changed-file strict types, format and
+lint pass. The independent final delta review accepts this capture-only source.
+These results do not replace the integrated gate or establish native, historical
+financial, source or model qualification.
+
+The architecture owner permits an explicit reviewed baseline refresh for intended
+growth. This batch adds one executable module (1,389 to 1,390) and 962 noncomment
+lines (553,625 to 554,587). The required lossless value codec, independent stored
+reader and atomic capture accounting explain the increase. The scanner and every
+other architecture ceiling are unchanged. The duplicate-code comparison passes
+without a baseline change. This is a temporary addition before native writer
+replacement; it earns no legacy-removal credit.
+
+Operational disposition: **no operator surface change**. The existing IR refresh
+command calls the capture adapter and retains its current flags and policy.
+The capture attempt uses existing run accounting. No route, control, scheduler,
+service, provider call or financial-fact write owner is added. The owning refresh
+command and policy tests are part of the 75-test batch. Production services,
+schedules and data remain unchanged.
+
+The owner kept WIX, NU and MELI transcript source qualification on hold. No issuer
+requests or dependent model qualification are authorized by this batch.
