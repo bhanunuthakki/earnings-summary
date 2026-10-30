@@ -60,12 +60,6 @@ def _kinds(db: Path) -> dict[str, int]:
     return out
 
 
-def test_list_unreconciled_covers_notes_and_falsifiers(seeded: Path) -> None:
-    # 1 seeded musing + 1 LEAP intent note, 1 theme, 1 inferred falsifier (MU
-    # only — NU's falsifier carries no marker and needs no ratification)
-    assert _kinds(seeded) == {"note": 2, "falsifier": 1}
-
-
 def test_note_verdicts_stamp_and_drop_off(seeded: Path) -> None:
     items = [i for i in list_unreconciled(seeded) if i.kind == "note"]
     musing = next(i for i in items if (i.source_ref or "").startswith("seed:musing"))

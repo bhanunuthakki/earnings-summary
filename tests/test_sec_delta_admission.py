@@ -366,19 +366,3 @@ def test_authorization_self_seal_rejects_tampering(tmp_path: Path) -> None:
 
     with pytest.raises(ValidationError, match="authorization_sha256"):
         SecDeltaNativeInventoryAuthorization.model_validate_json(json.dumps(payload))
-
-
-def test_old_plan_schema_is_rejected_without_changing_old_artifact(tmp_path: Path) -> None:
-    db = tmp_path / "snapshot.db"
-    _create_db(db)
-    plan_path, raw_plan, task_id = _write_plan(tmp_path, db)
-    old = json.loads(raw_plan)
-    old["schema_version"] = "sec_delta_plan_receipt.v1"
-    old["planner_version"] = "sec-delta-planner.v1"
-    old_raw = json.dumps(old).encode("utf-8")
-    plan_path.write_bytes(old_raw)
-
-    with pytest.raises(SecDeltaAdmissionError, match="sealed SEC delta plan validation failed"):
-        admit_native_inventory_task(_request(plan_path, old_raw, db, task_id))
-
-    assert plan_path.read_bytes() == old_raw

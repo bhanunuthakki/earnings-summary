@@ -601,21 +601,25 @@ class FactReadModel:
         """
         bundles: list[ProvenanceBundle] = []
         for read in self.provenance_bundles(observation_ids, cutoff=cutoff):
-            if read.bundle is not None:
-                bundles.append(read.bundle)
-                continue
-            failure = read.failure
-            if failure is None:
-                raise RuntimeError("required provenance batch has no outcome")
-            if failure.reason_code == "observation_unavailable_at_cutoff":
-                raise ObservationUnavailableError(failure.record_id)
-            raise FactAdmissionError(
-                failure.reason_code,
-                record_kind=failure.record_kind,
-                record_id=failure.record_id,
-                disposition=failure.disposition,
-            )
+            bundles.append(self.validate_provenance_bundle_read(read))
         return tuple(bundles)
+
+    @staticmethod
+    def validate_provenance_bundle_read(read: ProvenanceBundleRead) -> ProvenanceBundle:
+        """Apply strict single-result policy to one already materialized batch outcome."""
+        if read.bundle is not None:
+            return read.bundle
+        failure = read.failure
+        if failure is None:
+            raise RuntimeError("required provenance batch has no outcome")
+        if failure.reason_code == "observation_unavailable_at_cutoff":
+            raise ObservationUnavailableError(failure.record_id)
+        raise FactAdmissionError(
+            failure.reason_code,
+            record_kind=failure.record_kind,
+            record_id=failure.record_id,
+            disposition=failure.disposition,
+        )
 
     def provenance_bundles(
         self,

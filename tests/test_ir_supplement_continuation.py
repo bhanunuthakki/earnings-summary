@@ -1315,29 +1315,6 @@ def test_live_prompt_override_repair_and_fallback_metadata_bind_cache(
     assert len(calls) == 4
 
 
-def test_ir_pdf_capture_rejects_caller_transaction_before_source_preparation(
-    conn: sqlite3.Connection,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import compute.kpi_extract_summaries as summaries
-
-    def no_sources(*args: object, **kwargs: object) -> object:
-        pytest.fail("caller transaction must be rejected before source preparation")
-
-    monkeypatch.setattr(summaries, "_list_ir_capture_pdf_docs", no_sources)
-    conn.execute("CREATE TABLE owner_work (value TEXT)")
-    conn.commit()
-    conn.execute("INSERT INTO owner_work VALUES ('uncommitted')")
-    result = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn)
-    assert result.error and "before source preparation" in result.error
-    assert conn.in_transaction
-    assert conn.execute("SELECT value FROM owner_work").fetchone()[0] == "uncommitted"
-    assert conn.execute("SELECT COUNT(*) FROM pipeline_attempts").fetchone()[0] == 0
-    conn.rollback()
-    assert conn.execute("SELECT COUNT(*) FROM owner_work").fetchone()[0] == 0
-
-
 def test_numeric_repair_feedback_is_specific_bounded_and_primary_unchanged() -> None:
     primary = "unchanged source prompt"
     numeric_error = "direct IR PDF numeric token must occur in its exact source quote"

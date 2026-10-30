@@ -290,21 +290,6 @@ def test_themes_recent_transcripts(tmp_path: Path) -> None:
     assert set(comm.effective_winners.keys()) == expected_keys
 
 
-def test_price_chart_selects_primary_and_alias(tmp_path: Path) -> None:
-    _setup_base_tree(tmp_path)
-    fmp_dir = tmp_path / "data" / "historical" / "fmp"
-    fmp_dir.mkdir(parents=True, exist_ok=True)
-
-    # FMP price chart
-    (fmp_dir / "GOOG_historical_price_chart_v1.json").write_text("{}", encoding="utf-8")
-    (fmp_dir / "GOOGL_historical_price_chart_v1.json").write_text("{}", encoding="utf-8")
-
-    session = ReportFileCaptureSession(repo_root=tmp_path)
-
-    goog_comm = session.record_directory_selection("fmp_price_chart_v1", "GOOG")
-    assert len(goog_comm.selected_relative_paths) == 2
-
-
 def test_fixed_path_selectors(tmp_path: Path) -> None:
     _setup_base_tree(tmp_path)
     qa_dir = tmp_path / "data" / "qa_topics"
@@ -878,35 +863,6 @@ def test_directory_state_replay_mismatches(tmp_path: Path) -> None:
         replay_file_capture(receipt2, tmp_path)
 
 
-def test_price_chart_selector_reorder_invariance_s15(tmp_path: Path) -> None:
-    _setup_base_tree(tmp_path)
-    # S15 (fmp_price_chart_v1)
-    fmp = tmp_path / "data" / "historical" / "fmp"
-    fmp.mkdir(parents=True, exist_ok=True)
-    (fmp / "TEST_price_chart_1y.json").write_text("[]", encoding="utf-8")
-    (fmp / "TEST_price_chart_5y.json").write_text("[]", encoding="utf-8")
-
-    def _fwd(p: str | Path) -> Iterable[os.DirEntry[str]]:
-        return sorted(os.scandir(p), key=lambda e: e.name)
-
-    def _rev(p: str | Path) -> Iterable[os.DirEntry[str]]:
-        return sorted(os.scandir(p), key=lambda e: e.name, reverse=True)
-
-    for sel in ("fmp_price_chart_v1",):
-        s_fwd = ReportFileCaptureSession(repo_root=tmp_path, scandir_fn=_fwd)
-        c_fwd = s_fwd.record_directory_selection(sel, "TEST")
-        r_fwd = s_fwd.seal()
-
-        s_rev = ReportFileCaptureSession(repo_root=tmp_path, scandir_fn=_rev)
-        c_rev = s_rev.record_directory_selection(sel, "TEST")
-        r_rev = s_rev.seal()
-
-        assert c_fwd.effective_winners == c_rev.effective_winners
-        assert c_fwd.selection_digest == c_rev.selection_digest
-        assert r_fwd.receipt_digest == r_rev.receipt_digest
-        replay_file_capture(r_fwd, tmp_path, scandir_fn=_rev)
-
-
 def test_fstat_size_refusal_when_file_grows_during_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1137,48 +1093,3 @@ def test_fmp_price_chart_non_goog_suffix_l_file_rejected_by_both_readers(tmp_pat
     assert standalone is None
     assert captured is None
     assert comm.effective_winners == {}
-
-
-@pytest.mark.parametrize(
-    "selector",
-    [
-        "S1",
-        "S4",
-        "S5",
-        "S10",
-        "quarterly_summaries_tmp_v1",
-        "ir_briefs_tmp_v1",
-        "saydo_cards_tmp_v1",
-        "saydo_filter_json_v1",
-    ],
-)
-def test_retired_narrative_selectors_are_rejected(tmp_path: Path, selector: str) -> None:
-    session = ReportFileCaptureSession(repo_root=tmp_path)
-    with pytest.raises(FileCaptureUnavailableError) as exc:
-        session.record_directory_selection(selector, "TEST")
-    assert exc.value.reason == "forbidden_selector"
-
-
-@pytest.mark.parametrize(
-    ("alias", "selector"),
-    [
-        ("S2", "transcripts_dual_dir_v1"),
-        ("S3", "themes_recent_transcripts_v1"),
-        ("S6", "qa_topics_json_v1"),
-        ("S7", "filing_intelligence_json_v1"),
-        ("S8", "bear_case_json_v1"),
-        ("S9", "news_cache_json_v1"),
-        ("S11", "segment_definitions_json_v1"),
-        ("S12", "peer_selection_json_v1"),
-        ("S13", "peer_fundamentals_json_v1"),
-        ("S14", "holdings_json_v1"),
-        ("S15", "fmp_price_chart_v1"),
-        ("S16", "report_comments_json_v1"),
-    ],
-)
-def test_retained_selector_aliases_keep_their_identity(
-    tmp_path: Path, alias: str, selector: str
-) -> None:
-    _setup_base_tree(tmp_path)
-    session = ReportFileCaptureSession(repo_root=tmp_path)
-    assert session.record_directory_selection(alias, "TEST").selector_id == selector

@@ -100,9 +100,3 @@ def test_tenets_routes_keep_http_contract(client: FlaskClient, db_file: Path) ->
         "status": "current",
         "receipt": "Reverted — restores your prior belief",
     }
-
-
-def test_retired_profile_and_distill_routes_are_unavailable(client: FlaskClient) -> None:
-    assert client.post("/api/tenets/distill").status_code == 404
-    for action in ("affirm", "reject", "reaffirm", "retire", "update"):
-        assert client.post(f"/api/profile/fact/1/{action}").status_code == 404

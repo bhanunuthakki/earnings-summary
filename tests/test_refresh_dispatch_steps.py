@@ -13,8 +13,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TextIO
 
-import pytest
-
 from execution import refresh_dispatch as rd
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -65,15 +63,6 @@ def test_resolve_steps_default_is_standard_chain() -> None:
 
 def test_resolve_steps_subset_reordered_to_canonical() -> None:
     assert rd.resolve_steps(["dcf", "fmp"]) == ["fmp", "dcf"]
-
-
-@pytest.mark.parametrize(
-    "steps",
-    [[], [""], ["  "], ["bogus"], ["dcf", "bogus"], ["dcf", ""], ["extract_kpis"]],
-)
-def test_resolve_steps_rejects_invalid_selection(steps: list[str]) -> None:
-    with pytest.raises(ValueError):
-        rd.resolve_steps(steps)
 
 
 def test_resolve_steps_skip_removes() -> None:
@@ -171,14 +160,3 @@ def test_new_step_builders_point_at_the_right_clis() -> None:
         "run_thesis_evaluator.py",
     ]
     assert "--tickers" in commands[0] and "NU" in commands[0]
-
-
-def test_skipping_entire_default_chain_starts_no_children() -> None:
-    def runner(argv: list[str], *, out: TextIO) -> _Result:
-        pytest.fail(f"unexpected child: {argv}")
-
-    plan = rd.build_plan(
-        ticker="NU", mode="full", db_path=Path("unused.db"), skip_steps=list(rd.DEFAULT_STEPS)
-    )
-    assert plan.steps == ()
-    assert rd.execute(plan, runner=runner, out=io.StringIO()) == 0

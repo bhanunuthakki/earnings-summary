@@ -10,11 +10,6 @@ from pipeline.work_os_shell import render_work_os_shell
 from ui.cite_marks import CITE_MARKS_SNIPPET
 
 
-def test_retired_owner_capacity_importer_is_absent() -> None:
-    importer = Path(__file__).resolve().parents[1] / "execution" / "import_owner_capacity.py"
-    assert not importer.exists()
-
-
 def test_windows_sqlite_import_never_resolves_mac_default_database(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

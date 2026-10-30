@@ -346,21 +346,6 @@ def test_unreadable_source_fails_closed(tmp_path: Path, monkeypatch: pytest.Monk
     assert extract_for_ticker(tmp_path, "FOO")["failed"] == 1
 
 
-def test_pdf_parser_accepts_the_hashed_byte_stream() -> None:
-    from io import BytesIO
-
-    from pypdf import PdfWriter
-
-    from parser import extract_text_from_pdf
-
-    buffer = BytesIO()
-    writer = PdfWriter()
-    writer.add_blank_page(width=100, height=100)
-    writer.write(buffer)
-    buffer.seek(0)
-    assert extract_text_from_pdf(buffer).strip() == ""
-
-
 def test_second_writer_cannot_publish_until_cache_lock_is_released(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

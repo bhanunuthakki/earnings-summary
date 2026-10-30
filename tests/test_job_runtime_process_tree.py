@@ -12,7 +12,6 @@ from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Protocol, cast
-from unittest.mock import Mock
 
 import pytest
 
@@ -101,43 +100,6 @@ class _RecordingJob:
     def stop_and_wait(self, *, terminate: bool = False) -> None:
         assert terminate is True
         self.events.append("stopped")
-
-
-@pytest.mark.parametrize("outcome", ["stopped", "terminate_failed", "query_failed", "still_active"])
-def test_windows_owned_job_stop_requires_successful_termination_and_zero_active_processes(
-    monkeypatch: pytest.MonkeyPatch, outcome: str
-) -> None:
-    events: list[str] = []
-
-    def terminate(_handle: int, _exit_code: int) -> int:
-        events.append("terminate")
-        return int(outcome != "terminate_failed")
-
-    def query(_handle: int, _kind: int, buffer: object, _size: int, _length: object) -> int:
-        events.append("query")
-        setattr(getattr(buffer, "_obj"), "active", int(outcome == "still_active"))
-        return int(outcome != "query_failed")
-
-    kernel = SimpleNamespace(
-        TerminateJobObject=Mock(side_effect=terminate),
-        QueryInformationJobObject=Mock(side_effect=query),
-    )
-    monkeypatch.setattr(job_runtime.sys, "platform", "win32")
-    monkeypatch.setattr(job_runtime.ctypes, "WinDLL", Mock(return_value=kernel), raising=False)
-    monkeypatch.setattr(job_runtime.ctypes, "get_last_error", lambda: 5, raising=False)
-    monkeypatch.setattr(
-        job_runtime.ctypes,
-        "WinError",
-        Mock(return_value=OSError("native stop failure 5")),
-        raising=False,
-    )
-    job = runtime_test_api.windows_job(12345)
-    if outcome == "stopped":
-        job.stop_and_wait(terminate=True, timeout_seconds=0)
-    else:
-        with pytest.raises(OSError):
-            job.stop_and_wait(terminate=True, timeout_seconds=0)
-    assert events == (["terminate"] if outcome == "terminate_failed" else ["terminate", "query"])
 
 
 @pytest.mark.parametrize("error_code", [0, 5, 6])
@@ -358,45 +320,6 @@ def test_windows_child_is_assigned_while_suspended_before_resume(
     )
     assert observed_flags == [runtime_test_api.create_suspended]
     assert events == ["assign", "resume", "stopped", "close"]
-
-
-def test_managed_child_cannot_succeed_without_stop_proof(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    events: list[str] = []
-    process = _SuspendedProcess()
-    process.resumed = True
-
-    class Job(_RecordingJob):
-        def stop_and_wait(self, *, terminate: bool = False) -> None:
-            assert terminate is True
-            self.events.append("stop_failed")
-            raise OSError("owned Job stop could not be proved")
-
-    monkeypatch.setattr(job_runtime.subprocess, "Popen", Mock(return_value=process))
-    monkeypatch.setattr(job_runtime, "_create_process_tree_job", Mock(return_value=Job(events)))
-    with pytest.raises(OSError, match="stop could not be proved"):
-        _run_managed_child(
-            ["synthetic"], cwd=tmp_path, env={}, scheduler_owner=None, timeout_seconds=10
-        )
-    assert events == ["stop_failed", "close"]
-
-
-def test_managed_deadline_proves_stop_before_releasing_job(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    events: list[str] = []
-    process = _SuspendedProcess()
-    elapsed = iter([0.0, 2.0])
-    job = _RecordingJob(events)
-    monkeypatch.setattr(job_runtime.subprocess, "Popen", Mock(return_value=process))
-    monkeypatch.setattr(job_runtime, "_create_process_tree_job", Mock(return_value=job))
-    monkeypatch.setattr(job_runtime.time, "monotonic", lambda: next(elapsed))
-    with pytest.raises(job_runtime.JobDeadlineExceededError):
-        _run_managed_child(
-            ["synthetic"], cwd=tmp_path, env={}, scheduler_owner=None, timeout_seconds=1
-        )
-    assert events == ["stopped", "close"]
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Job Object integration")

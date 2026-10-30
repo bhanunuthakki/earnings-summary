@@ -117,16 +117,6 @@ def test_month_index_increases_monotonically_across_year_boundary() -> None:
     assert lenses.month_index_for("2026-12") + 1 == lenses.month_index_for("2027-01")
 
 
-def test_lens_rotation_covers_all_five_active_lenses() -> None:
-    """The rotation covers every retained company-research lens."""
-    assert len(lenses.LENS_NAMES) == 5
-    assert "missed_upside" in lenses.LENS_NAMES
-    assert "behavioral_consistency" not in lenses.LENS_NAMES
-    assert "profile_drift" not in lenses.LENS_NAMES
-    seen = {lenses.lens_for("NU", i) for i in range(len(lenses.LENS_NAMES))}
-    assert seen == set(lenses.LENS_NAMES)  # every lens reachable within one full cycle
-
-
 # ---------------------------------------------------------------------------
 # Bull-side symmetry (PR9): missed_upside lens + downside/add-rung evidence
 # flags (redteam.lenses reusing position_guard's detection, never re-derived)

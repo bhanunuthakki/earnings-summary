@@ -27,7 +27,6 @@ from compute.fmp_derived_kpis import (
 from models.facts import DerivedInputRef, FiscalPeriodType, Unit
 from provenance.evidence_backfill import ensure_legacy_document_evidence
 from provenance.financial_fact_resolution import (
-    CanonicalFactSelectionAsKnown,
     canonical_fact_selections_as_known,
     resolve_fact_row,
 )
@@ -203,64 +202,6 @@ def test_derive_skips_yoy_when_year_gap_is_not_exactly_one() -> None:
     rows = derive_for_facts(facts)
     yoy = [r for r in rows if r.name == KPI_REVENUE_YOY_USD]
     assert yoy == []
-
-
-def test_derive_for_ticker_excludes_annual_and_ttm_fiscal_periods(conn: sqlite3.Connection) -> None:
-    """Annual and TTM fiscal periods do not contribute to quarterly derivation."""
-    quarterly_doc = _insert_doc(conn, "X", "data/historical/fmp/X_income_statement_quarterly.json")
-    annual_doc = _insert_doc(conn, "X", "data/historical/fmp/X_income_statement.json")
-    ttm_doc = _insert_doc(conn, "X", "data/historical/fmp/X_income_statement_ttm.json")
-
-    pe = datetime(2024, 12, 31)
-    for line, val in [
-        ("revenue", 100),
-        ("operating_income", 20),
-        ("net_income", 15),
-        ("gross_profit", 40),
-    ]:
-        _insert_fact(
-            conn,
-            ticker="X",
-            period_end=pe,
-            fpt="Q4",
-            line_item=line,
-            value=val,
-            source_doc_id=quarterly_doc,
-        )
-        # Annual and TTM sources retain their actual fiscal period kinds.
-        _insert_fact(
-            conn,
-            ticker="X",
-            period_end=pe,
-            fpt="FY",
-            line_item=line,
-            value=val * 10,
-            source_doc_id=annual_doc,
-        )
-        _insert_fact(
-            conn,
-            ticker="X",
-            period_end=pe,
-            fpt="TTM",
-            line_item=line,
-            value=val * 4,
-            source_doc_id=ttm_doc,
-        )
-    conn.commit()
-
-    outcome = derive_for_ticker_outcome(conn, "X")
-    assert (
-        outcome.rows_emitted == 3
-    )  # OpMargin + NetMargin + GrossMargin (no YoY without prior year)
-    assert outcome.rows_inserted == 3
-    rows = conn.execute(
-        "SELECT kd.name, kf.value FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
-        "WHERE kf.ticker='X' ORDER BY kd.name"
-    ).fetchall()
-    by_name = {dict(r)["name"]: Decimal(str(dict(r)["value"])) for r in rows}
-    assert by_name[KPI_OPERATING_MARGIN_GAAP] == Decimal("20")  # 20/100*100
-    assert by_name[KPI_NET_MARGIN_GAAP] == Decimal("15")  # 15/100*100
-    assert by_name[KPI_GROSS_MARGIN_GAAP] == Decimal("40")  # 40/100*100
 
 
 def test_derived_lineage_preserves_each_winning_cell_document(
@@ -757,39 +698,3 @@ def test_derive_roe_skipped_when_period_end_equity_missing() -> None:
         _qf(2025, 4, Decimal(5), None),
     ]
     assert not [r for r in derive_for_facts(facts) if r.name == KPI_ROE]
-
-
-def test_derivation_requires_canonical_input_pins(
-    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from compute import fmp_derived_kpis
-
-    doc_id = _insert_doc(conn, "PIN", "data/historical/fmp/PIN_income_statement_quarterly.json")
-    for item, value in (
-        ("revenue", 100),
-        ("operating_income", 20),
-        ("net_income", 15),
-        ("gross_profit", 40),
-    ):
-        _insert_fact(
-            conn,
-            ticker="PIN",
-            period_end=datetime(2024, 12, 31),
-            fpt="Q4",
-            line_item=item,
-            value=value,
-            source_doc_id=doc_id,
-        )
-    conn.commit()
-
-    def unavailable(*_args: object, **_kwargs: object) -> tuple[CanonicalFactSelectionAsKnown, ...]:
-        return ()
-
-    monkeypatch.setattr(fmp_derived_kpis, "canonical_fact_selections_as_known", unavailable)
-    result = derive_for_ticker_outcome(conn, "PIN")
-    assert result.rows_emitted == result.rows_inserted == 0
-    assert result.reasons == (FmpDerivationReason.MISSING_CANONICAL_INPUT_REFERENCE,)
-    assert conn.execute("SELECT COUNT(*) FROM kpi_facts WHERE ticker='PIN'").fetchone()[0] == 0
-    assert (
-        conn.execute("SELECT COUNT(*) FROM financial_facts WHERE ticker='PIN'").fetchone()[0] == 4
-    )

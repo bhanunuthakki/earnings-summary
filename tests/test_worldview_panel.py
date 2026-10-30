@@ -149,7 +149,3 @@ def test_revert_route_brand_new_retires(client: FlaskClient, db_file: Path) -> N
 
 def test_revert_route_missing_is_404(client: FlaskClient) -> None:
     assert client.post("/api/tenets/999999/revert").status_code == 404
-
-
-def test_retired_distill_route_is_absent(client: FlaskClient) -> None:
-    assert client.post("/api/tenets/distill").status_code == 404

@@ -27,7 +27,6 @@ from report.models import (
     EvaluationSnapshotSection,
     KpiLedgerRow,
     QuickCategorizationRow,
-    SayDoHistoricalMetric,
     SayDoSection,
     SectionStatus,
     SnapshotSection,
@@ -459,35 +458,6 @@ def test_saydo_verdicts_panel_renders_rows() -> None:
     assert header.index("Verdict") < header.index("Source")
     assert "transcript_segment:9001" not in html
     assert html.index("MET") < html.index("Source unavailable")
-
-
-def test_saydo_historical_values_do_not_assume_a_unit() -> None:
-    section = SayDoSection(
-        status=SectionStatus.OK,
-        historical_metrics=[
-            SayDoHistoricalMetric(
-                id=1,
-                period_made=datetime(2025, 11, 5),
-                period_target=datetime(2026, 3, 31),
-                kpi_name="Revenue",
-                comparator="gte",
-                target_value=1760,
-                realized_value=1810,
-                outcome="met",
-                guidance_narrative="Q1 revenue of $1.76-1.79B.",
-                realized_narrative="Printed $1.81B.",
-            )
-        ],
-    )
-    out = StringIO()
-    _saydo_tab(out, section)
-    html = out.getvalue()
-    assert "1760.00%" not in html
-    assert "1810.00%" not in html
-    assert '1760 <span class="muted xsmall">(unit unavailable)</span>' in html
-    assert '1810</strong> <span class="muted xsmall">(unit unavailable)</span>' in html
-    assert "Q1 revenue of $1.76-1.79B." in html
-    assert "Printed $1.81B." in html
 
 
 def test_saydo_verdicts_panel_hides_when_empty() -> None:
@@ -1205,23 +1175,3 @@ def test_open_items_strip_hides_when_empty() -> None:
     out = StringIO()
     _open_items_strip(out, [])
     assert out.getvalue() == ""
-
-
-def test_saydo_realized_unit_cannot_add_markup() -> None:
-    row = SayDoVerdictRow(
-        period_made=datetime(2026, 1, 1),
-        period_target=datetime(2026, 4, 1),
-        kpi_name="Revenue",
-        comparator="ge",
-        target_value=12,
-        unit='<img src=x onerror="alert(1)">',
-        narrative="Source wording",
-        realized_value=13,
-        outcome="met",
-        evaluated_at=datetime(2026, 4, 2),
-    )
-    out = StringIO()
-    _saydo_verdicts_panel(out, [row])
-    rendered = out.getvalue()
-    assert "<img" not in rendered
-    assert rendered.count("&lt;img") >= 2

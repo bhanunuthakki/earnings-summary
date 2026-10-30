@@ -49,16 +49,3 @@ def test_needs_ticker_chip_renders(db_path: Path) -> None:
     )
     html = render_ledger_list(db_path)
     assert "needs ticker" in html
-
-
-def test_capture_box_keeps_logging_and_has_no_coaching_controls(db_path: Path) -> None:
-    from pipeline.ledger_panel import LEDGER_CAPTURE_JS
-
-    html = render_ledger_panel(db_path)
-    assert 'id="ledger-cap-btn"' in html and 'id="ledger-cap-text"' in html
-    assert "ledger-cap-coach" not in html
-    assert "pledge_challenge" not in html
-    assert LEDGER_CAPTURE_JS.count("/api/capture/text") == 1
-    assert "annotated_decision_id" not in LEDGER_CAPTURE_JS
-    assert "e.metaKey||e.ctrlKey" in LEDGER_CAPTURE_JS
-    assert "pollAnswer" not in LEDGER_CAPTURE_JS

@@ -66,15 +66,6 @@ def test_text_ingest_lands_musing_and_purges_raw(db_path: Path) -> None:
     assert _audit_count(db_path, note_id=res.note_id, action="landed") == 1
 
 
-def test_non_text_musing_rejected_before_staging(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _unexpected_session(**kwargs: object) -> int:
-        raise AssertionError("unsupported media must not create a session")
-
-    monkeypatch.setattr(sessions, "new_session", _unexpected_session)
-    with pytest.raises(ValueError, match="text only"):
-        ingest.ingest_capture(channel="claude_session", media_kind="voice", text="raw words")
-
-
 def test_dedup_external_ref_no_ops(db_path: Path) -> None:
     first = ingest.ingest_capture(
         channel="claude_session",

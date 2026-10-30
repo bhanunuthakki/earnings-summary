@@ -295,14 +295,6 @@ def test_chat_render_no_risk_lines_when_empty() -> None:
     assert "Event scenarios:" not in out
 
 
-def test_chat_render_keeps_risk_without_coaching() -> None:
-    risk = RiskContext(risk_share_pct=14.0, corr_to_book=0.62)
-    pre = replace(_PRE_DEFAULT, risk=risk)
-    out = render_pre_analysis_chat(pre)
-    assert "- Risk:" in out
-    assert "Mechanical read:" not in out
-
-
 # --------------------------------------------------------------------------- #
 # render_risk_lines
 # --------------------------------------------------------------------------- #

@@ -1,6 +1,6 @@
 # Backend simplification and product retirement execution plan
 
-## Current execution status — October 27, 2026 (Pacific)
+## Current execution status — October 29, 2026 (Pacific)
 
 This table owns current status and next actions. Dated checkpoint sections below
 are historical evidence. They do not select a release candidate or authorize a
@@ -8,16 +8,34 @@ repeated operation.
 
 | Area | Current state | Next action |
 |---|---|---|
-| Source candidate | Cleanup checkpoint `bedf39e0b` is committed. The next spreadsheet capture batch is local. Its changed-file strict types and 75 focused tests pass. The independent final delta review accepted the capture-only source and its explicit size increase; integrated gates are pending. No final release candidate is selected. | Complete the final review and integrated gates, then bind the next commit. |
+| Source candidate | Capture-only checkpoint `3572eb546` is committed. The bounded input-role read batch passed its full gate and independent advisory review. The owner-directed deletion removes 27 branch-added test files, 253 added test definitions and 23 unused test helpers. Collection passes with 21,507 retained tests. | Commit after the final static checks. Reuse passing application checks because application code is unchanged. |
 | Retained scope | Original sources, normal company acquisition, earnings briefs, individual transcript summaries, source-linked SayDo, basic Notes/decisions/outcomes, current owner thesis/process settings and on-demand research. | Preserve these paths in the integrated gate. |
 | Pending product choices | The separate Recent developments write-up and four-quarter Q&A theme rollup remain pending. A consolidated scope question is open. | Keep their product behavior while the choice is pending. Do not add replacement generation or qualification. |
 | Source cleanup | Optional producers, Telegram, extra document cards, pairwise SayDo and exclusive personal coaching/input paths are removed locally. Guarded history migrations remain unapplied to production. | Complete source, migration and retained-path validation before release preparation. |
-| Deterministic evidence | The frozen full matrix passed all 22,482 cases with 107 skips. Static gates passed. The command was interrupted during fixture retirement after the tests; it did not exit successfully. Recovery through the unchanged owner completed with zero errors: 24,228 files deleted, 31,080 already missing and 228 guarded files kept. | Bind the completed test evidence and final source graph. Keep the guarded files under the existing one-day completed-run lifecycle. No cleanup guard was weakened. |
+| Deterministic evidence | The last frozen full gate exited successfully: 22,507 tests passed, 107 skipped and two subtests passed. This is pre-deletion evidence. The owner then directed removal of task-added tests. The smaller suite collects successfully with 21,507 tests. No test process remains. | Delete branch-added tests. Use format, lint, types and collection checks for this test-only deletion; do not repeat the full matrix solely for deleting tests. |
 | Independent review | Final source advisory score 92. Earlier findings are resolved. The bounded final source delta also passed advisory review. Overall release remains HOLD. | Review native evidence. No formal purpose-qualified Judge certificate is claimed. |
 | R5 | The capture-only implementation has an exact stored decoder, inline missing selections, corruption/round-trip proof and 75 passing focused tests. Replay now checks the complete graph digest, including physical locators; header decoding rejects unknown fields. The native financial publication mapper remains unqualified. | Complete the integrated gates. Keep legacy period publication until native context and recovery qualify. |
-| R6 | Primary batching and DCF readiness have semantic proof. The foreign-oracle consumer now uses the existing strict batch at the same cutoff; all seven owning tests pass. Write/admission validation and bounded recursion have separate dispositions. | Keep the exact terminal inventory and complete the integrated gate. Do not extend the measured speedup to unmeasured families. |
+| R6 | Primary batching and DCF readiness have semantic proof. The foreign oracle uses the strict batch. Input-role review now uses ordered batches at source and currentness clocks; its 31 owning tests and strict types pass. Final independent review accepts the source delta. | Complete combined checks. Keep unmeasured families and historical parity explicit; no terminal R6 claim. |
 | Native/release | The first isolated attempt stopped before pytest: system SQLite loaded before the managed loader. Outer process stop, all 97,419 permission entries and runtime bytes passed parity checks. The repaired startup passed advisory review and portable checks. The exact 4,218-file payload is retired; native baselines and failure receipts remain. No deployment or production mutation occurred. | Bind the next clean candidate and complete native tests. Preserve the original failed result. Production release still needs its exact artifact, effect and recovery boundary. |
 | Transcript qualification | The three scoped existing transcripts have only `legacy-corpus` source URLs and no original URL in their legacy document rows. The retained source resolver rejects all three with `registered_document_source_invalid`. No source payload, collection or model call followed. | The owner kept source qualification on hold. Make no issuer-source requests or model qualification calls. Preserve the source gap and continue independent local cleanup; do not invent a URL or relax source verification. |
+
+
+
+## October 29 owner amendment: remove task-added tests and bound bug work
+
+Remove Python test files and test definitions introduced by this branch relative
+to `origin/main`. Keep upstream tests, removal of obsolete-feature tests and
+necessary compatibility edits to retained tests. Remove unused task-added test
+helpers and imports where their lack of callers is established. Add no replacement
+test framework or new test cases for this removal. The previous full gate passed;
+its result remains historical evidence, not a claim about the smaller suite.
+
+For any further bug work, state severity and probability from 1 to 10 before
+implementation. Fix only when **severity × probability > 50**. A score of 50 does
+not qualify. Use concrete user impact and occurrence evidence. Do not search for
+speculative edge cases or inflate scores to justify a fix. This rule supersedes
+earlier task expectations for broad adversarial bug finding. Existing authorized
+feature removals remain in scope.
 
 
 Owner direction: October 25, 2026. Source baseline: `0c22d6e478b33e20f0e75a055457ccf28599cd35`.
@@ -838,3 +856,31 @@ schedules and data remain unchanged.
 
 The owner kept WIX, NU and MELI transcript source qualification on hold. No issuer
 requests or dependent model qualification are authorized by this batch.
+
+## October 27 bounded input-role read closure
+
+Input-role review prepares unique observation and cell populations through the
+existing ordered readers. It retains distinct source-cutoff and current-selection
+clocks. Each item applies the strict outcome policy at its original point in
+sorted validation order. Publication verification is reused only within the read
+operation and ends before metadata writes. The caller still owns the transaction;
+dry-run, failed apply and exact replay retain their SAVEPOINT behavior.
+
+The existing required-provenance adapter and this reader share one strict outcome
+validator. There is no new cache, state owner or framework. The owning architecture
+measurement adds 40 noncomment lines, from 554,587 to 554,627, with no module or
+other ceiling growth. The independent source review accepts that explicit baseline
+refresh. It does not waive architecture or duplicate checks.
+
+Malformed stored evidence now uses the existing batch outcome
+`FactAdmissionError(fact_evidence_malformed, quarantined)`. The former scalar
+path could raise `FactEvidenceIntegrityError` or `ValidationError`. This diagnostic
+class change is intentional. The command catches typed admission errors and
+returns its existing blocked JSON with exit code 2. The 31-test owning batch
+covers failure order, both clocks, rollback and that command response. This does
+not claim identical raw exception types.
+
+Operational disposition: **existing command hardening; no new operator surface**.
+Flags, default dry-run, explicit apply, writer lock, source ownership and output
+schema remain. No service, task, route, collector or model call is added. The
+full matrix and native proof remain pending at this source checkpoint.

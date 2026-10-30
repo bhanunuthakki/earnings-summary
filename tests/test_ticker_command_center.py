@@ -210,14 +210,6 @@ def test_analysis_log_empty_db_is_safe(tmp_path: Path) -> None:
 # ----- assembler + render -----
 
 
-def test_build_surfaces_retained_fields(repo: Path) -> None:
-    tcc = build_ticker_command_center(repo, "NU")
-    assert tcc.identity.list_type == "portfolio"
-    assert tcc.identity.breach_status == "watch"
-    assert tcc.identity.name == "Nu Holdings"
-    assert tcc.tracker_url is None
-
-
 # ----- Holding tab (PR 8): report_date + head/foot-less fragments + embed -----
 
 
@@ -570,63 +562,6 @@ def client(repo: Path) -> FlaskClient:
 
 def _forbidden_data_work(*_args: object, **_kwargs: object) -> Never:
     pytest.fail("retired ticker route must perform no data work")
-
-
-@pytest.fixture
-def retired_ticker_client(tmp_path: Path) -> FlaskClient:
-    from comments_server_content_routes import (
-        ContentRouteContext,
-        register_content_routes,
-    )
-    from flask import Flask
-
-    from ticker_validation import safe_ticker
-
-    app = Flask(__name__)
-    context = ContentRouteContext(
-        repo_root=tmp_path,
-        db_path=tmp_path / "data" / "portfolio.db",
-        open_db=_forbidden_data_work,
-        get_read_db=_forbidden_data_work,
-        safe_ticker=safe_ticker,
-        linked_gsheet=_forbidden_data_work,
-        probe_tracker=_forbidden_data_work,
-        fetch_live_portfolio=_forbidden_data_work,
-        default_user_id=DEFAULT_USER_ID,
-    )
-    register_content_routes(app, context)
-    return app.test_client()
-
-
-def test_ticker_api_retired_returns_410_without_work(
-    retired_ticker_client: FlaskClient,
-) -> None:
-    resp = retired_ticker_client.get("/api/ticker/NU")
-    assert resp.status_code == 410
-    assert resp.headers["Cache-Control"] == "no-store"
-    payload = resp.get_json()
-    assert payload["error"] == "legacy_ticker_feed_retired"
-    assert payload["replacement_url"] == "/?screen=company-desk&ticker=NU"
-    lower = retired_ticker_client.get("/api/ticker/nu")
-    assert lower.status_code == 410
-    assert lower.get_json()["replacement_url"] == "/?screen=company-desk&ticker=NU"
-    assert retired_ticker_client.get("/api/ticker/..").status_code == 400
-
-
-def test_holding_builder_never_calls_portfolio_position(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import report.sections.portfolio_position as portfolio_position
-
-    def _forbidden(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError(
-            "retained builder must not call report.sections.portfolio_position.build"
-        )
-
-    monkeypatch.setattr(portfolio_position, "build", _forbidden)
-    tcc = build_ticker_command_center(repo, "NU")
-    assert tcc.identity.ticker == "NU"
-    render_holding_fragment(repo, "NU")
 
 
 def test_ticker_page_redirects_to_shell(client: FlaskClient) -> None:

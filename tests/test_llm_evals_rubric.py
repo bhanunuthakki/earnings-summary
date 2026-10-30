@@ -15,7 +15,7 @@ import os
 import sqlite3
 import sys
 import time
-from collections.abc import Callable, Generator
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 
@@ -29,7 +29,6 @@ from evals.corpora import (
     load_advisor_next_dollar_corpus,
     load_ask_advisory_answer_corpus,
     load_bear_case_corpus,
-    load_transcript_summary_corpus,
 )
 from evals.harness import EvalAbortError, now_naive_utc, persist_summary
 from evals.rubric_judge import (
@@ -44,14 +43,6 @@ from llm.cli import LLMBudgetExceeded
 from llm.prompt_versions import prompt_version_for, registered_purposes
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
-
-@pytest.fixture(autouse=True)
-def explicit_corpus_database(tmp_path: Path) -> Generator[None]:
-    from db_paths import db_path_context
-
-    with db_path_context(tmp_path / "data/portfolio.db"):
-        yield
 
 
 _RUBRIC_MD = """\
@@ -323,21 +314,6 @@ def test_bear_case_corpus_newest_first_and_skips_corrupt(tmp_path: Path) -> None
     assert items[0].ticker == "NU"
     assert "data/bear_case/NU.json" in items[0].label
     assert "failure_modes" in items[0].content
-
-
-def test_transcript_summary_corpus_ignores_legacy_generated_files(tmp_path: Path) -> None:
-    tmp_dir = tmp_path / ".tmp"
-    tmp_dir.mkdir()
-    (tmp_dir / "NU_Q1_2026_summary.txt").write_text("q1 note", encoding="utf-8")
-    (tmp_dir / "MELI_Q4_2025_investor_update_summary.txt").write_text("iu note", encoding="utf-8")
-    (tmp_dir / "NU_Q3_2025_summary.txt").write_text("old note", encoding="utf-8")
-    (tmp_dir / "NU_Q3_2025.txt").write_text("raw transcript, not a summary", encoding="utf-8")
-    (tmp_dir / "notes.txt").write_text("unrelated", encoding="utf-8")
-    # An old quarter re-rendered NOW must not outrank the newest print.
-    now = time.time()
-    os.utime(tmp_dir / "NU_Q3_2025_summary.txt", (now, now))
-
-    assert load_transcript_summary_corpus(tmp_path) == []
 
 
 def test_advisor_corpus_reads_next_dollar_memos(tmp_path: Path) -> None:

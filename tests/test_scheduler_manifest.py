@@ -35,49 +35,6 @@ EXPECTED_DISABLED_TASKS = {
 }
 
 
-def test_retired_research_lens_batch_jobs_are_absent() -> None:
-    """On-demand lenses: neither retired scheduled batch may be declared or shipped."""
-    manifest = load_manifest(MANIFEST_PATH)
-    declared = {task.task_name for task in manifest.tasks}
-    assert r"\earnings-summary\weekly_synthesis" not in declared
-    assert r"\earnings-summary\weekly_p2_lens_refresh" not in declared
-    for name in (
-        "run_weekly_p2_lens_refresh.bat",
-        "run_weekly_synthesis.bat",
-        "weekly_p2_lens_refresh.task.xml",
-        "weekly_synthesis.task.xml",
-    ):
-        assert not (CRON_DIR / name).exists(), name
-    for relative in (
-        "execution/run_weekly_synthesis.py",
-        "execution/run_due_lenses.py",
-    ):
-        assert not (PROJECT_ROOT / relative).exists(), relative
-
-
-def test_retired_score_and_refresh_tasks_are_absent() -> None:
-    manifest = load_manifest(MANIFEST_PATH)
-    declared = {task.task_name for task in manifest.tasks}
-    retired = {
-        r"\earnings-summary\weekly_score_stances": (
-            "weekly_score_stances.task.xml",
-            "run_weekly_score_stances.bat",
-        ),
-        r"\earnings-summary\refresh_business_factors": (
-            "refresh_business_factors.task.xml",
-            "run_refresh_business_factors.bat",
-        ),
-        r"\earnings-summary\refresh_scenario_priors": (
-            "refresh_scenario_priors.task.xml",
-            "run_refresh_scenario_priors.bat",
-        ),
-    }
-    for task_name, (xml_name, wrapper_name) in retired.items():
-        assert task_name not in declared
-        assert not (CRON_DIR / xml_name).exists()
-        assert not (CRON_DIR / wrapper_name).exists()
-
-
 def test_manifest_rejects_duplicate_json_keys(tmp_path: Path) -> None:
     manifest_path = tmp_path / "task_manifest.json"
     manifest_path.write_text(
@@ -462,14 +419,3 @@ def test_validation_rejects_wrapper_without_standard_exit_tail(tmp_path: Path) -
     assert any(
         "wrapper does not end with standard 'endlocal & exit /b' exit tail" in err for err in errors
     )
-
-
-def test_retired_saydo_narrative_batch_is_not_shipped() -> None:
-    manifest = load_manifest(MANIFEST_PATH)
-    assert r"\earnings-summary\submit_saydo_batch" not in {
-        task.task_name for task in manifest.tasks
-    }
-    for name in ("submit_saydo_batch.task.xml", "run_submit_saydo_batch.bat"):
-        assert not (CRON_DIR / name).exists()
-    for name in ("build_saydo_pairs.py", "submit_saydo_batch.py"):
-        assert not (PROJECT_ROOT / "execution" / name).exists()

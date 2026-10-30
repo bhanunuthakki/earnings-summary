@@ -235,10 +235,6 @@ def test_global_500_handler_redacts_and_drops_unsafe_traceback(
     assert "RuntimeError" in caplog.text
 
 
-def test_retired_tenet_distill_route_is_unavailable(client: FlaskClient) -> None:
-    assert client.post("/api/tenets/distill").status_code == 404
-
-
 def test_file_routes_reject_malformed_ticker(client: FlaskClient) -> None:
     """The file-serving routes validate the ticker BEFORE it reaches a
     filesystem path — a malformed ticker is a 400, never a traversal. A

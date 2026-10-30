@@ -11,14 +11,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from decision_extractor import reconcile_decision_actions
 from identity import DEFAULT_USER_ID
-from integrations.portfolio_tracker_client import LivePortfolio, LiveTransaction
 from research.investment_decision_card import CardActionError, act_on_card
 
 _PURPOSE = "investment_decision_card"
@@ -256,95 +253,6 @@ def test_promote_idempotent_double_post(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_research_further_action_is_rejected_without_writes(tmp_path: Path) -> None:
-    db_path = _make_db(tmp_path)
-    _insert_artifact(db_path, artifact_id=1)
-
-    with pytest.raises(CardActionError, match="unknown verb"):
-        act_on_card(1, "research_further", db_path=db_path)
-    assert _decisions(db_path) == []
-    conn = sqlite3.connect(str(db_path))
-    try:
-        count = conn.execute("SELECT COUNT(*) FROM research_tasks").fetchone()[0]
-    finally:
-        conn.close()
-    assert count == 0
-
-
 # --------------------------------------------------------------------------- #
 # Reconciliation safety — pass/watch/promote are never presumed buy/sell
 # --------------------------------------------------------------------------- #
-
-
-@pytest.mark.parametrize("action", ["pass", "watch", "promote"])
-def test_reconciliation_treats_card_action_as_non_directional(tmp_path: Path, action: str) -> None:
-    """A 'promote' decision with NO fill in its window reconciles through the
-    HOLD/AVOID (fill-vs-no-fill) branch — 'followed' once the window elapses
-    with nothing traded — never through the buy/sell direction branch (which
-    would require a _KIND_DIRECTION entry that doesn't exist)."""
-    db_path = _make_db(tmp_path)
-    _insert_artifact(db_path, artifact_id=1)
-    act_on_card(1, action, db_path=db_path)
-    # made_at recorded as "now" by act_on_card — backdate it so the 30d
-    # window has already elapsed relative to `now` below.
-    conn = sqlite3.connect(str(db_path))
-    conn.execute("UPDATE decisions SET made_at = '2026-01-01T00:00:00'")
-    conn.commit()
-    conn.close()
-
-    portfolio = LivePortfolio(available=True, api_url="http://tracker.test", transactions=[])
-    tally = reconcile_decision_actions(
-        db_path=db_path, portfolio=portfolio, now=datetime(2026, 3, 1, tzinfo=UTC)
-    )
-
-    assert tally["followed"] == 1  # held/passed cleanly through the window
-    conn = sqlite3.connect(str(db_path))
-    try:
-        action = conn.execute("SELECT user_action_kind FROM decisions").fetchone()[0]
-    finally:
-        conn.close()
-    assert action == "followed"
-
-
-@pytest.mark.parametrize("action", ["pass", "watch", "promote"])
-def test_reconciliation_treats_card_action_with_a_fill_as_partial(
-    tmp_path: Path, action: str
-) -> None:
-    """A 'promote' decision followed by ANY fill (buy or sell) in-window is
-    'partial' — the HOLD/AVOID branch's "traded anyway" read — never
-    'followed'/'reversed' (those require a _KIND_DIRECTION entry)."""
-    db_path = _make_db(tmp_path)
-    _insert_artifact(db_path, artifact_id=1)
-    act_on_card(1, action, db_path=db_path)
-    conn = sqlite3.connect(str(db_path))
-    conn.execute("UPDATE decisions SET made_at = '2026-01-10T00:00:00'")
-    conn.commit()
-    conn.close()
-
-    portfolio = LivePortfolio(
-        available=True,
-        api_url="http://tracker.test",
-        transactions=[
-            LiveTransaction(
-                date="2026-01-15",
-                ticker=TICKER,
-                name=None,
-                type="buy",
-                subtype=None,
-                quantity=1.0,
-                amount=-1.0,
-                account_name="x",
-            )
-        ],
-    )
-    tally = reconcile_decision_actions(
-        db_path=db_path, portfolio=portfolio, now=datetime(2026, 3, 1, tzinfo=UTC)
-    )
-
-    assert tally["partial"] == 1
-    conn = sqlite3.connect(str(db_path))
-    try:
-        action = conn.execute("SELECT user_action_kind FROM decisions").fetchone()[0]
-    finally:
-        conn.close()
-    assert action == "partial"

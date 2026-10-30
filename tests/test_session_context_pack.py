@@ -73,23 +73,6 @@ def test_pack_renders_seeded_tenet(db_path: Path) -> None:
     assert "`[tenet:exit-discipline]`" in pack
 
 
-def test_pack_excludes_retired_generated_context(db_path: Path) -> None:
-    record_insight(
-        scope_key="MELI",
-        kind="stance",
-        body_md="Obsolete generated conviction.",
-        source_note_ids=[],
-        watermark_id=None,
-        db_path=db_path,
-    )
-    pack = session_context_pack.build_pack(db_path)
-    assert "### Stances" not in pack
-    assert "### Themes" not in pack
-    assert "Obsolete generated conviction." not in pack
-    assert "## Owner Profile" not in pack
-    assert "## Research Tasks" not in pack
-
-
 def test_pack_renders_open_musing(db_path: Path) -> None:
     create_note(
         ticker=None,
@@ -124,31 +107,6 @@ def test_pack_renders_owner_decision_with_falsifier(db_path: Path) -> None:
     assert "**NVDA**" in pack
     assert "add" in pack
     assert "GPU demand rolls over 2 quarters straight" in pack
-
-
-def test_pack_ignores_retired_task_metadata_on_explicit_note(db_path: Path) -> None:
-    """Old automatic task metadata cannot add a nudge to an explicit note."""
-    note = create_note(
-        ticker=None,
-        kind="musing",
-        body="does the NU NPL trend really hold up under stress?",
-        source="manual",
-        db_path=db_path,
-    )
-    conn = sqlite3.connect(str(db_path))
-    try:
-        now = "2026-07-20T00:00:00"
-        conn.execute(
-            "INSERT INTO research_tasks (note_id, claim, ticker, status, created_at, updated_at) "
-            "VALUES (?, ?, ?, 'proposed', ?, ?)",
-            (note.id, "does the NPL trend hold", "NU", now, now),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    pack = session_context_pack.build_pack(db_path)
-    assert "`[wondering]`" not in pack
-    assert "does the NU NPL trend really hold up under stress?" in pack
 
 
 # ---------------------------------------------------------------------------
@@ -211,15 +169,3 @@ def test_main_writes_to_out_file(
     assert rc == 0
     assert out.exists()
     assert "# Research Session Context Pack" in out.read_text(encoding="utf-8")
-
-
-def test_pack_requires_database_authority(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("EARNINGS_SUMMARY_DB_PATH", raising=False)
-    with pytest.raises(ValueError, match="EARNINGS_SUMMARY_DB_PATH is required"):
-        session_context_pack.build_pack()
-
-
-def test_pack_uses_configured_database(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db_path))
-    record_tenet(body_md="Keep the owner process explicit.", scope_key="process", db_path=db_path)
-    assert "Keep the owner process explicit." in session_context_pack.build_pack()

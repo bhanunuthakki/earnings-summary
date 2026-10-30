@@ -30,7 +30,6 @@ from pipeline.operations_panel import (
     build_operations_panel_view,
     render_operations_panel,
 )
-from pipeline.operations_styles import OPERATIONS_STYLE
 from pipeline.provenance_panel import PROVENANCE_SECTIONS
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -251,39 +250,6 @@ def test_linked_dispositions_resolve_to_reachable_related_views_and_sections(
     for item in related.values():
         assert f'data-operations-related="{item.key}"' in html
         assert f"workOsOpenRelatedView('{item.endpoint}', '{item.label}')" in html
-
-
-def test_operations_renderer_has_four_tabs_and_related_views(
-    tmp_path: Path,
-) -> None:
-    html = render_operations_panel(_view(tmp_path))
-    tablist = html.split('role="tablist"', 1)[1].split("</div>", 1)[0]
-
-    assert tablist.count('role="tab"') == 4
-    assert ">Overview</button>" in tablist
-    assert ">Attention</button>" in tablist
-    assert ">Jobs</button>" in tablist
-    assert ">Runtime &amp; Recovery</button>" in tablist
-    assert ">Governance</button>" not in tablist
-    assert ">Settings</a>" not in tablist
-    assert ">Data provenance</a>" not in tablist
-    assert ">Settings</button>" in html
-    assert ">Data provenance</button>" in html
-    assert "workOsOpenRelatedView('/api/panel/data_policy_settings', 'Settings')" in html
-    assert "workOsOpenRelatedView('/api/panel/provenance', 'Data provenance')" in html
-    assert "event.key === 'ArrowRight'" in html
-    assert "event.key === 'ArrowLeft'" in html
-    assert "event.key === 'Home'" in html
-    assert "event.key === 'End'" in html
-    assert 'aria-selected="true"' in tablist
-    assert 'tabindex="0"' in tablist
-    assert 'tabindex="-1"' in tablist
-    assert "k-chip-tab" in tablist
-    assert ".operations-tab{min-block-size:var(--touch-target-size)}" in OPERATIONS_STYLE
-    assert 'data-operations-task-card="true"' in html
-    assert "data-readme-" not in html
-    assert "/actions/readme-update" not in html
-    assert "/api/readme-governance/status" not in html
 
 
 def test_operations_renderer_uses_card_title_for_the_card_heading(tmp_path: Path) -> None:

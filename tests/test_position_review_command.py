@@ -70,14 +70,6 @@ def _pre(**overrides: object) -> PreAnalysis:
 # --------------------------------------------------------------------------- #
 
 
-def test_render_chat_contains_grounded_facts_without_coaching() -> None:
-    out = render_pre_analysis_chat(_pre(at_price=82.0))
-    assert "**RBRK**" in out
-    assert "Mechanical read:" not in out
-    assert "ladder: fair" in out
-    assert "Full calibrated verdict" not in out
-
-
 # --------------------------------------------------------------------------- #
 # review_reply_text — deterministic Markdown dispatch
 # --------------------------------------------------------------------------- #
@@ -299,45 +291,3 @@ def test_review_command_parses_at_price_through_dispatch(
 # --------------------------------------------------------------------------- #
 # /review background full-verdict job (Bug 2: production caller wiring)
 # --------------------------------------------------------------------------- #
-
-
-@pytest.fixture(autouse=True)
-def explicit_review_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(tmp_path / "isolated-review.db"))
-
-
-def test_review_never_starts_a_verdict_job(monkeypatch: pytest.MonkeyPatch) -> None:
-    def no_job(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("deterministic review must not start background work")
-
-    def facts(*_args: object, **_kwargs: object) -> PreAnalysis:
-        return _pre()
-
-    monkeypatch.setattr(pr, "build_pre_analysis", facts)
-    monkeypatch.setattr(Registry, "start", no_job)
-    registry = Registry()
-    reply = run_chat_command(Path("."), "/review RBRK", registry)
-    assert reply is not None and "**RBRK**" in reply
-    assert "Full calibrated verdict" not in reply
-    assert registry.list_jobs() == []
-
-
-def test_review_uses_one_explicit_database_for_roster_and_facts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    database = tmp_path / "explicit.db"
-    seen: list[Path] = []
-
-    def roster(path: Path) -> RosterIndex:
-        seen.append(path)
-        return _roster()
-
-    def facts(*_args: object, **kwargs: object) -> PreAnalysis:
-        assert kwargs["db_path"] == database
-        return _pre()
-
-    monkeypatch.setattr(pr, "_load_review_roster", roster)
-    monkeypatch.setattr(pr, "build_pre_analysis", facts)
-    reply = review_reply_text(tmp_path, "/review Rubrik", db_path=database)
-    assert "**RBRK**" in reply
-    assert seen == [database]

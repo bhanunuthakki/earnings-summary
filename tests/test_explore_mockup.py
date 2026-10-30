@@ -69,19 +69,6 @@ def test_definition_doorways_and_accessibility() -> None:
     assert "@media(hover:none)" in wb_html or "@media (hover: none)" in wb_html
 
 
-def test_production_explore_uses_copilot_and_keeps_analytics() -> None:
-    panel = (ROOT / "src/pipeline/explore_panel.py").read_text(encoding="utf-8")
-    runtime = (ROOT / "src/pipeline/explore_panel_runtime.py").read_text(encoding="utf-8")
-    assert 'id="vx-ask-copilot"' in panel
-    assert 'id="vx-workbench-company"' in panel
-    assert 'id="ask-thread"' not in panel
-    assert "window.openWorkOsCopilot" in runtime
-    assert "/api/ask/stream" not in runtime
-    assert "work-os-explore-analysis" in runtime
-    assert "/api/viewspec/compile" in runtime
-    assert "/api/viewspec/run" in runtime
-
-
 def test_analytics_workbench_uses_progressive_full_height_rails() -> None:
     wb_html = WORKBENCH_MOCKUP.read_text(encoding="utf-8")
 

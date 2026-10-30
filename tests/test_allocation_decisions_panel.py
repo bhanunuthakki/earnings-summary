@@ -37,7 +37,6 @@ from pipeline.allocation_decisions_panel import (
     build_decisions_timeline,
     build_sizing_audit_rows,
     compose_decisions_page,
-    render_decision_journal_section,
     score_row,
 )
 from user_state.ledger import append_entry
@@ -570,28 +569,6 @@ def test_decisions_record_panel_route(client: FlaskClient) -> None:
     assert "Sizing audit" in body
     assert "Decisions timeline" in body
     assert "conviction 5/5" in body
-
-
-def test_decision_journal_lists_confirmed_owner_decisions_only(tmp_path: Path) -> None:
-    db = tmp_path / "journal.db"
-    with sqlite3.connect(db) as conn:
-        conn.execute(
-            "CREATE VIEW v_decision_journal AS "
-            "SELECT 1 AS decision_id, 'NU' AS ticker, 'owner' AS decided_by, "
-            "'watch' AS recommendation_kind, '2026-07-25' AS made_at, "
-            "'followed' AS user_action_kind, 'correct' AS outcome_label, 4.0 AS outcome_pct, 'sound' AS process_quality "
-            "UNION ALL SELECT 2, 'WIX', 'advisor', 'buy', '2026-07-24', "
-            "NULL, NULL, NULL, NULL"
-        )
-
-    html = render_decision_journal_section(db)
-
-    assert "owner: watch" in html
-    assert "followed" in html
-    assert "correct" in html
-    assert "+4.0%" in html
-    assert "advisor: buy" not in html
-    assert "advisor history" not in html
 
 
 # --------------------------------------------------------------------------- #

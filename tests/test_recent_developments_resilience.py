@@ -10,8 +10,6 @@ a future change that starts parsing the response.
 
 from __future__ import annotations
 
-import json
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -56,24 +54,3 @@ def test_build_stores_response_verbatim_without_raising(
     assert section.status == SectionStatus.OK
     assert section.content_md == response
     assert section.cached_at is not None
-
-
-def test_existing_markdown_cache_replays_without_generation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    cache_path = tmp_path / recent_developments.NEWS_CACHE_DIRNAME / "NU.json"
-    cache_path.parent.mkdir(parents=True)
-    content = "### Material news\n- **Existing event** — Recorded context. [Source: Issuer]"
-    cache_path.write_text(
-        json.dumps({"cached_at": datetime.now(UTC).isoformat(), "content_md": content}),
-        encoding="utf-8",
-    )
-
-    def no_generation(*args: object, **kwargs: object) -> str:
-        raise AssertionError("Completed Markdown cache must replay without a model call")
-
-    monkeypatch.setattr(recent_developments, "generate_recent_developments", no_generation)
-    section = recent_developments.build("NU", tmp_path, enable_llm=False)
-
-    assert section.status == SectionStatus.OK
-    assert section.content_md == content

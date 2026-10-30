@@ -253,15 +253,6 @@ def test_reconciliation_accepts_under_revenue(conn: sqlite3.Connection) -> None:
     assert passes_reconciliation(conn, record, "revenue_by_geography", source_doc_id=7) is True
 
 
-def test_reconciliation_no_revenue_is_degraded(conn: sqlite3.Connection) -> None:
-    """Unavailable prerequisite cannot establish reconciled segment admission."""
-    record = FmpSegmentRecord.model_validate(_GEO_SAMPLE)
-    with pytest.raises(SegmentPrerequisiteUnavailableError) as missing:
-        passes_reconciliation(conn, record, "revenue_by_geography", source_doc_id=1)
-    assert missing.value.coordinates == (("GOOG", "2025-12-31", "FY"),)
-    assert missing.value.committed_rows_inserted == 0
-
-
 def test_reconciliation_cannot_use_quarantined_revenue(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:

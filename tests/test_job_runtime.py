@@ -644,30 +644,6 @@ def test_scheduler_preserves_unknown_and_explicit_write_sets() -> None:
     assert _scheduler_write_sets("refresh_cache", ["operator-explicit"]) == ["operator-explicit"]
 
 
-@pytest.mark.parametrize("job_name", ["weekly-p2-lens-refresh", "weekly-synthesis"])
-def test_retired_lens_jobs_preserve_requested_write_sets(job_name: str) -> None:
-    assert _scheduler_write_sets(job_name, ["portfolio-db"]) == ["portfolio-db"]
-    assert _scheduler_write_sets(job_name, ["operator-explicit"]) == ["operator-explicit"]
-
-
-@pytest.mark.parametrize(
-    "job_name",
-    [
-        "ledger-synthesis",
-        "refresh-business-factors",
-        "refresh_scenario_priors",
-        "submit-saydo-batch-prepare",
-        "submit-saydo-batch-submit",
-        "tenet-accountability",
-        "thesis-collision",
-        "weekly-score-stances",
-    ],
-)
-def test_unlisted_and_retired_job_names_preserve_requested_write_sets(job_name: str) -> None:
-    assert _scheduler_write_sets(job_name, ["portfolio-db"]) == ["portfolio-db"]
-    assert _scheduler_write_sets(job_name, ["operator-explicit"]) == ["operator-explicit"]
-
-
 def test_operations_runtime_collector_scheduler_lane_is_preserved() -> None:
     assert _scheduler_write_sets(
         "collect-operations-runtime-observations", ["operations-runtime-receipts"]

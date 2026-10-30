@@ -16,7 +16,6 @@ from pipeline.positioning_panel import (
     FormError,
     profile_from_form,
     render_active_target_card,
-    render_approval_form,
     render_positioning_panel,
 )
 from positioning.profile import PositioningProfile, SectorTarget
@@ -120,25 +119,6 @@ def test_panel_renders_default_and_intent_states(tmp_path: Path) -> None:
     assert 'name="target_growth_tilt" placeholder="e.g. -0.10" value="-0.1"' in editor
     assert 'name="sleeve_intl" placeholder="%" value="20"' in editor
     assert ">Less growth, more intl value.</textarea>" in editor
-
-
-def test_approval_form_renders_manual_profile_values() -> None:
-    profile = PositioningProfile(
-        target_growth_tilt=0.0,
-        sector_targets=[SectorTarget(sector="Technology", target_weight=0.35, band=0.05)],
-        sleeves={"intl": 0.15},
-    )
-    html = render_approval_form(profile, "Neutral tilt; intl 15%.")
-    assert 'name="session_id" value=""' in html
-    assert 'name="target_growth_tilt"' in html and 'value="0"' in html
-    assert 'name="sector_0"' in html and 'value="Technology"' in html
-    assert 'name="sector_target_0"' in html and 'value="35"' in html
-    assert 'name="sleeve_intl"' in html and 'value="15"' in html
-    assert '<h3 class="k-well-title">Set targets' in html
-    assert '<h4 class="k-well-title">Sector targets' in html
-    assert '<h4 class="k-well-title">Narrative' in html
-    assert "Save targets" in html
-    assert "Neutral tilt; intl 15%." in html
 
 
 # ---------------------------------------------------------------------------

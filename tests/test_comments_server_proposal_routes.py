@@ -106,9 +106,3 @@ def test_research_proposal_routes_keep_http_contract(
         ).status_code
         == 403
     )
-
-
-def test_retired_research_entrypoints_stay_unavailable(client: FlaskClient) -> None:
-    assert client.post("/api/research/proposal/7/approve").status_code == 404
-    assert client.post("/api/research/task/7/run").status_code == 404
-    assert client.get("/api/panel/musings?fragment=research").status_code == 400

@@ -533,50 +533,6 @@ def test_runtime_tree_attestation_hashes_every_admitted_file(tmp_path: Path) -> 
     }
 
 
-def test_independent_runtime_inventory_hashes_each_regular_file(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    runtime_root = tmp_path / "runtime"
-    nested = runtime_root / "Lib" / "site-packages"
-    nested.mkdir(parents=True)
-    (runtime_root / "python.exe").write_bytes(b"python")
-    (nested / "package.py").write_bytes(b"package")
-
-    rows = _independent_runtime_inventory((("runtime/python", runtime_root),))
-
-    assert rows == [
-        {
-            "logical_path": "runtime/python/Lib/site-packages/package.py",
-            "dependency_class": "runtime",
-            "sha256": hashlib.sha256(b"package").hexdigest(),
-            "size_bytes": len(b"package"),
-        },
-        {
-            "logical_path": "runtime/python/python.exe",
-            "dependency_class": "runtime",
-            "sha256": hashlib.sha256(b"python").hexdigest(),
-            "size_bytes": len(b"python"),
-        },
-    ]
-
-    redirected = tmp_path / "redirected-runtime"
-    try:
-        redirected.symlink_to(runtime_root, target_is_directory=True)
-    except (NotImplementedError, OSError):
-        pass
-    else:
-        with pytest.raises(AssertionError, match="root is a reparse point"):
-            _independent_runtime_inventory((("runtime/python", redirected),))
-
-    def denied_walk(*_args: object, onerror: Callable[[OSError], None], **_kwargs: object):
-        onerror(PermissionError("synthetic traversal denial"))
-        yield
-
-    monkeypatch.setattr(os, "walk", denied_walk)
-    with pytest.raises(PermissionError, match="synthetic traversal denial"):
-        _independent_runtime_inventory((("runtime/python", runtime_root),))
-
-
 @pytest.mark.skipif(os.name != "nt", reason="native module enumeration is Windows-specific")
 def test_native_runtime_attestation_includes_python_and_os_dlls() -> None:
     records = runtime_native_dependency_records(

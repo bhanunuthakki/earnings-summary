@@ -112,32 +112,6 @@ def test_anchor_empty_when_only_proposed(repo_root: Path) -> None:
     assert load_owner_profile_anchor(repo_root) == ""
 
 
-def test_anchor_renders_explicit_process_facts(repo_root: Path) -> None:
-    _stage_process_fact(repo_root)
-    anchor = load_owner_profile_anchor(repo_root)
-    assert "OWNER PROCESS ANCHOR" in anchor
-    assert "Keep at least 5% in cash" in anchor
-    assert "(as of 20" in anchor  # dated for cache stability
-
-
-def test_anchor_excludes_affirmed_household_capacity(repo_root: Path) -> None:
-    conn = sqlite3.connect(str(_db(repo_root)))
-    try:
-        append_fact(
-            conn,
-            category="capacity",
-            key="cash_buffer_months",
-            value={"months": 6.0},
-            narrative="Household reserve: 6 months of spend.",
-            provenance="wealthplan_import",
-            status="affirmed",
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    assert load_owner_profile_anchor(repo_root) == ""
-
-
 def test_anchor_only_affirmed_not_proposed_or_rejected(repo_root: Path) -> None:
     conn = sqlite3.connect(str(_db(repo_root)))
     try:

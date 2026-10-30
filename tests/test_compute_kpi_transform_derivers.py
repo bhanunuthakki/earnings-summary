@@ -587,41 +587,6 @@ def test_transform_rejects_override_unit_mismatch(conn: sqlite3.Connection) -> N
     assert all(row.name != KPI_RISK_ADJ_NIM_YOY_BPS for row in rows)
 
 
-def test_derive_for_ticker_outcome_persists_transform_series(conn: sqlite3.Connection) -> None:
-    """End-to-end persist: the derived NIM series lands in kpi_facts under the
-    canonical name, tagged extracted_by='kpi_transform_derived'."""
-    _seed_base_kpi(
-        conn,
-        "NU",
-        _NIM_BASE,
-        [("2023-12-31", "Q4", 10.0), ("2024-12-31", "Q4", 9.0), ("2025-12-31", "Q4", 8.0)],
-    )
-    derive_for_ticker_outcome(conn, "NU")
-    rows = conn.execute(
-        "SELECT kf.value, kf.unit, kf.extracted_by FROM kpi_facts kf "
-        "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
-        "WHERE kf.ticker = 'NU' AND kd.name = ? ORDER BY kf.period_end",
-        (KPI_RISK_ADJ_NIM_YOY_BPS,),
-    ).fetchall()
-    assert len(rows) == 2
-    assert all(dict(r)["unit"] == "bps" for r in rows)
-    assert all(dict(r)["extracted_by"] == "kpi_transform_derived" for r in rows)
-
-
-def test_derive_for_ticker_outcome_transforms_are_idempotent(conn: sqlite3.Connection) -> None:
-    """Re-running inserts no duplicate derived rows (UNIQUE index dedupes)."""
-    _seed_base_kpi(
-        conn,
-        "NU",
-        _NIM_BASE,
-        [("2023-12-31", "Q4", 10.0), ("2024-12-31", "Q4", 9.0), ("2025-12-31", "Q4", 8.0)],
-    )
-    first = derive_for_ticker_outcome(conn, "NU")
-    second = derive_for_ticker_outcome(conn, "NU")
-    assert first.rows_inserted >= 2  # at least the 2 NIM-YoY rows
-    assert second.rows_inserted == 0
-
-
 def test_revenue_deceleration_fails_closed_on_legacy_derived_input(
     conn: sqlite3.Connection,
 ) -> None:

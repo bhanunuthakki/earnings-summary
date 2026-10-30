@@ -893,21 +893,6 @@ def test_skip_post_earnings_readouts_removes_only_stage1d(
     assert summary["stage_1d_post_earnings_readouts"] == "skipped"
 
 
-def test_pre_earnings_failure_still_runs_feed(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A pre-earnings brief failure does not block feed rendering or validation."""
-    fake = _RecordingRun(returncodes={PRE_ER_BRIEF_SCRIPT: 1})
-    _install_fake(monkeypatch, fake)
-
-    rc = run_morning_pipeline.main([])
-    assert rc == 1
-    summary = _parse_summary(capsys.readouterr().out)
-    assert summary["stage_1c_pre_earnings_briefs"] == "failed"
-    assert summary["stage_2_feed"] == "ok"
-    assert summary["stage_3_validate"] == "ok"
-
-
 def test_validation_gate_receives_db_path_when_set(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

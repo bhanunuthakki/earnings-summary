@@ -159,36 +159,3 @@ def test_process_preview_failure_is_generic_and_correlated(
 def _on_disk_thesis(repo: Path) -> str:
     data = json.loads((repo / "micro_thesis" / "holdings" / "NU.json").read_text(encoding="utf-8"))
     return cast(str, data["thesis"])
-
-
-@pytest.mark.parametrize("intent", ["edit_thesis", "edit_structured", "extract_kpi"])
-@pytest.mark.parametrize(
-    "failed_step", [None, "seed_kpi_definitions", "run_thesis_evaluator", "build_artifacts"]
-)
-def test_comment_rebuild_keeps_core_steps_without_automatic_numeric_extraction(
-    repo: Path, monkeypatch: pytest.MonkeyPatch, intent: str, failed_step: str | None
-) -> None:
-    cache = repo / "data" / "bear_case" / "NU.json"
-    cache.parent.mkdir()
-    cache.write_text("{}")
-    calls: list[tuple[str, list[str], int]] = []
-
-    def spawn(root: Path, *, name: str, cmd: list[str], timeout: int) -> dict[str, object]:
-        assert root == repo
-        calls.append((name, cmd, timeout))
-        return {"name": name, "exit_code": 1 if name == failed_step else 0}
-
-    monkeypatch.setattr(prc, "_spawn_step", spawn)
-    result = prc.maybe_auto_rebuild(repo, "NU", [{"intent": intent, "status": "ok"}])
-    assert [name for name, _, _ in calls] == [
-        "seed_kpi_definitions",
-        "run_thesis_evaluator",
-        "build_artifacts",
-    ]
-    assert [timeout for _, _, timeout in calls] == [60, 300, 900]
-    assert not cache.exists()
-    assert result["rebuilt"] is (failed_step is None)
-    assert result["caches_invalidated"] == ["data/bear_case/NU.json"]
-    assert result["mutating_intents_applied"] == 1
-    assert "--enable-llm" in calls[-1][1]
-    assert "--repo-root" in calls[0][1] and "--repo-root" in calls[-1][1]

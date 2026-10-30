@@ -370,39 +370,3 @@ def test_missing_instrument_schema_fails_closed_for_corporate_acquisition() -> N
         )
         assert result.status is StoredIdentityStatus.INSTRUMENT_UNAVAILABLE
         assert not result.allowed
-
-
-@pytest.mark.parametrize(
-    ("stored", "expected", "month"),
-    [
-        ("12-31", "12-31", 12),
-        ("06-30", "06-30", 6),
-        ("12-30", None, 12),
-        ("12", None, 12),
-        ("12-99", None, 12),
-        ("02-29", "02-29", 2),
-        ("02-30", None, 2),
-        (None, None, None),
-    ],
-)
-def test_stored_collection_retains_only_complete_valid_fiscal_calendar(
-    stored: str | None, expected: str | None, month: int | None
-) -> None:
-    with sqlite3.connect(":memory:") as conn:
-        conn.execute(
-            "CREATE TABLE tracked_companies(ticker TEXT,list_type TEXT,archived_at TEXT,"
-            "instrument_type TEXT,fiscal_year_end TEXT)"
-        )
-        conn.execute(
-            "INSERT INTO tracked_companies VALUES ('PORT','portfolio',NULL,'equity',?)", (stored,)
-        )
-        result = authorize_collection_target_in_connection(
-            conn,
-            "PORT",
-            requested=False,
-            source=CollectionSource.IR,
-            artifact_kind=ArtifactKind.IR_DOCUMENT,
-        )
-    assert result.allowed
-    assert result.fiscal_year_end == expected
-    assert result.fiscal_year_end_month == month

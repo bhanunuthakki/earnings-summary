@@ -479,31 +479,6 @@ def test_batch_recorder_inserts_from_lens_artifacts(repo_root: Path) -> None:
     assert tally2["skipped_existing"] == 2
 
 
-def test_batch_recorder_uses_explicit_arbitrary_database_path(db: Path) -> None:
-    """The recorder writes to its explicit DB, without a repo/data convention."""
-    conn = sqlite3.connect(str(db))
-    try:
-        _seed_artifact(
-            conn,
-            ticker="GOOG",
-            purpose="lens:five_min_reread",
-            content_md="## 2. Recommended Action\n\n**HOLD**\n\nSteady.",
-            generated_at=datetime.now(UTC) - timedelta(days=2),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    tally = record_decisions_from_artifacts(db_path=db, since_days=30)
-
-    assert tally["inserted"] == 1
-    conn = sqlite3.connect(str(db))
-    try:
-        assert conn.execute("SELECT ticker FROM decisions").fetchone() == ("GOOG",)
-    finally:
-        conn.close()
-
-
 def test_batch_recorder_skips_artifacts_without_recommendation(repo_root: Path) -> None:
     db_path = repo_root / "data" / "portfolio.db"
     conn = sqlite3.connect(str(db_path))

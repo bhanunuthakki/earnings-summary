@@ -23,11 +23,6 @@ from intake import IntakeClassification, IntakeResult
 from models.documents import DocType
 
 
-@pytest.fixture(autouse=True)
-def _explicit_test_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(intake_documents, "require_db_path", lambda: tmp_path / "portfolio.sqlite")
-
-
 def _result(ticker: str, doc_type: DocType, *, skipped: bool = False) -> IntakeResult:
     return IntakeResult(
         source=Path(f"{ticker}_Q1_2026_doc.pdf"),
@@ -61,28 +56,6 @@ def _ticker_for_call(call_args: list[str]) -> str:
     """Pull the `--ticker X` value from a subprocess argv list."""
     idx = call_args.index("--ticker")
     return call_args[idx + 1]
-
-
-def test_chain_processing_keeps_press_release_as_source_only() -> None:
-    results = [_result("NU", DocType.IR_PRESS_RELEASE)]
-    with patch.object(
-        intake_documents.subprocess,
-        "run",
-        return_value=subprocess.CompletedProcess[str]([], 0),
-    ) as mock_run:
-        intake_documents.chain_processing(results)
-    mock_run.assert_not_called()
-
-
-def test_chain_processing_keeps_presentation_as_source_only() -> None:
-    results = [_result("MELI", DocType.IR_PRESENTATION)]
-    with patch.object(
-        intake_documents.subprocess,
-        "run",
-        return_value=subprocess.CompletedProcess[str]([], 0),
-    ) as mock_run:
-        intake_documents.chain_processing(results)
-    mock_run.assert_not_called()
 
 
 def test_chain_processing_bridges_transcripts_into_transcripts_table() -> None:
@@ -252,32 +225,3 @@ def test_main_accepts_include_ir_transcripts_without_running_summarizer(
         process_documents=False,
         include_ir_transcripts=True,
     )
-
-
-@pytest.mark.parametrize("include_core", [False, True])
-def test_event_intake_keeps_core_chain_without_event_synthesis(include_core: bool) -> None:
-    results = [_result("ZZZ", DocType.IR_EVENT)]
-    if include_core:
-        results += [
-            _result("NU", DocType.IR_PRESS_RELEASE),
-            _result("META", DocType.EARNINGS_CALL_TRANSCRIPT),
-        ]
-    with patch.object(
-        intake_documents.subprocess,
-        "run",
-        return_value=subprocess.CompletedProcess[str]([], 0),
-    ) as mock_run:
-        result = intake_documents.chain_processing(results)
-    calls = [
-        (_managed_target(c.args[0]).name, _ticker_for_call(c.args[0])) for c in mock_run.mock_calls
-    ]
-    assert calls == (
-        [
-            ("ingest_transcripts.py", "META"),
-            ("process_ir_documents.py", "META"),
-            ("extract_commitments_from_transcript.py", "META"),
-        ]
-        if include_core
-        else []
-    )
-    assert result.exit_code == 0

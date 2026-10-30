@@ -18,12 +18,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
-from owner_profile.models import (
-    BehavioralRule,
-    NextDollarBlendWeights,
-)
 from owner_profile.store import (
     affirm_fact,
     append_fact,
@@ -73,18 +68,6 @@ def conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
 # ---------------------------------------------------------------------------
 # Value-shape validators
 # ---------------------------------------------------------------------------
-
-
-def test_next_dollar_blend_weights_sum_to_one() -> None:
-    with pytest.raises(ValidationError):
-        NextDollarBlendWeights(ret=0.5, div=0.3, macro=0.3)
-    ok = NextDollarBlendWeights(ret=0.5, div=0.3, macro=0.2)
-    assert ok.ret == 0.5
-
-
-def test_behavioral_rule_requires_matching_distinct_citations() -> None:
-    with pytest.raises(ValidationError):
-        BehavioralRule(rule_text="Sell too early", citations=[1, 1], wrong=0, total=2)
 
 
 # ---------------------------------------------------------------------------

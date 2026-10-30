@@ -298,38 +298,3 @@ def test_native_pre_post_resolution_refresh_retains_exact_original_observation(
             previous,
             current.model_copy(update={"canonical_resolution_revision_id": "unsealed-revision"}),
         )
-
-
-def test_strict_canonical_adapter_uses_later_resolution_clock_without_widening_source_clock(
-    database: sqlite3.Connection,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
-    from provenance.fact_read_model import FactReadModel, ProvenanceBundleRead
-
-    original, reference, snapshot = _native_materialization(database)
-    cutoffs: list[datetime] = []
-    original_bundles = FactReadModel.provenance_bundles
-
-    def bounded(
-        reader: FactReadModel, ids: tuple[str, ...], *, cutoff: datetime
-    ) -> tuple[ProvenanceBundleRead, ...]:
-        cutoffs.append(cutoff)
-        return original_bundles(reader, ids, cutoff=cutoff)
-
-    monkeypatch.setattr(FactReadModel, "provenance_bundles", bounded)
-    engine = CanonicalFactResolutionEngine(database)
-    for observed in (None, STAMP):
-        assert (
-            engine.read_as_known(
-                (reference.canonical_metric_cell_id,), STAMP, observed_through=observed
-            )[0].resolution
-            is None
-        )
-    read = engine.read_as_known(
-        (reference.canonical_metric_cell_id,), STAMP, observed_through=snapshot.recorded_at
-    )[0]
-    assert read.bundle is not None
-    assert read.bundle.observation.observation_id == original.observation.observation_id
-    assert read.resolution is not None and read.resolution.cutoff_at == STAMP
-    assert cutoffs and set(cutoffs) == {STAMP}

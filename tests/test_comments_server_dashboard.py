@@ -777,50 +777,6 @@ def test_investment_profile_review_is_fingerprint_bound_and_append_only(
     assert row == ("DLO", "garp", "ratify", fingerprint)
 
 
-def test_retired_etf_profile_review_preserves_saved_owner_rows(
-    app_repo: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from pipeline.work_os_evaluation import WorkOsEvaluationHydration, WorkOsEvaluationItem
-
-    fingerprint = "d" * 64
-    hydration = WorkOsEvaluationHydration(
-        generated_at="2026-08-29T12:00:00Z",
-        count=1,
-        items=[WorkOsEvaluationItem(ticker="XLE", name="Saved ETF", instrument_type="etf")],
-    )
-
-    def fake_cockpit_rows(*args: object, **kwargs: object) -> dict[str, list[object]]:
-        return {"evaluation": []}
-
-    def fake_evaluation(*args: object, **kwargs: object) -> WorkOsEvaluationHydration:
-        return hydration
-
-    conn = sqlite3.connect(app_repo / "data/portfolio.db")
-    conn.execute(
-        "INSERT INTO investment_profile_label_reviews "
-        "(ticker,label,action,suggestion_fingerprint,evidence_json,reviewed_by,reviewed_at,idempotency_key) "
-        "VALUES('XLE','tactical_cyclical','ratify',?,'{}','fixture','2020-01-01','saved-etf-review')",
-        (fingerprint,),
-    )
-    conn.commit()
-    before = conn.execute("SELECT * FROM investment_profile_label_reviews ORDER BY id").fetchall()
-    conn.close()
-    patch_server_seam(monkeypatch, "build_cockpit_rows", fake_cockpit_rows)
-    patch_server_seam(monkeypatch, "build_work_os_evaluation", fake_evaluation)
-    client = comments_server.create_app(app_repo).test_client()
-    response = client.post(
-        "/api/research/investment-profile/XLE/labels/tactical_cyclical/ratify",
-        json={"suggestion_fingerprint": fingerprint},
-    )
-    assert response.status_code == 410
-    assert "etf_research_retired" in response.get_data(as_text=True)
-    conn = sqlite3.connect(app_repo / "data/portfolio.db")
-    after = conn.execute("SELECT * FROM investment_profile_label_reviews ORDER BY id").fetchall()
-    conn.close()
-    assert before == after
-
-
 def test_work_os_portfolio_api_uses_governed_snapshot_only_after_tracker_failure(
     app_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

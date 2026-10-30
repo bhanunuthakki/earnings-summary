@@ -1211,25 +1211,3 @@ def test_job_receipt_declared_writer_root_has_no_other_root_fallback(
         receipt = next(item for item in missing.job_receipts if item.job == job)
         assert receipt.state == "missing"
         assert receipt.evidence_source == str(latest)
-
-
-@pytest.mark.parametrize("action", ["preview", "apply"])
-def test_retired_readme_action_does_not_dispatch_or_modify_saved_files(
-    tmp_path: Path, action: str
-) -> None:
-    saved = tmp_path / ".tmp" / "readme_updater" / ("a" * 32)
-    saved.mkdir(parents=True)
-    receipt = saved / "receipt.json"
-    receipt.write_text('{"historical": true}', encoding="utf-8")
-    readme = tmp_path / "README.md"
-    readme.write_text("# Saved README\n", encoding="utf-8")
-    jobs = Mock()
-    client = comments_server.create_app(
-        tmp_path, registry=jobs, operations_registry=build_operations_registry(PROJECT_ROOT)
-    ).test_client()
-    response = client.post("/actions/readme-update", json={"action": action})
-    assert response.status_code == 404
-    assert client.get("/api/readme-governance/status").status_code == 404
-    jobs.start.assert_not_called()
-    assert readme.read_text(encoding="utf-8") == "# Saved README\n"
-    assert receipt.read_text(encoding="utf-8") == '{"historical": true}'

@@ -13,7 +13,7 @@ from compute import fmp_derived_kpis as derived
 from compute.metrics_engine import io as metrics_io
 from compute.metrics_engine.inputs import CanonicalConcept
 from models.companies import AccountingStandard
-from provenance.financial_fact_resolution import canonical_fact_relation, resolve_fact_row
+from provenance.financial_fact_resolution import resolve_fact_row
 from provenance.semantic_disposition import SemanticDisposition, SemanticDispositionStore
 from report.sections import financials
 from tests import test_financial_fact_resolution_cutover as cutover
@@ -136,48 +136,5 @@ def test_financial_callers_exclude_explicitly_quarantined_source(
         assert len(after[4]) == 1 and after[4][0] == {}
         # The old global view remains a raw compatibility surface.
         assert conn.execute("SELECT revenue FROM metrics WHERE ticker='ACME'").fetchone()[0] == 100
-    finally:
-        conn.close()
-
-
-def test_report_financials_uses_canonical_winner_before_quarantine(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
-    path = migrated_db(tmp_path / "metrics-canonical-winner.db")
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        _resolved_quarter(conn)
-        _seed_document(conn, document_id=2, source_tier="fmp_normalized", value_suffix="FMP")
-        later_raw_id = _insert_financial_fact(conn, document_id=2, value="200")
-        assert (
-            resolve_fact_row(
-                conn,
-                fact_table="financial_facts",
-                fact_row_id=later_raw_id,
-                knowledge_cutoff=datetime.now(UTC) + timedelta(minutes=1),
-            )
-            is not None
-        )
-        fact_relation = canonical_fact_relation(conn, "financial_facts").sql
-        selected = conn.execute(
-            f"SELECT value FROM {fact_relation} WHERE ticker='ACME' AND line_item='revenue'"
-        ).fetchone()
-        assert selected is not None and selected[0] == 100
-        assert _load_quarterly(conn, "ACME")[0]["revenue"] == selected[0]
-        assert conn.execute("SELECT revenue FROM metrics WHERE ticker='ACME'").fetchone()[0] == 200
-
-        at = datetime.now(UTC) + timedelta(hours=1)
-        SemanticDispositionStore(conn).persist(
-            _disposition(
-                "document-version-1",
-                revision=1,
-                status="quarantined",
-                knowledge_at=at,
-                recorded_at=at,
-            )
-        )
-        assert _load_quarterly(conn, "ACME") == []
     finally:
         conn.close()

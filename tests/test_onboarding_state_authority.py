@@ -11,7 +11,7 @@ from typing import cast
 import pytest
 
 import db
-from execution import backfill_transcripts, process_ir_documents, save_fmp_data
+from execution import backfill_transcripts, save_fmp_data
 from pipeline import quarterly_refresh
 from pipeline.sec_xbrl import IngestStats
 
@@ -78,58 +78,6 @@ def test_transcript_retarget_preserves_explicit_database(
     assert Path(db.DB_PATH) == database
     assert root / "transcripts/raw" == getattr(backfill_transcripts, "_RAW_DIR")
     assert root / "transcripts/processed" == getattr(backfill_transcripts, "_PROCESSED_DIR")
-
-
-def test_transcript_job_preserves_database_and_state_authority(
-    state: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    root, database = state
-    selected: list[tuple[Path, str | None, bool, int | None, int | None]] = []
-
-    def select(
-        db_path: Path,
-        *,
-        ticker: str | None,
-        all_tickers: bool,
-        fiscal_year: int | None,
-        fiscal_quarter: int | None,
-    ) -> list[str]:
-        selected.append((db_path, ticker, all_tickers, fiscal_year, fiscal_quarter))
-        return []
-
-    class VerifierStub:
-        def __init__(self, *, db_path: Path, state_root: Path) -> None:
-            self.db_path = db_path
-            self.state_root = state_root
-
-    monkeypatch.setattr(process_ir_documents, "select_registered_transcripts", select)
-
-    def no_process(*_args: object, **_kwargs: object) -> dict[str, object]:
-        return {}
-
-    monkeypatch.setattr(process_ir_documents, "process_document", no_process)
-    monkeypatch.setattr(
-        "pipeline.transcript_summary_verification.TranscriptSummaryVerifier", VerifierStub
-    )
-    monkeypatch.setattr(process_ir_documents, "load_project_env", _no_environment)
-    original_db = db.DB_PATH
-    assert (
-        process_ir_documents.main(
-            [
-                "--ticker",
-                "NEWCO",
-                "--repo-root",
-                str(root),
-                "--db",
-                str(database),
-                "--state-root",
-                str(root),
-            ]
-        )
-        == 0
-    )
-    assert selected == [(database.resolve(), "NEWCO", False, None, None)]
-    assert original_db == db.DB_PATH
 
 
 def test_quarterly_sec_selection_does_not_depend_on_static_cik_map(

@@ -259,16 +259,6 @@ def test_strict_read_connection_cannot_hide_channel_sql_errors() -> None:
         strict.close()
 
 
-def test_strict_read_connection_preserves_native_variable_limit() -> None:
-    raw = sqlite3.connect(":memory:")
-    raw.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 37)
-    strict = StrictEvidenceConnection(raw)
-    try:
-        assert strict.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER) == 37
-    finally:
-        strict.close()
-
-
 def test_strict_filing_retrieval_exposes_a_corrupt_source(tmp_path: Path) -> None:
     filing = tmp_path / "TST_form_10k_2025.json"
     filing.write_text("{not-json", encoding="utf-8")

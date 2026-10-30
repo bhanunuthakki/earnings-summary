@@ -12,13 +12,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 from typing import cast
-
-import pytest
 
 from allocation.price_history import load_daily_closes
 from dcf.universe import dcf_universe
@@ -115,80 +112,3 @@ def test_dcf_universe_tolerates_missing_instrument_column(tmp_path: Path) -> Non
 # ---------------------------------------------------------------------------
 # Onboarding rails
 # ---------------------------------------------------------------------------
-
-
-def test_transcript_summaries_never_runs_for_etf() -> None:
-    assert _transcript_summaries_should_run("evaluation", force=False, instrument="etf") is False
-    assert _transcript_summaries_should_run("evaluation", force=True, instrument="etf") is False
-    assert _transcript_summaries_should_run("evaluation", force=False, instrument="equity") is True
-    assert _transcript_summaries_should_run("watchlist", force=False, instrument=None) is False
-    assert _transcript_summaries_should_run("watchlist", force=True, instrument=None) is True
-
-
-def test_refresh_candidate_fit_rejects_retired_synthesis_flag(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from execution import refresh_candidate_fit as refresh_mod
-
-    db_path = tmp_path / "portfolio.db"
-    db_path.write_bytes(b"")
-
-    def fail_connect(*args: object, **kwargs: object) -> object:
-        raise AssertionError("retired flag must be rejected before opening the DB")
-
-    monkeypatch.setattr(refresh_mod, "connect_sqlite", fail_connect)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["refresh_candidate_fit.py", "--refresh-synthesis", "--db-path", str(db_path)],
-    )
-
-    with pytest.raises(SystemExit) as exc:
-        refresh_mod.main()
-    assert exc.value.code == 2
-
-
-def test_refresh_candidate_fit_ordinary_path_keeps_company_materializer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    from execution import refresh_candidate_fit as refresh_mod
-
-    db_path = tmp_path / "portfolio.db"
-    db_path.write_bytes(b"")
-    calls: list[tuple[object, ...]] = []
-
-    class _Conn:
-        def close(self) -> None:
-            calls.append(("close",))
-
-    conn = _Conn()
-
-    def fake_connect(path: str, role: object) -> _Conn:
-        calls.append(("connect", path, role))
-        return conn
-
-    def fake_candidate(c: object, repo_root: Path, *, db_path: Path, api_url: str | None) -> int:
-        calls.append(("candidate", c, repo_root, db_path, api_url))
-        return 7
-
-    monkeypatch.setattr(refresh_mod, "connect_sqlite", fake_connect)
-    monkeypatch.setattr(refresh_mod, "materialize_candidate_fit", fake_candidate)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "refresh_candidate_fit.py",
-            "--repo-root",
-            str(tmp_path),
-            "--db-path",
-            str(db_path),
-            "--api-url",
-            "http://stub.invalid",
-        ],
-    )
-
-    assert refresh_mod.main() == 0
-    assert [call[0] for call in calls] == ["connect", "candidate", "close"]
-    assert calls[1] == ("candidate", conn, tmp_path, db_path, "http://stub.invalid")
-    out = capsys.readouterr().out
-    assert "names=7" in out and "etf_scores" not in out

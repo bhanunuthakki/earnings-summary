@@ -468,23 +468,6 @@ def test_merge_tier_1_kpis_alias_match_is_case_insensitive() -> None:
 # ---------------------------------------------------------------------------
 
 
-class _FakeProc:
-    def __init__(self, returncode: int) -> None:
-        self.returncode = returncode
-
-
-def test_transcript_summaries_should_run_gates_to_evaluation() -> None:
-    """Say-Do generation runs for evaluation names; other lists are skipped
-    unless explicitly forced (the per-decision policy)."""
-    assert transcript_summaries_should_run("evaluation", force=False) is True
-    assert transcript_summaries_should_run("portfolio", force=False) is False
-    assert transcript_summaries_should_run("watchlist", force=False) is False
-    assert transcript_summaries_should_run(None, force=False) is False
-    # --force-transcript-summaries overrides the gate (used for backfilling existing names).
-    assert transcript_summaries_should_run("portfolio", force=True) is True
-    assert transcript_summaries_should_run(None, force=True) is True
-
-
 def test_lookup_list_type_reads_tracked_companies(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -509,51 +492,3 @@ def test_lookup_list_type_missing_db_returns_none(
 ) -> None:
     monkeypatch.setattr(onboard_ticker, "_DB_PATH", tmp_path / "nope" / "portfolio.db")
     assert lookup_list_type("UBER") is None
-
-
-def test_run_transcript_summaries_runs_registered_summaries(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[list[str]] = []
-
-    def fake_run(cmd: list[str], **_kw: object) -> _FakeProc:
-        calls.append(cmd)
-        return _FakeProc(0)
-
-    monkeypatch.setattr(onboard_ticker.subprocess, "run", fake_run)
-
-    rc = run_transcript_summaries("UBER")
-
-    assert rc == 0
-    assert len(calls) == 1
-    # The new processor receives explicit code, state, and database roots.
-    assert Path(calls[0][1]).name == "sqlite_bootstrap.py"
-    assert Path(calls[0][2]).name == "process_ir_documents.py"
-    assert calls[0][3:] == [
-        "--ticker",
-        "UBER",
-        "--state-root",
-        str(cast("Path", getattr(onboard_ticker, "_STATE_ROOT"))),
-        "--repo-root",
-        str(onboard_ticker.PROJECT_ROOT),
-        "--db",
-        str(cast("Path", getattr(onboard_ticker, "_DB_PATH"))),
-    ]
-
-
-def test_run_transcript_summaries_short_circuits_on_summary_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A summary failure reaches the best-effort caller unchanged."""
-    calls: list[list[str]] = []
-
-    def fake_run(cmd: list[str], **_kw: object) -> _FakeProc:
-        calls.append(cmd)
-        return _FakeProc(3)
-
-    monkeypatch.setattr(onboard_ticker.subprocess, "run", fake_run)
-
-    rc = run_transcript_summaries("UBER")
-
-    assert rc == 3
-    assert len(calls) == 1

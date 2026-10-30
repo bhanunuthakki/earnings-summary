@@ -272,32 +272,6 @@ def test_work_os_explore_fragment_is_runtime_free_and_seeded_to_requested_ticker
     assert "<script>" not in html_out
 
 
-def test_explore_panel_uses_copilot_with_optional_analytics(db_path: Path) -> None:
-    html_out = render_explore_panel(db_path)
-    assert ".work-os-explore-title { font-size:var(--fs-display);" in html_out
-    assert 'id="ask-thread"' not in html_out
-    assert 'id="vx-ask-copilot"' in html_out
-    assert "Use Copilot for contextual questions" in html_out
-    assert '<dialog class="vx-workbench-page" id="vx-workbench"' in html_out
-    assert "← Back to Explore" in html_out
-    assert "period, unit, definition, and source provenance" in html_out
-    for builder_id in ("vx-run", "vx-field-search", "vx-save", "vx-tickers"):
-        assert f'id="{builder_id}"' in html_out
-
-
-def test_explore_panel_keeps_dcf_read_only_and_hands_questions_to_copilot() -> None:
-    import inspect
-
-    from pipeline import explore_panel
-
-    src = inspect.getsource(explore_panel)
-    assert "Inject as DCF driver" not in src
-    assert "/api/dcf/inject" not in src
-    assert "DCF relationship" not in src
-    assert "vx-ask-copilot" in src
-    assert "Work with data" in src
-
-
 def test_explore_workbench_is_fullscreen_and_on_demand(db_path: Path) -> None:
     html_out = render_explore_panel(db_path)
     assert '<dialog class="vx-workbench-page" id="vx-workbench"' in html_out
@@ -400,13 +374,6 @@ def test_explore_panel_route_and_views_fragment(client: FlaskClient) -> None:
     frag = client.get("/api/panel/explore?fragment=views")
     assert frag.status_code == 200
     assert b"No saved analyses yet" in frag.data
-
-
-def test_explore_panel_has_one_contextual_copilot_doorway(db_path: Path) -> None:
-    html_out = render_explore_panel(db_path)
-    assert 'id="vx-ask-copilot"' in html_out
-    assert "openWorkOsCopilot" in html_out
-    assert "data-ask-q" not in html_out
 
 
 def test_explore_shell_does_not_wait_for_metric_catalog(
@@ -724,14 +691,3 @@ def test_ask_stream_endpoint_streams_narrative_deltas(
 def test_ask_stream_endpoint_requires_query(client: FlaskClient) -> None:
     assert client.post("/api/ask/stream", json={}).status_code == 400
     assert client.open("/api/ask/stream", method="OPTIONS").status_code == 204
-
-
-def test_explore_panel_delegates_conversation_ownership_to_copilot(
-    db_path: Path,
-) -> None:
-    html_out = render_explore_panel(db_path)
-    assert "openWorkOsCopilot" in html_out
-    assert "/api/ask/stream" not in html_out
-    assert "var sessionId" not in html_out
-    assert "function parseFrame" not in html_out
-    assert "context_kind: 'company', prompt: prompt" in html_out

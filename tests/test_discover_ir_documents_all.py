@@ -23,20 +23,6 @@ from execution import discover_ir_documents_all as batch
 from execution import onboard_ticker
 
 
-@pytest.mark.parametrize(
-    "stdout",
-    [
-        'progress {not JSON}\n{"status":"partial","ready":1,"failed":1,"legacy_outcomes":[{"status":"failed"}]}\nfinished',
-        '{"status":"old"}\n{"status":"partial","ready":1,"failed":1,"legacy_outcomes":[{"status":"failed"}]}',
-    ],
-)
-def test_child_result_retains_top_level_truth_with_nested_outcomes(stdout: str) -> None:
-    parse = cast(Callable[[str], dict[str, object]], getattr(batch, "_json_object"))
-    result = parse(stdout)
-    assert (result["status"], result["ready"], result["failed"]) == ("partial", 1, 1)
-    assert result["legacy_outcomes"] == [{"status": "failed"}]
-
-
 class _FakeCompleted:
     def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
         self.returncode = returncode

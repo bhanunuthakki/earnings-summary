@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import sqlite3
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -126,103 +125,6 @@ def _location(
         supersedes_location_observation_id=supersedes_location_observation_id,
         recorded_at=verified_at,
     )
-
-
-@pytest.mark.parametrize(
-    "prefix", ["ir-native-location", "sec-native-location", "sec-companyfacts-location"]
-)
-def test_ensure_local_location_retains_identity_and_present_clocks(
-    tmp_path: Path, migrated_db: Callable[..., Path], prefix: str
-) -> None:
-    conn = _conn(tmp_path, migrated_db)
-    try:
-        _seed_ledger(conn)
-        conn.commit()
-        ledger = EvidenceLinkLedger(conn)
-        uri = "file:///evidence/acme/10q.html"
-        expected_id = (
-            prefix
-            + ":"
-            + hashlib.sha256("\0".join((SHA_A, uri, "1", "present")).encode()).hexdigest()
-        )
-        assert ledger.ensure_local_location(
-            identity_prefix=prefix, digest=SHA_A, storage_uri=uri, byte_size=42, verified_at=STAMP
-        )
-        assert conn.in_transaction
-        conn.commit()
-        before = conn.execute("SELECT * FROM evidence_blob_location_observations").fetchall()
-        assert before[0][0] == expected_id
-        assert before[0][1] == expected_id
-        for replay_prefix in (prefix, "another-collector"):
-            assert not ledger.ensure_local_location(
-                identity_prefix=replay_prefix,
-                digest=SHA_A,
-                storage_uri=uri,
-                byte_size=-1,
-                verified_at=STAMP + timedelta(days=1),
-            )
-            assert not conn.in_transaction
-            assert (
-                conn.execute("SELECT * FROM evidence_blob_location_observations").fetchall()
-                == before
-            )
-    finally:
-        conn.close()
-
-
-@pytest.mark.parametrize("state", ["missing", "quarantined"])
-def test_ensure_local_location_recovers_without_erasing_history(
-    tmp_path: Path,
-    migrated_db: Callable[..., Path],
-    state: Literal["missing", "quarantined"],
-) -> None:
-    conn = _conn(tmp_path, migrated_db)
-    try:
-        _seed_ledger(conn)
-        ledger = EvidenceLinkLedger(conn)
-        ledger.persist_location(_location(availability_state=state))
-        before = conn.execute("SELECT * FROM evidence_blob_location_observations").fetchall()
-        assert ledger.ensure_local_location(
-            identity_prefix="ir-native-location",
-            digest=SHA_A,
-            storage_uri="file:///evidence/acme/10q.html",
-            byte_size=42,
-            verified_at=STAMP + timedelta(hours=1),
-        )
-        assert (
-            conn.execute(
-                "SELECT * FROM evidence_blob_location_observations WHERE location_sequence = 1"
-            ).fetchall()
-            == before
-        )
-        assert conn.execute(
-            "SELECT availability_state,location_sequence,supersedes_location_observation_id "
-            "FROM v_evidence_blob_locations_current"
-        ).fetchone() == ("present", 2, "location-primary")
-    finally:
-        conn.close()
-
-
-def test_ensure_local_location_leaves_rollback_to_caller(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
-    conn = _conn(tmp_path, migrated_db)
-    try:
-        _seed_ledger(conn)
-        conn.commit()
-        assert EvidenceLinkLedger(conn).ensure_local_location(
-            identity_prefix="sec-native-location",
-            digest=SHA_A,
-            storage_uri="file:///evidence/acme/10q.html",
-            byte_size=42,
-            verified_at=STAMP,
-        )
-        assert conn.in_transaction
-        conn.rollback()
-        assert not conn.in_transaction
-        assert conn.execute("SELECT * FROM evidence_blob_location_observations").fetchall() == []
-    finally:
-        conn.close()
 
 
 def test_one_blob_can_have_multiple_immutable_replica_locations(

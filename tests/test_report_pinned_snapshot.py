@@ -35,8 +35,6 @@ import pytest
 from db_paths import db_path_context
 from dcf.persist import DcfRunRow, persist_run
 from dcf.provenance import DcfInputProvenance
-from report.builder import build_report, prepare_workspace_report
-from report.renderers import workspace_html
 from report.sections import snapshot as snapshot_section
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -350,93 +348,6 @@ def test_caller_connection_stays_open_after_build(
 # --------------------------------------------------------------------------- #
 
 
-def test_prepare_workspace_report_rejects_connection_from_other_database(
-    migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    repo_a, db_a = _repo_with_db(migrated_db, tmp_path / "a")
-    _, db_b = _repo_with_db(migrated_db, tmp_path / "b")
-
-    monkeypatch.setattr("report.builder.suppressed_sections_for_ticker", _no_suppressed_sections)
-    spec = build_report("TEST", repo_a, db_path=db_a)
-    assert spec.db_path == str(db_a)
-
-    def bomb(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("panel loader ran despite an authority mismatch")
-
-    monkeypatch.setattr("report.builder.load_workspace_p3_panels", bomb)
-
-    conn_b = _connect(db_b)
-    conn_b.execute("BEGIN")
-    try:
-        with pytest.raises(ValueError, match="Report connection and database path disagree"):
-            prepare_workspace_report(spec, conn=conn_b)
-        # The rejection precedes any panel read and preserves the caller's
-        # explicit transaction and row factory.
-        assert conn_b.in_transaction
-        assert conn_b.row_factory is sqlite3.Row
-        assert conn_b.execute("SELECT 1").fetchone()[0] == 1
-    finally:
-        conn_b.rollback()
-        conn_b.close()
-
-
-def test_prepare_workspace_report_rejects_transient_connection_for_disk_spec(
-    migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A :memory: main file PRAGMAs to an empty path and must be rejected.
-
-    The naive `if connected` shape let a named-disk spec accept an unrelated
-    transient connection because its PRAGMA main filename is empty. The
-    rejection must precede comment/panel reads and preserve the caller's
-    explicit transaction and row factory.
-    """
-    repo, db = _repo_with_db(migrated_db, tmp_path)
-
-    monkeypatch.setattr("report.builder.suppressed_sections_for_ticker", _no_suppressed_sections)
-    spec = build_report("TEST", repo, db_path=db)
-    assert spec.db_path == str(db)
-
-    def bomb(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("panel loader ran despite a transient connection")
-
-    monkeypatch.setattr("report.builder.load_workspace_p3_panels", bomb)
-    monkeypatch.setattr(workspace_html, "_comment_boot_data", bomb, raising=True)
-
-    transient = sqlite3.connect(":memory:")
-    transient.row_factory = sqlite3.Row
-    transient.execute("BEGIN")
-    try:
-        with pytest.raises(ValueError, match="no main database file"):
-            prepare_workspace_report(spec, conn=transient)
-        # Rejection happened before any panel read; the caller's explicit
-        # transaction and row factory are preserved and the handle usable.
-        assert transient.in_transaction
-        assert transient.row_factory is sqlite3.Row
-        assert transient.execute("SELECT 1").fetchone()[0] == 1
-    finally:
-        transient.rollback()
-        transient.close()
-
-
-def test_prepare_workspace_report_accepts_matching_connection(
-    migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    repo, db = _repo_with_db(migrated_db, tmp_path)
-    monkeypatch.setattr("report.builder.suppressed_sections_for_ticker", _no_suppressed_sections)
-    spec = build_report("TEST", repo, db_path=db)
-
-    conn = _connect(db)
-    try:
-        prepared = prepare_workspace_report(spec, conn=conn)
-        body = workspace_html.render_report_body(spec.model_copy(update={"workspace": prepared}))
-        assert body is not None
-        # A matching caller-owned connection survives the render usable.
-        assert conn.execute("SELECT 1").fetchone()[0] == 1
-        assert conn.row_factory is sqlite3.Row
-    finally:
-        conn.close()
-
-
 # --------------------------------------------------------------------------- #
 # _build_one integration: WAL writer-during-read stays on the pinned snapshot
 # --------------------------------------------------------------------------- #
@@ -633,24 +544,3 @@ def test_build_one_closes_reader_and_writes_nothing_when_render_fails(
         assert logged is not None and logged[0] == 0
     finally:
         check.close()
-
-
-def test_build_report_rejects_transient_connection_before_any_source_read(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def forbidden(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("source reader ran before database authority validation")
-
-    monkeypatch.setattr("report.builder.portfolio_position.build", forbidden)
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    conn.execute("BEGIN")
-    try:
-        with pytest.raises(ValueError, match="no main database file"):
-            build_report("TEST", tmp_path, db_path=tmp_path / "selected.sqlite", conn=conn)
-        assert conn.in_transaction
-        assert conn.row_factory is sqlite3.Row
-        assert conn.execute("SELECT 1").fetchone()[0] == 1
-    finally:
-        conn.rollback()
-        conn.close()

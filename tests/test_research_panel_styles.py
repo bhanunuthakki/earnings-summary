@@ -6,8 +6,6 @@ import importlib
 import re
 from pathlib import Path
 
-import pytest
-
 from pipeline.research_panel_styles import RESEARCH_PANEL_STYLE, research_panel_style
 
 _FAMILY = (
@@ -43,19 +41,3 @@ def test_family_consumers_route_through_master_recipe() -> None:
         source = Path(module_file).read_text(encoding="utf-8")
         assert "research_panel_styles" in source, name
         assert not re.search(r"^\s*\.[A-Za-z][\w-]*(?:\.[\w-]+)?\s*\{", source, re.MULTILINE), name
-
-
-def test_notes_assembly_includes_shared_family_style(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    from pipeline import ledger_panel
-    from user_state.notes import AnalystNoteRow
-
-    def no_notes(*_args: object, **_kwargs: object) -> list[AnalystNoteRow]:
-        return []
-
-    monkeypatch.setattr(ledger_panel, "list_notes", no_notes)
-    html = ledger_panel.render_ledger_panel(tmp_path / "notes-fixture.db")
-    assert RESEARCH_PANEL_STYLE in html
-    assert 'id="ledger-cap-text"' in html
-    assert 'id="ledger-list"' in html

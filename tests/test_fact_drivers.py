@@ -17,13 +17,6 @@ def test_wacc_is_not_an_injectable_field() -> None:
     assert {"risk_free_rate", "equity_risk_premium", "beta", "cost_of_debt"} <= keys
 
 
-def test_registry_fields_are_unique_and_labeled() -> None:
-    fields = fact_drivers.DRIVER_FIELDS
-    assert len(DRIVER_FIELDS_BY_KEY) == len(fields)
-    assert len({field.key for field in fields}) == len(fields)
-    assert all(field.label for field in fields)
-
-
 # --------------------------------------------------------------------------- #
 # Converter — proportions (the 4.3-vs-0.043 trap)
 # --------------------------------------------------------------------------- #

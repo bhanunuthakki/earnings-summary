@@ -260,18 +260,6 @@ def test_provenance_route_renders(tmp_path: Path) -> None:
     assert 'id="prov-coverage"' in body
 
 
-def test_cron_health_route_uses_operations_without_an_independent_poller(tmp_path: Path) -> None:
-    import comments_server
-
-    app = comments_server.create_app(tmp_path, db_path=_empty_db(tmp_path))
-    client = app.test_client()
-    panel = client.get("/api/panel/cron_health").get_data(as_text=True)
-    assert 'id="operations-title"' in panel
-    assert "data-cron-fragment-url" not in panel
-    assert "No pipeline run rows yet" in panel
-    assert "Observed by server" in panel
-
-
 def test_old_system_panel_routes_still_serve(tmp_path: Path) -> None:
     """The /api/panel/<id> fetch routes for each builder stay live (the console
     composes them; a direct fetch / cached deep-link still resolves)."""

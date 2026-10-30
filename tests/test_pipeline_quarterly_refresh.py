@@ -32,43 +32,6 @@ def _empty_artifact_batch(*_args: object, **_kwargs: object) -> dict[str, object
     return {}
 
 
-def test_fmp_parse_failure_is_failed_and_rolls_back_partial_document(
-    conn: sqlite3.Connection, tmp_path: Path
-) -> None:
-    from pipeline import quarterly_refresh
-
-    source = tmp_path / "income.json"
-    source.write_text(
-        json.dumps(
-            [
-                {"symbol": "TEST", "date": "2024-12-31", "period": "Q4", "revenue": 1000},
-                {"symbol": "TEST", "date": "invalid", "period": "Q4", "revenue": 2},
-            ]
-        )
-    )
-    cursor = conn.execute(
-        "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, "
-        "fetched_at, fetch_status, raw_bytes_size) "
-        "VALUES ('TEST', 'fmp', 'fmp_income_statement', ?, ?, ?, 'ok', ?)",
-        (
-            str(source),
-            hashlib.sha256(source.read_bytes()).hexdigest(),
-            datetime.now(),
-            source.stat().st_size,
-        ),
-    )
-    assert cursor.lastrowid is not None
-    ensure_legacy_document_evidence(conn, repo_root=tmp_path, document_id=cursor.lastrowid)
-    conn.commit()
-
-    stage = cast(Callable[..., StageResult], getattr(quarterly_refresh, "_stage_extract_fmp_facts"))
-    result = stage(conn, ticker="TEST", project_root=tmp_path)
-
-    assert result.status == StageStatus.FAILED
-    assert result.rows_processed == 0
-    assert conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0] == 0
-
-
 @pytest.fixture
 def conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> Iterator[sqlite3.Connection]:
     c = sqlite3.connect(migrated_db(tmp_path / "quarterly.sqlite"))
@@ -803,27 +766,3 @@ def test_cli_human_output_redacts_all_stage_notes(
     assert output.count('"receipt"') == 1
     assert leak_sentinel not in output
     assert output.count("api_key=***") >= 3
-
-
-def test_derivation_stage_reports_missing_canonical_input_pins(
-    conn: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from compute import fmp_derived_kpis
-    from provenance.financial_fact_resolution import CanonicalFactSelectionAsKnown
-
-    _seed_thesis_state(conn, "X")
-    _seed_quarterly_income(conn, "X", sec_official=True)
-    _write_holdings(tmp_path, "X", threshold=50)
-
-    def unavailable(*_args: object, **_kwargs: object) -> tuple[CanonicalFactSelectionAsKnown, ...]:
-        return ()
-
-    monkeypatch.setattr(fmp_derived_kpis, "canonical_fact_selections_as_known", unavailable)
-    report = refresh_ticker(
-        conn, ticker="X", project_root=tmp_path, holdings_dir=tmp_path, run_id="missing-pins"
-    )
-    stage = next(stage for stage in report.stages if stage.name is StageName.DERIVE_FMP_KPIS)
-    assert stage.status is StageStatus.SKIPPED and stage.rows_processed == 0
-    assert stage.notes is not None
-    assert "missing_canonical_input_reference" in stage.notes
-    assert "data on disk" not in stage.notes

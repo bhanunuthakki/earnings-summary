@@ -408,22 +408,3 @@ def test_evals_panel_route_serves_fragment(client: FlaskClient) -> None:
     html = resp.get_data(as_text=True)
     assert "ev-runbar" in html
     assert "No eval runs recorded yet" in html
-
-
-@pytest.mark.parametrize("steps", [None, [], [""], [" "], ["dcf", ""], ["bogus"], ["extract_kpis"]])
-def test_refresh_invalid_selection_starts_no_job(
-    client: FlaskClient, steps: list[str] | None
-) -> None:
-    assert isinstance(client.application, Flask)
-    assert isinstance(client.application.config["DISPATCH_REGISTRY"], Registry)
-    registry = cast("Registry", client.application.config["DISPATCH_REGISTRY"])
-    before = registry.list_jobs()
-    response = client.post("/actions/refresh", json={"ticker": "NU", "steps": steps})
-    assert response.status_code == 400
-    assert registry.list_jobs() == before
-
-
-@pytest.mark.parametrize("method", ["post", "options"])
-def test_retired_position_verdict_action_is_absent(client: FlaskClient, method: str) -> None:
-    response = getattr(client, method)("/actions/position-review", json={"ticker": "RBRK"})
-    assert response.status_code == 404

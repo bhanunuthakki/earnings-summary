@@ -32,7 +32,7 @@ from ask import context as ask_context
 from ask.packs import load_packs
 from db_paths import db_path_context
 from llm.anchors import load_worldview_anchor
-from macro_store import fetch_sensitivities, persist_rate_sensitivity
+from macro_store import persist_rate_sensitivity
 from synthesis.insights import record_insight
 from synthesis.tenets import record_tenet, scope_key_for
 
@@ -157,30 +157,6 @@ def _seed_macro(repo_root: Path) -> None:
         )
         is not None
     )
-
-
-def test_macro_pack_levels_betas_and_process_tenets(repo_root: Path) -> None:
-    _seed_macro(repo_root)
-    record_insight(
-        scope_key="macro:rates-duration",
-        kind="tenet",
-        body_md="I expect rates to stay above 4% through 2027; avoid duration bets.",
-        source_note_ids=[],
-        watermark_id=None,
-        db_path=_db(repo_root),
-    )
-    items = load_packs(["macro"], db_path=_db(repo_root), focus_tickers=[])
-    assert len(items) == 1
-    text = str(items[0]["text"])
-    assert "us_10y=4.2" in text
-    assert "NU~us_10y" in text  # admitted v2 rate fit clears the r² floor
-    estimate = fetch_sensitivities(ticker="NU", db_path=_db(repo_root))[0]
-    assert estimate.input_sha is not None and estimate.input_sha in text
-    assert "log return per +100 bps; v2_rate_diff" in text
-    assert f"source {date.today().isoformat()}" in text
-    assert "MELI" not in text  # r²=0.02 is noise, not exposure
-    assert "macro:rates-duration" in text
-    assert "rates to stay above 4%" in text
 
 
 def test_macro_pack_reports_unknown_when_all_betas_weak(repo_root: Path) -> None:

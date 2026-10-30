@@ -2,15 +2,9 @@
 
 from __future__ import annotations
 
-import sqlite3
-from collections.abc import Callable
 from pathlib import Path
 
-import pytest
 from alembic.config import Config
-
-from alembic import command
-from schema_compat import expected_head
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -20,66 +14,3 @@ def _config(path: Path) -> Config:
     config.set_main_option("script_location", str(ROOT / "alembic"))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{path.as_posix()}")
     return config
-
-
-def test_current_head_seeds_skip_mode_budget_and_holds_downgrade(
-    tmp_path: Path,
-    migrated_db: Callable[..., Path],
-) -> None:
-    db = tmp_path / "readout-budget.db"
-    migrated_db(db, target="head")
-    config = _config(db)
-
-    with sqlite3.connect(db) as conn:
-        revision = conn.execute("SELECT version_num FROM alembic_version").fetchone()
-        row = conn.execute(
-            "SELECT monthly_cap_usd, warn_threshold_pct, hard_block, on_exceed "
-            "FROM llm_budgets WHERE purpose='post_earnings_readout'"
-        ).fetchone()
-    assert revision == (expected_head(),)
-    assert row == (5, 0.80, 0, "skip")
-
-    with pytest.raises(RuntimeError, match="Restore a reviewed predecessor database snapshot"):
-        command.downgrade(config, "0002_drop_dead_tables")
-    with sqlite3.connect(db) as conn:
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            expected_head(),
-        )
-        assert conn.execute(
-            "SELECT monthly_cap_usd, on_exceed FROM llm_budgets "
-            "WHERE purpose='post_earnings_readout'"
-        ).fetchone() == (5, "skip")
-
-
-@pytest.mark.parametrize(
-    "predecessor",
-    ["0065_retire_optional_research_history", "0063_transcript_reported_period_receipts"],
-)
-def test_both_parent_histories_upgrade_to_one_head(
-    tmp_path: Path, migrated_db: Callable[..., Path], predecessor: str
-) -> None:
-    db = migrated_db(tmp_path / "parent-history.db", target=predecessor)
-    with sqlite3.connect(db) as conn:
-        before = conn.execute(
-            "SELECT monthly_cap_usd, on_exceed FROM llm_budgets "
-            "WHERE purpose='post_earnings_readout'"
-        ).fetchone()
-    migrated_db(db, upgrade_existing=True, target="head")
-    with sqlite3.connect(db) as conn:
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchall() == [
-            (expected_head(),)
-        ]
-        assert (
-            conn.execute(
-                "SELECT monthly_cap_usd, on_exceed FROM llm_budgets "
-                "WHERE purpose='post_earnings_readout'"
-            ).fetchone()
-            == before
-        )
-        schema = str(
-            conn.execute(
-                "SELECT sql FROM sqlite_schema WHERE name='transcript_acquisition_receipts'"
-            ).fetchone()[0]
-        )
-        assert "transcript-acquisition-authorization@2" in schema
-        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

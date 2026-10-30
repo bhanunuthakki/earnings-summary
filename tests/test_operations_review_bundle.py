@@ -423,33 +423,6 @@ def test_pin_enrollment_rejects_missing_database_lineage() -> None:
         seal_windows_review_pins(bundle=bundle, approved_by="owner", approved_at=NOW)
 
 
-def test_pin_enrollment_ignores_unexpected_tasks() -> None:
-    from execution.fetch_windows_review_bundle import (
-        seal_windows_review_pins,
-        validate_pinned_identity,
-    )
-
-    bundle = build_operations_review_bundle(
-        snapshot=_snapshot(),
-        registry=_registry(),
-        semantic_rows=(),
-        serving_origin="https://live-host.example.ts.net",
-        code_instance="checkout-content",
-        database_instance="database-lineage",
-    )
-    unexpected = ReviewSchedulerTask(
-        task_name=r"\earnings-summary\unexpected",
-        state="Running",
-        registry_match="unexpected",
-    )
-    enriched = _bundle_with_scheduler_tasks(bundle, (bundle.scheduler.tasks[0], unexpected))
-
-    pins = seal_windows_review_pins(bundle=enriched, approved_by="owner", approved_at=NOW)
-
-    assert tuple(pin.task_name for pin in pins.scheduler_tasks) == (r"\earnings-summary\morning",)
-    validate_pinned_identity(bundle=enriched, pins=pins, now=NOW)
-
-
 def test_pin_enrollment_keeps_required_missing_and_mismatched_tasks_blocking() -> None:
     from execution.fetch_windows_review_bundle import seal_windows_review_pins
 

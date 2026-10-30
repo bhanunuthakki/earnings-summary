@@ -13,7 +13,6 @@ import json
 import sqlite3
 import sys
 from datetime import UTC, datetime
-from functools import partial
 from pathlib import Path
 from typing import TextIO
 
@@ -347,21 +346,6 @@ class _MockRunner:
         return _Result(rc)
 
 
-def test_execute_full_runs_default_steps_without_numeric_extraction(tmp_path: Path) -> None:
-    runner = _MockRunner()
-    plan = Plan(ticker="NU", mode="full", skip_fmp=False, skip_fmp_reason=None)
-    out = io.StringIO()
-    rc = execute(plan, project_root=tmp_path, out=out, runner=runner)
-    assert rc == 0
-    script_names = [Path(call[2]).stem for call in runner.calls]
-    assert script_names == [
-        "fetch_fmp_historical_data",
-        "backfill_transcripts",
-        "process_ir_documents",
-        "build_artifacts",
-    ]
-
-
 def test_execute_stale_skips_fmp_when_planned(tmp_path: Path) -> None:
     runner = _MockRunner()
     plan = Plan(
@@ -516,72 +500,3 @@ def test_model_source_authority_is_separate_from_dispatch_data_root(
         assert child[child.index("--state-root") + 1] == str(sources)
     else:
         assert "--state-root" not in child
-
-
-@pytest.mark.parametrize("selection", ["", " ", "bogus", "dcf,bogus", "dcf,"])
-def test_cli_invalid_steps_refuse_before_database_or_execution(
-    monkeypatch: pytest.MonkeyPatch, selection: str
-) -> None:
-    def forbidden(*args: object, **kwargs: object) -> None:
-        pytest.fail("invalid selection reached database resolution or execution")
-
-    monkeypatch.setattr(rd, "require_db_path", forbidden)
-    monkeypatch.setattr(rd, "execute", forbidden)
-    monkeypatch.setattr(
-        sys, "argv", ["refresh_dispatch.py", "--ticker", "NU", "--steps", selection]
-    )
-    with pytest.raises(SystemExit) as exc:
-        rd.main()
-    assert exc.value.code == 2
-
-
-@pytest.mark.parametrize("selection", [None, "process_ir_docs"])
-def test_cli_omitted_and_explicit_selection_plan_exact_steps(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    selection: str | None,
-) -> None:
-    def resolver(override: Path | str | None = None) -> Path:
-        del override
-        return tmp_path / "unused.db"
-
-    monkeypatch.setattr(rd, "require_db_path", resolver)
-    argv = ["refresh_dispatch.py", "--ticker", "NU", "--mode", "full", "--plan-only"]
-    if selection is not None:
-        argv += ["--steps", selection]
-    monkeypatch.setattr(sys, "argv", argv)
-    assert rd.main() == 0
-    plan = json.loads(capsys.readouterr().out)
-    assert plan["steps"] == (["process_ir_docs"] if selection else list(rd.DEFAULT_STEPS))
-
-
-def test_cli_skip_all_does_not_start_default_collection(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def resolver(override: Path | str | None = None) -> Path:
-        del override
-        return tmp_path / "data" / "portfolio.db"
-
-    def forbidden(*args: object, **kwargs: object) -> None:
-        pytest.fail("skip-all started a child")
-
-    output = io.StringIO()
-    monkeypatch.setattr(rd, "execute", partial(rd.execute, out=output))
-    monkeypatch.setattr(rd, "require_db_path", resolver)
-    monkeypatch.setattr(rd, "_default_runner", forbidden)
-    argv = [
-        "refresh_dispatch.py",
-        "--ticker",
-        "NU",
-        "--mode",
-        "full",
-        "--state-root",
-        str(tmp_path),
-    ]
-    for name in rd.DEFAULT_STEPS:
-        argv += ["--skip-step", name]
-    monkeypatch.setattr(sys, "argv", argv)
-    assert rd.main() == 0
-    assert "action=start" not in output.getvalue()
-    assert "all_done rc=0" in output.getvalue()
