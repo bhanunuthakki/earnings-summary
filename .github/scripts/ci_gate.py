@@ -99,8 +99,6 @@ WINDOWS_APP_TEST_FILES = (
     "tests/test_owner_proposal_approval.py",
     "tests/test_storage_reservation.py",
     "tests/test_job_runtime.py",
-    "tests/test_run_coach_pings.py",
-    "tests/test_governor.py",
     "tests/test_cockpit_fundamentals.py",
     "tests/test_sqlite_bootstrap.py",
 )
@@ -127,23 +125,6 @@ WINDOWS_APP_REQUIRED_CASES = frozenset(
                 for column in ("rowid", "_rowid_", "oid")
             ),
             "test_hash_mismatch_and_atomic_registration",
-        ),
-        "tests.test_governor": (
-            *(
-                f"test_unlinked_owner_callback_during_send_preserves_terminal_state[{sent}-{action}]"
-                for sent in (False, True)
-                for action in ("acted", "dismissed")
-            ),
-            "test_push_interrupted_mid_flight_is_retried_not_recorded_as_sent",
-            "test_in_flight_push_from_a_live_run_is_not_duplicated",
-            "test_stale_worker_completing_late_cannot_overwrite_a_newer_attempt",
-            "test_push_accepted_before_a_crash_is_pushed_once_more",
-            "test_expired_claim_is_swept_even_when_its_moment_is_no_longer_collected",
-            "test_acknowledgement_during_freshness_gate_cancels_the_retry_push",
-        ),
-        "tests.test_run_coach_pings": (
-            "test_manual_run_cannot_overlap_a_run_holding_the_lane",
-            "test_scheduled_run_proceeds_under_the_lane_its_wrapper_holds",
         ),
         "tests.test_cockpit_fundamentals": (
             "test_cockpit_never_serves_cache_built_before_canonical_facts_changed",

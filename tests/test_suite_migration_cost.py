@@ -21,7 +21,7 @@ TESTS_DIR = Path(__file__).resolve().parent
 # Resolved and unresolved AST upgrade candidates; old substring count was 109.
 # Two explicit historical one-step controls were added for 0059 and 0061.
 # They use cached predecessor fixtures; application fixtures still use migrated_db.
-_MAX_DIRECT_CHAIN_BUILDERS = 103
+_MAX_DIRECT_CHAIN_BUILDERS = 99
 
 
 def _calls_upgrade(source: str, path: str) -> bool:

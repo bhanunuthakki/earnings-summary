@@ -37,7 +37,7 @@ make_resolution = foundation.make_resolution
 make_publication = foundation.make_publication
 
 
-_R6_BASELINE = "c978523d84a4efea07858e7029307dd588d2a841"
+_R6_BASELINE = "c978523d84a4efea07858e7029307dd588d2a841"  # pragma: allowlist secret -- Git subject, not a credential
 _R6_SAMPLE_COUNT = 5
 _R6_PROBE = r"""
 import json

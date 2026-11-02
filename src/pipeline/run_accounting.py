@@ -404,17 +404,21 @@ def record_stage(
     }:
         # This FK-backed journal is the durable source for new writers; the
         # original stage_transitions row remains the compatibility projection.
-        artifact_columns = ""
-        artifact_placeholders = ""
+        statement = (
+            "INSERT INTO pipeline_stage_transitions "
+            "(attempt_id, ticker, period_end, stage, status, started_at, ended_at, error_msg) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        )
         artifact_values: tuple[int, str, str] | tuple[()] = ()
         if _artifact_receipt is not None:
-            artifact_columns = ", artifact_id, receipt_json, receipt_sha256"
-            artifact_placeholders = ", ?, ?, ?"
+            statement = (
+                "INSERT INTO pipeline_stage_transitions "
+                "(attempt_id, ticker, period_end, stage, status, started_at, ended_at, error_msg, "
+                "artifact_id, receipt_json, receipt_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
             artifact_values = _artifact_receipt
         conn.execute(
-            "INSERT INTO pipeline_stage_transitions "
-            f"(attempt_id, ticker, period_end, stage, status, started_at, ended_at, error_msg{artifact_columns}) "
-            f"VALUES (?, ?, ?, ?, ?, ?, ?, ?{artifact_placeholders})",
+            statement,
             (
                 run_id,
                 ticker.upper(),

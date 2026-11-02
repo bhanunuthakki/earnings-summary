@@ -20,29 +20,29 @@ branch_labels = None
 depends_on = None
 
 _KNOWN_ARTIFACT_TRIGGER_HASHES = {
-    "trg_artifacts_dirty_on_commitment_insert": "ea18e04b7ddac05584652702727701e886aa8ddfc4274462f4eaaecdcc0a9e5d",
-    "trg_artifacts_dirty_on_exec_comp_insert": "53e88186518483c9b209bd1fac51d0e11ae9630e7114a63e7d393cc61e85f527",
-    "trg_artifacts_dirty_on_insider_insert": "4878defb5f2ed304b9f9cc2c1a42708935f6415cd8f34d3649ebbe083fac6dac",
-    "trg_artifacts_dirty_on_segment_dimensions_insert": "77d1bbc3a903f46689debe814241bc975cb7005e5a14644d1655306b98954e7d",
-    "trg_insights_dirty_on_prediction_grade": "cf7f3a630e2616b08f207862f114db21b758622541dbc9f38738e13a19417780",
-    "trg_llm_artifact_document_immutable": "1bb5fab28d20d14196328e54ce683c00d7d8486ef5c511696547e097613b8c64",
-    "trg_llm_artifact_document_shape_insert": "4033476c8a3b8a4df373c4bcf3001eeb48ca874ed3a1444058cd17732fd34392",
-    "trg_llm_artifact_document_shape_update": "f11dcb33af91f3945f7cee210301ed48251f79639ed0e5ef98cb16f7e89022eb",
-    "trg_llm_artifact_document_successor_restrict": "04ac3c13f86ac9989b60d003574adbbb3973f392428e752dd620e605f12b4a68",
-    "trg_llm_artifact_document_supersession_exact": "68b51659e23134f192dbba6f13f6e292ca29188dce93cac73f07c7224407cbc8",
-    "trg_pipeline_stage_document_receipt_immutable": "4573bcf0ad91051af346e45ec155043e9b7b8550940a453a7541311d9aa5b670",
-    "trg_pipeline_stage_document_receipt_insert": "2f766bfb001b8e85f0ef58095aadfe8469b54e4146afd7549bdc306a42dae7e7",
-    "trg_pipeline_stage_document_receipt_update": "44e9d66a7d3a43712e120f4c23fe5c569326239646b8201dc0bfc2e555f39d68",
+    "trg_artifacts_dirty_on_commitment_insert": "ea18e04b7ddac05584652702727701e886aa8ddfc4274462f4eaaecdcc0a9e5d",  # pragma: allowlist secret -- schema SQL digest, not a credential
+    "trg_artifacts_dirty_on_exec_comp_insert": "53e88186518483c9b209bd1fac51d0e11ae9630e7114a63e7d393cc61e85f527",  # pragma: allowlist secret -- schema SQL digest, not a credential
+    "trg_artifacts_dirty_on_insider_insert": "4878defb5f2ed304b9f9cc2c1a42708935f6415cd8f34d3649ebbe083fac6dac",  # pragma: allowlist secret -- schema SQL digest, not a credential
+    "trg_artifacts_dirty_on_segment_dimensions_insert": "77d1bbc3a903f46689debe814241bc975cb7005e5a14644d1655306b98954e7d",  # pragma: allowlist secret -- schema SQL digest, not a credential
+    "trg_insights_dirty_on_prediction_grade": "cf7f3a630e2616b08f207862f114db21b758622541dbc9f38738e13a19417780",  # pragma: allowlist secret -- schema SQL digest, not a credential
+    "trg_llm_artifact_document_immutable": "1bb5fab28d20d14196328e54ce683c00d7d8486ef5c511696547e097613b8c64",  # pragma: allowlist secret -- schema SQL digest, not a credential
+    "trg_llm_artifact_document_shape_insert": "4033476c8a3b8a4df373c4bcf3001eeb48ca874ed3a1444058cd17732fd34392",  # pragma: allowlist secret -- schema SQL digest, not a credential
+    "trg_llm_artifact_document_shape_update": "f11dcb33af91f3945f7cee210301ed48251f79639ed0e5ef98cb16f7e89022eb",  # pragma: allowlist secret -- schema SQL digest, not a credential
+    "trg_llm_artifact_document_successor_restrict": "04ac3c13f86ac9989b60d003574adbbb3973f392428e752dd620e605f12b4a68",  # pragma: allowlist secret -- schema SQL digest, not a credential
+    "trg_llm_artifact_document_supersession_exact": "68b51659e23134f192dbba6f13f6e292ca29188dce93cac73f07c7224407cbc8",  # pragma: allowlist secret -- schema SQL digest, not a credential
+    "trg_pipeline_stage_document_receipt_immutable": "4573bcf0ad91051af346e45ec155043e9b7b8550940a453a7541311d9aa5b670",  # pragma: allowlist secret -- schema SQL digest, not a credential
+    "trg_pipeline_stage_document_receipt_insert": "2f766bfb001b8e85f0ef58095aadfe8469b54e4146afd7549bdc306a42dae7e7",  # pragma: allowlist secret -- schema SQL digest, not a credential
+    "trg_pipeline_stage_document_receipt_update": "44e9d66a7d3a43712e120f4c23fe5c569326239646b8201dc0bfc2e555f39d68",  # pragma: allowlist secret -- schema SQL digest, not a credential
 }
 
 _KNOWN_NOTE_TRIGGER_HASHES = {
-    "analyst_notes_fts_ad": "76e47195a41523056df02db704685dd8bff7723c1438948d60508873d099bfc5",
-    "analyst_notes_fts_ai": "ed2f027be8e246ca8299f83b840918496bde9587d398e82e4001908a81f04912",
-    "analyst_notes_fts_au": "e26d309c3cdcbfec61051442b916d52dc17d8fd1c08744aeabb2d2c8f868e288",
+    "analyst_notes_fts_ad": "76e47195a41523056df02db704685dd8bff7723c1438948d60508873d099bfc5",  # pragma: allowlist secret -- schema SQL digest, not a credential
+    "analyst_notes_fts_ai": "ed2f027be8e246ca8299f83b840918496bde9587d398e82e4001908a81f04912",  # pragma: allowlist secret -- schema SQL digest, not a credential
+    "analyst_notes_fts_au": "e26d309c3cdcbfec61051442b916d52dc17d8fd1c08744aeabb2d2c8f868e288",  # pragma: allowlist secret -- schema SQL digest, not a credential
 }
 
 _KNOWN_VIEW_HASHES = {
-    "v_decision_journal": "b9ebbc6faaca5e184be295b6fa685dc4628e51b6f06849f8afa506c7abc02eb6",
+    "v_decision_journal": "b9ebbc6faaca5e184be295b6fa685dc4628e51b6f06849f8afa506c7abc02eb6",  # pragma: allowlist secret -- schema SQL digest, not a credential
 }
 
 _REQUIRED_COLUMNS = {

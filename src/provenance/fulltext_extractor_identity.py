@@ -58,11 +58,20 @@ RETAINED_PDF_FULLTEXT_EXTRACTOR_6_21_1 = FulltextExtractorIdentity(
     evidence_namespace="fulltext-pdf-v6",
     hierarchy="flat",
 )
+RETAINED_PDF_FULLTEXT_EXTRACTOR_6_21_2 = FulltextExtractorIdentity(
+    name=FULLTEXT_EXTRACTOR_NAME,
+    code_version="fulltext-evidence-backfill@6-pdf-public-access;pypdf=6.21.2",
+    config_sha256="ad7fd3e9c7fdd1c6aa33117dd36df798b6a032ef63a0555053cb52c2733390d9",  # pragma: allowlist secret -- retained extractor config digest, not a credential
+    idempotency_namespace="fulltext-pdf-v6-pypdf-6.21.2",
+    evidence_namespace="fulltext-pdf-v6",
+    hierarchy="flat",
+)
 RETAINED_PDF_FULLTEXT_EXTRACTORS = (
+    RETAINED_PDF_FULLTEXT_EXTRACTOR_6_21_2,
     RETAINED_PDF_FULLTEXT_EXTRACTOR_6_21_1,
     RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0,
 )
-PDF_FULLTEXT_PYPDF_VERSION = "6.21.2"
+PDF_FULLTEXT_PYPDF_VERSION = "6.21.4"
 PDF_FULLTEXT_EXTRACTOR = FulltextExtractorIdentity(
     name=FULLTEXT_EXTRACTOR_NAME,
     code_version=f"fulltext-evidence-backfill@6-pdf-public-access;pypdf={PDF_FULLTEXT_PYPDF_VERSION}",
@@ -71,7 +80,7 @@ PDF_FULLTEXT_EXTRACTOR = FulltextExtractorIdentity(
         f"verify-permissions,pypdf={PDF_FULLTEXT_PYPDF_VERSION}".encode()
     ).hexdigest(),
     # Run keys must distinguish parser identities; page evidence keeps its revision lineage.
-    idempotency_namespace="fulltext-pdf-v6-pypdf-6.21.2",
+    idempotency_namespace="fulltext-pdf-v6-pypdf-6.21.4",
     evidence_namespace="fulltext-pdf-v6",
     hierarchy="flat",
 )

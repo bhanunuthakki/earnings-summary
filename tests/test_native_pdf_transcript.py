@@ -33,6 +33,7 @@ from provenance.fulltext_extractor_identity import (
     PDF_FULLTEXT_EXTRACTOR,
     RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0,
     RETAINED_PDF_FULLTEXT_EXTRACTOR_6_21_1,
+    RETAINED_PDF_FULLTEXT_EXTRACTOR_6_21_2,
     FulltextExtractorIdentity,
 )
 from provenance.native_pdf_transcript import (
@@ -232,10 +233,11 @@ def _request(conn: sqlite3.Connection) -> NativePdfTranscriptRequest:
     [
         RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0,
         RETAINED_PDF_FULLTEXT_EXTRACTOR_6_21_1,
+        RETAINED_PDF_FULLTEXT_EXTRACTOR_6_21_2,
         PDF_FULLTEXT_EXTRACTOR,
     ],
     indirect=True,
-    ids=["pypdf-6.19.0", "pypdf-6.21.1", "pypdf-6.21.2"],
+    ids=["pypdf-6.19.0", "pypdf-6.21.1", "pypdf-6.21.2", "pypdf-6.21.4"],
 )
 def test_complete_exact_partition_keeps_unknown_and_both_lanes(native_source: sqlite3.Connection):
     conn = native_source

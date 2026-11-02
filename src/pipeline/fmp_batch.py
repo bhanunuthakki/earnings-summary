@@ -7,6 +7,7 @@ The supplied-record, commit=False refresh-cache path remains caller-owned.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Callable, Sequence
 from contextlib import suppress
@@ -73,15 +74,14 @@ def select_documents(
     """Select registered sources; commit revenue before dependent segments."""
     if not tickers or not doc_types:
         return []
-    placeholders_t = ",".join("?" for _ in tickers)
-    placeholders_d = ",".join("?" for _ in doc_types)
     rows = conn.execute(
-        f"SELECT id, ticker, doc_type FROM documents "
-        f"WHERE ticker IN ({placeholders_t}) AND doc_type IN ({placeholders_d}) "
+        "SELECT id, ticker, doc_type FROM documents "
+        "WHERE ticker IN (SELECT value FROM json_each(?)) "
+        "AND doc_type IN (SELECT value FROM json_each(?)) "
         "ORDER BY ticker, CASE doc_type "
         "WHEN 'fmp_income_statement' THEN 0 "
         "WHEN 'fmp_as_reported_income' THEN 1 ELSE 2 END, id",
-        (*(ticker.upper() for ticker in tickers), *doc_types),
+        (json.dumps([ticker.upper() for ticker in tickers]), json.dumps(list(doc_types))),
     )
     return [(int(row["id"]), str(row["ticker"]), str(row["doc_type"])) for row in rows]
 

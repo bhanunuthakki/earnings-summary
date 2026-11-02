@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import sqlite3
 from collections.abc import Callable
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 
+import fitz
 import pytest
-from reportlab.pdfgen import canvas
 
 from execution import capture_issuer_document_inventory as cli
 from execution import manage_issuer_document_sources as manage_cli
@@ -179,12 +178,9 @@ def _reviewed_period_fixture(
         ).fetchone()[0]
     )
     wording = "Nu Holdings Reports Second Quarter 2026 Financial Results"
-    stream = io.BytesIO()
-    pdf = canvas.Canvas(stream)
-    pdf.drawString(72, 730, wording)
-    pdf.showPage()
-    pdf.save()
-    raw = stream.getvalue()
+    with fitz.open() as pdf:
+        pdf.new_page().insert_text((72, 72), wording)
+        raw = pdf.tobytes()
     from provenance.fulltext_backfill import project_pdf_page_texts
 
     page = project_pdf_page_texts(raw)[0]
@@ -582,12 +578,9 @@ def test_reported_window_accepts_captured_native_review_and_sealed_sec_populatio
     try:
         inventory.persist_current_reported_period_review(conn, review)
         wording = "Nu Holdings Reports Fourth Quarter 2025 Financial Results"
-        stream = io.BytesIO()
-        pdf = canvas.Canvas(stream)
-        pdf.drawString(72, 730, wording)
-        pdf.showPage()
-        pdf.save()
-        q4_raw = stream.getvalue()
+        with fitz.open() as pdf:
+            pdf.new_page().insert_text((72, 72), wording)
+            q4_raw = pdf.tobytes()
         q4_sha = source("ir-q4-review", "ir_document", q4_url, q4_raw)
         EvidenceLedger(conn).persist(
             DocumentVersion(

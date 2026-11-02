@@ -89,8 +89,8 @@ _JSON_CALL_REFERENCES = {
 _JSON_CALL_KEYS = ("llm_call_id", "claim_audit_llm_call_id", "call_id")
 
 _KNOWN_CALL_TRIGGERS = {
-    "trg_ask_answer_audit_record_claim_llm": "167fd1732770340e5bf3140912321c93973e892c5f208a2ea80bcbd0658d8047",
-    "trg_ask_answer_audit_record_llm": "9b8005bf6daa3eb52168d7e070d9b698266ea9aa9274c8d450db5cd671b5c3cc",
+    "trg_ask_answer_audit_record_claim_llm": "167fd1732770340e5bf3140912321c93973e892c5f208a2ea80bcbd0658d8047",  # pragma: allowlist secret -- schema SQL digest, not a credential
+    "trg_ask_answer_audit_record_llm": "9b8005bf6daa3eb52168d7e070d9b698266ea9aa9274c8d450db5cd671b5c3cc",  # pragma: allowlist secret -- schema SQL digest, not a credential
 }
 
 
