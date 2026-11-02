@@ -228,10 +228,17 @@ result_path.write_text(json.dumps(result), encoding='utf-8')
         encoding="utf-8",
     )
     environment = minimal_worker_environment(isolated_repo=read_root, write_root=write_root)
+    runtime_roots = runtime_root_specs()
+    worker_executable = Path(sys.executable).resolve()
+    if Path(sys.prefix).resolve() != Path(sys.base_prefix).resolve():
+        base_executable = getattr(sys, "_base_executable", None)
+        assert isinstance(base_executable, str) and base_executable
+        worker_executable = Path(base_executable).resolve()
+        environment["__PYVENV_LAUNCHER__"] = str(Path(sys.executable).resolve())
     returncode, _stdout, stderr = run_appcontainer_worker(
-        [sys.executable, "-I", str(probe), str(outside), str(write_root / "probe.json")],
+        [str(worker_executable), "-I", str(probe), str(outside), str(write_root / "probe.json")],
         cwd=read_root,
-        read_roots=[Path(sys.base_prefix), read_root],
+        read_roots=[*(root for _logical, root in runtime_roots), read_root],
         write_root=write_root,
         environment=environment,
         export_names=("probe.json",),

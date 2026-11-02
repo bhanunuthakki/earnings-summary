@@ -23,7 +23,10 @@ from pathlib import Path
 from log_redact import redact
 from report.offline_artifact import OfflineBoundaryError
 from runtime.windows_appcontainer import (
+    Ace,
+    AppContainerError,
     JobExtendedLimitInformation,
+    NativeApi,
     ProcessInformation,
     SecurityCapabilities,
     StartupInfoEx,
@@ -49,7 +52,6 @@ _JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
 _WAIT_OBJECT_0 = 0
 _WAIT_ABANDONED = 0x00000080
 _WAIT_TIMEOUT = 0x00000102
-_INFINITE = 0xFFFFFFFF
 
 
 @dataclass(frozen=True)
@@ -58,6 +60,168 @@ class _EphemeralProfile:
     sid_pointer: int
     sid_text: str
     storage_root: Path
+
+
+class _ContainmentCleanupUncertainError(OfflineBoundaryError):
+    """Keep recovery state alive when containment cleanup is not proved."""
+
+    def __init__(self, message: str, *, retained_resources: Sequence[object] = ()) -> None:
+        self.retained_resources = tuple(retained_resources)
+        super().__init__(message)
+
+
+class _ReportSecurityAttributes(ctypes.Structure):
+    _fields_ = [
+        ("length", wintypes.DWORD),
+        ("descriptor", ctypes.c_void_p),
+        ("inherit", wintypes.BOOL),
+    ]
+
+
+class _ReportPrivateDesktop:
+    """Own a hidden, non-inheritable desktop for the offline report worker.
+
+    Security policy mirrors the frozen runtime owner at SHA-256
+    f9f9d8f14fd8bc331cf2876776fa69e251ade5c6a115dc88dca8718a20ab42b7.
+    Keep owner, protected DACL, low label, inheritance, restoration, and
+    closure checks in parity with that source.
+    """
+
+    def __init__(
+        self, native: NativeApi, package: str, owned: list[_ReportPrivateDesktop] | None = None
+    ) -> None:
+        self.n = native
+        self.name = "EarningsSummaryOffline_" + uuid.uuid4().hex
+        self.path = self.name + r"\Processor"
+        self.station: object | None = None
+        self.desktop: object | None = None
+        self.context_restored = True
+        if owned is not None:
+            owned.append(self)
+        owner = native.owner_sid()
+        station = native.check(native.u.GetProcessWindowStation(), "original station")
+        desktop = native.check(
+            native.u.GetThreadDesktop(native.k.GetCurrentThreadId()), "original desktop"
+        )
+        prefix = f"O:{owner}G:{owner}D:P(A;;GA;;;{owner})(A;;"
+        suffix = f";;;{package})S:(ML;;NW;;;LW)"
+        try:
+            with native.descriptor(prefix + "0x00020023" + suffix) as descriptor:
+                attributes = _ReportSecurityAttributes(
+                    ctypes.sizeof(_ReportSecurityAttributes), descriptor, False
+                )
+                self.station = native.check(
+                    native.u.CreateWindowStationW(self.name, 1, 0x2000B, ctypes.byref(attributes)),
+                    "private station creation",
+                )
+            self._verify(self.station, owner, package, 0x20023, station=True)
+            self.context_restored = False
+            native.check(
+                native.u.SetProcessWindowStation(self.station), "private station selection"
+            )
+            with native.descriptor(prefix + "0x00020087" + suffix) as descriptor:
+                attributes = _ReportSecurityAttributes(
+                    ctypes.sizeof(_ReportSecurityAttributes), descriptor, False
+                )
+                self.desktop = native.check(
+                    native.u.CreateDesktopW(
+                        "Processor", None, None, 0, 0x20083, ctypes.byref(attributes)
+                    ),
+                    "private desktop creation",
+                )
+            self._verify(self.desktop, owner, package, 0x20087, station=False)
+            self._restore(station, desktop)
+        except BaseException:
+            self._restore(station, desktop)
+            self.close()
+            raise
+
+    def _restore(self, station: object, desktop: object) -> None:
+        self.context_restored = False
+        n = self.n
+        n.check(n.u.SetProcessWindowStation(station), "creator station restoration")
+        n.check(n.u.SetThreadDesktop(desktop), "creator desktop restoration")
+        if (
+            n.u.GetProcessWindowStation() != station
+            or n.u.GetThreadDesktop(n.k.GetCurrentThreadId()) != desktop
+        ):
+            raise AppContainerError("creator_ui_context_restoration_unproved")
+        self.context_restored = True
+
+    def _verify(
+        self, handle: object, owner: str, package: str, mask: int, *, station: bool
+    ) -> None:
+        actual_owner, protected, entries, labels = self.n.security(handle, 7, labels=True)
+        if not protected:
+            raise AppContainerError("private_ui_dacl_is_unprotected")
+        _require_report_ui_security(actual_owner, owner, package, mask, entries, labels)
+        flags = (wintypes.DWORD * 3)()
+        needed = wintypes.DWORD()
+        self.n.check(
+            self.n.u.GetUserObjectInformationW(
+                handle, 1, flags, ctypes.sizeof(flags), ctypes.byref(needed)
+            ),
+            "private UI flags",
+        )
+        if needed.value != ctypes.sizeof(flags) or flags[0] or (station and flags[2]):
+            raise AppContainerError("private_ui_is_visible_or_inheritable")
+
+    def close(self) -> None:
+        if sys.platform != "win32":
+            raise AppContainerError("private_ui_requires_windows")
+        if not self.context_restored:
+            raise AppContainerError("creator_ui_context_restoration_unproved")
+        n = self.n
+        if self.desktop:
+            n.check(n.u.CloseDesktop(self.desktop), "private desktop close")
+            self.desktop = None
+        if self.station:
+            n.check(n.u.CloseWindowStation(self.station), "private station close")
+            self.station = None
+            ctypes.set_last_error(0)
+            unexpected = n.u.OpenWindowStationW(self.name, False, 0x20000)
+            error = int(ctypes.get_last_error())
+            if unexpected:
+                n.check(n.u.CloseWindowStation(unexpected), "unexpected private station close")
+                raise AppContainerError("private_station_remains")
+            if error != 2:
+                raise AppContainerError("private_station_absence_unproved")
+
+
+def _require_report_low_label(entries: Sequence[Ace]) -> None:
+    if len(entries) != 1:
+        raise AppContainerError("private_ui_label_count_changed")
+    ace = entries[0]
+    if (ace.kind, ace.flags, ace.mask, ace.sid, len(ace.raw)) != (
+        0x11,
+        0,
+        1,
+        "S-1-16-4096",
+        20,
+    ):
+        raise AppContainerError("private_ui_low_mandatory_label_changed")
+
+
+def _require_report_ui_security(
+    owner: str,
+    expected_owner: str,
+    package: str,
+    package_mask: int,
+    entries: Sequence[Ace],
+    labels: Sequence[Ace],
+) -> None:
+    if owner != expected_owner or len(entries) != 2:
+        raise AppContainerError("private_ui_ownership_changed")
+    owner_mask = 0xF037F if package_mask == 0x20023 else 0xF01FF
+    if {ace.sid for ace in entries} != {owner, package} or any(
+        ace.kind != 0
+        or ace.flags != 0
+        or (ace.sid == owner and ace.mask != owner_mask)
+        or (ace.sid == package and ace.mask != package_mask)
+        for ace in entries
+    ):
+        raise AppContainerError("private_ui_grants_changed")
+    _require_report_low_label(labels)
 
 
 def _win_error(stage: str) -> OfflineBoundaryError:
@@ -199,12 +363,21 @@ def _ephemeral_profile() -> Generator[_EphemeralProfile, None, None]:
     if sys.platform != "win32":
         raise OfflineBoundaryError("AppContainer profiles require Windows")
     profile = _create_ephemeral_profile()
+    cleanup_unproven = False
     try:
         yield profile
+    except _ContainmentCleanupUncertainError as exc:
+        cleanup_unproven = True
+        raise _ContainmentCleanupUncertainError(
+            "AppContainer containment cleanup is unproved; profile identity and storage are "
+            "retained for recovery: "
+            f"profile={profile.name}; sid={profile.sid_text}; storage={profile.storage_root}; "
+            f"cause={exc}",
+            retained_resources=(*exc.retained_resources, profile),
+        ) from exc
     finally:
-        try:
+        if not cleanup_unproven:
             _delete_ephemeral_profile(profile)
-        finally:
             ctypes.WinDLL("advapi32", use_last_error=True).FreeSid(
                 ctypes.c_void_p(profile.sid_pointer)
             )
@@ -373,6 +546,8 @@ def _run_appcontainer_worker_with_acl(
     process = ProcessInformation()
     attribute_list = ctypes.c_void_p()
     job = wintypes.HANDLE()
+    assigned_to_job = False
+    owned_private_uis: list[_ReportPrivateDesktop] = []
     handles: list[int] = []
     stdout_path = write_root / "worker.stdout"
     stderr_path = write_root / "worker.stderr"
@@ -380,6 +555,8 @@ def _run_appcontainer_worker_with_acl(
         for root in roots:
             _acl(sid_text, root, "RX")
             granted.append(root)
+
+        private_ui = _ReportPrivateDesktop(NativeApi(), sid_text, owned_private_uis)
 
         stdin_fd = os.open(os.devnull, os.O_RDONLY)
         stdout_fd = os.open(stdout_path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC)
@@ -433,6 +610,7 @@ def _run_appcontainer_worker_with_acl(
         startup = StartupInfoEx()
         startup.StartupInfo.cb = ctypes.sizeof(startup)
         startup.StartupInfo.dwFlags = _STARTF_USESTDHANDLES
+        startup.StartupInfo.lpDesktop = private_ui.path
         startup.StartupInfo.hStdInput = handles[0]
         startup.StartupInfo.hStdOutput = handles[1]
         startup.StartupInfo.hStdError = handles[2]
@@ -458,6 +636,7 @@ def _run_appcontainer_worker_with_acl(
             raise _win_error("process creation")
         if not kernel32.AssignProcessToJobObject(job, process.hProcess):
             raise _win_error("job assignment")
+        assigned_to_job = True
         token = wintypes.HANDLE()
         if not advapi32.OpenProcessToken(process.hProcess, _TOKEN_QUERY, ctypes.byref(token)):
             raise _win_error("child-token inspection")
@@ -484,7 +663,8 @@ def _run_appcontainer_worker_with_acl(
         wait = kernel32.WaitForSingleObject(process.hProcess, timeout_seconds * 1000)
         if wait != _WAIT_OBJECT_0:
             kernel32.TerminateProcess(process.hProcess, 124)
-            kernel32.WaitForSingleObject(process.hProcess, _INFINITE)
+            if kernel32.WaitForSingleObject(process.hProcess, 5_000) != _WAIT_OBJECT_0:
+                raise OfflineBoundaryError("AppContainer worker stop was not proved after timeout")
             detail = redact(stderr_path.read_text(encoding="utf-8", errors="replace").strip())
             raise OfflineBoundaryError(
                 f"AppContainer worker timed out{': ' + detail[-8_000:] if detail else ''}"
@@ -496,23 +676,67 @@ def _run_appcontainer_worker_with_acl(
         for fd in (locals().get("stdin_fd"), locals().get("stdout_fd"), locals().get("stderr_fd")):
             if isinstance(fd, int):
                 os.close(fd)
-        if process.hThread:
-            kernel32.CloseHandle(process.hThread)
-        if process.hProcess:
-            kernel32.CloseHandle(process.hProcess)
         if attribute_list:
             kernel32.DeleteProcThreadAttributeList(attribute_list)
-        if job:
-            kernel32.CloseHandle(job)
         cleanup_errors: list[str] = []
+        child_stopped = not bool(process.hProcess)
+        if process.hProcess and not assigned_to_job:
+            kernel32.TerminateProcess(process.hProcess, 127)
+        if job:
+            if not kernel32.CloseHandle(job):
+                cleanup_errors.append("owned Job close failed")
+            else:
+                job = wintypes.HANDLE()
+        if process.hProcess:
+            wait = kernel32.WaitForSingleObject(process.hProcess, 5_000)
+            if wait != _WAIT_OBJECT_0:
+                kernel32.TerminateProcess(process.hProcess, 127)
+                wait = kernel32.WaitForSingleObject(process.hProcess, 5_000)
+            if wait != _WAIT_OBJECT_0:
+                cleanup_errors.append("owned child stop was not proved")
+            else:
+                child_stopped = True
+        if not child_stopped:
+            # Keep the private UI and root read grants alive while an un-stopped
+            # process could still depend on them. Preserve the profile and native
+            # owners so the caller can recover without deleting their identity.
+            raise _ContainmentCleanupUncertainError(
+                "AppContainer child cleanup failed; containment remains active: "
+                + " | ".join(cleanup_errors),
+                retained_resources=(profile, process, job, owned_private_uis),
+            )
+        if process.hThread:
+            if not kernel32.CloseHandle(process.hThread):
+                cleanup_errors.append("child thread handle close failed")
+            else:
+                process.hThread = None
+        if process.hProcess:
+            if not kernel32.CloseHandle(process.hProcess):
+                cleanup_errors.append("child process handle close failed")
+            else:
+                process.hProcess = None
+        private_ui_errors: list[str] = []
+        for owned_private_ui in reversed(owned_private_uis):
+            try:
+                owned_private_ui.close()
+            except AppContainerError as exc:
+                private_ui_errors.append(f"private UI cleanup failed: {exc}")
+        if private_ui_errors:
+            raise _ContainmentCleanupUncertainError(
+                "AppContainer private UI cleanup failed; read grants remain active: "
+                + " | ".join([*cleanup_errors, *private_ui_errors]),
+                retained_resources=(profile, process, job, owned_private_uis),
+            )
         for root in reversed(granted):
             try:
                 _acl(sid_text, root, None)
             except OfflineBoundaryError as exc:
                 cleanup_errors.append(str(exc))
         if cleanup_errors:
-            raise OfflineBoundaryError(
-                "AppContainer ACL cleanup failed; recovery required: " + " | ".join(cleanup_errors)
+            raise _ContainmentCleanupUncertainError(
+                "AppContainer ACL or handle cleanup failed; recovery required: "
+                + " | ".join(cleanup_errors),
+                retained_resources=(profile, process, job, owned_private_uis),
             )
     stdout = (
         stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.exists() else ""

@@ -3581,9 +3581,9 @@
     "duplicated_loc": 110
   },
   "near_miss_totals": {
-    "groups": 139,
+    "groups": 141,
     "participating_functions": 225,
-    "duplicated_loc": 9283
+    "duplicated_loc": 9406
   },
   "definitions": {
     "eligible_function": "at least 20 AST nodes and at least 15 physical body lines",

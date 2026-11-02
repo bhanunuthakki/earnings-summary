@@ -1,11 +1,13 @@
 # Backend simplification and product retirement execution plan
 
-## Current status — November 1, 2026 (Pacific)
+## Release checkpoint — November 2, 2026 (Pacific)
 
-This document owns current execution status. Earlier checkpoints are available in
-Git history. They are not current completion evidence or release approval.
-Work continues in `codex/research-procedure-recovery`, from verified commit
-`9d751bfee87428a3aa0295020c8597ed7267f5b2`. Preserve the unrelated untracked
+This document owns execution scope and the pre-activation checkpoint below. Final
+merge and activation evidence must identify the deployed commit separately. Earlier
+checkpoints in Git history are not current completion evidence or release approval.
+Work continues in `codex/research-procedure-recovery`, from verified release candidate
+`f9e092721020a8a085595119f805a76cf1454839`, with the report launcher correction
+below under verification. Preserve the unrelated untracked
 `uv.lock` and the unrelated work in `/Applications/earnings-summary`.
 
 The owner chose **release retirements first; keep financial/KPI producer migration
@@ -38,9 +40,9 @@ cleanup/collection plan before any uncovered destructive operation or source pul
 | R5 publication | Typed lossless spreadsheet capture and stored recovery are implemented. Existing guarded legacy publication remains active. | Separate follow-up: qualify native context, disposition, historical readers and recovery per producer. No terminal R5 claim in the retirement release. |
 | R6 reads | Discovery/report batching, DCF readiness, foreign oracle and input-role batching are implemented. | The current five-file semantic/batching suite passes 107 tests; the measured reader-package digest still matches. Complete unmeasured caller families. Do not infer historical financial parity from batching. |
 | R7 reports | Builders prepare analytical panels; delivery prepares comments/capabilities; the body renderer consumes prepared inputs. Current serial checks pass 78 report tests, four file-replay/invalidation tests and a 49-test dynamic purity probe covering all 14 section callbacks. | Complete transitive renderer evidence and retain explicit limits for product/model replay. No demonstrated source seam requires another adapter. |
-| Native tests | The first isolated attempt stopped before pytest because SQLite loaded before managed bootstrap. Process stop, 97,419 permission entries and runtime bytes passed parity checks. The failed 4,218-file payload was retired. | Bind the retained tests to one clean candidate and run native Windows checks. Preserve the original failure receipt. |
-| Canonical host | Read-only verification on October 29 confirms dashboard and poller Running/Auto and the private Serve route. Forty-four project tasks remain installed. | Reconcile exact task owners and dependency changes before installation. The watchdog reports unrelated `chromoting` identity drift. No production mutation has occurred. |
-| Release | Source delta had an independent 91/100 advisory review; recovered scoring bytes match. Native/full release gates remain open. | Commit, review the concrete release, merge, native verification, exact deployment boundary, installation and activation proof. No formal Judge qualification is claimed. |
+| Native tests | Candidate `f9e0927210` ran 350 retained cases: 330 passed, three failed and 15 skipped, plus two subtests. Runtime bytes, 97,419 permission entries and scoped profiles passed parity. A controlled probe isolated the report worker failure to inherited desktop access; a private desktop succeeds with complete cleanup parity. | Verify the report-local private desktop and corrected venv fixture on one clean candidate. Keep the sealed financial helper unchanged. Retain failed evidence; no native passing claim yet. |
+| Canonical host | November 2 inspection confirms the managed runtime, configured database and private Serve route. Forty-four project tasks remain installed. Same-host retirement migration rehearsal passed integrity, foreign-key and all 343 protected-population comparisons. Recovery metadata preserves the live Tracker chain and source hotfixes. | Install the qualified code and four pinned dependency changes. Retire exactly 15 tasks and `es-poller`; preserve 29 retained tasks. Re-seal actual observations after activation. No live owner or production-data mutation has occurred. |
+| Release | PR #1739 is ready. Candidate `f9e0927210` passed the local push gate (6,321 passed, 31 skipped) and all 23 CI jobs. Its delta received a 92/100 advisory review. The report correction changes that source identity and needs fresh affected checks and release gates. | Finish correction review and native proof, commit, push, pass CI, merge, deploy and activate. Review exact operational effects and final activation evidence. No formal Judge qualification is claimed. |
 
 ## Approved outcome and holds
 

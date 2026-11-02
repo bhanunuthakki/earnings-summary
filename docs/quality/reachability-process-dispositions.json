@@ -808,8 +808,8 @@
     {
       "disposition": "external_process",
       "evidence": "_acl grants via the fixed icacls.exe executable.",
-      "fingerprint": "81f1862ea0cddc217e5bfc8a4dcd8ca5e507079af837635e6e1e159ce34c0d05",
-      "line": 177,
+      "fingerprint": "5997be06dfdadae4be357f8ca3e56edd72a9942a918bcdf15120ab4921e61cda",
+      "line": 341,
       "path": "src/report/windows_appcontainer.py",
       "targets": [
         "icacls.exe"
@@ -818,8 +818,8 @@
     {
       "disposition": "external_process",
       "evidence": "_acl inspects via the fixed icacls.exe executable.",
-      "fingerprint": "5bedb07a5acc26f0f7a7007d375af65ea9c9beed67ef7389686bf820af980582",
-      "line": 184,
+      "fingerprint": "97d396d15a40f78069b6424a52a4643a641f19c9f01a2ce92897205888e22355",
+      "line": 348,
       "path": "src/report/windows_appcontainer.py",
       "targets": [
         "icacls.exe"
@@ -828,8 +828,8 @@
     {
       "disposition": "external_process",
       "evidence": "Loopback removal uses the fixed CheckNetIsolation.exe executable.",
-      "fingerprint": "add5c185a4a2d8dc57626134c7a377d69f74910d63ecb4dde35a7c09607a5567",
-      "line": 215,
+      "fingerprint": "06d8bf5c5f5437d9fd81c5a9b9127cea72763f82fd7c300d23e5090c80f8d4fa",
+      "line": 388,
       "path": "src/report/windows_appcontainer.py",
       "targets": [
         "CheckNetIsolation.exe"
@@ -838,8 +838,8 @@
     {
       "disposition": "external_process",
       "evidence": "Loopback verification uses the fixed CheckNetIsolation.exe executable.",
-      "fingerprint": "f8250c02bf346940d3cb8d55ec0f02f2cc4825038d178d905fceb2c64fecd63d",
-      "line": 224,
+      "fingerprint": "3f23386506bb63f934c96a3e8f7d11efc1a68fe1cffad5edf909dc217a14131e",
+      "line": 397,
       "path": "src/report/windows_appcontainer.py",
       "targets": [
         "CheckNetIsolation.exe"
@@ -1014,7 +1014,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "e2b099d5e1d936c28ed7718c0780757b8a7373ee6ec1ea61e3a6214e15afbc23",
+      "source_sha256": "5692bb34923ebfcb565de49f527593a1dad54ad23ab2a95017102ef07d1e10cd",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
