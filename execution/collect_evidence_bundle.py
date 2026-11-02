@@ -6,10 +6,9 @@ import argparse
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+from _lib import PROJECT_ROOT as ROOT
 
-from quality.evidence_bundle import (  # noqa: E402
+from quality.evidence_bundle import (
     assemble_bundle,
     collect_evidence,
     default_artifact_specs,
@@ -74,7 +73,9 @@ def main(argv: list[str] | None = None) -> int:
                 print("validate requires --subject and --bundle", file=sys.stderr)
                 return 2
             manifest = load_collection_manifest(manifest_path)
-            violations = validate_bundle_diff(repo_root, args.subject, args.bundle, manifest)
+            violations = validate_bundle_diff(
+                repo_root, args.subject, args.bundle, manifest, staging
+            )
             if violations:
                 print("\n".join(violations), file=sys.stderr)
                 return 1

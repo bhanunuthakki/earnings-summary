@@ -75,7 +75,6 @@
     "execution/classify_operational_lifecycle.py",
     "execution/cleanup_condition_alerts.py",
     "execution/cleanup_material_news_alerts.py",
-    "execution/collect_evidence_bundle.py",
     "execution/comments_server.py",
     "execution/compare_backends.py",
     "execution/compute_derived_metrics.py",

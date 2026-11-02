@@ -56,21 +56,26 @@ from quality.evidence_bundle_io import (
     manifest_integrity as _manifest_integrity,
 )
 from quality.evidence_bundle_io import (
+    read_staged_secure as _read_staged_secure,
+)
+from quality.evidence_bundle_io import (
     reject_duplicate_keys as _reject_duplicate_keys,
 )
 from quality.evidence_bundle_io import (
     verify_staged_bytes,
 )
 from quality.evidence_bundle_models import (
-    HEX40_RE as _HEX40_RE,
-)
-from quality.evidence_bundle_models import (
+    ALLOWED_SOURCE_PATHS,
+    TRANSIENT_SOURCE_PATHS,
     ArtifactRecord,
     CollectionManifest,
     admission_path_for,
     allowed_bundle_paths,
     bound_violations,
     non_architecture_blocks,
+)
+from quality.evidence_bundle_models import (
+    HEX40_RE as _HEX40_RE,
 )
 from quality.evidence_bundle_models import (
     is_canonical_receipt_path as _is_canonical_receipt_path,
@@ -305,6 +310,7 @@ def validate_bundle_diff(
     subject: str,
     bundle: str,
     manifest: CollectionManifest | None = None,
+    staging_dir: Path | None = None,
 ) -> tuple[str, ...]:
     root = repo_root.resolve()
     problems: list[str] = []
@@ -339,6 +345,8 @@ def validate_bundle_diff(
             problems.append(f"bundle contains non-evidence file: {path}")
         if not path.endswith(".json") or not _is_canonical_receipt_path(path):
             problems.append(f"bundle contains non-JSON evidence: {path}")
+        if path in TRANSIENT_SOURCE_PATHS:
+            problems.append(f"bundle contains transient raw source: {path}")
     for path in changed:
         show = _git(root, "show", f"{exact_bundle}:{path}")
         if show.returncode != 0:
@@ -368,18 +376,59 @@ def validate_bundle_diff(
         if rel not in changed_set:
             problems.append(f"bundle is missing admission: {rel}")
     rec_by_path: dict[str, ArtifactRecord] | None = None
+    transient_blobs: dict[str, bytes] = {}
     if manifest is not None:
         if _manifest_integrity(manifest) != manifest.manifest_hash:
             problems.append("collection manifest integrity mismatch")
+        transient_records = tuple(rec for rec in manifest.artifacts if rec.handoff_path is not None)
+        if transient_records and staging_dir is None:
+            problems.append("transient source replay requires ignored collection staging")
+        elif transient_records and staging_dir is not None:
+            staging = (
+                staging_dir.resolve()
+                if staging_dir.is_absolute()
+                else (root / staging_dir).resolve()
+            )
+            try:
+                staging_rel = staging.relative_to(root).as_posix()
+            except ValueError:
+                staging_rel = ""
+            if not staging_rel.startswith(".tmp/"):
+                problems.append("transient source staging is outside ignored .tmp/")
+            else:
+                problems.extend(verify_staged_bytes(manifest, staging))
+                staging_resolved = staging.resolve()
+                seen_inodes: set[tuple[int, int]] = set()
+                for rec in transient_records:
+                    if rec.canonical_path not in TRANSIENT_SOURCE_PATHS:
+                        problems.append(f"unregistered transient source: {rec.canonical_path}")
+                        continue
+                    data, err = _read_staged_secure(staging, staging_resolved, rec, seen_inodes)
+                    if err is not None:
+                        problems.append(f"transient source bytes unstable: {err}")
+                        continue
+                    assert data is not None
+                    if hashlib.sha256(data).hexdigest() != rec.sha256.lower():
+                        problems.append(f"transient source hash mismatch: {rec.canonical_path}")
+                        continue
+                    if len(data) != rec.byte_length:
+                        problems.append(f"transient source length mismatch: {rec.canonical_path}")
+                        continue
+                    transient_blobs[rec.canonical_path] = data
         tmp: dict[str, ArtifactRecord] = {}
         for rec in manifest.artifacts:
             if rec.canonical_path in tmp:
                 problems.append(f"duplicate manifest source: {rec.canonical_path}")
             tmp[rec.canonical_path] = rec
-            if rec.canonical_path not in allowed:
+            if rec.canonical_path not in ALLOWED_SOURCE_PATHS and rec.canonical_path != FREEZE_PATH:
                 problems.append(f"manifest source is not allowlisted: {rec.canonical_path}")
         rec_by_path = tmp
         for rec_path in sorted(tmp):
+            rec = tmp[rec_path]
+            if rec.handoff_path is not None:
+                if rec_path in changed_set:
+                    problems.append(f"transient raw source was committed: {rec_path}")
+                continue
             if rec_path not in changed_set:
                 problems.append(f"bundle is missing raw source: {rec_path}")
         for path in changed:
@@ -387,6 +436,8 @@ def validate_bundle_diff(
                 problems.append(f"bundle contains unexpected evidence: {path}")
         for rec_path in sorted(tmp):
             rec = tmp[rec_path]
+            if rec.handoff_path is not None:
+                continue
             bbytes = _show_blob(root, exact_bundle, rec_path)
             if bbytes is None:
                 problems.append(f"bundle source bytes absent: {rec_path}")
@@ -419,7 +470,9 @@ def validate_bundle_diff(
         available = {p for p in changed_set if p in _source_paths}
     blobs: dict[str, bytes] = {}
     for _p in sorted(available):
-        _blob = _show_blob(root, exact_bundle, _p)
+        _blob = transient_blobs.get(_p)
+        if _blob is None:
+            _blob = _show_blob(root, exact_bundle, _p)
         if _blob is None:
             problems.append(f"bundle source bytes absent: {_p}")
             continue
@@ -518,7 +571,7 @@ def record_score_evidence(
     staged_problems = verify_staged_bytes(manifest, staging)
     if staged_problems:
         raise ValueError("staged bytes are not valid: " + "; ".join(staged_problems))
-    problems = validate_bundle_diff(root, manifest.subject_commit, exact_bundle, manifest)
+    problems = validate_bundle_diff(root, manifest.subject_commit, exact_bundle, manifest, staging)
     if problems:
         raise ValueError("bundle diff is not valid: " + "; ".join(problems))
     blocks: dict[str, EvidenceEntry] = {}

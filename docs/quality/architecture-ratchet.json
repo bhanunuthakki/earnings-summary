@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "3572eb54663ae97254945b5d10ab83600711cbfd",
+  "scoped_commit": "9d751bfee87428a3aa0295020c8597ed7267f5b2",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "e60ae70d66298d31cf16d5c5f4a3b45c35d09c13e9530270bbda094043e2b6ca",
+  "source_sha256": "edd314b16b3c50b6bbb12de6d52dc7710d9db8f30c72b59cd95ccf916f3a1818",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1390,
-    "total_noncomment_loc": 554627,
+    "total_noncomment_loc": 554823,
     "modules_over_1000_loc": 116,
     "modules_over_2000_loc": 23,
     "modules_at_least_3000_loc": 5,
@@ -1662,9 +1662,9 @@
         "path": "execution/collect_evidence_bundle.py",
         "module": "execution.collect_evidence_bundle",
         "lines": {
-          "physical": 103,
-          "nonblank": 93,
-          "noncomment": 93
+          "physical": 105,
+          "nonblank": 95,
+          "noncomment": 95
         },
         "internal_fan_out": 1,
         "responsibilities": [],
@@ -16673,9 +16673,9 @@
         "path": "src/quality/evidence_bundle_assemble.py",
         "module": "quality.evidence_bundle_assemble",
         "lines": {
-          "physical": 512,
-          "nonblank": 506,
-          "noncomment": 506
+          "physical": 517,
+          "nonblank": 511,
+          "noncomment": 511
         },
         "internal_fan_out": 6,
         "responsibilities": [
@@ -16723,9 +16723,9 @@
         "path": "src/quality/evidence_bundle_models.py",
         "module": "quality.evidence_bundle_models",
         "lines": {
-          "physical": 261,
-          "nonblank": 222,
-          "noncomment": 222
+          "physical": 267,
+          "nonblank": 226,
+          "noncomment": 226
         },
         "internal_fan_out": 3,
         "responsibilities": [],
@@ -16736,9 +16736,9 @@
         "path": "src/quality/evidence_bundle_validate.py",
         "module": "quality.evidence_bundle_validate",
         "lines": {
-          "physical": 576,
-          "nonblank": 550,
-          "noncomment": 550
+          "physical": 629,
+          "nonblank": 603,
+          "noncomment": 603
         },
         "internal_fan_out": 6,
         "responsibilities": [
@@ -17061,9 +17061,9 @@
         "path": "src/quality/scoring.py",
         "module": "quality.scoring",
         "lines": {
-          "physical": 738,
-          "nonblank": 669,
-          "noncomment": 669
+          "physical": 871,
+          "nonblank": 801,
+          "noncomment": 801
         },
         "internal_fan_out": 4,
         "responsibilities": [

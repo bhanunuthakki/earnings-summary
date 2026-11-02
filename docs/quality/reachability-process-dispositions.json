@@ -776,6 +776,16 @@
       ]
     },
     {
+      "disposition": "internal_python_target",
+      "evidence": "The fixed argv runs the checked-in reachability scanner against the exact subject in an isolated worktree and writes only to that worktree\u2019s ignored output path. The subprocess has a bounded timeout and no shell; cleanup targets only its owned temporary worktree.",
+      "fingerprint": "1892904e252d8a7282903e07bf31dd373517ec20f5bf5c18a41ad9493be395f4",
+      "line": 460,
+      "path": "src/quality/scoring.py",
+      "targets": [
+        "src/quality/reachability.py"
+      ]
+    },
+    {
       "disposition": "external_process",
       "evidence": "The whole-tree gate invokes only the pinned Pyright executable with the checked-in configuration and selected project interpreter.",
       "fingerprint": "22e0afb8297cfa70e77121855a7175c36677a6be20531d163b124d78ebe24494",
@@ -973,8 +983,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "The private test helper launches the fixed third-party detect_secrets.pre_commit_hook.main entrypoint. Its optional --filter argument loads this fixed repository callback, so retain that local-code edge. Other arguments are test-controlled scanner flags/fixture paths; --no-verify disables provider verification.",
-      "fingerprint": "d994679e8531b07603b4d3d9bfd984a658428d55fb8e873a072dc8a90ea712d7",
-      "line": 244,
+      "fingerprint": "078e33a37a72001a25ef7813f783423bbac8e5a55268a4cecb410b62ce6a00b0",
+      "line": 243,
       "path": "tests/test_quality_hash_filter.py",
       "targets": [
         ".github/scripts/quality_hash_filter.py"
@@ -1004,7 +1014,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "3ebc858b2dcac37f8c6431de7405adfd5a37b0535e1e70cee258b61527a099cc",
+      "source_sha256": "3a4d2557deccfae5e7fa99b9c448657c02d364a804fa2cdb3c8b1a34b7da58c2",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
