@@ -21,21 +21,16 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
-from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from filings import materiality_judgment as mj  # noqa: E402
-from filings.materiality_judgment import (  # noqa: E402
+from filings import materiality_judgment as mj
+from filings.materiality_judgment import (
     JudgmentCandidate,
     MaterialityVerdict,
     ThesisMateriality,
 )
-from llm.cli import LLMBudgetExceeded  # noqa: E402
+from llm.cli import LLMBudgetExceeded
 
 _SCHEMA = """
 CREATE TABLE disclosure_events (

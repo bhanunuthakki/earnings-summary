@@ -27,7 +27,9 @@ from provenance.fact_plane_v2 import (
     FactCellV2,
     ReportedFactObservationV2,
 )
-from provenance.fact_read_model import FactReadModel
+from provenance.fact_read_model import (
+    FactReadModel,
+)
 from provenance.metric_ontology import MetricOntology, OntologySnapshot, canonical_json
 from provenance.population_metric_ontology import (
     ExactSourceAdmissionRequest,

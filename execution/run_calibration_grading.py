@@ -11,31 +11,13 @@ dimension. Three OUTCOME graders over matured outputs vs realized data:
   * ``grade_decisions.py``   -- decision-audit outcomes vs realized price moves.
   * ``grade_bear_cases.py``  -- bear-hypothesis materialization.
 
-Plus seven QUALITY rungs (llm_evals_plan §3 PR 3) — ``run_llm_evals.py``
+Plus six QUALITY rungs (llm_evals_plan §3 PR 3) — ``run_llm_evals.py``
 rubric audits over the week's fresh artifacts (``--since-days``):
 ``bear_case``, ``transcript_summary``, ``advisor_next_dollar``,
 ``ask_advisory_answer`` (the conversational ask path's prose answers from
-``ask_turns`` — close_the_loops L3), and ``calibration_coach`` (the monthly
-scorecard prose — close_the_loops L8), plus capture audits for
+``ask_turns`` — close_the_loops L3), plus capture audits for
 ``material_news_classification`` and ``earnings_tone_diff``. Each also writes an ``eval_runs`` row with
 per-case judge evidence; a week with no fresh artifacts is a clean no-op.
-
-A final rung (tenet-2 Phase 4, docs/design/tenet2_advisory_program.md §3.3:
-"behavioral: after each grading batch") runs LAST, AFTER every grader above has
-had a chance to write fresh ``outcome_label``/``process_quality`` rows: the
-behavioral-rules distiller (``execution/run_behavior_distill.py`` ->
-``synthesis.behavior_distill.run_behavior_distill``) re-derives candidate
-behavioral ``owner_profile_facts`` from the now-freshly-graded corpus. Its own
-internals already implement the per-item degrade pattern (a transient LLM
-failure defers the whole distill run + tallies it, retried for free next week;
-a hard stop -- LLMBudgetExceeded / LLMSetupError -- propagates as a non-zero
-exit, which this orchestrator's always-attempt/never-raise ``_run_grader``
-wrapper reports as FAILED rather than crashing the batch), mirroring the
-post-#814 ``attach_conditions`` reference pattern. Window registered in
-``directives/llm_quota_scheduling.md`` (runs inside this job's existing Sun
-10:30 America/Los_Angeles window -- the daytime slot the weekly eval rung
-was re-registered to on 2026-07-13 after the 03:30 registry-drift incident,
-well clear of the 03:00-05:00 PT protected band).
 
 These were manual CLIs that nothing ran, so ``prompt_calibration_scores`` stayed
 empty even though the machinery was correct (v6 re-grade, LLM pass-through: "the
@@ -68,8 +50,6 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from runtime.python_process import managed_python_prefix  # noqa: E402
 
 # The deterministic graders are quick SQLite sweeps; bear_cases calls an LLM
 # judge per due hypothesis, so it gets the long pole's headroom.
@@ -137,15 +117,6 @@ _GRADERS: tuple[_Grader, ...] = (
         _BEAR_TIMEOUT_S,
         ("--purpose", "ask_advisory_answer", "--since-days", _EVAL_AUDIT_SINCE_DAYS),
     ),
-    # Calibration coach scorecards (close_the_loops L8): audits the freshly
-    # generated monthly scorecard prose. A week with no new scorecard exits 0
-    # without writing a run (the scorecard is monthly; most weeks are no-ops).
-    _Grader(
-        "eval_calibration_coach",
-        "run_llm_evals.py",
-        _BEAR_TIMEOUT_S,
-        ("--purpose", "calibration_coach", "--since-days", _EVAL_AUDIT_SINCE_DAYS),
-    ),
     # The two morning trigger purposes ingest the highest-risk untrusted text
     # (news and transcripts). Their private capture corpus is populated by the
     # 04:00 wrapper and judged here in the existing weekly eval window.
@@ -166,14 +137,6 @@ _GRADERS: tuple[_Grader, ...] = (
         _BEAR_TIMEOUT_S,
         ("--purpose", "earnings_tone_diff", "--since-days", _EVAL_AUDIT_SINCE_DAYS),
     ),
-    # Behavioral-rules distiller (tenet-2 Phase 4) -- LAST, so it re-derives
-    # from the corpus AFTER every grader above has had a chance to write
-    # fresh outcome_label/process_quality rows this batch (§3.3: "behavioral:
-    # after each grading batch"). Its own internals implement the per-item
-    # degrade pattern (transient LLM failure -> defer + tally, retried next
-    # week; a hard stop propagates as a non-zero exit, reported FAILED here
-    # rather than crashing the batch) -- see synthesis.behavior_distill.
-    _Grader("behavior_distill", "run_behavior_distill.py", _FAST_TIMEOUT_S),
 )
 _GRADER_KEYS = tuple(g.key for g in _GRADERS)
 
@@ -198,6 +161,8 @@ def _run_grader(grader: _Grader) -> _GraderResult:
         f"\n{'=' * 72}\n=== calibration grader: {grader.key} ({grader.script})\n{'=' * 72}\n"
     )
     sys.stdout.flush()
+
+    from runtime.python_process import managed_python_prefix
 
     argv = [
         *managed_python_prefix(PROJECT_ROOT),

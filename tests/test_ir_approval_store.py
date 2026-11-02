@@ -3,27 +3,23 @@
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from models.documents import DocType  # noqa: E402
-from pipeline.approved_ir_catalog import ApprovedIrCatalog, build_catalog  # noqa: E402
-from pipeline.approved_ir_rubrik import (  # noqa: E402
+from models.documents import DocType
+from pipeline.approved_ir_catalog import ApprovedIrCatalog, build_catalog
+from pipeline.approved_ir_rubrik import (
     load_rubrik_row_observations,
     parse_rubrik_quarter_rows,
 )
-from pipeline.approved_ir_wix import (  # noqa: E402
+from pipeline.approved_ir_wix import (
     load_wix_rendered_observations,
     parse_wix_visible_quarters,
 )
-from pipeline.ir_approval_store import (  # noqa: E402
+from pipeline.ir_approval_store import (
     DecisionAction,
     EvidenceReference,
     IrAdmissionProof,
@@ -36,7 +32,7 @@ from pipeline.ir_approval_store import (  # noqa: E402
     persist_candidate,
     verify_admission,
 )
-from pipeline.source_policy import issuer_policy  # noqa: E402
+from pipeline.source_policy import issuer_policy
 
 FIXTURES = Path(__file__).parent / "fixtures" / "approved_ir"
 RUBRIK_FIXTURE = FIXTURES / "rubrik_rows_sanitized.json"

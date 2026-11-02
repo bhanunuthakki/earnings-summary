@@ -8,14 +8,9 @@ also depends on it.
 
 from __future__ import annotations
 
-import sys
 from decimal import Decimal
-from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from table_extractors.xbrl_value_classify import (  # noqa: E402
+from table_extractors.xbrl_value_classify import (
     build_name,
     classify_value,
     is_unit_ambiguous_section,

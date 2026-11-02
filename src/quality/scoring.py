@@ -5,13 +5,19 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
+from contextlib import suppress
 from pathlib import Path
 from typing import Literal, cast
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from quality.admission_policy import (
+    REACHABILITY_PATH,
+)
 from quality.admission_policy import (
     RUNTIME_POLICY_SHA256 as _RUNTIME_POLICY_SHA256,
 )
@@ -349,6 +355,8 @@ class _AdmissionVerifier:
         self._bundle_diffs: dict[tuple[str, str, str], tuple[str, ...]] = {}
         self._bundle_errors: dict[tuple[str, str, str], str] = {}
         self._blobs: dict[tuple[str, str], bytes | None] = {}
+        self._replayed_sources: dict[str, bytes | None] = {}
+        self._replay_errors: dict[str, str] = {}
 
     def _subject_commit(self, scoped_commit: str) -> tuple[str | None, str | None]:
         if scoped_commit not in self._subjects:
@@ -402,6 +410,9 @@ class _AdmissionVerifier:
         if changed is None:
             self._bundle_errors[key] = "evidence-only diff is unverifiable"
             return None, self._bundle_errors[key]
+        if REACHABILITY_PATH in changed:
+            self._bundle_errors[key] = "bundle contains transient raw reachability output"
+            return None, self._bundle_errors[key]
         if any(not _is_canonical_receipt_path(path) for path in changed):
             self._bundle_errors[key] = "bundle contains non-evidence files"
             return None, self._bundle_errors[key]
@@ -413,6 +424,116 @@ class _AdmissionVerifier:
         if key not in self._blobs:
             self._blobs[key] = _git_show(self._repo_root, revision, rel_path)
         return self._blobs[key]
+
+    def _replay_reachability(self, subject: str) -> bytes | None:
+        if subject in self._replayed_sources:
+            return self._replayed_sources[subject]
+        raw: bytes | None = None
+        replay_error = "subject reachability scan did not complete"
+        temporary: Path | None = None
+        worktree: Path | None = None
+        quality_tmp = self._repo_root / ".tmp" / "quality"
+        try:
+            quality_tmp.mkdir(parents=True, exist_ok=True)
+            temporary = Path(tempfile.mkdtemp(prefix="reachability-replay-", dir=quality_tmp))
+            worktree = temporary / "checkout"
+            added = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(self._repo_root),
+                    "worktree",
+                    "add",
+                    "--detach",
+                    str(worktree),
+                    subject,
+                ],
+                check=False,
+                capture_output=True,
+                env=clean_local_git_env(),
+                timeout=60,
+            )
+            if added.returncode != 0:
+                replay_error = "isolated subject worktree could not be created"
+            else:
+                output = worktree / ".tmp" / "quality" / "reachability-check.json"
+                scanned = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "quality.reachability",
+                        "--repo-root",
+                        str(worktree),
+                        "--output",
+                        str(output),
+                    ],
+                    cwd=worktree / "src",
+                    check=False,
+                    capture_output=True,
+                    env=clean_local_git_env(),
+                    timeout=180,
+                )
+                if scanned.returncode == 0 and output.is_file():
+                    raw = output.read_bytes()
+                else:
+                    replay_error = "isolated subject reachability scan failed"
+        except (OSError, subprocess.SubprocessError):
+            raw = None
+            replay_error = "isolated subject reachability replay failed"
+        finally:
+            if temporary is not None and worktree is not None:
+                with suppress(OSError, subprocess.SubprocessError):
+                    subprocess.run(
+                        [
+                            "git",
+                            "-C",
+                            str(self._repo_root),
+                            "worktree",
+                            "remove",
+                            "--force",
+                            str(worktree),
+                        ],
+                        check=False,
+                        capture_output=True,
+                        env=clean_local_git_env(),
+                        timeout=30,
+                    )
+                try:
+                    listed = subprocess.run(
+                        [
+                            "git",
+                            "-C",
+                            str(self._repo_root),
+                            "worktree",
+                            "list",
+                            "--porcelain",
+                        ],
+                        check=False,
+                        capture_output=True,
+                        env=clean_local_git_env(),
+                        timeout=30,
+                    )
+                    registered = {
+                        line.removeprefix(b"worktree ")
+                        for line in listed.stdout.splitlines()
+                        if line.startswith(b"worktree ")
+                    }
+                except (OSError, subprocess.SubprocessError):
+                    listed = None
+                    registered = {str(worktree).encode()}
+                if listed is None or listed.returncode != 0 or str(worktree).encode() in registered:
+                    raw = None
+                    replay_error = f"temporary worktree cleanup failed; preserving registered checkout at {worktree}"
+                else:
+                    try:
+                        shutil.rmtree(temporary)
+                    except OSError:
+                        raw = None
+                        replay_error = "temporary replay directory cleanup failed"
+        if raw is None:
+            self._replay_errors[subject] = replay_error
+        self._replayed_sources[subject] = raw
+        return raw
 
     def verify(
         self,
@@ -477,9 +598,17 @@ class _AdmissionVerifier:
             for source in admission.sources:
                 if source.path == entry.receipt_path:
                     return None, "admission receipt cannot cite itself"
-                source_bytes = self._show(entry.bundle_commit.lower(), source.path)
+                source_bytes = (
+                    self._replay_reachability(subject)
+                    if source.path == REACHABILITY_PATH
+                    else self._show(entry.bundle_commit.lower(), source.path)
+                )
                 if source_bytes is None:
-                    return None, "source receipt is missing in bundle"
+                    if source.path == REACHABILITY_PATH:
+                        return None, self._replay_errors.get(
+                            subject, "reachability source cannot be replayed"
+                        )
+                    return None, "source receipt is missing or cannot be replayed"
                 if hashlib.sha256(source_bytes).hexdigest() != source.sha256:
                     return None, "source receipt hash mismatch"
             try:
@@ -489,7 +618,11 @@ class _AdmissionVerifier:
             path_to_source: dict[str, _SourceName] = {v: k for k, v in _SOURCE_PATHS.items()}
             parsed: dict[_SourceName, _ParsedSource] = {}
             for req_path in req_paths:
-                blob = self._show(entry.bundle_commit.lower(), req_path)
+                blob = (
+                    self._replay_reachability(subject)
+                    if req_path == REACHABILITY_PATH
+                    else self._show(entry.bundle_commit.lower(), req_path)
+                )
                 if blob is None:
                     continue
                 req_name = path_to_source.get(req_path)

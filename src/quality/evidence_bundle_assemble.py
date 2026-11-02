@@ -272,6 +272,11 @@ def assemble_bundle(
             pending_freeze = freeze_to_write
     written: list[str] = []
     pending_writes: dict[str, bytes] = {}
+    transient_paths = {
+        artifact.canonical_path
+        for artifact in manifest.artifacts
+        if artifact.handoff_path is not None
+    }
     if pending_freeze is not None:
         if freeze_record is None:
             violations.append("freeze index record is missing")
@@ -284,7 +289,7 @@ def assemble_bundle(
             else:
                 pending_writes[FREEZE_PATH] = pending_freeze
     for rel, raw in staged_bytes.items():
-        if rel not in typed_sources:
+        if rel not in typed_sources or rel in transient_paths:
             continue
         dst = root / rel
         src = (

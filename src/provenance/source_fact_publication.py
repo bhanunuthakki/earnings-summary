@@ -14,6 +14,7 @@ import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, cast
 
@@ -21,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from runtime.deterministic import as_utc as _utc
 from runtime.deterministic import canonical_json_model as canonical_json
+from sqlite_runtime import ManagedConnection
 
 PublicationMemberKind = Literal[
     "fact_cell",
@@ -34,6 +36,8 @@ PublicationVerificationDisposition = Literal[
     "missing_provenance",
     "quarantined",
 ]
+
+MAX_SCOPED_PUBLICATION_VERIFICATIONS = 4096
 
 PUBLICATION_PAYLOAD_VERSION = "source_fact_publication.v1"
 RECORD_COMMITMENT_VERSION = "source_fact_record_commitment.v1"
@@ -112,6 +116,14 @@ class PublicationVerificationError(RuntimeError):
         super().__init__(f"{reason_code}: publication {publication_id!r}{suffix} is not admissible")
 
 
+class PublicationVerificationLimitError(RuntimeError):
+    """One read operation exceeded its distinct publication-clock key budget."""
+
+
+class _PublicationValueIntegrityError(ValueError):
+    """A value decoded from the publication ledger is malformed."""
+
+
 class PublicationRecordMissingError(ValueError):
     """A publication member references no complete hardened live record."""
 
@@ -152,13 +164,13 @@ def publication_payload(
         {
             "created_at": canonical_time(created_at),
             "graph_counts": {
-                "cell_count": int(str(cell_count)),
-                "derivation_seal_count": int(str(derivation_seal_count)),
-                "extraction_seal_count": int(str(extraction_seal_count)),
-                "member_count": int(str(member_count)),
-                "observation_count": int(str(observation_count)),
-                "relation_count": int(str(relation_count)),
-                "resolution_revision_count": int(str(resolution_revision_count)),
+                "cell_count": _integer(cell_count),
+                "derivation_seal_count": _integer(derivation_seal_count),
+                "extraction_seal_count": _integer(extraction_seal_count),
+                "member_count": _integer(member_count),
+                "observation_count": _integer(observation_count),
+                "relation_count": _integer(relation_count),
+                "resolution_revision_count": _integer(resolution_revision_count),
             },
             "idempotency_key": str(idempotency_key),
             "member_set_sha256": str(member_set_sha256),
@@ -475,21 +487,66 @@ def record_bundle(
     return {"candidates": candidates, "resolution": resolution}
 
 
+@dataclass(frozen=True)
+class _PublicationVerificationFailure:
+    reason_code: str
+    publication_id: str
+    disposition: PublicationVerificationDisposition
+    record_kind: PublicationMemberKind | None
+    record_id: str | None
+
+    @classmethod
+    def capture(cls, error: PublicationVerificationError) -> _PublicationVerificationFailure:
+        return cls(
+            error.reason_code,
+            error.publication_id,
+            error.disposition,
+            error.record_kind,
+            error.record_id,
+        )
+
+    def to_error(self) -> PublicationVerificationError:
+        return PublicationVerificationError(
+            self.reason_code,
+            publication_id=self.publication_id,
+            disposition=self.disposition,
+            record_kind=self.record_kind,
+            record_id=self.record_id,
+        )
+
+
 class _PublicationReadScope:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
         self.initial_changes = conn.total_changes
         self.initial_factory = conn.row_factory
-        self.verified: dict[tuple[str, datetime, datetime], VerifiedSourceFactPublication] = {}
+        self.verified: dict[
+            tuple[str, datetime, datetime],
+            VerifiedSourceFactPublication | _PublicationVerificationFailure,
+        ] = {}
+
+    def require_capacity(self, key: tuple[str, datetime, datetime]) -> None:
+        if key not in self.verified and len(self.verified) >= MAX_SCOPED_PUBLICATION_VERIFICATIONS:
+            raise PublicationVerificationLimitError(
+                f"publication verification scope key limit ({MAX_SCOPED_PUBLICATION_VERIFICATIONS}) exceeded"
+            )
+
+    def remember(
+        self,
+        key: tuple[str, datetime, datetime],
+        outcome: VerifiedSourceFactPublication | _PublicationVerificationFailure,
+    ) -> None:
+        self.assert_unchanged()
+        self.require_capacity(key)
+        self.verified[key] = outcome
 
     def assert_unchanged(self) -> None:
-        if (
-            not self.conn.in_transaction
-            or self.conn.total_changes != self.initial_changes
-            or self.conn.row_factory is not self.initial_factory
-        ):
-            self.verified.clear()
-            raise RuntimeError("publication verification scope changed database read state")
+        if self.conn.total_changes != self.initial_changes:
+            raise RuntimeError("publication verification scope changed database state")
+        if self.conn.row_factory is not self.initial_factory:
+            raise RuntimeError("publication verification scope changed row factory")
+        if not self.conn.in_transaction:
+            raise RuntimeError("publication verification scope changed transaction state")
 
 
 _publication_read_scope: ContextVar[_PublicationReadScope | None] = ContextVar(
@@ -499,34 +556,65 @@ _publication_read_scope: ContextVar[_PublicationReadScope | None] = ContextVar(
 
 @contextmanager
 def publication_verification_scope(conn: sqlite3.Connection) -> Generator[None]:
-    """Reuse full verification only inside one synchronous caller-owned snapshot.
+    """Reuse full verification inside one synchronous read snapshot.
 
-    Individual membership and admission checks still run. A savepoint detects
-    transaction replacement before a result can escape; writes invalidate the
-    scope. No verification survives the call or crosses connection boundaries.
+    Individual membership and admission checks still run. A protected caller
+    snapshot is borrowed without transaction commands. Otherwise a savepoint
+    detects transaction replacement before a result can escape. Writes invalidate
+    the scope. No verification survives the call or crosses connection boundaries.
+    At most 4096 distinct publication/K/O keys may be verified. An additional
+    key aborts the operation without eviction or repeated verification.
     """
-    if not conn.in_transaction:
-        raise RuntimeError("publication verification scope requires a read transaction")
+    existing = _publication_read_scope.get()
+    if existing is not None and existing.conn is conn:
+        existing.assert_unchanged()
+        yield
+        existing.assert_unchanged()
+        return
+    borrow_protected_snapshot = (
+        isinstance(conn, ManagedConnection) and conn.protected_read_snapshot_active
+    )
+    owns_snapshot = not conn.in_transaction
+    if borrow_protected_snapshot and owns_snapshot:
+        raise RuntimeError("protected publication snapshot is not active")
+    if owns_snapshot:
+        conn.execute("BEGIN")
     scope = _PublicationReadScope(conn)
-    conn.execute("SAVEPOINT publication_verification_scope")
+    try:
+        if not borrow_protected_snapshot:
+            conn.execute("SAVEPOINT publication_verification_scope")
+    except BaseException:
+        if owns_snapshot:
+            conn.rollback()
+        raise
     token = _publication_read_scope.set(scope)
     completed = False
+    original_snapshot = True
     try:
         yield
         scope.assert_unchanged()
-        conn.execute("RELEASE SAVEPOINT publication_verification_scope")
+        if not borrow_protected_snapshot:
+            try:
+                conn.execute("RELEASE SAVEPOINT publication_verification_scope")
+            except sqlite3.OperationalError as exc:
+                original_snapshot = False
+                raise RuntimeError(
+                    "publication verification scope changed transaction state"
+                ) from exc
         completed = True
     finally:
         _publication_read_scope.reset(token)
         scope.verified.clear()
         if conn.row_factory is not scope.initial_factory:
             conn.row_factory = scope.initial_factory
-        if not completed and conn.in_transaction:
+        if not completed and conn.in_transaction and not borrow_protected_snapshot:
             try:
                 conn.execute("ROLLBACK TO SAVEPOINT publication_verification_scope")
                 conn.execute("RELEASE SAVEPOINT publication_verification_scope")
             except sqlite3.OperationalError:
-                pass  # A replaced transaction must not be rolled back on the caller's behalf.
+                original_snapshot = False
+        if owns_snapshot and original_snapshot and conn.in_transaction:
+            conn.rollback()
 
 
 def verify_source_fact_publication(
@@ -541,39 +629,34 @@ def verify_source_fact_publication(
     scope = _publication_read_scope.get()
     if scope is not None and scope.conn is not conn:
         scope = None
+    key = (publication_id, _utc(cutoff), _utc(observed_through or cutoff))
+    if scope is not None:
+        scope.assert_unchanged()
+        cached = scope.verified.get(key)
+        if isinstance(cached, _PublicationVerificationFailure):
+            raise cached.to_error() from None
+        if cached is not None:
+            return cached
+        scope.require_capacity(key)
     try:
-        key = (publication_id, _utc(cutoff), _utc(observed_through or cutoff))
-        if scope is not None:
-            scope.assert_unchanged()
-            cached = scope.verified.get(key)
-            if cached is not None:
-                return cached
         verified = _verify_source_fact_publication(
             conn,
             publication_id=publication_id,
             cutoff=cutoff,
             observed_through=observed_through,
         )
+    except _PublicationValueIntegrityError as exc:
+        failure = _verification_error("publication_ledger_malformed", publication_id, "quarantined")
         if scope is not None:
-            scope.assert_unchanged()
-            if len(scope.verified) >= 4096:
-                scope.verified.clear()
-            scope.verified[key] = verified
-        return verified
-    except PublicationVerificationError:
+            scope.remember(key, _PublicationVerificationFailure.capture(failure))
+        raise failure from exc
+    except PublicationVerificationError as exc:
+        if scope is not None:
+            scope.remember(key, _PublicationVerificationFailure.capture(exc))
         raise
-    except sqlite3.OperationalError as exc:
-        raise _verification_error(
-            "publication_ledger_unavailable",
-            publication_id,
-            "missing_provenance",
-        ) from exc
-    except (KeyError, TypeError, ValueError) as exc:
-        raise _verification_error(
-            "publication_ledger_malformed",
-            publication_id,
-            "quarantined",
-        ) from exc
+    if scope is not None:
+        scope.remember(key, verified)
+    return verified
 
 
 def _verify_source_fact_publication(
@@ -587,31 +670,24 @@ def _verify_source_fact_publication(
     bounded_observed = bounded_cutoff if observed_through is None else _utc(observed_through)
     if bounded_observed < bounded_cutoff:
         raise ValueError("observed_through must not precede cutoff")
-    try:
-        header = _fetchone(
-            conn,
-            "SELECT publication_id,idempotency_key,payload_version,"
-            "canonical_publication_payload_json,publication_payload_sha256,"
-            "member_set_sha256,cell_count,observation_count,relation_count,"
-            "derivation_seal_count,extraction_seal_count,"
-            "resolution_revision_count,member_count,created_at,recorded_at "
-            "FROM source_fact_publications WHERE publication_id = ?",
-            publication_id,
-        )
-        seal = _fetchone(
-            conn,
-            "SELECT publication_seal_id,idempotency_key,publication_id,"
-            "member_count,canonical_member_set_json,member_set_sha256,"
-            "publication_payload_sha256,sealed_at "
-            "FROM source_fact_publication_seals WHERE publication_id = ?",
-            publication_id,
-        )
-    except sqlite3.OperationalError as exc:
-        raise _verification_error(
-            "publication_ledger_unavailable",
-            publication_id,
-            "missing_provenance",
-        ) from exc
+    header = _fetchone(
+        conn,
+        "SELECT publication_id,idempotency_key,payload_version,"
+        "canonical_publication_payload_json,publication_payload_sha256,"
+        "member_set_sha256,cell_count,observation_count,relation_count,"
+        "derivation_seal_count,extraction_seal_count,"
+        "resolution_revision_count,member_count,created_at,recorded_at "
+        "FROM source_fact_publications WHERE publication_id = ?",
+        publication_id,
+    )
+    seal = _fetchone(
+        conn,
+        "SELECT publication_seal_id,idempotency_key,publication_id,"
+        "member_count,canonical_member_set_json,member_set_sha256,"
+        "publication_payload_sha256,sealed_at "
+        "FROM source_fact_publication_seals WHERE publication_id = ?",
+        publication_id,
+    )
     if header is None:
         raise _verification_error(
             "publication_graph_missing",
@@ -1087,15 +1163,18 @@ def _rows(
 
 def _integer(value: object) -> int:
     if isinstance(value, bool):
-        raise ValueError("boolean is not an integer commitment")
-    return int(str(value))
+        raise _PublicationValueIntegrityError("boolean is not an integer commitment")
+    try:
+        return int(str(value))
+    except ValueError as exc:
+        raise _PublicationValueIntegrityError("invalid integer commitment") from exc
 
 
 def _datetime(value: object) -> datetime:
     try:
         parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"invalid publication clock: {value!r}") from exc
+        raise _PublicationValueIntegrityError("invalid publication clock") from exc
     return _utc(parsed)
 
 

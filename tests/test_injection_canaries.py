@@ -15,21 +15,19 @@ spends. The checked-in golden file is also validated (schema + the
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from evals.injection_canaries import (  # noqa: E402
+from evals.injection_canaries import (
     CanaryCase,
     RunnerResult,
     grade_canary_case,
     load_canary_golden,
     run_canary_eval,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 GOLDEN = PROJECT_ROOT / "evals" / "golden" / "injection_canaries.json"
 

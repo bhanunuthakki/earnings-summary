@@ -20,31 +20,26 @@ from __future__ import annotations
 
 import importlib.util
 import sqlite3
-import sys
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 
 import pytest
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_REPO_ROOT / "src"))
+import db
 
-import db  # noqa: E402
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(autouse=True)
 def _restore_db_globals() -> Iterator[None]:
-    """``record_decisions.main()`` -> ``_sync_db_path`` mutates the ``db``
-    module's globals (PROJECT_ROOT/DATA_DIR/DB_PATH/FMP_DIR) directly, same as
-    run_lens.py / build_artifacts.py. Restore them after each test so this
-    file can never leak a temp-dir path into a test that runs afterward
-    (see tests/test_db_path_sync.py for the established pattern)."""
-    orig = (db.DB_PATH, db.DATA_DIR, db.FMP_DIR, db.PROJECT_ROOT)
+    """The CLI sets DB state for the supplied disposable database."""
+    orig = (db.DB_PATH, db.DATA_DIR, db.FMP_DIR, db.PROJECT_ROOT, db.STATE_ROOT)
     try:
         yield
     finally:
-        db.DB_PATH, db.DATA_DIR, db.FMP_DIR, db.PROJECT_ROOT = orig
+        db.DB_PATH, db.DATA_DIR, db.FMP_DIR, db.PROJECT_ROOT, db.STATE_ROOT = orig
 
 
 _SCHEMA = """
@@ -158,24 +153,22 @@ def _load_record_decisions_module():
 
 @pytest.fixture()
 def repo_root(tmp_path: Path) -> Path:
-    """A fake repo root with data/portfolio.db in the real layout
-    (repo_root/data/portfolio.db) — record_decisions_from_artifacts derives
-    its DB path from --repo-root, while attach_conditions/
-    attach_qualitative_conditions take the explicit --db-path. Pointing BOTH
-    flags at this same tree keeps main() off the real project DB."""
-    root = tmp_path / "proj"
-    (root / "data").mkdir(parents=True)
-    path = root / "data" / "portfolio.db"
-    conn = sqlite3.connect(str(path))
-    conn.executescript(_SCHEMA)
-    conn.commit()
-    conn.close()
+    """A separate code/artifact root with no database in its data directory."""
+    root = tmp_path / "code-root"
+    root.mkdir()
     return root
 
 
 @pytest.fixture()
-def db_path(repo_root: Path) -> Path:
-    return repo_root / "data" / "portfolio.db"
+def db_path(tmp_path: Path) -> Path:
+    """A disposable DB outside the code root and outside state-root/data."""
+    path = tmp_path / "authority" / "owner-main.sqlite"
+    path.parent.mkdir()
+    conn = sqlite3.connect(str(path))
+    conn.executescript(_SCHEMA)
+    conn.commit()
+    conn.close()
+    return path
 
 
 def _insert_artifact_decision(path: Path, *, content_md: str, ticker: str) -> int:
@@ -310,22 +303,21 @@ def test_main_default_skips_machine_recommendation_rungs(
 ) -> None:
     module = _load_record_decisions_module()
     calls: list[str] = []
+
+    def record(name: str, **_kwargs: object) -> dict[str, int]:
+        calls.append(name)
+        return {
+            "inserted": 0,
+            "skipped_existing": 0,
+            "no_recommendation": 0,
+            "skipped_no_stance": 0,
+            "db_unavailable": 0,
+        }
+
     monkeypatch.setattr(
-        module,
-        "record_decisions_from_artifacts",
-        lambda **kw: (
-            calls.append("from_artifacts")
-            or {"inserted": 0, "skipped_existing": 0, "no_recommendation": 0, "db_unavailable": 0}
-        ),
+        module, "record_decisions_from_artifacts", partial(record, "from_artifacts")
     )
-    monkeypatch.setattr(
-        module,
-        "record_socratic_decisions",
-        lambda **kw: (
-            calls.append("socratic")
-            or {"inserted": 0, "skipped_existing": 0, "skipped_no_stance": 0, "db_unavailable": 0}
-        ),
-    )
+    monkeypatch.setattr(module, "record_socratic_decisions", partial(record, "socratic"))
     monkeypatch.setattr(
         module.sys,
         "argv",
@@ -349,22 +341,55 @@ def test_main_include_advisor_runs_machine_recommendation_rungs(
     repo_root: Path, db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     module = _load_record_decisions_module()
-    calls: list[str] = []
+
+    calls: list[tuple[str, Path]] = []
+
+    def record(name: str, **kwargs: object) -> dict[str, int]:
+        database = kwargs["db_path"]
+        assert isinstance(database, Path)
+        calls.append((name, database))
+        if name == "advisor":
+            return {
+                "inserted": 0,
+                "skipped_existing": 0,
+                "no_recommendation": 0,
+                "db_unavailable": 0,
+            }
+        if name == "socratic":
+            return {
+                "inserted": 0,
+                "skipped_existing": 0,
+                "skipped_no_stance": 0,
+                "db_unavailable": 0,
+            }
+        return {
+            "extracted": 0,
+            "no_conditions": 0,
+            "no_section": 0,
+            "parse_failed": 0,
+            "deferred_transient": 0,
+            "db_unavailable": 0,
+        }
+
     monkeypatch.setattr(
         module,
         "record_decisions_from_artifacts",
-        lambda **kw: (
-            calls.append("from_artifacts")
-            or {"inserted": 0, "skipped_existing": 0, "no_recommendation": 0, "db_unavailable": 0}
-        ),
+        partial(record, "advisor"),
     )
     monkeypatch.setattr(
         module,
         "record_socratic_decisions",
-        lambda **kw: (
-            calls.append("socratic")
-            or {"inserted": 0, "skipped_existing": 0, "skipped_no_stance": 0, "db_unavailable": 0}
-        ),
+        partial(record, "socratic"),
+    )
+    monkeypatch.setattr(
+        module,
+        "attach_conditions",
+        partial(record, "numeric"),
+    )
+    monkeypatch.setattr(
+        module,
+        "attach_qualitative_conditions",
+        partial(record, "qualitative"),
     )
     monkeypatch.setattr(
         module.sys,
@@ -376,9 +401,16 @@ def test_main_include_advisor_runs_machine_recommendation_rungs(
             "--db-path",
             str(db_path),
             "--include-advisor",
-            "--no-conditions",
         ],
     )
     exit_code = module.main()
     assert exit_code == 0
-    assert calls == ["from_artifacts", "socratic"]
+    assert [name for name, _ in calls] == [
+        "advisor",
+        "socratic",
+        "numeric",
+        "qualitative",
+    ]
+    assert all(path == db_path.resolve() for _, path in calls)
+    assert not (repo_root / "data" / "portfolio.db").exists()
+    assert str(db_path.resolve()) == db.DB_PATH

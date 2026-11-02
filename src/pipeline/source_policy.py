@@ -233,6 +233,14 @@ class StoredCollectionAuthorization(BaseModel):
     target: CollectionTarget | None = None
     decision: AcquisitionDecision | None = None
     fiscal_year_end_month: int | None = Field(default=None, ge=1, le=12)
+    fiscal_year_end: str | None = Field(default=None, pattern=r"^\d{2}-\d{2}$")
+
+    @field_validator("fiscal_year_end")
+    @classmethod
+    def complete_fiscal_calendar(cls, value: str | None) -> str | None:
+        if value is not None:
+            fiscal_quarter_end(fiscal_year=2024, fiscal_quarter=4, fiscal_year_end=value)
+        return value
 
     @property
     def allowed(self) -> bool:
@@ -685,6 +693,14 @@ def authorize_collection_target_in_connection(
             candidate_month = 0
         if 1 <= candidate_month <= 12:
             fiscal_year_end_month = candidate_month
+    fiscal_year_end: str | None = None
+    if isinstance(fye_raw, str):
+        try:
+            fiscal_quarter_end(fiscal_year=2024, fiscal_quarter=4, fiscal_year_end=fye_raw)
+        except ValueError:
+            pass
+        else:
+            fiscal_year_end = fye_raw
     decision = decision_for(
         target.coverage_role,
         source,
@@ -700,6 +716,7 @@ def authorize_collection_target_in_connection(
         target=target,
         decision=decision,
         fiscal_year_end_month=fiscal_year_end_month,
+        fiscal_year_end=fiscal_year_end,
     )
 
 

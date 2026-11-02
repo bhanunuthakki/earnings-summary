@@ -27,14 +27,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-from calibration_guard import is_confident, rate_phrase, rate_phrase_ci
+from calibration_guard import is_confident
 from db_paths import require_db_path
 from dcf.input_evidence import SourceReadContext
 from dcf.readiness import load_valuation_readiness
 from decision_calibration import (
     CalibrationStats,
     Expectancy,
-    bucket_for_conviction,
     build_calibration,
     realized_magnitudes,
 )
@@ -489,101 +488,6 @@ def tax_block(ctx: AdvisorContext, ticker: str) -> str:
             "clear that drag too."
         )
     return ""
-
-
-def _ticker_conviction_bucket(ctx: AdvisorContext, ticker: str) -> tuple[str, str] | None:
-    """The conviction cohort this name's stated stance belongs to (read off the
-    sizing audit's conviction column), with a human descriptor. None when no
-    conviction is on file for the name."""
-    t = ticker.upper()
-    for r in ctx.audit_rows:
-        if r.ticker == t and r.conviction is not None:
-            bucket = bucket_for_conviction(r.conviction)
-            return bucket, f"a {bucket}-conviction name (you rate it {r.conviction:g}/5)"
-    return None
-
-
-def calibration_block(ctx: AdvisorContext, ticker: str) -> str:
-    """The analyst's own forecasting track record, framed to CHALLENGE the
-    conviction on this name — the L1 calibration return path into the advisor.
-
-    Reuses ``decision_calibration`` wholesale plus the shared minimum-n guard,
-    so a thin ledger is hedged rather than asserted, and the owner is never
-    confronted from a sparse denominator. Empty string when nothing is graded
-    yet (the prompts then fall back to evidence alone)."""
-    stats = ctx.calibration
-    if stats is None or stats.graded == 0:
-        return ""
-    lines = [
-        "**Your documented calibration (challenge this conviction against your own "
-        "track record — don't flatter it):**",
-        f"- Overall: {rate_phrase('graded calls', stats.overall_hit_rate, stats.graded)}, "
-        f"of {stats.total} logged.",
-    ]
-    # By conviction, each rate widened with its Wilson 95% CI (L-seam 3) — a
-    # band, not a point estimate that a thin denominator would flatter.
-    conv = [
-        rate_phrase_ci(b.conviction, b.hit_rate, b.correct, b.graded)
-        for b in stats.by_conviction
-        if b.graded
-    ]
-    if conv:
-        lines.append("- By conviction: " + "; ".join(conv) + ".")
-    # Proper-scoring Brier on the conviction language itself (L-seam 2) — only
-    # asserted once the denominator clears the min-n guard.
-    cc = stats.conviction_calibration
-    if (
-        cc is not None
-        and cc.brier is not None
-        and cc.baseline_brier is not None
-        and is_confident(cc.n)
-    ):
-        verdict = (
-            "your conviction discriminates — it beats a flat base-rate guess"
-            if cc.beats_baseline
-            else "your conviction does NOT beat a flat base-rate guess — the labels add "
-            "little signal over your average"
-        )
-        lines.append(
-            f"- Conviction Brier {cc.brier:.3f} vs {cc.baseline_brier:.3f} baseline "
-            f"(n={cc.n}): {verdict}."
-        )
-    # The dollar view: batting is above, this is slugging (L-seam 1).
-    exp_clause = _expectancy_clause(stats.expectancy, lead="Across your graded calls")
-    if exp_clause:
-        lines.append(f"- {exp_clause}")
-    if stats.reversals_vindicated or stats.reversals_cost:
-        lines.append(
-            f"- Reversals: {stats.reversals_vindicated} vindicated vs "
-            f"{stats.reversals_cost} cost — weigh whether overriding your own call "
-            "has usually paid off."
-        )
-    cohort = _ticker_conviction_bucket(ctx, ticker)
-    if cohort is not None:
-        bucket, descriptor = cohort
-        cb = next((b for b in stats.by_conviction if b.conviction == bucket), None)
-        if cb is not None and cb.graded:
-            line = (
-                f"- {ticker.upper()} is {descriptor}: "
-                + rate_phrase_ci(
-                    f"your {bucket}-conviction calls have graded",
-                    cb.hit_rate,
-                    cb.correct,
-                    cb.graded,
-                )
-                + ". If that rate undercuts the conviction here, the burden is to say why "
-                "THIS one is different."
-            )
-            cohort_exp = _expectancy_clause(cb.expectancy, lead=f"Those {bucket}-conviction calls")
-            if cohort_exp:
-                line += f" ({cohort_exp})"
-            lines.append(line)
-        else:
-            lines.append(
-                f"- {ticker.upper()} is {descriptor}, but you have no graded "
-                f"{bucket}-conviction calls yet (n=0) — one to calibrate going forward."
-            )
-    return "\n".join(lines)
 
 
 def _expectancy_clause(exp: Expectancy | None, *, lead: str) -> str:

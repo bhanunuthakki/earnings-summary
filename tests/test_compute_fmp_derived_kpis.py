@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
-from datetime import datetime
+from collections.abc import Callable, Iterator
+from contextlib import closing
+from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -18,80 +22,22 @@ from compute.fmp_derived_kpis import (
     FmpDerivationReason,
     QuarterlyFacts,
     derive_for_facts,
-    derive_for_ticker,
     derive_for_ticker_outcome,
 )
-from models.facts import FiscalPeriodType, Unit
-
-
-def _create_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        CREATE TABLE documents (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            source_type TEXT NOT NULL,
-            doc_type TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            sha256 TEXT NOT NULL,
-            fetched_at TIMESTAMP NOT NULL,
-            fetch_status TEXT NOT NULL,
-            raw_bytes_size INTEGER NOT NULL,
-            source_quality_tier TEXT NOT NULL DEFAULT 'fmp_normalized'
-        );
-        CREATE TABLE financial_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end TIMESTAMP NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            line_item TEXT NOT NULL,
-            value NUMERIC(24, 6) NOT NULL,
-            currency TEXT,
-            unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL,
-            confidence REAL DEFAULT 1.0
-        );
-        CREATE TABLE kpi_definitions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            name TEXT NOT NULL,
-            unit TEXT NOT NULL,
-            primary_source TEXT NOT NULL,
-            fallback_source TEXT,
-            ir_url TEXT,
-            threshold_tier TEXT,
-            threshold_low REAL,
-            threshold_high REAL,
-            notes TEXT,
-            UNIQUE(ticker, name)
-        );
-        CREATE TABLE kpi_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end TIMESTAMP NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            kpi_definition_id INTEGER NOT NULL,
-            value NUMERIC(24, 6) NOT NULL,
-            unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL,
-            confidence REAL DEFAULT 1.0,
-            extracted_by TEXT,
-            supersedes_id INTEGER,
-            computed_from TEXT
-        );
-        CREATE UNIQUE INDEX uq_kpi_facts_provenance
-        ON kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, source_doc_id);
-        """
-    )
-    conn.commit()
+from models.facts import DerivedInputRef, FiscalPeriodType, Unit
+from provenance.evidence_backfill import ensure_legacy_document_evidence
+from provenance.financial_fact_resolution import (
+    canonical_fact_selections_as_known,
+    resolve_fact_row,
+)
 
 
 @pytest.fixture
-def conn() -> sqlite3.Connection:
-    c = sqlite3.connect(":memory:")
-    c.row_factory = sqlite3.Row
-    _create_schema(c)
-    return c
+def conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> Iterator[sqlite3.Connection]:
+    with closing(sqlite3.connect(migrated_db(tmp_path / "derived.sqlite"))) as c:
+        c.row_factory = sqlite3.Row
+        c.execute("PRAGMA foreign_keys = ON")
+        yield c
 
 
 def _insert_doc(
@@ -103,21 +49,32 @@ def _insert_doc(
     doc_type: str = "fmp_income_statement",
     source_quality_tier: str = "fmp_normalized",
 ) -> int:
+    root = Path(conn.execute("PRAGMA database_list").fetchone()[2]).parent
+    path = root / file_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({"synthetic_document": file_path, "ticker": ticker}).encode()
+    path.write_bytes(payload)
     cur = conn.execute(
         "INSERT INTO documents (ticker, source_type, doc_type, file_path, "
         "sha256, fetched_at, fetch_status, raw_bytes_size, source_quality_tier) "
-        "VALUES (?, ?, ?, ?, ?, ?, 'ok', 1, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, 'ok', ?, ?)",
         (
             ticker,
             source_type,
             doc_type,
             file_path,
-            "a" * 64,
+            hashlib.sha256(payload).hexdigest(),
             datetime.now(),
+            len(payload),
             source_quality_tier,
         ),
     )
-    return int(cur.lastrowid) if cur.lastrowid is not None else 0
+    assert cur.lastrowid is not None
+    document_id = int(cur.lastrowid)
+    evidence = ensure_legacy_document_evidence(conn, repo_root=root, document_id=document_id)
+    assert evidence.documents_backfilled == 1
+    assert evidence.documents_quarantined == 0
+    return document_id
 
 
 def _insert_fact(
@@ -131,12 +88,16 @@ def _insert_fact(
     source_doc_id: int,
     currency: str | None = "USD",
 ) -> None:
-    conn.execute(
+    cursor = conn.execute(
         "INSERT INTO financial_facts "
         "(ticker, period_end, fiscal_period_type, line_item, value, currency, unit, source_doc_id) "
         "VALUES (?, ?, ?, ?, ?, ?, 'actual', ?)",
         (ticker, period_end, fpt, line_item, str(value), currency, source_doc_id),
     )
+
+    assert cursor.lastrowid is not None
+    resolved = resolve_fact_row(conn, fact_table="financial_facts", fact_row_id=cursor.lastrowid)
+    assert resolved is not None
 
 
 def test_derive_for_facts_emits_three_margin_metrics_per_period() -> None:
@@ -243,62 +204,6 @@ def test_derive_skips_yoy_when_year_gap_is_not_exactly_one() -> None:
     assert yoy == []
 
 
-def test_derive_for_ticker_filters_to_quarterly_files(conn: sqlite3.Connection) -> None:
-    """Only documents whose file_path ends in _quarterly.json contribute to derivation."""
-    quarterly_doc = _insert_doc(conn, "X", "data/historical/fmp/X_income_statement_quarterly.json")
-    annual_doc = _insert_doc(conn, "X", "data/historical/fmp/X_income_statement.json")
-    ttm_doc = _insert_doc(conn, "X", "data/historical/fmp/X_income_statement_ttm.json")
-
-    pe = datetime(2024, 12, 31)
-    for line, val in [
-        ("revenue", 100),
-        ("operating_income", 20),
-        ("net_income", 15),
-        ("gross_profit", 40),
-    ]:
-        _insert_fact(
-            conn,
-            ticker="X",
-            period_end=pe,
-            fpt="Q4",
-            line_item=line,
-            value=val,
-            source_doc_id=quarterly_doc,
-        )
-        # Annual + TTM rows would pollute if not filtered
-        _insert_fact(
-            conn,
-            ticker="X",
-            period_end=pe,
-            fpt="Q4",
-            line_item=line,
-            value=val * 10,
-            source_doc_id=annual_doc,
-        )
-        _insert_fact(
-            conn,
-            ticker="X",
-            period_end=pe,
-            fpt="Q4",
-            line_item=line,
-            value=val * 4,
-            source_doc_id=ttm_doc,
-        )
-    conn.commit()
-
-    emitted, inserted = derive_for_ticker(conn, "X")
-    assert emitted == 3  # OpMargin + NetMargin + GrossMargin (no YoY without prior year)
-    assert inserted == 3
-    rows = conn.execute(
-        "SELECT kd.name, kf.value FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
-        "WHERE kf.ticker='X' ORDER BY kd.name"
-    ).fetchall()
-    by_name = {dict(r)["name"]: Decimal(str(dict(r)["value"])) for r in rows}
-    assert by_name[KPI_OPERATING_MARGIN_GAAP] == Decimal("20")  # 20/100*100
-    assert by_name[KPI_NET_MARGIN_GAAP] == Decimal("15")  # 15/100*100
-    assert by_name[KPI_GROSS_MARGIN_GAAP] == Decimal("40")  # 40/100*100
-
-
 def test_derived_lineage_preserves_each_winning_cell_document(
     conn: sqlite3.Connection,
 ) -> None:
@@ -339,7 +244,7 @@ def test_derived_lineage_preserves_each_winning_cell_document(
     )
     conn.commit()
 
-    derive_for_ticker(conn, "MIX")
+    derive_for_ticker_outcome(conn, "MIX")
     raw = conn.execute(
         "SELECT kf.computed_from FROM kpi_facts kf "
         "JOIN kpi_definitions kd ON kd.id=kf.kpi_definition_id "
@@ -349,6 +254,39 @@ def test_derived_lineage_preserves_each_winning_cell_document(
     assert raw is not None
     inputs = {entry["item"]: entry["doc_id"] for entry in json.loads(str(raw))["inputs"]}
     assert inputs == {"operating_income": sec_doc, "revenue": fmp_doc}
+    cutoff = datetime.now(UTC)
+    selected = {
+        ref.fact_row_id: ref
+        for ref in canonical_fact_selections_as_known(
+            conn, fact_table="financial_facts", effective_at=cutoff, known_at=cutoff
+        )
+    }
+    for raw_input in json.loads(str(raw))["inputs"]:
+        reference = DerivedInputRef.model_validate(raw_input)
+        assert reference.ref == "legacy_canonical_fact"
+        assert reference.fact_table == "financial_facts"
+        assert reference.fact_id is not None
+        pin = selected[reference.fact_id]
+        assert (
+            reference.fact_revision,
+            reference.observation_id,
+            reference.resolution_id,
+            reference.resolution_revision,
+            reference.doc_id,
+        ) == (
+            pin.fact_revision,
+            pin.observation_id,
+            pin.resolution_id,
+            pin.resolution_revision,
+            pin.source_document_id,
+        )
+        assert (
+            conn.execute(
+                "SELECT legacy_document_id FROM evidence_document_versions WHERE document_version_id=?",
+                (reference.document_version_id,),
+            ).fetchone()[0]
+            == reference.doc_id
+        )
 
 
 def test_derive_for_ticker_idempotent(conn: sqlite3.Connection) -> None:
@@ -372,10 +310,10 @@ def test_derive_for_ticker_idempotent(conn: sqlite3.Connection) -> None:
         )
     conn.commit()
 
-    _, inserted_first = derive_for_ticker(conn, "Y")
-    _, inserted_second = derive_for_ticker(conn, "Y")
-    assert inserted_first == 3
-    assert inserted_second == 0
+    first = derive_for_ticker_outcome(conn, "Y")
+    second = derive_for_ticker_outcome(conn, "Y")
+    assert first.rows_inserted == 3
+    assert second.rows_inserted == 0
 
 
 def test_derive_for_ticker_rejects_incompatible_required_monetary_currency(
@@ -428,9 +366,9 @@ def test_derive_for_ticker_skips_period_missing_required_line_items(
         )
     conn.commit()
 
-    emitted, inserted = derive_for_ticker(conn, "Z")
-    assert emitted == 0
-    assert inserted == 0
+    outcome = derive_for_ticker_outcome(conn, "Z")
+    assert outcome.rows_emitted == 0
+    assert outcome.rows_inserted == 0
 
 
 def test_derive_for_ticker_skips_when_revenue_zero(conn: sqlite3.Connection) -> None:
@@ -453,8 +391,8 @@ def test_derive_for_ticker_skips_when_revenue_zero(conn: sqlite3.Connection) -> 
             source_doc_id=doc_id,
         )
     conn.commit()
-    emitted, _inserted = derive_for_ticker(conn, "Z")
-    assert emitted == 0
+    outcome = derive_for_ticker_outcome(conn, "Z")
+    assert outcome.rows_emitted == 0
 
 
 def test_derive_drops_cashflow_when_all_three_line_items_are_zero(
@@ -487,11 +425,11 @@ def test_derive_drops_cashflow_when_all_three_line_items_are_zero(
         )
     conn.commit()
 
-    emitted, inserted = derive_for_ticker(conn, "NTDOY")
+    outcome = derive_for_ticker_outcome(conn, "NTDOY")
     # Should emit only the three income-statement margins, NOT FCF margin
     # or Capex/Revenue. (No YoY without a prior year.)
-    assert emitted == 3
-    assert inserted == 3
+    assert outcome.rows_emitted == 3
+    assert outcome.rows_inserted == 3
     names = [
         r["name"]
         for r in conn.execute(
@@ -531,7 +469,7 @@ def test_derive_does_not_drop_cashflow_when_only_capex_is_zero(
         )
     conn.commit()
 
-    derive_for_ticker(conn, "Y")
+    derive_for_ticker_outcome(conn, "Y")
     names = [
         r["name"]
         for r in conn.execute(
@@ -547,32 +485,6 @@ def test_derive_does_not_drop_cashflow_when_only_capex_is_zero(
 
 
 def test_derive_segment_kpis_amzn(conn: sqlite3.Connection) -> None:
-    # 1. Create the junction tables — the post-0056 home for segment data.
-    conn.executescript(
-        """
-        CREATE TABLE segment_periods (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker VARCHAR(16) NOT NULL,
-            period_end DATETIME NOT NULL,
-            fiscal_period_type VARCHAR(8) NOT NULL,
-            source_doc_id INTEGER NOT NULL,
-            currency VARCHAR(8),
-            unit VARCHAR(16) NOT NULL,
-            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            CONSTRAINT uq_segment_periods_provenance UNIQUE
-              (ticker, period_end, fiscal_period_type, source_doc_id)
-        );
-        CREATE TABLE segment_dimensions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            period_id INTEGER NOT NULL REFERENCES segment_periods(id),
-            dim_type VARCHAR(16) NOT NULL,
-            dim_name VARCHAR(128) NOT NULL,
-            value NUMERIC(20, 4) NOT NULL,
-            metric VARCHAR(32) NOT NULL,
-            segment_entity_id INTEGER
-        );
-        """
-    )
 
     doc_id = _insert_doc(conn, "AMZN", "data/historical/fmp/AMZN_income_statement.json")
 
@@ -666,21 +578,6 @@ def test_derive_segment_kpis_amzn(conn: sqlite3.Connection) -> None:
 
 def test_derive_segment_kpis_rejects_incompatible_currency_inputs(conn: sqlite3.Connection) -> None:
     """A segment percentage/growth never spans USD and BRL source periods."""
-    conn.executescript(
-        """
-        CREATE TABLE segment_periods (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL, period_end DATETIME NOT NULL,
-            fiscal_period_type TEXT NOT NULL, source_doc_id INTEGER NOT NULL,
-            currency TEXT, unit TEXT NOT NULL
-        );
-        CREATE TABLE segment_dimensions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            period_id INTEGER NOT NULL, dim_type TEXT NOT NULL, dim_name TEXT NOT NULL,
-            value NUMERIC NOT NULL, metric TEXT NOT NULL
-        );
-        """
-    )
     usd_doc = _insert_doc(conn, "AMZN", "data/historical/fmp/AMZN_usd_quarterly.json")
     brl_doc = _insert_doc(conn, "AMZN", "data/historical/fmp/AMZN_brl_quarterly.json")
     period_ids: list[int] = []

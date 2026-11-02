@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 import re
 import sqlite3
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
@@ -21,8 +21,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from allocation.candidate_fit import CandidateFit
 from candidate_fit_cache import read_materialized_candidate_fit
 from dcf.availability import resolve_dcf_route_artifact
-from etf_score_cache import read_materialized_etf_loadings, read_materialized_etf_whatif
-from instrument_store import get_etf_profile
 from pipeline.cockpit_file_inputs import (
     HoldingsReadError,
     cockpit_input_is_current,
@@ -34,12 +32,8 @@ from pipeline.research_cockpit import CockpitRow
 from pipeline.work_os_briefs import build_brief_library
 from research.investment_profile import (
     CompanyProfileProjection,
-    EtfProfileInputs,
-    EtfProfileProjection,
-    EtfStyleEvidence,
     ValuationEvidence,
     project_company_profile,
-    project_etf_profile,
 )
 from ticker_validation import safe_ticker
 
@@ -119,7 +113,7 @@ class WorkOsEvaluationItem(BaseModel):
     dcf_upside_pct: float | None = None
     revenue_growth_yoy_pct: float | None = None
     fcf_margin_pct: float | None = None
-    profile: CompanyProfileProjection | EtfProfileProjection | None = None
+    profile: CompanyProfileProjection | None = None
     portfolio_indicators: list[WorkOsPortfolioIndicator] = Field(
         default_factory=list[WorkOsPortfolioIndicator]
     )
@@ -127,7 +121,6 @@ class WorkOsEvaluationItem(BaseModel):
     thesis_excerpt: str | None = Field(default=None, max_length=_EXCERPT_LIMIT)
     source: ThesisSource = "unavailable"
     company_desk_url: str | None = None
-    workup_url: str | None = None
     dcf_url: str | None = None
     report_url: str | None = None
 
@@ -156,12 +149,6 @@ def _finite(value: float | None) -> float | None:
     if value is None or not math.isfinite(value):
         return None
     return float(value)
-
-
-def _finite_object(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    return _finite(float(value))
 
 
 def _dcf_upside_pct(row: CockpitRow) -> float | None:
@@ -233,109 +220,6 @@ def _portfolio_projection(
         elif sharpe_delta_bps < 0:
             labels.append("Risk-adjusted dilutive")
     return indicators, labels
-
-
-def build_etf_profile_inputs(
-    conn: sqlite3.Connection,
-    *,
-    ticker: str,
-    fit: CandidateFit | None,
-    sharpe_delta_bps: float | None,
-    loadings_cache: Mapping[str, Sequence[object]],
-    whatif_cache: Mapping[str, Mapping[str, dict[str, object]]],
-    warnings: set[str],
-) -> EtfProfileInputs:
-    from etf_sources.profile_evidence import PROFILE_CAPTURE_POLICY, admitted_profile_fields
-
-    try:
-        fund_profile = get_etf_profile(conn, ticker)
-    except (sqlite3.Error, KeyError, TypeError, ValueError):
-        fund_profile = None
-        warnings.add("etf_profile_unavailable")
-
-    admitted = admitted_profile_fields(fund_profile) if fund_profile is not None else {}
-    if fund_profile is not None and not admitted:
-        warnings.add("etf_profile_freshness_unverified")
-    if any(evidence.source_as_of is None for evidence in admitted.values()):
-        warnings.add("etf_profile_publication_date_unknown")
-    if fund_profile is not None and any(
-        evidence.source_as_of is not None and evidence.source_as_of < evidence.captured_at.date()
-        for evidence in fund_profile.field_evidence.values()
-    ):
-        warnings.add("etf_profile_source_currency_unverified")
-
-    def text_field(key: str) -> str | None:
-        evidence = admitted.get(key)
-        return evidence.value if evidence and isinstance(evidence.value, str) else None
-
-    def numeric_field(key: str) -> float | None:
-        evidence = admitted.get(key)
-        return _finite_object(evidence.value) if evidence else None
-
-    style_rows = loadings_cache.get(ticker, [])
-    style_evidence: list[EtfStyleEvidence] = []
-    for row in style_rows:
-        key = getattr(row, "key", None)
-        beta = _finite_object(getattr(row, "beta", None))
-        r_squared = _finite_object(getattr(row, "r_squared", None))
-        if key not in {"value", "size", "momentum"} or beta is None or r_squared is None:
-            continue
-        try:
-            style_evidence.append(EtfStyleEvidence(key=key, beta=beta, r_squared=r_squared))
-        except ValueError:
-            continue
-
-    factors = {factor.key: factor for factor in fit.factors} if fit is not None else {}
-    divers = factors.get("divers")
-    overlap = factors.get("overlap")
-    book_available = fit is not None and any(not factor.missing for factor in fit.factors)
-    divers_multiplier = (
-        _finite(divers.multiplier) if divers is not None and not divers.missing else None
-    )
-    overlap_multiplier = (
-        _finite(overlap.multiplier) if overlap is not None and not overlap.missing else None
-    )
-
-    whatif_row = whatif_cache.get(ticker, {}).get("0.03")
-    whatif_available = False
-    vol_before_ann: float | None = None
-    vol_after_ann: float | None = None
-    whatif_sharpe = sharpe_delta_bps
-    if isinstance(whatif_row, dict):
-        degraded = whatif_row.get("degraded")
-        whatif_available = not isinstance(degraded, list) or not degraded
-        vol_before_ann = _finite_object(whatif_row.get("vol_before_ann"))
-        vol_after_ann = _finite_object(whatif_row.get("vol_after_ann"))
-        cached_delta = _finite_object(whatif_row.get("sharpe_delta_bps"))
-        if cached_delta is not None:
-            whatif_sharpe = cached_delta
-
-    return EtfProfileInputs(
-        profile_available=bool(admitted),
-        profile_field_evidence={
-            key: {
-                **value.model_dump(mode="json"),
-                "capture_policy": PROFILE_CAPTURE_POLICY,
-                "currency": "recently_captured",
-                "publication_date_known": value.source_as_of is not None,
-            }
-            for key, value in admitted.items()
-        },
-        asset_class=text_field("asset_class"),
-        benchmark_index=text_field("benchmark_index"),
-        sector_label=text_field("sector_label"),
-        expense_ratio=numeric_field("expense_ratio"),
-        distribution_yield=numeric_field("distribution_yield"),
-        style_evidence_available=ticker in loadings_cache,
-        style_loadings=style_evidence,
-        book_evidence_available=book_available,
-        diversification_multiplier=divers_multiplier,
-        overlap_multiplier=overlap_multiplier,
-        sharpe_delta_bps=whatif_sharpe,
-        whatif_evidence_available=whatif_available,
-        vol_before_ann=vol_before_ann,
-        vol_after_ann=vol_after_ann,
-    )
 
 
 def _bounded_human_text(value: str, *, limit: int) -> str:
@@ -478,16 +362,7 @@ def build_work_os_evaluation(
     except (OSError, UnicodeDecodeError, ValueError, TypeError):
         fit_cache = {}
         warnings.add("candidate_fit_unavailable")
-    try:
-        etf_loadings_cache = read_materialized_etf_loadings(repo_root)
-    except (OSError, UnicodeDecodeError, ValueError, TypeError):
-        etf_loadings_cache = {}
-        warnings.add("etf_style_loadings_unavailable")
-    try:
-        etf_whatif_cache = read_materialized_etf_whatif(repo_root)
-    except (OSError, UnicodeDecodeError, ValueError, TypeError):
-        etf_whatif_cache = {}
-        warnings.add("etf_whatif_unavailable")
+
     file_inputs = read_materialized_cockpit_file_inputs(repo_root)
     items: list[WorkOsEvaluationItem] = []
     for row in rows:
@@ -514,40 +389,29 @@ def build_work_os_evaluation(
             holdings_error,
         )
         instrument_type: EvaluationInstrument = "etf" if row.is_etf else "company"
-        dcf_upside_pct = _dcf_upside_pct(row)
+        dcf_upside_pct = _dcf_upside_pct(row) if instrument_type == "company" else None
         structured_fit = fit_cache.get(ticker)
         sharpe_delta_bps = _finite(row.sharpe_delta_bps)
-        portfolio_indicators, portfolio_role_labels = _portfolio_projection(
-            structured_fit,
-            sharpe_delta_bps=sharpe_delta_bps,
-        )
+        held_weight = _finite(row.held_weight)
+        profile: CompanyProfileProjection | None = None
+        portfolio_indicators: list[WorkOsPortfolioIndicator] = []
+        portfolio_role_labels: list[str] = []
         if instrument_type == "company":
-            profile: CompanyProfileProjection | EtfProfileProjection | None = (
-                project_company_profile(
-                    conn,
-                    ticker=ticker,
-                    valuation=ValuationEvidence(
-                        revenue_growth_yoy_pct=_finite(row.rev_yoy_pct),
-                        fcf_margin_pct=_finite(row.fcf_margin_pct),
-                        dcf_upside_pct=dcf_upside_pct,
-                    ),
-                )
+            portfolio_indicators, portfolio_role_labels = _portfolio_projection(
+                structured_fit,
+                sharpe_delta_bps=sharpe_delta_bps,
             )
-        else:
-            profile = project_etf_profile(
+            profile = project_company_profile(
                 conn,
                 ticker=ticker,
-                inputs=build_etf_profile_inputs(
-                    conn,
-                    ticker=ticker,
-                    fit=structured_fit,
-                    sharpe_delta_bps=sharpe_delta_bps,
-                    loadings_cache=etf_loadings_cache,
-                    whatif_cache=etf_whatif_cache,
-                    warnings=warnings,
+                valuation=ValuationEvidence(
+                    revenue_growth_yoy_pct=_finite(row.rev_yoy_pct),
+                    fcf_margin_pct=_finite(row.fcf_margin_pct),
+                    dcf_upside_pct=dcf_upside_pct,
                 ),
             )
-        held_weight = _finite(row.held_weight)
+        else:
+            sharpe_delta_bps = None
         held_weight_pct = held_weight * 100.0 if held_weight is not None else None
         if held_weight_pct is not None and not math.isfinite(held_weight_pct):
             held_weight_pct = None
@@ -580,17 +444,18 @@ def build_work_os_evaluation(
                 sharpe_delta_bps=sharpe_delta_bps,
                 held_weight_pct=held_weight_pct,
                 dcf_upside_pct=dcf_upside_pct,
-                revenue_growth_yoy_pct=_finite(row.rev_yoy_pct),
-                fcf_margin_pct=_finite(row.fcf_margin_pct),
+                revenue_growth_yoy_pct=(
+                    _finite(row.rev_yoy_pct) if instrument_type == "company" else None
+                ),
+                fcf_margin_pct=(
+                    _finite(row.fcf_margin_pct) if instrument_type == "company" else None
+                ),
                 profile=profile,
                 portfolio_indicators=portfolio_indicators,
                 portfolio_role_labels=portfolio_role_labels,
                 thesis_excerpt=thesis_excerpt,
                 source=source,
                 company_desk_url=(f"/ticker/{ticker}" if instrument_type == "company" else None),
-                workup_url=(
-                    f"/api/peek/etf_workup?ticker={ticker}" if instrument_type == "etf" else None
-                ),
                 dcf_url=dcf_url,
                 report_url=report_urls.get(ticker),
             )

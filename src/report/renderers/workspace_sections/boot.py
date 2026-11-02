@@ -15,6 +15,7 @@ from pathlib import Path
 
 from report.models import ReportSpec
 from report.renderers.workspace_sections._shared import _esc
+from report.workspace_models import WorkspaceDelivery
 from server_runtime.access import ReportCapabilityStore
 
 __all__ = [
@@ -29,21 +30,13 @@ def _script_json(payload: object) -> str:
     return json.dumps(payload).replace("<", "\\u003c")
 
 
-def _comment_boot_data(
-    body: StringIO,
+def prepare_report_delivery(
     spec: ReportSpec,
     *,
     candidate_mode: bool = False,
     report_capability: str | None = None,
-) -> None:
-    """Embed `<script type="application/json">` blocks the JS modules pick up:
-    - workspace-boot: ticker, report_date, server URL (default localhost:7421)
-    - workspace-comments: existing comments for this (ticker, date) so pins
-      render on first paint without a server fetch.
-
-    No server connection required for read-only display (pins + side panel).
-    POSTing new comments and opening Copilot needs the managed server
-    (`start_comments_server.bat`)."""
+) -> WorkspaceDelivery:
+    """Prepare fresh delivery state; candidate reports cannot create a capability."""
     from comments import load_store, to_json_payload
 
     if candidate_mode:
@@ -57,13 +50,12 @@ def _comment_boot_data(
             if os.environ.get("EARNINGS_OFFLINE_RENDER") == "1"
             else capability_store.load_or_create()
         ) or ""
-    boot = {
+    boot: dict[str, object] = {
         "ticker": spec.ticker,
         "report_date": spec.generation_date.isoformat(),
         "server_url": "http://localhost:7421",
         "report_capability": resolved_capability,
     }
-    body.write(f'<script id="workspace-boot" type="application/json">{_script_json(boot)}</script>')
     payload: dict[str, object]
     try:
         store = load_store(Path(spec.repo_root), spec.ticker, spec.generation_date)
@@ -75,8 +67,33 @@ def _comment_boot_data(
             "comments": [],
             "status": "unavailable",
         }
+    return WorkspaceDelivery(boot=boot, comments=payload)
+
+
+def _comment_boot_data(
+    body: StringIO, spec: ReportSpec, delivery: WorkspaceDelivery | None = None
+) -> None:
+    """Embed prepared delivery state without reading files or creating capabilities."""
+    if delivery is None:
+        delivery = WorkspaceDelivery(
+            boot={
+                "ticker": spec.ticker,
+                "report_date": spec.generation_date.isoformat(),
+                "server_url": "http://localhost:7421",
+                "report_capability": "",
+            },
+            comments={
+                "ticker": spec.ticker,
+                "report_date": spec.generation_date.isoformat(),
+                "comments": [],
+                "status": "unavailable",
+            },
+        )
     body.write(
-        f'<script id="workspace-comments" type="application/json">{_script_json(payload)}</script>'
+        f'<script id="workspace-boot" type="application/json">{_script_json(delivery.boot)}</script>'
+    )
+    body.write(
+        f'<script id="workspace-comments" type="application/json">{_script_json(delivery.comments)}</script>'
     )
 
 
@@ -153,11 +170,7 @@ def _chat_drawer_shell(body: StringIO, ticker: str, report_date: str) -> None:
         '<header class="chat-head">'
         "<div>"
         f'<div class="chat-title">Continue {_esc(ticker)} research</div>'
-        f'<div class="chat-sub">Report {_esc(report_date)} &middot; '
-        # P2.4 entry point: stances live behind the Socratic flow, never in chat.
-        f'<a href="/socratic/{_esc(ticker)}" '
-        f'data-server-path="/socratic/{_esc(ticker)}" target="_blank" '
-        'rel="noopener">think it through &rarr;</a></div>'
+        f'<div class="chat-sub">Report {_esc(report_date)}</div>'
         "</div>"
         '<button class="chat-close k-btn k-btn-quiet k-btn-sm" id="chat-close" type="button" aria-label="Close Copilot handoff">&times;</button>'
         "</header>"

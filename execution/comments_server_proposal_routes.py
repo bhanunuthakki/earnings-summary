@@ -1,8 +1,6 @@
 """Research proposal and governed-decision routes for the local comments server.
 
-This module owns the proposal verb family plus the governed Ask detail and
-decision endpoints. Task lifecycle routes live in
-``comments_server_research_routes.py``.
+This module owns the governed Ask detail and decision endpoints.
 """
 
 from __future__ import annotations
@@ -10,13 +8,11 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
 from comments_server_route_support import ActivationCounter, RedactedFailureLogger
 from flask import Flask, request
 from pydantic import ValidationError
 
-from logging_config import get_correlation_id
 from research.proposal_approval import (
     AskProposalDecisionV1,
     ProposalConflictError,
@@ -56,86 +52,12 @@ def _ask_proposal_error(
 
 
 def register_research_proposal_routes(app: Flask, context: ResearchProposalRouteContext) -> None:
-    """Register the research proposal verbs and governed Ask APIs on ``app``."""
+    """Register governed Ask proposal APIs on ``app``."""
 
     db_path = context.db_path
     repo_root = context.repo_root
     bump_activation_count = context.bump_activation_count
     log_redacted_failure = context.log_redacted_failure
-
-    @app.route("/api/research/proposal/<int:proposal_id>/<verb>", methods=["POST", "OPTIONS"])
-    def research_proposal_act(proposal_id: int, verb: str):
-        """Approve, further, steer, or reject a research proposal."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from research.proposals import PROPOSAL_VERBS, act_on_proposal, get_proposal
-
-        if verb not in PROPOSAL_VERBS:
-            return ({"error": f"unknown verb {verb!r}"}, 400)
-        proposal = get_proposal(proposal_id, db_path=db_path)
-        if proposal is not None and proposal.canonical_content_json is not None:
-            return (
-                {
-                    "error": "governed Ask proposals require the revisioned decision endpoint",
-                    "detail_url": f"/api/research/proposals/{proposal_id}",
-                    "decision_url": f"/api/research/proposals/{proposal_id}/decision",
-                },
-                409,
-            )
-        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
-        steer_text = str(payload.get("steer_text") or "").strip() or None
-        bump_activation_count(f"act:proposal:{verb}")
-        if verb == "approve" and proposal is not None and proposal.kind == "question":
-            from research.question_artifact import approve_question_proposal
-            from user_state.notes import NoteRevisionConflictError
-
-            try:
-                note = approve_question_proposal(proposal_id, db_path=db_path)
-            except NoteRevisionConflictError as exc:
-                return (
-                    {"error": "revision_conflict", "current_revision": exc.current_revision},
-                    409,
-                )
-            except LookupError as exc:
-                return ({"error": str(exc)}, 404)
-            except ValueError as exc:
-                return ({"error": str(exc)}, 400)
-            applied = f"open question #{note.id} persisted for {note.ticker or 'portfolio'}"
-            return {
-                "status": "approved",
-                "applied": applied,
-                "receipt": f"Approved — {applied}",
-            }
-        status = act_on_proposal(proposal_id, verb, steer_text=steer_text, db_path=db_path)
-        applied = ""
-        apply_failed = False
-        if verb == "approve":
-            from research.apply import apply_approved_proposal
-
-            try:
-                applied = apply_approved_proposal(proposal_id, db_path=db_path)
-            except Exception as exc:  # a bad apply must not 500 the action
-                apply_failed = True
-                log_redacted_failure(
-                    f"research proposal apply failed for proposal {proposal_id}",
-                    exc,
-                )
-        receipts = {
-            "approved": f"Approved — {applied}" if applied else "Approved — marked for follow-up",
-            "researching": "Sent back for deeper research",
-            "steered": "Steered — your direction was recorded",
-            "rejected": "Rejected — this proposal won't be revisited",
-        }
-        receipt = receipts.get(status, "Saved")
-        response: dict[str, object] = {"status": status, "applied": applied, "receipt": receipt}
-        if apply_failed:
-            response.update(
-                {
-                    "apply_error": "approved proposal could not be applied; retry the request",
-                    "correlation_id": get_correlation_id(),
-                }
-            )
-        return response
 
     @app.route("/api/research/proposals/<int:proposal_id>", methods=["GET"])
     def ask_proposal_detail(proposal_id: int):

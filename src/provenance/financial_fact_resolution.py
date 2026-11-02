@@ -1,7 +1,7 @@
 """Canonical observation/resolution cutover for financial and KPI facts.
 
 The database migration captures future fact writes.  This module owns the
-bounded legacy backfill, complete-candidate resolution policy, and the one
+bounded legacy backfill, complete-candidate resolution policy v3, and the one
 read-side compatibility boundary.  It never averages or deletes candidates:
 material ambiguity is recorded and canonical reads fail closed.
 
@@ -77,7 +77,7 @@ SelectionMode: TypeAlias = Literal["resolved_view", "legacy_pre_cutover"]
 DocumentFactAdmissionStatus: TypeAlias = Literal["inserted", "idempotent_replay", "empty"]
 
 _TABLES: tuple[FactTable, ...] = ("financial_facts", "kpi_facts")
-_POLICY_VERSION = "investor-grade-fact-resolution@2"
+_POLICY_VERSION = "investor-grade-fact-resolution@3"
 _MATERIAL_RELATIVE_DELTA = Decimal("0.01")
 _COMPANYFACTS_PATH = re.compile(r"^facts\.([^.]+)\.([^.]+)\.units\.([^\[]+)\[([0-9]+)\]$")
 _TIER_RANK = {
@@ -1677,7 +1677,7 @@ def resolve_fact_logical_key(
     recorded_at: datetime,
     persist: bool = True,
 ) -> FactResolutionResult:
-    """Resolve all current candidates available at the cutoff under policy v2."""
+    """Resolve candidates under policy v3: source reporting dates and fiscal type."""
 
     candidates = _load_complete_candidates(conn, logical_key, knowledge_cutoff)
     if not candidates:
@@ -2503,8 +2503,8 @@ def _candidate_checks(candidates: tuple[_Candidate, ...]) -> dict[str, bool]:
     }
     periods = {
         (
-            _utc_instant(candidate.period_start),
-            _utc_instant(candidate.period_end),
+            candidate.period_start.date(),
+            candidate.period_end.date(),
             candidate.fiscal_period_type,
         )
         for candidate in candidates

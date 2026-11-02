@@ -44,7 +44,7 @@ request_for: Callable[..., CorpusBuildRequest] = getattr(foundation, "_request")
 
 @pytest.fixture
 def conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> Iterator[sqlite3.Connection]:
-    path = migrated_db(tmp_path / "bulk-fts.db")
+    path = migrated_db(tmp_path / "bulk-fts.db", target=CURRENT)
     database = sqlite3.connect(path)
     database.row_factory = sqlite3.Row
     database.execute("PRAGMA foreign_keys=ON")
@@ -311,7 +311,7 @@ def test_vm_scaling_compares_actual_legacy_and_bulk_guards(
     python_legacy_counts: list[int] = []
     python_bulk_counts: list[int] = []
     for count in (64, 256):
-        path = migrated_db(tmp_path / f"scaling-{count}.db")
+        path = migrated_db(tmp_path / f"scaling-{count}.db", target=CURRENT)
         database = sqlite3.connect(path)
         register_sqlite_integrity_functions(database)
         try:

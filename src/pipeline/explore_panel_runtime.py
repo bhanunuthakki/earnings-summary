@@ -1,4 +1,4 @@
-"""Client runtime for the narrative-first Explore and full-screen Work Bench.
+"""Client runtime for the company Work Bench and contextual Copilot handoff.
 
 The server remains authoritative for answers, governed fact catalogs, ViewSpec
 execution, and saved analyses. Browser state is limited to presentation
@@ -17,25 +17,8 @@ window.initExplorePanel = function () {
       .replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
   function ticker() { return String(el('vx-tickers').value || '').trim().toUpperCase(); }
-  function parseFrame(frame) {
-    var data = frame.split('\n').filter(function (line) { return line.indexOf('data:') === 0; })
-      .map(function (line) { return line.replace(/^data:\s?/, ''); }).join('\n');
-    if (!data) return null;
-    try { return JSON.parse(data); } catch (_err) { return null; }
-  }
-  function prose(text) {
-    var chunks = String(text || '').trim().split(/\n\s*\n/).filter(Boolean);
-    return chunks.map(function (chunk) {
-      return '<p>' + esc(chunk).replace(/\n/g, '<br>') + '</p>';
-    }).join('');
-  }
-
-  var sessionId = null;
-  var lastSpec = null;
-  var lastQuestion = '';
   var workbenchTickers = [];
   var workbenchOpener = null;
-  var busy = false;
   var catalog = [];
   var catalogExpanded = false;
   var selected = {};
@@ -47,6 +30,10 @@ window.initExplorePanel = function () {
   var workbenchVersion = 0;
   var savedController = null;
   var savedVersion = 0;
+  function navigateProcedure(screen) {
+    if (typeof window.navigateTo === 'function') window.navigateTo(screen);
+    else root.setAttribute('data-navigation-status', 'Open this destination from the application navigation.');
+  }
   function retireAnalysis() {
     analysisVersion += 1;
     if (analysisController) analysisController.abort();
@@ -81,151 +68,35 @@ window.initExplorePanel = function () {
   lifetimeObserver.observe(document.body, {childList: true, subtree: true});
 
 
-  function setStatus(message) {
-    var node = el('explore-status');
-    if (node) node.textContent = message || '';
-  }
-  function addUserTurn(query) {
-    var empty = el('explore-empty');
-    if (empty) empty.hidden = true;
-    var article = document.createElement('article');
-    article.className = 'explore-turn explore-turn-user';
-    article.innerHTML = '<div class="k-label">You</div><p>' + esc(query) + '</p>';
-    el('ask-thread').appendChild(article);
-  }
-  function addAnswerTurn(query, contextSpec) {
-    var article = document.createElement('article');
-    article.className = 'explore-turn explore-turn-answer';
-    article.innerHTML = '<div class="explore-answer-head"><span class="k-label">Explore</span>'
-      + '<span class="k-pill k-pill-accent" data-answer-mode>Researching</span></div>'
-      + '<div class="explore-answer-copy prose" data-answer-copy></div>'
-      + '<div class="explore-answer-fragment" data-answer-fragment></div>'
-      + '<div class="explore-answer-actions" data-answer-actions hidden>'
-      + '<button type="button" class="k-chip k-chip-btn" data-window="qoq">QoQ</button>'
-      + '<button type="button" class="k-chip k-chip-btn" data-window="yoy">YoY</button>'
-      + '<button type="button" class="k-chip k-chip-btn" data-window="2y">2 years</button>'
-      + '<button type="button" class="k-chip k-chip-btn" data-window="5y">5 years</button>'
-      + '<button type="button" class="k-chip k-chip-btn k-chip-accent" data-work-with-data>Work with data ↗</button>'
-      + '</div>';
-    el('ask-thread').appendChild(article);
-    article.dataset.question = query;
-    if (contextSpec) article.dataset.contextSpec = JSON.stringify(contextSpec);
-    article.scrollIntoView({behavior: 'smooth', block: 'nearest'});
-    return article;
-  }
-  function finishAnswer(turn, state) {
-    if (!isCurrent()) return;
-    var copy = turn.querySelector('[data-answer-copy]');
-    var mode = turn.querySelector('[data-answer-mode]');
-    var actions = turn.querySelector('[data-answer-actions]');
-    if (state.error) {
-      mode.textContent = 'Unavailable';
-      mode.className = 'k-pill k-pill-warn';
-      copy.innerHTML = '<p role="alert">' + esc(state.error) + '</p>';
-    } else {
-      mode.textContent = state.fragment ? 'Analytics answer' : 'Research answer';
-      var answer = state.final || state.text;
-      if (answer) {
-        var renderedAnswer = prose(answer);
-        if (window.ccCiteMarks && state.citations.length) {
-          renderedAnswer = window.ccCiteMarks.linkify(renderedAnswer, state.citations);
-          renderedAnswer += window.ccCiteMarks.unverifiedChipHtml(state.claims);
-        }
-        copy.innerHTML = renderedAnswer;
-      }
-      actions.hidden = false;
-    }
-    busy = false;
-    el('ask-go').disabled = false;
-    setStatus(state.error ? 'Question failed. Try again.' : 'Grounded answer complete');
-  }
-  function handleAnswerEvent(event, turn, state) {
-    if (!event || !isCurrent()) return;
-    var copy = turn.querySelector('[data-answer-copy]');
-    var fragment = turn.querySelector('[data-answer-fragment]');
-    var mode = turn.querySelector('[data-answer-mode]');
-    if (event.type === 'session' && event.session_id) sessionId = event.session_id;
-    if (event.type === 'stage') {
-      mode.textContent = event.note || event.stage || 'Researching';
-    } else if (event.type === 'delta') {
-      state.text += event.text || '';
-      copy.innerHTML = prose(state.text);
-    } else if (event.type === 'fragment') {
-      state.fragment = event.html || '';
-      lastSpec = event.spec || lastSpec;
-      state.spec = event.spec || state.spec;
-      if (state.spec) turn.dataset.contextSpec = JSON.stringify(state.spec);
-      fragment.innerHTML = state.fragment;
-    } else if (event.type === 'final') {
-      state.final = event.text || state.text;
-    } else if (event.type === 'citations') {
-      state.citations = Array.isArray(event.items) ? event.items : [];
-      state.claims = Array.isArray(event.claims) ? event.claims : [];
-    } else if (event.type === 'error') {
-      state.error = event.error || event.message || 'Explore is temporarily unavailable.';
-    }
-  }
-  function ask(query, contextSpec) {
-    query = String(query || el('ask-q').value || '').trim();
-    if (!query || busy) return;
-    busy = true;
-    lastQuestion = query;
-    el('ask-q').value = '';
-    el('ask-go').disabled = true;
-    addUserTurn(query);
-    var turn = addAnswerTurn(query, contextSpec || null);
-    var state = {text: '', final: '', fragment: '', citations: [], claims: [], error: '', spec: null};
-    setStatus('Preparing governed company context…');
-    fetch('/api/ask/stream', {
-      method: 'POST', headers: {'Content-Type': 'application/json', Accept: 'text/event-stream'},
-      body: JSON.stringify({query: query, tickers: ticker() ? [ticker()] : [],
-        context_spec: contextSpec === undefined ? lastSpec : contextSpec, session_id: sessionId})
-    }).then(function (response) {
-      if (!response.ok || !response.body) throw new Error('HTTP ' + response.status);
-      var reader = response.body.getReader();
-      var decoder = new TextDecoder();
-      var buffer = '';
-      function pump() {
-        return reader.read().then(function (result) {
-          if (result.done) { finishAnswer(turn, state); return; }
-          if (!isCurrent()) { reader.cancel(); return; }
-          buffer += decoder.decode(result.value, {stream: true});
-          var frames = buffer.split('\n\n');
-          buffer = frames.pop();
-          frames.forEach(function (frame) { handleAnswerEvent(parseFrame(frame), turn, state); });
-          return pump();
-        });
-      }
-      return pump();
-    }).catch(function () {
-      if (!isCurrent()) return;
-      state.error = 'Explore is temporarily unavailable. Retry when the local research service is ready.';
-      finishAnswer(turn, state);
-    });
-  }
-
-  el('ask-go').addEventListener('click', function () { ask(); });
-  el('ask-q').addEventListener('keydown', function (event) {
-    if (event.key === 'Enter') { event.preventDefault(); ask(); }
-  });
-  el('ask-thread').addEventListener('click', function (event) {
-    var suggestion = event.target.closest('[data-ask-q]');
-    if (suggestion) { ask(suggestion.getAttribute('data-ask-q')); return; }
-    var windowButton = event.target.closest('[data-window]');
-    if (windowButton) {
-      var answer = windowButton.closest('.explore-turn-answer');
-      var originQuestion = answer && answer.dataset.question ? answer.dataset.question : 'Show the current metrics';
-      var originSpec = answer && answer.dataset.contextSpec ? JSON.parse(answer.dataset.contextSpec) : null;
-      ask(originQuestion + ' · ' + windowButton.getAttribute('data-window'), originSpec);
+  function openCopilot(fromWorkbench) {
+    if (typeof window.openWorkOsCopilot !== 'function') {
+      var unavailable = 'Copilot is unavailable here. Open it from the application navigation.';
+      if (fromWorkbench) showWorkbenchError(unavailable);
+      else el('vx-copilot-status').textContent = unavailable;
       return;
     }
-    var workButton = event.target.closest('[data-work-with-data]');
-    if (workButton) {
-      var workAnswer = workButton.closest('.explore-turn-answer');
-      var workQuestion = workAnswer && workAnswer.dataset.question ? workAnswer.dataset.question : lastQuestion;
-      var workSpec = workAnswer && workAnswer.dataset.contextSpec ? JSON.parse(workAnswer.dataset.contextSpec) : null;
-      openWorkbench(workQuestion, workSpec, workButton);
+    var company = fromWorkbench && workbenchTickers.length ? workbenchTickers[0] : ticker();
+    var prompt = 'What should I examine for ' + (company || 'this company') + '?';
+    if (fromWorkbench) {
+      prompt = 'Help me interpret this company-data analysis: '
+        + el('vx-active-prompt').textContent + '\nAnalysis selections: ' + JSON.stringify(buildSpec());
+      closeWorkbench();
     }
+    el('vx-copilot-status').textContent = '';
+    window.openWorkOsCopilot({company_ticker: company || null, category: 'research',
+      context_kind: 'company', prompt: prompt});
+  }
+
+  // Copilot owns answer rendering. The caller supplies its question or saved
+  // answer spec; compile/run remain the validation owners for the workbench.
+  root.addEventListener('work-os-explore-analysis', function (event) {
+    if (!isCurrent()) return;
+    var detail = event.detail || {};
+    var query = typeof detail.query === 'string' ? detail.query.trim() : '';
+    var spec = detail.spec && typeof detail.spec === 'object' && !Array.isArray(detail.spec)
+      ? detail.spec : null;
+    var opener = detail.opener instanceof HTMLElement ? detail.opener : null;
+    openWorkbench(query, spec, opener);
   });
 
   root.addEventListener('work-os-explore-tickers', function (event) {
@@ -233,8 +104,6 @@ window.initExplorePanel = function () {
     if (!values.length) return;
     el('vx-tickers').value = String(values[0]).trim().toUpperCase();
     workbenchTickers = values.map(function (value) { return String(value).trim().toUpperCase(); }).filter(Boolean);
-    sessionId = null;
-    lastSpec = null;
     retireWorkbench();
     if (el('vx-workbench').open) loadCatalog([]);
   });
@@ -481,7 +350,6 @@ window.initExplorePanel = function () {
         return response.json().then(function (error) { throw new Error(error.error || 'View failed'); });
       }).then(function (html) {
         if (!isCurrent() || version !== analysisVersion || JSON.stringify(buildSpec()) !== JSON.stringify(spec)) return;
-        lastSpec = spec;
         el('vx-result').innerHTML = html;
       }).catch(function (error) {
         if (!isCurrent() || version !== analysisVersion) return;
@@ -551,6 +419,11 @@ window.initExplorePanel = function () {
     if (!panel.hidden) refreshSavedViews();
   }
   el('vx-open-empty').addEventListener('click', function (event) { openWorkbench('', null, event.currentTarget); });
+  el('vx-ask-copilot').addEventListener('click', function () { openCopilot(false); });
+  el('vx-workbench-copilot').addEventListener('click', function () { openCopilot(true); });
+  el('vx-procedure-reports').addEventListener('click', function () { navigateProcedure('screen-brief-library'); });
+  el('vx-procedure-operations').addEventListener('click', function () { navigateProcedure('screen-execution-queue'); });
+  el('vx-procedure-analytics').addEventListener('click', function (event) { openWorkbench('', null, event.currentTarget); });
   el('vx-back').addEventListener('click', closeWorkbench);
   el('vx-workbench').addEventListener('cancel', function (event) {
     event.preventDefault(); closeWorkbench();
@@ -560,7 +433,6 @@ window.initExplorePanel = function () {
   el('vx-workbench-go').addEventListener('click', function () {
     var query = String(el('vx-workbench-q').value || '').trim();
     if (!query) return;
-    lastQuestion = query;
     el('vx-workbench-q').value = '';
     compileForWorkbench(query, buildSpec());
   });

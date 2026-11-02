@@ -10,20 +10,16 @@ facts move.
 from __future__ import annotations
 
 import sqlite3
-import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from llm_artifact_store import (  # noqa: E402
+from llm_artifact_store import (
     FACT_DEPENDENT_PURPOSES,
     mark_artifacts_dirty_for_fact_change,
 )
 
 
 def _build_artifacts_schema(db_path: Path) -> sqlite3.Connection:
-    """Minimal llm_artifacts schema sufficient for mark_dirty."""
+    """Minimal current non-document artifact schema sufficient for mark_dirty."""
     conn = sqlite3.connect(str(db_path))
     conn.execute(
         """
@@ -31,6 +27,7 @@ def _build_artifacts_schema(db_path: Path) -> sqlite3.Connection:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT,
             scope TEXT NOT NULL DEFAULT 'ticker',
+            document_version_id TEXT,
             purpose TEXT NOT NULL,
             fiscal_period TEXT,
             content_md TEXT,

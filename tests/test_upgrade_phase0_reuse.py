@@ -14,12 +14,13 @@ from sqlalchemy.engine import Connection, Engine
 
 from execution import portfolio_readiness_receipt as readiness
 from execution.backup_restore_readiness_receipt import collect_backup_restore_receipt
+from schema_compat import expected_head
 from sqlite_snapshot import SnapshotRequest, create_snapshot
 
 ROOT = Path(__file__).resolve().parents[1]
 OLD = "0061_bulk_lexical_projection_coverage"
 NEW = "0062_reviewed_pdf_pages"
-HEAD = "0063_transcript_reported_period_receipts"
+HEAD = expected_head()
 
 
 def setup_live(

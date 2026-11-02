@@ -36,7 +36,6 @@ def _render_company_description(section: CompanyDescriptionSection) -> str:
             "segments",
             "earnings",
             "saydo",
-            "ir_docs",
             "recent_developments",
             "bear_case",
             "provenance",

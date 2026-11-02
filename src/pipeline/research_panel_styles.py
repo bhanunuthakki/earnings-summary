@@ -40,12 +40,6 @@ RESEARCH_PANEL_STYLE = (
 .cc-peek-attest-done { color: var(--fg-soft); font-size: var(--fs-caption); }
 .cc-attest-msg { font-size: var(--fs-caption); color: var(--fg-soft); }
 .cc-review-peek .synthesis-body { font-size: var(--fs-body); }
-.cc-review-foot { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hairline);
-  display: flex; flex-direction: column; gap: 8px; }
-.cc-review-log { font-family: var(--mono); font-size: var(--fs-caption); color: var(--fg-soft);
-  background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 8px 10px; margin: 0; max-height: 200px; overflow-y: auto;
-  white-space: pre-wrap; word-break: break-word; }
 .research-card, .jr-note, .dj-row, .vx-builder, .sc-note, .ledger-cap,
 .ledger-stance, .ledger-packet { border:1px solid var(--border); border-radius:var(--radius);
   background:var(--surface); }
@@ -262,80 +256,13 @@ RESEARCH_PANEL_STYLE = (
    sizing family as the capture box's own textarea. */
 .ledger-rewrite-ta, .ledger-steer-ta { width: 100%; min-height: 56px; resize: vertical;
   font-family: var(--sans); font-size: var(--fs-body); margin-bottom: var(--sp-2); }
-/* Queues (overhaul P4): the four machinery sections (research / reconcile /
-   worldview / stances) collapse into ONE block below the feed, so the tab reads
-   conversation-first. Closed by default; a count on the summary surfaces pending
-   work without re-inflating the wall of sections. Token-only. */
-.ledger-queues { margin-top: var(--sp-4); border-top: 1px solid var(--border); }
-.ledger-queues-sum { cursor: pointer; padding: var(--sp-3) 0; font-size: var(--fs-body); font-weight: 600; color: var(--fg); list-style: none; display: flex; align-items: baseline; gap: var(--sp-2); }
-.ledger-queues-sum::-webkit-details-marker { display: none; }
-.ledger-queues-sum::before { content: "\\25B8"; color: var(--muted); font-size: var(--fs-caption); }
-.ledger-queues[open] .ledger-queues-sum::before { content: "\\25BE"; }
-.ledger-queues-hint { font-size: var(--fs-caption); font-weight: 400; color: var(--muted); }
-.ledger-queues-count { font-size: var(--fs-caption); font-weight: 600; color: var(--fg); }
-.ledger-queues-body { padding-top: var(--sp-2); }
-/* migrated src/pipeline/ledger_panel.py _ONMYMIND_STYLE */
-/* Reuses the panel's own micro-tag / warn-tag treatment (.ledger-chan,
-   .ledger-needs — see _PANEL_STYLE) rather than a second copy of the same
-   rule under a card-local name; only the accent ladder badge is genuinely
-   new here. */
-.om-ladder { font-size: var(--fs-caption); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-.om-ladder:empty { display: none; }
-.om-actions { flex-wrap: wrap; }
-/* Backlink from a research item to its source note + the brief highlight the
-   scroll applies on arrival (owner feedback 2026-07-14). */
+/* Source-note links from the retained research list. */
 .ledger-backlink { margin-left: auto; }
-.om-flash { animation: om-flash-kf 1.6s ease-out; }
-@keyframes om-flash-kf {
+.ledger-note-flash { animation: ledger-note-flash-kf 1.6s ease-out; }
+@keyframes ledger-note-flash-kf {
   0%, 100% { background: transparent; }
   20% { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 }
-.om-body a { overflow-wrap: anywhere; }
-.om-brief { margin-top: var(--sp-2); }
-.om-brief summary { font-size: var(--fs-caption); font-weight: 600; color: var(--accent); cursor: pointer; }
-.om-brief-body { margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-left: 3px solid var(--border-2); font-size: var(--fs-caption); color: var(--fg-soft); }
-.om-brief-takeaways { margin: 0 0 var(--sp-2); padding-left: var(--sp-4); }
-.om-brief-line { margin: var(--sp-1) 0; }
-.om-brief-src { margin: var(--sp-2) 0 0; color: var(--muted); font-size: var(--fs-caption); }
-/* The inline answer (overhaul): the Ledger's response to a question-shaped
-   capture, generated once at capture time and stored on the note. A quiet
-   accent-bordered block under the captured thought — distinct from the thought
-   itself, token-only. */
-.om-answer { margin-top: var(--sp-2); font-size: var(--fs-caption); line-height: 1.55; color: var(--fg-soft); }
-.om-answer > :first-child { margin-top: 0; }
-.om-answer > :last-child { margin-bottom: 0; }
-.om-answer-label { display: block; font-size: var(--fs-caption); font-weight: 600; color: var(--fg); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--sp-1); }
-/* The answer is being generated on a background thread — an honest quiet
-   in-progress state the poll swaps for the real answer when it lands. */
-.om-answer-pending { color: var(--muted); font-style: italic; }
-/* Inline chat (overhaul P3): "Ask more" / "Discuss" expands a real thread with
-   the Ask brain right inside the card — no navigation, no popup. Token-only. */
-.om-chat { margin-top: var(--sp-2); border-top: 1px solid var(--hairline); padding-top: var(--sp-2); }
-.om-chat-thread { display: flex; flex-direction: column; gap: var(--sp-2); margin-bottom: var(--sp-2); }
-.om-chat-msg { font-size: var(--fs-caption); line-height: 1.5; padding: var(--sp-2) var(--sp-3); border-radius: var(--radius); max-width: 90%; overflow-wrap: anywhere; }
-.om-chat-user { align-self: flex-end; background: var(--accent-soft); color: var(--fg); }
-.om-chat-assistant { align-self: flex-start; background: var(--surface); color: var(--fg-soft); }
-.om-chat-pending { color: var(--muted); }
-.om-chat-input { flex: 1; font-family: var(--sans); font-size: var(--fs-body); }
-/* The universal reply box (Phase B) — one input per card, routed by the
-   reply-intent classifier; the receipt bubble is the acted-path acknowledgement. */
-.om-reply-input { flex: 1; font-family: var(--sans); font-size: var(--fs-body); }
-.om-chat-receipt { color: var(--ok); font-weight: 600; }
-#onmymind-more { margin-top: var(--sp-2); }
-/* migrated src/pipeline/ledger_panel.py _PACKET_STYLE */
-.ledger-packet { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-4); }
-.pk-band { display: flex; align-items: baseline; gap: var(--sp-3); flex-wrap: wrap; }
-.pk-count { font-size: var(--fs-body); font-weight: 600; color: var(--fg); }
-.pk-hint, .pk-payoff { font-size: var(--fs-caption); color: var(--muted); }
-.pk-payoff { flex-basis: 100%; }
-.pk-progress { display: flex; align-items: baseline; gap: var(--sp-2); font-size: var(--fs-caption); color: var(--muted); margin: var(--sp-2) 0; flex-wrap: wrap; }
-.pk-tally { color: var(--fg); font-weight: 600; }
-.pk-item > .ledger-musing, .pk-item > .ledger-stance { margin-bottom: 0; }
-.pk-class-header { font-size: var(--fs-caption); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 var(--sp-1); }
-.pk-class-why { font-size: var(--fs-caption); color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: normal; margin-left: var(--sp-2); }
-.pk-clear { color: var(--ok); font-weight: 600; padding: var(--sp-3) 0; }
-.pk-receipt { color: var(--ok); font-weight: 600; font-size: var(--fs-body); padding: var(--sp-3) var(--sp-4); }
-.pk-fail { color: var(--bad); font-size: var(--fs-caption); margin-top: var(--sp-2); }
 .ledger-consequence { font-size: var(--fs-caption); color: var(--muted); margin: var(--sp-1) 0 0; }
 .ledger-profile-update-form { margin-top: var(--sp-2); }
 /* Homogeneous bulk-affirm group card (requirement C): the same .ledger-musing

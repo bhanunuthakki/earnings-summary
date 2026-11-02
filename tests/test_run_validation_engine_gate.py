@@ -11,14 +11,9 @@ from __future__ import annotations
 import sqlite3
 import sys
 from datetime import datetime
-from pathlib import Path
 
 import pytest
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import run_validation_engine as rve  # noqa: E402
+import run_validation_engine as rve
 
 _CREATE = """
 CREATE TABLE validation_issues (

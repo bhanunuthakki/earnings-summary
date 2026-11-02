@@ -381,8 +381,8 @@ def test_actual_onboarding_closes_identity_and_admits_sec_without_fmp(
         skip_sec=False,
         skip_transcripts=True,
         skip_ir=True,
-        skip_saydo=True,
-        force_saydo=False,
+        skip_transcript_summaries=True,
+        force_transcript_summaries=False,
     )
     assert cast(Callable[[Namespace], int], getattr(onboard_ticker, "_onboard"))(args) == 0
     assert calls == [CIK]

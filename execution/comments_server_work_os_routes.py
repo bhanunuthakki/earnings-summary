@@ -123,7 +123,6 @@ def register_work_os_routes(app: Flask, ctx: ServerContext) -> None:
             return ("", 204)
         from research.investment_profile import (
             CompanyProfileLabel,
-            EtfProfileLabel,
             LabelReviewAction,
             record_label_review,
         )
@@ -150,14 +149,12 @@ def register_work_os_routes(app: Flask, ctx: ServerContext) -> None:
             build_cockpit_rows=build_cockpit_rows,
             build_work_os_evaluation=build_work_os_evaluation,
         )
+        if item is not None and item.instrument_type == "etf":
+            return client_error("etf_research_retired: use portfolio context or saved history", 410)
         if item is None or item.profile is None:
             return client_error("not_found: current investment profile is unavailable", 404)
         try:
-            profile_label = (
-                EtfProfileLabel(label)
-                if item.instrument_type == "etf"
-                else CompanyProfileLabel(label)
-            )
+            profile_label = CompanyProfileLabel(label)
         except ValueError:
             return client_error("validation_error: label is invalid for this instrument", 400)
         presentation = next(

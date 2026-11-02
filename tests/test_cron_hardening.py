@@ -21,15 +21,9 @@ def _start_boundary(filename: str) -> str:
     return value
 
 
-def test_first_of_month_03_00_jobs_are_staggered() -> None:
-    """The monthly jobs previously collided at 03:00 on every first day."""
-    assert _start_boundary("refresh_scenario_priors.task.xml").endswith("03:40:00")
-
-
 _OVERNIGHT_WRITERS = {
     "backfill_transcripts": "02:00",
     "fetch_sec_xbrl": "01:40",
-    "submit_saydo_batch": "02:20",
 }
 
 
@@ -39,7 +33,7 @@ def _minutes(hhmm: str) -> int:
 
 
 def test_overnight_writer_cluster_is_staggered() -> None:
-    """backfill_transcripts, fetch_sec_xbrl and submit_saydo_batch all write
+    """backfill_transcripts and fetch_sec_xbrl both write
     the single-writer portfolio database and previously all started at 02:00
     on Saturdays. Their checked-in starts must be distinct, at least 20
     minutes apart, identical in manifest and task XML, clear of every other
@@ -90,23 +84,10 @@ def test_retired_monthly_p3_task_is_absent_from_scheduler_surface() -> None:
     assert not (CRON / "run_monthly_p3_refresh.bat").exists()
 
 
-def test_scenario_priors_wrapper_stays_on_invoking_checkout() -> None:
-    root = ET.parse(CRON / "refresh_scenario_priors.task.xml").getroot()
-    command = root.findtext(".//t:Actions/t:Exec/t:Command", namespaces=NS)
-    assert command is not None
-    assert r"\runtime\earnings-summary\cron\run_refresh_scenario_priors.bat" in command
-    assert r"\scratch\earnings-summary" not in command
-
-    wrapper = (CRON / "run_refresh_scenario_priors.bat").read_text(encoding="utf-8")
-    assert "%~dp0.." in wrapper
-    assert r"\scratch\earnings-summary" not in wrapper
-
-
 def test_production_capture_is_allowlisted_and_has_no_extra_llm_job() -> None:
     expected = {
         "run_backfill_transcripts.bat": {"saydo_commitment_extract"},
         "run_refresh_dirty_artifacts.bat": {
-            "saydo_filter",
             "valuation_basis",
             "exec_comp_alignment",
             "company_description",
@@ -151,7 +132,6 @@ def test_critical_wrappers_use_explicit_runtime_and_write_lock() -> None:
         "run_daily_fetch_and_brief.bat",
         "run_morning_pipeline.bat",
         "run_refresh_cache.bat",
-        "run_refresh_scenario_priors.bat",
         "run_track_comp_metrics.bat",
     ):
         text = (CRON / wrapper).read_text(encoding="utf-8")
@@ -199,17 +179,6 @@ def test_comp_metrics_wrapper_preserves_the_first_failed_step() -> None:
     assert lines[call_indexes[0] + 1].strip() == 'set "RC=%ERRORLEVEL%"'
     assert lines[call_indexes[1] + 1].strip() == 'set "STEP_RC=%ERRORLEVEL%"'
     assert lines[call_indexes[1] + 2].strip() == ('if "%RC%"=="0" set "RC=%STEP_RC%"')
-    assert lines[-1].strip() == "endlocal & exit /b %RC%"
-
-
-def test_weekly_synthesis_has_one_outer_portfolio_lock_and_entrypoint() -> None:
-    text = (CRON / "run_weekly_synthesis.bat").read_text(encoding="utf-8")
-    lines = text.splitlines()
-    calls = [index for index, line in enumerate(lines) if line.strip().lower().startswith("call ")]
-    assert len(calls) == 1
-    invocation = lines[calls[0]].lower()
-    assert '"weekly-synthesis" "portfolio-db"' in invocation
-    assert "execution\\run_weekly_synthesis.py" in invocation
     assert lines[-1].strip() == "endlocal & exit /b %RC%"
 
 

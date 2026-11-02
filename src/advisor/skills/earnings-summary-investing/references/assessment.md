@@ -10,12 +10,13 @@ second scheduler or rerun production jobs. Read the quota registry before dispat
    Resolve both installed project skills and compare their source revisions with
    that release. Run the source checker. Missing release files, stale remote
    evidence or installed differences are explicit holds, not a clean result.
-2. Read available authorized receipts from weekly model/prompt evaluations,
-   monthly advisor memos and the calibration scorecard, plus recorded owner
-   corrections. Use `directives/llm_evals.md` and `directives/model_eval_loop.md`
-   for evaluation and promotion authority. Missing, thin or inaccessible inputs
-   stay explicit. Read existing outputs; do not run their jobs or open a live DB
-   without separately resolved host authority. Record output identity and date.
+2. Read available authorized weekly model/prompt evaluation receipts,
+   prompt-quality summaries by purpose and version, explicit owner decisions,
+   and deterministic process/run receipts relevant to this skill. Use
+   `directives/llm_evals.md` and `directives/model_eval_loop.md` for evaluation
+   and promotion authority. Missing, thin or inaccessible inputs stay explicit.
+   Read existing outputs; do not run their jobs or open a live DB without
+   separately resolved host authority. Record output identity and date.
 3. Assess invocation using [synthetic cases](invocation-cases.json). Give independent
    workers the actual skill catalog and prompts before disclosing expected routes.
    Record their selection before they read full skill instructions. Then inspect
@@ -51,12 +52,10 @@ to the source, baseline or inspected skill prose; it does not approve deployment
 | --- | --- | --- |
 | Weekly evaluation | `src/evals/coverage.py` latest/immutable run receipts; `execution/run_weekly_model_eval.py` is the producer | Keep attempted, graded, insufficient and errors distinct; sweep success is not skill quality |
 | Prompt outcomes | `src/llm/calibration.py` read-only summaries by purpose and prompt version | Preserve count and dates; pooled unrelated purposes do not assess this skill |
-| Monthly advisor memos | `src/advisor/store.py` explicit-path memo readers | Preserve memo ID, kind, context, score status and date; prose alone is not realized quality |
-| Monthly calibration | `src/calibration_coach.py`; `execution/run_calibration_scorecard.py` is the producer | Select exact YYYY-MM.json and validate fields. The generic latest loader can select the separate advice-influence sibling. Keep thin, suppressed and gated states distinct |
+| Decision and process evidence | Existing governed decision and run receipts, read through their owning paths | Preserve record identity, status and date. Do not infer quality from prose, missing records or a single process result |
 
-Do not call writer helpers to collect evidence. In particular, the advisor score
-helper opens a writable connection; read existing outcome scores only through an
-approved read-only projection or connection. The producer paths above identify
+Do not call writer helpers to collect evidence. Read only existing outcomes
+through an approved read-only projection or connection. The listed owners identify
 source ownership, not permission to run a job. Scheduler execution and receipt
 freshness require their own evidence.
 

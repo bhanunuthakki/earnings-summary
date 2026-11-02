@@ -28,6 +28,8 @@ def test_every_model_purpose_has_an_explicit_prompt_version() -> None:
     from llm.cli import LLM_MODELS
 
     assert set(LLM_MODELS) <= set(prompt_versions.registered_purposes())
+    assert LLM_MODELS["transcript_summary_claim_audit"] == "gpt-6.1-sol"
+    assert prompt_version_for("transcript_summary_claim_audit") == "v1"
 
 
 def test_registry_is_the_single_bump_point(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -61,12 +63,6 @@ def test_trigger_and_prediction_purposes_registered() -> None:
     ):
         assert prompt_version_for(trigger_purpose) == "v2"
     assert prompt_version_for("material_news_classification") == "v5"
-
-
-def test_research_triage_is_registered() -> None:
-    # B7 — the routing triage behind a positive wondering verdict.
-    assert "research_triage" in prompt_versions.registered_purposes()
-    assert prompt_version_for("research_triage") == "v1"
 
 
 def test_triggers_source_prompt_version_from_registry() -> None:

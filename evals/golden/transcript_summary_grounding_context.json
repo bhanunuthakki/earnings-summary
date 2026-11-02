@@ -1,0 +1,404 @@
+{
+  "schema_version": "transcript-summary-grounding-context@1",
+  "scope": "synthetic full-format document narrative evaluation; not semantic qualification",
+  "cases": [
+    {
+      "case_id": "full_format_cross_batch",
+      "items": [
+        {
+          "n": 1,
+          "kind": "transcript",
+          "label": "SYNTHCTX1 · Q2 call",
+          "text": "SYNTHCTX1 reported consolidated revenue of USD 12 million for fiscal Q2 2026. The source reports IFRS revenue. Management said revenue was USD 12 million in fiscal Q2 2026. The transcript says revenue reached USD 12 million in Q2 2026. CFO: We expect Q3 revenue of USD 13 million. The CFO said expected pricing and mix should improve gross margin in the Q3 outlook. The CFO also said input costs remained elevated. The CFO linked expected margin improvement to pricing and mix, while warning that costs remained elevated. Revenue was USD 12 million in fiscal Q2 2026. Fiscal Q1 2026 revenue was USD 12 million. Fiscal Q4 2026 revenue was EUR 12 thousand."
+        }
+      ],
+      "lines": [
+        {
+          "quote": "### What accelerated",
+          "supported": true,
+          "kind": "presentation"
+        },
+        {
+          "quote": "### What decelerated or hit headwinds",
+          "supported": true,
+          "kind": "presentation"
+        },
+        {
+          "quote": "### What changed structurally",
+          "supported": true,
+          "kind": "presentation"
+        },
+        {
+          "quote": "### What management is / isn't talking about",
+          "supported": true,
+          "kind": "presentation"
+        },
+        {
+          "quote": "SYNTHCTX1 reported consolidated revenue of USD 12 million for fiscal Q2 2026.",
+          "supported": true,
+          "kind": "reported_fact",
+          "context": {
+            "issuer": "SYNTHCTX1",
+            "metric": "revenue",
+            "period": "fiscal Q2 2026",
+            "unit": "USD millions",
+            "scope": "consolidated",
+            "basis": "IFRS",
+            "actual_vs_forecast": "actual",
+            "attribution": "company reported"
+          }
+        },
+        {
+          "quote": "The source reports IFRS revenue.",
+          "supported": true,
+          "kind": "reported_fact"
+        },
+        {
+          "quote": "Management said revenue was USD 12 million in fiscal Q2 2026.",
+          "supported": true,
+          "kind": [
+            "management_claim",
+            "reported_fact"
+          ],
+          "context": {
+            "issuer": "SYNTHCTX1",
+            "metric": "revenue",
+            "period": "fiscal Q2 2026",
+            "unit": "USD millions",
+            "actual_vs_forecast": "actual",
+            "attribution": "management"
+          }
+        },
+        {
+          "quote": "The transcript says revenue reached USD 12 million in Q2 2026.",
+          "supported": true,
+          "kind": "reported_fact"
+        },
+        {
+          "quote": "CFO: We expect Q3 revenue of USD 13 million.",
+          "supported": true,
+          "kind": "management_claim",
+          "context": {
+            "issuer": "SYNTHCTX1",
+            "metric": "revenue",
+            "period": "fiscal Q3 2026",
+            "unit": "USD millions",
+            "actual_vs_forecast": "forecast",
+            "attribution": "CFO"
+          }
+        },
+        {
+          "quote": "The CFO said expected pricing and mix should improve gross margin.",
+          "supported": true,
+          "kind": "management_claim"
+        },
+        {
+          "quote": "The CFO also said input costs remained elevated.",
+          "supported": true,
+          "kind": "management_claim"
+        },
+        {
+          "quote": "Inference: management expects pricing and mix to improve gross margin, but elevated input costs remain a stated risk.",
+          "supported": true,
+          "kind": "explicit_inference",
+          "context": {
+            "issuer": "SYNTHCTX1",
+            "metric": "gross margin",
+            "period": "Q3 outlook",
+            "actual_vs_forecast": "mixed actual and forecast",
+            "attribution": "analyst inference"
+          },
+          "support_excerpts": [
+            "expected pricing and mix should improve gross margin",
+            "input costs remained elevated"
+          ]
+        },
+        {
+          "quote": "| Metric | Fiscal Q1 2026 | USD millions |",
+          "supported": true,
+          "kind": "reported_fact",
+          "context": {
+            "issuer": "SYNTHCTX1",
+            "metric": "table period and unit header",
+            "period": "Fiscal Q1 2026",
+            "unit": "USD millions",
+            "actual_vs_forecast": "actual"
+          },
+          "support_excerpts": [
+            "Fiscal Q1 2026 revenue was USD 12 million"
+          ]
+        },
+        {
+          "quote": "| Revenue | 12 |",
+          "supported": true,
+          "kind": "reported_fact",
+          "context": {
+            "issuer": "SYNTHCTX1",
+            "metric": "revenue",
+            "period": "Fiscal Q1 2026",
+            "unit": "USD millions",
+            "actual_vs_forecast": "actual"
+          },
+          "support_excerpts": [
+            "Fiscal Q1 2026 revenue was USD 12 million"
+          ]
+        },
+        {
+          "quote": "| Metric | Fiscal Q4 2026 | EUR thousands |",
+          "supported": true,
+          "kind": "reported_fact",
+          "context": {
+            "issuer": "SYNTHCTX1",
+            "metric": "table period and unit header",
+            "period": "Fiscal Q4 2026",
+            "unit": "EUR thousands",
+            "actual_vs_forecast": "actual"
+          },
+          "support_excerpts": [
+            "Fiscal Q4 2026 revenue was EUR 12 thousand"
+          ]
+        },
+        {
+          "quote": "| Revenue | 12 |",
+          "supported": true,
+          "kind": "reported_fact",
+          "context": {
+            "issuer": "SYNTHCTX1",
+            "metric": "revenue",
+            "period": "Fiscal Q4 2026",
+            "unit": "EUR thousands",
+            "actual_vs_forecast": "actual"
+          },
+          "support_excerpts": [
+            "Fiscal Q4 2026 revenue was EUR 12 thousand"
+          ]
+        },
+        {
+          "quote": "Revenue was USD 12 million in fiscal Q2 2026.",
+          "supported": true,
+          "kind": "reported_fact",
+          "context": {
+            "issuer": "SYNTHCTX1",
+            "metric": "revenue",
+            "period": "fiscal Q2 2026",
+            "unit": "USD millions",
+            "actual_vs_forecast": "actual"
+          }
+        },
+        {
+          "quote": "SYNTHCTX1 reported consolidated revenue of USD 12 million for fiscal Q2 2026.",
+          "supported": true,
+          "kind": "reported_fact"
+        },
+        {
+          "quote": "Management said revenue was USD 12 million in fiscal Q2 2026.",
+          "supported": true,
+          "kind": [
+            "management_claim",
+            "reported_fact"
+          ]
+        },
+        {
+          "quote": "The transcript says revenue reached USD 12 million in Q2 2026.",
+          "supported": true,
+          "kind": "reported_fact"
+        },
+        {
+          "quote": "The CFO said expected pricing and mix should improve gross margin.",
+          "supported": true,
+          "kind": "management_claim"
+        },
+        {
+          "quote": "The CFO also said input costs remained elevated.",
+          "supported": true,
+          "kind": "management_claim"
+        },
+        {
+          "quote": "Revenue was USD 12 million in fiscal Q2 2026.",
+          "supported": true,
+          "kind": "reported_fact"
+        },
+        {
+          "quote": "SYNTHCTX1 reported consolidated revenue of USD 12 million for fiscal Q2 2026.",
+          "supported": true,
+          "kind": "reported_fact"
+        },
+        {
+          "quote": "Management said revenue was USD 12 million in fiscal Q2 2026.",
+          "supported": true,
+          "kind": [
+            "management_claim",
+            "reported_fact"
+          ]
+        },
+        {
+          "quote": "The transcript says revenue reached USD 12 million in Q2 2026.",
+          "supported": true,
+          "kind": "reported_fact"
+        },
+        {
+          "quote": "The CFO said expected pricing and mix should improve gross margin.",
+          "supported": true,
+          "kind": "management_claim"
+        },
+        {
+          "quote": "The CFO also said input costs remained elevated.",
+          "supported": true,
+          "kind": "management_claim"
+        },
+        {
+          "quote": "Revenue was USD 12 million in fiscal Q2 2026.",
+          "supported": true,
+          "kind": "reported_fact"
+        },
+        {
+          "quote": "### What management is / isn't talking about",
+          "supported": true,
+          "kind": "presentation"
+        },
+        {
+          "quote": "### Quotes worth keeping",
+          "supported": true,
+          "kind": "presentation"
+        },
+        {
+          "quote": "### Next-quarter setup",
+          "supported": true,
+          "kind": "presentation"
+        }
+      ],
+      "mutations": [
+        {
+          "case_id": "full_format_false_after_batch20",
+          "line_index": 28,
+          "quote": "| Revenue | 99 |",
+          "supported": false
+        }
+      ]
+    },
+    {
+      "case_id": "period_conflict_issuer_and_qualifier",
+      "items": [
+        {
+          "n": 1,
+          "kind": "transcript",
+          "label": "SYNTHCTX2 transcript",
+          "text": "SYNTHCTX2 said Q1 revenue was USD 80 million. The source later corrects that figure: Q1 revenue was USD 75 million, not USD 80 million. The transcript's final note says the corrected amount excludes discontinued operations. SYNTHCTX9 reported USD 80 million of Q1 revenue."
+        }
+      ],
+      "lines": [
+        {
+          "quote": "SYNTHCTX2 reported Q1 revenue of USD 75 million, excluding discontinued operations.",
+          "supported": true,
+          "kind": "reported_fact",
+          "context": {
+            "issuer": "SYNTHCTX2",
+            "metric": "revenue",
+            "period": "Q1",
+            "unit": "USD millions",
+            "scope": "excludes discontinued operations",
+            "actual_vs_forecast": "actual"
+          }
+        },
+        {
+          "quote": "SYNTHCTX2 reported Q1 revenue of USD 80 million.",
+          "supported": false
+        },
+        {
+          "quote": "SYNTHCTX2 reported Q1 revenue of USD 75 million including discontinued operations.",
+          "supported": false
+        },
+        {
+          "quote": "SYNTHCTX2 reported Q1 revenue of USD 80 million because SYNTHCTX9 reported that value.",
+          "supported": false
+        }
+      ]
+    },
+    {
+      "case_id": "owner_anchor_not_company_fact",
+      "items": [
+        {
+          "n": 1,
+          "kind": "transcript",
+          "label": "SYNTHCTX3 transcript",
+          "text": "SYNTHCTX3 reported Q2 revenue of USD 40 million. Management did not state a margin target or a cause for the change."
+        },
+        {
+          "n": 2,
+          "kind": "owner_context",
+          "label": "SYNTHCTX3 owner context; assumptions and attributed views",
+          "text": "Owner assumption: if a new product launch succeeds, margin could reach 30%. This is an owner scenario, not company guidance."
+        }
+      ],
+      "lines": [
+        {
+          "quote": "SYNTHCTX3 reported Q2 revenue of USD 40 million.",
+          "supported": true,
+          "kind": "reported_fact",
+          "context": {
+            "issuer": "SYNTHCTX3",
+            "metric": "revenue",
+            "period": "Q2",
+            "unit": "USD millions",
+            "actual_vs_forecast": "actual",
+            "attribution": "company reported"
+          }
+        },
+        {
+          "quote": "SYNTHCTX3 guided to a 30% margin target.",
+          "supported": false
+        },
+        {
+          "quote": "Our view: if the new product launch succeeds, margin could reach 30%.",
+          "supported": true,
+          "kind": "explicit_inference",
+          "context": {
+            "issuer": "SYNTHCTX3",
+            "metric": "margin",
+            "period": "unknown",
+            "unit": "percent",
+            "actual_vs_forecast": "conditional assumption",
+            "attribution": "owner assumption"
+          }
+        },
+        {
+          "quote": "SYNTHCTX3's product launch caused margin to reach 30%.",
+          "supported": false
+        }
+      ]
+    },
+    {
+      "case_id": "long_full_source_and_preflight",
+      "items": [
+        {
+          "n": 1,
+          "kind": "transcript",
+          "label": "SYNTHCTX4 transcript",
+          "text": "SYNTHCTX4 initially stated Q2 revenue was USD 90 million.\n{{PAD_BEFORE}}\nThe speaker corrected the figure in the middle of the call: Q2 revenue was USD 85 million, not USD 90 million, due to a classification correction.\n{{PAD_AFTER}}\nThe final qualifier says this is reported revenue before the acquisition close."
+        }
+      ],
+      "lines": [
+        {
+          "quote": "SYNTHCTX4 reported Q2 revenue of USD 85 million before the acquisition close.",
+          "supported": true,
+          "kind": "reported_fact",
+          "context": {
+            "issuer": "SYNTHCTX4",
+            "metric": "revenue",
+            "period": "Q2",
+            "unit": "USD millions",
+            "scope": "before acquisition close",
+            "actual_vs_forecast": "actual"
+          }
+        },
+        {
+          "quote": "SYNTHCTX4 reported Q2 revenue of USD 90 million before the acquisition close.",
+          "supported": false
+        }
+      ],
+      "padding_chars": 90000,
+      "padding_text": "Context remains in the full source. No revenue, period, scope, or speaker information is added by this neutral transcript passage.\n",
+      "overlimit_preflight_chars": 120001
+    }
+  ]
+}

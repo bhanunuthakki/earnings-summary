@@ -10,7 +10,7 @@ audit ledger:
       LLM (Haiku) fallback only when the markdown shape is ambiguous or
       the regex returns nothing despite the section being present.
 
-  record_decisions_from_artifacts(repo_root, since_days=30) -> int
+  record_decisions_from_artifacts(db_path, since_days=30) -> int
       Walks recent llm_artifacts of purpose='lens:five_min_reread', extracts
       decisions, upserts into the `decisions` table. Idempotent on
       source_artifact_id — re-running on the same artifact is a no-op.
@@ -1116,7 +1116,9 @@ def _row_to_decision(row: sqlite3.Row) -> Decision:
         outcome_notes=row["outcome_notes"],
         # sqlite3.Row membership tests VALUES, not keys — .keys() is required to
         # tolerate a SELECT off a pre-0114 schema that lacks the column.
-        process_quality=(row["process_quality"] if "process_quality" in set(row.keys()) else None),
+        process_quality=(
+            row["process_quality"] if "process_quality" in tuple(row.keys()) else None
+        ),
     )
 
 
@@ -1138,7 +1140,7 @@ def _parse_dt(raw: object) -> datetime | None:
 
 def record_decisions_from_artifacts(
     *,
-    repo_root: Path,
+    db_path: Path,
     since_days: int = 30,
     source_lenses: tuple[str, ...] = ("lens:five_min_reread",),
     llm_fallback: bool = False,
@@ -1159,7 +1161,6 @@ def record_decisions_from_artifacts(
     Returns a tally: {inserted, skipped_existing, skipped_untracked,
     no_recommendation, db_unavailable}.
     """
-    db_path = repo_root / "data" / "portfolio.db"
     tally = {
         "inserted": 0,
         "skipped_existing": 0,

@@ -502,10 +502,6 @@ def _scan_tmp_dir(
         flags = _slot(artifacts, parsed.year, parsed.quarter)
         if parsed.kind is ArtifactKind.AUDIO:
             flags.has_audio_file = True
-        elif parsed.kind is ArtifactKind.SAYDO:
-            flags.step_saydo_analyzed = True
-        elif parsed.kind is ArtifactKind.LLM_SUMMARY:
-            flags.step_llm_summarized = True
 
 
 def _persist_artifact_rows(
@@ -520,14 +516,12 @@ def _persist_artifact_rows(
             INSERT INTO quarterly_artifacts (
                 ticker, year, quarter,
                 has_release_file, has_slides_file, has_transcript_file, has_audio_file,
-                step_audio_transcribed, step_llm_summarized, step_saydo_analyzed,
+                step_audio_transcribed,
                 step_thesis_updated
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ticker, year, quarter) DO UPDATE SET
                 has_transcript_file    = excluded.has_transcript_file    OR quarterly_artifacts.has_transcript_file,
-                has_audio_file         = excluded.has_audio_file         OR quarterly_artifacts.has_audio_file,
-                step_llm_summarized    = excluded.step_llm_summarized    OR quarterly_artifacts.step_llm_summarized,
-                step_saydo_analyzed    = excluded.step_saydo_analyzed    OR quarterly_artifacts.step_saydo_analyzed
+                has_audio_file         = excluded.has_audio_file         OR quarterly_artifacts.has_audio_file
             """,
             (
                 ticker,
@@ -538,8 +532,6 @@ def _persist_artifact_rows(
                 flags.has_transcript_file,
                 flags.has_audio_file,
                 flags.step_audio_transcribed,
-                flags.step_llm_summarized,
-                flags.step_saydo_analyzed,
                 flags.step_thesis_updated,
             ),
         )

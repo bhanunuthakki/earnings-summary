@@ -1,27 +1,16 @@
-"""The Worldview review surface (P2) — the section renderer + the /api/tenets routes.
-
-The section is behind LEDGER_WORLDVIEW; the routes delegate to the (separately
-tested) synthesis.tenets / tenet_distill cores. The distill route is exercised only
-on the $0-triage path (nothing flagged ⇒ no LLM), so CI needs no CLI.
-"""
+"""Manual process Tenet controls and refusal of retired distillation requests."""
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
+import comments_server
 import pytest
 from flask.testing import FlaskClient
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-
-from pipeline.worldview_panel import render_worldview_body, render_worldview_section  # noqa: E402
-from synthesis.tenets import ensure_tenet_for_note, record_tenet  # noqa: E402
+from pipeline.worldview_panel import render_worldview_body, render_worldview_section
+from synthesis.tenets import ensure_tenet_for_note, record_tenet
 
 _PRIOR_HEAD = "0059_kpi_facts_restatement"
 
@@ -51,7 +40,7 @@ def test_section_renders_when_flag_on(db_file: Path, monkeypatch: pytest.MonkeyP
     html = render_worldview_section(db_file)
     assert "Worldview" in html
     assert "wv-add-btn" in html  # the add-a-Tenet box
-    assert "wv-distill-btn" in html  # the distill tap
+    assert "wv-distill-btn" not in html
 
 
 def test_body_shows_current_and_proposed_with_tension(db_file: Path) -> None:
@@ -84,143 +73,6 @@ def test_note_staged_tenet_surfaces_in_panel(db_file: Path) -> None:
     html = render_worldview_body(db_file)
     assert "Let a working thesis run." in html
     assert 'data-tenet-action="approve"' in html
-
-
-# ---------------------------------------------------------------------------
-# "Adopted this week" strip (B4)
-# ---------------------------------------------------------------------------
-
-
-def test_adopted_strip_shows_recent_session_distill_tenet(db_file: Path) -> None:
-    from synthesis.insights import record_insight
-
-    record_insight(
-        scope_key="tenet:exit-discipline",
-        kind="tenet",
-        body_md="Let a working thesis run — distilled from this week's session.",
-        source_note_ids=[1],
-        watermark_id=1,
-        provenance="session_distill",
-        db_path=db_file,
-    )
-    html = render_worldview_body(db_file)
-    assert "Adopted this week" in html
-    assert "Let a working thesis run" in html
-    assert 'data-tenet-action="revert"' in html
-    assert "from session" in html
-
-
-def test_adopted_strip_excludes_old_adoption(db_file: Path) -> None:
-    import sqlite3
-
-    from synthesis.insights import record_insight
-
-    # kind='stance' (not 'tenet') so an un-excluded row would show ONLY in the
-    # strip, not also in the tenet-only "Your Worldview" list below it — an
-    # unambiguous probe of the 7-day cutoff.
-    insight_id = record_insight(
-        scope_key="NU",
-        kind="stance",
-        body_md="An old auto-adopted stance.",
-        source_note_ids=[1],
-        watermark_id=1,
-        provenance="session_distill",
-        db_path=db_file,
-    )
-    conn = sqlite3.connect(str(db_file))
-    try:
-        conn.execute(
-            "UPDATE insight_notes SET as_of = '2026-01-01T00:00:00' WHERE id = ?",
-            (insight_id,),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    html = render_worldview_body(db_file)
-    assert "Adopted this week" not in html
-    assert "An old auto-adopted stance." not in html
-
-
-def test_adopted_strip_excludes_owner_provenance(db_file: Path) -> None:
-    record_tenet(body_md="I state my own beliefs.", provenance="owner", db_path=db_file)
-    html = render_worldview_body(db_file)
-    assert "Adopted this week" not in html
-
-
-def test_adopted_strip_empty_renders_nothing(db_file: Path) -> None:
-    html = render_worldview_body(db_file)
-    assert "Adopted this week" not in html
-
-
-# ---------------------------------------------------------------------------
-# Accountability chip (B5, 2026-07-19 program overhaul)
-# ---------------------------------------------------------------------------
-
-
-def test_current_card_shows_accountability_chip_from_seeded_meta(db_file: Path) -> None:
-    import json
-    import sqlite3
-
-    tenet = record_tenet(
-        body_md="I let a working thesis run.", scope_key="exit-discipline", db_path=db_file
-    )
-    conn = sqlite3.connect(str(db_file))
-    try:
-        meta = {
-            "accountability": {
-                "as_of_run": "2026-07-20T00:00:00",
-                "upheld": [1, 2, 3, 4],
-                "violated": [5, 6],
-                "est_cost_usd": -4200.0,
-                "one_liner": "verdict",
-            }
-        }
-        conn.execute(
-            "UPDATE insight_notes SET meta_json = ? WHERE id = ?", (json.dumps(meta), tenet.id)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    html = render_worldview_body(db_file)
-    assert "upheld 4 / violated 2" in html
-    assert "4.2k" in html
-    assert "k-chip-warn" in html  # violated > 0 -> warn tone
-
-
-def test_current_card_no_accountability_meta_no_chip(db_file: Path) -> None:
-    record_tenet(body_md="A belief with no verdict yet.", db_path=db_file)
-    html = render_worldview_body(db_file)
-    assert "upheld" not in html
-    assert "k-chip-warn" not in html
-
-
-def test_current_card_all_upheld_gets_ok_tone_chip(db_file: Path) -> None:
-    import json
-    import sqlite3
-
-    tenet = record_tenet(body_md="A disciplined belief.", scope_key="discipline", db_path=db_file)
-    conn = sqlite3.connect(str(db_file))
-    try:
-        meta = {
-            "accountability": {
-                "as_of_run": "2026-07-20T00:00:00",
-                "upheld": [1],
-                "violated": [],
-                "est_cost_usd": None,
-                "one_liner": "verdict",
-            }
-        }
-        conn.execute(
-            "UPDATE insight_notes SET meta_json = ? WHERE id = ?", (json.dumps(meta), tenet.id)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    html = render_worldview_body(db_file)
-    assert "upheld 1 / violated 0" in html
-    assert "k-chip-ok" in html
 
 
 # ---------------------------------------------------------------------------
@@ -297,12 +149,3 @@ def test_revert_route_brand_new_retires(client: FlaskClient, db_file: Path) -> N
 
 def test_revert_route_missing_is_404(client: FlaskClient) -> None:
     assert client.post("/api/tenets/999999/revert").status_code == 404
-
-
-def test_distill_route_zero_triage_no_llm(client: FlaskClient) -> None:
-    # Nothing flagged ⇒ the deterministic $0 triage short-circuits before any LLM,
-    # so the route is safe to exercise end-to-end in CI.
-    r = client.post("/api/tenets/distill")
-    assert r.status_code == 200
-    j = r.get_json()
-    assert j["ok"] is True and j["candidates"] == 0 and j["proposed"] == 0

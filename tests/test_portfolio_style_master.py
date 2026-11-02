@@ -15,7 +15,6 @@ OWNED = (
     "position_lifecycle_panel.py",
     "portfolio_decision_support.py",
     "allocation_decisions_panel.py",
-    "advisor_memos_panel.py",
 )
 
 
@@ -54,8 +53,6 @@ def test_family_master_exposes_each_composition() -> None:
         "lifecycle_css",
         "allocation_css",
         "decisions_css",
-        "memos_css",
-        "page_css",
     ):
         assert f"def {name}()" in source
 

@@ -77,6 +77,7 @@ from pipeline.cockpit_file_inputs import (
 from pipeline.dashboard_status import DashboardRow, build_dashboard_rows
 from pipeline.freshness import freshness_verdict
 from pipeline.kpi_semantics import semantic_admission_sql
+from portfolio_weights import read_materialized_weights
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import KPI as OVERRIDE_KPI
 from provenance.overrides import active_scalar_override_key_set
@@ -547,9 +548,10 @@ def build_cockpit_rows(
     candidate_fit = read_materialized_candidate_fit(repo_root)
     file_inputs = read_materialized_cockpit_file_inputs(repo_root)
     instrument_types = _instrument_types(conn)
-    # ETF sibling scores (fund-appropriate factors, Stage 0f cache) — read
-    # lazily only when the evaluation list actually carries an ETF.
-    etf_scores: dict[str, AttractivenessBreakdown] | None = None
+    book_weights = (
+        read_materialized_weights(repo_root) if "etf" in instrument_types.values() else {}
+    )
+
     # Whether an owner positioning intent (vs the book default) is the active
     # target — drives the Fit chip's fit-to-target display (v2 cache meta).
     fit_meta = read_materialized_fit_meta(repo_root)
@@ -601,21 +603,12 @@ def build_cockpit_rows(
             fit_target: float | None = None
             sharpe_delta_bps: float | None = None
             fit_degraded: tuple[str, ...] = ()
-            held_weight: float | None = None
             is_etf = instrument_types.get(t) == "etf"
+            held_weight = book_weights.get(t) if is_etf else None
+            if held_weight is not None and not 0.0 <= held_weight <= 1.0:
+                held_weight = None
             if list_type == "evaluation":
-                if is_etf:
-                    # Fund-appropriate score from the Stage 0f cache (the
-                    # equity factors are meaningless for a fund); absent cache
-                    # → no chip, the same degrade as Fit.
-                    if etf_scores is None:
-                        from etf_score_cache import read_materialized_etf_scores
-
-                        etf_scores = read_materialized_etf_scores(repo_root)
-                    ebd = etf_scores.get(t)
-                    if ebd is not None:
-                        score, why, partial = ebd.score, ebd.why, ebd.partial
-                else:
+                if not is_etf:
                     upside = _dcf_upside_pct(fair_value, dcf_price)
                     score, why, partial = eval_attractiveness(
                         dcf_upside_pct=upside,
@@ -623,13 +616,14 @@ def build_cockpit_rows(
                         fcf_margin_pct=fcf_margin,
                         peg_ratio=peg,
                     )
-                cf = candidate_fit.get(t)
+                cf = candidate_fit.get(t) if not is_etf else None
                 if cf is not None:
-                    fit, fit_why, fit_partial = cf.fit, cf.why, cf.partial
-                    fit_target = cf.fit_target
-                    sharpe_delta_bps = cf.sharpe_delta_bps
-                    fit_degraded = cf.degraded
                     held_weight = cf.held_weight
+                    if not is_etf:
+                        fit, fit_why, fit_partial = cf.fit, cf.why, cf.partial
+                        fit_target = cf.fit_target
+                        sharpe_delta_bps = cf.sharpe_delta_bps
+                        fit_degraded = cf.degraded
             built.append(
                 CockpitRow(
                     base=row,
@@ -1323,15 +1317,15 @@ def _row_sort_data(row: CockpitRow, *, thin: bool) -> str:
         + lg.data_text_key("ticker", row.base.ticker)
         + lg.data_num("thesis", float(_THESIS_SORT_RANK.get(status, 0)))
         + lg.data_num("price", row.price)
-        + lg.data_num("fvgap", row.fv_gap_pct)
-        + lg.data_num("peg", row.peg_ratio)
+        + lg.data_num("fvgap", None if row.is_etf else row.fv_gap_pct)
+        + lg.data_num("peg", None if row.is_etf else row.peg_ratio)
         + lg.data_text_key("er", row.next_earnings or "")
     )
     if thin:
         data += (
-            lg.data_num("dsr", row.sharpe_delta_bps)
-            + lg.data_num("revyoy", row.rev_yoy_pct)
-            + lg.data_num("fcfmgn", row.fcf_margin_pct)
+            lg.data_num("dsr", None if row.is_etf else row.sharpe_delta_bps)
+            + lg.data_num("revyoy", None if row.is_etf else row.rev_yoy_pct)
+            + lg.data_num("fcfmgn", None if row.is_etf else row.fcf_margin_pct)
         )
     return data
 
@@ -1339,20 +1333,12 @@ def _row_sort_data(row: CockpitRow, *, thin: bool) -> str:
 def _render_row(row: CockpitRow, now: datetime, *, thin: bool) -> str:
     t = escape(row.base.ticker)
     name_attr = f" title='{escape(row.name)}'" if row.name else ""
-    # ETFs share the evaluation table but score on fund factors — the pill
-    # keeps the mixed table legible and IS the workup doorway (profile,
-    # loadings, look-through, what-if, role one-pager).
-    etf_pill = (
-        f" <a class='k-pill' href='/ticker/{t}' "
-        f"data-peek-url='/api/peek/etf_workup?ticker={t}' "
-        f"data-peek-title='ETF workup · {t}'>ETF</a>"
-        if row.is_etf
-        else ""
-    )
+    # ETFs keep their identity in the mixed table. The research cell stays empty.
+    etf_pill = " <span class='k-pill'>ETF</span>" if row.is_etf else ""
     if row.held_weight is not None:
         etf_pill += (
-            f" <span class='k-chip k-chip-mono' title='already held — fit scored against the "
-            f"ex-self book'>held {row.held_weight * 100.0:.1f}%</span>"
+            f" <span class='k-chip k-chip-mono' title='current portfolio weight'>"
+            f"held {row.held_weight * 100.0:.1f}%</span>"
         )
     # ticker_label() is the ONE ticker renderer (design_language §5) — a direct
     # /#holding=<T> href (no /ticker/<T> redirect hop) and the compact
@@ -1380,8 +1366,8 @@ def _render_row(row: CockpitRow, now: datetime, *, thin: bool) -> str:
     if thin:
         cells.extend(
             [
-                f"<td class='num'>{_signed_pct_cell(row.rev_yoy_pct)}</td>",
-                f"<td class='num'>{_plain_pct_cell(row.fcf_margin_pct)}</td>",
+                f"<td class='num'>{_signed_pct_cell(None if row.is_etf else row.rev_yoy_pct)}</td>",
+                f"<td class='num'>{_plain_pct_cell(None if row.is_etf else row.fcf_margin_pct)}</td>",
             ]
         )
     cells.extend(
@@ -1400,7 +1386,7 @@ def _render_row(row: CockpitRow, now: datetime, *, thin: bool) -> str:
 def _sharpe_delta_cell(row: CockpitRow) -> str:
     """The ΔSR chip: modeled-book Sharpe change (bps) at the default 3% what-if
     weight — a doorway into the full before/after what-if peek."""
-    if row.sharpe_delta_bps is None:
+    if row.is_etf or row.sharpe_delta_bps is None:
         return _muted()
     v = row.sharpe_delta_bps
     cls = "k-chip k-chip-mono"
@@ -1495,6 +1481,8 @@ def _price_cell(row: CockpitRow) -> str:
 
 
 def _fv_gap_cell(row: CockpitRow) -> str:
+    if row.is_etf:
+        return _muted()
     if row.dcf_unreviewed:
         # The trust gate (dcf_runs.sanity_flag): say WHY there is no gap signal —
         # a silent "—" would read as "no model" when the truth is "broken model".
@@ -1516,7 +1504,7 @@ def _fv_gap_cell(row: CockpitRow) -> str:
 
 
 def _peg_cell(row: CockpitRow) -> str:
-    if row.peg_ratio is None:
+    if row.is_etf or row.peg_ratio is None:
         return _muted()
     return f"{row.peg_ratio:.1f}"
 

@@ -10,21 +10,18 @@ default" comes from the data (Phase 1 only ever stages `proposed` facts).
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from llm.anchors import (  # noqa: E402
+from db_paths import db_path_context
+from llm.anchors import (
     OWNER_PROFILE_ANCHOR_CHAR_CAP,
     compose_anchor_block,
     load_owner_profile_anchor,
 )
-from owner_profile.store import affirm_fact, append_fact  # noqa: E402
+from owner_profile.store import append_fact
 
 _DDL = """
 CREATE TABLE owner_profile_facts (
@@ -59,28 +56,28 @@ def repo_root(tmp_path: Path) -> Iterator[Path]:
     conn.executescript(_DDL)
     conn.commit()
     conn.close()
-    yield tmp_path
+    with db_path_context(data_dir / "portfolio.db"):
+        yield tmp_path
 
 
 def _db(repo_root: Path) -> Path:
     return repo_root / "data" / "portfolio.db"
 
 
-def _stage_and_affirm(
-    repo_root: Path, *, category: str = "capacity", key: str = "cash_buffer_months"
+def _stage_process_fact(
+    repo_root: Path, *, category: str = "appetite", key: str = "cash_floor_rule"
 ) -> None:
     conn = sqlite3.connect(str(_db(repo_root)))
     try:
-        fact_id = append_fact(
+        append_fact(
             conn,
             category=category,
             key=key,
-            value={"months": 6.0},
-            narrative="Target cash buffer: 6 months of spend.",
-            provenance="wealthplan_import",
-            status="proposed",
+            value={"floor_pct": 5.0},
+            narrative="Keep at least 5% in cash.",
+            provenance="owner",
+            status="affirmed",
         )
-        affirm_fact(conn, fact_id)
         conn.commit()
     finally:
         conn.close()
@@ -115,35 +112,25 @@ def test_anchor_empty_when_only_proposed(repo_root: Path) -> None:
     assert load_owner_profile_anchor(repo_root) == ""
 
 
-def test_anchor_renders_affirmed_facts(repo_root: Path) -> None:
-    _stage_and_affirm(repo_root)
-    anchor = load_owner_profile_anchor(repo_root)
-    assert "OWNER PROFILE ANCHOR" in anchor
-    assert "Soft priors" in anchor and "NOT rules" in anchor
-    assert "6 months of spend" in anchor
-    assert "(as of 20" in anchor  # dated for cache stability
-
-
 def test_anchor_only_affirmed_not_proposed_or_rejected(repo_root: Path) -> None:
     conn = sqlite3.connect(str(_db(repo_root)))
     try:
-        affirmed_id = append_fact(
-            conn,
-            category="capacity",
-            key="cash_buffer_months",
-            value={"months": 6.0},
-            narrative="an affirmed fact",
-            provenance="wealthplan_import",
-            status="proposed",
-        )
-        affirm_fact(conn, affirmed_id)
         append_fact(
             conn,
-            category="capacity",
+            category="appetite",
+            key="cash_buffer_months",
+            value={"floor_pct": 5.0},
+            narrative="an affirmed fact",
+            provenance="owner",
+            status="affirmed",
+        )
+        append_fact(
+            conn,
+            category="appetite",
             key="home_city",
-            value={"city": "Austin"},
+            value={"floor_pct": 4.0},
             narrative="a still-proposed fact",
-            provenance="wealthplan_import",
+            provenance="owner",
             status="proposed",
         )
         rejected_id = append_fact(
@@ -168,12 +155,14 @@ def test_anchor_only_affirmed_not_proposed_or_rejected(repo_root: Path) -> None:
 
 
 def test_anchor_missing_db_degrades(tmp_path: Path) -> None:
-    assert load_owner_profile_anchor(tmp_path) == ""  # no data/portfolio.db, never raises
+    missing_db = tmp_path / "unavailable" / "portfolio.db"
+    with db_path_context(missing_db):
+        assert load_owner_profile_anchor(tmp_path) == ""  # never raises
 
 
 def test_anchor_is_deterministic(repo_root: Path) -> None:
-    _stage_and_affirm(repo_root, key="cash_buffer_months")
-    _stage_and_affirm(repo_root, category="capacity", key="home_city")
+    _stage_process_fact(repo_root, key="cash_floor_rule")
+    _stage_process_fact(repo_root, category="behavioral", key="sell_discipline")
     assert load_owner_profile_anchor(repo_root) == load_owner_profile_anchor(repo_root)
 
 
@@ -181,20 +170,20 @@ def test_anchor_respects_char_cap(repo_root: Path) -> None:
     conn = sqlite3.connect(str(_db(repo_root)))
     try:
         for i in range(60):
-            fact_id = append_fact(
+            append_fact(
                 conn,
-                category="capacity",
-                key=f"life_event.baby_{i}",
+                category="behavioral",
+                key=f"rule_{i}",
                 value={
-                    "kind": "baby",
-                    "label": f"belief number {i} " * 8,
-                    "date": "2031-01-01",
+                    "rule_text": f"belief number {i} " * 8,
+                    "citations": [],
+                    "wrong": 0,
+                    "total": 0,
                 },
                 narrative=f"belief number {i} " * 8,
-                provenance="wealthplan_import",
-                status="proposed",
+                provenance="owner",
+                status="affirmed",
             )
-            affirm_fact(conn, fact_id)
         conn.commit()
     finally:
         conn.close()

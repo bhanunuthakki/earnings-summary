@@ -118,11 +118,18 @@ def _run_main(
     def next_run(*_a: object, **_k: object) -> EvalRunSummary:
         return queue.pop(0)
 
-    monkeypatch.setattr(run_llm_evals, "_sync_db_to_repo", _no_sync)
     monkeypatch.setattr(run_llm_evals, "_run_purpose", next_run)
     monkeypatch.setattr(
         "sys.argv",
-        ["run_llm_evals.py", "--repo-root", str(tmp_path), "--no-persist", *argv],
+        [
+            "run_llm_evals.py",
+            "--repo-root",
+            str(tmp_path),
+            "--db",
+            str(tmp_path / "data" / "portfolio.db"),
+            "--no-persist",
+            *argv,
+        ],
     )
     return run_llm_evals.main()
 
@@ -168,13 +175,14 @@ def test_runner_usage_errors_still_exit_1(
     """Moving dispatch into a function must not change the CLI contract."""
     (tmp_path / "data").mkdir()
     (tmp_path / "data" / "portfolio.db").write_bytes(b"")
-    monkeypatch.setattr(run_llm_evals, "_sync_db_to_repo", _no_sync)
     monkeypatch.setattr(
         "sys.argv",
         [
             "run_llm_evals.py",
             "--repo-root",
             str(tmp_path),
+            "--db",
+            str(tmp_path / "data" / "portfolio.db"),
             "--purpose",
             "bear_case",
             "--no-judge",

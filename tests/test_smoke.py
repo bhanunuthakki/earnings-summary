@@ -94,15 +94,9 @@ def test_artifact_parser_canonical_names() -> None:
     assert audio is not None
     assert audio.kind == ArtifactKind.AUDIO
 
-    saydo = parse_tmp_artifact("SayDo_NVDA_Q4_2023_Q1_2024.txt")
-    assert saydo is not None
-    assert saydo.kind == ArtifactKind.SAYDO
-    assert saydo.quarter == Quarter.Q1
-    assert saydo.year == 2024
-
-    summary = parse_tmp_artifact("GOOGL_Q2_2024_summary.txt")
-    assert summary is not None
-    assert summary.kind == ArtifactKind.LLM_SUMMARY
+    assert parse_tmp_artifact("SayDo_NVDA_Q4_2023_Q1_2024.txt") is None
+    assert parse_tmp_artifact("GOOGL_Q2_2024_summary.txt") is None
+    assert parse_tmp_artifact("NU_Q2_2024_investor_update_summary.txt") is None
 
 
 def test_artifact_parser_silent_misclassification_fixed() -> None:
@@ -126,4 +120,3 @@ def test_artifact_flags_default_all_false() -> None:
     assert not f.has_release_file
     assert not f.has_transcript_file
     assert not f.has_audio_file
-    assert not f.step_llm_summarized

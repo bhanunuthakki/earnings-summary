@@ -265,52 +265,6 @@ def test_decision_history_aggregates_and_computes_win_rate(tmp_path: Path) -> No
     assert abs(hist.win_rate_overall - 0.75) < 1e-9
 
 
-def test_saydo_verdicts_returns_typed_rows(tmp_path: Path) -> None:
-    db = tmp_path / "portfolio.db"
-    conn = sqlite3.connect(str(db))
-    conn.execute(
-        """
-        CREATE TABLE management_commitments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_made TIMESTAMP NOT NULL,
-            transcript_segment_id INTEGER NOT NULL,
-            period_target TIMESTAMP NOT NULL,
-            kpi_name TEXT NOT NULL,
-            comparator TEXT NOT NULL,
-            target_value NUMERIC NOT NULL,
-            unit TEXT NOT NULL,
-            narrative TEXT NOT NULL,
-            realized_value NUMERIC,
-            realized_doc_id INTEGER,
-            outcome TEXT,
-            evaluated_at TIMESTAMP,
-            created_at TIMESTAMP NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        """
-        INSERT INTO management_commitments
-          (ticker, period_made, transcript_segment_id, period_target,
-           kpi_name, comparator, target_value, unit, narrative,
-           realized_value, outcome, evaluated_at, created_at)
-        VALUES ('GOOG', '2025-10-30 00:00:00', 1, '2025-12-31 00:00:00',
-                'Cloud revenue growth', '>=', 30.0, 'percent',
-                'Cloud growth at the prior quarter pace through year-end',
-                32.0, 'met', '2026-01-30 00:00:00', '2025-10-30 00:00:00')
-        """
-    )
-    conn.commit()
-    conn.close()
-
-    out = load_saydo_verdicts("GOOG", db_path=db)
-    assert len(out) == 1
-    assert out[0].kpi_name == "Cloud revenue growth"
-    assert out[0].outcome == "met"
-    assert out[0].realized_value == 32.0
-
-
 def test_peer_comp_returns_empty_when_files_missing(tmp_path: Path) -> None:
     """Cold-start eval — no FMP peers JSON yet — returns []."""
     out = load_peer_comp_legacy_shadow("XYZ", repo_root=tmp_path)

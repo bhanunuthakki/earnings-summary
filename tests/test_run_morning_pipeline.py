@@ -2,7 +2,7 @@
 
 The orchestrator runs an unconditional environment preflight, then dispatches
 the subprocess stages (news -> decisions -> lifecycle -> fundamentals ->
-reprice -> candidate_fit -> factor_proxies -> triggers -> standup -> feed ->
+reprice -> candidate_fit -> factor_proxies -> triggers -> pre-earnings briefs -> feed ->
 validate) as manifest-driven, bounded-parallel LANES: a stage starts once its
 declared scheduling dependencies have settled, independent read/compute stages
 overlap the single in-flight DB writer, and every stage keeps its own timeout
@@ -42,8 +42,8 @@ from execution import run_morning_pipeline
 from pipeline.morning_manifest import (
     STAGE_FEED,
     STAGE_MANIFEST,
+    STAGE_PRE_ER_BRIEF,
     STAGE_REPRICE,
-    STAGE_STANDUP,
     STAGE_TRIGGERS,
     ArgumentProfile,
     StageSpec,
@@ -80,7 +80,6 @@ POSITION_GUARD_SCRIPT = "refresh_position_guard.py"
 RISK_SNAPSHOT_SCRIPT = "refresh_portfolio_risk_snapshot.py"
 WEALTH_CONTEXT_SCRIPT = "refresh_wealth_context_snapshot.py"
 TRIGGERS_SCRIPT = "run_triggers.py"
-STANDUP_SCRIPT = "run_standup.py"
 PRE_ER_BRIEF_SCRIPT = "generate_pre_earnings_briefs.py"
 POST_ER_READOUT_SCRIPT = "generate_post_earnings_readouts.py"
 FEED_SCRIPT = "build_alert_feed.py"
@@ -106,7 +105,6 @@ _ALL_SCRIPTS = [
     RISK_SNAPSHOT_SCRIPT,
     WEALTH_CONTEXT_SCRIPT,
     TRIGGERS_SCRIPT,
-    STANDUP_SCRIPT,
     PRE_ER_BRIEF_SCRIPT,
     POST_ER_READOUT_SCRIPT,
     FEED_SCRIPT,
@@ -236,7 +234,9 @@ def test_manifest_is_complete_ordered_and_selection_dependency_valid() -> None:
     specs = run_morning_pipeline.STAGE_MANIFEST
     keys = [spec.key for spec in specs]
 
-    assert len(keys) == len(set(keys)) == 21
+    assert len(keys) == len(set(keys)) == 20
+    assert "stage_1b_standup" not in keys
+    assert all(spec.script != "run_standup.py" for spec in specs)
     positions = {key: index for index, key in enumerate(keys)}
     for spec in specs:
         assert spec.script.endswith(".py")
@@ -302,18 +302,17 @@ def test_only_selects_target_and_transitive_selection_dependencies(
     fake = _RecordingRun()
     _install_fake(monkeypatch, fake)
 
-    assert run_morning_pipeline.main(["--only", STAGE_STANDUP]) == 0
+    assert run_morning_pipeline.main(["--only", STAGE_PRE_ER_BRIEF]) == 0
 
     # The focused selection is exactly the manifest's transitive selection
-    # closure; the standup (a writer, and the only stage whose deps are all
-    # settled by the time the sweep finishes) is dispatched last.
+    # closure; the selected pre-earnings writer follows the trigger sweep.
     expected = [
         spec.script
         for spec in run_morning_pipeline.STAGE_MANIFEST
-        if spec.key in selection_closure(STAGE_STANDUP)
+        if spec.key in selection_closure(STAGE_PRE_ER_BRIEF)
     ]
     _assert_ran_exactly(fake, expected)
-    assert fake.scripts[-1] == STANDUP_SCRIPT
+    assert fake.scripts[-1] == PRE_ER_BRIEF_SCRIPT
     assert PREFLIGHT_SCRIPT in fake.scripts
     assert TRIGGERS_SCRIPT in fake.scripts
     assert FEED_SCRIPT not in fake.scripts
@@ -372,7 +371,7 @@ def test_resume_checkpoint_expires_after_eighteen_hours(
 
     assert run_morning_pipeline.main([]) == 0
 
-    assert len(second.scripts) == 21
+    assert len(second.scripts) == 20
 
 
 def test_resume_checkpoint_is_valid_through_exact_eighteen_hour_boundary(
@@ -413,7 +412,7 @@ def test_legacy_unversioned_checkpoint_is_not_activated(
 
     assert run_morning_pipeline.main([]) == 0
 
-    assert len(fake.scripts) == 21
+    assert len(fake.scripts) == 20
 
 
 def test_checkpoint_scope_binds_run_date_and_manifest_digest(
@@ -469,8 +468,8 @@ def test_checkpoint_write_failure_is_loud_without_short_circuiting_stages(
 
     monkeypatch.setattr(run_morning_pipeline.os, "replace", fail_replace)
 
-    assert run_morning_pipeline.main(["--db-path", str(tmp_path / "missing.db")]) == 21
-    assert len(fake.scripts) == 21
+    assert run_morning_pipeline.main(["--db-path", str(tmp_path / "missing.db")]) == 20
+    assert len(fake.scripts) == 20
 
 
 def test_main_uses_configured_db_path_for_parent_and_children(
@@ -568,7 +567,7 @@ def test_all_stages_succeed(
     _assert_ran_exactly(fake, _ALL_SCRIPTS)
 
     order = run_morning_pipeline.last_dispatch_order()
-    assert len(order) == 21
+    assert len(order) == 20
     positions = {key: index for index, key in enumerate(order)}
     for spec in run_morning_pipeline.STAGE_MANIFEST:
         for dependency in (*spec.selection_dependencies, *spec.lane_dependencies):
@@ -588,7 +587,6 @@ def test_all_stages_succeed(
     assert summary["stage_0g_factor_proxies"] == "ok"
     assert summary["stage_0h_position_guard"] == "ok"
     assert summary["stage_1_triggers"] == "ok"
-    assert summary["stage_1b_standup"] == "ok"
     assert summary["stage_2_feed"] == "ok"
     assert summary["stage_3_validate"] == "ok"
     assert "elapsed_seconds" in summary
@@ -660,8 +658,7 @@ def test_feed_failure_still_runs_validation(
 def test_all_stages_fail_exit_code_counts_failures(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Every stage failing (preflight included) → all sixteen still attempted,
-    exit code == 16."""
+    """Fifteen stages fail; every stage runs and the exit code counts failures."""
     fake = _RecordingRun(
         returncodes={
             PREFLIGHT_SCRIPT: 1,
@@ -677,7 +674,6 @@ def test_all_stages_fail_exit_code_counts_failures(
             FACTOR_PROXIES_SCRIPT: 1,
             POSITION_GUARD_SCRIPT: 1,
             TRIGGERS_SCRIPT: 1,
-            STANDUP_SCRIPT: 1,
             FEED_SCRIPT: 1,
             VALIDATE_SCRIPT: 2,
         }
@@ -686,7 +682,7 @@ def test_all_stages_fail_exit_code_counts_failures(
 
     rc = run_morning_pipeline.main([])
 
-    assert rc == 16
+    assert rc == 15
     _assert_ran_exactly(fake, _ALL_SCRIPTS)
 
     summary = _parse_summary(capsys.readouterr().out)
@@ -703,7 +699,6 @@ def test_all_stages_fail_exit_code_counts_failures(
     assert summary["stage_0g_factor_proxies"] == "failed"
     assert summary["stage_0h_position_guard"] == "failed"
     assert summary["stage_1_triggers"] == "failed"
-    assert summary["stage_1b_standup"] == "failed"
     assert summary["stage_2_feed"] == "failed"
     assert summary["stage_3_validate"] == "failed"
 
@@ -796,7 +791,7 @@ def test_skip_triggers_runs_only_the_feed_render(
     assert TRIGGERS_SCRIPT not in fake.scripts
     # --skip-triggers also skips stage 0 (no point fetching news we won't classify)
     # and stages 0b/0c (the decision_condition sensor won't run; the ledger
-    # reconciles tomorrow), and stage 1b standup (it watches what the sweep refreshes).
+    # reconciles tomorrow).
     assert NEWS_SCRIPT not in fake.scripts
     assert DECISIONS_SCRIPT not in fake.scripts
     assert LIST_TYPE_SCRIPT not in fake.scripts
@@ -805,7 +800,6 @@ def test_skip_triggers_runs_only_the_feed_render(
     assert FUNDAMENTALS_SCRIPT not in fake.scripts
     assert DERIVED_METRICS_SCRIPT not in fake.scripts
     assert REPRICE_SCRIPT not in fake.scripts
-    assert STANDUP_SCRIPT not in fake.scripts
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_0_news"] == "skipped"
@@ -817,7 +811,6 @@ def test_skip_triggers_runs_only_the_feed_render(
     assert summary["stage_0d2_derived_metrics"] == "skipped"
     assert summary["stage_0e_reprice"] == "skipped"
     assert summary["stage_1_triggers"] == "skipped"
-    assert summary["stage_1b_standup"] == "skipped"
     assert summary["stage_2_feed"] == "ok"
     # --skip-triggers (re-render only) also skips the validation gate.
     assert summary["stage_3_validate"] == "skipped"
@@ -884,53 +877,6 @@ def test_skip_validation_removes_only_stage3(
     assert summary["stage_3_validate"] == "skipped"
 
 
-def test_skip_standup_removes_only_stage1b(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """--skip-standup drops stage 1b (the paid advisory leg) but keeps the
-    trigger sweep, the feed render, and the validation gate."""
-    fake = _RecordingRun()
-    _install_fake(monkeypatch, fake)
-
-    rc = run_morning_pipeline.main(["--skip-standup"])
-    assert rc == 0
-    assert STANDUP_SCRIPT not in fake.scripts
-    assert TRIGGERS_SCRIPT in fake.scripts
-    assert FEED_SCRIPT in fake.scripts
-
-    summary = _parse_summary(capsys.readouterr().out)
-    assert summary["stage_1_triggers"] == "ok"
-    assert summary["stage_1b_standup"] == "skipped"
-    assert summary["stage_2_feed"] == "ok"
-
-
-def test_stage1b_standup_runs_after_triggers_with_user_and_db_path(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Stage 1b runs run_standup.py AFTER the trigger sweep (so it watches fresh
-    decision-condition state) and is forwarded --user-id + --db-path, never
-    --max-cost-usd (it owns its own rate-limit / eval-bar defaults)."""
-    fake = _RecordingRun()
-    _install_fake(monkeypatch, fake)
-    db_path = tmp_path / "alt.db"
-
-    rc = run_morning_pipeline.main(
-        ["--db-path", str(db_path), "--repo-root", str(tmp_path), "--user-id", "alice"]
-    )
-    assert rc == 0
-    # Standup follows the sweep (its declared dependency); the feed also waits
-    # for the sweep but may overlap the standup lane — no ordering is pinned
-    # between those two independent stages.
-    order = run_morning_pipeline.last_dispatch_order()
-    assert order.index(STAGE_TRIGGERS) < order.index(STAGE_STANDUP)
-    assert order.index(STAGE_TRIGGERS) < order.index(STAGE_FEED)
-
-    standup_argv = next(c for c in fake.calls if _script_of(c) == STANDUP_SCRIPT)
-    assert _has_flag(standup_argv, "--user-id", "alice")
-    assert _has_flag(standup_argv, "--db-path", str(db_path))
-    assert "--max-cost-usd" not in standup_argv
-
-
 def test_skip_post_earnings_readouts_removes_only_stage1d(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -945,22 +891,6 @@ def test_skip_post_earnings_readouts_removes_only_stage1d(
     assert TRIGGERS_SCRIPT in fake.scripts
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_1d_post_earnings_readouts"] == "skipped"
-
-
-def test_standup_failure_still_runs_feed(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A standup failure is counted but never blocks the feed render — it is a
-    paid advisory side-channel, not on the feed's critical path."""
-    fake = _RecordingRun(returncodes={STANDUP_SCRIPT: 1})
-    _install_fake(monkeypatch, fake)
-
-    rc = run_morning_pipeline.main([])
-    assert rc == 1
-    summary = _parse_summary(capsys.readouterr().out)
-    assert summary["stage_1b_standup"] == "failed"
-    assert summary["stage_2_feed"] == "ok"
-    assert summary["stage_3_validate"] == "ok"
 
 
 def test_validation_gate_receives_db_path_when_set(

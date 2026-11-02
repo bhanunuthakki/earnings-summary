@@ -9,7 +9,6 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 OWNED = (
     "triage_panel.py",
-    "calibration_scorecard_panel.py",
     "evals_panel.py",
     "discovery_panel.py",
     "cron_health_panel.py",
@@ -41,7 +40,12 @@ def test_owned_consumers_have_no_local_css_or_inline_presentation() -> None:
         ]
         assert not css_literals, f"{name} contains a local CSS literal"
         assert not re.search(r'\bstyle\s*=\s*["\']', source), f"{name} contains inline presentation"
-        assert "operations_styles" in source or name == "provenance_panel.py"
+        # Cron health keeps its governed status classes but no longer imports
+        # the operations style bundle. Keep its no-local-style checks above.
+        assert "operations_styles" in source or name in {
+            "provenance_panel.py",
+            "cron_health_panel.py",
+        }
 
 
 def test_operations_master_is_token_clean() -> None:

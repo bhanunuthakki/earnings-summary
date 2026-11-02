@@ -123,7 +123,7 @@ def test_mid_enumeration_exhaustion_directories(tmp_path: Path) -> None:
 def test_mid_enumeration_exhaustion_entries(tmp_path: Path) -> None:
     _setup_base_tree(tmp_path)
     for i in range(10):
-        (tmp_path / ".tmp" / f"TEST_Q{i % 4 + 1}_202{i // 4}_summary.txt").write_text(
+        (tmp_path / "transcripts" / "processed" / f"TEST_Q{i % 4 + 1}_202{i // 4}.txt").write_text(
             f"summary {i}", encoding="utf-8"
         )
 
@@ -131,7 +131,7 @@ def test_mid_enumeration_exhaustion_entries(tmp_path: Path) -> None:
     session = ReportFileCaptureSession(repo_root=tmp_path, budget=budget)
 
     with pytest.raises(FileCaptureUnavailableError) as exc_info:
-        session.record_directory_selection("S1", "TEST")
+        session.record_directory_selection("S2", "TEST")
     assert exc_info.value.reason == "budget_exhausted"
     assert session.total_examined_entries == 6
 
@@ -149,7 +149,7 @@ def test_mid_enumeration_exhaustion_entries(tmp_path: Path) -> None:
         repo_root=tmp_path, budget=budget, scandir_fn=_counting_scandir
     )
     with pytest.raises(FileCaptureUnavailableError) as exc_info2:
-        session_gen.record_directory_selection("S1", "TEST")
+        session_gen.record_directory_selection("S2", "TEST")
     assert exc_info2.value.reason == "budget_exhausted"
     assert session_gen.total_examined_entries == 6
     assert yield_count == 6  # Exactly ceiling + 1; proves list(...) was never called
@@ -158,7 +158,7 @@ def test_mid_enumeration_exhaustion_entries(tmp_path: Path) -> None:
 def test_mid_enumeration_exhaustion_selected_members(tmp_path: Path) -> None:
     _setup_base_tree(tmp_path)
     for i in range(5):
-        (tmp_path / ".tmp" / f"TEST_Q{i + 1}_2025_summary.txt").write_text(
+        (tmp_path / "transcripts" / "processed" / f"TEST_Q{i + 1}_2025.txt").write_text(
             f"summary {i}", encoding="utf-8"
         )
 
@@ -166,21 +166,21 @@ def test_mid_enumeration_exhaustion_selected_members(tmp_path: Path) -> None:
     session = ReportFileCaptureSession(repo_root=tmp_path, budget=budget)
 
     with pytest.raises(FileCaptureUnavailableError) as exc_info:
-        session.record_directory_selection("S1", "TEST")
+        session.record_directory_selection("S2", "TEST")
     assert exc_info.value.reason == "budget_exhausted"
     assert session.total_selected_members == 4
 
 
 def test_mid_enumeration_exhaustion_retained_metadata(tmp_path: Path) -> None:
     _setup_base_tree(tmp_path)
-    (tmp_path / ".tmp" / "TEST_Q1_2025_summary.txt").write_text("s1", encoding="utf-8")
-    (tmp_path / ".tmp" / "TEST_Q2_2025_summary.txt").write_text("s2", encoding="utf-8")
+    (tmp_path / "transcripts" / "processed" / "TEST_Q1_2025.txt").write_text("s1", encoding="utf-8")
+    (tmp_path / "transcripts" / "processed" / "TEST_Q2_2025.txt").write_text("s2", encoding="utf-8")
 
     budget = FileCaptureBudget(max_retained_metadata_bytes=100)
     session = ReportFileCaptureSession(repo_root=tmp_path, budget=budget)
 
     with pytest.raises(FileCaptureUnavailableError) as exc_info:
-        session.record_directory_selection("S1", "TEST")
+        session.record_directory_selection("S2", "TEST")
     assert exc_info.value.reason == "budget_exhausted"
     assert session.total_retained_metadata_bytes > 100
 
@@ -198,7 +198,7 @@ def test_forbidden_selector_and_path_inputs(tmp_path: Path) -> None:
 
     s2 = ReportFileCaptureSession(repo_root=tmp_path)
     with pytest.raises(FileCaptureUnavailable) as exc2:
-        s2.record_directory_selection("S1", "../../etc")
+        s2.record_directory_selection("S2", "../../etc")
     assert exc2.value.reason == "forbidden_selector"
     with pytest.raises(FileCaptureUnavailable) as seal_exc2:
         s2.seal()
@@ -206,7 +206,7 @@ def test_forbidden_selector_and_path_inputs(tmp_path: Path) -> None:
 
     s3 = ReportFileCaptureSession(repo_root=tmp_path)
     with pytest.raises(FileCaptureUnavailable) as exc3:
-        s3.record_directory_selection("S1", "TEST/secret")
+        s3.record_directory_selection("S2", "TEST/secret")
     assert exc3.value.reason == "forbidden_selector"
     with pytest.raises(FileCaptureUnavailable) as seal_exc3:
         s3.seal()
@@ -268,32 +268,6 @@ def test_transcripts_dual_dir_winner_and_duplicate_keys(tmp_path: Path) -> None:
         replay_file_capture(receipt1, tmp_path, scandir_fn=_order_reverse)
 
 
-def test_quarterly_summaries_last_write_wins_duplicate_keys(tmp_path: Path) -> None:
-    _setup_base_tree(tmp_path)
-    tmp_dir = tmp_path / ".tmp"
-    f_sum = tmp_dir / "NU_Q4_2025_summary.txt"
-    f_inv = tmp_dir / "NU_Q4_2025_investor_update_summary.txt"
-    f_sum.write_text("standard summary", encoding="utf-8")
-    f_inv.write_text("investor update summary", encoding="utf-8")
-
-    # Force ordering: f_sum then f_inv
-    def _order_forward(_path: str | Path) -> Iterable[os.DirEntry[str]]:
-        return sorted(os.scandir(_path), key=lambda e: e.name)
-
-    session1 = ReportFileCaptureSession(repo_root=tmp_path, scandir_fn=_order_forward)
-    comm1 = session1.record_directory_selection("quarterly_summaries_tmp_v1", "NU")
-    # NU_Q4_2025_summary.txt comes after NU_Q4_2025_investor_update_summary.txt in sort order
-    assert comm1.effective_winners["Q4_2025"] == ".tmp/NU_Q4_2025_summary.txt"
-
-    # Force reverse ordering: f_inv comes last
-    def _order_reverse(_path: str | Path) -> Iterable[os.DirEntry[str]]:
-        return sorted(os.scandir(_path), key=lambda e: e.name, reverse=True)
-
-    session2 = ReportFileCaptureSession(repo_root=tmp_path, scandir_fn=_order_reverse)
-    comm2 = session2.record_directory_selection("quarterly_summaries_tmp_v1", "NU")
-    assert comm2.effective_winners["Q4_2025"] == ".tmp/NU_Q4_2025_investor_update_summary.txt"
-
-
 def test_themes_recent_transcripts(tmp_path: Path) -> None:
     _setup_base_tree(tmp_path)
     p_dir = tmp_path / "transcripts" / "processed"
@@ -314,36 +288,6 @@ def test_themes_recent_transcripts(tmp_path: Path) -> None:
     # Expect exactly the 4 most recent quarters: Q3_2024, Q4_2024, Q1_2025, Q2_2025
     expected_keys = {"Q3_2024", "Q4_2024", "Q1_2025", "Q2_2025"}
     assert set(comm.effective_winners.keys()) == expected_keys
-
-
-def test_ir_briefs_and_saydo_and_price_chart_selectors(tmp_path: Path) -> None:
-    _setup_base_tree(tmp_path)
-    tmp_dir = tmp_path / ".tmp"
-    fmp_dir = tmp_path / "data" / "historical" / "fmp"
-    fmp_dir.mkdir(parents=True, exist_ok=True)
-
-    # IR briefs
-    (tmp_dir / "TEST_Q1_2025_press_release_summary.txt").write_text("pr", encoding="utf-8")
-    (tmp_dir / "TEST_Q1_2025_presentation_brief.txt").write_text("pres", encoding="utf-8")
-
-    # SayDo
-    (tmp_dir / "SayDo_TEST_Q4_2024_Q1_2025.txt").write_text("saydo", encoding="utf-8")
-
-    # FMP price chart
-    (fmp_dir / "GOOG_historical_price_chart_v1.json").write_text("{}", encoding="utf-8")
-    (fmp_dir / "GOOGL_historical_price_chart_v1.json").write_text("{}", encoding="utf-8")
-
-    session = ReportFileCaptureSession(repo_root=tmp_path)
-
-    ir_comm = session.record_directory_selection("ir_briefs_tmp_v1", "TEST")
-    assert "2025_Q1_press_release_summary" in ir_comm.effective_winners
-    assert "2025_Q1_presentation_brief" in ir_comm.effective_winners
-
-    saydo_comm = session.record_directory_selection("saydo_cards_tmp_v1", "TEST")
-    assert "Q1_2025_Q4_2024" in saydo_comm.effective_winners
-
-    goog_comm = session.record_directory_selection("fmp_price_chart_v1", "GOOG")
-    assert len(goog_comm.selected_relative_paths) == 2
 
 
 def test_fixed_path_selectors(tmp_path: Path) -> None:
@@ -368,13 +312,13 @@ def test_fixed_path_selectors(tmp_path: Path) -> None:
 
 def test_replay_verification_and_tamper_detection(tmp_path: Path) -> None:
     _setup_base_tree(tmp_path)
-    tmp_dir = tmp_path / ".tmp"
-    f1 = tmp_dir / "TEST_Q1_2025_summary.txt"
+    tmp_dir = tmp_path / "transcripts" / "processed"
+    f1 = tmp_dir / "TEST_Q1_2025.txt"
     f1.write_text("original summary", encoding="utf-8")
 
     session = ReportFileCaptureSession(repo_root=tmp_path)
-    session.record_directory_selection("S1", "TEST")
-    session.read_text(".tmp/TEST_Q1_2025_summary.txt")
+    session.record_directory_selection("S2", "TEST")
+    session.read_text("transcripts/processed/TEST_Q1_2025.txt")
     receipt = session.seal()
 
     # Replay succeeds on untouched tree
@@ -388,7 +332,7 @@ def test_replay_verification_and_tamper_detection(tmp_path: Path) -> None:
 
     # Restore content, now add an unexpected matching file
     f1.write_text("original summary", encoding="utf-8")
-    f2 = tmp_dir / "TEST_Q2_2025_summary.txt"
+    f2 = tmp_dir / "TEST_Q2_2025.txt"
     f2.write_text("new quarter", encoding="utf-8")
     with pytest.raises(FileCaptureMismatchError):
         replay_file_capture(receipt, tmp_path)
@@ -402,9 +346,9 @@ def test_replay_verification_and_tamper_detection(tmp_path: Path) -> None:
 
 def test_replay_mismatch_on_winner_order_reversal(tmp_path: Path) -> None:
     _setup_base_tree(tmp_path)
-    tmp_dir = tmp_path / ".tmp"
-    (tmp_dir / "NU_Q4_2025_summary.txt").write_text("sum", encoding="utf-8")
-    (tmp_dir / "NU_Q4_2025_investor_update_summary.txt").write_text("inv", encoding="utf-8")
+    tmp_dir = tmp_path / "transcripts" / "processed"
+    (tmp_dir / "NU_Q4_2025.txt").write_text("sum", encoding="utf-8")
+    (tmp_dir / "NU_Q4_2025.pdf").write_text("inv", encoding="utf-8")
 
     def _fwd(p: str | Path) -> Iterable[os.DirEntry[str]]:
         return sorted(os.scandir(p), key=lambda e: e.name)
@@ -413,7 +357,7 @@ def test_replay_mismatch_on_winner_order_reversal(tmp_path: Path) -> None:
         return sorted(os.scandir(p), key=lambda e: e.name, reverse=True)
 
     session = ReportFileCaptureSession(repo_root=tmp_path, scandir_fn=_fwd)
-    session.record_directory_selection("S1", "NU")
+    session.record_directory_selection("S2", "NU")
     receipt = session.seal()
 
     # Replaying with reversed order alters effective_winners -> must fail closed
@@ -613,8 +557,12 @@ def test_peer_fundamentals_s13_expansion_and_fmp_isolation(tmp_path: Path) -> No
 
 def test_non_competing_reorder_invariance(tmp_path: Path) -> None:
     _setup_base_tree(tmp_path)
-    (tmp_path / ".tmp" / "NU_Q1_2025_summary.txt").write_text("q1 summary", encoding="utf-8")
-    (tmp_path / ".tmp" / "NU_Q2_2025_summary.txt").write_text("q2 summary", encoding="utf-8")
+    (tmp_path / "transcripts" / "processed" / "NU_Q1_2025.txt").write_text(
+        "q1 summary", encoding="utf-8"
+    )
+    (tmp_path / "transcripts" / "processed" / "NU_Q2_2025.txt").write_text(
+        "q2 summary", encoding="utf-8"
+    )
 
     def _fwd(p: str | Path) -> Iterable[os.DirEntry[str]]:
         return sorted(os.scandir(p), key=lambda e: e.name)
@@ -623,10 +571,10 @@ def test_non_competing_reorder_invariance(tmp_path: Path) -> None:
         return sorted(os.scandir(p), key=lambda e: e.name, reverse=True)
 
     session_fwd = ReportFileCaptureSession(repo_root=tmp_path, scandir_fn=_fwd)
-    c_fwd = session_fwd.record_directory_selection("S1", "NU")
+    c_fwd = session_fwd.record_directory_selection("S2", "NU")
 
     session_rev = ReportFileCaptureSession(repo_root=tmp_path, scandir_fn=_rev)
-    c_rev = session_rev.record_directory_selection("S1", "NU")
+    c_rev = session_rev.record_directory_selection("S2", "NU")
 
     assert c_fwd.effective_winners == c_rev.effective_winners
     assert c_fwd.selection_digest == c_rev.selection_digest
@@ -639,7 +587,6 @@ def test_all_fixed_path_selectors_s6_through_s14_and_s16(tmp_path: Path) -> None
         "S7": ("data/filing_intelligence/GOOG.json", "{}"),
         "S8": ("data/bear_case/GOOG.json", "{}"),
         "S9": (".tmp/news_cache/GOOG.json", "{}"),
-        "S10": ("data/saydo_filter/GOOG.json", "{}"),
         "S11": ("data/segment_definitions/GOOG.json", "{}"),
         "S12": ("data/peer_selection/GOOG.json", "{}"),
         "S14": ("micro_thesis/holdings/GOOG.json", "{}"),
@@ -699,11 +646,11 @@ def test_narrow_holdings_root_enforcement(tmp_path: Path) -> None:
 
 def test_mapping_proxy_runtime_immutability(tmp_path: Path) -> None:
     _setup_base_tree(tmp_path)
-    (tmp_path / ".tmp" / "f.txt").write_text("sample", encoding="utf-8")
+    (tmp_path / "transcripts" / "processed" / "f.txt").write_text("sample", encoding="utf-8")
 
     session = ReportFileCaptureSession(repo_root=tmp_path)
-    session.read_text(".tmp/f.txt")
-    comm = session.record_directory_selection("S1", "TEST")
+    session.read_text("transcripts/processed/f.txt")
+    comm = session.record_directory_selection("S2", "TEST")
     receipt = session.seal()
 
     for target in (
@@ -894,12 +841,12 @@ def test_directory_state_replay_mismatches(tmp_path: Path) -> None:
     _setup_base_tree(tmp_path)
     # 1. Absent directory becomes present (empty) during replay:
     session1 = ReportFileCaptureSession(repo_root=tmp_path)
-    comm1 = session1.record_directory_selection("saydo_filter_json_v1", "TEST")
+    comm1 = session1.record_directory_selection("filing_intelligence_json_v1", "TEST")
     assert not comm1.directory_exists
     receipt1 = session1.seal()
 
     # Create the directory before replay
-    (tmp_path / "data" / "saydo_filter").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "filing_intelligence").mkdir(parents=True, exist_ok=True)
     with pytest.raises(FileCaptureMismatchError, match="mismatch"):
         replay_file_capture(receipt1, tmp_path)
 
@@ -914,46 +861,6 @@ def test_directory_state_replay_mismatches(tmp_path: Path) -> None:
     (tmp_path / "data" / "bear_case").rmdir()
     with pytest.raises(FileCaptureMismatchError, match="mismatch"):
         replay_file_capture(receipt2, tmp_path)
-
-
-def test_sorted_selectors_reorder_invariance_s4_s5_s15(tmp_path: Path) -> None:
-    _setup_base_tree(tmp_path)
-    # S4 (ir_briefs_tmp_v1)
-    (tmp_path / ".tmp" / "TEST_Q1_2024_presentation_brief.txt").write_text("b1", encoding="utf-8")
-    (tmp_path / ".tmp" / "TEST_Q1_2024_press_release_summary.txt").write_text(
-        "b2", encoding="utf-8"
-    )
-    (tmp_path / ".tmp" / "TEST_Q2_2025_presentation_brief.txt").write_text("b3", encoding="utf-8")
-
-    # S5 (saydo_cards_tmp_v1)
-    (tmp_path / ".tmp" / "SayDo_TEST_Q1_2024_Q2_2024.txt").write_text("sd1", encoding="utf-8")
-    (tmp_path / ".tmp" / "SayDo_TEST_Q2_2024_Q3_2024.txt").write_text("sd2", encoding="utf-8")
-
-    # S15 (fmp_price_chart_v1)
-    fmp = tmp_path / "data" / "historical" / "fmp"
-    fmp.mkdir(parents=True, exist_ok=True)
-    (fmp / "TEST_price_chart_1y.json").write_text("[]", encoding="utf-8")
-    (fmp / "TEST_price_chart_5y.json").write_text("[]", encoding="utf-8")
-
-    def _fwd(p: str | Path) -> Iterable[os.DirEntry[str]]:
-        return sorted(os.scandir(p), key=lambda e: e.name)
-
-    def _rev(p: str | Path) -> Iterable[os.DirEntry[str]]:
-        return sorted(os.scandir(p), key=lambda e: e.name, reverse=True)
-
-    for sel in ("ir_briefs_tmp_v1", "saydo_cards_tmp_v1", "fmp_price_chart_v1"):
-        s_fwd = ReportFileCaptureSession(repo_root=tmp_path, scandir_fn=_fwd)
-        c_fwd = s_fwd.record_directory_selection(sel, "TEST")
-        r_fwd = s_fwd.seal()
-
-        s_rev = ReportFileCaptureSession(repo_root=tmp_path, scandir_fn=_rev)
-        c_rev = s_rev.record_directory_selection(sel, "TEST")
-        r_rev = s_rev.seal()
-
-        assert c_fwd.effective_winners == c_rev.effective_winners
-        assert c_fwd.selection_digest == c_rev.selection_digest
-        assert r_fwd.receipt_digest == r_rev.receipt_digest
-        replay_file_capture(r_fwd, tmp_path, scandir_fn=_rev)
 
 
 def test_fstat_size_refusal_when_file_grows_during_read(
@@ -1029,7 +936,7 @@ def test_candidate_boot_isolation_and_bear_case_input_binding(
         SegmentsSection,
         ThesisSection,
     )
-    from report.renderers.workspace_sections.boot import _comment_boot_data
+    from report.renderers.workspace_sections.boot import _comment_boot_data, prepare_report_delivery
     from report.sections import bear_case
     from server_runtime.access import ReportCapabilityStore
 
@@ -1047,7 +954,11 @@ def test_candidate_boot_isolation_and_bear_case_input_binding(
         repo_root = str(tmp_path)
 
     out = StringIO()
-    _comment_boot_data(out, cast("Any", _StubSpec()), candidate_mode=True)
+    _comment_boot_data(
+        out,
+        cast("Any", _StubSpec()),
+        prepare_report_delivery(cast("Any", _StubSpec()), candidate_mode=True),
+    )
     rendered = out.getvalue()
     assert '"report_capability": ""' in rendered
 

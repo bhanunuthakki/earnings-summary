@@ -1,6 +1,6 @@
 """Tests for ``research.investment_decision_card.act_on_card`` — the ONE
-action core for the P1.1 Investment Decision Card's four owner verbs
-(pass/watch/research_further/promote — PRD §8.1 disposition semantics).
+action core for the P1.1 Investment Decision Card's three explicit owner
+actions (pass/watch/promote — PRD §8.1 disposition semantics).
 
 Hand-rolled minimal decisions + llm_artifacts + tracked_companies +
 research_tasks schema, mirroring tests/test_allocation_actions.py's style.
@@ -11,17 +11,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from decision_extractor import (
-    _KIND_DIRECTION,  # pyright: ignore[reportPrivateUsage]  # internal seam under test
-    reconcile_decision_actions,
-)
 from identity import DEFAULT_USER_ID
-from integrations.portfolio_tracker_client import LivePortfolio, LiveTransaction
 from research.investment_decision_card import CardActionError, act_on_card
 
 _PURPOSE = "investment_decision_card"
@@ -255,121 +249,10 @@ def test_promote_idempotent_double_post(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# research_further — research_tasks row, NO decision row
+# Retired research_further action — stale calls must not write either store.
 # --------------------------------------------------------------------------- #
-
-
-def test_research_further_creates_task_no_decision_row(tmp_path: Path) -> None:
-    db_path = _make_db(tmp_path)
-    _insert_artifact(db_path, artifact_id=1)
-
-    status = act_on_card(1, "research_further", db_path=db_path)
-
-    assert status.startswith("research_task_created:")
-    assert _decisions(db_path) == []
-    conn = sqlite3.connect(str(db_path))
-    try:
-        task = conn.execute("SELECT ticker, status, claim FROM research_tasks").fetchone()
-    finally:
-        conn.close()
-    assert task is not None
-    assert task[0] == TICKER
-    assert task[1] == "proposed"
-    assert "checkout" in task[2] or "ACME" in task[2]
-
-
-def test_research_further_idempotent_double_post(tmp_path: Path) -> None:
-    db_path = _make_db(tmp_path)
-    _insert_artifact(db_path, artifact_id=1)
-
-    first = act_on_card(1, "research_further", db_path=db_path)
-    second = act_on_card(1, "research_further", db_path=db_path)
-
-    assert first.startswith("research_task_created:")
-    assert second.startswith("already_proposed:")
-    conn = sqlite3.connect(str(db_path))
-    try:
-        n = conn.execute("SELECT COUNT(*) FROM research_tasks").fetchone()[0]
-    finally:
-        conn.close()
-    assert n == 1
 
 
 # --------------------------------------------------------------------------- #
 # Reconciliation safety — pass/watch/promote are never presumed buy/sell
 # --------------------------------------------------------------------------- #
-
-
-def test_kind_direction_has_no_entry_for_card_dispositions() -> None:
-    for kind in ("pass", "watch", "promote"):
-        assert _KIND_DIRECTION.get(kind) is None
-
-
-def test_reconciliation_treats_promote_as_non_directional(tmp_path: Path) -> None:
-    """A 'promote' decision with NO fill in its window reconciles through the
-    HOLD/AVOID (fill-vs-no-fill) branch — 'followed' once the window elapses
-    with nothing traded — never through the buy/sell direction branch (which
-    would require a _KIND_DIRECTION entry that doesn't exist)."""
-    db_path = _make_db(tmp_path)
-    _insert_artifact(db_path, artifact_id=1)
-    act_on_card(1, "promote", db_path=db_path)
-    # made_at recorded as "now" by act_on_card — backdate it so the 30d
-    # window has already elapsed relative to `now` below.
-    conn = sqlite3.connect(str(db_path))
-    conn.execute("UPDATE decisions SET made_at = '2026-01-01T00:00:00'")
-    conn.commit()
-    conn.close()
-
-    portfolio = LivePortfolio(available=True, api_url="http://tracker.test", transactions=[])
-    tally = reconcile_decision_actions(
-        db_path=db_path, portfolio=portfolio, now=datetime(2026, 3, 1, tzinfo=UTC)
-    )
-
-    assert tally["followed"] == 1  # held/passed cleanly through the window
-    conn = sqlite3.connect(str(db_path))
-    try:
-        action = conn.execute("SELECT user_action_kind FROM decisions").fetchone()[0]
-    finally:
-        conn.close()
-    assert action == "followed"
-
-
-def test_reconciliation_treats_promote_with_a_fill_as_partial(tmp_path: Path) -> None:
-    """A 'promote' decision followed by ANY fill (buy or sell) in-window is
-    'partial' — the HOLD/AVOID branch's "traded anyway" read — never
-    'followed'/'reversed' (those require a _KIND_DIRECTION entry)."""
-    db_path = _make_db(tmp_path)
-    _insert_artifact(db_path, artifact_id=1)
-    act_on_card(1, "promote", db_path=db_path)
-    conn = sqlite3.connect(str(db_path))
-    conn.execute("UPDATE decisions SET made_at = '2026-01-10T00:00:00'")
-    conn.commit()
-    conn.close()
-
-    portfolio = LivePortfolio(
-        available=True,
-        api_url="http://tracker.test",
-        transactions=[
-            LiveTransaction(
-                date="2026-01-15",
-                ticker=TICKER,
-                name=None,
-                type="buy",
-                subtype=None,
-                quantity=1.0,
-                amount=-1.0,
-                account_name="x",
-            )
-        ],
-    )
-    tally = reconcile_decision_actions(
-        db_path=db_path, portfolio=portfolio, now=datetime(2026, 3, 1, tzinfo=UTC)
-    )
-
-    assert tally["partial"] == 1
-    conn = sqlite3.connect(str(db_path))
-    try:
-        action = conn.execute("SELECT user_action_kind FROM decisions").fetchone()[0]
-    finally:
-        conn.close()
-    assert action == "partial"

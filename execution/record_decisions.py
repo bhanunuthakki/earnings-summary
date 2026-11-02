@@ -33,30 +33,22 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-
-def _sync_db_path(repo_root: Path) -> None:
-    """Point db.DB_PATH at the caller's repo so the recorder lands rows in
-    the right database (same pattern as run_lens.py / build_artifacts.py)."""
-    import db
-
-    db.PROJECT_ROOT = str(repo_root)
-    db.DATA_DIR = str(repo_root / "data")
-    db.DB_PATH = str(repo_root / "data" / "portfolio.db")
-    db.FMP_DIR = str(repo_root / "data" / "historical" / "fmp")
-
-
-from decision_conditions import (  # noqa: E402
+from db_paths import require_db_path
+from decision_conditions import (
     attach_conditions,
     attach_qualitative_conditions,
     record_socratic_decisions,
 )
-from decision_extractor import record_decisions_from_artifacts  # noqa: E402
+from decision_extractor import record_decisions_from_artifacts
 
 log = logging.getLogger("record_decisions")
 
@@ -97,7 +89,7 @@ def main() -> int:
         "--repo-root",
         type=Path,
         default=PROJECT_ROOT,
-        help="Repo root containing data/portfolio.db.",
+        help="Artifact and state root; it does not select the portfolio database.",
     )
     parser.add_argument(
         "--db-path",
@@ -114,18 +106,19 @@ def main() -> int:
     )
 
     repo_root = args.repo_root.resolve()
-    _sync_db_path(repo_root)
-    db_path: Path = (
-        args.db_path if args.db_path is not None else repo_root / "data" / "portfolio.db"
-    )
-    if args.db_path is not None:
-        import db
+    configured_db = os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
+    db_override = args.db_path if args.db_path is not None else configured_db or None
+    if db_override is None:
+        raise RuntimeError("An explicit --db-path or EARNINGS_SUMMARY_DB_PATH is required")
+    db_path = require_db_path(db_override)
 
-        db.DB_PATH = str(args.db_path)
+    import db
+
+    db.set_db_path(db_path, state_root=repo_root)
 
     if args.include_advisor:
         tally = record_decisions_from_artifacts(
-            repo_root=repo_root,
+            db_path=db_path,
             since_days=args.since_days,
             llm_fallback=args.llm_fallback,
         )

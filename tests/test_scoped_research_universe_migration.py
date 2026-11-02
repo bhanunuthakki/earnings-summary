@@ -45,7 +45,7 @@ def _seed(path: Path) -> None:
 
 @pytest.fixture
 def conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> Iterator[sqlite3.Connection]:
-    path = migrated_db(tmp_path / "scope-trigger.db")
+    path = migrated_db(tmp_path / "scope-trigger.db", target=CURRENT)
     _seed(path)
     database = _connect(path)
     yield database

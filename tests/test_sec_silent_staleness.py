@@ -10,17 +10,13 @@ worker re-attempts the build.
 from __future__ import annotations
 
 import sqlite3
-import sys
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from execution import fetch_sec_xbrl  # noqa: E402
-from execution.fetch_sec_xbrl import flag_silent_staleness, handle_silent_staleness  # noqa: E402
-from pipeline.sec_xbrl import IngestStats  # noqa: E402
+from execution import fetch_sec_xbrl
+from execution.fetch_sec_xbrl import flag_silent_staleness, handle_silent_staleness
+from pipeline.sec_xbrl import IngestStats
 
 
 def _build_schema(conn: sqlite3.Connection, *, with_brief_dirty: bool) -> None:

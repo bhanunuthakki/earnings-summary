@@ -25,11 +25,8 @@ from report.models import (
     BearCaseSection,
     CompanyDescriptionSection,
     EvaluationSnapshotSection,
-    IrDocsSection,
     KpiLedgerRow,
     QuickCategorizationRow,
-    ReportSpec,
-    SayDoCard,
     SayDoSection,
     SectionStatus,
     SnapshotSection,
@@ -429,6 +426,7 @@ def test_saydo_verdicts_panel_renders_rows() -> None:
             realized_value=32.0,
             outcome="met",
             evaluated_at=datetime(2026, 1, 30),
+            source_ref="transcript_segment:9001",
         ),
         SayDoVerdictRow(
             period_made=datetime(2025, 7, 30),
@@ -446,7 +444,7 @@ def test_saydo_verdicts_panel_renders_rows() -> None:
     out = StringIO()
     _saydo_verdicts_panel(out, rows)
     html = out.getvalue()
-    assert "Say·Do verdict ledger" in html
+    assert "Say·Do commitment ledger" in html
     assert "2 commitments" in html
     assert "2 with a reported result" in html
     assert "Cloud revenue growth" in html
@@ -456,6 +454,10 @@ def test_saydo_verdicts_panel_renders_rows() -> None:
     # Outcome pills
     assert "HIT" in html or "MET" in html  # _outcome_pill maps both
     assert "MISS" in html
+    header = html.split("</thead>", 1)[0]
+    assert header.index("Verdict") < header.index("Source")
+    assert "transcript_segment:9001" not in html
+    assert html.index("MET") < html.index("Source unavailable")
 
 
 def test_saydo_verdicts_panel_hides_when_empty() -> None:
@@ -598,10 +600,6 @@ def _empty_company_description() -> CompanyDescriptionSection:
         sector="Tech",
         industry="Software",
     )
-
-
-def _empty_ir_docs() -> IrDocsSection:
-    return IrDocsSection(status=SectionStatus.OK)
 
 
 def test_thesis_tab_hides_macro_sensitivity_when_cold() -> None:
@@ -780,7 +778,6 @@ def test_company_tab_hides_cold_p3_panels_keeps_concentration_fact() -> None:
     _company_tab(
         out,
         _empty_company_description(),
-        _empty_ir_docs(),
         None,
         [],
         [],
@@ -790,6 +787,7 @@ def test_company_tab_hides_cold_p3_panels_keeps_concentration_fact() -> None:
     assert "Strategic targets" not in html
     assert "Operating lease maturity ladder" not in html
     assert "Customer concentration" in html
+    assert "IR documents" not in html
     assert html.count('<details class="panel panel-empty') == 1
 
 
@@ -798,7 +796,6 @@ def test_company_tab_emits_panels_with_data() -> None:
     _company_tab(
         out,
         _empty_company_description(),
-        _empty_ir_docs(),
         None,
         [
             StrategicTargetRow(
@@ -864,7 +861,6 @@ def test_company_tab_shows_peer_panel_without_eval_snapshot() -> None:
     _company_tab(
         out,
         _empty_company_description(),
-        _empty_ir_docs(),
         None,
         [],
         [],
@@ -887,7 +883,6 @@ def test_company_tab_hides_peer_panel_when_no_peers_and_no_eval_snapshot() -> No
     _company_tab(
         out,
         _empty_company_description(),
-        _empty_ir_docs(),
         None,
         [],
         [],
@@ -928,7 +923,6 @@ def test_company_tab_suppresses_listed_sections() -> None:
     _company_tab(
         out,
         _empty_company_description(),
-        _empty_ir_docs(),
         None,
         [],
         [],
@@ -948,7 +942,6 @@ def test_company_tab_shows_panels_when_suppressed_empty() -> None:
     _company_tab(
         out,
         _empty_company_description(),
-        _empty_ir_docs(),
         None,
         [],
         [],
@@ -971,7 +964,6 @@ def test_company_tab_omits_bank_lease_ladder_end_to_end() -> None:
     _company_tab(
         out,
         _empty_company_description(),
-        _empty_ir_docs(),
         None,
         [],
         [],
@@ -990,7 +982,6 @@ def test_company_tab_keeps_hyperscaler_lease_ladder_end_to_end() -> None:
     _company_tab(
         out,
         _empty_company_description(),
-        _empty_ir_docs(),
         None,
         [],
         [],
@@ -1005,21 +996,7 @@ def test_company_tab_keeps_hyperscaler_lease_ladder_end_to_end() -> None:
 def test_saydo_tab_includes_verdicts_panel() -> None:
     section = SayDoSection(
         status=SectionStatus.OK,
-        cards=[
-            SayDoCard(
-                current_quarter="Q1",
-                current_year=2026,
-                prior_quarter="Q4",
-                prior_year=2025,
-                saydo_md="# SayDo\n\nSome narrative.",
-                rating="MET",
-                thesis_view="Bullish",
-                attribution="Execution.",
-            )
-        ],
     )
-    # Tab needs a spec for .repo_root/.llm_enabled — minimal stub.
-    spec = _spec_for_saydo()
     verdicts = [
         SayDoVerdictRow(
             period_made=datetime(2025, 10, 30),
@@ -1035,9 +1012,10 @@ def test_saydo_tab_includes_verdicts_panel() -> None:
         ),
     ]
     out = StringIO()
-    _saydo_tab(out, section, spec, verdicts)
+    section.verdicts = verdicts
+    _saydo_tab(out, section)
     html = out.getvalue()
-    assert "Say·Do verdict ledger" in html
+    assert "Say·Do commitment ledger" in html
     assert "Cloud growth" in html
 
 
@@ -1108,7 +1086,6 @@ def test_load_workspace_p3_panels_cold_repo(tmp_path: Path) -> None:
     assert p3.customer_concentrations == []
     assert p3.lease_ladder == []
     assert p3.decision_history.total == 0
-    assert p3.saydo_verdicts == []
     assert p3.peer_comp == []
 
 
@@ -1145,21 +1122,6 @@ def test_load_workspace_p3_panels_with_seeded_db(tmp_path: Path) -> None:
     assert p3.decision_history.total == 0
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _spec_for_saydo() -> ReportSpec:
-    """Minimal stand-in for ``ReportSpec`` carrying just the attrs ``_saydo_tab``
-    needs (``repo_root``, ``ticker``, ``llm_enabled``).
-
-    Construct only the fields read by this isolated renderer seam.
-    """
-
-    return ReportSpec.model_construct(repo_root="/tmp/synthetic", ticker="TEST", llm_enabled=False)
-
-
 def test_workspace_p3_panels_empty_factory() -> None:
     """`.empty()` classmethod provides a safe default instance."""
     empty = WorkspaceP3Panels.empty()
@@ -1169,7 +1131,6 @@ def test_workspace_p3_panels_empty_factory() -> None:
     assert empty.lease_ladder == []
     assert empty.decision_history.total == 0
     assert empty.decision_history.rows == []
-    assert empty.saydo_verdicts == []
     assert empty.peer_comp == []
     assert empty.open_notes == []
 

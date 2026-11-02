@@ -43,11 +43,11 @@ is a click or a `POST`.
 
 | Page | What it shows |
 |---|---|
-| `/` | Portfolio + evaluation status — last FMP pull, last transcript, last build, open-comment count, breach badge. Each ticker links to its drill-down; **Open↗** opens the latest brief. Includes the IR-KPI refresh control. |
-| `/analytical` | Cross-ticker overview, **live**: LLM **budget** (read-only here), the **decisions** ledger + calibration, the DCF **trigger ladder**, insider activity, prediction outcomes. Byte-identical to the static `build_analytical_dashboard.py` export — same renderer, always fresh from the DB. |
-| `/ticker/<T>` | **Per-ticker command center**: identity + freshness; an **artifacts inventory** (every brief / DCF / holdings / transcript / IR / FMP / LLM-cache file with mtime + size); the **analyses-ran** log (thesis eval · time-series signals · trigger alerts · queued actions · Say-Do · DCF · LLM-call cost (30d) · brief renders); recent decisions; the read-only **thesis** (tier-1 KPIs + break rules + breakers); and your live **position** + an **Open in Portfolio Tracker ↗** deep link. |
+| `/` | Unified Cockpit for portfolio decisions, research and data operations. Company Desk opens the selected company and its briefs. |
+| `/analytical` | Legacy bookmark that redirects into the unified shell. The separate portfolio-dashboard export is retired. |
+| `/ticker/<T>` | Legacy bookmark that redirects to Company Desk. Shared artifacts, analysis history, reports, Ops and Notes remain there. |
 
-JSON siblings for scripting: `GET /api/overview`, `GET /api/ticker/<T>`, `GET /api/dashboard`.
+`GET /api/dashboard` remains the status feed. The retired `GET /api/overview` and `GET /api/ticker/<T>` feeds return HTTP 410; use the Cockpit and Company Desk for the retained interface.
 
 ### Refreshes — with overrides
 
@@ -315,27 +315,20 @@ After step 2 (or after dropping PDFs in `_inbox`), run:
 ```cmd
 python execution/sqlite_bootstrap.py execution/process_ir_documents.py --ticker NU
 ```
-Reads each unprocessed document, runs the LLM summarizer with the
-thesis + bear-case anchor block, writes:
-- `.tmp/<T>_Q<n>_<Y>_summary.txt` (transcripts)
-- `.tmp/<T>_Q<n>_<Y>_press_release_summary.txt` (press releases)
-- `.tmp/<T>_Q<n>_<Y>_presentation_brief.txt` (slide decks)
+The transcript processor selects exact registered document versions. Supply
+`--db <configured-database>` and `--state-root <source-root>`. It writes an immutable
+verified transcript-summary artifact and its projection. An unavailable qualification
+or source receipt blocks generation. Press releases, decks and investor updates
+remain original source documents; they have no extra summary cards.
 
-These feed the Earnings tab and the bear case.
+### 4. Explicit KPI extraction
 
-### 4. KPI extraction (populate the Thesis tab's tracked KPIs)
-
-```cmd
-python execution/sqlite_bootstrap.py execution/extract_kpis_from_summaries.py --ticker NU --source earnings --repo-root %USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
-```
-
-Reads the `.tmp/<T>_*_summary.txt` files, asks Haiku to extract values
-for each tier-1 KPI defined in `micro_thesis/holdings/<T>.json`, persists
-to the `kpi_facts` table. Run this after step 3 whenever you add new
-quarters or update the tier-1 KPI list.
-
-If you don't see any tracked KPIs in the rendered report, this step
-hasn't run yet.
+Use `execution/extract_kpis_from_ir.py --list-pending` to inspect original IR
+documents. Apply a reviewed typed manifest with `--apply <manifest.json>`. Each
+value needs the exact original document, fiscal context, excerpt and locator.
+Original PDF numeric capture remains available through `--capture`. Generated
+summary text is no longer a KPI extraction source. A transcript manifest requires
+a verified source segment; automatic transcript numeric extraction is unavailable.
 
 ### 5. SayDo pairwise rebuild
 
@@ -431,7 +424,7 @@ script directly when you need flags the `.bat` doesn't expose.
 | `execution/process_ir_documents.py` | LLM-summarize IR docs. Flags: `--ticker`, `--quarter`, `--year`, `--all`, `--dry-run` |
 | `execution/intake_documents.py` | Classify + file PDFs from `_inbox/`. Flags: `--process` to also chain into the summarizer |
 | `execution/register_dropped_documents.py` | Register pre-filed PDFs from `micro_thesis/sources/<T>/` into the document index |
-| `execution/extract_kpis_from_summaries.py` | Extract tier-1 KPIs from summaries. Flags: `--ticker`, `--source {earnings,ir}`, `--repo-root` |
+| `execution/extract_kpis_from_ir.py` | Inspect original documents, capture original PDFs, or apply reviewed source-backed KPI manifests. |
 | `execution/extract_kpis_from_ir.py` | Manual KPI extraction with explicit manifest |
 | `execution/extract_company_description.py` | Regenerate the company-description JSON |
 | `execution/build_saydo_pairs.py` | Rebuild SayDo pairwise commits. Flags: `--ticker`, `--refresh` |
@@ -565,7 +558,7 @@ through**:
 4. Pull transcripts: `refresh_transcripts.bat <NEW_TICKER>`
 5. Process IR docs: `python execution/sqlite_bootstrap.py execution/process_ir_documents.py --ticker <NEW_TICKER>`
 6. Seed KPI definitions: `python execution/sqlite_bootstrap.py execution/seed_kpi_definitions.py`
-7. Extract KPIs: `python execution/sqlite_bootstrap.py execution/extract_kpis_from_summaries.py --ticker <NEW_TICKER> --source earnings --repo-root <REPO>`
+7. Extract KPIs from original documents with `execution/extract_kpis_from_ir.py`; review each manifest and its source locator.
 8. Build: `build_report.bat <NEW_TICKER> --enable-llm`
 
 Or after step 1-2, run the canonical dispatcher:
@@ -659,7 +652,7 @@ anchor it lives under, or look in `data/report_comments/<T>/<DATE>.json`.
 **Tracked KPIs are empty in the report**
 Run the KPI extractor first:
 ```cmd
-python execution/sqlite_bootstrap.py execution/extract_kpis_from_summaries.py --ticker NU --source earnings --repo-root %USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
+python execution/sqlite_bootstrap.py execution/extract_kpis_from_ir.py --ticker NU --list-pending
 ```
 
 The single canonical procedure lives under

@@ -52,7 +52,6 @@ _CONTEXT_LOCK_CLAIMS: ContextVar[dict[str, tuple[str, int]] | None] = ContextVar
 _ALLOW_NESTED_LOCKS: ContextVar[bool] = ContextVar("allow_nested_job_locks", default=False)
 _SCHEDULER_OWNER: tuple[int, str | None] | None = None
 _CREATE_SUSPENDED = getattr(subprocess, "CREATE_SUSPENDED", 0x00000004)
-_SERVICE_ORIGIN_JOBS: frozenset[str] = frozenset({"capture-poller"})
 
 # Closed scheduler compatibility policy. These wrappers historically declared
 # the coarse portfolio-db write set even though most of their wall time is
@@ -65,11 +64,9 @@ _SCHEDULER_PORTFOLIO_DB_POLICY: tuple[tuple[str, str], ...] = (
     ("backfill-earnings-surprises-ingest", "market-data-refresh"),
     ("backfill-transcripts", "transcript-refresh"),
     ("check-comp-set-drift", "comp-metrics"),
-    ("coach-pings", "notification-delivery"),
     ("compute-macro-sensitivities", "market-data-refresh"),
     ("daily_fetch_and_brief", "research-synthesis"),
     ("db-gc", "portfolio-db"),
-    ("decision-nudge", "notification-delivery"),
     ("disclosure-change-sweep", "research-synthesis"),
     ("discover-ir-documents", "ir-discovery"),
     ("discover-ir-failing", "ir-discovery"),
@@ -77,37 +74,23 @@ _SCHEDULER_PORTFOLIO_DB_POLICY: tuple[tuple[str, str], ...] = (
     ("fetch-macro-series", "market-data-refresh"),
     ("fetch-sec-xbrl", "sec-companyfacts"),
     ("grade-calibration", "llm-evaluation"),
-    ("ledger-synthesis", "research-synthesis"),
-    ("monthly-advisor-memos", "research-synthesis"),
-    ("monthly-calibration-scorecard", "llm-evaluation"),
     ("morning_pipeline", "morning-orchestration"),
-    ("refresh-business-factors", "research-synthesis"),
     ("refresh-dirty-artifacts", "artifact-refresh"),
     ("refresh-expected-earnings", "market-data-refresh"),
     ("refresh-ir-kpis", "ir-discovery"),
     ("refresh_fmp", "fmp-refresh"),
     ("refresh_cache", "fmp-refresh"),
-    ("refresh_scenario_priors", "research-synthesis"),
     ("restore-drill", "backup-restore"),
     ("scan-ir-transcripts", "transcript-refresh"),
-    ("submit-saydo-batch-prepare", "saydo-batch"),
-    ("submit-saydo-batch-submit", "saydo-batch"),
-    ("tenet-accountability", "research-synthesis"),
-    ("thesis-collision", "research-synthesis"),
     ("track-comp-metrics-build-sets", "comp-metrics"),
     ("track-comp-metrics-record", "comp-metrics"),
     ("weekly-cleanup", "filesystem-maintenance"),
-    ("weekly-cleanup-expire-research", "portfolio-db"),
     ("weekly-model-eval", "llm-evaluation"),
-    ("weekly-p2-lens-refresh", "lens-refresh"),
-    ("weekly-packet", "notification-delivery"),
-    ("weekly-score-stances", "advisor-scoring"),
-    ("weekly-synthesis", "research-synthesis"),
     ("weekly-validation", "portfolio-db"),
 )
 _DATABASE_ADJACENT_LANES = frozenset(
     lane for _, lane in _SCHEDULER_PORTFOLIO_DB_POLICY if lane != "portfolio-db"
-)
+) | {"lens-refresh"}  # Preserve the lock identity for explicit retired-lane callers.
 
 
 def _scheduler_write_sets(job_name: str, requested: list[str]) -> list[str]:
@@ -958,6 +941,14 @@ def _scheduled_deadline_seconds(code_root: Path, job_name: str) -> float | None:
     return float(seconds)
 
 
+def _stop_and_close_owned_job(job: _WindowsKillOnCloseJob) -> None:
+    """Prove the owned process tree stopped before releasing its Job handle."""
+    try:
+        job.stop_and_wait(terminate=True)
+    finally:
+        job.close()
+
+
 def _run_managed_child(
     command: list[str],
     *,
@@ -997,7 +988,7 @@ def _run_managed_child(
     except Exception:
         try:
             if process_tree_job is not None:
-                process_tree_job.close()
+                _stop_and_close_owned_job(process_tree_job)
         finally:
             if process.poll() is None:
                 process.kill()
@@ -1015,7 +1006,7 @@ def _run_managed_child(
             if timed_out or owner_exited:
                 if process_tree_job is not None:
                     try:
-                        process_tree_job.close()
+                        _stop_and_close_owned_job(process_tree_job)
                     except Exception:
                         if process.poll() is None:
                             process.kill()
@@ -1035,7 +1026,7 @@ def _run_managed_child(
             time.sleep(0.5)
     finally:
         if process_tree_job is not None:
-            process_tree_job.close()
+            _stop_and_close_owned_job(process_tree_job)
 
 
 def run_captured_application_child(
@@ -1941,7 +1932,7 @@ def main(argv: list[str] | None = None) -> int:
         help="checkout that owns executable code and Alembic migrations (default: --repo-root)",
     )
     parser.add_argument("--scheduler-wrapper", action="store_true")
-    parser.add_argument("--trigger-kind", choices=("scheduled", "service"))
+    parser.add_argument("--trigger-kind", choices=("scheduled",))
     parser.add_argument(
         "--allow-schema-drift",
         action="store_true",
@@ -1968,8 +1959,6 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--scheduler-wrapper requires JOB WRITE_SET SCRIPT [SCRIPT_ARGS ...]")
         job_name, write_set, *script_command = command
         trigger_kind = args.trigger_kind or "scheduled"
-        if trigger_kind == "service" and job_name not in _SERVICE_ORIGIN_JOBS:
-            parser.error("service origin is not approved for this job")
         command = [
             args.python_executable,
             "-u",

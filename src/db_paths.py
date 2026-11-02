@@ -12,7 +12,7 @@ checkout database or an unavailable configured database.
 
 :func:`db_path_context` adds a scoped, thread-safe middle layer between the
 explicit override and the ``db.DB_PATH`` global. A library entry point that
-takes an explicit ``db_path`` (e.g. ``advisor.position_review.review_position``)
+takes an explicit ``db_path`` (e.g. ``advisor.position_review.build_pre_analysis``)
 cannot thread it into every layer a governed LLM call touches — model pins,
 prompt A/B, budget checks, and the ``llm_calls`` cost ledger all call
 ``resolve_db_path(None)`` internally. Without the context those reads/writes

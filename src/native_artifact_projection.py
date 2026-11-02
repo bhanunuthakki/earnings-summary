@@ -94,23 +94,6 @@ class _QATopicsCache(BaseModel):
         return self
 
 
-class _SayDoFilterCache(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    by_key: dict[str, list[str]]
-
-    @model_validator(mode="after")
-    def _require_at_least_one_selected_commitment(self) -> _SayDoFilterCache:
-        if (
-            not self.by_key
-            or any(not key for key in self.by_key)
-            or not any(items for items in self.by_key.values())
-            or any(not item for items in self.by_key.values() for item in items)
-        ):
-            raise ValueError("saydo_filter cache contains no selected commitments")
-        return self
-
-
 class _NamedDescription(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -209,7 +192,6 @@ _NativePayload = Annotated[
     _BearCaseCache
     | _ValuationBasisCache
     | _QATopicsCache
-    | _SayDoFilterCache
     | _CompanyDescriptionCache
     | _FilingIntelligenceCache,
     Field(union_mode="left_to_right"),
@@ -235,10 +217,6 @@ _PROJECTION_SPECS: dict[str, _ProjectionSpec] = {
     "qa_topics": _ProjectionSpec(
         directory="qa_topics",
         adapter=TypeAdapter(_QATopicsCache),
-    ),
-    "saydo_filter": _ProjectionSpec(
-        directory="saydo_filter",
-        adapter=TypeAdapter(_SayDoFilterCache),
     ),
     "company_description": _ProjectionSpec(
         directory="company_description",

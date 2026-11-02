@@ -1,101 +1,13 @@
-"""Tests for the split-root IR-document processing adapter."""
+"""Registered transcript selection and explicit authority routing."""
 
 from __future__ import annotations
 
-import sys
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
 
-import process_ir_documents_state as adapter
-import pytest
-
-import db
+_CIK = "0001691493"
+_NOW = datetime(2026, 10, 19, 12, tzinfo=UTC)
 
 
-class _FakeIndexManager:
-    PROJECT_ROOT = ""
-    CACHE_DIR = ""
-    TRANSCRIPT_INDEX_PATH = ""
-    DOCUMENT_INDEX_PATH = ""
-    TRANSCRIPTS_RAW_DIR = ""
-    TRANSCRIPTS_PROCESSED_DIR = ""
-
-
-class _FakeProcessor:
-    PROJECT_ROOT = Path(".")
-    CACHE_DIR = Path(".")
-    index_manager = _FakeIndexManager()
-
-    def __init__(self) -> None:
-        self.seen_argv: list[str] = []
-
-    def main(self) -> int | None:
-        self.seen_argv = list(sys.argv)
-
-
-def test_bind_state_routes_every_mutable_ir_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    processor = cast("adapter.ProcessIrDocuments", _FakeProcessor())
-    original_db_path = db.DB_PATH
-    monkeypatch.delenv("EARNINGS_SUMMARY_DB_PATH", raising=False)
-
-    try:
-        adapter.bind_state(processor, tmp_path, tmp_path / "data/portfolio.db")
-
-        assert tmp_path == processor.PROJECT_ROOT
-        assert tmp_path / ".tmp" == processor.CACHE_DIR
-        assert (
-            Path(processor.index_manager.DOCUMENT_INDEX_PATH)
-            == tmp_path / ".tmp/document_index.json"
-        )
-        assert Path(processor.index_manager.TRANSCRIPTS_RAW_DIR) == tmp_path / "transcripts/raw"
-        assert Path(db.DB_PATH) == tmp_path / "data/portfolio.db"
-    finally:
-        db.set_db_path(original_db_path)
-
-
-def test_main_binds_state_and_forwards_only_legacy_ticker_args(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fake_processor = _FakeProcessor()
-    processor = cast("adapter.ProcessIrDocuments", fake_processor)
-    database = tmp_path / "authority.sqlite"
-    database.touch()
-    original_argv = list(sys.argv)
-    original_db_path = db.DB_PATH
-    monkeypatch.setattr(adapter, "_load_processor", lambda: processor)
-
-    try:
-        assert (
-            adapter.main(["--ticker", "NU", "--repo-root", str(tmp_path), "--db", str(database)])
-            == 0
-        )
-
-        assert tmp_path == processor.PROJECT_ROOT
-        assert fake_processor.seen_argv == ["process_ir_documents.py", "--ticker", "NU"]
-        assert sys.argv == original_argv
-    finally:
-        db.set_db_path(original_db_path)
-
-
-@pytest.mark.parametrize("status", [0, 1])
-def test_adapter_propagates_processor_status(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: int
-) -> None:
-    class StatusProcessor(_FakeProcessor):
-        def main(self) -> int:
-            return status
-
-    processor = cast("adapter.ProcessIrDocuments", StatusProcessor())
-    database = tmp_path / "authority.sqlite"
-    database.touch()
-    original_db_path = db.DB_PATH
-    monkeypatch.setattr(adapter, "_load_processor", lambda: processor)
-    try:
-        assert (
-            adapter.main(["--ticker", "NU", "--repo-root", str(tmp_path), "--db", str(database)])
-            == status
-        )
-    finally:
-        db.set_db_path(original_db_path)
+def _no_environment(_root: Path) -> None:
+    return None

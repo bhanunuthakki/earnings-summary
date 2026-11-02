@@ -206,6 +206,7 @@ def test_render_full_panel(tmp_path: Path) -> None:
     # Run bar: one button per runnable purpose, wired to /actions/run-eval.
     for p in RUNNABLE_PURPOSES:
         assert f'data-purpose="{p}"' in html
+    assert 'data-purpose="transcript_summary_claim_audit"' not in html
     assert "P0 capture audits" in html
     assert "P1 capture audits" in html
     assert "P2 capture audits" in html
@@ -304,8 +305,7 @@ def test_failed_drawer_survives_null_score_infra_case(tmp_path: Path) -> None:
 
 
 def test_runnable_purposes_match_runner_cli() -> None:
-    """The run bar and execution/run_llm_evals.py must offer the same
-    purposes — a purpose added to one without the other is a wiring bug."""
+    """The panel projects CLI purposes whose inputs its run action can supply."""
     import importlib.util
     import sys
 
@@ -315,4 +315,5 @@ def test_runnable_purposes_match_runner_cli() -> None:
     mod = importlib.util.module_from_spec(spec)
     sys.modules["run_llm_evals_panel_check"] = mod
     spec.loader.exec_module(mod)
-    assert set(RUNNABLE_PURPOSES) == set(mod.PURPOSES)
+    assert set(RUNNABLE_PURPOSES) == set(mod.PURPOSES) - {"transcript_summary_claim_audit"}
+    assert "transcript_summary_claim_audit" in mod.PURPOSES

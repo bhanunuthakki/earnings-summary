@@ -13,9 +13,8 @@ from compute import fmp_derived_kpis as derived
 from compute.metrics_engine import io as metrics_io
 from compute.metrics_engine.inputs import CanonicalConcept
 from models.companies import AccountingStandard
-from provenance.financial_fact_resolution import canonical_fact_relation, resolve_fact_row
+from provenance.financial_fact_resolution import resolve_fact_row
 from provenance.semantic_disposition import SemanticDisposition, SemanticDispositionStore
-from report.metrics_view import metrics_rows, ratios_rows
 from report.sections import financials
 from tests import test_financial_fact_resolution_cutover as cutover
 from tests import test_financial_source_semantic_quarantine as quarantine
@@ -63,7 +62,9 @@ def _resolved_quarter(conn: sqlite3.Connection) -> None:
         )
         assert row.lastrowid is not None
         fact_ids.append(int(row.lastrowid))
-    cutoff = datetime.now(UTC) + timedelta(minutes=1)
+    # Admit the synthetic inputs as known now. A future resolution receipt is
+    # not available to the current derivation's immutable-reference lookup.
+    cutoff = datetime.now(UTC)
     for fact_id in fact_ids:
         assert (
             resolve_fact_row(
@@ -92,8 +93,6 @@ def test_financial_callers_exclude_explicitly_quarantined_source(
             float | None,
             list[Decimal],
             list[dict[CanonicalConcept, Decimal]],
-            list[object],
-            list[object],
         ]:
             report_rows = _load_quarterly(conn, "ACME")
             sourced = _financial_series_with_provenance(
@@ -104,16 +103,12 @@ def test_financial_callers_exclude_explicitly_quarantined_source(
             )
             derived, _ = _fetch_quarterly_facts(conn, "ACME")
             cells = _build_quarter_cells(conn, "ACME", AccountingStandard.US_GAAP)
-            metric_rows = metrics_rows(conn, "ACME")
-            ratio_rows = ratios_rows(conn, "ACME")
             return (
                 [row["revenue"] for row in report_rows],
                 [row.value for row in sourced],
                 None if provenance is None else cast(float, provenance["value"]),
                 [row.revenue for row in derived],
                 [cell.values for cell in cells],
-                [row["revenue"] for row in metric_rows],
-                [row["revenue"] for row in ratio_rows],
             )
 
         before = current_values()
@@ -122,8 +117,6 @@ def test_financial_callers_exclude_explicitly_quarantined_source(
         assert before[2] == 100.0
         assert len(before[3]) == 1
         assert len(before[4]) == 1
-        assert before[5] == [100]
-        assert before[6] == [100]
 
         at = datetime.now(UTC) + timedelta(hours=1)
         SemanticDispositionStore(conn).persist(
@@ -141,52 +134,7 @@ def test_financial_callers_exclude_explicitly_quarantined_source(
         assert after[2] is None
         assert after[3] == []
         assert len(after[4]) == 1 and after[4][0] == {}
-        assert after[5] == []
-        assert after[6] == []
         # The old global view remains a raw compatibility surface.
         assert conn.execute("SELECT revenue FROM metrics WHERE ticker='ACME'").fetchone()[0] == 100
-    finally:
-        conn.close()
-
-
-def test_metrics_helper_uses_canonical_winner_before_quarantine(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
-    path = migrated_db(tmp_path / "metrics-canonical-winner.db")
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        _resolved_quarter(conn)
-        _seed_document(conn, document_id=2, source_tier="fmp_normalized", value_suffix="FMP")
-        later_raw_id = _insert_financial_fact(conn, document_id=2, value="200")
-        assert (
-            resolve_fact_row(
-                conn,
-                fact_table="financial_facts",
-                fact_row_id=later_raw_id,
-                knowledge_cutoff=datetime.now(UTC) + timedelta(minutes=1),
-            )
-            is not None
-        )
-        fact_relation = canonical_fact_relation(conn, "financial_facts").sql
-        selected = conn.execute(
-            f"SELECT value FROM {fact_relation} WHERE ticker='ACME' AND line_item='revenue'"
-        ).fetchone()
-        assert selected is not None and selected[0] == 100
-        assert metrics_rows(conn, "ACME")[0]["revenue"] == selected[0]
-        assert conn.execute("SELECT revenue FROM metrics WHERE ticker='ACME'").fetchone()[0] == 200
-
-        at = datetime.now(UTC) + timedelta(hours=1)
-        SemanticDispositionStore(conn).persist(
-            _disposition(
-                "document-version-1",
-                revision=1,
-                status="quarantined",
-                knowledge_at=at,
-                recorded_at=at,
-            )
-        )
-        assert metrics_rows(conn, "ACME") == []
     finally:
         conn.close()

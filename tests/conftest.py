@@ -10,6 +10,7 @@ import stat
 import tempfile
 from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -25,6 +26,20 @@ if TYPE_CHECKING:
 else:
     preload_sqlite()
     sqlite3 = importlib.import_module("sqlite3")
+
+
+@pytest.fixture
+def shell_clock(monkeypatch: pytest.MonkeyPatch) -> list[datetime]:
+    clock = [datetime(2026, 8, 7, 12, 0, 5, tzinfo=UTC)]
+
+    class FixedClock:
+        @staticmethod
+        def now(_zone: object) -> datetime:
+            return clock[0]
+
+    monkeypatch.setattr("pipeline.work_os_shell.datetime", FixedClock)
+    return clock
+
 
 # --- Deterministic FMP tier baseline (runs at conftest IMPORT, before pytest
 # collects any test module) ---------------------------------------------------
@@ -461,6 +476,9 @@ def _isolate_default_database(
     import db
 
     database = tmp_path / "default-db" / "portfolio.db"
+    # In-process CLI bootstraps must not leak the other path globals either.
+    monkeypatch.setattr(db, "PROJECT_ROOT", db.PROJECT_ROOT)
+    monkeypatch.setattr(db, "STATE_ROOT", db.STATE_ROOT)
     monkeypatch.setattr(db, "DB_PATH", os.fspath(database))
     monkeypatch.setattr(db, "DATA_DIR", os.fspath(database.parent))
     monkeypatch.setattr(db, "FMP_DIR", os.fspath(database.parent / "historical" / "fmp"))

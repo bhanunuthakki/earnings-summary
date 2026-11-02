@@ -11,7 +11,7 @@ import comments_server
 import pytest
 
 from report import builder
-from report.models import ReportFlavor
+from report.models import ReportFlavor, SayDoSection
 from sqlite_runtime import SQLiteConnectionRole
 from tests.comments_server_seams import patch_server_seam
 
@@ -115,11 +115,13 @@ def test_panel_activation_metrics_never_create_schema_from_request_path() -> Non
         assert "CREATE TABLE IF NOT EXISTS panel_activation_counts" not in source, path
 
 
+@pytest.mark.parametrize("enable_llm", [False, True])
 def test_build_report_threads_one_borrowed_connection_to_db_sections(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enable_llm: bool
 ) -> None:
     shared = sqlite3.connect(":memory:")
     received: dict[str, sqlite3.Connection | None] = {}
+    actual_saydo_build = builder.saydo.build
     stub = SimpleNamespace(held=False, budget_skip=None)
 
     db_sections = (
@@ -132,7 +134,6 @@ def test_build_report_threads_one_borrowed_connection_to_db_sections(
         builder.segments,
         builder.earnings,
         builder.saydo,
-        builder.ir_docs,
         builder.bear_case,
         builder.provenance,
         builder.valuation,
@@ -147,6 +148,8 @@ def test_build_report_threads_one_borrowed_connection_to_db_sections(
             value = kwargs.get("conn")
             assert isinstance(value, sqlite3.Connection)
             received[_name] = value
+            if _name == builder.saydo.__name__:
+                return actual_saydo_build("NU", tmp_path, conn=value)
             return stub
 
         monkeypatch.setattr(module, "build", record)
@@ -167,21 +170,40 @@ def test_build_report_threads_one_borrowed_connection_to_db_sections(
     def no_suppressed_sections(*_args: object) -> set[str]:
         return set()
 
-    def report_spec(**kwargs: object) -> dict[str, object]:
-        return kwargs
+    class CapturedSpec(dict[str, object]):
+        def model_copy(self, *, update: dict[str, object]) -> CapturedSpec:
+            return CapturedSpec({**self, **update})
+
+    def report_spec(**kwargs: object) -> CapturedSpec:
+        return CapturedSpec(kwargs)
+
+    def prepare_workspace(_spec: object, *, conn: sqlite3.Connection) -> object:
+        from report.workspace_models import WorkspacePrepared
+
+        assert conn is shared
+        received["workspace"] = conn
+        return WorkspacePrepared()
 
     monkeypatch.setattr(builder, "suppressed_sections_for_ticker", no_suppressed_sections)
     monkeypatch.setattr(builder, "ReportSpec", report_spec)
+    monkeypatch.setattr(builder, "prepare_workspace_report", prepare_workspace)
 
-    result = builder.build_report(
-        "NU",
-        tmp_path,
-        flavor=ReportFlavor.EVALUATION,
-        conn=shared,
-    )
+    result = None
+    for _ in range(2):
+        result = builder.build_report(
+            "NU",
+            tmp_path,
+            flavor=ReportFlavor.EVALUATION,
+            enable_llm=enable_llm,
+            force_refresh=True,
+            conn=shared,
+        )
 
     payload = cast("dict[str, object]", result)
     assert payload["ticker"] == "NU"
-    assert received == {module.__name__: shared for module in db_sections}
+    assert received == {**{module.__name__: shared for module in db_sections}, "workspace": shared}
+    section = payload["saydo"]
+    assert isinstance(section, SayDoSection)
+    assert section.verdicts_availability == "unavailable"
     assert shared.execute("SELECT 1").fetchone() == (1,)
     shared.close()

@@ -25,8 +25,6 @@ class Quarter(StrEnum):
 class ArtifactKind(StrEnum):
     TRANSCRIPT_PROCESSED = "transcript_processed"
     AUDIO = "audio"
-    SAYDO = "saydo"
-    LLM_SUMMARY = "llm_summary"
 
 
 class ArtifactName(BaseModel):
@@ -46,8 +44,6 @@ class ArtifactFlags(BaseModel):
     has_transcript_file: bool = False
     has_audio_file: bool = False
     step_audio_transcribed: bool = False
-    step_llm_summarized: bool = False
-    step_saydo_analyzed: bool = False
     step_thesis_updated: bool = False
 
 
@@ -56,21 +52,6 @@ _AUDIO_EXTS = frozenset({".mp3", ".wav", ".m4a"})
 
 _TICKER_QUARTER_YEAR_RX = re.compile(
     r"^(?P<ticker>[A-Za-z]+)_(?P<quarter>Q[1-4])_(?P<year>\d{4})$",
-    re.IGNORECASE,
-)
-_SAYDO_RX = re.compile(
-    r"^SayDo_(?P<ticker>[A-Za-z]+)_Q[1-4]_\d{4}_(?P<curr_q>Q[1-4])_(?P<curr_y>\d{4})$",
-    re.IGNORECASE,
-)
-# Match canonical `_summary` plus the variants the summarizer also writes:
-# `_investor_update_summary` (MELI/NU investor-letter format) and
-# `_presentation_brief` (IR slide brief). Keep this regex in sync with the
-# §5 earnings renderer in src/report/sections/earnings.py — both must
-# accept exactly the same set of files or `quarterly_artifacts.step_llm_summarized`
-# silently desyncs from what the report actually renders.
-_SUMMARY_RX = re.compile(
-    r"^(?P<ticker>[A-Za-z]+)_(?P<quarter>Q[1-4])_(?P<year>\d{4})"
-    r"_(?:investor_update_summary|presentation_brief|summary)$",
     re.IGNORECASE,
 )
 
@@ -109,16 +90,5 @@ def parse_tmp_artifact(filename: str) -> ArtifactName | None:
         if m is None:
             return None
         return _build_name(m["ticker"], m["quarter"], m["year"], ArtifactKind.AUDIO)
-
-    if suffix != ".txt":
-        return None
-
-    m = _SAYDO_RX.match(p.stem)
-    if m is not None:
-        return _build_name(m["ticker"], m["curr_q"], m["curr_y"], ArtifactKind.SAYDO)
-
-    m = _SUMMARY_RX.match(p.stem)
-    if m is not None:
-        return _build_name(m["ticker"], m["quarter"], m["year"], ArtifactKind.LLM_SUMMARY)
 
     return None

@@ -23,24 +23,20 @@ from __future__ import annotations
 import inspect
 import shutil
 import sqlite3
-import sys
 import typing
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import db as dbmod  # noqa: E402
-import identity  # noqa: E402
-from alerts.store import AlertRow  # noqa: E402
-from models.companies import Company, ListType  # noqa: E402
-from pipeline import queries  # noqa: E402
-from user_state.ledger import ThesisLedgerEntryRow  # noqa: E402
-from user_state.registry import UserKpiRegistryRow  # noqa: E402
-from user_state.sizing import PositionSizingIntentRow  # noqa: E402
+import db as dbmod
+import identity
+from alerts.store import AlertRow
+from models.companies import Company, ListType
+from pipeline import queries
+from user_state.ledger import ThesisLedgerEntryRow
+from user_state.registry import UserKpiRegistryRow
+from user_state.sizing import PositionSizingIntentRow
 
 # Every row-type that carries the tenant identifier.
 _SUBSTRATE_ROW_TYPES = (

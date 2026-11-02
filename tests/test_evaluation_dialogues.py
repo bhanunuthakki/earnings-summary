@@ -101,7 +101,7 @@ def test_dialogues_are_bounded_sorted_and_join_explicit_candidate_session(tmp_pa
     assert [item.ticker for item in result.items] == ["ZZZ", "AAA"]
     stock, fund = result.items
     assert fund.instrument_type == "etf"
-    assert fund.workup_readiness == "available"
+    assert fund.workup_readiness == "unavailable"
     assert fund.ask_session_link_state == "unlinked"
     assert stock.discovery_candidate_id == 7
     assert stock.ask_session_id == "session-z"
@@ -546,7 +546,7 @@ def test_readiness_sorting_rank(tmp_path: Path) -> None:
 
     result = evaluation_dialogues.load_evaluation_dialogues(path, sort="relevance")
     tickers = [i.ticker for i in result.items]
-    assert tickers == ["ETF", "STK"]
+    assert tickers == ["STK", "ETF"]  # ETF research is retired; company partial sorts first.
 
 
 def test_separated_note_semantics(tmp_path: Path) -> None:

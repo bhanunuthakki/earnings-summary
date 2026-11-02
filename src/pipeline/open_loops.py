@@ -1,44 +1,9 @@
-"""The open-loops band — ritual debt, rendered where the day starts.
-
-The 2026-07-02 UX audit's top finding: every learning-circuit queue
-(seed Reconcile, proposed Tenets, pending research proposals, owner decision
-stubs missing their words, the coach's digest lane) waited 2+ clicks deep
-while Home rendered market data only — the "fortress with no inhabitants"
-entry point, unchanged. This band puts one dense line per non-empty queue
-above the cockpit, each line a doorway into the panel that drains it; when
-nothing waits it says so explicitly (an empty circuit that renders as blank
-space can never pull the owner toward feeding it).
-
-Every count is a cheap read over tables that already exist. Each query is
-independently guarded so a pre-migration DB (or a stub fixture) can never
-break Home — a queue whose table is missing simply doesn't render.
-
-Pending Decision Draft confirmations and un-dispositioned Investment
-Decision Cards get their own unconditional lines so the queues never depend
-on a generated LLM artifact.
-
-Home-band consolidation (navigation_ia.md D1, wave3b — ~2-viewport budget):
-two more bands folded into this one rather than living beside it.
-
-* The retired ``coach_strip`` band's ONLY count these existing lines didn't
-  already cover was "sent today" (Telegram already pushed it; the digest and
-  routed-to-brief queues above already count everything else the coach can
-  hold) — one line, same doorway convention as its siblings.
-* The Sunday packet (``pipeline.weekly_packet``) gets a state line reading
-  the SAME ``weekly_packet_runs``/``weekly_packet_items`` rows the Telegram
-  packet itself uses (never a parallel count that could disagree with what
-  Telegram already showed) — dark when the packet is clear/complete or no
-  run exists yet this ISO week (the ratified "dark-when-clear" contract;
-  never a zero-count line). This band's render function stays read-only —
-  it never calls ``weekly_packet.ensure_run`` (which INSERTs); it reads the
-  current week's row directly, or finds none and renders nothing.
-"""
+"""Render owner queues that need attention on the home screen."""
 
 from __future__ import annotations
 
 import sqlite3
 from datetime import UTC, datetime
-from html import escape
 from pathlib import Path
 
 from pipeline.analysis_styles import ANALYSIS_STYLE
@@ -96,62 +61,6 @@ def pending_proposal_count(
     return len(list_proposals(status="pending", db_path=db_path, conn=conn))
 
 
-def _decision_stub_debt(
-    db_path: Path | str | None, *, conn: sqlite3.Connection | None = None
-) -> tuple[int, str]:
-    """Owner decisions still ungradeable — NULL conviction or falsifier. The
-    same debt the governor's retro_annotation ping chases, counted without its
-    channel/age filters (any incomplete stub starves Brier + the tripwires)."""
-    db_conn = conn or open_read_conn(db_path)
-    try:
-        row = db_conn.execute(
-            """
-            SELECT COUNT(*), MIN(created_at) FROM decisions
-            WHERE decided_by = 'owner' AND outcome_label = 'pending'
-              AND (conviction IS NULL OR falsifier IS NULL)
-            """
-        ).fetchone()
-        return int(row[0] or 0), _age_suffix(row[1]) if row[0] else ""
-    finally:
-        if conn is None:
-            db_conn.close()
-
-
-def _digest_ping_debt(
-    db_path: Path | str | None, *, conn: sqlite3.Connection | None = None
-) -> tuple[int, str]:
-    """Coach pings parked in the digest lane (over-cap or send-failed) — the
-    write-only queue the audit found no surface ever rendered."""
-    db_conn = conn or open_read_conn(db_path)
-    try:
-        row = db_conn.execute(
-            "SELECT COUNT(*), MIN(created_at) FROM coach_pings WHERE status = 'digest'"
-        ).fetchone()
-        return int(row[0] or 0), _age_suffix(row[1]) if row[0] else ""
-    finally:
-        if conn is None:
-            db_conn.close()
-
-
-def _legacy_routed_ping_debt(
-    db_path: Path | str | None, *, conn: sqlite3.Connection | None = None
-) -> tuple[int, str]:
-    """Historical pings parked by the retired weekly-brief product.
-
-    New governor runs use the ordinary sent/digest path. Retained rows remain
-    visible until the owner dismisses or resolves them; history is not rewritten.
-    """
-    db_conn = conn or open_read_conn(db_path)
-    try:
-        row = db_conn.execute(
-            "SELECT COUNT(*), MIN(created_at) FROM coach_pings WHERE status = 'routed_to_brief'"
-        ).fetchone()
-        return int(row[0] or 0), _age_suffix(row[1]) if row[0] else ""
-    finally:
-        if conn is None:
-            db_conn.close()
-
-
 def _pending_draft_confirmation_debt(
     db_path: Path | str | None, *, conn: sqlite3.Connection | None = None
 ) -> tuple[int, str]:
@@ -197,142 +106,6 @@ def _undispositioned_card_debt(
     finally:
         if conn is None:
             db_conn.close()
-
-
-def _coach_sent_today_debt(
-    db_path: Path | str | None,
-    *,
-    now: datetime | None = None,
-    conn: sqlite3.Connection | None = None,
-) -> int:
-    """Coach pings actually pushed to Telegram today — the ONE count the
-    retired ``coach_strip`` band carried that ``_digest_ping_debt`` /
-    ``_legacy_routed_ping_debt`` above don't already cover (those two count the
-    'digest' and 'routed_to_brief' queues; 'sent' is the third, disjoint
-    status the strip used to render up to 4 rows of). Folded to a single
-    count line — the strip's per-item detail (class label + body text) lived
-    on Telegram already; this line's job is just parity ("Home shows what
-    Telegram showed"), not a duplicate reading surface."""
-    stamp = now or datetime.now(UTC).replace(tzinfo=None)
-    day_start = stamp.date().isoformat()
-    db_conn = conn or open_read_conn(db_path)
-    try:
-        row = db_conn.execute(
-            "SELECT COUNT(*) FROM coach_pings WHERE status = 'sent' AND created_at >= ?",
-            (day_start,),
-        ).fetchone()
-        return int(row[0] or 0)
-    finally:
-        if conn is None:
-            db_conn.close()
-
-
-def _packet_state(
-    db_path: Path | str | None,
-    *,
-    now: datetime | None = None,
-    conn: sqlite3.Connection | None = None,
-) -> tuple[int, int] | None:
-    """(answered, total) for the CURRENT ISO week's Sunday packet run, or
-    ``None`` when there is nothing to show — no run yet this week, or the run
-    is already dark (status 'clear'/'complete', or zero items). Reads
-    ``weekly_packet_runs``/``weekly_packet_items`` directly (never
-    ``pipeline.weekly_packet.ensure_run``, which INSERTs a row — this render
-    path must stay read-only) so the number can never disagree with what the
-    Sunday packet itself already showed on Telegram."""
-    stamp = now or datetime.now(UTC).replace(tzinfo=None)
-    iso_year, iso_week, _ = stamp.isocalendar()
-    db_conn = conn or open_read_conn(db_path)
-    try:
-        row = db_conn.execute(
-            "SELECT id, status, total_items FROM weekly_packet_runs "
-            "WHERE iso_year = ? AND iso_week = ?",
-            (iso_year, iso_week),
-        ).fetchone()
-        if row is None:
-            return None
-        run_id, status, total_items = int(row[0]), str(row[1]), int(row[2] or 0)
-        if status != "open" or not total_items:
-            return None
-        pending_row = db_conn.execute(
-            "SELECT COUNT(*) FROM weekly_packet_items WHERE run_id = ? AND verdict IS NULL",
-            (run_id,),
-        ).fetchone()
-        pending = int(pending_row[0] or 0)
-        return total_items - pending, total_items
-    finally:
-        if conn is None:
-            db_conn.close()
-
-
-def render_weekly_packet_peek(db_path: Path | str | None, *, now: datetime | None = None) -> str:
-    """The read-only quick-look behind the Sunday-packet line's
-    ``data-peek-url`` — one row per item in the CURRENT week's run, verdict
-    (or 'pending'), and a reminder that verdicts are given on Telegram (this
-    page has no reply mechanism of its own — study §4/Task 3's "peeks the
-    packet state read-only" instruction). Never raises; an empty/absent run
-    renders a quiet note rather than a blank popover. ``now`` overrides the
-    wall clock (tests pin it to dodge the UTC-midnight ISO-week flake)."""
-    try:
-        stamp = now or datetime.now(UTC).replace(tzinfo=None)
-        iso_year, iso_week, _ = stamp.isocalendar()
-        conn = open_read_conn(db_path)
-        try:
-            run = conn.execute(
-                "SELECT id, status, total_items FROM weekly_packet_runs "
-                "WHERE iso_year = ? AND iso_week = ?",
-                (iso_year, iso_week),
-            ).fetchone()
-            if run is None:
-                return '<div class="k-well muted">No Sunday packet run yet this week.</div>'
-            run_id, status, total_items = int(run[0]), str(run[1]), int(run[2] or 0)
-            items = conn.execute(
-                "SELECT item_kind, ticker, title, verdict FROM weekly_packet_items "
-                "WHERE run_id = ? ORDER BY order_index",
-                (run_id,),
-            ).fetchall()
-        finally:
-            conn.close()
-    except Exception:
-        return '<div class="k-well muted">Packet state unavailable.</div>'
-    if not items:
-        return f'<div class="k-well muted">Packet clear this week (status: {escape(status)}).</div>'
-    rows = "".join(
-        '<div class="cc-ol-line">'
-        f'<span class="k-chip k-chip-mono">{escape(str(kind))}</span> '
-        f"{escape((str(ticker) + ' — ') if ticker else '')}{escape(str(title)[:160])} "
-        f'<span class="muted">{escape(str(verdict) if verdict else "pending")}</span></div>'
-        for kind, ticker, title, verdict in items
-    )
-    return (
-        f'<div class="k-well"><span class="k-chip k-chip-mono">Sunday packet</span> '
-        f'<span class="muted">{total_items} items — verdicts are given on Telegram</span>'
-        f"{rows}</div>"
-    )
-
-
-def _packet_line(
-    db_path: Path | str | None,
-    *,
-    now: datetime | None = None,
-    conn: sqlite3.Connection | None = None,
-) -> str:
-    """Task 3: "Sunday packet · N of M answered · finish ▸" — dark (returns
-    "") when the packet is clear/complete or no run exists this week, per the
-    ratified "dark-when-clear" contract (never a zero-count line). The doorway
-    falls back to a full-page destination (the Ledger, where the packet's
-    substrate queues live) for a plain click/middle-click, and opens the
-    read-only quick-look in place via ``data-peek-url`` (no web reply surface
-    exists — verdicts are given on Telegram, per Task 3's spec)."""
-    state = _packet_state(db_path, now=now, conn=conn)
-    if state is None:
-        return ""
-    answered, total = state
-    return (
-        f'<a class="cc-ol-line" href="{_LEDGER_HASH}" data-peek-url="/api/peek/weekly-packet" '
-        f'data-peek-title="Sunday packet">Sunday packet · {answered} of {total} answered · '
-        "finish ▸</a>"
-    )
 
 
 def _line(href: str, label: str, count: int, suffix: str = "") -> str:
@@ -382,12 +155,11 @@ def render_open_loops_band(
     now: datetime | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> str:
-    """The persistent Red Team escalation banner (if any) followed by one
-    dense line per non-empty ritual queue, each a doorway; an explicit
-    'Ritual clear' line when nothing waits. Never raises. ``now`` overrides
-    the wall clock for the two date-boundary-sensitive lines (coach
-    sent-today, the Sunday packet's ISO week) — tests pin it to dodge the
-    repo's known UTC-midnight flake class; production leaves it unset."""
+    """Render the Red Team escalation banner and non-empty owner queues.
+
+    An empty queue set renders an explicit clear state. Missing tables or
+    unavailable optional queues do not break the home screen.
+    """
     banner = _escalation_banner(db_path, conn=conn)
     lines: list[str] = []
 
@@ -419,36 +191,6 @@ def render_open_loops_band(
         n = pending_proposal_count(db_path, conn=conn)
         if n:
             lines.append(_line(_LEDGER_HASH, "Research proposals", n))
-    except Exception:
-        pass
-    try:
-        n, age = _decision_stub_debt(db_path, conn=conn)
-        if n:
-            lines.append(_line(_DECISIONS_HASH, "Decisions missing conviction/falsifier", n, age))
-    except Exception:
-        pass
-    try:
-        n, age = _digest_ping_debt(db_path, conn=conn)
-        if n:
-            lines.append(_line(_LEDGER_HASH, "Coach digest", n, age))
-    except Exception:
-        pass
-    try:
-        n, age = _legacy_routed_ping_debt(db_path, conn=conn)
-        if n:
-            lines.append(_line(_LEDGER_HASH, "Legacy routed coach moments", n, age))
-    except Exception:
-        pass
-    try:
-        n = _coach_sent_today_debt(db_path, now=now, conn=conn)
-        if n:
-            lines.append(_line(_LEDGER_HASH, "Coach sent today", n))
-    except Exception:
-        pass
-    try:
-        packet_line = _packet_line(db_path, now=now, conn=conn)
-        if packet_line:
-            lines.append(packet_line)
     except Exception:
         pass
 

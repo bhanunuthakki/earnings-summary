@@ -1,7 +1,7 @@
 """Generic capture-all extractor over FMP-XBRL note-detail tables (Stage A).
 
 The deterministic, no-LLM half of the "capture every reported number" program
-(`directives/capture_every_number_program.md`). It walks every ``(Details)``
+(`directives/data_provenance.md`). It walks every ``(Details)``
 note table in an FMP ``form_10k`` JSON via :func:`table_extractors.base.iter_xbrl_table`
 and emits one ``kpi_facts`` value per numeric cell — section-qualified name,
 value expanded to the issuer's base units, provenance back to the filing — routed

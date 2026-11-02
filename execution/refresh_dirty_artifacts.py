@@ -82,14 +82,6 @@ _PURPOSE_TO_REGENERATOR: dict[str, list[str]] = {
         "--regenerate-purpose",
         "qa_topics",
     ],
-    "saydo_filter": [
-        "python",
-        "execution/build_artifacts.py",
-        "--ticker",
-        "{ticker}",
-        "--regenerate-purpose",
-        "saydo_filter",
-    ],
     "valuation_basis": [
         "python",
         "execution/build_artifacts.py",
@@ -116,13 +108,6 @@ _PURPOSE_TO_REGENERATOR: dict[str, list[str]] = {
     "filing_intelligence": [
         "python",
         "execution/analyze_filing_intelligence.py",
-        "--ticker",
-        "{ticker}",
-        "--refresh",
-    ],
-    "saydo_pair": [
-        "python",
-        "execution/build_saydo_pairs.py",
         "--ticker",
         "{ticker}",
         "--refresh",

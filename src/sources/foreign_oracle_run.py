@@ -90,9 +90,8 @@ def _observations(
     conn: sqlite3.Connection, document_version_id: str, cutoff: datetime
 ) -> tuple[ProvenanceBundle, ...]:
     reader = FactReadModel(conn)
-    return tuple(
-        reader.provenance_bundle(observation_id, cutoff=cutoff)
-        for observation_id in _observation_ids(conn, document_version_id, cutoff)
+    return reader.required_provenance_bundles(
+        _observation_ids(conn, document_version_id, cutoff), cutoff=cutoff
     )
 
 

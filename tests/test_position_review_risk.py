@@ -1,9 +1,8 @@
 """The C7 risk-aware ``/review`` block — ``RiskContext`` + ``build_risk_context``
 + ``render_risk_lines`` + ``risk_prompt_block``, and their wiring into
-``render_pre_analysis_chat``/``render_pre_analysis_plain``.
+``render_pre_analysis_chat``.
 
-Mirrors ``tests/test_position_review_capacity_block.py``'s shape and its
-byte-identical-when-empty discipline: every sub-leg (book risk share/corr,
+Preserves the byte-identical-when-empty discipline: every sub-leg (book risk share/corr,
 crowding cluster, C3 business-factor loadings, C5 event-scenario membership)
 degrades independently and never raises; when EVERY leg comes back empty the
 whole block is absent (``risk=None``) and ``/review`` renders EXACTLY as it
@@ -27,9 +26,7 @@ from advisor.position_review import (
     RiskContext,
     build_risk_context,
     render_pre_analysis_chat,
-    render_pre_analysis_plain,
     render_risk_lines,
-    risk_prompt_block,
 )
 
 _START = date(2024, 1, 1)
@@ -273,8 +270,6 @@ _PRE_DEFAULT = PreAnalysis(
     at_price=None,
     mos_bar=0.30,
     valuation_verdict="fair",
-    conviction_encoded=True,
-    has_stance=True,
     has_decision_note=True,
     is_index_instrument=False,
 )
@@ -292,25 +287,12 @@ def test_chat_render_byte_identical_risk_none_vs_empty_context() -> None:
     assert render_pre_analysis_chat(pre_none) == render_pre_analysis_chat(pre_empty)
 
 
-def test_plain_render_byte_identical_risk_none_vs_empty_context() -> None:
-    pre_none = _PRE_DEFAULT
-    pre_empty = replace(_PRE_DEFAULT, risk=RiskContext())
-    assert render_pre_analysis_plain(pre_none) == render_pre_analysis_plain(pre_empty)
-
-
 def test_chat_render_no_risk_lines_when_empty() -> None:
     out = render_pre_analysis_chat(_PRE_DEFAULT)
     assert "Risk:" not in out
     assert "Crowding:" not in out
     assert "Business factors:" not in out
     assert "Event scenarios:" not in out
-
-
-def test_chat_render_risk_lines_appear_between_capacity_and_mechanical() -> None:
-    risk = RiskContext(risk_share_pct=14.0, corr_to_book=0.62)
-    pre = replace(_PRE_DEFAULT, risk=risk)
-    out = render_pre_analysis_chat(pre)
-    assert out.index("- Risk:") < out.index("- Mechanical read:")
 
 
 # --------------------------------------------------------------------------- #
@@ -349,26 +331,3 @@ def test_render_risk_lines_partial_context_only_renders_populated_bits() -> None
 
 
 # --------------------------------------------------------------------------- #
-# risk_prompt_block — the verdict-prompt RISK line
-# --------------------------------------------------------------------------- #
-
-
-def testrisk_prompt_block_empty_for_none_and_empty_context() -> None:
-    assert risk_prompt_block(None) == ""
-    assert risk_prompt_block(RiskContext()) == ""
-
-
-def testrisk_prompt_block_contains_factors_and_scenarios() -> None:
-    risk = RiskContext(
-        risk_share_pct=14.0,
-        corr_to_book=0.62,
-        crowding_cluster="co-moves with NU (avg corr 0.91, 25% combined weight)",
-        top_factors=(("Brazil consumer credit", 0.9), ("LatAm consumer/FX", 0.7)),
-        event_scenarios=("joint_latam",),
-    )
-    block = risk_prompt_block(risk)
-    assert block.startswith("RISK:")
-    assert "14% of book risk" in block
-    assert "cluster: co-moves with NU" in block
-    assert "factors: Brazil consumer credit 0.9, LatAm consumer/FX 0.7" in block
-    assert "scenarios: joint_latam" in block

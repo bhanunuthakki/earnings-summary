@@ -13,15 +13,10 @@ group. These tests pin:
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Callable
 from datetime import date
 from io import StringIO
 from pathlib import Path
-from typing import Any
 
-import pytest
-
-import report.renderers.workspace_html as workspace_html
 from report.models import (
     AppendixSection,
     BearCaseSection,
@@ -29,7 +24,6 @@ from report.models import (
     EarningsSection,
     EvaluationSnapshotSection,
     FinancialsSection,
-    IrDocsSection,
     KpiLedgerRow,
     MissingReason,
     PortfolioPositionSection,
@@ -45,31 +39,18 @@ from report.models import (
     ValuationSnapshot,
 )
 from report.renderers.workspace_data import WorkspaceP3Panels
-from report.renderers.workspace_html import render
+from report.renderers.workspace_html import (
+    _tab_groups,
+    _tabs,
+    render,
+)
 from report.renderers.workspace_script import JS
 from report.renderers.workspace_styles import CSS
 from report.sections.p3_data import DecisionHistorySummary
 
-_tab_groups: Callable[..., Any] = getattr(workspace_html, "_tab_groups")
-_tabs: Callable[..., Any] = getattr(workspace_html, "_tabs")
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def _isolate_tab_group_tests_from_live_database(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep markup-only tests independent of production-owned database readers."""
-
-    def _no_sell_base_rate(*_args: object, **_kwargs: object) -> None:
-        return None
-
-    def _no_you_said_strip(*_args: object) -> str:
-        return ""
-
-    monkeypatch.setattr(workspace_html, "load_graded_sell_base_rate", _no_sell_base_rate)
-    monkeypatch.setattr(workspace_html, "render_you_said_strip_for_path", _no_you_said_strip)
 
 
 def _make_spec(
@@ -110,7 +91,6 @@ def _make_spec(
         segments=SegmentsSection(status=SectionStatus.OK),
         earnings=EarningsSection(status=SectionStatus.OK),
         saydo=SayDoSection(status=SectionStatus.OK),
-        ir_docs=IrDocsSection(status=SectionStatus.OK),
         recent_developments=RecentDevelopmentsSection(status=SectionStatus.OK),
         bear_case=BearCaseSection(status=SectionStatus.OK),
         provenance=ProvenanceSection(status=SectionStatus.OK),

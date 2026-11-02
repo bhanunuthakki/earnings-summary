@@ -31,17 +31,7 @@ EXPECTED_DISABLED_TASKS = {
     r"\earnings-summary\refresh_ir_kpis",
     r"\earnings-summary\scan_ir_transcripts",
     # Simplification Phase 0 freeze (2026-10-20): outside the core research jobs.
-    r"\earnings-summary\coach_pings",
-    r"\earnings-summary\decision_nudge",
     r"\earnings-summary\grade_calibration",
-    r"\earnings-summary\ledger_synthesis",
-    r"\earnings-summary\monthly_calibration_scorecard",
-    r"\earnings-summary\red_team",
-    r"\earnings-summary\submit_saydo_batch",
-    r"\earnings-summary\tenet_accountability",
-    r"\earnings-summary\thesis_collision",
-    r"\earnings-summary\weekly_packet",
-    r"\earnings-summary\weekly_score_stances",
 }
 
 
@@ -58,7 +48,7 @@ def test_manifest_rejects_duplicate_json_keys(tmp_path: Path) -> None:
 
 def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     manifest = load_manifest(MANIFEST_PATH)
-    assert len(manifest.tasks) == 45
+    assert len(manifest.tasks) == 29
     assert all(
         task.task_name != r"\earnings-summary\backfill_financial_fact_resolutions"
         for task in manifest.tasks
@@ -80,6 +70,11 @@ def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     assert collector_xml.index("<Repetition>") < collector_xml.index("<StartBoundary>")
     assert all(task.task_name != r"\earnings-summary\session_distill" for task in manifest.tasks)
     assert all(task.task_name != r"\earnings-summary\monthly_p3_refresh" for task in manifest.tasks)
+    assert all(
+        task.task_name != r"\earnings-summary\monthly_advisor_memos" for task in manifest.tasks
+    )
+    assert not (CRON_DIR / "monthly_advisor_memos.task.xml").exists()
+    assert not (CRON_DIR / "run_monthly_advisor_memos.bat").exists()
     semantic_review = next(
         task
         for task in manifest.tasks
@@ -241,12 +236,7 @@ def test_generated_registration_and_inventory_are_deterministic_and_current() ->
     assert first_doc == generated_inventory_markdown(load_manifest(MANIFEST_PATH))
     assert (CRON_DIR / "register_tasks.generated.ps1").read_text(encoding="utf-8") == first_script
     assert (CRON_DIR / "TASKS.generated.md").read_text(encoding="utf-8") == first_doc
-    assert "/Create /TN '\\earnings-summary\\capture_poller'" not in first_script
-    registered_tasks = [
-        task
-        for task in manifest.tasks
-        if task.task_name.casefold() != r"\earnings-summary\capture_poller".casefold()
-    ]
+    registered_tasks = list(manifest.tasks)
     assert first_script.count("schtasks.exe /Create") == 1
     assert first_script.count("Failed to register scheduled task") == 1
     tracker_create = (
@@ -267,7 +257,8 @@ def test_generated_registration_and_inventory_are_deterministic_and_current() ->
     assert "-Password $password" in first_script
     assert "scheduler_rollback" in first_script
     assert "Principal.LogonType -ne 'Password'" in first_script
-    assert "| Windows service |" in first_doc
+    assert "| Task Scheduler |" in first_doc
+    assert "| Windows service |" not in first_doc
 
 
 def test_task_security_descriptor_helper_is_fail_closed_and_rollback_safe() -> None:
@@ -307,11 +298,7 @@ def test_operator_runbook_uses_generated_registration_and_safe_recovery_contract
     normalized = runbook.casefold()
     manifest = load_manifest(MANIFEST_PATH)
     generated_registration = (CRON_DIR / "register_tasks.generated.ps1").read_text(encoding="utf-8")
-    scheduler_tasks = [
-        task
-        for task in manifest.tasks
-        if task.task_name.casefold() != r"\earnings-summary\capture_poller".casefold()
-    ]
+    scheduler_tasks = list(manifest.tasks)
 
     assert f"{len(manifest.tasks)} operational declarations" in runbook
     assert f"{len(scheduler_tasks)} Task Scheduler registrations" in runbook

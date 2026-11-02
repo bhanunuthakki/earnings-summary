@@ -1,13 +1,6 @@
-"""Per-ticker command-center drill-down: assemble + render.
+"""Per-ticker command-center fragments: retained identity/freshness, analysis and artifact metadata, report iframe, Ops, and Notes.
 
-One page that answers "what's the full state of this name right now?" —
-identity/freshness, the live position (from the companion portfolio-tracker),
-the analyses that ran, the artifacts on disk, recent decisions, and the
-read-only thesis. Pure reads; degrades panel-by-panel when a source is absent.
-
-Single consumer (the live command-center server), so the builder and the
-renderer live together here — unlike the analytical dashboard, whose render
-layer is shared with a static exporter and therefore split out.
+Legacy fullpage assembly and the position/thesis/recent-decision projections have been retired; shared report/portfolio history is unchanged. Pure reads that degrade fragment-by-fragment when a source is absent.
 """
 
 from __future__ import annotations
@@ -15,7 +8,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from html import escape
 from io import StringIO
@@ -34,18 +27,16 @@ from pipeline.work_os_styles import (
     TCC_COMBO_STYLE,
     TCC_DISCLOSURE_STYLE,
     TCC_DRAWER_STYLE,
-    TCC_PAGE_CSS,
     TCC_QUICK_NOTE_STYLE,
     TCC_YOU_SAID_STYLE,
 )
 from pipeline.you_said import render_you_said_strip_for_path
 from provenance.selection import selected_transcripts_relation
-from report.renderers.numfmt import fmt_date, fmt_reltime
+from report.renderers.numfmt import fmt_reltime
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
-from ui.controls import controls_css, controls_js, pill_tone_class, thesis_status_tone, ticker_label
+from ui.controls import pill_tone_class, thesis_status_tone
 from ui.prose import render_prose
 from ui.time import stamp_html
-from ui.tokens import FAVICON_LINK, palette_css
 from user_state.notes import NOTE_KINDS, AnalystNoteRow, list_notes
 
 
@@ -62,128 +53,17 @@ class TickerIdentity:
     last_transcript_period: str | None = None
     breach_status: str | None = None
 
-    def to_dict(self) -> dict[str, object]:
-        return asdict(self)
-
-
-@dataclass(slots=True)
-class ThesisKpi:
-    name: str
-    current: str | None
-    status: str | None
-    break_condition: str | None
-
-    def to_dict(self) -> dict[str, object]:
-        return asdict(self)
-
-
-@dataclass(slots=True)
-class ThesisBreakRule:
-    kpi_name: str
-    comparator: str | None
-    threshold: str | None
-    unit: str | None
-    narrative: str | None
-
-    def to_dict(self) -> dict[str, object]:
-        return asdict(self)
-
-
-@dataclass(slots=True)
-class ThesisView:
-    present: bool = False
-    thesis: str | None = None
-    verdict: str | None = None
-    last_updated: str | None = None
-    tier1: list[ThesisKpi] = field(default_factory=lambda: list[ThesisKpi]())
-    break_rules: list[ThesisBreakRule] = field(default_factory=lambda: list[ThesisBreakRule]())
-    qualitative_breakers: list[str] = field(default_factory=lambda: list[str]())
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "present": self.present,
-            "thesis": self.thesis,
-            "verdict": self.verdict,
-            "last_updated": self.last_updated,
-            "tier1": [k.to_dict() for k in self.tier1],
-            "break_rules": [r.to_dict() for r in self.break_rules],
-            "qualitative_breakers": self.qualitative_breakers,
-        }
-
-
-@dataclass(slots=True)
-class PositionAccount:
-    account_name: str
-    quantity: float
-    market_value: float | None
-
-    def to_dict(self) -> dict[str, object]:
-        return asdict(self)
-
-
-@dataclass(slots=True)
-class PositionStrip:
-    available: bool = False  # is the portfolio-tracker DB reachable at all?
-    held: bool = False
-    total_quantity: float | None = None
-    total_cost_basis: float | None = None
-    total_market_value: float | None = None
-    total_unrealized_pnl: float | None = None
-    total_unrealized_pct: float | None = None
-    accounts: list[PositionAccount] = field(default_factory=lambda: list[PositionAccount]())
-    last_decision: str | None = None
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "available": self.available,
-            "held": self.held,
-            "total_quantity": self.total_quantity,
-            "total_cost_basis": self.total_cost_basis,
-            "total_market_value": self.total_market_value,
-            "total_unrealized_pnl": self.total_unrealized_pnl,
-            "total_unrealized_pct": self.total_unrealized_pct,
-            "accounts": [a.to_dict() for a in self.accounts],
-            "last_decision": self.last_decision,
-        }
-
-
-@dataclass(slots=True)
-class DecisionLite:
-    recommendation_kind: str
-    recommendation_value: float | None
-    conviction: str | None
-    made_at: str
-    outcome_label: str | None
-
-    def to_dict(self) -> dict[str, object]:
-        return asdict(self)
-
 
 @dataclass(slots=True)
 class TickerCommandCenter:
     identity: TickerIdentity
     artifacts: list[Artifact] = field(default_factory=lambda: list[Artifact]())
     analysis: AnalysisLog = field(default_factory=AnalysisLog)
-    recent_decisions: list[DecisionLite] = field(default_factory=lambda: list[DecisionLite]())
-    thesis: ThesisView = field(default_factory=ThesisView)
-    position: PositionStrip = field(default_factory=PositionStrip)
     tracker_url: str | None = None
     # YYYY-MM-DD of the latest workspace brief — the (ticker, report_date) key the
     # comment store + chat thread use, so the Holding tab's embedded report lines
     # up with the right day. None when no brief has been built.
     report_date: str | None = None
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "identity": self.identity.to_dict(),
-            "artifacts": [a.to_dict() for a in self.artifacts],
-            "analysis": self.analysis.to_dict(),
-            "recent_decisions": [d.to_dict() for d in self.recent_decisions],
-            "thesis": self.thesis.to_dict(),
-            "position": self.position.to_dict(),
-            "tracker_url": self.tracker_url,
-            "report_date": self.report_date,
-        }
 
 
 # --------------------------------------------------------------------------- #
@@ -199,7 +79,6 @@ def build_ticker_command_center(repo_root: Path, ticker: str) -> TickerCommandCe
     try:
         identity = _identity(conn, repo_root, t)
         analysis = build_analysis_log(conn, t) if conn is not None else AnalysisLog()
-        decisions = _recent_decisions(conn, t) if conn is not None else []
     finally:
         if conn is not None:
             conn.close()
@@ -208,9 +87,6 @@ def build_ticker_command_center(repo_root: Path, ticker: str) -> TickerCommandCe
         identity=identity,
         artifacts=artifacts,
         analysis=analysis,
-        recent_decisions=decisions,
-        thesis=_thesis_view(repo_root, t),
-        position=_position_strip(repo_root, t),
         tracker_url=tracker_url(t),
         report_date=_report_date_from_artifacts(artifacts),
     )
@@ -292,105 +168,6 @@ def _identity(conn: sqlite3.Connection | None, repo_root: Path, t: str) -> Ticke
     return ident
 
 
-def _recent_decisions(conn: sqlite3.Connection, t: str) -> list[DecisionLite]:
-    if not _has(conn, "decisions"):
-        return []
-    rows = conn.execute(
-        "SELECT recommendation_kind, recommendation_value, conviction, made_at, outcome_label "
-        "FROM decisions WHERE UPPER(ticker)=? ORDER BY made_at DESC LIMIT 8",
-        (t,),
-    ).fetchall()
-    out: list[DecisionLite] = []
-    for r in rows:
-        val = r["recommendation_value"]
-        out.append(
-            DecisionLite(
-                recommendation_kind=str(r["recommendation_kind"]),
-                recommendation_value=float(val) if val is not None else None,
-                conviction=r["conviction"],
-                made_at=str(r["made_at"])[:19],
-                outcome_label=r["outcome_label"],
-            )
-        )
-    return out
-
-
-def _thesis_view(repo_root: Path, t: str) -> ThesisView:
-    p = repo_root / "micro_thesis" / "holdings" / f"{t}.json"
-    if not p.is_file():
-        return ThesisView(present=False)
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return ThesisView(present=False)
-    if not isinstance(data, dict):
-        return ThesisView(present=False)
-    obj = cast("dict[str, object]", data)  # JSON boundary: cast, don't suppress
-    tier1 = [
-        ThesisKpi(
-            name=str(k.get("name", "")),
-            current=_s(k.get("current")),
-            status=_s(k.get("status")),
-            break_condition=_s(k.get("break_condition")),
-        )
-        for k in _dict_list(obj.get("tier_1_kpis"))
-    ]
-    rules = [
-        ThesisBreakRule(
-            kpi_name=str(r.get("kpi_name", "")),
-            comparator=_s(r.get("comparator")),
-            threshold=_s(r.get("threshold")),
-            unit=_s(r.get("unit")),
-            narrative=_s(r.get("narrative")),
-        )
-        for r in _dict_list(obj.get("break_rules"))
-    ]
-    return ThesisView(
-        present=True,
-        thesis=_s(obj.get("thesis")),
-        verdict=_s(obj.get("verdict")),
-        last_updated=_s(obj.get("last_updated")),
-        tier1=tier1,
-        break_rules=rules,
-        qualitative_breakers=_str_list(obj.get("thesis_breakers_qualitative")),
-    )
-
-
-def _position_strip(repo_root: Path, t: str) -> PositionStrip:
-    # Lazy import: keep the heavy report.* import chain out of server boot.
-    from report.models import SectionStatus
-    from report.sections import portfolio_position
-
-    section = portfolio_position.build(t, repo_root)
-    if section.status == SectionStatus.MISSING_DATA:
-        return PositionStrip(available=False)
-    if section.status not in (SectionStatus.OK, SectionStatus.PARTIAL):
-        return PositionStrip(available=True, held=False)
-    last_decision: str | None = None
-    if section.open_decisions:
-        d = section.open_decisions[0]
-        last_decision = f"{d.action} ({fmt_date(d.decision_date.isoformat())})"
-    elif section.closed_decisions:
-        d = section.closed_decisions[0]
-        last_decision = f"{d.action} → {d.outcome_status} ({fmt_date(d.decision_date.isoformat())})"
-    return PositionStrip(
-        available=True,
-        held=bool(section.held),
-        total_quantity=section.total_quantity,
-        total_cost_basis=section.total_cost_basis,
-        total_market_value=section.total_market_value,
-        total_unrealized_pnl=section.total_unrealized_pnl,
-        total_unrealized_pct=section.total_unrealized_pct,
-        accounts=[
-            PositionAccount(
-                account_name=a.account_name, quantity=a.quantity, market_value=a.market_value
-            )
-            for a in section.accounts
-        ],
-        last_decision=last_decision,
-    )
-
-
 def tracker_url(t: str) -> str | None:
     from os import environ
 
@@ -465,16 +242,14 @@ _QUICK_NOTE_SCRIPT = """<script>
     if (saveBtn.disabled) return;  // Enter + click can't double-submit
     var body = root.querySelector('.qn-body').value.trim();
     if (!body) { msg.textContent = 'write the note first'; return; }
-    // Default (unchecked): journal note, unchanged behavior. Checked: the
-    // SAME text routes to the Ledger capture spine instead (wondering/pledge
-    // taps run) — the endpoint the markup carries via data-musing-endpoint.
+    // Default (unchecked): journal note. Checked: the same text is recorded
+    // as a captured Note by the endpoint in data-musing-endpoint.
     var musing = root.querySelector('.qn-musing');
     var toCaptureSpine = !!(musing && musing.checked);
     var url = toCaptureSpine ? root.getAttribute('data-musing-endpoint') : '/api/notes';
     var t = root.querySelector('.qn-ticker').value.trim().toUpperCase();
-    // The capture spine takes bare text; a typed ticker rides along as a
-    // $-mention so the roster matcher links it (the tray's prefill idiom) —
-    // silently dropping it would land a needs_ticker musing.
+    // The capture endpoint takes bare text; include the typed ticker so the
+    // roster matcher can link the saved Note.
     var payload = toCaptureSpine
       ? { text: (t ? '$' + t + ' ' : '') + body }
       : { kind: root.querySelector('.qn-kind').value, body: body };
@@ -505,10 +280,8 @@ _QUICK_NOTE_SCRIPT = """<script>
 
 
 def _quick_add_form(ticker: str | None) -> str:
-    """Kind · ticker · body → POST /api/notes (source="manual"), OR — when the
-    "musing" toggle is checked — POST /api/capture/text so the same write
-    feeds the Ledger capture spine (wondering/pledge taps run) instead of
-    landing as a plain journal note. The ticker input pre-fills with the
+    """Kind · ticker · body → POST /api/notes, or POST /api/capture/text
+    when the "musing" toggle is checked. The ticker input pre-fills with the
     Holding tab's selection when the drawer opens ticker-scoped, and stays
     editable — a quick note about another name shouldn't need a tab switch.
     ``data-musing-endpoint`` is the alternate-endpoint contract the client JS
@@ -528,8 +301,8 @@ def _quick_add_form(ticker: str | None) -> str:
         "</div>"
         '<textarea class="qn-body" rows="3" '
         'placeholder="What did you notice? Enter saves · Shift+Enter for a newline."></textarea>'
-        '<div class="qn-row"><label class="qn-musing-label" title="Route to the Ledger capture '
-        'spine — wondering/pledge taps run.">'
+        '<div class="qn-row"><label class="qn-musing-label" title="Save as a captured Note '
+        'instead of a journal note.">'
         '<input type="checkbox" class="qn-musing">musing</label>'
         '<button type="button" class="qn-save k-btn k-btn-primary">Add note</button>'
         '<span class="qn-msg muted"></span></div>'
@@ -585,26 +358,6 @@ def _last_build_at(repo_root: Path, t: str) -> str | None:
     from datetime import UTC
 
     return datetime.fromtimestamp(matches[-1].stat().st_mtime, tz=UTC).isoformat()
-
-
-def _s(v: object) -> str | None:
-    return str(v) if v is not None else None
-
-
-def _dict_list(v: object) -> list[dict[str, object]]:
-    """Coerce an arbitrary JSON value to a list of dicts (drops non-dict items)."""
-    if not isinstance(v, list):
-        return []
-    items = cast("list[object]", v)
-    return [cast("dict[str, object]", x) for x in items if isinstance(x, dict)]
-
-
-def _str_list(v: object) -> list[str]:
-    """Coerce an arbitrary JSON value to a list of strings (drops non-strings)."""
-    if not isinstance(v, list):
-        return []
-    items = cast("list[object]", v)
-    return [x for x in items if isinstance(x, str)]
 
 
 # --------------------------------------------------------------------------- #
@@ -764,41 +517,6 @@ def _dcf_sheets_section(ticker: str) -> str:
         "Open in Google Sheets ↗</a> "
         '<span class="tcc-dcfsheets-msg muted"></span>' + _DCF_SHEETS_SCRIPT + "</section>"
     )
-
-
-def render_ticker_html(tcc: TickerCommandCenter, *, generated_at: datetime) -> str:
-    ident = tcc.identity
-    # The canonical two-part ticker label (mono symbol + muted name), display
-    # size — never the "T · Name" single string.
-    heading = ticker_label(ident.ticker, ident.name, wide=True)
-    parts: list[str] = [
-        _PAGE_HEAD.replace("{ticker}", escape(ident.ticker)).replace(
-            "{generated_at}", stamp_html(generated_at, prefix="updated ")
-        ),
-        f"<header><div><h1>{heading}</h1>",
-        '<nav class="top-nav">',
-        '<a href="/">&larr; Dashboard</a> · ',
-        '<a href="/analytical">Analytical overview</a> · ',
-        f'<a href="/reports/{escape(ident.ticker)}">Latest brief &nearr;</a>',
-        (
-            f' · <a href="{escape(tcc.tracker_url)}" target="_blank" rel="noopener">Open in Portfolio Tracker &nearr;</a>'
-            if tcc.tracker_url
-            else ""
-        ),
-        "</nav></div>",
-        _identity_badges(ident),
-        "</header>",
-        _freshness_strip(ident),
-        _refresh_section(ident.ticker),
-        _dcf_sheets_section(ident.ticker),
-        _position_section(tcc.position),
-        _analyses_section(tcc.analysis),
-        _decisions_section(tcc.recent_decisions),
-        _artifacts_section(tcc.artifacts),
-        _thesis_section(tcc.thesis),
-        _PAGE_FOOT,
-    ]
-    return "".join(parts)
 
 
 def render_ticker_fragment(tcc: TickerCommandCenter) -> str:
@@ -1426,49 +1144,6 @@ def _freshness_strip(ident: TickerIdentity) -> str:
     return f'<div class="fresh-strip">{inner}</div>'
 
 
-def _position_section(pos: PositionStrip) -> str:
-    if not pos.available:
-        return (
-            '<section class="panel"><h2>Position</h2>'
-            '<p class="muted">Portfolio-tracker not connected. Configure PORTFOLIO_TRACKER_UI_URL for navigation '
-            "and PORTFOLIO_TRACKER_API_URL (or PORTFOLIO_TRACKER_SNAPSHOT_PATH) for canonical data, then run it "
-            "alongside this app to see live shares / cost / P&amp;L here.</p></section>"
-        )
-    if not pos.held:
-        return (
-            '<section class="panel"><h2>Position</h2>'
-            '<p class="muted">No current position in this name.</p></section>'
-        )
-    pnl = pos.total_unrealized_pnl
-    pct = pos.total_unrealized_pct
-    pnl_tone = "k-num-pos" if (pnl or 0) >= 0 else "k-num-neg"
-    rows = "".join(
-        f"<tr><td>{escape(a.account_name)}</td>"
-        f'<td class="num">{a.quantity:,.2f}</td>'
-        f'<td class="num">{_money(a.market_value)}</td></tr>'
-        for a in pos.accounts
-    )
-    decision = (
-        f'<p class="sub">Last decision: {escape(pos.last_decision)}</p>'
-        if pos.last_decision
-        else ""
-    )
-    return (
-        '<section class="panel"><h2>Position</h2>'
-        f'<div class="kpi-strip">'
-        f'<div class="kpi-card"><div class="kpi-label">Shares</div><div class="kpi-value">{(pos.total_quantity or 0):,.2f}</div></div>'
-        f'<div class="kpi-card"><div class="kpi-label">Cost basis</div><div class="kpi-value">{_money(pos.total_cost_basis)}</div></div>'
-        f'<div class="kpi-card"><div class="kpi-label">Market value</div><div class="kpi-value">{_money(pos.total_market_value)}</div></div>'
-        f'<div class="kpi-card"><div class="kpi-label">Unrealized P&amp;L</div>'
-        f'<div class="kpi-value {pnl_tone}">{_money(pnl)}{f" ({pct * 100:+.1f}%)" if pct is not None else ""}</div></div>'
-        "</div>"
-        f"{decision}"
-        f'<table><thead><tr><th>Account</th><th class="num">Shares</th><th class="num">Value</th></tr></thead>'
-        f"<tbody>{rows}</tbody></table>"
-        "</section>"
-    )
-
-
 def _analyses_section(log: AnalysisLog) -> str:
     if not log.rows:
         return (
@@ -1511,24 +1186,6 @@ def _analyses_section(log: AnalysisLog) -> str:
     return "".join(out)
 
 
-def _decisions_section(decisions: list[DecisionLite]) -> str:
-    if not decisions:
-        return ""
-    body = "".join(
-        f"<tr><td>{_date(d.made_at)}</td>"
-        f"<td>{escape(d.recommendation_kind.upper())}"
-        f"{f' {d.recommendation_value:g}%' if d.recommendation_value is not None else ''}</td>"
-        f"<td>{escape(d.conviction or '—')}</td>"
-        f"<td>{escape(d.outcome_label or 'pending')}</td></tr>"
-        for d in decisions
-    )
-    return (
-        '<section class="panel"><h2>Recent decisions</h2>'
-        "<table><thead><tr><th>When</th><th>Recommendation</th><th>Conviction</th><th>Outcome</th></tr></thead>"
-        f"<tbody>{body}</tbody></table></section>"
-    )
-
-
 def _artifacts_section(artifacts: list[Artifact]) -> str:
     if not artifacts:
         return ""
@@ -1561,52 +1218,6 @@ def _artifact_row(a: Artifact) -> str:
     )
 
 
-def _thesis_section(th: ThesisView) -> str:
-    if not th.present:
-        return (
-            '<section class="panel"><h2>Thesis</h2>'
-            '<p class="muted">No holdings JSON for this ticker.</p></section>'
-        )
-    out = ['<section class="panel"><h2>Thesis</h2>']
-    meta: list[str] = []
-    if th.verdict:
-        meta.append(f"verdict: <strong>{escape(th.verdict)}</strong>")
-    if th.last_updated:
-        meta.append(stamp_html(th.last_updated, mode="date", prefix="updated "))
-    if meta:
-        out.append(f'<p class="sub">{" · ".join(meta)}</p>')
-    if th.thesis:
-        out.append(f"<p>{escape(th.thesis)}</p>")
-    if th.tier1:
-        rows = "".join(
-            f"<tr><td>{escape(k.name)}</td><td>{escape(k.current or '—')}</td>"
-            f"<td>{escape(k.status or '—')}</td><td>{escape(k.break_condition or '—')}</td></tr>"
-            for k in th.tier1
-        )
-        out.append(
-            '<h3 class="panel-h3">Tier-1 KPIs</h3>'
-            "<table><thead><tr><th>KPI</th><th>Current</th><th>Status</th><th>Break condition</th></tr></thead>"
-            f"<tbody>{rows}</tbody></table>"
-        )
-    if th.break_rules:
-        rows = "".join(
-            f"<tr><td>{escape(r.kpi_name)}</td>"
-            f"<td>{escape((r.comparator or '') + ' ' + (r.threshold or '') + ' ' + (r.unit or ''))}</td>"
-            f"<td>{escape(r.narrative or '')}</td></tr>"
-            for r in th.break_rules
-        )
-        out.append(
-            '<h3 class="panel-h3">Break rules</h3>'
-            "<table><thead><tr><th>KPI</th><th>Trigger</th><th>Narrative</th></tr></thead>"
-            f"<tbody>{rows}</tbody></table>"
-        )
-    if th.qualitative_breakers:
-        items = "".join(f"<li>{escape(b)}</li>" for b in th.qualitative_breakers)
-        out.append(f'<h3 class="panel-h3">Qualitative breakers</h3><ul>{items}</ul>')
-    out.append("</section>")
-    return "".join(out)
-
-
 def _date(iso: str | None) -> str:
     """Calendar-date stamp with the exact instant in the tooltip (PR1 human-time
     convention). Returns HTML — callers embed raw, never re-escape."""
@@ -1629,25 +1240,3 @@ def _size(n: int | None) -> str:
     if n >= 1000:
         return f"{n / 1000:.0f} KB"
     return f"{n} B"
-
-
-# Replace the two explicit placeholders instead of formatting the whole head;
-# canonical master CSS contains literal braces and must remain byte-for-byte.
-_PAGE_HEAD = (
-    """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{ticker} · command center</title>
-"""
-    + FAVICON_LINK
-    + (palette_css("dark") + controls_css("dark"))
-    + TCC_PAGE_CSS
-    + """
-</head>
-<body>
-<div class="stamp" hidden>{generated_at}</div>
-"""
-)
-
-_PAGE_FOOT = f"<script data-k-select-runtime>{controls_js()}</script></body></html>"

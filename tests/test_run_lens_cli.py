@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from synthesis_lenses import list_lenses_for_ticker, list_portfolio_lenses
+
 
 def test_portfolio_tickers_are_loaded_from_active_governed_roster(tmp_path: Path) -> None:
     from execution.run_lens import portfolio_tickers
@@ -28,3 +30,7 @@ def test_portfolio_tickers_are_loaded_from_active_governed_roster(tmp_path: Path
         conn.close()
 
     assert portfolio_tickers(tmp_path) == ["BKNG", "UBER"]
+
+
+_TICKER_LENSES: list[str] = list(list_lenses_for_ticker())
+_PORTFOLIO_LENSES: list[str] = list(list_portfolio_lenses())

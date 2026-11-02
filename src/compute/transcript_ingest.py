@@ -7,8 +7,8 @@ Walks `transcripts/processed/` and `transcripts/raw/` for files matching
   - one `transcript_segments` row per detected speaker turn (preserves speaker names).
 
 Period mapping is calendar-year by default; per-ticker overrides (VEEV/RBRK Jan FYE,
-TOL Oct FYE) are coded in `_FYE_OFFSETS`. Speaker detection is regex-based with
-explicit named patterns — no substring matching, no LLM.
+AMAT/TOL Oct FYE) share the filename calendar membership in `compute.fiscal_calendar`.
+Speaker detection uses explicit regex patterns. It makes no LLM calls.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from typing import cast
 from pypdf import PdfReader
 
 from compute import evidence_snapshot
+from compute.fiscal_calendar import CALENDAR_YEAR, FILENAME_CALENDARS, period_end_for
 from models.documents import DocType, FetchStatus, SourceType
 from models.facts import FiscalPeriodType
 from pipeline.transcript_acquisition import (
@@ -39,36 +40,6 @@ from provenance.selection import selected_transcripts_relation
 from transcripts.source_reliability import choose_winner, classify_transcript_source
 
 _FILENAME_RE = re.compile(r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<year>20\d{2})$")
-
-# (month, day, year_offset_from_fiscal_label)
-_CALENDAR_QUARTER_END: dict[int, tuple[int, int, int]] = {
-    1: (3, 31, 0),
-    2: (6, 30, 0),
-    3: (9, 30, 0),
-    4: (12, 31, 0),
-}
-
-# Tickers with non-calendar fiscal year-ends. The fiscal label "Q1 2026" for
-# Jan-FYE means quarter ending Apr 30 2025. Calendar tickers use the default.
-_JAN_FYE_OFFSETS: dict[int, tuple[int, int, int]] = {
-    1: (4, 30, -1),
-    2: (7, 31, -1),
-    3: (10, 31, -1),
-    4: (1, 31, 0),
-}
-_OCT_FYE_OFFSETS: dict[int, tuple[int, int, int]] = {
-    1: (1, 31, 0),
-    2: (4, 30, 0),
-    3: (7, 31, 0),
-    4: (10, 31, 0),
-}
-
-_FYE_OFFSETS: dict[str, dict[int, tuple[int, int, int]]] = {
-    "VEEV": _JAN_FYE_OFFSETS,
-    "RBRK": _JAN_FYE_OFFSETS,
-    "TOL": _OCT_FYE_OFFSETS,
-    "AMAT": _OCT_FYE_OFFSETS,
-}
 
 
 @dataclass(frozen=True)
@@ -98,9 +69,12 @@ def parse_transcript_filename(path: Path) -> ParsedFilename | None:
 
 def map_to_period(parsed: ParsedFilename) -> PeriodMapping:
     """Resolve (ticker, Qn, year_label) to a calendar period_end and fiscal_period_type."""
-    offsets = _FYE_OFFSETS.get(parsed.ticker, _CALENDAR_QUARTER_END)
-    month, day, year_offset = offsets[parsed.quarter_idx]
-    period_end = datetime(parsed.fiscal_year_label + year_offset, month, day)
+    # Filename inputs historically reject invalid quarters with KeyError.
+    if parsed.quarter_idx not in (1, 2, 3, 4):
+        raise KeyError(parsed.quarter_idx)
+    calendar = FILENAME_CALENDARS.get(parsed.ticker, CALENDAR_YEAR)
+    endpoint = period_end_for(calendar, parsed.fiscal_year_label, parsed.quarter_idx)
+    period_end = datetime.combine(endpoint, datetime.min.time())
     fiscal_period_type = FiscalPeriodType(f"Q{parsed.quarter_idx}")
     return PeriodMapping(period_end=period_end, fiscal_period_type=fiscal_period_type)
 

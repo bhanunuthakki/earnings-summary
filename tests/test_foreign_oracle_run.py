@@ -15,7 +15,9 @@ import pytest
 from pydantic import ValidationError
 
 from execution.backfill_foreign_oracle import main
-from provenance.fact_read_model import FactReadModel
+from provenance.fact_read_model import (
+    FactReadModel,
+)
 from sources.foreign_normalization_run import normalize_foreign_sources
 from sources.foreign_oracle_run import (
     ForeignOracleManifest,

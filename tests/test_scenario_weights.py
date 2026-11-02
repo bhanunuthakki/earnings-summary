@@ -13,22 +13,16 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import sys
 from pathlib import Path
 
 import openpyxl
 import pytest
+import refresh_dcf
+import set_scenario_priors as ssp
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import refresh_dcf  # noqa: E402
-import set_scenario_priors as ssp  # noqa: E402
-
-from dcf import redesign  # noqa: E402
-from dcf import scenario_prior as scenario_prior_mod  # noqa: E402
-from dcf.scenario_prior import ScenarioPrior  # noqa: E402
+from dcf import redesign
+from dcf import scenario_prior as scenario_prior_mod
+from dcf.scenario_prior import ScenarioPrior
 
 _BASE = redesign.RedesignInputs(
     segments=("Cloud",),
@@ -164,14 +158,14 @@ def test_capture_from_inputs_carries_weights() -> None:
 # --------------------------------------------------------------------------- #
 def test_mirror_skips_global_with_no_block() -> None:
     rd: dict[str, object] = {}
-    refresh_dcf._mirror_scenario_prior_weights(rd, _BASE)  # pyright: ignore[reportPrivateUsage]
+    getattr(refresh_dcf, "_mirror_scenario_prior_weights")(rd, _BASE)
     assert "scenario_prior" not in rd  # global default + no block → keep JSON clean
 
 
 def test_mirror_writes_owner_weights_off_default() -> None:
     rd: dict[str, object] = {}
     inp = dataclasses.replace(_BASE, weight_bull=0.15, weight_base=0.50, weight_bear=0.35)
-    refresh_dcf._mirror_scenario_prior_weights(rd, inp)  # pyright: ignore[reportPrivateUsage]
+    getattr(refresh_dcf, "_mirror_scenario_prior_weights")(rd, inp)
     sp = rd["scenario_prior"]
     assert isinstance(sp, dict)
     assert sp["bear_weight"] == 0.35 and sp["set_by"] == "owner"
@@ -190,7 +184,7 @@ def test_mirror_preserves_llm_rationale_and_flips_provenance_on_edit() -> None:
         }
     }
     inp = dataclasses.replace(_BASE, weight_bull=0.15, weight_base=0.50, weight_bear=0.35)
-    refresh_dcf._mirror_scenario_prior_weights(rd, inp)  # pyright: ignore[reportPrivateUsage]
+    getattr(refresh_dcf, "_mirror_scenario_prior_weights")(rd, inp)
     sp = rd["scenario_prior"]
     assert isinstance(sp, dict)
     assert sp["set_by"] == "owner"  # owner edited away from the LLM's weights
@@ -209,7 +203,7 @@ def test_mirror_keeps_llm_provenance_when_unchanged() -> None:
         }
     }
     inp = dataclasses.replace(_BASE, weight_bull=0.15, weight_base=0.50, weight_bear=0.35)
-    refresh_dcf._mirror_scenario_prior_weights(rd, inp)  # pyright: ignore[reportPrivateUsage]
+    getattr(refresh_dcf, "_mirror_scenario_prior_weights")(rd, inp)
     sp = rd["scenario_prior"]
     assert isinstance(sp, dict)
     assert sp["set_by"] == "llm"  # weights match → still the LLM's call
@@ -218,12 +212,12 @@ def test_mirror_keeps_llm_provenance_when_unchanged() -> None:
 def test_scenario_prior_snapshot_block() -> None:
     inp = dataclasses.replace(_BASE, weight_bull=0.15, weight_base=0.50, weight_bear=0.35)
     meta: dict[str, object] = {"rationale": "high multiple", "set_by": "llm", "as_of": "2026-07-02"}
-    block = refresh_dcf._scenario_prior_snapshot(inp, meta)  # pyright: ignore[reportPrivateUsage]
+    block = getattr(refresh_dcf, "_scenario_prior_snapshot")(inp, meta)
     assert block["weights"] == {"bull": 0.15, "base": 0.50, "bear": 0.35}
     assert block["rationale"] == "high multiple"
     assert block["set_by"] == "llm"
     # No meta + global weights → global provenance, empty rationale.
-    block2 = refresh_dcf._scenario_prior_snapshot(_BASE, None)  # pyright: ignore[reportPrivateUsage]
+    block2 = getattr(refresh_dcf, "_scenario_prior_snapshot")(_BASE, None)
     assert block2["set_by"] == "global"
     assert block2["rationale"] == ""
 
@@ -305,13 +299,13 @@ def test_anchor_inputs_sha256_is_stable_and_sensitive() -> None:
 
 def test_existing_inputs_sha256_reads_back_the_stamped_hash(tmp_path: Path) -> None:
     path = tmp_path / "NU.json"
-    no_file = ssp._existing_inputs_sha256(path)  # pyright: ignore[reportPrivateUsage]
+    no_file = getattr(ssp, "_existing_inputs_sha256")(path)
     assert no_file is None  # no file yet
     path.write_text(json.dumps({"redesign": {}}), encoding="utf-8")
-    no_block = ssp._existing_inputs_sha256(path)  # pyright: ignore[reportPrivateUsage]
+    no_block = getattr(ssp, "_existing_inputs_sha256")(path)
     assert no_block is None  # no scenario_prior block
     ssp.write_scenario_prior_to_json(path, _llm_prior(), inputs_sha256="deadbeef")
-    stamped = ssp._existing_inputs_sha256(path)  # pyright: ignore[reportPrivateUsage]
+    stamped = getattr(ssp, "_existing_inputs_sha256")(path)
     assert stamped == "deadbeef"
 
 
@@ -334,7 +328,9 @@ def test_set_priors_only_changed_skips_llm_call_when_hash_matches(
     weights, the call must simply not happen)."""
     adir = tmp_path / "data" / "dcf_assumptions"
     adir.mkdir(parents=True)
-    monkeypatch.setattr(ssp, "anchor_block_for_ticker", _anchor_stub("same anchor text"))
+    monkeypatch.setattr(
+        scenario_prior_mod, "anchor_block_for_ticker", _anchor_stub("same anchor text")
+    )
     stable_hash = scenario_prior_mod.anchor_inputs_sha256("same anchor text")
     (adir / "NU.json").write_text(
         json.dumps(
@@ -361,14 +357,18 @@ def test_set_priors_only_changed_skips_llm_call_when_hash_matches(
         calls.append(ticker)
         return _llm_prior()
 
-    monkeypatch.setattr(ssp, "set_scenario_prior_for_ticker", _fake_set_scenario_prior_for_ticker)
+    monkeypatch.setattr(
+        scenario_prior_mod, "set_scenario_prior_for_ticker", _fake_set_scenario_prior_for_ticker
+    )
 
     out = ssp.set_priors(tmp_path, ["NU"], apply=True, only_changed=True)
     assert out["NU"] == "skipped_unchanged"
     assert calls == []  # the LLM producer was never called
 
     # A changed anchor text (different hash) DOES proceed to the LLM call.
-    monkeypatch.setattr(ssp, "anchor_block_for_ticker", _anchor_stub("NEW anchor text"))
+    monkeypatch.setattr(
+        scenario_prior_mod, "anchor_block_for_ticker", _anchor_stub("NEW anchor text")
+    )
     out2 = ssp.set_priors(tmp_path, ["NU"], apply=True, only_changed=True)
     assert out2["NU"] == "written"
     assert calls == ["NU"]
@@ -386,7 +386,9 @@ def test_set_priors_only_changed_always_proceeds_with_no_prior_on_file(
     adir = tmp_path / "data" / "dcf_assumptions"
     adir.mkdir(parents=True)
     (adir / "NU.json").write_text(json.dumps({"redesign": {}}), encoding="utf-8")
-    monkeypatch.setattr(ssp, "anchor_block_for_ticker", _anchor_stub("some anchor text"))
+    monkeypatch.setattr(
+        scenario_prior_mod, "anchor_block_for_ticker", _anchor_stub("some anchor text")
+    )
     calls: list[str] = []
 
     def _fake_set_scenario_prior_for_ticker(
@@ -395,7 +397,9 @@ def test_set_priors_only_changed_always_proceeds_with_no_prior_on_file(
         calls.append(ticker)
         return _llm_prior()
 
-    monkeypatch.setattr(ssp, "set_scenario_prior_for_ticker", _fake_set_scenario_prior_for_ticker)
+    monkeypatch.setattr(
+        scenario_prior_mod, "set_scenario_prior_for_ticker", _fake_set_scenario_prior_for_ticker
+    )
     out = ssp.set_priors(tmp_path, ["NU"], apply=True, only_changed=True)
     assert out["NU"] == "written"
     assert calls == ["NU"]

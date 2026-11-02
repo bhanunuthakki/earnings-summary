@@ -26,18 +26,14 @@ Three gaps:
 from __future__ import annotations
 
 import json
-import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
 import requests
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from advisor.position_review import build_pre_analysis, render_tax_lines  # noqa: E402
-from integrations import portfolio_tracker_client as ptc  # noqa: E402
+from advisor.position_review import build_pre_analysis, render_tax_lines
+from integrations import portfolio_tracker_client as ptc
 
 
 @pytest.fixture

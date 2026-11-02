@@ -1,28 +1,20 @@
 """Analytical portfolio dashboard — cross-ticker view layered on top of dashboard_status.
 
-The Phase 7 deliverable. Whereas dashboard_status.py renders a per-ticker
-status table (FMP last-pulled, last build, comments count), this module
-adds the cross-ticker analytical panels:
+Pure reads from the unified data model. Retains four panels:
 
-  1. Trigger ladder    — every holding's DCF over/under vs MoS bar,
+  1. Trigger ladder    — every holding's DCF over/under vs the MoS bar,
                           positioned on a SELL ↔ HOLD ↔ ADD rail.
-  2. Recent insider     — open-market buys + cluster events across the
-                          portfolio/watchlist in last 90d, ranked by
-                          conviction signal.
-  3. Predictions outcomes — cross-ticker win-rate by source_kind from
-                          the predictions table.
-  4. Exec comp alignment — when populated: rank holdings by whether
-                          comp design rewards thesis KPIs.
-
-Pure reads from the unified data model. The renderer in
-`pipeline.dashboard_html` consumes the dict this module returns.
+  2. Portfolio synthesis — cross_portfolio_synthesis lens output.
+  3. Per-ticker re-reads — read-owner view per ticker (optionally scoped to
+                          one ticker by the caller).
+  4. LLM budgets       — read-only spend/cap/headroom panel.
 """
 
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime, timedelta
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -45,27 +37,6 @@ class TriggerLadderRow:
 
 
 @dataclass(slots=True)
-class InsiderEventRow:
-    ticker: str
-    insider_name: str
-    insider_role: str | None
-    transaction_date: str
-    transaction_type: str
-    shares: float
-    transaction_value: float | None
-    signal_strength: float
-    rationale: str
-
-
-@dataclass(slots=True)
-class PredictionOutcomeRow:
-    ticker: str
-    source_kind: str
-    outcome: str
-    count: int
-
-
-@dataclass(slots=True)
 class PortfolioLensRow:
     """One per-holding 5-min-reread (or other ticker lens) for cross-ticker
     scanning in the dashboard."""
@@ -74,32 +45,6 @@ class PortfolioLensRow:
     lens: str
     content_md: str
     generated_at: str
-
-
-@dataclass(slots=True)
-class DecisionRow:
-    """One recent recommendation from the decisions ledger."""
-
-    id: int
-    ticker: str
-    recommendation_kind: str
-    recommendation_value: float | None
-    conviction: str | None
-    made_at: str
-    outcome_label: str | None
-    outcome_pct: float | None
-    rationale_excerpt: str | None
-
-
-@dataclass(slots=True)
-class DecisionsPanel:
-    """Aggregated decisions view for the dashboard."""
-
-    recent: list[DecisionRow] = field(default_factory=list[DecisionRow])
-    hit_rate_by_kind: dict[str, dict[str, int]] = field(default_factory=dict[str, dict[str, int]])
-    calibration_by_conviction: dict[str, dict[str, int]] = field(
-        default_factory=dict[str, dict[str, int]]
-    )
 
 
 @dataclass(slots=True)
@@ -145,24 +90,9 @@ class LlmBudgetPanel:
 @dataclass(slots=True)
 class AnalyticalDashboard:
     trigger_ladder: list[TriggerLadderRow] = field(default_factory=list[TriggerLadderRow])
-    insider_events: list[InsiderEventRow] = field(default_factory=list[InsiderEventRow])
-    prediction_outcomes: list[PredictionOutcomeRow] = field(
-        default_factory=list[PredictionOutcomeRow]
-    )
     portfolio_synthesis_md: str | None = None  # cross_portfolio_synthesis lens output
     per_ticker_reread: list[PortfolioLensRow] = field(default_factory=list[PortfolioLensRow])
-    decisions: DecisionsPanel = field(default_factory=DecisionsPanel)
     llm_budgets: LlmBudgetPanel = field(default_factory=lambda: LlmBudgetPanel())
-
-    def to_dict(self) -> dict[str, object]:
-        """JSON-serializable view for the live ``GET /api/overview`` endpoint.
-
-        Every field is a primitive / list / nested dataclass of primitives —
-        the budget panel already converts ``Decimal`` caps to ``float`` at
-        build time — so ``dataclasses.asdict`` recurses to a clean JSON-able
-        dict with no boundary surprises (Flask's ``jsonify`` chokes on Decimal,
-        not on these)."""
-        return asdict(self)
 
 
 # Section keys accepted by ``build_analytical_dashboard(sections=...)``. Each maps
@@ -171,11 +101,8 @@ class AnalyticalDashboard:
 DASHBOARD_SECTIONS: frozenset[str] = frozenset(
     {
         "trigger_ladder",
-        "insider_events",
-        "prediction_outcomes",
         "portfolio_synthesis",
         "rereads",
-        "decisions",
         "llm_budgets",
     }
 )
@@ -184,22 +111,23 @@ DASHBOARD_SECTIONS: frozenset[str] = frozenset(
 def build_analytical_dashboard(
     db_path: Path,
     *,
-    insider_window_days: int = 90,
-    insider_top_n: int = 25,
     list_types: tuple[str, ...] = ("portfolio", "watchlist"),
     sections: set[str] | frozenset[str] | None = None,
     ticker: str | None = None,
 ) -> AnalyticalDashboard:
     """Build the cross-ticker analytical dashboard.
 
+    Builds the four retained panels: the trigger ladder (DCF over/under vs the
+    MoS bar), the portfolio synthesis (cross_portfolio_synthesis lens output),
+    the per-ticker re-reads, and the LLM budget/spend panel.
+
     ``sections`` selects which panels to build (keys in ``DASHBOARD_SECTIONS``);
     unrequested panels keep their empty dataclass default. ``None`` (the default)
-    builds everything — the existing behaviour the static export + ``/api/overview``
-    rely on. Per-panel selection lets the shell's ``/api/panel/<name>`` fetch one
-    panel without running the other six sub-queries (e.g. the 500-row insider scan).
+    retains all four sections. Per-panel selection lets callers fetch one panel
+    without running the other sub-queries.
 
-    ``ticker`` scopes the dropdown-driven panels (pre-reads + insiders) to one
-    name; the other panels ignore it.
+    ``ticker`` scopes only the per-ticker re-reads panel to one name; the other
+    panels ignore it.
     """
     if not db_path.exists():
         return AnalyticalDashboard()
@@ -214,99 +142,18 @@ def build_analytical_dashboard(
             trigger_ladder=(
                 _build_trigger_ladder(conn, list_types) if want("trigger_ladder") else []
             ),
-            insider_events=(
-                _build_insider_events(
-                    conn, insider_window_days, insider_top_n, list_types, ticker=ticker
-                )
-                if want("insider_events")
-                else []
-            ),
-            prediction_outcomes=(
-                _build_prediction_outcomes(conn, list_types) if want("prediction_outcomes") else []
-            ),
             portfolio_synthesis_md=(
                 _load_portfolio_synthesis(conn) if want("portfolio_synthesis") else None
             ),
             per_ticker_reread=(
                 _load_per_ticker_rereads(conn, ticker=ticker) if want("rereads") else []
             ),
-            decisions=(_build_decisions_panel(conn) if want("decisions") else DecisionsPanel()),
             llm_budgets=(
                 _build_llm_budget_panel(conn) if want("llm_budgets") else LlmBudgetPanel()
             ),
         )
     finally:
         conn.close()
-
-
-def _build_decisions_panel(conn: sqlite3.Connection, *, recent_limit: int = 30) -> DecisionsPanel:
-    """Recent decisions table + hit-rate aggregates + calibration distribution.
-    Returns an empty panel when the decisions table is absent (pre-migration)."""
-    has_decisions = (
-        conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='decisions'"
-        ).fetchone()
-        is not None
-    )
-    if not has_decisions:
-        return DecisionsPanel()
-    recent_rows = conn.execute(
-        """
-        SELECT id, ticker, recommendation_kind, recommendation_value, conviction,
-               made_at, outcome_label, outcome_pct, rationale_excerpt
-        FROM decisions
-        ORDER BY made_at DESC
-        LIMIT ?
-        """,
-        (recent_limit,),
-    ).fetchall()
-    recent = [
-        DecisionRow(
-            id=int(r["id"]),
-            ticker=str(r["ticker"]),
-            recommendation_kind=str(r["recommendation_kind"]),
-            recommendation_value=_f(r["recommendation_value"]),
-            conviction=r["conviction"],
-            made_at=str(r["made_at"])[:19],
-            outcome_label=r["outcome_label"],
-            outcome_pct=_f(r["outcome_pct"]),
-            rationale_excerpt=r["rationale_excerpt"],
-        )
-        for r in recent_rows
-    ]
-    kind_rows = conn.execute(
-        """
-        SELECT recommendation_kind,
-               COALESCE(outcome_label, 'pending') AS outcome_label,
-               COUNT(*) AS n
-        FROM decisions
-        WHERE made_at >= date('now', '-365 days')
-        GROUP BY recommendation_kind, outcome_label
-        """
-    ).fetchall()
-    hit_rate: dict[str, dict[str, int]] = {}
-    for r in kind_rows:
-        hit_rate.setdefault(str(r["recommendation_kind"]), {})[str(r["outcome_label"])] = int(
-            r["n"]
-        )
-    conv_rows = conn.execute(
-        """
-        SELECT COALESCE(conviction, 'unstated') AS conv,
-               COALESCE(outcome_label, 'pending') AS outcome_label,
-               COUNT(*) AS n
-        FROM decisions
-        WHERE made_at >= date('now', '-180 days')
-        GROUP BY conv, outcome_label
-        """
-    ).fetchall()
-    calibration: dict[str, dict[str, int]] = {}
-    for r in conv_rows:
-        calibration.setdefault(str(r["conv"]), {})[str(r["outcome_label"])] = int(r["n"])
-    return DecisionsPanel(
-        recent=recent,
-        hit_rate_by_kind=hit_rate,
-        calibration_by_conviction=calibration,
-    )
 
 
 def _mode_from_row(row: sqlite3.Row, *, has_mode: bool, hard_block: bool) -> str:
@@ -603,163 +450,6 @@ def _build_trigger_ladder(
             dcf_fair_value=_f(r["fair_value"]),
             verdict=r["verdict"],
             sanity_flag=r["sanity_flag"],
-        )
-        for r in rows
-    ]
-
-
-def _build_insider_events(
-    conn: sqlite3.Connection,
-    window_days: int,
-    top_n: int,
-    list_types: tuple[str, ...],
-    *,
-    ticker: str | None = None,
-) -> list[InsiderEventRow]:
-    """Cross-ticker insider activity over `window_days`, ranked by approximation
-    of conviction signal (open-market buys + cluster size + transaction value).
-    For simplicity here we compute a quick score; the rich
-    insider_transactions.conviction_signals() is per-ticker."""
-    has_insiders = (
-        conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='insider_transactions'"
-        ).fetchone()
-        is not None
-    )
-    if not has_insiders:
-        return []
-
-    placeholders = ",".join("?" * len(list_types))
-    cutoff = (datetime.now(UTC) - timedelta(days=window_days)).isoformat()
-    ticker_clause = " AND ticker = ?" if ticker else ""
-    active_params: tuple[object, ...] = (
-        (*list_types, ticker.upper()) if ticker else tuple(list_types)
-    )
-    rows = conn.execute(
-        f"""
-        WITH active AS (
-            SELECT ticker FROM tracked_companies
-            WHERE archived_at IS NULL AND list_type IN ({placeholders}){ticker_clause}
-        ),
-        clustered AS (
-            -- Same-day cluster count per (ticker, date)
-            SELECT it.ticker, DATE(it.transaction_date) AS d, COUNT(*) AS cluster_size
-            FROM insider_transactions it
-            INNER JOIN active a ON a.ticker = it.ticker
-            WHERE it.transaction_date >= ?
-            GROUP BY it.ticker, DATE(it.transaction_date)
-        )
-        SELECT it.ticker, it.insider_name, it.insider_title,
-               it.transaction_date, it.transaction_type, it.shares,
-               it.transaction_value, it.is_10b5_1,
-               COALESCE(c.cluster_size, 1) AS cluster_size
-        FROM insider_transactions it
-        INNER JOIN active a ON a.ticker = it.ticker
-        LEFT JOIN clustered c
-          ON c.ticker = it.ticker AND c.d = DATE(it.transaction_date)
-        WHERE it.transaction_date >= ?
-          AND it.transaction_type IN ('open_market_buy', 'open_market_sell', 'option_exercise')
-          -- Discretionary only — drop 10b5-1 sells (pre-scheduled = noise)
-          AND NOT (it.transaction_type = 'open_market_sell' AND it.is_10b5_1 = 1)
-        ORDER BY it.transaction_date DESC
-        LIMIT 500
-        """,
-        (*active_params, cutoff, cutoff),
-    ).fetchall()
-
-    # Score: open-market buys >>> sells; weighted by role and value
-    import math
-
-    scored: list[tuple[float, InsiderEventRow]] = []
-    for r in rows:
-        title = (r["insider_title"] or "").lower()
-        role_w = (
-            1.0
-            if "chief executive" in title
-            else 0.85
-            if "chief financial" in title
-            else 0.7
-            if "president" in title
-            else 0.5
-        )
-        type_w = (
-            1.0
-            if r["transaction_type"] == "open_market_buy"
-            else 0.6
-            if r["transaction_type"] == "open_market_sell"
-            else 0.15
-        )
-        v = float(r["transaction_value"] or 0)
-        size = math.log10(max(v, 1e3)) / 8.0 if v > 0 else 0.3
-        cluster_bonus = min(0.2, (int(r["cluster_size"]) - 1) * 0.05)
-        strength = min(1.0, role_w * type_w * size + cluster_bonus)
-
-        bits: list[str] = []
-        if r["transaction_type"] == "open_market_buy":
-            bits.append("open-market buy")
-        elif r["transaction_type"] == "open_market_sell":
-            bits.append("non-10b5-1 sell")
-        else:
-            bits.append(r["transaction_type"].replace("_", " "))
-        if int(r["cluster_size"]) > 1:
-            bits.append(f"cluster ({r['cluster_size']} insiders same day)")
-        if r["insider_title"]:
-            bits.append((r["insider_title"]).lower())
-        rationale = " · ".join(bits)
-
-        scored.append(
-            (
-                strength,
-                InsiderEventRow(
-                    ticker=r["ticker"],
-                    insider_name=r["insider_name"],
-                    insider_role=r["insider_title"],
-                    transaction_date=r["transaction_date"][:10],
-                    transaction_type=r["transaction_type"],
-                    shares=float(r["shares"]),
-                    transaction_value=float(r["transaction_value"])
-                    if r["transaction_value"] is not None
-                    else None,
-                    signal_strength=strength,
-                    rationale=rationale,
-                ),
-            )
-        )
-
-    scored.sort(key=lambda t: -t[0])
-    return [e for _, e in scored[:top_n]]
-
-
-def _build_prediction_outcomes(
-    conn: sqlite3.Connection, list_types: tuple[str, ...]
-) -> list[PredictionOutcomeRow]:
-    has_predictions = (
-        conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='predictions'"
-        ).fetchone()
-        is not None
-    )
-    if not has_predictions:
-        return []
-    placeholders = ",".join("?" * len(list_types))
-    rows = conn.execute(
-        f"""
-        SELECT p.ticker, p.source_kind, p.outcome, COUNT(*) AS n
-        FROM predictions p
-        INNER JOIN tracked_companies tc
-          ON tc.ticker = p.ticker AND tc.archived_at IS NULL
-          AND tc.list_type IN ({placeholders})
-        GROUP BY p.ticker, p.source_kind, p.outcome
-        ORDER BY p.ticker, p.source_kind
-        """,
-        list_types,
-    ).fetchall()
-    return [
-        PredictionOutcomeRow(
-            ticker=r["ticker"],
-            source_kind=r["source_kind"],
-            outcome=r["outcome"],
-            count=int(r["n"]),
         )
         for r in rows
     ]

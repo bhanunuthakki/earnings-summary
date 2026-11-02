@@ -1,4 +1,4 @@
-"""Advisor memos, red team, eval, socratic, and job-stream routes."""
+"""Advisor memos, red team, eval, and job-stream routes."""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from runtime.python_process import managed_python_argv
 
 
 def register_advisor_routes(app: Flask, ctx: ServerContext) -> None:
-    internal_failure = ctx.internal_failure
     log_redacted_failure = ctx.log_redacted_failure
     db_path = ctx.db_path
     job_registry = ctx.job_registry
@@ -121,85 +120,6 @@ def register_advisor_routes(app: Flask, ctx: ServerContext) -> None:
             "artifact_id": result.artifact_id,
         }
 
-    @app.route("/actions/advisor-memo", methods=["POST", "OPTIONS"])
-    def start_advisor_memo():
-        """Run an advisor memo generation (master build P2.3) as a streamed
-        single-flight job: {"kind": "next_dollar" | "swap_checks" | "all"}.
-        Runs execution/run_advisor_memos.py; the Memos panel consumes the
-        SSE stream and refetches itself on success."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        body = cast("dict[str, object]", request.get_json(silent=True) or {})
-        memo_kind = str(body.get("kind", ""))
-        if memo_kind not in ("next_dollar", "swap_checks", "all"):
-            return ({"error": "kind must be next_dollar | swap_checks | all"}, 400)
-        argv = managed_python_argv(
-            repo_root,
-            repo_root / "execution" / "run_advisor_memos.py",
-            "--kind",
-            memo_kind,
-            "--repo-root",
-            str(repo_root),
-        )
-        if ctx.source_state_root is not None:
-            argv.extend(("--state-root", str(ctx.source_state_root)))
-        try:
-            job = job_registry.start(ticker="_REPO", kind=f"advisor-{memo_kind}", argv=argv)
-        except RegistryConflict as e:
-            return ({"error": str(e)}, 409)
-        return (
-            {
-                "job_id": job.job_id,
-                "ticker": job.ticker,
-                "kind": job.kind,
-                "stream_url": f"/actions/stream/{job.job_id}",
-                "started_at": job.started_at.isoformat(),
-            },
-            201,
-        )
-
-    @app.route("/actions/position-review", methods=["POST", "OPTIONS"])
-    def start_position_review():
-        """Run the full governed position review (PR5 — the calibration
-        feeder) as a streamed single-flight job: {"ticker": str}. Runs
-        ``execution/review_position.py <TICKER> --verdict`` — the LLM verdict +
-        deterministic behavioral guard, PERSISTING an ``advisor_memos`` row
-        (kind ``position_review``) so the review finally lands a gradeable
-        memo. The review peek's "Full calibrated review (LLM)" button POSTs
-        here and streams the job log in place."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        body = cast("dict[str, object]", request.get_json(silent=True) or {})
-        ticker = str(body.get("ticker", "")).strip().upper()
-        if not ticker:
-            return ({"error": "ticker required"}, 400)
-        argv = managed_python_argv(
-            repo_root,
-            repo_root / "execution" / "review_position.py",
-            ticker,
-            "--verdict",
-            "--db",
-            str(db_path),
-            # An in-app owner click — tag it so it counts in the Coach P&L (the
-            # CLI defaults to 'agent', which would exclude it).
-            "--source",
-            "doorway",
-        )
-        try:
-            job = job_registry.start(ticker=ticker, kind="position-review", argv=argv)
-        except RegistryConflict as e:
-            return ({"error": str(e)}, 409)
-        return (
-            {
-                "job_id": job.job_id,
-                "ticker": job.ticker,
-                "kind": job.kind,
-                "stream_url": f"/actions/stream/{job.job_id}",
-                "started_at": job.started_at.isoformat(),
-            },
-            201,
-        )
-
     @app.route("/actions/run-eval", methods=["POST", "OPTIONS"])
     def start_eval_run():
         """Run one purpose's LLM eval (llm_evals_plan §2.6) as a streamed
@@ -238,128 +158,6 @@ def register_advisor_routes(app: Flask, ctx: ServerContext) -> None:
             },
             201,
         )
-
-    # ----- SOCRATIC THINK-THROUGH (master build P2.4) -----
-    # The only path to a per-holding stance (locked advisor posture). Step 1
-    # (wave3b Task 4) is now an honest BACKGROUND job — build_advisor_context
-    # + the Opus premortem + the questions call routinely runs ~2 minutes,
-    # and a synchronous fetch() stalling the browser that long is exactly
-    # what the owner ratified away from. Step 2 (the memo) stays synchronous
-    # on its own POST below: the owner is present and typing at that point.
-
-    @app.route("/actions/socratic-questions", methods=["POST", "OPTIONS"])
-    def start_socratic_questions():
-        """Step 1 as a streamed single-flight job: {"ticker": "NU"}. Runs
-        ``execution/run_socratic_questions.py``, which persists the result
-        (``advisor.socratic.persist_prelude``); the /socratic/<T> page (and
-        the Memos panel's think-through flow) stream this job's log via the
-        shared ``/actions/stream/<job_id>`` SSE channel, then GET
-        ``/api/socratic/questions/<ticker>`` once it reports done."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        body = cast("dict[str, object]", request.get_json(silent=True) or {})
-        ticker = str(body.get("ticker") or "").strip().upper()
-        if not ticker:
-            return ({"error": "ticker required"}, 400)
-        argv = managed_python_argv(
-            repo_root,
-            repo_root / "execution" / "run_socratic_questions.py",
-            ticker,
-            "--repo-root",
-            str(repo_root),
-        )
-        if ctx.source_state_root is not None:
-            argv.extend(("--state-root", str(ctx.source_state_root)))
-        try:
-            job = job_registry.start(ticker=ticker, kind="socratic-questions", argv=argv)
-        except RegistryConflict as e:
-            return ({"error": str(e)}, 409)
-        return (
-            {
-                "job_id": job.job_id,
-                "ticker": job.ticker,
-                "kind": job.kind,
-                "stream_url": f"/actions/stream/{job.job_id}",
-                "started_at": job.started_at.isoformat(),
-            },
-            201,
-        )
-
-    @app.route("/api/socratic/questions/<ticker>", methods=["GET"])
-    def socratic_questions_result(ticker: str):
-        """The persisted Step-1 prelude the background job wrote — read back
-        once its SSE stream reports done. 404 until a job has completed for
-        this ticker (the page's honest-cost button is the only way forward;
-        never a silently empty form)."""
-        from advisor.socratic import read_current_prelude
-
-        prelude = read_current_prelude(db_path, ticker.upper())
-        if prelude is None:
-            return ({"error": "no generated questions yet for this ticker"}, 404)
-        return {
-            "ticker": prelude.ticker,
-            "questions": prelude.questions,
-            "context_block": prelude.context_block,
-        }
-
-    @app.route("/api/socratic/memo", methods=["POST", "OPTIONS"])
-    def socratic_memo():
-        """Step 2: the decision memo from the owner's answers. Body:
-        {"ticker", "questions": [...], "answers": [...], "horizon_days"}.
-        Persists kind='socratic' (stance + horizon, P2.5-scoreable) and
-        returns the memo id + stance + rendered body HTML."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from advisor.socratic import generate_decision_memo
-        from advisor.store import get_memo
-        from pipeline.analytical_dashboard_html import light_markdown_to_html
-
-        body = cast("dict[str, object]", request.get_json(silent=True) or {})
-        ticker = str(body.get("ticker") or "").strip().upper()
-        raw_q, raw_a = body.get("questions"), body.get("answers")
-        if not ticker or not isinstance(raw_q, list) or not isinstance(raw_a, list):
-            return ({"error": "ticker, questions[] and answers[] required"}, 400)
-        questions = [str(q) for q in cast("list[object]", raw_q)]
-        answers = [str(a) for a in cast("list[object]", raw_a)]
-        try:
-            horizon_days = int(cast("int | str | float", body.get("horizon_days") or 90))
-        except (TypeError, ValueError):
-            return ({"error": "horizon_days must be an integer"}, 400)
-        try:
-            result = generate_decision_memo(
-                repo_root,
-                ticker,
-                questions=questions,
-                answers=answers,
-                horizon_days=horizon_days,
-                source_context=ctx.source_context,
-            )
-        except ValueError as exc:  # length mismatch / empty answers / bad horizon
-            return ({"error": str(exc)}, 400)
-        except Exception as exc:  # hard stops surface loudly to the form
-            return internal_failure("memo generation failed", exc)
-        if not result.ok or result.memo_id is None:
-            return internal_failure(
-                "memo generation failed",
-                result.skipped_reason or "no memo id returned",
-            )
-        memo = get_memo(result.memo_id, db_path=db_path)
-        return {
-            "memo_id": result.memo_id,
-            "ticker": result.ticker,
-            "title": result.title,
-            "stance": memo.stance if memo else None,
-            "horizon_days": horizon_days,
-            "body_html": light_markdown_to_html(memo.body_md) if memo else "",
-        }
-
-    @app.route("/socratic/<ticker>", methods=["GET"])
-    def socratic_page(ticker: str):
-        """Standalone think-through page — the per-ticker workspace chat links
-        here (its sidebar button + the chat system prompt's pointer)."""
-        from pipeline.advisor_memos_panel import render_socratic_page
-
-        return Response(render_socratic_page(ticker.upper()), mimetype="text/html")
 
     @app.route("/actions/stream/<job_id>", methods=["GET"])
     def stream_action(job_id: str):

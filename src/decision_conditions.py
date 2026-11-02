@@ -79,6 +79,7 @@ from clock import now_iso as _now_iso
 from llm.cli import is_hard_stop
 from llm.structured import StructuredParseError, call_llm_structured
 from models.facts import Unit
+from provenance.source_fact_publication import publication_verification_scope
 from sources.canonical_financial_series import (
     CanonicalFinancialObservation,
     FinancialCadence,
@@ -965,57 +966,55 @@ def read_financial_condition(
         raise ValueError("financial condition cutoff must be aware and not future")
     if condition.baseline_unavailable_reason:
         return FinancialConditionRead(None, None, condition.baseline_unavailable_reason)
-    owns_snapshot = not conn.in_transaction
-    if owns_snapshot:
-        conn.execute("BEGIN")
+    original_factory = conn.row_factory
     try:
-        history = financial_condition_history(
-            conn,
-            ticker,
-            condition.metric,
-            condition.for_periods,
-            cadence=condition.financial_cadence,
-            cutoff=cutoff,
-        )
-        if history.sources is None or history.observations is None:
+        conn.row_factory = sqlite3.Row
+        with publication_verification_scope(conn):
+            history = financial_condition_history(
+                conn,
+                ticker,
+                condition.metric,
+                condition.for_periods,
+                cadence=condition.financial_cadence,
+                cutoff=cutoff,
+            )
+            if history.sources is None or history.observations is None:
+                return history
+            reference = condition.baseline_source_reference
+            if reference is not None:
+                if reference.ticker != ticker.upper() or reference.as_of > cutoff:
+                    return FinancialConditionRead(
+                        None, history.sources, "invalid_financial_baseline_identity"
+                    )
+                baseline = read_financial_evidence(conn, reference)
+                if (
+                    not isinstance(baseline, FinancialConsumerPoint)
+                    or baseline.observation != condition.baseline_source_context
+                ):
+                    return FinancialConditionRead(
+                        None, history.sources, "financial_baseline_evidence_unavailable"
+                    )
+                if not financial_baseline_comparable(
+                    baseline.observation, history.sources.points[-1].observation
+                ):
+                    return FinancialConditionRead(
+                        None, history.sources, "financial_baseline_context_changed"
+                    )
             return history
-        reference = condition.baseline_source_reference
-        if reference is not None:
-            if reference.ticker != ticker.upper() or reference.as_of > cutoff:
-                return FinancialConditionRead(
-                    None, history.sources, "invalid_financial_baseline_identity"
-                )
-            baseline = read_financial_evidence(conn, reference)
-            if (
-                not isinstance(baseline, FinancialConsumerPoint)
-                or baseline.observation != condition.baseline_source_context
-            ):
-                return FinancialConditionRead(
-                    None, history.sources, "financial_baseline_evidence_unavailable"
-                )
-            if not financial_baseline_comparable(
-                baseline.observation, history.sources.points[-1].observation
-            ):
-                return FinancialConditionRead(
-                    None, history.sources, "financial_baseline_context_changed"
-                )
-        return history
     finally:
-        if owns_snapshot and conn.in_transaction:
-            conn.rollback()
+        conn.row_factory = original_factory
 
 
 def stamp_condition_baselines(
     conn: sqlite3.Connection, ticker: str, conditions: list[DecisionCondition]
 ) -> list[DecisionCondition]:
-    owns_snapshot = not conn.in_transaction
-    if owns_snapshot:
-        conn.execute("BEGIN")
+    original_factory = conn.row_factory
     try:
-        return _stamp_condition_baselines_snapshot(conn, ticker, conditions)
+        conn.row_factory = sqlite3.Row
+        with publication_verification_scope(conn):
+            return _stamp_condition_baselines_snapshot(conn, ticker, conditions)
     finally:
-        if owns_snapshot and conn.in_transaction:
-            conn.rollback()
+        conn.row_factory = original_factory
 
 
 def _stamp_condition_baselines_snapshot(

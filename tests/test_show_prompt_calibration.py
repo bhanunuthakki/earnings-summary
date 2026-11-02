@@ -10,20 +10,19 @@ from __future__ import annotations
 import io
 import json
 import sqlite3
-import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+import show_prompt_calibration as cli
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import show_prompt_calibration as cli  # noqa: E402
-
-from llm.calibration import CalibrationScore, record_score  # noqa: E402
-from report.renderers.workspace_html import _prompt_quality_panel  # noqa: E402
+from llm.calibration import (
+    CalibrationScore,
+    daily_avg_scores,
+    record_score,
+    summarize_by_prompt_version,
+)
+from report.renderers.workspace_html import _prompt_quality_panel
 
 Capsys = pytest.CaptureFixture[str]
 
@@ -236,7 +235,7 @@ def test_widget_hides_when_no_data(tmp_path: Path) -> None:
     body = io.StringIO()
     # No DB file at all → no panel (P4.2 hide-don't-stub; the Governance
     # coverage matrix is where data gaps stay visible).
-    _prompt_quality_panel(body, tmp_path / "does-not-exist.db")
+    _prompt_quality_panel(body, [], {})
     assert body.getvalue() == ""
 
 
@@ -246,7 +245,10 @@ def test_widget_renders_table_with_populated_db(tmp_path: Path) -> None:
     _seed_basic(db)
 
     body = io.StringIO()
-    _prompt_quality_panel(body, db)
+    since = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=30)
+    summaries = summarize_by_prompt_version(db_path=db, since=since)
+    daily = daily_avg_scores(db_path=db, since=since)
+    _prompt_quality_panel(body, summaries, daily)
     html = body.getvalue()
 
     assert "Prompt quality" in html

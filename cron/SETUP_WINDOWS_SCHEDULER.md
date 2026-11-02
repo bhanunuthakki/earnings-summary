@@ -9,10 +9,12 @@ under the `\earnings-summary\` namespace.
 
 ## Active crons
 
-45 operational declarations total — 44 Task Scheduler registrations and one
-separately managed Windows service. The authoritative set is
+29 operational declarations remain in this checkout. The generated script defines
+29 Task Scheduler registrations; the installed set is unverified. The authoritative set is
 `cron/task_manifest.json`; `cron/TASKS.generated.md` is its deterministic
-human-readable inventory. Run
+human-readable inventory. This source change does not query, disable, or remove
+existing Windows Task Scheduler registrations. The normal company collection,
+earnings-brief, and deterministic outcome-grading jobs remain declared. Run
 `python execution/sqlite_bootstrap.py execution/generate_cron_artifacts.py --check`
 to validate exact XML/wrapper coverage and generated artifacts, then
 `python execution/sqlite_bootstrap.py execution/verify_cron_registration.py` to
@@ -24,15 +26,12 @@ restores the latest backup to a throwaway path and verifies it (see
 **Disaster-recovery drill** below). The five daily data-chain tasks run in
 sequence (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at
 05:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (typed
-20-stage manifest with atomic checkpoint/resume); an eighth (02:45) backs up
+typed manifest with atomic checkpoint/resume); an eighth (02:45) backs up
 the database before the chain starts; the hourly catch-up is independent; the
-weekly + monthly tasks run off-cycle and refresh the synthesis / lens layer,
-the IR-spreadsheet KPI series, and the IR-document corpus — including a
-twice-weekly rescan of the names whose IR crawl is still failing (a
-bot-protected site that may start cooperating); and a weekly Thursday audit
-verifies every declared task is registered and on schedule. Session
-distillation remains available only as an explicit, operator-reviewed
-maintenance CLI.
+retained weekly + monthly tasks run off-cycle for data quality, IR source
+updates, model evaluation, deterministic outcome grading, and restore checks;
+and a weekly Thursday audit verifies every declared task is registered and on
+schedule.
 
 The retired `\earnings-summary\monthly_p3_refresh` task is no longer declared or registered by this checkout. On each Windows host where it was previously installed, run this one-time manual cleanup. This repository change does not execute the command or mutate Windows Task Scheduler:
 
@@ -87,7 +86,7 @@ continuation runs as a bounded morning stage; it adds no LLM schedule.
 |---|---|---|---|---|
 | `earnings-summary\refresh_cache` | Daily 03:00 | `refresh_cache.task.xml` | `run_refresh_cache.bat` | **Tier-aware FMP refresh queue.** Reads `FMP_TIER` from `.env` (defaults to `basic` = 250/day) and drains the highest-priority stale endpoints up to the cap. Failed endpoints (403 / Legacy Endpoint) get a 30-day retry window so a downgrade builds a backlog automatically; an upgrade catches up across following days. See `## Switching FMP tier` below. |
 | `earnings-summary\refresh_dirty_artifacts` | Daily 05:00 | `refresh_dirty_artifacts.task.xml` | `run_refresh_dirty_artifacts.bat` | **LLM artifact cache drain.** Picks up every `llm_artifacts` row with `dirty=1` (upstream-fact trigger) or `expires_at < now` (per-purpose TTL elapsed — see `_DEFAULT_TTL_DAYS` in `src/llm_artifact_store.py`). For each (ticker, purpose), shells out to the regenerator script defined in `execution/refresh_dirty_artifacts._PURPOSE_TO_REGENERATOR`. Halts gracefully (exit 0) once accumulated `llm_calls.cost_estimate_usd` for this run reaches `--max-cost-usd 5`. |
-| `earnings-summary\run_morning_pipeline` | Daily 04:00 | `run_morning_pipeline.task.xml` | `run_morning_pipeline.bat` | **Personal CIO morning pipeline.** Executes the typed 21-stage manifest in `src/pipeline/morning_manifest.py`, from environment preflight through news/state reconciliation, deterministic portfolio materializations, triggers/standup, pre/post-earnings artifacts, feed, and the final validation gate. Every child uses the verified SQLite bootstrap. Day + manifest-scoped atomic checkpoints resume only compatible successful stages; dependency failures block consumers while independent later stages may continue. |
+| `earnings-summary\run_morning_pipeline` | Daily 04:00 | `run_morning_pipeline.task.xml` | `run_morning_pipeline.bat` | **Personal CIO morning pipeline.** Executes the typed manifest in `src/pipeline/morning_manifest.py`, from environment preflight through news/state reconciliation, deterministic portfolio materializations, triggers, pre/post-earnings artifacts, feed, and the final validation gate. Every child uses the verified SQLite bootstrap. Day + manifest-scoped atomic checkpoints resume only compatible successful stages; dependency failures block consumers while independent later stages may continue. |
 | `earnings-summary\backfill_transcripts` | Daily 02:00 | `backfill_transcripts.task.xml` | `run_backfill_transcripts.bat` | Automatic text-transcript acquisition for portfolio, evaluation, and watchlist, bounded to the canonical last 5 reported fiscal quarters. Corporate lanes require stored equity/ADR identity; index/ETF/unknown identities fail closed. Commitment LLM extraction retains its separately authorized scope and exact evidence/SHA idempotency. |
 | `earnings-summary\scan_ir_transcripts` | Daily 02:15 | `scan_ir_transcripts.task.xml` | `run_scan_ir_transcripts.bat` | **Post-earnings IR-transcript scan.** Automatic re-check for applicable portfolio, evaluation, and watchlist companies for the latest reported quarter within 14 days of earnings. Stored role/instrument authorization applies; unknown identities fail closed. Stops on exact DB/path/SHA evidence, then ingests any newly published text transcript. |
 | `earnings-summary\fetch_fmp_earnings_calendar` | Daily 05:45 | `fetch_fmp_earnings_calendar.task.xml` | `run_fetch_fmp_earnings_calendar.bat` | Two steps. (1) Refreshes `data/historical/fmp/<TICKER>_earnings_calendar.json` for every portfolio + watchlist + evaluation ticker — on free/basic tier FMP refuses (402 since 2026-06-10) and the cache stays at its last good state. (2) Runs `execution/refresh_expected_earnings.py`, which materializes the **canonical `expected_earnings` table** via `next_earnings_date` (FMP cache → yfinance fallback); the Home rail's upcoming-earnings strip, the Home cockpit, and the portfolio-tracker's read-only bridge all read that table. Step 2 runs even when step 1 fails. |
@@ -112,18 +111,42 @@ let each step's writes commit before the next reads.
 |---|---|---|---|---|
 | `earnings-summary\onboard_pending` | Hourly at :17 | `onboard_pending_tickers.task.xml` | `run_onboard_pending.bat` | Catches up tickers that bypassed `db.track_company`'s auto-onboard hook (raw SQL / external API inserts). Idempotent — no-op when nothing is pending. |
 
-### Weekly + monthly synthesis layer
+### On-demand research
 
-These regenerate LLM lens artifacts only where the coverage contract permits them. P1 is governed daily work; P2 receives weekly narrow monitoring lenses; P3 is deterministic-only and has no scheduled LLM plan.
+The dedicated portfolio, watchlist/evaluation, and monthly adversarial batches
+are retired from this source version. Manual research and normal report builds
+remain. Other retained scheduled procedures keep their declared policies.
 
-| Task name | Cadence | XML | Wrapper | What it does |
-|---|---|---|---|---|
-| `earnings-summary\weekly_p2_lens_refresh` | Weekly, Friday 22:00 | `weekly_p2_lens_refresh.task.xml` | `run_weekly_p2_lens_refresh.bat` | Regenerates the narrow P2 lens set (`five_min_reread`, `thesis_drift_qoq`) for active watchlist/evaluation names at a 7-day due age. The plan is bounded at 128 pairs and dispatches only from 21:30 through 01:35 PT; transient items defer with retry result 75 and hard stops remain loud. It does not build watchlist DCFs or full briefs. |
-| `earnings-summary\weekly_synthesis` | Weekly, Sunday 23:00 | `weekly_synthesis.task.xml` | `run_weekly_synthesis.bat` | **The "Sunday-night portfolio review" pipeline.** Four steps in order: (1) `refresh_dirty_artifacts.py --manifest-only` drains the LLM-artifact dirty queue so lens reads see fresh facts; (2) `run_lens.py --tickers AMZN,BN,GOOG,MELI,META,NOW,NU,NVO,RBRK,VEEV,WIX --all` regenerates every per-ticker lens for the full portfolio; (3) `run_lens.py --lens cross_portfolio_synthesis` runs the Opus cross-portfolio convergence read (~$0.25); (4) `build_analytical_dashboard.py` rebuilds `output/dashboard/<DATE>_portfolio_dashboard.html` with the new artifacts. Sequential — any step's failure halts the rest. **Bear-case grading was removed from this task** (#675) — it is owned by the dedicated weekly `grade_calibration` cron (Sun 10:30); grading is idempotent so a single weekly pass suffices. |
-| `earnings-summary\submit_saydo_batch` | Weekly, Saturday 02:20 | `submit_saydo_batch.task.xml` | `run_submit_saydo_batch.bat` | **SayDo verdicts through the governed subscription-backed LLM entrypoint.** Two steps: (1) `build_saydo_pairs.py --all --prepare-batch` writes a JSONL of management-commitment (say, do) verdict requests whose check-date has arrived; (2) `submit_saydo_batch.py` processes each pending item through central purpose routing, writes successful verdicts, and leaves transient failures pending for the next run. No-op when nothing is due; the pre-flight budget gate and central hard stops fail loudly. |
-| `earnings-summary\red_team` | Weekly Saturday 10:00 (self-gated to the month's FIRST Saturday) | `red_team.task.xml` | `run_red_team.bat` | **Monthly First-Saturday adversarial review** (`directives/monthly_red_team.md` Phase 2). Runs `execution/run_red_team.py`, which generates one rotating-lens adversarial attack per held name (weight > 0.5%, cash-likes/index-ETFs excluded) plus the three cross-book passes (factor-block detection, style drift, human-capital overlay), persists them to `red_team_items`, and writes a brief snapshot to `.tmp/red_team_briefs/`. Windows Task Scheduler has no native "Nth weekday of month" trigger, so the XML fires every Saturday and the script itself no-ops (exit 0, logged `red_team_skipped_not_first_saturday`) unless today is the month's first Saturday. Idempotent on `red_team_{YYYY_MM}` — a re-run of an already-generated month is a no-op unless `--force`. Per-item degrade (a transient LLM failure defers that one item and retries next run); a hard stop (budget cap / missing CLI) halts loudly. Daytime weekend slot, clear of every protected window in `directives/llm_quota_scheduling.md`. |
+The dedicated lens batches are removed locally. The retained manual interface supports:
 
-The two weekly tasks deliberately bracket the weekend: `weekly_p2_lens_refresh` runs Friday 22:00, clear of Saturday's eval and data jobs, while `weekly_synthesis` runs Sunday 23:00 so the portfolio dashboard reflects everything that landed during the weekend ahead of Monday open. They do not depend on each other — `weekly_synthesis` step 1 (`refresh_dirty_artifacts`) guarantees its own current inputs.
+```text
+python execution/run_lens.py --ticker GOOG --lens thesis_drift_qoq
+python execution/run_lens.py --ticker GOOG --all
+python execution/run_lens.py --lens cross_portfolio_synthesis
+python execution/run_lens.py --tickers GOOG,MELI --all
+python execution/run_lens.py --portfolio --all
+```
+
+Normal report builds retain their existing generation path. On-demand lenses retain their source/context clocks and missing/stale states. Migration 0065 removes optional historical outputs after checking retained dependencies. The separate dirty-artifact refresh remains declared. These examples do not collect sources or run as part of this code change.
+
+#### Retired tasks: deployment boundary
+
+Source retirement does not stop an installed Windows task. Generated registration
+registers declared tasks; it does not remove omitted tasks. The Jobs view must
+show installed retired tasks as unexpected.
+
+Use the complete retirement list and release procedure in
+[`backend-retirement-execution-plan.md`](../docs/architecture/backend-retirement-execution-plan.md).
+Resolve the canonical host and inspect installed actions before the release.
+Prepare the exact candidate, task list, data cleanup and recovery evidence for
+one final approval. Hold if a target is running or has an unexpected action.
+After approval, stop the retired owners before removing their source. Verify
+the remaining registrations and Jobs view. Do not preserve retired product
+history except where a retained dependency or bounded recovery purpose requires it.
+
+Restore the reviewed predecessor code before re-enabling a retired task during
+recovery. Task XML alone cannot restore its deleted runner. This source change
+performs none of these live steps.
 
 ### IR-spreadsheet KPI refresh (weekly)
 
@@ -131,13 +154,13 @@ The two weekly tasks deliberately bracket the weekend: `weekly_p2_lens_refresh` 
 |---|---|---|---|---|
 | `earnings-summary\refresh_ir_kpis` | Weekly, Sunday 01:00 | `refresh_ir_kpis.task.xml` | `run_refresh_ir_kpis.bat` | **IR-spreadsheet KPI refresh.** Runs `execution/refresh_ir_kpis_all.py`, which loops every ticker with a parser config (`micro_thesis/ir_config/<T>.json`, enumerated via `ir_pipeline.config.configured_tickers`) and, per ticker, shells out to `refresh_ir_kpis.py --ticker <T> --discover`: headless-renders the issuer's IR results-center, downloads the current historical-data spreadsheet, parses it, and ingests the KPI series at IR_DOC tier — superseding the lower-tier LLM brief values the report charts read. Subprocess-isolated per ticker with a 5-min cap; never aborts on one ticker's failure; exit code = count of failed tickers. Idempotent: an unchanged spreadsheet re-ingests as a no-op (the document is sha256-keyed), so the weekly poll simply catches each new quarter's file within a week of publication. Tickers without a config are skipped (a ticker's first refresh must run `refresh_ir_kpis.py --url`/`--file` to generate its config). **Requires the optional `ir` extra** in the task's Python — see Prerequisites. |
 
-Runs Sunday 01:00 — ahead of the Sunday-night `weekly_synthesis` (23:00) — so freshly-ingested issuer KPIs are in `kpi_facts` before the portfolio synthesis read. The independent P2 lens sweep runs Friday 22:00. To change the cadence, edit the trigger in `refresh_ir_kpis.task.xml`; the script is cadence-agnostic and idempotent either way.
+Runs Sunday 01:00 to refresh issuer KPIs for later research. This cadence is unchanged by the dedicated lens-batch retirement. To change the cadence, edit the trigger in `refresh_ir_kpis.task.xml`; the script is cadence-agnostic and idempotent either way.
 
 ### Cron-registration audit (weekly)
 
 | Task name | Cadence | XML | Wrapper | What it does |
 |---|---|---|---|---|
-| `earnings-summary\verify_cron` | Weekly, Thursday 07:00 | `verify_cron.task.xml` | `run_verify_cron.bat` | **Cron self-audit.** Runs `execution/verify_cron_registration.py`, which reads the manifest-declared `cron/*.task.xml`, validates the manifest and XML metadata, then queries `schtasks /query /fo csv` for the live state. Reports eight problem categories: **manifest** (coverage, registration identity, action, or schedule errors), **unparseable** (a task XML cannot be read or parsed), **no_uri** (parsed XML lacks a `<URI>`), **missing** (XML exists but task is not registered), **extra** (a live task in the product namespace is not declared by the manifest), **disabled** (registered but not Ready/Running), **mismatch** (scheduled time differs from XML), and **wrong_root** (the registered wrapper targets a different checkout). Exit 0 = all OK, 1 = at least one problem category, 2 = `schtasks` unreachable. Fires Thursday morning so any drift from the weekend's task-scheduler maintenance or a failed install surfaces before the next weekly synthesis run. Output in `.tmp/cron_logs/verify_cron_*.log`. |
+| `earnings-summary\verify_cron` | Weekly, Thursday 07:00 | `verify_cron.task.xml` | `run_verify_cron.bat` | **Cron self-audit.** Runs `execution/verify_cron_registration.py`, which reads the manifest-declared `cron/*.task.xml`, validates the manifest and XML metadata, then queries `schtasks /query /fo csv` for the live state. Reports eight problem categories: **manifest** (coverage, registration identity, action, or schedule errors), **unparseable** (a task XML cannot be read or parsed), **no_uri** (parsed XML lacks a `<URI>`), **missing** (XML exists but task is not registered), **extra** (a live task in the product namespace is not declared by the manifest), **disabled** (registered but not Ready/Running), **mismatch** (scheduled time differs from XML), and **wrong_root** (the registered wrapper targets a different checkout). Exit 0 = all OK, 1 = at least one problem category, 2 = `schtasks` unreachable. Fires Thursday morning so any drift from the weekend's task-scheduler maintenance or a failed install surfaces before the next weekend jobs. Output in `.tmp/cron_logs/verify_cron_*.log`. |
 
 ### IR-document discovery + fetch (weekly)
 
@@ -145,7 +168,7 @@ Runs Sunday 01:00 — ahead of the Sunday-night `weekly_synthesis` (23:00) — s
 |---|---|---|---|---|
 | `earnings-summary\discover_ir_documents` | Weekly, Sunday 01:30 | `discover_ir_documents.task.xml` | `run_discover_ir_documents.bat` | **IR-document corpus refresh.** Automatic discovery/download for portfolio, evaluation, and watchlist, bounded to the canonical last 5 reported quarters. Each child rebinds the ticker to its active stored role and instrument; direct flags cannot bypass policy. Corporate lanes require equity/ADR identity; index/ETF/unknown identities fail closed. URL and content-SHA idempotency, per-stage timeouts, per-ticker failure isolation, and the existing registration/evidence path remain unchanged. **Requires the optional `ir` extra.** |
 
-Runs Sunday 01:30 — just after `refresh_ir_kpis` (01:00) and before Sunday-night synthesis — so freshly-registered IR documents and narrative anchors precede that synthesis. The independent P2 lens sweep runs Friday 22:00. To change the cadence, edit the trigger in `discover_ir_documents.task.xml`. The same per-ticker chain also runs best-effort on onboard (`execution/onboard_ticker.py`, `--skip-ir` to disable).
+Runs Sunday 01:30, after `refresh_ir_kpis` (01:00), to register original IR documents for retained reports and on-demand research. To change the cadence, edit the trigger in `discover_ir_documents.task.xml`. The same per-ticker chain also runs best-effort on onboard (`execution/onboard_ticker.py`, `--skip-ir` to disable).
 
 | Task name | Cadence | XML | Wrapper | What it does |
 |---|---|---|---|---|
@@ -156,12 +179,21 @@ The failing-only rescan is the cheap mid-week companion to the Sunday full sweep
 ### Prototype scheduler status
 
 `task_manifest.json` remains the sole authority for installed operations; no
-parallel prototype scheduler exists. SEC-delta planning is
-**planned/dormant**: their implementation remains available for manual development
-and validation, but neither is registered. Podcast RSS/takeaway is **retired**:
+parallel prototype scheduler exists. New SEC-delta plan creation is **retired**
+by owner decision on 2026-10-23. Saved-plan models, seals and existing admission
+checks remain at their current import paths; old plans do not become newly
+admissible. Standard SEC acquisition remains independent. No SEC-delta task is
+registered. Podcast RSS/takeaway is **retired**:
 its executable, eval, model budget, and rendered Diet paths are removed, while
 historical migrations, logs, and persisted rows remain evidence. Re-activation is
 a separate product and operations decision, not a scheduler toggle.
+
+### Advisor memos: on demand only
+
+The Memos dashboard button and `execution/run_advisor_memos.py --kind all` remain
+available when the owner requests a memo. No automatic advisor-memo task is
+declared. This source change does not disable an existing live Windows task;
+that is a separate approved scheduler action. Memo history and grading remain.
 
 ### Additional standalone + analytics tasks
 
@@ -171,12 +203,9 @@ These run off the daily chain. They were present on disk but previously undocume
 |---|---|---|---|---|
 | `earnings-summary\fetch_macro_series` | Daily 05:35 | `fetch_macro_series.task.xml` | `run_fetch_macro_series.bat` | Populates `macro_series` from timeout-bounded Yahoo candidates; direct FMP macro calls remain disabled until admitted by the shared recovery service. Recomputes portfolio `macro_sensitivities` only when every requested series is fresh or explicitly cached-degraded within 45 days, preserving warning/failure exit codes otherwise. |
 | `earnings-summary\model_eval_sweep` | Weekly, Saturday 20:00 | `model_eval_sweep.task.xml` | `run_weekly_model_eval.bat` | The activated model-downgrade eval loop (`directives/model_eval_loop.md`): harvest a rotating 2-ticker sample → sweep every cheaper candidate per active purpose → auto-switch a `model_pin_overrides` row after 3 consecutive SWITCH_DOWN verdicts (revert after 3 KEEP_INCUMBENT). Conservative + reversible; every decision audited via `model_eval_verdicts` + alerts. (The task runs `run_weekly_model_eval.bat`; the older `run_model_eval_sweep.bat` is unused.) |
-| `earnings-summary\grade_calibration` | Weekly, Sunday 10:30 | `grade_calibration.task.xml` | `run_grade_calibration.bat` | Feeds the prompt-calibration loop: `run_calibration_grading.py` runs 3 outcome graders (predictions → decisions → bear_cases, the last over `--all-portfolio`) + 5 eval-audit rungs (bear_case, transcript_summary, advisor_next_dollar, ask_advisory_answer, calibration_coach), writing `prompt_calibration_scores`. Never aborts early; exit code = count of failed rungs. **Owns bear-case grading** (moved here from `weekly_synthesis` in #675). |
+| `earnings-summary\grade_calibration` | Weekly, Sunday 10:30 | `grade_calibration.task.xml` | `run_grade_calibration.bat` | Feeds the prompt-calibration loop: `run_calibration_grading.py` runs 3 outcome graders (predictions → decisions → bear_cases, the last over `--all-portfolio`) plus 6 eval-audit rungs (bear_case, transcript_summary, advisor_next_dollar, ask_advisory_answer, material_news_classification, earnings_tone_diff), writing `prompt_calibration_scores`. It also runs the provider-free capture-retention sweep. It attempts every rung; the exit code counts failed rungs. **Owns bear-case grading** (moved here from `weekly_synthesis` in #675). |
 | `earnings-summary\weekly_validation` | Weekly, Sunday 03:00 | `weekly_validation.task.xml` | `run_weekly_validation.bat` | **Confidence backfill.** Rescores `financial_facts`/`kpi_facts` confidence `--apply`, folding fresh validation-issue penalties into per-fact scores (idempotent). The validation-engine SCAN runs DAILY in `run_morning_pipeline` (stage 3), so it is **not** repeated here (#679 dropped the duplicate weekly scan — the backfill reads the issues the daily run already inserted). Recorded in `ingestion_runs` for the cron-health panel. |
-| `earnings-summary\weekly_cleanup` | Weekly, Sunday 13:00 | `weekly_cleanup.task.xml` | `run_weekly_cleanup.bat` | Runs `run_weekly_cleanup.py --apply` against the allowlist in `directives/weekly_cleanup.md`, then `expire_stale_research.py --apply`. It has no network dependency, stops after 15 minutes, resumes missed starts when available, and retries a failed run once after 30 minutes. Filesystem cleanup uses `filesystem-maintenance`; research expiry uses `portfolio-db`. A cleanup failure prevents research expiry. |
-| `earnings-summary\weekly_score_stances` | Weekly, Sunday 06:30 | `weekly_score_stances.task.xml` | `run_weekly_score_stances.bat` | Grades matured advisor memos/stances (master build P2.5): Socratic stances vs price (SPY-relative via the tracker) + swap checks vs realized pair margin. Deferrals (immature horizons / price-cache gaps) are normal; idempotent over the pending set. |
-| `earnings-summary\monthly_advisor_memos` | Monthly, 1st @ 07:30 | `monthly_advisor_memos.task.xml` | `run_monthly_advisor_memos.bat` | Advisor memo run (master build P2.3): the next-dollar allocation memo + swap-discipline checks. Runs after the morning pipeline so FMP prices/DCFs are fresh; degrades gracefully if the tracker is offline. Each memo persists to `advisor_memos` + an analyst note (+ ledger entry when ticker-scoped). |
-| `earnings-summary\monthly_calibration_scorecard` | Monthly, 2nd @ 07:30 | `monthly_calibration_scorecard.task.xml` | `run_monthly_calibration_scorecard.bat` | Calibration scorecard (close_the_loops L8): the compounding loop's personal readout — deterministic hit-rate/skill split + eval-gated coach prose (named biases + a falsifiable experiment), grounded only in the owner's graded history. Below the min-n floor it renders the substrate with a "too thin to coach yet" note and makes no LLM call. Persists to `data/calibration_scorecard/<period>.json`. |
+| `earnings-summary\weekly_cleanup` | Weekly, Sunday 13:00 | `weekly_cleanup.task.xml` | `run_weekly_cleanup.bat` | Runs `run_weekly_cleanup.py --apply` against the allowlist in `directives/weekly_cleanup.md`. It has no network dependency, stops after 15 minutes, resumes missed starts when available, and retries a failed run once after 30 minutes. It owns filesystem cleanup in the `filesystem-maintenance` lane. |
 
 ### Disaster-recovery drill
 
@@ -543,7 +572,7 @@ Then check:
 - For `daily_fetch_and_brief`: `output/research/<TICKER>/<DATE>_workspace.html`
   for any tickers that had `brief_dirty=1`.
 - For `run_morning_pipeline`: the log shows one header for every entry in the
-  typed 21-stage manifest and a final JSON status map. A failed/timed-out stage
+  typed manifest and a final JSON status map. A failed/timed-out stage
   blocks declared dependents while independent stages may continue. The atomic
   checkpoint identity includes UTC day plus the manifest digest, so a changed
   manifest cannot reuse incompatible success receipts. On success expect a
@@ -559,17 +588,6 @@ Then check:
   and exits 0.
 - For `onboard_pending`: the script exits 0 with an empty results array when
   nothing is pending; otherwise it logs each onboarded ticker.
-- For `weekly_p2_lens_refresh`: new rows in the `llm_artifacts` table for
-  P2-tier (watchlist + evaluation) tickers whose previous lens runs had
-  drifted past the weekly cadence. Stable tickers log "cache hit — skipping"
-  via the `cache_inputs` hash; that's the desired no-op behavior.
-- For `weekly_synthesis`: five `=== <TIME> ...` step markers in the log
-  (drain dirty → per-ticker lenses → cross-portfolio synthesis → dashboard
-  rebuild → bear-case grading). On success, expect a fresh
-  `output/dashboard/<DATE>_portfolio_dashboard.html`, new `llm_artifacts`
-  rows for the eleven portfolio tickers + one `cross_portfolio_synthesis`
-  artifact, and updated grades on any bear-case predictions whose
-  `target_period` has passed.
 - For `refresh_ir_kpis`: per configured ticker, a `=== IR-spreadsheet refresh -
   <T>` header followed by the child's JSON (`rows_inserted`, `doc_id`, …), then a
   final summary `{ "tickers": [...], "skipped_no_config": [...], "ok": N,
@@ -607,3 +625,7 @@ schtasks /delete /tn "earnings-summary\<task>" /f
 Edit the canonical XML, regenerate/check artifacts, and rerun **Install or
 re-register**. Do not hand-edit live Scheduler properties: the next generated
 registration would correctly replace them from source.
+
+Pairwise SayDo narrative generation and its dedicated batch schedule are retired from source. Source-linked commitment extraction, guidance-versus-actual comparisons and recorded verdicts remain. The live task is unchanged until the canonical release.
+
+Advisor-stance scoring, business-factor refresh and scenario-prior refresh now run on demand through their existing backend commands. Their recurring declarations are retired from source. The live registrations are unchanged until the canonical release. Explicit decision grading and model-quality jobs remain.

@@ -9,14 +9,10 @@ JSON shape the downloader reads.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from ir_pipeline.ir_url_overrides import IR_URL_OVERRIDES, resolve_ir_url  # noqa: E402
-from ir_pipeline.manifest import (  # noqa: E402
+from ir_pipeline.ir_url_overrides import IR_URL_OVERRIDES, resolve_ir_url
+from ir_pipeline.manifest import (
     ManifestEntry,
     load_manifest,
     manifest_path,

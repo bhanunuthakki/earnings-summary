@@ -16,11 +16,12 @@ import pytest
 
 from dcf import redesign
 from dcf.primary_fact_overlay import Statement
-from provenance import fact_read_model
+from provenance import source_fact_publication
 from provenance.fact_plane_v2 import FactCellV2
 from provenance.fact_read_model import FactReadModel, ProvenanceBundleRead
 from provenance.metric_ontology import MetricOntology
 from provenance.source_fact_publication import VerifiedSourceFactPublication
+from runtime.deterministic import as_utc
 from sources.dcf_statements import DcfStatementCell, DcfStatementInputs, read_dcf_statements
 from tests.fixtures.dcf_statements import STAMP, seed_dcf_statements
 
@@ -101,9 +102,11 @@ def test_statement_reader_uses_one_sealed_provenance_batch(
     statement_database: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[tuple[str, ...]] = []
-    publication_checks: list[str] = []
+    publication_checks: list[tuple[str, datetime, datetime]] = []
     original = FactReadModel.provenance_bundles
-    verify_publication = fact_read_model.verify_source_fact_publication
+    verify_publication: Callable[..., VerifiedSourceFactPublication] = getattr(
+        source_fact_publication, "_verify_source_fact_publication"
+    )
 
     def counted_verification(
         conn: sqlite3.Connection,
@@ -112,7 +115,9 @@ def test_statement_reader_uses_one_sealed_provenance_batch(
         cutoff: datetime,
         observed_through: datetime | None = None,
     ) -> VerifiedSourceFactPublication:
-        publication_checks.append(publication_id)
+        publication_checks.append(
+            (publication_id, as_utc(cutoff), as_utc(observed_through or cutoff))
+        )
         return verify_publication(
             conn,
             publication_id=publication_id,
@@ -127,13 +132,17 @@ def test_statement_reader_uses_one_sealed_provenance_batch(
         return original(reader, observation_ids, cutoff=cutoff)
 
     monkeypatch.setattr(FactReadModel, "provenance_bundles", spy)
-    monkeypatch.setattr(fact_read_model, "verify_source_fact_publication", counted_verification)
+    # Count full verification bodies. The public adapter also serves scoped cache hits.
+    monkeypatch.setattr(
+        source_fact_publication, "_verify_source_fact_publication", counted_verification
+    )
     with sqlite3.connect(statement_database) as conn:
         inputs = read_dcf_statements(conn, "TEST", as_of=STAMP)
     inputs.require_complete_actuals()
     assert len(calls) == 1
     assert len(calls[0]) == len(inputs.cells)
     assert len(publication_checks) == 1
+    assert publication_checks[0][1:] == (as_utc(STAMP), as_utc(STAMP))
 
     def serial(
         reader: FactReadModel, observation_ids: tuple[str, ...], *, cutoff: datetime

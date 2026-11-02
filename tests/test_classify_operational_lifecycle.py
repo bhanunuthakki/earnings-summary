@@ -203,7 +203,7 @@ def test_canonical_task_manifest_loads() -> None:
     root = Path(__file__).resolve().parents[1]
     manifest = lifecycle_inventory_module.load_task_manifest(root)
     assert manifest.namespace == "\\earnings-summary"
-    assert len(manifest.tasks) >= 40
+    assert len(manifest.tasks) == 29
     assert all(task.schedule.trigger for task in manifest.tasks)
     assert all(task.wrapper.endswith(".bat") for task in manifest.tasks)
 

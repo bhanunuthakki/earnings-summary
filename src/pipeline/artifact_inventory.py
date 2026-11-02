@@ -54,7 +54,6 @@ def build_artifact_inventory(repo_root: Path, ticker: str) -> list[Artifact]:
         _single(repo_root, "LLM cache", "Bear case", f"data/bear_case/{t}.json"),
         _single(repo_root, "LLM cache", "Valuation basis", f"data/valuation_basis/{t}.json"),
         _single(repo_root, "LLM cache", "Q&A topics", f"data/qa_topics/{t}.json"),
-        _single(repo_root, "LLM cache", "SayDo filter", f"data/saydo_filter/{t}.json"),
         _single(
             repo_root, "LLM cache", "Filing intelligence", f"data/filing_intelligence/{t}.json"
         ),

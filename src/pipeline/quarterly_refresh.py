@@ -27,22 +27,15 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 
-from compute.as_reported import extract_as_reported_facts
-from compute.balance_sheet import extract_balance_sheet_facts
-from compute.cashflow import extract_cashflow_facts
 from compute.evidence_snapshot import recorded_evidence_location
-from compute.fmp_derived_kpis import derive_for_ticker
-from compute.income_statement import extract_income_statement_facts
+from compute.fmp_derived_kpis import derive_for_ticker_outcome
 from compute.say_do import match_pending as match_commitments_pending
-from compute.segment_oi_10k import extract_segment_oi_facts
-from compute.segments import extract_segment_facts
-from compute.segments_nu import extract_nu_segment_facts
 from compute.thesis_evaluator import (
     evaluate_ticker_thesis,
     persist_verdict,
@@ -54,6 +47,7 @@ from pipeline.document_completeness import (
     DocumentCompletenessStatus,
     document_completeness,
 )
+from pipeline.fmp_batch import DocumentOutcome, extract_documents, select_documents
 from pipeline.sec_xbrl import ingest_for_ticker as ingest_sec_for_ticker
 from pipeline.segment_cache_audit import audit_ticker_cache, segment_cache_present
 from pipeline.source_policy import (
@@ -68,30 +62,6 @@ from pipeline.transcript_acquisition import (
 from provenance.selection import selected_transcripts_relation
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from timeseries.signal_writer import compute_and_persist_signals
-
-_FACT_EXTRACTOR_DISPATCH: dict[str, Callable[[sqlite3.Connection, int, Path], int]] = {
-    "fmp_income_statement": extract_income_statement_facts,
-    "fmp_balance_sheet": extract_balance_sheet_facts,
-    "fmp_cashflow": extract_cashflow_facts,
-    "fmp_segment_product": extract_segment_facts,
-    "fmp_segment_geographic": extract_segment_facts,
-    "fmp_as_reported_income": extract_as_reported_facts,
-    "fmp_as_reported_balance": extract_as_reported_facts,
-    "fmp_as_reported_cashflow": extract_as_reported_facts,
-    "fmp_as_reported_financial": extract_as_reported_facts,
-    "fmp_10k_json": extract_segment_oi_facts,
-    "fmp_10q_json": extract_segment_oi_facts,
-}
-
-# Per-ticker extractor overrides (ticker, doc_type) -> Extractor.
-# NU's 20-F uses IFRS segment-note conventions that the generic
-# segment_oi_10k walker can't decode — see compute/segments_nu.py.
-_TICKER_EXTRACTOR_OVERRIDE: dict[
-    tuple[str, str], Callable[[sqlite3.Connection, int, Path], int]
-] = {
-    ("NU", "fmp_10k_json"): extract_nu_segment_facts,
-    ("NU", "fmp_10q_json"): extract_nu_segment_facts,
-}
 
 
 class StageName(StrEnum):
@@ -179,19 +149,6 @@ class RefreshReport:
     tickers: tuple[TickerRefreshReport, ...]
 
     execution: tuple[TickerExecutionReceipt, ...]
-
-
-def _safe_extract(
-    extractor: Callable[[sqlite3.Connection, int, Path], int],
-    conn: sqlite3.Connection,
-    doc_id: int,
-    project_root: Path,
-) -> int:
-    """Wrap an extractor; convert known failure modes into a rowcount of 0."""
-    try:
-        return extractor(conn, doc_id, project_root)
-    except (ValueError, OSError, KeyError, json.JSONDecodeError):
-        return 0
 
 
 def _stage_fetch_sec_xbrl(
@@ -307,20 +264,7 @@ def _stage_extract_fmp_facts(
     conn: sqlite3.Connection, *, ticker: str, project_root: Path
 ) -> StageResult:
     """Run every fact-producing FMP extractor for the ticker. Idempotent (INSERT OR IGNORE)."""
-    placeholders = ",".join("?" for _ in _FACT_EXTRACTOR_DISPATCH)
-    # Order matters: segment extractors gate on financial_facts.revenue from the
-    # income-statement extractor — see compute/segments._passes_reconciliation —
-    # so income_statement docs must commit first within this stage.
-    cur = conn.execute(
-        f"SELECT id, doc_type FROM documents "
-        f"WHERE ticker = ? AND doc_type IN ({placeholders}) "
-        f"ORDER BY CASE doc_type "
-        f"  WHEN 'fmp_income_statement' THEN 0 "
-        f"  WHEN 'fmp_as_reported_income' THEN 1 "
-        f"  ELSE 2 END, id",
-        (ticker.upper(), *_FACT_EXTRACTOR_DISPATCH.keys()),
-    )
-    docs = cur.fetchall()
+    docs = select_documents(conn, [ticker])
     if not docs:
         return StageResult(
             name=StageName.EXTRACT_FMP_FACTS,
@@ -328,26 +272,19 @@ def _stage_extract_fmp_facts(
             rows_processed=0,
             notes="no FMP fact-producing documents",
         )
-    inserted = 0
-    failed = 0
-    for row in docs:
-        doc_id = int(row["id"])
-        doc_type = row["doc_type"]
-        extractor = (
-            _TICKER_EXTRACTOR_OVERRIDE.get((ticker.upper(), doc_type))
-            or _FACT_EXTRACTOR_DISPATCH[doc_type]
-        )
-        n = _safe_extract(extractor, conn, doc_id, project_root)
-        if n < 0:
-            failed += 1
-        else:
-            inserted += n
-    status = StageStatus.OK if failed == 0 else StageStatus.FAILED
+    outcomes: list[DocumentOutcome] = []
+    result = extract_documents(conn, docs, project_root, report=outcomes.append)
+    failure_notes = "; ".join(
+        redact(outcome.error) for outcome in outcomes if outcome.error is not None
+    )
     return StageResult(
         name=StageName.EXTRACT_FMP_FACTS,
-        status=status,
-        rows_processed=inserted,
-        notes=f"{len(docs)} docs scanned; {inserted} new fact rows; {failed} failures",
+        status=StageStatus.FAILED if result.failed else StageStatus.OK,
+        rows_processed=result.rows_inserted,
+        notes=(
+            f"{result.documents} docs scanned; {result.rows_inserted} new fact rows; "
+            f"{result.failed} failures" + (f"; {failure_notes}" if failure_notes else "")
+        )[:500],
     )
 
 
@@ -410,7 +347,7 @@ def _stage_ingest_ir_transcripts(
 def _stage_derive_kpis(conn: sqlite3.Connection, *, ticker: str) -> StageResult:
     """Derive standard KPIs from FMP financial_facts for the ticker."""
     try:
-        emitted, inserted = derive_for_ticker(conn, ticker)
+        outcome = derive_for_ticker_outcome(conn, ticker)
     except (ValueError, KeyError) as e:
         return StageResult(
             name=StageName.DERIVE_FMP_KPIS,
@@ -418,18 +355,27 @@ def _stage_derive_kpis(conn: sqlite3.Connection, *, ticker: str) -> StageResult:
             rows_processed=0,
             notes=f"{type(e).__name__}: {e}"[:200],
         )
-    if emitted == 0:
+    skipped = (
+        f"{outcome.not_computable} not computable "
+        f"({', '.join(sorted({reason.value for reason in outcome.reasons}))})"
+        if outcome.not_computable
+        else ""
+    )
+    if outcome.rows_emitted == 0:
         return StageResult(
             name=StageName.DERIVE_FMP_KPIS,
             status=StageStatus.SKIPPED,
             rows_processed=0,
-            notes="no quarterly fmp_income_statement data on disk",
+            notes=skipped or "no quarterly fmp_income_statement data on disk",
         )
     return StageResult(
         name=StageName.DERIVE_FMP_KPIS,
         status=StageStatus.OK,
-        rows_processed=inserted,
-        notes=f"{emitted} rows derived; {inserted} new (others already present)",
+        rows_processed=outcome.rows_inserted,
+        notes=(
+            f"{outcome.rows_emitted} rows derived; {outcome.rows_inserted} new "
+            f"(others already present)" + (f"; {skipped}" if skipped else "")
+        ),
     )
 
 

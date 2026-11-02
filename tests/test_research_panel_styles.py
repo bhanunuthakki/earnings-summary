@@ -14,7 +14,6 @@ _FAMILY = (
     "journal_panel",
     "decision_journal_panel",
     "ledger_panel",
-    "ledger_console_panel",
     "thesis_ledger_panel",
     "source_viewers",
     "source_calls_panel",

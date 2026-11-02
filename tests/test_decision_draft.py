@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-import sys
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -15,10 +14,7 @@ from typing import cast
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from capture.decision_draft import (  # noqa: E402
+from capture.decision_draft import (
     DecisionDraft,
     create_draft_row,
     get_draft,
@@ -27,7 +23,7 @@ from capture.decision_draft import (  # noqa: E402
     parse_note,
     set_draft_status,
 )
-from capture.decision_draft_actions import (  # noqa: E402
+from capture.decision_draft_actions import (
     DraftActionError,
     confirm_draft,
     confirm_tracker_fill_group,
@@ -36,9 +32,10 @@ from capture.decision_draft_actions import (  # noqa: E402
     dismiss_draft,
     dismiss_tracker_fill_group,
 )
-from decision_extractor import reconcile_decision_actions  # noqa: E402
-from integrations.portfolio_tracker_client import LivePortfolio, LiveTransaction  # noqa: E402
+from decision_extractor import reconcile_decision_actions
+from integrations.portfolio_tracker_client import LivePortfolio, LiveTransaction
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _BOOTSTRAP_DDL = """
 CREATE TABLE IF NOT EXISTS tracked_companies (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -153,7 +150,8 @@ def test_migration_head_creates_decision_drafts_table(db_path: Path) -> None:
     view = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='view' AND name='v_decision_journal'"
     ).fetchone()
-    assert view is not None and "source_draft_id" in view["sql"]
+    assert view is not None and "FROM decisions d" in view["sql"]
+    assert "source_draft_id" not in view["sql"]
     conn.close()
 
 
@@ -255,6 +253,7 @@ def test_parse_note_drops_off_roster_ticker(db_path: Path) -> None:
             "proposed_action": "buy",
         },
     )
+    assert draft_id is not None
     row = get_draft(draft_id, db_path=db_path)
     assert row is not None and row.draft is not None
     assert row.draft.proposed_ticker is None
@@ -496,7 +495,9 @@ def _race_reconcile_and_action(
     import decision_extractor as extractor_module
 
     real_action_open = action_module.open_conn
-    real_reconcile_open = extractor_module._open
+    real_reconcile_open = cast(
+        "Callable[[Path | str | None], sqlite3.Connection]", vars(extractor_module)["_open"]
+    )
     barrier = threading.Barrier(2)
     action_local = threading.local()
     reconcile_local = threading.local()

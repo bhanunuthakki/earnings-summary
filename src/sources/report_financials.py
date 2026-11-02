@@ -24,13 +24,13 @@ from pydantic import (
     model_validator,
 )
 
-from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
-from provenance.fact_read_model import FactReadModel, ProvenanceBundle
+from provenance.canonical_fact_resolution import CanonicalFactRead, CanonicalFactResolutionEngine
+from provenance.fact_read_model import FactAdmissionError, ProvenanceBundle
 from provenance.financial_statement_admission import (
     ReviewedFinancialStatementRole,
     verify_reviewed_financial_role,
 )
-from provenance.metric_ontology import MetricOntology
+from provenance.source_fact_publication import publication_verification_scope
 from provenance.source_read_context import SourceReadContext
 from sources.canonical_financial_series import (
     CanonicalFinancialSeriesReader,
@@ -209,60 +209,30 @@ def _admit_cell(
     cell_id: str,
     metric_id: str,
     cutoff: datetime,
-    resolver: CanonicalFactResolutionEngine,
-    reader: FactReadModel,
-    ontology: MetricOntology,
-    resolution_observed_through: datetime | None = None,
+    read: CanonicalFactRead,
+    series: CanonicalFinancialSeriesReader,
 ) -> FinancialTableCell:
     initial = FinancialTableCell(
         concept=concept, canonical_metric_cell_id=cell_id, metric_id=metric_id
     )
-    resolution = resolver.as_known(cell_id, cutoff, observed_through=resolution_observed_through)
+    if read.failure is not None or read.unavailable_reason == "canonical_commitment_invalid":
+        return initial.model_copy(update={"reason_codes": ("canonical_evidence_invalid",)})
+    if read.unavailable_reason == "derived_operand_selection_changed":
+        return initial.model_copy(update={"reason_codes": ("canonical_resolution_unavailable",)})
+    resolution = read.resolution
     if (
         resolution is None
         or resolution.status != "resolved"
         or resolution.selected_observation_id is None
     ):
         return initial.model_copy(update={"reason_codes": ("canonical_resolution_unavailable",)})
-    bundle = reader.provenance_bundle(resolution.selected_observation_id, cutoff=cutoff)
+    bundle = read.bundle
+    if bundle is None:
+        return initial.model_copy(update={"reason_codes": ("canonical_evidence_invalid",)})
     value, source = bundle.observation, bundle.cell
     reasons: list[str] = []
-    if not CanonicalFinancialSeriesReader(conn, "", cutoff=cutoff).derivation_operands_current(
-        bundle
-    ):
-        reasons.append("derived_operand_selection_changed")
-    definition = ontology.metric_definition_as_known(metric_id, cutoff)
-    binding = ontology.binding_as_known(value.observation_id, cutoff)
-    admitted = (
-        ontology.metric_definition_as_known(metric_id, binding.recorded_at) if binding else None
-    )
-    semantics = {
-        "lifecycle",
-        "definition_text",
-        "value_kind",
-        "period_kind",
-        "unit_family",
-        "accounting_basis",
-        "scope_constraints",
-    }
-    if (
-        definition is None
-        or admitted is None
-        or definition.lifecycle != "active"
-        or binding is None
-        or binding.binding_status != "bound"
-        or binding.canonical_metric_cell_id != cell_id
-        or definition.model_dump(include=semantics) != admitted.model_dump(include=semantics)
-        or definition.value_kind != "numeric"
-        or definition.period_kind != "duration"
-        or definition.unit_family != "currency"
-        or not CanonicalFinancialSeriesReader(conn, "", cutoff=cutoff).reviewed_currency_matches(
-            value.observation_id, source.currency
-        )
-        or definition.accounting_basis != source.accounting_basis
-        or definition.scope_constraints.get("reporting_entity_id") != source.reporting_entity_id
-        or definition.scope_constraints.get("consolidation_scope") != source.consolidation_scope
-    ):
+    definition, admitted = series.financial_definition_admission(cell_id, metric_id, bundle)
+    if not admitted:
         reasons.append("active_metric_definition_or_binding_unavailable")
     if source.dimensions or source.scope_security_id is not None:
         reasons.append("nonconsolidated_financial_coordinate")
@@ -279,7 +249,7 @@ def _admit_cell(
                 )
                 verify_reviewed_financial_role(conn, role, bundle, cutoff=cutoff)
                 scope_label = role.context.source_scope_label
-            except (ValueError, RuntimeError, sqlite3.Error):
+            except (ValueError, FactAdmissionError):
                 reasons.append("reviewed_financial_statement_context_unavailable")
         elif source.consolidation_scope == "consolidated":
             scope_label = "consolidated"
@@ -378,106 +348,109 @@ def read_financial_table(
         raise ValueError("resolution observation clock must be timezone-aware and within K and now")
     ticker = ticker.upper()
     original_factory = conn.row_factory
-    owns_snapshot = not conn.in_transaction
     cells: list[FinancialTableCell] = []
     try:
-        if owns_snapshot:
-            conn.execute("BEGIN")
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT DISTINCT binding.canonical_metric_cell_id,CASE WHEN source.concept_namespace='urn:earnings-summary:legacy:financial' THEN source.concept_name ELSE COALESCE(json_extract(definition.scope_constraints_json,'$.financial_statement_concept'),metric.canonical_name) END,target.metric_id "
-            "FROM fact_cell_canonical_binding_revisions binding "
-            "JOIN fact_cells_v2 source ON source.fact_cell_id=binding.fact_cell_id "
-            "JOIN canonical_metric_cells target ON target.canonical_metric_cell_id=binding.canonical_metric_cell_id "
-            "JOIN canonical_metrics metric ON metric.metric_id=target.metric_id "
-            "JOIN canonical_metric_definition_revisions definition ON definition.metric_id=target.metric_id "
-            "JOIN fact_observations_v2 observation ON observation.observation_id=binding.source_observation_id "
-            "LEFT JOIN evidence_document_versions document ON document.document_version_id=observation.document_version_id "
-            "WHERE (document.ticker=? OR (observation.observation_kind='derived' AND EXISTS ("
-            "SELECT 1 FROM fact_cells_v2 input_cell JOIN fact_observations_v2 input_observation ON input_observation.fact_cell_id=input_cell.fact_cell_id "
-            "JOIN evidence_document_versions input_document ON input_document.document_version_id=input_observation.document_version_id "
-            "WHERE input_cell.reporting_entity_id=source.reporting_entity_id AND input_document.ticker=?))) "
-            "AND ((source.concept_namespace='urn:earnings-summary:legacy:financial' AND source.concept_name IN (SELECT value FROM json_each(?))) "
-            "OR metric.canonical_name IN (SELECT value FROM json_each(?)) "
-            "OR json_extract(definition.scope_constraints_json,'$.financial_statement_concept') IN (SELECT value FROM json_each(?))) "
-            "AND binding.binding_status='bound' "
-            "AND julianday(binding.recorded_at)<=julianday(?) AND julianday(binding.knowledge_at)<=julianday(?) "
-            "AND julianday(definition.recorded_at)<=julianday(?) AND julianday(definition.knowledge_at)<=julianday(?) "
-            "ORDER BY source.concept_name,binding.canonical_metric_cell_id",
-            (
-                ticker,
-                ticker,
-                json.dumps(REPORT_CONCEPTS),
-                json.dumps(REPORT_CONCEPTS),
-                json.dumps(REPORT_CONCEPTS),
-                cutoff.isoformat(),
-                cutoff.isoformat(),
-                cutoff.isoformat(),
-                cutoff.isoformat(),
-            ),
-        ).fetchall()
-        resolver, reader, ontology = (
-            CanonicalFactResolutionEngine(conn, source_context=source_context),
-            FactReadModel(conn, source_context=source_context),
-            MetricOntology(conn),
-        )
-        for cell_id, concept, metric_id in rows:
-            # Validate the bounded concept at the external SQLite boundary.
-            initial = FinancialTableCell.model_validate(
-                {"concept": concept, "canonical_metric_cell_id": cell_id, "metric_id": metric_id}
+        with publication_verification_scope(conn):
+            rows = conn.execute(
+                "SELECT DISTINCT binding.canonical_metric_cell_id,CASE WHEN source.concept_namespace='urn:earnings-summary:legacy:financial' THEN source.concept_name ELSE COALESCE(json_extract(definition.scope_constraints_json,'$.financial_statement_concept'),metric.canonical_name) END,target.metric_id "
+                "FROM fact_cell_canonical_binding_revisions binding "
+                "JOIN fact_cells_v2 source ON source.fact_cell_id=binding.fact_cell_id "
+                "JOIN canonical_metric_cells target ON target.canonical_metric_cell_id=binding.canonical_metric_cell_id "
+                "JOIN canonical_metrics metric ON metric.metric_id=target.metric_id "
+                "JOIN canonical_metric_definition_revisions definition ON definition.metric_id=target.metric_id "
+                "JOIN fact_observations_v2 observation ON observation.observation_id=binding.source_observation_id "
+                "LEFT JOIN evidence_document_versions document ON document.document_version_id=observation.document_version_id "
+                "WHERE (document.ticker=? OR (observation.observation_kind='derived' AND EXISTS ("
+                "SELECT 1 FROM fact_cells_v2 input_cell JOIN fact_observations_v2 input_observation ON input_observation.fact_cell_id=input_cell.fact_cell_id "
+                "JOIN evidence_document_versions input_document ON input_document.document_version_id=input_observation.document_version_id "
+                "WHERE input_cell.reporting_entity_id=source.reporting_entity_id AND input_document.ticker=?))) "
+                "AND ((source.concept_namespace='urn:earnings-summary:legacy:financial' AND source.concept_name IN (SELECT value FROM json_each(?))) "
+                "OR metric.canonical_name IN (SELECT value FROM json_each(?)) "
+                "OR json_extract(definition.scope_constraints_json,'$.financial_statement_concept') IN (SELECT value FROM json_each(?))) "
+                "AND binding.binding_status='bound' "
+                "AND julianday(binding.recorded_at)<=julianday(?) AND julianday(binding.knowledge_at)<=julianday(?) "
+                "AND julianday(definition.recorded_at)<=julianday(?) AND julianday(definition.knowledge_at)<=julianday(?) "
+                "ORDER BY source.concept_name,binding.canonical_metric_cell_id",
+                (
+                    ticker,
+                    ticker,
+                    json.dumps(REPORT_CONCEPTS),
+                    json.dumps(REPORT_CONCEPTS),
+                    json.dumps(REPORT_CONCEPTS),
+                    cutoff.isoformat(),
+                    cutoff.isoformat(),
+                    cutoff.isoformat(),
+                    cutoff.isoformat(),
+                ),
+            ).fetchall()
+            series = CanonicalFinancialSeriesReader(
+                conn, ticker, cutoff=cutoff, source_context=source_context
             )
-            try:
-                cell = _admit_cell(
-                    conn,
-                    concept=initial.concept,
-                    cell_id=str(cell_id),
-                    metric_id=str(metric_id),
-                    cutoff=cutoff,
-                    resolver=resolver,
-                    reader=reader,
-                    ontology=ontology,
-                    resolution_observed_through=resolution_observed_through,
+            reads = CanonicalFactResolutionEngine(
+                conn, source_context=source_context
+            ).read_as_known_outcomes(
+                tuple(str(row[0]) for row in rows),
+                cutoff,
+                observed_through=resolution_observed_through,
+            )
+            for (cell_id, concept, metric_id), read in zip(rows, reads, strict=True):
+                initial = FinancialTableCell.model_validate(
+                    {
+                        "concept": concept,
+                        "canonical_metric_cell_id": cell_id,
+                        "metric_id": metric_id,
+                    }
                 )
-            except (ValueError, RuntimeError, sqlite3.Error):
-                cell = initial.model_copy(update={"reason_codes": ("canonical_evidence_invalid",)})
-            cells.append(cell)
-    except (ValueError, RuntimeError, sqlite3.Error):
+                cells.append(
+                    _admit_cell(
+                        conn,
+                        concept=initial.concept,
+                        cell_id=str(cell_id),
+                        metric_id=str(metric_id),
+                        cutoff=cutoff,
+                        read=read,
+                        series=series,
+                    )
+                )
+            coordinates: dict[tuple[str, str, str | None], list[int]] = defaultdict(list)
+            units: dict[str, set[tuple[str | None, str]]] = defaultdict(set)
+            for index, cell in enumerate(cells):
+                if cell.display_coordinate is not None:
+                    coordinates[(cell.concept, cell.cadence, cell.display_coordinate)].append(index)
+                if cell.available and cell.provenance is not None:
+                    value = cell.provenance.observation
+                    units[cell.concept].add((value.currency, value.unit_key))
+            ambiguous = {
+                index for indexes in coordinates.values() if len(indexes) > 1 for index in indexes
+            }
+            table_currencies = {
+                cell.provenance.observation.currency
+                for cell in cells
+                if cell.available and cell.provenance is not None
+            }
+            for index, cell in enumerate(cells):
+                reasons = list(cell.reason_codes)
+                if len(table_currencies) > 1:
+                    reasons.append("mixed_currency_table")
+                if index in ambiguous:
+                    reasons.append("ambiguous_table_coordinate")
+                if len(units[cell.concept]) > 1:
+                    reasons.append("incomparable_currency_or_unit_history")
+                cells[index] = cell.model_copy(update={"reason_codes": tuple(reasons)})
+            return FinancialTableProjection(
+                ticker=ticker,
+                as_of=cutoff,
+                cells=tuple(cells),
+                reason_codes=() if cells else ("no_canonical_financial_cells",),
+            )
+
+    except sqlite3.Error:
         return FinancialTableProjection(
             ticker=ticker, as_of=cutoff, reason_codes=("canonical_financial_table_unavailable",)
         )
     finally:
-        if owns_snapshot and conn.in_transaction:
-            conn.rollback()
         conn.row_factory = original_factory
-    coordinates: dict[tuple[str, str, str | None], list[int]] = defaultdict(list)
-    units: dict[str, set[tuple[str | None, str]]] = defaultdict(set)
-    for index, cell in enumerate(cells):
-        if cell.display_coordinate is not None:
-            coordinates[(cell.concept, cell.cadence, cell.display_coordinate)].append(index)
-        if cell.available and cell.provenance is not None:
-            value = cell.provenance.observation
-            units[cell.concept].add((value.currency, value.unit_key))
-    ambiguous = {index for indexes in coordinates.values() if len(indexes) > 1 for index in indexes}
-    table_currencies = {
-        cell.provenance.observation.currency
-        for cell in cells
-        if cell.available and cell.provenance is not None
-    }
-    for index, cell in enumerate(cells):
-        reasons = list(cell.reason_codes)
-        if len(table_currencies) > 1:
-            reasons.append("mixed_currency_table")
-        if index in ambiguous:
-            reasons.append("ambiguous_table_coordinate")
-        if len(units[cell.concept]) > 1:
-            reasons.append("incomparable_currency_or_unit_history")
-        cells[index] = cell.model_copy(update={"reason_codes": tuple(reasons)})
-    return FinancialTableProjection(
-        ticker=ticker,
-        as_of=cutoff,
-        cells=tuple(cells),
-        reason_codes=() if cells else ("no_canonical_financial_cells",),
-    )
 
 
 def read_financial_evidence(

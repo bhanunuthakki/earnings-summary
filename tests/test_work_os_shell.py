@@ -97,8 +97,8 @@ def test_portfolio_copilot_home_composes_live_sortable_holdings_and_bounded_dial
     workup_runtime = html.split("function workOsOpenEvaluationWorkup(button)", 1)[1].split(
         "function workOsCompareEvaluation", 1
     )[0]
-    assert "instrument !== 'stock' && instrument !== 'etf'" in workup_runtime
-    assert "'/api/peek/etf_workup?ticker='" in workup_runtime
+    assert "instrument !== 'stock'" in workup_runtime
+    assert "'/api/peek/etf_workup?ticker='" not in workup_runtime
     assert "window.switchCompanyWorkspace(safeTicker)" in workup_runtime
     compare_runtime = html.split("function workOsCompareEvaluation(ticker)", 1)[1].split(
         "document.addEventListener('click'", 1
@@ -121,7 +121,7 @@ def test_evaluation_is_a_complete_live_research_destination() -> None:
     evaluation = _screen_fragment(html, "screen-evaluation")
 
     assert "Evaluation" in evaluation
-    assert "Complete evaluation coverage" in evaluation
+    assert "Company research and portfolio context" in evaluation
     assert 'id="workOsEvaluationRows"' in evaluation
     assert evaluation.count("k-card k-card-section") == 2
     assert evaluation.count("k-card-title") == 2
@@ -149,8 +149,8 @@ def test_evaluation_is_a_complete_live_research_destination() -> None:
     assert "No companies or ETFs match this filter." in html
     assert "empty.hidden = visible !== 0;" in html
     assert "ETF profile pending deterministic classification" not in html
-    assert "'<td>' + workOsInvestmentProfileCell(item) + '</td>'" in html
-    assert "item.instrument_type === 'company' ? 'DCF upside' : 'Company DCF'" in html
+    assert ": workOsInvestmentProfileCell(item)) + '</td>'" in html
+    assert "isEtf ? 'Not applicable to ETFs' : 'DCF upside'" in html
     assert "work-os:investment-evidence-updated" in html
     assert "detail.kind === 'dcf' || detail.kind === 'research_refresh'" in html
     assert "transient.route.startsWith('/api/peek/investment-profile?')" in html
@@ -161,7 +161,8 @@ def test_evaluation_is_a_complete_live_research_destination() -> None:
     assert "if (value == null || String(value).trim() === '') return null;" in html
     assert "workOsFetch('/api/work-os/evaluation'" in html
     assert "Company Desk" in html
-    assert "ETF workup" in html
+    assert "Saved ETF research" not in html
+    assert "ETF workup" not in html
     assert "if (!opened) window.location.assign(target.getAttribute('href'));" in html
     assert "Open a side peek for rationale and evidence" in evaluation
 
@@ -651,8 +652,14 @@ def test_work_os_copilot_is_not_a_top_right_header_action() -> None:
         Path(__file__).resolve().parents[1] / "mockups" / "harvey_sidebar_flow.html"
     ).read_text(encoding="utf-8")
     assert "Ask Copilot" not in prototype
-    assert prototype.count("openWorkOsCopilot()") == 1
+    assert 'onclick="openWorkOsCopilot()"' not in prototype
     assert html.count('id="workOsCopilotLauncher"') == 1
+    assert html.count('onclick="openWorkOsCopilot()"') == 0
+    launcher_tags = re.findall(r'<button[^>]*id="workOsCopilotLauncher"[^>]*>', html)
+    assert len(launcher_tags) == 1
+    launcher = launcher_tags[0]
+    assert 'aria-label="Open Copilot"' in launcher
+    assert 'aria-controls="workOsCopilot"' in launcher
 
 
 def test_work_os_shell_composes_the_canonical_dark_control_baseline() -> None:
@@ -907,14 +914,15 @@ def test_l1_dismissal_transition_survives_the_later_controls_cascade() -> None:
 def test_legacy_search_ask_drawer_and_non_durable_runtime_are_removed() -> None:
     html = render_work_os_shell()
 
-    assert "ask-copilot" not in html
+    assert "vx-ask-copilot" in html
+    assert "openDrillDrawer('ask-copilot')" not in html
+    assert "type === 'ask-copilot'" not in html
     assert "executeCopilotQuery" not in html
     assert "copilotInput" not in html
     assert "copilotResponse" not in html
     assert "fetch('/api/ask'," not in html
-    # One governed stream belongs to the global Copilot and one to the
-    # narrative-first Explore surface; neither is the retired Ask drawer.
-    assert html.count("fetch('/api/ask/stream'") == 2
+    # Explore opens the existing global Copilot stream.
+    assert html.count("fetch('/api/ask/stream'") == 1
     assert "work-os:ask-session" not in html
     assert "AI COPILOT ANALYSIS" not in html
     assert "Grounded Citations: doc:bcb_jun26_p4" not in html
@@ -931,7 +939,7 @@ def test_prototype_template_has_no_dead_copilot_runtime_to_strip() -> None:
     assert "type === 'ask-copilot'" not in prototype
     assert "populateCopilotPrompt" not in prototype
     assert "executeCopilotQuery" not in prototype
-    assert prototype.count("openWorkOsCopilot()") == 1
+    assert 'onclick="openWorkOsCopilot()"' not in prototype
 
 
 def test_full_brief_is_transient_reader_state_not_persistent_navigation() -> None:
@@ -1733,19 +1741,6 @@ def test_company_context_playground_change_updates_url_and_history_restores_it()
 # ---------------------------------------------------------------------------
 
 _STAMP_RX = re.compile(r'data-generated-at="([^"]+)"')
-
-
-@pytest.fixture
-def shell_clock(monkeypatch: pytest.MonkeyPatch) -> list[datetime]:
-    clock = [datetime(2026, 8, 7, 12, 0, 5, tzinfo=UTC)]
-
-    class FixedClock:
-        @staticmethod
-        def now(_zone: object) -> datetime:
-            return clock[0]
-
-    monkeypatch.setattr("pipeline.work_os_shell.datetime", FixedClock)
-    return clock
 
 
 def test_shell_render_is_memoized_within_the_thirty_second_bucket(

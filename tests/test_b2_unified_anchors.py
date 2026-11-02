@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import math
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import date, timedelta
 from pathlib import Path
 from typing import cast
@@ -30,8 +30,9 @@ import pytest
 
 from ask import context as ask_context
 from ask.packs import load_packs
-from llm.anchors import load_themes_anchor, load_worldview_anchor
-from macro_store import fetch_sensitivities, persist_rate_sensitivity
+from db_paths import db_path_context
+from llm.anchors import load_worldview_anchor
+from macro_store import persist_rate_sensitivity
 from synthesis.insights import record_insight
 from synthesis.tenets import record_tenet, scope_key_for
 
@@ -45,9 +46,10 @@ PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 
 @pytest.fixture
-def repo_root(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
-    migrated_db(tmp_path / "data" / "portfolio.db", stamp=PRIOR_HEAD)
-    return tmp_path
+def repo_root(tmp_path: Path, migrated_db: Callable[..., Path]) -> Iterator[Path]:
+    db_path = migrated_db(tmp_path / "data" / "portfolio.db", stamp=PRIOR_HEAD)
+    with db_path_context(db_path):
+        yield tmp_path
 
 
 def _db(repo_root: Path) -> Path:
@@ -73,33 +75,6 @@ def _record_theme(repo_root: Path, slug: str, body: str) -> None:
 # ---------------------------------------------------------------- themes anchor
 
 
-def test_themes_anchor_empty_when_flag_off(repo_root: Path) -> None:
-    _record_theme(repo_root, "ai-compute-buildout", "AI compute demand outruns supply.")
-    assert load_themes_anchor(repo_root) == ""
-
-
-def test_themes_anchor_renders_current_themes_when_on(
-    repo_root: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("LEDGER_WORLDVIEW_ANCHOR", "1")
-    _record_theme(repo_root, "ai-compute-buildout", "AI compute demand outruns supply.")
-    anchor = load_themes_anchor(repo_root)
-    assert "THEMES ANCHOR" in anchor
-    assert "AI compute demand outruns supply" in anchor
-    assert "theme:ai-compute-buildout" in anchor
-    assert "(since 20" in anchor  # dated for cache stability
-
-
-def test_themes_anchor_empty_without_themes_or_db(
-    repo_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("LEDGER_WORLDVIEW_ANCHOR", "1")
-    assert load_themes_anchor(repo_root) == ""  # table present, zero themes
-    bare = tmp_path / "empty_repo"
-    bare.mkdir()
-    assert load_themes_anchor(bare) == ""  # no DB at all — degrade, never raise
-
-
 # ------------------------------------------------- portfolio scope owner memory
 
 
@@ -111,7 +86,7 @@ def test_portfolio_context_carries_owner_memory_when_on(
     _record_theme(repo_root, "glp1-obesity", "GLP-1 reshapes consumer staples demand.")
     ctx = _portfolio_system_context(repo_root, {"portfolio": ["NU"]})
     assert "sell my winners too early" in ctx
-    assert "GLP-1 reshapes consumer staples" in ctx
+    assert "GLP-1 reshapes consumer staples" not in ctx
     # Sanity: the worldview loader is what fed it (same content, same gate).
     assert load_worldview_anchor(repo_root) != ""
 
@@ -182,30 +157,6 @@ def _seed_macro(repo_root: Path) -> None:
         )
         is not None
     )
-
-
-def test_macro_pack_levels_betas_and_stances(repo_root: Path) -> None:
-    _seed_macro(repo_root)
-    record_insight(
-        scope_key="macro:rates-duration",
-        kind="stance",
-        body_md="I expect rates to stay above 4% through 2027; avoid duration bets.",
-        source_note_ids=[],
-        watermark_id=None,
-        db_path=_db(repo_root),
-    )
-    items = load_packs(["macro"], db_path=_db(repo_root), focus_tickers=[])
-    assert len(items) == 1
-    text = str(items[0]["text"])
-    assert "us_10y=4.2" in text
-    assert "NU~us_10y" in text  # admitted v2 rate fit clears the r² floor
-    estimate = fetch_sensitivities(ticker="NU", db_path=_db(repo_root))[0]
-    assert estimate.input_sha is not None and estimate.input_sha in text
-    assert "log return per +100 bps; v2_rate_diff" in text
-    assert f"source {date.today().isoformat()}" in text
-    assert "MELI" not in text  # r²=0.02 is noise, not exposure
-    assert "macro:rates-duration" in text
-    assert "rates to stay above 4%" in text
 
 
 def test_macro_pack_reports_unknown_when_all_betas_weak(repo_root: Path) -> None:

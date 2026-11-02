@@ -130,11 +130,9 @@ _PORTFOLIO_DB_POLICY = {
     "backfill-earnings-surprises-ingest": "market-data-refresh",
     "backfill-transcripts": "transcript-refresh",
     "check-comp-set-drift": "comp-metrics",
-    "coach-pings": "notification-delivery",
     "compute-macro-sensitivities": "market-data-refresh",
     "daily_fetch_and_brief": "research-synthesis",
     "db-gc": "portfolio-db",
-    "decision-nudge": "notification-delivery",
     "disclosure-change-sweep": "research-synthesis",
     "discover-ir-documents": "ir-discovery",
     "discover-ir-failing": "ir-discovery",
@@ -142,37 +140,23 @@ _PORTFOLIO_DB_POLICY = {
     "fetch-macro-series": "market-data-refresh",
     "fetch-sec-xbrl": "sec-companyfacts",
     "grade-calibration": "llm-evaluation",
-    "ledger-synthesis": "research-synthesis",
-    "monthly-advisor-memos": "research-synthesis",
-    "monthly-calibration-scorecard": "llm-evaluation",
     "morning_pipeline": "morning-orchestration",
-    "refresh-business-factors": "research-synthesis",
     "refresh-dirty-artifacts": "artifact-refresh",
     "refresh-expected-earnings": "market-data-refresh",
     "refresh-ir-kpis": "ir-discovery",
     "refresh_fmp": "fmp-refresh",
     "refresh_cache": "fmp-refresh",
-    "refresh_scenario_priors": "research-synthesis",
     "restore-drill": "backup-restore",
     "scan-ir-transcripts": "transcript-refresh",
-    "submit-saydo-batch-prepare": "saydo-batch",
-    "submit-saydo-batch-submit": "saydo-batch",
-    "tenet-accountability": "research-synthesis",
-    "thesis-collision": "research-synthesis",
     "track-comp-metrics-build-sets": "comp-metrics",
     "track-comp-metrics-record": "comp-metrics",
     "weekly-cleanup": "filesystem-maintenance",
-    "weekly-cleanup-expire-research": "portfolio-db",
     "weekly-model-eval": "llm-evaluation",
-    "weekly-p2-lens-refresh": "lens-refresh",
-    "weekly-packet": "notification-delivery",
-    "weekly-score-stances": "advisor-scoring",
-    "weekly-synthesis": "research-synthesis",
     "weekly-validation": "portfolio-db",
 }
-_LONG_RUNNING_LANES = tuple(
-    (job_name, lane) for job_name, lane in _PORTFOLIO_DB_POLICY.items() if lane != "portfolio-db"
-)
+_DATABASE_ADJACENT_LANES = {
+    lane for lane in _PORTFOLIO_DB_POLICY.values() if lane != "portfolio-db"
+} | {"lens-refresh"}
 
 
 def _wait_for(path: Path, process: subprocess.Popen[str], *, timeout_s: float = 5.0) -> None:
@@ -688,20 +672,19 @@ def test_every_cron_portfolio_db_job_has_an_explicit_reviewed_classification() -
 
 
 def test_only_proven_bounded_database_jobs_keep_the_coarse_mutex() -> None:
-    # db-gc owns deliberate batch/VACUUM maintenance; expiry is a bounded row
-    # update; weekly validation is a measured seconds-long confidence rescore;
+    # db-gc owns deliberate batch/VACUUM maintenance; weekly validation is a
+    # measured seconds-long confidence rescore.
     # Every job that reads a large file corpus or can perform external I/O is
     # intentionally absent even when it eventually writes portfolio.db.
     assert {
         job_name for job_name, lane in _PORTFOLIO_DB_POLICY.items() if lane == "portfolio-db"
     } == {
         "db-gc",
-        "weekly-cleanup-expire-research",
         "weekly-validation",
     }
 
 
-@pytest.mark.parametrize("lane", sorted({lane for _, lane in _LONG_RUNNING_LANES}))
+@pytest.mark.parametrize("lane", sorted(_DATABASE_ADJACENT_LANES))
 def test_lane_lock_is_cross_process_single_flight(tmp_path: Path, lane: str) -> None:
     acquired = tmp_path / f"{lane}.acquired"
     release = tmp_path / f"{lane}.release"
@@ -735,7 +718,7 @@ def test_lane_lock_is_cross_process_single_flight(tmp_path: Path, lane: str) -> 
     assert not _write_set_lock_path(tmp_path, lane).exists()
 
 
-@pytest.mark.parametrize("lane", sorted({lane for _, lane in _LONG_RUNNING_LANES}))
+@pytest.mark.parametrize("lane", sorted(_DATABASE_ADJACENT_LANES))
 def test_lane_lock_converges_across_checkouts_for_one_database(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lane: str
 ) -> None:
@@ -752,7 +735,7 @@ def test_lane_lock_converges_across_checkouts_for_one_database(
         JobLock(second, "second", [lane], wait_s=0).__enter__()
 
 
-@pytest.mark.parametrize("lane", sorted({lane for _, lane in _LONG_RUNNING_LANES}))
+@pytest.mark.parametrize("lane", sorted(_DATABASE_ADJACENT_LANES))
 def test_lane_job_leaves_global_mutex_free_and_sqlite_bounds_writer_contention(
     tmp_path: Path, lane: str
 ) -> None:
@@ -922,42 +905,6 @@ def test_scheduler_wrapper_preserves_script_arguments(
     assert captured["scope"] == {"job": "morning_pipeline", "origin": "scheduled"}
     assert isinstance(captured["idempotency_key"], str)
     assert isinstance(captured["trace_id"], str)
-
-
-def test_capture_poller_main_uses_validated_service_origin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_run_job(**kwargs: object) -> int:
-        captured.update(kwargs)
-        return 0
-
-    monkeypatch.setattr(job_runtime, "run_job", fake_run_job)
-    base = [
-        "--repo-root",
-        str(tmp_path),
-        "--trigger-kind",
-        "service",
-        "--scheduler-wrapper",
-        "--python-executable",
-        "py",
-        "--python-bootstrap",
-        "execution/sqlite_bootstrap.py",
-        "--",
-    ]
-    assert main([*base, "capture-poller", "capture-poller", "execution/capture_poller.py"]) == 0
-    assert captured["trigger_kind"] == "service"
-    assert captured["actor"] == "managed_service"
-    assert captured["scope"] == {"job": "capture-poller", "origin": "service"}
-    with pytest.raises(SystemExit):
-        main([*base, "refresh_cache", "portfolio-db", "execution/refresh_cache.py"])
-    wrapper = (PROJECT_ROOT / "cron" / "run_capture_poller.bat").read_text(encoding="utf-8")
-    assert 'set "ES_JOB_TRIGGER_KIND=service"' in wrapper
-    assert 'run_python.bat" "capture-poller" "capture-poller"' in wrapper
-    shared_wrapper = (PROJECT_ROOT / "cron" / "run_python.bat").read_text(encoding="utf-8")
-    assert 'if /I "%ES_JOB_TRIGGER_KIND%"=="service"' in shared_wrapper
-    assert 'set "ES_JOB_TRIGGER_KIND="' in shared_wrapper
 
 
 @pytest.mark.parametrize(

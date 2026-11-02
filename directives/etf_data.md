@@ -1,119 +1,58 @@
-# ETF Published-Data Pipeline
+# ETF portfolio context
 
-The data lane for ETF instruments on the evaluation list (AVDV, AVUV, VWO, …).
-First-principles source hierarchy: everything an ETF evaluation needs is
-**published** — by regulation (SEC N-PORT) and by the fund administrator
-(fund pages). The FMP ETF endpoints are optional enrichment only; nothing in
-the evaluation lane depends on them.
+The owner limits ETF support to portfolio diversification commentary and simple
+long-term earnings-multiple context. Dedicated ETF research is retired.
 
-## Sources (in authority order)
+## Retained behavior
 
-| Rung | Source | What it provides | Freshness |
-|---|---|---|---|
-| 1. Spine | SEC EDGAR Form NPORT-P (`etf_sources/nport.py`) | Complete holdings: constituent, name, ticker-when-disclosed, **country** (`invCountry`), shares, value, % of net assets | Quarterly public, ~60-day lag. Acceptable: factor/thematic baskets churn slowly |
-| 2. Overlay | Issuer fund-page APIs (`etf_sources/issuer_registry.py`) | Fresher holdings; basket characteristics (expense ratio, P/E, P/B, weighted mkt cap) where published | Daily/monthly, issuer-dependent |
-| 3. Prices | yfinance dividend-adjusted closes → `data/factor_proxies/<T>.json` | Daily price series for fit/OLS/what-if | Daily (morning stage 0g refreshes proxies; ETF series fetched at onboard + weekly) |
-| 4. Enrichment (optional) | FMP `/stable/etf/{info,holdings}` (`execution/fetch_etf_data.py`) | ER/AUM/NAV when the plan allows | Plan-gated; 402s tolerated |
+- Keep ETF positions in portfolio weights, shared price readers, return
+  correlation and general portfolio risk calculations. Held funds remain part
+  of the book when company candidates are evaluated.
+- Keep diversification commentary brief and tied to supported portfolio
+  evidence. Return correlation is not holdings overlap. A partial holdings
+  snapshot supports only observed matched weight, not total overlap. Do not
+  rescale missing holdings or infer a complete country/sector allocation.
+- A supported, dated basket P/E can inform earnings-multiple context. Retain
+  its source and reported basis. Long-term growth or terminal-multiple inputs
+  must be explicit assumptions. A point-in-time P/E is not a long-term average,
+  historical range or earnings series. Missing support remains unavailable.
+- Apply the same financial-narrative grounding contract as company research.
+  The limited scope does not relax accuracy or provenance requirements. It
+  does not authorize new collection or a lower-coverage answer.
 
-### EDGAR resolution chain (spine)
+## Retired behavior
 
-1. `www.sec.gov/files/company_tickers_mf.json` → ticker → (trust CIK, seriesId).
-2. `data.sec.gov/submissions/CIK##########.json` → recent NPORT-P accessions
-   (a trust interleaves many series; up to 24 accessions probed, newest first).
-3. Accession `primary_doc.xml` → parse; keep the document whose `<genInfo>
-   <seriesId>` matches. `repPdDate` is the portfolio as-of date.
+ETF onboarding acquisition, dedicated source adapters, new ETF briefs, fund
+scoring, style regressions, fixed-weight allocation simulations and generated
+role/verdict research are outside the product scope. Do not build Create/Refresh
+controls, a replacement collector, a new ETF research workflow or a separate
+qualification project.
 
-### Issuer adapter status
+Known or explicitly declared ETFs stop before onboarding providers and writers.
+An instrument first identified by the shared company-classification path stops
+as soon as it is recognized as an ETF. It must never fall through to corporate
+financial statements, DCF, transcript, IR or Say-Do research.
 
-- **vanguard** — LIVE (scouted 2026-07-10).
-  `investor.vanguard.com/investment-products/etfs/profile/api/{T}/portfolio-holding/stock`
-  (paginated `fund.entity[]`; `percentWeight` in percent units; `asOfDate`
-  top-level) and `…/api/{T}/profile` (`fundProfile.expenseRatio`, percent
-  units). No basket P/E-P/B on this API.
-- **avantis** — NOT YET. avantisinvestors.com is JS-rendered (AEM) with no
-  static data URLs; needs a network-tab scout of the fund page's XHR calls to
-  find the holdings/characteristics endpoints. Until then Avantis names ride
-  the N-PORT spine (holdings + country land; ER/P-B come from FMP enrichment
-  or stay absent → dependent factors degrade neutral+partial, never faked).
+Company brief and fit batches exclude ETF candidates. Explicit ETF brief or
+research requests return an unsupported result. Retired direct commands return
+exit code 2 before any provider or database access.
 
-## Output schema
+## Source evidence and retired history
 
-- `etf_holdings` (alembic 0044 + 0144): `(ticker, as_of_date,
-  constituent_ticker)` PK; `weight_pct` **decimal fraction** (0.0742 = 7.42%);
-  `country` ISO-3166 alpha-2 from N-PORT; `source` ∈ {`nport`,
-  `issuer:<name>`, `fmp`}. Snapshots from different sources coexist on their
-  own `as_of_date` rows; readers take `MAX(as_of_date)`.
-- `etf_profile` (0044 + 0144): identity + `pe_ratio`/`pb_ratio` (multiples,
-  14.3 = 14.3x), `weighted_avg_mktcap_usd_m`, `characteristics_as_of`,
-  `characteristics_source`. Characteristics merge read-modify-write — a
-  source that publishes only ER never blanks another source's fields.
-- `etf_profile.field_evidence_json`: per-field value, source, timezone-aware
-  `captured_at`, and nullable source-published `source_as_of` for deterministic
-  investment labels. Legacy rows default to `{}`; no backfilled timestamp is
-  invented. An issuer overlay updates receipts only for fields it actually
-  publishes and does not renew `profile_fetched_at` for the original profile.
-  Holdings dates must not be assigned to separately fetched profile fields.
-- Label acquisition admission uses `etf_weekly_capture.v1`: at most seven days
-  since a verified capture, derived from the weekly refresh cadence below.
-  This means **recently captured**, not proof that underlying issuer facts are
-  current. Undated source observations retain an explicit unknown-publication
-  warning. Dated observations predating their capture remain historical/unknown
-  currency and cannot authorize current profile labels until an applicable
-  issuer/field validity policy exists. There is no universal issuer-data TTL.
-  Future/ambiguous timestamps, changed values without matching receipts, legacy
-  rows, and filesystem-mtime-only cache replays cannot authorize labels. Other
-  independently admitted style/book evidence remains usable.
-- Prices: `data/factor_proxies/<T>.json` `{"ticker","fetched_at","rows":
-  [[iso_date, close]]}` — `allocation.price_history.load_daily_closes` falls
-  back to this store when the FMP price-chart cache has nothing (FMP wins
-  when both exist).
+Do not retain or present old ETF workups, saved research histories or narrative
+versions as a supported product capability. The owner approved retirement of
+optional historical research. Preserve an old record only when an actual retained
+decision, thesis or financial-provenance dependency requires it. Do not infer a
+dependency from a shared reader or a record that could be useful later.
 
-## Cadence, identity, and budget
+Retain original source bytes only when they support an actual protected financial
+fact or provenance chain. A source file alone does not make a retired research
+artifact current advice. Supported point-in-time P/E evidence keeps its source,
+period and reported basis wherever it is used in retained portfolio context.
 
-- **Onboard**: `execution/onboard_ticker.py` routes `instrument_type='etf'`
-  to the published-data path (`run_etf_onboarding`) and **skips**
-  quarterly_refresh / transcripts / IR / Say-Do. Escape hatch when the FMP
-  profile is unavailable for auto-classification: `--instrument etf`.
-- **Refresh**: `execution/fetch_etf_published_data.py --ticker T` — weekly is
-  ample (holdings churn slowly); register alongside the IR-document weekly
-  cadence when ETFs are actively tracked. The role one-pager refreshes at
-  onboard time, via `execution/build_etf_workup.py`, or by passing
-  `--refresh-synthesis` to `refresh_candidate_fit.py` from a wide-budget
-  context — NOT in the default morning Stage 0f run: the workup payload's
-  floats wiggle daily, so the sha gate re-bills most mornings and the ~60s
-  LLM calls blow the stage's 180s pure-math budget (observed 2026-07-11).
-- **Logical Idempotency Key:** `etf_{ticker}_{rep_period_date}_{source}`. An
-  already-ingested N-PORT report is an explicit `already_done` skip; `--force`
-  requests reprocessing without changing the logical identity.
-- **Content Identity:** SHA-256 of the exact N-PORT, issuer, or price payload.
-- **Observation Version:** representative period/source filing identity plus
-  source-published and fetched-at times.
-- **Attempt Identity:** unique onboarding or refresh invocation and its receipt.
-  Price-fetch presence checks are repeat-safety guards, not identities.
-- **Rate limits**: SEC fair-access — declared UA with contact, ≥150 ms
-  between requests; ≤ ~26 requests per
-  ticker refresh (1 map + 1 submissions + ≤24 probes). Vanguard API: plain
-  GETs, ~10-60 pages per holdings refresh, UA declared. yfinance: 1 call.
+## Operations boundary
 
-## Failure modes
-
-- **N-PORT schema drift** (fetched but unparseable): `NportParseError` —
-  HALT, raw XML dumped to `.tmp/etf_nport/<T>_<accession>.xml`. Fix the
-  parser/directive; never guess-fix in the agent loop.
-- **N-PORT unavailable** (network, ticker not in fund map, series not in
-  recent window): degrade — status `unavailable`, look-through analytics
-  render their missing state.
-- **Issuer overlay failure** (page redesign, network): soft degrade to the
-  spine, logged `issuer_overlay_failed`. Adapters parse defensively and
-  return None on surprise — an issuer redesign must never block evaluation.
-- **yfinance failure**: last-good proxy file untouched; `price_status=failed`
-  only when there was nothing on file at all.
-- **Both holdings sources fail**: onboard/refresh exits 1 with a WARNING —
-  fit still computes from prices; overlap/geography factors degrade.
-
-## Safety rails (what ETFs must never touch)
-
-- `src/dcf/universe.py` excludes `instrument_type='etf'` — no FCFF DCF over
-  a fund. `execution/build_artifacts.py` dispatches ETFs to the ETF brief.
-- Say-Do never runs for ETFs (`_saydo_should_run` instrument gate).
-- The list-type reconciler never promotes ETFs to `portfolio` (by design).
+This is a local source change. Canonical Windows state, policy, services and
+schedulers are unchanged. The AVUV witness and temporary FMP exception were
+canceled by the owner. The configured FMP owner policy remains disabled.
+Deployment and any live scheduler retirement require their existing authority.

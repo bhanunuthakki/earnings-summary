@@ -123,7 +123,7 @@ def test_manifest_validator_rejects_duplicate_canonical_ownership() -> None:
 def test_manifest_validator_rejects_runbook_links_to_noncanonical_files() -> None:
     payload = copy.deepcopy(_manifest())
     entries = cast(dict[str, dict[str, object]], payload["directives"])
-    entries["backfill_transcripts.md"]["governed_by"] = ["capture_every_number_program.md"]
+    entries["backfill_transcripts.md"]["governed_by"] = ["navigation_ia.md"]
 
     with patch.object(validate_directive_manifest, "_load_manifest", return_value=payload):
         errors = validate_directive_manifest.validate()

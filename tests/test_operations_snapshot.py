@@ -10,6 +10,7 @@ from unittest.mock import Mock
 import pytest
 from pydantic import ValidationError
 
+import operations.snapshot as operations_snapshot
 from operations.models import (
     RuntimeProbeAttempt,
     SchedulerReceipt,
@@ -17,11 +18,7 @@ from operations.models import (
     SchedulerTaskReceipt,
 )
 from operations.registry import build_operations_registry
-from operations.snapshot import (
-    _database_identity,  # pyright: ignore[reportPrivateUsage]
-    _metadata_tables,  # pyright: ignore[reportPrivateUsage]
-    collect_operations_snapshot,
-)
+from operations.snapshot import collect_operations_snapshot
 from pipeline.operations_panel import build_operations_panel_view
 from runtime.job_runtime import health_receipt_directory
 
@@ -47,11 +44,7 @@ def _runtime_receipt(
                 {
                     "task_name": row.task_name,
                     "state": (
-                        "Missing"
-                        if row.service_owned
-                        else "Disabled"
-                        if row.scheduler_expectation == "required_disabled"
-                        else "Ready"
+                        "Disabled" if row.scheduler_expectation == "required_disabled" else "Ready"
                     ),
                 }
                 for row in tasks
@@ -255,9 +248,7 @@ def test_unavailable_probe_attempt_keeps_last_successful_runtime_evidence_visibl
                     SchedulerTaskReceipt(
                         task_name=task.task_name,
                         state=(
-                            "Missing"
-                            if task.service_owned
-                            else "Disabled"
+                            "Disabled"
                             if task.scheduler_expectation == "required_disabled"
                             else "Ready"
                         ),
@@ -574,7 +565,7 @@ def test_metadata_denial_is_invalid_not_exception(tmp_path: Path) -> None:
     snapshot = collect_operations_snapshot(
         build_operations_registry(PROJECT_ROOT),
         repo_root=tmp_path,
-        conn=_MetadataDeniedConnection(),  # type: ignore[arg-type]
+        conn=cast(sqlite3.Connection, _MetadataDeniedConnection()),
         observed_at=datetime(2026, 8, 13, 12, tzinfo=UTC),
     )
     assert snapshot.schema_revision.state == "invalid"
@@ -615,7 +606,7 @@ def test_database_identity_requires_exactly_one_main(
     rows: list[tuple[object, ...]],
 ) -> None:
     conn = _DatabaseListConnection(rows)
-    observation = _database_identity(
+    observation = getattr(operations_snapshot, "_database_identity")(
         cast(sqlite3.Connection, conn), datetime(2026, 8, 13, 12, tzinfo=UTC)
     )
     assert observation.state == "invalid"
@@ -631,7 +622,9 @@ def test_metadata_inventory_is_query_bounded() -> None:
             calls.append((sql, parameters))
             return _RowsCursor([("alembic_version",)])
 
-    tables, error = _metadata_tables(cast(sqlite3.Connection, _MetadataConnection()))
+    tables, error = getattr(operations_snapshot, "_metadata_tables")(
+        cast(sqlite3.Connection, _MetadataConnection())
+    )
     assert tables == {"alembic_version"}
     assert error is None
     sql, parameters = calls[0]

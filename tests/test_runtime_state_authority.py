@@ -15,7 +15,7 @@ def _no_environment(_root: Path) -> bool:
     return False
 
 
-@pytest.mark.parametrize("entrypoint", ["comments_server", "execution.capture_poller"])
+@pytest.mark.parametrize("entrypoint", ["comments_server"])
 @pytest.mark.parametrize("configured", [None, "", "   "])
 def test_service_refuses_shadow_and_prior_binding_without_configured_authority(
     entrypoint: str,
@@ -44,7 +44,7 @@ def test_service_refuses_shadow_and_prior_binding_without_configured_authority(
     assert shadow.read_bytes() == b"unapproved shadow"
 
 
-@pytest.mark.parametrize("entrypoint", ["comments_server", "execution.capture_poller"])
+@pytest.mark.parametrize("entrypoint", ["comments_server"])
 def test_service_binds_explicit_env_authority_after_environment_load(
     entrypoint: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -69,7 +69,7 @@ def test_service_binds_explicit_env_authority_after_environment_load(
     assert not (state_root / "data" / "portfolio.db").exists()
 
 
-@pytest.mark.parametrize("entrypoint", ["comments_server", "execution.capture_poller"])
+@pytest.mark.parametrize("entrypoint", ["comments_server"])
 def test_service_refuses_unavailable_configured_database(
     entrypoint: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

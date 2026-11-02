@@ -8,14 +8,12 @@ This map describes the localhost application after the August 2026 debt-hardenin
 flowchart TB
     subgraph ingress["Ingress and triggers"]
         browser["Browser UI\nlocalhost or approved Tailscale client"]
-        telegram["Telegram long poll\ntext, voice, documents, callbacks"]
         scheduler["Windows Task Scheduler\n15 daily, 22 weekly, 5 monthly, 1 hourly, 1 logon"]
         cli["Operator CLI entrypoints"]
     end
     subgraph boundary["Trust and request boundary"]
         network["Network allowlist\nloopback plus optional Tailscale"]
         origin["Origin and capability checks\nstate-changing HTTP requests"]
-        tg_allow["Preconfigured Telegram chat allowlist\nmissing, invalid, or unreadable means reject"]
         runlock["Shared run and DB write-set locks"]
         child_builder["Canonical managed Python child argv\nrepository target validation"]
         sqlite_boot["Verified SQLite 3.53.4 bootstrap\none hash/load per process"]
@@ -29,13 +27,12 @@ flowchart TB
         reports["Company brief builder\none borrowed read connection to HTML, Markdown, JSON"]
     end
     subgraph orchestration["Deterministic orchestration"]
-        morning["Typed 20-stage morning manifest at 04:00\nday + manifest-scoped atomic 18-hour checkpoint"]
-        capture["Capture routing\ntext, transcription, documents, callbacks"]
+        morning["Typed morning manifest at 04:00\nday + manifest-scoped atomic 18-hour checkpoint"]
         fetch["Market, filing, IR, transcript, and portfolio fetchers"]
         normalize["Typed validation and normalization\n10% batch drop-ratio drift gate"]
         compute["Deterministic compute\nDCF, KPIs, risk, signals, decisions"]
         artifact_build["Brief and recommendation artifact builders"]
-        notifications["Pull surfaces and Telegram response builders"]
+        notifications["Pull surfaces and response builders"]
         http["Canonical pooled HTTP client\ntimeouts, idempotent retries, host budgets"]
     end
     subgraph llm["Governed LLM path"]
@@ -66,7 +63,6 @@ flowchart TB
 
     browser --> network --> routes
     routes --> origin
-    telegram --> tg_allow --> capture
     scheduler --> child_builder
     cli --> child_builder
     child_builder --> sqlite_boot --> runlock --> morning
@@ -78,7 +74,6 @@ flowchart TB
     runlock --> orchestration
     morning --> fetch --> normalize --> compute --> artifact_build
     fetch --> http
-    capture --> normalize
     ask --> purpose
     artifact_build --> purpose
     purpose --> budget --> resolver --> provider --> schema --> ledger
@@ -89,7 +84,6 @@ flowchart TB
     sec --> http
     yahoo --> http
     ir --> http
-    media --> capture
     portfolio --> fetch
     drive --> fetch
     normalize --> sqlite
@@ -101,7 +95,6 @@ flowchart TB
     morning <--> temp
     compute -. "lineage retry when post-write receipt fails" .-> retry_receipts
     reports --> browser
-    notifications --> telegram
 ```
 
 ## Database access, lineage, and publication flow
@@ -138,7 +131,7 @@ flowchart LR
     writer --> facts
     subgraph research["Research state"]
         thesis["Thesis state and tracked KPI registry"]
-        decisions["Decision journal, drafts, nudges, process quality"]
+        decisions["Decision journal, drafts, process quality"]
         signals["Risk, valuation, scenario, alert, and say-do signals"]
         artifacts["LLM artifacts and call ledger"]
         publication["Current brief snapshots and published report sections"]

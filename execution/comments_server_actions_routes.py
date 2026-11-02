@@ -10,11 +10,10 @@ from typing import cast
 from comments_server_context import ServerContext
 from comments_server_shared import (
     MAINTENANCE_ACTIONS,
-    README_RUN_ID_RX,
     opt_int,
 )
 from flask import Flask, request
-from refresh_dispatch import STEP_NAMES
+from refresh_dispatch import resolve_steps
 
 import ticker_validation
 from dispatch_registry import RegistryConflict
@@ -45,7 +44,6 @@ from runtime.python_process import (
 
 
 def register_actions_routes(app: Flask, ctx: ServerContext) -> None:
-    collect_current_readme_status = ctx.collect_current_readme_status
     db_path = ctx.db_path
     job_registry = ctx.job_registry
     repo_root = ctx.repo_root
@@ -73,13 +71,14 @@ def register_actions_routes(app: Flask, ctx: ServerContext) -> None:
         force = bool(body.get("force", False))
         steps_raw = body.get("steps")
         steps: list[str] | None = None
-        if steps_raw is not None:
+        if "steps" in body:
             if not isinstance(steps_raw, list):
                 return ({"error": "steps must be a list of step names"}, 400)
             steps = [str(s) for s in cast("list[object]", steps_raw)]
-            bad = [s for s in steps if s not in STEP_NAMES]
-            if bad:
-                return ({"error": f"unknown step(s): {bad}; valid: {list(STEP_NAMES)}"}, 400)
+            try:
+                resolve_steps(steps)
+            except ValueError as exc:
+                return ({"error": str(exc)}, 400)
 
         dispatcher = resolved_code_root / "execution" / "refresh_dispatch.py"
         try:
@@ -103,7 +102,7 @@ def register_actions_routes(app: Flask, ctx: ServerContext) -> None:
             argv.extend(("--source-state-root", str(ctx.source_state_root)))
         if force:
             argv.append("--force")
-        if steps:
+        if steps is not None:
             argv += ["--steps", ",".join(steps)]
         if force_budget_bypass:
             argv.append("--force-budget-bypass")
@@ -514,63 +513,6 @@ def register_actions_routes(app: Flask, ctx: ServerContext) -> None:
             job = job_registry.start(ticker=slot_ticker, kind=kind, argv=argv)
         except RegistryConflict as e:
             return ({"error": str(e)}, 409)
-        return (
-            {
-                "job_id": job.job_id,
-                "ticker": job.ticker,
-                "kind": job.kind,
-                "stream_url": f"/actions/stream/{job.job_id}",
-                "started_at": job.started_at.isoformat(),
-            },
-            201,
-        )
-
-    @app.route("/actions/readme-update", methods=["POST", "OPTIONS"])
-    def start_readme_update():
-        """Preview-and-judge or apply one exact approved README candidate."""
-
-        if request.method == "OPTIONS":
-            return ("", 204)
-        raw_body = request.get_json(silent=True)
-        if not isinstance(raw_body, dict):
-            return ({"error": "JSON request body must be an object"}, 400)
-        body = cast("dict[str, object]", raw_body)
-        action = str(body.get("action", "")).strip()
-        argv = managed_python_argv(
-            resolved_code_root,
-            resolved_code_root / "execution" / "update_readme.py",
-            "--repo-root",
-            str(resolved_code_root),
-            "--db",
-            str(db_path),
-        )
-        if action == "preview":
-            kind = "readme-preview"
-        elif action == "apply":
-            run_id = str(body.get("run_id", "")).strip()
-            if README_RUN_ID_RX.fullmatch(run_id) is None:
-                return ({"error": "valid README updater run_id required"}, 400)
-            status = collect_current_readme_status()
-            if (
-                not status.can_apply
-                or status.state != "approved_preview"
-                or status.run_id != run_id
-            ):
-                return ({"error": "README candidate is not the current approved preview"}, 409)
-            argv.extend(["--apply-run", run_id])
-            kind = "readme-apply"
-        else:
-            return ({"error": "action must be 'preview' or 'apply'"}, 400)
-        try:
-            job = job_registry.start(
-                ticker="_REPO",
-                kind=kind,
-                argv=argv,
-                cwd=str(resolved_code_root),
-                write_sets=["portfolio-db", "readme-updater"],
-            )
-        except RegistryConflict as exc:
-            return ({"error": str(exc)}, 409)
         return (
             {
                 "job_id": job.job_id,

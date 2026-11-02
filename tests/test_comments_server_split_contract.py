@@ -49,7 +49,6 @@ PRE_SPLIT_PANEL_NAMES = (
     "actions",
     "thesis_ledger",
     "decisions_record",
-    "advisor_memos",
     "evals",
     "model_eval",
 )
@@ -73,7 +72,7 @@ def _function_lengths(path: Path) -> dict[str, int]:
 
 
 def test_panel_registry_holds_exactly_the_pre_split_names() -> None:
-    assert len(PRE_SPLIT_PANEL_NAMES) == 37
+    assert len(PRE_SPLIT_PANEL_NAMES) == 36
     assert sorted(PANEL_BUILDERS) == sorted(PRE_SPLIT_PANEL_NAMES)
 
 

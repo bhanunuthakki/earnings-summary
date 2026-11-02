@@ -8,20 +8,14 @@ propagate untouched rather than degrade.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from filings.guidance_lifecycle import GuidanceCandidate  # noqa: E402
-from filings.guidance_triage import (  # noqa: E402
+from filings.guidance_lifecycle import GuidanceCandidate
+from filings.guidance_triage import (
     GuidanceRelevance,
     triage_guidance_candidates,
 )
-from filings.metric_triage import LifecyclePrior  # noqa: E402
+from filings.metric_triage import LifecyclePrior
 
 
 def _candidate(subject_key: str = "NU") -> GuidanceCandidate:

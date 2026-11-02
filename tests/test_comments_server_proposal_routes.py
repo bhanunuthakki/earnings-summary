@@ -2,27 +2,20 @@
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
+import comments_server
+import comments_server_proposal_routes as proposal_routes
 import pytest
-from flask import Flask
-from flask.testing import FlaskClient
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-import comments_server_proposal_routes as proposal_routes  # noqa: E402
-from comments_server_proposal_routes import (  # noqa: E402
+from comments_server_proposal_routes import (
     ResearchProposalRouteContext,
     register_research_proposal_routes,
 )
+from flask import Flask
+from flask.testing import FlaskClient
 
-from research.proposal_approval import AskProposalDecisionV1  # noqa: E402
-from research.proposals import create_proposal, create_task, get_proposal  # noqa: E402
+from research.proposal_approval import AskProposalDecisionV1
 
 _PRIOR_HEAD = "0059_kpi_facts_restatement"
 
@@ -64,25 +57,6 @@ def client(tmp_path: Path, db_file: Path) -> FlaskClient:
     return comments_server.create_app(tmp_path).test_client()
 
 
-def _seed_research(db: Path) -> tuple[int, int]:
-    task_id = create_task(
-        note_id=None,
-        claim="do NU's margins still hold?",
-        ticker="NU",
-        db_path=db,
-    )
-    proposal_id = create_proposal(
-        task_id=task_id,
-        kind="memo",
-        ticker="NU",
-        title="NU margins hold",
-        body_md="The book looks stable.",
-        budget_tier="cheap",
-        db_path=db,
-    )
-    return task_id, proposal_id
-
-
 def test_research_proposal_routes_register_expected_endpoints(tmp_path: Path) -> None:
     app = Flask(__name__)
     register_research_proposal_routes(
@@ -95,32 +69,16 @@ def test_research_proposal_routes_register_expected_endpoints(tmp_path: Path) ->
         ),
     )
     routes = {rule.rule for rule in app.url_map.iter_rules()}
+    assert "/api/research/proposal/<int:proposal_id>/<verb>" not in routes
     assert {
-        "/api/research/proposal/<int:proposal_id>/<verb>",
         "/api/research/proposals/<int:proposal_id>",
         "/api/research/proposals/<int:proposal_id>/decision",
     }.issubset(routes)
 
 
 def test_research_proposal_routes_keep_http_contract(
-    client: FlaskClient, db_file: Path, monkeypatch: pytest.MonkeyPatch
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _task_id, proposal_id = _seed_research(db_file)
-
-    approve = client.post(f"/api/research/proposal/{proposal_id}/approve")
-    assert approve.status_code == 200
-    assert approve.get_json()["status"] == "approved"
-    assert get_proposal(proposal_id, db_path=db_file) is not None
-
-    steer = client.post(
-        f"/api/research/proposal/{proposal_id}/steer",
-        json={"steer_text": "focus on the credit book"},
-    )
-    assert steer.status_code == 200
-    assert steer.get_json()["status"] == "steered"
-
-    assert client.post(f"/api/research/proposal/{proposal_id}/delete").status_code == 400
-
     monkeypatch.setattr(proposal_routes, "get_ask_proposal_detail", _return_none)
     detail = client.get("/api/research/proposals/999999")
     assert detail.status_code == 404

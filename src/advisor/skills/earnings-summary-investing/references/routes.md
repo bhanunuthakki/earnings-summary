@@ -43,10 +43,10 @@ route is not authority to run it on production.
 | Thesis revision from notes / analysis / article | Approved narrative and rule versions; supplied claims; [revision path](analysis-paths.md#thesis-revision-from-notes-or-an-article) | Prepare a cited before/after proposal. Governed Ask diff and decision: `src/research/proposal_approval.py`; ledger drafts: `src/research/thesis_artifact.py`; explicit amendment approval remains required |
 | Valuation / comps / scenarios / model update | `execution/valuation_preflight.py --db-path <explicit> --ticker <TICKER>`; `src/dcf/readiness.py`; current `dcf/` workbook | `execution/refresh_dcf.py`; `execution/dcf_sheets.py`; preserve owner assumptions and applicable business-model route |
 | Investment decision card | `src/research/investment_decision_card.py`; current artifact and input hash | `execution/build_investment_decision_card.py --db-path <explicit> --ticker <TICKER>`; `POST /api/research/card/<ticker>/refresh`; disposition is a separate owner action |
-| ETF diligence / exposures | [ETF comparison path](analysis-paths.md#etf-comparison-and-overlap); existing ETF workup; `src/etf_sources/`; ETF-specific source coverage | `execution/build_etf_workup.py --db-path <explicit> --ticker <TICKER>`; `execution/fetch_etf_data.py`; `execution/fetch_etf_published_data.py` |
+| ETF portfolio context | [ETF context](analysis-paths.md#etf-portfolio-context); `directives/etf_data.md`; existing portfolio positions and risk evidence | Brief diversification commentary and supported long-term earnings-multiple context only. No saved-workup history viewer, dedicated ETF workup or collection. |
 | Portfolio risk / concentration / overlap | `execution/get_portfolio_risk_matrix.py`; `src/allocation/book_risk.py`; `src/allocation/what_if.py`; snapshot as-of and coverage; full holdings/account readers in the allocation skill | `execution/refresh_portfolio_risk_snapshot.py` for authorized snapshot refresh |
 | Next-dollar allocation / taxes / sizing | `src/advisor/skills/next-dollar-allocation/SKILL.md`; its `references/interfaces.md` | Follow that skill; use full holdings/accounts, owner context and recorded intent; no trade execution |
-| Research conversation / meeting preparation | Existing artifact, sources and typed context | `POST /api/ask/stream`; `execution/comments_server_research_routes.py`; can invoke LLM and retain conversation |
+| Research conversation / meeting preparation | Existing artifact, sources and typed context | `POST /api/ask/stream`; `execution/comments_server_viewspec_ask_routes.py`; can invoke LLM and retain conversation |
 | Acquisition gaps / issuer releases, slides, filings | Inspect current source receipts first; authorized `execution/capture_issuer_document_inventory.py` reads the DB and writes a local receipt | `execution/manage_issuer_document_sources.py` prepare → validate → publish; `execution/fetch_ir_documents.py`; `execution/intake_documents.py` |
 | SEC expected coverage and financial facts | Existing issuer/filing identity and coverage receipts; [EDGAR mechanics](../../../../../directives/edgar_pipeline.md) | `execution/fetch_sec_xbrl.py` independently captures CompanyFacts and admits supported facts; `execution/sync_sec_filing_inventory.py` → `execution/capture_expected_sec_documents.py` captures native packages; `execution/ingest_sec_filing_xbrl.py` processes supported packages with its approved bundle |
 | Transcript gaps / provenance | `transcripts/`; `execution/audit_transcript_evidence.py` | `execution/backfill_transcripts.py`; `execution/scan_ir_transcripts.py`; `execution/ingest_transcripts.py`; do not collect audio/webcasts |
@@ -85,6 +85,11 @@ route is not authority to run it on production.
   identity, admit facts or certify completeness. Prepared staging and publication
   remain strict v1. Verify installed revision before live use. Preserve exact
   issuer dates; unsupported scope remains unavailable.
+- URL-driven managed intake for a non-calendar issuer requires an exact current
+  registered SEC `document_version_id` witness. The resolver validates issuer,
+  source type and caller fiscal coordinates before staging. Do not select an
+  arbitrary document or infer a fiscal period from a URL or CLI date. Missing or
+  mismatched witness evidence stops intake before managed publication.
 - `execution/track_evaluation_names.py` uses the configured `db.DB_PATH`, but
   has a fixed ticker and template roster and writes state. It is not the general evaluation route.
 - DCF refresh and Sheet import/export use the existing per-ticker artifact owner

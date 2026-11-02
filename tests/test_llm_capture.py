@@ -1,7 +1,3 @@
-# pyright: reportPrivateUsage=false
-#
-# Reaches module-private surface (_load_capture_records, _run_one_backend) — that
-# IS the unit under test. Module-scoped directive per the repo's cli.py precedent.
 """Tests for the LLM capture sink (src/llm/capture.py) and the
 execution/compare_backends.py --from-capture replay path.
 
@@ -134,7 +130,7 @@ def test_capture_exchange_partitions_files_by_purpose(
     monkeypatch.delenv(capture.LLM_CAPTURE_PURPOSES_ENV, raising=False)
     monkeypatch.setattr(capture.os, "getpid", lambda: 111)
 
-    for purpose in ("annual_letter", "valuation_basis"):
+    for purpose in ("pre_earnings_brief", "valuation_basis"):
         capture.capture_exchange(
             prompt=f"prompt-{purpose}",
             response="response",
@@ -155,7 +151,7 @@ def test_capture_exchange_prunes_expired_shards_daily(
 ) -> None:
     monkeypatch.setenv(capture.LLM_CAPTURE_DIR_ENV, str(tmp_path))
     monkeypatch.setenv(capture.CAPTURE_RETENTION_DAYS_ENV, "30")
-    capture._LAST_PRUNED_DAY.clear()
+    getattr(capture, "_LAST_PRUNED_DAY").clear()
     old_day = (datetime.now(UTC) - timedelta(days=31)).strftime("%Y-%m-%d")
     old = tmp_path / f"capture_{old_day}_999.jsonl"
     old.write_text("{}\n", encoding="utf-8")
@@ -176,7 +172,7 @@ def test_capture_exchange_prunes_expired_shards_daily(
     future = datetime.now(UTC) + timedelta(days=31)
     newly_expired = tmp_path / f"capture_{datetime.now(UTC).strftime('%Y-%m-%d')}_998.jsonl"
     newly_expired.write_text("{}\n", encoding="utf-8")
-    capture._prune_expired(tmp_path, today=future)
+    getattr(capture, "_prune_expired")(tmp_path, today=future)
     assert not newly_expired.exists()
 
 
@@ -208,10 +204,10 @@ def test_strict_retention_sweep_surfaces_unlink_failure(
     old.write_text("{}\n", encoding="utf-8")
     original_unlink = Path.unlink
 
-    def deny(path: Path, *args: object, **kwargs: object) -> None:
+    def deny(path: Path, *, missing_ok: bool = False) -> None:
         if path == old:
             raise PermissionError("denied")
-        original_unlink(path, *args, **kwargs)
+        original_unlink(path, missing_ok=missing_ok)
 
     monkeypatch.setattr(Path, "unlink", deny)
 
@@ -295,20 +291,30 @@ def test_call_llm_captures_every_successful_backend(
     from llm import cli, codex_backend, gemini_backend, openrouter_backend
 
     captured: list[dict[str, object]] = []
-    monkeypatch.setattr(cli, "capture_exchange", lambda **kwargs: captured.append(kwargs))
-    monkeypatch.setattr(cli, "_enforce_budget_pre_call", lambda *_args, **_kwargs: None)
+
+    def capture(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    def no_budget(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    def answer(*_args: object, **_kwargs: object) -> str:
+        return "answer"
+
+    monkeypatch.setattr(cli, "capture_exchange", capture)
+    monkeypatch.setattr(cli, "_enforce_budget_pre_call", no_budget)
     if backend == "codex":
         monkeypatch.setenv(cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
-        monkeypatch.setattr(codex_backend, "call_codex_llm", lambda *_args, **_kwargs: "answer")
+        monkeypatch.setattr(codex_backend, "call_codex_llm", answer)
         result = cli.call_llm("prompt", purpose="bear_case")
     elif backend == "gemini":
-        monkeypatch.setattr(gemini_backend, "call_gemini", lambda *_args, **_kwargs: "answer")
+        monkeypatch.setattr(gemini_backend, "call_gemini", answer)
         result = cli.call_llm("prompt", purpose="bear_case", model=model)
     else:
         monkeypatch.setattr(
             openrouter_backend,
             "call_openrouter",
-            lambda *_args, **_kwargs: "answer",
+            answer,
         )
         result = cli.call_llm("prompt", purpose="bear_case", model=model)
 
@@ -359,9 +365,11 @@ def test_load_capture_dedups_and_filters(monkeypatch: pytest.MonkeyPatch, tmp_pa
             _capture_line(prompt_sha256="d", response="   "),  # empty response -> dropped
         ],
     )
-    recs = compare_backends._load_capture_records(path, purpose_filter=None, limit=None)
+    recs = getattr(compare_backends, "_load_capture_records")(path, purpose_filter=None, limit=None)
     assert len(recs) == 2  # a (once) + b
-    only_bc = compare_backends._load_capture_records(path, purpose_filter="bear_case", limit=None)
+    only_bc = getattr(compare_backends, "_load_capture_records")(
+        path, purpose_filter="bear_case", limit=None
+    )
     assert len(only_bc) == 1  # sha a; b is valuation_basis
 
 
@@ -370,7 +378,7 @@ def test_load_capture_limit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
     import compare_backends
 
     path = _write_capture(tmp_path, [_capture_line(prompt_sha256=str(i)) for i in range(5)])
-    recs = compare_backends._load_capture_records(path, purpose_filter=None, limit=2)
+    recs = getattr(compare_backends, "_load_capture_records")(path, purpose_filter=None, limit=2)
     assert len(recs) == 2
 
 

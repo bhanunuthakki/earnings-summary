@@ -30,12 +30,9 @@ from provenance.immutable_artifact import (
 from runtime.job_runtime import JobLock, current_lock_claim
 
 CAPTURE_WRITE_SETS: tuple[str, ...] = (
-    "capture-tmp-summaries",
-    "capture-tmp-saydo",
     "capture-transcripts",
     "capture-news-cache",
     "capture-bear-cache",
-    "capture-saydo-filter",
     "capture-qa-topics",
     "capture-peer-selection",
     "capture-fmp-peers",
@@ -67,46 +64,33 @@ def hold_capture_write_set(
 
 
 _TICKER_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9._-]*$")
-_SUMMARY_RX = re.compile(
-    r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})_(?:investor_update_)?summary\.txt$"
-)
 _TRANSCRIPT_RX = re.compile(
     r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})\.(?:txt|pdf)$"
 )
-_BRIEF_RX = re.compile(
-    r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})_(?P<kind>press_release_summary|presentation_brief)\.txt$"
+# Persisted aliases are stable identities. Retired IDs must never be reused.
+_SELECTOR_ALIASES: dict[str, str] = {
+    "S2": "transcripts_dual_dir_v1",
+    "S3": "themes_recent_transcripts_v1",
+    "S6": "qa_topics_json_v1",
+    "S7": "filing_intelligence_json_v1",
+    "S8": "bear_case_json_v1",
+    "S9": "news_cache_json_v1",
+    "S11": "segment_definitions_json_v1",
+    "S12": "peer_selection_json_v1",
+    "S13": "peer_fundamentals_json_v1",
+    "S14": "holdings_json_v1",
+    "S15": "fmp_price_chart_v1",
+    "S16": "report_comments_json_v1",
+}
+_CLOSED_SELECTORS: frozenset[str] = frozenset(_SELECTOR_ALIASES) | frozenset(
+    _SELECTOR_ALIASES.values()
 )
-_SAYDO_FILENAME_RX = re.compile(
-    r"^SayDo_(?P<t>[A-Z][A-Z0-9.]*)_Q(?P<pq>[1-4])_(?P<py>\d{4})_Q(?P<cq>[1-4])_(?P<cy>\d{4})\.txt$"
-)
-
-_SELECTOR_ORDER: tuple[str, ...] = (
-    "quarterly_summaries_tmp_v1",
-    "transcripts_dual_dir_v1",
-    "themes_recent_transcripts_v1",
-    "ir_briefs_tmp_v1",
-    "saydo_cards_tmp_v1",
-    "qa_topics_json_v1",
-    "filing_intelligence_json_v1",
-    "bear_case_json_v1",
-    "news_cache_json_v1",
-    "saydo_filter_json_v1",
-    "segment_definitions_json_v1",
-    "peer_selection_json_v1",
-    "peer_fundamentals_json_v1",
-    "holdings_json_v1",
-    "fmp_price_chart_v1",
-    "report_comments_json_v1",
-)
-_SELECTOR_ALIASES: dict[str, str] = {f"S{i}": n for i, n in enumerate(_SELECTOR_ORDER, start=1)}
-_CLOSED_SELECTORS: frozenset[str] = frozenset(_SELECTOR_ALIASES) | frozenset(_SELECTOR_ORDER)
 
 _FIXED_DIR_SELECTORS: dict[str, tuple[str, str]] = {
     "qa_topics_json_v1": ("data/qa_topics", "exact"),
     "filing_intelligence_json_v1": ("data/filing_intelligence", "exact"),
     "bear_case_json_v1": ("data/bear_case", "exact"),
     "news_cache_json_v1": (".tmp/news_cache", "exact"),
-    "saydo_filter_json_v1": ("data/saydo_filter", "exact"),
     "segment_definitions_json_v1": ("data/segment_definitions", "exact"),
     "peer_selection_json_v1": ("data/peer_selection", "exact"),
     "holdings_json_v1": ("micro_thesis/holdings", "exact"),
@@ -224,22 +208,6 @@ class FileCaptureReceipt(BaseModel):
     @field_serializer("files", "selections")
     def _serialize_mappings(self, v: Mapping[str, Any]) -> dict[str, Any]:
         return dict(v)
-
-
-def _brief_sort_key(item: tuple[str, str]) -> tuple[int, int, str]:
-    return (
-        (int(m.group("y")), int(m.group("q")), m.group("kind"))
-        if (m := _BRIEF_RX.match(item[0]))
-        else (0, 0, "")
-    )
-
-
-def _saydo_sort_key(item: tuple[str, str]) -> tuple[int, int, int, int]:
-    return (
-        (int(m.group("cy")), int(m.group("cq")), int(m.group("py")), int(m.group("pq")))
-        if (m := _SAYDO_FILENAME_RX.match(item[0]))
-        else (0, 0, 0, 0)
-    )
 
 
 _CURRENT_FILE_CAPTURE_SESSION: contextvars.ContextVar[ReportFileCaptureSession | None] = (
@@ -660,19 +628,7 @@ class ReportFileCaptureSession:
         matched: list[tuple[str, str]] = []
         dir_exists: bool = False
 
-        if canonical_id == "quarterly_summaries_tmp_v1":
-            dir_exists, matched = self._scan_single_dir(
-                ".tmp",
-                lambda n: bool(
-                    (m := _SUMMARY_RX.match(n)) and m.group("ticker").upper() == upper_ticker
-                ),
-            )
-            dir_states = {".tmp": dir_exists}
-            for name, rel_path in matched:
-                if m := _SUMMARY_RX.match(name):
-                    effective_winners[f"Q{m.group('q')}_{m.group('y')}"] = rel_path
-
-        elif canonical_id == "transcripts_dual_dir_v1":
+        if canonical_id == "transcripts_dual_dir_v1":
             p_exists, p_matched = self._scan_single_dir(
                 "transcripts/processed",
                 lambda n: bool(
@@ -705,34 +661,6 @@ class ReportFileCaptureSession:
             recent = sorted(s2.effective_winners.keys(), key=_sort_slot)[-4:]
             effective_winners = {k: s2.effective_winners[k] for k in recent}
             matched_paths = list(effective_winners.values())
-
-        elif canonical_id == "ir_briefs_tmp_v1":
-            dir_exists, matched = self._scan_single_dir(
-                ".tmp",
-                lambda n: bool(
-                    (m := _BRIEF_RX.match(n)) and m.group("ticker").upper() == upper_ticker
-                ),
-            )
-            dir_states = {".tmp": dir_exists}
-            for name, rel_path in sorted(matched, key=_brief_sort_key):
-                if m := _BRIEF_RX.match(name):
-                    effective_winners[f"{m.group('y')}_Q{m.group('q')}_{m.group('kind')}"] = (
-                        rel_path
-                    )
-
-        elif canonical_id == "saydo_cards_tmp_v1":
-            dir_exists, matched = self._scan_single_dir(
-                ".tmp",
-                lambda n: bool(
-                    (m := _SAYDO_FILENAME_RX.match(n)) and m.group("t").upper() == upper_ticker
-                ),
-            )
-            dir_states = {".tmp": dir_exists}
-            for name, rel_path in sorted(matched, key=_saydo_sort_key):
-                if m := _SAYDO_FILENAME_RX.match(name):
-                    effective_winners[
-                        f"Q{m.group('cq')}_{m.group('cy')}_Q{m.group('pq')}_{m.group('py')}"
-                    ] = rel_path
 
         elif canonical_id == "fmp_price_chart_v1":
             fmp_dir = "data/historical/fmp"

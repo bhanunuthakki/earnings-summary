@@ -37,19 +37,12 @@ _DIRECT_READ = re.compile(
 )
 
 # Pre-v2 mutation debt. New general production code must use SourceFactRepository.
-# src/viewspec/latency_benchmark.py is not a production data path: it is the
-# ViewSpec latency gate's synthetic-mode fixture generator, seeding a
-# disposable clone it creates itself (legacy projection rows plus the full
-# observation/resolution stack) so the read path can be timed at
-# representative scale. It never opens a configured, restored, or
-# checkout-default database for mutation.
 _DIRECT_MUTATION_DEBT = frozenset(
     {
         "execution/db_gc.py",
         "src/ir_pipeline/ingest.py",
         "src/pipeline/kpi_persistence.py",
         "src/pipeline/restatement_detector.py",
-        "src/viewspec/latency_benchmark.py",
     }
 )
 
@@ -112,15 +105,16 @@ AUDITED_LEGACY_FACT_READS = {
     "src/allocation/eligibility.py": 1,
     "src/bear_case_grader.py": 1,
     "src/competitive/holdings_sync.py": 1,
-    "src/compute/kpi_extract_summaries.py": 2,
+    "src/compute/kpi_extract_summaries.py": 1,
     "src/compute/metrics_engine/io.py": 6,
     "src/credibility/observations.py": 3,
     "src/decision_conditions.py": 2,
     "src/pipeline/confidence.py": 2,
     "src/pipeline/explore_panel.py": 1,
-    # Includes the pre-0059 logical-index duplicate guard. It preserves an
-    # existing source's semantic context when an incoming insert is ignored;
-    # this write-boundary check retires with the legacy KPI projection.
+    # Includes the pre-0059 logical-index duplicate guard and the reviewed
+    # scale guard, which excludes superseded neighbors. The duplicate guard
+    # preserves an existing source's semantic context on an ignored insert.
+    # These write-boundary checks retire with the legacy KPI projection.
     "src/pipeline/kpi_persistence.py": 6,
     # Exact predecessor/head reads guard the one governed append-only repair
     # write. They are not product analytics and retire with that write seam.

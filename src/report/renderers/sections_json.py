@@ -8,6 +8,7 @@ each key directly to a panel; nothing else is needed.
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from typing import Any
 
 from report.models import ReportSpec
@@ -66,7 +67,9 @@ def _saydo_tab(spec: ReportSpec) -> dict[str, Any]:
     return {
         "status": s.status.value,
         "missing": s.missing.model_dump() if s.missing else None,
-        "cards": [c.model_dump() for c in s.cards],
+        "verdicts": [asdict(v) for v in s.verdicts],
+        "verdicts_availability": s.verdicts_availability,
+        "historical_metrics": [m.model_dump(mode="json") for m in s.historical_metrics],
     }
 
 

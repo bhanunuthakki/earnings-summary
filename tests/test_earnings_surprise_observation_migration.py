@@ -488,7 +488,7 @@ def test_ingest_projects_the_exact_observation_clock_lexeme(
 def test_downgrade_removes_only_earnings_governance_surface(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
-    path = migrated_db(tmp_path / "earnings-observations-downgrade.db", target="head")
+    path = migrated_db(tmp_path / "earnings-observations-downgrade.db", target=REVISION)
     config = _config(path)
     command.downgrade(config, "0006_add_ask_proposal_approval")
 

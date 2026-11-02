@@ -34,8 +34,9 @@ allowlist and execution mechanics, not a second retention policy or schedule.
   the canonical cache cutoff.
 - `.tmp/temp_audio_*`: inventory only. Deletion remains owned by
   `execution/qa_transcripts.py` and requires a matching `qa_status=ok`.
-- `research_tasks`: `execution/expire_stale_research.py --apply` applies the
-  existing two-packet/never-packeted expiry policy only after schema preflight.
+- Packet-based research expiry is retired with weekly packets. The installed
+  external storage owner must remove its obsolete expiry step at release; no
+  alternate application writer replaces it.
 - `data/operations/artifact-retention.json`: explicit file registrations for
   completed test copies and superseded verified backups. The catalog specifies
   hashes, allowed scopes, family, status and recovery pins. Its scopes are excluded
@@ -71,7 +72,6 @@ allowlist and execution mechanics, not a second retention policy or schedule.
 ## Authorized tools
 
 - `execution/run_weekly_cleanup.py`
-- `execution/expire_stale_research.py`
 - `cron/run_python.bat` and the shared `runtime.job_runtime` lock/health seam
 
 No network or LLM calls are authorized.

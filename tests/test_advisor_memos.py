@@ -25,19 +25,21 @@ from flask.testing import FlaskClient
 import advisor.memos as memos_mod
 from advisor.context import (
     AdvisorContext,
-    SwapCandidate,
     TickerValuation,
     screen_swap_candidates,
 )
 from advisor.memos import generate_next_dollar_memo, run_swap_checks
-from advisor.store import AdvisorMemoRow, get_memo, insert_memo, list_memos
+from advisor.store import (
+    get_memo,
+    insert_memo,
+    list_memos,
+)
 from dispatch_registry import Job, Registry
 from integrations.portfolio_tracker_client import (
     LivePortfolio,
     PortfolioAnalytics,
 )
 from llm.cli import LLMSetupError
-from pipeline.advisor_memos_panel import compose_memos_page
 from pipeline.allocation_decisions_panel import SizingAuditRow
 from user_state.ledger import list_entries
 from user_state.notes import create_note, list_notes
@@ -495,44 +497,6 @@ def test_transient_llm_failure_degrades_hard_stop_propagates(
 # --------------------------------------------------------------------------- #
 
 
-def test_compose_memos_page_renders_all_sections(tmp_path: Path) -> None:
-    screen = [
-        SwapCandidate(
-            holding="NU",
-            holding_upside_pct=10.0,
-            holding_dcf_date="2026-06-01",
-            candidate="TSM",
-            candidate_upside_pct=45.0,
-            candidate_dcf_date="2026-06-01",
-            candidate_list="watchlist",
-            margin_pp=35.0,
-            cleared=True,
-        )
-    ]
-    memo = AdvisorMemoRow(
-        id=1,
-        user_id="bhanu",
-        kind="next_dollar",
-        ticker=None,
-        counter_ticker=None,
-        title="Next-dollar memo · 2026-06-10",
-        body_md="## Where the next dollar works hardest\n- NU",
-        context=None,
-        stance=None,
-        horizon_days=90,
-        score_status="pending",
-        note_id=7,
-        ledger_entry_id=None,
-        created_at=datetime(2026, 6, 10, tzinfo=UTC),
-    )
-    html = compose_memos_page(screen, [memo])
-    assert "Swap-discipline screen" in html and "clears the bar" in html
-    assert "Memo record" in html and "Next-dollar memo" in html
-    assert "/actions/advisor-memo" in html and "note #7" in html
-    empty = compose_memos_page([], [])
-    assert "No memos yet" in empty
-
-
 class _NonSpawningRegistry(Registry):
     """Records starts without forking a subprocess (same as the actions tests)."""
 
@@ -564,31 +528,6 @@ def client(tmp_path: Path, advisor_db: Path) -> FlaskClient:
     del advisor_db
     app = comments_server.create_app(tmp_path, registry=_NonSpawningRegistry())
     return app.test_client()
-
-
-def test_advisor_memos_panel_route(client: FlaskClient, tmp_path: Path) -> None:
-    insert_memo(
-        user_id="bhanu",
-        kind="next_dollar",
-        ticker=None,
-        title="Next-dollar memo · 2026-06-10",
-        body_md="## Section\nbody",
-        db_path=tmp_path / "data" / "portfolio.db",
-    )
-    resp = client.get("/api/panel/advisor_memos")
-    assert resp.status_code == 200
-    body = resp.data.decode()
-    assert "Memo record" in body and "Next-dollar memo" in body
-
-
-def test_advisor_memo_action_starts_job(client: FlaskClient) -> None:
-    resp = client.post("/actions/advisor-memo", json={"kind": "next_dollar"})
-    assert resp.status_code == 201
-    payload = resp.get_json()
-    assert payload["kind"] == "advisor-next_dollar"
-    assert payload["stream_url"].startswith("/actions/stream/")
-    assert client.post("/actions/advisor-memo", json={"kind": "bogus"}).status_code == 400
-    assert client.post("/actions/advisor-memo", json={}).status_code == 400
 
 
 def test_next_dollar_spends_nothing_on_unassessed_valuation(

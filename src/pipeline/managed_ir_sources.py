@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import stat
-from collections.abc import Mapping
+import uuid
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path, PurePath
 from typing import Literal, Self, cast
+from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel,
@@ -24,19 +27,23 @@ from pydantic import (
 )
 
 from db_paths import configured_db_path
-from ir_uploads import CategorizationFailure, classify_ir_file
+from ir_uploads import BoundIRClassification, CategorizationFailure, classify_ir_file
 from models.ir_uploads import CategorizationResult
 from pipeline.issuer_document_inventory import (
+    ExpectedIssuerDocument,
     FiscalPeriodWitness,
+    IssuerDocumentInventoryError,
     IssuerDocumentInventoryReceipt,
     IssuerDocumentInventoryRequest,
     build_issuer_document_inventory,
+    resolve_registered_document_period,
     validate_fiscal_period_witness,
 )
 from pipeline.reported_period_inventory import reported_quarter_selection
 from pipeline.source_policy import (
     ArtifactKind,
     CollectionSource,
+    StoredCollectionAuthorization,
     authorize_stored_collection_target,
     current_utc_date,
     fiscal_quarter_end,
@@ -46,6 +53,7 @@ from provenance.evidence_backfill import ensure_legacy_document_evidence
 from provenance.evidence_ledger import EvidenceLocator
 from provenance.immutable_artifact import (
     ImmutableArtifactConflictError,
+    ImmutableArtifactSnapshot,
     read_stable_artifact,
     require_canonical_text_artifact,
     require_no_reparse_points,
@@ -61,7 +69,87 @@ from runtime.deterministic import content_sha256 as _sha
 from runtime.job_runtime import JobLock, current_lock_claim
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
+log = logging.getLogger(__name__)
+
 _OPERATION = "managed_issuer_document_publication.v1"
+_CALENDAR_QUARTER_DOCUMENT_SUFFIXES: dict[str, frozenset[str]] = {
+    "ir_presentation": frozenset({".pdf"}),
+    "ir_press_release": frozenset({".pdf", ".html"}),
+    "ir_supplement": frozenset({".pdf", ".xlsx"}),
+    "ir_investor_update": frozenset({".pdf"}),
+    "ir_transcript": frozenset({".pdf"}),
+    "sec_10q": frozenset({".pdf"}),
+}
+ManagedIssuerMediaType = Literal[
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/html",
+]
+_MANAGED_MEDIA_SUFFIXES: dict[ManagedIssuerMediaType, str] = {
+    "application/pdf": ".pdf",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "text/html": ".html",
+}
+
+
+def _managed_media_allowed(
+    document_type: str,
+    suffix: str,
+    authorization: StoredCollectionAuthorization,
+    witness: FiscalPeriodWitness | None,
+) -> bool:
+    if suffix not in _CALENDAR_QUARTER_DOCUMENT_SUFFIXES.get(document_type, frozenset()):
+        return False
+    return suffix != ".html" or (
+        authorization.fiscal_year_end == "12-31"
+        and (witness is None or witness.fiscal_year_end == "12-31")
+    )
+
+
+_FISCAL_WITNESS_DOCUMENT_TYPES = frozenset({"sec_10q", "sec_10k", "sec_20f", "sec_40f"})
+
+
+def resolve_fiscal_period_witness(
+    conn: sqlite3.Connection,
+    document_version_id: str,
+    *,
+    ticker: str,
+    fiscal_year: int,
+    fiscal_quarter: int,
+) -> FiscalPeriodWitness:
+    """Resolve an exact current SEC filing as the fiscal-period witness."""
+    try:
+        resolved = resolve_registered_document_period(
+            conn,
+            document_version_id,
+            fiscal_year=fiscal_year,
+            fiscal_quarter=fiscal_quarter,
+        )
+    except IssuerDocumentInventoryError as exc:
+        raise IssuerDocumentPreparationError(f"fiscal_witness_{exc.reason_code}") from exc
+
+    if resolved.request.ticker != ticker.strip().upper():
+        raise IssuerDocumentPreparationError("fiscal_witness_ticker_mismatch")
+    if (
+        resolved.request.fiscal_year != fiscal_year
+        or resolved.request.fiscal_quarter != fiscal_quarter
+    ):
+        raise IssuerDocumentPreparationError("fiscal_witness_period_mismatch")
+    witness = resolved.request.fiscal_period_witness
+    if witness is None:
+        raise IssuerDocumentPreparationError("fiscal_witness_missing")
+    if witness.document_version_id != document_version_id:
+        raise IssuerDocumentPreparationError("fiscal_witness_document_mismatch")
+    expected = resolved.request.expected_documents[0]
+    parsed_url = urlsplit(expected.source_url)
+    if (
+        expected.document_type not in _FISCAL_WITNESS_DOCUMENT_TYPES
+        or parsed_url.scheme != "https"
+        or parsed_url.hostname not in {"sec.gov", "www.sec.gov"}
+        or not parsed_url.path.startswith("/Archives/edgar/data/")
+    ):
+        raise IssuerDocumentPreparationError("fiscal_witness_source_unsupported")
+    return witness
 
 
 def _json(value: object) -> str:
@@ -137,6 +225,8 @@ class IssuerDocumentStagingRequest(_Closed):
     inventory_request: IssuerDocumentInventoryRequest
     inventory_request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     historical_window: HistoricalIssuerDocumentWindow | None = None
+    owner_requested: bool = True
+    calendar_override: str | None = None
 
     @model_validator(mode="after")
     def bind(self) -> Self:
@@ -166,6 +256,11 @@ class IssuerDocumentStagingRequest(_Closed):
         result = cast("dict[str, object]", payload)
         if self.historical_window is None:
             result.pop("historical_window", None)
+        # Omitted legacy fields retain the original request bytes and hashes.
+        if self.owner_requested:
+            result.pop("owner_requested", None)
+        if self.calendar_override is None:
+            result.pop("calendar_override", None)
         return result
 
 
@@ -179,22 +274,32 @@ class StagedIssuerDocument(_Closed):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     byte_size: int = Field(gt=0)
     fetched_at: datetime
-    media_type: Literal[
-        "application/pdf", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    ]
+    media_type: ManagedIssuerMediaType
     ticker: str
     period_end: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     classification_confidence: Literal["high", "medium", "low"]
     classification_evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    period_label: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _legacy_payload(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        payload = handler(self)
+        if not isinstance(payload, dict):
+            raise TypeError("staged document serializer must return an object")
+        result = cast("dict[str, object]", payload)
+        if self.period_label is None:
+            result.pop("period_label", None)
+        return result
 
     @model_validator(mode="after")
     def validate_path(self) -> Self:
         if self.fetched_at.tzinfo is None or self.fetched_at.utcoffset() != UTC.utcoffset(None):
             raise ValueError("fetched_at must be UTC")
-        if (self.media_type == "application/pdf") != self.object_path.endswith(".pdf"):
-            raise ValueError("media type/object extension mismatch")
-        if self.media_type.endswith("sheet") and not self.object_path.endswith(".xlsx"):
-            raise ValueError("media type/object extension mismatch")
+        suffix = _MANAGED_MEDIA_SUFFIXES[self.media_type]
+        if not self.object_path.endswith(
+            suffix
+        ) or suffix not in _CALENDAR_QUARTER_DOCUMENT_SUFFIXES.get(self.document_type, frozenset()):
+            raise ValueError("document family/media/object extension mismatch")
         return self
 
 
@@ -261,7 +366,7 @@ class PreparedIssuerDocumentPublication(_Closed):
         receipt = self.staging_receipt
         expected_paths = tuple(
             f"ir_documents/{item.ticker}/{item.period_end}/{item.document_type}__{item.sha256[:8]}"
-            f"{'.pdf' if item.media_type == 'application/pdf' else '.xlsx'}"
+            f"{_MANAGED_MEDIA_SUFFIXES[item.media_type]}"
             for item in receipt.documents
         )
         document_set = _document_set(receipt)
@@ -572,12 +677,12 @@ def _configured(root: Path, db_path: Path) -> Path:
 
 def _policy(
     request: IssuerDocumentStagingRequest, db_path: Path, *, permit_pending: bool = False
-) -> None:
+) -> StoredCollectionAuthorization:
     inv = request.inventory_request
     auth = authorize_stored_collection_target(
         db_path,
         inv.ticker,
-        requested=True,
+        requested=request.owner_requested,
         source=CollectionSource.IR,
         artifact_kind=ArtifactKind.IR_DOCUMENT,
     )
@@ -603,11 +708,12 @@ def _policy(
             as_of=current_utc_date(),
         )
     if decision is None and permit_pending:
-        return
+        return auth
     if decision is None:
         raise PreparedIssuerDocumentPublisherError("reported_period_selection_pending")
     if not decision:
         raise PreparedIssuerDocumentPublisherError("reported_quarter_window_denied")
+    return auth
 
 
 def issuer_request_period_is_allowed(
@@ -652,36 +758,21 @@ def _read_receipt(
     return receipt
 
 
-def _read_completed_receipt(
-    root: Path, request: IssuerDocumentStagingRequest, db_path: Path
-) -> IssuerDocumentStagingReceipt:
-    """Recover the receipt embedded in immutable completion evidence.
-
-    Completed publication evidence is deliberately replayable after attempt
-    staging is wiped, so only policy and code identities are rechecked here;
-    object-byte validation was completed before the original commit.
-    """
+def _read_completed_publication(root: Path, attempt: str) -> PreparedIssuerDocumentPublication:
+    """Read self-consistent completion metadata; this does not verify PDF bytes."""
     try:
-        snap, raw = read_stable_artifact(_result_path(root, request.attempt_id))
+        snap, raw = read_stable_artifact(_result_path(root, attempt))
         result = PreparedIssuerDocumentPublication.model_validate_json(raw)
         require_canonical_text_artifact(snap, result.model_dump_json())
-        receipt_snap, receipt_raw = read_stable_artifact(
-            _durable_receipt_path(root, request.attempt_id)
-        )
+        receipt_snap, receipt_raw = read_stable_artifact(_durable_receipt_path(root, attempt))
         durable_receipt = IssuerDocumentStagingReceipt.model_validate_json(receipt_raw)
         require_canonical_text_artifact(receipt_snap, durable_receipt.canonical_json)
     except (OSError, ValueError, ImmutableArtifactConflictError) as exc:
         raise PreparedIssuerDocumentPublisherError("publication_result_invalid") from exc
     receipt = result.staging_receipt
-    if receipt != durable_receipt or receipt.request != request:
+    if receipt != durable_receipt or receipt.request.attempt_id != attempt:
         raise PreparedIssuerDocumentPublisherError("staging_request_mismatch")
-    if (
-        receipt.classifier_code_sha256 != classifier_code_identity()
-        or receipt.verifier_code_sha256 != verifier_code_identity()
-    ):
-        raise PreparedIssuerDocumentPublisherError("staging_code_identity_changed")
-    _policy(request, db_path)
-    return receipt
+    return result
 
 
 def validate_prepared_staging(
@@ -700,7 +791,7 @@ def validate_prepared_staging(
         or receipt.verifier_code_sha256 != verifier_code_identity()
     ):
         raise PreparedIssuerDocumentPublisherError("staging_code_identity_changed")
-    _policy(request, db_path, permit_pending=permit_pending)
+    authorization = _policy(request, db_path, permit_pending=permit_pending)
     staging = root / ".tmp" / "managed_ir_staging" / request.attempt_id
     require_no_reparse_points(staging)
     objects = staging / "objects"
@@ -726,6 +817,13 @@ def validate_prepared_staging(
     if observed != declared:
         raise PreparedIssuerDocumentPublisherError("staged_objects_directory_invalid")
     for item in receipt.documents:
+        if not _managed_media_allowed(
+            item.document_type,
+            Path(item.object_path).suffix,
+            authorization,
+            request.inventory_request.fiscal_period_witness,
+        ):
+            raise PreparedIssuerDocumentPublisherError("staged_media_not_admitted")
         source = staging / item.object_path
         try:
             snap, _raw = read_stable_artifact(source)
@@ -738,17 +836,261 @@ def validate_prepared_staging(
         result = classify_ir_file(
             source,
             ticker_hint=request.inventory_request.ticker,
+            calendar_override=request.calendar_override,
             source_url=item.source_url,
         )
         if isinstance(result, CategorizationFailure) or (
             result.ticker != item.ticker
             or result.doc_type.value != item.document_type
             or result.period_end.isoformat() != item.period_end
+            or (item.period_label is not None and result.period_label != item.period_label)
             or result.confidence.value != item.classification_confidence
             or classification_evidence(result) != item.classification_evidence_sha256
         ):
             raise PreparedIssuerDocumentPublisherError("staged_classification_mismatch")
     return receipt
+
+
+def _historical_receipt(root: Path, attempt: str) -> IssuerDocumentStagingReceipt:
+    path = _durable_receipt_path(root, attempt)
+    if not path.exists():
+        path = _receipt_path(root, attempt)
+    try:
+        snapshot, raw = read_stable_artifact(path)
+        receipt = IssuerDocumentStagingReceipt.model_validate_json(raw)
+        require_canonical_text_artifact(snapshot, receipt.canonical_json)
+    except (OSError, ValueError, ImmutableArtifactConflictError) as exc:
+        raise PreparedIssuerDocumentPublisherError(
+            "registered_publication_receipt_invalid", committed=True
+        ) from exc
+    if receipt.request.attempt_id != attempt:
+        raise PreparedIssuerDocumentPublisherError(
+            "registered_publication_source_mismatch", committed=True
+        )
+    return receipt
+
+
+def _replay_registered_result(
+    root: Path, attempt: str, db_path: Path
+) -> PreparedIssuerDocumentPublication:
+    if _result_path(root, attempt).exists():
+        completed = _read_completed_publication(root, attempt)
+        result = _replay_result(completed.staging_receipt, root, db_path)
+        if result is None:
+            raise PreparedIssuerDocumentPublisherError("publication_result_missing", committed=True)
+        return result
+    receipt = _historical_receipt(root, attempt)
+    return publish_prepared_issuer_documents(receipt.request, state_root=root, db_path=db_path)
+
+
+@dataclass(frozen=True)
+class RegisteredIssuerDocumentStatus:
+    """Recorded registration status, distinct from renewed byte verification."""
+
+    managed: bool
+    projection: Literal["coherent", "repaired", "alias_held_by_other_document"] = "coherent"
+    not_reverified: bool = False
+
+
+def _recorded_publication(
+    root: Path, attempt: str, db_path: Path
+) -> PreparedIssuerDocumentPublication:
+    """Check registration metadata and retained-file existence, never PDF bytes."""
+    result = _read_completed_publication(root, attempt)
+    receipt = result.staging_receipt
+    record = _publication_record(attempt, db_path)
+    paths = tuple(_relative_path(root, _target(root, item)) for item in receipt.documents)
+    if (
+        record is None
+        or record.staging_receipt_sha256 != receipt.receipt_sha256
+        or record.document_set_sha256 != _document_set(receipt)
+        or result.inserted_document_ids != record.inserted_ids
+        or result.reused_document_ids != record.reused_ids
+        or result.created_paths != record.created_paths
+        or result.canonical_paths != paths
+        or result.canonical_path_sha256 != tuple(item.sha256 for item in receipt.documents)
+        or tuple((item.path, item.sha256, item.byte_size) for item in record.canonical_paths)
+        != tuple(
+            (path, item.sha256, item.byte_size)
+            for path, item in zip(paths, receipt.documents, strict=True)
+        )
+    ):
+        raise PreparedIssuerDocumentPublisherError(
+            "registered_publication_metadata_mismatch", committed=True
+        )
+    inventory_sha = _read_persisted_inventory(receipt, root, _inventory_path(root, attempt))
+    evidence = _read_inventory_evidence(receipt, db_path, record)
+    if (
+        evidence is None
+        or result.inventory_receipt_path != record.inventory_receipt_path
+        or result.inventory_receipt_sha256 != inventory_sha
+        or evidence.inventory_receipt_sha256 != inventory_sha
+    ):
+        raise PreparedIssuerDocumentPublisherError(
+            "registered_publication_metadata_mismatch", committed=True
+        )
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    try:
+        ids: list[int] = []
+        for item in receipt.documents:
+            target = _target(root, item)
+            metadata = target.stat()
+            rows = conn.execute(
+                "SELECT id,ticker,source_type,doc_type,period_end,file_path,sha256,fetched_at,fetch_status,raw_bytes_size,source_url FROM documents WHERE source_url=?",
+                (item.source_url,),
+            ).fetchall()
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink != 1
+                or metadata.st_size != item.byte_size
+                or len(rows) != 1
+                or tuple(rows[0][1:]) != _expected_row(item, root, target)
+            ):
+                raise PreparedIssuerDocumentPublisherError(
+                    "registered_document_metadata_mismatch", committed=True
+                )
+            ids.append(int(rows[0][0]))
+        if tuple(sorted(ids)) != tuple(sorted((*record.inserted_ids, *record.reused_ids))):
+            raise PreparedIssuerDocumentPublisherError(
+                "registered_document_metadata_mismatch", committed=True
+            )
+    finally:
+        conn.close()
+    return result
+
+
+def inspect_registered_issuer_document(
+    ticker: str,
+    source_url: str,
+    *,
+    state_root: Path,
+    db_path: Path,
+    inspections: dict[str, tuple[PreparedIssuerDocumentPublication, ...]],
+) -> RegisteredIssuerDocumentStatus:
+    """Return recorded status, or perform the existing strict recovery if required.
+
+    A coherent recorded registration is a no-op, not renewed admission or byte
+    verification. Mutation recovery keeps the original opaque authority binding.
+    """
+    root = state_root.resolve(strict=True)
+    configured = _configured(root, db_path)
+    conn = connect_sqlite(configured, role=SQLiteConnectionRole.READ_ONLY)
+    try:
+        subjects = conn.execute(
+            "SELECT DISTINCT publication.attempt_id FROM managed_ir_publications AS publication "
+            "JOIN documents AS document ON "
+            "EXISTS (SELECT 1 FROM json_each(publication.inserted_ids_json) WHERE value=document.id) "
+            "OR EXISTS (SELECT 1 FROM json_each(publication.reused_ids_json) WHERE value=document.id) "
+            "WHERE document.ticker=? AND document.doc_type='ir_presentation' AND document.source_url=?",
+            (ticker, source_url),
+        ).fetchall()
+    finally:
+        conn.close()
+    if not subjects:
+        return RegisteredIssuerDocumentStatus(managed=False)
+    recorded = inspections.get(source_url)
+    if recorded is None:
+        try:
+            recorded = tuple(
+                _recorded_publication(root, str(subject[0]), configured) for subject in subjects
+            )
+            if any(
+                not any(
+                    item.ticker == ticker and item.source_url == source_url
+                    for item in result.staging_receipt.documents
+                )
+                for result in recorded
+            ):
+                raise PreparedIssuerDocumentPublisherError(
+                    "registered_publication_source_mismatch", committed=True
+                )
+        except (
+            OSError,
+            ValueError,
+            ImmutableArtifactConflictError,
+            PreparedIssuerDocumentPublisherError,
+        ):
+            recorded = None
+    if recorded is not None:
+        projection = project_managed_presentation(recorded, root, allow_repair=False)
+        if projection != "repair_required":
+            return RegisteredIssuerDocumentStatus(True, projection, not_reverified=True)
+    publications = _replay_registered_issuer_document_publications(
+        ticker,
+        source_url,
+        state_root=root,
+        db_path=configured,
+        inspections=inspections,
+    )
+    projection = project_managed_presentation(publications, root)
+    if projection == "repair_required":
+        raise PreparedIssuerDocumentPublisherError(
+            "compatibility_projection_not_ready", committed=True
+        )
+    return RegisteredIssuerDocumentStatus(True, projection)
+
+
+def _replay_registered_issuer_document_publications(
+    ticker: str,
+    source_url: str,
+    *,
+    state_root: Path,
+    db_path: Path,
+    inspections: dict[str, tuple[PreparedIssuerDocumentPublication, ...]] | None = None,
+) -> tuple[PreparedIssuerDocumentPublication, ...]:
+    """Inspect each committed quarter once; resume only incomplete finalization.
+
+    Completed proof is read-only; incomplete finalization takes publisher locks.
+    A legacy URL has no managed candidates. Corrupt proof fails closed.
+    The caller owns the optional memo for this one intake operation.
+    """
+    if inspections is not None and source_url in inspections:
+        return inspections[source_url]
+    root = state_root.resolve(strict=True)
+    configured = _configured(root, db_path)
+    join = (
+        "FROM managed_ir_publications AS publication JOIN documents AS document ON "
+        "EXISTS (SELECT 1 FROM json_each(publication.inserted_ids_json) WHERE value=document.id) "
+        "OR EXISTS (SELECT 1 FROM json_each(publication.reused_ids_json) WHERE value=document.id) "
+        "WHERE document.ticker=? AND document.doc_type='ir_presentation' "
+    )
+    conn = connect_sqlite(configured, role=SQLiteConnectionRole.READ_ONLY)
+    try:
+        subject = conn.execute(
+            "SELECT publication.attempt_id,date(document.period_end) "
+            + join
+            + "AND document.source_url=?",
+            (ticker, source_url),
+        ).fetchone()
+        if subject is None:
+            return ()
+        coordinate = ticker, str(subject[1])
+        attempts = conn.execute(
+            "SELECT DISTINCT publication.attempt_id " + join + "AND date(document.period_end)=?",
+            coordinate,
+        ).fetchall()
+    finally:
+        conn.close()
+    results = tuple(_replay_registered_result(root, str(row[0]), configured) for row in attempts)
+    for result in results:
+        inventory = result.staging_receipt.request.inventory_request
+        if inventory.ticker != ticker or inventory.period_end.isoformat() != coordinate[1]:
+            raise PreparedIssuerDocumentPublisherError(
+                "registered_publication_coordinates_mismatch", committed=True
+            )
+    if not any(
+        item.source_url == source_url
+        for result in results
+        for item in result.staging_receipt.documents
+    ):
+        raise PreparedIssuerDocumentPublisherError(
+            "registered_publication_source_mismatch", committed=True
+        )
+    if inspections is not None:
+        for result in results:
+            for item in result.staging_receipt.documents:
+                inspections[item.source_url] = results
+    return results
 
 
 def _claim(root: Path, write_set: str) -> tuple[int, str, str | None]:
@@ -792,20 +1134,24 @@ def _assert_authority(
         raise PreparedIssuerDocumentPublisherError("managed_lock_claim_changed")
 
 
-def _authority_binding(authority: _Authority) -> str:
-    """Commit public binding commitments, never raw process lock credentials."""
+def _publication_binding(root: Path, db_path: Path) -> str:
     return _sha(
         {
-            "code_root": authority.code_root,
-            "state_root": authority.state_root,
-            "database": authority.database,
-            "operation": authority.operation,
+            "code_root": str(_code_root()),
+            "state_root": str(root),
+            "database": str(db_path),
+            "operation": _OPERATION,
         }
     )
 
 
+def _authority_binding(authority: _Authority) -> str:
+    """Commit public binding commitments, never raw process lock credentials."""
+    return _publication_binding(Path(authority.state_root), Path(authority.database))
+
+
 def _target(root: Path, item: StagedIssuerDocument) -> Path:
-    suffix = ".pdf" if item.media_type == "application/pdf" else ".xlsx"
+    suffix = _MANAGED_MEDIA_SUFFIXES[item.media_type]
     target = (
         root
         / "ir_documents"
@@ -1240,18 +1586,7 @@ def _canonical_rows(
                 "SELECT id,ticker,source_type,doc_type,period_end,file_path,sha256,fetched_at,fetch_status,raw_bytes_size,source_url FROM documents WHERE source_url=?",
                 (item.source_url,),
             ).fetchall()
-            expected = (
-                item.ticker,
-                "ir_doc",
-                item.document_type,
-                item.period_end,
-                _relative_path(root, target),
-                item.sha256,
-                item.fetched_at.isoformat(),
-                "ok",
-                item.byte_size,
-                item.source_url,
-            )
+            expected = _expected_row(item, root, target)
             if len(row) != 1 or tuple(row[0][1:]) != expected:
                 raise PreparedIssuerDocumentPublisherError("canonical_row_drift")
             _require_document_evidence(conn, item, int(row[0][0]), root, target)
@@ -1275,7 +1610,7 @@ def _published_inventory(
     """Seal/read back a physical committed-DB inventory under the held claims."""
     inventory_path = _inventory_path(root, receipt.request.attempt_id)
     _assert_authority(authority, receipt, root, db_path)
-    evidence = _read_inventory_evidence(receipt, db_path, authority, durable)
+    evidence = _read_inventory_evidence(receipt, db_path, durable)
     if inventory_path.exists() and evidence is not None:
         row_ids, canonical_paths = _canonical_rows(receipt, root, db_path)
         inventory_sha = _read_persisted_inventory(receipt, root, inventory_path)
@@ -1362,7 +1697,6 @@ def _read_persisted_inventory(
 def _read_inventory_evidence(
     receipt: IssuerDocumentStagingReceipt,
     db_path: Path,
-    authority: _Authority,
     durable: _CommittedPublicationRecord,
 ) -> _InventoryEvidence | None:
     conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY, schema_preflight=True)
@@ -1394,7 +1728,7 @@ def _read_inventory_evidence(
         evidence.attempt_id != receipt.request.attempt_id
         or evidence.publication_payload_sha256 != durable.payload_sha256
         or evidence.inventory_receipt_path != durable.inventory_receipt_path
-        or evidence.binding_sha256 != _authority_binding(authority)
+        or evidence.binding_sha256 != durable.binding_sha256
     ):
         raise PreparedIssuerDocumentPublisherError("inventory_evidence_mismatch")
     return evidence
@@ -1408,7 +1742,7 @@ def _seal_inventory_evidence(
     inventory_path: Path,
     inventory_sha: str,
 ) -> _InventoryEvidence:
-    existing = _read_inventory_evidence(receipt, db_path, authority, durable)
+    existing = _read_inventory_evidence(receipt, db_path, durable)
     if existing is not None:
         if existing.inventory_receipt_sha256 != inventory_sha:
             raise PreparedIssuerDocumentPublisherError("inventory_evidence_mismatch")
@@ -1443,7 +1777,7 @@ def _seal_inventory_evidence(
         raise PreparedIssuerDocumentPublisherError("inventory_evidence_publish_failed") from exc
     finally:
         conn.close()
-    persisted = _read_inventory_evidence(receipt, db_path, authority, durable)
+    persisted = _read_inventory_evidence(receipt, db_path, durable)
     if persisted != evidence:
         raise PreparedIssuerDocumentPublisherError("inventory_evidence_mismatch")
     return evidence
@@ -1460,7 +1794,7 @@ def _finalize_committed(
 ) -> PreparedIssuerDocumentPublication:
     """Finish only post-commit evidence; every caller maps failures to partial."""
     try:
-        durable = _durable_recovery(receipt, db_path, authority)
+        durable = _durable_recovery(receipt, db_path, root)
         if durable is None:
             raise PreparedIssuerDocumentPublisherError("publication_record_missing")
         receipt_path = _durable_receipt_path(root, receipt.request.attempt_id)
@@ -1525,7 +1859,7 @@ def _finalize_committed(
 
 
 def _replay_result(
-    receipt: IssuerDocumentStagingReceipt, root: Path, db_path: Path, authority: _Authority
+    receipt: IssuerDocumentStagingReceipt, root: Path, db_path: Path
 ) -> PreparedIssuerDocumentPublication | None:
     path = _result_path(root, receipt.request.attempt_id)
     if not path.exists():
@@ -1536,7 +1870,7 @@ def _replay_result(
         require_canonical_text_artifact(snap, result.model_dump_json())
     except (OSError, ValueError, ImmutableArtifactConflictError) as exc:
         raise PreparedIssuerDocumentPublisherError("publication_result_invalid") from exc
-    durable = _durable_recovery(receipt, db_path, authority)
+    durable = _durable_recovery(receipt, db_path, root)
     if durable is None:
         raise PreparedIssuerDocumentPublisherError("publication_record_missing")
     if (
@@ -1565,7 +1899,7 @@ def _replay_result(
             raise PreparedIssuerDocumentPublisherError("publication_result_path_drift")
     inventory_path = _inventory_path(root, receipt.request.attempt_id)
     inventory_sha = _read_persisted_inventory(receipt, root, inventory_path)
-    evidence = _read_inventory_evidence(receipt, db_path, authority, durable)
+    evidence = _read_inventory_evidence(receipt, db_path, durable)
     if (
         _relative_path(root, inventory_path) != result.inventory_receipt_path
         or durable.inventory_receipt_path != result.inventory_receipt_path
@@ -1579,14 +1913,12 @@ def _replay_result(
     return result
 
 
-def _durable_recovery(
-    receipt: IssuerDocumentStagingReceipt, db_path: Path, authority: _Authority
-) -> _CommittedPublicationRecord | None:
+def _publication_record(attempt: str, db_path: Path) -> _CommittedPublicationRecord | None:
     conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY, schema_preflight=True)
     try:
         row = conn.execute(
             "SELECT attempt_id,staging_receipt_sha256,document_set_sha256,inserted_ids_json,reused_ids_json,canonical_paths_json,created_paths_json,staging_receipt_path,inventory_receipt_path,publication_result_path,intent_sha256,binding_sha256,committed_at,state,payload_sha256 FROM managed_ir_publications WHERE attempt_id=?",
-            (receipt.request.attempt_id,),
+            (attempt,),
         ).fetchone()
     except sqlite3.Error as exc:
         raise PreparedIssuerDocumentPublisherError("publication_record_schema_missing") from exc
@@ -1616,11 +1948,18 @@ def _durable_recovery(
         )
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
         raise PreparedIssuerDocumentPublisherError("publication_record_invalid") from exc
+    return record
+
+
+def _durable_recovery(
+    receipt: IssuerDocumentStagingReceipt, db_path: Path, root: Path
+) -> _CommittedPublicationRecord | None:
+    record = _publication_record(receipt.request.attempt_id, db_path)
+    if record is None:
+        return None
     expected_paths = tuple(
         _CanonicalPublicationPath(
-            path=_relative_path(
-                Path(authority.state_root), _target(Path(authority.state_root), item)
-            ),
+            path=_relative_path(root, _target(root, item)),
             sha256=item.sha256,
             byte_size=item.byte_size,
         )
@@ -1631,7 +1970,7 @@ def _durable_recovery(
         or record.staging_receipt_sha256 != receipt.receipt_sha256
         or record.document_set_sha256 != _document_set(receipt)
         or record.canonical_paths != expected_paths
-        or record.binding_sha256 != _authority_binding(authority)
+        or record.binding_sha256 != _publication_binding(root, db_path)
     ):
         raise PreparedIssuerDocumentPublisherError("publication_record_mismatch")
     return record
@@ -1658,57 +1997,40 @@ def _publish_prepared_issuer_documents_impl(
         )
     )
     with lock:
-        if _result_path(root, request.attempt_id).exists():
-            receipt = _read_completed_receipt(root, request, db_path)
-            authority = _issue(receipt, root, db_path)
-            _assert_authority(authority, receipt, root, db_path)
-            replay = _replay_result(receipt, root, db_path, authority)
-            if replay is None:
-                raise PreparedIssuerDocumentPublisherError("publication_result_missing")
-            return replay
-        receipt = validate_prepared_staging(request, state_root=root, db_path=db_path)
+        known_record = _publication_record(request.attempt_id, db_path)
+        receipt = (
+            _historical_receipt(root, request.attempt_id)
+            if known_record is not None
+            else _read_receipt(root, request)
+        )
+        if receipt.request != request:
+            raise PreparedIssuerDocumentPublisherError("staging_request_mismatch")
         authority = _issue(receipt, root, db_path)
         _assert_authority(authority, receipt, root, db_path)
-        intent = _read_intent(receipt, root, authority)
-        replay = _replay_result(receipt, root, db_path, authority)
-        if replay is not None:
-            return replay
-        durable = _durable_recovery(receipt, db_path, authority)
+        durable = _durable_recovery(receipt, db_path, root)
         if durable is not None:
+            replay = _replay_result(receipt, root, db_path)
+            if replay is not None:
+                return replay
+            intent = _read_intent(receipt, root, authority)
             if intent is None or durable.intent_sha256 != intent.payload_sha256:
-                raise PreparedIssuerDocumentPublisherError("publication_intent_missing")
-            try:
-                return _finalize_committed(
-                    receipt,
-                    root,
-                    db_path,
-                    authority,
-                    durable.inserted_ids,
-                    durable.reused_ids,
-                    tuple(root / path for path in durable.created_paths),
+                raise PreparedIssuerDocumentPublisherError(
+                    "publication_intent_missing", committed=True
                 )
-            except PreparedIssuerDocumentPublisherError as exc:
-                if exc.committed:
-                    raise
-                raise PreparedIssuerDocumentPublisherError(
-                    "publication_committed_partial",
-                    committed=True,
-                    inserted=durable.inserted_ids,
-                    reused=durable.reused_ids,
-                    created=durable.created_paths,
-                    inventory_state="failed",
-                    result_state="not_started",
-                ) from exc
-            except Exception as exc:
-                raise PreparedIssuerDocumentPublisherError(
-                    "publication_committed_partial",
-                    committed=True,
-                    inserted=durable.inserted_ids,
-                    reused=durable.reused_ids,
-                    created=durable.created_paths,
-                    inventory_state="failed",
-                    result_state="not_started",
-                ) from exc
+            _canonical_rows(receipt, root, db_path)
+            return _finalize_committed(
+                receipt,
+                root,
+                db_path,
+                authority,
+                durable.inserted_ids,
+                durable.reused_ids,
+                tuple(root / path for path in durable.created_paths),
+            )
+        if _result_path(root, request.attempt_id).exists():
+            raise PreparedIssuerDocumentPublisherError("publication_record_missing")
+        receipt = validate_prepared_staging(request, state_root=root, db_path=db_path)
+        intent = _read_intent(receipt, root, authority)
         staged = root / ".tmp" / "managed_ir_staging" / request.attempt_id
         items = [
             (item, staged / item.object_path, _target(root, item)) for item in receipt.documents
@@ -1862,7 +2184,7 @@ def _publish_prepared_issuer_documents_impl(
                 # acknowledging it. Never roll back or delete canonical files
                 # after that point: reconcile through a fresh read-only handle.
                 try:
-                    durable = _durable_recovery(receipt, db_path, authority)
+                    durable = _durable_recovery(receipt, db_path, root)
                     if durable is None:
                         raise PreparedIssuerDocumentPublisherError(
                             "publication_commit_outcome_unknown", committed=True
@@ -1940,3 +2262,610 @@ def publish_prepared_issuer_documents(
         root, "managed-issuer-document-publication", ["ir-discovery", "portfolio-db"], wait_s=0
     ):
         return _publish_prepared_issuer_documents_held(request, state_root=root, db_path=configured)
+
+
+class IssuerDocumentPreparationError(RuntimeError):
+    """Stable, non-sensitive failure result for managed issuer staging."""
+
+    def __init__(
+        self,
+        code: str,
+        *,
+        attempt_id: str | None = None,
+        phase: str | None = None,
+        residue_paths: tuple[str, ...] = (),
+    ) -> None:
+        self.code = code
+        self.attempt_id = attempt_id
+        self.phase = phase
+        self.residue_paths = residue_paths
+        super().__init__(code)
+
+
+def secure_staging_directory(directory: Path) -> None:
+    """Create one attempt-private directory without accepting reparse parents."""
+    try:
+        require_no_reparse_points(directory)
+        directory.mkdir(parents=True, exist_ok=True)
+        require_no_reparse_points(directory)
+        metadata = directory.lstat()
+    except (OSError, ImmutableArtifactConflictError) as exc:
+        raise IssuerDocumentPreparationError("staging_directory_unsafe") from exc
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise IssuerDocumentPreparationError("staging_directory_unsafe")
+
+
+def _retained_staging_names(directory: Path, direct: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """Report retained attempt-local names without following an unsafe directory."""
+    names = {Path(name).name for name in direct}
+    try:
+        require_no_reparse_points(directory)
+        names.update(entry.name for entry in directory.iterdir())
+    except (OSError, ImmutableArtifactConflictError):
+        pass
+    return tuple(sorted(names))
+
+
+def _preparation_failure(
+    code: str,
+    *,
+    request: IssuerDocumentStagingRequest,
+    phase: str,
+    objects: Path,
+    direct_residues: tuple[str, ...] = (),
+) -> IssuerDocumentPreparationError:
+    return IssuerDocumentPreparationError(
+        code,
+        attempt_id=request.attempt_id,
+        phase=phase,
+        residue_paths=_retained_staging_names(objects, direct_residues),
+    )
+
+
+def publisher_residue_names(exc: PreparedIssuerDocumentPublisherError) -> tuple[str, ...]:
+    """Keep direct publisher/installer residues in the attempt-local report."""
+    return tuple(
+        dict.fromkeys(
+            (*exc.remaining_paths, *exc.owned_artifacts, *exc.created, *exc.removed_paths)
+        )
+    )
+
+
+def _publish_attempt_text(path: Path, text: str) -> None:
+    """Seal attempt-private JSON through the shared no-replace transaction."""
+    payload = (text + "\n").encode("utf-8")
+    try:
+        result = install_bytes_no_clobber(
+            path.parent,
+            path.name,
+            payload,
+            expected_sha256=hashlib.sha256(payload).hexdigest(),
+            expected_size=len(payload),
+        )
+    except SecureFileInstallError as exc:
+        retained = (*exc.residue_paths, *((exc.ownership.path,) if exc.ownership else ()))
+        raise IssuerDocumentPreparationError(
+            "staging_receipt_publish_failed",
+            attempt_id=path.parent.name,
+            phase="publish",
+            residue_paths=tuple(dict.fromkeys(item.name for item in retained)),
+        ) from exc
+    if result.residue_paths:
+        raise IssuerDocumentPreparationError(
+            "staging_receipt_residue_retained",
+            attempt_id=path.parent.name,
+            phase="publish",
+            residue_paths=tuple(item.name for item in result.residue_paths),
+        )
+
+
+def _authorize_staging(
+    root: Path,
+    db_path: Path,
+    ticker: str,
+    owner_requested: bool,
+) -> StoredCollectionAuthorization:
+    if db_path.resolve() != configured_db_path(root):
+        raise IssuerDocumentPreparationError("configured_database_mismatch")
+    authorization = authorize_stored_collection_target(
+        db_path,
+        ticker,
+        requested=owner_requested,
+        source=CollectionSource.IR,
+        artifact_kind=ArtifactKind.IR_DOCUMENT,
+    )
+    if not authorization.allowed:
+        raise IssuerDocumentPreparationError("source_policy_denied")
+    return authorization
+
+
+def prepare_issuer_document_sources(
+    request: IssuerDocumentStagingRequest,
+    *,
+    state_root: Path,
+    db_path: Path,
+    download: Callable[[str, Path, str], Path | None],
+) -> IssuerDocumentStagingReceipt:
+    """Prepare exact issuer bytes below attempt-private staging only."""
+    root = state_root.resolve(strict=True)
+    authorization = _authorize_staging(
+        root, db_path, request.inventory_request.ticker, request.owner_requested
+    )
+    inventory = request.inventory_request
+    if not issuer_request_period_is_allowed(
+        request,
+        fiscal_year_end_month=authorization.fiscal_year_end_month,
+        as_of=date.today(),
+    ):
+        raise IssuerDocumentPreparationError("reported_quarter_window_denied")
+    staging = root / ".tmp" / "managed_ir_staging" / request.attempt_id
+    receipt_path = staging / "staging_receipt.json"
+    try:
+        require_no_reparse_points(staging)
+    except (OSError, ImmutableArtifactConflictError) as exc:
+        raise IssuerDocumentPreparationError("staging_directory_unsafe") from exc
+    if receipt_path.exists():
+        with JobLock(root, "managed-ir-stage-replay", ["ir-discovery"], wait_s=0):
+            try:
+                return validate_prepared_staging(request, state_root=root, db_path=db_path)
+            except PreparedIssuerDocumentPublisherError as exc:
+                raise _preparation_failure(
+                    "staging_replay_invalid",
+                    request=request,
+                    phase="replay",
+                    objects=staging / "objects",
+                    direct_residues=publisher_residue_names(exc),
+                ) from exc
+    with JobLock(root, "managed-ir-stage", ["ir-discovery"], wait_s=0):
+        objects = staging / "objects"
+        secure_staging_directory(objects)
+        documents: list[StagedIssuerDocument] = []
+        for expected in inventory.expected_documents:
+            try:
+                destination = download(
+                    expected.source_url,
+                    objects,
+                    hashlib.sha256(expected.source_url.encode("utf-8")).hexdigest()[:16],
+                )
+            except IssuerDocumentPreparationError as exc:
+                raise _preparation_failure(
+                    exc.code,
+                    request=request,
+                    phase=exc.phase or "download",
+                    objects=objects,
+                    direct_residues=exc.residue_paths,
+                ) from exc
+            if destination is None:
+                raise _preparation_failure(
+                    "staging_download_failed",
+                    request=request,
+                    phase="download",
+                    objects=objects,
+                )
+            try:
+                outcome, classified_bytes = _classify_staged_source(
+                    destination,
+                    ticker_hint=inventory.ticker,
+                    calendar_override=request.calendar_override,
+                    source_url=expected.source_url,
+                )
+            except (OSError, ValueError) as exc:
+                raise _preparation_failure(
+                    "staging_classification_failed",
+                    request=request,
+                    phase="classify",
+                    objects=objects,
+                ) from exc
+            if isinstance(outcome, CategorizationFailure):
+                raise _preparation_failure(
+                    "staging_classification_mismatch",
+                    request=request,
+                    phase="classify",
+                    objects=objects,
+                )
+            if not _managed_media_allowed(
+                expected.document_type,
+                destination.suffix.lower(),
+                authorization,
+                inventory.fiscal_period_witness,
+            ):
+                raise _preparation_failure(
+                    "staging_media_not_admitted", request=request, phase="classify", objects=objects
+                )
+            documents.append(
+                _staged_document(
+                    request,
+                    destination,
+                    outcome,
+                    expected.source_url,
+                    expected.document_type,
+                    objects,
+                    classified_bytes,
+                )
+            )
+        return _seal_prepared_staging(request, documents, root, db_path, objects)
+
+
+def _classify_staged_source(
+    path: Path,
+    *,
+    ticker_hint: str,
+    calendar_override: str | None,
+    source_url: str,
+) -> tuple[CategorizationResult | CategorizationFailure, ImmutableArtifactSnapshot]:
+    before, _ = read_stable_artifact(path)
+    outcome = classify_ir_file(
+        path, ticker_hint=ticker_hint, calendar_override=calendar_override, source_url=source_url
+    )
+    after, _ = read_stable_artifact(path)
+    if before != after:
+        raise ValueError("staged bytes changed during classification")
+    return outcome, before
+
+
+def _staged_document(
+    request: IssuerDocumentStagingRequest,
+    destination: Path,
+    outcome: CategorizationResult,
+    source_url: str,
+    document_type: str,
+    objects: Path,
+    classified_bytes: ImmutableArtifactSnapshot,
+) -> StagedIssuerDocument:
+    if (
+        outcome.ticker != request.inventory_request.ticker
+        or outcome.doc_type.value != document_type
+        or outcome.period_end != request.inventory_request.period_end
+        or outcome.confidence.value == "low"
+    ):
+        raise _preparation_failure(
+            "staging_classification_mismatch", request=request, phase="classify", objects=objects
+        )
+    try:
+        current, _ = read_stable_artifact(destination)
+        if current != classified_bytes:
+            raise ValueError("staged bytes changed after classification")
+        return StagedIssuerDocument(
+            source_url=source_url,
+            document_type=document_type,
+            object_path=f"objects/{destination.name}",
+            sha256=classified_bytes.file_sha256,
+            byte_size=classified_bytes.size_bytes,
+            fetched_at=datetime.now(UTC),
+            media_type=next(
+                media
+                for media, suffix in _MANAGED_MEDIA_SUFFIXES.items()
+                if suffix == destination.suffix.lower()
+            ),
+            ticker=outcome.ticker,
+            period_end=outcome.period_end.isoformat(),
+            classification_confidence=outcome.confidence.value,
+            classification_evidence_sha256=classification_evidence(outcome),
+            period_label=outcome.period_label,
+        )
+    except (OSError, ValueError) as exc:
+        raise _preparation_failure(
+            "staging_document_invalid",
+            request=request,
+            phase="classify",
+            objects=objects,
+        ) from exc
+
+
+def _seal_prepared_staging(
+    request: IssuerDocumentStagingRequest,
+    documents: list[StagedIssuerDocument],
+    root: Path,
+    db_path: Path,
+    objects: Path,
+) -> IssuerDocumentStagingReceipt:
+    receipt_path = objects.parent / "staging_receipt.json"
+    try:
+        documents.sort(key=lambda item: (item.source_url, item.document_type))
+        unsigned = {
+            "schema_version": "issuer_document_staging_receipt.v1",
+            "request": request.model_dump(mode="json"),
+            "documents": [item.model_dump(mode="json") for item in documents],
+            "classifier_code_sha256": classifier_code_identity(),
+            "verifier_code_sha256": verifier_code_identity(),
+            "canonical_mutations": False,
+        }
+        receipt = IssuerDocumentStagingReceipt.model_validate(
+            {
+                **unsigned,
+                "receipt_sha256": hashlib.sha256(
+                    json.dumps(unsigned, separators=(",", ":"), sort_keys=True).encode()
+                ).hexdigest(),
+            }
+        )
+    except ValueError as exc:
+        raise _preparation_failure(
+            "staging_receipt_invalid",
+            request=request,
+            phase="publish",
+            objects=objects,
+        ) from exc
+    try:
+        _publish_attempt_text(receipt_path, receipt.canonical_json)
+        return validate_prepared_staging(request, state_root=root, db_path=db_path)
+    except (
+        IssuerDocumentPreparationError,
+        PreparedIssuerDocumentPublisherError,
+        OSError,
+        ImmutableArtifactConflictError,
+    ) as exc:
+        code = (
+            exc.code
+            if isinstance(exc, IssuerDocumentPreparationError)
+            else "staging_validation_failed"
+            if isinstance(exc, PreparedIssuerDocumentPublisherError)
+            else "staging_receipt_publish_failed"
+        )
+        residues = (
+            exc.residue_paths
+            if isinstance(exc, IssuerDocumentPreparationError)
+            else publisher_residue_names(exc)
+            if isinstance(exc, PreparedIssuerDocumentPublisherError)
+            else ()
+        )
+        raise _preparation_failure(
+            code, request=request, phase="publish", objects=objects, direct_residues=residues
+        ) from exc
+
+
+def prepare_issuer_document_candidate(
+    ticker: str,
+    source_url: str,
+    *,
+    state_root: Path,
+    db_path: Path,
+    owner_requested: bool,
+    calendar_override: str | None,
+    fiscal_year: int,
+    fiscal_quarter: int,
+    legacy_base_name: str,
+    download: Callable[[str, Path, str], Path | None],
+    fiscal_witness_document_version_id: str | None = None,
+) -> tuple[Path, IssuerDocumentStagingRequest | None, BoundIRClassification | None]:
+    """Download once, then seal qualified quarterly IR documents.
+
+    A returned path without a request needs the existing legacy registration
+    route with its byte-bound classification. Rejected managed input remains
+    in owned attempt staging for repair.
+    Only exact quarter-end classifications with a managed document type and media
+    suffix enter managed publication. Non-calendar periods require an exact
+    current SEC filing witness for the same fiscal period.
+    """
+    root = state_root.resolve(strict=True)
+    authorization = _authorize_staging(root, db_path, ticker, owner_requested)
+    fiscal_witness: FiscalPeriodWitness | None = None
+    if fiscal_witness_document_version_id is not None:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        try:
+            fiscal_witness = resolve_fiscal_period_witness(
+                conn,
+                fiscal_witness_document_version_id,
+                ticker=ticker,
+                fiscal_year=fiscal_year,
+                fiscal_quarter=fiscal_quarter,
+            )
+        finally:
+            conn.close()
+        witness_month = int(fiscal_witness.fiscal_year_end[:2])
+        if (
+            authorization.fiscal_year_end_month is not None
+            and authorization.fiscal_year_end_month != witness_month
+        ):
+            raise IssuerDocumentPreparationError("fiscal_witness_calendar_mismatch")
+    fiscal_year_end_month = (
+        int(fiscal_witness.fiscal_year_end[:2])
+        if fiscal_witness is not None
+        else authorization.fiscal_year_end_month
+    )
+    if fiscal_year_end_month is None or not reported_quarter_is_in_window(
+        fiscal_year=fiscal_year,
+        fiscal_quarter=fiscal_quarter,
+        fiscal_year_end_month=fiscal_year_end_month,
+        as_of=date.today(),
+    ):
+        raise IssuerDocumentPreparationError("reported_quarter_window_denied")
+    attempt = f"candidate-{uuid.uuid4().hex}"
+    objects = root / ".tmp" / "managed_ir_staging" / attempt / "objects"
+    with JobLock(root, "managed-ir-candidate", ["ir-discovery"], wait_s=0):
+        secure_staging_directory(objects)
+        try:
+            destination = download(
+                source_url, objects, hashlib.sha256(source_url.encode()).hexdigest()[:16]
+            )
+        except IssuerDocumentPreparationError as exc:
+            raise IssuerDocumentPreparationError(
+                exc.code,
+                attempt_id=attempt,
+                phase="download",
+                residue_paths=_retained_staging_names(objects, exc.residue_paths),
+            ) from exc
+        if destination is None:
+            raise IssuerDocumentPreparationError(
+                "staging_download_failed", attempt_id=attempt, phase="download"
+            )
+        try:
+            outcome, classified_bytes = _classify_staged_source(
+                destination,
+                ticker_hint=ticker,
+                calendar_override=calendar_override,
+                source_url=source_url,
+            )
+        except (OSError, ValueError) as exc:
+            raise IssuerDocumentPreparationError(
+                "staging_classification_failed",
+                attempt_id=attempt,
+                phase="classify",
+                residue_paths=_retained_staging_names(objects),
+            ) from exc
+        classified = BoundIRClassification(
+            outcome,
+            classified_bytes.file_sha256,
+            classified_bytes.size_bytes,
+            ticker,
+            calendar_override,
+            source_url,
+        )
+        if isinstance(outcome, CategorizationFailure):
+            if fiscal_witness is not None:
+                raise IssuerDocumentPreparationError(
+                    "fiscal_witness_classification_failed",
+                    phase="classify",
+                    residue_paths=_retained_staging_names(objects),
+                )
+            return (
+                _legacy_candidate(destination, root / "ir_documents" / ticker, legacy_base_name),
+                None,
+                classified,
+            )
+        document_type = outcome.doc_type.value
+        suffix = destination.suffix.lower()
+        expected_period_end = fiscal_quarter_end(
+            fiscal_year=fiscal_year,
+            fiscal_quarter=fiscal_quarter,
+            fiscal_year_end=(
+                fiscal_witness.fiscal_year_end if fiscal_witness is not None else "12-31"
+            ),
+        )
+        if (
+            outcome.period_end != expected_period_end
+            or (fiscal_witness is None and authorization.fiscal_year_end_month != 12)
+            or not _managed_media_allowed(document_type, suffix, authorization, fiscal_witness)
+        ):
+            if fiscal_witness is not None:
+                raise IssuerDocumentPreparationError(
+                    "fiscal_witness_classification_mismatch",
+                    phase="classify",
+                    residue_paths=_retained_staging_names(objects),
+                )
+            return (
+                _legacy_candidate(destination, root / "ir_documents" / ticker, legacy_base_name),
+                None,
+                classified,
+            )
+        if outcome.ticker != ticker or outcome.confidence.value == "low":
+            raise IssuerDocumentPreparationError(
+                "staging_classification_mismatch",
+                attempt_id=attempt,
+                phase="classify",
+                residue_paths=_retained_staging_names(objects),
+            )
+        try:
+            inventory = IssuerDocumentInventoryRequest(
+                ticker=ticker,
+                fiscal_year=fiscal_year,
+                fiscal_quarter=fiscal_quarter,
+                period_end=outcome.period_end,
+                expected_documents=(
+                    ExpectedIssuerDocument(source_url=source_url, document_type=document_type),
+                ),
+                fiscal_period_witness=fiscal_witness,
+            )
+            request = IssuerDocumentStagingRequest(
+                attempt_id=attempt,
+                inventory_request=inventory,
+                inventory_request_sha256=inventory.request_sha256,
+                owner_requested=owner_requested,
+                calendar_override=calendar_override,
+            )
+        except ValueError as exc:
+            raise IssuerDocumentPreparationError(
+                "staging_period_unsupported",
+                attempt_id=attempt,
+                phase="classify",
+                residue_paths=_retained_staging_names(objects),
+            ) from exc
+        document = _staged_document(
+            request, destination, outcome, source_url, document_type, objects, classified_bytes
+        )
+        _seal_prepared_staging(request, [document], root, db_path, objects)
+        return destination, request, None
+
+
+def _legacy_candidate(
+    source: Path,
+    dest_dir: Path,
+    base_name: str,
+) -> Path:
+    """Transfer unsupported bytes to the existing intake, without another GET."""
+    snapshot, payload = read_stable_artifact(source)
+    secure_staging_directory(dest_dir)
+    try:
+        installed = install_bytes_no_clobber(
+            dest_dir,
+            base_name + source.suffix,
+            payload,
+            expected_sha256=snapshot.file_sha256,
+            expected_size=snapshot.size_bytes,
+        )
+    except SecureFileInstallError as exc:
+        raise IssuerDocumentPreparationError(
+            "legacy_handoff_failed",
+            attempt_id=source.parent.parent.name,
+            phase="publish",
+            residue_paths=_retained_staging_names(
+                source.parent, tuple(path.name for path in exc.residue_paths)
+            ),
+        ) from exc
+    if installed.residue_paths:
+        raise IssuerDocumentPreparationError(
+            "legacy_handoff_residue_retained",
+            phase="publish",
+            residue_paths=tuple(path.name for path in installed.residue_paths),
+        )
+    # The installer deliberately has no path-delete authority. Retain the
+    # attempt-local source for the existing staging recovery/retention owner.
+    log.info(
+        {
+            "event": "legacy_candidate_staging_retained",
+            "attempt_id": source.parent.parent.name,
+            "path": str(source),
+        }
+    )
+    return installed.path
+
+
+def project_managed_presentation(
+    publications: Sequence[PreparedIssuerDocumentPublication],
+    root: Path,
+    *,
+    newly_published: bool = False,
+    allow_repair: bool = True,
+) -> Literal["coherent", "repaired", "alias_held_by_other_document", "repair_required"]:
+    """Supply verified publication metadata to the existing index owner."""
+    import index_manager
+
+    candidates = [
+        index_manager.IRDocumentProjection(
+            ticker=item.ticker,
+            year=publication.staging_receipt.request.inventory_request.fiscal_year,
+            quarter=f"Q{publication.staging_receipt.request.inventory_request.fiscal_quarter}",
+            doc_type="presentation",
+            ir_url=item.source_url,
+            local_path=str(root / path),
+            fiscal_label=item.period_label,
+        )
+        for publication in publications
+        for item, path in zip(
+            publication.staging_receipt.documents, publication.canonical_paths, strict=True
+        )
+        if item.document_type == "ir_presentation"
+    ]
+    if not newly_published:
+        disposition = index_manager.project_ir_document(
+            candidates,
+            document_index_path=root / ".tmp" / "document_index.json",
+            allow_repair=False,
+        )
+        if disposition != "repair_required" or not allow_repair:
+            return disposition
+    with JobLock(root, "managed-ir-index", ["ir-discovery"], wait_s=0):
+        return index_manager.project_ir_document(
+            candidates,
+            document_index_path=root / ".tmp" / "document_index.json",
+            newly_published=candidates[0] if newly_published else None,
+        )

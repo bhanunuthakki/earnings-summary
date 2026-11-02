@@ -1,5 +1,410 @@
 # Operations & Governance Surface Impact
 
+## Retained transcript audit qualification — October 27, 2026
+
+Disposition: **bounded backend command, no new dashboard action or schedule**.
+The existing `run_llm_evals.py` CLI exposes `transcript_summary_claim_audit`.
+Native source cases require explicit `--db`, `--source-db`, `--source-state-root`
+and `--proof-state-root`. The ledger and proof root are isolated fixtures; original
+sources and their database remain read-only. Source/ledger aliases, live data
+locations and broad proof roots fail before budgets or provider work. The dashboard
+run bar and its action reject this native qualification purpose. Existing run
+history and call-health observations remain visible.
+
+`llm_budget` requires an explicit finite positive blocking budget. The migration
+seeds the new purpose at $5 API-equivalent per month without overwriting an existing
+owner row. `evals.harness` owns stable private-proof reads. The configured state
+root owns the active bundle; an explicit temporary proof root supports native tests.
+The reader creates no files or databases. Source collection, factual admission and
+new summary generation remain separate actions. Qualification needs complete
+actual-route results and independent context adjudication; metadata, synthetic
+fixtures and advisory code review do not qualify it. The release must verify the
+actual native fleet client and preserve existing operating holds.
+
+Evidence includes the transcript route, proof reconstruction, native-source,
+evaluation CLI, budget, panel and action tests. Native execution, model qualification
+and production activation remain open. This adds no dedicated batch runner.
+
+## Explicit Notes logging and legacy research retirement — October 27, 2026
+
+Notes capture stores the note and returns its receipt. It does not infer intent,
+triage a research request, extract a pledge, annotate a pending decision, suggest a
+parked-note route or generate a behavioral rule. Explicit typed decision capture,
+owner process controls, recorded outcomes and affirmed owner facts remain.
+
+The legacy research run/status/reject routes and singular proposal-action route
+are removed. `fragment=research` is unsupported. Governed Ask proposal detail and
+decision routes remain. Card actions are Pass, Watch and Promote; a stale
+`research_further` action fails before writes. The analyst's readable suggestion
+can still say `research_further`. On-demand backend research remains available.
+
+`record_decisions.py` requires an existing explicit or configured database. Every
+retained recording step receives that same path. Code-root and state-root inputs
+cannot select a checkout-local database. Migration 0065 also removes the five
+retired automation purposes from configuration and exclusive generated context;
+retained note bodies and known process/decision dependencies remain. It removes
+unaffirmed derived behavioral rules and exact retired-purpose model verdicts. A
+retained profile successor link blocks the migration before writes; affirmed
+settings are unchanged. All 61 migration/profile checks pass locally. Broader input
+and history deletion still requires the reference census and concrete release.
+
+Local proof: 192 owning tests pass. Synthetic Notes and card browser checks cover
+1280/768 widths, capture failures and retries, ticker attribution and the removed
+card action. They do not establish live cockpit parity. No service, schedule,
+production row or installed library changed.
+
+## On-demand process research source retirement — October 25, 2026
+
+The `ledger_synthesis`, `red_team`, `tenet_accountability` and `thesis_collision`
+task declarations and wrappers are removed. Their explicit backend runners stay.
+This supersedes the historical held-disabled disposition for those four jobs.
+Canonical Scheduler retirement remains a release action; no host task was changed.
+
+
+## October 25 simplification: source retirement in progress
+
+This amendment supersedes earlier retained-history and Telegram/coaching sections
+where they conflict. The owner approved removal of the retired features and their
+in-scope inputs, data, history, pending state, exclusive readers and libraries.
+Current theses, owner process settings and decision time series remain the named
+exceptions. See `docs/architecture/backend-retirement-execution-plan.md` for the
+single execution and release boundary.
+
+The source no longer declares Telegram capture, `es-poller`, automatic coaching
+pings, decision nudges, weekly personal-review packets, monthly calibration
+narratives, annual letters, README generation, automatic session distillation or
+the proactive standup. Their exclusive transports, callbacks and front cards are
+removed. Normal collection and earnings briefs remain. Direct note and decision
+logging stays explicit and uses a configured database. No replacement producer
+is scheduled.
+
+The legacy On My Mind feed, per-card replies and answer poll are removed from
+source. Its `/api/onmymind/*` routes return normal missing-route responses;
+`fragment=onmymind` and `fragment=card` are unsupported. Basic Notes capture,
+ticker attribution, decision logging and explicit Ask remain. The exclusive
+answer/contradiction classifier, reply classifier, saved-artifact brief and
+arbitrary reading extractor are removed. Migration 0065 removes their generated
+note context while retaining note bodies, other context and process/decision
+links. It checks known note triggers and context-reading views before mutation. Unknown
+or changed dependencies hold the migration. Invalid JSON context remains unchanged and needs its own
+source disposition; it is not erased or treated as an empty object.
+
+Source registration expects only `es-dashboard` as a managed service and no
+service-owned Scheduler exception. A leftover poller task is undeclared drift.
+Canonical service/task/data removal and installed-library cleanup have not run;
+this amendment makes no live-retirement claim.
+
+
+**2026-10-24 disposition:** two dedicated lens declarations/runners were removed locally; manual engine/cache/history access and the separate dirty-artifact refresh are retained. Declared Jobs rows disappear; still-installed jobs show unexpected. No live/deploy change or new control.
+
+The active runtime policy also removes both retired job names. A stale invocation
+keeps its requested coarse database lock. Explicit `lens-refresh` callers retain
+the existing database-scoped lock identity. Retained job mappings, lane locks and
+Jobs drift handling stay unchanged. Runtime tests cover these boundaries; no live
+scheduler or service change occurs.
+
+### Standalone portfolio dashboard and old overview feed retired (2026-10-24)
+
+The owner approved retiring new standalone weekly portfolio-dashboard HTML exports and `/api/overview`. The feed returns HTTP 410 with `error=retired`, a Cockpit replacement URL and `Cache-Control: no-store`, without assembling analytics. `/analytical` remains a shell redirect. Saved exports, current Cockpit panels, source records, decision history, outcome scoring and shared trigger, reread, synthesis and budget components stay. The exclusive CLI, page renderer, legacy dashboard data fields and queries are removed.
+
+The weekly code no longer launches the export CLI. Dirty refresh, holding lenses and cross-portfolio synthesis retain their sequence, failure and resume contracts. Version-2 same-scope checkpoints may contain the exact retired `analytical_dashboard` completion key; it is ignored while other unknown keys still fail. No checkpoint version or database schema changes.
+
+Tracked XML changes only the Description text. Its UTF-16 BOM, CRLF, triggers, settings, principal and actions stay byte-identical outside that text span. The wrapper, manifest, schedule and registration remain unchanged. No live task, service or database was inspected or changed. Installation on the canonical host remains a separate action. Evidence is in the bounded legacy-dashboard acceptance receipt and its XML description proof.
+
+### Legacy company feed and standalone page retired (2026-10-24)
+
+The owner approved retiring the unused `/api/ticker/<ticker>` JSON feed and
+standalone company-page renderer. Valid feed requests now return HTTP 410 with
+`error=legacy_ticker_feed_retired`, a Company Desk replacement URL and
+`Cache-Control: no-store`. Invalid ticker values return 400 before data access.
+Lowercase ticker values normalize through the existing validator.
+`/ticker/<ticker>` still redirects to Company Desk.
+
+Holding retains identity, freshness, artifacts, analyses, report links, and Ops
+and Notes fragments. It no longer builds unused position, thesis and recent
+selection fields for the retired page/feed. Shared reports, portfolio analysis,
+records, source files and history remain. No schema, data, schedule or live
+service was changed. Evidence: `tests/test_ticker_command_center.py` checks the
+410 response with all data callbacks forbidden and retains refresh/DCF event
+assertions in the active Ops fragment.
+
+### Dedicated ETF research retired (2026-10-25)
+
+The owner retains only portfolio diversification commentary and simple long-term
+earnings-multiple context. Known/declared ETFs stop before onboarding acquisition;
+new ETF briefs and native financial-purpose generation return unsupported.
+Company brief and candidate-fit batches exclude ETFs. General book weights,
+prices, correlation and risk calculations still include held funds.
+
+The dedicated ETF role writer, score/style/what-if materializer and acquisition
+adapters are retired. The old dedicated commands are removed. The previous Create/Refresh and capture-prerequisite proposals are
+superseded. No replacement ETF workflow is added.
+
+The old ETF peek and dedicated saved-workup readers are retired. Optional ETF
+reports, profiles, reviews and narrative history are canonical-cleanup candidates.
+Retain shared portfolio holdings and only the source bytes or notes that support
+an actual retained decision, thesis or financial-provenance dependency. Source
+retirement does not delete canonical files. No history viewer is promised.
+Stale caches cannot populate active ETF scoring, labels or sizing advice.
+A dated basket P/E retains its point-in-time meaning; unsupported long-term
+multiples remain unavailable. The same financial-grounding contract applies.
+
+The approved AVUV plan stopped at the disabled owner-policy preflight. The owner
+then canceled collection and the proposed run-only exception. Zero FMP requests
+or remote fixture writes occurred. No production database, service, policy or
+scheduler was changed. This source retirement is not deployed. See `etf_data.md`.
+
+### Research backend consolidation (2026-10-22)
+
+Disposition: **existing operations consolidated; no new schedule or live action**.
+`pipeline.fmp_batch` now owns registered FMP document selection, dependency order,
+dispatch and per-document outcomes for the bulk CLI and quarterly refresh. Parse
+failures are failed documents rather than valid zero-result extractions. Entry
+rejects a pending caller transaction before extractor or accounting work. Pending
+failed writes roll back before accounting; earlier committed documents remain.
+Missing segment revenue is a failed prerequisite with exact period coordinates;
+reported zero remains available. Independent reconciled periods can commit, and
+failed outcomes retain their actual inserted counts. Valid empty input can succeed
+with zero rows. Extractors retain document commits; these boundaries do not make
+the whole quarterly path atomic. The immutable-record `refresh_cache` transaction
+path remains caller-owned.
+
+Calendar-year PDF presentations now use managed prepare/validate/publish from
+automatic discovery and explicit URLs. Qualified candidates download once and
+bypass loose sidecar/categorizer registration. Other families and fiscal calendars
+retain exact-file legacy categorization. That route receives one prior classification
+bound to bytes, size, issuer, calendar and URL; a changed binding fails before writes.
+Undetermined inputs retain legacy rejection. The broad categorizer subprocess sweep
+is removed; explicit local-upload CLI ingestion remains. Actual owner-requested
+policy and calendar are sealed through preparation and validation. Old default
+request serialization is preserved. Legacy staging copies remain because the path
+callback has no deletion authority.
+
+Explicit URL intake also accepts `--document-version-id`. This option names one
+current registered SEC filing that proves the requested issuer and fiscal quarter.
+It does not select a filing automatically. The witness applies only to the supplied
+URLs. Preparation checks its source, fiscal calendar and classified period before
+managed publication. A witness mismatch fails the attempt; it cannot enter legacy
+registration. HTML, event and annual-document intake contracts are unchanged.
+
+Completed registrations use a read-only recorded-status check, memoized for one
+operation. It reads all subject attempts, small completion metadata, current rows
+and retained-file status. It does not hash canonical PDF bytes, compare current
+code identity or renew admission. Fetch reports `registration_not_reverified` for
+this outcome. An older coherent attempt cannot hide a later unfinished attempt.
+Missing/incoherent completion or a needed projection repair enters strict recovery.
+That path checks the original sealed binding and canonical evidence and can fail
+after code-root drift. A committed unfinished publication can finalize from its
+retained receipt and intent without download, classification or duplicate document
+insertion. Uncommitted work requires current code, policy and classification checks.
+
+The index owner projects compatibility aliases from verified committed candidates.
+Replay preserves any coherent incumbent; a missing/invalid entry repairs only
+with one candidate. Multiple candidates remain ambiguous. Whole-file malformed
+JSON, invalid root values and read errors fail projection without overwriting
+state. A committed publication can therefore remain not ready. Downloaded,
+registered, newly ready, existing ready and projection-failed remain distinct
+operational outcomes; they do not imply narrative completion.
+
+The explicit URL adapter returns ready URL entries, including coherent/repaired
+registrations, only when the attempt succeeds. Any registration, projection or
+required deterministic-effect failure returns zero. With processing enabled,
+coherent retries can finish anchor/dirty effects without another download,
+classification or model call. Disabling processing retains that boundary. Fetch
+CLI failed/partial outcomes return nonzero; bulk policy-denied role skips retain
+their existing handling. Discovery can process usable partial work but returns
+failure for the overall partial attempt. Repair-only processing defers optional
+model summaries explicitly. Transport skips are distinct from registration failure:
+automatic fetching remains best effort, while an explicit URL call with no ready
+work returns zero. Previously registered pending work can still process after a new
+publication fails; this does not make the overall failed attempt successful.
+Exact-file legacy categorization scopes and restores its runtime issuer registry.
+Per-file input failures remain explicit partial outcomes; database failure stops
+dependent legacy work. Post-commit writer contention is reported without losing
+earlier committed publications.
+
+The separate `process_ir_documents_state.py` entrypoint is retired. Its three
+callers invoke `process_ir_documents.py` with the same explicit state/database
+arguments. Existing index operations accept an explicit path; anchors and model
+bookkeeping use `db_path_context`, without module/path or `sys.argv` rebinding.
+The real summary chain uses the explicit database for model pins, budget alerts
+and usage rows, and the explicit state for cache/index writes. Context restores
+after success or budget denial. This does not change the preexisting statistical
+anchor branch that derives a checkout database path. Pure previews require no
+database. Completion flags and narrative-cache existence remain legacy authorities
+pending the separately qualified artifact migration.
+
+Financial consumers use ordered canonical outcomes and the existing bounded
+publication-verification scope. Source admission and derived currentness use K;
+selection retains the explicit recorded clock O. Typed corrupt evidence is local
+to affected cells/publications; database failures abort the operation and reports
+retain their whole-table unavailable state. Programmer failures propagate. Caller
+transactions, replacement transactions and row factories retain ownership. No
+verification cache survives an operation or creates a new persisted authority.
+The scope admits at most 4,096 distinct verification keys; another key fails before
+verification rather than evicting earlier proof. Cached failures store immutable
+metadata and create fresh exceptions. Reviewed mappings require matching committed
+currency, a stricter discovery predicate under the existing contract. Legacy
+mappings without `source_currency` retain their qualified complete-output parity.
+Stored period/reference corruption remains explicit, including outside the growth
+window; calculated output fails closed while valid references stay inspectable.
+
+Ten financial-read boundaries reuse the same validated snapshot owner. A caller's
+replacement transaction and pending writes survive rejected reads. Invalid O<K
+arguments raise ValueError; stored corrupt evidence retains typed quarantine errors.
+The financial-series reader consumes one ordered canonical population. Quarterly
+coverage keeps eager validation. Annual eligibility and missing-selection order,
+duplicate-selected-observation disposition and admitted-bundle handoff stay intact.
+Strict outcome validation remains in the canonical resolver. These are internal
+read changes, with no new operator action, data source or completion authority.
+
+Combined quarterly consumers now share source preparation, canonical outcomes and
+bundle materialization once. Separate series and coordinate reducers retain their
+own validation and handoff rules. Nonquarterly canonical admission remains separate;
+only its source enumeration is shared. Complete publication-verification work is
+unchanged. No prepared-population cache, schema or stored authority is added.
+
+Temporary-run finalization, recovery and reviewed registration build a hold-path
+set once per operation. Full reasons and ordering remain. The lookup algorithm
+changes; retention policy and operator capabilities do not. Metrics and FMP-derived
+KPI tests reuse the existing cached real migration fixture. They add no setup
+command, production schema, service or fixture framework.
+
+Say/Do preparation now owns full supported rows, selected indices, selection
+disposition, owner context, the existing filter cache, and verdict availability.
+Both normal build and strict dirty refresh use this owner. Rendering consumes
+prepared section values without parser, model, context, cache or verdict database
+work. Prompts, model route, budget and cache identity remain unchanged. Historical
+and current Markdown imports remain supported; other workspace panel reads remain.
+
+Spreadsheet ingestion receives source-preserving selected records from the existing
+parser. Winning values carry their cell/header locator, labels, scale and available
+openpyxl representation. The old numeric dictionary remains a projection and its
+invocation identity is retained. Source/config changes fail before writes. A workbook
+hash registered to another issuer is rejected before document/fact writes; same-issuer
+retry suppression remains. This guard does not change the global hash schema. The
+existing KPI writer, per-period commits and recovery contract remain; native writer
+retirement and durable per-cell rejected capture are not qualified by this change.
+Definition resolution now runs once per configured spec. Currency validation still
+examines absent and overwritten specs in original order after all resolutions.
+On a failed period, pending writes roll back before failed-run accounting commits;
+prior completed periods remain. New-document and run helpers retain their existing
+commits. This fix does not make the adapter caller-transaction safe or atomic across
+all periods. The source, shared writer, semantic admission and history owners stay.
+
+Evidence belongs to the FMP batch/quarterly, explicit-state, canonical read,
+spreadsheet ingest and Say/Do regression suites and the bounded implementation
+receipt. All runtime verification uses explicit synthetic fixtures. No collection,
+production mutation, migration, trade, publication or deployment is performed.
+
+### Shared fiscal-calendar calculation (2026-10-22)
+
+Disposition: **internal consolidation; no new operator action or schedule**.
+`compute.fiscal_calendar` owns the existing pure IR endpoint calculation and the four
+filename-calendar overrides. Six repeated compute tables are removed. Transcript
+and summary paths retain explicit year-label adapters; all other filename tickers
+keep their calendar fallback. IR helper imports remain available through aliases.
+The retired fiscal-stamp command uses the shared calendar membership and existing
+entrypoint bootstrap; its dry-run scope and rejection of writes remain unchanged. No data is migrated or restamped.
+
+The parity gate compares both filename conventions, all quarters, existing IR
+calendar families, leap years, fallback/error behavior and summary reverse matching.
+The separate tickerless transcript inverse-inference defect is outside this
+output-preserving change. Existing analysis depth, source lineage and collection
+authority remain unchanged.
+
+### Summary anchor preflight (2026-10-22)
+
+Disposition: **existing extraction preflight; no new operator action or schedule**.
+After the existing run reservation, allowlist summary extraction checks anchor
+coherence at `financial_fact_resolution`. Missing or inconsistent anchors fail the
+attempt before model work. A current explicit binding cannot fall back to direct
+lineage when it is invalid. Valid scope hashes remain distinct from whole-blob
+hashes. Recorded issuer IDs and existing canonical mappings remain supported;
+the check does not create or approve issuer mappings.
+
+The selected immutable identity is checked again inside the persistence transaction.
+Changed lineage prevents fact writes. Completed attempts, including earlier empty
+results, retain their processing history and skip before this preflight. Completion
+identity, general fact resolution, capture processing, database triggers and semantic
+admission remain unchanged. The check reads stored lineage only; it does not collect,
+repair or create evidence. Validation belongs to `test_summary_kpi_completion.py`,
+with the existing fact-resolution and binding regressions.
+
+### Summary KPI processing completion (2026-10-22)
+
+Disposition: **existing extraction and CLI correction; no new operator action or
+schedule**. Allowlist extraction uses the existing pipeline-attempt ledger before
+model work. Its identity binds captured summary and holdings bytes, requested
+metrics, effective units, source and parent identity, extraction contract and
+resolved model route. Existing facts no longer narrow another source's request.
+Exact completed attempts skip model work and allow later documents to continue.
+Allowlist `--refresh` repeats completed work but does not replace an active writer.
+
+The existing stage journal records requested, returned and unknown metrics plus
+persistence counts. Completion means bounded processing, not complete disclosure
+or semantic admission. Final input checks, fact writes and stage completion share
+one transaction. Failed writes roll back and remain retryable. Database rejection
+propagates from the shared KPI writer; a duplicate must identify a retained fact.
+The CLI preserves structured results and returns a failure exit code when any
+ticker records an error, including capture-mode errors.
+
+Summary-derived facts retain their existing non-admitted status. Source-evidence
+requirements, historical observations, original-source parent rules and capture
+processing remain unchanged. No new collection or live execution is authorized.
+Distinct source versions now receive the full configured metric request; initial
+model work can therefore increase. Purpose, prompt, response schema, model policy
+and analytical depth remain unchanged. Validation belongs to
+`test_summary_kpi_completion.py`, `test_summary_kpi_database_authority.py` and
+`test_pipeline_kpi_persistence.py`, with shared-writer caller regressions.
+
+### Raw IR narrative cache validity (2026-10-22)
+
+Disposition: **existing local extraction and reader hardening; no new operator
+action or schedule**. `compute.ir_narrative` owns one validity check for the
+producer, pending-work detection and prompt reader. One atomically replaced JSON
+envelope per ticker/document-type/period binds exact ordered source bytes,
+extraction settings and code, parser version, source dispositions and output hash.
+The existing adjacent-file `hold_run_lock` serializes writers for each ticker's
+narrative cache; it does not open a database.
+
+Legacy text files remain intact but unverified. Existing local extraction rebuilds
+the cache from held PDFs; no source collection, financial write or model call is
+added. Failed replacement preserves the preceding envelope. Empty extraction is
+recorded so it does not create repeated work. The reader selects the preferred
+candidate once, then emits an explicit gap if it cannot validate that candidate;
+it does not substitute an older cache. Source-less legacy caches remain gaps,
+not executable pending work. Document priority, text limits, normalization and
+management-claim framing remain unchanged. This proves local cache validity,
+not source-acquisition completeness or financial admission.
+
+Validation belongs to `test_ir_narrative_extract.py`, `test_llm_ir_anchor.py` and
+`test_discover_ir_documents_all.py`. Existing source and legacy-file retention
+remain with their established owners; this change creates no revision archive.
+
+### Extraction failure and database ownership cleanup (2026-10-22)
+
+Disposition: **existing CLI hardening; no new operational surface**. Financial
+same-document correction lookup and update errors now propagate. `extract_facts`
+rolls back pending writes before recording a failed stage and failed run, then
+stops. Previously committed documents remain intact. If failure bookkeeping also
+fails, the command reports that failure and preserves the original exception.
+Freeze triggers, source admission and observation history are unchanged.
+
+The owner retired generated-summary KPI extraction on October 26. Its CLI and
+refresh step are removed. Explicit original-source manifests and original PDF
+capture remain under `extract_kpis_from_ir`; source identity, semantic admission
+and locator checks remain required. No automatic transcript numeric extraction
+is implied. Evaluation commands use an explicit/configured database and scoped
+ledger context; source roots do not select a database.
+
+The unreferenced `src/parser.py` filename parser and automatic renaming function
+are removed. PDF/text readers, the filing-section filename parser and the
+registered metadata classifier remain. Validation belongs to
+`test_restatement_detector.py`, `test_extract_facts_database_failure.py`,
+the retained intake, IR, filing,
+summary-KPI and dispatch suites.
+
 The existing daily database backup and weekly filesystem cleanup jobs own file
 retention. Backups keep the latest verified completed member per source and
 family. Snapshot, archive and required upload failures preserve the last good
@@ -296,12 +701,10 @@ tests cover these boundaries. No operator action, registry entry, scheduler,
 service, schema or source authority changes.
 
 Application read-performance changes preserve the existing Operations registry,
-Jobs, Sources, Data, Actions, and README approval boundaries. Independent panel
-loading, bounded reads, cache-busy responses, and retry controls change delivery
-and recovery of read-only observations. They do not add an operator action,
-scheduler, writer, or service-health claim. A failed README status read disables
-Apply until the current status is verified. Route and read-lifecycle tests cover
-these preserved boundaries.
+Jobs, Sources, Data and Actions boundaries. Independent panel loading, bounded
+reads, cache-busy responses and retry controls change delivery and recovery of
+read-only observations. They do not add an operator action, scheduler, writer or
+service-health claim. Route and read-lifecycle tests cover these boundaries.
 
 Company Desk loading and same-company Retry preserve the prior company identity
 and evidence until the response identity validates. The additive selected-observation
@@ -334,19 +737,26 @@ Operations registry and its visible Jobs, Sources, Data, and Actions contracts t
 unchanged; manifest validation, transactionality, and durable coverage receipts stay owned by the
 ingestion boundary rather than the Operations workspace.
 
-### Streamlit analytics deep-dive sandbox
+### Retired optional analytics and automatic advisor cadence (2026-10-23)
 
-`explore-sandbox/analytics_deep_dive.py` is a local, optional-dependency analytics surface: an
-interactive composition of deterministic catalog → ViewSpec reads over an operator-named
-synthetic clone or restored snapshot. It adds no scheduled job, managed service, operator
-control, database write, or production access — the app opens every connection read-only,
-refuses a checkout-local `data/portfolio.db`, and every number comes from the shared
-provenance-aware resolver (`viewspec.engine`), never a sandbox-local query path. Theme and
-control parity with the cockpit is generated and drift-checked
-(`scripts/gen_streamlit_theme.py`; `tests/test_explore_sandbox_kit.py`), so no new visual
-contract exists to govern. The canonical Operations registry and its visible Jobs, Sources,
-Data, and Actions contracts therefore remain unchanged; the sandbox is not an operator
-workflow and never a production authority.
+Disposition: **owner-approved local surface and schedule retirement**.
+The separate Streamlit analytics shell, its toolkit, generated theme files,
+exclusive theme generator and optional dependency entry are retired. Main Explore,
+ViewSpec, the metric catalog, shared UI primitives and provenance-aware reads remain.
+No source data, stored research or shared dependency lock is removed. Existing
+synthetic Explore renders retain their exact bytes; interaction is not requalified
+by that comparison alone.
+
+Monthly automatic next-dollar/swap memo generation is retired from the project task
+configuration. Requested generation remains through the existing CLI and dashboard
+actions. Allocation calculations, model/prompt depth, budgets and saved memo history
+remain. The calibration task's description no longer claims a preceding automatic
+advisor run; its schedule and action remain unchanged.
+
+Removing a task declaration does not disable an already installed Windows task.
+The named monthly task's live disable/recovery action remains unexecuted and needs
+the separate owner approval reserved for that operation. No other task, service,
+source collection or live data changes follow from this local retirement.
 
 ### KPI definition-revision shadow census
 
@@ -420,23 +830,12 @@ envelope. The envelope binds all current source bytes and the extraction method.
 An unreadable, changed, or missing preferred source produces an explicit context
 gap. Legacy text caches remain retained but cannot supply prompt text.
 
-The existing summary-KPI CLI requires the configured database or an explicit
-`--db-path`; `--repo-root` selects source files only. Allowlist extraction checks
-existing evidence before a model call. It registers the exact summary bytes and
-uses the existing document-evidence coordinator for that document ID when
-deterministic preparation is needed. Registration and preparation share the exact
-database writer lock; the lock is released before model work. Invalid explicit
-bindings fail closed. Failed preparation makes no model call and remains
-retryable. Missing issuer-inventory linkage for a derived summary stays degraded;
-it does not become an acquisition-completeness claim. The existing run ledger binds
-each completed attempt to its exact source, parent, holdings, and model route.
-Empty and partial responses record bounded processing; unreturned metrics remain
-unknown. `--refresh` repeats completed work but cannot replace an active writer.
-The capture/enumeration path is unchanged. `--requested` carries explicit owner
-request context for a selected ticker or document. Resume receipts bind that
-context. Existing automatic role policy is unchanged. Derived summaries do not
-gain financial admission from this completion record. No scheduler task or service
-was added.
+Generated-summary KPI extraction is retired. The CLI, optional refresh step and
+Explore extraction control are removed. Explicit reviewed manifests use original
+documents through `extract_kpis_from_ir`; original supplement PDF capture remains.
+Neither manual application nor numeric capture proves disclosure completeness or
+semantic admission. No source collection or live scheduler change follows from
+this source retirement.
 
 ### Legacy evidence backfill and managed IR byte admission
 
@@ -770,16 +1169,29 @@ does not emit calibration. Successful outcomes retain a versioned input manifest
 in their notes; source capture freshness remains explicitly unverified. This
 changes the existing manual grader only, without activating a run or schedule.
 
-### README generation contract evidence
+### README application feature retired (October 25, 2026)
 
-The existing README update action retains a compact attestation for each generator
-and judge call, binding its registered purpose, prompt and schema versions, source
-hashes and observed provider attempt. The facade is limited to the existing
-`meta_eval` scope; prompt drift fails closed and missing usage, cost or effective
-prompt verification remains unknown. Setup, schema and budget failures cannot
-enter provider fallback. This changes evidence retained by the existing action;
-it adds no Operations control, schedule, provider activation or live execution.
-Other LLM consumers remain outside this migrated tranche.
+The owner approved removal of README generation, judging, apply and status
+collection. The CLI, two active model purposes and exclusive eval registrations
+are removed. The former action and status routes return 404. Operations has four
+tabs and performs no README repository-evidence scan. Manual README editing stays
+outside the application. Existing README bytes, candidates, receipts, call records
+and migration history remain. Retired judge calls retain their historical
+meta-purpose classification. No live state or scheduler was changed.
+
+### Automatic decision prompts retired from source (October 25, 2026)
+
+The owner requested basic logging and decision tracking without automatic coaching.
+The decision-nudge runner, module, source task and wrapper are removed. New weekly
+packets do not create missing-field decision prompts. Old `dn` callbacks are inert;
+a pending `decision_fill_in` does not consume the owner's next message or modify
+its historical pending row. The raw note and explicit typed decision logging paths remain. The later Notes
+amendment above removes pledge parsing and historical packet actions.
+
+Basic frontend capture no longer starts a challenge or an unsolicited answer job.
+It retains note ingestion. Explicit typed decision actions own decision writes.
+Explicit targeted questions use the existing chat engine and backend skills.
+Canonical-host task retirement remains a separate unverified deployment step.
 
 `execution/grade_predictions.py` uses the same explicit/configured database
 boundary. It grades only uniquely identified, admitted revision-aware KPI facts
@@ -1594,10 +2006,10 @@ builders receive `DCF_SOURCE_STATE_ROOT`. The SEC capture owner stores blobs
 under `<state-root>/data/evidence/blobs`. A code checkout, database path, or
 workbook output root grants no source-read authority. The dashboard passes its
 explicit state-root context to valuation consumers and child actions.
-`execution/run_advisor_memos.py`, `execution/run_socratic_questions.py`, and
-`execution/dcf_sheets.py import` accept the same explicit `--state-root`.
-Socratic questions and memo synthesis forward that context to their existing
+`execution/run_advisor_memos.py` and `execution/dcf_sheets.py import` accept
+that explicit `--state-root`. Advisor memo synthesis forwards it to the existing
 advisor reader. The code/output root and source state root remain separate.
+The retired new-exercise CLI has no remaining dispatch path.
 `execution/refresh_dispatch.py --state-root` retains its existing data/output
 meaning. Its separate `--source-state-root` is the model byte-read authority.
 The dashboard forwards that separate flag only from its explicit source state
@@ -2004,26 +2416,18 @@ window changed. Regression evidence: `tests/test_storage_reservation.py`,
 
 
 
-### Coach delivery confirmation and fundamentals cache revision — 2026-10-22
+### Coaching and Telegram retirement — current source disposition
 
-Disposition: **tested existing operational behavior repair; no new operator action**.
-Coach delivery claims use `sending` until Telegram confirmation. A 15-minute
-expired claim becomes retryable; completion is fenced to the exact claim timestamp.
-The manual and scheduled coach entrypoints share the `notification-delivery` lane.
-Owner acknowledgement and dismissal of an unlinked `sending` carrier remain
-recordable, and completion preserves those terminal states. Acknowledgement after
-a claim cannot recall a push already in flight. Delivery is at least once: a crash
-after Telegram accepts the push but before confirmation may produce a duplicate.
-This change does not establish durable send-time frequency accounting.
+Telegram transport, polling, bot credentials, pending reply handling, proactive
+coaching, weekly packets, nudges and annual/calibration narratives are retired.
+There is no legacy callback or delivery mode. Basic explicit note/decision logging,
+owner annotations and targeted research through chat remain. New migrations remove
+the dedicated stores after the decision journal no longer joins them. Mixed-store
+history cleanup requires the reviewed exact dependency plan and release boundary.
+Source removal does not stop a deployed service or unregister a task.
 
-The cockpit fundamentals cache binds the canonical financial revision captured
-with its values in one committed read transaction and rejects changed revisions.
-Snapshot replacement still requires an explicit derived-cache refresh. No schedule,
-service, database authority, publication permission, or UI geometry changes.
-Evidence: `tests/test_governor.py`, `tests/test_run_coach_pings.py`, and
-`tests/test_cockpit_fundamentals.py`; hosted native Windows application coverage
-is distinct from deployment proof on the managed production runtime.
-
+The cockpit fundamentals cache retains its separate revision-consistency guard.
+Snapshot replacement requires an explicit derived-cache refresh.
 
 ### Owner-reviewed governed proposal registration — 2026-10-21
 
@@ -2113,6 +2517,88 @@ Selected legacy PRE baselines do not acquire verified binding. Scheduled generat
 and financial state remain unchanged. There are no provider calls or new routes.
 Evidence: `tests/test_report_contract.py`, `tests/test_report_preview.py`, existing
 artifact-index and PRE/POST regressions, and isolated rendered preview receipts.
+
+
+### Shared location history and valuation verification — 2026-10-23
+
+Disposition: **no Operations surface change**. IR capture, SEC native filing
+capture and SEC CompanyFacts use `EvidenceLinkLedger.ensure_local_location` for
+their existing verified local-location history. Each keeps its existing identity
+prefix, NUL-separated digest, replay no-op, verification clocks, revision chain
+and caller-owned transaction. This adds no capture, download, admission, schema,
+task, automatic retry or live-write authority.
+
+MELI and ONON input preparation use shared assumption-review and committed receipt
+checks in `dcf.input_evidence`. Issuer calculations, drivers, recipes, source
+checks, errors and field populations remain. The shared check has one explicit
+argument for ONON's existing additional source-integrity comparison, in its
+original position before raw-document reads. MELI retains its existing exclusion.
+Fresh physical-reader clocks can advance; all previously committed raw-document
+identity fields stay compared. No model, prompt, forecast, financial fact,
+scenario, allocation permission or stored receipt version changes.
+
+The owner approved retirement of the unused standalone decision-history badge.
+Its module, dedicated tests and exact design-emitter entry are removed. Current
+application routes had no caller. Decision records, outcome scoring, shared
+calibration analysis, historical grades and direct reviews remain.
+
+Evidence belongs to the implementation checkpoint: synthetic migrated fixtures,
+full before/current row and result comparisons, caller rollback, revision history,
+review/replay mutations and retained consumer tests. These source changes do not
+activate a live service, collect data or establish native financial acceptance.
+
+## Unused row-pruner retirement and macro test schema — 2026-10-23
+
+Disposition: **no surface change**. The unused `pipeline.lifecycle` module and
+its dedicated tests are retired after source and dependency closure. Its generic
+row-pruning/JSON restore API and separate retention matrix had no application,
+CLI, reconstruction or receipt-reader caller. The existing weekly cleanup,
+`db_gc.py`, `gc_restore.py` and temporary-run owners retain their exact bytes,
+allowlists, receipts and recovery contracts. `data_pipeline_dag.md` still owns
+retention policy. No row, receipt, source document or backup is deleted.
+
+The dedicated test also repeated a scheduler check. The retained scheduler
+manifest suite checks the exact task population and the same wrapper/source-tree
+validator. No scheduler definition or installed task changes. The macro-store test
+suite uses the existing migrated-schema fixture instead of its private SQL schema.
+Its missing-database/table cases remain explicit. The two acquisition suites keep
+their existing setup; no private-function test adapters or suppression exceptions
+are added. Production macro behavior and provider policy do not change.
+
+## SEC refresh-plan creation retirement — 2026-10-23
+
+The owner approved retiring new experimental SEC refresh-plan creation. Remove
+the `plan_sec_delta_refresh` creator CLI and its request, planning and
+writer procedures. This removes a manual development interface; no scheduler
+definition or installed task changes. Standard CompanyFacts, native filing
+inventory, package capture and filing-text acquisition keep their existing owners.
+
+Saved-plan and terminal-receipt models, nested types, serialization, seals and
+supported-revision checks remain at `pipeline.sec_delta_planner`. The existing
+`sec_delta_admission.py` source stays unchanged. Parsing and seal verification
+do not establish current admission. Existing version, schema, policy, issuer,
+roster, inventory and exact-snapshot refusals still apply. No replacement creator,
+collection permission, fallback, verifier CLI or new stored representation is added.
+No saved plan, terminal receipt, source document, historical row or backup is
+rewritten or deleted. Creator-only tests retire; retained artifact and admission
+contracts keep their tests and bounded synthetic fixtures.
+
+## Dormant metric-to-DCF mapping retirement — 2026-10-23
+
+Disposition: **no current surface change**. The owner approved retiring the
+unused metric-to-DCF mapping and resolution experiment. Its resolver, direct
+input-application helper, unused dropdown and lineage writer have no current
+application caller and are removed. The field registry drops only application
+metadata; its ordered keys, labels, unit families and inclusive bounds remain.
+Pure conversion, unit/refusal errors, finite-number checks and the WACC registry
+exclusion remain. No arbitrary custom-field ban is added.
+
+The normal DCF editor, guarded commit/synchronization owners and shared unit
+converter stay unchanged. Explore still has no fact-injection write route.
+Historical assumptions, driver lineage JSON, observations and override history
+are not rewritten or deleted. The legacy fact-reader inventory loses only this
+unused resolver's one SQL-reader entry. No replacement reader, state, provider
+call, collection, schema or installed operation is added.
 
 ### Explicit cohort rollout census — 2026-10-22
 
@@ -2408,6 +2894,64 @@ Tests cover three-generation partial promotions, retained seals, native transcri
 readers and exact runtime/lock identity. Any re-extraction remains separately
 approved.
 
+### Cleanup integration and fiscal-date resolution — 2026-10-23
+
+Disposition: **no new Operations surface**. The retired monthly advisor-memo
+wrapper also loses its unused runtime classification. On-demand memo generation
+and saved history remain. No installed task is changed.
+
+Financial fact resolution policy `investor-grade-fact-resolution@3` compares source
+reporting dates and fiscal types. Availability, knowledge, effective and capture
+clocks retain their UTC comparisons. A subsequent resolution appends a new policy
+revision; prior observations and decisions remain unchanged. This code change
+does not re-resolve live facts, collect sources or grant financial admission.
+
+### Exact synthetic-run cleanup reuse — 2026-10-23
+
+Disposition: **no new Operations surface**. Exact completed synthetic-run
+retirement reuses one bounded manifest parse and declaration index within the
+existing retention operation. Fresh manifest bytes still guard every target before
+and after hashing in planning and immediately before deletion. Changed manifests
+remain protected. The public producer owner, scope, pins, proofs, file identities,
+live-database exclusion, byte bound and durable journal remain authoritative.
+No retention period, operator action, scheduler, service or live-state writer changes.
+
+
+### Standalone event-brief generation retirement — 2026-10-24
+
+Disposition: **owner-approved local feature retirement**. New standalone event
+brief generation and its processing selectors are retired. Event-only intake
+registers source documents without launching summary synthesis. Mixed intake
+retains quarterly summary, transcript and Say/Do processing. Direct retired event
+processing returns the existing unsupported-type result before generation.
+
+Raw event registration, identity checks, saved event bodies and source sidecars
+remain. Historical event filename lookup remains. The four consumed quarterly
+products and their anchors, prompts and model routes remain. Historical purpose
+metadata stays available for stored call/capture audits. No new model, budget,
+scheduler, source collection, schema or live-state action is introduced. The
+focused qualification exercises zero event generation, mixed-input order and
+failure handling, retained source/history bytes and quarterly replay/repair.
+
+
+### Original-source KPI extraction — October 26 scope
+
+The owner superseded the October 24 summary-candidate procedure. Summary-derived
+extraction, its CLI, refresh membership, Explore control and unused histories are
+retired. Explicit original-source manifests and original PDF capture remain.
+Manifest application validates issuer, document type and period. A transcript
+value also requires an exact stored source segment and consistent quote/locator.
+Automatic transcript numeric extraction remains unavailable. Retained historical
+financial observations keep their actual source dependencies until resolved.
+
+## SayDo narrative retirement (October 26, 2026)
+
+The SayDo report reads source-linked commitments, guidance-versus-actual comparisons and recorded verdicts. It makes no pairwise narrative or row-selection model call. The dedicated batch task and refresh/onboarding pairwise paths are removed from source. Onboarding retains exact registered transcript summaries through `process_ir_documents.py`; its CLI options are `--skip-transcript-summaries` and `--force-transcript-summaries`. Dirty-artifact regeneration excludes the retired pair/filter purposes. Migration 0065 retires their unlinked non-document cache rows, with the existing retained-reference and provenance guards. These source changes do not stop or unregister the installed Windows task. Earlier enabled-state and cadence entries are historical evidence.
+
+## Optional analysis cadence retirement (October 27, 2026)
+
+The source manifest retires `weekly_score_stances`, `refresh_business_factors` and `refresh_scenario_priors` and their exclusive wrappers/XML. Manual `score_advisor_stances.py`, `refresh_business_factors.py` and `set_scenario_priors.py` remain for explicit backend work. Source declarations fall from 32 to 29. Financial acquisition, earnings briefs, explicit decision grading and model-quality checks remain. Live registrations and enabled states are unchanged. The Jobs projection continues to show installed retired jobs as unexpected.
+
 
 ### Explicit source-bound PDF image OCR selection — 2026-10-23
 
@@ -2482,3 +3026,71 @@ viewer verifies the pinned document version and PDF bytes for both the page
 and image request; mismatch returns 404. No new scheduled job, store, provider
 route, or general trust flag is added. This path does not fill OCR-missed chart
 values or prove whole-document financial completeness.
+
+## Canonical derivation input receipts (2026-10-27)
+
+The existing derivation stage uses its typed outcome directly. It reports
+`missing_canonical_input_reference` when raw fundamentals exist but exact
+canonical input pins are unavailable. It does not label that state as absent
+on-disk data. Current-statement and KPI-transform derivations share one
+input-reference reader and snapshot owner. New lineage records pin the selected
+observation, resolution and source version. This adds no operator action, job,
+store or provider. Legacy unversioned lineage does not gain canonical reader admission.
+
+
+## Optional theme generation retirement (2026-10-27)
+
+Retire `seed_themes.py`, `backfill_seed_decisions.py` and
+`run_ledger_synthesis.py`, their exclusive libraries, model purposes, schemas,
+and evaluation specifications. Keep explicit owner decisions and current process
+tenets. Ask no longer imports generated theme or stance context. Migration
+`0067_retire_theme_generation` removes only the two retired purposes from budgets,
+budget alerts and evaluation verdicts. It checks the schema, inbound foreign keys
+and deletion triggers before mutation. Live history deletion remains a release
+operation. No installed service or task changed.
+
+Report capture no longer selects quarterly narrative caches, extra IR summary
+cards, SayDo narrative cards, or the SayDo filter. Their three exclusive capture
+locks are removed. Retained selector aliases keep their original IDs. Candidate
+builds no longer scan every ticker-prefixed temporary file. They prepare the
+retained inputs before reuse and compare the canonical reader body.
+
+The source authority digest now binds the actual explicit `SourceReadContext`.
+The existing bounded source verifier checks original financial bytes, including
+approved roots outside the output root. The research publisher supplies the
+content assessor to the existing atomic artifact commit. Assessment runs under
+that commit's writer snapshot. A changed or unavailable source blocks reuse or
+publication. This adds no operator action, provider, job, source copy or store.
+
+
+## Managed calendar-year HTML releases (2026-10-27)
+
+Discovery can publish the existing manifest `press_release` HTML cell through
+the managed issuer-document owner. The stored full fiscal year end must be
+exactly `12-31`. Any fiscal witness must also be exactly `12-31`. A stored
+month of 12 is insufficient. The authorization result retains its existing
+month field and also carries the validated full calendar.
+
+The existing classifier separates issuer identity text from release body text.
+Linked archive headlines cannot supply the positive release signal. PDF and ZIP
+bytes labeled as HTML are rejected. The single closed media/suffix map admits
+`text/html` and `.html` only for `ir_press_release`. Both preparation routes and
+uncommitted replay use the same admission predicate.
+
+Managed success preserves raw bytes, URL, document inventory and attempt
+accounting. It does not run legacy categorization or create an incoming-URL
+sidecar. Existing mismatch ordering, source-period selection, PDF/XLSX behavior,
+local HTML/HTM upload and committed recovery remain. This adds no command,
+source fetcher, store, schedule, narrative product or financial-fact writer.
+The implementation and fixtures perform no live collection or host mutation.
+
+## October 28 position-coaching backend retirement
+
+The generated position verdict is retired locally. `/review` returns deterministic
+position facts and starts no background verdict. The `/actions/position-review`
+endpoint, CLI `--verdict` path, fixed behavioral override, frozen seed rules and
+capacity-context read are removed. The normal company, earnings and source
+operations remain. The existing backend reader uses explicit or configured
+database authority. This source change does not stop or alter a canonical-host
+service or task. Frontend, input-library and history closure is still in progress;
+final release evidence must cover the integrated candidate.

@@ -10,7 +10,6 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO
-from unittest import mock
 
 import pytest
 from bs4 import BeautifulSoup, Tag
@@ -187,8 +186,10 @@ def test_full_synthetic_renderer_and_managed_cli_export(
     # Reuse the golden fixture factories rather than duplicate its full ReportSpec.
     spec = getattr(golden, "_portfolio_spec")(str(tmp_path))
     loader = getattr(golden, "_patched_p3_loader")
-    with mock.patch.object(workspace_html, "load_workspace_p3_panels", loader):
-        original = workspace_html.render(spec)
+    from report.workspace_models import WorkspacePrepared
+
+    spec.workspace = WorkspacePrepared(p3=loader(spec.ticker, tmp_path))
+    original = workspace_html.render(spec)
     source = tmp_path / "source.html"
     source.write_text(original, encoding="utf-8")
     destination = tmp_path / "share.html"

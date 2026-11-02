@@ -530,26 +530,6 @@ def sync_position_lifecycle(
             )
             closed += 1
 
-        if closed:
-            # B6 (2026-07-19 program overhaul): every freshly-closed row above
-            # left exit_reason/lessons/outcome_vs_thesis NULL or PREFILLED
-            # (seam 9) â€” never the LLM-drafted grading itself. That drafting
-            # is NEVER inline here (this reconciler runs on the protected
-            # 04:00 morning pipeline window and must stay zero/near-zero-LLM);
-            # it is the 18:00 sweep's job
-            # (synthesis.exit_postmortem.run_postmortem_drafts, wired in
-            # execution/run_session_distill.py). This is just the structured
-            # breadcrumb that closes happened this run â€” pending drafts are
-            # DERIVED at read time (closed + all three grading fields NULL),
-            # no stamp column needed.
-            log.info(
-                {
-                    "event": "postmortem_pending",
-                    "closed_this_run": closed,
-                    "user_id": user_id,
-                }
-            )
-
         # Enrichment pass: an open row missing entry_price gains the tracker's
         # avg cost once the tracker comes back online.
         if portfolio.available:

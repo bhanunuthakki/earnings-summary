@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import threading
 from datetime import UTC, datetime
 from typing import cast
 
@@ -11,9 +9,7 @@ from comments_server_context import ServerContext
 from flask import Flask, Response, redirect, request, send_file
 
 from identity import DEFAULT_USER_ID
-from pipeline.analytical_dashboard import build_analytical_dashboard
 from pipeline.dashboard_status import build_dashboard_rows
-from pipeline.tier_runner import tier_coverage_summary
 from pipeline.work_os_shell import render_work_os_shell_result
 
 
@@ -32,7 +28,7 @@ def register_core_routes(app: Flask, ctx: ServerContext) -> None:
     @app.route("/api/capture/text", methods=["POST", "OPTIONS"])
     def capture_text():
         """The Ledger at-desk tray: land a typed musing through the SAME LLM-free
-        ingest pipeline the Telegram poller uses (channel='tray'). CSRF-guarded by
+        ingest pipeline (channel='tray'). CSRF-guarded by
         the global Origin check on JSON state-changing requests."""
         if request.method == "OPTIONS":
             return ("", 204)
@@ -44,141 +40,26 @@ def register_core_routes(app: Flask, ctx: ServerContext) -> None:
             return ({"error": "text required"}, 400)
         bump_activation_count("act:capture")
         result = ingest_capture(channel="tray", media_kind="text", text=text, db_path=db_path)
-        # Fire the wondering tap on a landed tray musing — previously only the
-        # Telegram poller tapped, so a TYPED wondering never became a chip.
-        wondering_task_id: int | None = None
-        pledge_challenge: str | None = None
-        annotated_decision_id: int | None = None
-        if result.status == "landed" and result.note_id is not None:
-            from research.proposals import detect_and_create_task, tap_enabled
-
-            if tap_enabled():
-                wondering_task_id = detect_and_create_task(
-                    result.note_id, db_path=db_path, channel="tray"
-                )
-            # Entry-coaching taps (W2): a pledge gets the catalyst-test
-            # challenge back; an annotation-shaped follow-up fills the newest
-            # pending stub's NULL conviction/falsifier. Never breaks capture.
-            try:
-                from research.pledge import (
-                    annotate_latest_pending,
-                    build_challenge,
-                    detect_and_capture_pledge,
-                )
-
-                pledge = detect_and_capture_pledge(result.note_id, channel="tray", db_path=db_path)
-                if pledge is not None:
-                    pledge_challenge = build_challenge(pledge, repo_root=repo_root, db_path=db_path)
-                else:
-                    annotated_decision_id = annotate_latest_pending(text, db_path=db_path)
-            except Exception:
-                pass
-        # The answer tap: a question-shaped capture gets answered via the
-        # unified ask engine on a BACKGROUND thread and stored on the note —
-        # the POST returns immediately (the old inline call pinned this
-        # request, and the Capture button, on a multi-second LLM round-trip).
-        # The note is marked ledger_answer_pending first so the card renders
-        # an honest "Answering…" state; the capture JS polls
-        # /api/onmymind/<id>/answer and swaps the card when the answer lands.
-        # LEDGER_ANSWER_SYNC=1 restores the inline call (tests + a no-JS ops
-        # fallback); the Telegram poller keeps its own synchronous reply path.
-        ledger_answer: str | None = None
-        answering = False
-        if result.status == "landed" and result.note_id is not None:
-            from onmymind.respond import answer_capture, will_answer
-            from user_state.notes import patch_note_context
-
-            answer_sync = os.environ.get("LEDGER_ANSWER_SYNC", "").strip().lower() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            )
-            if answer_sync:
-                ledger_answer = answer_capture(result.note_id, repo_root=repo_root, db_path=db_path)
-            elif will_answer(result.note_id, db_path=db_path):
-                note_id = result.note_id
-                patch_note_context(note_id, {"ledger_answer_pending": True}, db_path=db_path)
-                threading.Thread(
-                    target=answer_capture,
-                    args=(note_id,),
-                    kwargs={"repo_root": repo_root, "db_path": db_path},
-                    daemon=True,
-                    name=f"ledger-answer-{note_id}",
-                ).start()
-                answering = True
         return {
             "status": result.status,
             "note_id": result.note_id,
             "ticker": result.ticker,
             "needs_ticker": result.needs_ticker,
-            "wondering_task_id": wondering_task_id,
-            "pledge_challenge": pledge_challenge,
-            "annotated_decision_id": annotated_decision_id,
-            "answer": ledger_answer,
-            "answering": answering,
         }
 
-    @app.route("/api/onmymind/<int:note_id>/reply", methods=["POST", "OPTIONS"])
-    def onmymind_reply(note_id: int):
-        """The universal reply box (Phase B): free text on a feed card, routed
-        by the ``ledger_reply_intent`` classifier instead of a verb-button
-        taxonomy. Action intents flow through the SAME ``act_on_feed_item``
-        core the old buttons (and the Telegram keyboard) call; ``question``
-        hands back ``{mode: 'chat'}`` and the client streams the answer via
-        /api/ask/stream; ``note`` appends the reply to the card's thread
-        context. The classify is one short FAST-tier call — the client shows
-        the pending bubble the moment the POST leaves."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from onmymind.reply import handle_reply
-        from user_state.notes import get_note
-
-        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
-        text = str(payload.get("text") or "").strip()
-        if not text:
-            return ({"error": "text required"}, 400)
-        if get_note(note_id, db_path=db_path) is None:
-            return ({"error": "not found"}, 404)
-        # The classify → route body is the SHARED reply core (one brain, two
-        # mouths — the Telegram reply-to-a-card path calls the same handle_reply).
-        result = handle_reply(note_id, text, db_path=db_path)
-        bump_activation_count(f"act:reply:{result.get('intent', 'question')}")
-        return result
-
-    @app.route("/api/onmymind/<int:note_id>/answer", methods=["GET"])
-    def onmymind_answer(note_id: int):
-        """The answer-poll read behind the async capture tap: the stored
-        ``ledger_answer`` text (if it has landed) + the pending flag. Cheap
-        context read — no LLM ever runs here."""
-        from user_state.notes import get_note
-
-        note = get_note(note_id, db_path=db_path)
-        if note is None:
-            return ({"error": "not found"}, 404)
-        ctx = note.context or {}
-        ans = ctx.get("ledger_answer")
-        text = (
-            str(cast("dict[str, object]", ans).get("text") or "") if isinstance(ans, dict) else ""
-        )
-        return {"answer": text or None, "pending": bool(ctx.get("ledger_answer_pending"))}
-
-    @app.route("/api/reconcile/<kind>/<int:item_id>/<verdict>", methods=["POST", "OPTIONS"])
-    def reconcile_verdict(kind: str, item_id: int, verdict: str):
+    @app.route("/api/reconcile/note/<int:item_id>/<verdict>", methods=["POST", "OPTIONS"])
+    def reconcile_verdict(item_id: int, verdict: str):
         """Seed-corpus freshness pass: stamp a one-tap verdict on a seed note or
-        theme. The coach only leans on items that survived this list. CSRF-guarded
+        note. Retained decisions keep their explicit review state. CSRF-guarded
         by the global Origin check."""
         if request.method == "OPTIONS":
             return ("", 204)
-        from synthesis.reconcile import RECONCILE_VERDICTS, reconcile_note, reconcile_theme
+        from synthesis.reconcile import RECONCILE_VERDICTS, reconcile_note
 
-        if kind not in ("note", "theme"):
-            return ({"error": f"unknown kind {kind!r}"}, 400)
         if verdict not in RECONCILE_VERDICTS:
             return ({"error": f"unknown verdict {verdict!r}"}, 400)
-        fn = reconcile_note if kind == "note" else reconcile_theme
         bump_activation_count(f"act:reconcile:{verdict}")
-        ok = fn(item_id, verdict, db_path=db_path)
+        ok = reconcile_note(item_id, verdict, db_path=db_path)
         if not ok:
             return ({"ok": False}, 404)
         # Consequence receipt: what the verdict means for whether the coach can
@@ -238,34 +119,6 @@ def register_core_routes(app: Flask, ctx: ServerContext) -> None:
             result["receipt"] = "Dropped — no tripwire will watch this decision"
         return (result, 200)
 
-    @app.route("/api/onmymind/<int:note_id>/<verb>", methods=["POST", "OPTIONS"])
-    def onmymind_act(note_id: int, verb: str):
-        """The On My Mind action ladder: dismiss / save / discuss / incorporate on
-        one captured item. Delegates to the ONE action core the Telegram callback
-        also calls. Safe by construction — it archives / patches context / stages an
-        inert research task; it never fetches the web or writes a live artifact.
-        CSRF-guarded by the global Origin check."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from onmymind.feed import LADDER_LABELS, LADDER_VERBS, act_on_feed_item
-
-        if verb not in LADDER_VERBS:
-            return ({"error": f"unknown verb {verb!r}"}, 400)
-        bump_activation_count(f"act:om:{verb}")
-        result = act_on_feed_item(note_id, verb, db_path=db_path)
-        return (
-            {
-                "ok": result.ok,
-                "removed": result.removed,
-                "ladder": result.ladder,
-                "ladder_label": LADDER_LABELS.get(result.ladder or "", ""),
-                "task_id": result.task_id,
-                "thread_url": result.thread_url,
-                "message": result.message,
-            },
-            200 if result.ok else 404,
-        )
-
     @app.route("/", methods=["GET"])
     def dashboard_page():
         """Eight-screen Work OS; legacy panel endpoints remain drill-throughs."""
@@ -312,19 +165,16 @@ def register_core_routes(app: Flask, ctx: ServerContext) -> None:
 
     @app.route("/api/overview", methods=["GET"])
     def overview_api():
-        """Cross-ticker analytical overview as JSON: trigger ladder, insider
-        activity, predictions, decisions ledger, and the (read-only) LLM
-        spend/budget panel, plus tier coverage. Same data the static export
-        (execution/build_analytical_dashboard.py) renders — one code path,
-        no divergence. (``GET /analytical`` itself is a 302 into the shell.)
+        """Retired analytical overview endpoint.
 
-        Budget WRITES are intentionally not here — dashboard-managed budgets
-        (editable caps + modes + override) are owned by the #215 track; this
-        surfaces spend/cap/headroom read-only."""
-        dash = build_analytical_dashboard(db_path)
-        payload = dash.to_dict()
-        payload["tier_coverage"] = tier_coverage_summary(repo_root)
-        return payload
+        The static/JSON analytical dashboard was retired; clients should use
+        the cockpit screen instead. (``GET /analytical`` itself is a 302 into
+        the shell.)"""
+        return (
+            {"error": "retired", "replacement": "/#screen-cockpit"},
+            410,
+            {"Cache-Control": "no-store"},
+        )
 
     @app.route("/api/source-calls", methods=["GET"])
     def source_calls_api():

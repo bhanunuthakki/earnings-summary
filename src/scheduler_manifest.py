@@ -14,7 +14,6 @@ from defusedxml import ElementTree
 TASK_NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 NS = f"{{{TASK_NS}}}"
 MANIFEST_VERSION = 1
-SERVICE_OWNED_TASKS = frozenset({r"\earnings-summary\capture_poller".casefold()})
 SYSTEM_OWNED_TASKS = frozenset({r"\earnings-summary\portfolio_tracker_api".casefold()})
 MONTHS = (
     "January",
@@ -429,8 +428,6 @@ def generated_registration_script(manifest: TaskManifest) -> str:
         "}",
     ]
     for task in manifest.tasks:
-        if task.task_name.casefold() in SERVICE_OWNED_TASKS:
-            continue
         rendered_xml = f"(Join-Path $renderDir '{task.xml}')"
         task_leaf = PureWindowsPath(task.task_name).name
         task_path = str(PureWindowsPath(task.task_name).parent) + "\\"
@@ -471,14 +468,9 @@ def generated_inventory_markdown(manifest: TaskManifest) -> str:
         "|---|---|---|---|---|",
     ]
     for task in manifest.tasks:
-        ownership = (
-            "Windows service"
-            if task.task_name.casefold() in SERVICE_OWNED_TASKS
-            else "Task Scheduler"
-        )
         lines.append(
             f"| `{task.task_name}` | {schedule_label(task.schedule)} | "
-            f"`{task.xml}` | `{task.wrapper}` | {ownership} |"
+            f"`{task.xml}` | `{task.wrapper}` | Task Scheduler |"
         )
     lines.extend(
         [

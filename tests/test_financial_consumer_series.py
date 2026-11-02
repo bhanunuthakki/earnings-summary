@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from ask.grounding_trace import view_trace_items
 from decision_conditions import DecisionCondition, parse_condition, stamp_condition_baselines
 from provenance.metric_ontology import MetricOntology
 from sources.canonical_financial_series import (
+    CanonicalFinancialSeries,
     CanonicalFinancialSeriesReader,
     FinancialCadence,
     FinancialConsumerPoint,
@@ -360,18 +362,20 @@ def test_concurrent_commit_does_not_mix_series_snapshot(
 ) -> None:
     seed_table(database, [("revenue", "2025-01-01", "2025-03-31", "Q1", "100", "USD")])
     database.execute("PRAGMA journal_mode=WAL")
-    original = CanonicalFinancialSeriesReader.read
+    original: Callable[..., CanonicalFinancialSeries] = getattr(
+        CanonicalFinancialSeriesReader, "_read_uncached"
+    )
     later = STAMP + timedelta(days=1)
     committed: list[str] = []
 
     def commit_definition(
         reader: CanonicalFinancialSeriesReader,
         metric: str,
-        *,
-        cadence: FinancialCadence = FinancialCadence.QUARTERLY,
-        continuity: SeriesContinuity = SeriesContinuity.STRICT_CONTIGUOUS,
-    ):
-        series = original(reader, metric, cadence=cadence, continuity=continuity)
+        cadence: FinancialCadence,
+        continuity: SeriesContinuity,
+        preparation: object,
+    ) -> CanonicalFinancialSeries:
+        series = original(reader, metric, cadence, continuity, preparation)
         if not committed:
             with sqlite3.connect(tmp_path / "source-fact-repository.db") as writer:
                 ontology = MetricOntology(writer)
@@ -396,7 +400,7 @@ def test_concurrent_commit_does_not_mix_series_snapshot(
             committed.append("changed")
         return series
 
-    monkeypatch.setattr(CanonicalFinancialSeriesReader, "read", commit_definition)
+    monkeypatch.setattr(CanonicalFinancialSeriesReader, "_read_uncached", commit_definition)
     result = read_financial_consumer_series(
         database,
         "SYNTH",
@@ -621,3 +625,15 @@ def test_financial_trigger_freshness_and_signature_keep_exact_source(
             "condition_index": 0,
             "period_end": "2025-06-30",
         }
+
+
+_SNAPSHOT_BOUNDARIES = (
+    "consumer_series",
+    "dcf_statements",
+    "thesis_metric",
+    "soft_rules",
+    "cockpit_snapshot",
+    "cockpit_materialize",
+    "condition_read",
+    "condition_stamp",
+)

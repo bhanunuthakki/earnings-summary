@@ -16,8 +16,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from collections.abc import Sequence
-from datetime import date, timedelta
+from collections.abc import Generator, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -25,6 +27,30 @@ from bs4 import BeautifulSoup
 from openpyxl import load_workbook
 from pypdf import PdfReader
 
+from compute.fiscal_calendar import (
+    APRIL_FYE as _CAL_APR30,
+)
+from compute.fiscal_calendar import (
+    CALENDAR_YEAR as _CAL_CALENDAR,
+)
+from compute.fiscal_calendar import (
+    JANUARY_FYE as _CAL_VEEV,
+)
+from compute.fiscal_calendar import (
+    MAY_FYE as _CAL_ORACLE,
+)
+from compute.fiscal_calendar import (
+    NVO_CALENDAR as _CAL_NVO,
+)
+from compute.fiscal_calendar import (
+    SEPTEMBER_FYE as _CAL_VISA,
+)
+from compute.fiscal_calendar import (
+    calendar_id_from_fye as calendar_id_from_fye,
+)
+from compute.fiscal_calendar import (
+    period_end_for as _period_end_for,
+)
 from models.documents import DocType
 from models.ir_uploads import (
     CategorizationFailure,
@@ -33,6 +59,18 @@ from models.ir_uploads import (
 )
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class BoundIRClassification:
+    """One classifier outcome tied to exact bytes and classification context."""
+
+    outcome: CategorizationResult | CategorizationFailure
+    sha256: str
+    byte_size: int
+    ticker_hint: str | None
+    calendar_override: str | None
+    source_url: str | None
 
 
 # ---------------------------------------------------------------------------
@@ -47,21 +85,13 @@ class FiscalCalendar(str):
     """Calendar ID — see `_period_end_for()` for mapping."""
 
 
-_CAL_CALENDAR = "calendar"  # FY-end Dec 31 — Q1=Mar-31, Q2=Jun-30, Q3=Sep-30, Q4=Dec-31
-_CAL_VEEV = "veeva"  # FY-end Jan 31 (Q1 ends Apr-30, Q4 ends Jan-31). RBRK shares this.
-_CAL_APR30 = "apr30"  # generic FY-end Apr 30 — Q1=Jul-31, Q4=Apr-30. (NOT Rubrik; see below.)
-_CAL_NVO = "nvo"  # Calendar, but H1=Q2, 9M=Q3, FY=Q4
-_CAL_VISA = "visa"  # FY-end Sep 30 — Q1=Dec-31, Q2=Mar-31, Q3=Jun-30, Q4=Sep-30
-_CAL_ORACLE = "oracle"  # FY-end May 31 — Q1=Aug-31, Q2=Nov-30, Q3=Feb-28, Q4=May-31
-
 ISSUER_REGISTRY: list[tuple[str, str, tuple[str, ...]]] = [
     ("MELI", _CAL_CALENDAR, ("MercadoLibre", "Mercado Libre", "Mercado  Libre")),
     ("NU", _CAL_CALENDAR, ("Nu Holdings", "Nu's Investor", "Nubank")),
     # Rubrik has a January-31 fiscal year-end (FY26 Q1 ended Apr-30-2025) — the
     # SAME calendar as Veeva. It is NOT an April-30 issuer; the prior `_CAL_RUBRIK`
-    # mapping shifted every RBRK period one quarter forward. See the transcript-
-    # ingest path (`src/compute/transcript_ingest.py::_FYE_OFFSETS`) which also
-    # treats RBRK as Jan-FYE.
+    # mapping shifted every RBRK period one quarter forward. The shared
+    # `compute.fiscal_calendar.FILENAME_CALENDARS` also assigns RBRK to Jan-FYE.
     ("RBRK", _CAL_VEEV, ("Rubrik",)),
     ("NOW", _CAL_CALENDAR, ("ServiceNow",)),
     ("WIX", _CAL_CALENDAR, ("Wix.com", "Wix Ltd", "Wix's", "Wix ", "WIX ")),
@@ -162,6 +192,20 @@ def set_runtime_registry(entries: list[tuple[str, str, tuple[str, ...]]] | None)
     """Install the effective registry for this process (None resets to curated)."""
     global _RUNTIME_REGISTRY
     _RUNTIME_REGISTRY = entries
+
+
+@contextmanager
+def scoped_runtime_registry(
+    entries: list[tuple[str, str, tuple[str, ...]]],
+) -> Generator[None]:
+    """Restore the caller's classifier registry after an in-process intake."""
+    global _RUNTIME_REGISTRY
+    previous = _RUNTIME_REGISTRY
+    _RUNTIME_REGISTRY = entries
+    try:
+        yield
+    finally:
+        _RUNTIME_REGISTRY = previous
 
 
 def _effective_registry() -> list[tuple[str, str, tuple[str, ...]]]:
@@ -463,68 +507,6 @@ def _yy_to_yyyy(yy: int) -> int:
     return yy
 
 
-def _period_end_for(ticker_calendar: str, year: int, q: int) -> date:
-    """Map (calendar, year, q) → period-end ISO date.
-
-    See `directives/fetch_ir_documents.md` for the per-issuer fiscal calendar.
-    """
-    if ticker_calendar == _CAL_CALENDAR:
-        return [date(year, 3, 31), date(year, 6, 30), date(year, 9, 30), date(year, 12, 31)][q - 1]
-    if ticker_calendar == _CAL_VEEV:
-        # FY-N Q1 ends Apr 30 (N-1), Q4 ends Jan 31 (N).
-        return [
-            date(year - 1, 4, 30),
-            date(year - 1, 7, 31),
-            date(year - 1, 10, 31),
-            date(year, 1, 31),
-        ][q - 1]
-    if ticker_calendar == _CAL_APR30:
-        # Generic April-30 FYE: FY-N Q1 ends Jul 31 (N-1), Q4 ends Apr 30 (N).
-        # No registered ticker uses this (Rubrik is Jan-FYE → _CAL_VEEV); it is
-        # the calendar derived for a genuine April-30 issuer via fiscal_year_end.
-        return [
-            date(year - 1, 7, 31),
-            date(year - 1, 10, 31),
-            date(year, 1, 31),
-            date(year, 4, 30),
-        ][q - 1]
-    if ticker_calendar == _CAL_NVO:
-        return [date(year, 3, 31), date(year, 6, 30), date(year, 9, 30), date(year, 12, 31)][q - 1]
-    if ticker_calendar == _CAL_VISA:
-        # FY-N Q1 ends Dec 31 (N-1), Q4 ends Sep 30 (N).
-        return [
-            date(year - 1, 12, 31),
-            date(year, 3, 31),
-            date(year, 6, 30),
-            date(year, 9, 30),
-        ][q - 1]
-    if ticker_calendar == _CAL_ORACLE:
-        # FY-N Q1 ends Aug 31 (N-1), Q4 ends May 31 (N). Q3 uses Feb-28 as the
-        # conventional last-day key (the existing calendars all use fixed dates).
-        return [
-            date(year - 1, 8, 31),
-            date(year - 1, 11, 30),
-            date(year, 2, 28),
-            date(year, 5, 31),
-        ][q - 1]
-    if ticker_calendar.startswith("fye_"):
-        # Generic non-December FYE derived from tracked_companies.fiscal_year_end.
-        # 'fye_MM' = the fiscal year ENDS in month MM (year N); Q4 ends that
-        # month-end and earlier quarters step back 3 months each. Curated entries
-        # above override this for 52/53-week names whose ends aren't month-ends.
-        try:
-            fy_month = int(ticker_calendar[4:6])
-        except ValueError:
-            raise ValueError(f"Unknown calendar id: {ticker_calendar!r}") from None
-        end_month, end_year = fy_month - 3 * (4 - q), year
-        while end_month <= 0:
-            end_month, end_year = end_month + 12, end_year - 1
-        if end_month == 12:
-            return date(end_year, 12, 31)
-        return date(end_year, end_month + 1, 1) - timedelta(days=1)
-    raise ValueError(f"Unknown calendar id: {ticker_calendar!r}")
-
-
 def _calendar_for(ticker: str) -> str:
     for tk, cal, _ in _effective_registry():
         if tk == ticker:
@@ -533,34 +515,6 @@ def _calendar_for(ticker: str) -> str:
 
 
 # Map a `tracked_companies.fiscal_year_end` ("MM-DD") to a fiscal-calendar id.
-_FYE_TO_CALENDAR: dict[str, str] = {
-    "12-31": _CAL_CALENDAR,
-    "01-31": _CAL_VEEV,
-    "04-30": _CAL_APR30,
-    "09-30": _CAL_VISA,
-    "05-31": _CAL_ORACLE,
-}
-
-
-def calendar_id_from_fye(mmdd: str | None) -> str:
-    """Derive a fiscal-calendar id from a ``fiscal_year_end`` ("MM-DD") string.
-
-    Used by the headless auto-fetch path to attribute periods for tickers not in
-    ``ISSUER_REGISTRY`` (the crawl supplies the ticker; the FYE supplies the
-    calendar). Unknown / missing FYE falls back to the Dec-31 calendar. NVO's
-    H1/9M/FY labeling can't be inferred from the FYE alone (it shares calendar's
-    Dec-31), so NVO stays registry-only. An exact curated-table match wins (e.g.
-    01-31 → veeva); any other non-December month falls back to the generic
-    ``fye_MM`` calendar; December / missing / unparseable uses the Dec-31 calendar.
-    """
-    key = (mmdd or "").strip()
-    if key in _FYE_TO_CALENDAR:
-        return _FYE_TO_CALENDAR[key]
-    try:
-        month = int(key.split("-")[0])
-    except (ValueError, IndexError):
-        return _CAL_CALENDAR
-    return f"fye_{month:02d}" if 1 <= month <= 11 else _CAL_CALENDAR
 
 
 # ---------------------------------------------------------------------------
@@ -667,13 +621,25 @@ def fingerprint_xlsx(path: Path) -> str:
         wb.close()
 
 
-def fingerprint_html(path: Path) -> str:
-    """Read a release classification view without changing its publisher bytes."""
-    soup = BeautifulSoup(path.read_bytes(), "html.parser")
+def _html_fingerprint_views(path: Path) -> tuple[str, str]:
+    """Keep issuer identity text separate from positive release body text."""
+    raw = path.read_bytes()
+    if raw.lstrip().startswith((b"%PDF-", b"PK\x03\x04")):
+        raise ValueError("binary source is not HTML")
+    soup = BeautifulSoup(raw, "html.parser")
     for node in soup.select("script, style, noscript, template, nav, header, footer"):
         node.decompose()
     content = soup.find("article") or soup.find("main") or soup.body or soup
-    return content.get_text(" ", strip=True)[:_PDF_FINGERPRINT_CHARS]
+    full_text = content.get_text(" ", strip=True)[:_PDF_FINGERPRINT_CHARS]
+    for link in reversed(content.select("a[href]")):
+        if not str(link.get("href", "")).startswith("#"):
+            link.decompose()
+    return full_text, content.get_text(" ", strip=True)[:_PDF_FINGERPRINT_CHARS]
+
+
+def fingerprint_html(path: Path) -> str:
+    """Read a release classification view without changing its publisher bytes."""
+    return _html_fingerprint_views(path)[0]
 
 
 def fingerprint(path: Path) -> str:
@@ -1304,7 +1270,10 @@ def classify_ir_file(
         )
 
     try:
-        raw_text = fingerprint(path)
+        if ext in {".html", ".htm"}:
+            raw_text, release_text = _html_fingerprint_views(path)
+        else:
+            raw_text = release_text = fingerprint(path)
     except Exception as e:  # pypdf / openpyxl can throw a wide tree
         return CategorizationFailure(
             reason=f"fingerprint_error:{type(e).__name__}:{e}",
@@ -1355,7 +1324,7 @@ def classify_ir_file(
         any(
             rule_type is DocType.IR_PRESS_RELEASE
             and label != "press_release_dateline"
-            and pattern.search(text) is not None
+            and pattern.search(re.sub(r"[ \t]+", " ", release_text)) is not None
             for rule_type, pattern, label in _DOC_TYPE_RULES
         )
         if is_html

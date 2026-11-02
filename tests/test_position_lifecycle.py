@@ -317,44 +317,6 @@ def test_close_on_portfolio_exit_with_sell_enrichment(repo: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_close_logs_postmortem_pending_without_changing_tally(
-    repo: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """The B6 hook fires a ``postmortem_pending`` log event exactly when a
-    close happens this run, carrying the close count — but the reconciler's
-    return contract (the exact tally dict every other test in this file
-    asserts on) is untouched, since drafting itself never runs inline here
-    (see position_lifecycle.py's hook comment)."""
-    import logging
-
-    _set_portfolio(repo, ["NU"])
-    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
-
-    _set_portfolio(repo, [])  # NU leaves the portfolio -> a close this run
-    with caplog.at_level(logging.INFO, logger="position_lifecycle"):
-        tally = sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
-
-    assert tally == {
-        "opened": 0,
-        "closed": 1,
-        "unchanged": 0,
-        "tracker_available": False,
-        "db_unavailable": 0,
-        "tracker_as_of": None,
-        "tracker_is_stale": False,
-        "tracker_is_partial": False,
-        "tracker_warnings": [],
-        "artifact_root_available": True,
-    }
-    events = [
-        cast(dict[str, object], r.msg)
-        for r in caplog.records
-        if isinstance(r.msg, dict) and r.msg.get("event") == "postmortem_pending"
-    ]
-    assert len(events) == 1
-    assert events[0]["closed_this_run"] == 1
-
-
 def test_no_close_does_not_log_postmortem_pending(
     repo: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

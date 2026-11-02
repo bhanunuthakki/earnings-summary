@@ -77,7 +77,6 @@ class AuditSpec:
 # The three PR-2 purposes. Adding one = a rubric file + a corpus loader in
 # evals.corpora + an entry here.
 AUDIT_SPECS: dict[str, AuditSpec] = {
-    "readme_update": AuditSpec("readme_update", RUBRICS_DIR / "readme_update.md"),
     "bear_case": AuditSpec("bear_case", RUBRICS_DIR / "bear_case.md"),
     "transcript_summary": AuditSpec("transcript_summary", RUBRICS_DIR / "transcript_summary.md"),
     "advisor_next_dollar": AuditSpec("advisor_next_dollar", RUBRICS_DIR / "advisor_next_dollar.md"),
@@ -91,26 +90,20 @@ AUDIT_SPECS: dict[str, AuditSpec] = {
     "investment_decision_card": AuditSpec(
         "investment_decision_card", RUBRICS_DIR / "investment_decision_card.md"
     ),
-    # Position-review verdict (src/advisor/position_review.py, the /review service):
-    # grades the persisted position_review memos on whether the trim/hold/add call
-    # follows from the grounded facts, respects the owner's sell-winners-too-early
-    # calibration, cites a specific driver, and picks a fitting expression.
-    "position_review": AuditSpec("position_review", RUBRICS_DIR / "position_review.md"),
-    # Ask advisory answer (directives/close_the_loops_2026_06.md L3): the
+    # Ask advisory answer: the
     # conversational ask path's prose answers (ask_turns), graded on
     # grounding-correctness, risk/reward balance, calibration-vs-evidence, and
     # follow-up usefulness — the first eval that judges whether the advice is
     # GOOD, not just whether its citations are hygienic. Corpus = the assistant
     # turns of the ask_turns table (evals.corpora.load_ask_advisory_answer_corpus).
     "ask_advisory_answer": AuditSpec("ask_advisory_answer", RUBRICS_DIR / "ask_advisory_answer.md"),
-    # Calibration coach (directives/close_the_loops_2026_06.md L8): the monthly
+    # Calibration evaluation: the monthly
     # personal scorecard's synthesised prose — named recurring biases + the
     # period's behavioural experiment, graded on grounded-in-own-history,
     # named-and-specific, falsifiable/actionable, and honest calibration. The
     # eval IS the gate the coach runs inline before the prose reaches the owner
     # (a coach that misreads his history is worse than silence). Corpus =
     # data/calibration_scorecard/*.json (evals.corpora.load_calibration_coach_corpus).
-    "calibration_coach": AuditSpec("calibration_coach", RUBRICS_DIR / "calibration_coach.md"),
     # Peer selection (directives/peer_selection_llm.md): graded on
     # business-model match, why-string specificity, cross-boundary range, and
     # peer-count coverage. Corpus = data/peer_selection/<T>.json files written
@@ -125,15 +118,6 @@ AUDIT_SPECS: dict[str, AuditSpec] = {
     # Q&A topic labels: the JSON array of per-question topic/tag pairs
     # produced by generate_qa_topics per quarter. Corpus = data/qa_topics/<T>.json.
     "qa_topics": AuditSpec("qa_topics", RUBRICS_DIR / "qa_topics.md"),
-    # Behavioral-rules distiller (tenet-2 Phase 4): grades staged
-    # owner_profile_facts rows (category='behavioral', provenance='derived')
-    # on grounding, second-person falsifiability, and non-redundancy. Chosen
-    # over the mode-A golden-classifier harness (evals.golden_classifiers) —
-    # distillation over a growing, non-fixed corpus with no single "right"
-    # rule set doesn't fit a checked-in expected-output comparison, the same
-    # reason synthesis.tenet_distill (its closest precedent) carries no golden
-    # set either. Corpus = evals.corpora.load_behavior_distill_corpus.
-    "behavior_distill": AuditSpec("behavior_distill", RUBRICS_DIR / "behavior_distill.md"),
 }
 
 _THRESHOLD_RX = re.compile(r"^Pass threshold:\s*([0-9.]+)\s*$", re.MULTILINE)

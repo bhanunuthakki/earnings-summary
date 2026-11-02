@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -86,10 +87,14 @@ def test_squashed_chain_has_one_head_and_preserves_active_schema(tmp_path: Path)
     assert foreign_keys == []
 
 
-def test_investment_profile_review_ledger_accepts_company_and_etf_labels(tmp_path: Path) -> None:
-    path = tmp_path / "investment-profile-reviews.db"
+def test_investment_profile_review_ledger_accepts_company_and_etf_labels(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    feature_revision = "0034_add_investment_profile_label_reviews"
+    parent_revision = "0033_add_report_kpi_reference_resolutions"
+    path = migrated_db(tmp_path / "investment-profile-reviews.db", target=parent_revision)
     config = _config(path)
-    command.upgrade(config, HEAD)
+    command.upgrade(config, feature_revision)
 
     with sqlite3.connect(path) as conn:
         for index, label in enumerate(("long_term_compounder", "defensive_hedge"), start=1):
@@ -119,7 +124,7 @@ def test_investment_profile_review_ledger_accepts_company_and_etf_labels(tmp_pat
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
             conn.execute("DELETE FROM investment_profile_label_reviews WHERE id=2")
 
-    command.downgrade(config, "0033_add_report_kpi_reference_resolutions")
+    command.downgrade(config, parent_revision)
     with sqlite3.connect(path) as conn:
         assert (
             conn.execute(
@@ -129,10 +134,10 @@ def test_investment_profile_review_ledger_accepts_company_and_etf_labels(tmp_pat
             is None
         )
         assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0033_add_report_kpi_reference_resolutions",
+            parent_revision,
         )
 
-    command.upgrade(config, HEAD)
+    command.upgrade(config, feature_revision)
     with sqlite3.connect(path) as conn:
         assert conn.execute(
             "SELECT name FROM sqlite_master "
@@ -140,10 +145,12 @@ def test_investment_profile_review_ledger_accepts_company_and_etf_labels(tmp_pat
         ).fetchone() == ("investment_profile_label_reviews",)
 
 
-def test_managed_ir_publication_migration_is_reversible(tmp_path: Path) -> None:
-    path = tmp_path / "managed-ir-publications.db"
+def test_managed_ir_publication_migration_is_reversible(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    revision = "0021_managed_ir_publications"
+    path = migrated_db(tmp_path / "managed-ir-publications.db", target="0020_kpi_fact_currency")
     config = _config(path)
-    command.upgrade(config, "0020_kpi_fact_currency")
     with sqlite3.connect(path) as conn:
         assert (
             conn.execute(
@@ -152,7 +159,7 @@ def test_managed_ir_publication_migration_is_reversible(tmp_path: Path) -> None:
             is None
         )
 
-    command.upgrade(config, HEAD)
+    command.upgrade(config, revision)
     with sqlite3.connect(path) as conn:
         columns = {
             str(row[1]) for row in conn.execute("PRAGMA table_info(managed_ir_publications)")
@@ -166,7 +173,7 @@ def test_managed_ir_publication_migration_is_reversible(tmp_path: Path) -> None:
             "intent_sha256",
             "payload_sha256",
         } <= columns
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (HEAD,)
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (revision,)
         conn.execute(
             "INSERT INTO managed_ir_publications VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (

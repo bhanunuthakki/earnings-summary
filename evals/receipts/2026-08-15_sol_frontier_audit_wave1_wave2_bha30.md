@@ -1,3 +1,5 @@
+> Historical receipt. The neutral LLM facade and its synthetic adapter tests are retired. This file does not establish current routing or provider parity.
+
 # Independent Quality Audit Receipt — BHA-30 / BHA-33 / BHA-34 / BHA-57 / BHA-59
 
 - **Tier:** J2 Specialist Audit (Evidence Governance Framework)

@@ -54,7 +54,6 @@ _PROMPT_VERSIONS: dict[str, str] = {
     "model_frontier_research": "v1",
     # Governed private-caller migrations: all are schema-bound extractors and
     # must have a stable prompt version for eval/ledger attribution.
-    "kpi_summary_extract": "v1",
     "kpi_summary_enumerate": "v1",
     "segment_6k_breakdown_extract": "v1",
     "segment_definition_extract": "v1",
@@ -111,6 +110,9 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # _build_prompt's rules are materially rewritten — the citation-accuracy
     # golden set scores this purpose, so the version keys its score history.
     "ask_claim_grounding": "v1",
+    # Retained transcript-summary claim audit; bump when its extraction or
+    # support-checking prompt changes materially.
+    "transcript_summary_claim_audit": "v1",
     # Ask evidence follow-up loop (src/ask/followup.py, S7). Bump when
     # need_protocol_block / _compose_followup_prompt are materially
     # rewritten, then re-run `run_llm_evals.py --purpose
@@ -198,18 +200,12 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # at v2: their prompts changed — either directly (document text / web
     # rules) or because the composed anchor block they embed is now wrapped
     # by compose_anchor_block.
-    "press_release_summary": "v2",  # press-release body spotlighted
-    "presentation_brief": "v2",  # deck text spotlighted
     "event_brief": "v2",  # event document text spotlighted
     # v3 (2026-08-03): transport-neutral search-first obligation and evidenced
     # no-news branch; model and transport are unchanged.
     "recent_developments": "v3",
     "company_description": "v3",  # 10-K excerpts + IR blocks spotlighted
     "platform_diagram": "v2",  # 10-K + transcript excerpts spotlighted
-    "pairwise_analysis": "v2",  # composed anchor block now spotlighted
-    "saydo_filter": "v2",  # composed anchor block now spotlighted
-    "advisor_socratic_questions": "v2",  # composed anchor block now spotlighted
-    "advisor_socratic_memo": "v2",  # composed anchor block now spotlighted
     # The injection-canary golden SET (evals/golden/injection_canaries.json),
     # not an LLM prompt of its own — versioned so a future canary-set revision
     # forks the security-pass-rate history cleanly. Bump when cases change.
@@ -228,57 +224,14 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # materially rewritten and re-run `run_llm_evals.py --purpose <p>`.
     "earnings_themes_split": "v1",
     "qa_topics": "v1",
-    # Calibration coach (close_the_loops L8): the monthly scorecard's named
-    # biases + behavioural experiment. Registered here so it counts as a known
-    # audit purpose (the rubric-wiring test gates AUDIT_SPECS ⊆ registered).
-    "calibration_coach": "v1",
-    # The Ledger longitudinal synthesis (Wave B). Bump when the per-holding
-    # stance-consolidation prompt (theme_synthesis) or the theme-clustering
-    # prompt (theme_seed_cluster) is materially rewritten.
-    "theme_synthesis": "v1",
-    "theme_seed_cluster": "v1",
-    # The Worldview distiller (P2). Bump when the Tenet-distillation prompt is
-    # materially rewritten. v2 (2026-07-19): identity-level bar, conditional
-    # phrasing over flat contradictory rules, standing Tenets ride in and
-    # overlap must revise (reuse scope_key) instead of stacking, max 3.
-    "tenet_distill": "v2",
-    # The session-distill tap (B4 keystone). Bump when _build_prompt in
-    # synthesis.session_distill is materially rewritten.
-    "session_distill": "v1",
-    # The Ledger intent tap (research.intent._build_prompt). Bump when the intent
-    # prompt is materially rewritten, then re-run
-    # `run_llm_evals.py --purpose capture_intent`.
-    "capture_intent": "v1",
-    # The B7 routing triage (research.triage._build_prompt). Bump when the
-    # triage prompt is materially rewritten.
-    "research_triage": "v1",
-    # The Ledger reply router (onmymind.reply._build_prompt). Bump when the
-    # reply-intent prompt is materially rewritten.
-    "ledger_reply_intent": "v1",
-    # The Triage second-pass router (user_state.triage_suggest._build_prompt).
-    # Bump when the route-suggest prompt is materially rewritten.
-    "triage_route_suggest": "v1",
-    # The capture->answer primary gate (capture.triage._build_prompt, B3).
-    # Bump when the triage prompt is materially rewritten, then re-run
-    # `run_llm_evals.py --purpose capture_triage`.
-    "capture_triage": "v1",
     # The async Decision Draft parser riding the landed capture note
     # (capture.decision_draft, P2.1 — PRD §9.2/§10.1). Bump with its prompt;
     # re-run `run_llm_evals.py --purpose decision_draft_parse`.
     "decision_draft_parse": "v1",
-    # The Ledger reply-box coach follow-up router (B3 sibling PR). Registered
-    # here alongside capture_triage since this file is the one source of
-    # truth for prompt versions.
-    "coach_reply_intent": "v1",
-    # The Ledger artifact brief (research.brief._build_prompt). Bump when the brief /
-    # stress prompt is materially rewritten.
-    "artifact_brief": "v1",
     # The Ledger Phase-1 research loop (two-pass): fetch / adversarial assess / narrate.
     "research_fetch": "v2",  # transport-neutral search-first web prompt
     "research_adversarial_assess": "v1",
     "research_narrate": "v1",
-    # The Ledger decision extraction.
-    "musing_decision_extract": "v1",
     # Meta-eval sampler difficulty classifier (evals/sampler.py, §2). This version
     # IS the eval_case_features cache key: bumping it invalidates every cached
     # classification by key and forks stratification history cleanly.
@@ -292,8 +245,6 @@ _PROMPT_VERSIONS: dict[str, str] = {
     "prompt_variant_propose": "v1",
     "prompt_reflect_rewrite": "v1",
     # Project README generator + mandatory independent release judge.
-    "readme_update": "v1",
-    "readme_update_judge": "v1",
     # SayDo commitment extraction (compute/say_do_extractor.build_extraction_prompt).
     # Bump when the extraction prompt is materially rewritten; commitment_scan_log
     # rows carry the version, so stale-version scans can be invalidated (DELETE
@@ -302,25 +253,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # The Ledger Phase-1 artifact drafters (thesis entry + code-change spec).
     "thesis_entry_draft": "v1",
     "research_code_spec": "v1",
-    # Position-review verdict (src/advisor/position_review.py). Bump when
-    # _build_verdict_prompt / _behavioral_rules is materially rewritten.
-    # v2 (PR5): rule 1's evidence is interpolated from the live
-    # graded_sell_record base rate instead of a hardcoded MU/GOOGL/TSM.
-    "position_review": "v2",
     # Per-name DCF scenario prior (src/dcf/scenario_prior.py, mode-A golden set).
     # Bump when the weight-setting prompt (dcf.scenario_prior._PROMPT) is materially
     # rewritten, then re-run `run_llm_evals.py --purpose scenario_prior`.
     "scenario_prior": "v1",
-    # Positioning coach + encode (src/positioning/coach_pack.py + encode.py).
-    # Bump coach when _INSTRUCTIONS materially changes posture; bump encode
-    # when _prompt's schema/rules change (the approval form re-validates
-    # owner-side regardless, so an encode bump never risks silent state).
-    "positioning_coach_turn": "v1",
-    "positioning_encode": "v1",
-    # ETF role-in-portfolio one-pager (src/etf_role_synthesis.py). The version
-    # rides the llm_artifacts input sha — bumping it forks every cached
-    # one-pager cleanly (a regenerate is forced even if no input moved).
-    "etf_role_synthesis": "v1",
     # Whole-book thesis-collision audit (src/thesis_collision.py). IS the
     # llm_artifacts cache key alongside the thesis-set hash — bumping it forks
     # cached findings cleanly (a re-run is forced even if no thesis changed).
@@ -333,31 +269,12 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # Annual letter-to-self (monthly_red_team.md Phase 3, PR7,
     # execution/draft_annual_letter.py). Bump when the drafting prompt is
     # materially rewritten.
-    "annual_letter": "v1",
     # 10-Q segment quarterly period-axis disambiguation Stage B fallback
     # (docs/design/segment_quarterly_framework.md §2.4,
     # compute.segment_quarterly_10q._build_disambiguate_prompt). Bump when
     # the prompt is materially rewritten, then re-run
     # `run_llm_evals.py --purpose segment_10q_period_disambiguate`.
     "segment_10q_period_disambiguate": "v1",
-    # Behavioral-rules distiller (tenet-2 Phase 4,
-    # synthesis.behavior_distill._build_prompt). Bump when the distill prompt
-    # is materially rewritten, then re-run
-    # `run_llm_evals.py --purpose behavior_distill`.
-    "behavior_distill": "v1",
-    # Semantic tenet-tension detection (B5, synthesis.semantic_tension._build_prompt).
-    # Bump when the restate/contradict prompt is materially rewritten, then
-    # re-run any golden-set eval added for this purpose.
-    "tenet_semantic_tension": "v1",
-    # Tenet accountability ledger (B5, synthesis.tenet_accountability — the
-    # sibling B5 workstream's file). Registered here since this file is the
-    # one source of truth for prompt versions.
-    "tenet_accountability": "v1",
-    # Exit post-mortem drafting (B6, 2026-07-19 program overhaul,
-    # synthesis.exit_postmortem._build_prompt). Bump when the drafting
-    # prompt is materially rewritten, then re-run any golden-set eval added
-    # for this purpose.
-    "exit_postmortem_draft": "v1",
     # Business-factor taxonomy (C3, 2026-07-19 program overhaul Workstream C
     # keystone, src/risk_factors.py). IS the llm_artifacts cache key
     # alongside the per-ticker mix+thesis input hash — bumping it (e.g. after
@@ -389,7 +306,8 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # inherited the v1 fallback. These rows are behavior-preserving, but make
     # capture cohorts and eval attribution auditable.
     "advisor_swap_check": "v1",
-    "ask_answer": "v1",
+    # Retired exercise referrals now use the existing governed /review command.
+    "ask_answer": "v3",
     "ask_claim_audit": "v1",
     "bear_case_grading": "v1",
     "canonicalize_segments": "v1",
@@ -408,7 +326,6 @@ _PROMPT_VERSIONS: dict[str, str] = {
     "pressure_test_thesis": "v2",
     "risk_factor_classify": "v2",
     "risk_factor_diff": "v2",
-    "saydo_importance": "v1",
     "strategic_analysis": "v1",
     "lens:five_min_reread": "v2",  # public-evidence method and exact prompt cache
     "thesis_pass_a": "v2",
@@ -416,7 +333,6 @@ _PROMPT_VERSIONS: dict[str, str] = {
     "transcript_qa_judgment": "v1",
     "transcript_topic_triage": "v1",
     "valuation_basis": "v1",
-    "weekly_packet_predraft": "v1",
 }
 
 _DEFAULT_VERSION = "v1"

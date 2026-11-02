@@ -185,7 +185,7 @@ def main() -> int:
                 indent=2,
             )
         )
-        return 0
+        return 2 if any(result.get("status") == "unsupported" for result in results) else 0
 
 
 def _refresh_tickers(
@@ -347,6 +347,7 @@ def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list
             f"SELECT ticker FROM tracked_companies "
             f"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} "
             f"AND (archived_at IS NULL) "
+            "AND LOWER(COALESCE(instrument_type,'')) <> 'etf' "
             f"ORDER BY ticker"
         )
     else:
@@ -362,6 +363,7 @@ def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list
             "WHERE (brief_dirty = 1 OR list_type = 'portfolio') "
             f"AND list_type IN {db.BRIEFED_LIST_TYPES_SQL} "
             "AND (archived_at IS NULL) "
+            "AND LOWER(COALESCE(instrument_type,'')) <> 'etf' "
             "ORDER BY ticker"
         )
     rows = cursor.fetchall()
@@ -519,8 +521,14 @@ def _refresh_one_ticker(
     # Per-ticker explicit invocation = force (bypass gates)
     forced = bool(args.force or args.ticker)
 
-    with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
+    with closing(connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)) as conn:
         conn.row_factory = sqlite3.Row
+        instrument = conn.execute(
+            "SELECT instrument_type FROM tracked_companies WHERE UPPER(ticker)=?",
+            (ticker.upper(),),
+        ).fetchone()
+        if instrument and str(instrument[0] or "").lower() == "etf":
+            return {"ticker": ticker, "status": "unsupported", "reason": "etf_research_retired"}
         skip, reason, current_hash = _check_skip_gates(
             conn,
             ticker,

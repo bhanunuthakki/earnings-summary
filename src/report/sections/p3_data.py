@@ -25,116 +25,36 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
-from dataclasses import dataclass, replace
+from collections.abc import Callable
+from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
-from typing import cast
+from typing import TypeVar, cast
 
 from macro_store import fetch_sensitivities
+from models.documents import DocType, SourceType
+from report.models import SayDoVerdictRow as SayDoVerdictRow
+from report.sections.comp_set_context import load_comp_set_context
+from report.workspace_models import (
+    CustomerConcentrationRow,
+    DecisionHistorySummary,
+    DecisionRow,
+    LeaseLadderRow,
+    MacroSensitivityRow,
+    PanelAvailability,
+    PeerCompRow,
+    StandingRuleRow,
+    StandingRulesPanel,
+    StrategicTargetRow,
+    WorkspaceP3Panels,
+)
 from runtime.deterministic import table_exists as _table_exists
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from user_state.notes import AnalystNoteRow, list_notes
+
+_ReadResult = TypeVar("_ReadResult")
 
 log = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class MacroSensitivityRow:
-    """One row of macro_sensitivities for a ticker."""
-
-    series_id: str
-    beta: float
-    r_squared: float | None
-    lookback_window_days: int
-    computed_at: datetime
-    metric_version: str = "legacy_unversioned"
-    shock_unit: str = "log_return"
-    input_sha: str | None = None
-    source_as_of: str | None = None
-
-
-@dataclass(frozen=True)
-class StrategicTargetRow:
-    """One row of strategic_targets — long-term mgmt commitment from an investor deck."""
-
-    target_kind: str
-    target_value: float | None
-    target_unit: str
-    target_period: str
-    target_currency: str | None
-    narrative_excerpt: str
-    confidence: float
-
-
-@dataclass(frozen=True)
-class CustomerConcentrationRow:
-    """One named customer's share of a ticker's revenue for a period."""
-
-    fiscal_period: str
-    fiscal_period_type: str
-    customer_label: str
-    pct_of_revenue: float
-    revenue_amount: float | None
-    revenue_currency: str | None
-
-
-@dataclass(frozen=True)
-class LeaseLadderRow:
-    """One year of a lease maturity ladder."""
-
-    fiscal_year: int
-    as_of_date: date
-    lease_type: str
-    ladder_year: str
-    ladder_calendar_year: int | None
-    amount: float
-    currency: str
-    unit: str
-
-
-@dataclass(frozen=True)
-class DecisionRow:
-    """One decision_audit row."""
-
-    recommendation_kind: str
-    recommendation_value: float | None
-    conviction: str | None
-    made_at: datetime
-    outcome_pct: float | None
-    outcome_at: datetime | None
-    rationale_excerpt: str | None
-
-
-@dataclass(frozen=True)
-class DecisionHistorySummary:
-    """Aggregated view: counts by (kind, conviction) + win-rate."""
-
-    total: int
-    by_kind: dict[str, int]
-    by_conviction: dict[str, int]
-    win_rate_overall: float | None
-    rows: list[DecisionRow]
-
-
-@dataclass(frozen=True)
-class SayDoVerdictRow:
-    """One management commitment + outcome — the P3-21 grading-overlay row.
-
-    Field names mirror the management_commitments columns (alembic 0017)
-    rather than inventing a new vocabulary: `period_made` is when management
-    said it, `period_target` is the period they were guiding for, `outcome`
-    is the post-match verdict.
-    """
-
-    period_made: datetime
-    period_target: datetime
-    kpi_name: str
-    comparator: str
-    target_value: float
-    unit: str
-    narrative: str
-    realized_value: float | None
-    outcome: str | None
-    evaluated_at: datetime | None
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +89,20 @@ def _parse_dt(raw: object) -> datetime | None:
         except ValueError:
             continue
     return None
+
+
+def _normalized_issuer_ticker(raw: object) -> str | None:
+    if not isinstance(raw, str):
+        return None
+    normalized = raw.strip().casefold()
+    return normalized or None
+
+
+def _normalized_source_kind(raw: object) -> str | None:
+    if not isinstance(raw, str):
+        return None
+    normalized = raw.strip().casefold()
+    return normalized or None
 
 
 def _parse_date(raw: object) -> date | None:
@@ -478,27 +412,6 @@ def load_decision_history(
         win_rate_overall=win_rate,
         rows=decisions,
     )
-
-
-@dataclass(frozen=True)
-class PeerCompRow:
-    """One peer's TTM metrics for the evaluation-snapshot peer-comp table.
-
-    ``match_reasons`` carries why this peer was selected (P4.2 scored
-    selection) so the renderer can show the basis instead of presenting an
-    unexplained list — e.g. ``("named rival", "same industry", "similar
-    scale")``.
-    """
-
-    peer_ticker: str
-    peer_name: str | None
-    market_cap_usd: float | None
-    revenue_ttm_usd: float | None
-    net_margin_ttm: float | None
-    roic_ttm: float | None
-    match_reasons: tuple[str, ...] = ()
-    coverage_notes: tuple[str, ...] = ()
-    source_evidence: dict[str, object] | None = None
 
 
 def _read_json(path: Path) -> object | None:
@@ -1078,17 +991,48 @@ def load_saydo_verdicts(
     try:
         if not _table_exists(db_conn, "management_commitments"):
             return []
+        table_columns = {
+            table: {str(row[1]) for row in db_conn.execute(f"PRAGMA table_info({table})")}
+            for table in ("transcript_segments", "transcripts", "documents")
+            if _table_exists(db_conn, table)
+        }
+        identity_schema_available = (
+            {"id", "transcript_id"} <= table_columns.get("transcript_segments", set())
+            and {"id", "ticker", "document_id", "source_url"}
+            <= table_columns.get("transcripts", set())
+            and {"id", "ticker", "source_type", "doc_type"} <= table_columns.get("documents", set())
+        )
+        transcript_join = (
+            "LEFT JOIN transcript_segments ts "
+            "ON ts.id = mc.transcript_segment_id "
+            "LEFT JOIN transcripts t ON t.id = ts.transcript_id "
+            "LEFT JOIN documents d ON d.id = t.document_id"
+            if identity_schema_available
+            else ""
+        )
+        transcript_projection = (
+            "mc.ticker AS commitment_ticker, t.ticker AS transcript_ticker, "
+            "t.document_id AS transcript_document_id, d.id AS existing_document_id, "
+            "d.ticker AS document_ticker, d.source_type AS document_source_type, "
+            "d.doc_type AS document_type, t.source_url AS source_url"
+            if identity_schema_available
+            else "NULL AS commitment_ticker, NULL AS transcript_ticker, "
+            "NULL AS transcript_document_id, NULL AS existing_document_id, "
+            "NULL AS document_ticker, NULL AS document_source_type, "
+            "NULL AS document_type, NULL AS source_url"
+        )
         rows = db_conn.execute(
             f"""
-            SELECT period_made, period_target, kpi_name, comparator,
-                   target_value, unit, narrative,
-                   realized_value, outcome, evaluated_at
-            FROM management_commitments
-            WHERE ticker = ?
-            ORDER BY period_made DESC
+            SELECT mc.period_made, mc.period_target, mc.transcript_segment_id, mc.kpi_name,
+                   mc.comparator, mc.target_value, mc.unit, mc.narrative,
+                   mc.realized_value, mc.outcome, mc.evaluated_at, {transcript_projection}
+            FROM management_commitments mc
+            {transcript_join}
+            WHERE UPPER(TRIM(mc.ticker)) = ?
+            ORDER BY mc.period_made DESC
             LIMIT {int(limit)}
             """,
-            (ticker.upper(),),
+            (ticker.strip().upper(),),
         ).fetchall()
     finally:
         if conn is None:
@@ -1101,6 +1045,23 @@ def load_saydo_verdicts(
         period_target = _parse_dt(r["period_target"])
         if period_made is None or period_target is None:
             continue
+        transcript_ticker = _normalized_issuer_ticker(r["transcript_ticker"])
+        commitment_ticker = _normalized_issuer_ticker(r["commitment_ticker"])
+        document_ticker = _normalized_issuer_ticker(r["document_ticker"])
+        document_type = _normalized_source_kind(r["document_type"])
+        source_type = _normalized_source_kind(r["document_source_type"])
+        document_kind_matches = (source_type, document_type) in {
+            (SourceType.IR_DOC.value, DocType.IR_TRANSCRIPT.value),
+            (SourceType.TRANSCRIPT_AUDIO.value, DocType.EARNINGS_CALL_TRANSCRIPT.value),
+        }
+        source_identity_matches = (
+            r["transcript_document_id"] is not None
+            and r["existing_document_id"] is not None
+            and commitment_ticker is not None
+            and commitment_ticker == transcript_ticker == document_ticker
+            and document_kind_matches
+        )
+        source_document_id = int(r["existing_document_id"]) if source_identity_matches else None
         out.append(
             SayDoVerdictRow(
                 period_made=period_made,
@@ -1115,6 +1076,272 @@ def load_saydo_verdicts(
                 ),
                 outcome=r["outcome"],
                 evaluated_at=_parse_dt(r["evaluated_at"]),
+                source_ref=f"transcript_segment:{int(r['transcript_segment_id'])}",
+                source_document_id=source_document_id,
+                source_url=(
+                    str(r["source_url"])
+                    if source_document_id is not None and r["source_url"] is not None
+                    else None
+                ),
             )
         )
     return out
+
+
+def _load_open_notes(ticker: str, conn: sqlite3.Connection) -> list[AnalystNoteRow]:
+    rows = list_notes(ticker=ticker, status="open", limit=12, conn=conn)
+    kind_rank = {"watch": 0, "question": 1}
+    return sorted(rows, key=lambda note: kind_rank.get(note.kind, 9))
+
+
+# ---------------------------------------------------------------------------
+# Standing rules (Monthly Red Team PR10 — surface wiring)
+# ---------------------------------------------------------------------------
+#
+# The per-ticker brief's Position tab historically rendered zero
+# ``position_sizing_intent`` content — the FLKR exit ladder, RBRK/BKNG target
+# weights and the DRAFT add-rungs were visible to the Risk panel, /review and
+# Ask but invisible in the brief. This loader reads the ticker's full intent
+# history (the same table + row shape ``position_guard`` reads) and derives
+# the coverage line via ``position_guard.evaluate_downside_trigger`` /
+# ``evaluate_add_trigger`` — the naked-position gate's OWN detection logic,
+# never re-derived.
+
+# The DRAFT provenance prefixes the red-team write paths stamp on narratives:
+# PR9's data pass writes "[draft, pending owner review] ..." and
+# redteam.response._accept writes "[red-team accepted, pending owner edit] ..."
+# — both are machine-proposed rows awaiting the owner, rendered as a quiet
+# DRAFT chip (the bracketed prefix is stripped from the displayed narrative —
+# the chip IS the prefix) rather than blended in with owner-authored rules.
+_DRAFT_NARRATIVE_RE = re.compile(
+    r"^\s*\[\s*(?:draft\b|red-team accepted\b)[^\]]*\]\s*", re.IGNORECASE
+)
+
+
+def _parse_intent_dt(raw: object) -> datetime | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        dt = datetime.fromisoformat(str(raw))
+    except ValueError:
+        return None
+    # Naive-UTC convention (reference_naive_utc): strip any aware offset so
+    # pre-migration rows compare/render like the naive rows.
+    return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+
+
+def load_standing_rules(
+    ticker: str, db_path: Path | None, repo_root: Path, *, conn: sqlite3.Connection | None = None
+) -> StandingRulesPanel | None:
+    """The ticker's ``position_sizing_intent`` history as a render-ready
+    panel, or ``None`` when there are no rows on file (hide-don't-stub) or the
+    DB/table is absent — the same best-effort degrade contract as every other
+    loader in this module."""
+    if conn is None and (db_path is None or not db_path.exists()):
+        return None
+    try:
+        db_conn = (
+            conn
+            if conn is not None
+            else connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
+        )
+    except sqlite3.Error:
+        return None
+    original_factory = db_conn.row_factory
+    db_conn.row_factory = sqlite3.Row
+    try:
+        raw_rows = db_conn.execute(
+            "SELECT intent_kind, intent_value, narrative, updated_at "
+            "FROM position_sizing_intent WHERE ticker = ? "
+            "ORDER BY updated_at DESC, id DESC",
+            (ticker.upper().strip(),),
+        ).fetchall()
+    except sqlite3.Error:
+        if conn is not None:
+            raise
+        return None
+    finally:
+        if conn is None:
+            db_conn.close()
+        else:
+            db_conn.row_factory = original_factory
+    if not raw_rows:
+        return None
+
+    rows: list[StandingRuleRow] = []
+    for r in raw_rows:
+        narrative = str(r["narrative"]) if r["narrative"] is not None else ""
+        is_draft = bool(_DRAFT_NARRATIVE_RE.match(narrative))
+        if is_draft:
+            # The DRAFT chip carries the provenance — strip the raw prefix
+            # from the displayed narrative so it isn't said twice.
+            narrative = _DRAFT_NARRATIVE_RE.sub("", narrative, count=1)
+        updated_at = _parse_intent_dt(r["updated_at"]) or datetime(1970, 1, 1)
+        rows.append(
+            StandingRuleRow(
+                intent_kind=str(r["intent_kind"]),
+                intent_value=(float(r["intent_value"]) if r["intent_value"] is not None else None),
+                narrative=narrative,
+                is_draft=is_draft,
+                updated_at=updated_at,
+            )
+        )
+
+    # Coverage line — reuse position_guard's exact detection (never
+    # re-derived). Guarded import so this renderer never hard-depends on the
+    # guard module's transitive imports; a failure degrades the coverage line
+    # to absent, never the whole panel.
+    downside_passed: bool | None = None
+    add_passed: bool | None = None
+    add_is_draft = False
+    try:
+        from position_guard import IntentRow, evaluate_add_trigger, evaluate_downside_trigger
+
+        intents = [
+            IntentRow(intent_kind=row.intent_kind, narrative=row.narrative or None) for row in rows
+        ]
+        downside_passed = evaluate_downside_trigger(
+            intents, repo_root=repo_root, ticker=ticker
+        ).passed
+        add_passed = evaluate_add_trigger(intents).passed
+        if add_passed:
+            # The add check passed — draft iff NO non-draft row alone passes
+            # it, i.e. the pre-commitment currently rests on machine-proposed
+            # rows awaiting owner review.
+            non_draft = [
+                IntentRow(intent_kind=row.intent_kind, narrative=row.narrative or None)
+                for row in rows
+                if not row.is_draft
+            ]
+            add_is_draft = not evaluate_add_trigger(non_draft).passed
+    except ImportError:
+        pass
+    return StandingRulesPanel(
+        rows=rows,
+        downside_passed=downside_passed,
+        add_passed=add_passed,
+        add_is_draft=add_is_draft,
+    )
+
+
+def load_workspace_p3_panels(
+    ticker: str,
+    repo_root: Path,
+    *,
+    db_path: Path | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> WorkspaceP3Panels:
+    """Read the optional panels through one connection with explicit availability.
+
+    A supplied connection remains caller-owned. Optional data failures do not
+    erase successfully read panels or become evidence of an empty history.
+    """
+    if db_path is None and conn is None:
+        return WorkspaceP3Panels.empty()
+    try:
+        db_conn = (
+            conn
+            if conn is not None
+            else connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
+        )
+    except (sqlite3.Error, OSError):
+        log.warning({"event": "workspace_database_unavailable"})
+        return WorkspaceP3Panels.empty(PanelAvailability.UNAVAILABLE)
+    original_factory = db_conn.row_factory
+    db_conn.row_factory = sqlite3.Row
+    try:
+        try:
+            tables = {
+                str(row[0])
+                for row in db_conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type IN ('table','view')"
+                )
+            }
+        except sqlite3.Error:
+            log.warning({"event": "workspace_database_unavailable"})
+            return WorkspaceP3Panels.empty(PanelAvailability.UNAVAILABLE)
+        availability: dict[str, PanelAvailability] = {}
+
+        def read(
+            name: str,
+            table: str,
+            loader: Callable[[], _ReadResult],
+            fallback: _ReadResult,
+            has_data: Callable[[_ReadResult], bool] = bool,
+        ) -> _ReadResult:
+            if table not in tables:
+                availability[name] = PanelAvailability.UNAVAILABLE
+                log.warning({"event": "workspace_panel_unavailable", "panel": name})
+                return fallback
+            try:
+                result = loader()
+            except (sqlite3.Error, OSError, ValueError, KeyError):
+                availability[name] = PanelAvailability.UNAVAILABLE
+                log.warning({"event": "workspace_panel_unavailable", "panel": name})
+                return fallback
+            availability[name] = (
+                PanelAvailability.PRESENT if has_data(result) else PanelAvailability.EMPTY
+            )
+            return result
+
+        empty = WorkspaceP3Panels.empty()
+        panels = WorkspaceP3Panels(
+            macro_sensitivities=read(
+                "macro_sensitivities",
+                "macro_sensitivities",
+                lambda: load_macro_sensitivities(ticker, conn=db_conn),
+                [],
+            ),
+            strategic_targets=read(
+                "strategic_targets",
+                "strategic_targets",
+                lambda: load_strategic_targets(ticker, conn=db_conn),
+                [],
+            ),
+            customer_concentrations=read(
+                "customer_concentrations",
+                "customer_concentrations",
+                lambda: load_customer_concentrations(ticker, conn=db_conn),
+                [],
+            ),
+            lease_ladder=read(
+                "lease_ladder",
+                "lease_commitments",
+                lambda: load_lease_ladder(ticker, conn=db_conn),
+                [],
+            ),
+            decision_history=read(
+                "decision_history",
+                "decisions",
+                lambda: load_decision_history(ticker, conn=db_conn),
+                empty.decision_history,
+                lambda history: history.total > 0,
+            ),
+            peer_comp=read(
+                "peer_comp",
+                "tracked_companies",
+                lambda: load_peer_comp(ticker, repo_root=repo_root, conn=db_conn),
+                [],
+            ),
+            open_notes=read(
+                "open_notes", "analyst_notes", lambda: _load_open_notes(ticker, db_conn), []
+            ),
+            standing_rules=read(
+                "standing_rules",
+                "position_sizing_intent",
+                lambda: load_standing_rules(ticker, db_path, repo_root, conn=db_conn),
+                None,
+            ),
+            comp_set_context=read(
+                "comp_set_context",
+                "comparable_sets",
+                lambda: load_comp_set_context(ticker, repo_root=repo_root, conn=db_conn),
+                None,
+            ),
+        )
+        return replace(panels, availability=availability)
+    finally:
+        if conn is None:
+            db_conn.close()
+        else:
+            db_conn.row_factory = original_factory

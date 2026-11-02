@@ -10,10 +10,10 @@ Native ingestion preserves exact bytes and admits immutable facts. A versioned
 UTC daily acquisition window prevents an old successful attempt from suppressing
 later discovery. This scheduling key is not source Content Identity.
 
-ETFs keep their published-data lane. Optional stages use existing transcript,
-IR-document and Say-Do interfaces. ``--industry-template`` remains an explicit
+Dedicated ETF research is retired. Optional stages use existing transcript,
+IR-document and Transcript summary interfaces. ``--industry-template`` remains an explicit
 request. Onboarding does not approve a thesis or certify report completeness.
-``--skip-llm`` preserves source collection and skips commitment extraction and Say-Do.
+``--skip-llm`` preserves source collection and skips commitment extraction and Transcript summary.
 
 Usage:
     python execution/onboard_ticker.py --ticker NEW --project-root STATE --db DB
@@ -211,8 +211,8 @@ def _onboard_invocation_inputs(
         "skip_llm": bool(getattr(args, "skip_llm", False)),
         "skip_transcripts": bool(args.skip_transcripts),
         "skip_ir": bool(args.skip_ir),
-        "skip_saydo": bool(args.skip_saydo),
-        "force_saydo": bool(args.force_saydo),
+        "skip_transcript_summaries": bool(args.skip_transcript_summaries),
+        "force_transcript_summaries": bool(args.force_transcript_summaries),
         "industry_template": args.industry_template,
         "instrument_override": args.instrument,
         "resolved_instrument": instrument,
@@ -538,11 +538,24 @@ def _run_ir_documents(ticker: str) -> int:
     return 0 if result.status is not TickerStatus.FAILED else 1
 
 
+def _lookup_known_instrument(ticker: str) -> str | None:
+    """Read the known kind before any provider or writer stage."""
+    conn = connect_sqlite(str(_DB_PATH), role=SQLiteConnectionRole.READ_ONLY)
+    try:
+        row = conn.execute(
+            "SELECT instrument_type FROM tracked_companies WHERE ticker = ? LIMIT 1",
+            (ticker,),
+        ).fetchone()
+        return str(row[0]).lower() if row and row[0] else None
+    finally:
+        conn.close()
+
+
 def _lookup_list_type(ticker: str) -> str | None:
     """Return tracked_companies.list_type for the ticker, or None if absent.
 
     Reads the same list_type used for schedule classification. Used to gate the
-    Say-Do onboarding step to evaluation-list names.
+    Transcript summary onboarding step to evaluation-list names.
     """
     if not _DB_PATH.exists():
         return None
@@ -560,124 +573,46 @@ def _lookup_list_type(ticker: str) -> str | None:
         return None
 
 
-def _run_saydo(ticker: str) -> int:
-    """Generate per-quarter transcript summaries + Say-Do pairs for a ticker.
+def _run_transcript_summaries(ticker: str) -> int:
+    """Generate registered transcript summaries for a ticker.
 
-    Closes the gap that leaves §6 Say-Do empty for freshly-onboarded names:
-    transcripts are registered processed=True at ingest without a summary ever
-    being written, so the normal pipeline never summarizes them. This runs
-    `process_ir_documents.py --regenerate-missing` (cache-aware — only writes
-    summaries that are absent, never re-bills existing ones) then
-    `build_saydo_pairs.py` to pair consecutive quarters into the §6 cards.
+    The transcript processor resolves current registered versions and reuses
+    qualified artifacts.
 
     Returns the first non-zero subprocess exit code, or 0 on success.
     """
-    process_ir = PROJECT_ROOT / "execution" / "process_ir_documents_state.py"
-    build_saydo = PROJECT_ROOT / "execution" / "build_saydo_pairs.py"
-    rc = subprocess.run(
+    process_ir = PROJECT_ROOT / "execution" / "process_ir_documents.py"
+    return subprocess.run(
         [
             *managed_python_prefix(PROJECT_ROOT),
             str(process_ir),
             "--ticker",
             ticker,
-            "--regenerate-missing",
-            "--repo-root",
+            "--state-root",
             str(_STATE_ROOT),
+            "--repo-root",
+            str(PROJECT_ROOT),
             "--db",
             str(_DB_PATH),
         ],
         cwd=str(PROJECT_ROOT),
     ).returncode
-    if rc != 0:
-        return rc
-    return subprocess.run(
-        [
-            *managed_python_prefix(PROJECT_ROOT),
-            str(build_saydo),
-            "--ticker",
-            ticker,
-            "--repo-root",
-            str(_STATE_ROOT),
-        ],
-        cwd=str(PROJECT_ROOT),
-    ).returncode
 
 
-def _saydo_should_run(list_type: str | None, *, force: bool, instrument: str | None = None) -> bool:
-    """Say-Do generation runs for evaluation-list names (the gap this closes)
+def _transcript_summaries_should_run(
+    list_type: str | None, *, force: bool, instrument: str | None = None
+) -> bool:
+    """Transcript summary generation runs for evaluation-list names (the gap this closes)
     or for any name when forced (e.g. backfilling an already-onboarded ticker).
 
     Never for ETFs — funds hold no earnings calls, so there are no
-    management commitments to pair. Belt-and-braces: the ETF onboarding
+    company transcripts to summarize. Belt-and-braces: the ETF onboarding
     branch in ``main`` returns before this gate is ever consulted, but a
-    ``--force-saydo`` on an ETF must still be a no-op.
+    ``--force-transcript-summaries`` on an ETF must still be a no-op.
     """
     if instrument == "etf":
         return False
     return force or list_type == "evaluation"
-
-
-def run_etf_onboarding(conn: sqlite3.Connection, ticker: str, repo_root: Path) -> int:
-    """The ETF onboarding-lite path (directives/etf_data.md): published data
-    only — N-PORT holdings, issuer overlay, yfinance price history. No
-    quarterly refresh, no transcripts, no IR crawl, no Say-Do: none of the
-    bottoms-up equity stages mean anything for a fund.
-
-    Returns 0 when at least one holdings source landed, 1 when both degraded
-    (evaluation analytics will be partial until a source succeeds), 2 on an
-    N-PORT schema-drift halt.
-    """
-    from etf_sources.ingest import refresh_published_data
-    from etf_sources.nport import NportParseError
-
-    print(f"[onboard] {ticker} stage=etf_published_data", flush=True)
-    try:
-        result = refresh_published_data(conn, ticker, repo_root)
-    except NportParseError as exc:
-        print(f"[onboard] {ticker} etf_published_data NPORT PARSE HALT: {exc}", flush=True)
-        return 2
-    conn.commit()
-    as_of = result.nport_as_of.isoformat() if result.nport_as_of else "-"
-    print(
-        f"[onboard] {ticker} etf nport={result.nport_status} as_of={as_of} "
-        f"rows={result.nport_rows} issuer={result.issuer_status} "
-        f"issuer_rows={result.issuer_rows} "
-        f"characteristics={'yes' if result.characteristics_applied else 'no'} "
-        f"prices={result.price_status} price_rows={result.price_rows}",
-        flush=True,
-    )
-    for skipped in ("quarterly_refresh", "backfill_transcripts", "ir_documents", "saydo"):
-        print(f"[onboard] {ticker} stage={skipped} SKIPPED (instrument_type=etf)", flush=True)
-    # Role-in-portfolio one-pager: one governed LLM call, sha-cached, best
-    # effort (a fresh ETF lands with its workup; a failure never fails the
-    # onboard — the workup peek shows the build-hint CLI instead).
-    print(f"[onboard] {ticker} stage=etf_role_synthesis", flush=True)
-    workup_rc = subprocess.run(
-        [
-            *managed_python_prefix(PROJECT_ROOT),
-            str(PROJECT_ROOT / "execution" / "build_etf_workup.py"),
-            "--ticker",
-            ticker,
-            "--repo-root",
-            str(repo_root),
-            "--db-path",
-            str(_DB_PATH),
-        ],
-        cwd=str(PROJECT_ROOT),
-    ).returncode
-    if workup_rc != 0:
-        print(
-            f"[onboard] {ticker} etf_role_synthesis rc={workup_rc}; continuing (best-effort)",
-            flush=True,
-        )
-    if result.nport_status == "unavailable" and result.issuer_status == "unavailable":
-        print(
-            f"[onboard] {ticker} WARNING: no ETF holdings source succeeded — "
-            f"look-through analytics degrade until one does",
-            flush=True,
-        )
-        return 1
-    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -706,7 +641,7 @@ def main() -> int:
     ap.add_argument(
         "--skip-llm",
         action="store_true",
-        help="Collect sources without LLM commitment extraction or Say-Do generation",
+        help="Collect sources without LLM commitment extraction or Transcript summary generation",
     )
     ap.add_argument(
         "--skip-transcripts",
@@ -719,14 +654,14 @@ def main() -> int:
         help="Skip the IR-document discover+fetch step (e.g. no `ir` extra installed)",
     )
     ap.add_argument(
-        "--skip-saydo",
+        "--skip-transcript-summaries",
         action="store_true",
-        help="Skip the Say-Do step (per-quarter transcript summaries + pairwise cards).",
+        help="Skip the Transcript summary step (registered transcript summaries).",
     )
     ap.add_argument(
-        "--force-saydo",
+        "--force-transcript-summaries",
         action="store_true",
-        help="Run the Say-Do step regardless of list_type (default: evaluation "
+        help="Run the Transcript summary step regardless of list_type (default: evaluation "
         "names only). Useful for backfilling an already-onboarded name.",
     )
     ap.add_argument(
@@ -747,8 +682,7 @@ def main() -> int:
         help=(
             "Force tracked_companies.instrument_type before classification. "
             "Escape hatch for symbols whose FMP profile is unavailable (the "
-            "auto-classifier needs it); an ETF routes to the published-data "
-            "onboarding-lite path."
+            "auto-classifier needs it); an ETF returns an unsupported result."
         ),
     )
     args = ap.parse_args()
@@ -762,6 +696,15 @@ def _onboard(args: argparse.Namespace) -> int:
 
     started = datetime.now()
     print(f"[onboard] {ticker} starting at {started.isoformat(timespec='seconds')}", flush=True)
+
+    declared_instrument = str(args.instrument or "").lower()
+    instrument_kind = declared_instrument or _lookup_known_instrument(ticker)
+    if instrument_kind == "etf":
+        print(
+            f"[onboard] {ticker} unsupported: dedicated ETF research is retired",
+            flush=True,
+        )
+        return 2
 
     industry_arg = args.industry_template
     if industry_arg:
@@ -838,6 +781,14 @@ def _onboard(args: argparse.Namespace) -> int:
             ).fetchone()
             instrument = row[0] if row and row[0] else None
         print(f"[onboard] {ticker} instrument_type={instrument!s}", flush=True)
+        instrument_value = getattr(instrument, "value", instrument)
+        if str(instrument_value or "").lower() == "etf":
+            print(
+                f"[onboard] {ticker} unsupported: dedicated ETF onboarding is retired; "
+                f"saved ETF history remains readable",
+                flush=True,
+            )
+            return 2
 
         # Self-heal filing_regime the same way (write-only-when-NULL; never
         # clobbers the hand-curated 0001 backfill). segment_quarterly_framework.md
@@ -846,11 +797,9 @@ def _onboard(args: argparse.Namespace) -> int:
         filing_regime = set_filing_regime_from_profile(conn, ticker, _STATE_ROOT)
         print(f"[onboard] {ticker} filing_regime={filing_regime!s}", flush=True)
 
-        # ETFs take the published-data onboarding-lite path: the remaining
-        # stages (quarterly refresh, transcripts, IR, Say-Do) are all
-        # bottoms-up equity machinery that means nothing for a fund.
-        instrument_value = getattr(instrument, "value", instrument)
-        if not args.skip_sec and str(instrument_value or "").lower() != "etf":
+        # ETF classification stops above: no dedicated fund onboarding, no
+        # corporate-fallback workup. Continue only for company instruments.
+        if not args.skip_sec:
             identity = ensure_sec_onboarding_identity(
                 conn,
                 ticker=ticker,
@@ -876,31 +825,12 @@ def _onboard(args: argparse.Namespace) -> int:
             if identity.instrument_type is not None:
                 instrument_value = identity.instrument_type
         if str(instrument_value or "").lower() == "etf":
-            try:
-                run_id = start_run(
-                    conn,
-                    directive="onboard_ticker",
-                    ticker_scope=[ticker],
-                    invocation_inputs=_onboard_invocation_inputs(
-                        args,
-                        ticker,
-                        instrument=str(instrument_value or "").lower() or None,
-                        conn=conn,
-                    ),
-                )
-            except PipelineRunSuppressedError as exc:
-                print(json.dumps(suppression_payload(exc)))
-                return 0
-            rc = run_etf_onboarding(conn, ticker, _STATE_ROOT)
-            end_run(
-                conn,
-                run_id,
-                RunStageStatus.OK if rc == 0 else RunStageStatus.FAILED,
-                error_summary=None if rc == 0 else f"etf onboarding rc={rc}",
+            print(
+                f"[onboard] {ticker} unsupported: dedicated ETF onboarding is retired; "
+                f"saved ETF history remains readable",
+                flush=True,
             )
-            elapsed = (datetime.now() - started).total_seconds()
-            print(f"[onboard] {ticker} done in {elapsed:.1f}s (etf path rc={rc})", flush=True)
-            return rc
+            return 2
 
         print(f"[onboard] {ticker} stage=quarterly_refresh", flush=True)
         transcript_artifacts = stage_pending_issuer_transcripts(
@@ -1027,29 +957,31 @@ def _onboard(args: argparse.Namespace) -> int:
                 flush=True,
             )
 
-    # Say-Do: per-quarter transcript summaries + pairwise §6 cards. Gated to
-    # evaluation-list names (per onboarding policy) unless --force-saydo. Runs
-    # after transcripts are ingested + registered so --regenerate-missing finds
-    # them. Best-effort — LLM-bound and tolerant of coverage gaps.
-    if not args.skip_saydo and not getattr(args, "skip_llm", False):
+    # Transcript summary: registered transcript summaries. Gated to
+    # evaluation-list names (per onboarding policy) unless --force-transcript-summaries. Runs
+    # after transcripts are ingested and registered. Best-effort — generation
+    # is verifier-bound and tolerant of coverage gaps.
+    if not args.skip_transcript_summaries and not getattr(args, "skip_llm", False):
         list_type = _lookup_list_type(ticker)
-        if _saydo_should_run(
+        if _transcript_summaries_should_run(
             list_type,
-            force=args.force_saydo,
+            force=args.force_transcript_summaries,
             instrument=str(instrument_value or "").lower() or None,
         ):
-            print(f"[onboard] {ticker} stage=saydo (list_type={list_type})", flush=True)
-            saydo_rc = _run_saydo(ticker)
-            if saydo_rc != 0:
+            print(
+                f"[onboard] {ticker} stage=transcript_summaries (list_type={list_type})", flush=True
+            )
+            transcript_summaries_rc = _run_transcript_summaries(ticker)
+            if transcript_summaries_rc != 0:
                 print(
-                    f"[onboard] {ticker} saydo returned rc={saydo_rc}; "
-                    f"continuing (Say-Do generation is best-effort)",
+                    f"[onboard] {ticker} transcript_summaries returned rc={transcript_summaries_rc}; "
+                    f"continuing (Transcript summary generation is best-effort)",
                     flush=True,
                 )
         else:
             print(
-                f"[onboard] {ticker} stage=saydo SKIPPED "
-                f"(list_type={list_type}, not evaluation; use --force-saydo to override)",
+                f"[onboard] {ticker} stage=transcript_summaries SKIPPED "
+                f"(list_type={list_type}, not evaluation; use --force-transcript-summaries to override)",
                 flush=True,
             )
 

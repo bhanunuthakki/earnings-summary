@@ -7,17 +7,40 @@ import inspect
 import json
 import logging
 import subprocess
+from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Never, Protocol, cast
 
 import pytest
 
 import llm_client
 from llm import cli as llm_cli
 from llm import codex_backend
+from llm_budget import BudgetCheck
 from llm_call_ledger import usage_from_json_meta
+
+
+class _MeteredFallbackAuthorizer(Protocol):
+    def __call__(self, purpose: str | None, *, force_budget_bypass: bool) -> bool: ...
+
+
+_authorize_metered_fallback = cast(
+    _MeteredFallbackAuthorizer,
+    getattr(llm_cli, "_authorize_metered_openrouter_fallback"),
+)
+
+
+def _raises_on_call(message: str) -> Callable[..., Never]:
+    def fail(*_args: object, **_kwargs: object) -> Never:
+        raise AssertionError(message)
+
+    return fail
+
+
+def _discard_record(**_kwargs: object) -> None:
+    return None
 
 
 def _good_cli_response(text: str = "ok") -> str:
@@ -124,6 +147,8 @@ def test_codex_cost_estimate_applies_long_context_rates() -> None:
 @pytest.mark.parametrize(
     ("model", "expected_cost"),
     [
+        ("gpt-6-luna", 0.000132),
+        ("gpt-6.1-sol", 0.00262),
         ("gpt-5.6-luna", 0.000284),
         ("gpt-5.6-terra", 0.00284),
         ("gpt-5.6-sol", 0.0071),
@@ -173,7 +198,7 @@ def test_default_purpose_routes_to_codex_before_claude(
     monkeypatch.setattr(
         llm_cli,
         "_call_claude",
-        fixture_callback_1,
+        _raises_on_call("Claude must not run when the Codex primary succeeds"),
     )
 
     assert llm_cli.call_llm("question", purpose="bear_case", ticker="NU") == "codex answer"
@@ -235,7 +260,6 @@ def test_codex_then_claude_failure_does_not_reenter_codex(
 @pytest.mark.parametrize(
     ("purpose", "expected"),
     [
-        ("capture_intent", "gpt-5.6-luna"),
         ("bear_case", "gpt-5.6-terra"),
         ("decision_draft_parse", "gpt-5.6-sol"),
     ],
@@ -273,7 +297,7 @@ def test_explicit_claude_model_bypasses_codex_primary(
     monkeypatch.setattr(
         codex_backend,
         "call_codex_llm",
-        fixture_callback_1,
+        _raises_on_call("an explicit Claude model is a forced-family request"),
     )
 
     assert (
@@ -329,7 +353,7 @@ def test_web_default_purpose_routes_to_codex_before_claude(
     monkeypatch.setattr(
         llm_cli.subprocess,
         "run",
-        fixture_callback_1,
+        _raises_on_call("Claude web subprocess must not run when Codex primary succeeds"),
     )
 
     assert (
@@ -363,12 +387,12 @@ def test_web_codex_primary_failure_falls_back_to_claude_web(
         )
 
     records: list[dict[str, object]] = []
-    monkeypatch.setattr(codex_backend, "call_codex_llm", fail_codex)
-    monkeypatch.setattr(llm_cli.subprocess, "run", fake_run)
 
     def record_call(**kwargs: object) -> None:
         records.append(kwargs)
 
+    monkeypatch.setattr(codex_backend, "call_codex_llm", fail_codex)
+    monkeypatch.setattr(llm_cli.subprocess, "run", fake_run)
     monkeypatch.setattr(llm_cli, "record_llm_call", record_call)
 
     result = llm_cli.call_llm_with_web("question", purpose="recent_developments", ticker="NU")
@@ -404,11 +428,7 @@ def test_web_codex_then_claude_web_failure_does_not_reenter_codex(
     monkeypatch.setattr(codex_backend, "call_codex_llm", fail_codex)
     monkeypatch.setattr(llm_cli.subprocess, "run", fail_run)
     monkeypatch.setattr(llm_cli, "_call_claude", fake_plain_claude)
-
-    def fixture_callback_1(**_kwargs: object) -> None:
-        return None
-
-    monkeypatch.setattr(llm_cli, "record_llm_call", fixture_callback_1)
+    monkeypatch.setattr(llm_cli, "record_llm_call", _discard_record)
 
     result = llm_cli.call_llm_with_web(
         "question",
@@ -432,7 +452,7 @@ def test_web_explicit_claude_model_bypasses_codex_primary(
     monkeypatch.setattr(
         codex_backend,
         "call_codex_llm",
-        fixture_callback_1,
+        _raises_on_call("an explicit Claude model on the web path is a forced-family request"),
     )
 
     def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -445,11 +465,7 @@ def test_web_explicit_claude_model_bypasses_codex_primary(
         )
 
     monkeypatch.setattr(llm_cli.subprocess, "run", fake_run)
-
-    def fixture_callback_2(**_kwargs: object) -> None:
-        return None
-
-    monkeypatch.setattr(llm_cli, "record_llm_call", fixture_callback_2)
+    monkeypatch.setattr(llm_cli, "record_llm_call", _discard_record)
 
     result = llm_cli.call_llm_with_web(
         "question", model="claude-opus-4-8", purpose="recent_developments"
@@ -538,28 +554,33 @@ def test_metered_fallback_requires_reviewed_purpose_and_hard_budget(
 ) -> None:
     monkeypatch.setattr(llm_cli, "OPENROUTER_FALLBACK_PURPOSES", frozenset({"approved_purpose"}))
 
-    def fixture_callback_1(purpose: str) -> SimpleNamespace:
-        return SimpleNamespace(cap=Decimal("5.00"), hard_block=True, current_spend=Decimal("1.25"))
+    def approved_budget(_purpose: str | None) -> BudgetCheck:
+        return BudgetCheck(
+            allowed=True,
+            warn=False,
+            current_spend=Decimal("1.25"),
+            cap=Decimal("5.00"),
+            headroom_pct=0.75,
+            hard_block=True,
+        )
 
     monkeypatch.setattr(
         "llm_budget.check_budget",
-        fixture_callback_1,
+        approved_budget,
     )
     enforced: list[tuple[str | None, bool]] = []
 
-    def fixture_callback_2(purpose: str | None, *, force_budget_bypass: bool) -> None:
+    def enforce_budget(purpose: str | None, *, force_budget_bypass: bool) -> None:
         enforced.append((purpose, force_budget_bypass))
 
     monkeypatch.setattr(
         llm_cli,
         "_enforce_budget_pre_call",
-        fixture_callback_2,
+        enforce_budget,
     )
 
     with caplog.at_level(logging.ERROR):
-        assert getattr(llm_cli, "_authorize_metered_openrouter_fallback")(
-            "approved_purpose", force_budget_bypass=False
-        )
+        assert _authorize_metered_fallback("approved_purpose", force_budget_bypass=False)
 
     assert enforced == [("approved_purpose", False)]
     assert "llm_metered_openrouter_fallback_authorized" in caplog.text
@@ -570,18 +591,23 @@ def test_metered_fallback_fails_closed_without_hard_budget(
 ) -> None:
     monkeypatch.setattr(llm_cli, "OPENROUTER_FALLBACK_PURPOSES", frozenset({"approved_purpose"}))
 
-    def fixture_callback_1(purpose: str) -> SimpleNamespace:
-        return SimpleNamespace(cap=Decimal("5.00"), hard_block=False, current_spend=Decimal("0"))
+    def soft_budget(_purpose: str | None) -> BudgetCheck:
+        return BudgetCheck(
+            allowed=True,
+            warn=False,
+            current_spend=Decimal("0"),
+            cap=Decimal("5.00"),
+            headroom_pct=1.0,
+            hard_block=False,
+        )
 
     monkeypatch.setattr(
         "llm_budget.check_budget",
-        fixture_callback_1,
+        soft_budget,
     )
 
     with pytest.raises(llm_cli.LLMSetupError, match="lacks a positive hard-block budget"):
-        getattr(llm_cli, "_authorize_metered_openrouter_fallback")(
-            "approved_purpose", force_budget_bypass=False
-        )
+        _authorize_metered_fallback("approved_purpose", force_budget_bypass=False)
 
 
 def test_metered_fallback_never_honors_budget_bypass(
@@ -589,9 +615,7 @@ def test_metered_fallback_never_honors_budget_bypass(
 ) -> None:
     monkeypatch.setattr(llm_cli, "OPENROUTER_FALLBACK_PURPOSES", frozenset({"approved_purpose"}))
     with pytest.raises(llm_cli.LLMBudgetExceeded, match="cannot bypass"):
-        getattr(llm_cli, "_authorize_metered_openrouter_fallback")(
-            "approved_purpose", force_budget_bypass=True
-        )
+        _authorize_metered_fallback("approved_purpose", force_budget_bypass=True)
 
 
 # ---------------------------------------------------------------------------
@@ -667,7 +691,7 @@ def test_cited_codex_web_answer_is_served_without_fallback(
     monkeypatch.setattr(
         llm_cli.subprocess,
         "run",
-        fixture_callback_1,
+        _raises_on_call("grounded Codex answer must not reach the Claude web leg"),
     )
 
     out = llm_cli.call_llm_with_web("brief please", purpose="recent_developments")

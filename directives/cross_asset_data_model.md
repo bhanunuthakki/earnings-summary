@@ -2,6 +2,14 @@
 
 **Status**: Scoping (Phase 1). Adopted path is **C — extend `tracked_companies` as the polymorphic instruments table** rather than the brief's Option A (rename to `instruments` + per-kind detail tables) or Option B (single table + JSON). Reasoning in §2.
 
+## Current ETF scope (2026-10-25)
+
+The owner retired the dedicated ETF research product. The retained boundary is
+portfolio diversification commentary, simple supported earnings-multiple context,
+and saved data/history. `etf_data.md` owns that current behavior. The original
+ETF MVP proposals below are historical design context; they do not authorize
+new ETF collection, briefs, scoring or generated workups.
+
 ## Why this design exists
 
 The fresh-review memo flagged that the system treats every tracked instrument as an equity:

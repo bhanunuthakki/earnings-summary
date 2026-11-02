@@ -11,8 +11,7 @@ No single LLM context holds both "read the web" (untrusted input) and "write a
 proposal" (the action) — a prompt injection in fetched content reaches the writer
 only as quoted DATA. The K1 structural test asserts no function names BOTH the web
 primitive (``call_llm_with_web``) and the write primitive (``create_proposal``);
-each is named in exactly one function here. The engine never runs itself — only the
-flag-gated run route (W1-5d) or an explicit call drives it.
+each is named in exactly one function here. The engine never runs itself — only an explicit backend call drives it.
 """
 
 from __future__ import annotations

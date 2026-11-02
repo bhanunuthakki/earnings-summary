@@ -11,7 +11,7 @@ from report.renderers.workspace_chat import JS as CHAT_JS
 from report.renderers.workspace_comments import JS as COMMENTS_JS
 from report.renderers.workspace_dcf import JS as DCF_JS
 from report.renderers.workspace_decision_card import JS as DECISION_CARD_JS
-from report.renderers.workspace_sections.boot import _comment_boot_data
+from report.renderers.workspace_sections.boot import _comment_boot_data, prepare_report_delivery
 
 
 def test_workspace_boot_embeds_static_report_capability(
@@ -25,7 +25,7 @@ def test_workspace_boot_embeds_static_report_capability(
         repo_root=str(tmp_path),
     )
     body = StringIO()
-    _comment_boot_data(body, spec)
+    _comment_boot_data(body, spec, prepare_report_delivery(spec))
     assert '"report_capability": "capability-for-test"' in body.getvalue()
 
 

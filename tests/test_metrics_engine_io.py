@@ -1,21 +1,25 @@
 """DB-backed tests for src/compute/metrics_engine/io.py.
 
-Synthetic in-memory sqlite schema only (no prod data, per repo convention --
-mirrors tests/test_compute_fmp_derived_kpis.py's _create_schema pattern).
+Ordinary cases use the cached current schema. Explicit pre-cutover valuation
+cases retain historical compatibility behavior; all source bytes are synthetic.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import closing
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import cast
+from unittest.mock import patch
 
 import pytest
 
+import db as dbmod
 from compute.metrics_engine import io as metrics_io
 from compute.metrics_engine.engine import ComputedValue
 from compute.metrics_engine.inputs import CanonicalConcept
@@ -29,122 +33,87 @@ from compute.metrics_engine.io import (
 from compute.metrics_engine.registry import REGISTRY, ReasonCode
 from models.companies import AccountingStandard, BusinessModelClass
 from models.facts import Currency, FactLocator, LocatorKind
+from provenance.evidence_backfill import ensure_legacy_document_evidence
+from provenance.financial_fact_resolution import resolve_fact_row
 from sources.price import LivePrice
 
+_PRE_CUTOVER_REVISION = "0224_expected_document_lifecycle"
 
-def _create_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        CREATE TABLE documents (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            source_type TEXT NOT NULL,
-            doc_type TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            sha256 TEXT NOT NULL,
-            fetched_at TIMESTAMP NOT NULL,
-            fetch_status TEXT NOT NULL,
-            raw_bytes_size INTEGER NOT NULL,
-            source_quality_tier VARCHAR(32) DEFAULT 'fmp_normalized' NOT NULL
-        );
-        CREATE TABLE financial_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end TIMESTAMP NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            line_item TEXT NOT NULL,
-            value NUMERIC(24, 6) NOT NULL,
-            currency TEXT,
-            unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL,
-            confidence REAL DEFAULT 1.0
-        );
-        CREATE TABLE kpi_definitions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            name TEXT NOT NULL,
-            unit TEXT NOT NULL,
-            primary_source TEXT NOT NULL,
-            fallback_source TEXT,
-            ir_url TEXT,
-            threshold_tier TEXT,
-            threshold_low REAL,
-            threshold_high REAL,
-            notes TEXT,
-            UNIQUE(ticker, name)
-        );
-        CREATE TABLE kpi_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end TIMESTAMP NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            kpi_definition_id INTEGER NOT NULL,
-            value NUMERIC(24, 6) NOT NULL,
-            unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL,
-            confidence REAL DEFAULT 1.0,
-            extracted_by VARCHAR(64),
-            supersedes_id INTEGER,
-            locator TEXT,
-            computed_from TEXT,
-            formula_id INTEGER,
-            formula_version INTEGER
-        );
-        CREATE UNIQUE INDEX uq_kpi_facts_provenance
-        ON kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, source_doc_id);
-        CREATE TABLE tracked_companies (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            business_model_class TEXT NOT NULL DEFAULT 'operating_company',
-            accounting_standard TEXT NOT NULL DEFAULT 'us_gaap'
-        );
-        CREATE TABLE formula_definitions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            formula_key TEXT NOT NULL,
-            version INTEGER NOT NULL,
-            category TEXT NOT NULL,
-            display_formula TEXT NOT NULL,
-            method_notes TEXT NOT NULL,
-            period_grid TEXT NOT NULL,
-            unit TEXT NOT NULL,
-            created_at TIMESTAMP NOT NULL,
-            UNIQUE(formula_key, version)
-        );
-        CREATE TABLE metric_computation_attempts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end TIMESTAMP NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            formula_id INTEGER NOT NULL,
-            status TEXT NOT NULL,
-            reason_code TEXT,
-            reason_detail TEXT,
-            kpi_fact_id INTEGER,
-            input_fingerprint TEXT NOT NULL,
-            engine_version TEXT NOT NULL,
-            computed_at TIMESTAMP NOT NULL
-        );
-        CREATE UNIQUE INDEX uq_metric_computation_attempts_logical
-        ON metric_computation_attempts (ticker, period_end, fiscal_period_type, formula_id);
-        """
-    )
-    conn.commit()
+
+def _bootstrap_pre_alembic_database(database: Path) -> None:
+    """Use the original bootstrap owner with an explicit disposable connection."""
+    checkout_database = Path(dbmod.PROJECT_ROOT) / "data" / "portfolio.db"
+    assert not checkout_database.exists()
+    original_paths = (dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR, dbmod.STATE_ROOT)
+    c = sqlite3.connect(database)
+    c.row_factory = sqlite3.Row
+    try:
+        # init_db predates path injection. Replace only its connection boundary;
+        # never rebind the module's configured database or state paths.
+        with patch.object(dbmod, "get_connection", return_value=c) as open_database:
+            dbmod.init_db()
+            open_database.assert_called_once_with(allow_create=True)
+    finally:
+        c.close()
+        assert original_paths == (dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR, dbmod.STATE_ROOT)
+        assert not checkout_database.exists()
+    with closing(sqlite3.connect(database)) as verified:
+        tables = {
+            row[0]
+            for row in verified.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+        }
+        assert tables == {"tracked_companies", "quarterly_artifacts", "fmp_endpoint_status"}
 
 
 @pytest.fixture
-def conn() -> sqlite3.Connection:
-    c = sqlite3.connect(":memory:")
+def conn(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    request: pytest.FixtureRequest,
+) -> Iterator[sqlite3.Connection]:
+    historical = getattr(request, "param", None) == "pre_cutover_valuation"
+    database = (
+        migrated_db(
+            tmp_path / "metrics.sqlite",
+            archived=True,
+            upgrade_from="0000_baseline",
+            before_upgrade=_bootstrap_pre_alembic_database,
+            seed_sha256=hashlib.sha256(Path(dbmod.__file__).read_bytes()).hexdigest(),
+            target=_PRE_CUTOVER_REVISION,
+        )
+        if historical
+        else migrated_db(tmp_path / "metrics.sqlite")
+    )
+    c = sqlite3.connect(database)
     c.row_factory = sqlite3.Row
-    _create_schema(c)
-    return c
+    c.execute("PRAGMA foreign_keys = ON")
+    try:
+        cutover = c.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='fact_observation_revisions'"
+        ).fetchone()
+        assert (cutover is None) is historical
+        if historical:
+            assert c.execute("SELECT version_num FROM alembic_version").fetchone()[0] == (
+                _PRE_CUTOVER_REVISION
+            )
+        yield c
+    finally:
+        c.close()
 
 
 def _insert_doc(conn: sqlite3.Connection, ticker: str, period_end: datetime) -> int:
+    root = Path(conn.execute("PRAGMA database_list").fetchone()[2]).parent
+    ordinal = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+    path = root / f"{ticker}_{period_end.date()}_{ordinal}.json"
+    path.write_text(json.dumps({"synthetic_document": ordinal, "symbol": ticker}))
+    payload = path.read_bytes()
     cur = conn.execute(
         "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, "
         "fetched_at, fetch_status, raw_bytes_size) "
-        "VALUES (?, 'fmp', 'fmp_income_statement', ?, ?, ?, 'ok', 1)",
-        (ticker, f"{ticker}_{period_end.date()}.json", "a" * 64, datetime.now()),
+        "VALUES (?, 'fmp', 'fmp_income_statement', ?, ?, ?, 'ok', ?)",
+        (ticker, str(path), hashlib.sha256(payload).hexdigest(), datetime.now(), len(payload)),
     )
     return int(cur.lastrowid) if cur.lastrowid is not None else 0
 
@@ -159,12 +128,26 @@ def _insert_fact(
     value: str,
     source_doc_id: int,
 ) -> None:
-    conn.execute(
+    if (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='trigger' "
+            "AND name='trg_financial_facts_observation_insert'"
+        ).fetchone()
+        and not conn.execute(
+            "SELECT 1 FROM evidence_document_versions WHERE legacy_document_id=?", (source_doc_id,)
+        ).fetchone()
+    ):
+        root = Path(conn.execute("PRAGMA database_list").fetchone()[2]).parent
+        ensure_legacy_document_evidence(conn, repo_root=root, document_id=source_doc_id)
+    cursor = conn.execute(
         "INSERT INTO financial_facts "
         "(ticker, period_end, fiscal_period_type, line_item, value, currency, unit, source_doc_id) "
         "VALUES (?, ?, ?, ?, ?, 'USD', 'actual', ?)",
         (ticker, period_end, fpt, line_item, value, source_doc_id),
     )
+
+    assert cursor.lastrowid is not None
+    resolve_fact_row(conn, fact_table="financial_facts", fact_row_id=cursor.lastrowid)
 
 
 @pytest.mark.parametrize(
@@ -312,10 +295,6 @@ def test_cutover_defers_unsealed_derived_kpi_before_fact_insert(
             "UPDATE documents SET source_type = ? WHERE id = ?",
             (source_type, document_id),
         )
-    conn.execute(
-        "CREATE TABLE fact_observation_revisions ("
-        "fact_table TEXT NOT NULL, fact_row_id INTEGER NOT NULL, logical_key TEXT NOT NULL)"
-    )
     formula = REGISTRY[(formula_key, 1)]
 
     for _ in range(2):
@@ -359,7 +338,9 @@ _QUARTERS: list[tuple[str, str]] = [
 ]
 
 
-def _seed_operating_company(conn: sqlite3.Connection, ticker: str) -> None:
+def _seed_operating_company(
+    conn: sqlite3.Connection, ticker: str, *, omit_line_items: frozenset[str] = frozenset()
+) -> None:
     """Full line-item set for every Phase-1 and Phase-2 formula, growing
     simply per quarter."""
     for i, (pe_str, fpt) in enumerate(_QUARTERS):
@@ -399,6 +380,8 @@ def _seed_operating_company(conn: sqlite3.Connection, ticker: str) -> None:
             "weighted_avg_shares_diluted": "100",
         }
         for line_item, value in facts.items():
+            if line_item in omit_line_items:
+                continue
             _insert_fact(
                 conn,
                 ticker=ticker,
@@ -443,9 +426,9 @@ def _set_classification(
     conn: sqlite3.Connection, ticker: str, business_model: str, standard: str
 ) -> None:
     conn.execute(
-        "INSERT INTO tracked_companies (ticker, business_model_class, accounting_standard) "
-        "VALUES (?, ?, ?)",
-        (ticker, business_model, standard),
+        "INSERT INTO tracked_companies (ticker, name, list_type, business_model_class, "
+        "accounting_standard) VALUES (?, ?, 'watchlist', ?, ?)",
+        (ticker, ticker, business_model, standard),
     )
     conn.commit()
 
@@ -612,15 +595,10 @@ def test_ifrs_ticker_missing_lease_liability_is_missing_input_not_mapping_gap(
     name for any period -- a per-period data gap (MISSING_INPUT via the
     normal resolution path), not a mapping gap (MISSING_INPUT_MAPPING).
     roic_strict (doesn't need the lease concept) must still compute fine."""
-    _seed_operating_company(conn, "IFRSNOLEASE")
-    _set_classification(conn, "IFRSNOLEASE", "operating_company", "ifrs")
-    # Remove the operating_lease_liability facts this fixture ticker would
-    # otherwise carry, simulating NU/BN/NVO's real absence of that field.
-    conn.execute(
-        "DELETE FROM financial_facts WHERE ticker = ? AND line_item = 'operating_lease_liability'",
-        ("IFRSNOLEASE",),
+    _seed_operating_company(
+        conn, "IFRSNOLEASE", omit_line_items=frozenset({"operating_lease_liability"})
     )
-    conn.commit()
+    _set_classification(conn, "IFRSNOLEASE", "operating_company", "ifrs")
     compute_for_ticker(conn, "IFRSNOLEASE")
 
     lease_row = _latest_attempt(conn, "IFRSNOLEASE", "roic_lease_adjusted")
@@ -849,7 +827,7 @@ def test_compute_for_ticker_revenue_cagr_3y_only_2_fy_rows_is_missing_input(
 
 
 # ---------------------------------------------------------------------------
-# Phase 3 -- valuation (pe_ttm/ps_ttm/pb/ev_ebitda/ev_sales/fcf_yield/
+# Pre-cutover valuation compatibility (pe_ttm/ps_ttm/pb/ev_ebitda/ev_sales/fcf_yield/
 # earnings_yield/enterprise_value_strict), wired to a stub live-price fetch.
 # ---------------------------------------------------------------------------
 
@@ -881,6 +859,7 @@ def _stub_price_reader(
     return _reader
 
 
+@pytest.mark.parametrize("conn", ["pre_cutover_valuation"], indirect=True)
 def test_compute_for_ticker_valuation_only_attempts_latest_quarter(
     conn: sqlite3.Connection,
 ) -> None:
@@ -897,6 +876,7 @@ def test_compute_for_ticker_valuation_only_attempts_latest_quarter(
         assert matches[0]["status"] == "ok"
 
 
+@pytest.mark.parametrize("conn", ["pre_cutover_valuation"], indirect=True)
 def test_currency_incompatible_live_price_blocks_ratio_valuation_formulas(
     conn: sqlite3.Connection,
 ) -> None:
@@ -914,6 +894,7 @@ def test_currency_incompatible_live_price_blocks_ratio_valuation_formulas(
         assert row["reason_code"] == ReasonCode.MISSING_INPUT.value
 
 
+@pytest.mark.parametrize("conn", ["pre_cutover_valuation"], indirect=True)
 def test_currency_admission_precedes_idempotency_and_accounts_final_result(
     conn: sqlite3.Connection,
 ) -> None:
@@ -941,6 +922,7 @@ def test_currency_admission_precedes_idempotency_and_accounts_final_result(
     assert replay.skipped_unchanged == first.attempts_written
 
 
+@pytest.mark.parametrize("conn", ["pre_cutover_valuation"], indirect=True)
 def test_compute_for_ticker_pe_ttm_happy_path_value(conn: sqlite3.Connection) -> None:
     _seed_operating_company(conn, "TEST")
     _set_classification(conn, "TEST", "operating_company", "us_gaap")
@@ -965,6 +947,7 @@ def test_compute_for_ticker_pe_ttm_happy_path_value(conn: sqlite3.Connection) ->
     assert "price_source_stub" in locator["derived"]["method_flags"]
 
 
+@pytest.mark.parametrize("conn", ["pre_cutover_valuation"], indirect=True)
 def test_compute_for_ticker_valuation_missing_live_price_is_missing_input(
     conn: sqlite3.Connection,
 ) -> None:
@@ -979,6 +962,7 @@ def test_compute_for_ticker_valuation_missing_live_price_is_missing_input(
     assert row["reason_code"] == ReasonCode.MISSING_INPUT.value
 
 
+@pytest.mark.parametrize("conn", ["pre_cutover_valuation"], indirect=True)
 def test_compute_for_ticker_valuation_no_repo_root_degrades_gracefully(
     conn: sqlite3.Connection,
 ) -> None:
@@ -992,6 +976,7 @@ def test_compute_for_ticker_valuation_no_repo_root_degrades_gracefully(
     assert row["reason_code"] == ReasonCode.MISSING_INPUT.value
 
 
+@pytest.mark.parametrize("conn", ["pre_cutover_valuation"], indirect=True)
 def test_compute_for_ticker_enterprise_value_strict_omitted_flag(
     conn: sqlite3.Connection,
 ) -> None:
@@ -1006,6 +991,7 @@ def test_compute_for_ticker_enterprise_value_strict_omitted_flag(
     assert "minority_interest_preferred_omitted" in locator["derived"]["method_flags"]
 
 
+@pytest.mark.parametrize("conn", ["pre_cutover_valuation"], indirect=True)
 def test_compute_for_ticker_bank_excludes_ev_ebitda_but_keeps_ev_sales(
     conn: sqlite3.Connection,
 ) -> None:
@@ -1019,6 +1005,7 @@ def test_compute_for_ticker_bank_excludes_ev_ebitda_but_keeps_ev_sales(
     assert ev_sales_row["status"] == "ok"
 
 
+@pytest.mark.parametrize("conn", ["pre_cutover_valuation"], indirect=True)
 def test_compute_for_ticker_valuation_idempotent_on_unchanged_price(
     conn: sqlite3.Connection,
 ) -> None:

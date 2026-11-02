@@ -195,10 +195,12 @@ def test_recent_developments_byte_identity(
 
 
 def test_migrated_templates_are_registered() -> None:
-    import llm_client  # noqa: F401  (registers on import)
-    from dcf.scenario_prior import SCENARIO_PRIOR_TEMPLATE  # noqa: F401
+    import llm_client
+    from dcf.scenario_prior import SCENARIO_PRIOR_TEMPLATE
     from llm.prompt_registry import REGISTRY
 
+    assert llm_client.NEWS_STRUCTURING_TEMPLATE.template_id == "news_structuring.items"
+    assert SCENARIO_PRIOR_TEMPLATE.template_id == "scenario_prior.weights"
     for tid in (
         "news_structuring.items",
         "recent_developments.brief",
@@ -316,7 +318,7 @@ def test_valuation_basis_matches_real_production_captures() -> None:
     absent (CI has no capture dir)."""
     import pathlib
 
-    import llm_client  # noqa: F401  (registers)
+    import llm_client
     from evals.sampler import load_frame
     from llm.prompt_registry import REGISTRY
 
@@ -327,6 +329,7 @@ def test_valuation_basis_matches_real_production_captures() -> None:
     if not frame:
         pytest.skip("no valuation_basis captures")
     template = REGISTRY["valuation_basis.pick"]
+    assert llm_client.VALUATION_BASIS_TEMPLATE.template_id == "valuation_basis.pick"
     head = template.body.split("{ticker}")[0]
     for rec in frame.values():
         assert rec.prompt.startswith(head)

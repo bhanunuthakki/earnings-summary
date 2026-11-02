@@ -1,7 +1,7 @@
-# Monthly Red Team — adversarial portfolio review program
+# Red Team — on-demand adversarial portfolio review
 
 Owner-authorized 2026-07-10 (adversarial portfolio review session). Goal: the platform must
-*surface* silent risk and *force* an owner response on a ~monthly cadence. The owner's stated
+*surface* silent risk and record an owner response when the owner requests a review. The owner's stated
 objective is calibration ("a better investor each year"), not alpha — so the program measures
 decision quality, never returns-vs-benchmark.
 
@@ -25,15 +25,15 @@ failure mode.
 | KPI series sanity | Cumulative series (customers, etc.) get a monotonicity + unit-jump guard at persist time; violations halt-and-surface per the schema-drift rule, never guess-fixed. |
 | Naked-position gate | Nightly: every held name needs (a) an encoded downside trigger (sizing-intent downside rung or non-empty break rules), (b) a persisted realistic bear (present + not lint-flagged), (c) thesis updated ≤90d. Violations are standing chips that block the monthly close. A fourth, ADVISORY check (`add_trigger`, PR9) asks whether HIGH-CONVICTION held names also carry an encoded add-rung (a buy pre-commitment, mirroring the downside rung); missing one never blocks the close or counts toward `NAKED POSITIONS` — it renders as a separate quiet nudge, deliberately asymmetric with the violation-grade checks above (missing downside protection is a blowup risk; missing upside protection is a missed-opportunity risk). |
 
-## Phase 2 — First-Saturday Red Team (the forcing function)
+## On-demand adversarial review
 
-- **Cadence**: first Saturday, 10:00 America/Los_Angeles (clear of the 04:00 pipeline, the 03:00
-  monthly prior refresh, and Sun 10:30 eval rungs). Window registered in
-  `llm_quota_scheduling.md`.
+- **Invocation**: the scheduled task is retired. The owner can request a manual review through
+  the [earnings-summary investing workflow](../src/advisor/skills/earnings-summary-investing/SKILL.md)
+  and run `python execution/run_red_team.py --skip-first-saturday-guard`.
 - **Identity:** Logical Idempotency Key `red_team_{YYYY_MM}`; Content Identity is
   the digest of the canonical book snapshot, lens configuration, and generated
-  brief; Observation Version is the month-end/as-of source snapshot; Attempt
-  Identity is the unique governed run and call receipt.
+  brief; Observation Version is the month-end/as-of source snapshot;
+  Attempt Identity is the unique governed run and call receipt.
 - **Per-name pass**: one adversarial LLM call per held name with a **rotating lens** —
   `shared_factor`, `fx_translation`, `competitive_encroachment`, `model_vs_market` (fair value
   disagrees with market >2x → attack the model), `behavioral_consistency`, `missed_upside` (PR9 —
@@ -50,10 +50,10 @@ failure mode.
   compound that factor).
 - **Output**: one dense Red Team Brief (ui-kit composed): each item = falsifiable attack + one
   question + a proposed rule/scenario change. Items persist to `red_team_items`.
-- **Forced response**: every item requires REFUTE (reasoning → ledger entry), ACCEPT
+- **Response record**: every item requires REFUTE (reasoning → ledger entry), ACCEPT
   (auto-creates the sizing intent / scenario edit / rule change), or DEFER (allowed once; second
-  defer escalates to a persistent Home-band banner). Telegram `/redteam` mirrors `/review`. The
-  month is not closed until all items are answered (say-do tracked).
+  defer escalates to a persistent Home-band banner). The review remains open until all items are
+  answered; say-do tracking records resulting commitments.
 - **Failure policy**: per-item degrade (transient CLI failure → defer item + tally + retry next
   run; hard stops loud) — the post-#814 `attach_conditions` pattern.
 
@@ -62,26 +62,15 @@ failure mode.
 - **Scored-miss gate**: re-underwriting a thesis whose breach fired (the NVO path) requires a
   Brier-scorable calibration entry FIRST — belief, probability, outcome — before the new thesis is
   admitted. Honest-but-unscored re-underwrites are how thesis migration compounds.
-- **Decision P&L**: every REFUTE/ACCEPT/DEFER and trim/hold from the monthly briefs is scored 2–4
-  quarters later against the counterfactual; wired to the Coach P&L surface.
 - **Fat-tail book MC**: multivariate-t Monte Carlo from the local price cache + event-correlation
   stresses (joint-LatAm at 0.9 event corr) as a Risk-panel leg; the wealthplan CMA gets a
   quarterly export of realized book vol + tail stats (the plan's 16%-vol assumption materially
   understates the ~22–27% book).
-- **Annual letter**: each January, auto-draft a letter-to-self from the ledger + trades + Brier
-  trajectory; the owner edits and signs. The yearly scorecard is three numbers: Brier trend,
-  cut-discipline hit rate, and rule-execution fidelity in drawdowns. Built (PR7): no dedicated
-  January cron — invoke by hand each January, `python execution/draft_annual_letter.py --year <YYYY>`
-  (Logical Idempotency Key `annual_letter_{YYYY}`, defaults to last year; source
-  snapshot/report digests are Content Identities, the selected year and as-of cutoff
-  form the Observation Version, and each invocation has a unique Attempt Identity);
-  the three scorecard numbers
-  render wherever Decision P&L renders (`redteam.decision_pnl.build_yearly_scorecard`).
 
 ## Component map (build order)
 
 PR1 coverage gate + bear lint + per-name deltas → PR2 trajectory soft rules + prose-rule encoding
-+ KPI sanity → PR3 naked-position gate → PR4 fat-tail MC + CMA export → PR5 red-team engine +
-schedule → PR6 response loop + Telegram → PR7 scored-miss gate + Decision P&L + annual letter.
++ KPI sanity → PR3 naked-position gate → PR4 fat-tail MC + CMA export → on-demand red-team review
++ response record. The scheduled review, coaching P&L and annual-letter surfaces are retired.
 Data pass after PR1/PR2: owner-pending honest bears for MELI (~−60% NIMAL-floor) and NU (~−69%
 carry-unwind) replace the missing scenario blocks.

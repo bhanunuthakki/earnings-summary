@@ -1,4 +1,3 @@
-# pyright: reportUnknownArgumentType=false, reportUnknownLambdaType=false
 from __future__ import annotations
 
 import argparse
@@ -9,15 +8,15 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import extract_competitive_mentions  # noqa: E402
-import ingest_competitive_category_share  # noqa: E402
-import refresh_ir_kpis  # noqa: E402
-
-from models.runs import StageStatus  # noqa: E402
-from pipeline.run_accounting import PipelineRunSuppressedError  # noqa: E402
+from execution import (
+    extract_competitive_mentions,
+    ingest_competitive_category_share,
+    refresh_ir_kpis,
+)
+from ir_pipeline.config import IrConfig
+from ir_pipeline.spreadsheet import SpreadsheetParseResult
+from models.runs import StageStatus
+from pipeline.run_accounting import PipelineRunSuppressedError
 
 
 class _Connection:
@@ -59,7 +58,11 @@ def test_competitive_cli_boundaries_render_suppression_json(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(sys, "argv", argv)
-    monkeypatch.setattr(module, "open_db", lambda _: _Connection())
+
+    def open_db(_path: object) -> _Connection:
+        return _Connection()
+
+    monkeypatch.setattr(module, "open_db", open_db)
 
     def suppress(*_: object, **__: object) -> None:
         raise _suppressed()
@@ -91,23 +94,39 @@ def test_refresh_ir_kpis_boundary_renders_suppression_json(
         owner_requested=True,
     )
     monkeypatch.setattr(refresh_ir_kpis, "_parse_args", lambda: args)
-    monkeypatch.setattr(
-        refresh_ir_kpis,
-        "authorize_stored_collection_target",
-        lambda *_args, **_kwargs: SimpleNamespace(allowed=True),
-    )
-    monkeypatch.setattr(
-        refresh_ir_kpis,
-        "get_config",
-        lambda *_: SimpleNamespace(spreadsheet_kpis=()),
-    )
-    monkeypatch.setattr(
-        "ir_pipeline.config_builder.widen_config",
-        lambda cfg, _path: cfg,
-    )
-    monkeypatch.setattr(refresh_ir_kpis, "save_config", lambda *_: None)
-    monkeypatch.setattr(refresh_ir_kpis, "parse_spreadsheet", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(refresh_ir_kpis, "connect_sqlite", lambda *_args, **_kwargs: _Connection())
+    config = IrConfig(ticker="NU", platform="mz", results_center_url="")
+
+    def authorize(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(allowed=True)
+
+    def get_config(*_args: object) -> IrConfig:
+        return config
+
+    def widen_config(current: IrConfig, _path: Path) -> IrConfig:
+        return current
+
+    def save_config(*_args: object) -> None:
+        pass
+
+    def parse(*_args: object, **_kwargs: object) -> SpreadsheetParseResult:
+        return SpreadsheetParseResult(
+            workbook_sha256="0" * 64,
+            workbook_bytes_size=0,
+            config_sha256="0" * 64,
+            max_quarters=5,
+            cells=(),
+            configured_name_order=(),
+        )
+
+    def connect(*_args: object, **_kwargs: object) -> _Connection:
+        return _Connection()
+
+    monkeypatch.setattr(refresh_ir_kpis, "authorize_stored_collection_target", authorize)
+    monkeypatch.setattr(refresh_ir_kpis, "get_config", get_config)
+    monkeypatch.setattr("ir_pipeline.config_builder.widen_config", widen_config)
+    monkeypatch.setattr(refresh_ir_kpis, "save_config", save_config)
+    monkeypatch.setattr(refresh_ir_kpis, "parse_spreadsheet_source", parse)
+    monkeypatch.setattr(refresh_ir_kpis, "connect_sqlite", connect)
 
     def suppress(*_: object, **__: object) -> None:
         raise _suppressed()

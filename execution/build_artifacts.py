@@ -81,6 +81,7 @@ from report.file_capture import (
     replay_file_capture,
 )
 from report.generation_context import DBSnapshotRef
+from report.legacy_body import extract_legacy_reader_body
 from report.models import ReportFlavor
 from report.read_capture import (
     CaptureLimits,
@@ -89,14 +90,10 @@ from report.read_capture import (
     replay_read_capture,
 )
 from report.render_clock import render_now
-from report.renderers.etf_markdown import render as render_etf_markdown
 from report.renderers.markdown import render as render_markdown
 from report.renderers.sections_json import render as render_sections_json
-from report.renderers.workspace_data import (
-    filter_important_print_vs_guide,
-    parse_print_vs_guide,
-)
 from report.renderers.workspace_html import (
+    prepare_report_delivery,
     render_report_body,
     render_standalone_report,
 )
@@ -106,14 +103,12 @@ from report.sections import (
     earnings,
     exec_compensation,
     qa_roster,
-    saydo,
     segments,
     thesis,
     valuation,
 )
 from report.sections import financials as financials_section_mod
 from report.sections import snapshot as snapshot_section_mod
-from report.sections.etf_holdings import build_etf_brief
 from research.decision_brief import (
     assess_candidate_decision_brief,
     persist_decision_brief_readiness,
@@ -328,17 +323,18 @@ def main() -> int:
 
     flavor = ReportFlavor(args.flavor)
     summary: list[dict[str, object]] = []
+    unsupported = False
     for ticker in tickers:
         if args.regenerate_purpose is not None:
-            summary.append(
-                _regenerate_native_purpose(
-                    ticker,
-                    repo_root,
-                    purpose=args.regenerate_purpose,
-                    force_budget_bypass=args.force_budget_bypass,
-                    source_context=source_context,
-                )
+            result = _regenerate_native_purpose(
+                ticker,
+                repo_root,
+                purpose=args.regenerate_purpose,
+                force_budget_bypass=args.force_budget_bypass,
+                source_context=source_context,
             )
+            summary.append(result)
+            unsupported = unsupported or result.get("status") == "unsupported"
             continue
         result = _build_one(
             ticker,
@@ -354,8 +350,9 @@ def main() -> int:
             source_context=source_context,
         )
         summary.append(result)
+        unsupported = unsupported or result.get("status") == "unsupported"
     print(json.dumps(summary, indent=2, default=str))
-    return 0
+    return 2 if unsupported else 0
 
 
 def build_candidate_artifact(
@@ -374,6 +371,9 @@ def build_candidate_artifact(
         if _resolve_kind(repo_root, symbol) is InstrumentType.ETF:
             raise ValueError("candidate_etf_unsupported")
         configure_artifact_runtime(repo_root)
+        authority_sha256 = canonical_digest(
+            source_context.model_dump(mode="json") if source_context is not None else None
+        )
         read_session = ReadCaptureSession(active_db, limits=CaptureLimits())
         file_session = ReportFileCaptureSession(repo_root=repo_root)
         conn = read_session.open()
@@ -413,6 +413,7 @@ def build_candidate_artifact(
                 if (
                     isinstance(cand_ctx, ReportGenerationContext)
                     and cand_ctx.model == binding
+                    and cand_ctx.source_authority_sha256 == authority_sha256
                     and (
                         expected_current_artifact_id is None
                         or cand_ctx.expected_current_artifact_id == expected_current_artifact_id
@@ -435,24 +436,14 @@ def build_candidate_artifact(
                         try:
                             replay_read_capture(active_db, cand_capture, limits=CaptureLimits())
                             replay_file_capture(cand_file_receipt, repo_root)
-                            read_session.abort()
-                            return {
-                                "status": "reused",
-                                "reused": True,
-                                "ticker": symbol,
-                                "artifact_id": latest_cand.artifact_id,
-                                "context_sha256": cand_ctx.sha256,
-                                "body_sha256": latest_cand.body_sha256,
-                                "candidate_review": cand_review.model_dump(mode="json"),
-                            }
+                            # Reuse the captured clock, then prepare retained inputs
+                            # again. SQL replay cannot verify source or product bytes.
+                            cutoff_at = cand_ctx.cutoff_at
                         except (ReadCaptureUnavailable, FileCaptureMismatchError, OSError):
                             pass
 
         for sel in (
-            "quarterly_summaries_tmp_v1",
-            "saydo_cards_tmp_v1",
             "transcripts_dual_dir_v1",
-            "ir_briefs_tmp_v1",
             "fmp_price_chart_v1",
         ):
             file_session.record_directory_selection(sel, symbol)
@@ -471,20 +462,6 @@ def build_candidate_artifact(
             f"data/filing_intelligence/{symbol}.json",
             f"data/qa_topics/{symbol}.json",
         ]
-        tmp_dir = repo_root / ".tmp"
-        if tmp_dir.is_dir():
-            for p in sorted(tmp_dir.iterdir()):
-                if p.is_file() and (
-                    p.name.upper().startswith(f"{symbol}_")
-                    or p.name.upper().startswith(f"SAYDO_{symbol}_")
-                ):
-                    candidate_file_targets.append(f".tmp/{p.name}")
-        for subdir in ("processed", "raw"):
-            tr_dir = repo_root / "transcripts" / subdir
-            if tr_dir.is_dir():
-                for p in sorted(tr_dir.iterdir()):
-                    if p.is_file() and p.name.upper().startswith(f"{symbol}_"):
-                        candidate_file_targets.append(f"transcripts/{subdir}/{p.name}")
         for target in candidate_file_targets:
             with suppress(FileNotFoundError):
                 file_session.read_bytes(target)
@@ -506,11 +483,10 @@ def build_candidate_artifact(
                 cutoff_at=effective_cutoff,
             )
 
-            # Render body while conn is still inside read_session to capture any panel reads
+            # Analytical reads were prepared within the captured database snapshot.
             temp_body = render_report_body(
                 spec,
-                conn=conn,
-                candidate_mode=True,
+                delivery=prepare_report_delivery(spec, candidate_mode=True),
                 generation_context_sha256="__CANDIDATE_CONTEXT_PLACEHOLDER__",
             )
         capture_receipt = read_session.finish()
@@ -533,13 +509,47 @@ def build_candidate_artifact(
             ),
             report_date=spec.generation_date,
             coverage_role=("evaluation" if spec.flavor is ReportFlavor.EVALUATION else "portfolio"),
-            source_authority_sha256=hashlib.sha256(str(repo_root).encode("utf-8")).hexdigest(),
+            source_authority_sha256=authority_sha256,
+        )
+        final_body_html = temp_body.body_html.replace(
+            "__CANDIDATE_CONTEXT_PLACEHOLDER__", generation_context.sha256
+        )
+        report_body = RenderedReportBody.from_html(
+            ticker=temp_body.ticker,
+            report_date=temp_body.report_date,
+            body_html=final_body_html,
+            sections=temp_body.sections,
+            interaction_manifest=temp_body.interaction_manifest,
+            fiscal_period_label=temp_body.fiscal_period_label,
         )
         existing = find_matching_candidate_artifact(
             repo_root, ticker=symbol, context_sha256=generation_context.sha256
         )
         if existing is not None:
             existing_review = load_report_candidate_review(repo_root, symbol, existing.artifact_id)
+            with connect_sqlite(active_db, role=SQLiteConnectionRole.READ_ONLY) as assess_conn:
+                readiness = assess_candidate_decision_brief(
+                    assess_conn,
+                    repo_root=repo_root,
+                    artifact=existing,
+                    as_of=generation_context.cutoff_at,
+                    source_context=source_context,
+                )
+            if (
+                existing.body_sha256
+                != extract_legacy_reader_body(
+                    report_body.body_html, artifact_id=report_body.artifact_id
+                ).body_sha256
+                or existing_review is None
+                or readiness.reason_codes != existing_review.reason_codes
+                or (readiness.status == "verified" and not readiness.reason_codes)
+                != existing_review.ready
+            ):
+                return {
+                    "status": "capture_unavailable",
+                    "ticker": symbol,
+                    "reason": "candidate_source_evidence_changed",
+                }
             return {
                 "status": "reused",
                 "reused": True,
@@ -552,17 +562,6 @@ def build_candidate_artifact(
                 ),
             }
 
-        final_body_html = temp_body.body_html.replace(
-            "__CANDIDATE_CONTEXT_PLACEHOLDER__", generation_context.sha256
-        )
-        report_body = RenderedReportBody.from_html(
-            ticker=temp_body.ticker,
-            report_date=temp_body.report_date,
-            body_html=final_body_html,
-            sections=temp_body.sections,
-            interaction_manifest=temp_body.interaction_manifest,
-            fiscal_period_label=temp_body.fiscal_period_label,
-        )
         standalone_html = render_standalone_report(
             spec,
             report_body,
@@ -650,6 +649,17 @@ def _regenerate_native_purpose(
 ) -> dict[str, object]:
     """Run exactly one purpose producer without rendering a report."""
     configure_artifact_runtime(repo_root)
+    if _resolve_kind(repo_root, ticker) is InstrumentType.ETF:
+        return {
+            "ticker": ticker,
+            "purpose": purpose,
+            "status": "unsupported",
+            "reason": (
+                "dedicated ETF brief generation is retired; "
+                "use portfolio diversification and supported earnings-multiple context"
+            ),
+            "instrument_kind": InstrumentType.ETF.value,
+        }
     effective_bypass = force_budget_bypass or ticker_settings.get_bypass_budget(
         ticker,
         db_path=require_db_path(),
@@ -709,25 +719,6 @@ def _regenerate_native_purpose(
                 force_refresh=True,
                 conn=conn,
             )
-        elif purpose == "saydo_filter":
-            section = saydo.build(ticker, repo_root, conn=conn)
-            generated = 0
-            for card in section.cards:
-                rows = parse_print_vs_guide(card)
-                if not rows:
-                    continue
-                filter_important_print_vs_guide(
-                    ticker=ticker,
-                    repo_root=repo_root,
-                    card=card,
-                    rows=rows,
-                    enable_llm=True,
-                    force_refresh=True,
-                    strict_refresh=True,
-                )
-                generated += 1
-            if generated == 0:
-                raise RuntimeError(f"saydo_filter has no parseable commitments for {ticker}")
         elif purpose == "exec_comp_alignment":
             section = exec_compensation.build(
                 ticker,
@@ -813,7 +804,6 @@ def _parse_args() -> argparse.Namespace:
             "bear_case",
             "exec_comp_alignment",
             "qa_topics",
-            "saydo_filter",
             "valuation_basis",
         ),
         default=None,
@@ -895,7 +885,8 @@ def _all_tracked(repo_root: Path) -> list[str]:
     cursor = conn.cursor()
     cursor.execute(
         f"SELECT DISTINCT ticker FROM tracked_companies "
-        f"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} ORDER BY ticker"
+        f"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} "
+        "AND LOWER(COALESCE(instrument_type,'')) <> 'etf' ORDER BY ticker"
     )
     rows = cursor.fetchall()
     conn.close()
@@ -916,6 +907,18 @@ def _build_one(
     source_context: SourceReadContext | None = None,
     model_run_id: int | None = None,
 ) -> dict[str, object]:
+    configure_artifact_runtime(repo_root)
+    if _resolve_kind(repo_root, ticker) is InstrumentType.ETF:
+        return {
+            "ticker": ticker,
+            "status": "unsupported",
+            "reason": (
+                "dedicated ETF brief generation is retired; "
+                "use portfolio diversification and supported earnings-multiple context"
+            ),
+            "instrument_kind": InstrumentType.ETF.value,
+        }
+
     out_dir = repo_root / "output" / "research" / ticker
     out_dir.mkdir(parents=True, exist_ok=True)
     today = date.today().isoformat()
@@ -926,13 +929,6 @@ def _build_one(
     # by execution/refresh_dcf.py). The brief references it rather than re-rendering
     # a per-date copy here; the dashboard serves it via the /dcf/<T> route.
     canonical_dcf = repo_root / "dcf" / f"{ticker}.xlsx"
-
-    configure_artifact_runtime(repo_root)
-
-    # Cross-asset dispatch: ETF tickers get the ETF brief shape (no DCF,
-    # no segments, no 10-K narrative). See directives/cross_asset_data_model.md.
-    if _resolve_kind(repo_root, ticker) is InstrumentType.ETF:
-        return _build_etf(ticker, repo_root, md_path, today)
 
     # Refresh quarterly_artifacts (audio/transcript/release/slides + step_* flags)
     # from the filesystem before the provenance section reads them. This is what
@@ -1015,7 +1011,7 @@ def _build_one(
             per_metric_provenance = _collect_per_metric_provenance(
                 ticker, repo_root, conn=report_conn, model_run_id=model_run_id
             )
-            report_body = render_report_body(spec, conn=report_conn)
+            report_body = render_report_body(spec, delivery=prepare_report_delivery(spec))
     finally:
         if report_conn is not None:
             report_conn.close()
@@ -1040,7 +1036,6 @@ def _build_one(
         "segments": spec.segments.status.value,
         "earnings": spec.earnings.status.value,
         "saydo": spec.saydo.status.value,
-        "ir_docs": spec.ir_docs.status.value,
         "recent_developments": spec.recent_developments.status.value,
         "bear_case": spec.bear_case.status.value,
         "provenance": spec.provenance.status.value,
@@ -1213,27 +1208,6 @@ def _resolve_kind(repo_root: Path, ticker: str) -> InstrumentType | None:
         return get_instrument_kind(conn, ticker)
     finally:
         conn.close()
-
-
-def _build_etf(ticker: str, repo_root: Path, md_path: Path, today: str) -> dict[str, object]:
-    """ETF brief build path — markdown only for the MVP.
-
-    HTML / workspace / xlsx renderers are equity-shaped and not adapted yet;
-    they'll graduate to multi-kind dispatch in a follow-up. For now the
-    markdown brief is the canary deliverable that proves the dispatch works.
-    """
-    brief = build_etf_brief(ticker, repo_root)
-    md_path.write_text(render_etf_markdown(brief), encoding="utf-8")
-    _emit("wrote_etf_markdown", {"ticker": ticker, "path": str(md_path)})
-    return {
-        "ticker": ticker,
-        "report_md": str(md_path),
-        "instrument_kind": InstrumentType.ETF.value,
-        "section_status": {
-            "etf_profile": brief.profile.status.value,
-            "etf_holdings": brief.holdings.status.value,
-        },
-    }
 
 
 if __name__ == "__main__":

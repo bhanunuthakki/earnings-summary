@@ -17,7 +17,7 @@ from execution import fetch_ir_from_urls as mod
 from ir_pipeline.manifest import load_manifest
 
 
-def _make_db(db: Path, *, role: str = "portfolio") -> None:
+def _make_db(db: Path, *, role: str = "portfolio", fiscal_year_end: str = "12-31") -> None:
     db.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db))
     conn.execute(
@@ -25,9 +25,8 @@ def _make_db(db: Path, *, role: str = "portfolio") -> None:
         "fiscal_year_end TEXT, brief_dirty INTEGER DEFAULT 0, instrument_type TEXT DEFAULT 'equity')"
     )
     conn.execute(
-        "INSERT INTO tracked_companies (ticker, list_type, fiscal_year_end) "
-        "VALUES ('NOW', ?, '12-31')",
-        (role,),
+        "INSERT INTO tracked_companies (ticker, list_type, fiscal_year_end) VALUES ('NOW', ?, ?)",
+        (role, fiscal_year_end),
     )
     conn.execute(
         "CREATE TABLE ir_fetch_status (ticker TEXT PRIMARY KEY, last_attempt_at TEXT, "
@@ -37,8 +36,8 @@ def _make_db(db: Path, *, role: str = "portfolio") -> None:
     conn.close()
 
 
-def _noop(*_a: object, **_k: object) -> None:
-    return None
+def _noop(*_a: object, **_k: object) -> bool:
+    return True
 
 
 def _qualified_period(*_args: object, **_kwargs: object) -> bool:
@@ -60,12 +59,23 @@ def _install_fake_process(
         categorize: bool,
         calendar: str | None,
         owner_requested: bool,
+        fiscal_witness_document_version_id: str | None = None,
+        fiscal_witness_urls: frozenset[str] = frozenset(),
     ) -> dict[str, object]:
         captured["calendar"] = calendar
         captured["categorize"] = categorize
         captured["root"] = root
         captured["owner_requested"] = owner_requested
-        return {"ticker": ticker, "status": "done", "downloaded": downloaded, "failed": 0}
+        captured["fiscal_witness_document_version_id"] = fiscal_witness_document_version_id
+        captured["fiscal_witness_urls"] = fiscal_witness_urls
+        return {
+            "ticker": ticker,
+            "status": "done",
+            "downloaded": downloaded,
+            "registered": downloaded,
+            "ready": downloaded,
+            "failed": 0,
+        }
 
     monkeypatch.setattr("execution.fetch_ir_from_urls.process_ticker", _fake_process)
     monkeypatch.setattr("execution.fetch_ir_from_urls._run_narrative", _noop)
@@ -91,6 +101,8 @@ def test_register_urls_writes_manifest_registers_and_anchors(
     assert n == 2
     assert captured["categorize"] is True  # docs are content-classified, not trusted blindly
     assert captured["owner_requested"] is True
+    assert captured["fiscal_witness_document_version_id"] is None
+    assert captured["fiscal_witness_urls"] == frozenset()
     # The provided URLs are persisted to the canonical manifest.
     assert {e.url for e in load_manifest(tmp_path, "NOW")} == set(urls)
     conn = sqlite3.connect(str(db))

@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from dcf.reviewed_input_roles import ReviewedInputRoleReceipt, review_input_roles
+from provenance.fact_read_model import FactAdmissionError
 from runtime.job_runtime import JobAlreadyRunningError, JobLock
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -61,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     except JobAlreadyRunningError:
         print(json.dumps({"outcome": "blocked", "reason_code": "database_writer_busy"}))
         return 75
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, FactAdmissionError) as exc:
         print(
             json.dumps(
                 {

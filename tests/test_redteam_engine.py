@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -118,18 +117,6 @@ def test_month_index_increases_monotonically_across_year_boundary() -> None:
     assert lenses.month_index_for("2026-12") + 1 == lenses.month_index_for("2027-01")
 
 
-def test_lens_rotation_covers_all_seven_lenses_mod_len() -> None:
-    """PR9 (Bull-side symmetry) grew LENS_NAMES from 5 to 6, and tenet-2
-    Phase 4 grew it again to 7 (profile_drift) — the rotation modulus follows
-    len(LENS_NAMES) automatically, so every lens is reachable and the
-    no-repeat guarantee holds for mod 7, not just mod 6."""
-    assert len(lenses.LENS_NAMES) == 7
-    assert "missed_upside" in lenses.LENS_NAMES
-    assert "profile_drift" in lenses.LENS_NAMES
-    seen = {lenses.lens_for("NU", i) for i in range(7)}
-    assert seen == set(lenses.LENS_NAMES)  # every lens reachable within one full cycle
-
-
 # ---------------------------------------------------------------------------
 # Bull-side symmetry (PR9): missed_upside lens + downside/add-rung evidence
 # flags (redteam.lenses reusing position_guard's detection, never re-derived)
@@ -167,94 +154,6 @@ def test_build_prompt_dispatches_missed_upside_via_lens_name() -> None:
     direct = lenses.build_missed_upside_prompt(pack, other_holdings_line="")
     assert dispatched == direct
     assert "attacking the owner's caution" in dispatched
-
-
-# ---------------------------------------------------------------------------
-# profile_drift lens (tenet-2 Phase 4): evidence assembly + prompt dispatch
-# ---------------------------------------------------------------------------
-
-
-def test_build_prompt_dispatches_profile_drift_via_lens_name() -> None:
-    from redteam.lenses import NameEvidencePack
-
-    pack = NameEvidencePack(
-        ticker="NU",
-        weight_pct=0.10,
-        thesis_anchor_md="Digital bank thesis.",
-        verdict="Intact",
-        key_driver=None,
-        over_under_pct=None,
-    )
-    dispatched = lenses.build_prompt(pack, "profile_drift", other_holdings_line="")
-    direct = lenses.build_profile_drift_prompt(pack, other_holdings_line="")
-    assert dispatched == direct
-    assert "OWNER'S PROFILE AND BEHAVIORAL RECORD" in dispatched
-
-
-def test_profile_drift_evidence_none_without_a_connection() -> None:
-    assert lenses.build_profile_drift_evidence(None) is None
-
-
-def test_profile_drift_prompt_pivots_to_empty_profile_when_nothing_affirmed() -> None:
-    from redteam.lenses import NameEvidencePack
-
-    pack = NameEvidencePack(
-        ticker="NU",
-        weight_pct=0.10,
-        thesis_anchor_md="Digital bank thesis.",
-        verdict="Intact",
-        key_driver=None,
-        over_under_pct=None,
-        profile_drift=None,
-    )
-    prompt = lenses.build_profile_drift_prompt(pack, other_holdings_line="")
-    assert "No owner_profile_facts are currently AFFIRMED" in prompt
-    assert "graded decisions accumulating" in prompt
-
-
-def test_profile_drift_evidence_reads_affirmed_and_expiring_facts(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
-    import sqlite3
-
-    from owner_profile.store import append_fact
-
-    db = tmp_path / "portfolio.db"
-    migrated_db(db)
-
-    conn = sqlite3.connect(str(db))
-    try:
-        append_fact(
-            conn,
-            category="behavioral",
-            key="behavior.sell_winners_early",
-            value={},
-            narrative="You sell your winners too early.",
-            provenance="owner",
-            status="affirmed",
-        )
-        append_fact(
-            conn,
-            category="capacity",
-            key="cash_buffer_months",
-            value={},
-            narrative="6 months of cash buffer.",
-            provenance="owner",
-            status="affirmed",
-            review_horizon_days=0,  # 0-day horizon -> already past due at read time
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    conn = sqlite3.connect(str(db))
-    try:
-        evidence = lenses.build_profile_drift_evidence(conn)
-    finally:
-        conn.close()
-    assert evidence is not None
-    assert any("behavior.sell_winners_early" in line for line in evidence.affirmed_lines)
-    assert any("cash_buffer_months" in line for line in evidence.expiring_lines)
 
 
 def test_evidence_pack_carries_rung_flags_from_position_sizing_intent(tmp_path: Path) -> None:

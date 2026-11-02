@@ -8,7 +8,7 @@ from comments_server_context import ServerContext
 from flask import Flask, Response, request
 
 from ask.context import build_portfolio_pack
-from ask.engine import AskTurn, ask_retrieval_mode, fold_events, respond_turn
+from ask.engine import ask_retrieval_mode, respond_turn
 from ask.exchange_store import (
     BeginExchangeResult,
     ExchangeConflictError,
@@ -23,7 +23,6 @@ from ask.exchange_store import (
 )
 from ask.store import (
     delete_session,
-    ensure_session,
     get_session,
     list_sessions,
     load_turns,
@@ -207,65 +206,12 @@ def register_viewspec_ask_routes(app: Flask, ctx: ServerContext) -> None:
         )
 
     # ------------------------------------------------------------------
-    # Positioning coach (the fit-v2 positioning surface)
-    # ------------------------------------------------------------------
-
-    @app.route("/api/positioning/coach", methods=["POST"])
-    def positioning_coach():
-        """One coach turn — the unified ask engine with the POSITIONING pack
-        (socratic push-back + live book grounding, billed under
-        ``positioning_coach_turn``). Sessions are scoped ``positioning`` so
-        coach threads never mix into the Ask tab's list. Buffered JSON (the
-        panel shows a thinking indicator); always carries ``session_id``."""
-        body = cast("dict[str, object]", request.get_json(silent=True) or {})
-        query = str(body.get("query") or "").strip()
-        if not query:
-            return ({"error": "query required"}, 400)
-        raw_sid = body.get("session_id")
-        client_sid = str(raw_sid).strip() if isinstance(raw_sid, str) and raw_sid else None
-        sess = ensure_session(client_sid, scope="positioning", db_path=db_path)
-        from positioning.coach_pack import build_positioning_pack
-
-        pack = build_positioning_pack(repo_root, db_path)
-        events = respond_turn(
-            AskTurn(text=query, session_id=sess.id),
-            pack,
-            db_path=db_path,
-            repo_root=repo_root,
-            registry=job_registry,
-            source_context=ctx.source_context,
-        )
-        result = fold_events(events)
-        result["session_id"] = sess.id
-        return result
-
-    @app.route("/api/positioning/propose", methods=["POST"])
-    def positioning_propose():
-        """Encode the coach conversation into an owner-editable approval form
-        (HTML fragment). Encode failures are loud 400s with the reason —
-        never a silently-empty proposal."""
-        from llm.cli import is_hard_stop
-        from pipeline.positioning_panel import render_approval_form
-        from positioning.encode import EncodeError, propose_profile
-
-        body = cast("dict[str, object]", request.get_json(silent=True) or {})
-        sid = str(body.get("session_id") or "").strip()
-        if not sid:
-            return ("session_id required", 400)
-        try:
-            proposal = propose_profile(db_path, repo_root, session_id=sid)
-        except EncodeError as exc:
-            return (str(exc), 400)
-        except Exception as exc:  # structured-call failures: hard stops propagate loud
-            if is_hard_stop(exc):
-                raise
-            return internal_failure("encode failed", exc)
-        return Response(render_approval_form(proposal), mimetype="text/html")
+    # Explicit owner target logging.
 
     @app.route("/api/positioning/approve", methods=["POST"])
     def positioning_approve():
         """Persist a positioning intent FROM THE SUBMITTED FORM VALUES (the
-        owner-wins seam: edits beat the LLM proposal). Returns the refreshed
+        explicit owner input). Returns the refreshed
         active-target card fragment; validation problems are owner-facing
         400s."""
         from pipeline.positioning_panel import (
@@ -280,15 +226,13 @@ def register_viewspec_ask_routes(app: Flask, ctx: ServerContext) -> None:
             profile, narrative = profile_from_form(form)
         except FormError as exc:
             return (str(exc), 400)
-        session_id = (form.get("session_id") or "").strip() or None
         conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             append_intent(
                 conn,
                 narrative=narrative,
                 profile=profile,
-                source="coach" if session_id else "manual",
-                coach_session_id=session_id,
+                source="manual",
             )
             conn.commit()
         finally:
@@ -378,10 +322,9 @@ def register_viewspec_ask_routes(app: Flask, ctx: ServerContext) -> None:
 
     @app.route("/api/research/card/<int:artifact_id>/<verb>", methods=["POST", "OPTIONS"])
     def investment_decision_card_disposition(artifact_id: int, verb: str):
-        """Owner disposition on a card artifact — pass|watch|research_further|
-        promote. Delegates entirely to
+        """Owner action on a card artifact — pass|watch|promote. Delegates to
         ``research.investment_decision_card.act_on_card`` (the ONE action
-        core), so a future Telegram dispatcher reaches the same write path."""
+        core). Explicit backend callers use the same write path."""
         if request.method == "OPTIONS":
             return ("", 204)
         from research.investment_decision_card import CardActionError, act_on_card
@@ -473,51 +416,6 @@ def register_viewspec_ask_routes(app: Flask, ctx: ServerContext) -> None:
         if not ok:
             return ({"error": "not found"}, 404)
         return ("", 204)
-
-    @app.route("/api/ask/sessions/<session_id>/distill", methods=["POST"])
-    def ask_session_distill(session_id: str):
-        """The explicit "Distill now" tap (B4): run the session-distillation
-        pass on ONE Ask thread immediately, skipping the 4h-idle gate used by
-        the manual batch command. Consequence (owner ruling 2026-07-19): distilled
-        belief revisions AUTO-ADOPT — live immediately, announced with a
-        one-tap Revert. Returns the per-session counts dict. 409 when the
-        thread was already distilled (re-running would double-land the same
-        candidates — batch idempotency comes from ``distilled_at``,
-        which this route must therefore honor too)."""
-        sid = session_id.strip()
-        if not sid:
-            return ({"error": "session_id required"}, 400)
-        sess = get_session(sid, db_path=db_path)
-        if sess is None:
-            return ({"error": "not found"}, 404)
-        import sqlite3 as _sqlite3
-
-        try:
-            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
-            try:
-                row = conn.execute(
-                    "SELECT distilled_at FROM ask_sessions WHERE id = ?", (sid,)
-                ).fetchone()
-            finally:
-                conn.close()
-            if row is not None and row[0]:
-                return ({"error": "already distilled", "distilled_at": row[0]}, 409)
-        except _sqlite3.OperationalError:
-            return ({"error": "distillation substrate not migrated (0190)"}, 503)
-        from synthesis.session_distill import SessionRef, distill_session
-
-        try:
-            counts = distill_session(
-                SessionRef(source="ask", session_id=sid),
-                db_path=db_path,
-                repo_root=repo_root,
-            )
-        except Exception:
-            # comments_server has no logger; the route contract (like its
-            # siblings) is an error tuple — session_distill already logged
-            # the failure with full context on its own logger.
-            return ({"error": "distillation failed — nothing landed"}, 500)
-        return {"counts": counts}
 
     @app.route("/api/peers/<ticker>", methods=["GET"])
     def peers_api(ticker: str) -> dict[str, object] | tuple[dict[str, str], int]:

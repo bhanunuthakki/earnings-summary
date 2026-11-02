@@ -15,7 +15,7 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, cast
 from urllib.parse import urlencode
 
 from comments_server_evaluation_projection import resolve_work_os_evaluation_item
@@ -23,6 +23,7 @@ from flask import (
     Flask,
     Response,
     abort,
+    jsonify,
     redirect,
     request,
     send_file,
@@ -54,17 +55,12 @@ from report.artifacts import (
     load_report_candidate_review,
     load_report_capture_receipt,
     load_report_file_capture_receipt,
-    publish_report_candidate,
     resolve_report_model_binding,
 )
 from report.file_capture import replay_file_capture
 from report.generation_context import ReportModelBinding
 from report.read_capture import CaptureLimits, replay_read_capture
-
-
-class _TickerCommandCenter(Protocol):
-    def to_dict(self) -> dict[str, object]: ...
-
+from research.decision_brief import publish_report_candidate
 
 # Self-hosted webfonts vendored under src/ui/vendor/fonts/, beside the inlined
 # Alpine asset. The Work OS shell's @font-face rules reference these exact
@@ -81,7 +77,6 @@ class ContentRouteContext:
     open_db: Callable[[], sqlite3.Connection]
     get_read_db: Callable[[], sqlite3.Connection]
     safe_ticker: Callable[[str], str]
-    build_ticker_command_center: Callable[[Path, str], _TickerCommandCenter]
     linked_gsheet: Callable[[Path, str], tuple[str | None, str | None]]
     probe_tracker: Callable[[], tuple[bool, str]]
     fetch_live_portfolio: Callable[[], LivePortfolio]
@@ -378,6 +373,7 @@ def _register_report_sync_routes(app: Flask, context: ContentRouteContext) -> No
                 artifact_id=artifact_id_val,
                 expected_current_artifact_id=expected_current,
                 owner_action_id=owner_action_val,
+                source_context=context.source_context,
             )
         except ReportPublicationConflictError as exc:
             return Response(
@@ -762,16 +758,6 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
         response.headers["Cache-Control"] = "no-store"
         return response
 
-    @app.route("/api/peek/weekly-packet", methods=["GET"])
-    def peek_weekly_packet():
-        """Task 3 (wave3b): the read-only quick-look behind the Home
-        open-loops band's Sunday-packet line — no web reply surface exists
-        (verdicts are given on Telegram), so the doorway peeks the packet
-        state instead of navigating anywhere. Always 200s; never raises."""
-        from pipeline.open_loops import render_weekly_packet_peek
-
-        return Response(render_weekly_packet_peek(db_path), mimetype="text/html")
-
     @app.route("/api/peek/whatif", methods=["GET"])
     def peek_whatif():
         from pipeline.peeks import render_what_if_peek
@@ -793,19 +779,6 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             funding_mode=funding_mode,
             db_path=db_path,
         )
-        if html is None:
-            abort(404)
-        return Response(html, mimetype="text/html")
-
-    @app.route("/api/peek/etf_workup", methods=["GET"])
-    def peek_etf_workup():
-        from pipeline.etf_workup import render_etf_workup
-
-        try:
-            ticker = context.safe_ticker(request.args.get("ticker") or "")
-        except ValueError:
-            abort(404)
-        html = render_etf_workup(context.get_read_db(), repo_root, db_path, ticker)
         if html is None:
             abort(404)
         return Response(html, mimetype="text/html")
@@ -886,8 +859,19 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
 
     @app.route("/api/ticker/<ticker>", methods=["GET"])
     def ticker_api(ticker: str):
-        command_center = context.build_ticker_command_center(repo_root, ticker)
-        return command_center.to_dict()
+        try:
+            validated = context.safe_ticker(ticker)
+        except ValueError:
+            abort(400)
+        response = jsonify(
+            {
+                "error": "legacy_ticker_feed_retired",
+                "replacement_url": f"/?screen=company-desk&ticker={validated}",
+            }
+        )
+        response.status_code = 410
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.route("/ticker/<ticker>", methods=["GET"])
     def ticker_page(ticker: str):

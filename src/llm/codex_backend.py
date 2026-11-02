@@ -30,6 +30,7 @@ Operational notes learned wiring it up (2026-07-25):
 from __future__ import annotations
 
 import importlib
+import inspect
 import logging
 import os
 import sys
@@ -77,7 +78,10 @@ DEFAULT_TIMEOUT_SECONDS = 420
 # claim that ChatGPT membership calls incur per-call API charges.
 _CODEX_API_PRICES: dict[str, tuple[float, float, float]] = {
     # model: (uncached input, cached input, output)
-    # OpenAI GPT-6.1 Sol model page verified 2026-10-23; candidate only.
+    # Candidate rates checked 2026-10-26; existing purpose pins stay unchanged.
+    # https://developers.openai.com/api/docs/models/gpt-6-luna
+    # https://developers.openai.com/api/docs/models/gpt-6.1-sol
+    "gpt-6-luna": (0.10, 0.01, 0.50),
     "gpt-6.1-sol": (2.00, 0.10, 10.00),
     "gpt-5.6-luna": (0.20, 0.02, 1.20),
     "gpt-5.6-terra": (2.00, 0.20, 12.00),
@@ -138,6 +142,19 @@ def _load_wrapper() -> _CodexCaller:
     module = importlib.import_module("codex_cli")
     caller = module.call_codex_with_usage
     return cast("_CodexCaller", caller)
+
+
+def codex_wrapper_source_path() -> Path:
+    """Resolve the actual loaded caller for qualification implementation seals."""
+    caller = _load_wrapper()
+    source = inspect.getsourcefile(caller)
+    if source is None:
+        raise RuntimeError("Codex wrapper has no inspectable source identity")
+    path = Path(source).resolve(strict=True)
+    expected = (_SNIPPETS_DIR / "codex_cli.py").resolve(strict=True)
+    if path != expected:
+        raise RuntimeError("Loaded Codex wrapper differs from the configured source")
+    return path
 
 
 def codex_available() -> bool:

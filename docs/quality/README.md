@@ -41,6 +41,12 @@ source and input-manifest hashes plus a fingerprint of the reviewed source
 line. Missing, malformed, stale, duplicated, or forged evidence leaves the raw
 edge unknown and closure at `HOLD`.
 
+The raw graph is rebuildable. Keep it in ignored
+`.tmp/quality/reachability-check.json`. The evidence-bundle manifest records
+its hash and subject. Score verification replays the graph from an isolated
+worktree at that exact subject. Do not publish the raw graph under
+`docs/quality/`.
+
 At this slice's source state, collection is `COMPLETE`, all 137 production
 unknown edges have reviewed dispositions, and production closure is `PASS`.
 The remaining 91 unknown edges comprise 90 test or instruction-test edges and

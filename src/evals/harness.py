@@ -19,7 +19,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TypeVar, cast
 from uuid import uuid4
 
@@ -27,6 +27,7 @@ from calibration_guard import wilson_interval
 from llm.calibration import CalibrationScore, record_score
 from llm.cli import is_hard_stop
 from llm.structured import StructuredParseError
+from provenance.immutable_artifact import read_stable_artifact, require_no_reparse_points
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -41,6 +42,33 @@ log = logging.getLogger(__name__)
 # pointer at the migration, not silently drop scores. ``--no-persist`` on the
 # CLI is the deliberate way to run without a migrated DB.
 # ---------------------------------------------------------------------------
+
+
+def read_transcript_audit_proof(
+    state_root: Path, relative_path: str, expected_sha256: str
+) -> bytes:
+    """Read sealed evaluation evidence from its one private state owner."""
+    parts = relative_path.split("/")
+    if (
+        not relative_path
+        or "\\" in relative_path
+        or ":" in relative_path
+        or "\x00" in relative_path
+        or PurePosixPath(relative_path).is_absolute()
+        or PureWindowsPath(relative_path).drive
+        or any(part in {"", ".", ".."} for part in parts)
+        or len(expected_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in expected_sha256)
+    ):
+        raise ValueError("transcript audit proof reference is invalid")
+    root = state_root.resolve(strict=True) / "data/model_evals/transcript_summary_qualification"
+    require_no_reparse_points(root)
+    target = root.joinpath(*parts)
+    snapshot, payload = read_stable_artifact(target, allowed_root=root, max_bytes=128 * 1024 * 1024)
+    if snapshot.file_sha256 != expected_sha256:
+        raise ValueError("transcript audit proof changed")
+    return payload
+
 
 _RUN_INSERT = """
 INSERT INTO eval_runs(

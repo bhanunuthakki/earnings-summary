@@ -21,6 +21,7 @@ the module layout against regressions during future cleanups.
 from __future__ import annotations
 
 import inspect
+from collections.abc import Callable
 
 
 def test_anchors_module_exposes_expected_names() -> None:
@@ -88,9 +89,7 @@ def test_kpi_registry_auto_proposal_routes_to_opus() -> None:
     from llm import cli
 
     assert cli.LLM_MODELS["kpi_registry_auto_proposal"] == "claude-opus-4-8"
-    # _model_for is module-private; tests reaching into it use the repo's
-    # rule-scoped pyright pragma (see test_etf_instrument_mvp.py).
-    resolve = cli._model_for  # pyright: ignore[reportPrivateUsage]
+    resolve: Callable[[str], str] = getattr(cli, "_model_for")
     assert resolve("kpi_registry_auto_proposal") == "claude-opus-4-8"
     # Fail-closed routing requires every public purpose to be registered.
     assert cli.LLM_MODELS["kpi_registry_proposal"] == cli.DEFAULT_MODEL
@@ -110,9 +109,7 @@ def test_news_purpose_pins() -> None:
     explicitly so call_llm_with_web's purpose resolution keeps it there."""
     from llm import cli
 
-    # _model_for is module-private; tests reaching into it use the repo's
-    # rule-scoped pyright pragma (see test_etf_instrument_mvp.py).
-    resolve = cli._model_for  # pyright: ignore[reportPrivateUsage]
+    resolve: Callable[[str], str] = getattr(cli, "_model_for")
     assert cli.LLM_MODELS["material_news_classification"] == "claude-opus-4-8"
     assert cli.LLM_MODELS["news_structuring"] == cli.DEFAULT_MODEL
     assert resolve("material_news_classification") == "claude-opus-4-8"
@@ -127,7 +124,7 @@ def test_news_pins_do_not_disturb_existing_purposes() -> None:
     Spot-check one purpose per tier plus the manual KPI seeder."""
     from llm import cli
 
-    resolve = cli._model_for  # pyright: ignore[reportPrivateUsage]
+    resolve: Callable[[str], str] = getattr(cli, "_model_for")
     # Sonnet (default) analytical writing — unchanged.
     assert resolve("bear_case") == cli.DEFAULT_MODEL
     assert resolve("transcript_summary") == cli.DEFAULT_MODEL
@@ -135,7 +132,6 @@ def test_news_pins_do_not_disturb_existing_purposes() -> None:
     assert resolve("company_description") == cli.DEFAULT_MODEL
     # Pre-existing Opus pins — unchanged.
     assert resolve("valuation_basis") == "claude-opus-4-8"
-    assert resolve("saydo_importance") == "claude-opus-4-8"
     assert resolve("kpi_registry_auto_proposal") == "claude-opus-4-8"
     # Gemini un-pinned 2026-07-02 (metered Gemini off the active pareto): these two
     # classifier purposes reverted from Gemini Flash (#538) back to Claude Haiku.
@@ -223,15 +219,9 @@ def test_llm_client_reexports_preserve_caller_imports() -> None:
         "classify_intake_document",
         "generate_bear_case",
         "generate_company_description",
-        "generate_event_brief",
-        "generate_pairwise_analysis",
         "generate_platform_diagram",
-        "generate_press_release_summary",
-        "generate_presentation_brief",
         "generate_qa_topics",
         "generate_recent_developments",
-        "generate_saydo_filter",
-        "generate_saydo_importance",
         "generate_strategic_analysis",
         "generate_summary",
         "generate_thesis_update",

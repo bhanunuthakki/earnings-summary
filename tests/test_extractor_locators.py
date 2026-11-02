@@ -17,7 +17,6 @@ import pytest
 from compute._common import extract_facts_with_spec
 from compute.as_reported import extract_facts_from_record as extract_as_reported
 from compute.income_statement import extract_income_statement_facts
-from compute.kpi_extract_summaries import build_manifest
 from models.facts import Currency, FactLocator, FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.fmp_payloads import FmpAsReportedRecord, FmpIncomeStatementRecord
 from pipeline.kpi_persistence import (
@@ -371,34 +370,6 @@ def test_persist_manifest_tolerates_pre_p32_schema() -> None:
     result = persist_manifest(conn, run_id="r1", manifest=_manifest(values))
     assert result.inserted == 1
     conn.close()
-
-
-# ----------------------------------------------------------------------------
-# summaries extractor: LLM payload -> manifest passthrough
-# ----------------------------------------------------------------------------
-
-
-def test_build_manifest_passes_source_excerpt_through() -> None:
-    extracted: dict[str, dict[str, object]] = {
-        "NIM": {
-            "value": 17.8,
-            "unit": "percent",
-            "confidence": 0.95,
-            "source_excerpt": "  NIM expanded to 17.8%  ",
-        },
-        "ARPAC": {"value": 11.2, "unit": "actual", "currency": "USD", "confidence": 0.9},
-        "Deposits": {
-            "value": 1,
-            "unit": "actual",
-            "currency": "USD",
-            "source_excerpt": 42,
-        },  # non-str -> dropped
-    }
-    manifest = build_manifest("NU", datetime(2026, 3, 31), FiscalPeriodType.Q1, 5, extracted)
-    by_name = {v.name: v for v in manifest.values}
-    assert by_name["NIM"].source_excerpt == "NIM expanded to 17.8%"
-    assert by_name["ARPAC"].source_excerpt is None
-    assert by_name["Deposits"].source_excerpt is None
 
 
 def test_kpi_value_accepts_manifest_json_locator() -> None:

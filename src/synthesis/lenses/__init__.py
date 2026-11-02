@@ -5,9 +5,8 @@ Each lens lives in its own sibling module and exports a module-level
 dispatcher dict and re-exports the runner/helpers consumers reach for.
 
 Backwards-compat shim at `src/synthesis_lenses.py` re-exports everything
-here so existing callers (execution/run_lens.py, execution/run_due_lenses.py,
-execution/run_scenario.py, src/report/sections/synthesis.py) keep working
-without import changes.
+here so existing callers (execution/run_lens.py, execution/run_scenario.py,
+src/report/sections/synthesis.py) keep working without import changes.
 """
 
 from __future__ import annotations

@@ -26,6 +26,7 @@ forced refresh) can pass `force_budget_bypass=True` to `call_llm`.
 from __future__ import annotations
 
 import logging
+import math
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -80,6 +81,23 @@ class BudgetCheck:
 
 class _BudgetStoreUnavailableError(RuntimeError):
     """Existing budget storage could not be read safely."""
+
+
+def require_explicit_blocking_budget(purpose: str, *, db_path: Path) -> None:
+    """Require a finite positive purpose budget without a default-row fallback."""
+    try:
+        with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
+            row = conn.execute(
+                "SELECT monthly_cap_usd, on_exceed FROM llm_budgets WHERE purpose=?",
+                (purpose,),
+            ).fetchone()
+        if row is None:
+            raise ValueError("explicit LLM budget is missing")
+        cap = float(row[0])
+        if not math.isfinite(cap) or cap <= 0 or row[1] != "block":
+            raise ValueError("explicit LLM budget must be positive and blocking")
+    except (sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("explicit LLM budget is unavailable") from exc
 
 
 def _log_read_failure(event: str, purpose: str, exc: sqlite3.Error) -> None:

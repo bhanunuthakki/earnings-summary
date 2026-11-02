@@ -527,7 +527,7 @@ def load_report_file_capture_receipt(
     return value if isinstance(value, FileCaptureReceipt) else None
 
 
-def publish_report_candidate(
+def commit_report_candidate(
     repo_root: Path,
     *,
     db_path: Path,
@@ -536,6 +536,8 @@ def publish_report_candidate(
     expected_current_artifact_id: str | None,
     owner_action_id: str,
     approved_at: datetime | None = None,
+    source_authority_sha256: str,
+    assess: Callable[[sqlite3.Connection, ReportArtifactRef], DecisionBriefReadiness],
 ) -> tuple[ReportPublicationApproval, bool]:
     symbol = ticker.strip().upper()
     with ExitStack() as stack:
@@ -598,6 +600,13 @@ def publish_report_candidate(
             replay_file_capture(file_receipt, repo_root)
         except FileCaptureMismatchError as exc:
             raise ReportPublicationConflictError("file_snapshot_drifted") from exc
+        if artifact.generation_context.source_authority_sha256 != source_authority_sha256:
+            raise ReportPublicationConflictError("source_authority_changed_since_candidate")
+        readiness = assess(writer_conn, artifact)
+        if readiness.status != "verified" or readiness.reason_codes:
+            raise ReportPublicationConflictError(
+                "candidate_source_evidence_changed", {"reason_codes": list(readiness.reason_codes)}
+            )
         current = latest_report_artifacts_for_tickers(repo_root, (symbol,)).get(symbol)
         current_id = current.artifact_id if current else None
         if (
@@ -1721,6 +1730,7 @@ __all__ = [
     "backfill_report_fiscal_periods",
     "build_report_sync_status",
     "candidate_review_path",
+    "commit_report_candidate",
     "latest_report_artifacts",
     "latest_report_artifacts_for_tickers",
     "load_report_artifact_index",
@@ -1729,7 +1739,6 @@ __all__ = [
     "load_report_file_capture_receipt",
     "migrate_legacy_report_bodies",
     "persist_report_artifact",
-    "publish_report_candidate",
     "reconcile_legacy_workspace_reports",
     "report_artifact_index_path",
     "resolve_report_model_binding",

@@ -38,8 +38,9 @@ first ~6 KB of document text.
      pipeline. (We do not block intake on whisper — that's a downstream stage.)
 3. Files with confidence < 0.6 stay in `_inbox/` next to a `.error.json`
    marker. The user can rename and re-run.
-4. With `--process`, chain into `execution/process_ir_documents.py --ticker <T>`
-   for each ticker that received new IR documents.
+4. With `--process`, ingest and register new transcripts, then build their exact-document
+   summaries with explicit database and state roots. Extract SayDo commitments from
+   the original transcripts. Other document families remain source material.
 
 ## Doc-Type Vocabulary
 
@@ -47,15 +48,15 @@ Closed enum, matches `src/models/documents.py::DocType`:
 
 | DocType | Filename stem | Index key | Cache suffix | Storage |
 |---|---|---|---|---|
-| `IR_PRESS_RELEASE` | `ir_press_release` | `press_release` | `press_release_summary.txt` | `ir_documents/<TICKER>/<period_end>/` |
-| `IR_PRESENTATION` | `ir_presentation` | `presentation` | `presentation_brief.txt` | `ir_documents/<TICKER>/<period_end>/` |
+| `IR_PRESS_RELEASE` | `ir_press_release` | `press_release` | source only | `ir_documents/<TICKER>/<period_end>/` |
+| `IR_PRESENTATION` | `ir_presentation` | `presentation` | source only | `ir_documents/<TICKER>/<period_end>/` |
 | `IR_SUPPLEMENT` | `ir_supplement` | `supplement` | _capture-every-number: `extract_kpis_from_ir.py --capture` (PDF) / `refresh_ir_kpis.py` (xlsx)_ | `ir_documents/<TICKER>/<period_end>/` |
-| `IR_INVESTOR_UPDATE` | `ir_investor_update` | `investor_update` | `investor_update_summary.txt` | `ir_documents/<TICKER>/<period_end>/` |
-| `EARNINGS_CALL_TRANSCRIPT` | `ir_transcript` | `transcript` | `summary.txt` | `ir_documents/<TICKER>/<period_end>/` |
+| `IR_INVESTOR_UPDATE` | `ir_investor_update` | `investor_update` | source only | `ir_documents/<TICKER>/<period_end>/` |
+| `EARNINGS_CALL_TRANSCRIPT` | `ir_transcript` | `transcript` | exact verified `transcript_summary` artifact | `ir_documents/<TICKER>/<period_end>/` |
 | `IR_EVENT` | `ir_event` | `event` | `event_brief.txt` | `ir_documents/_events/<TICKER>/<event_date>/` |
 
-`investor_update` reuses the press-release LLM path (semantically similar:
-quarterly results announcement / letter to shareholders).
+Press releases, presentations and investor updates have no separate generated
+summary or report card. Their original documents remain available to research.
 
 `ir_event` covers non-quarterly artifacts: investor days, AGMs, capital markets days,
 conference decks, ad-hoc strategic announcements, M&A or stock-split decks. These

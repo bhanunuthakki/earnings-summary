@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -15,45 +16,20 @@ from llm_artifact_store import UpsertRequest, upsert
 from native_artifact_projection import NativeArtifactProjectionError, project_native_artifact
 
 
-def _make_db(path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(path)
-    conn.execute(
-        """
-        CREATE TABLE llm_artifacts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT,
-            scope TEXT NOT NULL DEFAULT 'ticker',
-            purpose TEXT NOT NULL,
-            fiscal_period TEXT,
-            content_md TEXT,
-            content_json TEXT,
-            input_sha256 TEXT NOT NULL,
-            output_sha256 TEXT,
-            model TEXT,
-            prompt_version TEXT NOT NULL DEFAULT 'v1',
-            generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            expires_at TIMESTAMP,
-            superseded_by_id INTEGER,
-            dirty INTEGER NOT NULL DEFAULT 0,
-            dirty_reason TEXT,
-            source_doc_ids TEXT,
-            parent_artifact_ids TEXT,
-            llm_call_id INTEGER
-        )
-        """
-    )
-    return conn
+def _make_db(path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
+    """Use the current migrated schema, including 0063 artifact columns and guards."""
+    return sqlite3.connect(migrated_db(path))
 
 
 def _seed_dirty(conn: sqlite3.Connection, *, purpose: str) -> int:
     row = conn.execute(
         """
         INSERT INTO llm_artifacts (
-            ticker, scope, purpose, input_sha256, prompt_version, dirty
-        ) VALUES ('NU', 'ticker', ?, 'old', 'v1', 1)
+            ticker, scope, purpose, input_sha256, prompt_version, generated_at, dirty
+        ) VALUES ('NU', 'ticker', ?, 'old', 'v1', ?, 1)
         RETURNING id
         """,
-        (purpose,),
+        (purpose, datetime.now(UTC).isoformat()),
     ).fetchone()
     conn.commit()
     assert row is not None
@@ -83,10 +59,12 @@ def _valid_bear_payload() -> dict[str, object]:
     }
 
 
-def test_projection_supersedes_only_the_exact_dirty_purpose(tmp_path: Path) -> None:
+def test_projection_supersedes_only_the_exact_dirty_purpose(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     db_path = tmp_path / "data" / "portfolio.db"
     db_path.parent.mkdir()
-    conn = _make_db(db_path)
+    conn = _make_db(db_path, migrated_db)
     try:
         old_bear_id = _seed_dirty(conn, purpose="bear_case")
         qa_id = _seed_dirty(conn, purpose="qa_topics")
@@ -126,10 +104,12 @@ def test_projection_supersedes_only_the_exact_dirty_purpose(tmp_path: Path) -> N
     assert json.loads(str(current[4]))["failure_modes"][0]["hypothesis"] == "Growth stalls"
 
 
-def test_projection_rejects_a_cache_not_written_after_queue_time(tmp_path: Path) -> None:
+def test_projection_rejects_a_cache_not_written_after_queue_time(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     db_path = tmp_path / "data" / "portfolio.db"
     db_path.parent.mkdir()
-    conn = _make_db(db_path)
+    conn = _make_db(db_path, migrated_db)
     try:
         old_id = _seed_dirty(conn, purpose="bear_case")
     finally:
@@ -154,10 +134,12 @@ def test_projection_rejects_a_cache_not_written_after_queue_time(tmp_path: Path)
         conn.close()
 
 
-def test_projection_rejects_cache_timestamp_equal_to_queue_time(tmp_path: Path) -> None:
+def test_projection_rejects_cache_timestamp_equal_to_queue_time(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     db_path = tmp_path / "data" / "portfolio.db"
     db_path.parent.mkdir()
-    conn = _make_db(db_path)
+    conn = _make_db(db_path, migrated_db)
     try:
         _seed_dirty(conn, purpose="bear_case")
     finally:
@@ -177,10 +159,12 @@ def test_projection_rejects_cache_timestamp_equal_to_queue_time(tmp_path: Path) 
         )
 
 
-def test_projection_rejects_payload_ticker_mismatch(tmp_path: Path) -> None:
+def test_projection_rejects_payload_ticker_mismatch(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     db_path = tmp_path / "data" / "portfolio.db"
     db_path.parent.mkdir()
-    conn = _make_db(db_path)
+    conn = _make_db(db_path, migrated_db)
     try:
         _seed_dirty(conn, purpose="valuation_basis")
     finally:
@@ -213,10 +197,11 @@ def test_projection_rejects_payload_ticker_mismatch(tmp_path: Path) -> None:
 def test_projection_persistence_failure_leaves_obligation_dirty(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
     db_path = tmp_path / "data" / "portfolio.db"
     db_path.parent.mkdir()
-    conn = _make_db(db_path)
+    conn = _make_db(db_path, migrated_db)
     try:
         old_id = _seed_dirty(conn, purpose="bear_case")
     finally:
@@ -249,11 +234,11 @@ def test_projection_persistence_failure_leaves_obligation_dirty(
 
 
 def test_projection_forces_fresh_successor_when_identical_clean_artifact_predates_queue(
-    tmp_path: Path,
+    tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
     db_path = tmp_path / "data" / "portfolio.db"
     db_path.parent.mkdir()
-    conn = _make_db(db_path)
+    conn = _make_db(db_path, migrated_db)
     payload = _valid_bear_payload()
     raw = json.dumps(payload)
     try:
@@ -300,10 +285,12 @@ def test_projection_forces_fresh_successor_when_identical_clean_artifact_predate
     assert datetime.fromisoformat(str(generated_at[0])) > queued_at
 
 
-def test_projection_rolls_back_when_any_exact_obligation_has_wrong_scope(tmp_path: Path) -> None:
+def test_projection_rolls_back_when_any_exact_obligation_has_wrong_scope(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     db_path = tmp_path / "data" / "portfolio.db"
     db_path.parent.mkdir()
-    conn = _make_db(db_path)
+    conn = _make_db(db_path, migrated_db)
     try:
         bear_id = _seed_dirty(conn, purpose="bear_case")
         wrong_id = _seed_dirty(conn, purpose="qa_topics")
@@ -332,10 +319,12 @@ def test_projection_rolls_back_when_any_exact_obligation_has_wrong_scope(tmp_pat
         conn.close()
 
 
-def test_projection_rejects_invalid_purpose_schema(tmp_path: Path) -> None:
+def test_projection_rejects_invalid_purpose_schema(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     db_path = tmp_path / "data" / "portfolio.db"
     db_path.parent.mkdir()
-    conn = _make_db(db_path)
+    conn = _make_db(db_path, migrated_db)
     try:
         _seed_dirty(conn, purpose="bear_case")
     finally:
@@ -370,7 +359,6 @@ def test_projection_rejects_invalid_purpose_schema(tmp_path: Path) -> None:
             "qa_topics",
             {"by_key": {"sha": [{"id": "0", "topic": "Growth", "tag": "GROWTH"}]}},
         ),
-        ("saydo_filter", {"by_key": {"sha": ["0"]}}),
         (
             "company_description",
             {
@@ -408,10 +396,11 @@ def test_each_current_native_purpose_has_a_typed_projection(
     tmp_path: Path,
     purpose: str,
     payload: dict[str, object],
+    migrated_db: Callable[..., Path],
 ) -> None:
     db_path = tmp_path / "data" / "portfolio.db"
     db_path.parent.mkdir()
-    conn = _make_db(db_path)
+    conn = _make_db(db_path, migrated_db)
     try:
         _seed_dirty(conn, purpose=purpose)
     finally:
@@ -419,7 +408,6 @@ def test_each_current_native_purpose_has_a_typed_projection(
     directory = {
         "valuation_basis": "valuation_basis",
         "qa_topics": "qa_topics",
-        "saydo_filter": "saydo_filter",
         "company_description": "company_description",
         "filing_intelligence": "filing_intelligence",
     }[purpose]

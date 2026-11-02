@@ -66,7 +66,6 @@ STAGE_POSITION_GUARD = "stage_0h_position_guard"
 STAGE_RISK_SNAPSHOT = "stage_0i_risk_snapshot"
 STAGE_WEALTH_CONTEXT = "stage_0j_wealth_context"
 STAGE_TRIGGERS = "stage_1_triggers"
-STAGE_STANDUP = "stage_1b_standup"
 STAGE_PRE_ER_BRIEF = "stage_1c_pre_earnings_briefs"
 STAGE_POST_ER_READOUT = "stage_1d_post_earnings_readouts"
 STAGE_FEED = "stage_2_feed"
@@ -261,16 +260,6 @@ STAGE_MANIFEST: tuple[StageSpec, ...] = (
             STAGE_WEALTH_CONTEXT,
         ),
         ("skip_triggers",),
-        ArgumentProfile.DB_PATH,
-    ),
-    StageSpec(
-        STAGE_STANDUP,
-        "Stage 1b - proactive standup (run_standup.py)",
-        "run_standup.py",
-        ("--user-id", "{user_id}"),
-        900,
-        (STAGE_TRIGGERS,),
-        ("skip_triggers", "skip_standup"),
         ArgumentProfile.DB_PATH,
     ),
     StageSpec(

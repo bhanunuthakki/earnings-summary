@@ -233,7 +233,6 @@ def _section_status(spec: object) -> dict[str, object]:
         "segments",
         "earnings",
         "saydo",
-        "ir_docs",
         "recent_developments",
         "bear_case",
         "provenance",
@@ -313,7 +312,11 @@ def _worker(args: argparse.Namespace) -> int:
     from report.builder import build_report
     from report.renderers.markdown import render as render_markdown
     from report.renderers.sections_json import render as render_sections_json
-    from report.renderers.workspace_html import render_report_body, render_standalone_report
+    from report.renderers.workspace_html import (
+        prepare_report_delivery,
+        render_report_body,
+        render_standalone_report,
+    )
     from report.sections import financials as financials_section
     from report.sections import snapshot as snapshot_section
     from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -352,7 +355,7 @@ def _worker(args: argparse.Namespace) -> int:
             connection.close()
 
         _worker_event("render_start")
-        report_body = render_report_body(spec)
+        report_body = render_report_body(spec, delivery=prepare_report_delivery(spec))
         html = render_standalone_report(spec, report_body)
         sections = json.loads(render_sections_json(spec))
         normalized_sections = _normalize_json_paths(sections, repo_root)

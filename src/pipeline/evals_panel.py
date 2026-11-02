@@ -37,8 +37,8 @@ from pathlib import Path
 from evals.capture_quality_specs import CAPTURE_QUALITY_SPECS
 from evals.run_registry import (
     CAPTURE_AUDIT_PURPOSES,
-    RUNNABLE_PURPOSES,
 )
+from evals.run_registry import PANEL_PURPOSES as RUNNABLE_PURPOSES
 from llm.calibration import VersionSummary, summarize_by_prompt_version
 from pipeline.operations_styles import EVALS_STYLE as _PANEL_CSS
 from runtime.deterministic import table_exists as _has_table

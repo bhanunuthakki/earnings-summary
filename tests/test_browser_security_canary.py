@@ -21,7 +21,7 @@ import comments
 from execution import comments_server
 from report.models import ReportSpec
 from report.renderers.workspace_script import JS
-from report.renderers.workspace_sections.boot import _comment_boot_data
+from report.renderers.workspace_sections.boot import _comment_boot_data, prepare_report_delivery
 from report.shareable import export_shareable_report
 
 _RESULTS = TypeAdapter(dict[str, object])
@@ -134,7 +134,7 @@ def test_browser_origin_capability_and_script_boundaries(
         ticker="TEST", generation_date=date(2026, 9, 19), repo_root=str(root)
     )
     output = StringIO()
-    _comment_boot_data(output, spec)
+    _comment_boot_data(output, spec, prepare_report_delivery(spec))
     document = "<!doctype html><title>Synthetic security canary</title>" + output.getvalue()
     report = root / "output/research/TEST/2026_workspace.html"
     report.parent.mkdir(parents=True)

@@ -24,8 +24,10 @@ import pytest
 from openpyxl import Workbook
 
 from execution import fetch_ir_documents as fid
+from ir_uploads import BoundIRClassification
 from models.documents import DocType
 from models.ir_uploads import CategorizationResult, Confidence
+from pipeline import managed_ir_sources as managed
 from pipeline.issuer_document_inventory import (
     ExpectedIssuerDocument,
     IssuerDocumentInventoryRequest,
@@ -67,7 +69,7 @@ class _FakeOpener:
 
 
 def _no_registered_urls(*_a: object, **_k: object) -> set[str]:
-    """Typed stand-in for _registered_source_urls (a bare lambda trips pyright)."""
+    """Typed stand-in for registered_source_urls (a bare lambda trips pyright)."""
     return set()
 
 
@@ -137,6 +139,36 @@ def _make_policy_db(db: Path, rows: list[tuple[str, str]]) -> None:
         )
 
 
+@pytest.fixture
+def legacy_registration_db(
+    tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    database = migrated_db(tmp_path / "legacy-registration.sqlite")
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(database))
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('PORT','Synthetic issuer','portfolio','06-30','equity')"
+        )
+    return database
+
+
+def _register_legacy_source(database: Path, path: Path, url: str) -> None:
+    payload = path.read_bytes()
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            "INSERT INTO documents (ticker,source_type,doc_type,file_path,sha256,fetched_at,"
+            "fetch_status,raw_bytes_size,source_url) VALUES "
+            "('PORT','ir_doc','ir_press_release',?,?,'2026-06-30','ok',?,?)",
+            (
+                path.relative_to(database.parent).as_posix(),
+                hashlib.sha256(payload).hexdigest(),
+                len(payload),
+                url,
+            ),
+        )
+
+
 def _allow_safe_url(_url: str) -> None:
     """Network admission is outside these transport-unit tests."""
 
@@ -162,7 +194,7 @@ def test_downloader_sends_browser_user_agent(
     db = tmp_path / "p.db"
     _make_policy_db(db, [("BN", "portfolio")])
     _write_manifest(root, "BN", "https://bam.brookfield.com/x/Q1-26-BAM-Press-Release.pdf")
-    monkeypatch.setattr("execution.fetch_ir_documents._registered_source_urls", _no_registered_urls)
+    monkeypatch.setattr("execution.fetch_ir_documents.registered_source_urls", _no_registered_urls)
     monkeypatch.setattr(fid, "ensure_safe_public_url", _allow_safe_url)
     monkeypatch.setattr(fid, "curl_resolve_entries", _no_curl_resolve_entries)
     captured: dict[str, str | None] = {}
@@ -199,7 +231,7 @@ def test_downloader_halts_on_explicit_auth_denial(
     db = tmp_path / "p.db"
     _make_policy_db(db, [("ZZ", "portfolio")])
     _write_manifest(root, "ZZ", "https://blocked.example/Q1.pdf")
-    monkeypatch.setattr("execution.fetch_ir_documents._registered_source_urls", _no_registered_urls)
+    monkeypatch.setattr("execution.fetch_ir_documents.registered_source_urls", _no_registered_urls)
 
     def _raise_auth(req: urllib.request.Request, timeout: float | None = None) -> _FakeResp:
         _ = timeout
@@ -246,7 +278,7 @@ def test_downloader_falls_back_to_curl_cffi_on_timeout(
     db = tmp_path / "p.db"
     _make_policy_db(db, [("LLY", "portfolio")])
     _write_manifest(root, "LLY", "https://investor.lilly.com/static-files/uuid-1")
-    monkeypatch.setattr("execution.fetch_ir_documents._registered_source_urls", _no_registered_urls)
+    monkeypatch.setattr("execution.fetch_ir_documents.registered_source_urls", _no_registered_urls)
     monkeypatch.setattr(fid, "ensure_safe_public_url", _allow_safe_url)
     monkeypatch.setattr(fid, "curl_resolve_entries", _no_curl_resolve_entries)
 
@@ -348,9 +380,9 @@ def test_fetch_boundary_retains_sixth_manifest_period_while_source_window_is_unk
     (mdir / "PORT_urls.json").write_text(json.dumps(entries), encoding="utf-8")
     calls: list[str] = []
 
-    def _record(url: str, _dest: Path, _base: str) -> Path:
+    def _record(url: str, dest: Path, base: str) -> Path:
         calls.append(url)
-        return tmp_path / "staged.pdf"
+        return _staged_download(dest, base)
 
     monkeypatch.setattr(fid, "_download", _record)
     monkeypatch.setattr(fid.time, "sleep", _no_sleep)
@@ -453,9 +485,9 @@ def test_attempt_receipt_publish_preserves_installer_residue(
     def fail_install(*_args: object, **_kwargs: object) -> SecureFileInstallResult:
         raise SecureFileInstallError("secure_install_failed", residue_paths=(residue,))
 
-    monkeypatch.setattr(fid, "install_bytes_no_clobber", fail_install)
+    monkeypatch.setattr(managed, "install_bytes_no_clobber", fail_install)
     with pytest.raises(fid.IssuerDocumentPreparationError) as exc:
-        cast(Callable[[Path, str], None], getattr(fid, "_publish_attempt_text"))(
+        cast(Callable[[Path, str], None], getattr(managed, "_publish_attempt_text"))(
             attempt / "staging_receipt.json", "{}"
         )
 
@@ -474,10 +506,10 @@ def test_final_preparation_reports_owned_receipt_after_post_rename_verification_
     db_path = root / "data" / "portfolio.db"
     monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db_path))
     request = _preparation_request()
-    monkeypatch.setattr(fid, "authorize_stored_collection_target", _allow_preparation_policy)
-    monkeypatch.setattr(fid, "reported_quarter_selection", _preparation_window)
+    monkeypatch.setattr(managed, "authorize_stored_collection_target", _allow_preparation_policy)
+    monkeypatch.setattr(managed, "reported_quarter_selection", _preparation_window)
     monkeypatch.setattr(fid, "_download", _prepare_staged_object)
-    monkeypatch.setattr(fid, "classify_ir_file", _classify_prepared_object)
+    monkeypatch.setattr(managed, "classify_ir_file", _classify_prepared_object)
 
     def reject_final_verification(*_args: object, **_kwargs: object) -> None:
         raise SecureFileInstallError("installed_target_unsafe")
@@ -584,10 +616,10 @@ def test_preparation_accepts_actual_xlsx_supplement(
     db_path = migrated_db(root / "data" / "portfolio.db")
     monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db_path))
     request = _supplement_preparation_request()
-    monkeypatch.setattr(fid, "authorize_stored_collection_target", _allow_preparation_policy)
-    monkeypatch.setattr(fid, "reported_quarter_selection", _preparation_window)
+    monkeypatch.setattr(managed, "authorize_stored_collection_target", _allow_preparation_policy)
+    monkeypatch.setattr(managed, "reported_quarter_selection", _preparation_window)
     monkeypatch.setattr(fid, "_download", _prepare_staged_supplement)
-    monkeypatch.setattr(fid, "classify_ir_file", _classify_supplement_prepared_object)
+    monkeypatch.setattr(managed, "classify_ir_file", _classify_supplement_prepared_object)
     monkeypatch.setattr("pipeline.managed_ir_sources._policy", _allow_managed_preparation_policy)
     monkeypatch.setattr(
         "pipeline.managed_ir_sources.classify_ir_file", _classify_supplement_prepared_object
@@ -676,10 +708,10 @@ def test_final_preparation_errors_report_staged_objects_and_direct_residue(
     monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db_path))
     request = _preparation_request()
     objects = root / ".tmp" / "managed_ir_staging" / request.attempt_id / "objects"
-    monkeypatch.setattr(fid, "authorize_stored_collection_target", _allow_preparation_policy)
-    monkeypatch.setattr(fid, "reported_quarter_selection", _preparation_window)
+    monkeypatch.setattr(managed, "authorize_stored_collection_target", _allow_preparation_policy)
+    monkeypatch.setattr(managed, "reported_quarter_selection", _preparation_window)
     monkeypatch.setattr(fid, "_download", _prepare_staged_object)
-    monkeypatch.setattr(fid, "classify_ir_file", _classify_prepared_object)
+    monkeypatch.setattr(managed, "classify_ir_file", _classify_prepared_object)
     if failure == "receipt":
         residue = objects.parent / ".staging_receipt.json.retained.tmp"
 
@@ -691,7 +723,7 @@ def test_final_preparation_errors_report_staged_objects_and_direct_residue(
                 residue_paths=(residue.name,),
             )
 
-        monkeypatch.setattr(fid, "_publish_attempt_text", fail_publish)
+        monkeypatch.setattr(managed, "_publish_attempt_text", fail_publish)
     else:
         residue = objects / ".validator.retained.tmp"
 
@@ -700,7 +732,7 @@ def test_final_preparation_errors_report_staged_objects_and_direct_residue(
                 "staged_object_invalid", remaining_paths=(str(residue),)
             )
 
-        monkeypatch.setattr(fid, "validate_prepared_staging", fail_validation)
+        monkeypatch.setattr(managed, "validate_prepared_staging", fail_validation)
 
     with pytest.raises(fid.IssuerDocumentPreparationError) as raised:
         fid.prepare_issuer_document_sources(request, state_root=root, db_path=db_path)
@@ -723,15 +755,15 @@ def test_staging_replay_error_reports_existing_objects_and_direct_residue(
     _prepare_staged_object("", objects, "")
     (staging / "staging_receipt.json").write_text("{}\n", encoding="utf-8")
     residue = objects / ".replay.retained.tmp"
-    monkeypatch.setattr(fid, "authorize_stored_collection_target", _allow_preparation_policy)
-    monkeypatch.setattr(fid, "reported_quarter_selection", _preparation_window)
+    monkeypatch.setattr(managed, "authorize_stored_collection_target", _allow_preparation_policy)
+    monkeypatch.setattr(managed, "reported_quarter_selection", _preparation_window)
 
     def fail_replay(*_args: object, **_kwargs: object) -> object:
         raise fid.PreparedIssuerDocumentPublisherError(
             "staging_receipt_invalid", remaining_paths=(str(residue),)
         )
 
-    monkeypatch.setattr(fid, "validate_prepared_staging", fail_replay)
+    monkeypatch.setattr(managed, "validate_prepared_staging", fail_replay)
     with pytest.raises(fid.IssuerDocumentPreparationError) as raised:
         fid.prepare_issuer_document_sources(request, state_root=root, db_path=db_path)
     assert raised.value.code == "staging_replay_invalid"
@@ -797,18 +829,29 @@ def test_cli_all_continues_after_acquisition_failure(
 
 def test_cli_reports_registration_failure(
     tmp_path: Path,
+    legacy_registration_db: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    db = tmp_path / "portfolio.db"
-    _make_policy_db(db, [("PORT", "portfolio")])
+    db = legacy_registration_db
     _write_manifest(tmp_path, "PORT", "https://issuer.example/Q1-2026.pdf")
 
     def download(_url: str, dest: Path, base: str) -> Path:
         return _staged_download(dest, base)
 
-    def categorize(_ticker: str, _root: Path, _db: Path, _calendar: str | None) -> int:
-        return 3
+    def categorize(
+        _ticker: str,
+        _root: Path,
+        _db: Path,
+        _calendar: str | None,
+        paths: list[Path],
+        _urls: dict[str, str],
+        _classifications: dict[Path, BoundIRClassification],
+    ) -> tuple[fid.LegacyCategorizationOutcome, ...]:
+        return tuple(
+            fid.LegacyCategorizationOutcome(str(path), "failed", "synthetic_categorization_failure")
+            for path in paths
+        )
 
     monkeypatch.setattr(fid, "_download", download)
     monkeypatch.setattr(fid, "_run_categorize", categorize)
@@ -830,7 +873,9 @@ def test_cli_reports_registration_failure(
     )
     summary = json.loads(capsys.readouterr().out)
     assert summary["downloaded"] == 1
-    assert summary["categorize_rc"] == 3
+    assert summary["categorize_rc"] == 1
+    assert summary["failed"] == 1
+    assert summary["legacy_outcomes"][0]["status"] == "failed"
     assert summary["status"] == "registration_failed"
 
 
@@ -920,28 +965,30 @@ def test_html_does_not_replace_binary_or_unapproved_document(
 @pytest.mark.parametrize("register", [False, True])
 def test_categorizer_success_requires_downloaded_source_registration(
     tmp_path: Path,
+    legacy_registration_db: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     register: bool,
 ) -> None:
-    db = tmp_path / "portfolio.db"
-    _make_policy_db(db, [("PORT", "portfolio")])
+    db = legacy_registration_db
     url = "https://issuer.example/Q1-2026.pdf"
     _write_manifest(tmp_path, "PORT", url)
-    _document_registration_table(db)
-    downloaded_path: list[Path] = []
 
     def download(_url: str, dest: Path, base: str) -> Path:
-        path = _staged_download(dest, base)
-        downloaded_path.append(path)
-        return path
+        return _staged_download(dest, base)
 
-    def categorize(_ticker: str, _root: Path, _db: Path, _calendar: str | None) -> int:
+    def categorize(
+        _ticker: str,
+        _root: Path,
+        _db: Path,
+        _calendar: str | None,
+        paths: list[Path],
+        _urls: dict[str, str],
+        _classifications: dict[Path, BoundIRClassification],
+    ) -> tuple[fid.LegacyCategorizationOutcome, ...]:
         if register:
-            _register_ir_document(
-                db, root=tmp_path, ticker="PORT", url=url, path=downloaded_path[-1]
-            )
-        return 0
+            _register_legacy_source(db, paths[0], url)
+        return tuple(fid.LegacyCategorizationOutcome(str(path), "registered") for path in paths)
 
     monkeypatch.setattr(fid, "_download", download)
     monkeypatch.setattr(fid, "_run_categorize", categorize)
@@ -1035,7 +1082,7 @@ def test_registered_prefix_does_not_starve_manifest_entry_after_attempt_budget(
         assert root == tmp_path
         return set(urls[:100])
 
-    monkeypatch.setattr(fid, "_registered_source_urls", registered_prefix)
+    monkeypatch.setattr(fid, "registered_source_urls", registered_prefix)
     monkeypatch.setattr(fid.time, "sleep", _no_sleep)
     downloaded: list[str] = []
 
@@ -1076,7 +1123,7 @@ def test_pending_retained_prefix_advances_and_replays_without_redownload(
         return None
 
     monkeypatch.setattr(fid, "reported_quarter_selection_in_connection", unknown_period)
-    monkeypatch.setattr(fid, "_registered_source_urls", _no_registered_urls)
+    monkeypatch.setattr(fid, "registered_source_urls", _no_registered_urls)
     monkeypatch.setattr(fid.time, "sleep", _no_sleep)
     calls: list[str] = []
 
@@ -1129,7 +1176,7 @@ def test_failed_prefix_advances_retry_cursor_to_later_manifest_url(
         encoding="utf-8",
     )
     monkeypatch.setattr(fid, "reported_quarter_selection_in_connection", _source_qualified_period)
-    monkeypatch.setattr(fid, "_registered_source_urls", _no_registered_urls)
+    monkeypatch.setattr(fid, "registered_source_urls", _no_registered_urls)
     monkeypatch.setattr(fid.time, "sleep", _no_sleep)
     calls: list[str] = []
 
@@ -1163,7 +1210,7 @@ def test_fetch_progress_keeps_legacy_url_map_and_separates_roots_and_issuers(
         for ticker in tickers:
             host = "other.example" if root == second_root else "issuer.example"
             _write_manifest(root, ticker, f"https://{host}/{ticker}.pdf")
-    monkeypatch.setattr(fid, "_registered_source_urls", _no_registered_urls)
+    monkeypatch.setattr(fid, "registered_source_urls", _no_registered_urls)
     monkeypatch.setattr(fid, "reported_quarter_selection_in_connection", _source_qualified_period)
     monkeypatch.setattr(fid.time, "sleep", _no_sleep)
 
@@ -1191,11 +1238,11 @@ def test_fetch_progress_keeps_legacy_url_map_and_separates_roots_and_issuers(
 
 def test_shared_staged_object_does_not_hide_unregistered_source(
     tmp_path: Path,
+    legacy_registration_db: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    db = tmp_path / "portfolio.db"
-    _make_policy_db(db, [("PORT", "portfolio")])
+    db = legacy_registration_db
     first = "https://issuer.example/first.pdf"
     second = "https://issuer.example/second.pdf"
     _write_manifest(tmp_path, "PORT", first)
@@ -1203,21 +1250,25 @@ def test_shared_staged_object_does_not_hide_unregistered_source(
     entries = json.loads(manifest.read_text())
     entries.append({"url": second, "doc_type": "press_release", "year": 2026, "quarter": "Q1"})
     manifest.write_text(json.dumps(entries))
-    _document_registration_table(db)
-    downloaded_path: list[Path] = []
 
     def download(_url: str, dest: Path, _base: str) -> Path:
         dest.mkdir(parents=True, exist_ok=True)
         path = dest / "same-bytes.pdf"
-        path.write_bytes(b"%PDF-1.4\nshared synthetic issuer document\n")
-        downloaded_path.append(path)
+        path.write_bytes(b"same synthetic source bytes")
         return path
 
-    def categorize(_ticker: str, _root: Path, _db: Path, _calendar: str | None) -> int:
-        _register_ir_document(
-            db, root=tmp_path, ticker="PORT", url=second, path=downloaded_path[-1]
-        )
-        return 0
+    def categorize(
+        _ticker: str,
+        _root: Path,
+        _db: Path,
+        _calendar: str | None,
+        paths: list[Path],
+        _urls: dict[str, str],
+        _classifications: dict[Path, BoundIRClassification],
+    ) -> tuple[fid.LegacyCategorizationOutcome, ...]:
+        assert len(paths) == 2 and paths[0] == paths[1]
+        _register_legacy_source(db, paths[0], second)
+        return tuple(fid.LegacyCategorizationOutcome(str(path), "registered") for path in paths)
 
     monkeypatch.setattr(fid, "_download", download)
     monkeypatch.setattr(fid, "_run_categorize", categorize)

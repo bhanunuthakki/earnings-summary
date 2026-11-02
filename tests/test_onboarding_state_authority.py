@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +11,7 @@ from typing import cast
 import pytest
 
 import db
-from execution import backfill_transcripts, process_ir_documents_state, save_fmp_data
+from execution import backfill_transcripts, save_fmp_data
 from pipeline import quarterly_refresh
 from pipeline.sec_xbrl import IngestStats
 
@@ -79,38 +78,6 @@ def test_transcript_retarget_preserves_explicit_database(
     assert Path(db.DB_PATH) == database
     assert root / "transcripts/raw" == getattr(backfill_transcripts, "_RAW_DIR")
     assert root / "transcripts/processed" == getattr(backfill_transcripts, "_PROCESSED_DIR")
-
-
-def test_ir_state_adapter_preserves_database_and_missing_summary_selector(
-    state: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    root, database = state
-    index = SimpleNamespace()
-    seen: list[str] = []
-    processor = SimpleNamespace(
-        PROJECT_ROOT=Path("."),
-        CACHE_DIR=Path("."),
-        index_manager=index,
-        main=lambda: seen.extend(sys.argv),
-    )
-    monkeypatch.setattr(process_ir_documents_state, "_load_processor", lambda: processor)
-    assert (
-        process_ir_documents_state.main(
-            [
-                "--ticker",
-                "NEWCO",
-                "--repo-root",
-                str(root),
-                "--db",
-                str(database),
-                "--regenerate-missing",
-            ]
-        )
-        == 0
-    )
-    assert Path(db.DB_PATH) == database
-    assert root == processor.PROJECT_ROOT
-    assert seen == ["process_ir_documents.py", "--ticker", "NEWCO", "--regenerate-missing"]
 
 
 def test_quarterly_sec_selection_does_not_depend_on_static_cik_map(

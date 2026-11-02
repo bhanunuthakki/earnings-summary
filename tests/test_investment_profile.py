@@ -10,21 +10,15 @@ from pydantic import ValidationError
 
 from research.investment_profile import (
     CompanyProfileLabel,
-    EtfProfileInputs,
-    EtfProfileLabel,
-    EtfStyleEvidence,
     InvestmentProfileSuggestion,
     LabelReviewAction,
     MoatAssessment,
     MoatEvidenceCoverage,
     MoatLevel,
     ProfileLabelState,
-    ProfileProjectionState,
     ValuationEvidence,
     derive_company_label_evidence,
-    derive_etf_label_evidence,
     project_company_profile,
-    project_etf_profile,
     record_label_review,
     resolve_label_presentations,
 )
@@ -338,96 +332,3 @@ def test_company_projection_recomputes_dcf_labels_without_regenerating_or_mutati
     assert first.refresh_fingerprint != second.refresh_fingerprint
     assert first.source_artifact_id == second.source_artifact_id == 7
     assert conn.execute("SELECT COUNT(*) FROM investment_profile_label_reviews").fetchone()[0] == 0
-
-
-def test_etf_seed_labels_are_derived_from_typed_fund_and_book_evidence() -> None:
-    evidence = derive_etf_label_evidence(
-        EtfProfileInputs(
-            profile_available=True,
-            asset_class="equity",
-            sector_label="Energy",
-            expense_ratio=0.001,
-            distribution_yield=0.035,
-            style_evidence_available=True,
-            style_loadings=[
-                EtfStyleEvidence(key="value", beta=0.48, r_squared=0.32),
-            ],
-            book_evidence_available=True,
-            diversification_multiplier=1.2,
-            overlap_multiplier=1.08,
-            sharpe_delta_bps=18.0,
-            whatif_evidence_available=True,
-            vol_before_ann=0.15,
-            vol_after_ann=0.14,
-        )
-    )
-
-    assert set(evidence) == {
-        EtfProfileLabel.FACTOR_SLEEVE,
-        EtfProfileLabel.THEMATIC_EXPOSURE,
-        EtfProfileLabel.DIVERSIFIER,
-        EtfProfileLabel.DEFENSIVE_HEDGE,
-        EtfProfileLabel.INCOME,
-        EtfProfileLabel.TACTICAL_CYCLICAL,
-    }
-    assert evidence[EtfProfileLabel.DIVERSIFIER].summary == (
-        "Low book correlation and limited look-through duplication"
-    )
-
-
-def test_etf_core_beta_requires_an_exact_broad_index_and_low_fee() -> None:
-    evidence = derive_etf_label_evidence(
-        EtfProfileInputs(
-            profile_available=True,
-            asset_class="equity",
-            benchmark_index="S&P 500 Index",
-            expense_ratio=0.0003,
-            style_evidence_available=True,
-            book_evidence_available=False,
-            whatif_evidence_available=False,
-        )
-    )
-    assert set(evidence) == {EtfProfileLabel.CORE_BETA}
-
-    unrecognized = derive_etf_label_evidence(
-        EtfProfileInputs(
-            profile_available=True,
-            asset_class="equity",
-            benchmark_index="An approximately broad benchmark",
-            expense_ratio=0.0003,
-            style_evidence_available=True,
-            book_evidence_available=False,
-            whatif_evidence_available=False,
-        )
-    )
-    assert EtfProfileLabel.CORE_BETA not in unrecognized
-
-
-def test_etf_projection_is_pending_without_evidence_and_owner_review_is_reused() -> None:
-    conn = _conn()
-    pending = project_etf_profile(conn, ticker="VDE", inputs=EtfProfileInputs())
-    assert pending.state is ProfileProjectionState.UNAVAILABLE
-    assert pending.evidence_coverage.value == "insufficient"
-    assert pending.labels == []
-
-    inputs = EtfProfileInputs(
-        profile_available=True,
-        distribution_yield=0.04,
-        style_evidence_available=False,
-        book_evidence_available=False,
-        whatif_evidence_available=False,
-    )
-    first = project_etf_profile(conn, ticker="VDE", inputs=inputs)
-    income = first.labels[0]
-    assert income.label is EtfProfileLabel.INCOME
-    record_label_review(
-        conn,
-        ticker="VDE",
-        label=income.label,
-        action=LabelReviewAction.RATIFY,
-        suggestion_fingerprint=income.suggestion_fingerprint,
-        evidence={"source_kind": income.source_kind},
-    )
-    ratified = project_etf_profile(conn, ticker="VDE", inputs=inputs)
-    assert ratified.state is ProfileProjectionState.OWNER_RATIFIED
-    assert ratified.labels[0].state is ProfileLabelState.OWNER_RATIFIED

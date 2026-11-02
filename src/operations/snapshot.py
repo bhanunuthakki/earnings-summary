@@ -414,8 +414,6 @@ def _runtime_state(
                 if expectation == "required_enabled"
                 else task_state == "Disabled"
                 if expectation == "required_disabled"
-                else task_state == "Missing"
-                if expectation == "absent_service_owned"
                 else None
             )
             attention_detail = None

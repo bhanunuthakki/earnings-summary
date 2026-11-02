@@ -46,7 +46,7 @@ _INFERRED_RE = re.compile(r"\s*\(inferred\)\s*$", re.IGNORECASE)
 
 @dataclass(frozen=True, slots=True)
 class ReconcileItem:
-    kind: str  # 'note' (musing/decision/intent) | 'theme' | 'falsifier'
+    kind: str  # 'note' (musing/decision/intent) | 'falsifier'
     item_id: int
     label: str
     body: str
@@ -77,22 +77,6 @@ def list_unreconciled(
                     label=str(row[1]),
                     body=str(row[2]),
                     source_ref=str(row[3] or ""),
-                )
-            )
-        for row in db_conn.execute(
-            """
-            SELECT id, scope_key, body_md FROM insight_notes
-            WHERE kind = 'theme' AND status = 'current'
-              AND json_extract(coalesce(meta_json,'{}'), '$.reconcile') IS NULL
-            ORDER BY id
-            """
-        ).fetchall():
-            items.append(
-                ReconcileItem(
-                    kind="theme",
-                    item_id=int(row[0]),
-                    label=str(row[1]),
-                    body=str(row[2]),
                 )
             )
         for row in db_conn.execute(
@@ -177,30 +161,6 @@ def reconcile_note(note_id: int, verdict: str, *, db_path: Path | str | None = N
             WHERE id = ?
             """,
             (verdict, stamp, status, stamp, note_id),
-        )
-        conn.commit()
-        return cur.rowcount > 0
-    finally:
-        conn.close()
-
-
-def reconcile_theme(insight_id: int, verdict: str, *, db_path: Path | str | None = None) -> bool:
-    """Stamp a verdict on a theme insight; non-live verdicts retire it."""
-    if verdict not in RECONCILE_VERDICTS:
-        raise ValueError(f"unknown verdict {verdict!r}; expected one of {RECONCILE_VERDICTS}")
-    stamp = now_iso()
-    conn = open_conn(db_path)
-    try:
-        cur = conn.execute(
-            """
-            UPDATE insight_notes
-            SET meta_json = json_set(coalesce(meta_json,'{}'),
-                                     '$.reconcile', ?, '$.reconciled_at', ?),
-                status = CASE WHEN ? = 'live' THEN status ELSE 'superseded' END,
-                updated_at = ?
-            WHERE id = ? AND kind = 'theme'
-            """,
-            (verdict, stamp, verdict, stamp, insight_id),
         )
         conn.commit()
         return cur.rowcount > 0

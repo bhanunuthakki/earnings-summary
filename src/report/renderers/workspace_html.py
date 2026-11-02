@@ -26,11 +26,9 @@ from __future__ import annotations
 
 import sqlite3
 from io import StringIO
-from pathlib import Path
 
 from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
 from pipeline.cc_overlay import CC_OVERLAY_JS
-from pipeline.you_said import render_you_said_strip, render_you_said_strip_for_path
 from report.artifacts import (
     RenderedReportBody,
     ReportInteractionManifest,
@@ -43,8 +41,6 @@ from report.renderers.workspace_comments import JS as COMMENTS_JS
 from report.renderers.workspace_data import (
     PanelAvailability,
     WorkspaceP3Panels,
-    load_graded_sell_base_rate,
-    load_workspace_p3_panels,
 )
 from report.renderers.workspace_dcf import JS as DCF_JS
 from report.renderers.workspace_decision_card import JS as DECISION_CARD_JS
@@ -77,6 +73,7 @@ from report.renderers.workspace_sections.boot import (
     _chat_drawer_shell,
     _comment_boot_data,
     _comment_sidebar_shell,
+    prepare_report_delivery,
 )
 from report.renderers.workspace_sections.chrome import (
     _decision_card_strip,
@@ -149,17 +146,12 @@ from report.renderers.workspace_sections.financials import (
     _validation_panel,
 )
 from report.renderers.workspace_sections.position import (
-    _position_coaching,
     _position_stat,
     _position_tab,
 )
 from report.renderers.workspace_sections.saydo import (
     _fmt_made_period,
     _outcome_pill,
-    _rating_pill,
-    _saydo_historical_ledger,
-    _saydo_print_vs_guide,
-    _saydo_summary_table,
     _saydo_tab,
     _saydo_verdicts_panel,
 )
@@ -191,6 +183,7 @@ from report.renderers.workspace_sections.thesis_risk import (
 from report.renderers.workspace_sections.valuation import _TIMES, _valuation_tab
 from report.renderers.workspace_styles import CHAT_CSS, COMMENTS_CSS, CSS, DCF_CSS
 from report.sections.p3_data import PeerCompRow
+from report.workspace_models import WorkspaceDelivery
 from ui.controls import controls_css, controls_js, icon_svg, k_empty
 from ui.living_grid import head_assets as _living_grid_head_assets
 from ui.source_chip import SOURCE_CHIP_JS
@@ -272,20 +265,15 @@ __all__ = [
     "_panel_head",
     "_peer_comp_panel",
     "_pos_of_card",
-    "_position_coaching",
     "_position_stat",
     "_position_tab",
     "_prompt_quality_panel",
     "_qa_roster_panel",
     "_qa_row",
     "_quarter_selector",
-    "_rating_pill",
     "_render_filing_intelligence",
     "_render_markdown",
     "_reread_strip",
-    "_saydo_historical_ledger",
-    "_saydo_print_vs_guide",
-    "_saydo_summary_table",
     "_saydo_tab",
     "_saydo_verdicts_panel",
     "_scenario_range_block",
@@ -334,7 +322,6 @@ __all__ = [
 def render(
     spec: ReportSpec,
     *,
-    conn: sqlite3.Connection | None = None,
     candidate_mode: bool = False,
     report_capability: str | None = None,
     generation_context_sha256: str | None = None,
@@ -343,65 +330,38 @@ def render(
         spec,
         render_report_body(
             spec,
-            conn=conn,
-            candidate_mode=candidate_mode,
-            report_capability=report_capability,
+            delivery=prepare_report_delivery(
+                spec, candidate_mode=candidate_mode, report_capability=report_capability
+            ),
             generation_context_sha256=generation_context_sha256,
         ),
+        candidate_mode=candidate_mode,
+        generation_context_sha256=generation_context_sha256,
     )
 
 
 def render_report_body(
     spec: ReportSpec,
     *,
-    conn: sqlite3.Connection | None = None,
-    candidate_mode: bool = False,
-    report_capability: str | None = None,
+    delivery: WorkspaceDelivery | None = None,
     generation_context_sha256: str | None = None,
 ) -> RenderedReportBody:
     """Render every applicable section without document-level chrome."""
-
-    # Same authority guard as builder.build_report: a caller-owned connection
-    # must point at the spec's database before ANY panel read runs, otherwise
-    # the panels would silently mix reads from a different database version
-    # than the one the snapshot/valuation sections were built against. A
-    # connection whose main database has no filename (a :memory: handle)
-    # PRAGMAs to an empty path — it can never serve a spec that names disk
-    # authority, so reject it here rather than letting the guard pass.
-    if conn is not None and spec.db_path is not None:
-        connected = next(
-            (row[2] for row in conn.execute("PRAGMA database_list") if row[1] == "main"), ""
-        )
-        if not connected:
-            raise ValueError(
-                "Report connection has no main database file; a transient "
-                "connection cannot serve a spec with a database path"
-            )
-        if Path(connected).resolve() != Path(spec.db_path).resolve():
-            raise ValueError("Report connection and database path disagree")
 
     body = StringIO()
     # Comments + chat boot data: inlined as JSON so the JS UI can render
     # pins without a server fetch. Server is needed for posting NEW
     # comments + chat, but read-only display works file://.
-    _comment_boot_data(
-        body,
-        spec,
-        candidate_mode=candidate_mode,
-        report_capability=report_capability,
-    )
+    _comment_boot_data(body, spec, delivery)
 
     # Resolve navigation before the shell so the persistent Work OS sidebar
     # can own the report's top-level destinations without changing pane ids.
-    # A caller-owned connection keeps panel reads on the same read snapshot as
-    # the rest of the report; otherwise fall back to the spec's db path.
-    if conn is not None:
-        p3 = load_workspace_p3_panels(spec.ticker, Path(spec.repo_root), conn=conn)
-    elif spec.db_path is not None:
-        p3 = load_workspace_p3_panels(spec.ticker, Path(spec.repo_root), db_path=Path(spec.db_path))
-    else:
-        p3 = load_workspace_p3_panels(spec.ticker, Path(spec.repo_root))
-    groups = _tab_groups(spec, p3, conn=conn)
+    p3 = (
+        spec.workspace.p3
+        if spec.workspace is not None
+        else WorkspaceP3Panels.empty(PanelAvailability.UNAVAILABLE)
+    )
+    groups = _tab_groups(spec, p3)
     section_refs = tuple(
         ReportSectionRef(section_id=sid, label=slabel, group_id=gid)
         for gid, _glabel, sections in groups
@@ -414,8 +374,11 @@ def render_report_body(
         )
     else:
         body.write('<div class="l1-root">')
-    _identity(body, spec, p3.saydo_verdicts)
-    if PanelAvailability.UNAVAILABLE in p3.availability.values():
+    _identity(body, spec, spec.saydo.verdicts)
+    if (
+        PanelAvailability.UNAVAILABLE in p3.availability.values()
+        or spec.saydo.verdicts_availability == "unavailable"
+    ):
         body.write(
             k_empty(
                 "Some supporting research data is unavailable for this report. Empty panels may be incomplete."
@@ -426,7 +389,7 @@ def render_report_body(
     _reread_strip(body, spec.synthesis)
 
     # P3 panel data (macro sensitivities, strategic targets, customer
-    # concentrations, lease ladder, decision history, say-do verdicts,
+    # concentrations, lease ladder, decision history,
     # peer comp, open notes) — pre-loaded once; the open-notes strip leads
     # the page (P4.4: builds lead with the owner's standing watch-items)
     # and the rest threads into the tab definitions.
@@ -591,7 +554,13 @@ def _tab_defs(
             "Earnings",
             len(spec.earnings.full_quarters) + len(spec.earnings.digest_quarters),
             lambda b: _earnings_tab(
-                b, spec.earnings, spec.financials, spec.qa_roster, spec.ticker, spec.repo_root
+                b,
+                spec.earnings,
+                spec.financials,
+                spec.qa_roster,
+                spec.ticker,
+                spec.repo_root,
+                audio_url=spec.workspace.earnings_audio_url if spec.workspace is not None else None,
             ),
         ),
         (
@@ -603,8 +572,8 @@ def _tab_defs(
         (
             "saydo",
             "Say · Do",
-            len(spec.saydo.cards),
-            lambda b: _saydo_tab(b, spec.saydo, spec, p3.saydo_verdicts),
+            len(spec.saydo.verdicts),
+            lambda b: _saydo_tab(b, spec.saydo),
         ),
         (
             "financials",
@@ -637,7 +606,6 @@ def _tab_defs(
             lambda b: _company_tab(
                 b,
                 spec.company_description,
-                spec.ir_docs,
                 spec.filing_intelligence,
                 p3.strategic_targets,
                 p3.customer_concentrations,
@@ -686,17 +654,7 @@ def _tab_defs(
             or bool(pos.recent_transactions or pos.open_decisions or pos.closed_decisions)
         )
     ) or (standing is not None and standing.rows):
-        db_path = Path(spec.db_path) if spec.db_path is not None else None
-        graded_sell_line = load_graded_sell_base_rate(spec.ticker, db_path, conn=conn)
-        # "You said" strip (owner-ratified design review, 2026-08-02):
-        # pre-computed here (not inside _position_tab) so the section stays a
-        # pure renderer over already-fetched data, matching graded_sell_line's
-        # own convention.
-        you_said_html = (
-            render_you_said_strip(conn, spec.ticker)
-            if conn is not None
-            else render_you_said_strip_for_path(db_path, spec.ticker)
-        )
+        you_said_html = spec.workspace.you_said_html if spec.workspace is not None else ""
         tabs.append(
             (
                 "position",
@@ -706,8 +664,6 @@ def _tab_defs(
                     b,
                     pos,
                     ticker=spec.ticker,
-                    position_review_count=p3.position_review_count,
-                    graded_sell_line=graded_sell_line,
                     standing_rules=standing,
                     you_said_html=you_said_html,
                 ),
@@ -719,12 +675,7 @@ def _tab_defs(
             "Sources",
             len(spec.appendix.transcripts) if spec.appendix else None,
             lambda b: _sources_tab(
-                b,
-                spec.provenance,
-                spec.appendix,
-                spec.repo_root,
-                conn=conn,
-                as_of=spec.generation_date,
+                b, spec.provenance, spec.appendix, spec.repo_root, spec.workspace
             ),
         )
     )

@@ -103,18 +103,18 @@
     },
     {
       "id": "etf-pairwise-incomplete-snapshot",
-      "request": "Compare SYNFUND_A and SYNFUND_B for overlapping holdings. Does the workup prove that half their portfolios overlap?",
+      "request": "Can these supplied ETF snapshots establish a portfolio diversification conclusion for my account?",
       "evidence": [
         "Synthetic issuer holdings A1, 2026-09-30: complete long-only snapshot, fractional weights X 0.40, Y 0.30, Z 0.30. All security identities match explicitly.",
         "Synthetic issuer holdings B1, 2026-09-30: top-holdings excerpt only, X 0.20 and Y 0.50. Remaining 0.30 is undisclosed. No other snapshot is available.",
-        "Synthetic direct-book workup W1: the book owns X only; direct_overlap_pct for SYNFUND_A is 0.40. No full-account snapshot is available."
+        "No current full-account portfolio or risk snapshot is supplied. No active ETF workup or saved-history reader is available."
       ],
       "expected": [
-        "Select ETF comparison and distinguish pairwise weighted overlap from fund-versus-direct-book membership overlap and return correlation.",
-        "Using cited fractional weights, sum min(0.40,0.20) + min(0.30,0.50) = 0.50 observed matched weight. Label it a lower bound with 0.30 of B undisclosed, not exact total overlap. Do not renormalize the excerpt.",
-        "The 0.40 workup metric is a different fund-versus-book calculation. Do not infer personal-book concentration or sizing without full-account context."
+        "Do not produce a standalone pairwise ETF workup or treat the incomplete snapshot as complete exposure evidence.",
+        "State that no account-level diversification conclusion follows without current supported portfolio and risk evidence; do not start new ETF collection to fill the gap.",
+        "If a supported portfolio view is later supplied, limit commentary to its covered positions and dates. Do not infer sizing or full-account concentration from these issuer snapshots."
       ],
-      "held_out_request": "How much exposure do these two funds share, and what can their incomplete holdings actually establish?"
+      "held_out_request": "Based on these two partial files, should I change my account for diversification?"
     },
     {
       "id": "historical-preview-original-cutoff",

@@ -13,15 +13,16 @@ from decimal import Decimal
 from itertools import pairwise
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
-from provenance.fact_read_model import FactReadModel
+from provenance.fact_read_model import FactAdmissionError
 from provenance.financial_statement_admission import (
     ReviewedFinancialStatementRole,
     verify_reviewed_financial_role,
 )
-from provenance.metric_ontology import MetricOntology
+from provenance.source_fact_publication import publication_verification_scope
+from sources.canonical_financial_series import CanonicalFinancialSeriesReader
 
 FinancialConcept = Literal[
     "revenue", "gross_profit", "operating_income", "free_cash_flow", "net_income"
@@ -163,7 +164,7 @@ class CanonicalFinancialHistory(BaseModel):
     ticker: str
     as_of: date
     references: tuple[GrowthFactReference, ...] = ()
-    unresolved: tuple[tuple[str, date], ...] = ()
+    unresolved: tuple[tuple[str, date | None], ...] = ()
     reason_codes: tuple[str, ...] = ()
 
 
@@ -183,164 +184,155 @@ def read_financial_history(
     ticker = ticker.upper()
     cutoff = datetime.combine(as_of, time.max, tzinfo=UTC)
     facts: list[GrowthFactReference] = []
-    unresolved: list[tuple[str, date]] = []
+    unresolved: list[tuple[str, date | None]] = []
+    integrity_failure = False
     original_factory = conn.row_factory
-    owns_snapshot = not conn.in_transaction
     try:
-        if owns_snapshot:
-            conn.execute("BEGIN")
-        rows = conn.execute(
-            "SELECT DISTINCT binding.canonical_metric_cell_id,"
-            "CASE WHEN source.concept_namespace='urn:earnings-summary:legacy:financial' "
-            "THEN source.concept_name ELSE json_extract(definition.scope_constraints_json,'$.financial_statement_concept') END,source.period_end "
-            "FROM fact_cell_canonical_binding_revisions binding "
-            "JOIN fact_cells_v2 source ON source.fact_cell_id=binding.fact_cell_id "
-            "JOIN canonical_metric_cells target ON target.canonical_metric_cell_id=binding.canonical_metric_cell_id "
-            "JOIN canonical_metric_definition_revisions definition ON definition.metric_id=target.metric_id "
-            "JOIN fact_observations_v2 observation "
-            "ON observation.observation_id=binding.source_observation_id "
-            "JOIN evidence_document_versions document "
-            "ON document.document_version_id=observation.document_version_id "
-            "WHERE document.ticker=? "
-            "AND ((source.concept_namespace='urn:earnings-summary:legacy:financial' "
-            "AND source.concept_name IN (SELECT value FROM json_each(?))) "
-            "OR json_extract(definition.scope_constraints_json,'$.financial_statement_concept') "
-            "IN (SELECT value FROM json_each(?))) "
-            "AND binding.binding_status='bound' "
-            "AND julianday(binding.recorded_at)<=julianday(?) AND julianday(definition.recorded_at)<=julianday(?) "
-            "AND julianday(binding.knowledge_at)<=julianday(?) AND julianday(definition.knowledge_at)<=julianday(?) "
-            "ORDER BY source.concept_name,binding.canonical_metric_cell_id",
-            (
-                ticker,
-                json.dumps(concepts),
-                json.dumps(concepts),
-                cutoff.isoformat(),
-                cutoff.isoformat(),
-                cutoff.isoformat(),
-                cutoff.isoformat(),
-            ),
-        ).fetchall()
-        resolver = CanonicalFactResolutionEngine(conn)
-        reader = FactReadModel(conn)
-        ontology = MetricOntology(conn)
-        for cell_id, concept, period_end in rows:
-            candidate_end = date.fromisoformat(str(period_end)[:10])
-            if candidate_end > as_of:
-                continue
-            resolution = resolver.as_known(str(cell_id), cutoff)
-            if (
-                resolution is None
-                or resolution.status != "resolved"
-                or resolution.selected_observation_id is None
-            ):
-                unresolved.append((str(concept), candidate_end))
-                continue
-            bundle = reader.provenance_bundle(resolution.selected_observation_id, cutoff=cutoff)
-            value = bundle.observation
-            if bundle.cell.dimensions or bundle.cell.scope_security_id is not None:
-                continue
-            if (
-                bundle.evidence is None
-                or value.decimal_value is None
-                or value.period_start is None
-                or value.currency is None
-            ):
-                unresolved.append((str(concept), candidate_end))
-                continue
-            if value.period_end.date() > as_of:
-                continue
-            row = conn.execute(
-                "SELECT metric_id FROM canonical_metric_cells WHERE canonical_metric_cell_id=?",
-                (cell_id,),
-            ).fetchone()
-            if row is None:
-                raise ValueError("canonical cell disappeared")
-            metric_id = str(row[0])
-            definition = ontology.metric_definition_as_known(metric_id, cutoff)
-            if definition is None or definition.lifecycle != "active":
-                unresolved.append((str(concept), candidate_end))
-                continue
-            binding = ontology.binding_as_known(value.observation_id, cutoff)
-            admitted_definition = (
-                ontology.metric_definition_as_known(metric_id, binding.recorded_at)
-                if binding is not None
-                else None
-            )
-            semantic_fields = {
-                "lifecycle",
-                "definition_text",
-                "value_kind",
-                "period_kind",
-                "unit_family",
-                "accounting_basis",
-                "scope_constraints",
-            }
-            if (
-                binding is None
-                or binding.binding_status != "bound"
-                or binding.canonical_metric_cell_id != str(cell_id)
-                or admitted_definition is None
-                or admitted_definition.model_dump(include=semantic_fields)
-                != definition.model_dump(include=semantic_fields)
-                or definition.value_kind != "numeric"
-                or definition.period_kind != "duration"
-                or definition.unit_family != "currency"
-                or definition.accounting_basis != bundle.cell.accounting_basis
-                or definition.scope_constraints.get("reporting_entity_id")
-                != bundle.cell.reporting_entity_id
-                or definition.scope_constraints.get("consolidation_scope")
-                != bundle.cell.consolidation_scope
-            ):
-                unresolved.append((str(concept), candidate_end))
-                continue
-            scope_label = None
-            if definition.scope_constraints.get("financial_statement_concept") is not None:
-                reviews = definition.scope_constraints.get("financial_statement_reviews")
+        conn.row_factory = sqlite3.Row
+        with publication_verification_scope(conn):
+            rows = conn.execute(
+                "SELECT DISTINCT binding.canonical_metric_cell_id,"
+                "CASE WHEN source.concept_namespace='urn:earnings-summary:legacy:financial' "
+                "THEN source.concept_name ELSE json_extract(definition.scope_constraints_json,'$.financial_statement_concept') END,source.period_end,target.metric_id "
+                "FROM fact_cell_canonical_binding_revisions binding "
+                "JOIN fact_cells_v2 source ON source.fact_cell_id=binding.fact_cell_id "
+                "JOIN canonical_metric_cells target ON target.canonical_metric_cell_id=binding.canonical_metric_cell_id "
+                "JOIN canonical_metric_definition_revisions definition ON definition.metric_id=target.metric_id "
+                "JOIN fact_observations_v2 observation "
+                "ON observation.observation_id=binding.source_observation_id "
+                "JOIN evidence_document_versions document "
+                "ON document.document_version_id=observation.document_version_id "
+                "WHERE document.ticker=? "
+                "AND ((source.concept_namespace='urn:earnings-summary:legacy:financial' "
+                "AND source.concept_name IN (SELECT value FROM json_each(?))) "
+                "OR json_extract(definition.scope_constraints_json,'$.financial_statement_concept') "
+                "IN (SELECT value FROM json_each(?))) "
+                "AND binding.binding_status='bound' "
+                "AND julianday(binding.recorded_at)<=julianday(?) AND julianday(definition.recorded_at)<=julianday(?) "
+                "AND julianday(binding.knowledge_at)<=julianday(?) AND julianday(definition.knowledge_at)<=julianday(?) "
+                "ORDER BY source.concept_name,binding.canonical_metric_cell_id",
+                (
+                    ticker,
+                    json.dumps(concepts),
+                    json.dumps(concepts),
+                    cutoff.isoformat(),
+                    cutoff.isoformat(),
+                    cutoff.isoformat(),
+                    cutoff.isoformat(),
+                ),
+            ).fetchall()
+            resolver = CanonicalFactResolutionEngine(conn)
+            series = CanonicalFinancialSeriesReader(conn, ticker, cutoff=cutoff)
+            reads = resolver.read_as_known_outcomes(tuple(str(row[0]) for row in rows), cutoff)
+            for (cell_id, concept, period_end, metric_id), read in zip(rows, reads, strict=True):
                 try:
-                    if (
-                        not isinstance(reviews, dict)
-                        or definition.scope_constraints.get("financial_statement_concept")
-                        != concept
-                    ):
-                        raise ValueError("financial statement review is missing")
-                    role = ReviewedFinancialStatementRole.model_validate(
-                        reviews.get(value.observation_id)
-                    )
-                    verify_reviewed_financial_role(conn, role, bundle, cutoff=cutoff)
-                    scope_label = role.context.source_scope_label
-                except (ValueError, RuntimeError):
+                    candidate_end = date.fromisoformat(str(period_end)[:10])
+                except ValueError:
+                    unresolved.append((str(concept), None))
+                    integrity_failure = True
+                    continue
+                if candidate_end > as_of:
+                    continue
+                if (
+                    read.failure is not None
+                    or read.unavailable_reason == "canonical_commitment_invalid"
+                ):
+                    integrity_failure = True
                     unresolved.append((str(concept), candidate_end))
                     continue
-            elif bundle.cell.consolidation_scope == "consolidated":
-                scope_label = "consolidated"
-            # The existing legacy analytics slice retains its historical
-            # explicit 'other' coordinate without claiming decision grade.
-            # Native taxonomy candidates require the review above.
-            facts.append(
-                GrowthFactReference.model_validate(
-                    {
-                        "concept": concept,
-                        "metric_id": metric_id,
-                        "metric_definition_revision_id": definition.metric_definition_revision_id,
-                        "canonical_metric_cell_id": str(cell_id),
-                        "canonical_resolution_revision_id": resolution.canonical_resolution_revision_id,
-                        "observation_id": value.observation_id,
-                        "observation_payload_sha256": value.observation_payload_sha256,
-                        "document_version_id": bundle.evidence.document_version_id,
-                        "source_locator": bundle.evidence.source_locator.root,
-                        "reporting_entity_id": bundle.cell.reporting_entity_id,
-                        "period_start": value.period_start.date(),
-                        "period_end": value.period_end.date(),
-                        "currency": value.currency,
-                        "unit": value.unit_key,
-                        "accounting_basis": bundle.cell.accounting_basis,
-                        "consolidation_scope": bundle.cell.consolidation_scope,
-                        "source_scope_label": scope_label,
-                        "value": value.decimal_value,
-                    }
+                resolution = read.resolution
+                if (
+                    resolution is None
+                    or resolution.status != "resolved"
+                    or resolution.selected_observation_id is None
+                ):
+                    unresolved.append((str(concept), candidate_end))
+                    continue
+                bundle = read.bundle
+                if bundle is None:
+                    unresolved.append((str(concept), candidate_end))
+                    continue
+                value = bundle.observation
+                if bundle.cell.dimensions or bundle.cell.scope_security_id is not None:
+                    continue
+                if (
+                    bundle.evidence is None
+                    or value.decimal_value is None
+                    or value.period_start is None
+                    or value.currency is None
+                ):
+                    unresolved.append((str(concept), candidate_end))
+                    continue
+                if value.period_end.date() > as_of:
+                    continue
+                definition, admitted = series.financial_definition_admission(
+                    str(cell_id), str(metric_id), bundle
                 )
+                if definition is None or not admitted:
+                    unresolved.append((str(concept), candidate_end))
+                    continue
+                scope_label = None
+                if definition.scope_constraints.get("financial_statement_concept") is not None:
+                    reviews = definition.scope_constraints.get("financial_statement_reviews")
+                    try:
+                        if (
+                            not isinstance(reviews, dict)
+                            or definition.scope_constraints.get("financial_statement_concept")
+                            != concept
+                        ):
+                            raise ValueError("financial statement review is missing")
+                        role = ReviewedFinancialStatementRole.model_validate(
+                            reviews.get(value.observation_id)
+                        )
+                        verify_reviewed_financial_role(conn, role, bundle, cutoff=cutoff)
+                        scope_label = role.context.source_scope_label
+                    except (ValueError, FactAdmissionError):
+                        unresolved.append((str(concept), candidate_end))
+                        continue
+                elif bundle.cell.consolidation_scope == "consolidated":
+                    scope_label = "consolidated"
+                # The existing legacy analytics slice retains its historical
+                # explicit 'other' coordinate without claiming decision grade.
+                # Native taxonomy candidates require the review above.
+                try:
+                    fact = GrowthFactReference.model_validate(
+                        {
+                            "concept": concept,
+                            "metric_id": metric_id,
+                            "metric_definition_revision_id": definition.metric_definition_revision_id,
+                            "canonical_metric_cell_id": str(cell_id),
+                            "canonical_resolution_revision_id": resolution.canonical_resolution_revision_id,
+                            "observation_id": value.observation_id,
+                            "observation_payload_sha256": value.observation_payload_sha256,
+                            "document_version_id": bundle.evidence.document_version_id,
+                            "source_locator": bundle.evidence.source_locator.root,
+                            "reporting_entity_id": bundle.cell.reporting_entity_id,
+                            "period_start": value.period_start.date(),
+                            "period_end": value.period_end.date(),
+                            "currency": value.currency,
+                            "unit": value.unit_key,
+                            "accounting_basis": bundle.cell.accounting_basis,
+                            "consolidation_scope": bundle.cell.consolidation_scope,
+                            "source_scope_label": scope_label,
+                            "value": value.decimal_value,
+                        }
+                    )
+                except ValidationError:
+                    unresolved.append((str(concept), candidate_end))
+                    integrity_failure = True
+                    continue
+                facts.append(fact)
+            return CanonicalFinancialHistory(
+                ticker=ticker,
+                as_of=as_of,
+                references=tuple(facts),
+                unresolved=tuple(unresolved),
+                reason_codes=("canonical_financial_evidence_unavailable_or_invalid",)
+                if integrity_failure
+                else (),
             )
-    except (sqlite3.Error, ValueError, RuntimeError):
+
+    except sqlite3.Error:
         return CanonicalFinancialHistory(
             ticker=ticker,
             as_of=as_of,
@@ -348,11 +340,6 @@ def read_financial_history(
         )
     finally:
         conn.row_factory = original_factory
-        if owns_snapshot and conn.in_transaction:
-            conn.rollback()
-    return CanonicalFinancialHistory(
-        ticker=ticker, as_of=as_of, references=tuple(facts), unresolved=tuple(unresolved)
-    )
 
 
 def read_growth_financials(
@@ -370,7 +357,8 @@ def read_growth_financials(
         )
     result = calculate_growth_financials(history.ticker, as_of, history.references)
     if result.status == "available" and any(
-        end >= min(item.period_end for item in result.references if item.concept == concept)
+        end is None
+        or end >= min(item.period_end for item in result.references if item.concept == concept)
         for concept, end in history.unresolved
     ):
         return result.model_copy(

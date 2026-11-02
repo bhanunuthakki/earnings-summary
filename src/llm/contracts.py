@@ -12,34 +12,6 @@ from typing import Literal, NotRequired, Self, TypedDict
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
 
-class ArtifactBriefPayload(TypedDict):
-    takeaways: list[str]
-    bull: NotRequired[str]
-    bear: NotRequired[str]
-    changes_mind: NotRequired[str]
-    second_order: NotRequired[str]
-    portfolio_map: NotRequired[str]
-
-
-class DecisionExtractionPayload(TypedDict):
-    ticker: str | None
-    direction: str | None
-    size_pct: NotRequired[float | None]
-    conviction: NotRequired[str | None]
-    falsifier: NotRequired[str | None]
-
-
-class IntentPayload(TypedDict):
-    intent: Literal["observation", "wondering", "brief_artifact", "stress_artifact"]
-    claim: NotRequired[str]
-    ticker: NotRequired[str | None]
-
-
-class ResearchTriagePayload(TypedDict):
-    route: Literal["answer_now", "belief_candidate", "research_task"]
-    why: NotRequired[str]
-
-
 class ResearchAssessPayload(TypedDict):
     refuted: bool
     confidence: Literal["high", "medium", "low"]
@@ -66,18 +38,6 @@ class ThesisEntryPayload(TypedDict):
 class QualityScorePayload(TypedDict):
     id: int
     quality_score: float
-
-
-class BehaviorCitationPayload(TypedDict):
-    decision_id: int
-    outcome: Literal["correct", "wrong", "mixed", "unfalsifiable"]
-
-
-class BehaviorRulePayload(TypedDict):
-    key: str
-    rule_text: str
-    citations: list[BehaviorCitationPayload]
-    confidence_note: NotRequired[str]
 
 
 class ExitPostmortemPayload(TypedDict):
@@ -117,11 +77,6 @@ class TenetPayload(TypedDict):
     citations: list[int | str]
 
 
-class ThemeSynthesisPayload(TypedDict):
-    stance: str
-    citations: list[int | str]
-
-
 class TopicVerdictPayload(TypedDict):
     relevant: bool
     rationale: str
@@ -134,16 +89,6 @@ class ToneVerdictPayload(TypedDict):
 
 class TranscriptTonePayload(TypedDict):
     tone: dict[str, ToneVerdictPayload]
-
-
-class TriageSuggestionPayload(TypedDict):
-    intent: str
-    confidence: Literal["high", "low"]
-    reason: NotRequired[str]
-
-
-class AnnualLetterPayload(TypedDict):
-    letter_md: str
 
 
 class _ClosedPayload(BaseModel):
@@ -264,26 +209,18 @@ class DcfAssumptionsPayload(_ClosedPayload):
         return self
 
 
-ARTIFACT_BRIEF_SCHEMA = TypeAdapter(ArtifactBriefPayload)
-DECISION_EXTRACTION_SCHEMA = TypeAdapter(DecisionExtractionPayload)
-INTENT_SCHEMA = TypeAdapter(IntentPayload)
-RESEARCH_TRIAGE_SCHEMA = TypeAdapter(ResearchTriagePayload)
 RESEARCH_ASSESS_SCHEMA = TypeAdapter(ResearchAssessPayload)
 RESEARCH_NARRATIVE_SCHEMA = TypeAdapter(ResearchNarrativePayload)
 RESEARCH_CODE_SPEC_SCHEMA = TypeAdapter(ResearchCodeSpecPayload)
 THESIS_ENTRY_SCHEMA = TypeAdapter(ThesisEntryPayload)
 QUALITY_SCORE_BATCH_SCHEMA = TypeAdapter(list[QualityScorePayload])
-BEHAVIOR_RULE_BATCH_SCHEMA = TypeAdapter(list[BehaviorRulePayload])
 EXIT_POSTMORTEM_SCHEMA = TypeAdapter(ExitPostmortemPayload)
 SEMANTIC_TENSION_SCHEMA = TypeAdapter(SemanticTensionPayload)
 SESSION_CANDIDATE_BATCH_SCHEMA = TypeAdapter(list[SessionCandidatePayload])
 TENET_ACCOUNTABILITY_SCHEMA = TypeAdapter(TenetAccountabilityPayload)
 TENET_BATCH_SCHEMA = TypeAdapter(list[TenetPayload])
-THEME_SYNTHESIS_SCHEMA = TypeAdapter(ThemeSynthesisPayload)
 TRANSCRIPT_TONE_SCHEMA = TypeAdapter(TranscriptTonePayload)
 TRANSCRIPT_TOPIC_SCHEMA = TypeAdapter(dict[str, TopicVerdictPayload])
-TRIAGE_SUGGESTION_SCHEMA = TypeAdapter(TriageSuggestionPayload)
-ANNUAL_LETTER_SCHEMA = TypeAdapter(AnnualLetterPayload)
 TRANSCRIPT_METADATA_SCHEMA = TypeAdapter(TranscriptMetadataPayload)
 PRESSURE_TEST_SCHEMA = TypeAdapter(PressureTestPayload)
 RISK_FACTOR_CATEGORIES_SCHEMA = TypeAdapter(dict[str, RiskFactorCategory])

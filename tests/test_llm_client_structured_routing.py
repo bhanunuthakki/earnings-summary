@@ -38,7 +38,10 @@ def test_qa_topics_recovers_via_one_retry(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_qa_topics_raises_loudly_on_double_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(structured, "call_llm", lambda prompt, **_kw: "not json at all")
+    def malformed_response(_prompt: str, **_kwargs: object) -> str:
+        return "not json at all"
+
+    monkeypatch.setattr(structured, "call_llm", malformed_response)
     with pytest.raises(StructuredParseError):
         generate_qa_topics("GOOG", "Q1 2026", _Q)
 

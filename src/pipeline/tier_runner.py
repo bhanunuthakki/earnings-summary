@@ -16,15 +16,12 @@ write to the DB and does NOT trigger any pipeline. Callers (the daily worker,
 the new weekly/monthly cron entries, the dashboard tier-coverage strip) take
 the returned list and route it into their own work.
 
-Two helpers, same shape:
+One helper:
 
     tickers_due_for_refresh(repo_root, 'daily' | 'weekly' | 'monthly')
         Reads tracked_companies.last_built_at against the tier's cadence rule.
 
-    tickers_due_for_lens_regen(repo_root, lens_name, 'daily' | 'weekly' | 'monthly')
-        Reads llm_artifacts.generated_at scoped to the lens purpose.
-
-Cadence rule (per tier, applied uniformly to either refresh or lens regen):
+Cadence rule (per tier):
 
     cadence='daily'     P1: always due
                         P2: due if last_event > 7d ago
@@ -99,61 +96,6 @@ def tickers_due_for_refresh(
         ).fetchall()
 
     return _filter_due(rows, thresholds, now, "last_built_at")
-
-
-def tickers_due_for_lens_regen(
-    repo_root: Path,
-    lens_name: str,
-    cadence: Cadence,
-    *,
-    now: datetime | None = None,
-) -> list[str]:
-    """Tickers whose lens artifact (purpose='lens:<lens_name>') is due for regen.
-
-    Joins tracked_companies → llm_artifacts on (ticker, purpose, current row).
-    A ticker with no cached artifact for this lens is always due. Returns a
-    sorted list of UPPERCASE tickers.
-    """
-    db_path = repo_root / "data" / "portfolio.db"
-    if not db_path.exists():
-        return []
-    now = now if now is not None else datetime.now()
-    thresholds = _DUE_THRESHOLDS_DAYS[cadence]
-    purpose = f"lens:{lens_name}"
-
-    with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
-        conn.row_factory = sqlite3.Row
-        if not _has_columns(conn, "tracked_companies", {"ticker", "list_type"}):
-            return []
-        if not _has_table(conn, "llm_artifacts"):
-            # No artifact store yet — every tracked ticker is "due" since
-            # nothing has been generated.
-            rows = conn.execute(
-                "SELECT ticker, list_type, NULL AS last_generated "
-                "FROM tracked_companies WHERE archived_at IS NULL "
-                "ORDER BY ticker"
-            ).fetchall()
-            return _filter_due(rows, thresholds, now, "last_generated")
-
-        rows = conn.execute(
-            """
-            SELECT tc.ticker,
-                   tc.list_type,
-                   (
-                     SELECT MAX(a.generated_at)
-                     FROM llm_artifacts a
-                     WHERE a.ticker = tc.ticker
-                       AND a.purpose = ?
-                       AND a.superseded_by_id IS NULL
-                   ) AS last_generated
-            FROM tracked_companies tc
-            WHERE tc.archived_at IS NULL
-            ORDER BY tc.ticker
-            """,
-            (purpose,),
-        ).fetchall()
-
-    return _filter_due(rows, thresholds, now, "last_generated")
 
 
 def _filter_due(

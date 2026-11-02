@@ -79,8 +79,28 @@ def _parse_args() -> argparse.Namespace:
         "--repo-root",
         type=Path,
         default=PROJECT_ROOT,
-        help="Repo root whose data/portfolio.db the eval compiles + executes "
-        "against and persists into. Default: this repo.",
+        help="Source/state root for the requested evaluation. Database authority is separate.",
+    )
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=None,
+        help="Explicit existing database; otherwise use configured authority.",
+    )
+    parser.add_argument(
+        "--source-db",
+        type=Path,
+        help="Transcript audit only: explicit read-only registered-source database.",
+    )
+    parser.add_argument(
+        "--source-state-root",
+        type=Path,
+        help="Transcript audit only: explicit read-only original-source state root.",
+    )
+    parser.add_argument(
+        "--proof-state-root",
+        type=Path,
+        help="Native transcript audit only: isolated private-gold and proof fixture root.",
     )
     parser.add_argument(
         "--golden",
@@ -143,17 +163,6 @@ def _parse_args() -> argparse.Namespace:
         "lacks a real golden/audit/outcome/meta eval. No LLM spend.",
     )
     return parser.parse_args()
-
-
-def _sync_db_to_repo(repo_root: Path) -> None:
-    """Point the db module at --repo-root so the llm_calls ledger rows the
-    eval's calls produce land in the SAME portfolio.db the eval reads and
-    persists to (mirrors build_artifacts.py)."""
-    import db
-
-    db.PROJECT_ROOT = str(repo_root)
-    db.DATA_DIR = str(repo_root / "data")
-    db.DB_PATH = str(repo_root / "data" / "portfolio.db")
 
 
 def _run_purpose(args: argparse.Namespace, *, repo_root: Path, db_path: Path) -> EvalRunSummary:
@@ -284,6 +293,25 @@ def _run_purpose(args: argparse.Namespace, *, repo_root: Path, db_path: Path) ->
             limit=args.limit,
             include_answer_cases=not args.no_judge,
         )
+    elif args.purpose == "transcript_summary_claim_audit":
+        from evals.ask_citations import run_document_narrative_eval
+
+        golden_path = (
+            args.golden or (PROJECT_ROOT / "evals" / "golden" / "transcript_summary_grounding.json")
+        ).resolve()
+        context_path = (
+            PROJECT_ROOT / "evals" / "golden" / "transcript_summary_grounding_context.json"
+        )
+        summary = run_document_narrative_eval(
+            db_path=db_path,
+            golden_path=golden_path,
+            context_golden_path=context_path,
+            code_root=PROJECT_ROOT,
+            limit=args.limit,
+            source_db_path=args.source_db,
+            source_state_root=args.source_state_root,
+            proof_state_root=args.proof_state_root,
+        )
     elif args.purpose == "ask_claim_audit":
         from evals.ask_claim_audit import (
             DEFAULT_GOLDEN_RELPATH as CLAIM_AUDIT_GOLDEN,
@@ -346,7 +374,38 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     args = _parse_args()
     repo_root = args.repo_root.resolve()
-    db_path = repo_root / "data" / "portfolio.db"
+    if any(
+        value is not None
+        for value in (args.source_db, args.source_state_root, args.proof_state_root)
+    ) and (
+        args.purpose != "transcript_summary_claim_audit"
+        or args.coverage
+        or args.coverage_gate
+        or args.source_db is None
+        or args.source_state_root is None
+        or args.proof_state_root is None
+    ):
+        print(
+            "ERROR: --source-db, --source-state-root and --proof-state-root must be supplied together "
+            "for --purpose transcript_summary_claim_audit.",
+            file=sys.stderr,
+        )
+        return 1
+    if args.source_db is not None and args.db is None:
+        print(
+            "ERROR: native transcript evaluation requires an explicit isolated --db.",
+            file=sys.stderr,
+        )
+        return 1
+    from db_paths import db_path_context, require_db_path
+
+    try:
+        db_path = require_db_path(args.db)
+    except (OSError, RuntimeError) as exc:
+        if not (args.coverage or args.coverage_gate):
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        db_path = args.db or (repo_root / ".tmp/unavailable-eval-observation.sqlite")
 
     if args.coverage or args.coverage_gate:
         # Observability only — works without a DB (registry-derived universe;
@@ -373,7 +432,6 @@ def main() -> int:
     if not db_path.exists():
         print(f"ERROR: no DB at {db_path}", file=sys.stderr)
         return 1
-    _sync_db_to_repo(repo_root)
 
     from evals.harness import EvalAbortError, combine_repeats, persist_summary
 
@@ -382,9 +440,11 @@ def main() -> int:
         return 1
     noise: dict[str, object] | None = None
     try:
-        runs = [
-            _run_purpose(args, repo_root=repo_root, db_path=db_path) for _ in range(args.repeats)
-        ]
+        with db_path_context(db_path):
+            runs = [
+                _run_purpose(args, repo_root=repo_root, db_path=db_path)
+                for _ in range(args.repeats)
+            ]
     except (EvalAbortError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

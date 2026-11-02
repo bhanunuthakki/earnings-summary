@@ -9,15 +9,10 @@ the downside-skew case, and the point-estimate fallback.
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from dcf.scenario_reward import (  # noqa: E402
+from dcf.scenario_reward import (
     SCENARIO_PROBABILITIES,
     parse_scenario_fair_values,
     scenario_reward,

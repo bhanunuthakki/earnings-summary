@@ -24,16 +24,11 @@ Weighted toward the failure modes the scoping doc calls out explicitly
 from __future__ import annotations
 
 import sqlite3
-import sys
-from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from filings import guidance_lifecycle as gl  # noqa: E402
-from filings.guidance_lifecycle import (  # noqa: E402
+from filings import guidance_lifecycle as gl
+from filings.guidance_lifecycle import (
     GUIDANCE_WAVE_KEY,
     MDNA_WAVE_KEY,
     apply_wave_suppression,
@@ -43,8 +38,8 @@ from filings.guidance_lifecycle import (  # noqa: E402
     looks_like_guidance_heading,
     write_guidance_events,
 )
-from filings.metric_lifecycle import StandardTransitionCorpus  # noqa: E402
-from filings.models import HardStopError  # noqa: E402
+from filings.metric_lifecycle import StandardTransitionCorpus
+from filings.models import HardStopError
 
 _SCHEMA = """
 CREATE TABLE transcripts (

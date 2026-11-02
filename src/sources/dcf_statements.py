@@ -15,6 +15,7 @@ from dcf.primary_fact_overlay import Statement, primary_source_eligible, stateme
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.fact_read_model import ProvenanceBundle
 from provenance.metric_ontology import MetricOntology
+from provenance.source_fact_publication import publication_verification_scope
 
 _STATEMENTS: tuple[Statement, ...] = ("income", "balance", "cash_flow")
 _MAPPING = {
@@ -354,85 +355,86 @@ def read_dcf_statements(
         raise ValueError("DCF statement cutoff must be timezone-aware")
     cutoff, ticker = as_of.astimezone(UTC), ticker.upper()
     original_factory = conn.row_factory
-    owns_snapshot = not conn.in_transaction
     try:
         conn.row_factory = sqlite3.Row
-        if owns_snapshot:
-            conn.execute("BEGIN")
-        rows = conn.execute(
-            "SELECT DISTINCT binding.canonical_metric_cell_id,source.concept_name,target.metric_id "
-            "FROM fact_cell_canonical_binding_revisions binding "
-            "JOIN fact_cells_v2 source ON source.fact_cell_id=binding.fact_cell_id "
-            "JOIN canonical_metric_cells target ON target.canonical_metric_cell_id=binding.canonical_metric_cell_id "
-            "JOIN fact_observations_v2 observation ON observation.observation_id=binding.source_observation_id "
-            "JOIN evidence_document_versions document ON document.document_version_id=observation.document_version_id "
-            "WHERE document.ticker=? AND source.concept_namespace='urn:earnings-summary:legacy:financial' "
-            "AND (source.fiscal_period IS NULL OR source.fiscal_period NOT IN ('FY','TTM')) "
-            "AND binding.binding_status='bound' AND julianday(binding.recorded_at)<=julianday(?) "
-            "AND julianday(binding.knowledge_at)<=julianday(?) ORDER BY source.concept_name,binding.canonical_metric_cell_id",
-            (ticker, cutoff.isoformat(), cutoff.isoformat()),
-        ).fetchall()
-        selected_rows = tuple(row for row in rows if str(row[1]) in _MAPPING)
-        resolver = CanonicalFactResolutionEngine(conn)
-        try:
-            reads = resolver.read_as_known(tuple(str(row[0]) for row in selected_rows), cutoff)
-        except (ValueError, RuntimeError, sqlite3.Error):
-            # Required evidence is one batch. A broken selected source must not
-            # leave a partially usable model input population.
-            return DcfStatementInputs(
-                ticker=ticker,
-                as_of=cutoff,
-                cells=tuple(
-                    DcfStatementCell(
-                        concept=str(concept),
-                        canonical_metric_cell_id=str(cell_id),
-                        metric_id=str(metric_id),
-                        reason_codes=("canonical_evidence_invalid",),
-                    )
-                    for cell_id, concept, metric_id in selected_rows
-                ),
-            )
-        cells: list[DcfStatementCell] = []
-        for (cell_id, concept, metric_id), read in zip(selected_rows, reads, strict=True):
-            resolution, bundle = read.resolution, read.bundle
-            if resolution is None or resolution.status != "resolved" or bundle is None:
-                cells.append(
-                    DcfStatementCell(
-                        concept=str(concept),
-                        canonical_metric_cell_id=str(cell_id),
-                        metric_id=str(metric_id),
-                        reason_codes=("canonical_resolution_unavailable",),
-                    )
-                )
-                continue
+        with publication_verification_scope(conn):
             try:
-                cells.append(
-                    _read_cell(
-                        conn,
-                        ticker,
-                        str(concept),
-                        str(cell_id),
-                        str(metric_id),
-                        resolution.canonical_resolution_revision_id,
-                        bundle,
-                        cutoff,
+                rows = conn.execute(
+                    "SELECT DISTINCT binding.canonical_metric_cell_id,source.concept_name,target.metric_id "
+                    "FROM fact_cell_canonical_binding_revisions binding "
+                    "JOIN fact_cells_v2 source ON source.fact_cell_id=binding.fact_cell_id "
+                    "JOIN canonical_metric_cells target ON target.canonical_metric_cell_id=binding.canonical_metric_cell_id "
+                    "JOIN fact_observations_v2 observation ON observation.observation_id=binding.source_observation_id "
+                    "JOIN evidence_document_versions document ON document.document_version_id=observation.document_version_id "
+                    "WHERE document.ticker=? AND source.concept_namespace='urn:earnings-summary:legacy:financial' "
+                    "AND (source.fiscal_period IS NULL OR source.fiscal_period NOT IN ('FY','TTM')) "
+                    "AND binding.binding_status='bound' AND julianday(binding.recorded_at)<=julianday(?) "
+                    "AND julianday(binding.knowledge_at)<=julianday(?) ORDER BY source.concept_name,binding.canonical_metric_cell_id",
+                    (ticker, cutoff.isoformat(), cutoff.isoformat()),
+                ).fetchall()
+                selected_rows = tuple(row for row in rows if str(row[1]) in _MAPPING)
+                resolver = CanonicalFactResolutionEngine(conn)
+                try:
+                    reads = resolver.read_as_known(
+                        tuple(str(row[0]) for row in selected_rows), cutoff
                     )
-                )
-            except (ValueError, RuntimeError, sqlite3.Error):
-                cells.append(
-                    DcfStatementCell(
-                        concept=str(concept),
-                        canonical_metric_cell_id=str(cell_id),
-                        metric_id=str(metric_id),
-                        reason_codes=("canonical_evidence_invalid",),
+                except (ValueError, RuntimeError, sqlite3.Error):
+                    # Required evidence is one batch. A broken selected source must not
+                    # leave a partially usable model input population.
+                    return DcfStatementInputs(
+                        ticker=ticker,
+                        as_of=cutoff,
+                        cells=tuple(
+                            DcfStatementCell(
+                                concept=str(concept),
+                                canonical_metric_cell_id=str(cell_id),
+                                metric_id=str(metric_id),
+                                reason_codes=("canonical_evidence_invalid",),
+                            )
+                            for cell_id, concept, metric_id in selected_rows
+                        ),
                     )
+                cells: list[DcfStatementCell] = []
+                for (cell_id, concept, metric_id), read in zip(selected_rows, reads, strict=True):
+                    resolution, bundle = read.resolution, read.bundle
+                    if resolution is None or resolution.status != "resolved" or bundle is None:
+                        cells.append(
+                            DcfStatementCell(
+                                concept=str(concept),
+                                canonical_metric_cell_id=str(cell_id),
+                                metric_id=str(metric_id),
+                                reason_codes=("canonical_resolution_unavailable",),
+                            )
+                        )
+                        continue
+                    try:
+                        cells.append(
+                            _read_cell(
+                                conn,
+                                ticker,
+                                str(concept),
+                                str(cell_id),
+                                str(metric_id),
+                                resolution.canonical_resolution_revision_id,
+                                bundle,
+                                cutoff,
+                            )
+                        )
+                    except (ValueError, RuntimeError, sqlite3.Error):
+                        cells.append(
+                            DcfStatementCell(
+                                concept=str(concept),
+                                canonical_metric_cell_id=str(cell_id),
+                                metric_id=str(metric_id),
+                                reason_codes=("canonical_evidence_invalid",),
+                            )
+                        )
+                return DcfStatementInputs(ticker=ticker, as_of=cutoff, cells=tuple(cells))
+            except sqlite3.Error:
+                return DcfStatementInputs(
+                    ticker=ticker,
+                    as_of=cutoff,
+                    reason_codes=("canonical_statement_schema_unavailable",),
                 )
-        return DcfStatementInputs(ticker=ticker, as_of=cutoff, cells=tuple(cells))
-    except sqlite3.Error:
-        return DcfStatementInputs(
-            ticker=ticker, as_of=cutoff, reason_codes=("canonical_statement_schema_unavailable",)
-        )
     finally:
-        if owns_snapshot:
-            conn.rollback()
         conn.row_factory = original_factory

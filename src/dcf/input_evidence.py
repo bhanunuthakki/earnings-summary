@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Literal
@@ -337,6 +338,82 @@ def canonical_digest(value: object) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     ).hexdigest()
+
+
+def verify_assumption_review(
+    receipt: ModelInputReceipt,
+    actuals: Mapping[str, float],
+    inputs: Mapping[str, float],
+    as_of: datetime,
+    review_drivers: Callable[
+        [Mapping[str, float], Mapping[str, float]], Mapping[str, tuple[float, float]]
+    ],
+) -> None:
+    """Validate the review before calculating the issuer-specific driver population."""
+    review = receipt.request.assumption_review
+    if review is None:
+        raise InputEvidenceError("assumption_review_unverified")
+    if (
+        review.reviewed_at > as_of
+        or review.reviewed_at < max(item.recorded_at for item in receipt.inputs)
+        or review.effective_inputs_sha256 != canonical_digest(dict(inputs))
+        or review.actuals_sha256 != canonical_digest(dict(actuals))
+    ):
+        raise InputEvidenceError("assumption_review_clock_or_basis_mismatch")
+    drivers = review_drivers(actuals, inputs)
+    if set(review.drivers) != set(drivers):
+        raise InputEvidenceError("assumption_review_population_mismatch")
+    for key, (observed, forecast) in drivers.items():
+        item = review.drivers[key]
+        if not all(
+            math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-9)
+            for a, b in (
+                (item.observed, observed),
+                (item.forecast, forecast),
+                (item.variance, forecast - observed),
+            )
+        ):
+            raise InputEvidenceError(f"assumption_review_variance_mismatch:{key}")
+
+
+def verify_model_input_commitments(
+    receipt: ModelInputReceipt,
+    verified: ModelInputReceipt,
+    *,
+    check_source_integrity: bool = False,
+) -> None:
+    """Compare committed evidence; present-byte verification clocks may advance."""
+    if (
+        receipt.required_keys != verified.required_keys
+        or receipt.inputs != verified.inputs
+        or receipt.snapshot_member_sha256 != verified.snapshot_member_sha256
+        or receipt.inventory_snapshot_ids != verified.inventory_snapshot_ids
+        or receipt.calculations != verified.calculations
+        or receipt.actuals_sha256 != verified.actuals_sha256
+        or receipt.model_output_sha256 != verified.model_output_sha256
+        or (check_source_integrity and receipt.source_integrity != verified.source_integrity)
+        or tuple(
+            (
+                item.document_version_id,
+                item.blob_sha256,
+                item.byte_size,
+                item.reader_policy,
+                item.storage_uri_sha256,
+            )
+            for item in receipt.raw_documents
+        )
+        != tuple(
+            (
+                item.document_version_id,
+                item.blob_sha256,
+                item.byte_size,
+                item.reader_policy,
+                item.storage_uri_sha256,
+            )
+            for item in verified.raw_documents
+        )
+    ):
+        raise InputEvidenceError("model_input_receipt_mismatch")
 
 
 def _time(raw: object) -> datetime:

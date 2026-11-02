@@ -41,14 +41,22 @@ from typing import cast
 
 try:
     from _lib import PROJECT_ROOT
-    from fetch_ir_documents import process_ticker
 except ImportError:
     from execution._lib import PROJECT_ROOT
-    from execution.fetch_ir_documents import process_ticker
+
+try:
+    from .fetch_ir_documents import process_ticker, registered_source_urls
+except ImportError:
+    from fetch_ir_documents import process_ticker, registered_source_urls
 
 import ir_fetch_status
 from ir_pipeline.manifest import ManifestEntry, merge_write
 from ir_uploads import calendar_id_from_fye
+from pipeline.issuer_document_inventory import FiscalPeriodWitness
+from pipeline.managed_ir_sources import (
+    IssuerDocumentPreparationError,
+    resolve_fiscal_period_witness,
+)
 from pipeline.reported_period_inventory import reported_quarter_selection_in_connection
 from pipeline.source_policy import (
     ArtifactKind,
@@ -82,37 +90,42 @@ def _ticker_fye(db_path: Path, ticker: str) -> str | None:
     return str(val) if val else None
 
 
-def _set_brief_dirty(db_path: Path, ticker: str) -> None:
-    """Queue the ticker for the daily ``--enable-llm`` rebuild (best-effort)."""
+def _set_brief_dirty(db_path: Path, ticker: str) -> bool:
+    """Confirm the ticker was queued for the daily ``--enable-llm`` rebuild."""
     if not db_path.exists():
-        return
+        return False
     try:
         conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
-            conn.execute(
-                "UPDATE tracked_companies SET brief_dirty = 1 WHERE ticker = ?", (ticker.upper(),)
+            cursor = conn.execute(
+                "UPDATE tracked_companies SET brief_dirty=1 WHERE ticker=?", (ticker.upper(),)
             )
             conn.commit()
+            return cursor.rowcount > 0
         finally:
             conn.close()
     except sqlite3.Error:
-        return
+        return False
 
 
-def _run_narrative(ticker: str, repo_root: Path) -> None:
-    """Refresh the IR anchor (cheap pypdf extraction) so the new docs feed prompts."""
-    subprocess.run(
-        [
-            *managed_python_prefix(PROJECT_ROOT),
-            str(PROJECT_ROOT / "src" / "compute" / "ir_narrative.py"),
-            "--ticker",
-            ticker,
-            "--repo-root",
-            str(repo_root),
-        ],
-        cwd=str(PROJECT_ROOT),
-        check=False,
-    )
+def _run_narrative(ticker: str, repo_root: Path) -> bool:
+    """Confirm deterministic IR anchor extraction completed."""
+    try:
+        result = subprocess.run(
+            [
+                *managed_python_prefix(PROJECT_ROOT),
+                str(PROJECT_ROOT / "src" / "compute" / "ir_narrative.py"),
+                "--ticker",
+                ticker,
+                "--repo-root",
+                str(repo_root),
+            ],
+            cwd=str(PROJECT_ROOT),
+            check=False,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
 
 
 def collect_urls(url_args: list[str] | None, urls_file: Path | None) -> list[str]:
@@ -142,8 +155,14 @@ def register_urls(
     year: int,
     quarter: int,
     process: bool = True,
+    document_version_id: str | None = None,
 ) -> int:
-    """Seed the manifest with ``urls`` then download+register (+anchor). Returns count downloaded."""
+    """Return ready URL entries, including repaired/unchanged registrations.
+
+    Any candidate failure returns zero. Ready or repaired work still completes
+    deterministic anchor/dirty effects when process=True, including coherent
+    replay and partial attempts. Effect failure also returns zero.
+    """
     ticker = ticker.upper()
     authorization = authorize_stored_collection_target(
         db_path,
@@ -165,6 +184,51 @@ def register_urls(
             + "\n"
         )
         return 0
+    fiscal_witness: FiscalPeriodWitness | None = None
+    if document_version_id is not None:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        try:
+            fiscal_witness = resolve_fiscal_period_witness(
+                conn,
+                document_version_id,
+                ticker=ticker,
+                fiscal_year=year,
+                fiscal_quarter=quarter,
+            )
+            witness_month = int(fiscal_witness.fiscal_year_end[:2])
+            if (
+                authorization.fiscal_year_end_month is not None
+                and authorization.fiscal_year_end_month != witness_month
+            ):
+                raise IssuerDocumentPreparationError("fiscal_witness_calendar_mismatch")
+        except IssuerDocumentPreparationError as exc:
+            sys.stderr.write(
+                json.dumps(
+                    {
+                        "event": "fiscal_witness_rejected",
+                        "ticker": ticker,
+                        "reason": exc.code,
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            ir_fetch_status.record_attempt(
+                db_path,
+                ticker,
+                status="failed",
+                discovered=len(urls),
+                downloaded=0,
+                reason=exc.code,
+            )
+            return 0
+        finally:
+            conn.close()
+    fiscal_year_end_month = (
+        int(fiscal_witness.fiscal_year_end[:2])
+        if fiscal_witness is not None
+        else authorization.fiscal_year_end_month
+    )
     conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
         in_window = reported_quarter_selection_in_connection(
@@ -172,11 +236,18 @@ def register_urls(
             ticker=ticker,
             fiscal_year=year,
             fiscal_quarter=quarter,
-            fiscal_year_end_month=authorization.fiscal_year_end_month,
+            fiscal_year_end_month=fiscal_year_end_month,
             as_of=current_utc_date(),
         )
     finally:
         conn.close()
+    if (
+        in_window is not True
+        and urls
+        and set(urls).issubset(registered_source_urls(db_path, ticker, root=repo_root))
+    ):
+        # Inspection of verified existing bytes does not admit a new source.
+        in_window = True
     if in_window is False:
         sys.stderr.write(
             json.dumps(
@@ -228,7 +299,11 @@ def register_urls(
         )
         return downloaded_n
 
-    calendar = calendar_id_from_fye(_ticker_fye(db_path, ticker))
+    calendar = calendar_id_from_fye(
+        fiscal_witness.fiscal_year_end
+        if fiscal_witness is not None
+        else _ticker_fye(db_path, ticker)
+    )
     summary = process_ticker(
         ticker,
         root=repo_root,
@@ -236,26 +311,61 @@ def register_urls(
         categorize=True,
         calendar=calendar,
         owner_requested=True,
+        fiscal_witness_document_version_id=document_version_id,
+        fiscal_witness_urls=frozenset(urls) if document_version_id is not None else frozenset(),
     )
     downloaded = summary.get("downloaded")
     downloaded_n = downloaded if isinstance(downloaded, int) else 0
+    transport_skips = summary.get("transport_skipped")
+    transport_skipped_n = transport_skips if isinstance(transport_skips, int) else 0
 
-    if downloaded_n and process:
-        _run_narrative(ticker, repo_root)
-        _set_brief_dirty(db_path, ticker)
+    registered = summary.get("ready")
+    registered_n = registered if isinstance(registered, int) else 0
+
+    recovered = summary.get("projection_repaired")
+    recovered_n = recovered if isinstance(recovered, int) else 0
+
+    existing = summary.get("ready_existing")
+    existing_n = existing if isinstance(existing, int) else 0
+    ready_urls = registered_n + existing_n
+    failed = summary.get("failed")
+    projection_failed = summary.get("projection_failed")
+    attempt_failed = (
+        summary.get("status") not in ("done", "recovered")
+        or (isinstance(failed, int) and failed > 0)
+        or (isinstance(projection_failed, int) and projection_failed > 0)
+    )
+    processed = False
+    effects_failed = False
+    if ready_urls and process:
+        processed = _run_narrative(ticker, repo_root) and _set_brief_dirty(db_path, ticker)
+        effects_failed = not processed
+    success = ready_urls > 0 and not attempt_failed and not effects_failed
 
     ir_fetch_status.record_attempt(
         db_path,
         ticker,
-        status="ok" if downloaded_n else "failed",
+        status="ok" if success else "failed",
         discovered=len(urls),
         downloaded=downloaded_n,
-        reason=None if downloaded_n else "no documents downloaded from the provided URLs",
+        reason=(
+            f"{transport_skipped_n} transport/no-document skips; registrations retained"
+            if transport_skipped_n
+            else None
+        )
+        if success
+        else "deterministic anchor or brief-dirty update failed"
+        if effects_failed
+        else "registration or required metadata failed"
+        if attempt_failed
+        else "no registration completed with required metadata",
     )
     sys.stdout.write(
-        f"[{ticker}] done: downloaded={downloaded_n}, processed={bool(downloaded_n and process)}\n"
+        f"[{ticker}] done: downloaded={downloaded_n}, registered={registered_n}, "
+        f"repaired={recovered_n}, transport_skipped={transport_skipped_n}, "
+        f"processed={processed}, success={success}\n"
     )
-    return downloaded_n
+    return ready_urls if success else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -266,7 +376,7 @@ def main(argv: list[str] | None = None) -> int:
     if not urls:
         sys.stderr.write("No URLs provided (use --url and/or --urls-file).\n")
         return 2
-    downloaded = register_urls(
+    registered = register_urls(
         cast("str", args.ticker),
         urls,
         repo_root=repo_root,
@@ -274,8 +384,9 @@ def main(argv: list[str] | None = None) -> int:
         year=cast("int", args.year),
         quarter=cast("int", args.quarter),
         process=not cast("bool", args.no_process),
+        document_version_id=cast("str | None", args.document_version_id),
     )
-    return 0 if downloaded else 1
+    return 0 if registered else 1
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -285,6 +396,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--ticker", required=True, help="Ticker to register documents for")
     p.add_argument("--year", required=True, type=int, help="Reported fiscal year")
     p.add_argument("--quarter", required=True, type=int, choices=[1, 2, 3, 4])
+    p.add_argument(
+        "--document-version-id",
+        help="Exact current SEC filing version that proves this fiscal period.",
+    )
     p.add_argument("--url", action="append", help="A document URL (repeatable)")
     p.add_argument(
         "--urls-file", type=Path, help="File with one document URL per line (# comments ok)"

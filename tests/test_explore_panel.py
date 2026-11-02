@@ -129,7 +129,7 @@ def test_explore_panel_renders_with_default_universe(db_path: Path) -> None:
     html_out = render_explore_panel(db_path)
     assert 'id="vx-root"' in html_out
     assert "TST" in html_out
-    assert 'id="ask-q"' in html_out
+    assert 'id="vx-ask-copilot"' in html_out
     assert "Work with data" in html_out
     assert "Save analysis" in html_out
     assert "/api/viewspec/catalog" in html_out
@@ -146,8 +146,8 @@ def test_explore_panel_keeps_single_ticker_recipes_non_comparative(db_path: Path
     html_out = render_explore_panel(db_path)
 
     assert "TST vs TST" not in html_out
-    assert "What changed?" in html_out
-    assert "Key risks" in html_out
+    assert "Ask Copilot" in html_out
+    assert "data-ask-q" not in html_out
     assert "Ranked metrics" not in html_out
 
 
@@ -272,32 +272,6 @@ def test_work_os_explore_fragment_is_runtime_free_and_seeded_to_requested_ticker
     assert "<script>" not in html_out
 
 
-def test_explore_panel_is_narrative_first_with_optional_analytics(db_path: Path) -> None:
-    html_out = render_explore_panel(db_path)
-    assert ".work-os-explore-title { font-size:var(--fs-display);" in html_out
-    assert 'id="ask-thread"' in html_out
-    assert 'id="ask-q"' in html_out
-    assert "Explore answers in narrative" in html_out
-    assert '<dialog class="vx-workbench-page" id="vx-workbench"' in html_out
-    assert "← Back to Explore" in html_out
-    assert "period, unit, definition, and source provenance" in html_out
-    for builder_id in ("vx-run", "vx-field-search", "vx-save", "vx-tickers"):
-        assert f'id="{builder_id}"' in html_out
-
-
-def test_explore_panel_removes_dcf_mutation_and_legacy_copilot_handoff() -> None:
-    import inspect
-
-    from pipeline import explore_panel
-
-    src = inspect.getsource(explore_panel)
-    assert "Inject as DCF driver" not in src
-    assert "/api/dcf/inject" not in src
-    assert "DCF relationship" not in src
-    assert "openWorkOsCopilot" not in src
-    assert "Work with data" in src
-
-
 def test_explore_workbench_is_fullscreen_and_on_demand(db_path: Path) -> None:
     html_out = render_explore_panel(db_path)
     assert '<dialog class="vx-workbench-page" id="vx-workbench"' in html_out
@@ -312,8 +286,8 @@ def test_explore_workbench_is_fullscreen_and_on_demand(db_path: Path) -> None:
 
 def test_workbench_preserves_answer_context_peers_and_saved_views(db_path: Path) -> None:
     html_out = render_explore_panel(db_path)
-    assert "answer.dataset.question" in html_out
-    assert "answer.dataset.contextSpec" in html_out
+    assert "work-os-explore-analysis" in html_out
+    assert "openWorkbench(query, spec" in html_out
     assert "context_spec: contextSpec || null" in html_out
     assert "workbenchTickers = Array.isArray(spec.tickers)" in html_out
     assert "function updateWorkbenchTitle()" in html_out
@@ -402,13 +376,6 @@ def test_explore_panel_route_and_views_fragment(client: FlaskClient) -> None:
     assert b"No saved analyses yet" in frag.data
 
 
-def test_explore_panel_carries_question_suggestion_chips(db_path: Path) -> None:
-    html_out = render_explore_panel(db_path)
-    assert 'class="explore-suggestions"' in html_out
-    assert "data-ask-q" in html_out
-    assert "What changed?" in html_out
-
-
 def test_explore_shell_does_not_wait_for_metric_catalog(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -417,9 +384,9 @@ def test_explore_shell_does_not_wait_for_metric_catalog(
 
     monkeypatch.setattr("pipeline.explore_panel.metric_catalog", unavailable_catalog)
     html_out = render_explore_panel(db_path, initial_tickers=["TST"], include_runtime=False)
-    assert 'id="ask-q"' in html_out
+    assert 'id="vx-ask-copilot"' in html_out
     assert 'id="vx-workbench"' in html_out
-    assert "What changed most recently for TST?" in html_out
+    assert "Use Copilot for contextual questions" in html_out
 
 
 def test_keymetrics_fragment_route(client: FlaskClient) -> None:
@@ -724,11 +691,3 @@ def test_ask_stream_endpoint_streams_narrative_deltas(
 def test_ask_stream_endpoint_requires_query(client: FlaskClient) -> None:
     assert client.post("/api/ask/stream", json={}).status_code == 400
     assert client.open("/api/ask/stream", method="OPTIONS").status_code == 204
-
-
-def test_explore_panel_uses_governed_stream_inline(
-    db_path: Path,
-) -> None:
-    html_out = render_explore_panel(db_path)
-    assert "openWorkOsCopilot" not in html_out
-    assert "/api/ask/stream" in html_out

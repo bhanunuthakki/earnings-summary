@@ -66,6 +66,7 @@ from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import KPI as OVERRIDE_KPI
 from provenance.overrides import active_scalar_override_map
+from provenance.source_fact_publication import publication_verification_scope
 from sources.canonical_financial_series import (
     CanonicalFinancialSeries,
     CanonicalFinancialSeriesReader,
@@ -1270,17 +1271,16 @@ def evaluate_soft_rules(
     owns and rolls back a read transaction after materializing all results.
     """
     cutoff = datetime.now(UTC)
-    owns_snapshot = not conn.in_transaction
+    original_factory = conn.row_factory
     try:
-        if owns_snapshot:
-            conn.execute("BEGIN")
-        context = _EvaluationContext(
-            conn=conn,
-            ticker=ticker,
-            financials=CanonicalFinancialSeriesReader(conn, ticker, cutoff=cutoff),
-            cutoff=cutoff,
-        )
-        return _evaluate_soft_rules_in_snapshot(context, rules, cutoff)
+        conn.row_factory = sqlite3.Row
+        with publication_verification_scope(conn):
+            context = _EvaluationContext(
+                conn=conn,
+                ticker=ticker,
+                financials=CanonicalFinancialSeriesReader(conn, ticker, cutoff=cutoff),
+                cutoff=cutoff,
+            )
+            return _evaluate_soft_rules_in_snapshot(context, rules, cutoff)
     finally:
-        if owns_snapshot and conn.in_transaction:
-            conn.rollback()
+        conn.row_factory = original_factory

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable
-from datetime import datetime
 from pathlib import Path
 
 import comments_server
@@ -22,7 +21,6 @@ import pytest
 from flask.testing import FlaskClient
 
 import pipeline.allocation_decisions_panel as adp
-from advisor.position_review import attest_review_changed
 from attribution import ConvictionAlphaRow, SkillDecomposition
 from decision_calibration import CalibrationStats
 from integrations.portfolio_tracker_client import (
@@ -34,18 +32,11 @@ from integrations.portfolio_tracker_client import (
     PositionAlphaRow,
 )
 from pipeline.allocation_decisions_panel import (
-    COACH_CHANGED_TARGET,
     SizingAuditRow,
     SQLiteConnectionRole,
     build_decisions_timeline,
     build_sizing_audit_rows,
     compose_decisions_page,
-    query_coach_pnl,
-    render_coach_digest_section,
-    render_coach_mutes_section,
-    render_coach_pings_section,
-    render_coach_pnl_section,
-    render_decision_journal_section,
     score_row,
 )
 from user_state.ledger import append_entry
@@ -581,452 +572,6 @@ def test_decisions_record_panel_route(client: FlaskClient) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Coach P&L (REQ-7) — the guard's public scoreboard
-# --------------------------------------------------------------------------- #
-
-
-# ``decisions`` predates the 0059 stamp point (db.init_db() territory, same as
-# test_open_loops.py's _DECISIONS_DDL / test_governor.py's _PRE_DDL) — 0130's
-# extension is _has_table-guarded, so stamping past 0059 and upgrading to head
-# never creates it; hand-build the modern (post-0130) shape afterward so the
-# heuristic's decided_by / recommendation_kind / made_at columns are present.
-
-
-def _memo_db(
-    tmp_path: Path,
-    migrated_db: Callable[..., Path],
-    name: str = "coach.db",
-) -> Path:
-    """Alembic-built DB through head — carries advisor_memos (0077, widened to
-    admit 'position_review' by 0140), stance_scores (0078), and
-    coach_pings/coach_mutes (0131). Stamps past baseline first (the ``client``
-    fixture's pattern above) — 0000_baseline assumes the db.py:init_db() shape
-    already exists, which an empty file doesn't have. ``decisions`` is hand-
-    built post-upgrade (see ``_MEMO_TEST_DECISIONS_DDL``)."""
-    db = tmp_path / name
-    migrated_db(db, target="head")
-    return db
-
-
-def _insert_review_memo(
-    db: Path,
-    *,
-    ticker: str,
-    verdict_source: str,
-    created_at: str,
-    user_id: str = "bhanu",
-    source: str | None = None,
-    owner_attested_change: bool = False,
-) -> int:
-    import json
-
-    ctx: dict[str, object] = {"verdict_source": verdict_source}
-    if source is not None:
-        ctx["source"] = source
-    if owner_attested_change:
-        ctx["owner_attested_change"] = True
-    conn = sqlite3.connect(str(db))
-    try:
-        cur = conn.execute(
-            "INSERT INTO advisor_memos (user_id, kind, ticker, title, body_md, context_json, "
-            "stance, score_status, created_at) VALUES (?, 'position_review', ?, ?, 'body', ?, "
-            "'hold', 'pending', ?)",
-            (
-                user_id,
-                ticker,
-                f"Position review: {ticker}",
-                json.dumps(ctx),
-                created_at,
-            ),
-        )
-        memo_id = int(cur.lastrowid or 0)
-        conn.commit()
-        return memo_id
-    finally:
-        conn.close()
-
-
-def _insert_stance_score(db: Path, memo_id: int, verdict: str) -> None:
-    conn = sqlite3.connect(str(db))
-    try:
-        conn.execute(
-            "INSERT INTO stance_scores (memo_id, user_id, verdict, benchmark_basis, "
-            "horizon_days, created_at) VALUES (?, 'bhanu', ?, 'none', 90, '2026-07-01')",
-            (memo_id, verdict),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _insert_owner_decision(db: Path, *, ticker: str, kind: str, made_at: str) -> None:
-    conn = sqlite3.connect(str(db))
-    try:
-        conn.execute(
-            "INSERT INTO decisions (ticker, recommendation_kind, decided_by, made_at, "
-            "created_at) VALUES (?, ?, 'owner', ?, ?)",
-            (ticker, kind, made_at, made_at),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-# A fixed "now" well past the 30d window for the 2026-06-01 memos below, so the
-# candidate/window logic is deterministic (no dependence on the wall clock).
-_NOW = datetime(2026, 7, 15)
-
-
-def test_coach_pnl_all_zero_is_honest(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
-    db = _memo_db(tmp_path, migrated_db)
-    pnl = query_coach_pnl(db, user_id="bhanu", now=_NOW)
-    assert pnl.reviews_run == 0
-    assert pnl.guard_fired == 0 and pnl.overridden == 0
-    assert pnl.graded_right == 0 and pnl.graded_total == 0
-    assert pnl.changed == 0 and pnl.candidate == 0
-    html = render_coach_pnl_section(db, user_id="bhanu", now=_NOW)
-    assert "Reviews run: <b>0</b> — the guard has never been exercised." in html
-
-
-def test_coach_pnl_counts_reviews_guard_fires_and_grades(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
-    db = _memo_db(tmp_path, migrated_db)
-    _insert_review_memo(db, ticker="NU", verdict_source="llm", created_at="2026-06-01T00:00:00")
-    m2 = _insert_review_memo(
-        db, ticker="META", verdict_source="guard_override", created_at="2026-06-02T00:00:00"
-    )
-    _insert_stance_score(db, m2, "correct")
-
-    pnl = query_coach_pnl(db, user_id="bhanu", now=_NOW)
-    assert pnl.reviews_run == 2
-    assert pnl.guard_fired == 1 and pnl.overridden == 1
-    assert pnl.graded_total == 1 and pnl.graded_right == 1
-
-    html = render_coach_pnl_section(db, user_id="bhanu", now=_NOW)
-    assert "Reviews run: <b>2</b>" in html
-    assert "guard fired: <b>1</b>" in html
-    assert "overridden: <b>1</b>" in html
-    assert "1/1 graded right" in html
-    assert f"Q3&rsquo;26 target: <b>{COACH_CHANGED_TARGET}</b>" in html
-    assert "/api/peek/memo/position_review" in html
-
-
-def test_coach_pnl_candidate_split_and_attestation_promotes_to_changed(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
-    """An eligible-but-unconfirmed guard_override is a CANDIDATE, never a
-    changed decision (silence is the platform default, not evidence). Only an
-    explicit owner attestation counts toward the Q3'26 target — and once it
-    does, the row leaves the candidate line."""
-    db = _memo_db(tmp_path, migrated_db)
-    # Heeded-so-far: guard held NU, window elapsed, no sell/trim -> candidate.
-    nu_id = _insert_review_memo(
-        db, ticker="NU", verdict_source="guard_override", created_at="2026-06-01T00:00:00"
-    )
-    # Contradicted: guard held META, owner sold 5 days later -> neither.
-    _insert_review_memo(
-        db, ticker="META", verdict_source="guard_override", created_at="2026-06-01T00:00:00"
-    )
-    _insert_owner_decision(db, ticker="META", kind="sell", made_at="2026-06-06T00:00:00")
-
-    pnl = query_coach_pnl(db, user_id="bhanu", now=_NOW)
-    assert pnl.guard_fired == 2
-    assert pnl.changed == 0  # nothing attested yet — the honest target reading is 0
-    assert pnl.candidate == 1  # only NU is eligible + unconfirmed
-
-    html = render_coach_pnl_section(db, user_id="bhanu", now=_NOW)
-    assert "Decisions changed by the coach: <b>0</b>" in html
-    assert "Candidates (eligible, unconfirmed): <b>1</b>" in html
-
-    # The owner attests NU changed their call -> it promotes to a counted change.
-    assert attest_review_changed(db, nu_id) is True
-    pnl2 = query_coach_pnl(db, user_id="bhanu", now=_NOW)
-    assert pnl2.changed == 1 and pnl2.candidate == 0
-    html2 = render_coach_pnl_section(db, user_id="bhanu", now=_NOW)
-    assert "Decisions changed by the coach: <b>1</b>" in html2
-    assert "Candidates (eligible, unconfirmed)" not in html2
-
-
-def test_coach_pnl_window_not_elapsed_excludes_candidate(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
-    """A guard_override whose 30d window hasn't fully elapsed is NOT yet a
-    candidate — a memo written today trivially has no later sell, which must not
-    tick the counter."""
-    db = _memo_db(tmp_path, migrated_db)
-    # Created 5 days before now: 5d < 30d window -> not eligible yet.
-    _insert_review_memo(
-        db, ticker="NU", verdict_source="guard_override", created_at="2026-07-10T00:00:00"
-    )
-    pnl = query_coach_pnl(db, user_id="bhanu", now=_NOW)
-    assert pnl.guard_fired == 1
-    assert pnl.changed == 0 and pnl.candidate == 0
-
-    # Once the window has elapsed (now well past memo + 30d) it becomes a candidate.
-    later = datetime(2026, 8, 20)
-    pnl_later = query_coach_pnl(db, user_id="bhanu", now=later)
-    assert pnl_later.candidate == 1
-
-
-def test_coach_pnl_agent_source_reviews_are_excluded(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
-    """A review persisted by an agent/CI run (context source='agent') never
-    enters ANY count — reviews_run, guard_fired, or the change tally — so an
-    automated verification run can't inflate the owner-facing scoreboard."""
-    db = _memo_db(tmp_path, migrated_db)
-    # Owner-driven guard_override (no source tag = legacy owner row) -> counts.
-    _insert_review_memo(
-        db, ticker="NU", verdict_source="guard_override", created_at="2026-06-01T00:00:00"
-    )
-    # Agent verification run on the same shape -> fully excluded, even though
-    # it too is a guard_override with an elapsed window.
-    _insert_review_memo(
-        db,
-        ticker="RBRK",
-        verdict_source="guard_override",
-        created_at="2026-06-01T00:00:00",
-        source="agent",
-    )
-    pnl = query_coach_pnl(db, user_id="bhanu", now=_NOW)
-    assert pnl.reviews_run == 1  # only the owner row
-    assert pnl.guard_fired == 1
-    assert pnl.candidate == 1 and pnl.changed == 0
-
-    # Even an (illegitimately) attested agent row stays out of the changed count.
-    _insert_review_memo(
-        db,
-        ticker="WIX",
-        verdict_source="guard_override",
-        created_at="2026-06-01T00:00:00",
-        source="agent",
-        owner_attested_change=True,
-    )
-    pnl2 = query_coach_pnl(db, user_id="bhanu", now=_NOW)
-    assert pnl2.reviews_run == 1 and pnl2.changed == 0
-
-
-def test_coach_attest_change_route_marks_memo(client: FlaskClient, tmp_path: Path) -> None:
-    """POST /api/coach/attest-change flips a guard_override review's
-    owner_attested_change flag; a second POST is an idempotent no-op (never a
-    double-count), and a bad body 400s."""
-    db = tmp_path / "data" / "portfolio.db"
-    memo_id = _insert_review_memo(
-        db, ticker="NU", verdict_source="guard_override", created_at="2026-06-01T00:00:00"
-    )
-    resp = client.post("/api/coach/attest-change", json={"memo_id": memo_id})
-    assert resp.status_code == 200
-    payload = resp.get_json()
-    assert payload["ok"] is True and payload["attested"] is True
-
-    # Now the Coach P&L counts it as a changed decision.
-    pnl = query_coach_pnl(db, user_id="bhanu", now=_NOW)
-    assert pnl.changed == 1 and pnl.candidate == 0
-
-    # Idempotent: a repeat attestation does not count twice.
-    again = client.post("/api/coach/attest-change", json={"memo_id": memo_id})
-    assert again.get_json()["attested"] is False
-    assert query_coach_pnl(db, user_id="bhanu", now=_NOW).changed == 1
-
-    assert client.post("/api/coach/attest-change", json={}).status_code == 400
-
-
-def test_attest_review_changed_guardrails(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
-    """The write path never fabricates a positive: an unknown memo, another
-    user's memo, and a repeat attestation all return False."""
-    db = _memo_db(tmp_path, migrated_db)
-    memo_id = _insert_review_memo(
-        db, ticker="NU", verdict_source="guard_override", created_at="2026-06-01T00:00:00"
-    )
-    assert attest_review_changed(db, 9999) is False  # no such memo
-    assert attest_review_changed(db, memo_id, user_id="someone_else") is False  # not their memo
-    assert attest_review_changed(db, memo_id) is True  # the owner's, first time
-    assert attest_review_changed(db, memo_id) is False  # idempotent second click
-
-
-def test_coach_pnl_section_never_raises_on_missing_tables(tmp_path: Path) -> None:
-    """A thin/hand-rolled DB with no advisor_memos table degrades to the
-    honest all-zero line, never a 500."""
-    db = tmp_path / "thin.db"
-    conn = sqlite3.connect(str(db))
-    conn.close()
-    html = render_coach_pnl_section(db, user_id="bhanu")
-    assert "Reviews run: <b>0</b>" in html
-
-
-# --------------------------------------------------------------------------- #
-# Pings / mutes / digest (REQ-12) — first production renderers
-# --------------------------------------------------------------------------- #
-
-
-def _insert_ping(
-    db: Path, *, class_: str, key: str, ticker: str | None, status: str, created_at: str
-) -> int:
-    conn = sqlite3.connect(str(db))
-    try:
-        cur = conn.execute(
-            "INSERT INTO coach_pings (class_, key, ticker, body, status, created_at, "
-            "updated_at) VALUES (?, ?, ?, 'body', ?, ?, ?)",
-            (class_, key, ticker, status, created_at, created_at),
-        )
-        pid = int(cur.lastrowid or 0)
-        conn.commit()
-        return pid
-    finally:
-        conn.close()
-
-
-def _insert_mute(db: Path, *, class_: str, muted_at: str, reason: str | None = None) -> None:
-    conn = sqlite3.connect(str(db))
-    try:
-        conn.execute(
-            "INSERT INTO coach_mutes (class_, muted_at, reason) VALUES (?, ?, ?)",
-            (class_, muted_at, reason),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def test_coach_pings_section_renders_seeded_rows_this_month(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
-    from datetime import datetime
-
-    db = _memo_db(tmp_path, migrated_db)
-    now = datetime(2026, 7, 10)
-    _insert_ping(
-        db,
-        class_="falsifier_breach",
-        key="alert:1",
-        ticker="NU",
-        status="sent",
-        created_at="2026-07-05T00:00:00",
-    )
-    # Out of window (June) — must not appear.
-    _insert_ping(
-        db,
-        class_="intent_followup",
-        key="intent:1:0",
-        ticker=None,
-        status="dismissed",
-        created_at="2026-06-01T00:00:00",
-    )
-    html = render_coach_pings_section(db, now=now)
-    assert "falsifier_breach" in html and "NU" in html and "sent" in html
-    assert "intent_followup" not in html
-
-
-def test_coach_pings_section_empty_state_is_one_line(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
-    db = _memo_db(tmp_path, migrated_db)
-    html = render_coach_pings_section(db)
-    assert "No pings this month." in html
-
-
-def test_coach_mutes_section_renders_row_with_unmute_button(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
-    db = _memo_db(tmp_path, migrated_db)
-    _insert_mute(db, class_="falsifier_breach", muted_at="2026-07-02T00:00:00")
-    html = render_coach_mutes_section(db)
-    assert "falsifier_breach" in html
-    assert "muted since 2026-07-02" in html
-    assert "cpnl-unmute-btn" in html
-    assert "/api/coach/unmute" in html  # wired via _UNMUTE_JS
-
-
-def test_coach_mutes_section_empty_state_is_one_line(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
-    db = _memo_db(tmp_path, migrated_db)
-    html = render_coach_mutes_section(db)
-    assert "No active mutes." in html
-
-
-def test_coach_digest_section_renders_and_empty_state(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
-    db = _memo_db(tmp_path, migrated_db)
-    empty_html = render_coach_digest_section(db)
-    assert "Digest is empty." in empty_html
-
-    _insert_ping(
-        db,
-        class_="intent_followup",
-        key="intent:2:0",
-        ticker="WIX",
-        status="digest",
-        created_at="2026-07-01T00:00:00",
-    )
-    html = render_coach_digest_section(db)
-    assert "intent_followup" in html and "WIX" in html
-
-
-def test_decision_journal_defaults_to_owner_and_preserves_advisor_count(
-    tmp_path: Path,
-) -> None:
-    db = tmp_path / "journal.db"
-    conn = sqlite3.connect(db)
-    conn.execute(
-        """
-        CREATE VIEW v_decision_journal AS
-        SELECT 1 AS decision_id, 'NU' AS ticker, 'owner' AS decided_by,
-               'watch' AS recommendation_kind, '2026-07-25' AS made_at,
-               NULL AS linked_memo_id, NULL AS linked_memo_kind,
-               NULL AS advice_before_memo_id, NULL AS advice_before_memo_kind,
-               0 AS guard_override_flag, 0 AS owner_attested_change,
-               NULL AS coach_ping_class, NULL AS decision_nudge_id,
-               NULL AS user_action_kind, NULL AS outcome_label,
-               NULL AS outcome_pct, NULL AS stance_verdict
-        UNION ALL
-        SELECT 2, 'WIX', 'advisor', 'buy', '2026-07-24',
-               NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL
-        """
-    )
-    conn.commit()
-    conn.close()
-
-    html = render_decision_journal_section(db)
-
-    assert "owner: watch" in html
-    assert "advisor: buy" not in html
-    assert "1 advisor record preserved outside the Owner-default journal" in html
-    assert 'href="/api/panel/ledger_decisions?filter=advisor"' in html
-
-
-def test_coach_unmute_route_calls_governor_and_row_disappears(
-    client: FlaskClient, tmp_path: Path
-) -> None:
-    db = tmp_path / "data" / "portfolio.db"
-    _insert_mute(db, class_="falsifier_breach", muted_at="2026-07-02T00:00:00")
-    resp = client.post("/api/coach/unmute", json={"class_": "falsifier_breach"})
-    assert resp.status_code == 200
-    payload = resp.get_json()
-    assert payload["ok"] is True and payload["unmuted"] is True
-
-    from research.governor import unmute as _unmute  # sanity: same function the route calls
-
-    assert _unmute("falsifier_breach", db_path=db) is False  # already gone
-
-    html = render_coach_mutes_section(db)
-    assert "No active mutes." in html
-    assert "falsifier_breach" not in html
-
-
-def test_coach_unmute_route_options_preflight(client: FlaskClient) -> None:
-    resp = client.options("/api/coach/unmute")
-    assert resp.status_code == 204
-
-
-def test_coach_unmute_route_validates_body(client: FlaskClient) -> None:
-    resp = client.post("/api/coach/unmute", json={})
-    assert resp.status_code == 400
-
-
-# --------------------------------------------------------------------------- #
 # Mirror-first KPI-strip hoist
 # --------------------------------------------------------------------------- #
 
@@ -1196,40 +741,20 @@ def _make_pool_db(path: Path) -> Path:
     con = sqlite3.connect(str(path))
     try:
         con.executescript(
-            "CREATE TABLE advisor_memos(id INTEGER PRIMARY KEY, user_id TEXT, kind TEXT,"
-            " ticker TEXT, context_json TEXT, created_at TEXT);"
-            "CREATE TABLE stance_scores(id INTEGER PRIMARY KEY, memo_id INTEGER,"
-            " user_id TEXT, verdict TEXT, created_at TEXT);"
             "CREATE TABLE decisions(id INTEGER PRIMARY KEY, ticker TEXT,"
             " recommendation_kind TEXT, decided_by TEXT, made_at TEXT, created_at TEXT);"
-            "CREATE TABLE coach_pings(id INTEGER PRIMARY KEY, class_ TEXT, key TEXT,"
-            " ticker TEXT, body TEXT, status TEXT, created_at TEXT, updated_at TEXT);"
-            "CREATE TABLE coach_mutes(class_ TEXT PRIMARY KEY, muted_at TEXT, reason TEXT);"
             "CREATE TABLE v_decision_journal(decision_id INTEGER, ticker TEXT, decided_by TEXT,"
-            " recommendation_kind TEXT, made_at TEXT, linked_memo_id INTEGER,"
-            " linked_memo_kind TEXT, advice_before_memo_id INTEGER, advice_before_memo_kind TEXT,"
-            " guard_override_flag INTEGER, owner_attested_change INTEGER, coach_ping_class TEXT,"
-            " decision_nudge_id INTEGER, user_action_kind TEXT, outcome_label TEXT,"
-            " outcome_pct REAL, stance_verdict TEXT);"
+            " recommendation_kind TEXT, made_at TEXT, user_action_kind TEXT,"
+            " outcome_label TEXT, outcome_pct REAL);"
             "CREATE TABLE tracked_companies(ticker TEXT, name TEXT, list_type TEXT, archived_at TEXT);"
         )
         con.execute(
-            "INSERT INTO advisor_memos VALUES(1,'bhanu','position_review','NU',"
-            "'{\"verdict_source\":\"guard_override\"}','2026-06-01T00:00:00')"
-        )
-        con.execute("INSERT INTO stance_scores VALUES(1,1,'bhanu','correct','2026-06-02T00:00:00')")
-        con.execute(
-            "INSERT INTO coach_pings VALUES(1,'falsifier_breach','k1','NU','b','sent',"
-            "'2026-07-05T00:00:00','2026-07-05T00:00:00')"
-        )
-        con.execute("INSERT INTO coach_mutes VALUES('falsifier_breach','2026-07-02T00:00:00',NULL)")
-        con.execute(
             "INSERT INTO v_decision_journal VALUES(1,'NU','owner','watch','2026-07-25',"
-            "NULL,NULL,NULL,NULL,0,0,NULL,NULL,NULL,NULL,NULL,NULL)"
+            "'followed','correct',4.0)"
         )
         con.execute(
             "INSERT INTO v_decision_journal VALUES(2,'WIX','advisor','buy','2026-07-24',"
-            "NULL,NULL,NULL,NULL,0,0,NULL,NULL,NULL,NULL,NULL,NULL)"
+            "NULL,NULL,NULL)"
         )
         con.execute("INSERT INTO tracked_companies VALUES('NU','Nu','portfolio',NULL)")
         con.commit()
@@ -1249,20 +774,11 @@ def _assert_closed(con: sqlite3.Connection) -> None:
 
 def test_pool_owned_supplied_equivalence(tmp_path: Path) -> None:
     db = _make_pool_db(tmp_path / "pool.db")
-    now = datetime(2026, 7, 15)
-    exp_q = adp.query_coach_pnl(db, user_id="bhanu", now=now)
-    exp_pnl = adp.render_coach_pnl_section(db, user_id="bhanu", now=now)
-    exp_pings = adp.render_coach_pings_section(db, now=datetime(2026, 7, 10))
-    exp_mutes = adp.render_coach_mutes_section(db)
     exp_journal = adp.render_decision_journal_section(db)
     con = adp.connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
     con.row_factory = sqlite3.Row
     try:
-        assert adp.query_coach_pnl(db, user_id="bhanu", now=now, conn=con) == exp_q
         _assert_usable(con)
-        assert adp.render_coach_pnl_section(db, user_id="bhanu", now=now, conn=con) == exp_pnl
-        assert adp.render_coach_pings_section(db, now=datetime(2026, 7, 10), conn=con) == exp_pings
-        assert adp.render_coach_mutes_section(db, conn=con) == exp_mutes
         assert adp.render_decision_journal_section(db, conn=con) == exp_journal
         _assert_usable(con)
     finally:
@@ -1273,16 +789,9 @@ def test_pool_owned_supplied_equivalence(tmp_path: Path) -> None:
 def test_pool_thin_missing_tables(tmp_path: Path) -> None:
     db = tmp_path / "thin.db"
     sqlite3.connect(str(db)).close()
-    assert adp.query_coach_pnl(db, user_id="bhanu").reviews_run == 0
     con = adp.connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
     con.row_factory = sqlite3.Row
     try:
-        assert adp.query_coach_pnl(db, user_id="bhanu", conn=con).reviews_run == 0
-        assert "Reviews run: <b>0</b>" in adp.render_coach_pnl_section(
-            db, user_id="bhanu", conn=con
-        )
-        assert "No pings this month." in adp.render_coach_pings_section(db, conn=con)
-        assert "No active mutes." in adp.render_coach_mutes_section(db, conn=con)
         assert "No Owner Decisions recorded yet." in adp.render_decision_journal_section(
             db, conn=con
         )
@@ -1293,8 +802,6 @@ def test_pool_thin_missing_tables(tmp_path: Path) -> None:
 
 def test_pool_render_two_conns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db = _make_pool_db(tmp_path / "render.db")
-    exp_pnl = adp.render_coach_pnl_section(db, user_id="bhanu")
-    exp_mutes = adp.render_coach_mutes_section(db)
     exp_journal = adp.render_decision_journal_section(db)
     conns: list[sqlite3.Connection] = []
     orig = adp.connect_sqlite
@@ -1343,27 +850,11 @@ def test_pool_render_two_conns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     ) -> dict[str, tuple[float | None, float | None]]:
         return {}
 
-    def _fake_scorecard_html(path: Path, *, n_graded: int = 0) -> str:
-        return "<!--sc-->"
-
-    def _fake_redteam_pnl_html(path: Path, *, user_id: str = "") -> str:
-        return "<!--rt-->"
-
-    def _fake_annual_letter_html(path: Path) -> str:
-        return "<!--al-->"
-
-    def _fake_coach_digest_section(path: Path) -> str:
-        return "<!--dg-->"
-
     monkeypatch.setattr(adp, "build_calibration", _fake_build_calibration)
     monkeypatch.setattr(adp, "latest_dcf_runs", _fake_latest_dcf_runs)
     monkeypatch.setattr(adp, "latest_dcf_scenarios", _fake_latest_dcf_scenarios)
-    monkeypatch.setattr(adp, "_scorecard_html", _fake_scorecard_html)
-    monkeypatch.setattr(adp, "_redteam_pnl_html", _fake_redteam_pnl_html)
-    monkeypatch.setattr(adp, "_annual_letter_html", _fake_annual_letter_html)
-    monkeypatch.setattr(adp, "render_coach_digest_section", _fake_coach_digest_section)
     html = adp.render_allocation_decisions_panel(db, user_id="bhanu")
+    assert exp_journal in html
     assert len(conns) == 2
     for c in conns:
         _assert_closed(c)
-    assert exp_pnl in html and exp_mutes in html and exp_journal in html

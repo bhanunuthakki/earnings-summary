@@ -1,8 +1,8 @@
 {
   "schema_version": "1",
   "scoped_revision": "WORKTREE",
-  "commit_hash": "82bf9753dd9218761c9b44a8f47c2d744a31d82d",
-  "source_hash": "dbbffc24ab4aaa4fe7fc0da7577a621cb90591bb8e3e104edab1a9b95cb44cbf",
+  "commit_hash": "67b5562e0662555165cee119ed22a605b199ca8c",
+  "source_hash": "34b602e56ea77416870ac02957b2c77c3c3fda2b4f14e0c346af37e9f5e8ba53",
   "scanner_hash": "3e5eeae4a510bfc41990c977ec0d327f0ae945ba849766b82534e0efa043bdf1",
   "parser_version": "python-ast-normalized-v1",
   "python_version": "3.14.7",
@@ -10,34 +10,9 @@
     "min_ast_nodes": 20,
     "min_body_lines": 15
   },
-  "files_scanned": 1451,
-  "functions_scanned": 15712,
+  "files_scanned": 1389,
+  "functions_scanned": 15612,
   "exact_groups": [
-    {
-      "group_id": "exact-289a3c306c99e6b3",
-      "similarity": 1.0,
-      "duplicated_loc": 48,
-      "functions": [
-        {
-          "path": "src/dcf/meli_inputs.py",
-          "qualified_name": "_verify_review",
-          "lineno": 395,
-          "end_lineno": 424,
-          "body_lines": 24,
-          "ast_nodes": 239,
-          "normalized_hash": "073b9e118c53d77ccfb879cd5553446e189e882b7ac0c427faec93ced1478aed"
-        },
-        {
-          "path": "src/dcf/onon_inputs.py",
-          "qualified_name": "_verify_review",
-          "lineno": 301,
-          "end_lineno": 330,
-          "body_lines": 24,
-          "ast_nodes": 239,
-          "normalized_hash": "073b9e118c53d77ccfb879cd5553446e189e882b7ac0c427faec93ced1478aed"
-        }
-      ]
-    },
     {
       "group_id": "exact-37a4eac39474851f",
       "similarity": 1.0,
@@ -89,15 +64,15 @@
       ]
     },
     {
-      "group_id": "exact-d0148e57f0d3f248",
+      "group_id": "exact-926294d38ac1070e",
       "similarity": 1.0,
       "duplicated_loc": 38,
       "functions": [
         {
           "path": "execution/discover_ir_documents_all.py",
           "qualified_name": "_ticker_fye",
-          "lineno": 181,
-          "end_lineno": 200,
+          "lineno": 185,
+          "end_lineno": 204,
           "body_lines": 19,
           "ast_nodes": 110,
           "normalized_hash": "364359dc7e79121b0f34f874973466f5ae1b40d85f7d6473d03db02e77a94872"
@@ -105,8 +80,8 @@
         {
           "path": "execution/fetch_ir_from_urls.py",
           "qualified_name": "_ticker_fye",
-          "lineno": 61,
-          "end_lineno": 80,
+          "lineno": 71,
+          "end_lineno": 90,
           "body_lines": 19,
           "ast_nodes": 110,
           "normalized_hash": "364359dc7e79121b0f34f874973466f5ae1b40d85f7d6473d03db02e77a94872"
@@ -115,31 +90,6 @@
     }
   ],
   "near_miss_groups": [
-    {
-      "group_id": "near-003a7137938049af",
-      "similarity": 0.859821,
-      "duplicated_loc": 213,
-      "functions": [
-        {
-          "path": "src/provenance/issuer_registry_bootstrap.py",
-          "qualified_name": "_persist_reporting_identifier_assertion",
-          "lineno": 2066,
-          "end_lineno": 2197,
-          "body_lines": 108,
-          "ast_nodes": 532,
-          "normalized_hash": "1ed17380ed111717c81efd86841e696433b51e4d87f0706230acc8af6f725d04"
-        },
-        {
-          "path": "src/provenance/issuer_registry_bootstrap.py",
-          "qualified_name": "_persist_security_identifier_assertion",
-          "lineno": 2200,
-          "end_lineno": 2313,
-          "body_lines": 105,
-          "ast_nodes": 484,
-          "normalized_hash": "3a68e8bc2ef09a4d77ac20c1560658937881d9ddcee6b4429ff7f28c7cfd2f24"
-        }
-      ]
-    },
     {
       "group_id": "near-00a9a6c2bd768c0f",
       "similarity": 0.972777,
@@ -162,31 +112,6 @@
           "body_lines": 25,
           "ast_nodes": 135,
           "normalized_hash": "41cce012010a30eb5d3a3481d4a4a0e5ec0648462ba361bbf0c09efb2057d040"
-        }
-      ]
-    },
-    {
-      "group_id": "near-012e22a9dacf2885",
-      "similarity": 0.952436,
-      "duplicated_loc": 55,
-      "functions": [
-        {
-          "path": "execution/audit_transcript_evidence.py",
-          "qualified_name": "_safe_path",
-          "lineno": 67,
-          "end_lineno": 95,
-          "body_lines": 28,
-          "ast_nodes": 227,
-          "normalized_hash": "f44a4685a5d9e19077a570b4318bc2facf0e52829abc1e1206d31ba9a9d2cf57"
-        },
-        {
-          "path": "execution/backfill_transcripts.py",
-          "qualified_name": "_recorded_evidence_path",
-          "lineno": 254,
-          "end_lineno": 281,
-          "body_lines": 27,
-          "ast_nodes": 219,
-          "normalized_hash": "166f9049530724792263c5ac1efe59dc856dd09400c5d09d8a07c78895903f5d"
         }
       ]
     },
@@ -316,6 +241,31 @@
       ]
     },
     {
+      "group_id": "near-07fd534eea5caf87",
+      "similarity": 0.987393,
+      "duplicated_loc": 56,
+      "functions": [
+        {
+          "path": "execution/audit_transcript_evidence.py",
+          "qualified_name": "_safe_path",
+          "lineno": 67,
+          "end_lineno": 95,
+          "body_lines": 28,
+          "ast_nodes": 227,
+          "normalized_hash": "f44a4685a5d9e19077a570b4318bc2facf0e52829abc1e1206d31ba9a9d2cf57"
+        },
+        {
+          "path": "execution/scan_ir_transcripts.py",
+          "qualified_name": "_recorded_evidence_path",
+          "lineno": 109,
+          "end_lineno": 137,
+          "body_lines": 28,
+          "ast_nodes": 227,
+          "normalized_hash": "3106bd9ffbb5c098df6f3b4c1e15c21ed06d4de35dd1db326eefaf84f728f355"
+        }
+      ]
+    },
+    {
       "group_id": "near-0b295602108b70cc",
       "similarity": 0.857456,
       "duplicated_loc": 45,
@@ -337,31 +287,6 @@
           "body_lines": 21,
           "ast_nodes": 152,
           "normalized_hash": "24de9e4fb69a3238008182f3b12f5ccdc050e588c9ed35e5a3c259c51d8891f7"
-        }
-      ]
-    },
-    {
-      "group_id": "near-0f26af18d069fa40",
-      "similarity": 0.972951,
-      "duplicated_loc": 53,
-      "functions": [
-        {
-          "path": "src/provenance/atomic_cutover.py",
-          "qualified_name": "_replace_live_with_candidate",
-          "lineno": 609,
-          "end_lineno": 646,
-          "body_lines": 32,
-          "ast_nodes": 149,
-          "normalized_hash": "d9957f9c164587bad1d8b23bdaa489a4fbfd7e2da1c9fa88ec5998b8313c0fa1"
-        },
-        {
-          "path": "src/provenance/data_backbone_rehearsal.py",
-          "qualified_name": "_replace_throwaway_live",
-          "lineno": 1229,
-          "end_lineno": 1250,
-          "body_lines": 21,
-          "ast_nodes": 147,
-          "normalized_hash": "66debeb83aadd8607b309e4ece33281c4db9142b0b308c7263b793a1307f75c6"
         }
       ]
     },
@@ -391,102 +316,27 @@
       ]
     },
     {
-      "group_id": "near-1043f228e056ea5d",
-      "similarity": 0.870036,
-      "duplicated_loc": 34,
+      "group_id": "near-118d380f7e7938ec",
+      "similarity": 0.891548,
+      "duplicated_loc": 32,
       "functions": [
         {
-          "path": "src/ask/context.py",
-          "qualified_name": "tracked_tickers",
-          "lineno": 46,
-          "end_lineno": 65,
-          "body_lines": 19,
-          "ast_nodes": 94,
-          "normalized_hash": "d305158785ec8ddc5cacc92916e31519d0beefc340ac956b950e791e2dee7b0d"
+          "path": "src/provenance/metric_ontology.py",
+          "qualified_name": "MetricOntology._insert_or_verify",
+          "lineno": 555,
+          "end_lineno": 578,
+          "body_lines": 16,
+          "ast_nodes": 156,
+          "normalized_hash": "12adf4520276259978e4f532ea8d6f37f341c15d4e33d175fb10af0c9ba26645"
         },
         {
-          "path": "src/viewspec/nl_compile.py",
-          "qualified_name": "_tracked_tickers",
-          "lineno": 94,
-          "end_lineno": 109,
-          "body_lines": 15,
-          "ast_nodes": 94,
-          "normalized_hash": "cf95abeb84f5fb2b1a91b55c80c880c212f7a00d7e99cdae0779884efa7b8014"
-        }
-      ]
-    },
-    {
-      "group_id": "near-10b172af4010cb3b",
-      "similarity": 0.854814,
-      "duplicated_loc": 97,
-      "functions": [
-        {
-          "path": "src/provenance/issuer_registry_bootstrap.py",
-          "qualified_name": "_persist_historical_reporting_scope",
-          "lineno": 3083,
-          "end_lineno": 3138,
-          "body_lines": 47,
-          "ast_nodes": 205,
-          "normalized_hash": "4d05dd62ba29acbcfca8f7423d965714aeece5502da76f49b20b66ea410a3e55"
-        },
-        {
-          "path": "src/provenance/issuer_registry_bootstrap.py",
-          "qualified_name": "_persist_retired_ticker_reporting_scope",
-          "lineno": 3141,
-          "end_lineno": 3200,
-          "body_lines": 50,
-          "ast_nodes": 236,
-          "normalized_hash": "b938c3bec905a1289ec0f21b8ded689689b11a1bcfa665b16e74e9c601c72240"
-        }
-      ]
-    },
-    {
-      "group_id": "near-124e367205798a4f",
-      "similarity": 0.925484,
-      "duplicated_loc": 38,
-      "functions": [
-        {
-          "path": "src/provenance/population_document_processing.py",
-          "qualified_name": "verify_document_processing_receipt_current",
-          "lineno": 417,
-          "end_lineno": 439,
-          "body_lines": 19,
-          "ast_nodes": 79,
-          "normalized_hash": "55aaef51fcbf86916c80c257d3c459ddaf447cb07a6f38919979b505b3786550"
-        },
-        {
-          "path": "src/provenance/population_metric_ontology.py",
-          "qualified_name": "verify_metric_ontology_receipt_current",
-          "lineno": 697,
-          "end_lineno": 719,
-          "body_lines": 19,
-          "ast_nodes": 79,
-          "normalized_hash": "710e022bb4c625ff84d0df7650956443f0c0c3db550e313fb4151e2d6dca62e1"
-        }
-      ]
-    },
-    {
-      "group_id": "near-12b6e059418d1a9a",
-      "similarity": 0.980282,
-      "duplicated_loc": 54,
-      "functions": [
-        {
-          "path": "src/ir_pipeline/evidence_capture.py",
-          "qualified_name": "_ensure_location",
-          "lineno": 980,
-          "end_lineno": 1015,
-          "body_lines": 27,
-          "ast_nodes": 169,
-          "normalized_hash": "e7ab182089cc075c63ec22b81798cdf7c6262ebde1a73365b7101c9fc19595b3"
-        },
-        {
-          "path": "src/provenance/sec_companyfacts_capture.py",
-          "qualified_name": "_ensure_location",
-          "lineno": 683,
-          "end_lineno": 718,
-          "body_lines": 27,
-          "ast_nodes": 169,
-          "normalized_hash": "c6620a388d6d302c450869ca988f91a581426cdf582b331eb749ac771f382854"
+          "path": "src/provenance/research_snapshot.py",
+          "qualified_name": "_insert_exact",
+          "lineno": 511,
+          "end_lineno": 534,
+          "body_lines": 16,
+          "ast_nodes": 155,
+          "normalized_hash": "36f721de8fdd9512672efb3a964d58abcbdc61f16b31d4a52ed9df4d64da9b42"
         }
       ]
     },
@@ -512,31 +362,6 @@
           "body_lines": 29,
           "ast_nodes": 240,
           "normalized_hash": "e0c733c35c917bfdbdaff0c27df891dde2a898c371a601f732793c42b4d3fc48"
-        }
-      ]
-    },
-    {
-      "group_id": "near-13901a68ff0a3764",
-      "similarity": 0.930907,
-      "duplicated_loc": 98,
-      "functions": [
-        {
-          "path": "src/research/investment_profile.py",
-          "qualified_name": "resolve_label_presentations",
-          "lineno": 654,
-          "end_lineno": 707,
-          "body_lines": 48,
-          "ast_nodes": 255,
-          "normalized_hash": "2db222e2850efae8300fa5df30c7c0b2ee03385fbaabcbca73916440a1e28887"
-        },
-        {
-          "path": "src/research/investment_profile.py",
-          "qualified_name": "resolve_etf_label_presentations",
-          "lineno": 710,
-          "end_lineno": 765,
-          "body_lines": 50,
-          "ast_nodes": 262,
-          "normalized_hash": "8417538cdaef53ca283b9f152d646802748893fd8854c34a5edf477ca4c10b89"
         }
       ]
     },
@@ -625,31 +450,6 @@
       ]
     },
     {
-      "group_id": "near-16c9e7b775a37772",
-      "similarity": 0.926686,
-      "duplicated_loc": 93,
-      "functions": [
-        {
-          "path": "src/evals/corpora.py",
-          "qualified_name": "load_advisor_next_dollar_corpus",
-          "lineno": 275,
-          "end_lineno": 321,
-          "body_lines": 46,
-          "ast_nodes": 230,
-          "normalized_hash": "7a81591e7915f9dad7eff2d91ad46c2cf4d07c646c213fc5cc243f6edfec8e98"
-        },
-        {
-          "path": "src/evals/corpora.py",
-          "qualified_name": "load_position_review_corpus",
-          "lineno": 635,
-          "end_lineno": 682,
-          "body_lines": 47,
-          "ast_nodes": 230,
-          "normalized_hash": "57160ea77971367e6131d92aa6677e946c1b6b53005570315ba8f8d07d42f231"
-        }
-      ]
-    },
-    {
       "group_id": "near-19b344acd237e96e",
       "similarity": 0.925484,
       "duplicated_loc": 38,
@@ -700,52 +500,77 @@
       ]
     },
     {
-      "group_id": "near-1f520a224662ccef",
-      "similarity": 0.892928,
-      "duplicated_loc": 64,
+      "group_id": "near-1adf8e91d909557a",
+      "similarity": 0.911243,
+      "duplicated_loc": 175,
       "functions": [
         {
-          "path": "src/provenance/population_canonical_resolution.py",
-          "qualified_name": "build_canonical_resolution_receipt",
-          "lineno": 288,
-          "end_lineno": 331,
-          "body_lines": 33,
-          "ast_nodes": 178,
-          "normalized_hash": "11714163e0b4c75de786c03354041eb0b175ac224b39cf95719d22b2a4e44ccb"
+          "path": "src/pipeline/transcript_acquisition.py",
+          "qualified_name": "register_transcript_receipt_sqlite_functions",
+          "lineno": 527,
+          "end_lineno": 634,
+          "body_lines": 103,
+          "ast_nodes": 442,
+          "normalized_hash": "3f620f347fd4a79af044cf75df5bf78f32bdf7b5c4abd485c0e1706657ce0acc"
         },
         {
-          "path": "src/provenance/population_document_processing.py",
-          "qualified_name": "build_document_processing_receipt",
-          "lineno": 275,
-          "end_lineno": 315,
-          "body_lines": 31,
-          "ast_nodes": 169,
-          "normalized_hash": "c5f96c846f1fbb4462774f0c8f01d8251566fea4d756a14452f183d536eab012"
+          "path": "src/pipeline/transcript_acquisition.py",
+          "qualified_name": "register_transcript_receipt_sqlite_functions.validate",
+          "lineno": 536,
+          "end_lineno": 627,
+          "body_lines": 72,
+          "ast_nodes": 407,
+          "normalized_hash": "497e94ed31a2f881eed434d61393a48ffbfdff895265a481481216df57317487"
         }
       ]
     },
     {
-      "group_id": "near-1fd0be196719b27f",
-      "similarity": 0.985876,
-      "duplicated_loc": 53,
+      "group_id": "near-1b062691e3e31ba5",
+      "similarity": 0.9609,
+      "duplicated_loc": 32,
       "functions": [
         {
-          "path": "src/provenance/sec_companyfacts_capture.py",
-          "qualified_name": "_ensure_location",
-          "lineno": 683,
-          "end_lineno": 718,
-          "body_lines": 27,
-          "ast_nodes": 169,
-          "normalized_hash": "c6620a388d6d302c450869ca988f91a581426cdf582b331eb749ac771f382854"
+          "path": "src/provenance/population_document_processing.py",
+          "qualified_name": "database_instance_id",
+          "lineno": 445,
+          "end_lineno": 461,
+          "body_lines": 16,
+          "ast_nodes": 101,
+          "normalized_hash": "db6688ada88c7984d4f4d104ddf11ed1290c3a5799b1de6b9fac64cec5725ad5"
         },
         {
-          "path": "src/provenance/sec_native_capture.py",
-          "qualified_name": "_ensure_location",
-          "lineno": 1028,
-          "end_lineno": 1062,
-          "body_lines": 26,
-          "ast_nodes": 169,
-          "normalized_hash": "f7fdd8278e213533edbd30854230fd694314692460be921b5728f6db1a1b27d7"
+          "path": "src/provenance/population_metric_ontology.py",
+          "qualified_name": "database_instance_id",
+          "lineno": 722,
+          "end_lineno": 738,
+          "body_lines": 16,
+          "ast_nodes": 101,
+          "normalized_hash": "95ea5595f49f0375d829e9d3209f57d3c1082d406a8d05ff80e63e2ffade2f69"
+        }
+      ]
+    },
+    {
+      "group_id": "near-21e2cf42da63b687",
+      "similarity": 0.913594,
+      "duplicated_loc": 98,
+      "functions": [
+        {
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_holdco",
+          "lineno": 942,
+          "end_lineno": 990,
+          "body_lines": 48,
+          "ast_nodes": 303,
+          "normalized_hash": "3dbd40c4fcecbaf3caf65568f2e11726953076142fb53eab0269f5ae07942b50"
+        },
+        {
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_fintech_sotp",
+          "lineno": 993,
+          "end_lineno": 1043,
+          "body_lines": 50,
+          "ast_nodes": 297,
+          "normalized_hash": "7cd8cdac553cb035bace5c709d69c8f34a12297d0ad2bca10874aad35b1b690f"
         }
       ]
     },
@@ -850,6 +675,31 @@
       ]
     },
     {
+      "group_id": "near-2c3d600a69d21fe0",
+      "similarity": 0.925484,
+      "duplicated_loc": 38,
+      "functions": [
+        {
+          "path": "src/provenance/population_document_processing.py",
+          "qualified_name": "verify_document_processing_receipt_current",
+          "lineno": 420,
+          "end_lineno": 442,
+          "body_lines": 19,
+          "ast_nodes": 79,
+          "normalized_hash": "55aaef51fcbf86916c80c257d3c459ddaf447cb07a6f38919979b505b3786550"
+        },
+        {
+          "path": "src/provenance/population_metric_ontology.py",
+          "qualified_name": "verify_metric_ontology_receipt_current",
+          "lineno": 697,
+          "end_lineno": 719,
+          "body_lines": 19,
+          "ast_nodes": 79,
+          "normalized_hash": "710e022bb4c625ff84d0df7650956443f0c0c3db550e313fb4151e2d6dca62e1"
+        }
+      ]
+    },
+    {
       "group_id": "near-2e6c95a920726a4c",
       "similarity": 0.944961,
       "duplicated_loc": 48,
@@ -900,31 +750,6 @@
       ]
     },
     {
-      "group_id": "near-2f408f6a5df67381",
-      "similarity": 0.881667,
-      "duplicated_loc": 46,
-      "functions": [
-        {
-          "path": "src/provenance/metric_ontology.py",
-          "qualified_name": "MetricOntology.persist_axis",
-          "lineno": 619,
-          "end_lineno": 641,
-          "body_lines": 22,
-          "ast_nodes": 66,
-          "normalized_hash": "565be0d4c1f3f71c07366b22e4f8cd3a41bc13901abc2b7ae5477e1a55b7a78a"
-        },
-        {
-          "path": "src/provenance/metric_ontology.py",
-          "qualified_name": "MetricOntology.persist_member",
-          "lineno": 643,
-          "end_lineno": 667,
-          "body_lines": 24,
-          "ast_nodes": 71,
-          "normalized_hash": "15469e3c9a5b8db87dd3a9b7e64089df146b70fcd0ae72c4d0f01fd30cce3151"
-        }
-      ]
-    },
-    {
       "group_id": "near-31ef407c20dc19ef",
       "similarity": 0.884956,
       "duplicated_loc": 34,
@@ -946,56 +771,6 @@
           "body_lines": 15,
           "ast_nodes": 104,
           "normalized_hash": "9440d65f34e6b9635269694318f78f60ad0e44be77f71dba38f62a08f7f0c5ac"
-        }
-      ]
-    },
-    {
-      "group_id": "near-3263afce78468deb",
-      "similarity": 0.961061,
-      "duplicated_loc": 101,
-      "functions": [
-        {
-          "path": "src/dcf/meli_inputs.py",
-          "qualified_name": "verify_meli_inputs",
-          "lineno": 464,
-          "end_lineno": 521,
-          "body_lines": 50,
-          "ast_nodes": 280,
-          "normalized_hash": "4ded664ab41fe6d04803bff6cb36ffef722fbd1f8a12d884fb97f5f677849465"
-        },
-        {
-          "path": "src/dcf/onon_inputs.py",
-          "qualified_name": "verify_onon_inputs",
-          "lineno": 393,
-          "end_lineno": 451,
-          "body_lines": 51,
-          "ast_nodes": 290,
-          "normalized_hash": "8f66ff92c60aa4e5010da7441a450f5e2d112b34d05678eb025d538ffc0136e7"
-        }
-      ]
-    },
-    {
-      "group_id": "near-32d5421020a07e07",
-      "similarity": 0.995717,
-      "duplicated_loc": 70,
-      "functions": [
-        {
-          "path": "execution/publish_meli_reported_statements.py",
-          "qualified_name": "main",
-          "lineno": 25,
-          "end_lineno": 60,
-          "body_lines": 35,
-          "ast_nodes": 280,
-          "normalized_hash": "cd18e1000d73525507840f39d8d935f169b49045a7cd25a7284df167b68c2018"
-        },
-        {
-          "path": "execution/publish_meli_reported_tables.py",
-          "qualified_name": "main",
-          "lineno": 24,
-          "end_lineno": 59,
-          "body_lines": 35,
-          "ast_nodes": 280,
-          "normalized_hash": "b57832eb37e546498f0af74605bda8339019848f4f54cbff55fa32d57aef3663"
         }
       ]
     },
@@ -1046,56 +821,6 @@
           "body_lines": 46,
           "ast_nodes": 319,
           "normalized_hash": "464cb59331405b4e861cc0ac445327f9afa5252b0d721ecb6ae9f1c0486dcf5b"
-        }
-      ]
-    },
-    {
-      "group_id": "near-366deaa002483167",
-      "similarity": 0.972187,
-      "duplicated_loc": 88,
-      "functions": [
-        {
-          "path": "src/provenance/population_document_processing.py",
-          "qualified_name": "_document_plane_verification",
-          "lineno": 2105,
-          "end_lineno": 2154,
-          "body_lines": 44,
-          "ast_nodes": 190,
-          "normalized_hash": "7eb4559dd0daefe67a6ae14a79db046abbff3d28e2a466ac0fdb8ec284924b83"
-        },
-        {
-          "path": "src/provenance/population_research_snapshots.py",
-          "qualified_name": "_research_plane_verification",
-          "lineno": 1306,
-          "end_lineno": 1355,
-          "body_lines": 44,
-          "ast_nodes": 190,
-          "normalized_hash": "e57a47bb3b7bb3d5f11fd32c95742a435bc7ae78e74b7f4fadb0e8ce7a25a07b"
-        }
-      ]
-    },
-    {
-      "group_id": "near-388132b198bfe150",
-      "similarity": 0.867095,
-      "duplicated_loc": 59,
-      "functions": [
-        {
-          "path": "src/compute/company_description.py",
-          "qualified_name": "_load_recent_earnings_md",
-          "lineno": 547,
-          "end_lineno": 577,
-          "body_lines": 30,
-          "ast_nodes": 225,
-          "normalized_hash": "217c8a1a867220eb3478ac012aa67e5da423cd95bb714708018cd1afb0e5980f"
-        },
-        {
-          "path": "src/compute/company_description.py",
-          "qualified_name": "_load_recent_ir_docs_md",
-          "lineno": 580,
-          "end_lineno": 609,
-          "body_lines": 29,
-          "ast_nodes": 239,
-          "normalized_hash": "9eb3005da5671114600f71ebbcb8b6727c4fb89fc1aa984533fc52998718b3e9"
         }
       ]
     },
@@ -1175,27 +900,52 @@
       ]
     },
     {
-      "group_id": "near-4150dbabd218239b",
-      "similarity": 0.972808,
-      "duplicated_loc": 60,
+      "group_id": "near-3f2f378254917a0b",
+      "similarity": 0.874234,
+      "duplicated_loc": 100,
       "functions": [
         {
-          "path": "execution/import_visible_rubrik_observations.py",
-          "qualified_name": "main",
-          "lineno": 33,
-          "end_lineno": 63,
-          "body_lines": 30,
-          "ast_nodes": 178,
-          "normalized_hash": "801980346ab1230b10f2e2c2fbb9fa89496024c20d456f1e8d510e57fdc454c6"
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_holdco",
+          "lineno": 942,
+          "end_lineno": 990,
+          "body_lines": 48,
+          "ast_nodes": 303,
+          "normalized_hash": "3dbd40c4fcecbaf3caf65568f2e11726953076142fb53eab0269f5ae07942b50"
         },
         {
-          "path": "execution/import_visible_wix_observations.py",
-          "qualified_name": "main",
-          "lineno": 33,
-          "end_lineno": 63,
-          "body_lines": 30,
-          "ast_nodes": 178,
-          "normalized_hash": "776f855454ae567670e1fd4cc7f9d1e042d3af8038e3964c96031f6ea49367cf"
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_platform",
+          "lineno": 1046,
+          "end_lineno": 1104,
+          "body_lines": 52,
+          "ast_nodes": 324,
+          "normalized_hash": "bd3342067e982994025063df88d164627d54d0ce6714e12cbbc04bab94f6c8b3"
+        }
+      ]
+    },
+    {
+      "group_id": "near-3fa1ba9e15ce026b",
+      "similarity": 0.853888,
+      "duplicated_loc": 50,
+      "functions": [
+        {
+          "path": "src/provenance/research_snapshot.py",
+          "qualified_name": "_persist_research_universe",
+          "lineno": 2665,
+          "end_lineno": 2696,
+          "body_lines": 28,
+          "ast_nodes": 149,
+          "normalized_hash": "04888de0af792b5320671b73842d89f13721a7b22071dc19c362400c5723ae6d"
+        },
+        {
+          "path": "src/provenance/research_snapshot.py",
+          "qualified_name": "_verify_stored_research_universe",
+          "lineno": 2699,
+          "end_lineno": 2724,
+          "body_lines": 22,
+          "ast_nodes": 137,
+          "normalized_hash": "824074f7147376a77f5113c885dd4c3f62df611de19c5b4d5eeed8c3f4c0a6c2"
         }
       ]
     },
@@ -1225,6 +975,31 @@
       ]
     },
     {
+      "group_id": "near-420cd233b5b03e25",
+      "similarity": 0.850777,
+      "duplicated_loc": 42,
+      "functions": [
+        {
+          "path": "src/exec_comp_store.py",
+          "qualified_name": "_open",
+          "lineno": 80,
+          "end_lineno": 101,
+          "body_lines": 21,
+          "ast_nodes": 107,
+          "normalized_hash": "0fcf686c086d879e65211ddb375708fa023d1f99adec426d88d800614a1c075c"
+        },
+        {
+          "path": "src/insider_transactions.py",
+          "qualified_name": "_open",
+          "lineno": 112,
+          "end_lineno": 137,
+          "body_lines": 21,
+          "ast_nodes": 119,
+          "normalized_hash": "6d7e5b5c36ea90462722189d58a5934181bbc21983211b0b78d67ba9c4e9b1a6"
+        }
+      ]
+    },
+    {
       "group_id": "near-46e3370055dfaf9f",
       "similarity": 0.936236,
       "duplicated_loc": 66,
@@ -1246,6 +1021,56 @@
           "body_lines": 33,
           "ast_nodes": 149,
           "normalized_hash": "4ef6b0fccafb0ff9d24f8b526462a2a8d9b3012be8d74e7ae2b069a022c9380a"
+        }
+      ]
+    },
+    {
+      "group_id": "near-4877fe6eeeb6b022",
+      "similarity": 0.925484,
+      "duplicated_loc": 38,
+      "functions": [
+        {
+          "path": "src/provenance/population_canonical_resolution.py",
+          "qualified_name": "verify_canonical_resolution_receipt_current",
+          "lineno": 431,
+          "end_lineno": 453,
+          "body_lines": 19,
+          "ast_nodes": 79,
+          "normalized_hash": "bea7e9fc70c2448259a42f620d332efe6fd4d231a97eb01fe7b96d4bfc359303"
+        },
+        {
+          "path": "src/provenance/population_document_processing.py",
+          "qualified_name": "verify_document_processing_receipt_current",
+          "lineno": 420,
+          "end_lineno": 442,
+          "body_lines": 19,
+          "ast_nodes": 79,
+          "normalized_hash": "55aaef51fcbf86916c80c257d3c459ddaf447cb07a6f38919979b505b3786550"
+        }
+      ]
+    },
+    {
+      "group_id": "near-499c4f696130ef8b",
+      "similarity": 0.912127,
+      "duplicated_loc": 44,
+      "functions": [
+        {
+          "path": "src/provenance/metric_ontology.py",
+          "qualified_name": "MetricOntology.persist_metric",
+          "lineno": 597,
+          "end_lineno": 619,
+          "body_lines": 22,
+          "ast_nodes": 66,
+          "normalized_hash": "e7d774c322b5b4c78834b633cf9e95fb897e7e60208a3221372e8b4f43c0e780"
+        },
+        {
+          "path": "src/provenance/metric_ontology.py",
+          "qualified_name": "MetricOntology.persist_axis",
+          "lineno": 621,
+          "end_lineno": 643,
+          "body_lines": 22,
+          "ast_nodes": 66,
+          "normalized_hash": "565be0d4c1f3f71c07366b22e4f8cd3a41bc13901abc2b7ae5477e1a55b7a78a"
         }
       ]
     },
@@ -1275,31 +1100,6 @@
       ]
     },
     {
-      "group_id": "near-4b3bba65f8af1899",
-      "similarity": 0.9609,
-      "duplicated_loc": 32,
-      "functions": [
-        {
-          "path": "src/provenance/population_document_processing.py",
-          "qualified_name": "database_instance_id",
-          "lineno": 442,
-          "end_lineno": 458,
-          "body_lines": 16,
-          "ast_nodes": 101,
-          "normalized_hash": "db6688ada88c7984d4f4d104ddf11ed1290c3a5799b1de6b9fac64cec5725ad5"
-        },
-        {
-          "path": "src/provenance/population_metric_ontology.py",
-          "qualified_name": "database_instance_id",
-          "lineno": 722,
-          "end_lineno": 738,
-          "body_lines": 16,
-          "ast_nodes": 101,
-          "normalized_hash": "95ea5595f49f0375d829e9d3209f57d3c1082d406a8d05ff80e63e2ffade2f69"
-        }
-      ]
-    },
-    {
       "group_id": "near-4b8593ab6ceb3826",
       "similarity": 0.874473,
       "duplicated_loc": 42,
@@ -1321,6 +1121,31 @@
           "body_lines": 21,
           "ast_nodes": 107,
           "normalized_hash": "0fcf686c086d879e65211ddb375708fa023d1f99adec426d88d800614a1c075c"
+        }
+      ]
+    },
+    {
+      "group_id": "near-4c2921833ae01d60",
+      "similarity": 0.881667,
+      "duplicated_loc": 46,
+      "functions": [
+        {
+          "path": "src/provenance/metric_ontology.py",
+          "qualified_name": "MetricOntology.persist_axis",
+          "lineno": 621,
+          "end_lineno": 643,
+          "body_lines": 22,
+          "ast_nodes": 66,
+          "normalized_hash": "565be0d4c1f3f71c07366b22e4f8cd3a41bc13901abc2b7ae5477e1a55b7a78a"
+        },
+        {
+          "path": "src/provenance/metric_ontology.py",
+          "qualified_name": "MetricOntology.persist_member",
+          "lineno": 645,
+          "end_lineno": 669,
+          "body_lines": 24,
+          "ast_nodes": 71,
+          "normalized_hash": "15469e3c9a5b8db87dd3a9b7e64089df146b70fcd0ae72c4d0f01fd30cce3151"
         }
       ]
     },
@@ -1350,6 +1175,56 @@
       ]
     },
     {
+      "group_id": "near-4e3c39158cb6e9d6",
+      "similarity": 0.941408,
+      "duplicated_loc": 89,
+      "functions": [
+        {
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_bank",
+          "lineno": 898,
+          "end_lineno": 939,
+          "body_lines": 41,
+          "ast_nodes": 297,
+          "normalized_hash": "9f62fcae966e698274dd5e8f82b009834355891039b6064792010a4fd27e2909"
+        },
+        {
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_holdco",
+          "lineno": 942,
+          "end_lineno": 990,
+          "body_lines": 48,
+          "ast_nodes": 303,
+          "normalized_hash": "3dbd40c4fcecbaf3caf65568f2e11726953076142fb53eab0269f5ae07942b50"
+        }
+      ]
+    },
+    {
+      "group_id": "near-4f8371a5c737641e",
+      "similarity": 0.964821,
+      "duplicated_loc": 55,
+      "functions": [
+        {
+          "path": "execution/backfill_transcripts.py",
+          "qualified_name": "_recorded_evidence_path",
+          "lineno": 295,
+          "end_lineno": 322,
+          "body_lines": 27,
+          "ast_nodes": 219,
+          "normalized_hash": "166f9049530724792263c5ac1efe59dc856dd09400c5d09d8a07c78895903f5d"
+        },
+        {
+          "path": "execution/scan_ir_transcripts.py",
+          "qualified_name": "_recorded_evidence_path",
+          "lineno": 109,
+          "end_lineno": 137,
+          "body_lines": 28,
+          "ast_nodes": 227,
+          "normalized_hash": "3106bd9ffbb5c098df6f3b4c1e15c21ed06d4de35dd1db326eefaf84f728f355"
+        }
+      ]
+    },
+    {
       "group_id": "near-55e2306b5957c26a",
       "similarity": 0.898212,
       "duplicated_loc": 50,
@@ -1371,31 +1246,6 @@
           "body_lines": 26,
           "ast_nodes": 164,
           "normalized_hash": "7a5c2d795f6516bf4b64e811a7239f2f15c1e9828a43cf36a4d7bbad113939af"
-        }
-      ]
-    },
-    {
-      "group_id": "near-578e25b1e24232ef",
-      "similarity": 0.941557,
-      "duplicated_loc": 106,
-      "functions": [
-        {
-          "path": "src/provenance/population_document_processing.py",
-          "qualified_name": "_document_processing_receipt_verification_chain",
-          "lineno": 516,
-          "end_lineno": 573,
-          "body_lines": 54,
-          "ast_nodes": 437,
-          "normalized_hash": "42d30e4f36aec15c2722f515c4cdba75811fb5273adfe3e3d5fbb427e743fba8"
-        },
-        {
-          "path": "src/provenance/population_metric_ontology.py",
-          "qualified_name": "_metric_ontology_receipt_verification_chain",
-          "lineno": 796,
-          "end_lineno": 851,
-          "body_lines": 52,
-          "ast_nodes": 437,
-          "normalized_hash": "3f37e13b5e18c98582808fa2b9c143e5216936a9231e683935b0f048b3d27cd9"
         }
       ]
     },
@@ -1425,6 +1275,56 @@
       ]
     },
     {
+      "group_id": "near-581427c4bcc9f785",
+      "similarity": 0.850053,
+      "duplicated_loc": 86,
+      "functions": [
+        {
+          "path": "execution/refresh_candidate_fit.py",
+          "qualified_name": "main",
+          "lineno": 35,
+          "end_lineno": 78,
+          "body_lines": 43,
+          "ast_nodes": 204,
+          "normalized_hash": "42dfa27f1c4ed1597cebfcb30dbc04602a3f5c24a313ecb0b6231796b6f87937"
+        },
+        {
+          "path": "execution/refresh_cockpit_fundamentals.py",
+          "qualified_name": "main",
+          "lineno": 35,
+          "end_lineno": 78,
+          "body_lines": 43,
+          "ast_nodes": 199,
+          "normalized_hash": "93fdfce5796a513cf57c3f7d63aa4619d7178b549538754e7bfa3905fe77c869"
+        }
+      ]
+    },
+    {
+      "group_id": "near-58894882c47739a2",
+      "similarity": 0.92053,
+      "duplicated_loc": 62,
+      "functions": [
+        {
+          "path": "src/provenance/population_document_processing.py",
+          "qualified_name": "persist_document_processing_receipt",
+          "lineno": 464,
+          "end_lineno": 498,
+          "body_lines": 31,
+          "ast_nodes": 139,
+          "normalized_hash": "5f0b3bff1a4a0945a3fe12cf81558ff42c99b925668cb913a165bf70ab3c97ff"
+        },
+        {
+          "path": "src/provenance/population_metric_ontology.py",
+          "qualified_name": "persist_metric_ontology_receipt",
+          "lineno": 741,
+          "end_lineno": 775,
+          "body_lines": 31,
+          "ast_nodes": 139,
+          "normalized_hash": "027043cbb24a5444cfe62621dde68744d4fb08b1c295f4d6f1fe1943c66c976f"
+        }
+      ]
+    },
+    {
       "group_id": "near-58d47e3f4bca1a32",
       "similarity": 0.897569,
       "duplicated_loc": 30,
@@ -1450,52 +1350,52 @@
       ]
     },
     {
-      "group_id": "near-58f325ee02870bd8",
-      "similarity": 0.855086,
-      "duplicated_loc": 84,
+      "group_id": "near-5a9b0327f382ade0",
+      "similarity": 0.941557,
+      "duplicated_loc": 108,
       "functions": [
         {
-          "path": "src/ir_pipeline/approved_ir_observation_capture.py",
-          "qualified_name": "import_wix_visible_browser_export",
-          "lineno": 434,
-          "end_lineno": 477,
-          "body_lines": 43,
-          "ast_nodes": 247,
-          "normalized_hash": "cc5d62a3d87d6d59ebf17d8ca62a04db710990973dc59f754214c22d25301bb3"
+          "path": "src/provenance/population_canonical_resolution.py",
+          "qualified_name": "_canonical_resolution_receipt_verification_chain",
+          "lineno": 533,
+          "end_lineno": 590,
+          "body_lines": 54,
+          "ast_nodes": 437,
+          "normalized_hash": "59f513bdaf9c769f14ba8300b4061bba78e2f72d0c5f064e480683f16f00b8ba"
         },
         {
-          "path": "src/ir_pipeline/approved_ir_observation_capture.py",
-          "qualified_name": "import_rubrik_visible_browser_export",
-          "lineno": 480,
-          "end_lineno": 521,
-          "body_lines": 41,
-          "ast_nodes": 236,
-          "normalized_hash": "d5cab480090d044f3da42d73fe9da01fca967479e054f2690d93db0911aa69df"
+          "path": "src/provenance/population_document_processing.py",
+          "qualified_name": "_document_processing_receipt_verification_chain",
+          "lineno": 519,
+          "end_lineno": 576,
+          "body_lines": 54,
+          "ast_nodes": 437,
+          "normalized_hash": "42d30e4f36aec15c2722f515c4cdba75811fb5273adfe3e3d5fbb427e743fba8"
         }
       ]
     },
     {
-      "group_id": "near-591770ba33913f01",
-      "similarity": 0.866255,
-      "duplicated_loc": 61,
+      "group_id": "near-5c1b4fc29a4e7dde",
+      "similarity": 0.876642,
+      "duplicated_loc": 76,
       "functions": [
         {
-          "path": "src/evals/golden_classifiers.py",
-          "qualified_name": "load_capture_intent_golden",
-          "lineno": 247,
-          "end_lineno": 275,
-          "body_lines": 28,
-          "ast_nodes": 266,
-          "normalized_hash": "8ce1e77bd6fb216dec611d4d7ad61a3ca9180b747f56d0f7eae25e67b4887f73"
+          "path": "src/provenance/population_canonical_resolution.py",
+          "qualified_name": "_validate_canonical_resolution_receipt_successor",
+          "lineno": 593,
+          "end_lineno": 635,
+          "body_lines": 39,
+          "ast_nodes": 242,
+          "normalized_hash": "4d8444cc52937f59c85feccd54ada2069a46c5defafb72dd52a036f203084386"
         },
         {
-          "path": "src/evals/golden_classifiers.py",
-          "qualified_name": "load_ledger_reply_intent_golden",
-          "lineno": 278,
-          "end_lineno": 311,
-          "body_lines": 33,
-          "ast_nodes": 282,
-          "normalized_hash": "067188673530ece9ff9b17e1008073eccff99433f244380770f54f5ad6a8ba96"
+          "path": "src/provenance/population_document_processing.py",
+          "qualified_name": "_validate_document_processing_receipt_successor",
+          "lineno": 579,
+          "end_lineno": 619,
+          "body_lines": 37,
+          "ast_nodes": 245,
+          "normalized_hash": "f526f5da31d6a9a2f941175fafb70c68b36c92cef8a0dbff876bce97c5acbe67"
         }
       ]
     },
@@ -1525,6 +1425,31 @@
       ]
     },
     {
+      "group_id": "near-5f1e3d95f5ce1bed",
+      "similarity": 0.905763,
+      "duplicated_loc": 136,
+      "functions": [
+        {
+          "path": "src/ir_pipeline/evidence_capture.py",
+          "qualified_name": "_persist_coverage",
+          "lineno": 978,
+          "end_lineno": 1055,
+          "body_lines": 69,
+          "ast_nodes": 335,
+          "normalized_hash": "185441a6be8d185b64cce93e2fdaf8dc0d9ccaede369e6ae77f45d46edb47d42"
+        },
+        {
+          "path": "src/provenance/sec_native_capture.py",
+          "qualified_name": "_persist_coverage",
+          "lineno": 1070,
+          "end_lineno": 1145,
+          "body_lines": 67,
+          "ast_nodes": 314,
+          "normalized_hash": "4b0b6401f71bd8109bc1f42fa3d8b64f730dbe8b28d5a1e997a32ec15784f74d"
+        }
+      ]
+    },
+    {
       "group_id": "near-5fe3ee5570760fa3",
       "similarity": 0.874473,
       "duplicated_loc": 38,
@@ -1546,6 +1471,31 @@
           "body_lines": 17,
           "ast_nodes": 107,
           "normalized_hash": "f45842f52fb2670075666da7ab754c31396de9202c20e3a7dae963a26fe222a3"
+        }
+      ]
+    },
+    {
+      "group_id": "near-60e11747f936a80a",
+      "similarity": 0.949495,
+      "duplicated_loc": 37,
+      "functions": [
+        {
+          "path": "src/decision_conditions.py",
+          "qualified_name": "conditions_from_json",
+          "lineno": 488,
+          "end_lineno": 507,
+          "body_lines": 19,
+          "ast_nodes": 149,
+          "normalized_hash": "50b06f3ad14fd3cdf3f56ff7c252cca5f6ab45fe71b89c87261c41d332801b1f"
+        },
+        {
+          "path": "src/decision_conditions.py",
+          "qualified_name": "qualitative_conditions_from_json",
+          "lineno": 539,
+          "end_lineno": 557,
+          "body_lines": 18,
+          "ast_nodes": 149,
+          "normalized_hash": "18dd8f865b27dede16016772bdf832fee425bafaa40ceb6bf0251d1190f4b2dd"
         }
       ]
     },
@@ -1575,102 +1525,127 @@
       ]
     },
     {
-      "group_id": "near-62609f878d4aedf6",
-      "similarity": 0.963665,
-      "duplicated_loc": 33,
+      "group_id": "near-634253836127dbf1",
+      "similarity": 0.884068,
+      "duplicated_loc": 44,
       "functions": [
         {
-          "path": "execution/analyze_filing_intelligence.py",
-          "qualified_name": "_extract_relevant_text",
-          "lineno": 115,
-          "end_lineno": 131,
-          "body_lines": 16,
-          "ast_nodes": 160,
-          "normalized_hash": "7cb87ae844ca5fb0fd50715eebfcdb2268745c3a677d2724f1c9eccea7cb6326"
+          "path": "src/ir_pipeline/approved_ir_observation_capture.py",
+          "qualified_name": "public_robots_allows",
+          "lineno": 1414,
+          "end_lineno": 1432,
+          "body_lines": 18,
+          "ast_nodes": 156,
+          "normalized_hash": "400dd7104ae62ef8d13ca2d32292ced599d9fdaf60d47765a0916b6e309cbbe2"
         },
+        {
+          "path": "src/ir_pipeline/evidence_capture.py",
+          "qualified_name": "_robots_allows",
+          "lineno": 1137,
+          "end_lineno": 1163,
+          "body_lines": 26,
+          "ast_nodes": 167,
+          "normalized_hash": "cf9f52ff305cae93bdce28c3333aa4bd6bc06ab3598e9c9157bbe009d2002ff9"
+        }
+      ]
+    },
+    {
+      "group_id": "near-63a35ccbceb5c530",
+      "similarity": 0.987358,
+      "duplicated_loc": 30,
+      "functions": [
+        {
+          "path": "src/research/investment_profile.py",
+          "qualified_name": "_latest_reviews",
+          "lineno": 381,
+          "end_lineno": 398,
+          "body_lines": 15,
+          "ast_nodes": 98,
+          "normalized_hash": "cac1656990d5c183fc05fb0b3b912707782735a5cf52f5e4dfd714904e996113"
+        },
+        {
+          "path": "src/research/investment_profile.py",
+          "qualified_name": "_latest_etf_reviews",
+          "lineno": 401,
+          "end_lineno": 418,
+          "body_lines": 15,
+          "ast_nodes": 98,
+          "normalized_hash": "4233ab41de82d0e0a824a64417ed23c295304eb7fc4ef15118947dfa9baf6e53"
+        }
+      ]
+    },
+    {
+      "group_id": "near-64367613b3745ddd",
+      "similarity": 0.854814,
+      "duplicated_loc": 97,
+      "functions": [
+        {
+          "path": "src/provenance/issuer_registry_bootstrap.py",
+          "qualified_name": "_persist_historical_reporting_scope",
+          "lineno": 3527,
+          "end_lineno": 3582,
+          "body_lines": 47,
+          "ast_nodes": 205,
+          "normalized_hash": "4d05dd62ba29acbcfca8f7423d965714aeece5502da76f49b20b66ea410a3e55"
+        },
+        {
+          "path": "src/provenance/issuer_registry_bootstrap.py",
+          "qualified_name": "_persist_retired_ticker_reporting_scope",
+          "lineno": 3585,
+          "end_lineno": 3644,
+          "body_lines": 50,
+          "ast_nodes": 236,
+          "normalized_hash": "b938c3bec905a1289ec0f21b8ded689689b11a1bcfa665b16e74e9c601c72240"
+        }
+      ]
+    },
+    {
+      "group_id": "near-650d2182d9f79cf5",
+      "similarity": 0.900354,
+      "duplicated_loc": 107,
+      "functions": [
+        {
+          "path": "execution/comments_server_financial_evidence_routes.py",
+          "qualified_name": "register_growth_evidence_routes",
+          "lineno": 18,
+          "end_lineno": 79,
+          "body_lines": 54,
+          "ast_nodes": 367,
+          "normalized_hash": "7d1bb5e4cfafef33ebd5ac33c4dfd7e83685ee1c639acb9a21335bb5cf9e57d1"
+        },
+        {
+          "path": "execution/comments_server_financial_evidence_routes.py",
+          "qualified_name": "register_growth_evidence_routes.peek_financial_calculation",
+          "lineno": 26,
+          "end_lineno": 79,
+          "body_lines": 53,
+          "ast_nodes": 328,
+          "normalized_hash": "6bea0305ba6ec58bd5dd1b34388c0db3ad18ebd9effedc7ec2afe67100dfe1fa"
+        }
+      ]
+    },
+    {
+      "group_id": "near-6cd183ea567db10a",
+      "similarity": 0.99127,
+      "duplicated_loc": 34,
+      "functions": [
         {
           "path": "src/compute/company_description.py",
           "qualified_name": "extract_relevant_text",
-          "lineno": 341,
-          "end_lineno": 358,
+          "lineno": 331,
+          "end_lineno": 348,
           "body_lines": 17,
           "ast_nodes": 162,
           "normalized_hash": "57ac8a144b9437ce711929e3f28b05740f23973630cb68626f67663c457c273b"
-        }
-      ]
-    },
-    {
-      "group_id": "near-669aab7e56d8a11d",
-      "similarity": 0.891548,
-      "duplicated_loc": 32,
-      "functions": [
-        {
-          "path": "src/provenance/metric_ontology.py",
-          "qualified_name": "MetricOntology._insert_or_verify",
-          "lineno": 553,
-          "end_lineno": 576,
-          "body_lines": 16,
-          "ast_nodes": 156,
-          "normalized_hash": "12adf4520276259978e4f532ea8d6f37f341c15d4e33d175fb10af0c9ba26645"
         },
         {
-          "path": "src/provenance/research_snapshot.py",
-          "qualified_name": "_insert_exact",
-          "lineno": 366,
-          "end_lineno": 389,
-          "body_lines": 16,
-          "ast_nodes": 155,
-          "normalized_hash": "36f721de8fdd9512672efb3a964d58abcbdc61f16b31d4a52ed9df4d64da9b42"
-        }
-      ]
-    },
-    {
-      "group_id": "near-6756ae976f434eab",
-      "similarity": 0.853888,
-      "duplicated_loc": 50,
-      "functions": [
-        {
-          "path": "src/provenance/research_snapshot.py",
-          "qualified_name": "_persist_research_universe",
-          "lineno": 2208,
-          "end_lineno": 2239,
-          "body_lines": 28,
-          "ast_nodes": 149,
-          "normalized_hash": "04888de0af792b5320671b73842d89f13721a7b22071dc19c362400c5723ae6d"
-        },
-        {
-          "path": "src/provenance/research_snapshot.py",
-          "qualified_name": "_verify_stored_research_universe",
-          "lineno": 2242,
-          "end_lineno": 2267,
-          "body_lines": 22,
-          "ast_nodes": 137,
-          "normalized_hash": "824074f7147376a77f5113c885dd4c3f62df611de19c5b4d5eeed8c3f4c0a6c2"
-        }
-      ]
-    },
-    {
-      "group_id": "near-6c6d1d6f9ed0a1c6",
-      "similarity": 0.964821,
-      "duplicated_loc": 55,
-      "functions": [
-        {
-          "path": "execution/backfill_transcripts.py",
-          "qualified_name": "_recorded_evidence_path",
-          "lineno": 254,
-          "end_lineno": 281,
-          "body_lines": 27,
-          "ast_nodes": 219,
-          "normalized_hash": "166f9049530724792263c5ac1efe59dc856dd09400c5d09d8a07c78895903f5d"
-        },
-        {
-          "path": "execution/scan_ir_transcripts.py",
-          "qualified_name": "_recorded_evidence_path",
-          "lineno": 108,
-          "end_lineno": 136,
-          "body_lines": 28,
-          "ast_nodes": 227,
-          "normalized_hash": "3106bd9ffbb5c098df6f3b4c1e15c21ed06d4de35dd1db326eefaf84f728f355"
+          "path": "src/compute/segment_definitions.py",
+          "qualified_name": "_extract_relevant_text",
+          "lineno": 183,
+          "end_lineno": 200,
+          "body_lines": 17,
+          "ast_nodes": 162,
+          "normalized_hash": "31ac02dbaeb4e294ba9557a4c74c794b0ca528520ff6942118a9018a902a2562"
         }
       ]
     },
@@ -1775,31 +1750,6 @@
       ]
     },
     {
-      "group_id": "near-71876f330d6d266a",
-      "similarity": 0.897835,
-      "duplicated_loc": 175,
-      "functions": [
-        {
-          "path": "src/pipeline/transcript_acquisition.py",
-          "qualified_name": "register_transcript_receipt_sqlite_functions",
-          "lineno": 465,
-          "end_lineno": 572,
-          "body_lines": 103,
-          "ast_nodes": 450,
-          "normalized_hash": "5a62134f01fa73db532fcb81dd7328d3685aae15d8465fbbc754d6d187f65449"
-        },
-        {
-          "path": "src/pipeline/transcript_acquisition.py",
-          "qualified_name": "register_transcript_receipt_sqlite_functions.validate",
-          "lineno": 474,
-          "end_lineno": 565,
-          "body_lines": 72,
-          "ast_nodes": 407,
-          "normalized_hash": "497e94ed31a2f881eed434d61393a48ffbfdff895265a481481216df57317487"
-        }
-      ]
-    },
-    {
       "group_id": "near-71e77e36b2f43058",
       "similarity": 0.880605,
       "duplicated_loc": 77,
@@ -1821,31 +1771,6 @@
           "body_lines": 43,
           "ast_nodes": 248,
           "normalized_hash": "70451e044141146c1f079d830d7701be8ed00cd4495ba9da14aae6733883d18f"
-        }
-      ]
-    },
-    {
-      "group_id": "near-725811cf787dabf8",
-      "similarity": 0.985816,
-      "duplicated_loc": 44,
-      "functions": [
-        {
-          "path": "execution/build_meli_platform_dcf.py",
-          "qualified_name": "scenarios_block",
-          "lineno": 316,
-          "end_lineno": 338,
-          "body_lines": 22,
-          "ast_nodes": 148,
-          "normalized_hash": "c3c4c6bcce533dd642a961b09911db97ecbc05e54948c6696809ffd779fcd8c5"
-        },
-        {
-          "path": "execution/build_nu_platform_dcf.py",
-          "qualified_name": "scenarios_block",
-          "lineno": 432,
-          "end_lineno": 454,
-          "body_lines": 22,
-          "ast_nodes": 148,
-          "normalized_hash": "62d41abbc401ffb78ed9a64d9706119547e70426067d543217b6a345aecb9bf7"
         }
       ]
     },
@@ -1925,27 +1850,52 @@
       ]
     },
     {
-      "group_id": "near-79574a82b8458e26",
-      "similarity": 0.859401,
-      "duplicated_loc": 88,
+      "group_id": "near-76f20884b688a36d",
+      "similarity": 0.963665,
+      "duplicated_loc": 33,
       "functions": [
         {
-          "path": "src/provenance/population_canonical_resolution.py",
-          "qualified_name": "_plane_verification",
-          "lineno": 1865,
-          "end_lineno": 1916,
-          "body_lines": 44,
-          "ast_nodes": 212,
-          "normalized_hash": "d4f44b20be152337d945ae08e048fd18e501ec02d917f54b4187d92a1fcbd595"
+          "path": "execution/analyze_filing_intelligence.py",
+          "qualified_name": "_extract_relevant_text",
+          "lineno": 115,
+          "end_lineno": 131,
+          "body_lines": 16,
+          "ast_nodes": 160,
+          "normalized_hash": "7cb87ae844ca5fb0fd50715eebfcdb2268745c3a677d2724f1c9eccea7cb6326"
         },
         {
-          "path": "src/provenance/population_document_processing.py",
-          "qualified_name": "_document_plane_verification",
-          "lineno": 2105,
-          "end_lineno": 2154,
-          "body_lines": 44,
-          "ast_nodes": 190,
-          "normalized_hash": "7eb4559dd0daefe67a6ae14a79db046abbff3d28e2a466ac0fdb8ec284924b83"
+          "path": "src/compute/company_description.py",
+          "qualified_name": "extract_relevant_text",
+          "lineno": 331,
+          "end_lineno": 348,
+          "body_lines": 17,
+          "ast_nodes": 162,
+          "normalized_hash": "57ac8a144b9437ce711929e3f28b05740f23973630cb68626f67663c457c273b"
+        }
+      ]
+    },
+    {
+      "group_id": "near-77f5fbd0cb7b673d",
+      "similarity": 0.870036,
+      "duplicated_loc": 34,
+      "functions": [
+        {
+          "path": "src/ask/context.py",
+          "qualified_name": "tracked_tickers",
+          "lineno": 48,
+          "end_lineno": 67,
+          "body_lines": 19,
+          "ast_nodes": 94,
+          "normalized_hash": "d305158785ec8ddc5cacc92916e31519d0beefc340ac956b950e791e2dee7b0d"
+        },
+        {
+          "path": "src/viewspec/nl_compile.py",
+          "qualified_name": "_tracked_tickers",
+          "lineno": 94,
+          "end_lineno": 109,
+          "body_lines": 15,
+          "ast_nodes": 94,
+          "normalized_hash": "cf95abeb84f5fb2b1a91b55c80c880c212f7a00d7e99cdae0779884efa7b8014"
         }
       ]
     },
@@ -2025,52 +1975,27 @@
       ]
     },
     {
-      "group_id": "near-7d8c62b3e4451b25",
-      "similarity": 0.99127,
-      "duplicated_loc": 34,
+      "group_id": "near-7db630c3df39421e",
+      "similarity": 0.972951,
+      "duplicated_loc": 53,
       "functions": [
         {
-          "path": "src/compute/company_description.py",
-          "qualified_name": "extract_relevant_text",
-          "lineno": 341,
-          "end_lineno": 358,
-          "body_lines": 17,
-          "ast_nodes": 162,
-          "normalized_hash": "57ac8a144b9437ce711929e3f28b05740f23973630cb68626f67663c457c273b"
+          "path": "src/provenance/atomic_cutover.py",
+          "qualified_name": "_replace_live_with_candidate",
+          "lineno": 609,
+          "end_lineno": 646,
+          "body_lines": 32,
+          "ast_nodes": 149,
+          "normalized_hash": "d9957f9c164587bad1d8b23bdaa489a4fbfd7e2da1c9fa88ec5998b8313c0fa1"
         },
         {
-          "path": "src/compute/segment_definitions.py",
-          "qualified_name": "_extract_relevant_text",
-          "lineno": 183,
-          "end_lineno": 200,
-          "body_lines": 17,
-          "ast_nodes": 162,
-          "normalized_hash": "31ac02dbaeb4e294ba9557a4c74c794b0ca528520ff6942118a9018a902a2562"
-        }
-      ]
-    },
-    {
-      "group_id": "near-7e02b696f35a4922",
-      "similarity": 0.959184,
-      "duplicated_loc": 30,
-      "functions": [
-        {
-          "path": "src/operations/models.py",
-          "qualified_name": "SchedulerRuntimeReceipt._available_attempt_has_evidence",
-          "lineno": 270,
-          "end_lineno": 285,
-          "body_lines": 15,
-          "ast_nodes": 85,
-          "normalized_hash": "597a0589925786e074ee9e19c2f417bbef989a01d5c2c6cfd667523bb847d4a2"
-        },
-        {
-          "path": "src/operations/models.py",
-          "qualified_name": "ServiceRuntimeReceipt._available_attempt_has_evidence",
-          "lineno": 305,
-          "end_lineno": 320,
-          "body_lines": 15,
-          "ast_nodes": 85,
-          "normalized_hash": "fd5ed4acfd50d0dc9ef0e711a7c62a9dbe53625872e7b9a21233147dda32b91e"
+          "path": "src/provenance/data_backbone_rehearsal.py",
+          "qualified_name": "_replace_throwaway_live",
+          "lineno": 1228,
+          "end_lineno": 1249,
+          "body_lines": 21,
+          "ast_nodes": 147,
+          "normalized_hash": "66debeb83aadd8607b309e4ece33281c4db9142b0b308c7263b793a1307f75c6"
         }
       ]
     },
@@ -2100,27 +2025,52 @@
       ]
     },
     {
-      "group_id": "near-82a7cb11e3124c70",
-      "similarity": 0.960327,
-      "duplicated_loc": 32,
+      "group_id": "near-82387097bc4e9a97",
+      "similarity": 0.959184,
+      "duplicated_loc": 30,
       "functions": [
         {
-          "path": "src/report/renderers/markdown.py",
-          "qualified_name": "_quarterly_table",
-          "lineno": 670,
-          "end_lineno": 686,
-          "body_lines": 16,
-          "ast_nodes": 195,
-          "normalized_hash": "fc8bad8b0642f8e90d5d9da6897aedde14cfbef6f6b5149c70465941b46b2971"
+          "path": "src/operations/models.py",
+          "qualified_name": "SchedulerRuntimeReceipt._available_attempt_has_evidence",
+          "lineno": 269,
+          "end_lineno": 284,
+          "body_lines": 15,
+          "ast_nodes": 85,
+          "normalized_hash": "597a0589925786e074ee9e19c2f417bbef989a01d5c2c6cfd667523bb847d4a2"
         },
         {
-          "path": "src/report/renderers/markdown.py",
-          "qualified_name": "_segments_table",
-          "lineno": 774,
-          "end_lineno": 790,
-          "body_lines": 16,
-          "ast_nodes": 197,
-          "normalized_hash": "ff59f4e1efd70e925a8d5df977a4f64328ea00ecd456ffa9168136f68f08fdcb"
+          "path": "src/operations/models.py",
+          "qualified_name": "ServiceRuntimeReceipt._available_attempt_has_evidence",
+          "lineno": 304,
+          "end_lineno": 319,
+          "body_lines": 15,
+          "ast_nodes": 85,
+          "normalized_hash": "fd5ed4acfd50d0dc9ef0e711a7c62a9dbe53625872e7b9a21233147dda32b91e"
+        }
+      ]
+    },
+    {
+      "group_id": "near-844594917f8eb072",
+      "similarity": 0.864014,
+      "duplicated_loc": 93,
+      "functions": [
+        {
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_bank",
+          "lineno": 898,
+          "end_lineno": 939,
+          "body_lines": 41,
+          "ast_nodes": 297,
+          "normalized_hash": "9f62fcae966e698274dd5e8f82b009834355891039b6064792010a4fd27e2909"
+        },
+        {
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_platform",
+          "lineno": 1046,
+          "end_lineno": 1104,
+          "body_lines": 52,
+          "ast_nodes": 324,
+          "normalized_hash": "bd3342067e982994025063df88d164627d54d0ce6714e12cbbc04bab94f6c8b3"
         }
       ]
     },
@@ -2150,27 +2100,27 @@
       ]
     },
     {
-      "group_id": "near-8566fcae8f66f1dc",
-      "similarity": 0.874529,
-      "duplicated_loc": 50,
+      "group_id": "near-85380ddec0098500",
+      "similarity": 0.981631,
+      "duplicated_loc": 98,
       "functions": [
         {
-          "path": "execution/discover_ir_documents_all.py",
-          "qualified_name": "_discovery_from_checkpoint",
-          "lineno": 788,
-          "end_lineno": 812,
-          "body_lines": 24,
-          "ast_nodes": 179,
-          "normalized_hash": "e3e678cbcbef36b210d95b58d3631370b5c10fb9398f7b028b481ac2da1912c1"
+          "path": "execution/import_visible_rubrik_observations.py",
+          "qualified_name": "main",
+          "lineno": 40,
+          "end_lineno": 89,
+          "body_lines": 49,
+          "ast_nodes": 331,
+          "normalized_hash": "a2187a591fec694f9ad3377617a83988cd32a0509d2f49e3d54457ac6a23fad4"
         },
         {
-          "path": "execution/discover_ir_documents_all.py",
-          "qualified_name": "_result_from_checkpoint",
-          "lineno": 827,
-          "end_lineno": 853,
-          "body_lines": 26,
-          "ast_nodes": 200,
-          "normalized_hash": "a5d6806c9c9af68f6878fcd19f6c4330eac35af9f75082499f066d5ba6c1881e"
+          "path": "execution/import_visible_wix_observations.py",
+          "qualified_name": "main",
+          "lineno": 40,
+          "end_lineno": 89,
+          "body_lines": 49,
+          "ast_nodes": 331,
+          "normalized_hash": "e78d75b83cd7b48b213424784ca24b08af297afe2237eefd23fc06936a609a1a"
         }
       ]
     },
@@ -2200,49 +2150,24 @@
       ]
     },
     {
-      "group_id": "near-896b0d139933aca9",
-      "similarity": 0.850777,
-      "duplicated_loc": 42,
+      "group_id": "near-8a660f6e54723411",
+      "similarity": 0.9609,
+      "duplicated_loc": 32,
       "functions": [
         {
-          "path": "src/exec_comp_store.py",
-          "qualified_name": "_open",
-          "lineno": 80,
-          "end_lineno": 101,
-          "body_lines": 21,
-          "ast_nodes": 107,
-          "normalized_hash": "0fcf686c086d879e65211ddb375708fa023d1f99adec426d88d800614a1c075c"
-        },
-        {
-          "path": "src/insider_transactions.py",
-          "qualified_name": "_open",
-          "lineno": 113,
-          "end_lineno": 138,
-          "body_lines": 21,
-          "ast_nodes": 119,
-          "normalized_hash": "6d7e5b5c36ea90462722189d58a5934181bbc21983211b0b78d67ba9c4e9b1a6"
-        }
-      ]
-    },
-    {
-      "group_id": "near-8aa895e632299a44",
-      "similarity": 0.93911,
-      "duplicated_loc": 31,
-      "functions": [
-        {
-          "path": "src/operations/review_bundle.py",
-          "qualified_name": "database_lineage_identity",
-          "lineno": 296,
-          "end_lineno": 311,
-          "body_lines": 15,
+          "path": "src/provenance/population_canonical_resolution.py",
+          "qualified_name": "database_instance_id",
+          "lineno": 456,
+          "end_lineno": 472,
+          "body_lines": 16,
           "ast_nodes": 101,
-          "normalized_hash": "b0a273ab5d643f077ff03373ffdc734724c6483c8bd85d595f6e10783eae0565"
+          "normalized_hash": "fd65fa46f72b05ae509e8fc247d318e7a19c4a0dd10291c26a5f5c821ba4a006"
         },
         {
           "path": "src/provenance/population_document_processing.py",
           "qualified_name": "database_instance_id",
-          "lineno": 442,
-          "end_lineno": 458,
+          "lineno": 445,
+          "end_lineno": 461,
           "body_lines": 16,
           "ast_nodes": 101,
           "normalized_hash": "db6688ada88c7984d4f4d104ddf11ed1290c3a5799b1de6b9fac64cec5725ad5"
@@ -2250,27 +2175,27 @@
       ]
     },
     {
-      "group_id": "near-8baa72d52da37df6",
-      "similarity": 0.925569,
-      "duplicated_loc": 98,
+      "group_id": "near-8b3c8e51ddf126dd",
+      "similarity": 0.859401,
+      "duplicated_loc": 88,
       "functions": [
         {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_holdco",
-          "lineno": 927,
-          "end_lineno": 975,
-          "body_lines": 48,
-          "ast_nodes": 303,
-          "normalized_hash": "3dbd40c4fcecbaf3caf65568f2e11726953076142fb53eab0269f5ae07942b50"
+          "path": "src/provenance/population_canonical_resolution.py",
+          "qualified_name": "_plane_verification",
+          "lineno": 1865,
+          "end_lineno": 1916,
+          "body_lines": 44,
+          "ast_nodes": 212,
+          "normalized_hash": "d4f44b20be152337d945ae08e048fd18e501ec02d917f54b4187d92a1fcbd595"
         },
         {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_platform",
-          "lineno": 1031,
-          "end_lineno": 1081,
-          "body_lines": 50,
-          "ast_nodes": 297,
-          "normalized_hash": "8ed96926f3d6bf3e8807c7c54039d1c6b6e1b8065065e52657b6d1688df4ace8"
+          "path": "src/provenance/population_research_snapshots.py",
+          "qualified_name": "_research_plane_verification",
+          "lineno": 1298,
+          "end_lineno": 1347,
+          "body_lines": 44,
+          "ast_nodes": 190,
+          "normalized_hash": "e57a47bb3b7bb3d5f11fd32c95742a435bc7ae78e74b7f4fadb0e8ce7a25a07b"
         }
       ]
     },
@@ -2300,27 +2225,52 @@
       ]
     },
     {
-      "group_id": "near-92e020dd95e82608",
-      "similarity": 0.935224,
-      "duplicated_loc": 106,
+      "group_id": "near-95a28f9099bf007f",
+      "similarity": 0.873465,
+      "duplicated_loc": 67,
       "functions": [
         {
-          "path": "src/provenance/fact_plane_v2.py",
-          "qualified_name": "FactPlaneV2._load_observation",
-          "lineno": 2104,
-          "end_lineno": 2159,
-          "body_lines": 52,
-          "ast_nodes": 354,
-          "normalized_hash": "9b9a130b6090b5fea9e82db5cf63db2125f4dc242539cb0731770a991239de2c"
+          "path": "src/compute/say_do_extractor.py",
+          "qualified_name": "_fetch_transcript_segment_inputs",
+          "lineno": 220,
+          "end_lineno": 256,
+          "body_lines": 34,
+          "ast_nodes": 220,
+          "normalized_hash": "43651d5d2813ec58a5a5a8343fd1059964d586cbca87296c6355be29983940c0"
         },
         {
-          "path": "src/provenance/fact_read_model.py",
-          "qualified_name": "FactReadModel._load_observation",
-          "lineno": 961,
-          "end_lineno": 1018,
-          "body_lines": 54,
-          "ast_nodes": 350,
-          "normalized_hash": "a35fac9fe44d8847a07d24dbd4a4ba8c6f3fb9dfdc7afcf639bce5b5ab66411f"
+          "path": "src/pipeline/commitment_scan_receipts.py",
+          "qualified_name": "selected_segment_versions",
+          "lineno": 287,
+          "end_lineno": 322,
+          "body_lines": 33,
+          "ast_nodes": 209,
+          "normalized_hash": "9f1b7c96104880bca3eda8aefd4ed15ea4ecec7ba7397cb120f6497c8edb0c10"
+        }
+      ]
+    },
+    {
+      "group_id": "near-965905671d2c345f",
+      "similarity": 0.93911,
+      "duplicated_loc": 31,
+      "functions": [
+        {
+          "path": "src/operations/review_bundle.py",
+          "qualified_name": "database_lineage_identity",
+          "lineno": 296,
+          "end_lineno": 311,
+          "body_lines": 15,
+          "ast_nodes": 101,
+          "normalized_hash": "b0a273ab5d643f077ff03373ffdc734724c6483c8bd85d595f6e10783eae0565"
+        },
+        {
+          "path": "src/provenance/population_document_processing.py",
+          "qualified_name": "database_instance_id",
+          "lineno": 445,
+          "end_lineno": 461,
+          "body_lines": 16,
+          "ast_nodes": 101,
+          "normalized_hash": "db6688ada88c7984d4f4d104ddf11ed1290c3a5799b1de6b9fac64cec5725ad5"
         }
       ]
     },
@@ -2375,77 +2325,27 @@
       ]
     },
     {
-      "group_id": "near-99457e742680eadf",
-      "similarity": 0.854396,
-      "duplicated_loc": 88,
+      "group_id": "near-9f7453941d4efb3f",
+      "similarity": 0.931842,
+      "duplicated_loc": 106,
       "functions": [
         {
-          "path": "src/operations/snapshot.py",
-          "qualified_name": "_runs_observation",
-          "lineno": 706,
-          "end_lineno": 757,
-          "body_lines": 46,
-          "ast_nodes": 259,
-          "normalized_hash": "d7ac31a644040887c712d4b54e6f4d862b381a245e4a5a387c347b1390af07ec"
+          "path": "src/provenance/fact_plane_v2.py",
+          "qualified_name": "FactPlaneV2._load_observation",
+          "lineno": 2110,
+          "end_lineno": 2165,
+          "body_lines": 52,
+          "ast_nodes": 354,
+          "normalized_hash": "2c9f4e2abb6f6ce6e5a31765314031f8d4fb340c73c923dbcb23a8a3c7b7f10d"
         },
         {
-          "path": "src/operations/snapshot.py",
-          "qualified_name": "_source_calls_observation",
-          "lineno": 760,
-          "end_lineno": 807,
-          "body_lines": 42,
-          "ast_nodes": 234,
-          "normalized_hash": "0f638c71f38dc3d31c1e83bbbbf1119042c806801761a5379968ed343fe391db"
-        }
-      ]
-    },
-    {
-      "group_id": "near-9cce1b7015aa97f4",
-      "similarity": 0.891599,
-      "duplicated_loc": 40,
-      "functions": [
-        {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_source_file",
-          "lineno": 126,
-          "end_lineno": 150,
-          "body_lines": 19,
-          "ast_nodes": 126,
-          "normalized_hash": "879b007ef8a899cdbec579f5b78bc7ab07b0722eb6a1e2fd56131d3447ae39d8"
-        },
-        {
-          "path": "src/dcf/provenance.py",
-          "qualified_name": "_source_record",
-          "lineno": 49,
-          "end_lineno": 76,
-          "body_lines": 21,
-          "ast_nodes": 135,
-          "normalized_hash": "d4c6f4b72919dff123a9c2bc44abdcc69986d9a6c538f34540cc8e4a654257cb"
-        }
-      ]
-    },
-    {
-      "group_id": "near-9d13a3b4bdafa3c4",
-      "similarity": 0.925484,
-      "duplicated_loc": 38,
-      "functions": [
-        {
-          "path": "src/provenance/population_canonical_resolution.py",
-          "qualified_name": "verify_canonical_resolution_receipt_current",
-          "lineno": 431,
-          "end_lineno": 453,
-          "body_lines": 19,
-          "ast_nodes": 79,
-          "normalized_hash": "bea7e9fc70c2448259a42f620d332efe6fd4d231a97eb01fe7b96d4bfc359303"
-        },
-        {
-          "path": "src/provenance/population_document_processing.py",
-          "qualified_name": "verify_document_processing_receipt_current",
-          "lineno": 417,
-          "end_lineno": 439,
-          "body_lines": 19,
-          "ast_nodes": 79,
-          "normalized_hash": "55aaef51fcbf86916c80c257d3c459ddaf447cb07a6f38919979b505b3786550"
+          "path": "src/provenance/fact_read_model.py",
+          "qualified_name": "FactReadModel._load_observation",
+          "lineno": 1208,
+          "end_lineno": 1265,
+          "body_lines": 54,
+          "ast_nodes": 350,
+          "normalized_hash": "1c0613ea8e17f6272cbe1f7712ee4e808b5e6875d4b42dcdf90dd94644cc853f"
         }
       ]
     },
@@ -2550,52 +2450,52 @@
       ]
     },
     {
-      "group_id": "near-a32f301286083302",
-      "similarity": 0.949495,
-      "duplicated_loc": 37,
+      "group_id": "near-a38a2349f6bc1f4f",
+      "similarity": 0.891599,
+      "duplicated_loc": 40,
       "functions": [
         {
-          "path": "src/decision_conditions.py",
-          "qualified_name": "conditions_from_json",
-          "lineno": 487,
-          "end_lineno": 506,
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_source_file",
+          "lineno": 136,
+          "end_lineno": 160,
           "body_lines": 19,
-          "ast_nodes": 149,
-          "normalized_hash": "50b06f3ad14fd3cdf3f56ff7c252cca5f6ab45fe71b89c87261c41d332801b1f"
+          "ast_nodes": 126,
+          "normalized_hash": "879b007ef8a899cdbec579f5b78bc7ab07b0722eb6a1e2fd56131d3447ae39d8"
         },
         {
-          "path": "src/decision_conditions.py",
-          "qualified_name": "qualitative_conditions_from_json",
-          "lineno": 538,
-          "end_lineno": 556,
-          "body_lines": 18,
-          "ast_nodes": 149,
-          "normalized_hash": "18dd8f865b27dede16016772bdf832fee425bafaa40ceb6bf0251d1190f4b2dd"
+          "path": "src/dcf/provenance.py",
+          "qualified_name": "_source_record",
+          "lineno": 49,
+          "end_lineno": 76,
+          "body_lines": 21,
+          "ast_nodes": 135,
+          "normalized_hash": "d4c6f4b72919dff123a9c2bc44abdcc69986d9a6c538f34540cc8e4a654257cb"
         }
       ]
     },
     {
-      "group_id": "near-a3f75482f19c0cea",
-      "similarity": 0.913594,
-      "duplicated_loc": 98,
+      "group_id": "near-a480221fd064b5cc",
+      "similarity": 0.873656,
+      "duplicated_loc": 33,
       "functions": [
         {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_holdco",
-          "lineno": 927,
-          "end_lineno": 975,
-          "body_lines": 48,
-          "ast_nodes": 303,
-          "normalized_hash": "3dbd40c4fcecbaf3caf65568f2e11726953076142fb53eab0269f5ae07942b50"
+          "path": "src/provenance/image_ocr_extraction.py",
+          "qualified_name": "_stored_values_match",
+          "lineno": 1141,
+          "end_lineno": 1157,
+          "body_lines": 16,
+          "ast_nodes": 138,
+          "normalized_hash": "b200f86a1d1e3738f7305a9ea7b87ab6fed060fef4b241049ea31f1e0feb176e"
         },
         {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_fintech_sotp",
-          "lineno": 978,
-          "end_lineno": 1028,
-          "body_lines": 50,
-          "ast_nodes": 297,
-          "normalized_hash": "7cd8cdac553cb035bace5c709d69c8f34a12297d0ad2bca10874aad35b1b690f"
+          "path": "src/provenance/ocr_extraction.py",
+          "qualified_name": "_stored_values_match",
+          "lineno": 1408,
+          "end_lineno": 1425,
+          "body_lines": 17,
+          "ast_nodes": 127,
+          "normalized_hash": "df52440127a606c6ecbcbc279d083774c547af455fbb648b8b4ffdff9c5ae6be"
         }
       ]
     },
@@ -2700,27 +2600,27 @@
       ]
     },
     {
-      "group_id": "near-aa471bd558fd3890",
-      "similarity": 0.876705,
-      "duplicated_loc": 114,
+      "group_id": "near-ac05695b12b08ca8",
+      "similarity": 0.865331,
+      "duplicated_loc": 72,
       "functions": [
         {
-          "path": "execution/build_fintech_sotp.py",
-          "qualified_name": "_load",
-          "lineno": 174,
-          "end_lineno": 232,
-          "body_lines": 58,
-          "ast_nodes": 420,
-          "normalized_hash": "d4dffe60d6c374f346fd8c5aaaa3c683a13a9f90a1aa0ca797f6e6721c4d31ee"
+          "path": "src/compute/segment_quarterly_10q.py",
+          "qualified_name": "_resolve_doc_id",
+          "lineno": 133,
+          "end_lineno": 170,
+          "body_lines": 35,
+          "ast_nodes": 197,
+          "normalized_hash": "fa17fd85bdfa6362fb55c868bfa8f9fdf975fdc07b1b06dc7ca7ffb0f2901b4e"
         },
         {
-          "path": "execution/build_nu_platform_dcf.py",
-          "qualified_name": "load_assumptions",
-          "lineno": 317,
-          "end_lineno": 373,
-          "body_lines": 56,
-          "ast_nodes": 397,
-          "normalized_hash": "ae06b690acd0f2ee3f2948588171325ecccfe4dd9dd90656df2b711503fba4aa"
+          "path": "src/table_extractors/generic_xbrl_capture.py",
+          "qualified_name": "_resolve_doc_id",
+          "lineno": 463,
+          "end_lineno": 502,
+          "body_lines": 37,
+          "ast_nodes": 199,
+          "normalized_hash": "fc9c3c5bd0fd5d06817eeeb4b50181d3771b62466b3ffee4fddf266b9cd679bd"
         }
       ]
     },
@@ -2750,56 +2650,6 @@
       ]
     },
     {
-      "group_id": "near-afe39c52d81a285b",
-      "similarity": 0.988263,
-      "duplicated_loc": 30,
-      "functions": [
-        {
-          "path": "src/sqlite_runtime.py",
-          "qualified_name": "ManagedCursor.execute",
-          "lineno": 71,
-          "end_lineno": 86,
-          "body_lines": 15,
-          "ast_nodes": 106,
-          "normalized_hash": "b322d231742ae5939267e0188ddcc307264a02ce854fd6b794ccf6261eb55ed3"
-        },
-        {
-          "path": "src/sqlite_runtime.py",
-          "qualified_name": "ManagedCursor.executemany",
-          "lineno": 88,
-          "end_lineno": 103,
-          "body_lines": 15,
-          "ast_nodes": 106,
-          "normalized_hash": "9edd56b5be880d50ab7536877c3db25d99381f6723f47a1e96350fe9ac37d54d"
-        }
-      ]
-    },
-    {
-      "group_id": "near-aff0a79993b029e0",
-      "similarity": 0.911911,
-      "duplicated_loc": 100,
-      "functions": [
-        {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_fintech_sotp",
-          "lineno": 978,
-          "end_lineno": 1028,
-          "body_lines": 50,
-          "ast_nodes": 297,
-          "normalized_hash": "7cd8cdac553cb035bace5c709d69c8f34a12297d0ad2bca10874aad35b1b690f"
-        },
-        {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_platform",
-          "lineno": 1031,
-          "end_lineno": 1081,
-          "body_lines": 50,
-          "ast_nodes": 297,
-          "normalized_hash": "8ed96926f3d6bf3e8807c7c54039d1c6b6e1b8065065e52657b6d1688df4ace8"
-        }
-      ]
-    },
-    {
       "group_id": "near-b4c25400c20f03d2",
       "similarity": 0.991482,
       "duplicated_loc": 38,
@@ -2825,6 +2675,31 @@
       ]
     },
     {
+      "group_id": "near-b5e200f496946d0d",
+      "similarity": 0.941557,
+      "duplicated_loc": 106,
+      "functions": [
+        {
+          "path": "src/provenance/population_document_processing.py",
+          "qualified_name": "_document_processing_receipt_verification_chain",
+          "lineno": 519,
+          "end_lineno": 576,
+          "body_lines": 54,
+          "ast_nodes": 437,
+          "normalized_hash": "42d30e4f36aec15c2722f515c4cdba75811fb5273adfe3e3d5fbb427e743fba8"
+        },
+        {
+          "path": "src/provenance/population_metric_ontology.py",
+          "qualified_name": "_metric_ontology_receipt_verification_chain",
+          "lineno": 796,
+          "end_lineno": 851,
+          "body_lines": 52,
+          "ast_nodes": 437,
+          "normalized_hash": "3f37e13b5e18c98582808fa2b9c143e5216936a9231e683935b0f048b3d27cd9"
+        }
+      ]
+    },
+    {
       "group_id": "near-b645e428e5394935",
       "similarity": 0.927949,
       "duplicated_loc": 168,
@@ -2846,31 +2721,6 @@
           "body_lines": 82,
           "ast_nodes": 462,
           "normalized_hash": "7c77b7de6b2c672ef50eac403756df75d878c68bfe32ef834081a57c88a73674"
-        }
-      ]
-    },
-    {
-      "group_id": "near-b6f843ca63c67a8a",
-      "similarity": 0.884068,
-      "duplicated_loc": 44,
-      "functions": [
-        {
-          "path": "src/ir_pipeline/approved_ir_observation_capture.py",
-          "qualified_name": "public_robots_allows",
-          "lineno": 1223,
-          "end_lineno": 1241,
-          "body_lines": 18,
-          "ast_nodes": 156,
-          "normalized_hash": "400dd7104ae62ef8d13ca2d32292ced599d9fdaf60d47765a0916b6e309cbbe2"
-        },
-        {
-          "path": "src/ir_pipeline/evidence_capture.py",
-          "qualified_name": "_robots_allows",
-          "lineno": 1177,
-          "end_lineno": 1203,
-          "body_lines": 26,
-          "ast_nodes": 167,
-          "normalized_hash": "cf9f52ff305cae93bdce28c3333aa4bd6bc06ab3598e9c9157bbe009d2002ff9"
         }
       ]
     },
@@ -2925,6 +2775,31 @@
       ]
     },
     {
+      "group_id": "near-c0da338096d2cbb5",
+      "similarity": 0.859821,
+      "duplicated_loc": 213,
+      "functions": [
+        {
+          "path": "src/provenance/issuer_registry_bootstrap.py",
+          "qualified_name": "_persist_reporting_identifier_assertion",
+          "lineno": 2486,
+          "end_lineno": 2617,
+          "body_lines": 108,
+          "ast_nodes": 532,
+          "normalized_hash": "1ed17380ed111717c81efd86841e696433b51e4d87f0706230acc8af6f725d04"
+        },
+        {
+          "path": "src/provenance/issuer_registry_bootstrap.py",
+          "qualified_name": "_persist_security_identifier_assertion",
+          "lineno": 2620,
+          "end_lineno": 2733,
+          "body_lines": 105,
+          "ast_nodes": 484,
+          "normalized_hash": "3a68e8bc2ef09a4d77ac20c1560658937881d9ddcee6b4429ff7f28c7cfd2f24"
+        }
+      ]
+    },
+    {
       "group_id": "near-c1764d031b0764c0",
       "similarity": 0.908367,
       "duplicated_loc": 32,
@@ -2975,52 +2850,27 @@
       ]
     },
     {
-      "group_id": "near-c471e51f97c67f5b",
-      "similarity": 0.941408,
-      "duplicated_loc": 89,
+      "group_id": "near-c6de8e6338c1f237",
+      "similarity": 0.883387,
+      "duplicated_loc": 65,
       "functions": [
         {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_bank",
-          "lineno": 883,
-          "end_lineno": 924,
-          "body_lines": 41,
-          "ast_nodes": 297,
-          "normalized_hash": "9f62fcae966e698274dd5e8f82b009834355891039b6064792010a4fd27e2909"
+          "path": "src/provenance/population_canonical_resolution.py",
+          "qualified_name": "persist_canonical_resolution_receipt",
+          "lineno": 475,
+          "end_lineno": 512,
+          "body_lines": 34,
+          "ast_nodes": 143,
+          "normalized_hash": "263a9d3ebcd5ffe3ba63a4b38c705f918c5a87f3a705efcc972e00b6a5e6a4ad"
         },
         {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_holdco",
-          "lineno": 927,
-          "end_lineno": 975,
-          "body_lines": 48,
-          "ast_nodes": 303,
-          "normalized_hash": "3dbd40c4fcecbaf3caf65568f2e11726953076142fb53eab0269f5ae07942b50"
-        }
-      ]
-    },
-    {
-      "group_id": "near-c5219772ea4ad272",
-      "similarity": 0.911986,
-      "duplicated_loc": 97,
-      "functions": [
-        {
-          "path": "execution/comments_server_financial_evidence_routes.py",
-          "qualified_name": "register_growth_evidence_routes",
-          "lineno": 17,
-          "end_lineno": 72,
-          "body_lines": 49,
-          "ast_nodes": 344,
-          "normalized_hash": "c3ab1a38338f03ccd0f09d291045af59f79f798f4610138e9bb653ba2fce9cf7"
-        },
-        {
-          "path": "execution/comments_server_financial_evidence_routes.py",
-          "qualified_name": "register_growth_evidence_routes.peek_financial_calculation",
-          "lineno": 24,
-          "end_lineno": 72,
-          "body_lines": 48,
-          "ast_nodes": 312,
-          "normalized_hash": "e4f27a4215daccdf6256deaed9262102461c9a3f2d20205896d87541090a2e5b"
+          "path": "src/provenance/population_document_processing.py",
+          "qualified_name": "persist_document_processing_receipt",
+          "lineno": 464,
+          "end_lineno": 498,
+          "body_lines": 31,
+          "ast_nodes": 139,
+          "normalized_hash": "5f0b3bff1a4a0945a3fe12cf81558ff42c99b925668cb913a165bf70ab3c97ff"
         }
       ]
     },
@@ -3050,52 +2900,27 @@
       ]
     },
     {
-      "group_id": "near-c8849f9e79fb46a8",
-      "similarity": 0.876642,
-      "duplicated_loc": 76,
+      "group_id": "near-cc23d7339096ecb1",
+      "similarity": 0.897909,
+      "duplicated_loc": 36,
       "functions": [
         {
-          "path": "src/provenance/population_canonical_resolution.py",
-          "qualified_name": "_validate_canonical_resolution_receipt_successor",
-          "lineno": 593,
-          "end_lineno": 635,
-          "body_lines": 39,
-          "ast_nodes": 242,
-          "normalized_hash": "4d8444cc52937f59c85feccd54ada2069a46c5defafb72dd52a036f203084386"
-        },
-        {
-          "path": "src/provenance/population_document_processing.py",
-          "qualified_name": "_validate_document_processing_receipt_successor",
-          "lineno": 576,
-          "end_lineno": 616,
-          "body_lines": 37,
-          "ast_nodes": 245,
-          "normalized_hash": "f526f5da31d6a9a2f941175fafb70c68b36c92cef8a0dbff876bce97c5acbe67"
-        }
-      ]
-    },
-    {
-      "group_id": "near-c9e64e3313e53848",
-      "similarity": 0.914879,
-      "duplicated_loc": 33,
-      "functions": [
-        {
-          "path": "execution/apply_kpi_semantic_dispositions.py",
-          "qualified_name": "build_parser",
-          "lineno": 144,
-          "end_lineno": 159,
-          "body_lines": 15,
-          "ast_nodes": 161,
-          "normalized_hash": "f99812fc639c7b7e4b313d05d7ba233ce11d1a87dc89364300f15e2cf14f3b44"
-        },
-        {
-          "path": "execution/apply_kpi_semantic_refresh.py",
-          "qualified_name": "build_parser",
-          "lineno": 1582,
-          "end_lineno": 1600,
+          "path": "src/discovery/adjacency.py",
+          "qualified_name": "portfolio_tickers",
+          "lineno": 260,
+          "end_lineno": 278,
           "body_lines": 18,
-          "ast_nodes": 151,
-          "normalized_hash": "a36dc29c121e389eaf60045507ce32935d65625b1ecab0c8ed1a7924deb4e80f"
+          "ast_nodes": 100,
+          "normalized_hash": "6a5f4430dd6fd6e66b130ce5c2de21d5b5b522ff1815303dc209ddf675abea80"
+        },
+        {
+          "path": "src/pipeline/explore_panel.py",
+          "qualified_name": "_default_tickers",
+          "lineno": 269,
+          "end_lineno": 287,
+          "body_lines": 18,
+          "ast_nodes": 95,
+          "normalized_hash": "51c149478618970e1347d62272a523c8c8b0a1e7bfdca81b1c1e49b23348d347"
         }
       ]
     },
@@ -3125,177 +2950,77 @@
       ]
     },
     {
-      "group_id": "near-cce6d82f6b727903",
-      "similarity": 0.987358,
-      "duplicated_loc": 30,
+      "group_id": "near-ccdbdc235bac7c63",
+      "similarity": 0.854396,
+      "duplicated_loc": 88,
       "functions": [
         {
-          "path": "src/research/investment_profile.py",
-          "qualified_name": "_latest_reviews",
-          "lineno": 614,
-          "end_lineno": 631,
-          "body_lines": 15,
-          "ast_nodes": 98,
-          "normalized_hash": "cac1656990d5c183fc05fb0b3b912707782735a5cf52f5e4dfd714904e996113"
+          "path": "src/operations/snapshot.py",
+          "qualified_name": "_runs_observation",
+          "lineno": 704,
+          "end_lineno": 755,
+          "body_lines": 46,
+          "ast_nodes": 259,
+          "normalized_hash": "d7ac31a644040887c712d4b54e6f4d862b381a245e4a5a387c347b1390af07ec"
         },
         {
-          "path": "src/research/investment_profile.py",
-          "qualified_name": "_latest_etf_reviews",
-          "lineno": 634,
-          "end_lineno": 651,
-          "body_lines": 15,
-          "ast_nodes": 98,
-          "normalized_hash": "4233ab41de82d0e0a824a64417ed23c295304eb7fc4ef15118947dfa9baf6e53"
+          "path": "src/operations/snapshot.py",
+          "qualified_name": "_source_calls_observation",
+          "lineno": 758,
+          "end_lineno": 805,
+          "body_lines": 42,
+          "ast_nodes": 234,
+          "normalized_hash": "0f638c71f38dc3d31c1e83bbbbf1119042c806801761a5379968ed343fe391db"
         }
       ]
     },
     {
-      "group_id": "near-cd763800b9a9106a",
-      "similarity": 0.897909,
+      "group_id": "near-cf578d0b1175952f",
+      "similarity": 0.89633,
       "duplicated_loc": 36,
       "functions": [
         {
-          "path": "src/discovery/adjacency.py",
-          "qualified_name": "portfolio_tickers",
-          "lineno": 260,
-          "end_lineno": 278,
-          "body_lines": 18,
-          "ast_nodes": 100,
-          "normalized_hash": "6a5f4430dd6fd6e66b130ce5c2de21d5b5b522ff1815303dc209ddf675abea80"
+          "path": "src/report/sections/financials.py",
+          "qualified_name": "_load_quarterly",
+          "lineno": 1212,
+          "end_lineno": 1233,
+          "body_lines": 21,
+          "ast_nodes": 129,
+          "normalized_hash": "045276fce32dc9f7689fba28d5348959991a12c348274434d80c8f704c396de3"
         },
         {
-          "path": "src/pipeline/explore_panel.py",
-          "qualified_name": "_default_tickers",
-          "lineno": 270,
-          "end_lineno": 288,
-          "body_lines": 18,
-          "ast_nodes": 95,
-          "normalized_hash": "51c149478618970e1347d62272a523c8c8b0a1e7bfdca81b1c1e49b23348d347"
+          "path": "src/report/sections/financials.py",
+          "qualified_name": "_load_annual",
+          "lineno": 1326,
+          "end_lineno": 1341,
+          "body_lines": 15,
+          "ast_nodes": 127,
+          "normalized_hash": "464c132144d761ba44b48d8c2e13d06cfc73be4e3be731957df3809e13798c26"
         }
       ]
     },
     {
-      "group_id": "near-cec7205c06f3912b",
-      "similarity": 0.888986,
-      "duplicated_loc": 36,
+      "group_id": "near-d0e583bc0a7f7520",
+      "similarity": 0.881813,
+      "duplicated_loc": 51,
       "functions": [
         {
-          "path": "src/provenance/fulltext_backfill.py",
-          "qualified_name": "_new_node",
-          "lineno": 1529,
-          "end_lineno": 1567,
-          "body_lines": 19,
-          "ast_nodes": 136,
-          "normalized_hash": "c79f6b666bb423792cabdda3447d04150c340f2590f4caef976503df6739e13d"
+          "path": "execution/discover_ir_documents_all.py",
+          "qualified_name": "_discovery_from_checkpoint",
+          "lineno": 939,
+          "end_lineno": 964,
+          "body_lines": 25,
+          "ast_nodes": 189,
+          "normalized_hash": "cb287c44b4f563b0c70c0dd7b19cccc85ec2b36d89ed2a3689fc404b23381b07"
         },
         {
-          "path": "src/provenance/ocr_extraction.py",
-          "qualified_name": "_new_node",
-          "lineno": 1184,
-          "end_lineno": 1212,
-          "body_lines": 17,
-          "ast_nodes": 121,
-          "normalized_hash": "9d4e12ab704ef6b15cef04361329e539fc038f7f3db024cd19b6f14cd39a7f1f"
-        }
-      ]
-    },
-    {
-      "group_id": "near-cfea060a724de7b9",
-      "similarity": 0.873465,
-      "duplicated_loc": 67,
-      "functions": [
-        {
-          "path": "src/compute/say_do_extractor.py",
-          "qualified_name": "_fetch_transcript_segment_inputs",
-          "lineno": 220,
-          "end_lineno": 256,
-          "body_lines": 34,
-          "ast_nodes": 220,
-          "normalized_hash": "43651d5d2813ec58a5a5a8343fd1059964d586cbca87296c6355be29983940c0"
-        },
-        {
-          "path": "src/pipeline/commitment_scan_receipts.py",
-          "qualified_name": "selected_segment_versions",
-          "lineno": 283,
-          "end_lineno": 318,
-          "body_lines": 33,
-          "ast_nodes": 209,
-          "normalized_hash": "9f1b7c96104880bca3eda8aefd4ed15ea4ecec7ba7397cb120f6497c8edb0c10"
-        }
-      ]
-    },
-    {
-      "group_id": "near-d024dde302aa8b48",
-      "similarity": 0.912127,
-      "duplicated_loc": 44,
-      "functions": [
-        {
-          "path": "src/provenance/metric_ontology.py",
-          "qualified_name": "MetricOntology.persist_metric",
-          "lineno": 595,
-          "end_lineno": 617,
-          "body_lines": 22,
-          "ast_nodes": 66,
-          "normalized_hash": "e7d774c322b5b4c78834b633cf9e95fb897e7e60208a3221372e8b4f43c0e780"
-        },
-        {
-          "path": "src/provenance/metric_ontology.py",
-          "qualified_name": "MetricOntology.persist_axis",
-          "lineno": 619,
-          "end_lineno": 641,
-          "body_lines": 22,
-          "ast_nodes": 66,
-          "normalized_hash": "565be0d4c1f3f71c07366b22e4f8cd3a41bc13901abc2b7ae5477e1a55b7a78a"
-        }
-      ]
-    },
-    {
-      "group_id": "near-d195ac66523ab82d",
-      "similarity": 0.883387,
-      "duplicated_loc": 65,
-      "functions": [
-        {
-          "path": "src/provenance/population_canonical_resolution.py",
-          "qualified_name": "persist_canonical_resolution_receipt",
-          "lineno": 475,
-          "end_lineno": 512,
-          "body_lines": 34,
-          "ast_nodes": 143,
-          "normalized_hash": "263a9d3ebcd5ffe3ba63a4b38c705f918c5a87f3a705efcc972e00b6a5e6a4ad"
-        },
-        {
-          "path": "src/provenance/population_document_processing.py",
-          "qualified_name": "persist_document_processing_receipt",
-          "lineno": 461,
-          "end_lineno": 495,
-          "body_lines": 31,
-          "ast_nodes": 139,
-          "normalized_hash": "5f0b3bff1a4a0945a3fe12cf81558ff42c99b925668cb913a165bf70ab3c97ff"
-        }
-      ]
-    },
-    {
-      "group_id": "near-d62b94e533b60f3b",
-      "similarity": 0.882495,
-      "duplicated_loc": 173,
-      "functions": [
-        {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_meli_sotp",
-          "lineno": 1084,
-          "end_lineno": 1175,
-          "body_lines": 84,
-          "ast_nodes": 463,
-          "normalized_hash": "6875b0ed53ac9712c22857586dd98dd03a9608dc73dfe678ee95dd8e7de770e8"
-        },
-        {
-          "path": "execution/refresh_dcf.py",
-          "qualified_name": "_refresh_onon",
-          "lineno": 1178,
-          "end_lineno": 1274,
-          "body_lines": 89,
-          "ast_nodes": 490,
-          "normalized_hash": "dc6467444d9d17c2bb46aed73a9fd30ab7a78a53509a01e63c5517b9ddef49bc"
+          "path": "execution/discover_ir_documents_all.py",
+          "qualified_name": "_result_from_checkpoint",
+          "lineno": 979,
+          "end_lineno": 1005,
+          "body_lines": 26,
+          "ast_nodes": 200,
+          "normalized_hash": "a5d6806c9c9af68f6878fcd19f6c4330eac35af9f75082499f066d5ba6c1881e"
         }
       ]
     },
@@ -3325,57 +3050,57 @@
       ]
     },
     {
-      "group_id": "near-d75b9b9ec19eed4b",
-      "similarity": 0.941557,
-      "duplicated_loc": 108,
+      "group_id": "near-d6ad6164d298b151",
+      "similarity": 0.890244,
+      "duplicated_loc": 36,
+      "functions": [
+        {
+          "path": "src/provenance/fulltext_backfill.py",
+          "qualified_name": "_new_node",
+          "lineno": 1579,
+          "end_lineno": 1617,
+          "body_lines": 19,
+          "ast_nodes": 136,
+          "normalized_hash": "c79f6b666bb423792cabdda3447d04150c340f2590f4caef976503df6739e13d"
+        },
+        {
+          "path": "src/provenance/ocr_extraction.py",
+          "qualified_name": "_new_node",
+          "lineno": 1428,
+          "end_lineno": 1456,
+          "body_lines": 17,
+          "ast_nodes": 122,
+          "normalized_hash": "3c57ae6237e334ba44cd1ecd8f0bf341f72fe030d10f0eb5d06508b449435c62"
+        }
+      ]
+    },
+    {
+      "group_id": "near-d76bebaf565921f0",
+      "similarity": 0.859401,
+      "duplicated_loc": 88,
       "functions": [
         {
           "path": "src/provenance/population_canonical_resolution.py",
-          "qualified_name": "_canonical_resolution_receipt_verification_chain",
-          "lineno": 533,
-          "end_lineno": 590,
-          "body_lines": 54,
-          "ast_nodes": 437,
-          "normalized_hash": "59f513bdaf9c769f14ba8300b4061bba78e2f72d0c5f064e480683f16f00b8ba"
+          "qualified_name": "_plane_verification",
+          "lineno": 1865,
+          "end_lineno": 1916,
+          "body_lines": 44,
+          "ast_nodes": 212,
+          "normalized_hash": "d4f44b20be152337d945ae08e048fd18e501ec02d917f54b4187d92a1fcbd595"
         },
         {
           "path": "src/provenance/population_document_processing.py",
-          "qualified_name": "_document_processing_receipt_verification_chain",
-          "lineno": 516,
-          "end_lineno": 573,
-          "body_lines": 54,
-          "ast_nodes": 437,
-          "normalized_hash": "42d30e4f36aec15c2722f515c4cdba75811fb5273adfe3e3d5fbb427e743fba8"
+          "qualified_name": "_document_plane_verification",
+          "lineno": 2281,
+          "end_lineno": 2330,
+          "body_lines": 44,
+          "ast_nodes": 190,
+          "normalized_hash": "7eb4559dd0daefe67a6ae14a79db046abbff3d28e2a466ac0fdb8ec284924b83"
         }
       ]
     },
     {
-      "group_id": "near-d77545b3e03a5b56",
-      "similarity": 0.985876,
-      "duplicated_loc": 53,
-      "functions": [
-        {
-          "path": "src/ir_pipeline/evidence_capture.py",
-          "qualified_name": "_ensure_location",
-          "lineno": 980,
-          "end_lineno": 1015,
-          "body_lines": 27,
-          "ast_nodes": 169,
-          "normalized_hash": "e7ab182089cc075c63ec22b81798cdf7c6262ebde1a73365b7101c9fc19595b3"
-        },
-        {
-          "path": "src/provenance/sec_native_capture.py",
-          "qualified_name": "_ensure_location",
-          "lineno": 1028,
-          "end_lineno": 1062,
-          "body_lines": 26,
-          "ast_nodes": 169,
-          "normalized_hash": "f7fdd8278e213533edbd30854230fd694314692460be921b5728f6db1a1b27d7"
-        }
-      ]
-    },
-    {
-      "group_id": "near-dfd28a27e296f8b0",
+      "group_id": "near-d81a96e34aba884f",
       "similarity": 0.881119,
       "duplicated_loc": 42,
       "functions": [
@@ -3391,11 +3116,61 @@
         {
           "path": "src/insider_transactions.py",
           "qualified_name": "_open",
-          "lineno": 113,
-          "end_lineno": 138,
+          "lineno": 112,
+          "end_lineno": 137,
           "body_lines": 21,
           "ast_nodes": 119,
           "normalized_hash": "6d7e5b5c36ea90462722189d58a5934181bbc21983211b0b78d67ba9c4e9b1a6"
+        }
+      ]
+    },
+    {
+      "group_id": "near-dd60ddfcae129930",
+      "similarity": 0.892928,
+      "duplicated_loc": 64,
+      "functions": [
+        {
+          "path": "src/provenance/population_canonical_resolution.py",
+          "qualified_name": "build_canonical_resolution_receipt",
+          "lineno": 288,
+          "end_lineno": 331,
+          "body_lines": 33,
+          "ast_nodes": 178,
+          "normalized_hash": "11714163e0b4c75de786c03354041eb0b175ac224b39cf95719d22b2a4e44ccb"
+        },
+        {
+          "path": "src/provenance/population_document_processing.py",
+          "qualified_name": "build_document_processing_receipt",
+          "lineno": 278,
+          "end_lineno": 318,
+          "body_lines": 31,
+          "ast_nodes": 169,
+          "normalized_hash": "c5f96c846f1fbb4462774f0c8f01d8251566fea4d756a14452f183d536eab012"
+        }
+      ]
+    },
+    {
+      "group_id": "near-e18a83fadcbe4379",
+      "similarity": 0.952436,
+      "duplicated_loc": 55,
+      "functions": [
+        {
+          "path": "execution/audit_transcript_evidence.py",
+          "qualified_name": "_safe_path",
+          "lineno": 67,
+          "end_lineno": 95,
+          "body_lines": 28,
+          "ast_nodes": 227,
+          "normalized_hash": "f44a4685a5d9e19077a570b4318bc2facf0e52829abc1e1206d31ba9a9d2cf57"
+        },
+        {
+          "path": "execution/backfill_transcripts.py",
+          "qualified_name": "_recorded_evidence_path",
+          "lineno": 295,
+          "end_lineno": 322,
+          "body_lines": 27,
+          "ast_nodes": 219,
+          "normalized_hash": "166f9049530724792263c5ac1efe59dc856dd09400c5d09d8a07c78895903f5d"
         }
       ]
     },
@@ -3425,27 +3200,52 @@
       ]
     },
     {
-      "group_id": "near-e9095d98ca813e16",
-      "similarity": 0.865331,
-      "duplicated_loc": 72,
+      "group_id": "near-e591db0c7de983fb",
+      "similarity": 0.872978,
+      "duplicated_loc": 92,
       "functions": [
         {
-          "path": "src/compute/segment_quarterly_10q.py",
-          "qualified_name": "_resolve_doc_id",
-          "lineno": 139,
-          "end_lineno": 176,
-          "body_lines": 35,
-          "ast_nodes": 197,
-          "normalized_hash": "fa17fd85bdfa6362fb55c868bfa8f9fdf975fdc07b1b06dc7ca7ffb0f2901b4e"
+          "path": "src/ir_pipeline/approved_ir_observation_capture.py",
+          "qualified_name": "import_wix_visible_browser_export",
+          "lineno": 607,
+          "end_lineno": 659,
+          "body_lines": 47,
+          "ast_nodes": 294,
+          "normalized_hash": "77c6c0eb111f707002082a5e5972167e361e25ed92277462062012fcd8b8b6ad"
         },
         {
-          "path": "src/table_extractors/generic_xbrl_capture.py",
-          "qualified_name": "_resolve_doc_id",
-          "lineno": 460,
-          "end_lineno": 499,
-          "body_lines": 37,
-          "ast_nodes": 199,
-          "normalized_hash": "fc9c3c5bd0fd5d06817eeeb4b50181d3771b62466b3ffee4fddf266b9cd679bd"
+          "path": "src/ir_pipeline/approved_ir_observation_capture.py",
+          "qualified_name": "import_rubrik_visible_browser_export",
+          "lineno": 662,
+          "end_lineno": 712,
+          "body_lines": 45,
+          "ast_nodes": 283,
+          "normalized_hash": "1f4fe48080daa4b12afb0cac32535abbb9412c878d336f4491fe44dd81277556"
+        }
+      ]
+    },
+    {
+      "group_id": "near-ea23edb362769edf",
+      "similarity": 0.912398,
+      "duplicated_loc": 47,
+      "functions": [
+        {
+          "path": "src/decision_extractor.py",
+          "qualified_name": "hit_rate_by_kind",
+          "lineno": 1034,
+          "end_lineno": 1061,
+          "body_lines": 23,
+          "ast_nodes": 160,
+          "normalized_hash": "271555523985d4500daeea9a4ca0e9a2443ba17d857ff4111ea36675756a070b"
+        },
+        {
+          "path": "src/decision_extractor.py",
+          "qualified_name": "outcome_curve_by_conviction",
+          "lineno": 1064,
+          "end_lineno": 1092,
+          "body_lines": 24,
+          "ast_nodes": 160,
+          "normalized_hash": "6e1280d708aa4aaf25a49d2836a0e7664df4ffadd380858c87480a066ca86160"
         }
       ]
     },
@@ -3500,52 +3300,52 @@
       ]
     },
     {
-      "group_id": "near-eb5235bc7c22f1c3",
-      "similarity": 0.9609,
-      "duplicated_loc": 32,
+      "group_id": "near-eb91d6fafed739aa",
+      "similarity": 0.9175,
+      "duplicated_loc": 42,
       "functions": [
         {
-          "path": "src/provenance/population_canonical_resolution.py",
-          "qualified_name": "database_instance_id",
-          "lineno": 456,
-          "end_lineno": 472,
-          "body_lines": 16,
-          "ast_nodes": 101,
-          "normalized_hash": "fd65fa46f72b05ae509e8fc247d318e7a19c4a0dd10291c26a5f5c821ba4a006"
+          "path": "src/dcf/meli_inputs.py",
+          "qualified_name": "verify_meli_inputs",
+          "lineno": 705,
+          "end_lineno": 733,
+          "body_lines": 21,
+          "ast_nodes": 143,
+          "normalized_hash": "eb60ba03874b7a5edc0f2b51a55624f475d35e363fc59a38348048259756e201"
         },
         {
-          "path": "src/provenance/population_document_processing.py",
-          "qualified_name": "database_instance_id",
-          "lineno": 442,
-          "end_lineno": 458,
-          "body_lines": 16,
-          "ast_nodes": 101,
-          "normalized_hash": "db6688ada88c7984d4f4d104ddf11ed1290c3a5799b1de6b9fac64cec5725ad5"
+          "path": "src/dcf/onon_inputs.py",
+          "qualified_name": "verify_onon_inputs",
+          "lineno": 363,
+          "end_lineno": 391,
+          "body_lines": 21,
+          "ast_nodes": 144,
+          "normalized_hash": "e7252c615c9e75601492600dc9a5e8c06558e9d329a5abf34eee343712934f94"
         }
       ]
     },
     {
-      "group_id": "near-eca3a727fa7fa565",
-      "similarity": 0.912398,
-      "duplicated_loc": 47,
+      "group_id": "near-ed36e17e468088f9",
+      "similarity": 0.972187,
+      "duplicated_loc": 88,
       "functions": [
         {
-          "path": "src/decision_extractor.py",
-          "qualified_name": "hit_rate_by_kind",
-          "lineno": 1017,
-          "end_lineno": 1044,
-          "body_lines": 23,
-          "ast_nodes": 160,
-          "normalized_hash": "271555523985d4500daeea9a4ca0e9a2443ba17d857ff4111ea36675756a070b"
+          "path": "src/provenance/population_document_processing.py",
+          "qualified_name": "_document_plane_verification",
+          "lineno": 2281,
+          "end_lineno": 2330,
+          "body_lines": 44,
+          "ast_nodes": 190,
+          "normalized_hash": "7eb4559dd0daefe67a6ae14a79db046abbff3d28e2a466ac0fdb8ec284924b83"
         },
         {
-          "path": "src/decision_extractor.py",
-          "qualified_name": "outcome_curve_by_conviction",
-          "lineno": 1047,
-          "end_lineno": 1075,
-          "body_lines": 24,
-          "ast_nodes": 160,
-          "normalized_hash": "6e1280d708aa4aaf25a49d2836a0e7664df4ffadd380858c87480a066ca86160"
+          "path": "src/provenance/population_research_snapshots.py",
+          "qualified_name": "_research_plane_verification",
+          "lineno": 1298,
+          "end_lineno": 1347,
+          "body_lines": 44,
+          "ast_nodes": 190,
+          "normalized_hash": "e57a47bb3b7bb3d5f11fd32c95742a435bc7ae78e74b7f4fadb0e8ce7a25a07b"
         }
       ]
     },
@@ -3650,27 +3450,27 @@
       ]
     },
     {
-      "group_id": "near-f11efa597cb9545b",
-      "similarity": 0.92053,
-      "duplicated_loc": 62,
+      "group_id": "near-f1bae8539a8aa04e",
+      "similarity": 0.988263,
+      "duplicated_loc": 30,
       "functions": [
         {
-          "path": "src/provenance/population_document_processing.py",
-          "qualified_name": "persist_document_processing_receipt",
-          "lineno": 461,
-          "end_lineno": 495,
-          "body_lines": 31,
-          "ast_nodes": 139,
-          "normalized_hash": "5f0b3bff1a4a0945a3fe12cf81558ff42c99b925668cb913a165bf70ab3c97ff"
+          "path": "src/sqlite_runtime.py",
+          "qualified_name": "ManagedCursor.execute",
+          "lineno": 73,
+          "end_lineno": 88,
+          "body_lines": 15,
+          "ast_nodes": 106,
+          "normalized_hash": "b322d231742ae5939267e0188ddcc307264a02ce854fd6b794ccf6261eb55ed3"
         },
         {
-          "path": "src/provenance/population_metric_ontology.py",
-          "qualified_name": "persist_metric_ontology_receipt",
-          "lineno": 741,
-          "end_lineno": 775,
-          "body_lines": 31,
-          "ast_nodes": 139,
-          "normalized_hash": "027043cbb24a5444cfe62621dde68744d4fb08b1c295f4d6f1fe1943c66c976f"
+          "path": "src/sqlite_runtime.py",
+          "qualified_name": "ManagedCursor.executemany",
+          "lineno": 90,
+          "end_lineno": 105,
+          "body_lines": 15,
+          "ast_nodes": 106,
+          "normalized_hash": "9edd56b5be880d50ab7536877c3db25d99381f6723f47a1e96350fe9ac37d54d"
         }
       ]
     },
@@ -3700,115 +3500,90 @@
       ]
     },
     {
-      "group_id": "near-f3dd4204736c2aec",
-      "similarity": 0.905763,
-      "duplicated_loc": 136,
+      "group_id": "near-f3f8066676526ed8",
+      "similarity": 0.960327,
+      "duplicated_loc": 32,
       "functions": [
         {
-          "path": "src/ir_pipeline/evidence_capture.py",
-          "qualified_name": "_persist_coverage",
-          "lineno": 1018,
-          "end_lineno": 1095,
-          "body_lines": 69,
-          "ast_nodes": 335,
-          "normalized_hash": "185441a6be8d185b64cce93e2fdaf8dc0d9ccaede369e6ae77f45d46edb47d42"
+          "path": "src/report/renderers/markdown.py",
+          "qualified_name": "_quarterly_table",
+          "lineno": 665,
+          "end_lineno": 681,
+          "body_lines": 16,
+          "ast_nodes": 195,
+          "normalized_hash": "fc8bad8b0642f8e90d5d9da6897aedde14cfbef6f6b5149c70465941b46b2971"
         },
         {
-          "path": "src/provenance/sec_native_capture.py",
-          "qualified_name": "_persist_coverage",
-          "lineno": 1065,
-          "end_lineno": 1140,
-          "body_lines": 67,
-          "ast_nodes": 314,
-          "normalized_hash": "4b0b6401f71bd8109bc1f42fa3d8b64f730dbe8b28d5a1e997a32ec15784f74d"
+          "path": "src/report/renderers/markdown.py",
+          "qualified_name": "_segments_table",
+          "lineno": 769,
+          "end_lineno": 785,
+          "body_lines": 16,
+          "ast_nodes": 197,
+          "normalized_hash": "ff59f4e1efd70e925a8d5df977a4f64328ea00ecd456ffa9168136f68f08fdcb"
         }
       ]
     },
     {
-      "group_id": "near-f9066b6a86dbb9c2",
-      "similarity": 0.873656,
+      "group_id": "near-f4c5c59b23e0fdb7",
+      "similarity": 0.914879,
       "duplicated_loc": 33,
       "functions": [
         {
-          "path": "src/provenance/image_ocr_extraction.py",
-          "qualified_name": "_stored_values_match",
-          "lineno": 1141,
-          "end_lineno": 1157,
-          "body_lines": 16,
-          "ast_nodes": 138,
-          "normalized_hash": "b200f86a1d1e3738f7305a9ea7b87ab6fed060fef4b241049ea31f1e0feb176e"
+          "path": "execution/apply_kpi_semantic_dispositions.py",
+          "qualified_name": "build_parser",
+          "lineno": 144,
+          "end_lineno": 159,
+          "body_lines": 15,
+          "ast_nodes": 161,
+          "normalized_hash": "f99812fc639c7b7e4b313d05d7ba233ce11d1a87dc89364300f15e2cf14f3b44"
         },
         {
-          "path": "src/provenance/ocr_extraction.py",
-          "qualified_name": "_stored_values_match",
-          "lineno": 1164,
-          "end_lineno": 1181,
-          "body_lines": 17,
-          "ast_nodes": 127,
-          "normalized_hash": "df52440127a606c6ecbcbc279d083774c547af455fbb648b8b4ffdff9c5ae6be"
+          "path": "execution/apply_kpi_semantic_refresh.py",
+          "qualified_name": "build_parser",
+          "lineno": 1584,
+          "end_lineno": 1602,
+          "body_lines": 18,
+          "ast_nodes": 151,
+          "normalized_hash": "a36dc29c121e389eaf60045507ce32935d65625b1ecab0c8ed1a7924deb4e80f"
         }
       ]
     },
     {
-      "group_id": "near-f929e47ef6564f30",
-      "similarity": 0.987393,
-      "duplicated_loc": 56,
+      "group_id": "near-fb0bf170544648d0",
+      "similarity": 0.882495,
+      "duplicated_loc": 173,
       "functions": [
         {
-          "path": "execution/audit_transcript_evidence.py",
-          "qualified_name": "_safe_path",
-          "lineno": 67,
-          "end_lineno": 95,
-          "body_lines": 28,
-          "ast_nodes": 227,
-          "normalized_hash": "f44a4685a5d9e19077a570b4318bc2facf0e52829abc1e1206d31ba9a9d2cf57"
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_meli_sotp",
+          "lineno": 1107,
+          "end_lineno": 1198,
+          "body_lines": 84,
+          "ast_nodes": 463,
+          "normalized_hash": "589f8a336c1d068fb96a0ec766d1c9316930f261e2fa7c0dad186b528ab01979"
         },
         {
-          "path": "execution/scan_ir_transcripts.py",
-          "qualified_name": "_recorded_evidence_path",
-          "lineno": 108,
-          "end_lineno": 136,
-          "body_lines": 28,
-          "ast_nodes": 227,
-          "normalized_hash": "3106bd9ffbb5c098df6f3b4c1e15c21ed06d4de35dd1db326eefaf84f728f355"
-        }
-      ]
-    },
-    {
-      "group_id": "near-ffdb35989ac30f06",
-      "similarity": 0.859401,
-      "duplicated_loc": 88,
-      "functions": [
-        {
-          "path": "src/provenance/population_canonical_resolution.py",
-          "qualified_name": "_plane_verification",
-          "lineno": 1865,
-          "end_lineno": 1916,
-          "body_lines": 44,
-          "ast_nodes": 212,
-          "normalized_hash": "d4f44b20be152337d945ae08e048fd18e501ec02d917f54b4187d92a1fcbd595"
-        },
-        {
-          "path": "src/provenance/population_research_snapshots.py",
-          "qualified_name": "_research_plane_verification",
-          "lineno": 1306,
-          "end_lineno": 1355,
-          "body_lines": 44,
-          "ast_nodes": 190,
-          "normalized_hash": "e57a47bb3b7bb3d5f11fd32c95742a435bc7ae78e74b7f4fadb0e8ce7a25a07b"
+          "path": "execution/refresh_dcf.py",
+          "qualified_name": "_refresh_onon",
+          "lineno": 1201,
+          "end_lineno": 1297,
+          "body_lines": 89,
+          "ast_nodes": 490,
+          "normalized_hash": "5e54a774038a8ed4ae5f3e8ed56a5ef011e536594f424ad7a5cfa5d902402639"
         }
       ]
     }
   ],
   "exact_totals": {
-    "groups": 4,
-    "participating_functions": 8,
-    "duplicated_loc": 158
+    "groups": 3,
+    "participating_functions": 6,
+    "duplicated_loc": 110
   },
   "near_miss_totals": {
-    "groups": 147,
-    "participating_functions": 238,
-    "duplicated_loc": 9867
+    "groups": 141,
+    "participating_functions": 225,
+    "duplicated_loc": 9406
   },
   "definitions": {
     "eligible_function": "at least 20 AST nodes and at least 15 physical body lines",

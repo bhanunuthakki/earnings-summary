@@ -39,6 +39,7 @@ CREATE TABLE llm_artifacts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ticker VARCHAR(16),
     scope VARCHAR(64) NOT NULL DEFAULT 'ticker',
+    document_version_id TEXT,
     purpose VARCHAR(64) NOT NULL,
     fiscal_period VARCHAR(10),
     content_md TEXT,
@@ -617,7 +618,7 @@ def test_workspace_strip_renders_disposition_buttons_when_present() -> None:
         ticker=TICKER,
         artifact_id=42,
         generated_at=datetime(2026, 7, 1, tzinfo=UTC),
-        suggested_disposition="watch",
+        suggested_disposition="research_further",
         company_hypothesis=DecisionCardHypothesis(directional_thesis="ACME grows via X."),
         security_setup=DecisionCardSecuritySetup(appears_priced_in="flat growth priced in"),
         portfolio_fit=DecisionCardPortfolioFit(expected_role="growth diversifier"),
@@ -633,8 +634,10 @@ def test_workspace_strip_renders_disposition_buttons_when_present() -> None:
 
     assert 'class="l1-decision-card"' in html
     assert "Decision-ready" in html
-    for verb in ("pass", "watch", "research_further", "promote"):
+    for verb in ("pass", "watch", "promote"):
         assert f'data-verb="{verb}"' in html
+    assert "suggests: research_further" in html
+    assert 'data-verb="research_further"' not in html
     assert 'data-artifact-id="42"' in html
     assert "ACME grows via X." in html
     assert "growth diversifier" in html

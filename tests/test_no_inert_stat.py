@@ -26,15 +26,10 @@ legitimate supplement, not a Law-2 violation.
 from __future__ import annotations
 
 import re
-import sys
 from html.parser import HTMLParser
-from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from pipeline.dashboard_status import DashboardRow, TranscriptStatus  # noqa: E402
-from pipeline.research_cockpit import CockpitRow, KpiDelta, render_research_cockpit  # noqa: E402
+from pipeline.dashboard_status import DashboardRow, TranscriptStatus
+from pipeline.research_cockpit import CockpitRow, KpiDelta, render_research_cockpit
 
 # The shell-handled action attributes (command_center_shell delegates).
 _ACTION_ATTRS = ("data-ask-q", "data-peek-url", "data-fact-ref")

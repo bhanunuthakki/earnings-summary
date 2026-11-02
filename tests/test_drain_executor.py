@@ -49,68 +49,11 @@ def executor(monkeypatch: pytest.MonkeyPatch) -> Any:
     return _load_module()
 
 
-def _make_portfolio_db(db_path: Path) -> sqlite3.Connection:
-    """Build the roster, artifact, and call tables used by the drain.
-
-    Returns an open connection the caller must close. Sufficient column set for
-    the executor's two SQL queries (dirty-breakdown + cost-sum).
-    """
-    conn = sqlite3.connect(str(db_path))
-    conn.executescript(
-        """
-        CREATE TABLE tracked_companies (
-            ticker TEXT PRIMARY KEY,
-            list_type TEXT NOT NULL,
-            archived_at TEXT
-        );
-        CREATE TABLE llm_artifacts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT,
-            scope TEXT NOT NULL DEFAULT 'ticker',
-            purpose TEXT NOT NULL,
-            fiscal_period TEXT,
-            content_md TEXT,
-            content_json TEXT,
-            input_sha256 TEXT NOT NULL,
-            output_sha256 TEXT,
-            model TEXT,
-            prompt_version TEXT NOT NULL DEFAULT 'v1',
-            generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            expires_at TIMESTAMP,
-            superseded_by_id INTEGER,
-            dirty INTEGER NOT NULL DEFAULT 0,
-            dirty_reason TEXT,
-            source_doc_ids TEXT,
-            parent_artifact_ids TEXT,
-            llm_call_id INTEGER
-        );
-        CREATE TABLE llm_calls (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            called_at DATETIME NOT NULL,
-            purpose VARCHAR(64),
-            ticker VARCHAR(16),
-            scope VARCHAR(64),
-            model VARCHAR(64) NOT NULL,
-            prompt_sha256 VARCHAR(64) NOT NULL,
-            response_sha256 VARCHAR(64),
-            prompt_chars INTEGER NOT NULL,
-            response_chars INTEGER,
-            input_tokens INTEGER,
-            cache_creation_input_tokens INTEGER,
-            cache_read_input_tokens INTEGER,
-            output_tokens INTEGER,
-            elapsed_ms INTEGER NOT NULL,
-            cost_estimate_usd FLOAT,
-            cache_hit BOOLEAN NOT NULL DEFAULT 0,
-            fallback_used VARCHAR(16),
-            artifact_id INTEGER,
-            error TEXT,
-            run_id VARCHAR(64)
-        );
-        """
-    )
-    conn.commit()
-    return conn
+def _make_portfolio_db(db_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
+    """Open a disposable database with the current migrated application schema."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    migrated_db(db_path)
+    return sqlite3.connect(str(db_path))
 
 
 def _insert_dirty(
@@ -122,16 +65,16 @@ def _insert_dirty(
     expires_at: str | None = None,
 ) -> None:
     conn.execute(
-        "INSERT OR IGNORE INTO tracked_companies (ticker, list_type) VALUES (?, 'portfolio')",
-        (ticker,),
+        "INSERT OR IGNORE INTO tracked_companies (ticker, name, list_type) VALUES (?, ?, 'portfolio')",
+        (ticker, ticker),
     )
     conn.execute(
         """
         INSERT INTO llm_artifacts (ticker, scope, purpose, input_sha256,
-                                   prompt_version, dirty, expires_at)
-        VALUES (?, 'ticker', ?, 'sha', 'v1', ?, ?)
+                                   prompt_version, generated_at, dirty, expires_at)
+        VALUES (?, 'ticker', ?, 'sha', 'v1', ?, ?, ?)
         """,
-        (ticker, purpose, dirty, expires_at),
+        (ticker, purpose, datetime.now(UTC).isoformat(), dirty, expires_at),
     )
     conn.commit()
 
@@ -239,14 +182,17 @@ def _projection_ok(*args: object, **kwargs: object) -> None:
 
 
 def test_default_mode_does_not_invoke_subprocess(
-    executor: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
     """Without --execute, drain prints manifest and exits 0; subprocess.run
     must not be called regardless of how many dirty artifacts exist."""
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     try:
         _insert_dirty(conn, ticker="GOOG", purpose="bear_case")
         _insert_dirty(conn, ticker="META", purpose="qa_topics")
@@ -268,7 +214,10 @@ def test_default_mode_does_not_invoke_subprocess(
 
 
 def test_execute_invokes_correct_subprocess(
-    executor: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
     """--execute must spawn the per-purpose regenerator with the substituted
     ticker. company_description has its own extractor; bear_case folds into
@@ -276,7 +225,7 @@ def test_execute_invokes_correct_subprocess(
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     try:
         _insert_dirty(conn, ticker="GOOG", purpose="bear_case")
         _insert_dirty(conn, ticker="META", purpose="company_description")
@@ -326,17 +275,20 @@ def test_execute_invokes_correct_subprocess(
 
 
 def test_execute_uses_configured_database_for_queue_and_child(
-    executor: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
     repo_root = tmp_path / "runtime"
     (repo_root / "data").mkdir(parents=True)
-    local_conn = _make_portfolio_db(repo_root / "data" / "portfolio.db")
+    local_conn = _make_portfolio_db(repo_root / "data" / "portfolio.db", migrated_db)
     local_conn.close()
     external_db = tmp_path / "canonical" / "portfolio.db"
     external_db.parent.mkdir()
-    conn = _make_portfolio_db(external_db)
+    conn = _make_portfolio_db(external_db, migrated_db)
     try:
-        _insert_dirty(conn, ticker="MELI", purpose="saydo_filter")
+        _insert_dirty(conn, ticker="MELI", purpose="valuation_basis")
     finally:
         conn.close()
     monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(external_db))
@@ -357,21 +309,24 @@ def test_execute_uses_configured_database_for_queue_and_child(
     assert executor.main() == 1
     assert len(calls) == 1
     argv, kwargs = calls[0]
-    assert argv[-4:] == ["--ticker", "MELI", "--regenerate-purpose", "saydo_filter"]
+    assert argv[-4:] == ["--ticker", "MELI", "--regenerate-purpose", "valuation_basis"]
     assert cast("dict[str, str]", kwargs["env"])["EARNINGS_SUMMARY_DB_PATH"] == str(external_db)
 
 
 def test_execute_dedupes_shared_cli_for_one_ticker(
-    executor: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
     """Multiple rows for the same exact ticker/purpose invoke one subprocess."""
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     try:
-        _insert_dirty(conn, ticker="NU", purpose="saydo_filter")
-        _insert_dirty(conn, ticker="NU", purpose="saydo_filter")
+        _insert_dirty(conn, ticker="NU", purpose="valuation_basis")
+        _insert_dirty(conn, ticker="NU", purpose="valuation_basis")
     finally:
         conn.close()
 
@@ -401,7 +356,7 @@ def test_execute_dedupes_shared_cli_for_one_ticker(
         "--ticker",
         "NU",
         "--regenerate-purpose",
-        "saydo_filter",
+        "valuation_basis",
     ]
 
 
@@ -418,7 +373,7 @@ def test_bear_case_regenerator_bypasses_the_on_disk_cache(executor: Any) -> None
 
 @pytest.mark.parametrize(
     "purpose",
-    ["bear_case", "exec_comp_alignment", "qa_topics", "saydo_filter", "valuation_basis"],
+    ["bear_case", "exec_comp_alignment", "qa_topics", "valuation_basis"],
 )
 def test_report_regenerator_names_the_exact_native_purpose(executor: Any, purpose: str) -> None:
     argv = executor._PURPOSE_TO_REGENERATOR[purpose]
@@ -431,12 +386,13 @@ def test_zero_exit_without_clearing_obligation_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     capsys: pytest.CaptureFixture[str],
+    migrated_db: Callable[..., Path],
 ) -> None:
     """A child process exit code is not proof that the dirty row was refreshed."""
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     try:
         _insert_dirty(conn, ticker="ABNB", purpose="bear_case")
     finally:
@@ -473,11 +429,12 @@ def test_zero_exit_projects_a_fresh_typed_native_cache_before_progress_check(
     executor: Any,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     try:
         _insert_dirty(conn, ticker="ABNB", purpose="bear_case")
         old_id = int(conn.execute("SELECT id FROM llm_artifacts").fetchone()[0])
@@ -525,11 +482,12 @@ def test_native_projection_failure_cannot_be_hidden_by_clearing_the_old_row(
     executor: Any,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     try:
         _insert_dirty(conn, ticker="ABNB", purpose="bear_case")
     finally:
@@ -560,11 +518,12 @@ def test_duplicate_native_obligations_share_one_producer_and_one_successor(
     executor: Any,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     try:
         _insert_dirty(conn, ticker="ABNB", purpose="bear_case")
         _insert_dirty(conn, ticker="ABNB", purpose="bear_case")
@@ -615,12 +574,13 @@ def test_child_failure_text_is_redacted_before_structured_logging(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     failure_mode: str,
+    migrated_db: Callable[..., Path],
 ) -> None:
     """API keys, bearer tokens, and signed URLs never survive child failures."""
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     try:
         _insert_dirty(conn, ticker="ABNB", purpose="bear_case")
     finally:
@@ -670,12 +630,13 @@ def test_cost_ledger_error_halts_before_child_and_is_redacted(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     capsys: pytest.CaptureFixture[str],
+    migrated_db: Callable[..., Path],
 ) -> None:
     """Spend cannot fail open when the ledger query is unavailable."""
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     try:
         _insert_dirty(conn, ticker="ABNB", purpose="bear_case")
     finally:
@@ -725,18 +686,19 @@ def test_deduped_job_requires_every_original_obligation_to_progress(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    migrated_db: Callable[..., Path],
 ) -> None:
     """One shared child cannot hide a second exact-row obligation."""
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     try:
-        _insert_dirty(conn, ticker="NU", purpose="saydo_filter")
-        _insert_dirty(conn, ticker="NU", purpose="saydo_filter")
+        _insert_dirty(conn, ticker="NU", purpose="valuation_basis")
+        _insert_dirty(conn, ticker="NU", purpose="valuation_basis")
         unresolved_id = int(
             conn.execute(
-                "SELECT MAX(id) FROM llm_artifacts WHERE purpose = 'saydo_filter'"
+                "SELECT MAX(id) FROM llm_artifacts WHERE purpose = 'valuation_basis'"
             ).fetchone()[0]
         )
     finally:
@@ -780,7 +742,10 @@ def test_deduped_job_requires_every_original_obligation_to_progress(
 
 
 def test_execute_halts_at_cost_cap(
-    executor: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
     """When the cost-query returns a value above --max-cost-usd at the moment
     the executor checks (before each job), the drain halts gracefully without
@@ -789,7 +754,7 @@ def test_execute_halts_at_cost_cap(
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     try:
         _insert_dirty(conn, ticker="GOOG", purpose="bear_case")
         _insert_dirty(conn, ticker="META", purpose="bear_case")
@@ -827,13 +792,17 @@ def test_execute_halts_at_cost_cap(
     )
 
 
-def test_accrued_cost_usd_sums_ledger_rows_since_window(executor: Any, tmp_path: Path) -> None:
+def test_accrued_cost_usd_sums_ledger_rows_since_window(
+    executor: Any,
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
     """The cost-query helper must SUM cost_estimate_usd for rows whose
     called_at >= since. Older rows are excluded; newer rows accrue."""
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     try:
         cutoff = datetime(2026, 5, 27, 12, 0, 0, tzinfo=UTC)
         _insert_llm_call(conn, called_at=cutoff - timedelta(hours=1), cost_usd=99.0)
@@ -848,7 +817,10 @@ def test_accrued_cost_usd_sums_ledger_rows_since_window(executor: Any, tmp_path:
 
 
 def test_cost_check_runs_before_each_job(
-    executor: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
     """The cap is consulted per-job, so a queue that goes overbudget mid-drain
     halts at the next iteration boundary — not after the entire queue runs.
@@ -859,7 +831,7 @@ def test_cost_check_runs_before_each_job(
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     try:
         _insert_dirty(conn, ticker="GOOG", purpose="bear_case")
         _insert_dirty(conn, ticker="META", purpose="company_description")
@@ -908,13 +880,14 @@ def test_empty_queue_exits_cleanly(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    migrated_db: Callable[..., Path],
 ) -> None:
     """No dirty/expired rows exits zero without claiming the whole pipeline is fresh.
     Subprocess.run must never be called."""
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     conn.close()
 
     fake_run = _CapturingFakeRun()
@@ -990,11 +963,12 @@ def test_missing_roster_fails_closed_before_children(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    migrated_db: Callable[..., Path],
 ) -> None:
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     try:
         _insert_dirty(conn, ticker="META", purpose="bear_case")
         conn.execute("DROP TABLE tracked_companies")
@@ -1019,9 +993,10 @@ def test_missing_roster_fails_closed_before_children(
 def test_strict_drain_only_returns_active_portfolio_or_evaluation_tickers(
     executor: Any,
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
     db_path = tmp_path / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     try:
         for ticker in ("GOOG", "META", "NU", "LLY"):
             _insert_dirty(conn, ticker=ticker, purpose="bear_case")
@@ -1082,16 +1057,17 @@ def test_non_ticker_queue_row_is_not_reported_as_idle(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    migrated_db: Callable[..., Path],
 ) -> None:
     """Synthesis rows remain queued even though no ticker regenerator can run."""
     repo_root = tmp_path
     (repo_root / "data").mkdir()
-    conn = _make_portfolio_db(repo_root / "data" / "portfolio.db")
+    conn = _make_portfolio_db(repo_root / "data" / "portfolio.db", migrated_db)
     try:
         conn.execute(
             """INSERT INTO llm_artifacts
-               (ticker, scope, purpose, input_sha256, prompt_version, dirty)
-               VALUES (NULL, 'portfolio', 'bear_case', 'sha', 'v1', 1)"""
+               (ticker, scope, purpose, input_sha256, prompt_version, generated_at, dirty)
+               VALUES (NULL, 'portfolio', 'bear_case', 'sha', 'v1', CURRENT_TIMESTAMP, 1)"""
         )
         conn.commit()
     finally:
@@ -1117,6 +1093,7 @@ def test_unmapped_purpose_logs_warning_and_skips(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    migrated_db: Callable[..., Path],
 ) -> None:
     """A purpose not in _PURPOSE_TO_REGENERATOR must not crash the drain.
     The executor logs a 'no_regenerator' warning, skips the unmapped artifact,
@@ -1124,7 +1101,7 @@ def test_unmapped_purpose_logs_warning_and_skips(
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     try:
         _insert_dirty(conn, ticker="GOOG", purpose="not_a_real_purpose")
         _insert_dirty(conn, ticker="META", purpose="bear_case")
@@ -1176,6 +1153,7 @@ def test_daily_scan_purpose_classified_not_warned(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    migrated_db: Callable[..., Path],
 ) -> None:
     """A trigger/news purpose (earnings_tone_diff) has no standalone drain
     regenerator BY DESIGN — it is recomputed as a side effect of the daily
@@ -1185,7 +1163,7 @@ def test_daily_scan_purpose_classified_not_warned(
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     try:
         _insert_dirty(conn, ticker="GOOG", purpose="earnings_tone_diff")
     finally:
@@ -1226,7 +1204,10 @@ def test_daily_scan_purpose_classified_not_warned(
 
 
 def test_expired_artifact_drives_execute_path(
-    executor: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
     """An artifact with dirty=0 but expires_at in the past should be drained.
     This is the load-bearing case: the whole point of --execute is to act on
@@ -1234,7 +1215,7 @@ def test_expired_artifact_drives_execute_path(
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     try:
         past = (datetime.now(UTC) - timedelta(days=1)).isoformat()
         _insert_dirty(conn, ticker="WIX", purpose="bear_case", dirty=0, expires_at=past)
@@ -1271,10 +1252,11 @@ def test_expired_artifact_drives_execute_path(
 def test_expiry_equal_to_progress_check_time_remains_unresolved(
     executor: Any,
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
     """An expiry must be strictly later than the check time to prove refresh."""
     db_path = tmp_path / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     queued_at = datetime(2026, 8, 11, 12, 0, tzinfo=UTC)
     checked_at = queued_at + timedelta(minutes=1)
     try:
@@ -1312,13 +1294,14 @@ def test_subprocess_failure_continues_drain(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     capsys: pytest.CaptureFixture[str],
+    migrated_db: Callable[..., Path],
 ) -> None:
     """One regenerator returning non-zero must not poison the queue. The
     drain logs the failure and proceeds to the next job."""
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
-    conn = _make_portfolio_db(db_path)
+    conn = _make_portfolio_db(db_path, migrated_db)
     try:
         _insert_dirty(conn, ticker="GOOG", purpose="bear_case")
         _insert_dirty(conn, ticker="META", purpose="company_description")

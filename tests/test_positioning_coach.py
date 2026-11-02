@@ -1,171 +1,26 @@
-"""Positioning coach: pack grounding, encode proposal, owner-wins approval.
+"""Manual positioning approval and deterministic target display contracts.
 
-Network-free: the book assembly and the structured LLM call are monkeypatched;
-what's under test is the grounding content contract (absence-explicit, closed
-vocabulary), the encode validation boundary (loud on bad profiles, never a
-silent empty proposal), the approval form's re-validation FROM FORM VALUES,
-and the panel's render paths.
+These tests preserve submitted-value validation, active-profile form seeding,
+and explicit unavailable/degraded book readings after coaching retirement.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import positioning.coach_pack as coach_pack  # noqa: E402
-import positioning.encode as encode_mod  # noqa: E402
-from allocation.candidate_fit import BookContext  # noqa: E402
-from pipeline.positioning_panel import (  # noqa: E402
+from pipeline.positioning_panel import (
     FormError,
     profile_from_form,
     render_active_target_card,
-    render_approval_form,
     render_positioning_panel,
 )
-from positioning.encode import EncodeError, propose_profile  # noqa: E402
-from positioning.profile import PositioningProfile, SectorTarget  # noqa: E402
+from positioning.profile import PositioningProfile, SectorTarget
 
-# ---------------------------------------------------------------------------
-# Coach pack — grounding contract
-# ---------------------------------------------------------------------------
-
-
-_LIVE_BOOK = BookContext(
-    weights={"NU": 0.4, "MELI": 0.35, "RBRK": 0.25},
-    sharpe=0.85,
-    risk_free_annual=0.045,
-    growth_tilt=0.25,
-    sector_weights={"Technology": 0.45, "Financial Services": 0.35},
-)
-
-_OFFLINE_BOOK = BookContext(
-    weights={},
-    sharpe=None,
-    risk_free_annual=None,
-    growth_tilt=None,
-    sector_weights={},
-    degraded=(
-        "tracker offline and no risk snapshot — book Sharpe unknown",
-        "sector weights are tracker-only — sector factors unscored",
-    ),
-)
-
-
-def test_pack_grounds_in_live_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(coach_pack, "assemble_book_context", lambda *a, **k: _LIVE_BOOK)
-    pack = coach_pack.build_positioning_pack(tmp_path, tmp_path / "missing.db")
-    ctx = pack.system_context or ""
-    assert pack.narrative_purpose == "positioning_coach_turn"
-    assert pack.scope == "portfolio"
-    # Socratic posture + never-claims-saved rule are in the instructions.
-    assert "PUSH BACK" in ctx
-    assert "NEVER save anything" in ctx
-    # Live numbers quoted verbatim.
-    assert "book Sharpe: +0.85" in ctx
-    assert "growth tilt (QQQ beta - SPY beta): +0.25" in ctx
-    assert "NU 40%" in ctx
-    assert "Technology 45%" in ctx
-    # Closed vocabularies for the encoder.
-    assert "SECTOR VOCABULARY" in ctx and "Financial Services" in ctx
-    assert "SLEEVE VOCABULARY: intl, small_cap, em, cash" in ctx
-    # No saved intent → book-default statement.
-    assert "no saved positioning" in ctx
-
-
-def test_pack_is_absence_explicit_offline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(coach_pack, "assemble_book_context", lambda *a, **k: _OFFLINE_BOOK)
-    ctx = coach_pack.build_positioning_pack(tmp_path, tmp_path / "missing.db").system_context or ""
-    assert "book Sharpe: unavailable" in ctx
-    assert "sector weights: unavailable (tracker offline)" in ctx
-    assert "DEGRADED: tracker offline and no risk snapshot" in ctx
-
-
-# ---------------------------------------------------------------------------
-# Encode — loud boundary
-# ---------------------------------------------------------------------------
-
-
-_THREAD = [
-    {"role": "user", "text": "I want less mega-cap growth and an intl small-cap value sleeve."},
-    {"role": "assistant", "text": "What horizon? … converged: tilt toward 0.0, intl 15%."},
-]
-
-
-def _patch_history(monkeypatch: pytest.MonkeyPatch, turns: list[dict[str, str]]) -> None:
-    monkeypatch.setattr(encode_mod, "load_recent_history", lambda sid, **kw: turns)
-
-
-def _patch_encode_llm(monkeypatch: pytest.MonkeyPatch, fn: object) -> None:
-    # ``propose_profile`` imports call_llm_structured FUNCTION-LOCALLY (the
-    # module-level import dragged the ~10s llm transport chain into the
-    # Positioning panel's render path — Phase-5 verifier fix 5), so the patch
-    # targets the source module the lazy import resolves against.
-    monkeypatch.setattr("llm.structured.call_llm_structured", fn)
-
-
-def test_propose_profile_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_history(monkeypatch, _THREAD)
-    payload = {
-        "profile": {
-            "target_growth_tilt": 0.0,
-            "sleeves": {"intl": 0.15},
-            "sector_targets": [{"sector": "Technology", "target_weight": 0.35, "band": 0.05}],
-            "life_circumstances": ["kid on the way"],
-        },
-        "summary": "Neutral growth tilt; build a 15% intl sleeve; Tech toward 35%.",
-        "rationale": "Owner said less mega-cap growth; converged on tilt 0.0 and intl 15%.",
-    }
-    captured: dict[str, object] = {}
-
-    def fake_structured(prompt: str, **kw: object) -> object:
-        captured["prompt"] = prompt
-        captured["purpose"] = kw.get("purpose")
-        return payload
-
-    _patch_encode_llm(monkeypatch, fake_structured)
-    proposal = propose_profile(
-        tmp_path / "missing.db", tmp_path, session_id="s1", sector_vocabulary=["Technology"]
-    )
-    assert captured["purpose"] == "positioning_encode"
-    assert "Emit ONLY dimensions the owner actually expressed" in str(captured["prompt"])
-    assert proposal.profile.sleeves == {"intl": 0.15}
-    assert proposal.summary.startswith("Neutral growth tilt")
-    assert proposal.session_id == "s1"
-    # Everything is a diff vs 'no active profile'.
-    assert any(d.fieldname == "sleeves" for d in proposal.diffs)
-
-
-def test_propose_profile_invalid_is_loud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_history(monkeypatch, _THREAD)
-    _patch_encode_llm(
-        monkeypatch, lambda *a, **k: {"profile": {"sleeves": {"crypto": 0.5}}, "summary": "x"}
-    )
-    with pytest.raises(EncodeError, match="failed validation"):
-        propose_profile(tmp_path / "m.db", tmp_path, session_id="s1", sector_vocabulary=[])
-
-
-def test_propose_profile_empty_conversation_and_empty_profile(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _patch_history(monkeypatch, [])
-    with pytest.raises(EncodeError, match="no conversation"):
-        propose_profile(tmp_path / "m.db", tmp_path, session_id="s1", sector_vocabulary=[])
-    _patch_history(monkeypatch, _THREAD)
-    _patch_encode_llm(monkeypatch, lambda *a, **k: {"profile": {}, "summary": "x"})
-    with pytest.raises(EncodeError, match="hasn't expressed any quantitative target"):
-        propose_profile(tmp_path / "m.db", tmp_path, session_id="s1", sector_vocabulary=[])
-
-
-# ---------------------------------------------------------------------------
-# Approval — owner-wins re-validation from the form
-# ---------------------------------------------------------------------------
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_profile_from_form_owner_edits_win() -> None:
@@ -232,7 +87,7 @@ def _intent_db(tmp_path: Path) -> Path:
     )
     conn.execute(
         "INSERT INTO positioning_intents (narrative, profile_json, source, created_at) "
-        "VALUES (?, ?, 'coach', '2026-07-10T12:00:00')",
+        "VALUES (?, ?, 'manual', '2026-07-10T12:00:00')",
         ("Less growth, more intl value.", profile.model_dump_json()),
     )
     conn.commit()
@@ -241,13 +96,16 @@ def _intent_db(tmp_path: Path) -> Path:
 
 
 def test_panel_renders_default_and_intent_states(tmp_path: Path) -> None:
-    # No DB / no cache → default-to-book card, empty history, coach present.
+    # No DB or cache: the current book is the default and manual inputs are blank.
     html = render_positioning_panel(tmp_path / "missing.db", tmp_path)
     assert "defaulting to current book" in html
-    # Wave B (B6): the section header names WHICH coach.
-    assert '<h3 class="k-well-title">Positioning coach</h3>' in html
-    assert "pos-chat-form" in html and "/api/positioning/coach" in html
-    assert "Propose targets from this conversation" in html
+    assert '<h3 class="k-well-title">Set targets</h3>' in html
+    assert 'id="pos-approve-form"' in html
+    assert "/api/positioning/approve" in html
+    assert "pos-chat-form" not in html
+    assert "/api/positioning/coach" not in html
+    assert "/api/positioning/propose" not in html
+    assert 'class="pos-hist"' not in html
     assert "grid-template-columns:repeat(auto-fit,minmax(var(--grid-card-lg),1fr))" in html
     assert "repeat(2, minmax(var(--grid-card-lg), 1fr))" not in html
     # With a saved intent → versioned card + narrative + dimensions.
@@ -257,31 +115,10 @@ def test_panel_renders_default_and_intent_states(tmp_path: Path) -> None:
     assert "target -0.10" in card
     assert "Sleeve · intl" in card
     assert "Less growth, more intl value." in card
-
-
-def test_approval_form_round_trips_proposal_values(tmp_path: Path) -> None:
-    from positioning.encode import ProposedProfile
-
-    proposal = ProposedProfile(
-        profile=PositioningProfile(
-            target_growth_tilt=0.0,
-            sector_targets=[SectorTarget(sector="Technology", target_weight=0.35, band=0.05)],
-            sleeves={"intl": 0.15},
-        ),
-        summary="Neutral tilt; intl 15%.",
-        rationale="From the conversation.",
-        session_id="s9",
-    )
-    html = render_approval_form(proposal)
-    assert 'name="session_id" value="s9"' in html
-    assert 'name="target_growth_tilt"' in html and 'value="0"' in html
-    assert 'name="sector_0"' in html and 'value="Technology"' in html
-    assert 'name="sector_target_0"' in html and 'value="35"' in html
-    assert 'name="sleeve_intl"' in html and 'value="15"' in html
-    assert '<h3 class="k-well-title">Proposed targets' in html
-    assert '<h4 class="k-well-title">Sector targets' in html
-    assert '<h4 class="k-well-title">Narrative' in html
-    assert "Approve" in html
+    editor = render_positioning_panel(db, tmp_path)
+    assert 'name="target_growth_tilt" placeholder="e.g. -0.10" value="-0.1"' in editor
+    assert 'name="sleeve_intl" placeholder="%" value="20"' in editor
+    assert ">Less growth, more intl value.</textarea>" in editor
 
 
 # ---------------------------------------------------------------------------
@@ -399,9 +236,11 @@ def test_degraded_book_context_renders_owner_language_not_raw_dump(
         "tracker offline and no risk snapshot — book Sharpe unknown",
         "sector weights are tracker-only — sector factors unscored",
     )
-    monkeypatch.setattr(
-        panel, "read_materialized_fit_meta", lambda root: {"book": {"degraded": list(raw)}}
-    )
+
+    def degraded_meta(_root: Path) -> dict[str, object]:
+        return {"book": {"degraded": list(raw)}}
+
+    monkeypatch.setattr(panel, "read_materialized_fit_meta", degraded_meta)
     card = panel.render_active_target_card(tmp_path / "missing.db", tmp_path)
 
     # Owner-language strip: pill + count + consequence.
@@ -422,7 +261,10 @@ def test_healthy_book_context_has_no_degraded_strip(
     degraded stays visibly distinct from healthy (silent-degradation rule)."""
     import pipeline.positioning_panel as panel
 
-    monkeypatch.setattr(panel, "read_materialized_fit_meta", lambda root: {"book": {}})
+    def healthy_meta(_root: Path) -> dict[str, object]:
+        return {"book": {}}
+
+    monkeypatch.setattr(panel, "read_materialized_fit_meta", healthy_meta)
     card = panel.render_active_target_card(tmp_path / "missing.db", tmp_path)
     assert "pos-degraded" not in card
     assert "context degraded" not in card

@@ -1,38 +1,7 @@
-"""execution/session_context_pack.py — the Claude-session bridge's READ surface (B8).
+"""Read current process tenets, explicit notes and owner decisions for a chat.
 
-Deep research now splits by depth (owner ruling #9, 2026-07-19 review): thin
-in-app Ask for quick pulls, deep research in a Claude Code session via a
-platform bridge. The bridge's INGEST half already exists
-(``execution/land_session_notes.py``: musing / close-intent / decision /
-B4's ``transcript`` kind). This script is the READ half — what a fresh Claude
-session should see BEFORE it starts researching, so it doesn't re-derive
-context the platform already has or contradict a standing belief it never saw.
-
-Pure read, ZERO LLM calls — safe to run at any hour, no quota interaction, no
-``llm_budgets`` touch (the 18:00 ``session_distill`` sweep, not this script,
-owns the only LLM leg in the bridge). Prints a markdown context pack:
-
-  - the owner's current Worldview (tenets + stances + themes)
-  - open questions / wonderings (analyst_notes, capped, wondering-flagged via
-    a linked research_tasks row)
-  - open owner decisions + falsifiers, ungraded (v_decision_journal)
-  - research-task prompt blocks explicitly marked for a Claude session (the
-    ``session_prompt`` value inside the legacy ``research_tasks.run_id``
-    object; read defensively so a DB without the metadata column or with an
-    invalid value renders an empty section instead of crashing)
-  - the owner-profile anchor (affirmed capacity/appetite facts)
-
-Every section degrades to an explicit empty-state note on a missing table /
-column / DB rather than raising — the pack must always render, even against a
-DB that predates half of these features.
-
-Usage:
-    python execution/session_context_pack.py
-    python execution/session_context_pack.py --db-path data/portfolio.db
-    python execution/session_context_pack.py --out .tmp/session_pack.md
-
-Structured JSON events (best-effort load failures, the final build event) go
-to stderr; the markdown pack goes to stdout by default.
+This command makes no model call. It requires an explicit or configured database.
+Its output is research context and does not authorize collection or state changes.
 """
 
 from __future__ import annotations
@@ -46,9 +15,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from clock import now_naive_utc
-from synthesis.insights import InsightRow, list_insights
+from db_paths import require_product_db_path
+from synthesis.insights import InsightRow
 from synthesis.tenets import list_tenets
-from user_state._db import open_conn
+from user_state._db import open_read_conn
 from user_state.notes import AnalystNoteRow, list_notes
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -56,11 +26,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # Caps keep the pack scannable at session-start — a wall of history is worse
 # than a capped, newest-first slice (mirrors the anchor loaders' char caps).
 _TENET_CAP = 12
-_STANCE_CAP = 12
-_THEME_CAP = 12
 _QUESTION_CAP = 20
 _DECISION_CAP = 15
-_RESEARCH_TASK_CAP = 10
 
 # Tables/views this pack reads from, paired with the column that carries their
 # most-recent write — the freshness probe in the header. Best-effort: a
@@ -68,7 +35,6 @@ _RESEARCH_TASK_CAP = 10
 _FRESHNESS_PROBES: tuple[tuple[str, str], ...] = (
     ("insight_notes", "updated_at"),
     ("analyst_notes", "updated_at"),
-    ("research_tasks", "updated_at"),
     ("decisions", "made_at"),
 )
 
@@ -97,7 +63,7 @@ def _max_freshness(db_path: Path) -> str | None:
     stale pack is visible at a glance rather than silently trusted. Returns
     None when the DB is missing or no probed table/view exists yet."""
     try:
-        conn = open_conn(db_path)
+        conn = open_read_conn(db_path)
     except (FileNotFoundError, RuntimeError) as exc:
         _log({"event": "freshness_probe_db_unavailable", "error": str(exc)})
         return None
@@ -148,56 +114,7 @@ def _render_worldview(db_path: Path) -> list[str]:
         lines.append("_None recorded._")
     lines.append("")
 
-    try:
-        stances = list_insights(kind="stance", status="current", db_path=db_path)
-    except Exception as exc:
-        _log({"event": "stances_load_failed", "error": str(exc)})
-        stances = []
-    lines.append("### Stances")
-    if stances:
-        for s in stances[:_STANCE_CAP]:
-            lines.append(f"- **{s.scope_key}** — {_flatten(s.body_md)} (as of {s.as_of[:10]})")
-    else:
-        lines.append("_None recorded._")
-    lines.append("")
-
-    try:
-        themes = list_insights(kind="theme", status="current", db_path=db_path)
-    except Exception as exc:
-        _log({"event": "themes_load_failed", "error": str(exc)})
-        themes = []
-    lines.append("### Themes")
-    if themes:
-        for th in themes[:_THEME_CAP]:
-            lines.append(f"- {_flatten(th.body_md)} `[{th.scope_key}]` (as of {th.as_of[:10]})")
-    else:
-        lines.append("_None recorded._")
-    lines.append("")
     return lines
-
-
-def _wondering_note_ids(db_path: Path, note_ids: list[int]) -> set[int]:
-    """Which of ``note_ids`` have a linked research_tasks row — the wondering
-    flag (a 'wondering' intent verdict creates a research_tasks row keyed on
-    note_id; it never patches the note's own context, see
-    ``research.proposals.detect_and_create_task``)."""
-    if not note_ids:
-        return set()
-    try:
-        conn = open_conn(db_path)
-    except (FileNotFoundError, RuntimeError):
-        return set()
-    try:
-        placeholders = ", ".join("?" * len(note_ids))
-        rows = conn.execute(
-            f"SELECT DISTINCT note_id FROM research_tasks WHERE note_id IN ({placeholders})",
-            note_ids,
-        ).fetchall()
-        return {int(r[0]) for r in rows if r[0] is not None}
-    except sqlite3.Error:
-        return set()
-    finally:
-        conn.close()
 
 
 def _render_open_questions(db_path: Path) -> list[str]:
@@ -216,13 +133,10 @@ def _render_open_questions(db_path: Path) -> list[str]:
         return lines
     notes.sort(key=lambda n: (n.created_at, n.id), reverse=True)
     notes = notes[:_QUESTION_CAP]
-    wondering_ids = _wondering_note_ids(db_path, [n.id for n in notes])
     for n in notes:
-        flag = " `[wondering]`" if n.id in wondering_ids else ""
         ticker = f" ({n.ticker})" if n.ticker else ""
         lines.append(
-            f"- [{n.kind}]{ticker}{flag} {_flatten(n.body)} "
-            f"(since {n.created_at.date().isoformat()})"
+            f"- [{n.kind}]{ticker} {_flatten(n.body)} (since {n.created_at.date().isoformat()})"
         )
     lines.append("")
     return lines
@@ -231,7 +145,7 @@ def _render_open_questions(db_path: Path) -> list[str]:
 def _render_open_decisions(db_path: Path) -> list[str]:
     lines = ["## Open Decisions & Falsifiers (owner, ungraded)", ""]
     try:
-        conn = open_conn(db_path)
+        conn = open_read_conn(db_path)
     except (FileNotFoundError, RuntimeError) as exc:
         _log({"event": "decisions_db_unavailable", "error": str(exc)})
         lines.append("_Unavailable — DB not found._")
@@ -272,71 +186,21 @@ def _render_open_decisions(db_path: Path) -> list[str]:
     return lines
 
 
-def _render_research_prompts(db_path: Path) -> list[str]:
-    from research.proposals import list_session_prompt_tasks
-
-    lines = ["## Research Tasks -> Claude Session", ""]
-    try:
-        tasks = list_session_prompt_tasks(db_path=db_path, limit=_RESEARCH_TASK_CAP)
-    except (FileNotFoundError, RuntimeError) as exc:
-        _log({"event": "research_tasks_db_unavailable", "error": str(exc)})
-        return [*lines, "_Unavailable — DB not found._", ""]
-    except sqlite3.Error as exc:
-        _log({"event": "research_tasks_query_failed", "error": str(exc)})
-        lines.append("_Unavailable — query failed against this DB._")
-        lines.append("")
-        return lines
-    for task in tasks:
-        ticker = f" ({task.ticker})" if task.ticker else ""
-        lines.append(f"### Task #{task.id}{ticker} — {task.status}")
-        lines.append(f"_Claim:_ {_flatten(task.claim)}")
-        lines.append("")
-        lines.append(str(task.metadata["session_prompt"]).strip())
-        lines.append("")
-    if not tasks:
-        lines.append("_None pending._")
-        lines.append("")
-    return lines
-
-
-def _render_owner_profile(resolved_db: Path) -> list[str]:
-    lines = ["## Owner Profile (affirmed)", ""]
-    try:
-        from llm.anchors import load_owner_profile_anchor
-
-        # anchors.py resolves its own DB path as repo_root/"data"/"portfolio.db".
-        # Walk back up two segments from the resolved DB so the anchor loader
-        # reads the SAME db this pack is built against (both production
-        # ``<repo>/data/portfolio.db`` and every test fixture follow that
-        # <root>/data/portfolio.db layout) rather than silently falling back
-        # to PROJECT_ROOT's own DB when ``--db-path`` points elsewhere.
-        anchor = load_owner_profile_anchor(resolved_db.parent.parent)
-    except Exception as exc:  # never block the pack — degrade to empty
-        _log({"event": "owner_profile_anchor_failed", "error": str(exc)})
-        anchor = ""
-    if anchor.strip():
-        lines.append(anchor.strip())
-    else:
-        lines.append("_None affirmed yet._")
-    lines.append("")
-    return lines
-
-
 def build_pack(db_path: Path | str | None = None) -> str:
     """Assemble the full markdown context pack. Pure read, ZERO LLM calls —
     every section degrades to an explicit empty-state note on a missing
     table/column/DB rather than raising, so a pre-migration or
     partially-seeded DB still renders a usable pack instead of crashing a
     session's opening move."""
-    resolved_db = Path(db_path) if db_path is not None else PROJECT_ROOT / "data" / "portfolio.db"
+    resolved_db = require_product_db_path(
+        PROJECT_ROOT, explicit=Path(db_path) if db_path is not None else None
+    )
 
     sections: list[str] = []
     sections.extend(_render_header(resolved_db))
     sections.extend(_render_worldview(resolved_db))
     sections.extend(_render_open_questions(resolved_db))
     sections.extend(_render_open_decisions(resolved_db))
-    sections.extend(_render_research_prompts(resolved_db))
-    sections.extend(_render_owner_profile(resolved_db))
 
     _log({"event": "session_context_pack_built", "db_path": str(resolved_db)})
     return "\n".join(sections).rstrip() + "\n"

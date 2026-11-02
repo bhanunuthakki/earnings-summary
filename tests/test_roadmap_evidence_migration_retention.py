@@ -13,10 +13,11 @@ from alembic import command
 
 
 @pytest.mark.parametrize(
-    ("table", "parent", "insert"),
+    ("table", "feature_revision", "parent", "insert"),
     [
         (
             "macro_sensitivity_estimates",
+            "0041_versioned_rate_sensitivity",
             "0040_fmp_watchlist_recovery",
             "INSERT INTO macro_sensitivity_estimates(ticker,series_id,metric_version,shock_unit,"
             "return_unit,beta,r_squared,n_obs,lookback_window_days,input_sha,inputs_json,"
@@ -25,17 +26,20 @@ from alembic import command
         ),
         (
             "etf_profile",
+            "0043_etf_profile_field_evidence",
             "0042_governed_ir_event_revisions",
             "INSERT INTO etf_profile(ticker,profile_fetched_at,field_evidence_json) "
             "VALUES('AVDV','2026-09-19',json_object('source_hash',?))",
         ),
         (
             "fmp_refresh_receipts",
+            "0045_fmp_recovery_receipts",
             "0044_position_entry_supersession",
             "INSERT INTO fmp_refresh_receipts VALUES('run',?,'2026-09-19','{}',printf('%064d',0))",
         ),
         (
             "sec_execution_receipts",
+            "0046_sec_execution_receipts",
             "0045_fmp_recovery_receipts",
             "INSERT INTO sec_execution_receipts VALUES('attempt','request',0,'requested',"
             "'2026-09-19','{}',?)",
@@ -46,10 +50,11 @@ def test_populated_roadmap_evidence_refuses_downgrade(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
     table: str,
+    feature_revision: str,
     parent: str,
     insert: str,
 ) -> None:
-    database = migrated_db(tmp_path / "retained.db")
+    database = migrated_db(tmp_path / "retained.db", target=feature_revision)
     with sqlite3.connect(database) as conn:
         conn.execute(insert, ("a" * 64,))
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))

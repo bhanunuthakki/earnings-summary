@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -23,62 +24,14 @@ from llm_artifact_store import (
 )
 
 
-def _create_schema(conn: sqlite3.Connection) -> None:
-    """Mirror migrations 0034 + 0035 inline for self-contained tests."""
-    conn.executescript(
-        """
-        CREATE TABLE llm_calls (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            called_at DATETIME NOT NULL,
-            purpose VARCHAR(64), ticker VARCHAR(16), scope VARCHAR(64),
-            model VARCHAR(64) NOT NULL,
-            prompt_sha256 VARCHAR(64) NOT NULL,
-            response_sha256 VARCHAR(64),
-            prompt_chars INTEGER NOT NULL, response_chars INTEGER,
-            input_tokens INTEGER, cache_creation_input_tokens INTEGER,
-            cache_read_input_tokens INTEGER, output_tokens INTEGER,
-            elapsed_ms INTEGER NOT NULL,
-            cost_estimate_usd FLOAT,
-            cache_hit BOOLEAN NOT NULL DEFAULT 0,
-            fallback_used VARCHAR(16),
-            artifact_id INTEGER,
-            error TEXT,
-            run_id VARCHAR(64)
-        );
-        CREATE TABLE llm_artifacts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker VARCHAR(16),
-            scope VARCHAR(64) NOT NULL DEFAULT 'ticker',
-            purpose VARCHAR(64) NOT NULL,
-            fiscal_period VARCHAR(10),
-            content_md TEXT,
-            content_json TEXT,
-            input_sha256 VARCHAR(64) NOT NULL,
-            output_sha256 VARCHAR(64),
-            model VARCHAR(64),
-            prompt_version VARCHAR(32) NOT NULL DEFAULT 'v1',
-            generated_at DATETIME NOT NULL,
-            expires_at DATETIME,
-            superseded_by_id INTEGER REFERENCES llm_artifacts(id),
-            dirty BOOLEAN NOT NULL DEFAULT 0,
-            dirty_reason VARCHAR(128),
-            source_doc_ids TEXT,
-            parent_artifact_ids TEXT,
-            llm_call_id INTEGER REFERENCES llm_calls(id)
-        );
-        """
-    )
-    conn.commit()
-
-
 @pytest.fixture()
-def db(tmp_path: Path) -> Path:
-    path = tmp_path / "artifacts.db"
-    conn = sqlite3.connect(str(path))
-    try:
-        _create_schema(conn)
-    finally:
-        conn.close()
+def db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    path = migrated_db(tmp_path / "artifacts.db")
+    with sqlite3.connect(path) as conn:
+        conn.executemany(
+            "INSERT INTO tracked_companies (ticker, name, list_type) VALUES (?, ?, 'portfolio')",
+            [(ticker, f"Synthetic {ticker}") for ticker in ("BKNG", "GOOG", "META", "NU")],
+        )
     return path
 
 

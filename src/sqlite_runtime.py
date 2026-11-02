@@ -30,6 +30,7 @@ from pipeline.db_writer_gate import (
     trace_writer_connection,
     writer_connection_trace_enabled,
 )
+from runtime.deterministic import sha256_text
 from runtime.sqlite_adapters import register_datetime_adapters
 from schema_compat import require_current_for_write
 from scope_identity import derive_retrieval_scope_id
@@ -677,10 +678,8 @@ def connect_sqlite(
 def register_sqlite_integrity_functions(conn: sqlite3.Connection) -> None:
     """Install shared deterministic functions used by schema integrity guards."""
 
-    from provenance.source_fact_publication import digest_text
-
     def fact_sha256(value: object) -> str:
-        return digest_text(str(value))
+        return sha256_text(str(value))
 
     conn.create_function(
         "fact_sha256",

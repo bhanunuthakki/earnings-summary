@@ -13,18 +13,14 @@ and a DB without the view must degrade to ``{}`` rather than raise.
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from user_state.ledger import append_entry  # noqa: E402
-from user_state.notes import create_note  # noqa: E402
-from user_state.thesis_status import read_thesis_status  # noqa: E402
+from user_state.ledger import append_entry
+from user_state.notes import create_note
+from user_state.thesis_status import read_thesis_status
 
 
 def _seed_thesis_state(db_path: Path, ticker: str, thesis: str, breach: str) -> None:

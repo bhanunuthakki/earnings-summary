@@ -16,26 +16,17 @@ from report.renderers.workspace_sections._shared import _empty_panel, _esc, _fmt
 from ui import living_grid as lg
 
 __all__ = [
-    "_position_coaching",
     "_position_stat",
     "_position_tab",
     "_standing_rules_block",
 ]
 
 
-# The research server the report deep-links into (report opens via file://,
-# so the doorway must be absolute) — same hardcoded base the chat drawer /
-# sources tab use (workspace_sections/boot.py, workspace_sections/sources.py).
-# The Socratic think-through page is the deterministic per-ticker decision
-# surface every other "review this name" doorway in the workspace already
-# points at (chat drawer's "think it through", the console's Memos panel).
 def _position_tab(
     body: StringIO,
     pp: PortfolioPositionSection | None,
     *,
     ticker: str = "",
-    position_review_count: int | None = 0,
-    graded_sell_line: str | None = None,
     standing_rules: StandingRulesPanel | None = None,
     you_said_html: str | None = None,
 ) -> None:
@@ -123,11 +114,9 @@ def _position_tab(
         # "You said" strip (owner-ratified design review, 2026-08-02): the
         # owner's own last decision on this name, right below the position
         # header — pre-computed by the caller (pipeline.you_said), a pure
-        # string here like graded_sell_line.
+        # string here, pre-computed by the caller.
         if you_said_html:
             body.write(f'<div class="position-yousaid">{you_said_html}</div>')
-
-        _position_coaching(body, ticker, position_review_count, graded_sell_line)
 
         if pp.history_state != "available" and pp.history_error:
             body.write(f'<p class="muted xsmall">History evidence: {_esc(pp.history_error)}</p>')
@@ -299,43 +288,6 @@ def _position_tab(
         )
 
     _standing_rules_block(body, standing_rules)
-    body.write("</div>")
-
-
-def _position_coaching(
-    body: StringIO,
-    ticker: str,
-    position_review_count: int | None,
-    graded_sell_line: str | None,
-) -> None:
-    """Position-tab coaching lines (REQ-3/REQ-6): the behavioral-guard status,
-    the graded-sells base rate when that ledger exists on this branch, and a
-    doorway into the deterministic review surface for this name.
-
-    The guard phrase is derived from ``position_review_count`` so it can never
-    contradict the count rendered beside it: the behavioral guard runs *inside*
-    a position review, so with zero reviews it has genuinely never fired on
-    this name (the honest-zero starvation wording), and with N reviews it was
-    consulted on each of them."""
-    body.write('<div class="position-coaching">')
-    reviews_word = "review" if position_review_count == 1 else "reviews"
-    if position_review_count is None:
-        guard_line = "Position review history is unavailable for this report"
-    elif position_review_count == 0:
-        # Honest-zero starvation: no review has ever run the guard on this name.
-        guard_line = "Guard: never run on this name &middot; 0 position reviews"
-    else:
-        guard_line = f"Guard: consulted during {position_review_count} position {reviews_word}"
-    body.write(f'<p class="coaching-line muted xsmall">{guard_line}</p>')
-    if graded_sell_line:
-        body.write(f'<p class="coaching-line muted xsmall">{_esc(graded_sell_line)}</p>')
-    if ticker:
-        body.write(
-            f'<a class="k-btn k-btn-quiet k-btn-sm" '
-            f'href="/socratic/{_esc(ticker.upper())}" '
-            f'data-server-path="/socratic/{_esc(ticker.upper())}" '
-            'target="_blank" rel="noopener">Review this position &rarr;</a>'
-        )
     body.write("</div>")
 
 

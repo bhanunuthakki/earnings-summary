@@ -92,7 +92,10 @@ class _RecordingRun:
                 "ticker": ticker,
                 "status": "done",
                 "downloaded": self._downloaded.get(ticker, 2),
+                "ready": self._downloaded.get(ticker, 2),
                 "failed": 0,
+                "projection_repaired": 0,
+                "projection_failed": 0,
                 "categorize_rc": 0 if self._downloaded.get(ticker, 2) else None,
             }
         )
@@ -606,7 +609,7 @@ def test_process_stage_runs_anchor_and_flags_brief_dirty(
     scripts = [_script_of(c) for c in fake.calls]
     assert scripts.index("process_document_evidence.py") < scripts.index("ir_narrative.py")
     assert "ir_narrative.py" in scripts  # anchor refresh ran (cheap)
-    assert "process_ir_documents_state.py" not in scripts  # LLM summaries are opt-in
+    assert "process_ir_documents.py" not in scripts  # LLM summaries are opt-in
     conn = sqlite3.connect(str(db))
     val = conn.execute("SELECT brief_dirty FROM tracked_companies WHERE ticker='NU'").fetchone()[0]
     conn.close()
@@ -746,7 +749,7 @@ def test_missing_inventory_allows_existing_views_but_stays_degraded(
     assert calls == [
         "process_document_evidence.py",
         "ir_narrative.py",
-        "process_ir_documents_state.py",
+        "process_ir_documents.py",
     ]
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT brief_dirty FROM tracked_companies").fetchone() == (1,)
@@ -760,10 +763,11 @@ def test_summaries_flag_runs_process_ir_documents(
     fake = _RecordingRun(downloaded={"NU": 2})
     _install(monkeypatch, fake, ["NU"])
     batch.main(["--repo-root", str(tmp_path), "--db", str(db), "--summaries"])
-    command = next(c for c in fake.calls if _script_of(c) == "process_ir_documents_state.py")
+    command = next(c for c in fake.calls if _script_of(c) == "process_ir_documents.py")
     assert command[command.index("--db") + 1] == str(db)
-    assert command[command.index("--repo-root") + 1] == str(tmp_path)
-    assert "--regenerate-missing" in command
+    assert command[command.index("--state-root") + 1] == str(tmp_path)
+    assert command[command.index("--repo-root") + 1] == str(batch.PROJECT_ROOT)
+    assert "--regenerate-missing" not in command
 
 
 def test_existing_uncached_narrative_is_processed_without_new_downloads(
@@ -823,9 +827,11 @@ def test_unverified_existing_narrative_is_rechecked(
     source = tmp_path / "ir_documents" / "NU" / "2026-06-30" / "ir_presentation__abcd1234.pdf"
     source.parent.mkdir(parents=True)
     source.write_bytes(b"source already downloaded")
+
+    # A legacy text cache has no source-bound envelope. It must be rechecked.
     cache = tmp_path / "data" / "ir_narrative" / "NU" / "ir_presentation__2026-06-30.txt"
     cache.parent.mkdir(parents=True)
-    cache.write_text("processed narrative", encoding="utf-8")
+    cache.write_text("processed narrative " * 20, encoding="utf-8")
     fake = _RecordingRun(downloaded={"NU": 0})
     _install(monkeypatch, fake, ["NU"])
     assert batch.main(["--repo-root", str(tmp_path), "--db", str(db)]) == 0
@@ -856,7 +862,7 @@ def test_summary_reported_failure_is_not_hidden_by_zero_exit_status(
                 ),
                 "",
             )
-        summary = _script_of(argv) == "process_ir_documents_state.py"
+        summary = _script_of(argv) == "process_ir_documents.py"
         return subprocess.CompletedProcess(argv, 0, json.dumps({"failed": int(summary)}), "")
 
     monkeypatch.setattr(batch, "_run_child", child)

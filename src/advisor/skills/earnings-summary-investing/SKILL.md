@@ -1,6 +1,6 @@
 ---
 name: earnings-summary-investing
-description: Use the earnings-summary project's existing sources and tools for public-company and ETF research, earnings previews and readouts, valuation and thesis review, thesis revision from notes or articles, investment decision cards, evaluation-list review, full-book portfolio risk, and investment memos. Prefer this workflow for research in earnings-summary and its portfolio or evaluation names. Route next-dollar allocation to the existing next-dollar-allocation skill. Does not execute trades or authorize publication.
+description: Use the earnings-summary project's existing sources and tools for public-company research, limited ETF portfolio context, earnings previews and readouts, valuation and thesis review, thesis revision from notes or articles, investment decision cards, evaluation-list review, full-book portfolio risk, and investment memos. Prefer this workflow for research in earnings-summary and its portfolio or evaluation names. Route next-dollar allocation to the existing next-dollar-allocation skill. Does not execute trades or authorize publication.
 ---
 
 # Earnings-summary investing

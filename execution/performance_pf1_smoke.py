@@ -18,13 +18,11 @@ from defusedxml.common import DefusedXmlException
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from quality.performance_experiment import MAX_COMPANION_OUTPUT_BYTES  # noqa: E402
-
-WORKLOAD_ID = "capture-poller-runner-fidelity-smoke/v1"
+WORKLOAD_ID = "job-runtime-lock-runner-fidelity-smoke/v2"
 FIXTURE_PATH = Path("tests/fixtures/performance/pf1-smoke.txt")
 SELECTED_NODES = (
-    "tests/test_capture_poller.py::test_runtime_configuration_binds_implicit_consumers_to_canonical_db",
-    "tests/test_capture_poller.py::test_load_save_offset_roundtrip",
+    "tests/test_job_runtime.py::test_lock_excludes_same_mutable_write_set",
+    "tests/test_job_runtime.py::test_different_write_sets_can_run_together",
 )
 
 
@@ -41,6 +39,8 @@ class _BoundedTextFile(TextIOBase):
         return True
 
     def write(self, value: str) -> int:
+        from quality.performance_experiment import MAX_COMPANION_OUTPUT_BYTES
+
         encoded_size = len(value.encode("utf-8"))
         if self._budget[0] + encoded_size > MAX_COMPANION_OUTPUT_BYTES:
             raise _OutputLimitError

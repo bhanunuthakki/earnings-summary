@@ -90,29 +90,23 @@ from the no-write assessment function.
 The evaluator CLI's dry run still writes operational logs. The legacy pressure-test
 CLI is excluded by the route map; the analyst can still form a cited counter-case.
 
-## ETF comparison and overlap
+## ETF portfolio context
 
-Resolve whether the request compares funds, a fund with direct holdings, or the
-full account book. Start with the existing ETF workups and `directives/etf_data.md`.
-Compare mandate, benchmark, fees, concentration and relevant country, sector,
-currency and style exposure. Retain each field's source date and evidence limits.
-An ETF comparison does not require a corporate DCF or portfolio sizing.
+ETF support is limited to brief portfolio diversification commentary and simple
+long-term earnings-multiple context. Start with `directives/etf_data.md`.
+Do not run standalone ETF diligence, collection, scoring, workup generation or
+corporate DCF. Read existing portfolio positions and general risk evidence.
 
-Read holdings through `src/instrument_store.py` with an explicit read-only
-connection. Preserve snapshot dates, sources, security identities and fractional
-weights. The latest date or a top-holdings list does not prove a complete,
-source-coherent snapshot. Check duplicate or unmatched identities, missing
-weights and covered weight before calculating overlap. Do not rescale partial
-holdings to imply full coverage.
+Retain each input's source, date and coverage. Return correlation is not
+holdings overlap. Existing holdings can support observed matched weight only
+when identities and fractional weights are valid. Missing or partial holdings
+do not prove total overlap or a complete country/sector allocation.
 
-`src/etf_overlap.py` sums one fund's weights in names held directly by the book.
-It does not calculate symmetric fund-to-fund weighted overlap. For comparable
-long-only fund snapshots, a separately labeled analyst calculation can sum
-`min(weight_A, weight_B)` across matched security identities. Calculate with code
-and retain the input rows and formula. With incomplete holdings, report only
-observed matched weight and the unknown remainder; do not claim total overlap.
-Holdings overlap is different from return correlation. A personal-book exposure
-or allocation conclusion also needs the full-account allocation path.
+A supported, dated basket P/E is a point-in-time characteristic. A long-term
+multiple or growth rate may be an explicit scenario assumption. Do not relabel
+one P/E as a long-term average or invent an earnings series. Missing support is
+unavailable; this route does not authorize a new collector or a lower evidence
+standard. Dedicated ETF workups and their saved-history interface are retired.
 
 ## Portfolio risk
 
@@ -121,8 +115,8 @@ or allocation conclusion also needs the full-account allocation path.
    Preserve the typed tracker snapshot envelope; the compatibility holdings reader
    does not carry its complete account-coverage metadata. Reconcile positions,
    cash and totals. Record missing accounts, unresolved securities and freshness. Research-roster coverage is not all-account coverage.
-2. Use `src/allocation/book_risk.py`, `src/allocation/what_if.py` and existing fund
-   workups. Examine position concentration, fund overlap, sector/style/country and
+2. Use `src/allocation/book_risk.py`, `src/allocation/what_if.py` and existing
+   portfolio evidence. Examine position concentration, fund overlap, sector/style/country and
    currency exposure, correlated business risks, liquidity and known leverage.
    Retain each source's coverage and method. Do not invent missing look-through.
    An analytics section succeeding does not prove all sections succeeded. Read

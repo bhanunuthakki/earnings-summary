@@ -8,10 +8,12 @@ direct DB / filesystem coupling in the renderer layer.
 from __future__ import annotations
 
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from industry_classifier import suppressed_sections_for_ticker
+from llm.calibration import daily_avg_scores, summarize_by_prompt_version
+from pipeline.you_said import render_you_said_strip, render_you_said_strip_for_path
 from provenance.source_read_context import SourceReadContext
 from report.models import BudgetSkip, ReportFlavor, ReportSpec
 from report.render_clock import render_today
@@ -25,7 +27,6 @@ from report.sections import (
     filing_intelligence,
     financials,
     investment_decision_card,
-    ir_docs,
     portfolio_position,
     provenance,
     qa_roster,
@@ -38,6 +39,24 @@ from report.sections import (
     thesis,
     valuation,
 )
+from report.sections.p3_data import load_workspace_p3_panels
+from report.workspace_models import PanelAvailability, WorkspacePrepared
+from ui.controls import k_empty
+from ui.earnings_audio import google_finance_earnings_url
+
+
+def _report_database_path(conn: sqlite3.Connection | None, db_path: Path | None) -> Path | None:
+    """Validate the caller's database authority before any report source read."""
+    if conn is None:
+        return db_path
+    connected = next(
+        (row[2] for row in conn.execute("PRAGMA database_list") if row[1] == "main"), ""
+    )
+    if db_path is not None and not connected:
+        raise ValueError("Report connection has no main database file")
+    if db_path is not None and Path(connected).resolve() != db_path.resolve():
+        raise ValueError("Report connection and database path disagree")
+    return Path(connected) if connected else None
 
 
 def build_report(
@@ -84,14 +103,7 @@ def build_report(
     build (the "run anyway, ignore caps" path), so analyses that a `skip`-mode
     cap would forgo are run regardless. See report.sections._common.budget_gate.
     """
-    # Preserve the same authority when render-time panels open their readers.
-    if conn is not None:
-        connected = next(
-            (row[2] for row in conn.execute("PRAGMA database_list") if row[1] == "main"), ""
-        )
-        if db_path is not None and connected and Path(connected).resolve() != db_path.resolve():
-            raise ValueError("Report connection and database path disagree")
-        db_path = Path(connected) if connected else None
+    db_path = _report_database_path(conn, db_path)
     ticker = ticker.upper()
     portfolio_position_section = portfolio_position.build(ticker, repo_root)
     snapshot_section = snapshot.build(
@@ -125,8 +137,8 @@ def build_report(
         force_budget_bypass=force_budget_bypass,
         conn=conn,
     )
+    # Only purpose-specific dirty regeneration bypasses the SayDo selection cache.
     saydo_section = saydo.build(ticker, repo_root, conn=conn)
-    ir_docs_section = ir_docs.build(ticker, repo_root, conn=conn)
     recent_developments_section = recent_developments.build(
         ticker=ticker,
         repo_root=repo_root,
@@ -198,7 +210,7 @@ def build_report(
     # worth a panel). Empty for unclassified tickers, so the renderer shows
     # everything by default. Deterministic (no LLM / network).
     suppressed_sections = sorted(suppressed_sections_for_ticker(ticker, repo_root))
-    return ReportSpec(
+    spec = ReportSpec(
         ticker=ticker,
         db_path=str(db_path) if db_path is not None else None,
         generation_date=generation_date or render_today(),
@@ -218,7 +230,6 @@ def build_report(
         segments=segments_section,
         earnings=earnings_section,
         saydo=saydo_section,
-        ir_docs=ir_docs_section,
         recent_developments=recent_developments_section,
         bear_case=bear_case_section,
         provenance=provenance_section,
@@ -228,4 +239,50 @@ def build_report(
         exec_compensation=exec_compensation_section,
         synthesis=synthesis_section,
         investment_decision_card=investment_decision_card_section,
+    )
+
+    return spec.model_copy(update={"workspace": prepare_workspace_report(spec, conn=conn)})
+
+
+def prepare_workspace_report(
+    spec: ReportSpec, *, conn: sqlite3.Connection | None = None
+) -> WorkspacePrepared:
+    """Prepare optional analytical values once under the report caller's DB authority."""
+    root = Path(spec.repo_root)
+    db_path = Path(spec.db_path) if spec.db_path is not None else None
+    db_path = _report_database_path(conn, db_path)
+    p3 = load_workspace_p3_panels(spec.ticker, root, db_path=db_path, conn=conn)
+    previous_factory = conn.row_factory if conn is not None else None
+    try:
+        if conn is not None:
+            conn.row_factory = sqlite3.Row
+        if p3.availability.get("decision_history") in {
+            PanelAvailability.UNAVAILABLE,
+            PanelAvailability.NOT_CONFIGURED,
+        }:
+            you_said = k_empty("Decision history is unavailable for this report.")
+        elif conn is not None:
+            you_said = render_you_said_strip(conn, spec.ticker)
+        else:
+            you_said = render_you_said_strip_for_path(db_path, spec.ticker)
+    finally:
+        if conn is not None:
+            conn.row_factory = previous_factory
+    since = datetime.combine(spec.generation_date, datetime.min.time()) - timedelta(days=30)
+    try:
+        summaries = (
+            summarize_by_prompt_version(db_path=db_path, conn=conn, since=since)
+            if db_path is not None or conn is not None
+            else []
+        )
+        daily = daily_avg_scores(db_path=db_path, conn=conn, since=since) if summaries else {}
+    except (sqlite3.Error, OSError):
+        summaries, daily = [], {}
+        p3.availability["prompt_quality"] = PanelAvailability.UNAVAILABLE
+    return WorkspacePrepared(
+        p3=p3,
+        you_said_html=you_said,
+        earnings_audio_url=google_finance_earnings_url(root, spec.ticker),
+        prompt_summaries=summaries,
+        prompt_daily=daily,
     )

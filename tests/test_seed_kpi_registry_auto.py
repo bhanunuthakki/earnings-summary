@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import cast
@@ -33,19 +32,17 @@ import yaml
 
 # scratch/ lives at <repo_root>/scratch/; src/ is already on sys.path via the
 # tests' conftest. Insert scratch/ so ``seed_kpi_registry`` imports at runtime.
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "scratch"))
-
-from seed_kpi_registry import (  # noqa: E402
+from seed_kpi_registry import (
     AutoSeedSummary,
     auto_seed_ticker,
     main,
 )
 
-from tests.kpi_semantic_support import admit_all_kpi_facts  # noqa: E402
-from triggers import KpiInflectionTrigger, UserStateContext  # noqa: E402
-from user_state import registry  # noqa: E402
+from tests.kpi_semantic_support import admit_all_kpi_facts
+from triggers import KpiInflectionTrigger, UserStateContext
+from user_state import registry
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # 8 flat quarters ~18 then a 4-quarter decline to 16.4 — a recent down
 # inflection that crosses 'below 17'. Pinned from test_trigger_kpi_inflection.py.
 _VALUES_RECENT_DOWN: list[float] = [
@@ -122,7 +119,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
     _ = conn.execute(
         "CREATE TABLE llm_artifacts ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, "
-        "scope TEXT NOT NULL DEFAULT 'ticker', purpose TEXT NOT NULL, "
+        "scope TEXT NOT NULL DEFAULT 'ticker', document_version_id TEXT, purpose TEXT NOT NULL, "
         "fiscal_period TEXT, content_md TEXT, content_json TEXT, "
         "input_sha256 TEXT NOT NULL, output_sha256 TEXT, model TEXT, "
         "prompt_version TEXT NOT NULL DEFAULT 'v1', generated_at TEXT NOT NULL, "

@@ -15,6 +15,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Protocol, cast
 from zoneinfo import ZoneInfo
 
@@ -2724,26 +2725,29 @@ def test_offline_receipt_rejects_invalid_uuid_hash_arithmetic_status_and_manifes
 def test_raw_corpus_manifest_22k_tiny_files_has_bounded_two_pass_runtime(
     tmp_path: Path,
 ) -> None:
-    raw_dir = tmp_path / "fmp"
-    raw_dir.mkdir()
-    for index in range(22_000):
-        (raw_dir / f"T{index:05d}_profile.json").write_bytes(b"[]")
+    with TemporaryDirectory(prefix="raw-corpus-scale-", dir=tmp_path) as temporary:
+        raw_dir = Path(temporary) / "fmp"
+        raw_dir.mkdir()
+        for index in range(22_000):
+            (raw_dir / f"T{index:05d}_profile.json").write_bytes(b"[]")
 
-    started = time.perf_counter()
-    before = cast(
-        Callable[[Path], refresh_cache.RawCorpusManifest],
-        getattr(refresh_cache, "_raw_corpus_manifest"),
-    )(raw_dir)
-    after = cast(
-        Callable[[Path], refresh_cache.RawCorpusManifest],
-        getattr(refresh_cache, "_raw_corpus_manifest"),
-    )(raw_dir)
-    elapsed = time.perf_counter() - started
+        started = time.perf_counter()
+        before = cast(
+            Callable[[Path], refresh_cache.RawCorpusManifest],
+            getattr(refresh_cache, "_raw_corpus_manifest"),
+        )(raw_dir)
+        after = cast(
+            Callable[[Path], refresh_cache.RawCorpusManifest],
+            getattr(refresh_cache, "_raw_corpus_manifest"),
+        )(raw_dir)
+        elapsed = time.perf_counter() - started
 
-    assert before == after
-    assert len(before.entries) == 22_000
-    assert before.total_bytes == 44_000
-    assert elapsed < 300.0
+        assert before == after
+        assert len(before.entries) == 22_000
+        assert before.total_bytes == 44_000
+        assert elapsed < 300.0
+
+    assert not Path(temporary).exists()
 
 
 def test_raw_corpus_manifest_matches_rehearsal_path_order_and_hash(tmp_path: Path) -> None:

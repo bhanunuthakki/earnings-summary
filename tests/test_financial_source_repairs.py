@@ -21,7 +21,9 @@ from provenance.metric_ontology import (
     MetricOntology,
 )
 from provenance.source_fact_repository import ReportedSourceFact
-from sources.canonical_financial_series import CanonicalFinancialSeriesReader
+from sources.canonical_financial_series import (
+    CanonicalFinancialSeriesReader,
+)
 from tests.test_report_canonical_financials import STAMP, seed_table
 from tests.test_report_canonical_financials import database as database
 
@@ -898,7 +900,9 @@ def test_derived_revision_preserves_predecessor_and_retired_operand_fails_closed
     bundle = FactReadModel(database).provenance_bundle(
         original.observation.observation_id, cutoff=later
     )
-    assert not reader.derivation_operands_current(bundle)
+    assert not CanonicalFactResolutionEngine(database).observation_lineage_current(
+        bundle.observation.observation_id, later
+    )
     rejected = CanonicalFactResolutionEngine(database).resolve(
         target,
         later,

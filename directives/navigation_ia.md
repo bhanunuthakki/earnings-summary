@@ -1,5 +1,14 @@
 # Navigation & Ritual Specification — the investment-partner IA (v2, post-adversarial)
 
+Current scope amendment, October 25, 2026: the owner retired automatic coaching
+and decision prompts. Keep basic chat logging and dated decision/outcome history.
+Targeted analysis uses backend skills through the shared chat owner. The older
+behavioral flagship and compulsory prompt descriptions below are superseded.
+The decision-nudge producer and source schedule are removed locally. Retained
+historical packet actions can record explicit owner fields without a new prompt.
+Other approved coaching removals remain in implementation; live task retirement
+has not been verified.
+
 **Status: DRAFT v2 for owner sign-off.** v1 (2026-07-11) transcribed the external UX
 feedback into a spec; it was then put through a four-lens adversarial loop (behavioral/DB
 evidence · per-move product attack · migration red-team · minimal-alternative), and the

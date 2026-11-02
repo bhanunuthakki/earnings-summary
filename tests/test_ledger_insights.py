@@ -56,7 +56,7 @@ def test_record_supersedes_prior_and_tracks_watermark(db_path: Path) -> None:
         kind="stance", scope_key="NU", status="superseded", db_path=db_path
     )
     assert [r.id for r in superseded] == [id1]
-    assert insights.current_watermark("NU", "stance", db_path=db_path) == 3
+    assert current[0].watermark_id == 3
 
 
 def test_search_musings_finds_by_content(db_path: Path) -> None:

@@ -41,6 +41,14 @@ def _policy_module() -> ModuleType:
     )
 
 
+def policy_source_path() -> Path:
+    """Return the fleet policy module actually loaded by this adapter."""
+    source = _policy_module().__file__
+    if source is None:
+        raise RuntimeError("Fleet policy has no source identity")
+    return Path(source).resolve(strict=True)
+
+
 def subscription_route() -> tuple[str, ...]:
     """Return the ordinary application route as backend identifiers."""
     try:

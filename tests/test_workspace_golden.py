@@ -12,10 +12,8 @@ Mechanics
 - Two deterministic fixture specs: a rich PORTFOLIO held spec exercising
   every tab with data, and an EVALUATION-flavor spec (research-first group
   order, eval screen panels inside the Company tab, standalone Decisions
-  group). P3 panel rows are injected by patching
-  ``workspace_html.load_workspace_p3_panels`` — ``render()`` resolves that
-  name from its own module globals, and a seam-guard test below fails if
-  the injected content stops reaching the document.
+  group). P3 panel rows enter the prepared ``ReportSpec.workspace`` contract.
+  A seam-guard test fails if the supplied content stops reaching the document.
 - The document is decomposed into named parts: ``styles`` (the <style>
   blocks), ``styles_sorted`` (same rules, whitespace-normalized and sorted —
   survives reordering/moving rules between modules while still catching
@@ -44,10 +42,10 @@ from datetime import UTC, date, datetime
 from itertools import islice
 from pathlib import Path
 from typing import Literal, TypedDict, cast
-from unittest import mock
 
 import pytest
 
+from pipeline.you_said import render_you_said_strip_for_path
 from report.models import (
     AppendixSection,
     BearCaseSection,
@@ -69,7 +67,6 @@ from report.models import (
     GrowthMetrics,
     InsiderSignalRowModel,
     InvestmentSignalDetail,
-    IrDocsSection,
     KpiLedgerRow,
     KpiSeries,
     KpiSnapshotRow,
@@ -89,7 +86,6 @@ from report.models import (
     RecentDevelopmentsSection,
     ReportFlavor,
     ReportSpec,
-    SayDoCard,
     SayDoHistoricalMetric,
     SayDoSection,
     SectionStatus,
@@ -130,6 +126,7 @@ from report.sections.p3_data import (
     SayDoVerdictRow,
     StrategicTargetRow,
 )
+from report.workspace_models import WorkspacePrepared
 from user_state.notes import AnalystNoteRow
 
 GOLDEN_DIR = Path(__file__).resolve().parent / "golden" / "workspace"
@@ -677,37 +674,8 @@ def _qa_roster() -> QARosterSection:
 def _saydo() -> SayDoSection:
     return SayDoSection(
         status=SectionStatus.OK,
-        cards=[
-            SayDoCard(
-                current_quarter="Q1",
-                current_year=2026,
-                prior_quarter="Q4",
-                prior_year=2025,
-                saydo_md=(
-                    "## Print vs guide\n\n"
-                    "| Metric | Guide | Actual | Verdict |\n"
-                    "| --- | --- | --- | --- |\n"
-                    "| Revenue | $1.76-1.79B | $1.81B | beat |\n"
-                    "| Operating margin | ~24% | 24.8% | beat |\n"
-                    "| FY26 revenue | $7.4B | raised to $7.5B | in-line |\n\n"
-                    "Management delivered above the top end of its own range.\n\n"
-                    "Performance Rating: EXCEEDED\n\nThesis View: Bullish\n\n"
-                    "Attribution: Guidance conservatism plus genuine demand pull-forward."
-                ),
-                rating="EXCEEDED",
-                thesis_view="Bullish",
-                attribution="Guidance conservatism plus genuine demand pull-forward.",
-            ),
-            SayDoCard(
-                current_quarter="Q4",
-                current_year=2025,
-                prior_quarter="Q3",
-                prior_year=2025,
-                saydo_md="Narrative-only quarter: commitments tracked qualitatively.",
-                rating="MET",
-                thesis_view="Neutral",
-            ),
-        ],
+        verdicts=_saydo_verdicts(),
+        verdicts_availability="present",
         historical_metrics=[
             SayDoHistoricalMetric(
                 id=1,
@@ -1066,16 +1034,12 @@ def _provenance() -> ProvenanceSection:
                 has_transcript_file=True,
                 has_release_file=True,
                 has_slides_file=True,
-                step_saydo_analyzed=True,
-                step_llm_summarized=True,
             ),
             CoverageRow(
                 quarter="Q4",
                 year=2025,
                 has_transcript_file=True,
                 has_release_file=True,
-                step_saydo_analyzed=True,
-                step_llm_summarized=True,
             ),
         ],
         source_docs=[
@@ -1183,6 +1147,36 @@ def _bear() -> BearCaseSection:
         ),
         out_of_scope_flags=["Macro demand shock", "Acquisition of TEST itself"],
     )
+
+
+def _saydo_verdicts() -> list[SayDoVerdictRow]:
+    return [
+        SayDoVerdictRow(
+            period_made=datetime(2025, 11, 5),
+            period_target=datetime(2026, 3, 31),
+            kpi_name="Revenue",
+            comparator="gte",
+            target_value=1760.0,
+            unit="USD millions",
+            narrative="Q1 revenue of $1.76-1.79B.",
+            realized_value=1810.0,
+            outcome="met",
+            evaluated_at=_TS,
+            source_ref="transcript_segment:9001",
+        ),
+        SayDoVerdictRow(
+            period_made=datetime(2026, 2, 4),
+            period_target=datetime(2026, 6, 30),
+            kpi_name="Operating margin",
+            comparator="gte",
+            target_value=24.0,
+            unit="%",
+            narrative="Q2 margin at or above 24%.",
+            realized_value=None,
+            outcome=None,
+            evaluated_at=None,
+        ),
+    ]
 
 
 def _p3_rich() -> WorkspaceP3Panels:
@@ -1299,32 +1293,6 @@ def _p3_rich() -> WorkspaceP3Panels:
                 ),
             ],
         ),
-        saydo_verdicts=[
-            SayDoVerdictRow(
-                period_made=datetime(2025, 11, 5),
-                period_target=datetime(2026, 3, 31),
-                kpi_name="Revenue",
-                comparator="gte",
-                target_value=1760.0,
-                unit="USD millions",
-                narrative="Q1 revenue of $1.76-1.79B.",
-                realized_value=1810.0,
-                outcome="met",
-                evaluated_at=_TS,
-            ),
-            SayDoVerdictRow(
-                period_made=datetime(2026, 2, 4),
-                period_target=datetime(2026, 6, 30),
-                kpi_name="Operating margin",
-                comparator="gte",
-                target_value=24.0,
-                unit="%",
-                narrative="Q2 margin at or above 24%.",
-                realized_value=None,
-                outcome=None,
-                evaluated_at=None,
-            ),
-        ],
         peer_comp=[
             PeerCompRow(
                 peer_ticker="RIVL",
@@ -1445,7 +1413,6 @@ def _portfolio_spec(repo_root: str) -> ReportSpec:
         segments=_segments(),
         earnings=_earnings(),
         saydo=_saydo(),
-        ir_docs=IrDocsSection(status=SectionStatus.OK),
         recent_developments=_news(),
         bear_case=_bear(),
         provenance=_provenance(),
@@ -1680,9 +1647,12 @@ def _render_parts(flavor: str, repo_root: Path) -> dict[str, str]:
     is_portfolio = flavor == "portfolio"
     spec = _portfolio_spec(root) if is_portfolio else _evaluation_spec(root)
     loader = _patched_p3_loader if is_portfolio else _patched_p3_loader_no_rules
-    with mock.patch.object(workspace_html, "load_workspace_p3_panels", loader):
-        doc = workspace_html.render(spec)
-        doc_again = workspace_html.render(spec)
+    spec.workspace = WorkspacePrepared(
+        p3=loader(spec.ticker, repo_root),
+        you_said_html=render_you_said_strip_for_path(None, spec.ticker),
+    )
+    doc = workspace_html.render(spec)
+    doc_again = workspace_html.render(spec)
     # Determinism guard: two renders of the same spec must be identical after
     # reltime normalization (catches accidental wall-clock / ordering leaks).
     assert _RELTIME_RX.sub("[RELTIME]", doc) == _RELTIME_RX.sub("[RELTIME]", doc_again)
@@ -1857,10 +1827,8 @@ def test_shared_pane_flavor_independence(
 
 
 def test_p3_seam_reaches_document(portfolio_parts: dict[str, str]) -> None:
-    """The p3 injection seam (mock of workspace_html.load_workspace_p3_panels)
-    must actually feed the render — if the renderer stops resolving that name
-    from its module globals, the patch silently no-ops and the rich panels
-    vanish. Anchor on content that ONLY the patched p3 provides."""
+    """The prepared P3 population must reach the document unchanged.
+    Anchor on content that only the supplied P3 fixture provides."""
     assert "Reach 40% operating margin by FY2028 at scale." in portfolio_parts["pane_company"]
     assert (
         "Watch management&#x27;s Q&amp;A handling of seat-compression questions."

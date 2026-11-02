@@ -80,24 +80,6 @@ def _decode(row: sqlite3.Row) -> InsightRow:
     )
 
 
-def current_watermark(
-    scope_key: str, kind: str, *, db_path: Path | str | None = None
-) -> int | None:
-    """The watermark_id of the current insight for this scope+kind, or None — the
-    incremental-synthesis gate (skip when no musing advanced past it)."""
-    conn = open_read_conn(db_path)
-    try:
-        row = conn.execute(
-            "SELECT watermark_id FROM insight_notes "
-            "WHERE scope_key = ? AND kind = ? AND status = 'current' "
-            "ORDER BY id DESC LIMIT 1",
-            (scope_key, kind),
-        ).fetchone()
-        return None if row is None or row[0] is None else int(row[0])
-    finally:
-        conn.close()
-
-
 def record_insight(
     *,
     scope_key: str,

@@ -29,9 +29,12 @@ import sqlite3
 from dataclasses import asdict
 from decimal import Decimal
 from pathlib import Path
+from typing import TypeVar
 
 from compute.kpi_resolver import canonical_metric_name
 from ir_pipeline.config import IrConfig, SheetKpi
+from ir_pipeline.spreadsheet import SpreadsheetCellRead, SpreadsheetParseResult
+from ir_pipeline.spreadsheet_capture import capture_spreadsheet_parse
 from models.documents import SourceType, tier_for_source_type
 from models.facts import Currency, FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import DefinitionOrigin
@@ -42,15 +45,14 @@ from pipeline.kpi_persistence import (
     KpiValue,
     persist_manifest,
 )
+from pipeline.kpi_semantics import unclassified_kpi_context
 from pipeline.run_accounting import end_run, start_run
 from provenance.evidence_backfill import ensure_legacy_document_evidence
 
 _DOC_TYPE = "ir_historical_spreadsheet"
 
-# A parsed spreadsheet cell has no JSON/PDF position to anchor a
-# FactLocator to (documented exception, docs/design/
-# provenance_clickthrough.md §5.3) -- the cell's (row, column) identity
-# lives in the source .xlsx, which this reader doesn't carry through.
+# Historical value-only callers do not carry worksheet coordinates. The typed
+# source handoff supplies an exact locator without changing their compatibility path.
 _NO_LOCATOR = LegacyEscapeHatch(
     reason=(
         "IR historical spreadsheet cells have no JSON/PDF position captured "
@@ -65,12 +67,16 @@ def _fiscal_period_type(period_end: _dt.datetime) -> FiscalPeriodType:
     return FiscalPeriodType(f"Q{(period_end.month - 1) // 3 + 1}")
 
 
-def _ensure_spreadsheet_document(conn: sqlite3.Connection, ticker: str, path: Path) -> int:
-    """Insert (idempotently, sha256-keyed) the documents row for the spreadsheet."""
-    raw = path.read_bytes()
+def _ensure_spreadsheet_document(
+    conn: sqlite3.Connection, ticker: str, path: Path, *, raw: bytes | None = None
+) -> int:
+    """Reuse exact spreadsheet bytes only within their registered issuer."""
+    raw = path.read_bytes() if raw is None else raw
     sha = hashlib.sha256(raw).hexdigest()
-    existing = conn.execute("SELECT id FROM documents WHERE sha256 = ?", (sha,)).fetchone()
+    existing = conn.execute("SELECT id, ticker FROM documents WHERE sha256 = ?", (sha,)).fetchone()
     if existing is not None:
+        if str(existing["ticker"]).upper() != ticker.upper():
+            raise ValueError("spreadsheet document hash is already registered to another issuer")
         return int(existing["id"])
     common = (
         ticker.upper(),
@@ -102,49 +108,40 @@ def _ensure_spreadsheet_document(conn: sqlite3.Connection, ticker: str, path: Pa
     return int(cur.lastrowid) if cur.lastrowid is not None else 0
 
 
-def _resolve_definition(
-    conn: sqlite3.Connection, ticker: str, spec: SheetKpi
-) -> tuple[str, Unit, DefinitionOrigin]:
-    """Resolve one ``SheetKpi`` to its (canonical name, unit, origin) for write.
-
-    A curated ``analyst`` row keeps its ``kpi_name`` verbatim (it already IS the
-    canonical name the report charts read) at ANALYST origin. A ``capture`` row's
-    raw label is canonicalized via ``canonical_metric_name`` — reusing an existing
-    series when one safely matches, else minting a clean CAPTURE name. Requires
-    ``conn.row_factory = sqlite3.Row`` (canonical_metric_name reads rows by key).
-    """
-    unit = _unit(spec.unit)
-    if spec.origin == "capture":
-        name = canonical_metric_name(conn, ticker, spec.kpi_name, unit)
-        return name, unit, DefinitionOrigin.CAPTURE
-    return spec.kpi_name, unit, DefinitionOrigin.ANALYST
+_ParsedValue = TypeVar("_ParsedValue", float, SpreadsheetCellRead)
 
 
 def _canonicalize_parsed(
     conn: sqlite3.Connection,
     ticker: str,
     config: IrConfig,
-    parsed: dict[str, dict[_dt.datetime, float]],
+    parsed: dict[str, dict[_dt.datetime, _ParsedValue]],
 ) -> tuple[
-    dict[str, dict[_dt.datetime, float]],
+    dict[str, dict[_dt.datetime, _ParsedValue]],
     dict[str, Unit],
     dict[str, DefinitionOrigin],
+    dict[str, Currency | None],
 ]:
-    """Re-key ``parsed`` (keyed by ``SheetKpi.kpi_name``) by CANONICAL name.
+    """Resolve all specs once, then merge selected series and validate currencies.
 
-    Returns ``(series_by_name, unit_by_name, origins)`` all keyed by the resolved
-    ``kpi_definitions.name``. Two source rows that canonicalize together merge
-    (later periods overwrite); an analyst origin always wins over capture for a
-    shared name so a curated series is never demoted to the long tail.
+    Later configured names and periods overwrite; analyst origin wins a shared
+    canonical name. Even absent or overwritten specs require valid currencies.
     """
-    resolved = {
-        spec.kpi_name: _resolve_definition(conn, ticker, spec) for spec in config.spreadsheet_kpis
-    }
-    series_by_name: dict[str, dict[_dt.datetime, float]] = {}
+    resolved: list[tuple[SheetKpi, str, Unit, DefinitionOrigin]] = []
+    for spec in config.spreadsheet_kpis:
+        unit = _unit(spec.unit)
+        capture = spec.origin == "capture"
+        name = (
+            canonical_metric_name(conn, ticker, spec.kpi_name, unit) if capture else spec.kpi_name
+        )
+        origin = DefinitionOrigin.CAPTURE if capture else DefinitionOrigin.ANALYST
+        resolved.append((spec, name, unit, origin))
+    by_config_name = {spec.kpi_name: (name, unit, origin) for spec, name, unit, origin in resolved}
+    series_by_name: dict[str, dict[_dt.datetime, _ParsedValue]] = {}
     unit_by_name: dict[str, Unit] = {}
     origins: dict[str, DefinitionOrigin] = {}
     for raw_name, series in parsed.items():
-        res = resolved.get(raw_name)
+        res = by_config_name.get(raw_name)
         if res is None:
             continue
         name, unit, origin = res
@@ -152,17 +149,9 @@ def _canonicalize_parsed(
         unit_by_name[name] = unit
         if origin is DefinitionOrigin.ANALYST or name not in origins:
             origins[name] = origin
-    return series_by_name, unit_by_name, origins
-
-
-def _currency_by_name(
-    conn: sqlite3.Connection, ticker: str, config: IrConfig
-) -> dict[str, Currency | None]:
-    """Resolve explicit spreadsheet currencies onto canonical KPI names."""
     currencies: dict[str, Currency | None] = {}
     monetary = {Unit.ACTUAL, Unit.THOUSANDS, Unit.MILLIONS, Unit.BILLIONS}
-    for spec in config.spreadsheet_kpis:
-        name, unit, _ = _resolve_definition(conn, ticker, spec)
+    for spec, name, unit, _ in resolved:
         if unit not in monetary:
             currencies.setdefault(name, None)
             continue
@@ -181,14 +170,14 @@ def _currency_by_name(
         if existing is not None and existing is not currency:
             raise ValueError(f"canonical IR spreadsheet KPI {name!r} has conflicting currencies")
         currencies[name] = currency
-    return currencies
+    return series_by_name, unit_by_name, origins, currencies
 
 
 def ingest_spreadsheet_kpis(
     conn: sqlite3.Connection,
     ticker: str,
     config: IrConfig,
-    parsed: dict[str, dict[_dt.datetime, float]],
+    parsed: dict[str, dict[_dt.datetime, float]] | SpreadsheetParseResult,
     source_path: Path,
     *,
     repo_root: Path | None = None,
@@ -199,16 +188,54 @@ def ingest_spreadsheet_kpis(
     persisting; analyst rows are untouched. ``conn.row_factory`` must be
     ``sqlite3.Row``.
     """
-    doc_id = _ensure_spreadsheet_document(conn, ticker, source_path)
+    source_bytes: bytes | None = None
+    if isinstance(parsed, SpreadsheetParseResult):
+        source_bytes = source_path.read_bytes()
+        if (
+            hashlib.sha256(source_bytes).hexdigest() != parsed.workbook_sha256
+            or len(source_bytes) != parsed.workbook_bytes_size
+        ):
+            raise ValueError("spreadsheet bytes changed after parsing")
+        if payload_sha256(asdict(config)) != parsed.config_sha256:
+            raise ValueError("spreadsheet config changed after parsing")
+    doc_id = _ensure_spreadsheet_document(conn, ticker, source_path, raw=source_bytes)
     if _has_trigger(conn, "trg_kpi_facts_observation_insert"):
         if repo_root is None:
             raise ValueError("post-cutover IR spreadsheet ingest requires repo_root")
         ensure_legacy_document_evidence(conn, repo_root=repo_root, document_id=doc_id)
-    series_by_name, unit_by_name, origins = _canonicalize_parsed(conn, ticker, config, parsed)
-    currency_by_name = _currency_by_name(conn, ticker, config)
+        if isinstance(parsed, SpreadsheetParseResult):
+            # Keep the acquired document and its evidence anchor durable before
+            # the separate, atomic parser capture begins.
+            conn.commit()
+            document_version_id = f"legacy-doc-{doc_id}"
+            version = conn.execute(
+                "SELECT issuer_id,blob_sha256 FROM evidence_document_versions "
+                "WHERE document_version_id=? AND legacy_document_id=?",
+                (document_version_id, doc_id),
+            ).fetchone()
+            if version is None or str(version[1]) != parsed.workbook_sha256:
+                raise ValueError("spreadsheet document evidence version is unavailable")
+            capture_spreadsheet_parse(
+                conn,
+                ticker=ticker,
+                issuer_id=str(version[0]),
+                document_version_id=document_version_id,
+                config=config,
+                parsed=parsed,
+            )
+    if isinstance(parsed, SpreadsheetParseResult):
+        series_by_name, unit_by_name, origins, currency_by_name = _canonicalize_parsed(
+            conn, ticker, config, parsed.selected_series()
+        )
+        numeric_parsed = parsed.numeric_projection()
+    else:
+        series_by_name, unit_by_name, origins, currency_by_name = _canonicalize_parsed(
+            conn, ticker, config, parsed
+        )
+        numeric_parsed = parsed
 
     # Regroup to one manifest per period_end (each manifest = a period's KPIs).
-    by_period: dict[_dt.datetime, dict[str, float]] = {}
+    by_period: dict[_dt.datetime, dict[str, float | SpreadsheetCellRead]] = {}
     for kpi, series in series_by_name.items():
         for period, val in series.items():
             by_period.setdefault(period, {})[kpi] = val
@@ -219,12 +246,19 @@ def ingest_spreadsheet_kpis(
         ticker_scope=[ticker],
         invocation_inputs={
             "document_id": doc_id,
-            "source": file_fingerprint(source_path),
+            "source": file_fingerprint(source_path)
+            if source_bytes is None
+            else {
+                "path": source_path.resolve().as_posix(),
+                "exists": True,
+                "bytes": len(source_bytes),
+                "sha256": hashlib.sha256(source_bytes).hexdigest(),
+            },
             "config_sha256": payload_sha256(asdict(config)),
             "parsed_sha256": payload_sha256(
                 {
                     name: {period.isoformat(): value for period, value in sorted(series.items())}
-                    for name, series in sorted(parsed.items())
+                    for name, series in sorted(numeric_parsed.items())
                 }
             ),
         },
@@ -236,11 +270,25 @@ def ingest_spreadsheet_kpis(
             values = [
                 KpiValue(
                     name=name,
-                    value=Decimal(str(val)),
+                    value=Decimal(
+                        str(val.scaled_value if isinstance(val, SpreadsheetCellRead) else val)
+                    ),
                     unit=unit_by_name.get(name, Unit.ACTUAL),
                     currency=currency_by_name.get(name),
                     confidence=1.0,
-                    locator=_NO_LOCATOR,
+                    locator=(
+                        val.locator
+                        if isinstance(val, SpreadsheetCellRead) and val.locator is not None
+                        else _NO_LOCATOR
+                    ),
+                    semantic_context=(
+                        unclassified_kpi_context(
+                            metric_name_as_reported=val.raw_label or val.spec.kpi_name,
+                            reported_period_end=period_end.date(),
+                        )
+                        if isinstance(val, SpreadsheetCellRead)
+                        else None
+                    ),
                 )
                 for name, val in kpis.items()
             ]
@@ -259,6 +307,9 @@ def ingest_spreadsheet_kpis(
             inserted += result.inserted
 
     except Exception as exc:
+        # Prior periods are committed; discard only this period's pending writes
+        # before end_run commits the failure accounting.
+        conn.rollback()
         end_run(conn, run_id, StageStatus.FAILED, error_summary=f"{type(exc).__name__}: {exc}")
         raise
     end_run(conn, run_id, StageStatus.OK)

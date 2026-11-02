@@ -38,9 +38,6 @@ def content_client(conn: sqlite3.Connection | None, root: Path) -> tuple[FlaskCl
             open_db=get_read_db,
             get_read_db=get_read_db,
             safe_ticker=lambda ticker: ticker,
-            build_ticker_command_center=lambda _root, _ticker: pytest.fail(
-                "unrelated product access"
-            ),
             linked_gsheet=lambda _root, _ticker: (None, None),
             probe_tracker=lambda: (False, "isolated"),
             fetch_live_portfolio=lambda: pytest.fail("tracker access prohibited"),

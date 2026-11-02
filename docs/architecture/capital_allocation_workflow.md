@@ -83,7 +83,7 @@ Run these stages in order and retain their receipts:
    calculate them, but cannot silently become durable owner facts.
 3. **Admit the universe.** Include held stocks/funds and relevant evaluated
    diversifiers. AVDV is an explicit candidate, not a preselected winner. Use the
-   existing ETF workup/price/exposure evidence for funds; corporate DCF/KPI gates
+   shared price/exposure evidence for funds; corporate DCF/KPI gates
    cannot be required of an ETF. Distinguish fund identity/classification from
    adequacy of the evidence needed to recommend a particular weight.
 4. **Build comparable plans.** Always include do-nothing and cash-only deployment.

@@ -16,14 +16,16 @@ import json
 import re
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from bs4 import BeautifulSoup
+
 from scripts.gen_design_controls import check as check_generated_controls
 from scripts.gen_design_tokens import check as check_generated_tokens
-from scripts.gen_streamlit_theme import check as check_streamlit_theme
 from ui.tokens import CHROME_TOKENS, PALETTE_DARK, SPACING_SCALE, TYPE_SCALE
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -84,16 +86,6 @@ def generated_control_failures() -> list[str]:
     )
 
 
-def streamlit_theme_failures() -> list[str]:
-    """Token parity for the Streamlit sandbox theme, same policy as the
-    React token layer: generated artifacts must match ``src/ui/tokens.py``."""
-    return (
-        []
-        if check_streamlit_theme()
-        else ["generated Streamlit sandbox theme drifted from src/ui/tokens.py"]
-    )
-
-
 def conformance_receipt_failures() -> list[str]:
     """Delegate visual evidence and debt policy to the canonical verifier."""
 
@@ -119,7 +111,10 @@ def conformance_receipt_failures() -> list[str]:
 
 
 def work_os_contract_failures(
-    *, mockup_text: str | None = None, renderer_source: str | None = None
+    *,
+    mockup_text: str | None = None,
+    renderer_source: str | None = None,
+    rendered_shell: str | None = None,
 ) -> list[str]:
     """Verify that the prototype used by ``/`` is the canonical new design."""
     mockup = WORK_OS_PROTOTYPE.read_text(encoding="utf-8") if mockup_text is None else mockup_text
@@ -166,16 +161,44 @@ def work_os_contract_failures(
     ):
         if required not in renderer:
             failures.append(f"Work OS renderer missing production design contract {required!r}")
-    static_action_classes = (
-        "k-card",
-        "k-card-action",
-        "k-card-interactive",
-        "k-card-row-title",
-        "k-card-meta",
-    )
-    for class_name in static_action_classes:
-        if not has_html_class(mockup, class_name):
-            failures.append(f"Work OS static Action Queue missing class {class_name!r}")
+    if rendered_shell is None:
+        from pipeline.work_os_shell import render_work_os_shell
+
+        rendered_shell = render_work_os_shell(
+            generated_at=datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC),
+        )
+    soup = BeautifulSoup(rendered_shell, "html.parser")
+    queues = soup.select("#workOsActionQueue")
+    if len(queues) != 1:
+        failures.append("Work OS shell must have exactly one #workOsActionQueue")
+    else:
+        queue = queues[0]
+        article = queue.find_parent("article")
+        if article is not None:
+            heading = article.select("#workOsActionHeading.k-card-title")
+            count = article.select("#workOsActionCount.k-card-meta[aria-live=polite]")
+            if len(heading) != 1:
+                failures.append(
+                    "Work OS Action Queue article must own heading #workOsActionHeading.k-card-title"
+                )
+            if len(count) != 1:
+                failures.append(
+                    "Work OS Action Queue article must own #workOsActionCount.k-card-meta[aria-live=polite]"
+                )
+        else:
+            failures.append(
+                "Work OS Action Queue article must own heading #workOsActionHeading.k-card-title"
+            )
+            failures.append(
+                "Work OS Action Queue article must own #workOsActionCount.k-card-meta[aria-live=polite]"
+            )
+        if len(soup.select("#workOsActionHeading")) != 1:
+            failures.append("Work OS shell must have exactly one #workOsActionHeading")
+        if len(soup.select("#workOsActionCount")) != 1:
+            failures.append("Work OS shell must have exactly one #workOsActionCount")
+        wells = queue.select(".k-well[role=status]")
+        if len(wells) != 1:
+            failures.append("Work OS Action Queue must contain exactly one .k-well[role=status]")
     # BHA-93 deliberately compacts hydrated governed actions into a well, not
     # interactive cards. Keep the typography, provenance, and registered
     # controls inside the compact action grammar without importing the
@@ -198,7 +221,6 @@ def main() -> int:
     if not check_generated_tokens():
         failures.append("generated React tokens drifted from src/ui/tokens.py")
     failures.extend(generated_control_failures())
-    failures.extend(streamlit_theme_failures())
     failures.extend(conformance_receipt_failures())
     failures.extend(work_os_contract_failures())
     if failures:

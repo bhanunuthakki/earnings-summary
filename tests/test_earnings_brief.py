@@ -61,7 +61,8 @@ CREATE TABLE expected_earnings (
     first_seen_at TEXT, last_seen_at TEXT);
 CREATE TABLE llm_artifacts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker TEXT, scope TEXT NOT NULL DEFAULT 'ticker', purpose TEXT NOT NULL,
+    ticker TEXT, scope TEXT NOT NULL DEFAULT 'ticker',
+    document_version_id TEXT, purpose TEXT NOT NULL,
     fiscal_period TEXT, content_md TEXT, content_json TEXT,
     input_sha256 TEXT NOT NULL, output_sha256 TEXT, model TEXT,
     prompt_version TEXT NOT NULL DEFAULT 'v1',

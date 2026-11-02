@@ -18,6 +18,7 @@ from typing import Literal, Self, TypeAlias
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from provenance.observation_resolution import persist_idempotent_row
+from runtime.deterministic import sha256_joined_nul
 
 LocationKind: TypeAlias = Literal["local", "object", "archive", "mirror"]
 AvailabilityState: TypeAlias = Literal["present", "missing", "quarantined"]
@@ -101,6 +102,46 @@ class EvidenceLinkLedger:
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
+
+    def ensure_local_location(
+        self,
+        *,
+        identity_prefix: str,
+        digest: str,
+        storage_uri: str,
+        byte_size: int,
+        verified_at: datetime,
+    ) -> bool:
+        """Record verified local bytes unless their current location is present."""
+        current = self._conn.execute(
+            "SELECT location_observation_id, availability_state, location_sequence "
+            "FROM v_evidence_blob_locations_current "
+            "WHERE blob_sha256 = ? AND storage_uri = ?",
+            (digest, storage_uri),
+        ).fetchone()
+        if current is not None and str(current[1]) == "present":
+            return False
+        sequence = 1 if current is None else int(current[2]) + 1
+        supersedes = None if current is None else str(current[0])
+        identity = (
+            f"{identity_prefix}:{sha256_joined_nul(digest, storage_uri, str(sequence), 'present')}"
+        )
+        return self.persist_location(
+            BlobLocationObservation(
+                location_observation_id=identity,
+                idempotency_key=identity,
+                blob_sha256=digest,
+                storage_uri=storage_uri,
+                location_kind="local",
+                availability_state="present",
+                location_sequence=sequence,
+                verified_at=verified_at,
+                verified_byte_size=byte_size,
+                verified_sha256=digest,
+                supersedes_location_observation_id=supersedes,
+                recorded_at=verified_at,
+            )
+        ).created
 
     def persist_location(self, location: BlobLocationObservation) -> PersistResult:
         """Append a verified location state or accept an exact replay."""

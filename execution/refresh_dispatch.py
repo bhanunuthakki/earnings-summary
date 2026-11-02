@@ -1,7 +1,7 @@
 """Per-ticker refresh dispatcher with stale-only mode.
 
-Owns the canonical 6-step full-refresh chain (FMP fetch → transcripts →
-IR-doc summarize → KPI extraction → SayDo pairs → report rebuild) as a
+Owns the default refresh chain (FMP fetch → transcripts →
+registered transcript summaries → SayDo pairs → report rebuild) as a
 single Python entry point the dashboard and managed runtime can spawn and
 stream output from.
 
@@ -10,9 +10,9 @@ Two modes:
     --mode full   : run every standard refresh step
     --mode stale  : skip FMP only if all annual/quarterly core statement
                     receipts are successful, nonempty and fresh. Cheaper steps
-                    (transcripts / IR-summarize / KPI / SayDo / build)
-                    always run because they're either idempotent skips
-                    on a file-exists check or low-cost LLM calls.
+                    (transcripts / IR-summarize / SayDo / build)
+                    always run because they either reuse verified products or
+                    carry bounded, source-scoped work.
 
 Output is line-buffered to stdout so an SSE forwarder can pipe it through
 to a browser drawer without buffering surprises:
@@ -69,21 +69,17 @@ STEP_NAMES: tuple[str, ...] = (
     "transcripts",
     "process_ir_docs",
     "news",
-    "extract_kpis",
-    "saydo",
     "dcf",
     "thesis_eval",
     "build_report",
 )
-# Default chain when no explicit --steps is given (the standard six-step refresh).
-# news / dcf / thesis_eval are opt-in via --steps so a routine refresh isn't
+# Default chain when no explicit --steps is given.
+# news / dcf / thesis_eval are opt-in so a routine refresh isn't
 # silently made heavier / more expensive.
 DEFAULT_STEPS: tuple[str, ...] = (
     "fmp",
     "transcripts",
     "process_ir_docs",
-    "extract_kpis",
-    "saydo",
     "build_report",
 )
 
@@ -91,17 +87,24 @@ DEFAULT_STEPS: tuple[str, ...] = (
 def resolve_steps(steps: list[str] | None = None, skip: list[str] | None = None) -> list[str]:
     """Resolve which steps to run, in canonical order.
 
-    `steps` selects an explicit subset (unknown names are dropped); when falsy,
-    the default chain runs. `skip` removes names from whatever was selected.
+    `None` selects the default chain. An explicit selection must contain only
+    known, nonblank names. `skip` removes names from the selected chain.
     """
-    if steps:
-        wanted = {s.strip() for s in steps if s.strip()}
-        selected = [s for s in STEP_NAMES if s in wanted]
-    else:
+    if steps is None:
         selected = list(DEFAULT_STEPS)
+    else:
+        if not steps or any(not name.strip() for name in steps):
+            raise ValueError("steps must select at least one nonblank step name")
+        wanted = {name.strip() for name in steps}
+        unknown = wanted.difference(STEP_NAMES)
+        if unknown:
+            raise ValueError(f"unknown step(s): {sorted(unknown)}; valid: {list(STEP_NAMES)}")
+        selected = [name for name in STEP_NAMES if name in wanted]
     if skip:
-        skipset = {s.strip() for s in skip if s.strip()}
-        selected = [s for s in selected if s not in skipset]
+        skipset = {name.strip() for name in skip}
+        if "" in skipset or skipset.difference(STEP_NAMES):
+            raise ValueError("skip steps must contain known, nonblank step names")
+        selected = [name for name in selected if name not in skipset]
     return selected
 
 
@@ -117,7 +120,7 @@ class Plan:
     skip_fmp: bool
     skip_fmp_reason: str | None  # e.g. "fresh last_pulled=2026-05-11T01:02:14"
     force_budget_bypass: bool = False  # pass --force-budget-bypass to build_artifacts
-    steps: tuple[str, ...] = ()  # resolved steps to run, in canonical order
+    steps: tuple[str, ...] | None = None  # None selects defaults; () runs no steps
     force: bool = False  # run FMP even if fresh (override the stale-skip)
 
 
@@ -244,7 +247,9 @@ def execute(
     """
     runner = runner or _default_runner
     resolved_state_root = state_root or project_root
-    steps = plan.steps or DEFAULT_STEPS
+    steps = DEFAULT_STEPS if plan.steps is None else plan.steps
+    if any(name not in STEP_NAMES for name in steps):
+        raise ValueError("plan contains an unknown step name")
     _emit(out, f"[dispatch] ticker={plan.ticker} mode={plan.mode} steps={','.join(steps)}")
 
     # argv per step name — built once; only the selected ones run.
@@ -253,8 +258,6 @@ def execute(
         "transcripts": _argv_transcripts(project_root, resolved_state_root, plan.ticker),
         "process_ir_docs": _argv_process_ir(project_root, resolved_state_root, plan.ticker),
         "news": _argv_news(project_root, resolved_state_root, plan.ticker),
-        "extract_kpis": _argv_extract_kpis(project_root, resolved_state_root, plan.ticker),
-        "saydo": _argv_saydo(project_root, resolved_state_root, plan.ticker),
         "dcf": _argv_dcf(
             project_root, resolved_state_root, plan.ticker, source_state_root=source_state_root
         ),
@@ -329,35 +332,15 @@ def _argv_transcripts(project_root: Path, state_root: Path, ticker: str) -> list
 def _argv_process_ir(project_root: Path, state_root: Path, ticker: str) -> list[str]:
     return managed_python_argv(
         project_root,
-        project_root / "execution" / "process_ir_documents_state.py",
+        project_root / "execution" / "process_ir_documents.py",
         "--ticker",
         ticker,
-        "--repo-root",
+        "--db",
+        str(state_root / "data" / "portfolio.db"),
+        "--state-root",
         str(state_root),
-    )
-
-
-def _argv_extract_kpis(project_root: Path, state_root: Path, ticker: str) -> list[str]:
-    return managed_python_argv(
-        project_root,
-        project_root / "execution" / "extract_kpis_from_summaries.py",
-        "--ticker",
-        ticker,
-        "--source",
-        "earnings",
         "--repo-root",
-        str(state_root),
-    )
-
-
-def _argv_saydo(project_root: Path, state_root: Path, ticker: str) -> list[str]:
-    return managed_python_argv(
-        project_root,
-        project_root / "execution" / "build_saydo_pairs.py",
-        "--ticker",
-        ticker,
-        "--repo-root",
-        str(state_root),
+        str(project_root),
     )
 
 
@@ -485,7 +468,11 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    steps = [s for s in args.steps.split(",")] if args.steps else None
+    steps = args.steps.split(",") if args.steps is not None else None
+    try:
+        resolve_steps(steps, args.skip_step)
+    except ValueError as exc:
+        parser.error(str(exc))
     db_path = require_db_path(args.db)
     plan = build_plan(
         ticker=args.ticker.upper(),

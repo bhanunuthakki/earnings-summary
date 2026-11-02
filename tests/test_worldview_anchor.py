@@ -6,11 +6,12 @@ stability, capped, degrade-safe, and spotlight-wrapped inside compose_anchor_blo
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
 
+from db_paths import db_path_context
 from llm.anchors import (
     WORLDVIEW_ANCHOR_CHAR_CAP,
     compose_anchor_block,
@@ -23,9 +24,10 @@ PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 
 @pytest.fixture
-def repo_root(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
-    migrated_db(tmp_path / "data" / "portfolio.db", stamp=PRIOR_HEAD)
-    return tmp_path
+def repo_root(tmp_path: Path, migrated_db: Callable[..., Path]) -> Iterator[Path]:
+    db_path = migrated_db(tmp_path / "data" / "portfolio.db", stamp=PRIOR_HEAD)
+    with db_path_context(db_path):
+        yield tmp_path
 
 
 def _db(repo_root: Path) -> Path:
@@ -77,7 +79,9 @@ def test_anchor_empty_when_no_tenets(repo_root: Path, monkeypatch: pytest.Monkey
 
 def test_anchor_missing_db_degrades(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LEDGER_WORLDVIEW_ANCHOR", "1")
-    assert load_worldview_anchor(tmp_path) == ""  # no data/portfolio.db, never raises
+    missing_db = tmp_path / "unavailable" / "portfolio.db"
+    with db_path_context(missing_db):
+        assert load_worldview_anchor(tmp_path) == ""  # never raises
 
 
 def test_anchor_is_deterministic(repo_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -2,14 +2,14 @@
 ---------------------------------------------
 One-shot (re-runnable) correction of ``documents.period_end`` /
 ``kpi_facts.period_end`` for ``llm_extracted`` rows stamped on the WRONG
-fiscal calendar before ``compute/kpi_extract_summaries.py::_TICKER_QUARTER_PERIOD_END``
-covered AMAT/TOL (Oct-FYE issuers).
+fiscal calendar before summary filename mappings covered AMAT/TOL (Oct-FYE
+issuers). The current calendar owner is ``compute.fiscal_calendar``.
 
 Background (directives/data_provenance.md, "Fiscal-period stamping drift"):
 ``execution/backfill_llm_extracted_parents.py`` (#765) left 10 llm_extracted
 orphans with no resolvable ``parent_document_id``. 6 of those (AMAT ids
 8296/8297, TOL ids 8382/8383) were NOT missing-source rows — they were
-mis-stamped: `_TICKER_QUARTER_PERIOD_END` only covered RBRK/VEEV (Jan FYE),
+mis-stamped: the summary override table only covered RBRK/VEEV (Jan FYE),
 so AMAT/TOL (Oct FYE) fell through to the plain calendar-quarter map. E.g.
 AMAT_Q4_2025 (fiscal Q4 ending 2025-10-31, matching the registered transcript)
 was stamped 2025-12-31 instead, so `resolve_parent`'s exact-date match never
@@ -18,27 +18,20 @@ found the transcript that was actually read.
 This script:
   1. Re-derives the correct period_end from the row's own file_path (which
      encodes `<TICKER>_Q<N>_<YYYY>`) using the now-fixed
-     `compute.kpi_extract_summaries._period_end`.
+     `compute.fiscal_calendar.summary_period_end`.
   2. Where the stored period_end differs from the re-derived one AND the
      ticker is one of the historically-affected off-cycle-FYE tickers,
      reports the source-backed correction candidate.
   3. Never mutates historical observations. Apply has been retired; corrections
      use the reviewed append-only supersession path.
 
-Deliberately scoped to `_TICKER_QUARTER_PERIOD_END`'s tickers only (not a
-general "any documents row with a weird period_end" sweep) — see that table's
-docstring for why the mapping is per-ticker and not inferable in general.
+Scope is limited to ``compute.fiscal_calendar.FILENAME_CALENDARS``. The summary
+filename label adapter supplies dates; no runtime registry expands this scan.
 
 Usage:
     python execution/backfill_fiscal_period_stamps.py                 # dry run
     python execution/backfill_fiscal_period_stamps.py --ticker AMAT
 """
-
-# pyright: reportPrivateUsage=false
-# This script is the correction counterpart to kpi_extract_summaries.py's own
-# fiscal-calendar table and reuses its internal _period_end/_TICKER_QUARTER_
-# PERIOD_END directly (single source of truth for the mapping) rather than
-# duplicating it — same rationale as that module's own test file.
 
 from __future__ import annotations
 
@@ -49,19 +42,16 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
-PROJECT_ROOT = SCRIPT_DIR.parent
-SRC_DIR = PROJECT_ROOT / "src"
-sys.path.insert(0, str(SRC_DIR))
+try:  # direct script invocation
+    from _lib import PROJECT_ROOT
+except ImportError:  # pragma: no cover - package import fallback
+    from execution._lib import PROJECT_ROOT
 
-from compute.kpi_extract_summaries import (  # noqa: E402
-    _TICKER_QUARTER_PERIOD_END,
-    _period_end,
-)
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from compute.fiscal_calendar import FILENAME_CALENDARS, summary_period_end
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # Matches the `.tmp/<TICKER>_Q<N>_<YYYY>_*.txt` filename convention that
-# `_period_end`'s (quarter, year) inputs come from — same regex shape as
+# `summary_period_end`'s (quarter, year) inputs come from — same regex shape as
 # `compute/kpi_extract_summaries.py`'s `_SourceSpec` patterns, loosened to
 # not care which of the 4 suffix variants follows.
 _FILENAME_RE = re.compile(r"(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<year>20\d{2})_")
@@ -91,16 +81,16 @@ def backfill(
     log: bool = True,
 ) -> CorrectionResult:
     """Re-stamp llm_extracted documents (+ dependent kpi_facts) whose period_end
-    doesn't match what `_period_end` now computes from their own filename."""
+    doesn't match what `summary_period_end` now computes from their own filename."""
     if not dry_run:
         raise ValueError("in-place fiscal-period repair is retired; use source-backed supersession")
     conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY, schema_preflight=False)
     conn.row_factory = sqlite3.Row
     result = CorrectionResult()
     try:
-        tickers = [only_ticker.upper()] if only_ticker else sorted(_TICKER_QUARTER_PERIOD_END)
+        tickers = [only_ticker.upper()] if only_ticker else sorted(FILENAME_CALENDARS)
         for ticker in tickers:
-            if ticker not in _TICKER_QUARTER_PERIOD_END:
+            if ticker not in FILENAME_CALENDARS:
                 continue
             rows = conn.execute(
                 "SELECT id, ticker, doc_type, period_end, file_path FROM documents "
@@ -114,7 +104,7 @@ def backfill(
                     result.skipped_no_filename_match.append(row["id"])
                     continue
                 _, quarter, year = parsed
-                correct_period_end = _period_end(ticker, quarter, year)
+                correct_period_end = summary_period_end(ticker, quarter, year)
                 stored = str(row["period_end"] or "")[:10]
                 correct_str = correct_period_end.date().isoformat()
                 if stored == correct_str:

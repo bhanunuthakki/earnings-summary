@@ -8,14 +8,17 @@ import math
 import sqlite3
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from time import perf_counter
+from unittest.mock import patch
 
 import pytest
 from alembic.config import Config
+from upgrade_database import upgrade_database
 
+import db as dbmod
 from alembic import command
 from compute.fmp_derived_kpis import fetch_selected_kpi_series
 from execution import backfill_financial_fact_resolutions as cutover_cli
@@ -27,7 +30,17 @@ from pipeline.kpi_definition_revisions import (
     KpiUnitFamily,
     persist_kpi_definition_revision,
 )
-from pipeline.kpi_semantics import current_kpi_semantic_context, persist_kpi_semantic_context
+from pipeline.kpi_semantics import (
+    KpiAccountingBasis,
+    KpiConsolidationScope,
+    KpiPeriodRole,
+    KpiPublicationLane,
+    KpiSemanticContext,
+    KpiSemanticStatus,
+    KpiUnitScale,
+    current_kpi_semantic_context,
+    persist_kpi_semantic_context,
+)
 from pipeline.queries import open_db
 from pipeline.restatement_detector import insert_with_restatement_detection
 from provenance.evidence_ledger import (
@@ -44,6 +57,7 @@ from provenance.financial_fact_resolution import (
     HistoricalFactAuthorityUnavailableError,
     canonical_fact_relation,
     canonical_fact_selections_as_known,
+    capture_fact_row_observation,
     execute_fact_cutover,
     fact_observation_dimensions,
     resolve_fact_logical_key,
@@ -64,6 +78,135 @@ ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0224_expected_document_lifecycle"
 HEAD = "0225_financial_fact_resolution_cutover"
 STAMP = datetime(2026, 7, 27, 12, 0, 0)
+
+
+def test_kpi_observation_dimensions_use_only_current_semantic_head(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    seed_sha256 = hashlib.sha256(
+        Path(__file__).read_bytes() + Path(dbmod.__file__).read_bytes()
+    ).hexdigest()
+
+    def bootstrap(path: Path) -> None:
+        legacy = sqlite3.connect(path)
+        legacy.row_factory = sqlite3.Row
+        try:
+            with patch.object(dbmod, "get_connection", return_value=legacy) as open_database:
+                dbmod.init_db()
+                open_database.assert_called_once_with(allow_create=True)
+        finally:
+            legacy.close()
+
+    def seed_legacy(path: Path) -> None:
+        migrated_db(
+            path,
+            archived=True,
+            upgrade_from="0000_baseline",
+            before_upgrade=bootstrap,
+            seed_sha256=seed_sha256,
+            target=PRIOR_HEAD,
+        )
+        legacy = sqlite3.connect(path)
+        try:
+            _seed_document(
+                legacy, document_id=1, source_tier="sec_official", value_suffix="KPI source"
+            )
+            fact_id = _insert_kpi_fact(
+                legacy, document_id=1, value="1000000", unit="count", kpi_definition_id=641
+            )
+            legacy.execute(
+                "UPDATE kpi_facts SET source_excerpt='1 million customers.' WHERE id=?",
+                (fact_id,),
+            )
+            legacy.commit()
+        finally:
+            legacy.close()
+
+    database = migrated_db(
+        tmp_path / "current-head-dimensions.db",
+        archived=True,
+        upgrade_from=PRIOR_HEAD,
+        before_upgrade=seed_legacy,
+        seed_sha256=seed_sha256,
+    )
+    backup = tmp_path / "current-head-dimensions.pre-upgrade.db"
+    upgraded = upgrade_database(
+        database,
+        repo_root=ROOT,
+        runtime_root=tmp_path,
+        backup_path=backup,
+        allow_isolated_db=True,
+    )
+    assert upgraded.status == "bridged" and upgraded.backup_path == str(backup)
+    conn = sqlite3.connect(database)
+    conn.row_factory = sqlite3.Row
+    try:
+        fact_id = int(conn.execute("SELECT id FROM kpi_facts").fetchone()[0])
+        assert conn.execute("SELECT COUNT(*) FROM reported_observations").fetchone()[0] == 0
+        observed_at = STAMP.replace(tzinfo=UTC)
+        prior = KpiSemanticContext(
+            metric_name_as_reported="Customers",
+            reported_period_end=date(2025, 6, 30),
+            period_role=KpiPeriodRole.PRIOR_YEAR_COMPARATOR,
+            publication_lane=KpiPublicationLane.COMPARATOR,
+            accounting_basis=KpiAccountingBasis.GAAP,
+            consolidation_scope=KpiConsolidationScope.GEOGRAPHY,
+            dimensions={"country": "BR"},
+            unit_scale=KpiUnitScale.MILLIONS,
+            source_value_text="1",
+            status=KpiSemanticStatus.ADMITTED,
+        )
+        first = persist_kpi_semantic_context(
+            conn, kpi_fact_id=fact_id, context=prior, knowledge_at=observed_at
+        )
+        current = prior.model_copy(
+            update={
+                "metric_name_as_reported": "Total customers",
+                "reported_period_end": date(2026, 6, 30),
+                "period_role": KpiPeriodRole.CURRENT,
+                "publication_lane": KpiPublicationLane.CURRENT_ACTUAL,
+                "accounting_basis": KpiAccountingBasis.MANAGEMENT,
+                "consolidation_scope": KpiConsolidationScope.CONSOLIDATED,
+                "dimensions": {},
+            }
+        )
+        second = persist_kpi_semantic_context(
+            conn, kpi_fact_id=fact_id, context=current, knowledge_at=observed_at
+        )
+        revisions = conn.execute(
+            "SELECT id,revision,supersedes_context_id,dimensions_json "
+            "FROM kpi_fact_semantic_contexts WHERE kpi_fact_id=? ORDER BY revision",
+            (fact_id,),
+        ).fetchall()
+        assert [(row[0], row[1], row[2]) for row in revisions] == [
+            (first, 1, None),
+            (second, 2, first),
+        ]
+        assert json.loads(revisions[0][3]) == {"country": "BR"}
+        assert capture_fact_row_observation(
+            conn, fact_table="kpi_facts", fact_row_id=fact_id, recorded_at=observed_at
+        )
+        result = resolve_fact_row(
+            conn, fact_table="kpi_facts", fact_row_id=fact_id, knowledge_cutoff=observed_at
+        )
+        assert result is not None and result.resolution_status == "resolved"
+        payload = conn.execute(
+            "SELECT dimensions_json FROM reported_observations WHERE observation_id=?",
+            (result.selected_observation_id,),
+        ).fetchone()[0]
+        dimensions = {item["key"]: item["value"] for item in json.loads(payload)}
+        assert dimensions == {
+            "accounting_basis": "management",
+            "consolidation_scope": "consolidated",
+            "kpi_definition_id": "641",
+            "metric_name_as_reported": "Total customers",
+            "period_role": "current",
+            "publication_lane": "current_actual",
+            "semantic_status": "admitted",
+            "unit_scale": "millions",
+        }
+    finally:
+        conn.close()
 
 
 def test_capture_numeric_policy_matches_sqlite_trigger_text_without_rounding() -> None:
@@ -112,43 +255,6 @@ def test_nested_canonical_reader_keeps_active_managed_cursor(
         assert cursor.fetchone()[0] == 2
     finally:
         conn.close()
-
-
-def test_kpi_observation_dimensions_use_only_current_semantic_head() -> None:
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    conn.executescript(
-        """
-        CREATE TABLE kpi_facts (id INTEGER PRIMARY KEY,kpi_definition_id INTEGER);
-        CREATE TABLE kpi_fact_semantic_contexts (
-            id INTEGER PRIMARY KEY,kpi_fact_id INTEGER,revision INTEGER,
-            supersedes_context_id INTEGER,metric_name_as_reported TEXT,
-            period_role TEXT,publication_lane TEXT,accounting_basis TEXT,
-            consolidation_scope TEXT,dimensions_json TEXT,unit_scale TEXT,status TEXT
-        );
-        INSERT INTO kpi_facts VALUES (7,641);
-        INSERT INTO kpi_fact_semantic_contexts VALUES
-          (10,7,1,NULL,'Customers','prior_year_comparator','comparator','gaap',
-           'geography','{"country":"BR"}','actual','admitted'),
-          (11,7,2,10,'Total customers','current','current_actual','management',
-           'consolidated','{}','millions','admitted');
-        """
-    )
-    row = conn.execute("SELECT * FROM kpi_facts WHERE id=7").fetchone()
-    dimensions = {
-        item.key: item.value for item in fact_observation_dimensions(conn, "kpi_facts", row)
-    }
-    assert dimensions == {
-        "accounting_basis": "management",
-        "consolidation_scope": "consolidated",
-        "kpi_definition_id": "641",
-        "metric_name_as_reported": "Total customers",
-        "period_role": "current",
-        "publication_lane": "current_actual",
-        "semantic_status": "admitted",
-        "unit_scale": "millions",
-    }
-    conn.close()
 
 
 def _after_latest_system_clock(conn: sqlite3.Connection, floor: datetime) -> datetime:
@@ -379,15 +485,17 @@ def _insert_financial_fact(
     value: str,
     unit: str = "actual",
     period_end: str = "2026-06-30",
+    fiscal_period_type: str = "Q2",
+    currency: str = "USD",
     line_item: str = "revenue",
 ) -> int:
     cursor = conn.execute(
         "INSERT INTO financial_facts "
         "(ticker, period_end, fiscal_period_type, line_item, value, currency, unit, "
         "source_doc_id, confidence, extracted_by, locator) "
-        "VALUES ('ACME', ?, 'Q2', ?, ?, 'USD', ?, ?, 0.99, "
+        "VALUES ('ACME', ?, ?, ?, ?, ?, ?, ?, 0.99, "
         "'deterministic:test', '{\"json_path\":\"[0].revenue\"}')",
-        (period_end, line_item, value, unit, document_id),
+        (period_end, fiscal_period_type, line_item, value, currency, unit, document_id),
     )
     assert cursor.lastrowid is not None
     return int(cursor.lastrowid)
@@ -401,29 +509,30 @@ def _insert_kpi_fact(
     unit: str,
     currency: str | None = None,
     supersedes_id: int | None = None,
+    kpi_definition_id: int = 1,
 ) -> int:
     conn.execute(
         "INSERT OR IGNORE INTO kpi_definitions (id, ticker, name, unit) "
-        "VALUES (1, 'ACME', 'Active customers', ?)",
-        (unit,),
+        "VALUES (?, 'ACME', 'Active customers', ?)",
+        (kpi_definition_id, unit),
     )
     if currency is None:
         cursor = conn.execute(
             "INSERT INTO kpi_facts "
             "(ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, "
             "source_doc_id, confidence, extracted_by, locator, supersedes_id) "
-            "VALUES ('ACME', '2026-06-30', 'Q2', 1, ?, ?, ?, 0.95, "
+            "VALUES ('ACME', '2026-06-30', 'Q2', ?, ?, ?, ?, 0.95, "
             "'deterministic:test', '{\"pdf_page\":3}', ?)",
-            (value, unit, document_id, supersedes_id),
+            (kpi_definition_id, value, unit, document_id, supersedes_id),
         )
     else:
         cursor = conn.execute(
             "INSERT INTO kpi_facts "
             "(ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, currency, "
             "source_doc_id, confidence, extracted_by, locator, supersedes_id) "
-            "VALUES ('ACME', '2026-06-30', 'Q2', 1, ?, ?, ?, ?, 0.95, "
+            "VALUES ('ACME', '2026-06-30', 'Q2', ?, ?, ?, ?, ?, 0.95, "
             "'deterministic:test', '{\"pdf_page\":3}', ?)",
-            (value, unit, currency, document_id, supersedes_id),
+            (kpi_definition_id, value, unit, currency, document_id, supersedes_id),
         )
     assert cursor.lastrowid is not None
     return int(cursor.lastrowid)

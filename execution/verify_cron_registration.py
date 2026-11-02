@@ -43,7 +43,7 @@ import sys
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 from xml.etree.ElementTree import ParseError
 
 from defusedxml import ElementTree
@@ -51,19 +51,11 @@ from defusedxml import ElementTree
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CRON_DIR = PROJECT_ROOT / "cron"
 SRC = PROJECT_ROOT / "src"
+if TYPE_CHECKING:
+    from scheduler_manifest import TaskManifest
+
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
-
-from runtime.service_registry import (  # noqa: E402
-    ServiceRole,
-    managed_service_for_role,
-)
-from scheduler_manifest import (  # noqa: E402
-    SERVICE_OWNED_TASKS,
-    TaskManifest,
-    load_manifest,
-    validate_source_tree,
-)
 
 MANIFEST_PATH = CRON_DIR / "task_manifest.json"
 
@@ -73,8 +65,6 @@ _NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 # Task statuses considered "healthy" — both mean the task is scheduled and
 # ready to fire; "Running" appears when the task is currently executing.
 _HEALTHY_STATUSES = {"Ready", "Running"}
-_CAPTURE_POLLER_TASK = r"\earnings-summary\capture_poller".lower()
-_CAPTURE_POLLER_SERVICE = managed_service_for_role(ServiceRole.CAPTURE_POLLER).name
 
 
 class _XmlTask(NamedTuple):
@@ -283,28 +273,6 @@ def _is_under(path_text: str, root: Path) -> bool:
     return cand_text == root_text or cand_text.startswith(root_text + os.sep)
 
 
-def _windows_service_is_running(service_name: str) -> bool:
-    """Return whether a named Windows service positively reports RUNNING."""
-    try:
-        result = subprocess.run(
-            ["sc.exe", "query", service_name],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    if result.returncode != 0:
-        return False
-    return any(
-        line.strip().startswith("STATE") and line.rstrip().endswith("RUNNING")
-        for line in result.stdout.splitlines()
-    )
-
-
 def _extract_next_run_time(next_run: str) -> str | None:
     """Extract HH:MM:SS from a schtasks 'Next Run Time' like '6/12/2026 5:35:00 AM'."""
     # Format varies by locale; we look for the time part after the date.
@@ -341,6 +309,8 @@ def compare(
     cannot be queried, every parsed XML is listed as "missing" so the exit code
     is still non-zero.
     """
+    from scheduler_manifest import load_manifest, validate_source_tree
+
     # Resolved at call time, not bound as a default, so the module global stays
     # patchable (and a caller can audit a checkout other than this one).
     root = PROJECT_ROOT if project_root is None else project_root
@@ -375,12 +345,7 @@ def compare(
     live = _query_schtasks()
     report.scheduler_unavailable = live is None
 
-    # Exact-set check for this product's Scheduler namespace. The generated
-    # installer creates/replaces declared tasks but cannot retire an old task,
-    # so stale registrations must fail the verifier instead of remaining an
-    # invisible second writer. Service-owned declarations (currently the
-    # capture poller) remain outside the Scheduler-owned set and are allowed by
-    # their dedicated service-health compatibility seam below.
+    # Retired registrations must fail the exact namespace check.
     if manifest is not None:
         declared_names = {task.task_name.casefold() for task in manifest.tasks}
         namespace_prefixes = {manifest.namespace.rstrip("\\").casefold() + "\\"}
@@ -389,9 +354,7 @@ def compare(
         namespace_prefixes = {
             name.rpartition("\\")[0] + "\\" for name in declared_names if "\\" in name
         }
-    scheduler_owned_names = declared_names - SERVICE_OWNED_TASKS
-    service_owned_names = declared_names & SERVICE_OWNED_TASKS
-    allowed_live_names = scheduler_owned_names | service_owned_names
+    allowed_live_names = declared_names
     if live is not None:
         report.extra.extend(
             sorted(
@@ -414,11 +377,6 @@ def compare(
     for xt in xml_tasks:
         key = xt.task_name.lower()
         if live is None or key not in live:
-            if key == _CAPTURE_POLLER_TASK and _windows_service_is_running(_CAPTURE_POLLER_SERVICE):
-                report.ok.append(
-                    f"{xt.task_name} (scheduler absent; {_CAPTURE_POLLER_SERVICE} service running)"
-                )
-                continue
             report.missing.append(xt.task_name)
             continue
 
@@ -434,16 +392,6 @@ def compare(
             continue
 
         if status not in _HEALTHY_STATUSES:
-            if (
-                key == _CAPTURE_POLLER_TASK
-                and status.casefold() == "disabled"
-                and _windows_service_is_running(_CAPTURE_POLLER_SERVICE)
-            ):
-                report.ok.append(
-                    f"{xt.task_name} (scheduler disabled; "
-                    f"{_CAPTURE_POLLER_SERVICE} service running)"
-                )
-                continue
             report.disabled.append(f"{xt.task_name} (Status={status!r})")
             continue
 
@@ -604,6 +552,8 @@ def _notify_alert_hook(payload: dict[str, object]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     import argparse
+
+    from scheduler_manifest import load_manifest
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(

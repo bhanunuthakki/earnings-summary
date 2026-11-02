@@ -244,6 +244,17 @@ class IssuerDocumentInventoryRequest(_FiscalRequest):
         return _sha256_text(self.canonical_json)
 
 
+@dataclass(frozen=True, slots=True)
+class RegisteredDocumentPeriod:
+    """Read-only registered document identity and fiscal-period proof for R3."""
+
+    request: IssuerDocumentInventoryRequest
+    period_start: date | None
+    recorded_issuer_id: str
+    binding_revision_id: str | None
+    binding_kind: Literal["native", "recorded_subject", "legacy_issuer"]
+
+
 class DatabaseBinding(_ClosedModel):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     byte_size: int = Field(ge=0)
@@ -1069,6 +1080,238 @@ def validate_fiscal_period_witness(
         raise IssuerDocumentInventoryError("fiscal_profile_superseded")
 
 
+def resolve_registered_document_period(
+    conn: sqlite3.Connection,
+    document_version_id: str,
+    *,
+    fiscal_year: int | None = None,
+    fiscal_quarter: int | None = None,
+) -> RegisteredDocumentPeriod:
+    """Resolve one current native document to source-backed fiscal coordinates.
+
+    This function borrows ``conn`` and performs only reads. Fiscal coordinates
+    come from the current SEC-backed issuer profile and the source period end.
+    It never guesses a calendar year-end or a quarter duration.
+    """
+    if (fiscal_year is None) != (fiscal_quarter is None):
+        raise IssuerDocumentInventoryError("fiscal_coordinates_incomplete")
+    if not document_version_id or document_version_id != document_version_id.strip():
+        raise IssuerDocumentInventoryError("document_version_id_invalid")
+
+    cursor = conn.execute(
+        "SELECT current.document_version_id,current.issuer_id AS recorded_issuer_id,"
+        "current.ticker,current.document_type,current.period_start,current.period_end,"
+        "current.blob_sha256,current.observation_id,current.recorded_at,"
+        "canonical.issuer_id AS canonical_issuer_id,"
+        "COALESCE(subject.binding_revision_id,legacy.binding_revision_id) "
+        "AS binding_revision_id,"
+        "CASE WHEN subject.binding_revision_id IS NOT NULL THEN 'recorded_subject' "
+        "WHEN direct.issuer_id IS NOT NULL THEN 'native' "
+        "WHEN legacy.binding_revision_id IS NOT NULL THEN 'legacy_issuer' "
+        "ELSE 'unresolved' END AS binding_kind "
+        "FROM v_evidence_document_current AS current "
+        "JOIN v_evidence_document_versions_canonical AS canonical "
+        "ON canonical.document_version_id=current.document_version_id "
+        "LEFT JOIN issuer_entities AS direct ON direct.issuer_id=current.issuer_id "
+        "LEFT JOIN v_recorded_subject_bindings_current AS subject "
+        "ON subject.recorded_issuer_id=current.issuer_id AND subject.outcome='selected' "
+        "LEFT JOIN v_legacy_issuer_bindings_current AS legacy "
+        "ON legacy.recorded_issuer_id=current.issuer_id AND legacy.outcome='selected' "
+        "WHERE current.document_version_id=?",
+        (document_version_id,),
+    )
+    document_rows = cursor.fetchall()
+    if len(document_rows) != 1:
+        raise IssuerDocumentInventoryError("registered_document_missing_or_ambiguous")
+    document = dict(
+        zip((str(column[0]) for column in cursor.description or ()), document_rows[0], strict=True)
+    )
+    ticker = document["ticker"]
+    if not isinstance(ticker, str) or _TICKER.fullmatch(ticker) is None:
+        raise IssuerDocumentInventoryError("registered_document_ticker_missing")
+    ticker = ticker.upper()
+    if str(document["ticker"]) != ticker:
+        raise IssuerDocumentInventoryError("registered_document_ticker_noncanonical")
+    recorded_issuer_id = str(document["recorded_issuer_id"])
+    canonical_issuer_id = str(document["canonical_issuer_id"])
+    if not canonical_issuer_id:
+        raise IssuerDocumentInventoryError("registered_document_issuer_missing")
+    binding_revision_id = (
+        None if document["binding_revision_id"] is None else str(document["binding_revision_id"])
+    )
+    binding_kind = str(document["binding_kind"])
+    if binding_kind not in {"native", "recorded_subject", "legacy_issuer"}:
+        raise IssuerDocumentInventoryError("registered_document_binding_unresolved")
+    if recorded_issuer_id != canonical_issuer_id and binding_revision_id is None:
+        raise IssuerDocumentInventoryError("registered_document_binding_missing")
+
+    period_start = _document_period(document["period_start"])
+    period_end = _document_period(document["period_end"])
+    if period_end is None or (document["period_start"] is not None and period_start is None):
+        raise IssuerDocumentInventoryError("registered_document_period_unknown")
+    if period_start is not None and period_start > period_end:
+        raise IssuerDocumentInventoryError("registered_document_period_invalid")
+    source_sha256 = str(document["blob_sha256"])
+    if _SHA256.fullmatch(source_sha256) is None:
+        raise IssuerDocumentInventoryError("registered_document_blob_invalid")
+
+    source = _alias_row(
+        conn,
+        "evidence_source_observations",
+        "observation_id",
+        str(document["observation_id"]),
+    )
+    if source["blob_sha256"] != source_sha256:
+        raise IssuerDocumentInventoryError("registered_document_source_mismatch")
+    source_url = source["source_url"]
+    document_type = document["document_type"]
+    if not isinstance(source_url, str) or not isinstance(document_type, str):
+        raise IssuerDocumentInventoryError("registered_document_source_missing")
+    try:
+        expected = ExpectedIssuerDocument(source_url=source_url, document_type=document_type)
+    except ValueError as exc:
+        raise IssuerDocumentInventoryError("registered_document_source_invalid") from exc
+
+    profile_cursor = conn.execute(
+        "SELECT * FROM issuer_profile_revisions WHERE issuer_id=? ORDER BY revision DESC LIMIT 1",
+        (canonical_issuer_id,),
+    )
+    profile_rows = profile_cursor.fetchall()
+    if len(profile_rows) != 1:
+        raise IssuerDocumentInventoryError("fiscal_profile_missing")
+    profile = dict(
+        zip(
+            (str(column[0]) for column in profile_cursor.description or ()),
+            profile_rows[0],
+            strict=True,
+        )
+    )
+    fiscal_year_end = profile["fiscal_year_end"]
+    if (
+        profile["issuer_id"] != canonical_issuer_id
+        or profile["status"] != "active"
+        or profile["filing_regime"] not in {"SEC", "10-K", "20-F", "40-F"}
+        or not isinstance(fiscal_year_end, str)
+    ):
+        raise IssuerDocumentInventoryError("fiscal_profile_unsupported")
+    try:
+        fiscal_quarter_end(fiscal_year=2000, fiscal_quarter=4, fiscal_year_end=fiscal_year_end)
+    except ValueError as exc:
+        raise IssuerDocumentInventoryError("fiscal_profile_calendar_unsupported") from exc
+
+    if fiscal_year is None or fiscal_quarter is None:
+        coordinates = [
+            (year, quarter)
+            for year in range(1900, 2201)
+            for quarter in range(1, 5)
+            if fiscal_quarter_end(
+                fiscal_year=year,
+                fiscal_quarter=quarter,
+                fiscal_year_end=fiscal_year_end,
+            )
+            == period_end
+        ]
+        if len(coordinates) != 1:
+            raise IssuerDocumentInventoryError("registered_document_period_unsupported")
+        resolved_year, resolved_quarter = coordinates[0]
+    else:
+        resolved_year, resolved_quarter = fiscal_year, fiscal_quarter
+        try:
+            expected_end = fiscal_quarter_end(
+                fiscal_year=resolved_year,
+                fiscal_quarter=resolved_quarter,
+                fiscal_year_end=fiscal_year_end,
+            )
+        except ValueError as exc:
+            raise IssuerDocumentInventoryError("fiscal_profile_calendar_unsupported") from exc
+        if expected_end != period_end:
+            raise IssuerDocumentInventoryError("registered_document_period_mismatch")
+
+    # Use only immutable source and current registry clocks. This makes an
+    # unchanged registration produce the same proof on every replay.
+    ticker_subject = conn.execute(
+        "SELECT issuer_id,outcome,material_dissent,effective_at,knowledge_at,recorded_at "
+        "FROM recorded_subject_binding_revisions WHERE recorded_issuer_id=? "
+        "ORDER BY revision DESC LIMIT 1",
+        (f"legacy-ticker:{ticker}",),
+    ).fetchone()
+    binding_row = None
+    if binding_revision_id is not None:
+        table = (
+            "recorded_subject_binding_revisions"
+            if binding_kind == "recorded_subject"
+            else "legacy_issuer_binding_revisions"
+        )
+        binding_row = _alias_row(conn, table, "binding_revision_id", binding_revision_id)
+    clocks: list[datetime] = []
+    clock_values: list[object] = [
+        profile["effective_at"],
+        profile["knowledge_at"],
+        profile["recorded_at"],
+        source["observed_at"],
+        source["retrieved_at"],
+        document["recorded_at"],
+    ]
+    if ticker_subject is not None:
+        clock_values.extend(ticker_subject[3:6])
+    if binding_row is not None:
+        clock_values.extend(
+            binding_row.get(key) for key in ("effective_at", "knowledge_at", "recorded_at")
+        )
+    for value in clock_values:
+        parsed = _parse_utc(value)
+        if parsed is None:
+            raise IssuerDocumentInventoryError("registered_document_clock_invalid")
+        clocks.append(parsed)
+    knowledge_clocks = [
+        parsed
+        for value in (
+            profile["effective_at"],
+            profile["knowledge_at"],
+            source["observed_at"],
+            *(ticker_subject[3:5] if ticker_subject is not None else ()),
+            *(
+                binding_row[key]
+                for key in ("effective_at", "knowledge_at")
+                if binding_row is not None
+            ),
+        )
+        if (parsed := _parse_utc(value)) is not None
+    ]
+    if not knowledge_clocks:
+        raise IssuerDocumentInventoryError("registered_document_clock_invalid")
+    knowledge_cutoff = max(knowledge_clocks)
+    observed_through = max(clocks)
+    witness = FiscalPeriodWitness(
+        issuer_id=canonical_issuer_id,
+        profile_revision_id=str(profile["profile_revision_id"]),
+        fiscal_year_end=fiscal_year_end,
+        document_version_id=document_version_id,
+        document_sha256=source_sha256,
+        knowledge_cutoff=knowledge_cutoff,
+        observed_through=observed_through,
+    )
+    try:
+        request = IssuerDocumentInventoryRequest(
+            ticker=ticker,
+            fiscal_year=resolved_year,
+            fiscal_quarter=resolved_quarter,
+            period_end=period_end,
+            expected_documents=(expected,),
+            fiscal_period_witness=witness,
+        )
+    except ValueError as exc:
+        raise IssuerDocumentInventoryError("registered_document_period_unsupported") from exc
+    validate_fiscal_period_witness(conn, request=request)
+    return RegisteredDocumentPeriod(
+        request=request,
+        period_start=period_start,
+        recorded_issuer_id=recorded_issuer_id,
+        binding_revision_id=binding_revision_id,
+        binding_kind=cast(Literal["native", "recorded_subject", "legacy_issuer"], binding_kind),
+    )
+
+
 def reviewable_current_reported_period_source(source_kind: object, document_type: object) -> bool:
     """Map only the established legacy press-release pair into current review input."""
     return (source_kind, document_type) in {
@@ -1667,8 +1910,10 @@ __all__ = [
     "IssuerDocumentInventoryRecord",
     "IssuerDocumentInventoryRequest",
     "IssuerDocumentInventoryRequestAny",
+    "RegisteredDocumentPeriod",
     "build_issuer_document_inventory",
     "inspect_issuer_document_alias",
     "load_issuer_document_inventory_receipt",
     "load_issuer_document_inventory_request",
+    "resolve_registered_document_period",
 ]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from collections.abc import Callable, Generator
 from datetime import datetime, timedelta
@@ -7,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-import provenance.fact_read_model as fact_read_model
+import provenance.source_fact_publication as source_publication
+from provenance import fact_read_model
 from provenance.fact_plane_v2 import (
     DerivationInputV2,
     DerivationSealV2,
@@ -15,11 +17,10 @@ from provenance.fact_plane_v2 import (
     FactCellV2,
     FactObservationV2,
 )
-from provenance.fact_read_model import FactReadModel
-from provenance.source_fact_publication import (
-    PublicationMemberKind,
-    VerifiedSourceFactPublication,
+from provenance.fact_read_model import (
+    FactReadModel,
 )
+from provenance.source_fact_publication import PublicationMemberKind, VerifiedSourceFactPublication
 from provenance.source_fact_repository import (
     DerivedSourceFact,
     ReportedSourceFact,
@@ -34,6 +35,93 @@ make_cell = foundation.make_cell
 make_report = foundation.make_report
 make_resolution = foundation.make_resolution
 make_publication = foundation.make_publication
+
+
+_R6_BASELINE = "c978523d84a4efea07858e7029307dd588d2a841"  # pragma: allowlist secret -- Git subject, not a credential
+_R6_SAMPLE_COUNT = 5
+_R6_PROBE = r"""
+import json
+import sqlite3
+import sys
+import time
+from datetime import date, datetime
+
+import provenance.source_fact_publication as source_publication
+from sources.discovery_financials import read_financial_history
+from sources.report_financials import read_financial_table
+
+verification_count = 0
+original_verify = source_publication._verify_source_fact_publication
+
+def counted_verify(*args, **kwargs):
+    global verification_count
+    verification_count += 1
+    return original_verify(*args, **kwargs)
+
+source_publication._verify_source_fact_publication = counted_verify
+
+def run(request):
+    global verification_count
+    verification_count = 0
+    select_count = 0
+
+    def trace(statement):
+        nonlocal select_count
+        if statement.lstrip().upper().startswith(("SELECT", "WITH")):
+            select_count += 1
+
+    uri = "file:" + request["database"] + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    conn.row_factory = sqlite3.Row
+    conn.set_trace_callback(trace)
+    started = time.perf_counter_ns()
+    if request["operation"] == "discovery":
+        result = read_financial_history(
+            conn, "WIX", as_of=date.fromisoformat(request["as_of"])
+        )
+        reference_count = len(result.references)
+        available_count = None
+    else:
+        observed = request["observed_through"]
+        kwargs = {} if observed is None else {
+            "resolution_observed_through": datetime.fromisoformat(observed)
+        }
+        result = read_financial_table(
+            conn,
+            "SYNTH",
+            as_of=datetime.fromisoformat(request["as_of"]),
+            **kwargs,
+        )
+        reference_count = None
+        available_count = sum(cell.available for cell in result.cells)
+    elapsed_ns = time.perf_counter_ns() - started
+    conn.close()
+    return {
+        "output": result.model_dump(mode="json"),
+        "reference_count": reference_count,
+        "available_count": available_count,
+        "select_count": select_count,
+        "full_verification_count": verification_count,
+        "elapsed_ns": elapsed_ns,
+    }
+
+try:
+    print(json.dumps(run(json.load(sys.stdin)), sort_keys=True), flush=True)
+except BaseException as exc:
+    print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), flush=True)
+"""
+
+
+def _r6_source_digest(source_root: Path) -> str:
+    digest = hashlib.sha256()
+    for package in ("provenance", "sources"):
+        for path in sorted((source_root / package).rglob("*.py")):
+            relative = path.relative_to(source_root).as_posix()
+            digest.update(relative.encode())
+            digest.update(b"\0")
+            digest.update(hashlib.sha256(path.read_bytes()).digest())
+            digest.update(b"\n")
+    return digest.hexdigest()
 
 
 @pytest.fixture
@@ -150,7 +238,9 @@ def test_batch_reuses_full_verification_and_matches_single_reads(
     SourceFactRepository(conn).publish(publication)
     observation_ids = tuple(item.observation.observation_id for item in publication.reported_facts)
     verified: list[tuple[str, datetime]] = []
-    original = fact_read_model.verify_source_fact_publication
+    original: Callable[..., VerifiedSourceFactPublication] = getattr(
+        source_publication, "_verify_source_fact_publication"
+    )
 
     def counted(
         connection: sqlite3.Connection,
@@ -167,7 +257,7 @@ def test_batch_reuses_full_verification_and_matches_single_reads(
             observed_through=observed_through,
         )
 
-    monkeypatch.setattr(fact_read_model, "verify_source_fact_publication", counted)
+    monkeypatch.setattr(source_publication, "_verify_source_fact_publication", counted)
     results = FactReadModel(conn).provenance_bundles(observation_ids, cutoff=STAMP)
 
     assert [item.observation_id for item in results] == list(observation_ids)
@@ -186,7 +276,9 @@ def test_large_publication_is_fully_verified_once_per_batch(
     publication = _large_publication(24)
     SourceFactRepository(conn).publish(publication)
     verified: list[str] = []
-    original = fact_read_model.verify_source_fact_publication
+    original: Callable[..., VerifiedSourceFactPublication] = getattr(
+        source_publication, "_verify_source_fact_publication"
+    )
 
     def counted(
         connection: sqlite3.Connection,
@@ -203,7 +295,7 @@ def test_large_publication_is_fully_verified_once_per_batch(
             observed_through=observed_through,
         )
 
-    monkeypatch.setattr(fact_read_model, "verify_source_fact_publication", counted)
+    monkeypatch.setattr(source_publication, "_verify_source_fact_publication", counted)
     results = FactReadModel(conn).provenance_bundles(
         tuple(item.observation.observation_id for item in publication.reported_facts),
         cutoff=STAMP,
@@ -372,7 +464,6 @@ def test_native_shared_subtree_depth_is_independent_of_edge_order(
 
 def test_native_batch_shared_subtree_depth_is_independent_of_edge_order(
     conn: sqlite3.Connection,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     publication = make_publication()
     SourceFactRepository(conn).publish(publication)
@@ -401,7 +492,6 @@ def test_native_batch_shared_subtree_depth_is_independent_of_edge_order(
                 height = max(height, child_height + 1)
             return height
 
-    monkeypatch.setattr(fact_read_model, "_BatchFactReadModel", GraphBatchReader)
     for shared_height in (1, 3):
         for total_levels in (32, 33):
             for short_first in (True, False):
@@ -411,7 +501,7 @@ def test_native_batch_shared_subtree_depth_is_independent_of_edge_order(
                     short_first=short_first,
                 )
                 visited.clear()
-                reads = FactReadModel(conn).provenance_bundles((root_id, root_id), cutoff=STAMP)
+                reads = GraphBatchReader(conn).provenance_bundles((root_id, root_id), cutoff=STAMP)
                 if total_levels == 32:
                     assert all(read.bundle is not None and read.failure is None for read in reads)
                     assert visited.count(root_id) == 2
@@ -492,7 +582,9 @@ def test_batch_rejects_corrupt_descendants_and_revalidates_each_call(
     )
     conn.commit()
     verified: list[str] = []
-    original = fact_read_model.verify_source_fact_publication
+    original: Callable[..., VerifiedSourceFactPublication] = getattr(
+        source_publication, "_verify_source_fact_publication"
+    )
 
     def counted(
         connection: sqlite3.Connection,
@@ -509,7 +601,7 @@ def test_batch_rejects_corrupt_descendants_and_revalidates_each_call(
             observed_through=observed_through,
         )
 
-    monkeypatch.setattr(fact_read_model, "verify_source_fact_publication", counted)
+    monkeypatch.setattr(source_publication, "_verify_source_fact_publication", counted)
     first = FactReadModel(conn).provenance_bundles(
         (
             corrupt.reported_facts[0].observation.observation_id,
@@ -541,7 +633,9 @@ def test_batch_revalidates_after_a_committed_publication_mutation(
     SourceFactRepository(conn).publish(publication)
     conn.commit()
     verified: list[str] = []
-    original = fact_read_model.verify_source_fact_publication
+    original: Callable[..., VerifiedSourceFactPublication] = getattr(
+        source_publication, "_verify_source_fact_publication"
+    )
 
     def counted(
         connection: sqlite3.Connection,
@@ -558,7 +652,7 @@ def test_batch_revalidates_after_a_committed_publication_mutation(
             observed_through=observed_through,
         )
 
-    monkeypatch.setattr(fact_read_model, "verify_source_fact_publication", counted)
+    monkeypatch.setattr(source_publication, "_verify_source_fact_publication", counted)
     observation_id = publication.reported_facts[0].observation.observation_id
     assert FactReadModel(conn).provenance_bundles((observation_id,), cutoff=STAMP)[0].bundle
     conn.execute("DROP TRIGGER trg_source_fact_publication_members_append_only")
@@ -593,13 +687,19 @@ def test_batch_preserves_caller_transaction_and_row_factory(
     conn.rollback()
 
 
+@pytest.mark.parametrize("replacement_write", [False, True])
 def test_batch_rejects_commit_and_rebegin_that_replaces_its_snapshot(
     conn: sqlite3.Connection,
     monkeypatch: pytest.MonkeyPatch,
+    replacement_write: bool,
 ) -> None:
     publication = _two_observation_publication()
     SourceFactRepository(conn).publish(publication)
-    original = fact_read_model.verify_source_fact_publication
+    conn.commit()
+    conn.execute("CREATE TEMP TABLE replacement_caller_write (value INTEGER)")
+    original: Callable[..., VerifiedSourceFactPublication] = getattr(
+        source_publication, "_verify_source_fact_publication"
+    )
 
     def replace_snapshot(
         connection: sqlite3.Connection,
@@ -616,15 +716,22 @@ def test_batch_rejects_commit_and_rebegin_that_replaces_its_snapshot(
         )
         connection.commit()
         connection.execute("BEGIN")
+        if replacement_write:
+            connection.execute("INSERT INTO replacement_caller_write VALUES (7)")
         return verified
 
-    monkeypatch.setattr(fact_read_model, "verify_source_fact_publication", replace_snapshot)
-    with pytest.raises(RuntimeError, match="changed transaction state"):
+    monkeypatch.setattr(source_publication, "_verify_source_fact_publication", replace_snapshot)
+    with pytest.raises(RuntimeError, match=r"changed .* state"):
         FactReadModel(conn).provenance_bundles(
             (publication.reported_facts[0].observation.observation_id,), cutoff=STAMP
         )
 
-    assert not conn.in_transaction
+    # The replaced transaction is not the read operation's transaction to undo.
+    assert conn.in_transaction
+    assert conn.execute("SELECT value FROM replacement_caller_write").fetchall() == (
+        [(7,)] if replacement_write else []
+    )
+    conn.rollback()
 
 
 def test_batch_rejects_caller_transaction_commit_and_rebegin(
@@ -672,7 +779,9 @@ def test_batch_rejects_an_internal_write(
     conn.execute("CREATE TEMP TABLE caller_write_guard (value INTEGER)")
     conn.execute("BEGIN")
     conn.execute("INSERT INTO caller_write_guard VALUES (1)")
-    original = fact_read_model.verify_source_fact_publication
+    original: Callable[..., VerifiedSourceFactPublication] = getattr(
+        source_publication, "_verify_source_fact_publication"
+    )
 
     def writes_during_verification(
         connection: sqlite3.Connection,
@@ -692,8 +801,8 @@ def test_batch_rejects_an_internal_write(
         return verified
 
     monkeypatch.setattr(
-        fact_read_model,
-        "verify_source_fact_publication",
+        source_publication,
+        "_verify_source_fact_publication",
         writes_during_verification,
     )
     with pytest.raises(RuntimeError, match="changed database state"):
@@ -724,7 +833,9 @@ def test_batch_keeps_one_wal_snapshot_across_a_concurrent_commit(
     database_path = str(database_row[2])
     assert conn.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
     writer = sqlite3.connect(database_path, timeout=1)
-    original = fact_read_model.verify_source_fact_publication
+    original: Callable[..., VerifiedSourceFactPublication] = getattr(
+        source_publication, "_verify_source_fact_publication"
+    )
     committed = False
 
     def commit_tamper_after_first_verify(
@@ -753,8 +864,8 @@ def test_batch_keeps_one_wal_snapshot_across_a_concurrent_commit(
         return verified
 
     monkeypatch.setattr(
-        fact_read_model,
-        "verify_source_fact_publication",
+        source_publication,
+        "_verify_source_fact_publication",
         commit_tamper_after_first_verify,
     )
     try:

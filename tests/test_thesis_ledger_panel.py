@@ -8,14 +8,10 @@ only via the since-retired /digest page (v6 re-grade, Richness & surfacing).
 from __future__ import annotations
 
 import sqlite3
-import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from pipeline.thesis_ledger_panel import render_thesis_ledger_panel  # noqa: E402
-from user_state.ledger import append_entry  # noqa: E402
+from pipeline.thesis_ledger_panel import render_thesis_ledger_panel
+from user_state.ledger import append_entry
 
 _CREATE = """
 CREATE TABLE thesis_ledger_entries (

@@ -25,7 +25,7 @@ from execution.onboard_ticker import apply_industry_template
 from industry_classifier import IndustryTemplate
 
 
-class SayDoPolicy(Protocol):
+class TranscriptSummaryPolicy(Protocol):
     def __call__(
         self, list_type: str | None, *, force: bool, instrument: str | None = None
     ) -> bool: ...
@@ -35,9 +35,13 @@ _merge_tier_1_kpis = cast(
     "Callable[[dict[str, object], IndustryTemplate], tuple[list[str], list[str]]]",
     getattr(onboard_ticker, "_merge_tier_1_kpis"),
 )
-saydo_should_run = cast("SayDoPolicy", getattr(onboard_ticker, "_saydo_should_run"))
+transcript_summaries_should_run = cast(
+    "TranscriptSummaryPolicy", getattr(onboard_ticker, "_transcript_summaries_should_run")
+)
 lookup_list_type = cast("Callable[[str], str | None]", getattr(onboard_ticker, "_lookup_list_type"))
-run_saydo = cast("Callable[[str], int]", getattr(onboard_ticker, "_run_saydo"))
+run_transcript_summaries = cast(
+    "Callable[[str], int]", getattr(onboard_ticker, "_run_transcript_summaries")
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -464,23 +468,6 @@ def test_merge_tier_1_kpis_alias_match_is_case_insensitive() -> None:
 # ---------------------------------------------------------------------------
 
 
-class _FakeProc:
-    def __init__(self, returncode: int) -> None:
-        self.returncode = returncode
-
-
-def test_saydo_should_run_gates_to_evaluation() -> None:
-    """Say-Do generation runs for evaluation names; other lists are skipped
-    unless explicitly forced (the per-decision policy)."""
-    assert saydo_should_run("evaluation", force=False) is True
-    assert saydo_should_run("portfolio", force=False) is False
-    assert saydo_should_run("watchlist", force=False) is False
-    assert saydo_should_run(None, force=False) is False
-    # --force-saydo overrides the gate (used for backfilling existing names).
-    assert saydo_should_run("portfolio", force=True) is True
-    assert saydo_should_run(None, force=True) is True
-
-
 def test_lookup_list_type_reads_tracked_companies(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -505,56 +492,3 @@ def test_lookup_list_type_missing_db_returns_none(
 ) -> None:
     monkeypatch.setattr(onboard_ticker, "_DB_PATH", tmp_path / "nope" / "portfolio.db")
     assert lookup_list_type("UBER") is None
-
-
-def test_run_saydo_runs_summary_then_pairs(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[list[str]] = []
-
-    def fake_run(cmd: list[str], **_kw: object) -> _FakeProc:
-        calls.append(cmd)
-        return _FakeProc(0)
-
-    monkeypatch.setattr(onboard_ticker.subprocess, "run", fake_run)
-
-    rc = run_saydo("UBER")
-
-    assert rc == 0
-    assert len(calls) == 2
-    # The state adapter preserves the summary selector and both authorities.
-    assert Path(calls[0][1]).name == "sqlite_bootstrap.py"
-    assert Path(calls[0][2]).name == "process_ir_documents_state.py"
-    assert calls[0][3:] == [
-        "--ticker",
-        "UBER",
-        "--regenerate-missing",
-        "--repo-root",
-        str(cast("Path", getattr(onboard_ticker, "_STATE_ROOT"))),
-        "--db",
-        str(cast("Path", getattr(onboard_ticker, "_DB_PATH"))),
-    ]
-    # 2) build_saydo_pairs.py --ticker UBER
-    assert Path(calls[1][1]).name == "sqlite_bootstrap.py"
-    assert Path(calls[1][2]).name == "build_saydo_pairs.py"
-    assert calls[1][3:] == [
-        "--ticker",
-        "UBER",
-        "--repo-root",
-        str(cast("Path", getattr(onboard_ticker, "_STATE_ROOT"))),
-    ]
-
-
-def test_run_saydo_short_circuits_on_summary_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If the summary step fails, build_saydo_pairs is not reached and the
-    non-zero code propagates (best-effort caller logs + continues)."""
-    calls: list[list[str]] = []
-
-    def fake_run(cmd: list[str], **_kw: object) -> _FakeProc:
-        calls.append(cmd)
-        return _FakeProc(3)
-
-    monkeypatch.setattr(onboard_ticker.subprocess, "run", fake_run)
-
-    rc = run_saydo("UBER")
-
-    assert rc == 3
-    assert len(calls) == 1  # build_saydo_pairs.py not invoked

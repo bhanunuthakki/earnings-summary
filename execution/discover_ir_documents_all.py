@@ -105,7 +105,7 @@ class TickerResult:
     downloaded: int | None
     elapsed_seconds: float
     error: str | None = None
-    processed: bool = False  # post-registration stage ran (anchor + summaries + brief_dirty)
+    processed: bool = False  # deterministic anchor/dirty stage completed; summaries are optional
 
 
 @dataclass(slots=True)
@@ -223,21 +223,21 @@ def _set_brief_dirty(db_path: Path, ticker: str) -> bool:
     return True
 
 
-def _json_field(stdout: str, key: str) -> object:
-    """Pull ``key`` from the last balanced top-level JSON object in ``stdout``."""
+def _json_object(stdout: str) -> dict[str, object]:
+    """Decode the last complete child result, preserving nested result fields."""
     decoder = json.JSONDecoder()
-    position = 0
-    last: dict[str, object] = {}
-    while (start := stdout.find("{", position)) >= 0:
+    result: dict[str, object] = {}
+    offset = 0
+    while (start := stdout.find("{", offset)) >= 0:
         try:
             value, end = decoder.raw_decode(stdout, start)
         except json.JSONDecodeError:
-            position = start + 1
+            offset = start + 1
             continue
-        position = end
         if isinstance(value, dict):
-            last = cast("dict[str, object]", value)
-    return last.get(key)
+            result = cast("dict[str, object]", value)
+        offset = end
+    return result
 
 
 def _fail(
@@ -290,7 +290,7 @@ def _run_tolerant(argv: list[str], timeout_s: float, label: str) -> bool:
     if proc.returncode != 0:
         sys.stderr.write(f"{label} rc={proc.returncode} (tolerated)\n")
         return False
-    failures = _json_field(proc.stdout, "failed")
+    failures = _json_object(proc.stdout).get("failed")
     if isinstance(failures, int) and failures > 0:
         sys.stderr.write(f"{label} reported {failures} failed documents\n")
         return False
@@ -413,14 +413,15 @@ def _run_process_stage(
         summaries_ok = _run_tolerant(
             [
                 *managed_python_prefix(PROJECT_ROOT),
-                str(PROJECT_ROOT / "execution" / "process_ir_documents_state.py"),
+                str(PROJECT_ROOT / "execution" / "process_ir_documents.py"),
                 "--ticker",
                 ticker,
-                "--repo-root",
-                str(repo_root),
                 "--db",
                 str(db_path),
-                "--regenerate-missing",
+                "--state-root",
+                str(repo_root),
+                "--repo-root",
+                str(PROJECT_ROOT),
             ],
             summary_timeout,
             f"[{ticker}] process_ir_documents",
@@ -490,8 +491,9 @@ def _run_discovery(
             error=f"discover spawn failed: {redact(exc)}",
         )
 
-    status = _json_field(disc.stdout, "status")
-    discovered = _json_field(disc.stdout, "discovered")
+    discovery_result = _json_object(disc.stdout)
+    status = discovery_result.get("status")
+    discovered = discovery_result.get("discovered")
     discovered_n = discovered if isinstance(discovered, int) else None
     if disc.returncode != 0:
         auth_denied = '"event": "source_authentication_denied"' in disc.stderr
@@ -517,7 +519,7 @@ def _run_discovery(
             stdout=disc.stdout,
             stderr=disc.stderr,
         )
-    if status not in {"done", "partial"} or discovered_n is None or discovered_n == 0:
+    if status not in ("done", "partial") or discovered_n is None or discovered_n == 0:
         return DiscoveryResult(
             ticker,
             TickerStatus.FAILED,
@@ -635,73 +637,86 @@ def _finish_discovery(
     if not owner_requested:
         fetch_argv.append("--automatic")
     finish_t0 = time.monotonic()
+    fetch_spawn_error: str | None = None
     try:
         fetch = _run_child(fetch_argv, fetch_timeout)
     except subprocess.TimeoutExpired:
-        return _fail(
-            ticker,
-            f"fetch timed out after {round(fetch_timeout, 3)}s (bounded deadline)",
-            round(discovery.elapsed_seconds + _elapsed(finish_t0), 3),
-            discovered=discovery.discovered,
-        )
+        fetch = None
+        fetch_spawn_error = f"fetch timed out after {round(fetch_timeout, 3)}s (bounded deadline)"
     except OSError as exc:
-        return _fail(
-            ticker,
-            f"fetch spawn failed: {redact(exc)}",
-            round(discovery.elapsed_seconds + _elapsed(finish_t0), 3),
-            discovered=discovery.discovered,
-        )
-    if fetch.stdout:
-        safe_stdout = redact(fetch.stdout)
+        fetch = None
+        fetch_spawn_error = f"fetch spawn failed: {redact(exc)}"
+    fetch_stdout = fetch.stdout if fetch is not None else ""
+    fetch_stderr = fetch.stderr if fetch is not None else ""
+    fetch_returncode = fetch.returncode if fetch is not None else 1
+    if fetch_stdout:
+        safe_stdout = redact(fetch_stdout)
         sys.stdout.write(safe_stdout if safe_stdout.endswith("\n") else safe_stdout + "\n")
-    if fetch.stderr:
-        sys.stderr.write(redact(fetch.stderr))
-    if fetch.returncode != 0:
-        reported_status = _json_field(fetch.stdout, "status")
-        reported_downloaded = _json_field(fetch.stdout, "downloaded")
-        reason = f"fetch exited {fetch.returncode}"
-        if fetch.returncode == 10:
-            reason = "auth_denial: fetch halted"
-        elif isinstance(reported_status, str):
-            reason = f"fetch_incomplete:{reported_status}"
+    if fetch_stderr:
+        sys.stderr.write(redact(fetch_stderr))
+    fetch_result = _json_object(fetch_stdout)
+    downloaded = fetch_result.get("downloaded")
+    downloaded_n = downloaded if isinstance(downloaded, int) else None
+    if fetch_returncode == 10:
         return _fail(
             ticker,
-            reason,
+            "auth_denial: fetch halted",
             round(discovery.elapsed_seconds + _elapsed(finish_t0), 3),
             discovered=discovery.discovered,
-            downloaded=(reported_downloaded if isinstance(reported_downloaded, int) else None),
+            downloaded=downloaded_n,
         )
-
-    fetch_status = _json_field(fetch.stdout, "status")
-    fetch_failed = _json_field(fetch.stdout, "failed")
-    downloaded = _json_field(fetch.stdout, "downloaded")
-    categorize_rc = _json_field(fetch.stdout, "categorize_rc")
-    if (
-        fetch_status != "done"
-        or not isinstance(fetch_failed, int)
-        or fetch_failed > 0
+    ready = fetch_result.get("ready")
+    ready_n = ready if isinstance(ready, int) else 0
+    repaired = fetch_result.get("projection_repaired")
+    repaired_n = repaired if isinstance(repaired, int) else 0
+    failed = fetch_result.get("failed")
+    fetch_status = fetch_result.get("status")
+    categorize_rc = fetch_result.get("categorize_rc")
+    registration_missing = fetch_result.get("registration_missing")
+    projection_failed = fetch_result.get("projection_failed")
+    fetch_failed = (
+        fetch_returncode != 0
+        or fetch_status not in ("done", "recovered")
         or not isinstance(downloaded, int)
-        or (downloaded > 0 and categorize_rc != 0)
-        or (downloaded == 0 and categorize_rc not in (None, 0))
-    ):
-        return _fail(
-            ticker,
-            f"fetch_incomplete:{fetch_status or 'missing_status'}",
-            round(discovery.elapsed_seconds + _elapsed(finish_t0), 3),
-            discovered=discovery.discovered,
-            downloaded=downloaded if isinstance(downloaded, int) else None,
-        )
-
-    downloaded_n = downloaded
+        or not isinstance(failed, int)
+        or failed > 0
+        or categorize_rc not in (None, 0)
+        or (isinstance(registration_missing, int) and registration_missing > 0)
+        or (isinstance(projection_failed, int) and projection_failed > 0)
+    )
+    ready_work = ready_n + repaired_n
+    fetch_error = fetch_spawn_error or (
+        "auth_denial: fetch halted"
+        if fetch_returncode == 10
+        else f"fetch_incomplete:{fetch_status or 'missing_status'}"
+    )
     processed = False
-    if process:
+    if process and (
+        not fetch_failed
+        or ready_work
+        or discovery.processing_pending
+        or (summaries and not fetch_failed)
+        or has_pending_narrative(repo_root, ticker)
+    ):
         process_budget = _remaining_timeout(process_timeout, effective_deadline)
         if process_budget is not None:
+            repair_only = ready_n == 0 and repaired_n > 0
+            if repair_only and summaries:
+                sys.stdout.write(
+                    json.dumps(
+                        {
+                            "event": "ir_model_summaries_deferred",
+                            "ticker": ticker,
+                            "reason": "registration_repair_only",
+                        }
+                    )
+                    + "\n"
+                )
             processed = _run_process_stage(
                 ticker,
                 repo_root=repo_root,
                 db_path=db_path,
-                summaries=summaries,
+                summaries=summaries and not repair_only,
                 owner_requested=owner_requested,
                 timeout_s=process_budget,
                 deadline_at=effective_deadline,
@@ -726,10 +741,10 @@ def _finish_discovery(
             )
 
     elapsed = round(discovery.elapsed_seconds + _elapsed(finish_t0), 3)
-    if discovery.crawl_incomplete:
+    if fetch_failed or discovery.crawl_incomplete:
         return _fail(
             ticker,
-            "discovery_incomplete:partial",
+            fetch_error if fetch_failed else "discovery_incomplete:partial",
             elapsed,
             discovered=discovery.discovered,
             downloaded=downloaded_n,
@@ -1297,7 +1312,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument(
         "--summaries",
         action="store_true",
-        help="Also run process_ir_documents.py (LLM per-doc summaries — the cost step)",
+        help="Also run verified summaries for registered earnings transcripts",
     )
     p.add_argument(
         "--process-timeout",

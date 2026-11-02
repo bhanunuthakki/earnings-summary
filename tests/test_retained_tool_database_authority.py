@@ -129,51 +129,6 @@ def test_scoped_extractor_database_owns_both_log_kinds(
         assert conn.execute("SELECT COUNT(*) FROM source_calls").fetchone()[0] == 2
 
 
-def test_seed_grader_receives_exact_database_and_artifact_root(
-    tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import sys
-
-    import backfill_seed_decisions as entrypoint
-
-    database = migrated_db(tmp_path / "retained" / "facts.db")
-    artifacts = tmp_path / "artifacts"
-    artifacts.mkdir()
-    seed = tmp_path / "seed.json"
-    seed.write_text("[]", encoding="utf-8")
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "backfill_seed_decisions",
-            "--repo-root",
-            str(artifacts),
-            "--db-path",
-            str(database),
-            "--seed-json",
-            str(seed),
-        ],
-    )
-    writes: list[Path] = []
-    launches: list[list[str]] = []
-
-    def seed_rows(target: Path, _seed: Path) -> dict[str, int]:
-        writes.append(target)
-        return {"inserted": 1}
-
-    def grade(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        launches.append(argv)
-        return subprocess.CompletedProcess(argv, 0)
-
-    monkeypatch.setattr(entrypoint, "backfill_seed_decisions", seed_rows)
-    monkeypatch.setattr(entrypoint.subprocess, "run", grade)
-    assert entrypoint.main() == 0
-    assert writes == [database]
-    assert launches[0][-4:] == ["--db-path", str(database), "--repo-root", str(artifacts)]
-    assert str(ROOT / "execution" / "grade_decisions.py") in launches[0]
-    assert not (artifacts / "data" / "portfolio.db").exists()
-
-
 def test_extractor_without_database_authority_stops_before_work(tmp_path: Path) -> None:
     artifacts = tmp_path / "artifacts"
     artifacts.mkdir()

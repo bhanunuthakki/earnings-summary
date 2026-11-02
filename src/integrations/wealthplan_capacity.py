@@ -37,9 +37,7 @@ _DEFAULT_WEALTHPLAN_ROOT = Path(
     or Path.home() / ".gemini" / "antigravity" / "scratch" / "wealthplan"
 )
 
-# ~24 months — matches the position-review capacity block's own life-event
-# lookahead window (advisor.position_review.CAPACITY_HORIZON_DAYS) so a "baby
-# window" that shows up in one shows up in the other.
+# Two-year lookahead for the shared cash-need summary.
 DEFAULT_LOOKAHEAD_DAYS = 730
 
 CashNeedBand = Literal["normal", "elevated"]

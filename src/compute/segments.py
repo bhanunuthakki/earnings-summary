@@ -13,8 +13,9 @@ distinctive: sum-of-segments runs 1.4x–3.4x the period's reported revenue.
 Legitimate cases of sum < revenue (an "Other" bucket not in the FMP feed) are
 common and accepted; sum substantially > revenue is mechanically impossible.
 So we drop records whose segment sum exceeds the period's revenue by more than
-RECONCILE_TOLERANCE_OVER. Requires the income_statement extractor to have
-already run for the same ticker — quarterly_refresh orders docs so that holds.
+RECONCILE_TOLERANCE_OVER. Each nonempty record needs reported revenue at its
+exact fiscal coordinate. Missing revenue is degraded, even if an income document
+ran first. Independent reconciled periods retain the document commit boundary.
 """
 
 from __future__ import annotations
@@ -69,6 +70,26 @@ _DOC_TYPE_TO_DIM_TYPE: dict[str, SegmentDimType] = {
 RECONCILE_TOLERANCE_OVER: float = 0.10
 
 
+class SegmentPrerequisiteUnavailableError(ValueError):
+    """Missing revenue coordinates, with only explicitly committed partial rows."""
+
+    def __init__(
+        self,
+        coordinates: tuple[tuple[str, str, str], ...],
+        *,
+        committed_rows_inserted: int = 0,
+    ) -> None:
+        self.coordinates = tuple(dict.fromkeys(coordinates))
+        self.committed_rows_inserted = committed_rows_inserted
+        detail = ", ".join(
+            f"{ticker}/{period_end}/{period}" for ticker, period_end, period in self.coordinates
+        )
+        super().__init__(
+            f"prerequisite_unavailable: reported revenue missing for {detail}; "
+            f"committed_rows_inserted={committed_rows_inserted}"
+        )
+
+
 def segment_sum_exceeds_revenue(
     values: Iterable[object],
     revenue: Decimal,
@@ -100,10 +121,8 @@ def _lookup_period_revenue(
 ) -> Decimal | None:
     """Revenue for (ticker, period_end, period_type) from financial_facts, or None.
 
-    None means the income-statement extractor hasn't populated this period yet
-    — the caller treats this as "skip the gate, accept the record" since we
-    can't disprove it. quarterly_refresh orders docs so income_statement runs
-    first; the None branch only triggers on bootstrap / partial-data states.
+    None means no revenue exists at this coordinate. It does not establish why
+    the prerequisite is unavailable. Numeric zero is an available reported value.
     """
     fact_relation = canonical_fact_relation(conn, "financial_facts").sql
     cur = conn.execute(
@@ -126,16 +145,35 @@ def passes_reconciliation(
 ) -> bool:
     """True if record's segment sum is within tolerance of reported revenue.
 
-    Emits a single-line JSON warning to stderr when rejecting so cron / onboard
-    logs surface the drop. Doesn't raise — bad data is not a refresh failure.
+    Empty data is valid zero work. Missing revenue raises a typed degraded
+    outcome; an over-cap record is rejected with a structured warning. Known
+    zero revenue uses the same cap comparison without division by zero.
     """
+    if not record.data:
+        return True
     period_end = datetime.fromisoformat(record.date)
     period_type = FiscalPeriodType(record.period)
     revenue = _lookup_period_revenue(
         conn, ticker=record.symbol, period_end=period_end, period_type=period_type
     )
-    if revenue is None or revenue == 0:
-        return True
+    if revenue is None:
+        sys.stderr.write(
+            json.dumps(
+                {
+                    "event": "segment_record_degraded",
+                    "reason": "prerequisite_unavailable",
+                    "ticker": record.symbol.upper(),
+                    "period_end": record.date,
+                    "period_type": record.period,
+                    "metric": metric,
+                    "source_doc_id": source_doc_id,
+                }
+            )
+            + "\n"
+        )
+        raise SegmentPrerequisiteUnavailableError(
+            ((record.symbol.upper(), record.date, record.period),)
+        )
     exceeds, seg_total = segment_sum_exceeds_revenue(record.data.values(), revenue)
     if not exceeds:
         return True
@@ -150,7 +188,7 @@ def passes_reconciliation(
                 "metric": metric,
                 "segment_sum": str(seg_total),
                 "revenue": str(revenue),
-                "ratio": float(seg_total / revenue),
+                "ratio": float(seg_total / revenue) if revenue != 0 else None,
                 "source_doc_id": source_doc_id,
             }
         )
@@ -199,6 +237,8 @@ def extract_segment_facts(conn: sqlite3.Connection, document_id: int, project_ro
 
     Auto-detects product vs geographic from doc_type. Idempotent. Rejects
     records that fail the revenue-reconciliation gate (see module docstring).
+    Missing prerequisites skip only their coordinates. After committing valid
+    periods, a typed error reports the missing coordinates and committed count.
     Writes into segment_periods + segment_dimensions; the legacy segment_facts
     table was retired in migration 0056.
     """
@@ -225,9 +265,15 @@ def extract_segment_facts(conn: sqlite3.Connection, document_id: int, project_ro
     records = apply_overrides(records, ticker=_ticker, dim_type=dim_type.value, conn=conn)
 
     inserted = 0
+    unavailable: list[tuple[str, str, str]] = []
     for record_index, rec_data in enumerate(records):
         rec = FmpSegmentRecord.model_validate(rec_data)
-        if not passes_reconciliation(conn, rec, metric, document_id):
+        try:
+            reconciled = passes_reconciliation(conn, rec, metric, document_id)
+        except SegmentPrerequisiteUnavailableError as exc:
+            unavailable.extend(exc.coordinates)
+            continue
+        if not reconciled:
             continue
         inserted += _write_record_to_junction(
             conn,
@@ -238,6 +284,10 @@ def extract_segment_facts(conn: sqlite3.Connection, document_id: int, project_ro
             junction_metric="revenue",
         )
     conn.commit()
+    if unavailable:
+        raise SegmentPrerequisiteUnavailableError(
+            tuple(unavailable), committed_rows_inserted=inserted
+        )
     return inserted
 
 

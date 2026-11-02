@@ -7,11 +7,16 @@ import hashlib
 import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from decision_extractor import (
+    OutcomeLabel,
+    ProcessQuality,
+    RecommendationKind,
     history,
     hit_rate_by_kind,
     outcome_curve_by_conviction,
@@ -149,7 +154,8 @@ def test_record_decision_inserts_row(db: Path) -> None:
 
 
 def test_record_decision_idempotent_on_source_artifact_id(db: Path) -> None:
-    args = dict(
+    record = partial(
+        record_decision,
         ticker="META",
         recommendation_kind="add",
         recommendation_value=15.0,
@@ -160,8 +166,8 @@ def test_record_decision_idempotent_on_source_artifact_id(db: Path) -> None:
         made_at=datetime(2026, 5, 1, tzinfo=UTC),
         db_path=db,
     )
-    pid1 = record_decision(**args)  # type: ignore[arg-type]
-    pid2 = record_decision(**args)  # type: ignore[arg-type]
+    pid1 = record()
+    pid2 = record()
     assert pid1 == pid2
     # Confirm only one row was inserted
     conn = sqlite3.connect(str(db))
@@ -350,7 +356,7 @@ def test_pending_for_grading_skips_already_graded(db: Path) -> None:
 
 def test_hit_rate_by_kind_aggregates(db: Path) -> None:
     base = datetime(2026, 5, 1, tzinfo=UTC)
-    cases = [
+    cases: list[tuple[RecommendationKind, OutcomeLabel, int]] = [
         ("add", "correct", 1),
         ("add", "wrong", 2),
         ("trim", "correct", 3),
@@ -360,7 +366,7 @@ def test_hit_rate_by_kind_aggregates(db: Path) -> None:
     for kind, outcome_label, source_id in cases:
         pid = record_decision(
             ticker="X",
-            recommendation_kind=kind,  # type: ignore[arg-type]
+            recommendation_kind=kind,
             recommendation_value=None,
             conviction=None,
             source_artifact_id=source_id,
@@ -370,7 +376,7 @@ def test_hit_rate_by_kind_aggregates(db: Path) -> None:
             db_path=db,
         )
         assert pid is not None
-        record_outcome(decision_id=pid, outcome_label=outcome_label, db_path=db)  # type: ignore[arg-type]
+        record_outcome(decision_id=pid, outcome_label=outcome_label, db_path=db)
 
     agg = hit_rate_by_kind(db_path=db)
     assert agg["add"]["correct"] == 1
@@ -381,12 +387,13 @@ def test_hit_rate_by_kind_aggregates(db: Path) -> None:
 
 
 def test_outcome_curve_by_conviction(db: Path) -> None:
-    base = datetime(2026, 5, 1, tzinfo=UTC)
-    for source_id, conv, outcome_label in [
+    base = datetime.now(UTC) - timedelta(days=1)
+    cases: list[tuple[int, str, OutcomeLabel]] = [
         (10, "high", "correct"),
         (11, "high", "wrong"),
         (12, "low", "correct"),
-    ]:
+    ]
+    for source_id, conv, outcome_label in cases:
         pid = record_decision(
             ticker="X",
             recommendation_kind="add",
@@ -399,7 +406,7 @@ def test_outcome_curve_by_conviction(db: Path) -> None:
             db_path=db,
         )
         assert pid is not None
-        record_outcome(decision_id=pid, outcome_label=outcome_label, db_path=db)  # type: ignore[arg-type]
+        record_outcome(decision_id=pid, outcome_label=outcome_label, db_path=db)
     curve = outcome_curve_by_conviction(db_path=db)
     assert curve["high"]["correct"] == 1
     assert curve["high"]["wrong"] == 1
@@ -458,12 +465,16 @@ def test_batch_recorder_inserts_from_lens_artifacts(repo_root: Path) -> None:
     finally:
         conn.close()
 
-    tally = record_decisions_from_artifacts(repo_root=repo_root, since_days=30)
+    tally = record_decisions_from_artifacts(
+        db_path=repo_root / "data" / "portfolio.db", since_days=30
+    )
     assert tally["inserted"] == 2
     assert tally["skipped_existing"] == 0
 
     # Re-run — idempotent
-    tally2 = record_decisions_from_artifacts(repo_root=repo_root, since_days=30)
+    tally2 = record_decisions_from_artifacts(
+        db_path=repo_root / "data" / "portfolio.db", since_days=30
+    )
     assert tally2["inserted"] == 0
     assert tally2["skipped_existing"] == 2
 
@@ -483,7 +494,9 @@ def test_batch_recorder_skips_artifacts_without_recommendation(repo_root: Path) 
     finally:
         conn.close()
 
-    tally = record_decisions_from_artifacts(repo_root=repo_root, since_days=30)
+    tally = record_decisions_from_artifacts(
+        db_path=repo_root / "data" / "portfolio.db", since_days=30
+    )
     assert tally["inserted"] == 0
     assert tally["no_recommendation"] == 1
 
@@ -513,7 +526,9 @@ def test_batch_recorder_ignores_superseded_artifacts(repo_root: Path) -> None:
     finally:
         conn.close()
 
-    tally = record_decisions_from_artifacts(repo_root=repo_root, since_days=30)
+    tally = record_decisions_from_artifacts(
+        db_path=repo_root / "data" / "portfolio.db", since_days=30
+    )
     assert tally["inserted"] == 1
     # Only the current (non-superseded) artifact's recommendation should land
     out = history(ticker="AMZN", db_path=db_path)
@@ -545,7 +560,9 @@ def test_batch_recorder_respects_since_days_window(repo_root: Path) -> None:
     finally:
         conn.close()
 
-    tally = record_decisions_from_artifacts(repo_root=repo_root, since_days=30)
+    tally = record_decisions_from_artifacts(
+        db_path=repo_root / "data" / "portfolio.db", since_days=30
+    )
     assert tally["inserted"] == 1
 
 
@@ -581,7 +598,9 @@ def test_batch_recorder_skips_p3_tier_tickers(repo_root: Path) -> None:
     finally:
         conn.close()
 
-    tally = record_decisions_from_artifacts(repo_root=repo_root, since_days=30)
+    tally = record_decisions_from_artifacts(
+        db_path=repo_root / "data" / "portfolio.db", since_days=30
+    )
     assert tally["inserted"] == 2
     assert tally["skipped_untracked"] == 1
     conn = sqlite3.connect(str(db_path))
@@ -1021,7 +1040,9 @@ def test_record_process_quality_writes_column(db: Path) -> None:
 
 def test_record_process_quality_rejects_unknown_label(db: Path) -> None:
     with pytest.raises(ValueError, match="unknown process_quality"):
-        record_process_quality(decision_id=1, process_quality="brilliant", db_path=db)  # type: ignore[arg-type]
+        record_process_quality(
+            decision_id=1, process_quality=cast("ProcessQuality", "brilliant"), db_path=db
+        )
 
 
 def test_record_process_quality_missing_db_returns_false(tmp_path: Path) -> None:

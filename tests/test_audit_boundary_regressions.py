@@ -17,7 +17,7 @@ from flask import Flask
 import comments
 from execution import comments_server
 from report.models import ReportSpec
-from report.renderers.workspace_sections.boot import _comment_boot_data
+from report.renderers.workspace_sections.boot import _comment_boot_data, prepare_report_delivery
 from server_runtime.access import is_allowed_origin
 from tests.comments_server_seams import patch_server_seam
 
@@ -44,7 +44,7 @@ def test_comment_boot_cannot_escape_json_script(tmp_path: Path, monkeypatch: pyt
         ticker="TEST", generation_date=date(2026, 9, 19), repo_root=str(tmp_path)
     )
     out = StringIO()
-    _comment_boot_data(out, spec)
+    _comment_boot_data(out, spec, prepare_report_delivery(spec))
     dom = BeautifulSoup(out.getvalue(), "html.parser")
     assert dom.find(id="injected") is None
     element = dom.find(id="workspace-comments")

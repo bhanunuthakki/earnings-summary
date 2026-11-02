@@ -18,19 +18,14 @@ Weighted toward the failure modes the design doc calls out:
 from __future__ import annotations
 
 import sqlite3
-import sys
-from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from filings import boilerplate_classify as bc  # noqa: E402
-from filings import boilerplate_triage as bt  # noqa: E402
-from filings.boilerplate_triage import BoilerplateVerdict, ItemVerdict, TriageOutcome  # noqa: E402
-from filings.models import HardStopError  # noqa: E402
-from filings.specificity import SpecificityBand, specificity_metrics  # noqa: E402
+from filings import boilerplate_classify as bc
+from filings import boilerplate_triage as bt
+from filings.boilerplate_triage import BoilerplateVerdict, ItemVerdict, TriageOutcome
+from filings.models import HardStopError
+from filings.specificity import SpecificityBand, specificity_metrics
 
 _SCHEMA = """
 CREATE TABLE filing_sections (

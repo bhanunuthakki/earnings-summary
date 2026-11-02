@@ -303,3 +303,16 @@ def test_portfolio_window_failure_retains_chart_filters_and_refresh_retry(tmp_pa
             assert page.evaluate("window.readCalls") == 2
         finally:
             browser.close()
+
+
+_PROCEDURE_FIXTURE = r"""
+window.requests=[];window.pending=[];window.navigation=[];
+window.navigateTo=function(id){window.navigation.push(id);};
+window.fetch=function(url,options){
+  window.requests.push({url:String(url),body:options&&options.body});
+  return new Promise(resolve=>window.pending.push(resolve));
+};
+window.resolveProcedure=function(status,payload){
+  window.pending.shift()(new Response(JSON.stringify(payload),{status:status}));
+};
+"""

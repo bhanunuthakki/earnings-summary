@@ -27,6 +27,8 @@ class WindowsJobForTest(Protocol):
 
     def close(self) -> None: ...
 
+    def stop_and_wait(self, *, terminate: bool = False, timeout_seconds: float = 5) -> None: ...
+
 
 class RuntimeTestAPI(Protocol):
     run_managed_child: Callable[..., int]
@@ -94,6 +96,10 @@ class _RecordingJob:
 
     def close(self) -> None:
         self.events.append("close")
+
+    def stop_and_wait(self, *, terminate: bool = False) -> None:
+        assert terminate is True
+        self.events.append("stopped")
 
 
 @pytest.mark.parametrize("error_code", [0, 5, 6])
@@ -186,6 +192,10 @@ def test_owned_root_cleanup_runs_when_job_close_fails(
             return super().wait(timeout)
 
     class Job:
+        def stop_and_wait(self, *, terminate: bool = False) -> None:
+            assert terminate is True
+            events.append("stopped")
+
         def close(self) -> None:
             events.append("close")
             raise OSError("controlled job close failure")
@@ -216,11 +226,11 @@ def test_owned_root_cleanup_runs_when_job_close_fails(
             ["python", "worker.py"], cwd=tmp_path, env={}, scheduler_owner=(1234, "win:start")
         )
 
-    assert events[:3] == ["close", "kill", "wait"]
+    assert events[:4] == ["stopped", "close", "kill", "wait"]
     if startup_failure:
         assert isinstance(raised.value.__context__, ValueError)
     else:
-        assert events == ["close", "kill", "wait", "close"]
+        assert events == ["stopped", "close", "kill", "wait", "stopped", "close"]
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows held process handle integration")
@@ -309,7 +319,7 @@ def test_windows_child_is_assigned_while_suspended_before_resume(
         == 0
     )
     assert observed_flags == [runtime_test_api.create_suspended]
-    assert events == ["assign", "resume", "close"]
+    assert events == ["assign", "resume", "stopped", "close"]
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Job Object integration")

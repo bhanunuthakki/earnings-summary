@@ -32,7 +32,6 @@ SCHEDULED_SUPPRESSION_BOUNDARIES = {
 DEEP_SUPPRESSION_BOUNDARIES = {
     "execution/extract_competitive_mentions.py",
     "execution/extract_document_tables.py",
-    "execution/extract_kpis_from_summaries.py",
     "execution/ingest_competitive_category_share.py",
     "execution/refresh_ir_kpis.py",
 }
@@ -82,14 +81,14 @@ def test_every_pipeline_run_callsite_has_terminal_accounting_in_its_module() -> 
         if not _start_run_calls(path):
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        end_names = {"end_run"}
+        end_names = {"end_run", "end_run_owned"}
         for node in ast.walk(tree):
             if not isinstance(node, ast.ImportFrom):
                 continue
             if node.module != "pipeline.run_accounting":
                 continue
             for alias in node.names:
-                if alias.name == "end_run":
+                if alias.name in {"end_run", "end_run_owned"}:
                     end_names.add(alias.asname or alias.name)
         if not any(isinstance(node, ast.Name) and node.id in end_names for node in ast.walk(tree)):
             missing.add(path.relative_to(PROJECT_ROOT).as_posix())

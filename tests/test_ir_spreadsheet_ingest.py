@@ -14,8 +14,8 @@ parse → ingest pipeline:
 from __future__ import annotations
 
 import datetime as dt
+import json
 import sqlite3
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import ParamSpec, TypeVar, cast
@@ -23,15 +23,14 @@ from typing import ParamSpec, TypeVar, cast
 import openpyxl
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+import ir_pipeline.ingest as ingest_module
+from ir_pipeline.config import IrConfig, SheetKpi, get_config
+from ir_pipeline.config_builder import build_ir_config, widen_config
+from ir_pipeline.ingest import ingest_spreadsheet_kpis
+from ir_pipeline.spreadsheet import parse_spreadsheet, parse_spreadsheet_source
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-import ir_pipeline.ingest as ingest_module  # noqa: E402
-from ir_pipeline.config import IrConfig, SheetKpi, get_config  # noqa: E402
-from ir_pipeline.config_builder import build_ir_config, widen_config  # noqa: E402
-from ir_pipeline.ingest import ingest_spreadsheet_kpis  # noqa: E402
-from ir_pipeline.spreadsheet import parse_spreadsheet  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 _Q = [dt.datetime(2025, 6, 30), dt.datetime(2025, 9, 30), dt.datetime(2025, 12, 31)]
 
@@ -364,6 +363,7 @@ def test_ir_doc_value_supersedes_llm_incumbent_for_same_metric(tmp_path: Path) -
 def test_post_cutover_ingest_dual_writes_evidence_and_preserves_history(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo_root = tmp_path / "repo"
     db_path = migrated_db(repo_root / "data" / "portfolio.db")
@@ -382,7 +382,18 @@ def test_post_cutover_ingest_dual_writes_evidence_and_preserves_history(
         results_center_url="https://example.invalid/results",
         spreadsheet_kpis=(SheetKpi("NII", "Indicators", "NII", "actual", currency="USD"),),
     )
-    period = dt.datetime(2025, 12, 31)
+    first_parsed = parse_spreadsheet_source(first_path, cfg, max_quarters=1)
+    second_parsed = parse_spreadsheet_source(second_path, cfg, max_quarters=1)
+    assert first_parsed.workbook_sha256 != second_parsed.workbook_sha256
+    capture_receipts: list[object] = []
+    real_capture = ingest_module.capture_spreadsheet_parse
+
+    def record_capture(*args: object, **kwargs: object) -> object:
+        receipt = cast("Callable[..., object]", real_capture)(*args, **kwargs)
+        capture_receipts.append(receipt)
+        return receipt
+
+    monkeypatch.setattr(ingest_module, "capture_spreadsheet_parse", record_capture)
 
     conn = connect_sqlite(
         db_path,
@@ -395,7 +406,7 @@ def test_post_cutover_ingest_dual_writes_evidence_and_preserves_history(
             conn,
             "CO",
             cfg,
-            {"NII": {period: 120.0}},
+            first_parsed,
             first_path,
             repo_root=repo_root,
         )
@@ -407,18 +418,63 @@ def test_post_cutover_ingest_dual_writes_evidence_and_preserves_history(
             conn,
             "CO",
             cfg,
-            {"NII": {period: 121.0}},
+            second_parsed,
             second_path,
             repo_root=repo_root,
         )
         facts = conn.execute(
-            "SELECT id, value, supersedes_id, source_doc_id FROM kpi_facts "
+            "SELECT id, value, supersedes_id, source_doc_id, locator FROM kpi_facts "
             "WHERE ticker = 'CO' ORDER BY id"
         ).fetchall()
+        original_capture = conn.execute(
+            "SELECT extraction_run_id,started_at,completed_at,output_sha256 "
+            "FROM evidence_extraction_runs WHERE extractor_name=? "
+            "ORDER BY document_version_id",
+            ("ir-spreadsheet-parser-capture",),
+        ).fetchall()
+        original_nodes = conn.execute(
+            "SELECT node_id,text,locator_json,recorded_at FROM evidence_nodes "
+            "WHERE extraction_run_id IN (SELECT extraction_run_id "
+            "FROM evidence_extraction_runs WHERE extractor_name=?) ORDER BY node_id",
+            ("ir-spreadsheet-parser-capture",),
+        ).fetchall()
+        from pipeline.run_accounting import PipelineRunSuppressedError
+
+        with pytest.raises(PipelineRunSuppressedError):
+            ingest_spreadsheet_kpis(
+                conn,
+                "CO",
+                cfg,
+                second_parsed,
+                second_path,
+                repo_root=repo_root,
+            )
         evidence_count = conn.execute(
             "SELECT COUNT(*) FROM evidence_document_versions WHERE legacy_document_id IN (?, ?)",
             (first_doc, second_doc),
         ).fetchone()[0]
+        capture_runs = conn.execute(
+            "SELECT extraction_run_id, document_version_id, input_sha256, outcome "
+            "FROM evidence_extraction_runs WHERE extractor_name = ? "
+            "ORDER BY document_version_id",
+            ("ir-spreadsheet-parser-capture",),
+        ).fetchall()
+        replayed_capture = conn.execute(
+            "SELECT extraction_run_id,started_at,completed_at,output_sha256 "
+            "FROM evidence_extraction_runs WHERE extractor_name=? "
+            "ORDER BY document_version_id",
+            ("ir-spreadsheet-parser-capture",),
+        ).fetchall()
+        replayed_nodes = conn.execute(
+            "SELECT node_id,text,locator_json,recorded_at FROM evidence_nodes "
+            "WHERE extraction_run_id IN (SELECT extraction_run_id "
+            "FROM evidence_extraction_runs WHERE extractor_name=?) ORDER BY node_id",
+            ("ir-spreadsheet-parser-capture",),
+        ).fetchall()
+        capture_attempts = conn.execute(
+            "SELECT status FROM ingestion_runs WHERE directive=? ORDER BY started_at",
+            ("capture_ir_spreadsheet",),
+        ).fetchall()
         revision_count = conn.execute(
             "SELECT COUNT(*) FROM fact_observation_revisions "
             "WHERE fact_table = 'kpi_facts' AND fact_row_id IN (?, ?)",
@@ -429,6 +485,28 @@ def test_post_cutover_ingest_dual_writes_evidence_and_preserves_history(
 
     assert (first_inserted, second_inserted) == (1, 1)
     assert evidence_count == 2
+    assert len(capture_runs) == 2
+    assert {str(row[1]) for row in capture_runs} == {
+        f"legacy-doc-{first_doc}",
+        f"legacy-doc-{second_doc}",
+    }
+    assert {str(row[2]) for row in capture_runs} == {
+        first_parsed.workbook_sha256,
+        second_parsed.workbook_sha256,
+    }
+    assert all(str(row[3]) == "succeeded" for row in capture_runs)
+    assert len(capture_receipts) == 3
+    first_receipt, replay_receipt = capture_receipts[1], capture_receipts[2]
+    assert getattr(replay_receipt, "replayed") is True
+    assert getattr(replay_receipt, "extraction_run_id") == getattr(
+        first_receipt, "extraction_run_id"
+    )
+    assert getattr(replay_receipt, "node_ids") == getattr(first_receipt, "node_ids")
+    assert getattr(replay_receipt, "started_at") == getattr(first_receipt, "started_at")
+    assert getattr(replay_receipt, "completed_at") == getattr(first_receipt, "completed_at")
+    assert [tuple(row) for row in original_capture] == [tuple(row) for row in replayed_capture]
+    assert [tuple(row) for row in original_nodes] == [tuple(row) for row in replayed_nodes]
+    assert [str(row[0]) for row in capture_attempts] == ["ok", "ok", "ok"]
     assert revision_count == 2
     assert len(facts) == 2
     assert facts[1]["supersedes_id"] == facts[0]["id"]
@@ -436,3 +514,9 @@ def test_post_cutover_ingest_dual_writes_evidence_and_preserves_history(
         first_doc,
         second_doc,
     )
+
+    assert [float(fact["value"]) for fact in facts] == [120.0, 121.0]
+    for fact in facts:
+        locator = json.loads(fact["locator"])
+        assert locator["kind"] == "spreadsheet_cell"
+        assert locator["spreadsheet_cell"] == {"sheet_name": "Indicators", "cell_address": "E6"}

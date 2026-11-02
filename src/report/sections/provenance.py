@@ -76,7 +76,7 @@ def _coverage(conn: sqlite3.Connection, ticker: str) -> list[CoverageRow]:
     cursor.execute(
         """
         SELECT year, quarter, has_audio_file, has_transcript_file, has_release_file,
-               has_slides_file, step_saydo_analyzed, step_llm_summarized
+               has_slides_file
         FROM quarterly_artifacts
         WHERE ticker = ?
         ORDER BY year DESC, quarter DESC
@@ -91,8 +91,6 @@ def _coverage(conn: sqlite3.Connection, ticker: str) -> list[CoverageRow]:
             has_transcript_file=bool(r["has_transcript_file"]),
             has_release_file=bool(r["has_release_file"]),
             has_slides_file=bool(r["has_slides_file"]),
-            step_saydo_analyzed=bool(r["step_saydo_analyzed"]),
-            step_llm_summarized=bool(r["step_llm_summarized"]),
         )
         for r in cursor.fetchall()
     ]

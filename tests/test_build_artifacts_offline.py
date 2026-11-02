@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import sqlite3
+import stat
 import subprocess
 import sys
 from collections.abc import Callable
@@ -38,6 +39,61 @@ from report.offline_artifact import (
 from report.windows_appcontainer import minimal_worker_environment, run_appcontainer_worker
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _independent_runtime_inventory(
+    runtime_roots: tuple[tuple[str, Path], ...],
+) -> list[dict[str, str | int]]:
+    """Enumerate runtime roots independently of the production closure walker."""
+    rows: list[dict[str, str | int]] = []
+
+    def fail_walk(error: OSError) -> None:
+        raise error
+
+    for logical_root, root in runtime_roots:
+        root = Path(root)
+        root_metadata = root.lstat()
+        root_attributes = getattr(root_metadata, "st_file_attributes", 0)
+        if stat.S_ISLNK(root_metadata.st_mode) or root_attributes & 0x400:
+            raise AssertionError(f"runtime inventory root is a reparse point: {root}")
+        if not stat.S_ISDIR(root_metadata.st_mode):
+            raise AssertionError(f"runtime inventory root is not a directory: {root}")
+        root = root.resolve(strict=True)
+        for directory, directory_names, file_names in os.walk(
+            root, topdown=True, followlinks=False, onerror=fail_walk
+        ):
+            current = Path(directory)
+            for name in directory_names:
+                path = current / name
+                metadata = path.lstat()
+                attributes = getattr(metadata, "st_file_attributes", 0)
+                if stat.S_ISLNK(metadata.st_mode) or attributes & 0x400:
+                    raise AssertionError(f"runtime inventory contains a reparse point: {path}")
+                if not stat.S_ISDIR(metadata.st_mode):
+                    raise AssertionError(f"runtime inventory contains a non-directory: {path}")
+            for name in file_names:
+                path = current / name
+                metadata = path.lstat()
+                attributes = getattr(metadata, "st_file_attributes", 0)
+                if stat.S_ISLNK(metadata.st_mode) or attributes & 0x400:
+                    raise AssertionError(f"runtime inventory contains a reparse point: {path}")
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise AssertionError(f"runtime inventory contains a special file: {path}")
+                body = path.read_bytes()
+                if len(body) != metadata.st_size:
+                    raise AssertionError(
+                        f"runtime file changed during independent inventory: {path}"
+                    )
+                relative = path.relative_to(root).as_posix()
+                rows.append(
+                    {
+                        "logical_path": f"{logical_root}/{relative}",
+                        "dependency_class": DependencyClass.RUNTIME.value,
+                        "sha256": hashlib.sha256(body).hexdigest(),
+                        "size_bytes": len(body),
+                    }
+                )
+    return sorted(rows, key=lambda item: str(item["logical_path"]).casefold())
 
 
 def test_cache_loaders_do_not_create_directories_on_read(tmp_path: Path) -> None:
@@ -172,10 +228,17 @@ result_path.write_text(json.dumps(result), encoding='utf-8')
         encoding="utf-8",
     )
     environment = minimal_worker_environment(isolated_repo=read_root, write_root=write_root)
+    runtime_roots = runtime_root_specs()
+    worker_executable = Path(sys.executable).resolve()
+    if Path(sys.prefix).resolve() != Path(sys.base_prefix).resolve():
+        base_executable = getattr(sys, "_base_executable", None)
+        assert isinstance(base_executable, str) and base_executable
+        worker_executable = Path(base_executable).resolve()
+        environment["__PYVENV_LAUNCHER__"] = str(Path(sys.executable).resolve())
     returncode, _stdout, stderr = run_appcontainer_worker(
-        [sys.executable, "-I", str(probe), str(outside), str(write_root / "probe.json")],
+        [str(worker_executable), "-I", str(probe), str(outside), str(write_root / "probe.json")],
         cwd=read_root,
-        read_roots=[Path(sys.base_prefix), read_root],
+        read_roots=[*(root for _logical, root in runtime_roots), read_root],
         write_root=write_root,
         environment=environment,
         export_names=("probe.json",),
@@ -658,8 +721,18 @@ def test_offline_cli_repeats_byte_identically_from_isolated_snapshot(
     assert first == second
     receipt = json.loads(first["receipt.json"])
     logical_paths = [record["logical_path"].casefold() for record in receipt["dependencies"]]
-    assert len(logical_paths) == 63_176
     assert len(logical_paths) == len(set(logical_paths))
+    runtime_roots = runtime_root_specs()
+    root_prefixes = tuple(f"{logical_root}/".casefold() for logical_root, _root in runtime_roots)
+    receipt_runtime_rows = sorted(
+        (
+            record
+            for record in receipt["dependencies"]
+            if record["logical_path"].casefold().startswith(root_prefixes)
+        ),
+        key=lambda item: item["logical_path"].casefold(),
+    )
+    assert receipt_runtime_rows == _independent_runtime_inventory(runtime_roots)
     assert "runtime/python/python313.dll" in logical_paths
     assert "runtime/python/python3.dll" in logical_paths
     assert any(path.startswith("runtime/os/") and path.endswith(".dll") for path in logical_paths)

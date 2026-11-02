@@ -83,9 +83,11 @@ def test_builder_freezes_truthful_missingness_and_no_fabricated_thesis_change(
 def test_session_decision_fails_closed_without_checkpoint_payload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    db_path = tmp_path / "fixture.db"
+    db_path.touch()
     monkeypatch.setattr(
         sys,
         "argv",
-        ["land_session_notes.py", "decision", "--repo-root", str(tmp_path)],
+        ["land_session_notes.py", "decision", "--db", str(db_path)],
     )
     assert land_session_notes.main() == 2

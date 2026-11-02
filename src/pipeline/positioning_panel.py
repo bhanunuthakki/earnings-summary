@@ -1,20 +1,7 @@
-"""Portfolio → Positioning — the owner's target book, its history, the coach.
+"""Manual portfolio targets and deterministic active-target readings.
 
-Three wells (command-center panel fragment, kit components only):
-
-  1. **Active target** — the authoritative positioning vs the book's current
-     readings, with gap chips. Reads the MATERIALIZED fit meta (Stage 0f's
-     ``candidate_fit.json`` book/target blocks) so the GET path never touches
-     the tracker; a stale/absent cache degrades to the stored intent alone.
-  2. **Version history** — every saved intent, newest first (append-and-
-     supersede: nothing is ever overwritten).
-  3. **Coach** — the conversational surface (``positioning/coach_pack.py``
-     via the unified ask engine, sessions scoped ``positioning``), with the
-     propose→approve flow: "Propose targets" encodes the conversation into an
-     editable form; only the owner's explicit approval persists, and the
-     owner's edits — not the LLM's numbers — are what's validated and saved.
-
-The manual path is the same form seeded from the active profile (no LLM).
+The owner edits the current profile and explicitly saves through
+``/api/positioning/approve``. No conversation or model proposal is required.
 """
 
 from __future__ import annotations
@@ -26,9 +13,8 @@ from typing import cast
 
 from candidate_fit_cache import read_materialized_fit_meta
 from pipeline.portfolio_styles import positioning_css
-from positioning.encode import ProposedProfile
 from positioning.profile import SLEEVE_KEYS, PositioningProfile, SectorTarget
-from positioning.store import PositioningIntentRow, latest_intent, list_intents
+from positioning.store import PositioningIntentRow, latest_intent
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.panel import panel_section
 
@@ -36,7 +22,7 @@ _PANEL_STYLE = positioning_css()
 
 
 # --------------------------------------------------------------------------- #
-# Active-target card + history (pure reads)
+# Active-target card (pure reads)
 # --------------------------------------------------------------------------- #
 
 
@@ -114,7 +100,7 @@ def render_active_target_card(db_path: Path, repo_root: Path) -> str:
         badge = '<span class="k-chip">defaulting to current book</span>'
         rows.append(
             '<p class="muted">No positioning saved yet — the current book is the target '
-            "(every gap reads zero). Talk to the coach below, or set targets manually.</p>"
+            "(every gap reads zero). Set targets with the form below.</p>"
         )
     else:
         badge = (
@@ -204,58 +190,16 @@ def render_active_target_card(db_path: Path, repo_root: Path) -> str:
     )
 
 
-def _history_well(db_path: Path) -> str:
-    rows: list[PositioningIntentRow] = []
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        conn = None
-    if conn is not None:
-        try:
-            rows = list_intents(conn, limit=12)
-        finally:
-            conn.close()
-    if not rows:
-        return '<div class="k-well"><h3 class="k-well-title">History</h3><p class="muted">No versions yet.</p></div>'
-    body = "".join(
-        "<tr>"
-        f'<td><span class="k-chip k-chip-mono">v{r.id}</span></td>'
-        f"<td>{escape(r.created_at[:16].replace('T', ' '))}</td>"
-        f'<td><span class="k-chip">{escape(r.source)}</span></td>'
-        f"<td>{escape(r.narrative.splitlines()[0][:120]) if r.narrative else ''}"
-        + (
-            f'<div class="pos-diff">superseded {escape(str(r.superseded_at)[:10])}</div>'
-            if not r.is_latest and r.superseded_at
-            else ""
-        )
-        + "</td></tr>"
-        for r in rows
-    )
-    return (
-        '<div class="k-well"><h3 class="k-well-title">History</h3>'
-        f'<table class="pos-hist"><tbody>{body}</tbody></table></div>'
-    )
-
-
 # --------------------------------------------------------------------------- #
-# Approval form (proposal → editable inputs; owner-wins)
+# Manual approval form (owner-entered inputs)
 # --------------------------------------------------------------------------- #
 
 _EXTRA_SECTOR_ROWS = 2
 
 
-def render_approval_form(proposal: ProposedProfile) -> str:
-    """The encode proposal as an editable form. Every value is an input the
-    owner can change before approving — what persists is re-validated from
-    the FORM, never from the raw proposal."""
-    p = proposal.profile
-    diffs = (
-        '<div class="pos-diff">changes vs active: '
-        + escape("; ".join(f"{d.fieldname}: {d.active} → {d.proposed}" for d in proposal.diffs))
-        + "</div>"
-        if proposal.diffs
-        else ""
-    )
+def render_approval_form(profile: PositioningProfile, narrative: str = "") -> str:
+    """Render manual inputs. Submitted values are revalidated before saving."""
+    p = profile
     sector_rows: list[str] = []
     targets: list[SectorTarget] = list(p.sector_targets)
     for i in range(len(targets) + _EXTRA_SECTOR_ROWS):
@@ -286,11 +230,9 @@ def render_approval_form(proposal: ProposedProfile) -> str:
     )
     life = escape("\n".join(p.life_circumstances))
     return f"""<div class="k-well" id="pos-approval-form">
-<h3 class="k-well-title">Proposed targets — review, edit, approve</h3>
-<p class="muted">{escape(proposal.rationale or "Encoded from the coach conversation.")}</p>
-{diffs}
+<h3 class="k-well-title">Set targets</h3>
 <form id="pos-approve-form">
-<input type="hidden" name="session_id" value="{escape(proposal.session_id)}">
+<input type="hidden" name="session_id" value="">
 <div class="pos-form-grid">
   <span class="hdr">dimension</span><span class="hdr">value</span><span class="hdr"></span>
   <label>Growth tilt target</label>{_num("target_growth_tilt", p.target_growth_tilt, "e.g. -0.10")}
@@ -312,12 +254,13 @@ def render_approval_form(proposal: ProposedProfile) -> str:
 <h4 class="k-well-title">Life circumstances <span class="pos-diff">(one per line, your words)</span></h4>
 <textarea class="pos-narrative" name="life_circumstances">{life}</textarea>
 <h4 class="k-well-title">Narrative <span class="pos-diff">(persisted with the profile)</span></h4>
-<textarea class="pos-narrative" name="narrative">{escape(proposal.summary)}</textarea>
+<textarea class="pos-narrative" name="narrative">{escape(narrative)}</textarea>
 <div class="pos-actions">
-  <button type="submit" class="k-btn k-btn-primary">Approve &amp; save</button>
-  <button type="button" class="k-btn k-btn-quiet" id="pos-approve-cancel">Discard</button>
+  <button type="submit" class="k-btn k-btn-primary">Save targets</button>
+  <button type="reset" class="k-btn k-btn-quiet">Reset</button>
 </div>
-<div class="pos-error" id="pos-approve-error" hidden></div>
+<div class="pos-error" id="pos-approve-error" role="alert" hidden></div>
+<p class="muted" id="pos-save-status" role="status" hidden></p>
 </form></div>"""
 
 
@@ -391,128 +334,72 @@ def profile_from_form(form: dict[str, str]) -> tuple[PositioningProfile, str]:
 # Panel assembly
 # --------------------------------------------------------------------------- #
 
-_COACH_JS = """<script>
+_APPROVAL_JS = """<script>
 (function () {
-  var log = document.getElementById('pos-chat-log');
-  var form = document.getElementById('pos-chat-form');
-  var input = document.getElementById('pos-chat-input');
-  var propose = document.getElementById('pos-propose');
-  var approvalHost = document.getElementById('pos-approval');
-  var sessionId = '';
-  function msg(role, text) {
-    var el = document.createElement('div');
-    el.className = 'pos-msg';
-    el.classList.toggle('user', role === 'user');
-    el.classList.toggle('coach', role === 'coach');
-    el.textContent = text;
-    log.appendChild(el);
-    log.scrollTop = log.scrollHeight;
-    return el;
-  }
+  var form = document.getElementById('pos-approve-form');
+  if (!form) return;
+  var error = document.getElementById('pos-approve-error');
+  var status = document.getElementById('pos-save-status');
+  var submit = form.querySelector('button[type="submit"]');
+  form.addEventListener('reset', function () {
+    error.hidden = true;
+    status.hidden = true;
+  });
   form.addEventListener('submit', function (ev) {
     ev.preventDefault();
-    var q = input.value.trim();
-    if (!q) return;
-    input.value = '';
-    msg('user', q);
-    var pending = msg('coach', 'thinking…');
-    fetch('/api/positioning/coach', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: q, session_id: sessionId })
-    }).then(function (r) { return r.json(); }).then(function (data) {
-      sessionId = data.session_id || sessionId;
-      pending.textContent = data.text || data.message || '(no answer)';
-    }).catch(function (err) { pending.textContent = 'error: ' + err; });
+    if (submit.disabled) return;
+    error.hidden = true;
+    status.hidden = false;
+    status.textContent = 'Saving targets…';
+    CCAction.busy(submit);
+    fetch('/api/positioning/approve', { method: 'POST', body: new FormData(form) })
+      .then(function (r) { return r.text().then(function (t) { return { ok: r.ok, text: t }; }); })
+      .then(function (res) {
+        if (!res.ok) {
+          status.hidden = true;
+          error.hidden = false;
+          error.textContent = res.text;
+          return;
+        }
+        document.getElementById('pos-active-card').outerHTML = res.text;
+        status.textContent = 'Targets saved. Portfolio comparisons update on the next refresh.';
+      })
+      .catch(function () {
+        status.hidden = true;
+        error.hidden = false;
+        error.textContent = 'Could not save targets. Your entries remain in the form; try again.';
+      })
+      .finally(function () { CCAction.release(submit); });
   });
-  propose.addEventListener('click', function () {
-    if (!sessionId) { msg('coach', 'Talk to the coach first — there is no conversation to encode yet.'); return; }
-    CCAction.busy(propose, 'Encoding…');
-    fetch('/api/positioning/propose', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId })
-    }).then(function (r) {
-      return r.text().then(function (t) { return { ok: r.ok, text: t }; });
-    }).then(function (res) {
-      if (!res.ok) {
-        CCAction.release(propose);
-        msg('coach', 'encode failed: ' + res.text);
-        return;
-      }
-      CCAction.receipt(propose, '✓ Targets proposed — review below');
-      approvalHost.innerHTML = res.text;
-      wireApproval();
-      // Re-proposing after more conversation is a normal flow, so the
-      // receipt is momentary, not terminal — unlock once it has registered.
-      setTimeout(function () { CCAction.release(propose); }, 1500);
-    }).catch(function (err) {
-      CCAction.release(propose);
-      msg('coach', 'encode failed: ' + err);
-    });
-  });
-  function wireApproval() {
-    var f = document.getElementById('pos-approve-form');
-    if (!f) return;
-    var errEl = document.getElementById('pos-approve-error');
-    var cancel = document.getElementById('pos-approve-cancel');
-    if (cancel) cancel.addEventListener('click', function () { approvalHost.innerHTML = ''; });
-    f.addEventListener('submit', function (ev) {
-      ev.preventDefault();
-      fetch('/api/positioning/approve', { method: 'POST', body: new FormData(f) })
-        .then(function (r) { return r.text().then(function (t) { return { ok: r.ok, text: t }; }); })
-        .then(function (res) {
-          if (!res.ok) { errEl.hidden = false; errEl.textContent = res.text; return; }
-          document.getElementById('pos-active-card').outerHTML = res.text;
-          approvalHost.innerHTML = '';
-          msg('coach', 'Saved. The new positioning is now the active target — fit chips re-score against it on the next morning run (or refresh_candidate_fit).');
-        });
-    });
-  }
 })();
 </script>"""
 
 
 def render_positioning_panel(db_path: Path, repo_root: Path) -> str:
-    """The Positioning tab fragment.
-
-    P0.4b (PRD §7.5): the detailed active-target card — every quantitative
-    dimension (growth tilt, vol posture, sector/sleeve targets, Sharpe
-    floor, max position) — is now demoted into a collapsed "Advanced" well.
-    Portfolio Posture (``portfolio_decision_support.
-    render_portfolio_posture_section``) is the new default entry point: a
-    short correctable paragraph, one section up the Allocation console.
-    ``render_active_target_card`` itself is unchanged (still the fragment
-    ``/api/positioning/approve`` swaps back in by id on save) — only its
-    wrapper here changed."""
+    """Show current targets and an explicit manual editor without model calls."""
+    intent: PositioningIntentRow | None = None
+    try:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    except sqlite3.Error:
+        conn = None
+    if conn is not None:
+        try:
+            intent = latest_intent(conn)
+        finally:
+            conn.close()
+    profile = intent.profile if intent is not None else PositioningProfile()
+    narrative = intent.narrative if intent is not None else ""
     return panel_section(
-        # D7: the subtitle states the question the section answers, in one
-        # line — the old five-line mechanics paragraph is exactly the
-        # "unnecessary detail" the walkthrough flagged.
-        '<p class="sub">Should the target book change? — durable targets the '
-        "fit math scores against; nothing persists until you approve.</p>",
+        '<p class="sub">Record portfolio targets. Changes take effect when you save.</p>',
         '<div class="pos-grid">',
-        '<details class="pos-span"><summary>Advanced — active target detail</summary>',
+        '<details class="pos-span"><summary>Active target detail</summary>',
         render_active_target_card(db_path, repo_root),
         "</details>",
-        f'<div class="pos-span">{_history_well(db_path)}</div>',
-        # "Positioning coach" (wave B B6) — disambiguates from Record's
-        # Calibration coach; a bare "Coach" read as the same product twice.
-        '<div class="k-well pos-span"><h3 class="k-well-title">Positioning coach</h3>',
-        '<div class="pos-chat-log" id="pos-chat-log"></div>',
-        '<form class="pos-chat-form" id="pos-chat-form">',
-        '<textarea id="pos-chat-input" placeholder="e.g. I want more international ',
-        "small-cap value exposure and less mega-cap growth — kid on the way, thinking "
-        'about lowering volatility…"></textarea>',
-        '<button type="submit" class="k-btn k-btn-primary">Send</button></form>',
-        '<div class="pos-actions">',
-        '<button type="button" class="k-btn k-btn-quiet" id="pos-propose">',
-        "Propose targets from this conversation</button>",
-        "</div>",
-        '<div id="pos-approval"></div>',
+        '<div class="pos-span">',
+        render_approval_form(profile, narrative),
         "</div>",
         "</div>",
         title="Positioning",
         style=_PANEL_STYLE,
-        tail=_COACH_JS,
+        tail=_APPROVAL_JS,
     )

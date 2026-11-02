@@ -13,28 +13,22 @@ surface can't silently drop the kit.
 from __future__ import annotations
 
 import re
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC = PROJECT_ROOT / "src"
-sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(SRC))
-
-from scripts import gen_design_conformance_debt  # noqa: E402
-from ui.conformance_scan import (  # noqa: E402
+from scripts import gen_design_conformance_debt
+from ui.conformance_scan import (
     css_text as _css_text,
 )
-from ui.conformance_scan import (  # noqa: E402
+from ui.conformance_scan import (
     discover_emitters,
     scan_surface,
     split_top_commas,
     strip_css_comments,
 )
-from ui.controls import (  # noqa: E402
+from ui.controls import (
     controls_css,
     controls_js,
     icon_svg,
@@ -43,7 +37,7 @@ from ui.controls import (  # noqa: E402
     panel_toolbar,
     ticker_label,
 )
-from ui.design_registry import (  # noqa: E402
+from ui.design_registry import (
     BESPOKE_BUTTON_OK,
     CCACTION_PINNED,
     CHROME_TOKENS,
@@ -56,6 +50,9 @@ from ui.design_registry import (  # noqa: E402
     VISUAL_EMITTER_MANIFEST,
     palette_css,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC = PROJECT_ROOT / "src"
 
 
 def _registered_path(rel: str) -> Path:
@@ -939,9 +936,9 @@ def test_workspace_local_css_standardizes_primitives() -> None:
 
 def test_combobox_renders_two_part_ticker_labels() -> None:
     """The holding combobox keeps ticker value and company label separate."""
-    from pipeline.ticker_command_center import _combobox  # pyright: ignore[reportPrivateUsage]
+    import pipeline.ticker_command_center as ticker_command_center
 
-    combo = _combobox("NU", "Nu Holdings Ltd.")
+    combo = getattr(ticker_command_center, "_combobox")("NU", "Nu Holdings Ltd.")
     assert 'value="NU"' in combo
     assert '<span class="cc-combo-name"' in combo
     assert "NU · Nu Holdings" not in combo
@@ -1402,14 +1399,10 @@ def test_whole_table_mono_check_fires_on_known_violation() -> None:
 # ---------------------------------------------------------------------------
 # Guard (c): CCAction adopter census — a REGRESSION-ONLY ratchet.
 #
-# CCAction.busy()/.release()/.receipt()/.leave() (PR #1092) is the busy/
-# release/receipt/leave feedback primitive every action button should use
-# instead of bare `disabled=true` / instant `.remove()`. This does NOT force
-# adoption on a surface that never used it — that would be a mandate, not a
-# regression guard, and plenty of legitimate non-button surfaces (this file's
-# own REGISTERED set included) have no business referencing it. It only pins
-# the CURRENT adopters and fails if one of THEM drops to zero references,
-# i.e. a conformant surface silently regressed to the pre-#1092 pattern.
+# CCAction.busy()/.release()/.receipt()/.leave() (PR #1092) provides busy,
+# release, receipt, and leave feedback for surfaces that adopt it. This is a
+# regression-only census. It does not require adoption by surfaces outside
+# the pinned set. It fails if a current adopter drops to zero references.
 # ---------------------------------------------------------------------------
 
 # Pinned adopters are typed registry data. Growing that floor remains allowed;

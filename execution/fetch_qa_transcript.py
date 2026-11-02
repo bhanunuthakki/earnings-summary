@@ -7,7 +7,7 @@ sites (roic.ai → stockanalysis.com → tickertrends.io). First hit wins.
 Why Q&A only:
   - Prepared remarks are reproducible from the press release + investor deck,
     which `execution/process_ir_documents.py` already summarizes via
-    `generate_press_release_summary` / `generate_presentation_brief`.
+    separate generated document summaries.
   - The Q&A segment is the unique audio-only content — analysts probing the
     edges of management's prepared message — and is exactly what say-do
     consistency analysis needs.

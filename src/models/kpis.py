@@ -50,7 +50,7 @@ class DefinitionOrigin(StrEnum):
     ``ANALYST`` is the curated holdings / tier-N KPI registry an analyst defined
     (the 0007 seed and every holdings ``tier_*_kpis`` entry) — and the DEFAULT for
     every pre-existing row. ``CAPTURE`` marks a definition auto-minted by the
-    "capture every reported number" extractors (`directives/capture_every_number_program.md`)
+    source-provenance extractors (`directives/data_provenance.md`)
     for an arbitrary reported figure that isn't on any watchlist.
 
     The distinction lets a consumer separate the controlled watchlist from the

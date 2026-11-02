@@ -1,36 +1,24 @@
-"""HTML renderer for the analytical portfolio dashboard.
+"""Retained shared HTML fragments for the analytical portfolio dashboard.
 
-Pure render layer: takes the :class:`AnalyticalDashboard` dataclass produced by
-``pipeline.analytical_dashboard.build_analytical_dashboard`` and emits one
-self-contained HTML document.
-
-Split out of ``execution/build_analytical_dashboard.py`` so BOTH the static
-exporter (that CLI) and the live command center (``execution/comments_server.py``
-→ ``GET /analytical``) render identical markup from a single code path — no
-query/markup divergence between the two surfaces.
+This module holds the shared fragment/rendering helpers kept for reuse; it no
+longer exposes a self-contained static HTML export.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
 from html import escape
 
-from dashboard._styles import CSS
 from pipeline.analytical_dashboard import (
     AnalyticalDashboard,
-    DecisionsPanel,
-    InsiderEventRow,
     LlmBudgetPanel,
     LlmBudgetRow,
     PortfolioLensRow,
-    PredictionOutcomeRow,
     TriggerLadderRow,
 )
 from ui import living_grid as lg
-from ui.controls import controls_css, controls_js, k_empty, ticker_label
+from ui.controls import k_empty, ticker_label
 from ui.prose import render_prose
 from ui.time import stamp_html
-from ui.tokens import FAVICON_LINK
 
 _TRIGGER_TONE: dict[str, str] = {
     "sell": "tone-sell",
@@ -42,28 +30,6 @@ _TRIGGER_TONE: dict[str, str] = {
     # action signal — the number behind the row needs review before it means anything.
     "unreviewed": "tone-bad",
 }
-
-
-def render_html(
-    dash: AnalyticalDashboard,
-    *,
-    generated_at: datetime,
-    tier_coverage: dict[str, dict[str, int]] | None = None,
-) -> str:
-    parts: list[str] = [
-        _PAGE_HEAD.format(generated_at=stamp_html(generated_at, prefix="updated ")),
-        _tier_coverage_strip(tier_coverage or {}),
-        # Top of page: portfolio-wide synthesis when cached
-        _portfolio_synthesis_section(dash.portfolio_synthesis_md),
-        _per_ticker_reread_section(dash.per_ticker_reread),
-        _decisions_section(dash.decisions),
-        _trigger_ladder_section(dash.trigger_ladder),
-        _insider_events_section(dash.insider_events),
-        _predictions_section(dash.prediction_outcomes),
-        _llm_budget_section(dash.llm_budgets),
-        _PAGE_FOOT,
-    ]
-    return "".join(parts)
 
 
 # Command-center panel name -> the build_analytical_dashboard `sections` key it
@@ -107,116 +73,6 @@ def render_panel_fragment(dash: AnalyticalDashboard, name: str) -> str | None:
     if name == "budget":
         return _llm_budget_section(dash.llm_budgets)
     return None
-
-
-def _decisions_section(panel: DecisionsPanel) -> str:
-    """Recent decisions table + hit-rate strip + calibration strip.
-    Shows even when empty so the operator sees the panel exists."""
-    if not panel.recent and not panel.hit_rate_by_kind:
-        return (
-            '<section class="panel"><div class="panel-head">'
-            "<h2>Decisions (LLM recommendations · audit ledger)</h2></div>"
-            '<div class="panel-body">'
-            + k_empty("No decisions recorded yet — extract them from cached rereads.")
-            + "<details><summary>run manually</summary>"
-            '<pre class="cli-hint">python execution/record_decisions.py</pre></details>'
-            "</div></section>"
-        )
-
-    out: list[str] = [
-        '<section class="panel"><div class="panel-head">'
-        "<h2>Decisions (LLM recommendations · audit ledger)</h2>"
-        '<p class="sub">Every five-min-reread recommendation extracted into a durable ledger. '
-        "Outcomes graded against realized price moves; calibration curve below.</p>"
-        '</div><div class="panel-body">',
-    ]
-
-    # Hit-rate strip — one card per kind, with correct% when graded
-    if panel.hit_rate_by_kind:
-        out.append('<div class="kpi-strip">')
-        for kind in sorted(panel.hit_rate_by_kind.keys()):
-            c = panel.hit_rate_by_kind[kind]
-            graded = c.get("correct", 0) + c.get("wrong", 0) + c.get("mixed", 0)
-            pending = c.get("pending", 0)
-            total = graded + pending
-            hit_rate = (100 * c.get("correct", 0) / graded) if graded > 0 else None
-            hit_str = f"{hit_rate:.0f}%" if hit_rate is not None else "—"
-            tone = (
-                "tone-good"
-                if hit_rate is not None and hit_rate >= 60
-                else "tone-warn"
-                if hit_rate is not None and hit_rate >= 40
-                else "tone-bad"
-                if hit_rate is not None
-                else "tone-muted"
-            )
-            out.append(
-                f'<div class="kpi-card {tone}">'
-                f'<div class="kpi-label">{escape(kind.upper())}</div>'
-                f'<div class="kpi-value">{hit_str}</div>'
-                f'<div class="kpi-sub">{graded} graded · {pending} pending · {total} total</div>'
-                "</div>"
-            )
-        out.append("</div>")
-
-    # Calibration sparkline — conviction bucket → correct%
-    if panel.calibration_by_conviction:
-        out.append('<h3 class="panel-h3">Calibration · correct% by stated conviction</h3>')
-        out.append('<div class="calib-strip">')
-        for conv in ("high", "medium", "low", "unstated"):
-            if conv not in panel.calibration_by_conviction:
-                continue
-            c = panel.calibration_by_conviction[conv]
-            graded = c.get("correct", 0) + c.get("wrong", 0) + c.get("mixed", 0)
-            hit = (100 * c.get("correct", 0) / graded) if graded > 0 else None
-            hit_str = f"{hit:.0f}%" if hit is not None else "—"
-            bar_width = int(hit) if hit is not None else 0
-            out.append(
-                '<div class="calib-row">'
-                f'<div class="calib-label">{escape(conv)}</div>'
-                f'<div class="calib-bar"><meter class="calib-fill" min="0" max="100" value="{bar_width}" aria-label="{hit_str} correct"></meter></div>'
-                f'<div class="calib-value">{hit_str} ({graded})</div>'
-                "</div>"
-            )
-        out.append("</div>")
-
-    # Recent decisions table
-    if panel.recent:
-        out.append(
-            '<h3 class="panel-h3">Recent recommendations</h3>'
-            '<table class="decisions-table"><thead><tr>'
-            "<th>When</th><th>Ticker</th><th>Recommendation</th>"
-            '<th>Conviction</th><th class="num">Outcome %</th>'
-            "<th>Outcome</th></tr></thead><tbody>"
-        )
-        for d in panel.recent:
-            kind_label = d.recommendation_kind.upper()
-            if d.recommendation_value is not None:
-                kind_label = f"{kind_label} {d.recommendation_value:g}%"
-            outcome_tone = (
-                "outcome-correct"
-                if d.outcome_label == "correct"
-                else "outcome-wrong"
-                if d.outcome_label == "wrong"
-                else "outcome-mixed"
-                if d.outcome_label == "mixed"
-                else "outcome-pending"
-            )
-            pct_str = f"{d.outcome_pct * 100:+.1f}%" if d.outcome_pct is not None else "—"
-            out.append(
-                "<tr>"
-                f"<td>{stamp_html(d.made_at, mode='date')}</td>"
-                f"<td>{ticker_label(d.ticker, href=f'../research/{d.ticker}/')}</td>"
-                f"<td>{escape(kind_label)}</td>"
-                f"<td>{escape(d.conviction or '—')}</td>"
-                f'<td class="num">{pct_str}</td>'
-                f'<td class="{outcome_tone}">{escape(d.outcome_label or "pending")}</td>'
-                "</tr>"
-            )
-        out.append("</tbody></table>")
-
-    out.append("</div></section>")
-    return "".join(out)
 
 
 _BUDGET_PANEL_SCRIPT = """<script>
@@ -634,131 +490,3 @@ def _trigger_ladder_section(rows: list[TriggerLadderRow]) -> str:
         )
     out.append("</tbody></table></div></section>")
     return "".join(out)
-
-
-def _insider_events_section(rows: list[InsiderEventRow]) -> str:
-    if not rows:
-        return (
-            '<section class="panel"><div class="panel-head"><h2>Cross-ticker insider activity (last 90d)</h2></div>'
-            '<div class="panel-body">'
-            + k_empty("No insider-transaction data yet.")
-            + "<details><summary>run manually</summary>"
-            '<pre class="cli-hint">python execution/backfill_insider_transactions.py '
-            "--since 2024-01-01</pre></details>"
-            "</div></section>"
-        )
-    out: list[str] = [
-        '<section class="panel"><div class="panel-head"><h2>Cross-ticker insider activity (last 90d)</h2>'
-        '<p class="sub">Discretionary trades only · ranked by conviction signal · 10b5-1 sells filtered out.</p>'
-        '</div><div class="panel-body">',
-        '<table class="insider-table"><thead><tr>',
-        "<th>Date</th><th>Ticker</th><th>Insider</th><th>Role</th><th>Action</th>",
-        '<th class="num">Shares</th><th class="num">Value</th><th class="num">Signal</th><th>Why</th>',
-        "</tr></thead><tbody>",
-    ]
-    for r in rows:
-        tone = (
-            "tx-buy"
-            if "buy" in r.transaction_type
-            else "tx-sell"
-            if "sell" in r.transaction_type
-            else ""
-        )
-        signal_pct = int(r.signal_strength * 100)
-        strength_tone = (
-            "signal-strong"
-            if r.signal_strength >= 0.6
-            else "signal-medium"
-            if r.signal_strength >= 0.3
-            else "signal-weak"
-        )
-        out.append(
-            f'<tr class="{tone}">'
-            f"<td>{escape(r.transaction_date)}</td>"
-            f"<td>{ticker_label(r.ticker, href=f'../research/{r.ticker}/')}</td>"
-            f"<td>{escape(r.insider_name)}</td>"
-            f"<td>{escape(r.insider_role or '?')}</td>"
-            f"<td>{escape(r.transaction_type.replace('_', ' '))}</td>"
-            f'<td class="num">{r.shares:,.0f}</td>'
-        )
-        if r.transaction_value is not None:
-            v = r.transaction_value
-            v_str = (
-                f"${v / 1e9:.1f}B"
-                if v >= 1e9
-                else f"${v / 1e6:.1f}M"
-                if v >= 1e6
-                else f"${v / 1e3:.0f}K"
-            )
-            out.append(f'<td class="num">{v_str}</td>')
-        else:
-            out.append('<td class="num muted">—</td>')
-        out.append(
-            f'<td class="num {strength_tone}">{signal_pct}</td><td>{escape(r.rationale)}</td></tr>'
-        )
-    out.append("</tbody></table></div></section>")
-    return "".join(out)
-
-
-def _predictions_section(rows: list[PredictionOutcomeRow]) -> str:
-    if not rows:
-        return ""
-    # Aggregate by source_kind into a per-ticker grid
-    from collections import defaultdict
-
-    by_ticker: dict[str, dict[str, dict[str, int]]] = defaultdict(lambda: defaultdict(dict))
-    for r in rows:
-        by_ticker[r.ticker][r.source_kind][r.outcome] = r.count
-
-    out: list[str] = [
-        '<section class="panel"><div class="panel-head"><h2>Predictions outcomes (cross-ticker)</h2>'
-        '<p class="sub">SayDo, LLM bear-case, risk-factor materialization tallied across all forward-looking sources.</p>'
-        '</div><div class="panel-body">',
-        '<table class="predictions-table"><thead><tr>',
-        "<th>Ticker</th><th>Source</th>",
-        '<th class="num">Pending</th><th class="num">Met</th>',
-        '<th class="num">Mixed</th><th class="num">Missed</th>',
-        '<th class="num">Hit rate</th></tr></thead><tbody>',
-    ]
-    for ticker in sorted(by_ticker.keys()):
-        for source_kind in sorted(by_ticker[ticker].keys()):
-            outcomes = by_ticker[ticker][source_kind]
-            graded = outcomes.get("met", 0) + outcomes.get("missed", 0) + outcomes.get("mixed", 0)
-            hit_rate = f"{100 * outcomes.get('met', 0) / graded:.0f}%" if graded > 0 else "—"
-            out.append(
-                "<tr>"
-                f"<td>{ticker_label(ticker, href=f'../research/{ticker}/')}</td>"
-                f"<td>{escape(source_kind)}</td>"
-                f'<td class="num muted">{outcomes.get("pending", 0)}</td>'
-                f'<td class="num k-num-pos">{outcomes.get("met", 0)}</td>'
-                f'<td class="num">{outcomes.get("mixed", 0)}</td>'
-                f'<td class="num k-num-neg">{outcomes.get("missed", 0)}</td>'
-                f'<td class="num">{hit_rate}</td>'
-                "</tr>"
-            )
-    out.append("</tbody></table></div></section>")
-    return "".join(out)
-
-
-# The whole concatenated head goes through str.format(), so the palette block
-# (literal CSS braces) must be brace-escaped before splicing.
-_PAGE_HEAD = (
-    """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Portfolio · analytical dashboard</title>
-"""
-    + FAVICON_LINK
-    + "<style>"
-    + CSS.replace("{", "{{").replace("}", "}}")
-    + controls_css("dark").replace("{", "{{").replace("}", "}}")
-    + "</style>"
-    + """
-</head>
-<body class="analytical-dashboard">
-<h1>Portfolio · analytical dashboard</h1>
-<div class="stamp">{generated_at}</div>
-"""
-)
-_PAGE_FOOT = f"<script data-k-select-runtime>{controls_js()}</script></body></html>"

@@ -22,5 +22,5 @@
     "execution/performance_pf1_smoke.py"
   ],
   "workload_entrypoint": "execution/performance_pf1_smoke.py",
-  "workload_id": "capture-poller-runner-fidelity-smoke/v1"
+  "workload_id": "job-runtime-lock-runner-fidelity-smoke/v2"
 }

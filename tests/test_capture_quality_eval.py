@@ -17,6 +17,7 @@ from evals.capture_quality_specs import CAPTURE_QUALITY_PURPOSES, CAPTURE_QUALIT
 from evals.coverage import GRANDFATHERED_UNCOVERED_PURPOSES, eval_coverage, eval_coverage_gate
 from evals.harness import EvalRunSummary, persist_summary
 from llm.capture import capture_purpose_suffix
+from llm.prompt_versions import prompt_version_for
 
 
 def _capture(
@@ -25,11 +26,12 @@ def _capture(
     prompt: str = "SOURCE: Management committed to launch by Q4.",
     response: str = '{"commitment": "Launch by Q4"}',
     captured_at: str = "2026-07-26T12:00:00",
+    prompt_version: str | None = None,
 ) -> dict[str, object]:
     return {
         "captured_at": captured_at,
         "purpose": purpose,
-        "prompt_version": "v1",
+        "prompt_version": prompt_version or prompt_version_for(purpose),
         "ticker": "NU",
         "model": "test-model",
         "backend": "claude",
@@ -62,8 +64,27 @@ def test_registered_eval_mode_debt_is_fully_paid_down(tmp_path: Path) -> None:
 
 
 def test_specs_are_prioritized_and_performance_bounded() -> None:
-    # 79 registered specs minus the two retired, unwired feature purposes.
-    assert len(CAPTURE_QUALITY_SPECS) == 77
+    # The owner retired exercise, coach-reply and dedicated ETF generation.
+    assert len(CAPTURE_QUALITY_SPECS) == 53
+    assert not {
+        "advisor_socratic_questions",
+        "advisor_socratic_memo",
+        "coach_reply_intent",
+        "etf_role_synthesis",
+        "annual_letter",
+        "weekly_packet_predraft",
+        "research_triage",
+        "musing_decision_extract",
+        "theme_seed_cluster",
+        "theme_synthesis",
+        "exit_postmortem_draft",
+        "tenet_accountability",
+        "tenet_distill",
+        "tenet_semantic_tension",
+        "capture_intent",
+        "triage_route_suggest",
+        "behavior_distill",
+    }.intersection(CAPTURE_QUALITY_SPECS)
     assert CAPTURE_QUALITY_SPECS[CAPTURE_QUALITY_PURPOSES[0]].priority == "P0"
     assert CAPTURE_QUALITY_SPECS[CAPTURE_QUALITY_PURPOSES[0]].traffic_tier == "hot"
     assert CAPTURE_QUALITY_SPECS["saydo_commitment_extract"].priority == "P0"
@@ -71,8 +92,8 @@ def test_specs_are_prioritized_and_performance_bounded() -> None:
     assert CAPTURE_QUALITY_SPECS["saydo_commitment_extract"].default_limit == 20
     assert CAPTURE_QUALITY_SPECS["advisor_swap_check"].priority == "P0"
     assert CAPTURE_QUALITY_SPECS["pressure_test_thesis"].priority == "P0"
-    assert CAPTURE_QUALITY_SPECS["annual_letter"].priority == "P2"
-    assert CAPTURE_QUALITY_SPECS["annual_letter"].default_limit == 5
+    assert CAPTURE_QUALITY_SPECS["pre_earnings_brief"].priority == "P2"
+    assert CAPTURE_QUALITY_SPECS["pre_earnings_brief"].default_limit == 5
     assert {spec.priority for spec in CAPTURE_QUALITY_SPECS.values()} == {"P0", "P1", "P2"}
 
 
@@ -84,8 +105,8 @@ def test_capture_loader_deduplicates_and_rolls_up_lenses(tmp_path: Path) -> None
             "{bad-json",
             duplicate,
             duplicate,
-            _capture("lens:five_min_reread", prompt="lens-one"),
-            _capture("lens:macro:rates_up", prompt="lens-two"),
+            _capture("lens:five_min_reread", prompt="lens-one", prompt_version="v1"),
+            _capture("lens:macro:rates_up", prompt="lens-two", prompt_version="v1"),
         ],
     )
 
@@ -102,17 +123,21 @@ def test_capture_loader_merges_pid_shards_by_timestamp(tmp_path: Path) -> None:
     directory = tmp_path / "data" / "llm_capture"
     directory.mkdir(parents=True)
     (directory / "capture_2026-07-26_999.jsonl").write_text(
-        json.dumps(_capture("annual_letter", prompt="older", captured_at="2026-07-26T12:00:00"))
+        json.dumps(
+            _capture("pre_earnings_brief", prompt="older", captured_at="2026-07-26T12:00:00")
+        )
         + "\n",
         encoding="utf-8",
     )
     (directory / "capture_2026-07-26_111.jsonl").write_text(
-        json.dumps(_capture("annual_letter", prompt="newer", captured_at="2026-07-26T12:59:00"))
+        json.dumps(
+            _capture("pre_earnings_brief", prompt="newer", captured_at="2026-07-26T12:59:00")
+        )
         + "\n",
         encoding="utf-8",
     )
 
-    items = load_capture_quality_corpus(tmp_path, "annual_letter", limit=1)
+    items = load_capture_quality_corpus(tmp_path, "pre_earnings_brief", limit=1)
 
     assert len(items) == 1
     assert "newer" in items[0].content
@@ -123,15 +148,17 @@ def test_capture_path_scan_is_partitioned_for_exact_purpose(
 ) -> None:
     capture_dir = tmp_path / "data" / "llm_capture"
     capture_dir.mkdir(parents=True)
-    target = capture_dir / f"capture_2026-07-26_1_p{capture_purpose_suffix('annual_letter')}.jsonl"
+    target = (
+        capture_dir / f"capture_2026-07-26_1_p{capture_purpose_suffix('pre_earnings_brief')}.jsonl"
+    )
     unrelated = capture_dir / (
         f"capture_2026-07-26_1_p{capture_purpose_suffix('valuation_basis')}.jsonl"
     )
     legacy = capture_dir / "capture_2026-07-25_1.jsonl"
     for path, purpose in (
-        (target, "annual_letter"),
+        (target, "pre_earnings_brief"),
         (unrelated, "valuation_basis"),
-        (legacy, "annual_letter"),
+        (legacy, "pre_earnings_brief"),
     ):
         path.write_text(json.dumps(_capture(purpose, prompt=path.name)) + "\n", encoding="utf-8")
 
@@ -152,7 +179,7 @@ def test_capture_path_scan_is_partitioned_for_exact_purpose(
         return original_open(path, mode, buffering, encoding, errors, newline)
 
     monkeypatch.setattr(Path, "open", observe_open)
-    items = load_capture_quality_corpus(tmp_path, "annual_letter")
+    items = load_capture_quality_corpus(tmp_path, "pre_earnings_brief")
 
     assert opened == {target, legacy}
     assert len(items) == 2
@@ -170,15 +197,15 @@ def test_capture_loader_filters_age_before_deduplication(tmp_path: Path) -> None
         tmp_path,
         [
             _capture(
-                "annual_letter",
+                "pre_earnings_brief",
                 prompt="same",
                 captured_at=recent.isoformat(timespec="seconds"),
             ),
-            _capture("annual_letter", prompt="same", captured_at="2020-01-01T12:00:00"),
+            _capture("pre_earnings_brief", prompt="same", captured_at="2020-01-01T12:00:00"),
         ],
     )
 
-    items = load_capture_quality_corpus(tmp_path, "annual_letter", since_days=7)
+    items = load_capture_quality_corpus(tmp_path, "pre_earnings_brief", since_days=7)
 
     assert len(items) == 1
     assert items[0].produced_at is not None
@@ -186,16 +213,16 @@ def test_capture_loader_filters_age_before_deduplication(tmp_path: Path) -> None
 
 
 def test_capture_loader_selects_one_exact_provenance_cohort(tmp_path: Path) -> None:
-    older = _capture("annual_letter", prompt="old-model", captured_at="2026-07-26T12:00:00")
+    older = _capture("pre_earnings_brief", prompt="old-model", captured_at="2026-07-26T12:00:00")
     older["model"] = "model-a"
-    newer = _capture("annual_letter", prompt="new-model", captured_at="2026-07-26T12:01:00")
+    newer = _capture("pre_earnings_brief", prompt="new-model", captured_at="2026-07-26T12:01:00")
     newer["model"] = "model-b"
     _write_capture(tmp_path, [older, newer])
 
     items = load_capture_quality_corpus(
         tmp_path,
-        "annual_letter",
-        required_prompt_version="v1",
+        "pre_earnings_brief",
+        required_prompt_version=prompt_version_for("pre_earnings_brief"),
     )
 
     assert len(items) == 1
@@ -262,7 +289,7 @@ def test_sensitive_capture_text_never_reaches_logs_or_summary(
         tmp_path,
         [
             _capture(
-                "annual_letter",
+                "pre_earnings_brief",
                 prompt=f"source {sentinel}",
                 response=f"response {sentinel}",
             )
@@ -270,7 +297,7 @@ def test_sensitive_capture_text_never_reaches_logs_or_summary(
     )
 
     summary = run_capture_quality_eval(
-        "annual_letter",
+        "pre_earnings_brief",
         repo_root=tmp_path,
         code_root=tmp_path,
         caller=lambda *_args, **_kwargs: f"unparseable echo {sentinel}",
@@ -283,7 +310,7 @@ def test_sensitive_capture_text_never_reaches_logs_or_summary(
 def test_capture_persistence_strips_private_exchange_defense_in_depth(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    _write_capture(tmp_path, [_capture("annual_letter")])
+    _write_capture(tmp_path, [_capture("pre_earnings_brief")])
 
     def fake_judge(_prompt: str, **_kwargs: object) -> str:
         return json.dumps(
@@ -299,7 +326,7 @@ def test_capture_persistence_strips_private_exchange_defense_in_depth(
         )
 
     summary = run_capture_quality_eval(
-        "annual_letter",
+        "pre_earnings_brief",
         repo_root=tmp_path,
         code_root=tmp_path,
         caller=fake_judge,

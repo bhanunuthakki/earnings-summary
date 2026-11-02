@@ -22,8 +22,12 @@ from dcf.input_evidence import (
     canonical_digest,
 )
 from dcf.onon_inputs import RECIPE, requirements_for
-from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
-from provenance.fact_read_model import ExactEvidenceReference, FactReadModel
+from provenance.canonical_fact_resolution import CanonicalFactRead, CanonicalFactResolutionEngine
+from provenance.fact_read_model import (
+    ExactEvidenceReference,
+    FactReadModel,
+    ProvenanceBundleRead,
+)
 from provenance.issuer_registry import evidence_document_relation
 from provenance.metric_ontology import (
     CanonicalDimension,
@@ -32,6 +36,7 @@ from provenance.metric_ontology import (
     canonical_json,
     sha256_json,
 )
+from provenance.source_fact_publication import publication_verification_scope
 
 _SHA = r"^[0-9a-f]{64}$"
 _SELECTORS = TypeAdapter(dict[str, ValuationRoleSelector])
@@ -167,13 +172,17 @@ def _validate_source(
     ontology: MetricOntology,
     resolver: CanonicalFactResolutionEngine,
     as_of: datetime,
+    bundle_read: ProvenanceBundleRead,
+    source_read: CanonicalFactRead,
+    current_read: CanonicalFactRead,
 ) -> CanonicalMetricDefinitionRevision:
     ref, req, cutoff = item.reference, item.requirement, manifest.source_cutoff_at
-    bundle = FactReadModel(conn).provenance_bundle(ref.observation_id, cutoff=cutoff)
+    bundle = FactReadModel.validate_provenance_bundle_read(bundle_read)
     fact, evidence = bundle.observation, bundle.evidence
     definition = ontology.metric_definition_as_known(ref.metric_id, cutoff)
     binding = ontology.binding_as_known(ref.observation_id, cutoff)
-    resolution = resolver.as_known(ref.canonical_metric_cell_id, cutoff)
+    resolver.validate_as_known_read(source_read)
+    resolution = source_read.resolution
     if (
         definition is None
         or definition.lifecycle != "active"
@@ -203,7 +212,8 @@ def _validate_source(
         raise ReviewedInputRoleError("role_mapping_commitment_changed")
     current_binding = ontology.binding_as_known(ref.observation_id, as_of)
     current_mapping = ontology.mapping_as_known(binding.source_component_id or "", as_of)
-    current_resolution = resolver.as_known(ref.canonical_metric_cell_id, as_of)
+    resolver.validate_as_known_read(current_read)
+    current_resolution = current_read.resolution
     if (
         current_binding != binding
         or current_mapping != mapping
@@ -354,18 +364,44 @@ def review_input_roles(
             raise ReviewedInputRoleError("role_resolution_issuer_mismatch")
         definitions: dict[str, CanonicalMetricDefinitionRevision] = {}
         selected: dict[str, dict[str, ValuationRoleSelector]] = {}
-        for key in sorted(manifest.inputs):
-            item = manifest.inputs[key]
-            definition = _validate_source(conn, manifest, item, ontology, resolver, as_of)
-            metric = definition.metric_id
-            if metric in definitions and definitions[metric] != definition:
-                raise ReviewedInputRoleError("role_prior_definition_conflict")
-            definitions[metric] = definition
-            selectors = selected.setdefault(metric, {})
-            prior = selectors.get(item.requirement.role)
-            if prior is not None and prior != item.selector:
-                raise ReviewedInputRoleError("role_same_metric_selector_conflict")
-            selectors[item.requirement.role] = item.selector
+        items = {key: manifest.inputs[key] for key in sorted(manifest.inputs)}
+        observation_ids = tuple(
+            dict.fromkeys(item.reference.observation_id for item in items.values())
+        )
+        cell_ids = tuple(
+            dict.fromkeys(item.reference.canonical_metric_cell_id for item in items.values())
+        )
+        with publication_verification_scope(conn):
+            bundle_reads = FactReadModel(conn).provenance_bundles(
+                observation_ids, cutoff=manifest.source_cutoff_at
+            )
+            bundles_by_id = {read.observation_id: read for read in bundle_reads}
+            source_reads = resolver.read_as_known_outcomes(cell_ids, manifest.source_cutoff_at)
+            source_by_cell = {read.canonical_metric_cell_id: read for read in source_reads}
+            current_reads = resolver.read_as_known_outcomes(cell_ids, as_of)
+            current_by_cell = {read.canonical_metric_cell_id: read for read in current_reads}
+            for item in items.values():
+                ref = item.reference
+                definition = _validate_source(
+                    conn,
+                    manifest,
+                    item,
+                    ontology,
+                    resolver,
+                    as_of,
+                    bundles_by_id[ref.observation_id],
+                    source_by_cell[ref.canonical_metric_cell_id],
+                    current_by_cell[ref.canonical_metric_cell_id],
+                )
+                metric = definition.metric_id
+                if metric in definitions and definitions[metric] != definition:
+                    raise ReviewedInputRoleError("role_prior_definition_conflict")
+                definitions[metric] = definition
+                selectors = selected.setdefault(metric, {})
+                prior = selectors.get(item.requirement.role)
+                if prior is not None and prior != item.selector:
+                    raise ReviewedInputRoleError("role_same_metric_selector_conflict")
+                selectors[item.requirement.role] = item.selector
         revised: list[CanonicalMetricDefinitionRevision] = []
         for metric in sorted(definitions):
             prior = definitions[metric]

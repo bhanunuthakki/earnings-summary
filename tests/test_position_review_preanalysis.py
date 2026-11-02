@@ -58,7 +58,6 @@ def test_valuation_ladder_matches_dcf_valuation_docstring() -> None:
         tripped_rules=(),
         holdings_json=None,
         dcf_tuple=(None, 100.0, None, None),
-        has_stance=False,
         has_decision_note=False,
         is_index_instrument=False,
         at_price=110.0,
@@ -114,7 +113,6 @@ def test_rbrk_intact_undervalued_is_a_sizing_only_decision() -> None:
             "mos_bar": 0.30,
         },
         dcf_tuple=(-10.0, 91.09, 80.35, "2026-06-15"),
-        has_stance=False,
         has_decision_note=True,
         is_index_instrument=False,
         at_price=82.0,
@@ -127,7 +125,6 @@ def test_rbrk_intact_undervalued_is_a_sizing_only_decision() -> None:
     assert pre.concentration_flag is False
     assert pre.concentration_zone == "meaningful"
     assert pre.weight_vs_band == "no_band"  # no target recorded
-    assert pre.conviction_encoded is True  # JSON + a decision note
     assert pre.valuation_verdict == "fair"  # ~-10% vs fair: no trim/sell, not initiation-grade
     assert pre.dcf_gap_pct is not None and pre.dcf_gap_pct < 0
 
@@ -148,7 +145,6 @@ def test_flkr_unencoded_conviction_degrades_cleanly() -> None:
         tripped_rules=(),
         holdings_json=None,
         dcf_tuple=None,
-        has_stance=False,
         has_decision_note=True,  # FLKR has a seeded "macro ETF, low conviction" note
         is_index_instrument=True,
         at_price=70.0,
@@ -156,7 +152,6 @@ def test_flkr_unencoded_conviction_degrades_cleanly() -> None:
     assert pre.thesis_present is False
     assert pre.break_rule_status == "no_thesis"
     assert pre.valuation_verdict == "n/a"
-    assert pre.conviction_encoded is False  # no JSON -> not encoded, note notwithstanding
     assert pre.is_index_instrument is True
     assert pre.concentration_flag is False  # 7.6% < 12% trim-assessment threshold
     assert pre.concentration_zone == "ordinary"  # 7.6% < 10%
@@ -176,7 +171,6 @@ def test_breach_overvalued_name_sells_and_flags_band() -> None:
         tripped_rules=("xyz_nrr_below_115 (breach): NRR 112 < 115",),
         holdings_json={"mos_bar": 0.30},
         dcf_tuple=(25.0, 100.0, 125.0, "2026-06-01"),
-        has_stance=True,
         has_decision_note=False,
         is_index_instrument=False,
         at_price=None,
@@ -184,7 +178,6 @@ def test_breach_overvalued_name_sells_and_flags_band() -> None:
     assert pre.valuation_verdict == "sell"  # +25% over fair
     assert pre.weight_vs_band == "above_band"  # 5.0 > 4.8
     assert pre.tripped_rules == ("xyz_nrr_below_115 (breach): NRR 112 < 115",)
-    assert pre.conviction_encoded is True
 
 
 def test_at_price_recompute_overrides_stored_gap() -> None:
@@ -202,7 +195,6 @@ def test_at_price_recompute_overrides_stored_gap() -> None:
         tripped_rules=(),
         holdings_json={"mos_bar": 0.30},
         dcf_tuple=(-10.0, 91.09, 80.35, "2026-06-15"),
-        has_stance=False,
         has_decision_note=False,
         is_index_instrument=False,
         at_price=110.0,
@@ -233,7 +225,6 @@ def test_assemble_computes_zone_and_threads_entry_method() -> None:
         tripped_rules=(),
         holdings_json=None,
         dcf_tuple=None,
-        has_stance=False,
         has_decision_note=False,
         is_index_instrument=False,
         at_price=None,
@@ -258,7 +249,6 @@ def test_assemble_zone_and_entry_method_none_with_no_weight() -> None:
         tripped_rules=(),
         holdings_json=None,
         dcf_tuple=None,
-        has_stance=False,
         has_decision_note=False,
         is_index_instrument=False,
         at_price=None,

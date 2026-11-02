@@ -155,34 +155,14 @@ def test_naive_cutoff_rejected() -> None:
         load_valuation_readiness(_db(), "META", as_of=NOW.replace(tzinfo=None))
 
 
-def test_unavailable_referenced_observation_is_reported_not_replaced() -> None:
-    conn = _db(
-        {
-            "primary_fact_overlay": {
-                "statements": {
-                    "income": {
-                        "applied": [
-                            {
-                                "reported_observation_id": "missing-used-observation",
-                                "period_end": "2025-12-31",
-                                "line_item": "revenue",
-                            }
-                        ]
-                    }
-                }
-            }
-        }
-    )
-    result = load_valuation_readiness(conn, "META", as_of=NOW)
-    assert not result.ready
-    assert result.financial_inputs[0].observation_id == "missing-used-observation"
-    assert result.financial_inputs[0].status == "failed"  # absent fact schema, not no observation
-    assert result.financial_period_end is None  # unverified manifest date is not admitted evidence
-
-
 def test_only_run_referenced_canonical_observations_are_admitted(
-    tmp_path: Path, migrated_db: Callable[..., Path]
+    tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from provenance.canonical_fact_resolution import (
+        CanonicalFactRead,
+        CanonicalFactResolutionEngine,
+    )
+    from provenance.fact_read_model import FactReadModel, ProvenanceBundleRead
     from sources.discovery_financials import read_financial_history
     from tests.test_canonical_growth_screen import seed_growth_graph
 
@@ -193,7 +173,15 @@ def test_only_run_referenced_canonical_observations_are_admitted(
         assert history.references
         used = min(history.references, key=lambda item: item.period_end)
         newer = max(history.references, key=lambda item: item.period_end)
-        assert used.period_end < newer.period_end
+        other_used = max(
+            (
+                item
+                for item in history.references
+                if item.period_end < newer.period_end and item.observation_id != used.observation_id
+            ),
+            key=lambda item: item.period_end,
+        )
+        assert used.period_end < other_used.period_end < newer.period_end
         proof = {
             "primary_fact_overlay": {
                 "statements": {
@@ -202,7 +190,15 @@ def test_only_run_referenced_canonical_observations_are_admitted(
                             {
                                 "reported_observation_id": used.observation_id,
                                 "period_end": used.period_end.isoformat(),
-                            }
+                            },
+                            {
+                                "reported_observation_id": other_used.observation_id,
+                                "period_end": other_used.period_end.isoformat(),
+                            },
+                            {
+                                "reported_observation_id": used.observation_id,
+                                "period_end": used.period_end.isoformat(),
+                            },
                         ]
                     }
                 }
@@ -225,9 +221,66 @@ def test_only_run_referenced_canonical_observations_are_admitted(
             ),
         )
         conn.commit()
-        result = load_valuation_readiness(conn, "WIX", as_of=NOW)
-        assert result.financial_inputs[0].status == "admitted", result.financial_inputs[0]
-        assert result.financial_period_end == used.period_end.isoformat()
+
+        scalar_calls: list[str] = []
+        bundle_batch_calls: list[tuple[str, ...]] = []
+        resolver_batch_calls: list[tuple[str, ...]] = []
+        original_bundle_batch = FactReadModel.provenance_bundles
+        original_resolver_batch = CanonicalFactResolutionEngine.read_as_known_outcomes
+
+        def reject_scalar_bundle(*_args: object, **_kwargs: object) -> object:
+            scalar_calls.append("provenance_bundle")
+            raise AssertionError("legacy readiness must use the batch bundle API")
+
+        def reject_scalar_resolution(*_args: object, **_kwargs: object) -> object:
+            scalar_calls.append("as_known")
+            raise AssertionError("legacy readiness must use the batch resolver API")
+
+        def track_bundle_batch(
+            reader: FactReadModel, observation_ids: tuple[str, ...], *, cutoff: datetime
+        ) -> tuple[ProvenanceBundleRead, ...]:
+            bundle_batch_calls.append(observation_ids)
+            return original_bundle_batch(reader, observation_ids, cutoff=cutoff)
+
+        def track_resolver_batch(
+            resolver: CanonicalFactResolutionEngine,
+            cell_ids: tuple[str, ...],
+            cutoff_at: datetime,
+            *,
+            observed_through: datetime | None = None,
+        ) -> tuple[CanonicalFactRead, ...]:
+            resolver_batch_calls.append(cell_ids)
+            return original_resolver_batch(
+                resolver, cell_ids, cutoff_at, observed_through=observed_through
+            )
+
+        with monkeypatch.context() as scoped_patch:
+            scoped_patch.setattr(FactReadModel, "provenance_bundle", reject_scalar_bundle)
+            scoped_patch.setattr(
+                CanonicalFactResolutionEngine, "as_known", reject_scalar_resolution
+            )
+            scoped_patch.setattr(FactReadModel, "provenance_bundles", track_bundle_batch)
+            scoped_patch.setattr(
+                CanonicalFactResolutionEngine, "read_as_known_outcomes", track_resolver_batch
+            )
+            result = load_valuation_readiness(conn, "WIX", as_of=NOW)
+
+        assert not scalar_calls
+        assert (used.observation_id, other_used.observation_id) in bundle_batch_calls
+        expected_cell_ids = tuple(
+            dict.fromkeys((used.canonical_metric_cell_id, other_used.canonical_metric_cell_id))
+        )
+        assert expected_cell_ids in resolver_batch_calls
+        references = (used, other_used, used)
+        assert [item.observation_id for item in result.financial_inputs] == [
+            item.observation_id for item in references
+        ]
+        assert [item.status for item in result.financial_inputs] == [
+            "admitted",
+            "admitted",
+            "admitted",
+        ]
+        assert result.financial_period_end == other_used.period_end.isoformat()
         assert result.financial_period_end != newer.period_end.isoformat()
         assert not result.ready  # admission of one used input proves no full population
         assert result.financial_inputs[0].document_version_id

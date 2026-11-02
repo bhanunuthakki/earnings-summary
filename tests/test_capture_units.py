@@ -1,13 +1,11 @@
-"""The Ledger deterministic capture units: matcher, scrub, transcribe (mocked)."""
+"""The Ledger deterministic capture units: matcher and scrub."""
 
 from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
 
-import pytest
-
-from capture import matcher, scrub, transcribe
+from capture import matcher, scrub
 from capture.matcher import build_roster_index, match_ticker
 
 
@@ -126,53 +124,3 @@ def test_scrub_preserves_tickers_amounts_years() -> None:
     res = scrub.scrub(s)
     assert res.text == s
     assert res.total == 0
-
-
-class _Seg:
-    def __init__(self, text: str) -> None:
-        self.text = text
-
-
-class _FakeModel:
-    def transcribe(self, path: str, beam_size: int = 1) -> tuple[list[_Seg], None]:
-        return ([_Seg(" hello "), _Seg("world")], None)
-
-
-def test_transcribe_joins_segments_and_loads_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    transcribe._MODEL = None
-    loads = {"n": 0}
-
-    def _load() -> object:
-        loads["n"] += 1
-        return _FakeModel()
-
-    monkeypatch.setattr(transcribe, "_load_model", _load)
-    audio = tmp_path / "m.oga"
-    audio.write_bytes(b"\x00")
-    assert transcribe.transcribe(audio) == "hello world"
-    assert transcribe.transcribe(audio) == "hello world"
-    assert loads["n"] == 1  # model loaded once, reused
-    transcribe._MODEL = None
-
-
-def test_transcribe_missing_file_raises() -> None:
-    transcribe._MODEL = None
-    with pytest.raises(transcribe.TranscriptionError):
-        transcribe.transcribe("/no/such/file.oga")
-
-
-def test_transcribe_empty_result_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    transcribe._MODEL = None
-
-    class _Empty:
-        def transcribe(self, path: str, beam_size: int = 1) -> tuple[list[_Seg], None]:
-            return ([], None)
-
-    monkeypatch.setattr(transcribe, "_load_model", lambda: _Empty())
-    audio = tmp_path / "e.oga"
-    audio.write_bytes(b"\x00")
-    with pytest.raises(transcribe.TranscriptionError):
-        transcribe.transcribe(audio)
-    transcribe._MODEL = None

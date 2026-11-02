@@ -112,7 +112,6 @@ def pinned_source(
             open_db=lambda: conn,
             get_read_db=lambda: conn,
             safe_ticker=lambda ticker: ticker,
-            build_ticker_command_center=lambda _root, _ticker: pytest.fail("unrelated read"),
             linked_gsheet=lambda _root, _ticker: (None, None),
             probe_tracker=lambda: (False, "isolated"),
             fetch_live_portfolio=lambda: pytest.fail("tracker access prohibited"),

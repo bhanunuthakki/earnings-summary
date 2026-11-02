@@ -2,7 +2,7 @@
   // comments_server_content_routes.  Full-page detail never upgrades an
   // arbitrary prototype callback or an unregistered endpoint into navigation.
   const WORK_OS_FULL_PAGE_PEEK_PATHS = [
-    new RegExp('^/api/peek/(?:alerts|news-events|documents|earnings-prep|earnings-readout|investment-profile|portfolio-impact|weekly-packet|whatif|etf_workup|discovery-compare)$'),
+    new RegExp('^/api/peek/(?:alerts|news-events|documents|earnings-prep|earnings-readout|investment-profile|portfolio-impact|weekly-packet|whatif|discovery-compare)$'),
     new RegExp('^/api/peek/(?:alert/[0-9]+|ticker/[A-Za-z0-9.=-]+|memo/[a-z_]+|review/[A-Za-z0-9.=-]+|provenance(?:/[A-Za-z0-9_:-]+)?)$'),
     new RegExp('^/api/governed-alerts/[1-9][0-9]*/evidence$'),
     new RegExp('^/source/[0-9]+$')
@@ -2166,7 +2166,8 @@
         const ticker = String(item.ticker || '').toUpperCase();
         const instrument = item.instrument_type === 'etf' ? 'ETF' : item.instrument_type === 'stock' ? 'Company' : 'Instrument unavailable';
         const sessionId = typeof item.ask_session_id === 'string' ? item.ask_session_id.trim() : '';
-        const readiness = String(item.workup_readiness || 'unavailable').replaceAll('_', ' ');
+        const isEtf = item.instrument_type === 'etf';
+        const readiness = isEtf ? '' : String(item.workup_readiness || 'unavailable').replaceAll('_', ' ');
         const freshnessClass = item.freshness === 'available'
           ? 'k-pill k-pill-ok'
           : item.freshness === 'unavailable' ? 'k-pill k-pill-bad' : 'k-pill k-pill-warn';
@@ -2183,7 +2184,9 @@
         } else {
           dialogueAction = '<button class="k-btn k-btn-quiet k-btn-sm" type="button" disabled title="Dialogue status temporarily unavailable">Dialogue unavailable</button>';
         }
-        return '<article class="k-well work-os-evaluation-thread" data-work-os-evaluation-ticker="' + escapeWorkOsHtml(ticker) + '"><div class="work-os-evaluation-copy"><h3 class="k-card-title k-card-row-title work-os-evaluation-title"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(ticker) + '</span> · ' + escapeWorkOsHtml(item.name || ticker) + '</h3><span class="k-chip work-os-evaluation-kind">' + escapeWorkOsHtml(instrument) + '</span><span class="' + freshnessClass + ' work-os-evaluation-readiness">' + escapeWorkOsHtml(readiness) + ' workup</span><div class="k-card-meta work-os-evaluation-meta">' + escapeWorkOsHtml(noteDetail) + (item.latest_note_at ? ' · updated ' + escapeWorkOsHtml(String(item.latest_note_at)) : '') + '</div></div><div class="research-actions work-os-evaluation-actions">' + dialogueAction + '<button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-evaluation-workup="' + escapeWorkOsHtml(ticker) + '" data-work-os-evaluation-instrument="' + escapeWorkOsHtml(instrumentValue) + '">Open workup</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-evaluation-compare="' + escapeWorkOsHtml(ticker) + '">Compare</button></div></article>';
+        return '<article class="k-well work-os-evaluation-thread" data-work-os-evaluation-ticker="' + escapeWorkOsHtml(ticker) + '"><div class="work-os-evaluation-copy"><h3 class="k-card-title k-card-row-title work-os-evaluation-title"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(ticker) + '</span> · ' + escapeWorkOsHtml(item.name || ticker) + '</h3><span class="k-chip work-os-evaluation-kind">' + escapeWorkOsHtml(instrument) + '</span>' + (isEtf ? '' : '<span class="' + freshnessClass + ' work-os-evaluation-readiness">' + escapeWorkOsHtml(readiness) + ' workup</span>') + '<div class="k-card-meta work-os-evaluation-meta">' + escapeWorkOsHtml(noteDetail) + (item.latest_note_at ? ' · updated ' + escapeWorkOsHtml(String(item.latest_note_at)) : '') + '</div></div><div class="research-actions work-os-evaluation-actions">' + dialogueAction + '' + (isEtf
+          ? ''
+          : '<button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-evaluation-workup="' + escapeWorkOsHtml(ticker) + '" data-work-os-evaluation-instrument="' + escapeWorkOsHtml(instrumentValue) + '">Open workup</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-evaluation-compare="' + escapeWorkOsHtml(ticker) + '">Compare</button>') + '</div></article>';
       }).join('');
       target.innerHTML = html;
     } catch (error) {
@@ -2246,10 +2249,7 @@
     if (item.instrument_type === 'company' && item.company_desk_url) {
       actions.push('<a class="k-btn k-btn-primary k-btn-sm" href="' + escapeWorkOsHtml(item.company_desk_url) + '" data-work-os-evaluation-company="' + escapeWorkOsHtml(ticker) + '">Company Desk</a>');
     }
-    if (item.instrument_type === 'etf' && item.workup_url) {
-      actions.push('<a class="k-btn k-btn-primary k-btn-sm" href="' + escapeWorkOsHtml(item.workup_url) + '" data-peek-url="' + escapeWorkOsHtml(item.workup_url) + '" data-peek-title="ETF workup — ' + escapeWorkOsHtml(ticker) + '">ETF workup</a>');
-    }
-    if (item.dcf_url) actions.push('<a class="k-chip" href="' + escapeWorkOsHtml(item.dcf_url) + '">DCF</a>');
+    if (item.instrument_type === 'company' && item.dcf_url) actions.push('<a class="k-chip" href="' + escapeWorkOsHtml(item.dcf_url) + '">DCF</a>');
     if (item.report_url) actions.push('<a class="k-chip" href="' + escapeWorkOsHtml(item.report_url) + '">Brief</a>');
     return actions.length ? '<div class="research-actions">' + actions.join('') + '</div>' : '<span class="k-card-meta">No verified artifact available</span>';
   }
@@ -2310,6 +2310,15 @@
     return content + '<button class="k-chip k-chip-btn" type="button" data-peek-url="/api/peek/portfolio-impact?ticker=' + encodeURIComponent(ticker) + '" data-peek-title="Portfolio impact — ' + escapeWorkOsHtml(ticker) + '">Impact detail &rarr;</button>';
   }
 
+
+  function workOsEtfHeldWeightCell(item) {
+    const held = workOsFiniteNumber(item.held_weight_pct);
+    if (held === null) {
+      return '<span class="k-card-meta">No held weight recorded</span>';
+    }
+    return '<span class="k-chip k-chip-mono">held ' + escapeWorkOsHtml(held.toFixed(1)) + '%</span>';
+  }
+
   function workOsApplyEvaluationFilter(filter) {
     const selected = String(filter || 'all');
     const rows = Array.from(document.querySelectorAll('[data-work-os-evaluation-row]'));
@@ -2348,19 +2357,20 @@
       const ticker = workOsNormalizeTicker(item.ticker);
       const type = item.instrument_type === 'etf' ? 'ETF' : 'Company';
       const typeClass = item.instrument_type === 'etf' ? 'k-pill k-pill-warn' : 'k-pill';
+      const isEtf = item.instrument_type === 'etf';
       const profile = item.profile;
-      const profileLabels = profile && Array.isArray(profile.labels) ? profile.labels.map(function (label) { return label.label; }).join(',') : '';
-      const profileState = profile && profile.state ? profile.state : 'unavailable';
+      const profileLabels = !isEtf && profile && Array.isArray(profile.labels) ? profile.labels.map(function (label) { return label.label; }).join(',') : '';
+      const profileState = !isEtf && profile && profile.state ? profile.state : 'unavailable';
       const dcfUpside = workOsFiniteNumber(item.dcf_upside_pct);
       const dcf = dcfUpside !== null ? workOsPercent(dcfUpside) : 'Unavailable';
-      const valuationLink = item.dcf_url ? '<a class="k-chip" href="' + escapeWorkOsHtml(item.dcf_url) + '">Open DCF</a>' : '';
-      const valuationValue = item.instrument_type === 'company' ? dcf : 'Not applicable';
-      const valuationContext = item.instrument_type === 'company' ? 'DCF upside' : 'Company DCF';
+      const valuationLink = !isEtf && item.dcf_url ? '<a class="k-chip" href="' + escapeWorkOsHtml(item.dcf_url) + '">Open DCF</a>' : '';
+      const valuationValue = isEtf ? 'Not applicable' : dcf;
+      const valuationContext = isEtf ? 'Not applicable to ETFs' : 'DCF upside';
       return '<tr data-work-os-evaluation-row="' + escapeWorkOsHtml(ticker) + '" data-profile-labels="' + escapeWorkOsHtml(profileLabels) + '" data-profile-state="' + escapeWorkOsHtml(profileState) + '" data-instrument="' + escapeWorkOsHtml(item.instrument_type) + '">' +
         '<td><div class="k-ticker"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(ticker) + '</span><span class="k-ticker-name">' + escapeWorkOsHtml(workOsHumanCopy(item.name, ticker)) + '</span></div><span class="' + typeClass + '">' + type + '</span></td>' +
-        '<td>' + workOsInvestmentProfileCell(item) + '</td>' +
-        '<td>' + (item.instrument_type === 'company' ? workOsBusinessCell(item) : '<span class="k-card-meta">Not applicable to ETF baskets</span>') + '</td>' +
-        '<td>' + workOsPortfolioRoleCell(item) + '</td>' +
+        '<td>' + (isEtf ? '<span class="k-card-meta">Portfolio context</span>' : workOsInvestmentProfileCell(item)) + '</td>' +
+        '<td>' + (isEtf ? '<span class="k-card-meta">Not applicable to ETF baskets</span>' : workOsBusinessCell(item)) + '</td>' +
+        '<td>' + (isEtf ? workOsEtfHeldWeightCell(item) : workOsPortfolioRoleCell(item)) + '</td>' +
         '<td><strong class="t-mono">' + escapeWorkOsHtml(valuationValue) + '</strong><div class="k-card-meta">' + valuationContext + '</div>' + valuationLink + '</td>' +
         '<td>' + workOsEvaluationActions(item) + '</td></tr>';
     }).join('') + '<tr id="workOsEvaluationFilterEmpty" hidden><td colspan="6"><div class="k-well" role="status">No companies or ETFs match this filter.</div></td></tr>' : '<tr><td colspan="6"><div class="k-well">No companies or ETFs are currently under evaluation.</div></td></tr>';
@@ -2432,11 +2442,7 @@
   function workOsOpenEvaluationWorkup(button) {
     const safeTicker = workOsNormalizeTicker(button.getAttribute('data-work-os-evaluation-workup'));
     const instrument = button.getAttribute('data-work-os-evaluation-instrument');
-    if (!safeTicker || (instrument !== 'stock' && instrument !== 'etf')) return;
-    if (instrument === 'etf') {
-      workOsOpenPeekRoute('/api/peek/etf_workup?ticker=' + encodeURIComponent(safeTicker), 'ETF workup — ' + safeTicker);
-      return;
-    }
+    if (!safeTicker || instrument !== 'stock') return;
     window.switchCompanyWorkspace(safeTicker);
   }
 
@@ -2694,6 +2700,18 @@
     if (!workOsWriteCompanyContext(requested, 'analytics-playground', options)) return false;
     window.navigateTo('screen-analytics-playground', { fromHistory: true, companyContextReady: true });
     return workOsRenderFactPlayground();
+  };
+
+  window.workOsOpenAnalysis = async function (input) {
+    const supplied = input || {};
+    const opened = await window.switchFactPlayground(supplied.company);
+    if (!opened) return false;
+    const root = document.getElementById('vx-root');
+    if (!root) return false;
+    root.dispatchEvent(new CustomEvent('work-os-explore-analysis', {detail: {
+      query: String(supplied.query || ''), spec: supplied.spec || null, opener: supplied.opener || null
+    }}));
+    return true;
   };
 
   const workOsFactTicker = document.getElementById('workOsFactTicker');

@@ -51,7 +51,6 @@ NEWS_SCRIPT = "fetch_news.py"
 FUNDAMENTALS_SCRIPT = "refresh_cockpit_fundamentals.py"
 FACTOR_PROXIES_SCRIPT = "fetch_factor_proxies.py"
 TRIGGERS_SCRIPT = "run_triggers.py"
-STANDUP_SCRIPT = "run_standup.py"
 PRE_ER_BRIEF_SCRIPT = "generate_pre_earnings_briefs.py"
 POST_ER_READOUT_SCRIPT = "generate_post_earnings_readouts.py"
 FEED_SCRIPT = "build_alert_feed.py"
@@ -396,12 +395,12 @@ def test_read_only_feed_overlaps_the_writer_tail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """After the sweep settles, the read-only feed render overlaps the writer
-    tail: while standup (a writer) is held on its gate, the feed completes,
+    tail: while the pre-earnings writer is held, the feed completes,
     and the remaining writer stages wait for the single-writer slot instead of
     stacking. The feed still dispatches after the sweep — the lane
     supplement."""
     probe = _LaneProbe(
-        hold={STANDUP_SCRIPT},
+        hold={PRE_ER_BRIEF_SCRIPT},
         writer_scripts=_writer_scripts(),
         body_s=0.01,
         writer_body_s=0.02,
@@ -410,23 +409,22 @@ def test_read_only_feed_overlaps_the_writer_tail(
 
     pipeline = _PipelineThread([])
     with pipeline:
-        probe.wait_entered(STANDUP_SCRIPT)
+        probe.wait_entered(PRE_ER_BRIEF_SCRIPT)
         probe.wait_entered(FEED_SCRIPT)
         probe.wait_exited(FEED_SCRIPT)
         time.sleep(0.1)
         # The other writer stages queue on the writer slot behind the held
-        # standup; none of them may start while it is in flight.
-        assert not probe.entered_yet(PRE_ER_BRIEF_SCRIPT)
+        # pre-earnings writer; neither may start while it is in flight.
         assert not probe.entered_yet(POST_ER_READOUT_SCRIPT)
         assert not probe.entered_yet(VALIDATE_SCRIPT)
-        probe.release(STANDUP_SCRIPT)
+        probe.release(PRE_ER_BRIEF_SCRIPT)
     rc = pipeline.join()
 
     assert rc == 0
     assert sorted(probe.scripts) == sorted(_ALL_SCRIPTS)
-    # Overlap fact: the feed rendered while the standup writer was in flight.
-    assert probe.enter_time(FEED_SCRIPT) < probe.exit_time(STANDUP_SCRIPT)
-    assert probe.exit_time(FEED_SCRIPT) < probe.exit_time(STANDUP_SCRIPT)
+    # The feed rendered while the pre-earnings writer was in flight.
+    assert probe.enter_time(FEED_SCRIPT) < probe.exit_time(PRE_ER_BRIEF_SCRIPT)
+    assert probe.exit_time(FEED_SCRIPT) < probe.exit_time(PRE_ER_BRIEF_SCRIPT)
     # Ordering fact: the feed follows the sweep even though selection-wise it
     # only depends on the preflight.
     order = run_morning_pipeline.last_dispatch_order()

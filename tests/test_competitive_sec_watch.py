@@ -3,15 +3,11 @@
 from __future__ import annotations
 
 import sqlite3
-import sys
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from competitive.sec_watch import (  # noqa: E402
+from competitive.sec_watch import (
     SecWatch,
     check_s1_watch,
     load_watches,
@@ -20,7 +16,9 @@ from competitive.sec_watch import (  # noqa: E402
     s1_watch_status,
 )
 
-from ._competitive_fixtures import news_conn_path  # noqa: E402
+from ._competitive_fixtures import news_conn_path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 _WATCH = SecWatch(
     entity_name="Cohesity",

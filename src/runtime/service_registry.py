@@ -11,7 +11,6 @@ class ServiceRole(StrEnum):
     """Stable logical identities independent of deploy-time service names."""
 
     DASHBOARD = "dashboard"
-    CAPTURE_POLLER = "capture_poller"
 
 
 class ManagedService(BaseModel):
@@ -27,11 +26,6 @@ _MANAGED_SERVICES = (
         role=ServiceRole.DASHBOARD,
         name="es-dashboard",
         purpose="localhost research application",
-    ),
-    ManagedService(
-        role=ServiceRole.CAPTURE_POLLER,
-        name="es-poller",
-        purpose="capture and notification poller",
     ),
 )
 _MANAGED_SERVICES_BY_ROLE = {service.role: service for service in _MANAGED_SERVICES}

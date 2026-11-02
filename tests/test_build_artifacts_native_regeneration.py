@@ -138,62 +138,6 @@ def test_targeted_regeneration_calls_only_the_requested_llm_section(
     assert kwargs["force_refresh"] is True
 
 
-def test_saydo_filter_regeneration_forces_only_the_native_filter(
-    builder: Any,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    card = SimpleNamespace(current_quarter="Q2", current_year=2026)
-    row = SimpleNamespace(metric="Revenue", guide="$1", actual="$2", verdict="EXCEEDED")
-    calls: list[dict[str, object]] = []
-
-    def _no_bypass(*args: object, **kwargs: object) -> bool:
-        del args, kwargs
-        return False
-
-    def _saydo_section(*args: object, **kwargs: object) -> object:
-        del args, kwargs
-        return SimpleNamespace(status=SectionStatus.OK, cards=[card])
-
-    def _filter(*args: object, **kwargs: object) -> list[object]:
-        del args
-        calls.append(dict(kwargs))
-        return [row]
-
-    def _parse(_card: object) -> list[object]:
-        return [row]
-
-    def _bomb(*args: object, **kwargs: object) -> object:
-        del args, kwargs
-        raise AssertionError("unrelated LLM/report path was invoked")
-
-    monkeypatch.setattr(builder.ticker_settings, "get_bypass_budget", _no_bypass)
-    monkeypatch.setattr(builder.saydo, "build", _saydo_section)
-    monkeypatch.setattr(builder, "parse_print_vs_guide", _parse)
-    monkeypatch.setattr(builder, "filter_important_print_vs_guide", _filter)
-    monkeypatch.setattr(builder, "build_report", _bomb)
-
-    result = builder._regenerate_native_purpose(
-        "NU",
-        tmp_path,
-        purpose="saydo_filter",
-        force_budget_bypass=False,
-    )
-
-    assert result == {"ticker": "NU", "purpose": "saydo_filter", "status": "ok"}
-    assert calls == [
-        {
-            "ticker": "NU",
-            "repo_root": tmp_path,
-            "card": card,
-            "rows": [row],
-            "enable_llm": True,
-            "force_refresh": True,
-            "strict_refresh": True,
-        }
-    ]
-
-
 def test_exec_comp_regeneration_calls_only_alignment_section(
     builder: Any,
     tmp_path: Path,

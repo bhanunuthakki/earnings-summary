@@ -4,20 +4,18 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import ParamSpec, TypeVar, cast
 
 import pytest
 
+import competitive.category_share as category_share
+from competitive.category_share import ingest_category_share, load_seed
+
+from ._competitive_fixtures import kpi_conn
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import competitive.category_share as category_share  # noqa: E402
-from competitive.category_share import ingest_category_share, load_seed  # noqa: E402
-
-from ._competitive_fixtures import kpi_conn  # noqa: E402
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")

@@ -1,28 +1,22 @@
 """
 execution/fetch_ir_documents.py
 --------------------------------
-Download IR documents from the per-ticker URL manifest
-(``.tmp/ir_url_manifest/<T>_urls.json``, written by ``discover_ir_documents.py``)
-into a ticker staging folder, then — with ``--categorize`` — hand them to
-``categorize_ir_uploads.py`` for canonical registration.
-
-Each URL is downloaded to ``ir_documents/<T>/<descriptive>__<url_sha8>.<ext>`` (a
-bare filename directly under the ticker folder, NOT a period subdir). That layout
-gives the categorizer a strong parent-folder ticker hint and the correct
-canonical destination root, so the categorizer can content-classify the file and
-move it to ``ir_documents/<T>/<period_end>/<doc_type>__<sha8>.<ext>`` + insert the
-``documents`` row (and the legacy JSON-index mirror the LLM step reads). The real
-source URL is recorded in ``.tmp/ir_incoming_urls.json`` so the categorizer stamps
-it as ``documents.source_url`` (provenance) instead of the ``manual_upload:`` placeholder.
+Download IR documents from the per-ticker URL manifest. With --categorize,
+calendar-FYE quarter-end presentations, press releases, supplements, investor
+updates, transcripts and SEC 10-Q documents use managed staging, verification and
+publication for supported PDF/XLSX media. Non-calendar periods and other supported
+families retain exact-file legacy categorization. Managed inputs never enter the
+incoming-URL sidecar or a broad categorizer scan.
 
 Idempotent: a URL already present in the ``documents`` table (source_url) is
-skipped. Best-effort transport failures are logged and skipped, while an explicit
+skipped. Transport failures remain visible and fail the bounded operation; an explicit
 HTTP 401/403 is a typed authentication denial that halts the current job; auth is
 never bypassed.
 
 The JSON summary reports ``failed`` or ``partial`` for download failures and
 ``registration_failed`` for a nonzero categorizer exit or missing source registration.
-``registration_missing`` counts downloaded sources absent after a successful categorizer exit.
+``registration_missing`` counts legacy downloaded sources absent after categorization.
+Managed registrations retain their publication receipt and URL-membership checks.
 These states and a missing manifest return exit code 1. Successful downloads remain available for
 recovery. An automatic ``--all`` run continues after these failures.
 
@@ -42,20 +36,19 @@ import logging
 import os
 import re
 import sqlite3
-import stat
-import subprocess
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import UTC, datetime
+from dataclasses import asdict, dataclass
+from functools import partial
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from db_paths import configured_db_path
+from db_paths import require_db_path
 from ir_pipeline._net import (
     UnsafeURLError,
     build_public_opener,
@@ -63,20 +56,26 @@ from ir_pipeline._net import (
     ensure_safe_public_url,
     safe_redirect_url,
 )
-from ir_uploads import CategorizationFailure, classify_ir_file, sha256_of
+from ir_uploads import BoundIRClassification
 from log_redact import redact
 from pipeline.managed_ir_sources import (
+    IssuerDocumentPreparationError,
     IssuerDocumentStagingReceipt,
     IssuerDocumentStagingRequest,
+    PreparedIssuerDocumentPublication,
     PreparedIssuerDocumentPublisherError,
-    StagedIssuerDocument,
-    classification_evidence,
-    classifier_code_identity,
-    validate_prepared_staging,
-    verifier_code_identity,
+    RegisteredIssuerDocumentStatus,
+    inspect_registered_issuer_document,
+    prepare_issuer_document_candidate,
+    project_managed_presentation,
+    publish_prepared_issuer_documents,
+    publisher_residue_names,
+    secure_staging_directory,
+)
+from pipeline.managed_ir_sources import (
+    prepare_issuer_document_sources as prepare_managed_issuer_document_sources,
 )
 from pipeline.reported_period_inventory import (
-    reported_quarter_selection,
     reported_quarter_selection_in_connection,
 )
 from pipeline.source_policy import (
@@ -95,8 +94,7 @@ from provenance.secure_file_install import (
     SecureFileInstallError,
     install_bytes_no_clobber,
 )
-from runtime.job_runtime import JobLock
-from runtime.python_process import managed_python_prefix
+from runtime.job_runtime import JobAlreadyRunningError
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -106,24 +104,6 @@ SRC_DIR = PROJECT_ROOT / "src"
 LOG_FORMAT = json.dumps({"level": "%(levelname)s", "ts": "%(asctime)s", "msg": "%(message)s"})
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, stream=sys.stderr)
 log = logging.getLogger(__name__)
-
-
-class IssuerDocumentPreparationError(RuntimeError):
-    """Stable, non-sensitive failure result for managed issuer staging."""
-
-    def __init__(
-        self,
-        code: str,
-        *,
-        attempt_id: str | None = None,
-        phase: str | None = None,
-        residue_paths: tuple[str, ...] = (),
-    ) -> None:
-        self.code = code
-        self.attempt_id = attempt_id
-        self.phase = phase
-        self.residue_paths = residue_paths
-        super().__init__(code)
 
 
 # A real browser User-Agent. Many issuer file CDNs (e.g. Brookfield's bam.brookfield.com)
@@ -138,7 +118,6 @@ _UA = (
 )
 _CONNECT_READ_TIMEOUT = 60
 _RATE_LIMIT_S = 0.5
-_CATEGORIZER = SCRIPT_DIR / "categorize_ir_uploads.py"
 _MAX_REDIRECTS = 5
 _QUARTER = re.compile(r"^Q([1-4])$")
 _MAX_MANIFEST_ATTEMPTS = 100
@@ -247,7 +226,7 @@ def _ext_from_headers(url: str, content_disposition: str, content_type: str) -> 
     return ".pdf"
 
 
-def _registered_source_urls(db_path: Path, ticker: str, *, root: Path) -> set[str]:
+def registered_source_urls(db_path: Path, ticker: str, *, root: Path) -> set[str]:
     """Return URLs with an admitted IR row and matching retained source bytes."""
     if not db_path.exists():
         return set()
@@ -465,7 +444,7 @@ def _download(
         return None
 
     try:
-        _secure_staging_directory(dest_dir)
+        secure_staging_directory(dest_dir)
         installed = install_bytes_no_clobber(
             dest_dir,
             dest.name,
@@ -492,55 +471,6 @@ def _download(
         raise IssuerDocumentPreparationError("staged_object_unsafe") from exc
     log.info({"event": "downloaded", "dest": str(dest), "size_kb": len(data) // 1024})
     return dest
-
-
-def _secure_staging_directory(directory: Path) -> None:
-    """Create one attempt-private directory without accepting reparse parents."""
-    try:
-        require_no_reparse_points(directory)
-        directory.mkdir(parents=True, exist_ok=True)
-        require_no_reparse_points(directory)
-        metadata = directory.lstat()
-    except (OSError, ImmutableArtifactConflictError) as exc:
-        raise IssuerDocumentPreparationError("staging_directory_unsafe") from exc
-    if not stat.S_ISDIR(metadata.st_mode):
-        raise IssuerDocumentPreparationError("staging_directory_unsafe")
-
-
-def _retained_staging_names(directory: Path, direct: tuple[str, ...] = ()) -> tuple[str, ...]:
-    """Report retained attempt-local names without following an unsafe directory."""
-    names = {Path(name).name for name in direct}
-    try:
-        require_no_reparse_points(directory)
-        names.update(entry.name for entry in directory.iterdir())
-    except (OSError, ImmutableArtifactConflictError):
-        pass
-    return tuple(sorted(names))
-
-
-def _preparation_failure(
-    code: str,
-    *,
-    request: IssuerDocumentStagingRequest,
-    phase: str,
-    objects: Path,
-    direct_residues: tuple[str, ...] = (),
-) -> IssuerDocumentPreparationError:
-    return IssuerDocumentPreparationError(
-        code,
-        attempt_id=request.attempt_id,
-        phase=phase,
-        residue_paths=_retained_staging_names(objects, direct_residues),
-    )
-
-
-def _publisher_residue_names(exc: PreparedIssuerDocumentPublisherError) -> tuple[str, ...]:
-    """Keep direct publisher/installer residues in the attempt-local report."""
-    return tuple(
-        dict.fromkeys(
-            (*exc.remaining_paths, *exc.owned_artifacts, *exc.created, *exc.removed_paths)
-        )
-    )
 
 
 _FETCH_PROGRESS_KEY = "__fetch_progress_v1__"
@@ -608,255 +538,84 @@ def _write_incoming_sidecar(
     os.replace(temporary, path)
 
 
-def _publish_attempt_text(path: Path, text: str) -> None:
-    """Seal attempt-private JSON through the shared no-replace transaction."""
-    payload = (text + "\n").encode("utf-8")
-    try:
-        result = install_bytes_no_clobber(
-            path.parent,
-            path.name,
-            payload,
-            expected_sha256=hashlib.sha256(payload).hexdigest(),
-            expected_size=len(payload),
-        )
-    except SecureFileInstallError as exc:
-        retained = (*exc.residue_paths, *((exc.ownership.path,) if exc.ownership else ()))
-        raise IssuerDocumentPreparationError(
-            "staging_receipt_publish_failed",
-            attempt_id=path.parent.name,
-            phase="publish",
-            residue_paths=tuple(dict.fromkeys(item.name for item in retained)),
-        ) from exc
-    if result.residue_paths:
-        raise IssuerDocumentPreparationError(
-            "staging_receipt_residue_retained",
-            attempt_id=path.parent.name,
-            phase="publish",
-            residue_paths=tuple(item.name for item in result.residue_paths),
-        )
+@dataclass(frozen=True)
+class LegacyCategorizationOutcome:
+    path: str
+    status: Literal["registered", "rejected", "failed", "blocked"]
+    reason: str | None = None
 
 
-def _run_categorize(ticker: str, root: Path, db_path: Path, calendar: str | None) -> int:
-    """Invoke categorize_ir_uploads.py for ``ticker`` (content-classify + register)."""
-    argv = [
-        *managed_python_prefix(PROJECT_ROOT),
-        str(_CATEGORIZER),
-        "--ticker",
-        ticker.upper(),
-        "--source-dir",
-        str(root / "ir_documents"),
-        "--db-path",
-        str(db_path),
-        "--rel-root",
-        str(root),
-    ]
-    if calendar:
-        argv += ["--calendar", calendar]
-    env = dict(os.environ, IR_PROJECT_ROOT=str(root))
-    proc = subprocess.run(argv, env=env, check=False)
-    return proc.returncode
+def _run_categorize(
+    ticker: str,
+    root: Path,
+    db_path: Path,
+    calendar: str | None,
+    paths: list[Path],
+    urls: dict[str, str],
+    classifications: dict[Path, BoundIRClassification],
+) -> tuple[LegacyCategorizationOutcome, ...]:
+    """Finish exact legacy files; isolate file failures and stop on DB failure."""
+    import issuer_registry
+    from execution.categorize_ir_uploads import process_ir_document
+    from ir_uploads import scoped_runtime_registry
+
+    outcomes: list[LegacyCategorizationOutcome] = []
+    with scoped_runtime_registry(issuer_registry.effective_entries(root)):
+        try:
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+        except (OSError, sqlite3.Error) as exc:
+            return tuple(
+                LegacyCategorizationOutcome(str(path), "failed", redact(exc)) for path in paths
+            )
+        try:
+            for position, path in enumerate(paths):
+                try:
+                    record = process_ir_document(
+                        path,
+                        conn,
+                        False,
+                        ticker,
+                        ir_dir=root / "ir_documents",
+                        rel_root=root,
+                        url_overrides=urls,
+                        calendar_override=calendar,
+                        document_index_path=root / ".tmp" / "document_index.json",
+                        classification=classifications.get(path),
+                    )
+                    conn.commit()
+                except sqlite3.Error as exc:
+                    conn.rollback()
+                    outcomes.append(LegacyCategorizationOutcome(str(path), "failed", redact(exc)))
+                    outcomes.extend(
+                        LegacyCategorizationOutcome(str(later), "blocked", "database_failure")
+                        for later in paths[position + 1 :]
+                    )
+                    break
+                except (
+                    OSError,
+                    ValueError,
+                    ImmutableArtifactConflictError,
+                    SecureFileInstallError,
+                ) as exc:
+                    conn.rollback()
+                    outcomes.append(LegacyCategorizationOutcome(str(path), "failed", redact(exc)))
+                    continue
+                status = (
+                    "registered" if record["status"] in {"categorized", "reindexed"} else "rejected"
+                )
+                outcomes.append(LegacyCategorizationOutcome(str(path), status))
+        finally:
+            conn.close()
+    return tuple(outcomes)
 
 
 def prepare_issuer_document_sources(
     request: IssuerDocumentStagingRequest, *, state_root: Path, db_path: Path
 ) -> IssuerDocumentStagingReceipt:
-    """Prepare exact issuer bytes below attempt-private staging only."""
-    root = state_root.resolve(strict=True)
-    if db_path.resolve() != configured_db_path(root):
-        raise IssuerDocumentPreparationError("configured_database_mismatch")
-    inventory = request.inventory_request
-    # Preparation owns only ir-discovery. Authorization/window reads are
-    # read-only snapshots, so long downloads never reserve the DB writer lane.
-    authorization = authorize_stored_collection_target(
-        db_path,
-        inventory.ticker,
-        requested=True,
-        source=CollectionSource.IR,
-        artifact_kind=ArtifactKind.IR_DOCUMENT,
+    """Operational download adapter for the managed preparation owner."""
+    return prepare_managed_issuer_document_sources(
+        request, state_root=state_root, db_path=db_path, download=_download
     )
-    if request.historical_window is None:
-        in_window: bool | None = reported_quarter_selection(
-            db_path,
-            ticker=inventory.ticker,
-            fiscal_year=inventory.fiscal_year,
-            fiscal_quarter=inventory.fiscal_quarter,
-            fiscal_year_end_month=authorization.fiscal_year_end_month,
-            as_of=current_utc_date(),
-        )
-    else:
-        from pipeline.managed_ir_sources import issuer_request_period_is_allowed
-
-        in_window = issuer_request_period_is_allowed(
-            request,
-            fiscal_year_end_month=authorization.fiscal_year_end_month,
-            as_of=current_utc_date(),
-        )
-    if not authorization.allowed:
-        raise IssuerDocumentPreparationError("source_policy_denied")
-    if in_window is False:
-        raise IssuerDocumentPreparationError("reported_quarter_window_denied")
-    staging = root / ".tmp" / "managed_ir_staging" / request.attempt_id
-    receipt_path = staging / "staging_receipt.json"
-    try:
-        require_no_reparse_points(staging)
-    except (OSError, ImmutableArtifactConflictError) as exc:
-        raise IssuerDocumentPreparationError("staging_directory_unsafe") from exc
-    if receipt_path.exists():
-        with JobLock(root, "managed-ir-stage-replay", ["ir-discovery"], wait_s=0):
-            try:
-                return validate_prepared_staging(
-                    request, state_root=root, db_path=db_path, permit_pending=True
-                )
-            except PreparedIssuerDocumentPublisherError as exc:
-                raise _preparation_failure(
-                    "staging_replay_invalid",
-                    request=request,
-                    phase="replay",
-                    objects=staging / "objects",
-                    direct_residues=_publisher_residue_names(exc),
-                ) from exc
-    with JobLock(root, "managed-ir-stage", ["ir-discovery"], wait_s=0):
-        objects = staging / "objects"
-        _secure_staging_directory(objects)
-        documents: list[StagedIssuerDocument] = []
-        for expected in inventory.expected_documents:
-            try:
-                destination = _download(
-                    expected.source_url,
-                    objects,
-                    hashlib.sha256(expected.source_url.encode("utf-8")).hexdigest()[:16],
-                )
-            except IssuerDocumentPreparationError as exc:
-                raise _preparation_failure(
-                    exc.code,
-                    request=request,
-                    phase=exc.phase or "download",
-                    objects=objects,
-                    direct_residues=exc.residue_paths,
-                ) from exc
-            if destination is None:
-                raise _preparation_failure(
-                    "staging_download_failed",
-                    request=request,
-                    phase="download",
-                    objects=objects,
-                )
-            try:
-                outcome = classify_ir_file(
-                    destination,
-                    ticker_hint=inventory.ticker,
-                    source_url=expected.source_url,
-                )
-            except (OSError, ValueError) as exc:
-                raise _preparation_failure(
-                    "staging_classification_failed",
-                    request=request,
-                    phase="classify",
-                    objects=objects,
-                ) from exc
-            if isinstance(outcome, CategorizationFailure) or (
-                outcome.ticker != inventory.ticker
-                or outcome.doc_type.value != expected.document_type
-                or outcome.period_end != inventory.period_end
-                or outcome.confidence.value == "low"
-            ):
-                raise _preparation_failure(
-                    "staging_classification_mismatch",
-                    request=request,
-                    phase="classify",
-                    objects=objects,
-                )
-            media_type = (
-                "application/pdf"
-                if destination.suffix.lower() == ".pdf"
-                else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            try:
-                size_bytes = destination.stat().st_size
-                digest = sha256_of(destination)
-            except OSError as exc:
-                raise _preparation_failure(
-                    "staging_object_invalid",
-                    request=request,
-                    phase="classify",
-                    objects=objects,
-                ) from exc
-            try:
-                documents.append(
-                    StagedIssuerDocument(
-                        source_url=expected.source_url,
-                        document_type=expected.document_type,
-                        object_path=f"objects/{destination.name}",
-                        sha256=digest,
-                        byte_size=size_bytes,
-                        fetched_at=datetime.now(UTC),
-                        media_type=media_type,
-                        ticker=outcome.ticker,
-                        period_end=outcome.period_end.isoformat(),
-                        classification_confidence=outcome.confidence.value,
-                        classification_evidence_sha256=classification_evidence(outcome),
-                    )
-                )
-            except ValueError as exc:
-                raise _preparation_failure(
-                    "staging_document_invalid",
-                    request=request,
-                    phase="classify",
-                    objects=objects,
-                ) from exc
-        try:
-            documents.sort(key=lambda item: (item.source_url, item.document_type))
-            unsigned = {
-                "schema_version": "issuer_document_staging_receipt.v1",
-                "request": request.model_dump(mode="json"),
-                "documents": [item.model_dump(mode="json") for item in documents],
-                "classifier_code_sha256": classifier_code_identity(),
-                "verifier_code_sha256": verifier_code_identity(),
-                "canonical_mutations": False,
-            }
-            receipt = IssuerDocumentStagingReceipt.model_validate(
-                {
-                    **unsigned,
-                    "receipt_sha256": hashlib.sha256(
-                        json.dumps(unsigned, separators=(",", ":"), sort_keys=True).encode()
-                    ).hexdigest(),
-                }
-            )
-        except ValueError as exc:
-            raise _preparation_failure(
-                "staging_receipt_invalid",
-                request=request,
-                phase="publish",
-                objects=objects,
-            ) from exc
-        try:
-            _publish_attempt_text(receipt_path, receipt.canonical_json)
-            return validate_prepared_staging(
-                request, state_root=root, db_path=db_path, permit_pending=True
-            )
-        except IssuerDocumentPreparationError as exc:
-            raise _preparation_failure(
-                exc.code,
-                request=request,
-                phase=exc.phase or "publish",
-                objects=objects,
-                direct_residues=exc.residue_paths,
-            ) from exc
-        except (OSError, ImmutableArtifactConflictError) as exc:
-            raise _preparation_failure(
-                "staging_receipt_publish_failed",
-                request=request,
-                phase="publish",
-                objects=objects,
-            ) from exc
-        except PreparedIssuerDocumentPublisherError as exc:
-            raise _preparation_failure(
-                "staging_validation_failed",
-                request=request,
-                phase="publish",
-                objects=objects,
-                direct_residues=_publisher_residue_names(exc),
-            ) from exc
 
 
 def process_ticker(
@@ -868,9 +627,15 @@ def process_ticker(
     categorize: bool = False,
     calendar: str | None = None,
     owner_requested: bool = False,
+    fiscal_witness_document_version_id: str | None = None,
+    fiscal_witness_urls: frozenset[str] = frozenset(),
 ) -> dict[str, object]:
     """Download every manifest URL for ``ticker`` into staging; optionally categorize."""
     ticker = ticker.upper()
+    if fiscal_witness_document_version_id is not None and not categorize:
+        raise ValueError("fiscal witness requires categorize=True")
+    if fiscal_witness_document_version_id is not None and not fiscal_witness_urls:
+        raise ValueError("fiscal witness requires exact source URLs")
     authorization = authorize_stored_collection_target(
         db_path,
         ticker,
@@ -904,12 +669,16 @@ def process_ticker(
         return empty
     # Manifest labels are discovery guesses. Do not evict an older actual
     # reported quarter before the complete source population is proved.
+    already = registered_source_urls(db_path, ticker, root=root)
     policy_skipped = 0
     pending_period_selection = False
     selected: list[dict[str, object]] = []
     conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
         for entry in entries:
+            if str(entry.get("url") or "") in already:
+                selected.append(entry)
+                continue
             period = _reported_quarter(entry)
             decision = (
                 None
@@ -930,7 +699,6 @@ def process_ticker(
             selected.append(entry)
     finally:
         conn.close()
-    already = _registered_source_urls(db_path, ticker, root=root)
     sidecar_state = _load_incoming_sidecar(root)
     all_progress = sidecar_state.get(_FETCH_PROGRESS_KEY)
     ticker_progress = (
@@ -948,6 +716,8 @@ def process_ticker(
     # The attempt budget applies to unfinished URLs. A registered prefix must
     # not starve an unregistered URL on every replay of the same manifest.
     pending: list[dict[str, object]] = []
+    registered_entries: list[dict[str, object]] = []
+    retained_entries: list[dict[str, object]] = []
     seen_urls: set[str] = set()
     skipped = 0
     retained_urls: set[str] = set()
@@ -957,7 +727,7 @@ def process_ticker(
             continue
         if url in already:
             retained.pop(url, None)
-            skipped += 1
+            registered_entries.append(entry)
             continue
         if url in seen_urls:
             skipped += 1
@@ -965,6 +735,7 @@ def process_ticker(
         seen_urls.add(url)
         if _retained_entry_is_valid(root, ticker, entry, retained.get(url)):
             retained_urls.add(url)
+            retained_entries.append(entry)
             skipped += 1
             continue
         retained.pop(url, None)
@@ -979,73 +750,235 @@ def process_ticker(
 
     dest_dir = root / "ir_documents" / ticker
     sidecar: dict[str, str] = {}
-    downloaded_urls: set[str] = set()
-    downloaded = failed = 0
+    legacy_paths: list[Path] = []
+    legacy_downloaded_urls: set[str] = set()
+    legacy_classifications: dict[Path, BoundIRClassification] = {}
+    downloaded = failed = registered = managed_registered = ready = 0
+    projection_repaired = projection_failed = ready_existing = alias_held = transport_skipped = 0
+    inspections: dict[str, tuple[PreparedIssuerDocumentPublication, ...]] = {}
+    registration_not_reverified = 0
+    registered_statuses: dict[str, RegisteredIssuerDocumentStatus] = {}
 
-    for entry in entries:
+    for entry in registered_entries + entries:
         url = str(entry.get("url") or "")
         if not url:
             continue
+        entry_witness_document_version_id = (
+            fiscal_witness_document_version_id if url in fiscal_witness_urls else None
+        )
         if url in already:
             skipped += 1
+            if categorize and not dry_run:
+                try:
+                    existing_status = registered_statuses.get(url)
+                    if existing_status is None:
+                        existing_status = inspect_registered_issuer_document(
+                            ticker,
+                            url,
+                            state_root=root,
+                            db_path=db_path,
+                            inspections=inspections,
+                        )
+                        registered_statuses[url] = existing_status
+                    registration_not_reverified += int(existing_status.not_reverified)
+                    projection_repaired += int(existing_status.projection == "repaired")
+                    alias_held += int(existing_status.projection == "alias_held_by_other_document")
+                except (
+                    OSError,
+                    ValueError,
+                    sqlite3.Error,
+                    PreparedIssuerDocumentPublisherError,
+                    JobAlreadyRunningError,
+                ) as exc:
+                    projection_failed += 1
+                    failed += 1
+                    log.error(
+                        {
+                            "event": "registered_document_projection_failed",
+                            "ticker": ticker,
+                            "error": redact(exc),
+                        }
+                    )
+                    continue
+            ready_existing += 1
             continue
         base = _staging_base_name(
             ticker, str(entry.get("doc_type") or ""), entry.get("year"), entry.get("quarter"), url
         )
         if dry_run:
-            print(f"[DRY RUN] would download {url} -> {dest_dir / base}.<ext>")
+            print(f"[DRY RUN] would download {redact(url)} -> {dest_dir / base}.<ext>")
             skipped += 1
             continue
-        if entry.get("doc_type") == "press_release" and Path(
+        allow_html_release = entry.get("doc_type") == "press_release" and Path(
             urllib.parse.urlsplit(url).path
-        ).suffix.lower() not in {".pdf", ".xlsx", ".xls", ".pptx", ".ppt"}:
-            dest = _download(url, dest_dir, base, allow_html_release=True)
-        else:
-            dest = _download(url, dest_dir, base)
-        time.sleep(_RATE_LIMIT_S)
-        if dest is None:
-            failed += 1
-            continue
+        ).suffix.lower() not in {".pdf", ".xlsx", ".xls", ".pptx", ".ppt"}
+        download = partial(_download, allow_html_release=True) if allow_html_release else _download
+        did_download = False
         try:
+            if (
+                categorize
+                and not pending_period_selection
+                and (
+                    authorization.fiscal_year_end_month == 12
+                    or entry_witness_document_version_id is not None
+                )
+            ):
+                period = _reported_quarter(entry)
+                if period is None:
+                    raise IssuerDocumentPreparationError("reported_quarter_invalid", phase="input")
+                dest, request, classification = prepare_issuer_document_candidate(
+                    ticker,
+                    url,
+                    state_root=root,
+                    db_path=db_path,
+                    owner_requested=owner_requested,
+                    calendar_override=calendar,
+                    fiscal_year=period[0],
+                    fiscal_quarter=period[1],
+                    legacy_base_name=base,
+                    fiscal_witness_document_version_id=entry_witness_document_version_id,
+                    download=download,
+                )
+                downloaded += 1
+                did_download = True
+                if classification is not None:
+                    legacy_classifications[dest] = classification
+                if request is not None:
+                    publication = publish_prepared_issuer_documents(
+                        request, state_root=root, db_path=db_path
+                    )
+                    count = len(publication.inserted_document_ids) + len(
+                        publication.reused_document_ids
+                    )
+                    registered += count
+                    managed_registered += count
+                    already.add(url)
+                    if any(
+                        item.document_type == "ir_presentation"
+                        for item in publication.staging_receipt.documents
+                    ):
+                        try:
+                            project_managed_presentation([publication], root, newly_published=True)
+                        except (OSError, ValueError, JobAlreadyRunningError) as exc:
+                            projection_failed += 1
+                            failed += 1
+                            log.error(
+                                {
+                                    "event": "committed_document_projection_failed",
+                                    "ticker": ticker,
+                                    "attempt_id": request.attempt_id,
+                                    "error": redact(exc),
+                                }
+                            )
+                        else:
+                            ready += count
+                    else:
+                        ready += count
+                    continue
+            else:
+                dest = download(url, dest_dir, base)
+                if dest is None:
+                    transport_skipped += 1
+                    failed += 1
+                    continue
+                downloaded += 1
             snapshot, _ = read_stable_artifact(dest, allowed_root=dest_dir)
-        except (OSError, ValueError, ImmutableArtifactConflictError):
+            retained[url] = {
+                "filename": dest.name,
+                "sha256": snapshot.file_sha256,
+                "size_bytes": snapshot.size_bytes,
+            }
+            sidecar[dest.name] = url
+            legacy_downloaded_urls.add(url)
+            legacy_paths.append(dest)
+        except JobAlreadyRunningError as exc:
             failed += 1
-            continue
-        sidecar[dest.name] = url
-        retained[url] = {
-            "filename": dest.name,
-            "sha256": snapshot.file_sha256,
-            "size_bytes": snapshot.size_bytes,
-        }
-        downloaded_urls.add(url)
-        downloaded += 1
+            log.warning(
+                {"event": "issuer_document_candidate_busy", "ticker": ticker, "error": redact(exc)}
+            )
+        except IssuerDocumentPreparationError as exc:
+            if exc.code == "staging_download_failed":
+                transport_skipped += 1
+                failed += 1
+                continue
+            if not did_download and exc.phase in {"classify", "publish"}:
+                downloaded += 1
+            failed += 1
+            log.error(
+                {
+                    "event": "issuer_document_candidate_failed",
+                    "ticker": ticker,
+                    "code": exc.code,
+                    "attempt_id": exc.attempt_id,
+                    "phase": exc.phase,
+                    "residue_paths": exc.residue_paths,
+                }
+            )
+        except PreparedIssuerDocumentPublisherError as exc:
+            if exc.committed:
+                committed_count = len(exc.inserted) + len(exc.reused)
+                registered += committed_count
+                managed_registered += committed_count
+            failed += 1
+            log.error(
+                {
+                    "event": "issuer_document_publication_failed",
+                    "ticker": ticker,
+                    "code": exc.code,
+                    "residue_paths": publisher_residue_names(exc),
+                }
+            )
+        finally:
+            time.sleep(_RATE_LIMIT_S)
 
-    if not dry_run:
+    if not dry_run and (sidecar or retained or deferred_count or progress):
         _write_incoming_sidecar(
             root, sidecar, ticker=ticker, next_index=next_index, retained=retained
         )
 
     cat_rc: int | None = None
-    registration_missing: int | None = None
-    if (
-        categorize
-        and not dry_run
-        and (downloaded or retained_urls)
-        and not pending_period_selection
-    ):
-        cat_rc = _run_categorize(ticker, root, db_path, calendar)
-        if cat_rc == 0:
-            # A zero exit can mean no eligible files or skipped duplicates.
-            # Check each source, independently of the staging filename sidecar.
-            registered = _registered_source_urls(db_path, ticker, root=root)
-            registration_missing = len((downloaded_urls | retained_urls) - registered)
+    if categorize and not dry_run and not pending_period_selection:
+        for entry in retained_entries:
+            url = str(entry["url"])
+            value = retained[url]
+            if not isinstance(value, dict):
+                raise ValueError("retained source metadata changed")
+            name = cast("dict[str, object]", value)["filename"]
+            path = dest_dir / str(name)
+            legacy_paths.append(path)
+            legacy_downloaded_urls.add(url)
+            sidecar[path.name] = url
+    legacy_outcomes: tuple[LegacyCategorizationOutcome, ...] = ()
+    if categorize and not dry_run and not pending_period_selection and legacy_paths:
+        legacy_outcomes = _run_categorize(
+            ticker, root, db_path, calendar, legacy_paths, sidecar, legacy_classifications
+        )
+        legacy_registered = sum(item.status == "registered" for item in legacy_outcomes)
+        legacy_failed = len(legacy_outcomes) - legacy_registered
+        registered += legacy_registered
+        ready += legacy_registered
+        failed += legacy_failed
+        cat_rc = 1 if legacy_failed else 0
 
-    status = "period_selection_pending" if pending_period_selection else "done"
-    if deferred_count:
-        status = "partial"
-    if failed:
-        status = "partial" if downloaded or skipped else "failed"
-    if cat_rc not in (None, 0) or registration_missing:
+    registration_missing: int | None = None
+    if categorize and not dry_run and not pending_period_selection and legacy_downloaded_urls:
+        registration_missing = len(
+            legacy_downloaded_urls - registered_source_urls(db_path, ticker, root=root)
+        )
+    status = (
+        "partial"
+        if failed and (downloaded or registered or ready_existing)
+        else "failed"
+        if failed
+        else "recovered"
+        if projection_repaired
+        else "period_selection_pending"
+        if pending_period_selection
+        else "partial"
+        if deferred_count
+        else "done"
+    )
+    if (registration_missing and not failed) or (cat_rc not in (None, 0) and not registered):
         status = "registration_failed"
     summary: dict[str, object] = {
         "ticker": ticker,
@@ -1054,10 +987,20 @@ def process_ticker(
         "skipped": skipped,
         "retained": len(retained_urls),
         "failed": failed,
+        "transport_skipped": transport_skipped,
         "policy_skipped": policy_skipped,
         "pending_period_selection": pending_period_selection,
         "deferred": deferred_count,
         "categorize_rc": cat_rc,
+        "registered": registered,
+        "managed_registered": managed_registered,
+        "ready": ready,
+        "ready_existing": ready_existing,
+        "projection_repaired": projection_repaired,
+        "projection_failed": projection_failed,
+        "registration_not_reverified": registration_not_reverified,
+        "alias_held_by_other_document": alias_held,
+        "legacy_outcomes": [asdict(item) for item in legacy_outcomes],
         "registration_missing": registration_missing,
     }
     print(json.dumps(summary))
@@ -1068,7 +1011,7 @@ def verify_ticker(root: Path, db_path: Path, ticker: str) -> None:
     """Report which manifest URLs are registered in the ``documents`` table."""
     ticker = ticker.upper()
     entries = load_url_manifest(root, ticker)
-    registered = _registered_source_urls(db_path, ticker, root=root)
+    registered = registered_source_urls(db_path, ticker, root=root)
     if not entries:
         print(f"[{ticker}] no manifest.")
         return
@@ -1078,10 +1021,16 @@ def verify_ticker(root: Path, db_path: Path, ticker: str) -> None:
         print(f"  [{mark}] {ticker} {entry.get('doc_type')} {url[:80]}")
 
 
+def _exit_code(summary: dict[str, object]) -> int:
+    if summary.get("status") == "policy_denied":
+        return 2
+    return 0 if summary.get("status") in ("done", "recovered", "period_selection_pending") else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     root = resolve_root(args.repo_root)
-    db_path = Path(args.db) if args.db else root / "data" / "portfolio.db"
+    db_path = require_db_path(args.db)
 
     if args.verify:
         if args.all:
@@ -1096,7 +1045,7 @@ def main(argv: list[str] | None = None) -> int:
         if not manifests:
             print(f"No URL manifests in {manifest_dir(root)}", file=sys.stderr)
             return 1
-        failed = False
+        exit_code = 0
         try:
             for p in manifests:
                 summary = process_ticker(
@@ -1108,13 +1057,11 @@ def main(argv: list[str] | None = None) -> int:
                     calendar=args.calendar,
                     owner_requested=False,
                 )
-                # Automatic sweeps may skip names outside collection policy.
-                # An admitted name with incomplete acquisition still fails the run.
-                if summary["status"] not in {"done", "period_selection_pending", "policy_denied"}:
-                    failed = True
+                if summary["status"] != "policy_denied":
+                    exit_code = max(exit_code, _exit_code(summary))
         except SourceAuthenticationDeniedError:
             return 10
-        return int(failed)
+        return exit_code
 
     try:
         summary = process_ticker(
@@ -1128,9 +1075,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     except SourceAuthenticationDeniedError:
         return 10
-    if summary["status"] == "policy_denied":
-        return 2
-    return 0 if summary["status"] in {"done", "period_selection_pending"} else 1
+    return _exit_code(summary)
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -1152,7 +1097,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--verify", action="store_true", help="Report manifest-vs-documents coverage; no download"
     )
     p.add_argument("--dry-run", action="store_true", help="Show what would download; no writes")
-    p.add_argument("--db", help="portfolio.db path (default: <root>/data/portfolio.db)")
+    p.add_argument("--db", help="Explicit database path (otherwise configured authority)")
     p.add_argument(
         "--repo-root", dest="repo_root", help="Root holding ir_documents/ + data/ + .tmp/"
     )

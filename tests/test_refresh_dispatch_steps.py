@@ -65,10 +65,6 @@ def test_resolve_steps_subset_reordered_to_canonical() -> None:
     assert rd.resolve_steps(["dcf", "fmp"]) == ["fmp", "dcf"]
 
 
-def test_resolve_steps_drops_unknown() -> None:
-    assert rd.resolve_steps(["dcf", "bogus"]) == ["dcf"]
-
-
 def test_resolve_steps_skip_removes() -> None:
     out = rd.resolve_steps(skip=["fmp"])
     assert "fmp" not in out

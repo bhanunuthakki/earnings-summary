@@ -69,7 +69,7 @@ def _check_accepted_exit_codes(codes: tuple[int, ...]) -> tuple[int, ...]:
 
 
 def allowed_bundle_paths() -> tuple[str, ...]:
-    paths: list[str] = [*ALLOWED_SOURCE_PATHS, FREEZE_PATH]
+    paths: list[str] = [*BUNDLE_SOURCE_PATHS, FREEZE_PATH]
     for key in non_architecture_blocks():
         paths.append(admission_path_for("block", key))
     for key in HARD_GATES:
@@ -259,3 +259,9 @@ class BundleAssembly(StrictModel):
     generator_sha256: str = Field(pattern=_HEX64)
     written: tuple[str, ...] = Field(default_factory=tuple, max_length=64)
     violations: tuple[str, ...] = Field(default_factory=tuple, max_length=20)
+
+
+TRANSIENT_SOURCE_PATHS: tuple[str, ...] = ("docs/quality/reachability-check.json",)
+BUNDLE_SOURCE_PATHS: tuple[str, ...] = tuple(
+    path for path in ALLOWED_SOURCE_PATHS if path not in TRANSIENT_SOURCE_PATHS
+)

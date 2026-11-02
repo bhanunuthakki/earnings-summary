@@ -69,29 +69,6 @@ def test_definition_doorways_and_accessibility() -> None:
     assert "@media(hover:none)" in wb_html or "@media (hover: none)" in wb_html
 
 
-def test_explore_and_analytics_are_one_consolidated_flow() -> None:
-    wb_html = WORKBENCH_MOCKUP.read_text(encoding="utf-8")
-    sheet_html = ANALYSIS_SHEET_MOCKUP.read_text(encoding="utf-8")
-    combined = f"{sheet_html}\n{wb_html}"
-
-    # Explore is the only company-scoped Q&A surface. Analytics is its deep state.
-    assert "Fact & Metric Playground" not in combined
-    assert "DIY builder" not in combined
-    assert 'id="explore-company"' in sheet_html
-    assert 'id="workbench-company"' in wb_html
-    assert "Auto route" in sheet_html
-    assert "Analytics once" in sheet_html
-    assert "Research answer" in sheet_html
-    assert "Analytics answer" in sheet_html
-    assert "Explore / Analytics" in wb_html
-    assert "Back to Explore" in wb_html
-
-    # One explicit escalation from a compact answer to the full-screen work state.
-    assert sheet_html.count("data-open-sheet") == 2  # one element + one JS binding
-    assert "Work with data" in sheet_html
-    assert "Open full work bench" not in sheet_html
-
-
 def test_analytics_workbench_uses_progressive_full_height_rails() -> None:
     wb_html = WORKBENCH_MOCKUP.read_text(encoding="utf-8")
 
@@ -168,25 +145,6 @@ def test_metric_click_opens_persistent_read_only_inspector() -> None:
     assert "metricOpen" in wb_html
     assert "DCF context · read-only" in wb_html
     assert "No DCF overlay for this metric" in wb_html
-
-
-def test_explore_answer_is_narrative_first_and_uses_reclaimed_canvas() -> None:
-    sheet_html = ANALYSIS_SHEET_MOCKUP.read_text(encoding="utf-8")
-
-    assert "<h1>Explore</h1>" not in sheet_html
-    assert 'class="hs-head"' not in sheet_html
-    assert sheet_html.index('id="hs-question"') < sheet_html.index('id="hs-response"')
-    assert sheet_html.count('class="hs-answer-paragraph"') >= 3
-    assert "Reported fact" in sheet_html
-    assert "Management claim" in sheet_html
-    assert "Calculation" in sheet_html
-    assert "Analyst inference" in sheet_html
-    assert 'class="hs-metric-link" data-definition="fintech" data-window="2y"' in sheet_html
-    assert 'class="hs-metric-link" data-definition="commerce" data-window="2y"' in sheet_html
-    assert 'class="hs-result"' not in sheet_html
-    assert 'class="hs-chart"' not in sheet_html
-    assert 'class="k-chip k-chip-accent hs-work-data" data-open-sheet' in sheet_html
-    assert "width:min(1240px,100%)" in sheet_html
 
 
 def test_explore_company_picker_and_metric_quick_view_are_progressive() -> None:

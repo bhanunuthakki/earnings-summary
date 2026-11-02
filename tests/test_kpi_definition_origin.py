@@ -10,16 +10,11 @@ stays runnable on a pre-0113 schema that lacks the column.
 from __future__ import annotations
 
 import sqlite3
-import sys
-from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from models.documents import SourceType  # noqa: E402
-from models.facts import Unit  # noqa: E402
-from models.kpis import DefinitionOrigin  # noqa: E402
-from pipeline.kpi_persistence import find_or_create_kpi_definition  # noqa: E402
+from models.documents import SourceType
+from models.facts import Unit
+from models.kpis import DefinitionOrigin
+from pipeline.kpi_persistence import find_or_create_kpi_definition
 
 # kpi_definitions with every column _create_kpi_definition writes, including the
 # 0113 origin column.

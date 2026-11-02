@@ -1,5 +1,5 @@
 # This suite exercises module-private ladder internals (_candidates, _http_get,
-# _stable_only, _fmp_get, _run_under_lock) by design.
+# _stable_only, _run_under_lock) by design.
 """Tier-aware ladder tests for the FMP /api/v3 -> /stable migration (plan 7.1).
 
 On the free tier every /api/v3 and /api/v4 call 403s (v3 deprecated 2025-08-31),
@@ -23,7 +23,6 @@ from typing import Protocol, cast
 
 import pytest
 
-import execution.fetch_etf_data as etf
 import execution.refresh_cache as rc
 import execution.save_fmp_data as sfd
 from net.client import HttpCallError, HttpErrorKind, HttpJsonResponse
@@ -60,7 +59,6 @@ write_work_receipt = cast(
 fmp_utc_now = cast("Callable[[], datetime]", getattr(sfd, "_utc_now"))
 cache_utc_now = cast("Callable[[], datetime]", getattr(rc, "_utc_now"))
 dispatch_one = cast("DispatchWork", getattr(rc, "_dispatch_one"))
-etf_fmp_get = cast("Callable[[str, str, str], object]", getattr(etf, "_fmp_get"))
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -409,42 +407,8 @@ def test_env_fmp_tier_free_enables_stable_only_at_import(
 
 
 # ---------------------------------------------------------------------------
-# fetch_etf_data — same gate on its stable->v3 ladder
+# Dedicated ETF transport tests retired with the acquisition feature.
 # ---------------------------------------------------------------------------
-
-
-def test_etf_fmp_get_stable_only_skips_v3(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(etf, "_STABLE_ONLY", True)
-    requested: list[str] = []
-
-    def fake_get(url: str, **_kwargs: object) -> HttpJsonResponse:
-        requested.append(url)
-        return HttpJsonResponse(status_code=200, payload=[{"ok": 1}])
-
-    monkeypatch.setattr(etf.FMP_CLIENT, "get_url_json", fake_get)
-    etf_fmp_get("key", "SOXX", "etf/info")
-    assert requested == [f"{etf.FMP_BASE}/stable/etf/info/SOXX"]
-    assert not any("/api/v3/" in url for url in requested)
-
-
-def test_etf_fmp_get_legacy_falls_back_to_v3(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(etf, "_STABLE_ONLY", False)
-    requested: list[str] = []
-
-    def fake_get(url: str, **_kwargs: object) -> HttpJsonResponse:
-        requested.append(url)
-        if "/stable/" in url:
-            raise HttpCallError(
-                kind=HttpErrorKind.CLIENT,
-                message="HTTP 404",
-                retryable=False,
-                status_code=404,
-            )
-        return HttpJsonResponse(status_code=200, payload=[{"ok": 1}])
-
-    monkeypatch.setattr(etf.FMP_CLIENT, "get_url_json", fake_get)
-    etf_fmp_get("key", "SOXX", "etf/info")
-    assert any("/api/v3/" in url for url in requested)
 
 
 # ---------------------------------------------------------------------------

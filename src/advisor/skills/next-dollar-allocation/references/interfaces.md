@@ -22,7 +22,7 @@ the environment. Do not invoke checkout-default legacy entrypoints unchanged.
 | Recorded sizing and positioning | `user_state.sizing.latest_intent`, `positioning.store.latest_intent`, `positioning.target.resolve_target_context` |
 | Position facts and deterministic tax pre-analysis | `advisor.position_review.build_pre_analysis(repo_root, ticker, db_path=explicit_path)`; alternatively `execution/review_position.py TICKER --json --db <resolved-path>` with the approved tracker origin |
 | Lot-based tax calculation | `advisor.position_tax.build_position_tax_view`; use existing validated reconstruction/history and configured tax profile |
-| Risk and candidate comparisons | `allocation.book_risk`, `allocation.what_if`, materialized candidate-fit and ETF workups |
+| Risk and candidate comparisons | `allocation.book_risk`, `allocation.what_if`, company candidate-fit and existing portfolio context |
 | Company-reported facts | Local micro-thesis, canonical provenance-aware financial readers and transcripts; use the project's source policy |
 
 ## Remote read-only dashboard access
@@ -36,7 +36,8 @@ Use these existing GET routes when direct canonical-host interfaces are unavaila
   verification state. An unverified checkpoint is not proof the target was attained.
 - `/api/peek/review/<TICKER>`: deterministic position/tax pre-analysis. Ticker is a
   path segment, not a `?ticker=` query. This may be slow; bound reads and failures.
-- `/api/peek/etf_workup?ticker=<TICKER>`: existing ETF evidence.
+- ETF support stays at portfolio diversification commentary and simple supported
+  earnings-multiple context. Dedicated ETF research and saved workups are retired.
 
 If full account holdings cannot be reached through these projections, use a
 provenance-bearing export through the live host owner. Do not infer omitted small

@@ -15,21 +15,19 @@ REAL build_evidence_block so the discount rule is actually under test.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from evals.provenance_caution import (  # noqa: E402
+from evals.provenance_caution import (
     CautionCase,
     build_answer_prompt,
     grade_caution_case,
     load_caution_golden,
     run_caution_eval,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 GOLDEN = PROJECT_ROOT / "evals" / "golden" / "provenance_caution.json"
 

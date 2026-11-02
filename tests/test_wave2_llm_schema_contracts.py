@@ -1,31 +1,32 @@
-# pyright: reportPrivateUsage=false, reportUnknownParameterType=false, reportMissingParameterType=false
 """Provider-free contract canaries for the wave-2 structured LLM boundaries."""
 
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
-from advisor.position_review import _VERDICT_ADAPTER
+import ask.router as ask_router
+import capture.decision_draft as capture_decision_draft
+import dcf.scenario_prior as dcf_scenario_prior
+import decision_conditions as decision_conditions
+import filings.boilerplate_triage as filings_boilerplate_triage
+import llm_client as llm_client
+import risk_factors
 from ask.packs import PACK_KEYS
-from ask.router import _PACK_ROUTE_ADAPTER
-from capture.decision_draft import _DECISION_DRAFT_ADAPTER
-from dcf.scenario_prior import _SCENARIO_PRIOR_ADAPTER
-from decision_conditions import _DECISION_CONDITIONS_ADAPTER
-from filings.boilerplate_triage import _TRIAGE_ADAPTER
-from llm_client import _INTAKE_CLASSIFICATION_ADAPTER
-from onmymind.reply import _REPLY_ADAPTER
-from risk_factors import _FACTOR_LOADINGS_ADAPTER, TAXONOMY
+from risk_factors import TAXONOMY
+
+_PACK_ROUTE_ADAPTER = getattr(ask_router, "_PACK_ROUTE_ADAPTER")
+_DECISION_DRAFT_ADAPTER = getattr(capture_decision_draft, "_DECISION_DRAFT_ADAPTER")
+_SCENARIO_PRIOR_ADAPTER = getattr(dcf_scenario_prior, "_SCENARIO_PRIOR_ADAPTER")
+_DECISION_CONDITIONS_ADAPTER = getattr(decision_conditions, "_DECISION_CONDITIONS_ADAPTER")
+_TRIAGE_ADAPTER = getattr(filings_boilerplate_triage, "_TRIAGE_ADAPTER")
+_INTAKE_CLASSIFICATION_ADAPTER = getattr(llm_client, "_INTAKE_CLASSIFICATION_ADAPTER")
+_FACTOR_LOADINGS_ADAPTER = getattr(risk_factors, "_FACTOR_LOADINGS_ADAPTER")
 
 
 @pytest.mark.parametrize(
     ("adapter", "valid", "invalid"),
     [
-        (
-            _REPLY_ADAPTER,
-            {"intent": "question", "reason": "asks for detail"},
-            {"intent": "delete_everything", "reason": "unsafe invented action"},
-        ),
         (
             _PACK_ROUTE_ADAPTER,
             {"packs": [PACK_KEYS[0]]},
@@ -96,28 +97,11 @@ from risk_factors import _FACTOR_LOADINGS_ADAPTER, TAXONOMY
             [{"factor": TAXONOMY[0], "loading": 0.7, "rationale": "Grounded exposure."}],
             [{"factor": "invented factor", "loading": 0.7, "rationale": "Ungrounded."}],
         ),
-        (
-            _VERDICT_ADAPTER,
-            {
-                "verdict": "hold",
-                "size": "No change",
-                "reason": "Valuation and thesis remain aligned.",
-                "confidence": "medium",
-                "behavioral_check": "Do not react to price alone.",
-                "suggested_expression": "do-nothing",
-            },
-            {
-                "verdict": "all-in",
-                "size": "Everything",
-                "reason": "Invalid stance.",
-                "confidence": "certain",
-                "behavioral_check": "None",
-                "suggested_expression": "leverage",
-            },
-        ),
     ],
 )
-def test_wave2_schema_accepts_valid_and_rejects_invalid(adapter, valid, invalid) -> None:
+def test_wave2_schema_accepts_valid_and_rejects_invalid(
+    adapter: TypeAdapter[object], valid: object, invalid: object
+) -> None:
     adapter.validate_python(valid)
     with pytest.raises(ValidationError):
         adapter.validate_python(invalid)

@@ -39,8 +39,7 @@ Per `llm_evals_plan.md` §5.1, untrusted text reaches prompts four ways:
    because they never pass through our string-assembly code. A hostile page is a
    direct injection vector into memo prose and, via `news_structuring` → the
    `news` table, into the `material_news` trigger (second-order).
-2. **Issuer documents** (`transcript_summary`, `press_release_summary`,
-   `presentation_brief`, `event_brief`, `earnings_tone_diff`,
+2. **Issuer documents** (`transcript_summary`, `event_brief`, `earnings_tone_diff`,
    `company_description`, `platform_diagram`). Raw document text is interpolated
    into the prompt as a string argument — wrappable.
 3. **Anchor chaining** (thesis / bear / IR / priors anchors). LLM-derived and

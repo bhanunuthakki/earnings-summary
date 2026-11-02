@@ -27,7 +27,8 @@ def _panel_overview(ctx: ServerContext) -> Response | tuple[str, int]:
 
 
 def _panel_operations(ctx: ServerContext) -> Response | tuple[str, int]:
-    collect_current_readme_status = ctx.collect_current_readme_status
+    from pipeline.cron_health_panel import render_cron_health_live_body
+
     declared_operations = ctx.declared_operations
     get_operations_read_db = ctx.get_operations_read_db
     repo_root = ctx.repo_root
@@ -46,11 +47,11 @@ def _panel_operations(ctx: ServerContext) -> Response | tuple[str, int]:
             build_operations_panel_view(
                 declared_operations,
                 snapshot,
-                readme_status=collect_current_readme_status(),
                 attention=build_attention_panel_view(
                     operations_conn, observed_at=snapshot.observed_at
                 ),
-            )
+            ),
+            diagnostics_html=render_cron_health_live_body(ctx.db_path, conn=operations_conn),
         ),
         mimetype="text/html",
     )
@@ -82,7 +83,7 @@ def _panel_performance_risk(ctx: ServerContext) -> Response | tuple[str, int]:
     from pipeline.portfolio_panel import render_health_fragment
 
     fragment = request.args.get("fragment")
-    if fragment in ("performance", "allocation", "posture"):
+    if fragment in ("performance", "allocation", "posture", "targets"):
         return Response(
             render_performance_risk_fragment(
                 db_path,
@@ -155,31 +156,11 @@ def _panel_red_team(ctx: ServerContext) -> Response | tuple[str, int]:
 
 
 def _panel_portfolio_health(ctx: ServerContext) -> Response | tuple[str, int]:
-    db_path = ctx.db_path
-    get_read_db = ctx.get_read_db
-    from pipeline.portfolio_console_panel import render_portfolio_health_panel
-    from pipeline.portfolio_panel import render_health_fragment
-
-    fragment = request.args.get("fragment")
-    if fragment:
-        return Response(
-            render_health_fragment(db_path, fragment, repo_root=ctx.repo_root, conn=get_read_db()),
-            mimetype="text/html",
-        )
-    user_id = DEFAULT_USER_ID
-    return Response(render_portfolio_health_panel(db_path, user_id=user_id), mimetype="text/html")
+    return _panel_performance_risk(ctx)
 
 
 def _panel_portfolio_allocation(ctx: ServerContext) -> Response | tuple[str, int]:
-    db_path = ctx.db_path
-    repo_root = ctx.repo_root
-    from pipeline.portfolio_console_panel import render_portfolio_allocation_panel
-
-    user_id = DEFAULT_USER_ID
-    return Response(
-        render_portfolio_allocation_panel(db_path, repo_root, user_id=user_id),
-        mimetype="text/html",
-    )
+    return _panel_performance_risk(ctx)
 
 
 def _panel_portfolio_record(ctx: ServerContext) -> Response | tuple[str, int]:
@@ -223,19 +204,7 @@ def _panel_source_calls(ctx: ServerContext) -> Response | tuple[str, int]:
 
 
 def _panel_cron_health(ctx: ServerContext) -> Response | tuple[str, int]:
-    db_path = ctx.db_path
-    get_read_db = ctx.get_read_db
-    from pipeline.cron_health_panel import (
-        render_cron_health_live_body,
-        render_cron_health_panel,
-    )
-
-    if request.args.get("fragment") == "live":
-        return Response(
-            render_cron_health_live_body(db_path, conn=get_read_db()),
-            mimetype="text/html",
-        )
-    return Response(render_cron_health_panel(db_path, conn=get_read_db()), mimetype="text/html")
+    return _panel_operations(ctx)
 
 
 def _panel_dcf_coverage(ctx: ServerContext) -> Response | tuple[str, int]:
@@ -351,28 +320,13 @@ def _panel_diet(ctx: ServerContext) -> Response | tuple[str, int]:
 
 def _panel_musings(ctx: ServerContext) -> Response | tuple[str, int]:
     db_path = ctx.db_path
-    from pipeline.ledger_panel import (
-        render_ledger_list,
-        render_ledger_research_list,
-        render_onmymind_list,
-        render_reconcile_list,
-    )
+    from pipeline.ledger_panel import render_ledger_list, render_reconcile_list
 
     user_id = DEFAULT_USER_ID
     fragment = request.args.get("fragment")
-    if fragment == "research":
-        # The Ledger → Research inbox lane re-fetched after a run / action.
-        return Response(render_ledger_research_list(db_path), mimetype="text/html")
     if fragment == "reconcile":
         # Seed-corpus freshness pass — re-fetched after each verdict.
         return Response(render_reconcile_list(db_path), mimetype="text/html")
-    if fragment == "onmymind":
-        # On My Mind keyset page — the next page of feed cards + a fresh
-        # 'Load more', which replaces the current one in place.
-        return Response(
-            render_onmymind_list(db_path, cursor=request.args.get("cursor"), user_id=user_id),
-            mimetype="text/html",
-        )
     if fragment == "worldview":
         # The Worldview review body — re-fetched after add / approve /
         # reject / distill.
@@ -381,25 +335,11 @@ def _panel_musings(ctx: ServerContext) -> Response | tuple[str, int]:
         return Response(render_worldview_body(db_path), mimetype="text/html")
     if fragment == "list":
         return Response(render_ledger_list(db_path, user_id=user_id), mimetype="text/html")
-    if fragment == "card":
-        # One feed card by note id — the card-level refresh (set-ticker,
-        # the freshly-captured prepend, the answer-poll swap) so an
-        # action never repaints the whole list. 404 keeps the client on
-        # its full-refresh fallback.
-        from onmymind.feed import load_feed_item
-        from pipeline.ledger_panel import render_feed_card
+    if fragment is not None:
+        return ("unsupported fragment", 400)
+    from pipeline.ledger_panel import render_ledger_panel
 
-        raw_note = request.args.get("note", "")
-        if not raw_note.isdigit():
-            return ("note id required", 400)
-        item = load_feed_item(int(raw_note), db_path=db_path)
-        if item is None:
-            return ("not found", 404)
-        return Response(render_feed_card(item), mimetype="text/html")
-    # Default: the composite Ledger console (Phase-5 IA).
-    from pipeline.ledger_console_panel import render_ledger_console
-
-    return Response(render_ledger_console(db_path, user_id=user_id), mimetype="text/html")
+    return Response(render_ledger_panel(db_path, user_id=user_id), mimetype="text/html")
 
 
 def _panel_discovery(ctx: ServerContext) -> Response | tuple[str, int]:
@@ -548,17 +488,6 @@ def _panel_decisions_record(ctx: ServerContext) -> Response | tuple[str, int]:
     )
 
 
-def _panel_advisor_memos(ctx: ServerContext) -> Response | tuple[str, int]:
-    db_path = ctx.db_path
-    from pipeline.advisor_memos_panel import render_advisor_memos_panel
-
-    user_id = DEFAULT_USER_ID
-    return Response(
-        render_advisor_memos_panel(db_path, user_id=user_id, source_context=ctx.source_context),
-        mimetype="text/html",
-    )
-
-
 def _panel_evals(ctx: ServerContext) -> Response | tuple[str, int]:
     db_path = ctx.db_path
     from pipeline.evals_panel import render_evals_panel
@@ -607,6 +536,5 @@ register_panel("restatements", _panel_restatements)
 register_panel("actions", _panel_actions)
 register_panel("thesis_ledger", _panel_thesis_ledger)
 register_panel("decisions_record", _panel_decisions_record)
-register_panel("advisor_memos", _panel_advisor_memos)
 register_panel("evals", _panel_evals)
 register_panel("model_eval", _panel_model_eval)

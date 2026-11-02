@@ -852,12 +852,12 @@ def _macro_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[str, ob
     stances = _rows(
         db_path,
         "SELECT scope_key, body_md, as_of FROM insight_notes "
-        "WHERE kind IN ('stance','tenet','theme') AND status='current' "
+        "WHERE kind='tenet' AND status='current' "
         "AND scope_key LIKE 'macro:%' ORDER BY as_of DESC",
     )
     if stances:
         lines.append(
-            "your standing macro stances: "
+            "your current macro process tenets: "
             + "; ".join(
                 f"[{r['scope_key']}] {' '.join(str(r['body_md']).split())[:160]} "
                 f"({_day(r['as_of'])})"

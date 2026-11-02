@@ -12,14 +12,13 @@ from types import SimpleNamespace
 import pytest
 
 from advisor import context as advisor_context
-from advisor import memos, socratic
+from advisor import memos
 from dcf.input_evidence import SourceReadContext
-from execution import run_advisor_memos, run_socratic_questions
+from execution import run_advisor_memos
 
 
-@pytest.mark.parametrize("entrypoint", ["memos", "questions"])
 def test_advisor_entrypoint_forwards_explicit_state_authority(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entrypoint: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     state = tmp_path / "state"
     code = tmp_path / "code"
@@ -32,35 +31,15 @@ def test_advisor_entrypoint_forwards_explicit_state_authority(
         return ctx
 
     monkeypatch.setattr(advisor_context, "build_advisor_context", build)
-    if entrypoint == "memos":
 
-        def memo(_root: Path, **kwargs: object) -> SimpleNamespace:
-            assert kwargs["ctx"] is ctx
-            return SimpleNamespace(ok=True, memo_id=1, title="synthetic")
+    def memo(_root: Path, **kwargs: object) -> SimpleNamespace:
+        assert kwargs["ctx"] is ctx
+        return SimpleNamespace(ok=True, memo_id=1, title="synthetic")
 
-        monkeypatch.setattr(memos, "generate_next_dollar_memo", memo)
-        result = run_advisor_memos.main(
-            ["--kind", "next_dollar", "--repo-root", str(code), "--state-root", str(state)]
-        )
-    else:
-
-        def questions(_root: Path, ticker: str, **kwargs: object) -> socratic.SocraticPrelude:
-            supplied = kwargs.get("source_context")
-            seen.append(supplied)
-            assert supplied == SourceReadContext.for_product_state_root(state)
-            return socratic.SocraticPrelude(
-                ticker=ticker, questions=["one?", "two?", "three?"], context_block="synthetic"
-            )
-
-        monkeypatch.setattr(socratic, "generate_questions", questions)
-
-        def persist(*_args: object, **_kwargs: object) -> int:
-            return 1
-
-        monkeypatch.setattr(socratic, "persist_prelude", persist)
-        result = run_socratic_questions.main(
-            ["ONON", "--repo-root", str(code), "--state-root", str(state)]
-        )
+    monkeypatch.setattr(memos, "generate_next_dollar_memo", memo)
+    result = run_advisor_memos.main(
+        ["--kind", "next_dollar", "--repo-root", str(code), "--state-root", str(state)]
+    )
     assert result == 0
     assert seen == [SourceReadContext.for_product_state_root(state)]
 
@@ -84,11 +63,8 @@ def test_dashboard_source_authority_reaches_supported_child_arguments(
         root, registry=registry, db_path=tmp_path / "explicit-synthetic.db", source_state_root=state
     )
     client = app.test_client()
-    for route, body in (
-        ("/actions/advisor-memo", {"kind": "next_dollar"}),
-        ("/actions/socratic-questions", {"ticker": "ONON"}),
-        ("/actions/dcf-import", {"ticker": "META"}),
-    ):
+    assert client.post("/actions/advisor-memo", json={"kind": "next_dollar"}).status_code == 404
+    for route, body in (("/actions/dcf-import", {"ticker": "META"}),):
         response = client.post(route, json=body)
         assert response.status_code == 201
         job = registry.get(response.get_json()["job_id"])

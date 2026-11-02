@@ -13,7 +13,10 @@ import datetime
 import json
 import os
 import threading
-from typing import TypeAlias, cast
+from collections.abc import Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Literal, TypeAlias, cast
 
 from alias_manager import resolve_ticker
 from pipeline.transcript_acquisition import AuthorizedTranscriptArtifact
@@ -54,26 +57,27 @@ _DOCUMENT_INDEX_READ_CACHE: tuple[str, int, int, DocumentIndex] | None = None
 # ---------------------------------------------------------------------------
 
 
-def _ensure_dir() -> None:
-    os.makedirs(CACHE_DIR, exist_ok=True)
+def _ensure_dir(path: str | None = None) -> None:
+    os.makedirs(str(Path(path).parent) if path is not None else CACHE_DIR, exist_ok=True)
 
 
-def _load(path: str) -> dict:
-    _ensure_dir()
+def _load(path: str) -> dict[str, dict[str, Any]]:
+    _ensure_dir(path)
     if not os.path.exists(path):
         with open(path, "w") as f:
             json.dump({}, f, indent=4)
         return {}
     try:
         with open(path) as f:
-            return json.load(f)
+            payload = json.load(f)
+        return cast("dict[str, dict[str, Any]]", payload) if isinstance(payload, dict) else {}
     except Exception:
         return {}
 
 
-def _save(path: str, data: dict) -> None:
+def _save(path: str, data: dict[str, dict[str, Any]]) -> None:
     global _DOCUMENT_INDEX_READ_CACHE
-    _ensure_dir()
+    _ensure_dir(path)
     with open(path, "w") as f:
         json.dump(data, f, indent=4)
     if os.path.abspath(path) == os.path.abspath(DOCUMENT_INDEX_PATH):
@@ -81,7 +85,7 @@ def _save(path: str, data: dict) -> None:
             _DOCUMENT_INDEX_READ_CACHE = None
 
 
-def _document_index_snapshot() -> DocumentIndex:
+def _document_index_snapshot(document_index_path: Path | None = None) -> DocumentIndex:
     """Parse the legacy document index once per unchanged file signature.
 
     ``categorize_ir_uploads --ticker`` asks about every canonical document for
@@ -91,7 +95,7 @@ def _document_index_snapshot() -> DocumentIndex:
     clear the snapshot explicitly.
     """
     global _DOCUMENT_INDEX_READ_CACHE
-    path = DOCUMENT_INDEX_PATH
+    path = str(document_index_path) if document_index_path is not None else DOCUMENT_INDEX_PATH
     try:
         stat = os.stat(path)
         signature = (stat.st_mtime_ns, stat.st_size)
@@ -109,12 +113,12 @@ def _document_index_snapshot() -> DocumentIndex:
     return data
 
 
-def _transcript_key(ticker: str, year, quarter: str) -> str:
+def _transcript_key(ticker: str, year: int | str, quarter: str) -> str:
     ticker = resolve_ticker(ticker)
     return f"{ticker.upper()}_{year}_{quarter.upper()}"
 
 
-def _doc_key(ticker: str, year, quarter: str, doc_type: str) -> str:
+def _doc_key(ticker: str, year: int | str, quarter: str, doc_type: str) -> str:
     ticker = resolve_ticker(ticker)
     if doc_type not in VALID_DOC_TYPES:
         raise ValueError(f"Invalid doc_type '{doc_type}'. Must be one of {VALID_DOC_TYPES}")
@@ -159,7 +163,7 @@ def _canonicalize_transcript_filepath(filepath: str | None) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def has_transcript(ticker: str, year, quarter: str) -> dict | None:
+def has_transcript(ticker: str, year: int | str, quarter: str) -> dict[str, Any] | None:
     """Returns the metadata dict if a transcript exists, else None."""
     index = _load(TRANSCRIPT_INDEX_PATH)
     return index.get(_transcript_key(ticker, year, quarter))
@@ -183,13 +187,13 @@ def peek_transcript(ticker: str, year: int, quarter: str) -> IndexEntry | None:
 
 def _register_transcript(
     ticker: str,
-    year,
+    year: int | str,
     quarter: str,
     source: str,
     filepath: str | None = None,
     has_qa: bool | None = None,
     qa_status: str | None = None,
-    qa_details: dict | None = None,
+    qa_details: dict[str, Any] | None = None,
     acquisition_receipt: IndexEntry | None = None,
 ) -> bool:
     index = _load(TRANSCRIPT_INDEX_PATH)
@@ -299,10 +303,10 @@ def register_transcript(
 
 def update_transcript_qa(
     ticker: str,
-    year,
+    year: int | str,
     quarter: str,
     qa_status: str,
-    qa_details: dict | None = None,
+    qa_details: dict[str, Any] | None = None,
 ) -> bool:
     """Update only the QA fields of an existing transcript entry. Returns False
     if the entry does not exist (caller should register_transcript first)."""
@@ -319,7 +323,7 @@ def update_transcript_qa(
 
 def update_local_path(
     ticker: str,
-    year,
+    year: int | str,
     quarter: str,
     doc_type: str,
     new_path: str,
@@ -355,9 +359,18 @@ def update_local_path(
 # ---------------------------------------------------------------------------
 
 
-def has_document(ticker: str, year, quarter: str, doc_type: str) -> dict | None:
+def has_document(
+    ticker: str,
+    year: int | str,
+    quarter: str,
+    doc_type: str,
+    *,
+    document_index_path: Path | None = None,
+) -> dict[str, Any] | None:
     """Returns the metadata dict if a document exists in the index, else None."""
-    entry = _document_index_snapshot().get(_doc_key(ticker, year, quarter, doc_type))
+    entry = _document_index_snapshot(document_index_path).get(
+        _doc_key(ticker, year, quarter, doc_type)
+    )
     # Do not expose the cached object to callers that may mutate the returned
     # metadata. This preserves the old fresh-parse read semantics.
     return dict(entry) if isinstance(entry, dict) else None
@@ -365,7 +378,7 @@ def has_document(ticker: str, year, quarter: str, doc_type: str) -> dict | None:
 
 def _register_document(
     ticker: str,
-    year,
+    year: int | str,
     quarter: str,
     doc_type: str,
     source: str,
@@ -374,13 +387,17 @@ def _register_document(
     processed: bool = False,
     fiscal_label: str | None = None,
     note: str | None = None,
+    *,
+    document_index_path: Path | None = None,
 ) -> bool:
     """
     Internal registration; also callable directly for IR documents.
     """
-    index = _load(DOCUMENT_INDEX_PATH)
+    path = str(document_index_path) if document_index_path is not None else DOCUMENT_INDEX_PATH
+    index = _load(path)
     key = _doc_key(ticker, year, quarter, doc_type)
     existing = index.get(key)
+    indexed_at = existing.get("indexed_at") if isinstance(existing, dict) else None
 
     index[key] = {
         "ticker": resolve_ticker(ticker).upper(),
@@ -393,16 +410,149 @@ def _register_document(
         "fiscal_label": fiscal_label,
         "note": note,
         "processed": processed,
-        "indexed_at": existing["indexed_at"] if existing else datetime.datetime.now().isoformat(),
+        "indexed_at": indexed_at or datetime.datetime.now().isoformat(),
         "updated_at": datetime.datetime.now().isoformat(),
     }
-    _save(DOCUMENT_INDEX_PATH, index)
+    _save(path, index)
     return True
+
+
+@dataclass(frozen=True)
+class IRDocumentProjection:
+    """Verified document metadata for the legacy quarter/type alias."""
+
+    ticker: str
+    year: int
+    quarter: str
+    doc_type: str
+    ir_url: str
+    local_path: str
+    fiscal_label: str | None
+
+
+def _valid_ir_alias(entry: object, key: str) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    record = cast("dict[str, Any]", entry)
+    if not all(
+        isinstance(record.get(field), str) and record[field]
+        for field in (
+            "ticker",
+            "year",
+            "quarter",
+            "doc_type",
+            "source",
+            "local_path",
+            "indexed_at",
+            "updated_at",
+        )
+    ) or not isinstance(record.get("processed"), bool):
+        return False
+    url = record.get("ir_url")
+    if not (
+        (isinstance(url, str) and bool(url))
+        or (
+            "ir_url" in record
+            and url is None
+            and record["source"] in {"MANUAL_DROP", "USER_INTAKE"}
+        )
+    ):
+        return False
+    if (
+        _doc_key(record["ticker"], record["year"], record["quarter"], record["doc_type"]) != key
+        or "fiscal_label" not in record
+        or (record["fiscal_label"] is not None and not isinstance(record["fiscal_label"], str))
+    ):
+        return False
+    try:
+        datetime.datetime.fromisoformat(record["indexed_at"])
+        datetime.datetime.fromisoformat(record["updated_at"])
+    except ValueError:
+        return False
+    return True
+
+
+IRProjectionDisposition: TypeAlias = Literal[
+    "coherent", "repaired", "alias_held_by_other_document", "repair_required"
+]
+
+
+def project_ir_document(
+    candidates: Sequence[IRDocumentProjection],
+    *,
+    document_index_path: Path,
+    newly_published: IRDocumentProjection | None = None,
+    allow_repair: bool = True,
+) -> IRProjectionDisposition:
+    """Preserve a coherent replay alias; repair only an unambiguous missing alias.
+
+    The alias does not prove that every candidate has a completed narrative.
+    A newly executed publication retains the existing registration behavior.
+    """
+    distinct = tuple(dict.fromkeys(candidates))
+    if not distinct or (newly_published is not None and newly_published not in distinct):
+        raise ValueError("compatibility_projection_candidates_invalid")
+    keys = {_doc_key(item.ticker, item.year, item.quarter, item.doc_type) for item in distinct}
+    if len(keys) != 1:
+        raise ValueError("compatibility_projection_coordinates_mismatch")
+    key = keys.pop()
+    try:
+        payload = json.loads(document_index_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        payload = {}
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError("compatibility_projection_index_corrupt") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("compatibility_projection_index_corrupt")
+    index = cast("dict[str, dict[str, Any]]", payload)
+    incumbent = index.get(key)
+    valid_incumbent = _valid_ir_alias(incumbent, key)
+    selected = newly_published
+    for candidate in distinct:
+        expected = {
+            "ticker": resolve_ticker(candidate.ticker).upper(),
+            "year": str(candidate.year),
+            "quarter": candidate.quarter.upper(),
+            "doc_type": candidate.doc_type,
+            "source": "IR_WEBSITE",
+            "ir_url": candidate.ir_url,
+            "local_path": candidate.local_path,
+            "fiscal_label": candidate.fiscal_label,
+        }
+        if (
+            valid_incumbent
+            and isinstance(incumbent, dict)
+            and (newly_published is None or candidate == newly_published)
+            and all(incumbent.get(name) == value for name, value in expected.items())
+        ):
+            return "coherent"
+    if selected is None:
+        if valid_incumbent:
+            return "alias_held_by_other_document"
+        if len(distinct) != 1:
+            raise ValueError("compatibility_projection_ambiguous")
+        selected = distinct[0]
+    if not allow_repair:
+        return "repair_required"
+    if not register_ir_document(
+        ticker=selected.ticker,
+        year=selected.year,
+        quarter=selected.quarter,
+        doc_type=selected.doc_type,
+        ir_url=selected.ir_url,
+        local_path=selected.local_path,
+        fiscal_label=selected.fiscal_label,
+        note="managed_issuer_document_publication",
+        processed=False,
+        document_index_path=document_index_path,
+    ):
+        raise ValueError("compatibility_projection_write_failed")
+    return "repaired"
 
 
 def register_ir_document(
     ticker: str,
-    year,
+    year: int | str,
     quarter: str,
     doc_type: str,
     ir_url: str,
@@ -410,6 +560,8 @@ def register_ir_document(
     fiscal_label: str | None = None,
     note: str | None = None,
     processed: bool = False,
+    *,
+    document_index_path: Path | None = None,
 ) -> bool:
     """
     Register a document sourced from an IR website.
@@ -426,12 +578,13 @@ def register_ir_document(
         processed=processed,
         fiscal_label=fiscal_label,
         note=note,
+        document_index_path=document_index_path,
     )
 
 
 def register_manual_document(
     ticker: str,
-    year,
+    year: int | str,
     quarter: str,
     doc_type: str,
     local_path: str,
@@ -468,7 +621,7 @@ def _event_key(ticker: str, event_date: str, sha256: str) -> str:
     return f"{resolve_ticker(ticker).upper()}_event_{event_date}_{sha256[:8]}"
 
 
-def has_event(ticker: str, event_date: str, sha256: str) -> dict | None:
+def has_event(ticker: str, event_date: str, sha256: str) -> dict[str, Any] | None:
     index = _load(DOCUMENT_INDEX_PATH)
     return index.get(_event_key(ticker, event_date, sha256))
 
@@ -480,13 +633,16 @@ def register_event_document(
     sha256: str,
     confidence: float,
     note: str | None = None,
+    *,
+    document_index_path: Path | None = None,
 ) -> bool:
     """Register a non-quarterly IR event artifact (investor day, AGM, capital markets day).
 
     Lives in document_index.json under a separate key namespace from quarterly docs;
     `doc_type` is fixed to "event". `event_date` is the ISO date the event occurred.
     """
-    index = _load(DOCUMENT_INDEX_PATH)
+    path = str(document_index_path) if document_index_path is not None else DOCUMENT_INDEX_PATH
+    index = _load(path)
     key = _event_key(ticker, event_date, sha256)
     existing = index.get(key)
 
@@ -506,41 +662,13 @@ def register_event_document(
         "indexed_at": existing["indexed_at"] if existing else datetime.datetime.now().isoformat(),
         "updated_at": datetime.datetime.now().isoformat(),
     }
-    _save(DOCUMENT_INDEX_PATH, index)
+    _save(path, index)
     return True
-
-
-def mark_event_processed(ticker: str, event_date: str, sha8: str) -> bool:
-    """Mark an event artifact as processed. `sha8` is the 8-character sha256 prefix
-    that appears in the event's index key and on-disk filename."""
-    index = _load(DOCUMENT_INDEX_PATH)
-    key = f"{resolve_ticker(ticker).upper()}_event_{event_date}_{sha8}"
-    if key not in index:
-        return False
-    index[key]["processed"] = True
-    index[key]["updated_at"] = datetime.datetime.now().isoformat()
-    _save(DOCUMENT_INDEX_PATH, index)
-    return True
-
-
-def get_unprocessed_events(ticker: str | None = None) -> list[dict]:
-    """Return all registered but unprocessed event artifacts, optionally filtered by ticker."""
-    index = _load(DOCUMENT_INDEX_PATH)
-    result = [
-        v
-        for v in index.values()
-        if v.get("doc_type") == "event" and not v.get("processed") and v.get("local_path")
-    ]
-    if ticker:
-        ticker = resolve_ticker(ticker).upper()
-        result = [v for v in result if v.get("ticker") == ticker]
-    result.sort(key=lambda d: (d.get("ticker", ""), d.get("event_date", "")))
-    return result
 
 
 def register_user_intake_document(
     ticker: str,
-    year,
+    year: int | str,
     quarter: str,
     doc_type: str,
     local_path: str,
@@ -571,34 +699,52 @@ def register_user_intake_document(
     )
 
 
-def mark_document_processed(ticker: str, year, quarter: str, doc_type: str) -> bool:
+def mark_document_processed(
+    ticker: str,
+    year: int | str,
+    quarter: str,
+    doc_type: str,
+    *,
+    document_index_path: Path | None = None,
+) -> bool:
     """Mark a registered document as LLM-processed."""
-    index = _load(DOCUMENT_INDEX_PATH)
+    path = str(document_index_path) if document_index_path is not None else DOCUMENT_INDEX_PATH
+    index = _load(path)
     key = _doc_key(ticker, year, quarter, doc_type)
     if key not in index:
         return False
     index[key]["processed"] = True
     index[key]["updated_at"] = datetime.datetime.now().isoformat()
-    _save(DOCUMENT_INDEX_PATH, index)
+    _save(path, index)
     return True
 
 
-def get_documents_for_ticker(ticker: str) -> list[dict]:
+def get_documents_for_ticker(
+    ticker: str, *, document_index_path: Path | None = None, quarterly_only: bool = False
+) -> list[dict[str, Any]]:
     """Return all registered documents for a ticker, sorted by year/quarter/doc_type."""
     ticker = resolve_ticker(ticker).upper()
-    index = _load(DOCUMENT_INDEX_PATH)
-    docs = [v for v in index.values() if v.get("ticker") == ticker]
+    path = str(document_index_path) if document_index_path is not None else DOCUMENT_INDEX_PATH
+    index = _load(path)
+    docs = [
+        v
+        for v in index.values()
+        if v.get("ticker") == ticker and (not quarterly_only or v.get("doc_type") != "event")
+    ]
     docs.sort(key=lambda d: (d["year"], d["quarter"], d["doc_type"]))
     return docs
 
 
-def get_unprocessed_documents(ticker: str | None = None) -> list[dict]:
+def get_unprocessed_documents(
+    ticker: str | None = None, *, document_index_path: Path | None = None
+) -> list[dict[str, Any]]:
     """Return all registered but unprocessed quarterly documents, optionally filtered by ticker.
 
-    Events live in a separate keyspace (no year/quarter fields) — fetch via
-    `get_unprocessed_events`.
+    Raw events retain their separate registration keyspace and are excluded
+    from quarterly summary synthesis.
     """
-    index = _load(DOCUMENT_INDEX_PATH)
+    path = str(document_index_path) if document_index_path is not None else DOCUMENT_INDEX_PATH
+    index = _load(path)
     result = [
         v
         for v in index.values()

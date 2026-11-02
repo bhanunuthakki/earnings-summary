@@ -4,26 +4,26 @@
   (FMP chart wins when both exist; proxy carries ETFs the plan doesn't).
 - dcf.universe.dcf_universe: evaluation ETFs are excluded from the DCF
   universe; a pre-0044 substrate without instrument_type keeps old behavior.
-- onboard_ticker rails: _saydo_should_run never fires for an ETF (even
-  forced); run_etf_onboarding maps ingest outcomes to exit codes.
+- onboard_ticker rails: _transcript_summaries_should_run never fires for an ETF (even
+  forced); company-fit refresh excludes the retired ETF tail.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
-import sys
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
+from typing import cast
 
-import pytest
+from allocation.price_history import load_daily_closes
+from dcf.universe import dcf_universe
+from execution import onboard_ticker as onboard_ticker_mod
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from allocation.price_history import load_daily_closes  # noqa: E402
-from dcf.universe import dcf_universe  # noqa: E402
-from execution.onboard_ticker import _saydo_should_run, run_etf_onboarding  # noqa: E402
+_transcript_summaries_should_run = cast(
+    Callable[..., bool], getattr(onboard_ticker_mod, "_transcript_summaries_should_run")
+)
 
 # ---------------------------------------------------------------------------
 # price_history proxy-store fallback
@@ -46,7 +46,7 @@ def _write_fmp_chart(repo_root: Path, ticker: str, rows: list[dict[str, object]]
 
 
 def test_load_daily_closes_falls_back_to_proxy_store(tmp_path: Path) -> None:
-    _write_proxy(tmp_path, "AVDV", [["2026-07-08", 102.5], ["2026-07-09", 103.1]])
+    _write_proxy(tmp_path, "AVDV", [("2026-07-08", 102.5), ("2026-07-09", 103.1)])
     closes = load_daily_closes("AVDV", tmp_path)
     assert closes == [(date(2026, 7, 8), 102.5), (date(2026, 7, 9), 103.1)]
 
@@ -54,12 +54,12 @@ def test_load_daily_closes_falls_back_to_proxy_store(tmp_path: Path) -> None:
 def test_load_daily_closes_proxy_fallback_without_fmp_dir(tmp_path: Path) -> None:
     # No data/historical/fmp at all — the pre-existing early return must
     # still consult the proxy store.
-    _write_proxy(tmp_path, "VWO", [["2026-07-09", 44.2]])
+    _write_proxy(tmp_path, "VWO", [("2026-07-09", 44.2)])
     assert load_daily_closes("vwo", tmp_path) == [(date(2026, 7, 9), 44.2)]
 
 
 def test_load_daily_closes_fmp_wins_over_proxy(tmp_path: Path) -> None:
-    _write_proxy(tmp_path, "AVUV", [["2026-07-09", 1.0]])
+    _write_proxy(tmp_path, "AVUV", [("2026-07-09", 1.0)])
     _write_fmp_chart(tmp_path, "AVUV", [{"date": "2026-07-09", "adjClose": 95.5}])
     assert load_daily_closes("AVUV", tmp_path) == [(date(2026, 7, 9), 95.5)]
 
@@ -112,52 +112,3 @@ def test_dcf_universe_tolerates_missing_instrument_column(tmp_path: Path) -> Non
 # ---------------------------------------------------------------------------
 # Onboarding rails
 # ---------------------------------------------------------------------------
-
-
-def test_saydo_never_runs_for_etf() -> None:
-    assert _saydo_should_run("evaluation", force=False, instrument="etf") is False
-    assert _saydo_should_run("evaluation", force=True, instrument="etf") is False
-    assert _saydo_should_run("evaluation", force=False, instrument="equity") is True
-    assert _saydo_should_run("watchlist", force=False, instrument=None) is False
-    assert _saydo_should_run("watchlist", force=True, instrument=None) is True
-
-
-class _FakeResult:
-    def __init__(self, nport_status: str, issuer_status: str) -> None:
-        self.nport_status = nport_status
-        self.issuer_status = issuer_status
-        self.nport_as_of = date(2026, 5, 31)
-        self.nport_rows = 3
-        self.issuer_rows = 0
-        self.issuer_as_of = None
-        self.characteristics_applied = False
-        self.price_status = "fetched"
-        self.price_rows = 1250
-
-
-def test_run_etf_onboarding_exit_codes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import etf_sources.ingest as ingest_mod
-    from etf_sources.nport import NportParseError
-
-    conn = sqlite3.connect(":memory:")
-
-    monkeypatch.setattr(
-        ingest_mod,
-        "refresh_published_data",
-        lambda c, t, root, **kw: _FakeResult("ingested", "unavailable"),
-    )
-    assert run_etf_onboarding(conn, "AVDV", tmp_path) == 0
-
-    monkeypatch.setattr(
-        ingest_mod,
-        "refresh_published_data",
-        lambda c, t, root, **kw: _FakeResult("unavailable", "unavailable"),
-    )
-    assert run_etf_onboarding(conn, "AVDV", tmp_path) == 1
-
-    def halt(c: object, t: str, root: Path, **kw: object) -> object:
-        raise NportParseError("drifted")
-
-    monkeypatch.setattr(ingest_mod, "refresh_published_data", halt)
-    assert run_etf_onboarding(conn, "AVDV", tmp_path) == 2
-    conn.close()

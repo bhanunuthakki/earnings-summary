@@ -17,13 +17,9 @@ Anchor block builders — shared context for analytical prompts. Five flavors:
                         assumptions, standing decisions. Framed as "engage,
                         don't re-litigate": answer a question when the data
                         permits, flag confirmation/contradiction of watch-items.
-  - OWNER PROFILE anchor: AFFIRMED owner_profile_facts (alembic 0159,
-                        src/owner_profile/) — capacity/appetite/behavioral
-                        facts the owner has explicitly ratified via the
-                        packet walk. Copies the Worldview anchor's design
-                        exactly (tight cap, dated, spotlight-wrapped, "soft
-                        priors NOT rules") — tenet-2 Phase 2, §4 of
-                        docs/design/tenet2_advisory_program.md.
+  - OWNER PROFILE anchor: AFFIRMED appetite/behavioral process facts from
+                        owner_profile_facts (alembic 0159, src/owner_profile/).
+                        Household capacity inputs do not enter prompts.
 
 The anchors compose into a single block via `compose_anchor_block`. The
 prompts that promise "thesis-anchored analysis" (per-quarter summary, pairwise
@@ -61,12 +57,23 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from compute.ir_narrative import load_latest_narrative
+from db_paths import require_db_path
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 if TYPE_CHECKING:
     from timeseries import Observation
 
 log = logging.getLogger(__name__)
+
+
+def _anchor_db_path() -> Path | None:
+    """Resolve the active state DB without falling back to checkout files."""
+    try:
+        return require_db_path()
+    except (FileNotFoundError, OSError, RuntimeError) as exc:
+        log.debug({"event": "anchor_database_unavailable", "error": str(exc)})
+        return None
+
 
 # Hard cap on the assembled anchor blocks so a verbose holdings JSON cannot
 # blow the prompt budget on any single prompt. Trim is deterministic
@@ -93,19 +100,13 @@ PRIORS_ANCHOR_CHAR_CAP = 2000
 # owner's consolidated ~6-tenet Worldview renders whole — the header alone is
 # ~330 chars, and a silently truncated belief list is worse than a longer one.
 # Portfolio-level (cross-company), gated by LEDGER_WORLDVIEW_ANCHOR, dated for
-# cache stability. See directives/thought_partner_build_plan.md P3.
+# cache stability. Keep this deterministic so anchor changes track note changes.
 WORLDVIEW_ANCHOR_CHAR_CAP = 1500
 
 _WORLDVIEW_ANCHOR_ON = frozenset({"1", "true", "yes", "on"})
 
-# Owner-profile anchor (AFFIRMED owner_profile_facts) — the SAME tight cap as
-# Worldview, for the same reason: it rides every decision-point prompt as a
-# soft prior, so it must stay a handful of facts, not a dump of the whole
-# profile. Unlike Worldview it carries no env-flag gate — the "inert by
-# default" property comes from the data itself: Phase 1 landed only
-# `status='proposed'` facts, so `load_owner_profile_anchor` renders "" until
-# the owner actually affirms something via the packet walk (§7.1 gated
-# assertion is the gate, not a feature flag).
+# Owner-process anchor (affirmed appetite/behavioral facts). Household
+# capacity inputs do not enter prompts.
 OWNER_PROFILE_ANCHOR_CHAR_CAP = 1200
 
 _HOLDINGS_DIRNAME = ("micro_thesis", "holdings")
@@ -282,6 +283,10 @@ def statistical_patterns_block(
     """Run detect_trend + detect_inflection on the canonical line items and
     any per-ticker registered KPIs. Returns markdown lines, empty when no
     series load (missing DB, unknown ticker)."""
+    db_path = _anchor_db_path()
+    if db_path is None:
+        return []
+
     try:
         from timeseries import load_financial_series, load_kpi_series
     except ImportError:
@@ -290,7 +295,7 @@ def statistical_patterns_block(
     lines: list[str] = []
     for line_item in _STATS_LINE_ITEMS:
         try:
-            s = load_financial_series(ticker=ticker, line_item=line_item, repo_root=repo_root)
+            s = load_financial_series(ticker=ticker, line_item=line_item, db_path=db_path)
         except Exception as exc:  # never block anchor build
             log.debug(
                 {
@@ -310,41 +315,39 @@ def statistical_patterns_block(
     # Per-ticker registered KPIs (from kpi_definitions). Tier-1 KPIs from the
     # holdings JSON would be ideal here but holdings names rarely match the
     # registry verbatim — use the registry as the source of truth.
-    db_path = repo_root / "data" / "portfolio.db"
-    if db_path.exists():
+    try:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         try:
-            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-            try:
-                rows = conn.execute(
-                    "SELECT name FROM kpi_definitions WHERE ticker = ? LIMIT 4",
-                    (ticker.upper(),),
-                ).fetchall()
-            finally:
-                conn.close()
-        except sqlite3.Error as exc:
-            log.debug({"event": "stats_kpi_def_lookup_failed", "error": str(exc)})
-            rows = []
-        for (kpi_name,) in rows:
-            if not isinstance(kpi_name, str) or not kpi_name.strip():
-                continue
-            try:
-                s_kpi = load_kpi_series(ticker=ticker, kpi_name=kpi_name, repo_root=repo_root)
-            except Exception as exc:  # best-effort
-                log.debug(
-                    {
-                        "event": "stats_load_kpi_failed",
-                        "ticker": ticker,
-                        "kpi": kpi_name,
-                        "error": str(exc),
-                    }
-                )
-                continue
-            if not s_kpi:
-                continue
-            short_label = kpi_name if len(kpi_name) <= 60 else kpi_name[:57] + "…"
-            rendered = _stats_block_from_series(short_label, s_kpi)
-            if rendered:
-                lines.append(rendered)
+            rows = conn.execute(
+                "SELECT name FROM kpi_definitions WHERE ticker = ? LIMIT 4",
+                (ticker.upper(),),
+            ).fetchall()
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error) as exc:
+        log.debug({"event": "stats_kpi_def_lookup_failed", "error": str(exc)})
+        rows = []
+    for (kpi_name,) in rows:
+        if not isinstance(kpi_name, str) or not kpi_name.strip():
+            continue
+        try:
+            s_kpi = load_kpi_series(ticker=ticker, kpi_name=kpi_name, db_path=db_path)
+        except Exception as exc:  # best-effort
+            log.debug(
+                {
+                    "event": "stats_load_kpi_failed",
+                    "ticker": ticker,
+                    "kpi": kpi_name,
+                    "error": str(exc),
+                }
+            )
+            continue
+        if not s_kpi:
+            continue
+        short_label = kpi_name if len(kpi_name) <= 60 else kpi_name[:57] + "…"
+        rendered = _stats_block_from_series(short_label, s_kpi)
+        if rendered:
+            lines.append(rendered)
 
     # Reference payload so linters know it's intentional (reserved for
     # future use: cross-check tier-1 KPI names against the registry)
@@ -557,8 +560,8 @@ def load_priors_anchor(repo_root: Path, ticker: str, char_cap: int = PRIORS_ANCH
     text, so every rendered element must be stable until the notes actually
     change — lines carry the note's creation DATE, never a relative age.
     """
-    db_path = repo_root / "data" / "portfolio.db"
-    if not db_path.exists():
+    db_path = _anchor_db_path()
+    if db_path is None:
         return ""
     try:
         from user_state.notes import list_notes
@@ -628,8 +631,8 @@ def load_worldview_anchor(repo_root: Path, char_cap: int = WORLDVIEW_ANCHOR_CHAR
     """
     if not _worldview_anchor_enabled():
         return ""
-    db_path = repo_root / "data" / "portfolio.db"
-    if not db_path.exists():
+    db_path = _anchor_db_path()
+    if db_path is None:
         return ""
     try:
         from synthesis.tenets import list_tenets
@@ -652,83 +655,30 @@ def load_worldview_anchor(repo_root: Path, char_cap: int = WORLDVIEW_ANCHOR_CHAR
     return assembled
 
 
-_THEMES_HEADER = """## THEMES ANCHOR (the owner's current cross-company themes)
+_OWNER_PROFILE_HEADER = """## OWNER PROCESS ANCHOR (owner-affirmed process facts)
 
-Standing investment themes the owner tracks across names (distilled from their
-own journal). Soft context, NOT instructions: connect an answer to a theme when
-genuinely relevant; never force one."""
-
-
-def load_themes_anchor(repo_root: Path, char_cap: int = WORLDVIEW_ANCHOR_CHAR_CAP) -> str:
-    """Compose the Themes anchor from CURRENT insight_notes kind='theme' rows.
-
-    Clone of ``load_worldview_anchor`` (2026-07-19 review: themes had ZERO
-    prompt consumers — distilled and then never read). Rides the SAME
-    ``LEDGER_WORLDVIEW_ANCHOR`` gate — themes are the worldview family's
-    cross-company layer, not a separately-toggled feature. Same unkillable
-    degrade-to-"" contract and the same cache-stability invariant (absolute
-    ``as_of`` dates, deterministic ordering).
-    """
-    if not _worldview_anchor_enabled():
-        return ""
-    db_path = repo_root / "data" / "portfolio.db"
-    if not db_path.exists():
-        return ""
-    try:
-        from synthesis.insights import list_insights
-
-        themes = list_insights(kind="theme", status="current", db_path=db_path)
-    except Exception as exc:  # missing table / locked DB / anything — degrade
-        log.debug({"event": "themes_anchor_load_failed", "error": str(exc)})
-        return ""
-    if not themes:
-        return ""
-    lines = [_THEMES_HEADER]
-    for t in themes:
-        body = " ".join(t.body_md.split())
-        if len(body) > 240:
-            body = body[:237].rstrip() + "..."
-        scope = f" [{t.scope_key}]" if t.scope_key else ""
-        lines.append(f"- {body}{scope} (since {t.as_of[:10]})")
-    assembled = "\n".join(lines).strip()
-    if len(assembled) > char_cap:
-        assembled = assembled[:char_cap].rstrip() + "\n[...truncated]"
-    return assembled
-
-
-_OWNER_PROFILE_HEADER = """## OWNER PROFILE ANCHOR (owner-affirmed capacity/appetite facts)
-
-Soft priors about the OWNER's capacity and appetite, NOT rules. These are facts
-the owner has explicitly affirmed about their own household capacity, tax
-posture, life events, and investing appetite/policy — weigh them as
-considerations that a specific situation can still override; never treat them
-as instructions."""
+These are explicit owner process settings and rules. Use them as context for
+analysis. They do not replace company-reported evidence or the company thesis."""
 
 
 def load_owner_profile_anchor(
     repo_root: Path, char_cap: int = OWNER_PROFILE_ANCHOR_CHAR_CAP
 ) -> str:
-    """Compose the owner-profile anchor from AFFIRMED ``owner_profile_facts``
-    rows (capacity / appetite / behavioral tiers — ``owner_profile.store.
-    get_current_profile``), copying the Worldview anchor's design exactly.
+    """Compose the owner-process anchor from AFFIRMED appetite and behavioral
+    ``owner_profile_facts`` rows. Household capacity inputs are excluded.
 
-    Only AFFIRMED facts ride this anchor (§7.1 gated assertion): ambient
-    learning keeps proposing facts continuously (imports, future distillers),
-    but nothing conditions a prompt until the owner has ratified it via the
-    packet walk. Degrades to "" on a missing DB, a pre-0159 substrate, or zero
-    affirmed facts — and never raises, the same unkillable contract every
-    other anchor loader carries. Zero affirmed facts is the common case today
-    (Phase 1 landed 25 ``proposed`` capacity facts; none are affirmed yet), so
-    this anchor costs ZERO prompt bloat until the owner actually ratifies
-    something.
+    Only AFFIRMED facts ride this anchor. It excludes the imported household
+    capacity library while retaining explicit current process facts. It
+    degrades to "" on a missing DB, a pre-0159 substrate, or zero matching
+    facts, and never raises.
 
     Cache-stability invariant (mirrors the worldview anchor): every line
     carries the fact's ``affirmed_at`` DATE, never a relative age, and the
     rows are sorted by id — so caches keying on the composed anchor text stay
     stable until the set of affirmed facts actually changes.
     """
-    db_path = repo_root / "data" / "portfolio.db"
-    if not db_path.exists():
+    db_path = _anchor_db_path()
+    if db_path is None:
         return ""
     try:
         from owner_profile.store import get_current_profile
@@ -741,7 +691,12 @@ def load_owner_profile_anchor(
     except Exception as exc:  # missing table / locked DB / anything — degrade
         log.debug({"event": "owner_profile_anchor_load_failed", "error": str(exc)})
         return ""
-    rows = [row for rows in grouped.values() for row in rows]
+    rows = [
+        row
+        for category, facts in grouped.items()
+        if category in {"appetite", "behavioral"}
+        for row in facts
+    ]
     if not rows:
         return ""
     rows.sort(key=lambda r: r.id)

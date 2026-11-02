@@ -8,12 +8,14 @@ section carries an explicit `status` so a downstream renderer can show a clear
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum, StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from report.workspace_models import WorkspacePrepared
 from sources.discovery_market import DiscoveryMarketContext
 from sources.financial_growth_evidence import FinancialGrowthReference
 from sources.report_financials import FinancialEvidenceReference, FinancialTableProjection
@@ -905,32 +907,33 @@ class EarningsSection(BaseModel):
     themes_note: str | None = None
 
 
-class SayDoCard(BaseModel):
-    """One pairwise Say-Do analysis: prior-quarter guidance vs current-quarter results.
+@dataclass(frozen=True)
+class SayDoVerdictRow:
+    """One management commitment + outcome — the P3-21 grading-overlay row.
 
-    `rating` and `thesis_view` are parsed from the saydo_md body (LLM-produced
-    "Performance Rating" + "Thesis View" lines). `unknown` if the prompt format
-    drifts and we can't pin them.
+    Field names mirror the management_commitments columns (alembic 0017)
+    rather than inventing a new vocabulary: `period_made` is when management
+    said it, `period_target` is the period they were guiding for, `outcome`
+    is the post-match verdict.
     """
 
-    current_quarter: str
-    current_year: int
-    prior_quarter: str
-    prior_year: int
-    saydo_md: str
-    rating: Literal["MET", "MISSED", "EXCEEDED", "MIXED", "unknown"] = "unknown"
-    thesis_view: str | None = (
-        None  # "Bullish" / "Bearish" / "Neutral" (free text after "Thesis View:")
-    )
-    attribution: str | None = None  # one-line excerpt after "Attribution:"
+    period_made: datetime
+    period_target: datetime
+    kpi_name: str
+    comparator: str
+    target_value: float
+    unit: str
+    narrative: str
+    realized_value: float | None
+    outcome: str | None
+    evaluated_at: datetime | None
+    source_ref: str = ""
+    source_document_id: int | None = None
+    source_url: str | None = None
 
 
 class SayDoHistoricalMetric(BaseModel):
-    """One structured guidance→realized row from `saydo_historical_metrics`.
-
-    Populated alongside `SayDoCard` so the renderer can show KPI-grain
-    promise-vs-delivery rows beside the LLM's narrative pairwise cards.
-    """
+    """One preserved guidance-to-realized comparison from the history ledger."""
 
     id: int
     period_made: datetime
@@ -945,12 +948,14 @@ class SayDoHistoricalMetric(BaseModel):
 
 
 class SayDoSection(BaseModel):
-    """§7 — pairwise Say-Do analyses across the available quarter sequence,
-    newest first."""
+    """Recorded commitments, outcomes, and retained guidance comparisons."""
 
     status: SectionStatus
     missing: MissingReason | None = None
-    cards: list[SayDoCard] = Field(default_factory=list[SayDoCard])
+    verdicts: list[SayDoVerdictRow] = Field(default_factory=list[SayDoVerdictRow])
+    verdicts_availability: Literal["present", "empty", "not_configured", "unavailable"] = (
+        "not_configured"
+    )
     historical_metrics: list[SayDoHistoricalMetric] = Field(
         default_factory=list[SayDoHistoricalMetric]
     )
@@ -1004,26 +1009,6 @@ class FilingIntelligenceSection(BaseModel):
         default_factory=list[InvestmentSignalDetail]
     )
     raw_synthesis_md: str | None = None
-
-
-# ---------------------------------------------------------------------------
-# §8 IR documents
-# ---------------------------------------------------------------------------
-
-
-class IrDocCard(BaseModel):
-    quarter: str
-    year: int
-    doc_type: Literal["press_release", "presentation", "transcript"]
-    summary_md: str | None = None
-    source_url: str | None = None
-    local_path: str | None = None
-
-
-class IrDocsSection(BaseModel):
-    status: SectionStatus
-    missing: MissingReason | None = None
-    cards: list[IrDocCard] = Field(default_factory=list[IrDocCard])
 
 
 # ---------------------------------------------------------------------------
@@ -1082,8 +1067,6 @@ class CoverageRow(BaseModel):
     has_transcript_file: bool = False
     has_release_file: bool = False
     has_slides_file: bool = False
-    step_saydo_analyzed: bool = False
-    step_llm_summarized: bool = False
 
 
 class SourceDocRow(BaseModel):
@@ -1555,10 +1538,10 @@ class ReportSpec(BaseModel):
     repo_root: str  # absolute path the build read from
     db_path: str | None = Field(default=None, exclude=True, repr=False)
     run_id: str | None = None  # ingestion_runs.run_id if produced under one
+    workspace: WorkspacePrepared | None = Field(default=None, exclude=True, repr=False)
     flavor: ReportFlavor = ReportFlavor.PORTFOLIO
-    # True when this build was invoked with --enable-llm. Renderers consult
-    # this to decide whether to run optional LLM filters (e.g. SayDo
-    # commitment importance ranking) without requiring per-call wiring.
+    # True when preparation was invoked with --enable-llm. Rendering consumes
+    # the resulting selection and never starts model work.
     llm_enabled: bool = False
     # Sections whose LLM analysis was forgone to stay under a monthly budget cap
     # (on_exceed='skip'). Drives the brief's "forgone due to budget" header
@@ -1583,7 +1566,6 @@ class ReportSpec(BaseModel):
     segments: SegmentsSection
     earnings: EarningsSection
     saydo: SayDoSection
-    ir_docs: IrDocsSection
     recent_developments: RecentDevelopmentsSection
     bear_case: BearCaseSection
     provenance: ProvenanceSection

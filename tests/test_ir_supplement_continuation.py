@@ -471,15 +471,31 @@ def test_changed_bytes_prompt_and_model_invalidate_cache(
     assert len(calls) == 4
 
 
-@pytest.mark.parametrize("limits", [{"max_chunks": 2}, {"max_structured_calls": 4}])
+@pytest.mark.parametrize(
+    ("pages", "limits", "expected_error"),
+    [
+        (("A", "B", "C"), {"max_chunks": 2}, "before extraction"),
+        (("A", "B", "C"), {"max_structured_calls": 4}, "before extraction"),
+        (
+            ("source exceeds limit",),
+            {"max_input_chars": 5},
+            "IR native source line exceeds section budget at page 1",
+        ),
+    ],
+)
 def test_global_budget_preflight_makes_no_calls(
-    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, limits: dict[str, int]
+    conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    pages: tuple[str, ...],
+    limits: dict[str, int],
+    expected_error: str,
 ) -> None:
     def extract(text: str) -> list[dict[str, object]]:
         pytest.fail("preflight must occur before model work")
 
-    with pytest.raises(ValueError, match="before extraction"):
-        _capture(conn, monkeypatch, ("A", "B", "C"), extract, **limits).capture(b"original source")
+    with pytest.raises(ValueError, match=expected_error):
+        _capture(conn, monkeypatch, pages, extract, **limits).capture(b"original source")
+    assert conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == 0
 
 
 @pytest.mark.parametrize("pages", [("one", ""), ("",), ()])
@@ -491,6 +507,7 @@ def test_empty_image_pages_unresolved_before_calls(
 
     with pytest.raises(ValueError, match="unresolved"):
         _capture(conn, monkeypatch, pages, extract).capture(b"original source")
+    assert conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == 0
 
 
 def test_saturation_splits_with_source_context_and_replays(
@@ -1132,77 +1149,6 @@ def test_exact_reviewed_decorative_page_is_omitted_without_changing_ocr_flag(
     assert len(calls) == 1
 
 
-def test_financial_manifest_late_failure_rolls_back_partial_write(
-    conn: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from datetime import datetime
-
-    import compute.kpi_extract_summaries as summaries
-    from models.documents import SourceType
-    from models.facts import FiscalPeriodType
-    from pipeline.kpi_persistence import persist_manifest as real_persist
-
-    _retained_source(conn, tmp_path)
-    build = getattr(summaries, "_build_capture_manifest")
-    manifest = build(
-        "TEST",
-        datetime(2026, 6, 30),
-        FiscalPeriodType.Q2,
-        1,
-        [{"label": "Margin", "value": 10, "unit": "percent", "source_excerpt": "10%"}],
-        primary_source=SourceType.IR_DOC,
-    )
-
-    def fail_after_write(*args: object, **kwargs: object) -> object:
-        real_persist(conn, run_id=str(kwargs["run_id"]), manifest=manifest, commit=False)
-        assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 1
-        raise ValueError("late persistence failure")
-
-    monkeypatch.setattr(summaries, "persist_manifest", fail_after_write)
-    persist = getattr(summaries, "_persist_accounted")
-    with pytest.raises(ValueError, match="late persistence failure"):
-        persist(
-            conn,
-            directive="test_atomic_manifest",
-            ticker="TEST",
-            invocation_inputs={},
-            manifest=manifest,
-        )
-    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
-    assert (
-        conn.execute("SELECT COUNT(*) FROM kpi_definitions WHERE ticker='TEST'").fetchone()[0] == 0
-    )
-    assert conn.execute("SELECT status FROM pipeline_attempts").fetchone()[0] == "failed"
-
-
-def test_financial_persistence_rejects_unrelated_open_transaction(
-    conn: sqlite3.Connection,
-) -> None:
-    from datetime import datetime
-
-    import compute.kpi_extract_summaries as summaries
-    from models.facts import FiscalPeriodType
-
-    build = getattr(summaries, "_build_capture_manifest")
-    manifest = build("TEST", datetime(2026, 6, 30), FiscalPeriodType.Q2, 1, [])
-    conn.execute("CREATE TABLE owner_work (value TEXT)")
-    conn.commit()
-    conn.execute("INSERT INTO owner_work VALUES ('uncommitted')")
-    with pytest.raises(ValueError, match="owned transaction boundary"):
-        getattr(summaries, "_persist_accounted")(
-            conn,
-            directive="test_atomic_manifest",
-            ticker="TEST",
-            invocation_inputs={},
-            manifest=manifest,
-        )
-    assert conn.in_transaction
-    assert conn.execute("SELECT value FROM owner_work").fetchone()[0] == "uncommitted"
-    assert conn.execute("SELECT COUNT(*) FROM pipeline_attempts").fetchone()[0] == 0
-    conn.rollback()
-    assert conn.execute("SELECT COUNT(*) FROM owner_work").fetchone()[0] == 0
-
-
 def test_pinned_byte_locator_ignores_replacement_pdf(tmp_path: Path) -> None:
     import fitz
 
@@ -1367,32 +1313,6 @@ def test_live_prompt_override_repair_and_fallback_metadata_bind_cache(
     rejected = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn)
     assert rejected.error and "attribution mismatch" in rejected.error
     assert len(calls) == 4
-
-
-@pytest.mark.parametrize("capture_name", ["capture_for_ticker", "capture_for_ir_pdf_docs"])
-def test_capture_rejects_caller_transaction_before_source_preparation(
-    conn: sqlite3.Connection,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capture_name: str,
-) -> None:
-    import compute.kpi_extract_summaries as summaries
-
-    def no_sources(*args: object, **kwargs: object) -> object:
-        pytest.fail("caller transaction must be rejected before source preparation")
-
-    monkeypatch.setattr(summaries, "_list_sources", no_sources)
-    monkeypatch.setattr(summaries, "_list_ir_capture_pdf_docs", no_sources)
-    conn.execute("CREATE TABLE owner_work (value TEXT)")
-    conn.commit()
-    conn.execute("INSERT INTO owner_work VALUES ('uncommitted')")
-    result = getattr(summaries, capture_name)("TEST", tmp_path, conn)
-    assert result.error and "before source preparation" in result.error
-    assert conn.in_transaction
-    assert conn.execute("SELECT value FROM owner_work").fetchone()[0] == "uncommitted"
-    assert conn.execute("SELECT COUNT(*) FROM pipeline_attempts").fetchone()[0] == 0
-    conn.rollback()
-    assert conn.execute("SELECT COUNT(*) FROM owner_work").fetchone()[0] == 0
 
 
 def test_numeric_repair_feedback_is_specific_bounded_and_primary_unchanged() -> None:

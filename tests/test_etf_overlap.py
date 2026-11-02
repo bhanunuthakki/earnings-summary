@@ -1,42 +1,30 @@
-"""ETF fit extension: look-through overlap, sleeve factor, what-if precompute.
+"""Stored partial holdings overlap and shared portfolio-fit factor math.
 
-- etf_overlap.compute_lookthrough_overlap: direct-overlap math, top table,
-  sector/country rollups (+ intl/em reads), None on no holdings.
-- candidate_fit: the ETF-only 5th 'overlap' factor (equities keep exactly 4 —
-  pinned), the intent-only sleeve target factor.
-- candidate_fit_cache: ETF candidates get overlap/sleeve reads and lose the
-  meaningless profile sector.
-- etf_score_cache: the 1/3/5% what-if block rides the Stage 0f payload.
+Dedicated ETF candidate scoring and cache materialization are retired.
+These tests retain pure overlap coverage and shared fit factors.
 """
 
 from __future__ import annotations
 
-import json
-import math
 import sqlite3
-import sys
-from datetime import date, datetime, timedelta
-from pathlib import Path
+from datetime import date, datetime
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from allocation.candidate_fit import (  # noqa: E402
+from allocation.candidate_fit import (
     BookContext,
     CandidateRisk,
     score_candidate_fit,
 )
-from etf_overlap import (  # noqa: E402
+from etf_overlap import (
     EtfOverlap,
     compute_lookthrough_overlap,
     overlap_detail,
     sleeves_served,
 )
-from instrument_store import upsert_etf_holdings  # noqa: E402
-from models.instruments import EtfHolding  # noqa: E402
-from positioning.target import TargetContext  # noqa: E402
+from instrument_store import upsert_etf_holdings
+from models.instruments import EtfHolding
+from positioning.target import TargetContext
 
 _DDL = """
 CREATE TABLE etf_holdings (
@@ -222,147 +210,3 @@ def test_sleeve_factor_intent_only() -> None:
     # An equity (no sleeve read) never gets the factor, intent or not.
     eq = CandidateRisk(ticker="NU")
     assert "sleeve" not in {f.key for f in score_candidate_fit(eq, book, intent).target_factors}
-
-
-# ---------------------------------------------------------------------------
-# Materializer integration (candidate_fit_cache)
-# ---------------------------------------------------------------------------
-
-
-def test_materializer_gives_etfs_overlap_and_drops_sector(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import candidate_fit_cache as cfc
-
-    db_path = tmp_path / "portfolio.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    conn.executescript(
-        _DDL
-        + """
-        CREATE TABLE tracked_companies (
-            ticker TEXT, list_type TEXT, instrument_type TEXT, archived_at TEXT
-        );
-        """
-    )
-    conn.executemany(
-        "INSERT INTO tracked_companies VALUES (?, 'evaluation', ?, NULL)",
-        [("AVDV", "etf"), ("DLO", "equity")],
-    )
-    upsert_etf_holdings(
-        conn,
-        "AVDV",
-        date(2026, 5, 31),
-        [_holding("AVDV", "NU", 0.06, country="BR"), _holding("AVDV", "7203", 0.5, country="JP")],
-    )
-    conn.commit()
-
-    # A profile-sector cache for BOTH names — the ETF's must be dropped.
-    fmp = tmp_path / "data" / "historical" / "fmp"
-    fmp.mkdir(parents=True)
-    for t in ("AVDV", "DLO"):
-        (fmp / f"{t}_profile.json").write_text(
-            json.dumps([{"sector": "Technology"}]), encoding="utf-8"
-        )
-
-    monkeypatch.setattr(
-        cfc,
-        "assemble_book_context",
-        lambda *a, **k: BookContext(weights={"NU": 1.0}),
-        raising=True,
-    )
-    captured: dict[str, object] = {}
-
-    def _fake_compute(repo_root, candidates, book, **kw):  # type: ignore[no-untyped-def]
-        captured.update(kw)
-        captured["candidates"] = sorted(candidates)
-        from allocation.candidate_fit import CandidateFit
-
-        return {
-            t: CandidateFit(ticker=t, factors=[], fit=1.0, why="", partial=False)
-            for t in candidates
-        }
-
-    monkeypatch.setattr(cfc, "compute_candidate_fit", _fake_compute, raising=True)
-    conn2 = sqlite3.connect(str(db_path))
-    conn2.row_factory = sqlite3.Row
-    try:
-        cfc.materialize_candidate_fit(conn2, tmp_path, db_path=db_path)
-    finally:
-        conn2.close()
-    conn.close()
-
-    sectors = captured["sectors"]
-    assert isinstance(sectors, dict)
-    assert "DLO" in sectors and "AVDV" not in sectors  # ETF profile sector dropped
-    overlaps = captured["overlaps"]
-    assert isinstance(overlaps, dict) and "AVDV" in overlaps
-    pct, detail = overlaps["AVDV"]
-    assert pct == pytest.approx(0.06)  # NU is held; 7203 isn't
-    assert "AVDV overlaps the book" in detail
-    sleeves = captured["sleeves"]
-    assert isinstance(sleeves, dict)
-    assert sleeves.get("AVDV") == ("intl",)  # JP-heavy rollup
-
-
-# ---------------------------------------------------------------------------
-# What-if precompute (etf_score_cache payload)
-# ---------------------------------------------------------------------------
-
-
-def test_etf_whatif_block_materializes(tmp_path: Path) -> None:
-    from allocation.what_if import clear_caches
-    from etf_score_cache import materialize_etf_scores, read_materialized_etf_whatif
-
-    clear_caches()
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    conn.executescript(
-        """
-        CREATE TABLE tracked_companies (
-            ticker TEXT, list_type TEXT, instrument_type TEXT, archived_at TEXT
-        );
-        """
-    )
-    conn.execute("INSERT INTO tracked_companies VALUES ('AVDV', 'evaluation', 'etf', NULL)")
-
-    start = date(2025, 1, 2)
-    fmp = tmp_path / "data" / "historical" / "fmp"
-    fmp.mkdir(parents=True)
-
-    def _chart(ticker: str, gen: list[float]) -> None:
-        price, rows = 100.0, [{"date": start.isoformat(), "adjClose": 100.0}]
-        for i, r in enumerate(gen, start=1):
-            price *= math.exp(r)
-            rows.append({"date": (start + timedelta(days=i)).isoformat(), "adjClose": price})
-        (fmp / f"{ticker}_price_chart_10y_div_adj.json").write_text(
-            json.dumps(rows), encoding="utf-8"
-        )
-
-    market = [0.01 * math.sin(i / 5.0) + 0.0004 for i in range(200)]
-    _chart("AAA", market)
-    _chart("AVDV", [0.008 * math.cos(i / 7.0) for i in range(200)])
-    (tmp_path / "data" / "portfolio_weights.json").write_text(
-        json.dumps({"computed_at": "2026-07-10T04:00:00", "weights": {"AAA": 1.0}}),
-        encoding="utf-8",
-    )
-    (tmp_path / "data" / "candidate_fit.json").write_text(
-        json.dumps(
-            {
-                "version": 2,
-                "book": {"risk_free_annual": 0.04, "growth_tilt": 0.2},
-                "fits": {},
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    n = materialize_etf_scores(conn, tmp_path)
-    conn.close()
-    assert n == 1
-    whatif = read_materialized_etf_whatif(tmp_path)
-    assert set(whatif) == {"AVDV"}
-    assert set(whatif["AVDV"]) == {"0.01", "0.03", "0.05"}
-    three = whatif["AVDV"]["0.03"]
-    assert isinstance(three["sharpe_delta_bps"], float)
-    assert three["obs"] and three["prices_through"]
