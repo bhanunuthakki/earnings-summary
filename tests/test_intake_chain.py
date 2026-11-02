@@ -58,8 +58,13 @@ def _ticker_for_call(call_args: list[str]) -> str:
     return call_args[idx + 1]
 
 
-def test_chain_processing_bridges_transcripts_into_transcripts_table() -> None:
+def test_chain_processing_bridges_transcripts_into_transcripts_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     results = [_result("META", DocType.EARNINGS_CALL_TRANSCRIPT)]
+    database = tmp_path / "portfolio.sqlite"
+    database.touch()
+    monkeypatch.setattr(intake_documents, "require_db_path", lambda: database)
     with patch.object(
         intake_documents.subprocess,
         "run",
@@ -75,7 +80,7 @@ def test_chain_processing_bridges_transcripts_into_transcripts_table() -> None:
     ingest_argv = mock_run.mock_calls[0].args[0]
     assert "--include-ir-transcripts" in ingest_argv
     process_argv = mock_run.mock_calls[1].args[0]
-    assert process_argv[process_argv.index("--db") + 1].endswith("portfolio.sqlite")
+    assert process_argv[process_argv.index("--db") + 1] == str(database)
     assert process_argv[process_argv.index("--state-root") + 1] == str(
         intake_documents.PROJECT_ROOT
     )
@@ -101,8 +106,13 @@ def test_chain_processing_stops_before_say_do_when_ingest_fails() -> None:
     assert result.exit_code == 7
 
 
-def test_chain_processing_returns_commitment_failure() -> None:
+def test_chain_processing_returns_commitment_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     results = [_result("META", DocType.EARNINGS_CALL_TRANSCRIPT)]
+    database = tmp_path / "portfolio.sqlite"
+    database.touch()
+    monkeypatch.setattr(intake_documents, "require_db_path", lambda: database)
     completed: list[subprocess.CompletedProcess[str]] = [
         intake_documents.subprocess.CompletedProcess([], 0),
         intake_documents.subprocess.CompletedProcess([], 0),
@@ -115,12 +125,17 @@ def test_chain_processing_returns_commitment_failure() -> None:
     assert result.exit_code == 5
 
 
-def test_chain_processing_handles_mixed_doctype_batch() -> None:
+def test_chain_processing_handles_mixed_doctype_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Only META's transcript gets summary and Say-Do processing."""
     results = [
         _result("NU", DocType.IR_PRESS_RELEASE),
         _result("META", DocType.EARNINGS_CALL_TRANSCRIPT),
     ]
+    database = tmp_path / "portfolio.sqlite"
+    database.touch()
+    monkeypatch.setattr(intake_documents, "require_db_path", lambda: database)
     with patch.object(
         intake_documents.subprocess,
         "run",
@@ -149,12 +164,17 @@ def test_chain_processing_handles_mixed_doctype_batch() -> None:
     assert commit_tickers == {"META"}
 
 
-def test_chain_processing_deduplicates_multiple_transcripts_for_same_ticker() -> None:
+def test_chain_processing_deduplicates_multiple_transcripts_for_same_ticker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Two transcripts for META (e.g. Q1 + Q2 in one drop): chain runs once per ticker."""
     results = [
         _result("META", DocType.EARNINGS_CALL_TRANSCRIPT),
         _result("META", DocType.EARNINGS_CALL_TRANSCRIPT),
     ]
+    database = tmp_path / "portfolio.sqlite"
+    database.touch()
+    monkeypatch.setattr(intake_documents, "require_db_path", lambda: database)
     with patch.object(
         intake_documents.subprocess,
         "run",

@@ -21,6 +21,7 @@ from types import ModuleType
 
 import pytest
 
+import evals.corpora as corpora
 import evals.judge as ej
 from evals.corpora import (
     CORPUS_LOADERS,
@@ -316,7 +317,9 @@ def test_bear_case_corpus_newest_first_and_skips_corrupt(tmp_path: Path) -> None
     assert "failure_modes" in items[0].content
 
 
-def test_advisor_corpus_reads_next_dollar_memos(tmp_path: Path) -> None:
+def test_advisor_corpus_reads_next_dollar_memos(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     data = tmp_path / "data"
     data.mkdir()
     db = data / "portfolio.db"
@@ -348,6 +351,7 @@ def test_advisor_corpus_reads_next_dollar_memos(tmp_path: Path) -> None:
     conn.commit()
     conn.close()
 
+    monkeypatch.setattr(corpora, "_corpus_database", lambda: db)
     items = load_advisor_next_dollar_corpus(tmp_path)
     assert [i.item_id for i in items] == ["memo:3", "memo:1"]  # newest id first
     assert items[1].label.endswith("June memo")

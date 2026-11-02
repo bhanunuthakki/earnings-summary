@@ -75,12 +75,17 @@ def _pre(**overrides: object) -> PreAnalysis:
 # --------------------------------------------------------------------------- #
 
 
-def test_review_reply_text_default_stays_markdown(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_review_reply_text_default_stays_markdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "portfolio.sqlite"
+    database.touch()
+
     def _fake(*_a: object, **_k: object) -> PreAnalysis:
         return _pre(at_price=82.0)
 
     monkeypatch.setattr(pr, "build_pre_analysis", _fake)
-    reply = review_reply_text(Path("."), "/review RBRK at $82")
+    reply = review_reply_text(Path("."), "/review RBRK at $82", db_path=database)
     assert "**RBRK**" in reply
 
 
@@ -131,7 +136,7 @@ def test_parse_without_roster_uses_token_as_typed() -> None:
 
 
 def test_review_reply_text_resolves_company_name_end_to_end(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The complete chat command: '/review Rubrik' must build the review for
     RBRK, not the literal 'RUBRIK'."""
@@ -147,7 +152,9 @@ def test_review_reply_text_resolves_company_name_end_to_end(
         "_load_review_roster",
         _fake_roster,
     )
-    out = review_reply_text(Path("."), "/review Rubrik")
+    database = tmp_path / "portfolio.sqlite"
+    database.touch()
+    out = review_reply_text(Path("."), "/review Rubrik", db_path=database)
     assert seen["ticker"] == "RBRK"
     assert "RBRK" in out
 
@@ -262,29 +269,38 @@ def test_review_command_usage_without_ticker() -> None:
     assert reply is not None and "Usage:" in reply
 
 
-def test_review_command_dispatches_and_renders(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_review_command_dispatches_and_renders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "portfolio.sqlite"
+    database.touch()
+
     def _fake(*_a: object, **_k: object) -> PreAnalysis:
         return _pre(at_price=82.0)
 
     monkeypatch.setattr(pr, "build_pre_analysis", _fake)
-    reply = run_chat_command(Path("."), "/review RBRK at $82", cast("Registry", None))
+    reply = run_chat_command(
+        Path("."), "/review RBRK at $82", cast("Registry", None), db_path=database
+    )
     assert reply is not None
     assert "**RBRK**" in reply and "Mechanical read:" not in reply
 
 
 def test_review_command_parses_at_price_through_dispatch(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seen: dict[str, object] = {}
+    database = tmp_path / "portfolio.sqlite"
+    database.touch()
 
     def _fake(*_a: object, **kwargs: object) -> PreAnalysis:
         seen["at_price"] = kwargs.get("at_price")
         return _pre()
 
     monkeypatch.setattr(pr, "build_pre_analysis", _fake)
-    run_chat_command(Path("."), "/review FLKR at $70", cast("Registry", None))
+    run_chat_command(Path("."), "/review FLKR at $70", cast("Registry", None), db_path=database)
     assert seen["at_price"] == 70.0
-    run_chat_command(Path("."), "/review RBRK", cast("Registry", None))
+    run_chat_command(Path("."), "/review RBRK", cast("Registry", None), db_path=database)
     assert seen["at_price"] is None
 
 
