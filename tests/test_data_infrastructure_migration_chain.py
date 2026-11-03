@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
@@ -85,6 +86,229 @@ def test_squashed_chain_has_one_head_and_preserves_active_schema(tmp_path: Path)
     assert identity is not None and str(identity[0]).startswith("database-instance:")
     assert integrity == ("ok",)
     assert foreign_keys == []
+
+
+def test_full_retirement_chain_preserves_pre_and_post_earnings_artifact_history(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    """Normal earnings artifacts and their source context are retained by 0065."""
+    path = migrated_db(
+        tmp_path / "earnings-history.db",
+        target="0063_transcript_reported_period_receipts",
+    )
+    config = _config(path)
+    with sqlite3.connect(path) as conn:
+        parent_id = int(
+            conn.execute("SELECT COALESCE(MAX(id),0)+1 FROM llm_artifacts").fetchone()[0]
+        )
+        artifact_ids = {
+            name: parent_id + index
+            for index, name in enumerate(
+                ("pre_old", "pre_current", "post_old", "post_current", "retired"), start=1
+            )
+        }
+        call_base = int(conn.execute("SELECT COALESCE(MAX(id),0)+100 FROM llm_calls").fetchone()[0])
+        call_ids = {
+            name: call_base + index
+            for index, name in enumerate(
+                ("pre_old", "pre_current", "post_old", "post_current"), start=1
+            )
+        }
+        for name, purpose, artifact_name in (
+            ("pre_old", "pre_earnings_brief", "pre_old"),
+            ("pre_current", "pre_earnings_brief", "pre_current"),
+            ("post_old", "post_earnings_readout", "post_old"),
+            ("post_current", "post_earnings_readout", "post_current"),
+        ):
+            conn.execute(
+                "INSERT INTO llm_calls "
+                "(id,called_at,purpose,ticker,scope,model,prompt_sha256,prompt_chars,elapsed_ms,"
+                "artifact_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (
+                    call_ids[name],
+                    "2026-11-01T12:00:00Z",
+                    purpose,
+                    "ACME",
+                    "ticker",
+                    "test-model",
+                    "a" * 64,
+                    10,
+                    1,
+                    artifact_ids[artifact_name],
+                ),
+            )
+
+        def add_artifact(
+            name: str,
+            purpose: str,
+            *,
+            call_name: str | None = None,
+            superseded_by: str | None = None,
+            parent_ids: list[int] | None = None,
+        ) -> None:
+            artifact_id = artifact_ids[name]
+            conn.execute(
+                "INSERT INTO llm_artifacts "
+                "(id,ticker,scope,purpose,fiscal_period,content_md,input_sha256,generated_at,"
+                "superseded_by_id,parent_artifact_ids,llm_call_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    artifact_id,
+                    "ACME",
+                    "ticker",
+                    purpose,
+                    "2026Q3",
+                    name,
+                    f"{artifact_id:064x}",
+                    "2026-11-01T12:00:00Z",
+                    artifact_ids[superseded_by] if superseded_by else None,
+                    json.dumps(parent_ids) if parent_ids else None,
+                    call_ids[call_name] if call_name else None,
+                ),
+            )
+
+        # Use a candidate lens artifact as a parent to exercise dependency closure.
+        parent_id = max(artifact_ids.values()) + 1
+        conn.execute(
+            "INSERT INTO llm_artifacts "
+            "(id,ticker,scope,purpose,fiscal_period,content_md,input_sha256,generated_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (
+                parent_id,
+                "ACME",
+                "ticker",
+                "lens:earnings-context",
+                "2026Q3",
+                "source context",
+                f"{parent_id:064x}",
+                "2026-11-01T11:00:00Z",
+            ),
+        )
+        add_artifact(
+            "pre_current", "pre_earnings_brief", call_name="pre_current", parent_ids=[parent_id]
+        )
+        add_artifact(
+            "post_current",
+            "post_earnings_readout",
+            call_name="post_current",
+            parent_ids=[parent_id],
+        )
+        add_artifact(
+            "pre_old",
+            "pre_earnings_brief",
+            call_name="pre_old",
+            superseded_by="pre_current",
+            parent_ids=[parent_id],
+        )
+        add_artifact(
+            "post_old",
+            "post_earnings_readout",
+            call_name="post_old",
+            superseded_by="post_current",
+            parent_ids=[parent_id],
+        )
+        add_artifact("retired", "filing_intelligence")
+        for name, purpose in (
+            ("pre_current", "pre_earnings_brief"),
+            ("post_current", "post_earnings_readout"),
+            ("retired", "filing_intelligence"),
+        ):
+            conn.execute(
+                "INSERT INTO prompt_calibration_scores "
+                "(purpose,prompt_version,ticker,score,scored_by,artifact_id) VALUES (?,?,?,?,?,?)",
+                (purpose, "v1", "ACME", 0.9, "migration-regression", artifact_ids[name]),
+            )
+        for purpose in ("pre_earnings_brief", "post_earnings_readout"):
+            conn.execute(
+                "INSERT INTO llm_budget_alerts "
+                "(purpose,month,threshold_pct,alerted_at,spend_at_alert_usd) VALUES (?,?,?,?,?)",
+                (purpose, "2026-11", 0.91, "2026-11-01T12:00:00Z", 4.0),
+            )
+            conn.execute(
+                "INSERT INTO model_eval_verdicts "
+                "(purpose,candidate,incumbent,verdict,run_id,recorded_at) VALUES (?,?,?,?,?,?)",
+                (
+                    purpose,
+                    "candidate-model",
+                    "incumbent-model",
+                    "KEEP_INCUMBENT",
+                    f"run-{purpose}",
+                    "2026-11-01T12:00:00Z",
+                ),
+            )
+        budget_purposes = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT purpose FROM llm_budgets "
+                "WHERE purpose IN ('pre_earnings_brief','post_earnings_readout')"
+            )
+        }
+        assert budget_purposes == {"pre_earnings_brief", "post_earnings_readout"}
+
+    command.upgrade(config, "head")
+
+    with sqlite3.connect(path) as conn:
+        artifacts = {
+            int(row[0]): (str(row[1]), row[2], row[3], row[4])
+            for row in conn.execute(
+                "SELECT id,purpose,superseded_by_id,parent_artifact_ids,llm_call_id "
+                "FROM llm_artifacts"
+            )
+        }
+        calls = {
+            int(row[0]): str(row[1]) for row in conn.execute("SELECT id,purpose FROM llm_calls")
+        }
+        calibration = {
+            (str(row[0]), int(row[1]))
+            for row in conn.execute("SELECT purpose,artifact_id FROM prompt_calibration_scores")
+        }
+        budgets = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT purpose FROM llm_budgets "
+                "WHERE purpose IN ('pre_earnings_brief','post_earnings_readout')"
+            )
+        }
+        alerts = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT purpose FROM llm_budget_alerts "
+                "WHERE purpose IN ('pre_earnings_brief','post_earnings_readout')"
+            )
+        }
+        evals = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT purpose FROM model_eval_verdicts "
+                "WHERE purpose IN ('pre_earnings_brief','post_earnings_readout')"
+            )
+        }
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (HEAD,)
+
+    for name in ("pre_old", "pre_current", "post_old", "post_current"):
+        artifact_id = artifact_ids[name]
+        assert artifacts[artifact_id][0] == (
+            "pre_earnings_brief" if name.startswith("pre_") else "post_earnings_readout"
+        )
+        expected_purpose = (
+            "pre_earnings_brief" if name.startswith("pre_") else "post_earnings_readout"
+        )
+        assert calls[call_ids[name]] == expected_purpose
+        assert artifacts[artifact_id][3] == call_ids[name]
+    for name in ("pre_current", "post_current"):
+        artifact_id = artifact_ids[name]
+        assert (artifacts[artifact_id][0], artifact_id) in calibration
+    for name in ("pre_old", "post_old"):
+        artifact_id = artifact_ids[name]
+        assert (artifacts[artifact_id][0], artifact_id) not in calibration
+    assert artifacts[artifact_ids["pre_old"]][1] == artifact_ids["pre_current"]
+    assert artifacts[artifact_ids["post_old"]][1] == artifact_ids["post_current"]
+    for name in ("pre_old", "pre_current", "post_old", "post_current"):
+        assert json.loads(artifacts[artifact_ids[name]][2]) == [parent_id]
+    assert artifacts[parent_id][0] == "lens:earnings-context"
+    assert artifact_ids["retired"] not in artifacts
+    assert ("filing_intelligence", artifact_ids["retired"]) not in calibration
+    assert budgets == alerts == evals == {"pre_earnings_brief", "post_earnings_readout"}
 
 
 def test_investment_profile_review_ledger_accepts_company_and_etf_labels(
