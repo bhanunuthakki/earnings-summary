@@ -1,8 +1,9 @@
 """Retire unlinked optional research and Telegram history.
 
 Explicit decisions, current tenets, native document artifacts, stage receipts,
-and their exact source lineage remain authoritative. Restore a reviewed
-predecessor snapshot to recover retired optional history.
+normal pre/post earnings artifacts, and their exact source lineage remain
+authoritative. Restore a reviewed predecessor snapshot to recover retired
+optional history.
 """
 
 from __future__ import annotations
@@ -126,7 +127,7 @@ _RETIRED_NOTE_CONTEXT_KEYS = (
 _RETIRED_PURPOSE_SQL = f"""
     purpose GLOB 'lens:*'
     OR purpose IN (
-      'investment_decision_card', 'post_earnings_readout', 'pre_earnings_brief',
+      'investment_decision_card',
       'filing_intelligence', 'earnings_tone_diff', 'qa_topics',
       'transcript_qa_judgment', 'valuation_basis', 'incremental_dollar_recommendation',
       'senior_partner_brief', 'thesis_collision', 'etf_role_synthesis',
@@ -146,7 +147,7 @@ artifact_candidates(id) AS (
     OR (a.scope='etf' AND a.purpose='etf_role_synthesis')
     OR (a.scope IN ('ticker','portfolio') AND a.purpose GLOB 'lens:*')
     OR (a.scope='ticker' AND a.purpose IN (
-      'investment_decision_card','post_earnings_readout','pre_earnings_brief',
+      'investment_decision_card',
       'filing_intelligence','earnings_tone_diff','qa_topics','transcript_qa_judgment',
       'valuation_basis','bear_case','kpi_inflection_context'
     ))
@@ -183,6 +184,8 @@ artifact_seed(id) AS (
     WHERE purpose='bear_case' AND scope='ticker' AND superseded_by_id IS NULL
   ) WHERE rn=1
   UNION SELECT artifact_id FROM pipeline_stage_transitions WHERE artifact_id IS NOT NULL
+  UNION SELECT id FROM llm_artifacts
+    WHERE purpose IN ('pre_earnings_brief','post_earnings_readout')
 ),
 artifact_dependency_edges(from_id,to_id) AS (
   SELECT id, superseded_by_id FROM llm_artifacts WHERE superseded_by_id IS NOT NULL

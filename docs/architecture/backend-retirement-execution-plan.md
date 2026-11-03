@@ -1,6 +1,38 @@
 # Backend simplification and product retirement execution plan
 
-## Release checkpoint — November 2, 2026 (Pacific)
+## Current release disposition — November 3, 2026 (Pacific)
+
+PR #1739 merged as `335c7757ce65f7a38d3ed0497270d950fd2c915b`.
+That candidate is **HOLD for activation**. Migration 0065 selected normal
+`pre_earnings_brief` and `post_earnings_readout` artifacts for deletion, contrary
+to the approved keep scope. Native metadata comparison confirmed the loss of NU's
+current Q2 readout. Restoring the predecessor database restored that readout.
+Protected table counts and passing technical checks did not detect this
+purpose-level loss and do not establish retention acceptance.
+
+The canonical Windows runtime is recovered to `3b0885deceb0b1f1a22beaef974aedf854332dee`
+and database revision 0063. Original dependencies and prior owner states are
+restored; all 44 task registrations and 19 prior holds remain. The dashboard and
+poller run, Tracker is preserved, and maintenance is clear. The genuine 11:20 UTC
+scheduled collector returned 0. No retired tasks, exclusive files, private owner
+baselines or Mac monitor settings were removed or promoted in this attempt.
+
+The correction is limited to preserving normal earnings artifact versions and
+their dependency closure, related purpose configuration and evidence in migration
+0065. Validate the full 0063-to-head chain with the retained migration test. This
+is a corrected pre-activation chain, not a repair for a database already migrated
+by the defective candidate. The original 0063 recovery snapshot and degraded 0069
+diagnostic snapshot remain on Windows until this preservation defect is resolved.
+The redundant verification database was removed after identity and hash checks.
+
+Before another activation, qualify the corrected candidate and reconcile the
+15 Password-logon task deletions with the owner's recovery choice. Task XML does
+not preserve the stored logon password. The four financial and nine KPI producer
+migrations remain open. All issuer-source and unresolved-product holds below
+remain in force. Native receipts are under the November 3 deployment evidence
+root; metadata and exact references are in the ignored retirement release status.
+
+## Historical pre-merge checkpoint — November 2, 2026 (Pacific)
 
 This document owns execution scope and the pre-activation checkpoint below. Final
 merge and activation evidence must identify the deployed commit separately. Earlier

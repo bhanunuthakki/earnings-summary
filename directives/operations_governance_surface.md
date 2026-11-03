@@ -1,5 +1,24 @@
 # Operations & Governance Surface Impact
 
+## Retirement recovery and earnings preservation — November 3, 2026
+
+Merged candidate `335c7757` is on activation HOLD. Migration 0065 deleted normal
+earnings briefs/readouts, which remain in the approved keep scope. The correction
+preserves all versions of those artifacts and their existing dependency closure,
+plus associated purpose configuration and evidence. It adds no operator action,
+producer, schedule or replacement framework. The corrected chain targets the
+recovered revision-0063 predecessor; it does not repair an existing degraded
+revision-0069 database.
+
+Canonical recovery restored runtime `3b0885de`, database revision 0063, original
+dependencies and prior service/task states. All 44 tasks remain registered and
+19 prior holds remain. Dashboard and poller run; Tracker is preserved; maintenance
+is clear. The genuine 11:20 UTC collector returned 0. No retired task, exclusive
+file or private owner configuration was removed. The 15 Password-logon task
+retirements still require the owner's password-recovery disposition. Producer
+migration and issuer-source qualification remain separate open work. The execution
+plan owns the corrected release boundary and evidence limits.
+
 ## Retained transcript audit qualification — October 27, 2026
 
 Disposition: **bounded backend command, no new dashboard action or schedule**.
