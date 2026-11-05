@@ -211,6 +211,7 @@ def _canary_shell_payloads() -> dict[str, object]:
                     "international_equity": {"weight_pct": 20.0},
                     "us_etf": {"weight_pct": 15.0},
                     "international_etf": {"weight_pct": 10.0},
+                    "global_etf": {"weight_pct": 0.0},
                     "cash": {"weight_pct": 15.0},
                     "unclassified": {"weight_pct": 0.0},
                 },

@@ -31,9 +31,17 @@ _BUCKET_NAMES = (
     "international_equity",
     "us_etf",
     "international_etf",
+    "global_etf",
     "cash",
     "unclassified",
 )
+_BUCKET_BY_TYPE_AND_REGION = {
+    ("stock", "us"): "us_equity",
+    ("stock", "international"): "international_equity",
+    ("etf", "us"): "us_etf",
+    ("etf", "international"): "international_etf",
+    ("etf", "global"): "global_etf",
+}
 _POSITION_PERCENT_TOLERANCE = Decimal("0.0001")
 _ZERO = Decimal(0)
 
@@ -48,7 +56,7 @@ class PortfolioAllocationBucket(BaseModel):
 
 
 class PortfolioAllocationBuckets(BaseModel):
-    """The six mutually exclusive buckets used by the allocation surface."""
+    """The seven mutually exclusive buckets used by the allocation surface."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -56,6 +64,7 @@ class PortfolioAllocationBuckets(BaseModel):
     international_equity: PortfolioAllocationBucket
     us_etf: PortfolioAllocationBucket
     international_etf: PortfolioAllocationBucket
+    global_etf: PortfolioAllocationBucket
     cash: PortfolioAllocationBucket
     unclassified: PortfolioAllocationBucket
 
@@ -132,6 +141,7 @@ def _null_buckets() -> PortfolioAllocationBuckets:
         international_equity=bucket,
         us_etf=bucket,
         international_etf=bucket,
+        global_etf=bucket,
         cash=bucket,
         unclassified=bucket,
     )
@@ -279,17 +289,7 @@ def _bucket_name(security: SecurityV1) -> str:
     region = security.region.strip().casefold() if security.region is not None else ""
     if security.is_cash_equivalent or asset_type == "cash":
         return "cash"
-    if asset_type == "stock":
-        if region == "us":
-            return "us_equity"
-        if region == "international":
-            return "international_equity"
-    if asset_type == "etf":
-        if region == "us":
-            return "us_etf"
-        if region == "international":
-            return "international_etf"
-    return "unclassified"
+    return _BUCKET_BY_TYPE_AND_REGION.get((asset_type, region), "unclassified")
 
 
 def _covered_call_underlying(
@@ -341,7 +341,7 @@ def project_portfolio_allocation(
     positions: PositionsV1Result,
     securities: SecuritiesV1Result,
 ) -> PortfolioAllocationProjection:
-    """Project validated v1 source data into six raw-total-preserving buckets."""
+    """Project validated v1 source data into seven raw-total-preserving buckets."""
     error = _structural_error(health, positions, securities)
     if error is not None:
         return unavailable_portfolio_allocation(error)
@@ -433,6 +433,7 @@ def project_portfolio_allocation(
         international_equity=bucket("international_equity"),
         us_etf=bucket("us_etf"),
         international_etf=bucket("international_etf"),
+        global_etf=bucket("global_etf"),
         cash=bucket("cash"),
         unclassified=bucket("unclassified"),
     )

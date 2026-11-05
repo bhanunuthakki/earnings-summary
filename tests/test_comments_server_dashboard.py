@@ -48,6 +48,7 @@ def _available_allocation() -> PortfolioAllocationProjection:
             international_equity=empty,
             us_etf=empty,
             international_etf=empty,
+            global_etf=empty,
             cash=empty,
             unclassified=empty,
         ),
