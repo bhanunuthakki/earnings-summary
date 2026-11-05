@@ -525,7 +525,6 @@ def render_allocation_decisions_panel(
     audit = build_sizing_audit_rows(
         holdings, verdicts, dcf_gaps, intents, live, analytics.position_alpha, dcf_scenarios
     )
-    timeline = build_decisions_timeline(db_path, user_id=user_id, intents=intents)
     calibration = build_calibration(
         db_path=db_path,
         magnitudes_by_ticker=realized_magnitudes(analytics.position_alpha, analytics.exit_quality),
@@ -533,24 +532,20 @@ def render_allocation_decisions_panel(
     attribution = decompose_alpha(
         analytics.position_alpha, conviction_by_ticker=_conviction_by_ticker(audit)
     )
-    # Read the decision journal after tracker calls; close its owned connection
-    # before pure composition.
-    pooled = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    pooled.row_factory = sqlite3.Row
-    try:
-        decision_journal_html = render_decision_journal_section(db_path, conn=pooled)
-    finally:
-        pooled.close()
     return compose_decisions_page(
         audit,
-        timeline,
+        None,
         live,
         analytics.position_alpha,
         calibration=calibration,
         attribution=attribution,
         beta=analytics.beta,
-        decision_journal_html=decision_journal_html,
     )
+
+
+def render_decisions_timeline(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> str:
+    """Render every recorded thesis edit, sizing intent, and decision note."""
+    return _PANEL_CSS + _timeline_section(build_decisions_timeline(db_path, user_id=user_id))
 
 
 def _conviction_by_ticker(audit: list[SizingAuditRow]) -> dict[str, float]:
@@ -561,106 +556,15 @@ def _conviction_by_ticker(audit: list[SizingAuditRow]) -> dict[str, float]:
 
 _OUTCOME_TONE: dict[str, str] = {"correct": "ok", "wrong": "bad", "mixed": "warn"}
 
-_DECISION_JOURNAL_LIMIT = 30
-
-
-def render_decision_journal_section(
-    db_path: Path,
-    *,
-    limit: int = _DECISION_JOURNAL_LIMIT,
-    conn: sqlite3.Connection | None = None,
-) -> str:
-    """Owner-first journal over ``v_decision_journal``.
-
-    Advisor-authored legacy rows remain preserved in the view and are counted,
-    but they never appear as Owner Decisions by default.
-    """
-    owned = conn is None
-    db_conn = (
-        conn if conn is not None else connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    )
-    previous_row_factory = db_conn.row_factory
-    db_conn.row_factory = sqlite3.Row
-    try:
-        rows = _safe_rows(
-            db_conn,
-            "SELECT decision_id, ticker, decided_by, recommendation_kind, made_at, "
-            "user_action_kind, outcome_label, outcome_pct, process_quality "
-            "FROM v_decision_journal WHERE decided_by = 'owner' "
-            "ORDER BY made_at DESC, decision_id DESC LIMIT ?",
-            (limit,),
-        )
-    finally:
-        if owned:
-            db_conn.close()
-        else:
-            db_conn.row_factory = previous_row_factory
-    sub = '<p class="sub">Owner Decisions show the recorded action, outcome, and process grade.</p>'
-    if not rows:
-        return panel_section(
-            sub,
-            '<p class="muted">No Owner Decisions recorded yet.</p>',
-            title="Owner Decision journal",
-        )
-    lines = "".join(_journal_row(r) for r in rows)
-    return panel_section(
-        sub,
-        f'<div class="cpnl-list">{lines}</div>',
-        title="Owner Decision journal",
-    )
-
-
-def _journal_row(r: sqlite3.Row) -> str:
-    ticker = str(r["ticker"]) if r["ticker"] else None
-    ticker_html = (
-        ticker_label(ticker, href=f"/ticker/{ticker}")
-        if ticker
-        else '<span class="muted">portfolio</span>'
-    )
-    kind = escape(str(r["recommendation_kind"]))
-    decided_by = escape(str(r["decided_by"] or "advisor"))
-    kind_chip = f'<span class="k-chip k-chip-mono">{decided_by}: {kind}</span>'
-    action = r["user_action_kind"]
-    disposition = (
-        f'<span class="k-pill">{escape(str(action))}</span>'
-        if action
-        else '<span class="muted">&mdash;</span>'
-    )
-    outcome_label = r["outcome_label"]
-    if outcome_label:
-        tone = _OUTCOME_TONE.get(str(outcome_label), "")
-        pct = r["outcome_pct"]
-        pct_html = (
-            f' <span class="k-num-{"pos" if (pct or 0) >= 0 else "neg"}">{pct:+.1f}%</span>'
-            if pct is not None
-            else ""
-        )
-        outcome = (
-            f'<span class="k-pill{_pill_tone(tone)}">{escape(str(outcome_label))}</span>{pct_html}'
-        )
-    else:
-        outcome = '<span class="muted">pending</span>'
-    grade = (
-        f'<span class="k-chip">process: {escape(str(r["process_quality"]))}</span>'
-        if r["process_quality"]
-        else ""
-    )
-    when = str(r["made_at"])[:10]
-    return (
-        f'<p class="cpnl-line">{ticker_html} &middot; {kind_chip} &middot; '
-        f"{disposition} &middot; {outcome} {grade} &middot; {escape(when)}</p>"
-    )
-
 
 def compose_decisions_page(
     audit: list[SizingAuditRow],
-    timeline: list[TimelineEvent],
+    timeline: list[TimelineEvent] | None,
     live: LivePortfolio,
     alpha: PositionAlpha | None,
     calibration: CalibrationStats | None = None,
     attribution: SkillDecomposition | None = None,
     beta: BetaStats | None = None,
-    decision_journal_html: str = "",
 ) -> str:
     """Compose sizing logs, decision history and deterministic time-series views.
 
@@ -677,8 +581,7 @@ def compose_decisions_page(
             render_skill_decomposition_section(attribution, beta)
             if attribution is not None
             else "",
-            decision_journal_html,
-            _timeline_section(timeline),
+            _timeline_section(timeline) if timeline is not None else "",
             f"<script>{_EDITOR_JS}</script>",
         ]
     )

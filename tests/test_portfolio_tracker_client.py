@@ -52,6 +52,11 @@ from pipeline.portfolio_panel import (
 )
 from portfolio_risk import compute_drawdown, factor_exposure_rollup
 
+# These tests pin the private tracker parsers directly.
+_parse_performance = vars(ptc)["_parse_performance"]
+_parse_position_alpha = vars(ptc)["_parse_position_alpha"]
+_parse_drawdown = vars(ptc)["_parse_drawdown"]
+
 # Recorded payloads (Decimal-as-strings, mirroring the real FastAPI responses).
 _HOLDINGS = [
     {
@@ -1420,7 +1425,7 @@ def test_position_no_invested_capital_reason_is_a_supported_unavailable_state() 
     payload["calculation_status"] = "unavailable"
     payload["calculation_reason_codes"] = ["no_invested_position_capital"]
 
-    parsed = ptc._parse_position_alpha(payload)  # pyright: ignore[reportPrivateUsage]
+    parsed = _parse_position_alpha(payload)
 
     assert parsed.calculation_status == "unavailable"
     assert parsed.calculation_reason_codes == ["no_invested_position_capital"]
@@ -1434,7 +1439,7 @@ def test_position_nonpositive_dietz_reason_is_a_supported_unavailable_state() ->
     payload["calculation_status"] = "unavailable"
     payload["calculation_reason_codes"] = ["nonpositive_dietz_denominator"]
 
-    parsed = ptc._parse_position_alpha(payload)  # pyright: ignore[reportPrivateUsage]
+    parsed = _parse_position_alpha(payload)
 
     assert parsed.calculation_status == "unavailable"
     assert parsed.calculation_reason_codes == ["nonpositive_dietz_denominator"]
@@ -1448,7 +1453,7 @@ def test_nonpositive_dietz_reason_is_a_supported_unavailable_state() -> None:
     payload["calculation_status"] = "unavailable"
     payload["calculation_reason_codes"] = ["nonpositive_dietz_denominator"]
 
-    parsed = ptc._parse_performance(payload)  # pyright: ignore[reportPrivateUsage]
+    parsed = _parse_performance(payload)
     html = render_portfolio_analytics_sections(
         PortfolioAnalytics(available=True, api_url="http://tracker.test", performance=parsed)
     )
@@ -1472,7 +1477,7 @@ def test_current_provider_reconciliation_reasons_render_without_contract_rejecti
     payload["net_external_cashflow_in"] = None
     payload["equation_receipt"] = None
 
-    parsed = ptc._parse_performance(payload)  # pyright: ignore[reportPrivateUsage]
+    parsed = _parse_performance(payload)
     html = render_portfolio_analytics_sections(
         PortfolioAnalytics(available=True, api_url="http://tracker.test", performance=parsed)
     )
@@ -1513,7 +1518,8 @@ def test_available_position_data_never_substitutes_for_unavailable_performance(
     assert "Whole-portfolio cash-flow-matched return" not in html
     assert "Invested-position price/trade return" in html
     assert "+9.0%" in html
-    assert "Whole-account Modified Dietz return unavailable" in html
+    assert "Your return against the benchmarks cannot be calculated yet." in html
+    assert "Deposits and withdrawals are not confirmed" in html
     assert "external share-movement price unavailable" in html
     assert "Position drivers" in html
 
@@ -1555,9 +1561,7 @@ def test_position_unsupported_methodology_fails_closed() -> None:
     )
     meta = V1Meta.model_validate(fixture["meta"]).model_copy(update={"methodology_version": "2"})
 
-    parsed = ptc._parse_position_alpha(  # pyright: ignore[reportPrivateUsage]
-        cast("dict[str, object]", deepcopy(_POSITION_ALPHA)), meta=meta
-    )
+    parsed = _parse_position_alpha(cast("dict[str, object]", deepcopy(_POSITION_ALPHA)), meta=meta)
 
     assert parsed.calculation_status == "unavailable"
     assert parsed.compatibility_issue == "unsupported_methodology"
@@ -1568,10 +1572,10 @@ def test_position_unsupported_methodology_fails_closed() -> None:
 @pytest.mark.parametrize(
     ("payload", "parser"),
     [
-        (_PERFORMANCE, ptc._parse_performance),  # pyright: ignore[reportPrivateUsage]
-        (_POSITION_ALPHA, ptc._parse_position_alpha),  # pyright: ignore[reportPrivateUsage]
+        (_PERFORMANCE, _parse_performance),
+        (_POSITION_ALPHA, _parse_position_alpha),
         (_BETA, ptc.parse_beta),
-        (_DRAWDOWN, ptc._parse_drawdown),  # pyright: ignore[reportPrivateUsage]
+        (_DRAWDOWN, _parse_drawdown),
     ],
 )
 def test_legacy_analytics_missing_embedded_methodology_fails_closed(
@@ -1599,7 +1603,7 @@ def test_available_performance_core_contradictions_fail_closed(field: str, value
     payload = deepcopy(_PERFORMANCE)
     payload[field] = value
 
-    parsed = ptc._parse_performance(payload)  # pyright: ignore[reportPrivateUsage]
+    parsed = _parse_performance(payload)
 
     assert parsed.calculation_status == "unavailable"
     assert parsed.compatibility_issue == "contradictory_available_payload"
@@ -1617,7 +1621,7 @@ def test_available_performance_series_contradictions_fail_closed(mutation: str) 
     else:
         points[-1]["date"] = "2026-06-11"
 
-    parsed = ptc._parse_performance(payload)  # pyright: ignore[reportPrivateUsage]
+    parsed = _parse_performance(payload)
 
     assert parsed.calculation_status == "unavailable"
     assert parsed.compatibility_issue == "contradictory_available_payload"
@@ -1634,7 +1638,7 @@ def test_available_performance_requires_a_reconciling_equation_receipt(mutation:
         spy = cast("dict[str, object]", receipt["spy"])
         spy["dollar_alpha"] = "6700.01"
 
-    parsed = ptc._parse_performance(payload)  # pyright: ignore[reportPrivateUsage]
+    parsed = _parse_performance(payload)
 
     assert parsed.calculation_status == "unavailable"
     assert parsed.compatibility_issue == "contradictory_available_payload"
@@ -1715,7 +1719,7 @@ def test_available_performance_requires_complete_market_session_lineage(mutation
             extra_flow["date"] = "2025-06-10"
         flows.append(extra_flow)
 
-    parsed = ptc._parse_performance(payload)  # pyright: ignore[reportPrivateUsage]
+    parsed = _parse_performance(payload)
 
     assert parsed.calculation_status == "unavailable"
     assert parsed.compatibility_issue == "contradictory_available_payload"
@@ -1728,7 +1732,7 @@ def test_available_performance_rejects_unverified_source_cashflows() -> None:
     source_coverage["status"] = "incomplete"
     source_coverage["is_complete"] = False
 
-    parsed = ptc._parse_performance(payload)  # pyright: ignore[reportPrivateUsage]
+    parsed = _parse_performance(payload)
 
     assert parsed.calculation_status == "unavailable"
     assert parsed.compatibility_issue == "source_cashflow_coverage_incomplete"
@@ -1745,7 +1749,7 @@ def test_available_position_series_rejects_nonpositive_intermediate_dietz_denomi
     second["position_cashflow"] = "120000.00"
     series[1:1] = [first, second]
 
-    parsed = ptc._parse_position_alpha(payload)  # pyright: ignore[reportPrivateUsage]
+    parsed = _parse_position_alpha(payload)
 
     assert parsed.calculation_status == "unavailable"
     assert parsed.compatibility_issue == "contradictory_available_payload"
@@ -1782,9 +1786,7 @@ def test_position_arithmetic_or_nonfinite_contradiction_fails_closed(
     else:
         cast("list[object]", cursor)[last] = value
 
-    parsed = ptc._parse_position_alpha(  # pyright: ignore[reportPrivateUsage]
-        cast("dict[str, object]", payload)
-    )
+    parsed = _parse_position_alpha(cast("dict[str, object]", payload))
 
     assert parsed.calculation_status == "unavailable"
     assert parsed.compatibility_issue == "contradictory_available_payload"
@@ -1825,7 +1827,7 @@ def test_available_drawdown_core_contradictions_fail_closed(field: str, value: o
     payload = cast("dict[str, object]", deepcopy(_DRAWDOWN))
     payload[field] = value
 
-    parsed = ptc._parse_drawdown(payload)  # pyright: ignore[reportPrivateUsage]
+    parsed = _parse_drawdown(payload)
 
     assert parsed.calculation_status == "unavailable"
     assert parsed.compatibility_issue == "contradictory_available_payload"
@@ -1838,7 +1840,7 @@ def test_available_drawdown_invalid_underwater_point_fails_closed() -> None:
     points = cast("list[dict[str, object]]", payload["underwater"])
     points[1]["drawdown_pct"] = None
 
-    parsed = ptc._parse_drawdown(payload)  # pyright: ignore[reportPrivateUsage]
+    parsed = _parse_drawdown(payload)
 
     assert parsed.calculation_status == "unavailable"
     assert parsed.compatibility_issue == "contradictory_available_payload"
@@ -1849,7 +1851,7 @@ def test_available_drawdown_curve_must_reconcile_to_summary() -> None:
     points = cast("list[dict[str, object]]", payload["underwater"])
     points[1]["drawdown_pct"] = "-99"
 
-    parsed = ptc._parse_drawdown(payload)  # pyright: ignore[reportPrivateUsage]
+    parsed = _parse_drawdown(payload)
 
     assert parsed.calculation_status == "unavailable"
     assert parsed.compatibility_issue == "contradictory_available_payload"
@@ -1860,7 +1862,7 @@ def test_drawdown_insufficient_observations_is_supported_unavailability() -> Non
     payload["calculation_status"] = "unavailable"
     payload["calculation_reason_codes"] = ["insufficient_return_observations"]
 
-    parsed = ptc._parse_drawdown(payload)  # pyright: ignore[reportPrivateUsage]
+    parsed = _parse_drawdown(payload)
 
     assert parsed.calculation_status == "unavailable"
     assert parsed.calculation_reason_codes == ["insufficient_return_observations"]

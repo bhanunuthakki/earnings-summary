@@ -1496,13 +1496,6 @@
           window.workOsOpenPeekRoute(readout.route, (readout.period_label || normalized) + ' earnings readout');
         });
       }
-      const recentUpdates = document.getElementById('deskRecentUpdates');
-      if (recentUpdates) {
-        const updates = [];
-        if (readout) updates.push('<div class="k-well"><strong>' + escapeWorkOsHtml(readout.period_label || 'Latest earnings readout') + '</strong><div class="stat-subtext">Governed earnings artifact · ' + escapeWorkOsHtml(readout.generated_at || 'date unavailable') + '</div></div>');
-        if (brief) updates.push('<div class="k-well"><strong>Latest full brief</strong><div class="stat-subtext">' + escapeWorkOsHtml(brief.report_date || 'date unavailable') + ' · ' + escapeWorkOsHtml(brief.coverage_role || 'unknown') + ' coverage</div></div>');
-        recentUpdates.innerHTML = updates.length ? updates.join('') : '<div class="k-well">No governed recent update is available.</div>';
-      }
       const bands = desk.price_action_bands || { state: 'unavailable', reason_codes: ['price_action_band_source_unavailable'] };
       const trackingBands = document.getElementById('deskTrackingBands');
       if (trackingBands) {
@@ -1633,9 +1626,22 @@
         return '<div class="k-well research-row" data-stable-id="' + escapeWorkOsHtml(condition.stable_id) + '"><div><strong>' + escapeWorkOsHtml(condition.metric) + '</strong><div class="stat-subtext">' + escapeWorkOsHtml(latest) + ' · ' + escapeWorkOsHtml(detail) + '</div><div class="stat-subtext">' + escapeWorkOsHtml(prior) + '</div><div class="stat-subtext">Evidence: ' + escapeWorkOsHtml(condition.evidence_ref || 'unavailable') + '</div></div><div><span class="' + workOsPillClass(status) + '">' + escapeWorkOsHtml(status) + '</span><div class="stat-subtext">' + escapeWorkOsHtml(condition.operator) + ' ' + escapeWorkOsHtml(condition.threshold) + ' ' + escapeWorkOsHtml(condition.unit) + (Number(condition.for_periods) > 1 ? ' · ' + escapeWorkOsHtml(condition.for_periods) + ' periods' : '') + '</div></div></div>';
       }).join('') : '<div class="k-well">No governed conditions are attached to the current decision.</div>';
       const questions = Array.isArray(desk.open_questions) ? desk.open_questions : [];
-      document.getElementById('deskQuestions').innerHTML = questions.length ? questions.map(function (question) {
-        return '<div class="k-well" data-stable-id="' + escapeWorkOsHtml(question.stable_id) + '"><strong>' + escapeWorkOsHtml(question.body) + '</strong><div class="stat-subtext">' + escapeWorkOsHtml(question.origin) + ' · ' + escapeWorkOsHtml(question.approval) + ' · revision ' + escapeWorkOsHtml(question.revision) + '</div></div>';
-      }).join('') : (desk.question_store_status === 'unavailable'
+      const renderQuestion = function (question) {
+        const date = String(question.revision || '').slice(0, 10);
+        const meta = question.origin === 'owner' ? date : question.origin + ' · ' + question.approval + ' · ' + date;
+        const label = '<span class="research-question-line"><strong>' + escapeWorkOsHtml(question.headline) + '</strong><span class="stat-subtext">' + escapeWorkOsHtml(meta) + '</span></span>';
+        const content = question.detail_html
+          ? '<details><summary>' + label + '</summary><div class="research-question-body">' + question.detail_html + '</div></details>'
+          : label;
+        return '<li class="research-question" data-stable-id="' + escapeWorkOsHtml(question.stable_id) + '">' + content + '</li>';
+      };
+      const ownerQuestions = questions.filter(function (question) { return question.origin === 'owner'; });
+      const prompts = questions.filter(function (question) { return question.origin !== 'owner'; });
+      const ownerHtml = ownerQuestions.length ? '<ul class="research-question-list">' + ownerQuestions.map(renderQuestion).join('') + '</ul>' : '';
+      const promptHtml = prompts.length
+        ? '<details class="research-question-prompts"><summary>' + prompts.length + (prompts.length === 1 ? ' suggested re-check' : ' suggested re-checks') + '</summary><ul class="research-question-list">' + prompts.map(renderQuestion).join('') + '</ul></details>'
+        : '';
+      document.getElementById('deskQuestions').innerHTML = (ownerHtml || promptHtml) ? ownerHtml + promptHtml : (desk.question_store_status === 'unavailable'
         ? '<div class="k-well" role="alert">Open-question store unavailable.</div>'
         : '<div class="k-well">No open research questions.</div>');
       const askCompany = document.getElementById('workOsAskCompany');
@@ -2567,7 +2573,9 @@
     window.navigateTo('screen-audit-log');
     window.setTimeout(function () {
       const researchItems = document.getElementById('csec-research-items');
-      if (researchItems) researchItems.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (!researchItems) return;
+      if (researchItems.tagName === 'DETAILS') researchItems.open = true;
+      researchItems.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 250);
   });
   if (deskQuestionCapture) deskQuestionCapture.addEventListener('submit', async function (event) {

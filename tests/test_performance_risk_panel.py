@@ -215,6 +215,8 @@ def test_policy_editor_uses_only_confirmed_provider_weights_and_fresh_read_contr
         assert f'value="{weight}"' in html
     assert "Apply mix</button>" in html
     assert 'data-write-ready="true"' in html
+    # The submit handler attaches only when it tests the value the markup emits.
+    assert "form.dataset.writeReady !== 'true'" in html
     assert "/api/portfolio/policy" in html
     assert "X-Portfolio-Write-Intent" in html
     assert "Policy weights must total 100.00%" in html

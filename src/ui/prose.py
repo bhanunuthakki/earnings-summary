@@ -87,6 +87,37 @@ def prose_card_text(text: str) -> str:
     return _inline(" ".join(lines))
 
 
+_HEADLINE_MIN_LENGTH = 60
+_HEADLINE_LINE_MARK_RE = re.compile(r"^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+)")
+_HEADLINE_INLINE_RE = re.compile(r"\*{1,2}|__|`")
+_HEADLINE_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+_HEADLINE_SENTENCE_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"\u201c])")
+
+
+def prose_headline(md: str, *, limit: int = 140, skip_title: bool = False) -> str:
+    """Return one plain line that names stored prose.
+
+    A leading Markdown title wins. Otherwise the first sentence is used.
+    ``skip_title=True`` returns the first sentence after that title. The result
+    is plain text, so callers must escape it for HTML.
+    """
+    lines = [line.strip() for line in md.strip().splitlines() if line.strip()]
+    titled = bool(lines) and lines[0].startswith("#")
+    selected = lines[1:] if titled and skip_title else lines[:1] if titled else lines
+    plain = " ".join(_HEADLINE_LINE_MARK_RE.sub("", line) for line in selected)
+    text = _HEADLINE_LINK_RE.sub(r"\1", plain)
+    text = " ".join(_HEADLINE_INLINE_RE.sub("", text).split())
+    sentences = _HEADLINE_SENTENCE_RE.split(text)
+    text = sentences[0]
+    for sentence in sentences[1:]:
+        if len(text) >= _HEADLINE_MIN_LENGTH:
+            break
+        text = f"{text} {sentence}"
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rsplit(" ", 1)[0].rstrip(" ,;:") + "\u2026"
+
+
 def render_prose(
     md: str,
     *,

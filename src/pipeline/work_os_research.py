@@ -122,19 +122,12 @@ def render_company_desk_shell() -> str:
     </div>
 
     <section class="k-card k-card-section" data-testid="next-step-exploration" aria-labelledby="deskNextStepHeading">
-      <header class="k-card-head"><div class="k-card-heading"><h2 class="k-card-title" id="deskNextStepHeading">Next-step exploration</h2><p class="k-card-meta">Recent evidence and open questions</p></div></header>
-      <div class="company-desk-exploration-grid">
-        <div><h3 class="k-well-title">Recent relevant updates</h3><div class="research-list" id="deskRecentUpdates"><div class="k-well">No governed update is available.</div></div></div>
-        <div>
-          <div class="research-row"><h3 class="k-well-title">Open questions</h3><div class="research-actions"><button class="k-btn k-btn-quiet k-btn-sm" type="button" id="workOsAskQuestions" data-research-chat="open-questions" data-copilot-scope="open-questions" disabled>Ask these questions</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" id="workOsManageResearchItems">Manage items</button></div></div>
-          <form class="research-question-capture" id="deskQuestionCapture">
-            <label class="k-card-meta" for="deskQuestionInput">Add an owner question</label>
-            <div class="research-actions"><input id="deskQuestionInput" maxlength="2000" required placeholder="What should we track?" autocomplete="off"><button class="k-btn k-btn-primary k-btn-sm" type="submit">Track question</button></div>
-            <span class="stat-subtext" id="deskQuestionCaptureStatus" aria-live="polite"></span>
-          </form>
-          <div class="research-list" id="deskQuestions"><div class="k-well">No open research questions.</div></div>
-        </div>
-      </div>
+      <header class="k-card-head"><div class="k-card-heading"><h2 class="k-card-title" id="deskNextStepHeading">Open questions</h2></div><div class="research-actions"><button class="k-btn k-btn-quiet k-btn-sm" type="button" id="workOsAskQuestions" data-research-chat="open-questions" data-copilot-scope="open-questions" disabled>Ask these questions</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" id="workOsManageResearchItems">Manage items</button></div></header>
+      <div class="research-list" id="deskQuestions"><div class="k-well">No open research questions.</div></div>
+      <form class="research-question-capture" id="deskQuestionCapture">
+        <div class="research-actions"><input id="deskQuestionInput" maxlength="2000" required placeholder="Add a question to track" aria-label="Add a question to track" autocomplete="off"><button class="k-btn k-btn-quiet k-btn-sm" type="submit">Track question</button></div>
+        <span class="stat-subtext" id="deskQuestionCaptureStatus" aria-live="polite"></span>
+      </form>
     </section>
 
     <section class="k-card k-card-section" data-testid="contracts-card" aria-labelledby="deskContractsHeading">

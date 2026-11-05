@@ -547,6 +547,8 @@ _BHA_92_SURFACES = frozenset(
         "dashboard/inbox.py",
         "dashboard/upcoming.py",
         "pipeline/allocation_decisions_panel.py",
+        "pipeline/decision_log.py",
+        "pipeline/performance_notice.py",
         "pipeline/portfolio_decision_support.py",
         "pipeline/analytical_dashboard_html.py",
         "pipeline/attribution_panel.py",
@@ -572,7 +574,6 @@ _BHA_92_SURFACES = frozenset(
         "pipeline/open_loops.py",
         "pipeline/operations_panel.py",
         "pipeline/peeks.py",
-        "pipeline/portfolio_console_panel.py",
         "pipeline/portfolio_panel.py",
         "pipeline/position_lifecycle_panel.py",
         "pipeline/positioning_panel.py",
@@ -1028,11 +1029,11 @@ _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
         "execution/build_earnings_calendar.py": "a2257779753cf8476f0ab93478569ffbd1d116856e596b46d12afcf8e45de114",  # pragma: allowlist secret
         "pipeline/analysis_styles.py": "75476869a35c0e1f08ba3faa1d35c1f08d5e506efe77ed3b1a52f33bc937942a",  # pragma: allowlist secret
         "pipeline/operations_styles.py": "25ac8767dbe7aa83b41902fdaded9f6ec60482850f02c4ba93996ff8ff7544e7",  # pragma: allowlist secret
-        "pipeline/portfolio_styles.py": "71c0ce48fe31845c25f187338910ee641aea618a297b4762af009654aa50ded8",  # pragma: allowlist secret
+        "pipeline/portfolio_styles.py": "00a7d1a23146133a6abce9b38c6430295a873490b6f01c38dc35047b90cb7994",  # pragma: allowlist secret
         # Retire legacy feed, answer, packet and queue rules; keep shared Notes/research geometry.
         "pipeline/research_panel_styles.py": "95721070567c6e6faf7a65002e23b89b4f8bc395d4f9bf84461b7afe1374d7e2",  # pragma: allowlist secret
         # Work OS retains its family geometry after the standalone page CSS retired; this digest covers that retained geometry.
-        "pipeline/work_os_styles.py": "42f32470f84e129f39682d482cbe5cbf60a458ac3f91b23fdf26dfc0c3c24d82",  # pragma: allowlist secret
+        "pipeline/work_os_styles.py": "c88af7689ee179af2f00520914eb283777f87f271805d4df77ff29f6b5b2c191",  # pragma: allowlist secret
         "report/renderers/workspace_charts.py": "e55dff6926088b1c08aa42dc69fad725a1f55c15d46a8d9f5c60e60f1773b13a",  # pragma: allowlist secret
         "report/renderers/workspace_styles.py": "82c330d136b35a08f482bb2a851308455864df63b611438725d172e9fd5cb3c3",  # pragma: allowlist secret
         "ui/cite_marks.py": "0c45d7eefb5ef340b1ec58036f32ec4042f69c41473850fc8624f4968e95783e",  # pragma: allowlist secret

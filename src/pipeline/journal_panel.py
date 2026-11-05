@@ -47,11 +47,12 @@ from journal_links import (
     targets_for_notes,
 )
 from pipeline.research_panel_styles import RESEARCH_PANEL_STYLE
-from ui.prose import render_prose
+from ui.prose import prose_headline, render_prose
 from user_state.notes import NOTE_KINDS, AnalystNoteRow, list_notes
 
 _PANEL_STYLE = RESEARCH_PANEL_STYLE
 
+_NOTE_BODY_INLINE_LIMIT = 320
 _STATUS_FILTERS = ("open", "resolved", "superseded", "archived", "all")
 # Research Items is deliberately a lens over the canonical analyst-note journal,
 # not a second work queue. Decisions and free-form musings retain their homes in
@@ -111,6 +112,16 @@ def _stored_answer_suggestion(n: AnalystNoteRow) -> str:
     return (
         '<div class="jr-resolution"><strong>Stored answer — suggestion only:</strong> '
         f"{escape(text)}</div>"
+    )
+
+
+def _note_body(body: str) -> str:
+    """Show short notes whole. Long notes open from a one-line headline."""
+    if len(body) <= _NOTE_BODY_INLINE_LIMIT:
+        return f'<div class="jr-body">{render_prose(body)}</div>'
+    return (
+        f'<details class="jr-body"><summary>{escape(prose_headline(body))}</summary>'
+        f"{render_prose(body)}</details>"
     )
 
 
@@ -198,7 +209,7 @@ def _note_card(
         f"{anchor}"
         f"{_link_chip(n, targets)}"
         "</div>"
-        f'<div class="jr-body">{render_prose(n.body)}</div>'
+        f"{_note_body(n.body)}"
         f"{resolution}"
         f"{actions}"
         "</div>"

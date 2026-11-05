@@ -181,27 +181,15 @@ def test_health_synthesis_without_cached_memo_keeps_the_run_hint(
 # --------------------------------------------------------------------------- #
 
 
-def test_record_console_is_brief_plus_grid(tmp_path: Path, probe_down: None) -> None:
+def test_record_console_leads_with_decisions(tmp_path: Path, probe_down: None) -> None:
     from pipeline.portfolio_console_panel import render_portfolio_record_panel
 
-    html = render_portfolio_record_panel(tmp_path / "missing.db")
-    assert 'class="console-grid"' in html
-    assert 'class="console-sec csec-wide k-card k-card-section" id="csec-brief"' in html
-    assert 'class="console-sec csec-wide k-card k-card-section" id="csec-decisions"' in html
-    assert 'class="console-sec k-card k-card-section" id="csec-triggers"' in html
-
-
-def test_briefs_degrade_to_quiet_line_on_missing_db(tmp_path: Path, probe_down: None) -> None:
-    """D4: an empty read states itself in one line — it never blanks the
-    console or leaks a traceback."""
-    from pipeline.portfolio_console_panel import render_portfolio_record_panel
-
-    # Record has nothing to say → the one-line quiet state, never a blank.
-    record = render_portfolio_record_panel(tmp_path / "missing.db")
-    assert 'class="console-brief"' in record
-    assert 'class="panel console-brief"' not in record
-    assert "Not enough live data for a read yet" in record
-    assert "Traceback" not in record
+    html = render_portfolio_record_panel(tmp_path / "missing.db", lazy=True)
+    assert '<article class="console-sec k-card k-card-section" id="csec-decisions">' in html
+    assert "csec-brief" not in html
+    for anchor in ("process", "research-items", "triggers", "activity"):
+        assert f'<details class="console-sec k-card k-card-section" id="csec-{anchor}">' in html
+        assert f'fragment={anchor}"' in html
 
 
 # --------------------------------------------------------------------------- #
