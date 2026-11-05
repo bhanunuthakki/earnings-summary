@@ -154,7 +154,7 @@ def test_session_start_prunes_earlier_runs_from_the_controller(tmp_path: Path) -
     environment = {
         key: value
         for key, value in os.environ.items()
-        if key not in {"PYTEST_XDIST_WORKER", "GITHUB_ACTIONS", "EARNINGS_SUMMARY_DB_PATH"}
+        if key not in {"PYTEST_XDIST_WORKER", "EARNINGS_SUMMARY_DB_PATH"}
         and not key.startswith("_EARNINGS_SUMMARY_PYTEST")
     }
     environment.update(

@@ -72,6 +72,13 @@ Local proof: 192 owning tests pass. Synthetic Notes and card browser checks cove
 card action. They do not establish live cockpit parity. No service, schedule,
 production row or installed library changed.
 
+## Weekly cleanup hold alignment — November 4, 2026
+
+The `weekly_cleanup` source definition remains disabled to match its existing
+Windows operating hold. Retirement activation preserves that hold. Native monitor
+pin enrollment still requires the observed task state to match the source
+definition. This alignment does not run cleanup or change its deletion allowlist.
+
 ## On-demand process research source retirement — October 25, 2026
 
 The `ledger_synthesis`, `red_team`, `tenet_accountability` and `thesis_collision`

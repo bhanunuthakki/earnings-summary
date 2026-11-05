@@ -32,6 +32,8 @@ EXPECTED_DISABLED_TASKS = {
     r"\earnings-summary\scan_ir_transcripts",
     # Simplification Phase 0 freeze (2026-10-20): outside the core research jobs.
     r"\earnings-summary\grade_calibration",
+    # Preserve the existing Windows hold during retirement activation.
+    r"\earnings-summary\weekly_cleanup",
 }
 
 
