@@ -385,7 +385,7 @@ def _add_production_contract(
                 mount_id="workOsAuditMount",
                 layer="Operations & Governance",
                 title="Decision Audit Log",
-                description="Live decisions, memos, triggers, and the governed research record",
+                description="What you decided, why, and how it turned out",
             ),
             "\n\n      ",
         ),

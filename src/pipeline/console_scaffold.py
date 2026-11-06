@@ -90,6 +90,7 @@ def render_console(
     grid: bool = False,
     wide: tuple[str, ...] = (),
     deferred: dict[str, str] | None = None,
+    collapsed: tuple[str, ...] = (),
 ) -> str:
     """Assemble a composite console: an anchor-nav band (jump chips) over the
     composed builder sections.
@@ -118,6 +119,10 @@ def render_console(
     vertical stack. ``wide`` names the anchors that span every column (the
     Band-1 brief, a landing section). The adopting console owns the
     ``.console-grid`` CSS — this scaffold stays styling-free.
+
+    ``collapsed`` names reference sections that stay closed on arrival. A closed
+    deferred section does not intersect the viewport, so it costs no request
+    until the owner opens it.
     """
     nav = extra_nav + "".join(
         f'<button type="button" class="k-chip k-chip-btn k-chip-tab" '
@@ -126,7 +131,7 @@ def render_console(
         for anchor, label, _ in sections
         if anchor not in nav_exclude
     )
-    toolbar = panel_toolbar(title, filters=nav, suppress_title=True, sticky=True)
+    toolbar = panel_toolbar(title, filters=nav, suppress_title=True, sticky=True) if nav else ""
     rendered_sections: list[str] = []
     for anchor, label, fn in sections:
         endpoint = (deferred or {}).get(anchor)
@@ -146,6 +151,12 @@ def render_console(
                 "</div></header>"
             )
         )
+        if anchor in collapsed:
+            rendered_sections.append(
+                f'<details class="console-sec k-card k-card-section" id="csec-{escape(anchor)}">'
+                f'<summary class="k-card-title">{escape(label)}</summary>{fragment}</details>'
+            )
+            continue
         rendered_sections.append(
             f'<article class="console-sec{" csec-wide" if grid and anchor in wide else ""} '
             f'k-card k-card-section" id="csec-{escape(anchor)}">'
@@ -234,7 +245,8 @@ _CONSOLE_LOAD_JS = """
       }
       section.dataset.consoleLoaded = '1';
     } catch (_) {
-      if (!disposed && active.get(section) === state && eligible(section)) error(section);
+      if (disposed || active.get(section) !== state || !eligible(section)) return;
+      error(section);
     } finally {
       window.clearTimeout(state.timer);
       if (active.get(section) === state) {

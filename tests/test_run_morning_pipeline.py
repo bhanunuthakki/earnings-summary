@@ -438,6 +438,40 @@ def test_corrupt_checkpoint_fails_loud() -> None:
         _LOAD_COMPLETED_STAGES("scope")
 
 
+def _write_checkpoint(*, scope: str, updated_at: float, stages: list[str]) -> None:
+    run_morning_pipeline.STATE_FILE.parent.mkdir(parents=True)
+    run_morning_pipeline.STATE_FILE.write_text(
+        json.dumps(
+            {
+                "version": vars(run_morning_pipeline)["_CHECKPOINT_VERSION"],
+                "scope": scope,
+                "updated_at": updated_at,
+                "completed_stages": stages,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_retired_stage_in_older_scope_does_not_stop_the_next_run() -> None:
+    _write_checkpoint(scope="old-manifest", updated_at=time.time(), stages=["stage_retired"])
+
+    assert _LOAD_COMPLETED_STAGES("new-manifest") == set()
+
+
+def test_retired_stage_in_expired_checkpoint_does_not_stop_the_next_run() -> None:
+    _write_checkpoint(scope="scope", updated_at=time.time() - 19 * 3600, stages=["stage_retired"])
+
+    assert _LOAD_COMPLETED_STAGES("scope") == set()
+
+
+def test_unknown_stage_in_current_checkpoint_fails_loud() -> None:
+    _write_checkpoint(scope="scope", updated_at=time.time(), stages=["stage_retired"])
+
+    with pytest.raises(run_morning_pipeline.CheckpointStateError, match="unknown stage"):
+        _LOAD_COMPLETED_STAGES("scope")
+
+
 def test_checkpoint_replace_failure_preserves_last_good_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

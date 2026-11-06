@@ -58,6 +58,24 @@ global.document = {dispatchEvent:event=>observations.push(event.detail)};
   try {await window.uiFetch('/api/test');throw Error('unexpected stream accepted');}
   catch(error) {if(!error.message.includes('Accept:'))throw error;}
   if(!streamCancelled)throw Error('unexpected stream left open');
+  const busyResponse=()=>new Response('{}',{status:503,headers:{'X-Panel-Cache':'busy','Retry-After':'0.01'}});
+  calls=0;
+  global.fetch=async()=>++calls<3?busyResponse():new Response('built');
+  if(await (await window.uiFetch('/api/test')).text()!=='built'||calls!==3)throw Error('busy read not retried');
+  calls=0;
+  global.fetch=async()=>{calls++;return busyResponse();};
+  try {await window.uiFetch('/api/test');throw Error('endless busy accepted');}
+  catch(error){if(error.status!==503||calls!==5)throw error;}
+  calls=0;
+  global.fetch=async()=>{calls++;return new Response('{}',{status:503});};
+  try {await window.uiFetch('/api/test');throw Error('plain 503 accepted');}
+  catch(error){if(error.status!==503||calls!==1)throw error;}
+  const busyAbort=new AbortController();
+  global.fetch=async()=>new Response('{}',{status:503,headers:{'X-Panel-Cache':'busy','Retry-After':'5'}});
+  window.setTimeout(()=>busyAbort.abort(new DOMException('Read cancelled','AbortError')),10);
+  const busyStarted=Date.now();
+  try {await window.uiFetch('/api/test',{signal:busyAbort.signal});throw Error('abort during busy wait accepted');}
+  catch(error){if(error.name!=='AbortError'||Date.now()-busyStarted>1000)throw error;}
   global.fetch=async()=>new Response('value',{headers:{ETag:'saved'}});
   const result=await window.uiFetch('/api/test?private=hidden');
   if(await result.text()!=='value'||result.headers.get('ETag')!=='saved')throw Error('response changed');

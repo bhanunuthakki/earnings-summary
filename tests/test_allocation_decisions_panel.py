@@ -567,8 +567,14 @@ def test_decisions_record_panel_route(client: FlaskClient) -> None:
     assert resp.mimetype == "text/html"
     body = resp.data.decode()
     assert "Sizing audit" in body
-    assert "Decisions timeline" in body
-    assert "conviction 5/5" in body
+    assert "Decisions timeline" not in body
+
+
+def test_decisions_timeline_renders_on_its_own(tmp_path: Path) -> None:
+    db = tmp_path / "empty.db"
+    sqlite3.connect(db).close()
+
+    assert "Nothing recorded yet." in adp.render_decisions_timeline(db)
 
 
 # --------------------------------------------------------------------------- #
@@ -772,37 +778,8 @@ def _assert_closed(con: sqlite3.Connection) -> None:
         con.execute("SELECT 1")
 
 
-def test_pool_owned_supplied_equivalence(tmp_path: Path) -> None:
-    db = _make_pool_db(tmp_path / "pool.db")
-    exp_journal = adp.render_decision_journal_section(db)
-    con = adp.connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
-    con.row_factory = sqlite3.Row
-    try:
-        _assert_usable(con)
-        assert adp.render_decision_journal_section(db, conn=con) == exp_journal
-        _assert_usable(con)
-    finally:
-        con.close()
-    _assert_closed(con)
-
-
-def test_pool_thin_missing_tables(tmp_path: Path) -> None:
-    db = tmp_path / "thin.db"
-    sqlite3.connect(str(db)).close()
-    con = adp.connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
-    con.row_factory = sqlite3.Row
-    try:
-        assert "No Owner Decisions recorded yet." in adp.render_decision_journal_section(
-            db, conn=con
-        )
-        _assert_usable(con)
-    finally:
-        con.close()
-
-
 def test_pool_render_two_conns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db = _make_pool_db(tmp_path / "render.db")
-    exp_journal = adp.render_decision_journal_section(db)
     conns: list[sqlite3.Connection] = []
     orig = adp.connect_sqlite
 
@@ -854,7 +831,7 @@ def test_pool_render_two_conns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(adp, "latest_dcf_runs", _fake_latest_dcf_runs)
     monkeypatch.setattr(adp, "latest_dcf_scenarios", _fake_latest_dcf_scenarios)
     html = adp.render_allocation_decisions_panel(db, user_id="bhanu")
-    assert exp_journal in html
-    assert len(conns) == 2
+    assert "Sizing audit" in html
+    assert len(conns) == 1
     for c in conns:
         _assert_closed(c)

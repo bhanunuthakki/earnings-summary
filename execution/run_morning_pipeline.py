@@ -328,15 +328,17 @@ def _load_completed_stages(checkpoint_scope: str | None = None) -> set[str]:
             f"checkpoint completed_stages must be a list of strings: {STATE_FILE}"
         )
     completed_stages = cast("list[str]", completed_stage_values)
+    # A checkpoint from an older manifest may name a retired stage. It is not
+    # resumable, and it must not stop every later run.
+    if checkpoint_scope is not None and stored_scope != checkpoint_scope:
+        return set()
+    if time.time() - updated_at > 18 * 3600:
+        return set()
     unknown = set(completed_stages).difference(_ALL_STAGE_KEYS)
     if unknown:
         raise CheckpointStateError(
             f"checkpoint contains unknown stage keys {sorted(unknown)}: {STATE_FILE}"
         )
-    if checkpoint_scope is not None and stored_scope != checkpoint_scope:
-        return set()
-    if time.time() - updated_at > 18 * 3600:
-        return set()
     return set(completed_stages)
 
 

@@ -36,6 +36,9 @@ from provenance.selection import selected_transcripts_relation
 from report.artifacts import latest_report_artifacts_for_tickers
 from report.models import BreakRuleEvaluation, KpiLedgerRow, SectionStatus, ThesisSection
 from report.sections import thesis as thesis_section
+from ui.prose import prose_headline, render_prose
+
+_QUESTION_HEADLINE_LIMIT = 120
 
 # ---------------------------------------------------------------------------
 # Pure PRE/POST earnings doorway selection (folded in from the former
@@ -176,6 +179,8 @@ class DeskQuestion(BaseModel):
     note_id: int
     revision: str
     body: str
+    headline: str
+    detail_html: str
     origin: Literal["owner", "model", "thesis", "engagement", "system"]
     approval: Literal["owner-authored", "owner-approved", "system"]
     evidence_ref: str | None
@@ -467,6 +472,13 @@ def _company(conn: sqlite3.Connection, ticker: str) -> CompanyIdentity | None:
     return CompanyIdentity(ticker=ticker, name=str(row["name"] or ticker), coverage_role=role)
 
 
+def _question_detail(body: str) -> str:
+    """Return sanitized prose only when the headline does not hold the whole note."""
+    if prose_headline(body, limit=_QUESTION_HEADLINE_LIMIT) == " ".join(body.split()):
+        return ""
+    return render_prose(body)
+
+
 def _questions(
     conn: sqlite3.Connection, ticker: str
 ) -> tuple[list[DeskQuestion], Literal["ok", "unavailable"], list[str]]:
@@ -533,6 +545,8 @@ def _questions(
                 note_id=int(note["id"]),
                 revision=str(note["updated_at"]),
                 body=str(note["body"]),
+                headline=prose_headline(str(note["body"]), limit=_QUESTION_HEADLINE_LIMIT),
+                detail_html=_question_detail(str(note["body"])),
                 origin=origin,
                 approval=approval,
                 evidence_ref=(

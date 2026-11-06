@@ -40,7 +40,7 @@ permissions:
 jobs:
   changes:
     name: Check Changed Paths
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       code: ${{ steps.classify.outputs.code }}
       python: ${{ steps.classify.outputs.python }}
@@ -87,7 +87,7 @@ jobs:
 
   public-boundary:
     name: Public Boundary
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -100,7 +100,7 @@ jobs:
     name: Fast Signal
     needs: [changes]
     if: ${{ needs.changes.outputs.code == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -186,7 +186,7 @@ jobs:
     name: tests (shard ${{ matrix.label }}/8)
     needs: [changes]
     if: ${{ needs.changes.outputs.code == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 40, not 25: the heaviest shards legitimately run 14-15 min, and hosted
     # runners routinely deliver ~2x slowdowns (disk/CPU contention), which put
     # shard 6 over a 25 min cap three times on 2026-07-31 while it was still
@@ -352,7 +352,7 @@ jobs:
     # path skips the job, and the aggregate gate tolerates that skip only
     # because classify_paths said design=false.
     if: ${{ needs.changes.outputs.design == 'true' || github.ref == 'refs/heads/main' || github.event_name == 'schedule' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -473,7 +473,7 @@ jobs:
   quality:
     needs: [changes]
     if: ${{ needs.changes.outputs.python == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -524,7 +524,7 @@ jobs:
     # Every changed retained file must be clean. The complete active population
     # also has exact, checked-in subsystem ceilings that must move downward with
     # each debt cleanup; hidden files and diagnostic substitution cannot pass.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       NODE_OPTIONS: "--max-old-space-size=6144"
@@ -574,7 +574,7 @@ jobs:
     # Blocking supply-chain, secret, and SAST checks. Bandit carries an explicit
     # reviewed legacy baseline so regressions fail without pretending the
     # historical findings have already been remediated.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -752,7 +752,7 @@ jobs:
     name: CI Gate
     if: ${{ always() }}
     needs: [changes, public-boundary, fast-signal, windows-native, windows-app, tests, design, quality, typecheck, security]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Require every applicable job to pass

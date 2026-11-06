@@ -73,6 +73,10 @@ from integrations.portfolio_tracker_client import (
     probe_tracker,
 )
 from macro_store import Sensitivity, fetch_sensitivities
+from pipeline.performance_notice import (
+    performance_calculation_notice,
+    performance_reason_list,
+)
 from pipeline.portfolio_styles import portfolio_css
 from portfolio_correlation import (
     CLUSTER_CORR,
@@ -721,16 +725,23 @@ def _performance_section(
     chart_points = perf.points if perf.calculation_status == "available" else []
     if not chart_points:
         provenance = _analytics_provenance(perf.provenance)
-        performance_empty = (
-            _performance_calculation_notice(perf)
-            if perf.calculation_status == "unavailable"
-            else k_empty("Tracker returned no performance history for the window.")
-        )
+        if perf.calculation_status == "unavailable":
+            return panel_section(
+                '<div class="pf-perf-head">',
+                perf_h2,
+                "</div>",
+                performance_calculation_notice(perf),
+                '<details class="pf-quiet-details"><summary>Tracker details</summary>',
+                f"{performance_reason_list(perf)}{provenance}",
+                "</details>",
+                '<details class="pf-quiet-details"><summary>Try another window</summary>'
+                f'<div class="pf-perf-head">{window_bar}</details>',
+            )
         return panel_section(
             '<div class="pf-perf-head">',
             perf_h2,
             window_bar,
-            performance_empty,
+            k_empty("Tracker returned no performance history for the window."),
             provenance,
             _policy_line(policy),
         )
@@ -812,62 +823,6 @@ _POSITION_REASON_LABELS = {
     "trade_ticker_missing": "trade missing ticker identity",
     "trade_notional_unavailable": "trade value unavailable",
 }
-
-_PERFORMANCE_REASON_LABELS = {
-    "no_portfolio_values": "no portfolio values",
-    "external_share_movement_missing_security": "external share movement missing security identity",
-    "external_share_movement_missing_ticker": "external share movement missing ticker identity",
-    "external_share_movement_price_unavailable": "external share-movement price unavailable",
-    "nonpositive_dietz_denominator": "nonpositive Modified Dietz denominator",
-    "portfolio_start_value_unavailable": "requested start-date valuation unavailable",
-    "portfolio_end_value_unavailable": "requested end-date valuation unavailable",
-    "partial_snapshot_start_date": "start-date account snapshot is incomplete",
-    "partial_snapshot_end_date": "end-date account snapshot is incomplete",
-    "partial_account_valuation_start_date": "start-date account valuation coverage is incomplete",
-    "partial_account_valuation_end_date": "end-date account valuation coverage is incomplete",
-    "account_valuation_integrity_invalid": "account valuation evidence failed integrity checks",
-    "modeled_opening_account_coverage_incomplete": "modeled opening account coverage incomplete",
-    "modeled_opening_valuation_coverage_incomplete": "modeled opening valuation incomplete",
-    "portfolio_account_universe_coverage_incomplete": "portfolio account-universe valuation coverage incomplete",
-    "account_valuation_index_exclusion_unsupported": "account valuation cannot support the requested index-fund exclusion",
-    "provider_valuation_as_of_unasserted": "provider valuation date is not asserted",
-    "performance_window_too_short": "performance window is too short",
-    "spy_benchmark_price_unavailable": "SPY benchmark history incomplete",
-    "qqq_benchmark_price_unavailable": "QQQ benchmark history incomplete",
-    "policy_benchmark_price_unavailable": "policy benchmark history incomplete",
-    "external_flow_source_coverage_incomplete": "broker-statement cash-flow coverage incomplete",
-    "broker_archive_coverage_not_complete": "broker archive coverage incomplete",
-    "external_flow_provenance_current_decision_missing": "cash-flow provenance decision missing",
-    "external_flow_provenance_current_decision_conflict": "cash-flow provenance decisions conflict",
-    "external_flow_provenance_current_decision_unapproved": "cash-flow provenance decision unapproved",
-    "external_flow_provenance_current_decision_unresolved": "cash-flow provenance decision unresolved",
-    "external_flow_provenance_current_decision_provisional": "cash-flow provenance decision provisional",
-    "external_flow_provenance_target_transaction_missing": "cash-flow provenance target transaction missing",
-    "external_flow_provenance_target_transaction_account_mismatch": "cash-flow provenance target account mismatch",
-    "external_flow_provenance_target_transaction_economics_mismatch": "cash-flow provenance target economics mismatch",
-    "external_flow_provenance_transaction_target_conflict": "cash-flow provenance transaction target conflict",
-    "external_flow_provenance_decision_payload_digest_mismatch": "cash-flow provenance decision integrity mismatch",
-    "external_flow_provenance_source_event_set_digest_mismatch": "cash-flow provenance source-event integrity mismatch",
-    "external_flow_provenance_effective_date_basis_mismatch": "cash-flow provenance effective-date basis mismatch",
-    "unpriceable_holding_snapshot": "one or more held positions could not be valued",
-    "option_history_reconstruction_unsupported": "option position history cannot be reconstructed",
-}
-
-
-def _performance_calculation_notice(perf: PerformanceSeries) -> str:
-    if perf.calculation_status == "available":
-        return ""
-    if perf.compatibility_issue is not None:
-        detail = "the provider response did not satisfy the supported calculation contract"
-    elif perf.calculation_reason_codes:
-        detail = ", ".join(
-            _PERFORMANCE_REASON_LABELS[code]
-            for code in perf.calculation_reason_codes
-            if code in _PERFORMANCE_REASON_LABELS
-        )
-    else:
-        detail = "the tracker could not validate the whole-account calculation"
-    return k_empty(f"Whole-account Modified Dietz return unavailable: {detail}.")
 
 
 def _position_calculation_notice(

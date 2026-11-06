@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "9d751bfee87428a3aa0295020c8597ed7267f5b2",
+  "scoped_commit": "2148485af77097072ad753873a79e78bd62510d6",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "edd314b16b3c50b6bbb12de6d52dc7710d9db8f30c72b59cd95ccf916f3a1818",
+  "source_sha256": "1f6b4ef322d2466bcc598049483676c896a86edea8f27797c8bbf407e363089c",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,8 +22,8 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1390,
-    "total_noncomment_loc": 555039,
+    "executable_modules": 1392,
+    "total_noncomment_loc": 555358,
     "modules_over_1000_loc": 116,
     "modules_over_2000_loc": 23,
     "modules_at_least_3000_loc": 5,
@@ -33,11 +33,11 @@
     "largest_scc": 12,
     "composition_root_loc": {
       "execution/comments_server.py": 183,
-      "src/pipeline/portfolio_panel.py": 3498
+      "src/pipeline/portfolio_panel.py": 3456
     },
     "composition_root_fan_out": {
       "execution/comments_server.py": 8,
-      "src/pipeline/portfolio_panel.py": 28
+      "src/pipeline/portfolio_panel.py": 29
     },
     "facade_violations": [
       "execution/comments_server.py: side-effect responsibilities ('network', 'process')",
@@ -1662,9 +1662,9 @@
         "path": "execution/collect_evidence_bundle.py",
         "module": "execution.collect_evidence_bundle",
         "lines": {
-          "physical": 105,
-          "nonblank": 95,
-          "noncomment": 95
+          "physical": 104,
+          "nonblank": 94,
+          "noncomment": 94
         },
         "internal_fan_out": 1,
         "responsibilities": [],
@@ -5526,8 +5526,8 @@
         "path": "execution/run_morning_pipeline.py",
         "module": "execution.run_morning_pipeline",
         "lines": {
-          "physical": 873,
-          "nonblank": 763,
+          "physical": 875,
+          "nonblank": 765,
           "noncomment": 714
         },
         "internal_fan_out": 10,
@@ -12672,9 +12672,9 @@
         "path": "src/pipeline/allocation_decisions_panel.py",
         "module": "pipeline.allocation_decisions_panel",
         "lines": {
-          "physical": 1536,
-          "nonblank": 1392,
-          "noncomment": 1328
+          "physical": 1439,
+          "nonblank": 1299,
+          "noncomment": 1237
         },
         "internal_fan_out": 17,
         "responsibilities": [
@@ -12920,9 +12920,9 @@
         "path": "src/pipeline/console_scaffold.py",
         "module": "pipeline.console_scaffold",
         "lines": {
-          "physical": 277,
-          "nonblank": 254,
-          "noncomment": 248
+          "physical": 289,
+          "nonblank": 265,
+          "noncomment": 259
         },
         "internal_fan_out": 1,
         "responsibilities": [
@@ -13088,6 +13088,22 @@
         ],
         "public_functions": 2,
         "fully_annotated_public_functions": 2
+      },
+      {
+        "path": "src/pipeline/decision_log.py",
+        "module": "pipeline.decision_log",
+        "lines": {
+          "physical": 364,
+          "nonblank": 313,
+          "noncomment": 311
+        },
+        "internal_fan_out": 3,
+        "responsibilities": [
+          "database",
+          "network"
+        ],
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
       },
       {
         "path": "src/pipeline/deferred_fmp.py",
@@ -13493,9 +13509,9 @@
         "path": "src/pipeline/journal_panel.py",
         "module": "pipeline.journal_panel",
         "lines": {
-          "physical": 711,
-          "nonblank": 673,
-          "noncomment": 664
+          "physical": 722,
+          "nonblank": 682,
+          "noncomment": 673
         },
         "internal_fan_out": 6,
         "responsibilities": [
@@ -13867,12 +13883,27 @@
         "fully_annotated_public_functions": 18
       },
       {
+        "path": "src/pipeline/performance_notice.py",
+        "module": "pipeline.performance_notice",
+        "lines": {
+          "physical": 107,
+          "nonblank": 94,
+          "noncomment": 94
+        },
+        "internal_fan_out": 2,
+        "responsibilities": [
+          "network"
+        ],
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
+      },
+      {
         "path": "src/pipeline/performance_risk_panel.py",
         "module": "pipeline.performance_risk_panel",
         "lines": {
-          "physical": 586,
-          "nonblank": 552,
-          "noncomment": 552
+          "physical": 602,
+          "nonblank": 566,
+          "noncomment": 566
         },
         "internal_fan_out": 8,
         "responsibilities": [
@@ -13885,9 +13916,9 @@
         "path": "src/pipeline/portfolio_console_panel.py",
         "module": "pipeline.portfolio_console_panel",
         "lines": {
-          "physical": 187,
-          "nonblank": 160,
-          "noncomment": 149
+          "physical": 119,
+          "nonblank": 105,
+          "noncomment": 101
         },
         "internal_fan_out": 10,
         "responsibilities": [],
@@ -13914,11 +13945,11 @@
         "path": "src/pipeline/portfolio_panel.py",
         "module": "pipeline.portfolio_panel",
         "lines": {
-          "physical": 3926,
-          "nonblank": 3649,
-          "noncomment": 3498
+          "physical": 3881,
+          "nonblank": 3607,
+          "noncomment": 3456
         },
-        "internal_fan_out": 28,
+        "internal_fan_out": 29,
         "responsibilities": [
           "database",
           "filesystem",
@@ -13931,9 +13962,9 @@
         "path": "src/pipeline/portfolio_styles.py",
         "module": "pipeline.portfolio_styles",
         "lines": {
-          "physical": 169,
-          "nonblank": 141,
-          "noncomment": 141
+          "physical": 177,
+          "nonblank": 149,
+          "noncomment": 149
         },
         "internal_fan_out": 0,
         "responsibilities": [],
@@ -14153,9 +14184,9 @@
         "path": "src/pipeline/run_accounting.py",
         "module": "pipeline.run_accounting",
         "lines": {
-          "physical": 607,
-          "nonblank": 555,
-          "noncomment": 551
+          "physical": 611,
+          "nonblank": 559,
+          "noncomment": 555
         },
         "internal_fan_out": 3,
         "responsibilities": [
@@ -14630,11 +14661,11 @@
         "path": "src/pipeline/work_os_company.py",
         "module": "pipeline.work_os_company",
         "lines": {
-          "physical": 1008,
-          "nonblank": 889,
-          "noncomment": 880
+          "physical": 1022,
+          "nonblank": 900,
+          "noncomment": 891
         },
-        "internal_fan_out": 14,
+        "internal_fan_out": 15,
         "responsibilities": [
           "database",
           "network"
@@ -14736,9 +14767,9 @@
         "path": "src/pipeline/work_os_research.py",
         "module": "pipeline.work_os_research",
         "lines": {
-          "physical": 220,
-          "nonblank": 199,
-          "noncomment": 199
+          "physical": 213,
+          "nonblank": 192,
+          "noncomment": 192
         },
         "internal_fan_out": 1,
         "responsibilities": [],
@@ -14780,9 +14811,9 @@
         "path": "src/pipeline/work_os_styles.py",
         "module": "pipeline.work_os_styles",
         "lines": {
-          "physical": 480,
-          "nonblank": 462,
-          "noncomment": 462
+          "physical": 488,
+          "nonblank": 470,
+          "noncomment": 470
         },
         "internal_fan_out": 2,
         "responsibilities": [],
@@ -15507,9 +15538,9 @@
         "path": "src/provenance/fulltext_extractor_identity.py",
         "module": "provenance.fulltext_extractor_identity",
         "lines": {
-          "physical": 262,
-          "nonblank": 238,
-          "noncomment": 231
+          "physical": 271,
+          "nonblank": 247,
+          "noncomment": 240
         },
         "internal_fan_out": 2,
         "responsibilities": [
@@ -18345,9 +18376,9 @@
         "path": "src/report/windows_appcontainer.py",
         "module": "report.windows_appcontainer",
         "lines": {
-          "physical": 634,
-          "nonblank": 592,
-          "noncomment": 592
+          "physical": 858,
+          "nonblank": 799,
+          "noncomment": 796
         },
         "internal_fan_out": 3,
         "responsibilities": [
@@ -20823,9 +20854,9 @@
         "path": "src/ui/controls.py",
         "module": "ui.controls",
         "lines": {
-          "physical": 1637,
-          "nonblank": 1475,
-          "noncomment": 1431
+          "physical": 1651,
+          "nonblank": 1489,
+          "noncomment": 1445
         },
         "internal_fan_out": 3,
         "responsibilities": [
@@ -20838,9 +20869,9 @@
         "path": "src/ui/design_registry.py",
         "module": "ui.design_registry",
         "lines": {
-          "physical": 1323,
-          "nonblank": 1227,
-          "noncomment": 1197
+          "physical": 1324,
+          "nonblank": 1228,
+          "noncomment": 1198
         },
         "internal_fan_out": 1,
         "responsibilities": [],
@@ -20895,14 +20926,14 @@
         "path": "src/ui/prose.py",
         "module": "ui.prose",
         "lines": {
-          "physical": 194,
-          "nonblank": 163,
-          "noncomment": 163
+          "physical": 225,
+          "nonblank": 189,
+          "noncomment": 189
         },
         "internal_fan_out": 1,
         "responsibilities": [],
-        "public_functions": 2,
-        "fully_annotated_public_functions": 2
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
       },
       {
         "path": "src/ui/source_chip.py",

@@ -3066,7 +3066,21 @@ ${r?'Expression: "'+r+`"
       controller.abort(new DOMException('Read timed out', 'TimeoutError'));
     }, timeoutMs);
     try {
-      const response = await fetch(input, Object.assign(settings, { signal: controller.signal }));
+      let response = await fetch(input, Object.assign(settings, { signal: controller.signal }));
+      // The panel cache answers "busy" while another request builds this view.
+      // That is a loading state, so wait for the build inside this read's deadline.
+      for (let busyReads = 0; response.status === 503 && response.headers.get('X-Panel-Cache') === 'busy' && busyReads < 4; busyReads += 1) {
+        const waitMs = Math.min(Number(response.headers.get('Retry-After')) || 1, 5) * 1000;
+        if (response.body) await response.body.cancel();
+        await new Promise(function (resolve, reject) {
+          const wait = window.setTimeout(resolve, waitMs);
+          controller.signal.addEventListener('abort', function () {
+            window.clearTimeout(wait);
+            reject(controller.signal.reason);
+          }, { once: true });
+        });
+        response = await fetch(input, settings);
+      }
       status = response.status;
       if (!response.ok && status !== 304 && !allowStatuses.includes(status)) {
         const error = new Error('View unavailable (HTTP ' + status + ')');

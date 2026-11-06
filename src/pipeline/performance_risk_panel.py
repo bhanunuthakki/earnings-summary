@@ -208,7 +208,7 @@ _POLICY_EDITOR_JS = """
       receiptTimer = window.setTimeout(function () { receiptTimer = null; refreshPanel(); }, 1250);
     }
     checkReceipt();
-    if (form.dataset.writeReady !== '1') return;
+    if (form.dataset.writeReady !== 'true') return;
     form.addEventListener('submit', function (event) {
       event.preventDefault();
       var inputs = form.querySelectorAll('input[data-policy-ticker]');
@@ -480,6 +480,7 @@ def render_performance_risk_panel(
             ("performance", "Index Benchmarking"),
             ("posture", "Portfolio Posture"),
             ("allocation", "Portfolio Allocation"),
+            ("risk-budget", "Risk Budget"),
             ("targets", "Portfolio Targets"),
         )
         return (
@@ -488,6 +489,9 @@ def render_performance_risk_panel(
                 "Performance & Risk",
                 [(key, label, lambda: "") for key, label in anchors],
                 wrap_class="performance-risk-panel",
+                nav_exclude=tuple(key for key, _label in anchors),
+                heading_exclude=("performance", "posture", "allocation", "risk-budget"),
+                collapsed=("targets",),
                 deferred={
                     key: "/api/panel/performance_risk?" + urlencode({"fragment": key, **window})
                     for key, _label in anchors
@@ -555,7 +559,13 @@ def render_performance_risk_fragment(
 ) -> str:
     """Render independent performance sections through their existing owners."""
     if fragment == "targets":
-        return portfolio_css() + _targets(db_path, repo_root)
+        from pipeline.positioning_panel import render_positioning_panel
+
+        return portfolio_css() + render_positioning_panel(db_path, repo_root)
+    if fragment == "risk-budget":
+        from pipeline.portfolio_decision_support import render_risk_budget_section
+
+        return portfolio_css() + render_risk_budget_section(db_path, repo_root)
     if fragment == "allocation":
         return portfolio_css() + render_allocation_card(fetch_portfolio_allocation())
     if fragment == "posture":
@@ -580,7 +590,13 @@ def render_performance_risk_fragment(
         refresh_target_selector='[data-console-endpoint*="fragment=performance"]',
         analytics_observer=capture,
     )
-    return portfolio_css() + performance + _policy_editor(captured["policy"])
+    return (
+        portfolio_css()
+        + performance
+        + '<details class="pf-quiet-details"><summary>Edit benchmark mix</summary>'
+        + _policy_editor(captured["policy"])
+        + "</details>"
+    )
 
 
 __all__ = ["render_allocation_card", "render_performance_risk_panel"]
