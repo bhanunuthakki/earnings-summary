@@ -12,6 +12,7 @@ from ui.panel import panel_empty
 
 _CONSOLE_CSS = console_css()
 _RECORD_REFERENCE = ("process", "research-items", "triggers", "activity")
+RECORD_FRAGMENTS = ("decisions", *_RECORD_REFERENCE)
 
 
 def _record_sections(

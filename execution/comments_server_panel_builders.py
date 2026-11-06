@@ -166,6 +166,7 @@ def _panel_portfolio_allocation(ctx: ServerContext) -> Response | tuple[str, int
 def _panel_portfolio_record(ctx: ServerContext) -> Response | tuple[str, int]:
     db_path = ctx.db_path
     from pipeline.portfolio_console_panel import (
+        RECORD_FRAGMENTS,
         render_portfolio_record_fragment,
         render_portfolio_record_panel,
     )
@@ -173,7 +174,7 @@ def _panel_portfolio_record(ctx: ServerContext) -> Response | tuple[str, int]:
     user_id = DEFAULT_USER_ID
     fragment = request.args.get("fragment")
     if fragment:
-        if fragment not in ("brief", "decisions", "research-items", "memos", "triggers"):
+        if fragment not in RECORD_FRAGMENTS:
             abort(404)
         return Response(
             render_portfolio_record_fragment(

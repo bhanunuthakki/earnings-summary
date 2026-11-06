@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import inspect
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
+from pipeline import decision_log
 from pipeline.decision_log import (
     build_decision_log,
     render_decision_log,
@@ -160,6 +162,20 @@ def test_missing_tables_show_the_empty_state(tmp_path: Path) -> None:
     sqlite3.connect(db_path).close()
 
     assert "No owner decisions are recorded yet." in render_decision_log_panel(db_path)
+
+
+def test_date_has_no_zero_padding_and_needs_no_platform_format(conn: sqlite3.Connection) -> None:
+    _decision(
+        conn,
+        "META",
+        "buy",
+        made_at="2026-01-05T09:30:00+00:00",
+        created_at="2026-01-05T09:30:00+00:00",
+    )
+
+    assert build_decision_log(conn).recorded[0].date_text == "Jan 5, 2026"
+    # The canonical host is Windows, where strftime rejects the "%-d" form.
+    assert "%-" not in inspect.getsource(decision_log)
 
 
 def test_headline_keeps_meaning_and_removes_markup() -> None:

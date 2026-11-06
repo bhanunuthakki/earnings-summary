@@ -98,7 +98,8 @@ def _why(text: str) -> str:
 
 
 def _exact_date(value: object) -> str:
-    return _day(value).strftime("%b %-d, %Y")
+    day = _day(value)
+    return f"{day:%b} {day.day}, {day.year}"
 
 
 def _hindsight_date(row: sqlite3.Row) -> str:
