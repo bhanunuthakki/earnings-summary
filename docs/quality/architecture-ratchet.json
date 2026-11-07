@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "2148485af77097072ad753873a79e78bd62510d6",
+  "scoped_commit": "67a0574bc9579ea96abf278b00fee58568e2e99b",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "1f6b4ef322d2466bcc598049483676c896a86edea8f27797c8bbf407e363089c",
+  "source_sha256": "db1b234a4d5034327c9231b5a1021abbc1a81e2c0ff507f2db4987df48d9dad1",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1392,
-    "total_noncomment_loc": 555358,
+    "total_noncomment_loc": 555361,
     "modules_over_1000_loc": 116,
     "modules_over_2000_loc": 23,
     "modules_at_least_3000_loc": 5,
@@ -1998,9 +1998,9 @@
         "path": "execution/comments_server_panel_builders.py",
         "module": "execution.comments_server_panel_builders",
         "lines": {
-          "physical": 540,
-          "nonblank": 426,
-          "noncomment": 421
+          "physical": 541,
+          "nonblank": 427,
+          "noncomment": 422
         },
         "internal_fan_out": 37,
         "responsibilities": [
@@ -13093,9 +13093,9 @@
         "path": "src/pipeline/decision_log.py",
         "module": "pipeline.decision_log",
         "lines": {
-          "physical": 364,
-          "nonblank": 313,
-          "noncomment": 311
+          "physical": 365,
+          "nonblank": 314,
+          "noncomment": 312
         },
         "internal_fan_out": 3,
         "responsibilities": [
@@ -13916,9 +13916,9 @@
         "path": "src/pipeline/portfolio_console_panel.py",
         "module": "pipeline.portfolio_console_panel",
         "lines": {
-          "physical": 119,
-          "nonblank": 105,
-          "noncomment": 101
+          "physical": 120,
+          "nonblank": 106,
+          "noncomment": 102
         },
         "internal_fan_out": 10,
         "responsibilities": [],

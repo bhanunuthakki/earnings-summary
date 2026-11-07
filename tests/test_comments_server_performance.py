@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "execution"))
 import comments_server
 from comments_server_panel_cache import PanelCacheBusy, PanelResponseCache
+
+from pipeline.portfolio_console_panel import RECORD_FRAGMENTS
 
 
 def test_cache_busy_returns_retryable_uncached_error(
@@ -60,7 +63,7 @@ def test_live_composites_request_lazy_shells(
     assert len(calls) == 2
 
 
-@pytest.mark.parametrize("fragment", ["brief", "decisions", "research-items", "memos", "triggers"])
+@pytest.mark.parametrize("fragment", RECORD_FRAGMENTS)
 def test_record_dispatches_exact_fragment(
     fragment: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -76,7 +79,19 @@ def test_record_dispatches_exact_fragment(
     response = app.test_client().get("/api/panel/portfolio_record?fragment=" + fragment)
     assert response.status_code == 200
     assert response.get_data(as_text=True) == "ONLY " + fragment
-    assert app.test_client().get("/api/panel/portfolio_record?fragment=unknown").status_code == 404
+    for unknown in ("unknown", "brief", "memos"):
+        url = "/api/panel/portfolio_record?fragment=" + unknown
+        assert app.test_client().get(url).status_code == 404
+
+
+@pytest.mark.parametrize("fragment", RECORD_FRAGMENTS)
+def test_every_record_section_renders_through_the_route(
+    fragment: str, migrated_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    app = comments_server.create_app(tmp_path, db_path=migrated_db(tmp_path / "portfolio.db"))
+    response = app.test_client().get("/api/panel/portfolio_record?fragment=" + fragment)
+    assert response.status_code == 200
+    assert response.get_data(as_text=True).strip()
 
 
 @pytest.mark.parametrize("fragment", ["performance", "allocation", "posture"])
