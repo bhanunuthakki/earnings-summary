@@ -904,7 +904,7 @@
     }
     const buckets = allocation.buckets;
     const entries = [
-      ['Domestic ETF', buckets.us_etf], ['Intl ETF', buckets.international_etf],
+      ['Domestic ETF', buckets.us_etf], ['Intl ETF', buckets.international_etf], ['Global ETF', buckets.global_etf],
       ['Domestic Equity', buckets.us_equity], ['Intl Equity', buckets.international_equity],
       ['Cash reserve', buckets.cash], ['Unclassified', buckets.unclassified]
     ];

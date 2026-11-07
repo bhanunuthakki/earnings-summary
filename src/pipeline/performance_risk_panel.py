@@ -289,20 +289,15 @@ def render_allocation_card(allocation: PortfolioAllocationProjection) -> str:
             cls="pr-allocation",
         )
     b: PortfolioAllocationBuckets = allocation.buckets
-    us_etf = b.us_etf
-    international_etf = b.international_etf
-    us_equity = b.us_equity
-    international_equity = b.international_equity
-    cash = b.cash
-    unclassified = b.unclassified
     rows = "".join(
         (
-            _row("US ETF", us_etf),
-            _row("Intl ETF", international_etf),
-            _row("US Equity", us_equity),
-            _row("Intl Equity", international_equity),
-            _row("Cash", cash),
-            _row("Unclassified", unclassified),
+            _row("US ETF", b.us_etf),
+            _row("Intl ETF", b.international_etf),
+            _row("Global ETF", b.global_etf),
+            _row("US Equity", b.us_equity),
+            _row("Intl Equity", b.international_equity),
+            _row("Cash", b.cash),
+            _row("Unclassified", b.unclassified),
         )
     )
     status = "Incomplete evidence" if allocation.state == "incomplete" else "Current"

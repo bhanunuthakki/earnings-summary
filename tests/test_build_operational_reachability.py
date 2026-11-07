@@ -173,12 +173,15 @@ def test_actual_head_is_supported() -> None:
     assert graph.parser["source_sha256"]
     assert any(node.id == "execution/comments_server.py" for node in graph.nodes)
     assert graph.collection_status == "COMPLETE"
-    assert graph.closure_status == "PASS", {
-        "closure_reasons": graph.closure_reasons,
-        "diagnostics": [diagnostic.model_dump() for diagnostic in graph.diagnostics],
-        "parser": graph.parser,
-        "scanner_sha256": graph.scanner_sha256,
-    }
+    if graph.closure_status != "PASS":
+        pytest.fail(
+            f"Reachability closure {graph.closure_status}\n"
+            f"Parser source SHA-256: {graph.parser['source_sha256']}\n"
+            f"Scanner SHA-256: {graph.scanner_sha256}\n"
+            f"Reasons: {graph.closure_reasons}\n"
+            f"Diagnostics: {[diagnostic.model_dump() for diagnostic in graph.diagnostics]}",
+            pytrace=False,
+        )
     assert graph.stats["production_unknown"] == 0
     assert graph.stats["production_unresolved"] == 0
     residual_source_edges = [

@@ -31,6 +31,7 @@ def _allocation(
         ),
         us_etf=PortfolioAllocationBucket(value=Decimal("18"), weight_pct=Decimal("18")),
         international_etf=PortfolioAllocationBucket(value=Decimal("7"), weight_pct=Decimal("7")),
+        global_etf=PortfolioAllocationBucket(value=Decimal("0"), weight_pct=Decimal("0")),
         cash=PortfolioAllocationBucket(value=Decimal("14"), weight_pct=Decimal("14")),
         unclassified=PortfolioAllocationBucket(value=Decimal("0"), weight_pct=Decimal("0")),
     )
@@ -122,7 +123,7 @@ def test_unified_panel_composes_read_only_sections_and_correlation_first(
     assert 'data-testid="benchmark"' in html
     assert 'data-testid="posture"' in html
     assert "Portfolio Allocation" in html
-    assert "US ETF" in html and "Intl Equity" in html
+    assert "US ETF" in html and "Global ETF" in html and "Intl Equity" in html
     assert "Cash" in html and "Unclassified" in html
     assert "Next dollar" not in html
     assert "Risk Budget" in html and "No risk snapshot yet" in html

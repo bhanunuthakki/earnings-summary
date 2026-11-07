@@ -136,6 +136,53 @@ def test_unknown_etf_geography_is_incomplete_and_kept_in_denominator() -> None:
     assert result.reconciliation.bucket_total == Decimal("20000")
 
 
+def test_global_fund_has_its_own_bucket_and_completes_the_allocation() -> None:
+    from integrations.portfolio_allocation import read_portfolio_allocation
+
+    securities = _classified_securities()
+    global_fund = securities.securities[1].model_copy(update={"region": "Global"})
+    result = read_portfolio_allocation(
+        _reader(
+            securities=securities.model_copy(
+                update={
+                    "securities": [
+                        securities.securities[0],
+                        global_fund,
+                        securities.securities[2],
+                    ]
+                }
+            )
+        )
+    )
+
+    assert result.state == "available"
+    assert result.reason_codes == ()
+    assert result.buckets.global_etf.value == Decimal("5800")
+    assert result.buckets.global_etf.weight_pct == Decimal("29")
+    assert result.buckets.us_etf.value == Decimal("0")
+    assert result.buckets.international_etf.value == Decimal("0")
+    assert result.buckets.unclassified.value == Decimal("0")
+    assert result.reconciliation.bucket_total == Decimal("20000")
+
+
+def test_global_region_on_a_stock_is_not_a_supported_bucket() -> None:
+    from integrations.portfolio_allocation import read_portfolio_allocation
+
+    securities = _classified_securities()
+    stock = securities.securities[0].model_copy(update={"region": "Global"})
+    result = read_portfolio_allocation(
+        _reader(
+            securities=securities.model_copy(
+                update={"securities": [stock, *securities.securities[1:]]}
+            )
+        )
+    )
+
+    assert result.state == "incomplete"
+    assert result.buckets.global_etf.value == Decimal("0")
+    assert result.buckets.unclassified.value == Decimal("13200")
+
+
 def _covered_call_book(
     *, account_id: int = 1, units: Decimal = Decimal(-100)
 ) -> tuple[PositionsV1Result, SecuritiesV1Result]:
