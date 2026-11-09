@@ -42,6 +42,14 @@ from runtime.backup_crypto import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_staging(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Each test owns its staging parent; leftover cleanup must not reach a peer."""
+    root = tmp_path / "backup-staging"
+    monkeypatch.setenv("ES_DB_BACKUP_STAGING_DIR", str(root))
+    return root
+
+
 def _make_db(path: Path, value: str) -> None:
     conn = sqlite3.connect(str(path))
     try:
@@ -868,3 +876,84 @@ def test_lazy_destination_ignores_unavailable_drive_mount(
 
     monkeypatch.setattr(Path, "is_dir", unavailable_mount)
     assert backup_db.configured_backup_dir() == tmp_path / "earnings-summary-db-backups"
+
+
+# --- Interrupted-run leftovers and compression cost (2026-11-08) ------------
+
+
+def test_backup_removes_leftovers_of_a_killed_run_and_keeps_other_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _isolated_staging: Path
+) -> None:
+    """A scheduler time limit skips TemporaryDirectory cleanup. The next run,
+    under the db-backup lock, removes only this job's staging folders."""
+    _live, _backup_dir = _prime_backup(tmp_path, monkeypatch)
+    killed = _isolated_staging / "portfolio_backup.killed01"
+    killed.mkdir(parents=True)
+    (killed / "portfolio.db").write_bytes(b"plaintext snapshot")
+    killed_archive = _isolated_staging / "archive_backup.killed02"
+    killed_archive.mkdir()
+    unrelated = _isolated_staging / "operator-notes"
+    unrelated.mkdir()
+    stray_file = _isolated_staging / "portfolio_backup.not-a-folder"
+    stray_file.write_text("keep")
+
+    assert backup_db.main() == 0
+
+    assert not killed.exists()
+    assert not killed_archive.exists()
+    assert unrelated.is_dir()
+    assert stray_file.read_text() == "keep"
+    # The run's own staging folder is removed on a normal exit.
+    assert not [
+        p
+        for p in _isolated_staging.iterdir()
+        if p.is_dir() and p.name.startswith("portfolio_backup.")
+    ]
+
+
+def test_snapshot_staging_uses_the_job_owned_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _isolated_staging: Path
+) -> None:
+    _prime_backup(tmp_path, monkeypatch)
+    observed: list[Path] = []
+    real = backup_db.consistent_snapshot
+
+    def spy(src_db: Path, tmp: Path) -> None:
+        observed.append(tmp.parent.parent)
+        real(src_db, tmp)
+
+    monkeypatch.setattr(backup_db, "consistent_snapshot", spy)
+    assert backup_db.main() == 0
+    assert observed and all(parent == _isolated_staging for parent in observed)
+
+
+def test_backup_compresses_below_the_slow_default_level(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Level 9 pushed the 4.6 GB run past its limit; restore reads any level."""
+    _live, backup_dir = _prime_backup(tmp_path, monkeypatch)
+    levels: list[int] = []
+
+    def spy(filename: Path, mode: str = "rb", compresslevel: int = 9) -> gzip.GzipFile:
+        if "w" in mode:
+            levels.append(compresslevel)
+        return gzip.GzipFile(filename, mode, compresslevel)
+
+    monkeypatch.setattr(backup_db.gzip, "open", spy)
+    assert backup_db.main() == 0
+    assert levels == [backup_db.GZIP_LEVEL]
+    assert backup_db.GZIP_LEVEL == 6
+    restored = tmp_path / "restored.db"
+    rc = restore_db.main(
+        [
+            "--latest",
+            "--backup-dir",
+            str(backup_dir),
+            "--to",
+            str(restored),
+            "--schema-policy",
+            "versioned",
+        ]
+    )
+    assert rc == 0
+    assert _read_value(restored) == "e2e"
