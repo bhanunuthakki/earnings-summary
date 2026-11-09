@@ -26,7 +26,7 @@ from operations.review_bundle import (
     database_lineage_identity,
     load_kpi_repair_review,
 )
-from operations.snapshot import collect_operations_snapshot
+from operations.snapshot import collect_operations_review_snapshot
 from pipeline.kpi_semantic_scope import scoped_kpi_definitions
 from runtime.secrets import secret_read_path
 from server_runtime.access import private_mobile_origin
@@ -168,7 +168,7 @@ def register_ops_routes(app: Flask, ctx: ServerContext) -> None:
                 503,
             )
         operations_conn = get_operations_read_db()
-        snapshot = collect_operations_snapshot(
+        snapshot = collect_operations_review_snapshot(
             declared_operations,
             repo_root=repo_root,
             conn=operations_conn,

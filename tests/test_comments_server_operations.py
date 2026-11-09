@@ -900,7 +900,7 @@ def test_operations_review_bundle_uses_configured_private_origin(
     patch_server_seam(monkeypatch, "scoped_kpi_definitions", semantic_rows)
     patch_server_seam(monkeypatch, "database_lineage_identity", no_database_lineage)
     patch_server_seam(monkeypatch, "load_kpi_repair_review", no_repair_review)
-    patch_server_seam(monkeypatch, "collect_operations_snapshot", snapshot)
+    patch_server_seam(monkeypatch, "collect_operations_review_snapshot", snapshot)
 
     def build_bundle(**kwargs: object) -> _Bundle:
         captured.update(kwargs)
@@ -956,11 +956,15 @@ def test_operations_review_bundle_excludes_unused_coverage_and_history_reads(
     def unrelated_projection(*_: object, **__: object) -> None:
         raise AssertionError("review request evaluated an unused projection")
 
+    def connect(*_: object, **__: object) -> sqlite3.Connection:
+        return conn
+
+    def private_origin(**_: object) -> str:
+        return "https://review.example.ts.net"
+
     conn = sqlite3.connect(":memory:")
-    patch_server_seam(monkeypatch, "connect_sqlite", lambda *args, **kwargs: conn)
-    patch_server_seam(
-        monkeypatch, "private_mobile_origin", lambda **kwargs: "https://review.example.ts.net"
-    )
+    patch_server_seam(monkeypatch, "connect_sqlite", connect)
+    patch_server_seam(monkeypatch, "private_mobile_origin", private_origin)
     for name in ("_data_coverage", "_database_observations", "_portfolio_tracker_runtime_state"):
         monkeypatch.setattr(snapshot_module, name, unrelated_projection)
     app = comments_server.create_app(tmp_path, code_root=PROJECT_ROOT)
