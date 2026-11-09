@@ -28,6 +28,7 @@ import json
 import os
 import shutil
 import sqlite3
+import stat
 import sys
 import tempfile
 from contextlib import nullcontext
@@ -98,6 +99,45 @@ def configured_backup_dir() -> Path:
 
 
 DEFAULT_RETAIN = 1
+# gzip.open defaults to level 9. On the 4.6 GB production snapshot (2026-11-08)
+# level 9 cost 2.7x the time of level 6 for 2.7% less output, and pushed the
+# daily run past its scheduler limit. Restore reads any level.
+GZIP_LEVEL = 6
+STAGING_PREFIXES = ("portfolio_backup.", "archive_backup.")
+
+
+def staging_root() -> Path:
+    """Job-owned parent for plaintext staging; only this job writes here.
+
+    A scheduler time limit kills the process tree without running
+    TemporaryDirectory cleanup, which left a multi-GB plaintext snapshot in
+    %TEMP% per killed run. A dedicated parent lets the next run (under the
+    db-backup lock) remove exactly those leftovers and nothing else.
+    """
+    configured = os.environ.get("ES_DB_BACKUP_STAGING_DIR", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path(tempfile.gettempdir()) / "earnings-summary-backup-staging"
+
+
+def clear_stale_staging(root: Path) -> list[str]:
+    """Remove leftover staging folders. Call only while holding the db-backup lock."""
+    removed: list[str] = []
+    if not root.is_dir():
+        return removed
+    for entry in sorted(root.iterdir()):
+        if not entry.name.startswith(STAGING_PREFIXES):
+            continue
+        info = entry.lstat()
+        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+            continue
+        if not stat.S_ISDIR(info.st_mode):
+            continue
+        shutil.rmtree(entry)
+        removed.append(entry.name)
+    return removed
+
+
 # The db_gc archive sidecar (execution/db_gc.py) holds the ONLY copy of pruned
 # rows and underpins the "reversible" contract, yet it lived unbacked-up until
 # 2026-08-03. It is append-only, so a snapshot only needs to be newer than the
@@ -271,14 +311,19 @@ def _run_backup() -> int:
     # snapshot AND its gzip before either is released, so the true cost is ~2x the DB
     # (plus the compressed artifact landing in dest_dir). A backup that dies mid-write
     # on a full disk is indistinguishable from one that never ran.
+    staging_parent = staging_root()
+    staging_parent.mkdir(parents=True, exist_ok=True)
+    stale = clear_stale_staging(staging_parent)
+    if stale:
+        print(f"removed {len(stale)} leftover staging folder(s) from an interrupted backup")
     db_bytes = SRC_DB.stat().st_size
     need_staging = 2 * db_bytes + 256 * 1024 * 1024
-    free_staging = shutil.disk_usage(tempfile.gettempdir()).free
+    free_staging = shutil.disk_usage(staging_parent).free
     if free_staging < need_staging:
         msg = (
             f"insufficient free space for backup staging: need "
             f"{need_staging / 1e9:.2f} GB, have {free_staging / 1e9:.2f} GB "
-            f"on {tempfile.gettempdir()}"
+            f"on {staging_parent}"
         )
         _finish_accounting(accounting, success=False, error_msg=msg)
         print(f"ERROR: {msg}", file=sys.stderr)
@@ -288,7 +333,7 @@ def _run_backup() -> int:
     final_path = dest_dir / f"portfolio.db.{stamp}.gz.enc"
 
     try:
-        with tempfile.TemporaryDirectory(prefix="portfolio_backup.") as staging:
+        with tempfile.TemporaryDirectory(prefix="portfolio_backup.", dir=staging_parent) as staging:
             tmp_path = Path(staging) / "portfolio.db"
             tmp_gz = Path(staging) / "portfolio.db.gz"
             consistent_snapshot(SRC_DB, tmp_path)
@@ -315,7 +360,10 @@ def _run_backup() -> int:
                     error_msg="skipped_unchanged: snapshot sha256 matches last locally verified snapshot",
                 )
                 return 0
-            with open(tmp_path, "rb") as raw, gzip.open(tmp_gz, "wb") as gz:
+            with (
+                open(tmp_path, "rb") as raw,
+                gzip.open(tmp_gz, "wb", compresslevel=GZIP_LEVEL) as gz,
+            ):
                 shutil.copyfileobj(raw, gz)
             encrypt_file(tmp_gz, final_path, key=load_or_create_key())
             _verify_encrypted_snapshot(final_path, Path(staging), snapshot_sha256)
@@ -347,7 +395,9 @@ def _backup_archive_sidecar(dest_dir: Path) -> None:
         raise ValueError("ES_ARCHIVE_BACKUP_RETAIN must be at least 1")
     stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
     final_path = dest_dir / f"{ARCHIVE_PREFIX}.{stamp}.gz.enc"
-    with tempfile.TemporaryDirectory(prefix="archive_backup.") as staging:
+    staging_parent = staging_root()
+    staging_parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="archive_backup.", dir=staging_parent) as staging:
         tmp_path = Path(staging) / ARCHIVE_PREFIX
         tmp_gz = Path(staging) / f"{ARCHIVE_PREFIX}.gz"
         consistent_snapshot(archive, tmp_path)
@@ -358,7 +408,7 @@ def _backup_archive_sidecar(dest_dir: Path) -> None:
         if existing and existing[-1][1].snapshot_sha256 == snapshot_sha256:
             print(f"(archive unchanged since last verified snapshot: {existing[-1][0].name})")
             return
-        with open(tmp_path, "rb") as raw, gzip.open(tmp_gz, "wb") as gz:
+        with open(tmp_path, "rb") as raw, gzip.open(tmp_gz, "wb", compresslevel=GZIP_LEVEL) as gz:
             shutil.copyfileobj(raw, gz)
         encrypt_file(tmp_gz, final_path, key=load_or_create_key())
         _verify_encrypted_snapshot(final_path, Path(staging), snapshot_sha256)
