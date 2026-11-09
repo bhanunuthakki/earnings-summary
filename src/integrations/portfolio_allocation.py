@@ -128,9 +128,8 @@ class PortfolioAllocationReader(Protocol):
 
 def _null_buckets() -> PortfolioAllocationBuckets:
     bucket = PortfolioAllocationBucket(value=None, weight_pct=None)
-    return PortfolioAllocationBuckets.model_validate(
-        dict.fromkeys(PortfolioAllocationBuckets.model_fields, bucket)
-    )
+    buckets = dict.fromkeys(PortfolioAllocationBuckets.model_fields, bucket)
+    return PortfolioAllocationBuckets.model_validate(buckets)
 
 
 def unavailable_portfolio_allocation(code: str) -> PortfolioAllocationProjection:
@@ -486,9 +485,7 @@ def _resolved_data(future: Future[V1Fetch[_T]]) -> _T | None:
         fetch = future.result()
     except Exception:
         return None
-    if not fetch.available or fetch.data is None:
-        return None
-    return fetch.data
+    return fetch.data if fetch.available else None
 
 
 def read_portfolio_allocation(reader: PortfolioAllocationReader) -> PortfolioAllocationProjection:
