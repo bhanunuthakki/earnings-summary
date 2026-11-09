@@ -112,6 +112,26 @@ class _FakeResponse:
         return self._payload
 
 
+@pytest.mark.parametrize("currency", ["USD", "EUR"])
+def test_weekly_values_use_the_unversioned_endpoint_and_validate_currency(
+    currency: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_get(
+        self: requests.Session, url: str, params: object = None, timeout: object = None
+    ) -> _FakeResponse:
+        assert url == "http://tracker.test/api/v1/weekly-values"
+        return _FakeResponse({"currency": currency, "expected_account_ids": [1, 2], "points": []})
+
+    monkeypatch.setattr(requests.Session, "get", fake_get)
+    result = tv1.TrackerV1Client(base_url="http://tracker.test").get_weekly_values()
+    assert result.available is (currency == "USD")
+    if currency == "USD":
+        assert result.data is not None
+        assert result.data.expected_account_ids == [1, 2]
+    else:
+        assert result.data is None
+
+
 # ---------------------------------------------------------------------------
 # Official fixtures parse into their response models
 # ---------------------------------------------------------------------------

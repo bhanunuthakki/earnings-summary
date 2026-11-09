@@ -22,7 +22,7 @@ from integrations.portfolio_allocation import (
 from integrations.portfolio_tracker_client import PolicyMix, PortfolioAnalytics
 from pipeline.console_scaffold import render_console
 from pipeline.portfolio_decision_support import render_portfolio_posture_section
-from pipeline.portfolio_panel import render_portfolio_panel
+from pipeline.portfolio_panel import render_portfolio_panel, render_weekly_portfolio_values
 from pipeline.portfolio_styles import portfolio_css
 from ui.panel import panel_empty, panel_section
 
@@ -476,6 +476,7 @@ def render_performance_risk_panel(
         }
         anchors = (
             ("performance", "Index Benchmarking"),
+            ("weekly-values", "Portfolio Value History"),
             ("posture", "Portfolio Posture"),
             ("allocation", "Portfolio Allocation"),
             ("risk-budget", "Risk Budget"),
@@ -526,6 +527,7 @@ def render_performance_risk_panel(
         portfolio_css()
         + '<div class="performance-risk-panel">'
         + performance
+        + render_weekly_portfolio_values()
         + policy_editor
         + '<div class="pr-secondary-grid">'
         + posture
@@ -564,6 +566,8 @@ def render_performance_risk_fragment(
         from pipeline.portfolio_decision_support import render_risk_budget_section
 
         return portfolio_css() + render_risk_budget_section(db_path, repo_root)
+    if fragment == "weekly-values":
+        return portfolio_css() + render_weekly_portfolio_values()
     if fragment == "allocation":
         return portfolio_css() + render_allocation_card(fetch_portfolio_allocation())
     if fragment == "posture":

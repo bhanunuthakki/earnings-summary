@@ -9,13 +9,15 @@ from __future__ import annotations
 
 import gzip
 import json
+import re
 import shutil
 import sqlite3
 import sys
 import tempfile
 from collections.abc import Mapping
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from cryptography.exceptions import InvalidTag
@@ -40,6 +42,15 @@ from runtime.backup_crypto import (
     load_key,
     load_or_create_key,
 )
+from schema_compat import expected_head
+
+
+@pytest.fixture(autouse=True)
+def _isolated_staging(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Each test owns its staging parent; leftover cleanup must not reach a peer."""
+    root = tmp_path / "backup-staging"
+    monkeypatch.setenv("ES_DB_BACKUP_STAGING_DIR", str(root))
+    return root
 
 
 def _make_db(path: Path, value: str) -> None:
@@ -150,10 +161,12 @@ def test_start_accounting_records_current_schema_revision(
         *,
         invocation_inputs: dict[str, str | int],
         deduplicate_completed: bool,
+        stale_after: timedelta,
     ) -> str:
         del conn, directive, ticker_scope
         captured.update(invocation_inputs)
         assert deduplicate_completed is True
+        assert stale_after == backup_db.ATTEMPT_STALE_AFTER
         return "backup-test"
 
     def fake_connect(*_args: object, **_kwargs: object) -> sqlite3.Connection:
@@ -167,6 +180,66 @@ def test_start_accounting_records_current_schema_revision(
         assert captured["source_schema_revision"] == "0032_allow_source_reviewed_kpi_supersessions"
     finally:
         conn.close()
+
+
+def test_retry_after_a_scheduler_kill_is_not_blocked_for_hours(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A killed run never closes its attempt. Once the attempt is older than the
+    scheduler limit allows, a same-day retry abandons it and starts; a younger
+    attempt still counts as live."""
+    head = expected_head()
+    ledger = tmp_path / "ledger.db"
+    seed = _accounting_conn(head)
+    seed.commit()
+    target = sqlite3.connect(ledger)
+    seed.backup(target)
+    target.close()
+    seed.close()
+    backup_dir = tmp_path / "backups"
+    monkeypatch.setattr(backup_db, "SRC_DB", tmp_path / "portfolio.db")
+
+    def open_ledger(*_args: object, **_kwargs: object) -> sqlite3.Connection:
+        return sqlite3.connect(ledger)
+
+    monkeypatch.setattr(backup_db, "connect_sqlite", open_ledger)
+    inputs = backup_db.backup_invocation_inputs(
+        backup_dir, 1, head, datetime.now().date().isoformat()
+    )
+    conn = sqlite3.connect(ledger)
+    try:
+        killed = start_run(
+            conn,
+            directive="backup_db",
+            ticker_scope=[],
+            invocation_inputs=inputs,
+            deduplicate_completed=True,
+            now=datetime.now() - timedelta(minutes=20),
+        )
+        with pytest.raises(PipelineRunSuppressedError) as live:
+            backup_db.start_accounting(backup_dir, 1)
+        assert live.value.status is StageStatus.IN_PROGRESS
+
+        aged = datetime.now() - backup_db.ATTEMPT_STALE_AFTER - timedelta(minutes=1)
+        conn.execute("UPDATE pipeline_attempts SET started_at = ?", (aged.isoformat(),))
+        conn.commit()
+        retry_conn, retry_id = backup_db.start_accounting(backup_dir, 1)
+        retry_conn.close()
+        statuses = dict(conn.execute("SELECT attempt_id, status FROM pipeline_attempts").fetchall())
+        assert statuses[retry_id] == StageStatus.IN_PROGRESS.value
+        assert statuses[killed] == "abandoned"
+    finally:
+        conn.close()
+
+
+def test_attempt_staleness_exceeds_the_scheduler_time_limit() -> None:
+    """The orphan bound is only safe while no live run can be that old."""
+    xml = (Path(__file__).resolve().parents[1] / "cron" / "backup_db.task.xml").read_text(
+        encoding="utf-16"
+    )
+    match = re.search(r"<ExecutionTimeLimit>PT(\d+)M</ExecutionTimeLimit>", xml)
+    assert match is not None
+    assert timedelta(minutes=int(match.group(1))) < backup_db.ATTEMPT_STALE_AFTER
 
 
 def test_source_schema_revision_fails_closed_when_unreadable() -> None:
@@ -585,6 +658,41 @@ def test_backup_captures_archive_sidecar(tmp_path: Path, monkeypatch: pytest.Mon
         conn.close()
 
 
+def test_integrity_check_runs_with_a_large_page_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _prime_backup(tmp_path, monkeypatch)
+    statements: list[str] = []
+    real_connect = sqlite3.connect
+
+    def traced_connect(database: str, *args: Any, **kwargs: Any) -> sqlite3.Connection:
+        conn = real_connect(database, *args, **kwargs)
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", traced_connect)
+    assert backup_db.main() == 0
+    cache = f"PRAGMA cache_size=-{backup_db.INTEGRITY_CACHE_KIB}"
+    assert backup_db.INTEGRITY_CACHE_KIB >= 262_144
+    checks = [i for i, sql in enumerate(statements) if sql == "PRAGMA integrity_check"]
+    assert checks, "backup never ran PRAGMA integrity_check"
+    for index in checks:
+        assert cache in statements[:index]
+        assert statements[index - 1] == cache
+
+
+def test_backup_log_reports_each_stage_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    live, _backup_dir = _prime_backup(tmp_path, monkeypatch)
+    _make_archive(live)
+    assert backup_db.main() == 0
+    out = capsys.readouterr().out
+    stages = re.findall(r"^timing: (\w+) \d+\.\ds$", out, flags=re.MULTILINE)
+    expected = ["snapshot", "integrity_check", "sha256", "gzip", "encrypt", "verify"]
+    assert stages == expected + [f"archive_{stage}" for stage in expected]
+
+
 def test_missing_archive_does_not_fail_db_backup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -868,3 +976,84 @@ def test_lazy_destination_ignores_unavailable_drive_mount(
 
     monkeypatch.setattr(Path, "is_dir", unavailable_mount)
     assert backup_db.configured_backup_dir() == tmp_path / "earnings-summary-db-backups"
+
+
+# --- Interrupted-run leftovers and compression cost (2026-11-08) ------------
+
+
+def test_backup_removes_leftovers_of_a_killed_run_and_keeps_other_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _isolated_staging: Path
+) -> None:
+    """A scheduler time limit skips TemporaryDirectory cleanup. The next run,
+    under the db-backup lock, removes only this job's staging folders."""
+    _live, _backup_dir = _prime_backup(tmp_path, monkeypatch)
+    killed = _isolated_staging / "portfolio_backup.killed01"
+    killed.mkdir(parents=True)
+    (killed / "portfolio.db").write_bytes(b"plaintext snapshot")
+    killed_archive = _isolated_staging / "archive_backup.killed02"
+    killed_archive.mkdir()
+    unrelated = _isolated_staging / "operator-notes"
+    unrelated.mkdir()
+    stray_file = _isolated_staging / "portfolio_backup.not-a-folder"
+    stray_file.write_text("keep")
+
+    assert backup_db.main() == 0
+
+    assert not killed.exists()
+    assert not killed_archive.exists()
+    assert unrelated.is_dir()
+    assert stray_file.read_text() == "keep"
+    # The run's own staging folder is removed on a normal exit.
+    assert not [
+        p
+        for p in _isolated_staging.iterdir()
+        if p.is_dir() and p.name.startswith("portfolio_backup.")
+    ]
+
+
+def test_snapshot_staging_uses_the_job_owned_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _isolated_staging: Path
+) -> None:
+    _prime_backup(tmp_path, monkeypatch)
+    observed: list[Path] = []
+    real = backup_db.consistent_snapshot
+
+    def spy(src_db: Path, tmp: Path) -> None:
+        observed.append(tmp.parent.parent)
+        real(src_db, tmp)
+
+    monkeypatch.setattr(backup_db, "consistent_snapshot", spy)
+    assert backup_db.main() == 0
+    assert observed and all(parent == _isolated_staging for parent in observed)
+
+
+def test_backup_compresses_below_the_slow_default_level(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Level 9 pushed the 4.6 GB run past its limit; restore reads any level."""
+    _live, backup_dir = _prime_backup(tmp_path, monkeypatch)
+    levels: list[int] = []
+
+    def spy(filename: Path, mode: str = "rb", compresslevel: int = 9) -> gzip.GzipFile:
+        if "w" in mode:
+            levels.append(compresslevel)
+        return gzip.GzipFile(filename, mode, compresslevel)
+
+    monkeypatch.setattr(backup_db.gzip, "open", spy)
+    assert backup_db.main() == 0
+    assert levels == [backup_db.GZIP_LEVEL]
+    assert backup_db.GZIP_LEVEL == 6
+    restored = tmp_path / "restored.db"
+    rc = restore_db.main(
+        [
+            "--latest",
+            "--backup-dir",
+            str(backup_dir),
+            "--to",
+            str(restored),
+            "--schema-policy",
+            "versioned",
+        ]
+    )
+    assert rc == 0
+    assert _read_value(restored) == "e2e"

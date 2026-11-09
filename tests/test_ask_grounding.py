@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterable
+from dataclasses import replace
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -23,6 +24,7 @@ from ask.grounding import (
     used_citation_items,
 )
 from pipeline.confidence import IssuesByTicker
+from provenance.financial_fact_resolution import CanonicalFactRelation, FactTable
 
 
 class _ScoredFilingSections(Protocol):
@@ -333,6 +335,23 @@ def _insert_kpi(repo: Path, def_id: int, name: str, value: float, unit: str = "p
         conn.commit()
     finally:
         conn.close()
+
+
+def test_fact_channel_survives_json_literals_in_the_fact_relation(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live lineage SQL embeds '{"inputs":[]}'. Filling the confidence slot
+    must not read that literal as a format field and drop the whole channel."""
+    real = grounding_module.canonical_fact_relation
+
+    def with_json_literal(conn: sqlite3.Connection, fact_table: FactTable) -> CanonicalFactRelation:
+        relation = real(conn, fact_table)
+        sql = f"(SELECT * FROM {relation.sql} WHERE json_valid('{{\"inputs\":[]}}'))"
+        return replace(relation, sql=sql)
+
+    monkeypatch.setattr(grounding_module, "canonical_fact_relation", with_json_literal)
+    items = _gather(repo, "TST total customers and revenue trend")
+    assert "TST · Total Customers (millions)" in [i.label for i in items if i.kind == "fact"]
 
 
 def test_fact_channel_resolves_section_qualified_capture_name(repo: Path) -> None:

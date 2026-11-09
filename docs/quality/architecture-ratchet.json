@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "67a0574bc9579ea96abf278b00fee58568e2e99b",
+  "scoped_commit": "54421d366dd4e8a06af5fc42414e11f7a6bad31e",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "db1b234a4d5034327c9231b5a1021abbc1a81e2c0ff507f2db4987df48d9dad1",
+  "source_sha256": "3220d14e355c3a2b31fdf877293c92ea03abf2b6e958cc12d9223e80706fc59f",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1392,
-    "total_noncomment_loc": 555361,
+    "total_noncomment_loc": 555490,
     "modules_over_1000_loc": 116,
     "modules_over_2000_loc": 23,
     "modules_at_least_3000_loc": 5,
@@ -33,11 +33,11 @@
     "largest_scc": 12,
     "composition_root_loc": {
       "execution/comments_server.py": 183,
-      "src/pipeline/portfolio_panel.py": 3456
+      "src/pipeline/portfolio_panel.py": 3555
     },
     "composition_root_fan_out": {
       "execution/comments_server.py": 8,
-      "src/pipeline/portfolio_panel.py": 29
+      "src/pipeline/portfolio_panel.py": 30
     },
     "facade_violations": [
       "execution/comments_server.py: side-effect responsibilities ('network', 'process')",
@@ -1998,9 +1998,9 @@
         "path": "execution/comments_server_panel_builders.py",
         "module": "execution.comments_server_panel_builders",
         "lines": {
-          "physical": 541,
-          "nonblank": 427,
-          "noncomment": 422
+          "physical": 548,
+          "nonblank": 434,
+          "noncomment": 429
         },
         "internal_fan_out": 37,
         "responsibilities": [
@@ -2438,9 +2438,9 @@
         "path": "execution/design_route_canaries.py",
         "module": "execution.design_route_canaries",
         "lines": {
-          "physical": 622,
-          "nonblank": 581,
-          "noncomment": 576
+          "physical": 623,
+          "nonblank": 582,
+          "noncomment": 577
         },
         "internal_fan_out": 14,
         "responsibilities": [
@@ -7042,9 +7042,9 @@
         "path": "src/ask/grounding.py",
         "module": "ask.grounding",
         "lines": {
-          "physical": 1881,
-          "nonblank": 1697,
-          "noncomment": 1577
+          "physical": 1885,
+          "nonblank": 1700,
+          "noncomment": 1580
         },
         "internal_fan_out": 17,
         "responsibilities": [
@@ -10687,9 +10687,9 @@
         "path": "src/integrations/portfolio_allocation.py",
         "module": "integrations.portfolio_allocation",
         "lines": {
-          "physical": 546,
-          "nonblank": 477,
-          "noncomment": 472
+          "physical": 547,
+          "nonblank": 478,
+          "noncomment": 473
         },
         "internal_fan_out": 2,
         "responsibilities": [
@@ -10749,9 +10749,9 @@
         "path": "src/integrations/portfolio_tracker_v1.py",
         "module": "integrations.portfolio_tracker_v1",
         "lines": {
-          "physical": 1622,
-          "nonblank": 1367,
-          "noncomment": 1286
+          "physical": 1646,
+          "nonblank": 1386,
+          "noncomment": 1305
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -13901,9 +13901,9 @@
         "path": "src/pipeline/performance_risk_panel.py",
         "module": "pipeline.performance_risk_panel",
         "lines": {
-          "physical": 602,
-          "nonblank": 566,
-          "noncomment": 566
+          "physical": 601,
+          "nonblank": 565,
+          "noncomment": 565
         },
         "internal_fan_out": 8,
         "responsibilities": [
@@ -13945,18 +13945,18 @@
         "path": "src/pipeline/portfolio_panel.py",
         "module": "pipeline.portfolio_panel",
         "lines": {
-          "physical": 3881,
-          "nonblank": 3607,
-          "noncomment": 3456
+          "physical": 3983,
+          "nonblank": 3706,
+          "noncomment": 3555
         },
-        "internal_fan_out": 29,
+        "internal_fan_out": 30,
         "responsibilities": [
           "database",
           "filesystem",
           "network"
         ],
-        "public_functions": 14,
-        "fully_annotated_public_functions": 14
+        "public_functions": 15,
+        "fully_annotated_public_functions": 15
       },
       {
         "path": "src/pipeline/portfolio_styles.py",

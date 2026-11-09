@@ -19,6 +19,7 @@ from integrations.portfolio_allocation import (
     PortfolioAllocationReconciliation,
 )
 from integrations.portfolio_tracker_client import PolicyMix, PolicyWeight
+from integrations.portfolio_tracker_v1 import TrackerV1Client, V1Fetch, WeeklyPortfolioValues
 
 
 def _allocation(
@@ -277,6 +278,7 @@ def test_lazy_performance_shell_does_not_call_dependencies(
         tmp_path / "unused.db", tmp_path, lazy=True, start_date="2026-01-01"
     )
     assert "fragment=performance&amp;start_date=2026-01-01" in html
+    assert "fragment=weekly-values" in html
     assert "fragment=allocation" in html
     assert "fragment=posture" in html
     assert 'data-pr-panel="correlation"' in html
@@ -298,3 +300,52 @@ def test_performance_fragment_excludes_unrelated_allocation(
     html = panel.render_performance_risk_fragment(tmp_path / "unused.db", tmp_path, "performance")
     assert "BENCHMARK" in html
     assert "Policy mix unavailable" in html
+
+
+def test_weekly_values_show_estimates_and_measured_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pipeline import portfolio_panel
+
+    data = WeeklyPortfolioValues.model_validate(
+        {
+            "currency": "USD",
+            "expected_account_ids": [1, 2],
+            "points": [
+                {
+                    "week_start": "2026-08-03",
+                    "as_of": "2026-08-07",
+                    "basis": "marked_positions",
+                    "value": "80",
+                    "covered_account_ids": [1],
+                },
+                {
+                    "week_start": "2026-08-03",
+                    "as_of": "2026-08-07",
+                    "basis": "legacy_cached_model",
+                    "value": "90",
+                    "covered_account_ids": None,
+                },
+                {
+                    "week_start": "2026-08-03",
+                    "as_of": "2026-08-07",
+                    "basis": "whole_account",
+                    "value": "100",
+                    "covered_account_ids": [1, 2],
+                },
+            ],
+        }
+    )
+
+    def get_weekly_values(_self: TrackerV1Client) -> V1Fetch[WeeklyPortfolioValues]:
+        return V1Fetch(available=True, endpoint="/api/v1/weekly-values", data=data)
+
+    monkeypatch.setenv("PORTFOLIO_TRACKER_API_URL", "http://tracker.test")
+    monkeypatch.setattr(
+        portfolio_panel.TrackerV1Client,
+        "get_weekly_values",
+        get_weekly_values,
+    )
+    html = portfolio_panel.render_weekly_portfolio_values()
+    assert "Weekly portfolio value in US dollars by source" in html
+    assert "Transaction-walk estimates" in html
+    assert "1/2 accounts" in html
+    assert "10.0%" in html
