@@ -32,7 +32,7 @@ import stat
 import sys
 import tempfile
 from contextlib import nullcontext
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -104,6 +104,12 @@ DEFAULT_RETAIN = 1
 # daily run past its scheduler limit. Restore reads any level.
 GZIP_LEVEL = 6
 STAGING_PREFIXES = ("portfolio_backup.", "archive_backup.")
+# Task Scheduler stops backup_db at its ExecutionTimeLimit (cron/backup_db.task.xml,
+# PT45M) without letting the run close its accounting attempt. Run accounting
+# otherwise treats that orphan as live for 6 h, and every same-day retry exits
+# 75 "already_running" (2026-11-08, 20:17 run). No live attempt can be older
+# than the scheduler limit, so a longer age proves the attempt is dead.
+ATTEMPT_STALE_AFTER = timedelta(minutes=60)
 
 
 def staging_root() -> Path:
@@ -249,6 +255,7 @@ def start_accounting(dest_dir: Path, retain: int) -> tuple[sqlite3.Connection, s
                 run_date,
             ),
             deduplicate_completed=True,
+            stale_after=ATTEMPT_STALE_AFTER,
         )
     except Exception:
         conn.close()
