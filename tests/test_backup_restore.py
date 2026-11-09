@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import gzip
 import json
+import re
 import shutil
 import sqlite3
 import sys
 import tempfile
 from collections.abc import Mapping
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -40,6 +42,7 @@ from runtime.backup_crypto import (
     load_key,
     load_or_create_key,
 )
+from schema_compat import expected_head
 
 
 @pytest.fixture(autouse=True)
@@ -158,10 +161,12 @@ def test_start_accounting_records_current_schema_revision(
         *,
         invocation_inputs: dict[str, str | int],
         deduplicate_completed: bool,
+        stale_after: timedelta,
     ) -> str:
         del conn, directive, ticker_scope
         captured.update(invocation_inputs)
         assert deduplicate_completed is True
+        assert stale_after == backup_db.ATTEMPT_STALE_AFTER
         return "backup-test"
 
     def fake_connect(*_args: object, **_kwargs: object) -> sqlite3.Connection:
@@ -175,6 +180,66 @@ def test_start_accounting_records_current_schema_revision(
         assert captured["source_schema_revision"] == "0032_allow_source_reviewed_kpi_supersessions"
     finally:
         conn.close()
+
+
+def test_retry_after_a_scheduler_kill_is_not_blocked_for_hours(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A killed run never closes its attempt. Once the attempt is older than the
+    scheduler limit allows, a same-day retry abandons it and starts; a younger
+    attempt still counts as live."""
+    head = expected_head()
+    ledger = tmp_path / "ledger.db"
+    seed = _accounting_conn(head)
+    seed.commit()
+    target = sqlite3.connect(ledger)
+    seed.backup(target)
+    target.close()
+    seed.close()
+    backup_dir = tmp_path / "backups"
+    monkeypatch.setattr(backup_db, "SRC_DB", tmp_path / "portfolio.db")
+
+    def open_ledger(*_args: object, **_kwargs: object) -> sqlite3.Connection:
+        return sqlite3.connect(ledger)
+
+    monkeypatch.setattr(backup_db, "connect_sqlite", open_ledger)
+    inputs = backup_db.backup_invocation_inputs(
+        backup_dir, 1, head, datetime.now().date().isoformat()
+    )
+    conn = sqlite3.connect(ledger)
+    try:
+        killed = start_run(
+            conn,
+            directive="backup_db",
+            ticker_scope=[],
+            invocation_inputs=inputs,
+            deduplicate_completed=True,
+            now=datetime.now() - timedelta(minutes=20),
+        )
+        with pytest.raises(PipelineRunSuppressedError) as live:
+            backup_db.start_accounting(backup_dir, 1)
+        assert live.value.status is StageStatus.IN_PROGRESS
+
+        aged = datetime.now() - backup_db.ATTEMPT_STALE_AFTER - timedelta(minutes=1)
+        conn.execute("UPDATE pipeline_attempts SET started_at = ?", (aged.isoformat(),))
+        conn.commit()
+        retry_conn, retry_id = backup_db.start_accounting(backup_dir, 1)
+        retry_conn.close()
+        statuses = dict(conn.execute("SELECT attempt_id, status FROM pipeline_attempts").fetchall())
+        assert statuses[retry_id] == StageStatus.IN_PROGRESS.value
+        assert statuses[killed] == "abandoned"
+    finally:
+        conn.close()
+
+
+def test_attempt_staleness_exceeds_the_scheduler_time_limit() -> None:
+    """The orphan bound is only safe while no live run can be that old."""
+    xml = (Path(__file__).resolve().parents[1] / "cron" / "backup_db.task.xml").read_text(
+        encoding="utf-16"
+    )
+    match = re.search(r"<ExecutionTimeLimit>PT(\d+)M</ExecutionTimeLimit>", xml)
+    assert match is not None
+    assert timedelta(minutes=int(match.group(1))) < backup_db.ATTEMPT_STALE_AFTER
 
 
 def test_source_schema_revision_fails_closed_when_unreadable() -> None:
