@@ -639,11 +639,15 @@ def _series_rows_conf(
     """``sql_tmpl`` carries a ``{conf}`` slot for the scored-confidence
     column (S2). Tried with it first; a legacy DB without the column fails
     that query, so retry without and pad rows with None — confidence is
-    enrichment, never the reason a fact series goes missing."""
-    rows = _series_rows(conn, sql_tmpl.format(conf=", confidence"), params)
+    enrichment, never the reason a fact series goes missing.
+
+    Only the literal ``{conf}`` slot is replaced. Composed SQL can carry JSON
+    literals such as ``'{"inputs":[]}'``, which ``str.format`` misreads.
+    """
+    rows = _series_rows(conn, sql_tmpl.replace("{conf}", ", confidence"), params)
     if rows:
         return rows
-    return [(*r, None) for r in _series_rows(conn, sql_tmpl.format(conf=""), params)]
+    return [(*r, None) for r in _series_rows(conn, sql_tmpl.replace("{conf}", ""), params)]
 
 
 def _dedupe_series(
