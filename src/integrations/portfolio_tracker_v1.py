@@ -649,6 +649,22 @@ class PositioningV1Result(V1Model):
 # ---------------------------------------------------------------------------
 
 
+class WeeklyPortfolioValue(V1Model):
+    week_start: date
+    as_of: date
+    basis: Literal[
+        "whole_account", "marked_positions", "legacy_cached_snapshot", "legacy_cached_model"
+    ]
+    value: Money
+    covered_account_ids: list[int] | None
+
+
+class WeeklyPortfolioValues(V1Model):
+    currency: Literal["USD"]
+    expected_account_ids: list[int]
+    points: list[WeeklyPortfolioValue]
+
+
 class PerformancePoint(V1Model):
     date: date
     portfolio_value: Money
@@ -1490,6 +1506,14 @@ class TrackerV1Client:
             PositioningV1Result,
             params=params,
             timeout=self._analytics_read_timeout,
+        )
+
+    def get_weekly_values(self) -> V1Fetch[WeeklyPortfolioValues]:
+        return self._get(
+            "/api/v1/weekly-values",
+            WeeklyPortfolioValues,
+            timeout=self._read_timeout,
+            check_version=False,
         )
 
     def get_performance(

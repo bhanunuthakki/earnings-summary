@@ -35,6 +35,7 @@ the chart's series colors come from ``ui.tokens.CHART_SERIES``.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 from collections.abc import Callable
@@ -72,6 +73,7 @@ from integrations.portfolio_tracker_client import (
     fetch_portfolio_analytics,
     probe_tracker,
 )
+from integrations.portfolio_tracker_v1 import TrackerV1Client, WeeklyPortfolioValue
 from macro_store import Sensitivity, fetch_sensitivities
 from pipeline.performance_notice import (
     performance_calculation_notice,
@@ -983,6 +985,106 @@ def _benchmark_chart(points: list[PerformancePoint]) -> str:
         )
     parts.append("</svg>")
     return "".join(parts)
+
+
+def render_weekly_portfolio_values() -> str:
+    """Render the tracker's weekly dollar values with their original basis."""
+    title = "Portfolio Value History"
+    base = os.environ.get("PORTFOLIO_TRACKER_API_URL")
+    if not base:
+        return panel_empty("Portfolio Tracker connection is unavailable.", title=title)
+    result = TrackerV1Client(base_url=base).get_weekly_values()
+    if not result.available or result.data is None:
+        return panel_empty("Weekly values are unavailable from Portfolio Tracker.", title=title)
+    history = result.data
+    if not history.points:
+        return panel_empty("No weekly portfolio values have been recorded.", title=title)
+
+    display = (
+        ("whole_account", "Complete account totals", "portfolio"),
+        ("marked_positions", "Marked holdings", "spy"),
+        ("legacy_cached_snapshot", "Historical cached values", "qqq"),
+        ("legacy_cached_model", "Transaction-walk estimates", "policy"),
+    )
+    lo = min(point.value for point in history.points)
+    hi = max(point.value for point in history.points)
+    spread = float(hi - lo) or 1.0
+    first = min(point.as_of for point in history.points)
+    last = max(point.as_of for point in history.points)
+    span = (last - first).days or 1
+    axes = (
+        '<svg class="pf-chart" viewBox="0 0 860 220" role="img" '
+        'aria-label="Weekly portfolio value in US dollars by source">'
+        f'<text class="pf-axis-label" x="6" y="13">{_money(float(hi))}</text>'
+        f'<text class="pf-axis-label" x="6" y="190">{_money(float(lo))}</text>'
+        f'<text class="pf-axis-label" x="90" y="212">{first}</text>'
+        f'<text class="pf-axis-label pf-axis-end" x="845" y="212">{last}</text>'
+    )
+    paths: list[str] = []
+    legend: list[str] = []
+    for basis, label, css in display:
+        points = sorted(
+            (point for point in history.points if point.basis == basis),
+            key=lambda point: point.as_of,
+        )
+        if not points:
+            continue
+        commands: list[str] = []
+        previous: WeeklyPortfolioValue | None = None
+        for point in points:
+            x = 90 + (point.as_of - first).days * 755 / span
+            y = 187 - 174 * float(point.value - lo) / spread
+            contiguous = (
+                previous is not None
+                and (point.week_start - previous.week_start).days == 7
+                and point.covered_account_ids == previous.covered_account_ids
+            )
+            if contiguous:
+                commands.append(f"L{x:.2f},{y:.2f}")
+            else:
+                commands.append(f"M{x:.2f},{y:.2f}h0.2")
+            previous = point
+        paths.append(
+            f'<path class="pf-series pf-series-{css}" d="{" ".join(commands)}">'
+            f"<title>{label}</title></path>"
+        )
+        latest = points[-1]
+        coverage = (
+            "coverage unknown"
+            if latest.covered_account_ids is None
+            else f"{len(latest.covered_account_ids)}/{len(history.expected_account_ids)} accounts"
+        )
+        legend.append(
+            f'<span class="pf-chip"><span class="pf-swatch pf-swatch-{css}"></span>'
+            f"{label} <strong>{_money(float(latest.value))}</strong>"
+            f" · {latest.as_of} · {coverage}</span>"
+        )
+    reported = {
+        point.as_of: point.value for point in history.points if point.basis == "whole_account"
+    }
+    differences = [
+        (abs(point.value - reported[point.as_of]), abs(reported[point.as_of]))
+        for point in history.points
+        if point.basis == "legacy_cached_model"
+        and point.as_of in reported
+        and reported[point.as_of] != 0
+    ]
+    comparison = (
+        f"On {len(differences)} matched dates, estimates differed from account totals by "
+        f"{min(delta / total for delta, total in differences):.1%} to "
+        f"{max(delta / total for delta, total in differences):.1%} in absolute terms "
+        f"({_money(float(min(delta for delta, _ in differences)))} to "
+        f"{_money(float(max(delta for delta, _ in differences)))})."
+        if differences
+        else "Estimate error is unknown. The estimates and complete account totals have no comparable dates."
+    )
+    return panel_section(
+        '<p class="sub">Weekly dollar values. Marked holdings can omit cash and accounts.</p>',
+        f'<div class="pf-legend">{"".join(legend)}</div>',
+        axes + "".join(paths) + "</svg>",
+        f'<p class="pf-policy muted">{comparison}</p>',
+        title=title,
+    )
 
 
 def _policy_line(policy: PolicyMix | None) -> str:

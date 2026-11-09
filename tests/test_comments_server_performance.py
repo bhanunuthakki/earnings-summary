@@ -94,7 +94,7 @@ def test_every_record_section_renders_through_the_route(
     assert response.get_data(as_text=True).strip()
 
 
-@pytest.mark.parametrize("fragment", ["performance", "allocation", "posture"])
+@pytest.mark.parametrize("fragment", ["performance", "allocation", "posture", "weekly-values"])
 def test_performance_dispatch_preserves_window(
     fragment: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
