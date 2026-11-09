@@ -83,7 +83,14 @@ def _panel_performance_risk(ctx: ServerContext) -> Response | tuple[str, int]:
     from pipeline.portfolio_panel import render_health_fragment
 
     fragment = request.args.get("fragment")
-    if fragment in ("performance", "allocation", "posture", "risk-budget", "targets"):
+    if fragment in (
+        "performance",
+        "allocation",
+        "posture",
+        "risk-budget",
+        "targets",
+        "weekly-values",
+    ):
         return Response(
             render_performance_risk_fragment(
                 db_path,
