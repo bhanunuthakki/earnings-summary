@@ -174,7 +174,9 @@ def test_company_desk_is_a_narrow_governed_read_model(work_os_app_repo: Path) ->
     conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
     conn.row_factory = sqlite3.Row
     try:
-        desk = build_company_desk(work_os_app_repo, conn, "nu")
+        desk = build_company_desk(
+            work_os_app_repo, conn, "nu", generated_at=datetime(2026, 8, 15, 12, tzinfo=UTC)
+        )
     finally:
         conn.close()
 
