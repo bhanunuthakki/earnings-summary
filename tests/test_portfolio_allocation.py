@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -184,11 +185,17 @@ def test_global_region_on_a_stock_is_not_a_supported_bucket() -> None:
 
 
 def _covered_call_book(
-    *, account_id: int = 1, units: Decimal = Decimal(-100)
+    *,
+    account_id: int = 1,
+    units: Decimal = Decimal(-100),
+    market_value: Decimal = Decimal(-200),
+    contract_type: Literal["call", "put"] = "call",
 ) -> tuple[PositionsV1Result, SecuritiesV1Result]:
+    base = _positions()
+    total = base.total_market_value + market_value
     contract = OptionContractV1(
         underlying_ticker="AAAA",
-        contract_type="call",
+        contract_type=contract_type,
         expiration_date=date(2026, 11, 20),
         strike_price=Decimal(150),
         multiplier=Decimal(100),
@@ -200,10 +207,10 @@ def _covered_call_book(
         ticker="AAAA261120C00150000",
         name="Alpha call",
         quantity=units,
-        market_value=Decimal(-200),
+        market_value=market_value,
         cost_basis=None,
         unrealized_pnl=None,
-        percent_of_portfolio=Decimal(-200) / Decimal(19800) * 100,
+        percent_of_portfolio=market_value / total * 100,
         option_contract=contract,
         quantity_unit="underlying_units",
         contract_quantity=units / 100,
@@ -214,26 +221,23 @@ def _covered_call_book(
                 quantity=units,
                 quantity_unit="underlying_units",
                 contract_quantity=units / 100,
-                market_value=Decimal(-200),
+                market_value=market_value,
                 cost_basis=None,
                 cost_basis_source=None,
                 tax_treatment="roth",
             )
         ],
     )
-    base = _positions()
     rows = [
         row.model_copy(
             update={
-                "percent_of_portfolio": row.market_value / Decimal(19800) * 100,
+                "percent_of_portfolio": row.market_value / total * 100,
             }
         )
         for row in base.positions
         if row.market_value is not None
     ]
-    positions = base.model_copy(
-        update={"positions": [*rows, call], "total_market_value": Decimal(19800)}
-    )
+    positions = base.model_copy(update={"positions": [*rows, call], "total_market_value": total})
     securities = _classified_securities()
     option = securities.securities[0].model_copy(
         update={
@@ -245,6 +249,55 @@ def _covered_call_book(
         }
     )
     return positions, securities.model_copy(update={"securities": [*securities.securities, option]})
+
+
+@pytest.mark.parametrize("contract_type", ["call", "put"])
+def test_long_options_are_unclassified_without_blocking_allocation(
+    contract_type: Literal["call", "put"],
+) -> None:
+    from integrations.portfolio_allocation import read_portfolio_allocation
+
+    positions, securities = _covered_call_book(
+        units=Decimal(100), market_value=Decimal(200), contract_type=contract_type
+    )
+    result = read_portfolio_allocation(_reader(positions=positions, securities=securities))
+
+    assert result.state == "available"
+    assert result.reason_codes == ()
+    assert result.long_options_unclassified
+    assert result.buckets.unclassified.value == Decimal(200)
+    assert result.buckets.unclassified.weight_pct == Decimal(200) / Decimal(20200) * 100
+    assert result.buckets.us_equity.value == Decimal(13200)
+    assert result.reconciliation.is_reconciled
+    assert result.reconciliation.bucket_total == Decimal(20200)
+    assert result.covered_calls == ()
+
+
+def test_long_option_does_not_clear_other_unclassified_holdings() -> None:
+    from integrations.portfolio_allocation import read_portfolio_allocation
+
+    positions, securities = _covered_call_book(units=Decimal(100), market_value=Decimal(200))
+    stock = securities.securities[0]
+    securities.securities[0] = stock.model_copy(update={"region": None})
+    result = read_portfolio_allocation(_reader(positions=positions, securities=securities))
+
+    assert result.state == "incomplete"
+    assert result.reason_codes == ("portfolio_allocation_incomplete",)
+    assert result.long_options_unclassified
+    assert result.buckets.unclassified.value == Decimal(13400)
+    assert result.reconciliation.is_reconciled
+
+
+def test_negative_value_on_long_option_still_blocks_allocation() -> None:
+    from integrations.portfolio_allocation import read_portfolio_allocation
+
+    positions, securities = _covered_call_book(units=Decimal(100))
+    result = read_portfolio_allocation(_reader(positions=positions, securities=securities))
+
+    assert result.state == "incomplete"
+    assert not result.long_options_unclassified
+    assert result.buckets.unclassified.value == Decimal(-200)
+    assert result.reconciliation.is_reconciled
 
 
 def test_signed_covered_call_preserves_net_allocation_and_stock_capital() -> None:

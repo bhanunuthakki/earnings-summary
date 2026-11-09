@@ -910,7 +910,11 @@
     ];
     const rendered = entries.filter(function (entry) { return Number.isFinite(Number(entry[1] && entry[1].weight_pct)); })
       .map(function (entry) { return '<div class="stat-subtext work-os-allocation-row">' + workOsPortfolioPercent(Number(entry[1].weight_pct)) + ' ' + entry[0] + '</div>'; });
-    return rendered.length ? rendered.join('') : '<div class="stat-subtext">Allocation mix unavailable</div>';
+    if (!rendered.length) return '<div class="stat-subtext">Allocation mix unavailable</div>';
+    const note = allocation.long_options_unclassified
+      ? '<p class="stat-subtext">Long options are included in Unclassified at market value.</p>'
+      : '';
+    return rendered.join('') + note;
   }
 
   function workOsPillClass(status) {

@@ -26,15 +26,6 @@ from integrations.portfolio_tracker_v1 import (
     V1Fetch,
 )
 
-_BUCKET_NAMES = (
-    "us_equity",
-    "international_equity",
-    "us_etf",
-    "international_etf",
-    "global_etf",
-    "cash",
-    "unclassified",
-)
 _BUCKET_BY_TYPE_AND_REGION = {
     ("stock", "us"): "us_equity",
     ("stock", "international"): "international_equity",
@@ -93,6 +84,7 @@ class PortfolioAllocationProjection(BaseModel):
     reconciliation: PortfolioAllocationReconciliation
     reason_codes: tuple[str, ...] = ()
     covered_calls: tuple[CoveredCallExposure, ...] = ()
+    long_options_unclassified: bool = False
 
 
 class CoveredCallLeg(BaseModel):
@@ -136,15 +128,8 @@ class PortfolioAllocationReader(Protocol):
 
 def _null_buckets() -> PortfolioAllocationBuckets:
     bucket = PortfolioAllocationBucket(value=None, weight_pct=None)
-    return PortfolioAllocationBuckets(
-        us_equity=bucket,
-        international_equity=bucket,
-        us_etf=bucket,
-        international_etf=bucket,
-        global_etf=bucket,
-        cash=bucket,
-        unclassified=bucket,
-    )
+    buckets = dict.fromkeys(PortfolioAllocationBuckets.model_fields, bucket)
+    return PortfolioAllocationBuckets.model_validate(buckets)
 
 
 def unavailable_portfolio_allocation(code: str) -> PortfolioAllocationProjection:
@@ -292,6 +277,22 @@ def _bucket_name(security: SecurityV1) -> str:
     return _BUCKET_BY_TYPE_AND_REGION.get((asset_type, region), "unclassified")
 
 
+def _is_long_option(position: PositionV1, security: SecurityV1) -> bool:
+    """Identify long option capital without inferring contract size or exposure."""
+    contract = security.option_contract
+    return (
+        contract is not None
+        and position.option_contract == contract
+        and position.quantity > _ZERO
+        and position.market_value is not None
+        and position.market_value >= _ZERO
+        and all(
+            lot.quantity > _ZERO and lot.market_value is not None and lot.market_value >= _ZERO
+            for lot in position.accounts
+        )
+    )
+
+
 def _covered_call_underlying(
     position: PositionV1,
     security: SecurityV1,
@@ -346,13 +347,14 @@ def project_portfolio_allocation(
     if error is not None:
         return unavailable_portfolio_allocation(error)
 
-    totals = {name: _ZERO for name in _BUCKET_NAMES}
+    totals = dict.fromkeys(PortfolioAllocationBuckets.model_fields, _ZERO)
     by_security_id = {security.security_id: security for security in securities.securities}
     by_position_id = {position.security_id: position for position in positions.positions}
     reasons: set[str] = set()
     option_values: dict[int, Decimal] = {}
     call_legs: dict[int, list[CoveredCallLeg]] = {}
     remaining_shares: dict[tuple[int, int], Decimal] = {}
+    long_options_unclassified = False
     for position in sorted(positions.positions, key=lambda row: row.security_id):
         security = by_security_id[position.security_id]
         # _structural_error() has proved this field is a finite Decimal.
@@ -360,6 +362,10 @@ def project_portfolio_allocation(
         assert isinstance(market_value, Decimal)
         bucket_security = security
         if _is_option(security):
+            if _is_long_option(position, security):
+                totals["unclassified"] += market_value
+                long_options_unclassified = True
+                continue
             underlying, issue = _covered_call_underlying(
                 position, security, securities.securities, by_position_id
             )
@@ -416,7 +422,10 @@ def project_portfolio_allocation(
                             metadata_source=contract.metadata_source,
                         )
                     )
-        totals[_bucket_name(bucket_security)] += market_value
+        bucket_name = _bucket_name(bucket_security)
+        totals[bucket_name] += market_value
+        if bucket_name == "unclassified" and market_value != _ZERO:
+            reasons.add("portfolio_allocation_incomplete")
 
     total = positions.total_market_value
     bucket_total = sum(totals.values(), _ZERO)
@@ -424,21 +433,12 @@ def project_portfolio_allocation(
     if difference != _ZERO:
         return unavailable_portfolio_allocation("portfolio_allocation_reconciliation_failed")
 
-    def bucket(name: str) -> PortfolioAllocationBucket:
-        value = totals[name]
-        return PortfolioAllocationBucket(value=value, weight_pct=value / total * Decimal(100))
-
-    allocation_buckets = PortfolioAllocationBuckets(
-        us_equity=bucket("us_equity"),
-        international_equity=bucket("international_equity"),
-        us_etf=bucket("us_etf"),
-        international_etf=bucket("international_etf"),
-        global_etf=bucket("global_etf"),
-        cash=bucket("cash"),
-        unclassified=bucket("unclassified"),
+    allocation_buckets = PortfolioAllocationBuckets.model_validate(
+        {
+            name: PortfolioAllocationBucket(value=value, weight_pct=value / total * Decimal(100))
+            for name, value in totals.items()
+        }
     )
-    if totals["unclassified"] != _ZERO:
-        reasons.add("portfolio_allocation_incomplete")
     exposures: list[CoveredCallExposure] = []
     for security_id, value in sorted(option_values.items()):
         stock_value = by_position_id[security_id].market_value
@@ -455,9 +455,8 @@ def project_portfolio_allocation(
                 legs=tuple(call_legs[security_id]),
             )
         )
-    incomplete = bool(reasons)
     return PortfolioAllocationProjection(
-        state="incomplete" if incomplete else "available",
+        state="incomplete" if reasons else "available",
         source_identity="portfolio_tracker_api_v1",
         as_of=securities.meta.as_of,
         currency=securities.meta.currency,
@@ -470,6 +469,7 @@ def project_portfolio_allocation(
         ),
         reason_codes=tuple(sorted(reasons)),
         covered_calls=tuple(exposures),
+        long_options_unclassified=long_options_unclassified,
     )
 
 
@@ -485,9 +485,7 @@ def _resolved_data(future: Future[V1Fetch[_T]]) -> _T | None:
         fetch = future.result()
     except Exception:
         return None
-    if not fetch.available or fetch.data is None:
-        return None
-    return fetch.data
+    return fetch.data if fetch.available else None
 
 
 def read_portfolio_allocation(reader: PortfolioAllocationReader) -> PortfolioAllocationProjection:

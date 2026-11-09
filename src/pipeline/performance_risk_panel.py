@@ -364,6 +364,9 @@ def render_allocation_card(allocation: PortfolioAllocationProjection) -> str:
         f"{escape(as_of)} · {escape(reconciliation)}.</p>",
         f'<div class="pr-allocation-rows">{rows}</div>',
         reasons,
+        '<p class="sub">Long options are included in Unclassified at market value.</p>'
+        if allocation.long_options_unclassified
+        else "",
         option_details,
         title="Portfolio Allocation",
         cls="pr-allocation",
