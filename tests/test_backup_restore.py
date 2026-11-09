@@ -17,7 +17,7 @@ import tempfile
 from collections.abc import Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from cryptography.exceptions import InvalidTag
@@ -656,6 +656,41 @@ def test_backup_captures_archive_sidecar(tmp_path: Path, monkeypatch: pytest.Mon
         assert conn.execute("SELECT rows_archived FROM gc_manifest").fetchone()[0] == 5
     finally:
         conn.close()
+
+
+def test_integrity_check_runs_with_a_large_page_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _prime_backup(tmp_path, monkeypatch)
+    statements: list[str] = []
+    real_connect = sqlite3.connect
+
+    def traced_connect(database: str, *args: Any, **kwargs: Any) -> sqlite3.Connection:
+        conn = real_connect(database, *args, **kwargs)
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", traced_connect)
+    assert backup_db.main() == 0
+    cache = f"PRAGMA cache_size=-{backup_db.INTEGRITY_CACHE_KIB}"
+    assert backup_db.INTEGRITY_CACHE_KIB >= 262_144
+    checks = [i for i, sql in enumerate(statements) if sql == "PRAGMA integrity_check"]
+    assert checks, "backup never ran PRAGMA integrity_check"
+    for index in checks:
+        assert cache in statements[:index]
+        assert statements[index - 1] == cache
+
+
+def test_backup_log_reports_each_stage_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    live, _backup_dir = _prime_backup(tmp_path, monkeypatch)
+    _make_archive(live)
+    assert backup_db.main() == 0
+    out = capsys.readouterr().out
+    stages = re.findall(r"^timing: (\w+) \d+\.\ds$", out, flags=re.MULTILINE)
+    expected = ["snapshot", "integrity_check", "sha256", "gzip", "encrypt", "verify"]
+    assert stages == expected + [f"archive_{stage}" for stage in expected]
 
 
 def test_missing_archive_does_not_fail_db_backup(

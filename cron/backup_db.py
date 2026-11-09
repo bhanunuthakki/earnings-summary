@@ -31,7 +31,9 @@ import sqlite3
 import stat
 import sys
 import tempfile
-from contextlib import nullcontext
+import time
+from collections.abc import Generator
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -103,6 +105,7 @@ DEFAULT_RETAIN = 1
 # level 9 cost 2.7x the time of level 6 for 2.7% less output, and pushed the
 # daily run past its scheduler limit. Restore reads any level.
 GZIP_LEVEL = 6
+INTEGRITY_CACHE_KIB = 262_144  # 256 MiB page cache for PRAGMA integrity_check
 STAGING_PREFIXES = ("portfolio_backup.", "archive_backup.")
 # Task Scheduler stops backup_db at its ExecutionTimeLimit (cron/backup_db.task.xml,
 # PT45M) without letting the run close its accounting attempt. Run accounting
@@ -195,9 +198,22 @@ def consistent_snapshot(src_db: Path, tmp_path: Path) -> None:
         src.close()
 
 
+@contextmanager
+def _timed(stage: str) -> Generator[None]:
+    """Print the elapsed time of one backup stage to the log (plain text, not JSON)."""
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        print(f"timing: {stage} {time.monotonic() - started:.1f}s", flush=True)
+
+
 def _integrity_ok(db_path: Path) -> bool:
     conn = sqlite3.connect(str(db_path))
     try:
+        # A larger page cache halves integrity_check time on a multi-GB snapshot
+        # (host probe: 191-210 s with the default cache, 102-114 s with 256 MiB).
+        conn.execute(f"PRAGMA cache_size=-{INTEGRITY_CACHE_KIB}")
         row = conn.execute("PRAGMA integrity_check").fetchone()
         return bool(row) and row[0] == "ok"
     finally:
@@ -343,10 +359,14 @@ def _run_backup() -> int:
         with tempfile.TemporaryDirectory(prefix="portfolio_backup.", dir=staging_parent) as staging:
             tmp_path = Path(staging) / "portfolio.db"
             tmp_gz = Path(staging) / "portfolio.db.gz"
-            consistent_snapshot(SRC_DB, tmp_path)
-            if not _integrity_ok(tmp_path):
+            with _timed("snapshot"):
+                consistent_snapshot(SRC_DB, tmp_path)
+            with _timed("integrity_check"):
+                integrity_ok = _integrity_ok(tmp_path)
+            if not integrity_ok:
                 raise RuntimeError("consistent snapshot failed SQLite integrity_check")
-            snapshot_sha256 = _file_sha256(tmp_path)
+            with _timed("sha256"):
+                snapshot_sha256 = _file_sha256(tmp_path)
             existing = verified_files(dest_dir, family="portfolio-db", source=SRC_DB)
             local_receipt = existing[-1][1] if existing else None
             if (
@@ -368,12 +388,15 @@ def _run_backup() -> int:
                 )
                 return 0
             with (
+                _timed("gzip"),
                 open(tmp_path, "rb") as raw,
                 gzip.open(tmp_gz, "wb", compresslevel=GZIP_LEVEL) as gz,
             ):
                 shutil.copyfileobj(raw, gz)
-            encrypt_file(tmp_gz, final_path, key=load_or_create_key())
-            _verify_encrypted_snapshot(final_path, Path(staging), snapshot_sha256)
+            with _timed("encrypt"):
+                encrypt_file(tmp_gz, final_path, key=load_or_create_key())
+            with _timed("verify"):
+                _verify_encrypted_snapshot(final_path, Path(staging), snapshot_sha256)
         record_snapshot(
             final_path, family="portfolio-db", source=SRC_DB, snapshot_sha256=snapshot_sha256
         )
@@ -407,18 +430,28 @@ def _backup_archive_sidecar(dest_dir: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="archive_backup.", dir=staging_parent) as staging:
         tmp_path = Path(staging) / ARCHIVE_PREFIX
         tmp_gz = Path(staging) / f"{ARCHIVE_PREFIX}.gz"
-        consistent_snapshot(archive, tmp_path)
-        if not _integrity_ok(tmp_path):
+        with _timed("archive_snapshot"):
+            consistent_snapshot(archive, tmp_path)
+        with _timed("archive_integrity_check"):
+            integrity_ok = _integrity_ok(tmp_path)
+        if not integrity_ok:
             raise RuntimeError("archive snapshot failed SQLite integrity_check")
-        snapshot_sha256 = _file_sha256(tmp_path)
+        with _timed("archive_sha256"):
+            snapshot_sha256 = _file_sha256(tmp_path)
         existing = verified_files(dest_dir, family="portfolio-gc-archive", source=archive)
         if existing and existing[-1][1].snapshot_sha256 == snapshot_sha256:
             print(f"(archive unchanged since last verified snapshot: {existing[-1][0].name})")
             return
-        with open(tmp_path, "rb") as raw, gzip.open(tmp_gz, "wb", compresslevel=GZIP_LEVEL) as gz:
+        with (
+            _timed("archive_gzip"),
+            open(tmp_path, "rb") as raw,
+            gzip.open(tmp_gz, "wb", compresslevel=GZIP_LEVEL) as gz,
+        ):
             shutil.copyfileobj(raw, gz)
-        encrypt_file(tmp_gz, final_path, key=load_or_create_key())
-        _verify_encrypted_snapshot(final_path, Path(staging), snapshot_sha256)
+        with _timed("archive_encrypt"):
+            encrypt_file(tmp_gz, final_path, key=load_or_create_key())
+        with _timed("archive_verify"):
+            _verify_encrypted_snapshot(final_path, Path(staging), snapshot_sha256)
     record_snapshot(
         final_path, family="portfolio-gc-archive", source=archive, snapshot_sha256=snapshot_sha256
     )
