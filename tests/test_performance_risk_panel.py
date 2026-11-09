@@ -50,6 +50,16 @@ def _allocation(
     )
 
 
+def test_long_options_footnote_depends_on_allocation_evidence() -> None:
+    allocation = _allocation()
+    footnote = "Long options are included in Unclassified at market value."
+    assert footnote not in panel.render_allocation_card(allocation)
+    allocation = allocation.model_copy(update={"long_options_unclassified": True})
+    html = panel.render_allocation_card(allocation)
+    assert "Unclassified" in html and footnote in html
+    assert "Incomplete evidence" not in html
+
+
 def test_covered_call_details_distinguish_stock_capital_net_value_and_missing_delta() -> None:
     allocation = _allocation().model_copy(
         update={
