@@ -17,7 +17,7 @@ from operations.models import (
     ObservationEnvelope,
     ObservationState,
     OperationsRegistry,
-    OperationsSnapshot,
+    OperationsReviewSnapshot,
     SchedulerExpectation,
 )
 from pipeline.kpi_report_reference_dispositions import (
@@ -414,7 +414,7 @@ def load_kpi_repair_review(
 
 def build_operations_review_bundle(
     *,
-    snapshot: OperationsSnapshot,
+    snapshot: OperationsReviewSnapshot,
     registry: OperationsRegistry,
     semantic_rows: tuple[ScopedKpiDefinition, ...],
     serving_origin: str,
