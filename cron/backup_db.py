@@ -32,7 +32,9 @@ import stat
 import sys
 import tempfile
 import time
+from collections import deque
 from collections.abc import Generator
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -105,7 +107,24 @@ DEFAULT_RETAIN = 1
 # level 9 cost 2.7x the time of level 6 for 2.7% less output, and pushed the
 # daily run past its scheduler limit. Restore reads any level.
 GZIP_LEVEL = 6
-INTEGRITY_CACHE_KIB = 262_144  # 256 MiB page cache for PRAGMA integrity_check
+INTEGRITY_CACHE_KIB = 262_144  # 256 MiB page cache for the snapshot check
+# 2026-11-09: the 10.4 GB snapshot spent 2127 s in PRAGMA integrity_check and the
+# run hit its 45-minute limit. integrity_check also looks up every index entry in
+# its table, so its random reads grow faster than the file. quick_check reads each
+# page once and verifies every b-tree, record, freelist and NOT NULL/CHECK rule:
+# that proves the snapshot restorable. The monthly restore drill still runs the
+# full integrity_check on the restored copy, and an index-only mismatch is
+# repaired by REINDEX without data loss.
+SNAPSHOT_CHECK = "quick_check"
+# A memory-mapped check with a 2 GiB cache took 194 s on the same 11 GB copy
+# (host probe 2026-11-09); the 256 MiB cache alone was the slow path.
+CHECK_CACHE_KIB = 2_097_152
+# gzip level 6 ran at 110 s/GB on one core (host probe 2026-11-09), so the
+# 11 GB snapshot spent ~20 min compressing. Independent gzip members compress in
+# parallel; concatenated members are one valid gzip stream that restore reads
+# unchanged. zlib releases the GIL, so threads use separate cores.
+COMPRESS_CHUNK_BYTES = 16 * 1024 * 1024
+COMPRESS_WORKERS = max(1, min(8, (os.cpu_count() or 2) - 2))
 STAGING_PREFIXES = ("portfolio_backup.", "archive_backup.")
 # Task Scheduler stops backup_db at its ExecutionTimeLimit (cron/backup_db.task.xml,
 # PT45M) without letting the run close its accounting attempt. Run accounting
@@ -153,14 +172,6 @@ def clear_stale_staging(root: Path) -> list[str]:
 # last prune, not daily — keep fewer, and skip re-encrypting an unchanged file.
 ARCHIVE_PREFIX = "portfolio_gc_archive.db"
 DEFAULT_ARCHIVE_RETAIN = 1
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _skipped_unchanged_payload(receipt: BackupReceipt) -> dict[str, str]:
@@ -211,13 +222,51 @@ def _timed(stage: str) -> Generator[None]:
 def _integrity_ok(db_path: Path) -> bool:
     conn = sqlite3.connect(str(db_path))
     try:
-        # A larger page cache halves integrity_check time on a multi-GB snapshot
+        # A larger page cache halves check time on a multi-GB snapshot
         # (host probe: 191-210 s with the default cache, 102-114 s with 256 MiB).
-        conn.execute(f"PRAGMA cache_size=-{INTEGRITY_CACHE_KIB}")
-        row = conn.execute("PRAGMA integrity_check").fetchone()
+        conn.execute(f"PRAGMA cache_size=-{max(INTEGRITY_CACHE_KIB, CHECK_CACHE_KIB)}")
+        conn.execute(f"PRAGMA mmap_size={db_path.stat().st_size + (1 << 30)}")
+        row = conn.execute(f"PRAGMA {SNAPSHOT_CHECK}").fetchone()
         return bool(row) and row[0] == "ok"
     finally:
         conn.close()
+
+
+def _gzip_member(chunk: bytes) -> bytes:
+    return gzip.compress(chunk, compresslevel=GZIP_LEVEL, mtime=0)
+
+
+def _compress_and_hash(raw_path: Path, gz_path: Path) -> str:
+    """Gzip *raw_path* in parallel members; return its SHA-256 from the same read."""
+    digest = hashlib.sha256()
+    pending: deque[Future[bytes]] = deque()
+    with (
+        raw_path.open("rb") as raw,
+        gz_path.open("wb") as out,
+        ThreadPoolExecutor(COMPRESS_WORKERS) as pool,
+    ):
+        while chunk := raw.read(COMPRESS_CHUNK_BYTES):
+            digest.update(chunk)
+            pending.append(pool.submit(_gzip_member, chunk))
+            if len(pending) >= 2 * COMPRESS_WORKERS:
+                out.write(pending.popleft().result())
+        while pending:
+            out.write(pending.popleft().result())
+    return digest.hexdigest()
+
+
+def _check_and_compress(raw_path: Path, gz_path: Path, prefix: str = "") -> tuple[bool, str]:
+    """Run the snapshot check beside compression; both read the same snapshot."""
+    started = time.monotonic()
+    with ThreadPoolExecutor(1) as checker:
+        check = checker.submit(_integrity_ok, raw_path)
+        snapshot_sha256 = _compress_and_hash(raw_path, gz_path)
+        compressed_at = time.monotonic()
+        ok = check.result()
+    checked_at = time.monotonic()
+    print(f"timing: {prefix}gzip_sha256 {compressed_at - started:.1f}s", flush=True)
+    print(f"timing: {prefix}{SNAPSHOT_CHECK}_overlap {checked_at - started:.1f}s", flush=True)
+    return ok, snapshot_sha256
 
 
 def source_schema_revision(conn: sqlite3.Connection) -> str:
@@ -361,12 +410,12 @@ def _run_backup() -> int:
             tmp_gz = Path(staging) / "portfolio.db.gz"
             with _timed("snapshot"):
                 consistent_snapshot(SRC_DB, tmp_path)
-            with _timed("integrity_check"):
-                integrity_ok = _integrity_ok(tmp_path)
+            # Hash during compression (one read instead of two) while the check runs
+            # beside it. Nothing is encrypted or published unless the check passes.
+            # On an unchanged day the gzip is discarded.
+            integrity_ok, snapshot_sha256 = _check_and_compress(tmp_path, tmp_gz)
             if not integrity_ok:
-                raise RuntimeError("consistent snapshot failed SQLite integrity_check")
-            with _timed("sha256"):
-                snapshot_sha256 = _file_sha256(tmp_path)
+                raise RuntimeError(f"consistent snapshot failed SQLite {SNAPSHOT_CHECK}")
             existing = verified_files(dest_dir, family="portfolio-db", source=SRC_DB)
             local_receipt = existing[-1][1] if existing else None
             if (
@@ -387,12 +436,7 @@ def _run_backup() -> int:
                     error_msg="skipped_unchanged: snapshot sha256 matches last locally verified snapshot",
                 )
                 return 0
-            with (
-                _timed("gzip"),
-                open(tmp_path, "rb") as raw,
-                gzip.open(tmp_gz, "wb", compresslevel=GZIP_LEVEL) as gz,
-            ):
-                shutil.copyfileobj(raw, gz)
+            tmp_path.unlink()
             with _timed("encrypt"):
                 encrypt_file(tmp_gz, final_path, key=load_or_create_key())
             with _timed("verify"):
@@ -432,22 +476,14 @@ def _backup_archive_sidecar(dest_dir: Path) -> None:
         tmp_gz = Path(staging) / f"{ARCHIVE_PREFIX}.gz"
         with _timed("archive_snapshot"):
             consistent_snapshot(archive, tmp_path)
-        with _timed("archive_integrity_check"):
-            integrity_ok = _integrity_ok(tmp_path)
+        integrity_ok, snapshot_sha256 = _check_and_compress(tmp_path, tmp_gz, "archive_")
         if not integrity_ok:
-            raise RuntimeError("archive snapshot failed SQLite integrity_check")
-        with _timed("archive_sha256"):
-            snapshot_sha256 = _file_sha256(tmp_path)
+            raise RuntimeError(f"archive snapshot failed SQLite {SNAPSHOT_CHECK}")
         existing = verified_files(dest_dir, family="portfolio-gc-archive", source=archive)
         if existing and existing[-1][1].snapshot_sha256 == snapshot_sha256:
             print(f"(archive unchanged since last verified snapshot: {existing[-1][0].name})")
             return
-        with (
-            _timed("archive_gzip"),
-            open(tmp_path, "rb") as raw,
-            gzip.open(tmp_gz, "wb", compresslevel=GZIP_LEVEL) as gz,
-        ):
-            shutil.copyfileobj(raw, gz)
+        tmp_path.unlink()
         with _timed("archive_encrypt"):
             encrypt_file(tmp_gz, final_path, key=load_or_create_key())
         with _timed("archive_verify"):
