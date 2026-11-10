@@ -658,7 +658,7 @@ def test_backup_captures_archive_sidecar(tmp_path: Path, monkeypatch: pytest.Mon
         conn.close()
 
 
-def test_integrity_check_runs_with_a_large_page_cache(
+def test_snapshot_check_is_linear_and_uses_a_large_page_cache(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _prime_backup(tmp_path, monkeypatch)
@@ -672,13 +672,15 @@ def test_integrity_check_runs_with_a_large_page_cache(
 
     monkeypatch.setattr(sqlite3, "connect", traced_connect)
     assert backup_db.main() == 0
-    cache = f"PRAGMA cache_size=-{backup_db.INTEGRITY_CACHE_KIB}"
-    assert backup_db.INTEGRITY_CACHE_KIB >= 262_144
-    checks = [i for i, sql in enumerate(statements) if sql == "PRAGMA integrity_check"]
-    assert checks, "backup never ran PRAGMA integrity_check"
+    cache = f"PRAGMA cache_size=-{backup_db.CHECK_CACHE_KIB}"
+    assert backup_db.CHECK_CACHE_KIB >= backup_db.INTEGRITY_CACHE_KIB >= 262_144
+    assert backup_db.SNAPSHOT_CHECK == "quick_check"
+    checks = [i for i, sql in enumerate(statements) if sql == "PRAGMA quick_check"]
+    assert checks, "backup never ran PRAGMA quick_check"
+    assert "PRAGMA integrity_check" not in statements
     for index in checks:
-        assert cache in statements[:index]
-        assert statements[index - 1] == cache
+        assert statements[index - 2] == cache
+        assert statements[index - 1].startswith("PRAGMA mmap_size=")
 
 
 def test_backup_log_reports_each_stage_time(
@@ -689,7 +691,7 @@ def test_backup_log_reports_each_stage_time(
     assert backup_db.main() == 0
     out = capsys.readouterr().out
     stages = re.findall(r"^timing: (\w+) \d+\.\ds$", out, flags=re.MULTILINE)
-    expected = ["snapshot", "integrity_check", "sha256", "gzip", "encrypt", "verify"]
+    expected = ["snapshot", "gzip_sha256", "quick_check_overlap", "encrypt", "verify"]
     assert stages == expected + [f"archive_{stage}" for stage in expected]
 
 
@@ -1030,18 +1032,25 @@ def test_snapshot_staging_uses_the_job_owned_parent(
 def test_backup_compresses_below_the_slow_default_level(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Level 9 pushed the 4.6 GB run past its limit; restore reads any level."""
+    """Level 9 pushed the 4.6 GB run past its limit; restore reads any level.
+
+    Small chunks force many parallel gzip members; restore must read them as
+    one stream and return the exact database.
+    """
     _live, backup_dir = _prime_backup(tmp_path, monkeypatch)
     levels: list[int] = []
+    real_compress = gzip.compress
 
-    def spy(filename: Path, mode: str = "rb", compresslevel: int = 9) -> gzip.GzipFile:
-        if "w" in mode:
-            levels.append(compresslevel)
-        return gzip.GzipFile(filename, mode, compresslevel)
+    def spy(data: bytes, compresslevel: int = 9, *, mtime: float | None = None) -> bytes:
+        levels.append(compresslevel)
+        return real_compress(data, compresslevel=compresslevel, mtime=mtime)
 
-    monkeypatch.setattr(backup_db.gzip, "open", spy)
+    monkeypatch.setattr(backup_db.gzip, "compress", spy)
+    monkeypatch.setattr(backup_db, "COMPRESS_CHUNK_BYTES", 1024)
+    monkeypatch.setattr(backup_db, "COMPRESS_WORKERS", 3)
     assert backup_db.main() == 0
-    assert levels == [backup_db.GZIP_LEVEL]
+    assert len(levels) > 3, "snapshot was not split into parallel members"
+    assert set(levels) == {backup_db.GZIP_LEVEL}
     assert backup_db.GZIP_LEVEL == 6
     restored = tmp_path / "restored.db"
     rc = restore_db.main(
