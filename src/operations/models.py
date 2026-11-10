@@ -573,9 +573,9 @@ class DataCoverageSummary(FrozenModel):
     sec_state: str = "unavailable"
 
 
-class OperationsSnapshot(FrozenModel):
-    data_coverage: DataCoverageSummary = Field(default_factory=DataCoverageSummary)
-    snapshot_version: Literal["1"] = "1"
+class OperationsReviewSnapshot(FrozenModel):
+    """Evidence consumed by the cross-machine review projection."""
+
     observed_at: datetime
     registry_version: str
     database_identity: DatabaseIdentityObservation
@@ -583,12 +583,6 @@ class OperationsSnapshot(FrozenModel):
     scheduler: SchedulerObservation
     services: ServiceObservation
     job_receipts: tuple[JobReceiptObservation, ...]
-    database_runs: DatabaseRunsObservation
-    source_calls: SourceCallsObservation
-    llm_calls: LLMCallsObservation
-    fmp_backlog: FMPBacklogObservation
-    fmp_circuit: FMPCircuitObservation
-    portfolio_tracker_runtime: PortfolioTrackerRuntimeObservation
 
     @field_validator("observed_at")
     @classmethod
@@ -596,3 +590,14 @@ class OperationsSnapshot(FrozenModel):
         if value.tzinfo is None:
             raise ValueError("snapshot observed_at must be timezone-aware")
         return value
+
+
+class OperationsSnapshot(OperationsReviewSnapshot):
+    data_coverage: DataCoverageSummary = Field(default_factory=DataCoverageSummary)
+    snapshot_version: Literal["1"] = "1"
+    database_runs: DatabaseRunsObservation
+    source_calls: SourceCallsObservation
+    llm_calls: LLMCallsObservation
+    fmp_backlog: FMPBacklogObservation
+    fmp_circuit: FMPCircuitObservation
+    portfolio_tracker_runtime: PortfolioTrackerRuntimeObservation
