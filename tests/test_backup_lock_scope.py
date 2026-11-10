@@ -1,7 +1,7 @@
 """What the backup job may and may not be blocked by.
 
 The snapshot is a READER: SQLite's online-backup API is safe while other writers
-work, and ``_integrity_ok`` is what proves a snapshot good. Claiming the
+work, and ``_quick_check_ok`` plus the round-trip verify prove a snapshot good. Claiming the
 database's exclusive ``portfolio-db`` write set therefore bought no safety while
 costing every run that overlapped any writer -- ``JobLock`` is fail-fast with
 zero wait. On 2026-08-03 the 02:45 run gave up 12 ms in with "write set busy:

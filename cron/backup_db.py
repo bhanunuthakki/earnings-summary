@@ -11,7 +11,7 @@ all required families, then retires only verified older copies. The default
 retention is one completed copy per source/family. Pending, failed, unclassified,
 and pinned copies remain intact. ES_DB_BACKUP_DIR sets the destination.
 
-After the integrity gate, unchanged content can reuse a hash-bound local
+After the quick_check gate, unchanged content can reuse a hash-bound local
 snapshot receipt. The wrapper still verifies/retries its remote upload. Local
 production and remote completion are separate receipt fields. RPO is 24h of
 changes — see cron/restore_db.py.
@@ -32,7 +32,10 @@ import stat
 import sys
 import tempfile
 import time
-from collections.abc import Generator
+import zlib
+from collections import deque
+from collections.abc import Callable, Generator
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -105,7 +108,12 @@ DEFAULT_RETAIN = 1
 # level 9 cost 2.7x the time of level 6 for 2.7% less output, and pushed the
 # daily run past its scheduler limit. Restore reads any level.
 GZIP_LEVEL = 6
-INTEGRITY_CACHE_KIB = 262_144  # 256 MiB page cache for PRAGMA integrity_check
+# Each block becomes an independent gzip member, compressed on its own thread. The
+# concatenated members are one standard gzip stream (RFC 1952), so gzip.open and
+# cron/restore_db.py read it unchanged.
+COMPRESS_BLOCK_BYTES = 16 * 1024 * 1024
+COMPRESS_WORKERS = max(1, (os.cpu_count() or 2) // 2)
+CHECK_CACHE_KIB = 262_144  # 256 MiB page cache for PRAGMA quick_check
 STAGING_PREFIXES = ("portfolio_backup.", "archive_backup.")
 # Task Scheduler stops backup_db at its ExecutionTimeLimit (cron/backup_db.task.xml,
 # PT45M) without letting the run close its accounting attempt. Run accounting
@@ -155,11 +163,36 @@ ARCHIVE_PREFIX = "portfolio_gc_archive.db"
 DEFAULT_ARCHIVE_RETAIN = 1
 
 
-def _file_sha256(path: Path) -> str:
+def _gzip_member(block: bytes) -> bytes:
+    compressor = zlib.compressobj(GZIP_LEVEL, zlib.DEFLATED, 16 + zlib.MAX_WBITS)
+    return compressor.compress(block) + compressor.flush()
+
+
+def compress_and_hash(source: Path, destination: Path) -> str:
+    """Read *source* once: return its SHA-256 and write it as parallel gzip members.
+
+    zlib releases the GIL, so blocks compress on all worker threads at once. Members
+    are written in source order, and at most two blocks per worker are in memory.
+    """
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
+    pending: deque[Future[bytes]] = deque()
+    wrote_any = False
+    with (
+        source.open("rb") as raw,
+        destination.open("wb") as out,
+        ThreadPoolExecutor(max_workers=COMPRESS_WORKERS) as pool,
+    ):
+        while block := raw.read(COMPRESS_BLOCK_BYTES):
+            digest.update(block)
+            pending.append(pool.submit(_gzip_member, block))
+            if len(pending) >= 2 * COMPRESS_WORKERS:
+                out.write(pending.popleft().result())
+                wrote_any = True
+        while pending:
+            out.write(pending.popleft().result())
+            wrote_any = True
+        if not wrote_any:
+            out.write(_gzip_member(b""))
     return digest.hexdigest()
 
 
@@ -191,6 +224,10 @@ def consistent_snapshot(src_db: Path, tmp_path: Path) -> None:
     src = sqlite3.connect(str(src_db))
     dst = sqlite3.connect(str(tmp_path))
     try:
+        # The staging copy is disposable and is verified end to end afterwards, so it
+        # needs no rollback journal or per-step fsync.
+        dst.execute("PRAGMA journal_mode=OFF")
+        dst.execute("PRAGMA synchronous=OFF")
         with dst:
             src.backup(dst)
     finally:
@@ -208,16 +245,69 @@ def _timed(stage: str) -> Generator[None]:
         print(f"timing: {stage} {time.monotonic() - started:.1f}s", flush=True)
 
 
-def _integrity_ok(db_path: Path) -> bool:
+def _quick_check_ok(db_path: Path) -> bool:
+    """Nightly structural check of the staging copy.
+
+    quick_check verifies every page, record format and constraint but skips the
+    index-to-table cross-check. On the 10 GB database the full integrity_check took
+    35 minutes at task priority. The monthly restore drill (execution/restore_drill.py)
+    and every restore (cron/restore_db.py) still run the full integrity_check.
+    """
     conn = sqlite3.connect(str(db_path))
     try:
-        # A larger page cache halves integrity_check time on a multi-GB snapshot
-        # (host probe: 191-210 s with the default cache, 102-114 s with 256 MiB).
-        conn.execute(f"PRAGMA cache_size=-{INTEGRITY_CACHE_KIB}")
-        row = conn.execute("PRAGMA integrity_check").fetchone()
+        conn.execute(f"PRAGMA cache_size=-{CHECK_CACHE_KIB}")
+        row = conn.execute("PRAGMA quick_check").fetchone()
         return bool(row) and row[0] == "ok"
     finally:
         conn.close()
+
+
+def _timed_quick_check(db_path: Path) -> tuple[bool, float]:
+    started = time.monotonic()
+    ok = _quick_check_ok(db_path)
+    return ok, time.monotonic() - started
+
+
+def check_and_seal(
+    snapshot: Path,
+    final_path: Path,
+    *,
+    label: str,
+    stage_prefix: str = "",
+    is_unchanged: Callable[[str], bool],
+) -> tuple[str, bool]:
+    """Run quick_check alongside compress -> encrypt -> verify of one staging snapshot.
+
+    Both read the same file, so the check costs no extra wall time. Returns the
+    snapshot SHA-256 and whether a new envelope was sealed (False when
+    *is_unchanged* matches). A failed check or verify removes the new envelope,
+    so no receipt-less ciphertext stays in the destination.
+    """
+    gz = snapshot.with_name(f"{snapshot.name}.gz")
+    published = False
+    try:
+        # Leaving this block waits for the check, so the snapshot is closed before
+        # the staging folder is removed (Windows cannot delete an open file).
+        with ThreadPoolExecutor(max_workers=1) as checker:
+            check = checker.submit(_timed_quick_check, snapshot)
+            with _timed(f"{stage_prefix}compress_hash"):
+                snapshot_sha256 = compress_and_hash(snapshot, gz)
+            sealed = not is_unchanged(snapshot_sha256)
+            if sealed:
+                with _timed(f"{stage_prefix}encrypt"):
+                    encrypt_file(gz, final_path, key=load_or_create_key())
+                published = True
+                with _timed(f"{stage_prefix}verify"):
+                    _verify_encrypted_snapshot(final_path, snapshot.parent, snapshot_sha256)
+            check_ok, check_seconds = check.result()
+        print(f"timing: {stage_prefix}quick_check {check_seconds:.1f}s", flush=True)
+        if not check_ok:
+            raise RuntimeError(f"{label} snapshot failed SQLite quick_check")
+    except BaseException:
+        if published:
+            final_path.unlink(missing_ok=True)
+        raise
+    return snapshot_sha256, sealed
 
 
 def source_schema_revision(conn: sqlite3.Connection) -> str:
@@ -358,22 +448,22 @@ def _run_backup() -> int:
     try:
         with tempfile.TemporaryDirectory(prefix="portfolio_backup.", dir=staging_parent) as staging:
             tmp_path = Path(staging) / "portfolio.db"
-            tmp_gz = Path(staging) / "portfolio.db.gz"
             with _timed("snapshot"):
                 consistent_snapshot(SRC_DB, tmp_path)
-            with _timed("integrity_check"):
-                integrity_ok = _integrity_ok(tmp_path)
-            if not integrity_ok:
-                raise RuntimeError("consistent snapshot failed SQLite integrity_check")
-            with _timed("sha256"):
-                snapshot_sha256 = _file_sha256(tmp_path)
             existing = verified_files(dest_dir, family="portfolio-db", source=SRC_DB)
             local_receipt = existing[-1][1] if existing else None
-            if (
-                local_receipt is not None
-                and local_receipt.snapshot_sha256 == snapshot_sha256
-                and local_receipt.source == str(SRC_DB.resolve())
-            ):
+
+            def unchanged(sha256: str) -> bool:
+                return (
+                    local_receipt is not None
+                    and local_receipt.snapshot_sha256 == sha256
+                    and local_receipt.source == str(SRC_DB.resolve())
+                )
+
+            snapshot_sha256, sealed = check_and_seal(
+                tmp_path, final_path, label="consistent", is_unchanged=unchanged
+            )
+            if not sealed and local_receipt is not None:
                 print(
                     "OK backup skipped (skipped_unchanged) — snapshot matches "
                     f"last locally verified snapshot {local_receipt.snapshot_name}"
@@ -387,16 +477,6 @@ def _run_backup() -> int:
                     error_msg="skipped_unchanged: snapshot sha256 matches last locally verified snapshot",
                 )
                 return 0
-            with (
-                _timed("gzip"),
-                open(tmp_path, "rb") as raw,
-                gzip.open(tmp_gz, "wb", compresslevel=GZIP_LEVEL) as gz,
-            ):
-                shutil.copyfileobj(raw, gz)
-            with _timed("encrypt"):
-                encrypt_file(tmp_gz, final_path, key=load_or_create_key())
-            with _timed("verify"):
-                _verify_encrypted_snapshot(final_path, Path(staging), snapshot_sha256)
         record_snapshot(
             final_path, family="portfolio-db", source=SRC_DB, snapshot_sha256=snapshot_sha256
         )
@@ -429,29 +509,20 @@ def _backup_archive_sidecar(dest_dir: Path) -> None:
     staging_parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="archive_backup.", dir=staging_parent) as staging:
         tmp_path = Path(staging) / ARCHIVE_PREFIX
-        tmp_gz = Path(staging) / f"{ARCHIVE_PREFIX}.gz"
         with _timed("archive_snapshot"):
             consistent_snapshot(archive, tmp_path)
-        with _timed("archive_integrity_check"):
-            integrity_ok = _integrity_ok(tmp_path)
-        if not integrity_ok:
-            raise RuntimeError("archive snapshot failed SQLite integrity_check")
-        with _timed("archive_sha256"):
-            snapshot_sha256 = _file_sha256(tmp_path)
         existing = verified_files(dest_dir, family="portfolio-gc-archive", source=archive)
-        if existing and existing[-1][1].snapshot_sha256 == snapshot_sha256:
+        last_sha256 = existing[-1][1].snapshot_sha256 if existing else None
+        snapshot_sha256, sealed = check_and_seal(
+            tmp_path,
+            final_path,
+            label="archive",
+            stage_prefix="archive_",
+            is_unchanged=lambda sha256: sha256 == last_sha256,
+        )
+        if not sealed:
             print(f"(archive unchanged since last verified snapshot: {existing[-1][0].name})")
             return
-        with (
-            _timed("archive_gzip"),
-            open(tmp_path, "rb") as raw,
-            gzip.open(tmp_gz, "wb", compresslevel=GZIP_LEVEL) as gz,
-        ):
-            shutil.copyfileobj(raw, gz)
-        with _timed("archive_encrypt"):
-            encrypt_file(tmp_gz, final_path, key=load_or_create_key())
-        with _timed("archive_verify"):
-            _verify_encrypted_snapshot(final_path, Path(staging), snapshot_sha256)
     record_snapshot(
         final_path, family="portfolio-gc-archive", source=archive, snapshot_sha256=snapshot_sha256
     )
@@ -475,7 +546,7 @@ def main() -> int:
             return 1
     # "db-backup", NOT "portfolio-db". This job READS the database through
     # SQLite's online-backup API, which is explicitly safe while other writers
-    # work (and _integrity_ok below is what actually proves the snapshot good).
+    # work (and _quick_check_ok plus the round-trip verify prove the snapshot good).
     # Claiming the database's exclusive write set bought no safety and cost
     # every scheduled run that overlapped any writer: JobLock is fail-fast with
     # zero wait, so on 2026-08-03 the 02:45 run gave up 12 ms in with

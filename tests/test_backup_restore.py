@@ -8,12 +8,14 @@ the full backup_db -> restore_db path end-to-end.
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import re
 import shutil
 import sqlite3
 import sys
 import tempfile
+import zlib
 from collections.abc import Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -658,9 +660,10 @@ def test_backup_captures_archive_sidecar(tmp_path: Path, monkeypatch: pytest.Mon
         conn.close()
 
 
-def test_integrity_check_runs_with_a_large_page_cache(
+def test_nightly_check_is_quick_check_with_a_large_page_cache(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The full integrity_check took 35 min on 10 GB; restore and the drill keep it."""
     _prime_backup(tmp_path, monkeypatch)
     statements: list[str] = []
     real_connect = sqlite3.connect
@@ -672,13 +675,13 @@ def test_integrity_check_runs_with_a_large_page_cache(
 
     monkeypatch.setattr(sqlite3, "connect", traced_connect)
     assert backup_db.main() == 0
-    cache = f"PRAGMA cache_size=-{backup_db.INTEGRITY_CACHE_KIB}"
-    assert backup_db.INTEGRITY_CACHE_KIB >= 262_144
-    checks = [i for i, sql in enumerate(statements) if sql == "PRAGMA integrity_check"]
-    assert checks, "backup never ran PRAGMA integrity_check"
+    cache = f"PRAGMA cache_size=-{backup_db.CHECK_CACHE_KIB}"
+    assert backup_db.CHECK_CACHE_KIB >= 262_144
+    checks = [i for i, sql in enumerate(statements) if sql == "PRAGMA quick_check"]
+    assert checks, "backup never ran PRAGMA quick_check"
     for index in checks:
-        assert cache in statements[:index]
         assert statements[index - 1] == cache
+    assert "PRAGMA integrity_check" not in statements
 
 
 def test_backup_log_reports_each_stage_time(
@@ -689,8 +692,25 @@ def test_backup_log_reports_each_stage_time(
     assert backup_db.main() == 0
     out = capsys.readouterr().out
     stages = re.findall(r"^timing: (\w+) \d+\.\ds$", out, flags=re.MULTILINE)
-    expected = ["snapshot", "integrity_check", "sha256", "gzip", "encrypt", "verify"]
+    expected = ["snapshot", "compress_hash", "encrypt", "verify", "quick_check"]
     assert stages == expected + [f"archive_{stage}" for stage in expected]
+
+
+@pytest.mark.parametrize("size", [0, 1, 4096 * 3 + 17])
+def test_compress_and_hash_is_one_standard_gzip_stream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, size: int
+) -> None:
+    monkeypatch.setattr(backup_db, "COMPRESS_BLOCK_BYTES", 4096)
+    payload = bytes((i * 7919) % 251 for i in range(size))
+    source = tmp_path / "snapshot.db"
+    source.write_bytes(payload)
+    target = tmp_path / "snapshot.db.gz"
+    digest = backup_db.compress_and_hash(source, target)
+    assert digest == hashlib.sha256(payload).hexdigest()
+    with gzip.open(target, "rb") as restored:
+        assert restored.read() == payload
+    members = target.read_bytes().count(b"\x1f\x8b\x08")
+    assert members >= max(1, -(-size // 4096))
 
 
 def test_missing_archive_does_not_fail_db_backup(
@@ -926,9 +946,29 @@ def test_corrupt_encryption_output_has_no_receipt_and_keeps_last_good(
     monkeypatch.setattr(backup_db, "encrypt_file", corrupt_encrypt)
     assert backup_db.main() == 1
     assert all(path.exists() for path in previous)
-    failed = set(backup_dir.glob("*.gz.enc")) - previous
-    assert len(failed) == 1
-    assert not _receipt_path(failed.pop()).exists()
+    # The unverifiable envelope is removed: a receipt-less file would otherwise
+    # look like a fresh backup to the mtime-based health check.
+    assert set(backup_dir.glob("*.gz.enc")) == previous
+    receipts = {p.name for p in backup_dir.glob("*.receipt.json")}
+    assert receipts == {_receipt_path(p).name for p in previous}
+
+
+def test_failed_quick_check_publishes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The check runs alongside sealing; a failure must remove the new envelope."""
+    live, backup_dir = _prime_backup(tmp_path, monkeypatch)
+    assert backup_db.main() == 0
+    previous = set(backup_dir.glob("*"))
+    with sqlite3.connect(str(live)) as conn:
+        conn.execute("UPDATE t SET v = 'changed' WHERE k = 'key'")
+
+    def failing_check(_db_path: Path) -> bool:
+        return False
+
+    monkeypatch.setattr(backup_db, "_quick_check_ok", failing_check)
+    assert backup_db.main() == 1
+    assert set(backup_dir.glob("*")) == previous
 
 
 def test_main_refuses_unconfigured_checkout_fallback(
@@ -1030,18 +1070,20 @@ def test_snapshot_staging_uses_the_job_owned_parent(
 def test_backup_compresses_below_the_slow_default_level(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Level 9 pushed the 4.6 GB run past its limit; restore reads any level."""
+    """Level 9 pushed the 4.6 GB run past its limit; restore reads multi-member gzip."""
     _live, backup_dir = _prime_backup(tmp_path, monkeypatch)
+    monkeypatch.setattr(backup_db, "COMPRESS_BLOCK_BYTES", 4096)
     levels: list[int] = []
+    real_compressobj = zlib.compressobj
 
-    def spy(filename: Path, mode: str = "rb", compresslevel: int = 9) -> gzip.GzipFile:
-        if "w" in mode:
-            levels.append(compresslevel)
-        return gzip.GzipFile(filename, mode, compresslevel)
+    def spy(level: int, method: int, wbits: int) -> Any:
+        levels.append(level)
+        return real_compressobj(level, method, wbits)
 
-    monkeypatch.setattr(backup_db.gzip, "open", spy)
+    monkeypatch.setattr(backup_db.zlib, "compressobj", spy)
     assert backup_db.main() == 0
-    assert levels == [backup_db.GZIP_LEVEL]
+    assert len(levels) > 1, "a multi-block snapshot must produce several gzip members"
+    assert set(levels) == {backup_db.GZIP_LEVEL}
     assert backup_db.GZIP_LEVEL == 6
     restored = tmp_path / "restored.db"
     rc = restore_db.main(
