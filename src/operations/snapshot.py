@@ -25,6 +25,7 @@ from operations.models import (
     LLMCallRow,
     LLMCallsObservation,
     OperationsRegistry,
+    OperationsReviewSnapshot,
     OperationsSnapshot,
     PortfolioTrackerRuntimeObservation,
     RuntimeProbeAttempt,
@@ -1007,7 +1008,7 @@ def _data_coverage(conn: sqlite3.Connection, observed_at: datetime) -> DataCover
         conn.row_factory = original_factory
 
 
-def collect_operations_snapshot(
+def collect_operations_review_snapshot(
     registry: OperationsRegistry,
     *,
     repo_root: Path,
@@ -1016,15 +1017,12 @@ def collect_operations_snapshot(
     scheduler_receipt_path: Path | None = None,
     service_receipt_path: Path | None = None,
     job_receipt_roots: Mapping[str, Path] | None = None,
-) -> OperationsSnapshot:
+) -> OperationsReviewSnapshot:
     if observed_at.tzinfo is None:
         raise ValueError("observed_at must be timezone-aware")
     if set(job_receipt_roots or {}) - {step.job for step in registry.job_steps}:
         raise ValueError("job receipt root names an unregistered job")
     tables, metadata_error = _metadata_tables(conn)
-    runs, sources, llm, backlog, circuit = _database_observations(
-        conn, tables, registry, observed_at, metadata_error
-    )
     pair_base = scheduler_receipt_path or service_receipt_path
     pair_path = (
         pair_base.with_name(RUNTIME_PAIR_RECEIPT_FILENAME) if pair_base is not None else None
@@ -1059,10 +1057,7 @@ def collect_operations_snapshot(
         receipt_override=pair_receipt.services if pair_receipt is not None else None,
         receipt_error=pair_error,
     )
-    return OperationsSnapshot(
-        data_coverage=_data_coverage(conn, observed_at)
-        if metadata_error is None
-        else DataCoverageSummary(attention_count=1, fmp_state="unavailable"),
+    return OperationsReviewSnapshot(
         observed_at=observed_at,
         registry_version=registry.registry_version,
         database_identity=_database_identity(conn, observed_at),
@@ -1070,6 +1065,37 @@ def collect_operations_snapshot(
         scheduler=SchedulerObservation.model_validate(scheduler.model_dump()),
         services=ServiceObservation.model_validate(services.model_dump()),
         job_receipts=_job_receipts(registry, repo_root, observed_at, job_receipt_roots),
+    )
+
+
+def collect_operations_snapshot(
+    registry: OperationsRegistry,
+    *,
+    repo_root: Path,
+    conn: sqlite3.Connection,
+    observed_at: datetime,
+    scheduler_receipt_path: Path | None = None,
+    service_receipt_path: Path | None = None,
+    job_receipt_roots: Mapping[str, Path] | None = None,
+) -> OperationsSnapshot:
+    review = collect_operations_review_snapshot(
+        registry,
+        repo_root=repo_root,
+        conn=conn,
+        observed_at=observed_at,
+        scheduler_receipt_path=scheduler_receipt_path,
+        service_receipt_path=service_receipt_path,
+        job_receipt_roots=job_receipt_roots,
+    )
+    tables, metadata_error = _metadata_tables(conn)
+    runs, sources, llm, backlog, circuit = _database_observations(
+        conn, tables, registry, observed_at, metadata_error
+    )
+    return OperationsSnapshot(
+        **review.model_dump(),
+        data_coverage=_data_coverage(conn, observed_at)
+        if metadata_error is None
+        else DataCoverageSummary(attention_count=1, fmp_state="unavailable"),
         database_runs=runs,
         source_calls=sources,
         llm_calls=llm,

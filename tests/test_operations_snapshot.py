@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -12,17 +13,80 @@ from pydantic import ValidationError
 
 import operations.snapshot as operations_snapshot
 from operations.models import (
+    RUNTIME_PAIR_RECEIPT_FILENAME,
     RuntimeProbeAttempt,
     SchedulerReceipt,
     SchedulerRuntimeReceipt,
     SchedulerTaskReceipt,
 )
 from operations.registry import build_operations_registry
-from operations.snapshot import collect_operations_snapshot
+from operations.review_bundle import build_operations_review_bundle
+from operations.snapshot import collect_operations_review_snapshot, collect_operations_snapshot
 from pipeline.operations_panel import build_operations_panel_view
 from runtime.job_runtime import health_receipt_directory
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize("state", ["current", "missing", "stale", "invalid", "invalid_pair"])
+def test_review_collection_preserves_complete_bundle_and_degraded_evidence(
+    tmp_path: Path, migrated_db: Callable[..., Path], state: str
+) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    observed_at = datetime(2026, 11, 9, 8, tzinfo=UTC)
+    scheduler = tmp_path / "scheduler.json"
+    services = tmp_path / "services.json"
+    if state != "missing":
+        recorded = observed_at - timedelta(days=1) if state == "stale" else observed_at
+        _runtime_receipt(scheduler, registry, recorded)
+        _runtime_receipt(services, registry, recorded, service=True)
+    if state == "invalid":
+        scheduler.write_text("not json", encoding="utf-8")
+        services.write_text("not json", encoding="utf-8")
+    if state == "invalid_pair":
+        scheduler.with_name(RUNTIME_PAIR_RECEIPT_FILENAME).write_text("not json", encoding="utf-8")
+    database = migrated_db(tmp_path / "isolated.db")
+    with sqlite3.connect(database) as conn:
+        full = collect_operations_snapshot(
+            registry,
+            repo_root=tmp_path,
+            conn=conn,
+            observed_at=observed_at,
+            scheduler_receipt_path=scheduler,
+            service_receipt_path=services,
+        )
+        review = collect_operations_review_snapshot(
+            registry,
+            repo_root=tmp_path,
+            conn=conn,
+            observed_at=observed_at,
+            scheduler_receipt_path=scheduler,
+            service_receipt_path=services,
+        )
+    expected_state = "invalid" if state == "invalid_pair" else state
+    assert review.scheduler.state == review.services.state == expected_state
+    assert review.schema_revision.value is not None
+    assert review.schema_revision.value.matches is True
+    assert review.job_receipts == full.job_receipts
+    assert all(row.state == "missing" for row in review.job_receipts)
+    assert not hasattr(review, "data_coverage")
+    full_bundle = build_operations_review_bundle(
+        snapshot=full,
+        registry=registry,
+        semantic_rows=(),
+        serving_origin="https://review.example.ts.net",
+        code_instance="same-reviewed-source",
+        database_instance="same-isolated-database",
+    )
+    review_bundle = build_operations_review_bundle(
+        snapshot=review,
+        registry=registry,
+        semantic_rows=(),
+        serving_origin="https://review.example.ts.net",
+        code_instance="same-reviewed-source",
+        database_instance="same-isolated-database",
+    )
+    assert review_bundle.model_dump_json() == full_bundle.model_dump_json()
 
 
 def _runtime_receipt(

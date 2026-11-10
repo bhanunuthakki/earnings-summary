@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "54421d366dd4e8a06af5fc42414e11f7a6bad31e",
+  "scoped_commit": "83a47928e36617cbff1a4dda446c2c9492aba67a",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "3220d14e355c3a2b31fdf877293c92ea03abf2b6e958cc12d9223e80706fc59f",
+  "source_sha256": "b6f97f4b36e12906d7dfc212ae4ad462e38a8b3724e04a184c650294ac2f94a7",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1392,
-    "total_noncomment_loc": 555490,
+    "total_noncomment_loc": 555516,
     "modules_over_1000_loc": 116,
     "modules_over_2000_loc": 23,
     "modules_at_least_3000_loc": 5,
@@ -10687,9 +10687,9 @@
         "path": "src/integrations/portfolio_allocation.py",
         "module": "integrations.portfolio_allocation",
         "lines": {
-          "physical": 547,
-          "nonblank": 478,
-          "noncomment": 473
+          "physical": 545,
+          "nonblank": 475,
+          "noncomment": 470
         },
         "internal_fan_out": 2,
         "responsibilities": [
@@ -12448,9 +12448,9 @@
         "path": "src/operations/models.py",
         "module": "operations.models",
         "lines": {
-          "physical": 598,
-          "nonblank": 468,
-          "noncomment": 468
+          "physical": 603,
+          "nonblank": 470,
+          "noncomment": 470
         },
         "internal_fan_out": 1,
         "responsibilities": [],
@@ -12524,9 +12524,9 @@
         "path": "src/operations/snapshot.py",
         "module": "operations.snapshot",
         "lines": {
-          "physical": 1081,
-          "nonblank": 1028,
-          "noncomment": 1027
+          "physical": 1107,
+          "nonblank": 1052,
+          "noncomment": 1051
         },
         "internal_fan_out": 7,
         "responsibilities": [
@@ -12534,8 +12534,8 @@
           "filesystem",
           "network"
         ],
-        "public_functions": 1,
-        "fully_annotated_public_functions": 1
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
       },
       {
         "path": "src/operations/storage_reservation.py",
@@ -13901,9 +13901,9 @@
         "path": "src/pipeline/performance_risk_panel.py",
         "module": "pipeline.performance_risk_panel",
         "lines": {
-          "physical": 601,
-          "nonblank": 565,
-          "noncomment": 565
+          "physical": 604,
+          "nonblank": 568,
+          "noncomment": 568
         },
         "internal_fan_out": 8,
         "responsibilities": [

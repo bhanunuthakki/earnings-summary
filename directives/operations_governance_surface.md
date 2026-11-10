@@ -1,5 +1,17 @@
 # Operations & Governance Surface Impact
 
+## Passive monitor request performance — November 9, 2026
+
+Disposition: **tested no-surface-change**. The existing read-only review-bundle
+endpoint selects only the database identity, schema, task, service and job
+evidence consumed by its v4 projection. It retains the complete KPI census,
+repair evidence, sanitization, content hash, freshness and identity validation.
+It does not build the unused financial coverage and global history projections.
+The full Operations panel still reads those projections. No endpoint, operator
+action, schedule, recovery owner, timeout, database schema or publication rule
+changes. Monitor baseline corrections and native operational repairs remain
+separate from this request-path change.
+
 ## Retirement recovery and earnings preservation — November 3, 2026
 
 Merged candidate `335c7757` is on activation HOLD. Migration 0065 deleted normal
