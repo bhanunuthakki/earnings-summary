@@ -232,6 +232,47 @@ def _integrity_ok(db_path: Path) -> bool:
         conn.close()
 
 
+def _raise_own_priority() -> str:
+    """Undo Task Scheduler priority 7 for this process (Windows only).
+
+    Every task here runs at priority 7: a below-normal CPU class with low
+    memory and I/O priority. On 2026-11-09 the scheduled run spent 868 s in
+    quick_check against 148 s for the same check at normal priority on the same
+    host, because its page-cache reads were treated as background work. The
+    task logs on with a stored password, so its XML cannot be re-registered
+    without the owner; raising the process itself needs no privilege.
+    """
+    if sys.platform != "win32":
+        return "unchanged (not Windows)"
+    import ctypes
+    from ctypes import wintypes
+
+    class _MemoryPriority(ctypes.Structure):
+        _fields_ = [("MemoryPriority", wintypes.ULONG)]
+
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        ntdll = ctypes.WinDLL("ntdll")
+        process = wintypes.HANDLE(-1)  # current-process pseudo handle; typed, not int32
+        cpu = bool(kernel32.SetPriorityClass(process, 0x20))  # NORMAL_PRIORITY_CLASS
+        memory_info = _MemoryPriority(5)  # MEMORY_PRIORITY_NORMAL
+        memory = bool(
+            kernel32.SetProcessInformation(  # ProcessMemoryPriority = 0
+                process, 0, ctypes.byref(memory_info), ctypes.sizeof(memory_info)
+            )
+        )
+        io_priority = wintypes.ULONG(2)  # IoPriorityNormal
+        io = (
+            ntdll.NtSetInformationProcess(  # ProcessIoPriority = 33
+                process, 33, ctypes.byref(io_priority), ctypes.sizeof(io_priority)
+            )
+            == 0
+        )
+    except (OSError, AttributeError) as exc:
+        return f"unchanged ({redact(exc)})"
+    return f"cpu={cpu} memory={memory} io={io}"
+
+
 def _gzip_member(chunk: bytes) -> bytes:
     return gzip.compress(chunk, compresslevel=GZIP_LEVEL, mtime=0)
 
@@ -524,6 +565,7 @@ def main() -> int:
         if inherited_lock_is_valid(PROJECT_ROOT, "db-backup")
         else JobLock(PROJECT_ROOT, "backup_db_direct", ["db-backup"])
     )
+    print(f"priority: {_raise_own_priority()}", flush=True)
     try:
         with lock:
             result = _run_backup()
