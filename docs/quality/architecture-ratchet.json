@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "6dd3a92c82ec9f3034b9c5c0473bf9242024e620",
+  "scoped_commit": "3ea927b4b4a1a2fd25f1a32aa0471231b108747b",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "74a3c755e6a7658d208fe338c49ece3c936a4e996d1101ef4924553c6e2f9336",
+  "source_sha256": "9302eb1c1db6c1673204eadce21e505d481d38e45fa1ff6c79829529e45a40a3",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,12 +22,12 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1392,
-    "total_noncomment_loc": 555570,
+    "executable_modules": 1393,
+    "total_noncomment_loc": 555741,
     "modules_over_1000_loc": 116,
     "modules_over_2000_loc": 23,
     "modules_at_least_3000_loc": 5,
-    "max_internal_fan_out": 38,
+    "max_internal_fan_out": 39,
     "scc_count": 17,
     "scc_module_count": 56,
     "largest_scc": 12,
@@ -1034,11 +1034,11 @@
         "path": "execution/build_artifacts.py",
         "module": "execution.build_artifacts",
         "lines": {
-          "physical": 1214,
-          "nonblank": 1140,
-          "noncomment": 1089
+          "physical": 1252,
+          "nonblank": 1178,
+          "noncomment": 1127
         },
-        "internal_fan_out": 38,
+        "internal_fan_out": 39,
         "responsibilities": [
           "database",
           "filesystem",
@@ -2775,11 +2775,11 @@
         "path": "execution/extract_company_description.py",
         "module": "execution.extract_company_description",
         "lines": {
-          "physical": 122,
-          "nonblank": 103,
-          "noncomment": 99
+          "physical": 136,
+          "nonblank": 117,
+          "noncomment": 113
         },
-        "internal_fan_out": 4,
+        "internal_fan_out": 5,
         "responsibilities": [
           "database"
         ],
@@ -4964,11 +4964,11 @@
         "path": "execution/refresh_dirty_artifacts.py",
         "module": "execution.refresh_dirty_artifacts",
         "lines": {
-          "physical": 732,
-          "nonblank": 665,
-          "noncomment": 636
+          "physical": 759,
+          "nonblank": 692,
+          "noncomment": 663
         },
-        "internal_fan_out": 6,
+        "internal_fan_out": 7,
         "responsibilities": [
           "database",
           "network",
@@ -18008,11 +18008,11 @@
         "path": "src/report/sections/bear_case.py",
         "module": "report.sections.bear_case",
         "lines": {
-          "physical": 618,
-          "nonblank": 549,
-          "noncomment": 522
+          "physical": 630,
+          "nonblank": 561,
+          "noncomment": 534
         },
-        "internal_fan_out": 9,
+        "internal_fan_out": 10,
         "responsibilities": [
           "database",
           "filesystem",
@@ -18975,6 +18975,19 @@
         ],
         "public_functions": 9,
         "fully_annotated_public_functions": 9
+      },
+      {
+        "path": "src/runtime/native_producer_outcome.py",
+        "module": "runtime.native_producer_outcome",
+        "lines": {
+          "physical": 96,
+          "nonblank": 80,
+          "noncomment": 80
+        },
+        "internal_fan_out": 0,
+        "responsibilities": [],
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
       },
       {
         "path": "src/runtime/portfolio_tracker.py",

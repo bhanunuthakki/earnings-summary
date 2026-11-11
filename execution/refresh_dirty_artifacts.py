@@ -44,6 +44,10 @@ from native_artifact_projection import (
     NativeArtifactProjectionError,
     project_native_artifact,
 )
+from runtime.native_producer_outcome import (
+    NativeProducerProtocolError,
+    read_native_producer_outcome,
+)
 from runtime.python_process import managed_python_argv
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -69,6 +73,7 @@ _PURPOSE_TO_REGENERATOR: dict[str, list[str]] = {
     "bear_case": [
         "python",
         "execution/build_artifacts.py",
+        "--native-producer-outcome",
         "--ticker",
         "{ticker}",
         "--regenerate-purpose",
@@ -101,6 +106,7 @@ _PURPOSE_TO_REGENERATOR: dict[str, list[str]] = {
     "company_description": [
         "python",
         "execution/extract_company_description.py",
+        "--native-producer-outcome",
         "--ticker",
         "{ticker}",
         "--refresh",
@@ -316,10 +322,30 @@ def _run_subprocess(job: _PendingJob, cwd: Path, db_path: Path) -> dict[str, obj
             "purpose": job.purposes[0],
             "purposes": job.purposes,
             "exit_code": -1,
-            "error": redact(f"spawn failed: {exc}"),
+            "error": (
+                "producer_spawn_failed"
+                if len(job.purposes) == 1
+                and job.purposes[0] in {"bear_case", "company_description"}
+                else redact(f"spawn failed: {exc}")
+            ),
         }
+    producer_diagnostic: dict[str, object] = {}
+    if len(job.purposes) == 1 and job.purposes[0] in {"bear_case", "company_description"}:
+        purpose = "bear_case" if job.purposes[0] == "bear_case" else "company_description"
+        try:
+            outcome = read_native_producer_outcome(proc.stdout or "", purpose)
+        except NativeProducerProtocolError as exc:
+            producer_diagnostic = {
+                "producer_outcome_state": "unavailable",
+                "producer_outcome_error": str(exc),
+            }
+        else:
+            producer_diagnostic = {
+                "producer_outcome_state": "current",
+                "producer_outcome": outcome.model_dump(),
+            }
     stderr_tail = ""
-    if proc.returncode != 0 and proc.stderr:
+    if not producer_diagnostic and proc.returncode != 0 and proc.stderr:
         stderr_tail = redact(proc.stderr)[-400:]
     return {
         "ticker": job.ticker,
@@ -327,6 +353,7 @@ def _run_subprocess(job: _PendingJob, cwd: Path, db_path: Path) -> dict[str, obj
         "purposes": job.purposes,
         "exit_code": proc.returncode,
         "stderr_tail": stderr_tail,
+        **producer_diagnostic,
     }
 
 

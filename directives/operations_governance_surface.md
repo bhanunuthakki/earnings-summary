@@ -1,5 +1,20 @@
 # Operations & Governance Surface Impact
 
+## Native dirty-producer outcome diagnostics — November 11, 2026
+
+The existing dirty-artifact refresh retains a bounded typed terminal reason from
+its bear-case and company-description subprocesses. The internal opt-in protocol
+contains only schema version, purpose, status and a closed reason code. Raw
+subprocess output, exception messages, source content and credentials do not enter
+this diagnostic. Missing or invalid output remains unavailable. Failed producers
+return nonzero; blocked producers retain their explicit reason.
+
+A reported outcome does not prove progress. A current native cache and the exact
+queued obligations still decide success. Normal report degradation and hard-stop
+behavior remain unchanged. This adds no operator action, schedule, provider call,
+model change, collection, admission, retry or database schema. It does not repair
+the historical dirty refresh or infer its discarded failure reason.
+
 ## Passive monitor request performance — November 9, 2026
 
 Disposition: **tested no-surface-change**. The existing read-only review-bundle

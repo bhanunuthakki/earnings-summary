@@ -178,3 +178,95 @@ def test_exec_comp_regeneration_calls_only_alignment_section(
     assert calls[0]["enable_llm"] is True
     assert calls[0]["force_budget_bypass"] is False
     assert isinstance(calls[0]["conn"], sqlite3.Connection)
+
+
+@pytest.mark.parametrize(
+    "terminal,reason,exit_code",
+    [
+        ("ok", "generated", 0),
+        ("unsupported", "unsupported_instrument", 2),
+        ("missing_data", "producer_exception", 1),
+        ("thesis_missing", "thesis_missing", 0),
+        ("budget_skipped", "budget_skipped", 0),
+        ("llm_deferred", "llm_deferred", 0),
+        ("llm_operational_failure", "llm_operational_failure", 1),
+        ("llm_response_invalid", "llm_response_invalid", 1),
+        ("exception", "producer_exception", 1),
+    ],
+)
+def test_native_cli_retains_only_terminal_reason(
+    builder: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    terminal: str,
+    reason: str,
+    exit_code: int,
+) -> None:
+    from runtime.native_producer_outcome import (
+        NativeProducerReason,
+        NativeProducerUnavailableError,
+        read_native_producer_outcome,
+    )
+
+    marker = "PRIVATE_PRODUCER_PAYLOAD"
+
+    def produce(_ticker: str, _root: Path, **kwargs: object) -> dict[str, object]:
+        assert kwargs["purpose"] == "bear_case"
+        assert kwargs["strict_regeneration"] is True
+        if terminal == "exception":
+            raise RuntimeError(marker)
+        if terminal not in {"ok", "unsupported", "missing_data"}:
+            reasons: dict[str, NativeProducerReason] = {
+                "thesis_missing": "thesis_missing",
+                "budget_skipped": "budget_skipped",
+                "llm_deferred": "llm_deferred",
+                "llm_operational_failure": "llm_operational_failure",
+                "llm_response_invalid": "llm_response_invalid",
+            }
+            raise NativeProducerUnavailableError(reasons[terminal])
+        return {"status": terminal}
+
+    monkeypatch.setattr(builder, "_regenerate_native_purpose", produce)
+
+    def tickers(*_args: object) -> list[str]:
+        return ["TEST"]
+
+    monkeypatch.setattr(builder, "_resolve_tickers", tickers)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_artifacts.py",
+            "--ticker",
+            "TEST",
+            "--repo-root",
+            str(tmp_path),
+            "--regenerate-purpose",
+            "bear_case",
+            "--native-producer-outcome",
+        ],
+    )
+    assert builder.main() == exit_code
+    output = capsys.readouterr()
+    assert marker not in output.out + output.err
+    assert read_native_producer_outcome(output.out, "bear_case").reason == reason
+
+
+@pytest.mark.parametrize(
+    "selection",
+    [
+        ["--all-tracked", "--regenerate-purpose", "bear_case"],
+        ["--ticker", "TEST", "--regenerate-purpose", "qa_topics"],
+        ["--ticker", "TEST", "--candidate"],
+    ],
+)
+def test_native_cli_rejects_other_scopes(
+    builder: Any, monkeypatch: pytest.MonkeyPatch, selection: list[str]
+) -> None:
+    monkeypatch.setattr(
+        sys, "argv", ["build_artifacts.py", *selection, "--native-producer-outcome"]
+    )
+    with pytest.raises(SystemExit) as error:
+        builder._parse_args()
+    assert error.value.code == 2

@@ -44,7 +44,13 @@ def _thesis() -> ThesisSection:
     )
 
 
-def _build(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, response: str) -> BearCaseSection:
+def _build(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    response: str,
+    *,
+    strict_regeneration: bool = False,
+) -> BearCaseSection:
     """Run bear_case.build with the LLM stubbed to return ``response``.
 
     ``force_refresh`` skips the on-disk cache so the stub always runs, and
@@ -66,6 +72,7 @@ def _build(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, response: str) -> Be
         segments=SegmentsSection(status=SectionStatus.MISSING_DATA),
         earnings=EarningsSection(status=SectionStatus.MISSING_DATA),
         force_refresh=True,
+        strict_regeneration=strict_regeneration,
     )
 
 
@@ -199,3 +206,39 @@ def test_unmarked_or_changed_method_cache_cannot_claim_current_method(
 def test_malformed_json_is_not_stamped_current(tmp_path: Path) -> None:
     vars(bear_case)["_cache_bear_response"]("NU", tmp_path, '{"failure_modes":"bad"}')
     assert not (tmp_path / "data/bear_case/NU.json").exists()
+
+
+def test_strict_regeneration_keeps_invalid_response_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from runtime.native_producer_outcome import NativeProducerUnavailableError
+
+    with pytest.raises(NativeProducerUnavailableError, match=r"^llm_response_invalid$"):
+        _build(monkeypatch, tmp_path, "", strict_regeneration=True)
+
+
+@pytest.mark.parametrize("strict", [False, True])
+def test_hard_stop_still_propagates(
+    strict: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from llm.cli import LLMSetupError
+
+    expected = LLMSetupError("synthetic missing provider setup")
+
+    def fail(*_args: object, **_kwargs: object) -> str:
+        raise expected
+
+    monkeypatch.setattr(bear_case, "generate_bear_case", fail)
+    with pytest.raises(LLMSetupError) as observed:
+        bear_case.build(
+            ticker="TEST",
+            repo_root=tmp_path,
+            enable_llm=True,
+            force_refresh=True,
+            thesis=_thesis(),
+            financials=FinancialsSection(status=SectionStatus.MISSING_DATA),
+            segments=SegmentsSection(status=SectionStatus.MISSING_DATA),
+            earnings=EarningsSection(status=SectionStatus.MISSING_DATA),
+            strict_regeneration=strict,
+        )
+    assert observed.value is expected

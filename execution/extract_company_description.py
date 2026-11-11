@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import db
 from compute.company_description import extract_for_ticker
 from db_paths import configured_db_path, db_path_context, require_db_path
+from runtime.native_producer_outcome import emit_native_producer_outcome
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -57,8 +58,17 @@ def main() -> int:
                         ticker, repo_root, conn, fiscal_year=args.year, refresh=args.refresh
                     )
             except Exception as e:
+                if args.native_producer_outcome:
+                    emit_native_producer_outcome("company_description", "producer_exception")
+                    return 1
                 summary.append({"ticker": ticker, "error": f"{type(e).__name__}: {e}"})
                 continue
+            if args.native_producer_outcome:
+                emit_native_producer_outcome(
+                    "company_description",
+                    "source_missing" if result.skipped_reason is not None else "generated",
+                )
+                return 0
             summary.append(
                 {
                     "ticker": ticker,
@@ -97,7 +107,11 @@ def _parse_args() -> argparse.Namespace:
         help="Existing database (default: configured authority)",
     )
     p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
-    return p.parse_args()
+    p.add_argument("--native-producer-outcome", action="store_true", help=argparse.SUPPRESS)
+    args = p.parse_args()
+    if args.native_producer_outcome and not args.ticker:
+        p.error("--native-producer-outcome requires --ticker")
+    return args
 
 
 def _resolve_tickers(db_path: Path, args: argparse.Namespace) -> list[str]:
