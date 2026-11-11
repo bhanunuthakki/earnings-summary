@@ -213,7 +213,7 @@ def test_strict_regeneration_keeps_invalid_response_reason(
 ) -> None:
     from runtime.native_producer_outcome import NativeProducerUnavailableError
 
-    with pytest.raises(NativeProducerUnavailableError, match="^llm_response_invalid$"):
+    with pytest.raises(NativeProducerUnavailableError, match=r"^llm_response_invalid$"):
         _build(monkeypatch, tmp_path, "", strict_regeneration=True)
 
 

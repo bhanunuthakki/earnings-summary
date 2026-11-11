@@ -51,6 +51,7 @@ from report.sections._ts_signals import (
     load_all_signals,
 )
 from research.method_contract import load_research_method
+from runtime.native_producer_outcome import NativeProducerUnavailableError
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -71,6 +72,7 @@ def build(
     force_budget_bypass: bool = False,
     conn: sqlite3.Connection | None = None,
     candidate_mode: bool = False,
+    strict_regeneration: bool = False,
 ) -> BearCaseSection:
     input_digest = _bear_inputs_sha256(
         ticker=ticker,
@@ -91,6 +93,8 @@ def build(
             return cached
 
     if not enable_llm or candidate_mode:
+        if strict_regeneration:
+            raise NativeProducerUnavailableError("llm_deferred")
         return BearCaseSection(
             status=SectionStatus.LLM_PENDING,
             missing=missing(
@@ -107,6 +111,8 @@ def build(
         )
 
     if thesis.status == SectionStatus.MISSING_DATA or not thesis.thesis_full:
+        if strict_regeneration:
+            raise NativeProducerUnavailableError("thesis_missing")
         return BearCaseSection(
             status=SectionStatus.MISSING_DATA,
             missing=missing(
@@ -118,6 +124,8 @@ def build(
 
     skip = budget_gate("bear_case", "Bear case (§7)", repo_root, bypass=force_budget_bypass)
     if skip is not None:
+        if strict_regeneration:
+            raise NativeProducerUnavailableError("budget_skipped")
         return BearCaseSection(
             status=SectionStatus.BUDGET_SKIPPED,
             budget_skip=skip,
@@ -149,6 +157,8 @@ def build(
         # render and leave the daily cron with no artifact at all.
         if is_hard_stop(exc):
             raise
+        if strict_regeneration:
+            raise NativeProducerUnavailableError("llm_operational_failure") from None
         log.error("bear_case LLM call failed for %s: %s: %s", ticker, type(exc).__name__, exc)
         return _degraded_bear(
             ticker,
@@ -165,6 +175,8 @@ def build(
             _cache_bear_response(ticker, repo_root, response_text, input_digest=input_digest)
         return parsed
     except (json.JSONDecodeError, ValueError) as exc:
+        if strict_regeneration:
+            raise NativeProducerUnavailableError("llm_response_invalid") from None
         # A transient empty / unparseable LLM response must fail at SECTION
         # scope, not abort the whole multi-section build: one flaky §7 call
         # would otherwise cost every other section + the render, and leave the

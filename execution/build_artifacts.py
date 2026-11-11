@@ -114,6 +114,10 @@ from research.decision_brief import (
     persist_decision_brief_readiness,
 )
 from research.report_contract import report_read_snapshot
+from runtime.native_producer_outcome import (
+    NativeProducerUnavailableError,
+    emit_native_producer_outcome,
+)
 from runtime.python_process import managed_python_prefix
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -326,6 +330,30 @@ def main() -> int:
     unsupported = False
     for ticker in tickers:
         if args.regenerate_purpose is not None:
+            if args.native_producer_outcome:
+                try:
+                    result = _regenerate_native_purpose(
+                        ticker,
+                        repo_root,
+                        purpose="bear_case",
+                        force_budget_bypass=args.force_budget_bypass,
+                        source_context=source_context,
+                        strict_regeneration=True,
+                    )
+                except NativeProducerUnavailableError as exc:
+                    outcome = emit_native_producer_outcome("bear_case", exc.reason)
+                    return 1 if outcome.status == "failed" else 0
+                except Exception:
+                    emit_native_producer_outcome("bear_case", "producer_exception")
+                    return 1
+                if result.get("status") == "unsupported":
+                    emit_native_producer_outcome("bear_case", "unsupported_instrument")
+                    return 2
+                if result.get("status") != "ok":
+                    emit_native_producer_outcome("bear_case", "producer_exception")
+                    return 1
+                emit_native_producer_outcome("bear_case", "generated")
+                return 0
             result = _regenerate_native_purpose(
                 ticker,
                 repo_root,
@@ -646,6 +674,7 @@ def _regenerate_native_purpose(
     purpose: str,
     force_budget_bypass: bool,
     source_context: SourceReadContext | None = None,
+    strict_regeneration: bool = False,
 ) -> dict[str, object]:
     """Run exactly one purpose producer without rendering a report."""
     configure_artifact_runtime(repo_root)
@@ -694,6 +723,7 @@ def _regenerate_native_purpose(
                 force_refresh=True,
                 force_budget_bypass=effective_bypass,
                 conn=conn,
+                strict_regeneration=strict_regeneration,
             )
         elif purpose == "qa_topics":
             earnings_section = earnings.build(
@@ -850,7 +880,15 @@ def _parse_args() -> argparse.Namespace:
             "override. Analyses a skip-mode cap would forgo are run regardless."
         ),
     )
-    return parser.parse_args()
+    parser.add_argument("--native-producer-outcome", action="store_true", help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    if args.native_producer_outcome and (
+        args.regenerate_purpose != "bear_case" or not args.ticker or args.candidate
+    ):
+        parser.error(
+            "--native-producer-outcome requires --ticker and --regenerate-purpose bear_case"
+        )
+    return args
 
 
 def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:
