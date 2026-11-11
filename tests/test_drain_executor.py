@@ -257,6 +257,7 @@ def test_execute_invokes_correct_subprocess(
         sys.executable,
         str(repo_root / "execution" / "sqlite_bootstrap.py"),
         str(repo_root / "execution" / "build_artifacts.py"),
+        "--native-producer-outcome",
         "--ticker",
         "GOOG",
         "--regenerate-purpose",
@@ -266,6 +267,7 @@ def test_execute_invokes_correct_subprocess(
         sys.executable,
         str(repo_root / "execution" / "sqlite_bootstrap.py"),
         str(repo_root / "execution" / "extract_company_description.py"),
+        "--native-producer-outcome",
         "--ticker",
         "META",
         "--refresh",
@@ -380,7 +382,11 @@ def test_report_regenerator_names_the_exact_native_purpose(executor: Any, purpos
     assert argv[-2:] == ["--regenerate-purpose", purpose]
 
 
+@pytest.mark.parametrize(
+    "outcome", [None, ("blocked", "thesis_missing"), ("produced", "generated")]
+)
 def test_zero_exit_without_clearing_obligation_fails_closed(
+    outcome: tuple[str, str] | None,
     executor: Any,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -398,7 +404,24 @@ def test_zero_exit_without_clearing_obligation_fails_closed(
     finally:
         conn.close()
 
-    fake_run = _CapturingFakeRun(returncode=0)
+    marker = "PRIVATE_PAYLOAD_DO_NOT_RETAIN"
+    output = marker
+    if outcome is not None:
+        status, reason = outcome
+        output += "\nES_NATIVE_PRODUCER_OUTCOME " + json.dumps(
+            {
+                "schema_version": "native-producer-v1",
+                "purpose": "bear_case",
+                "status": status,
+                "reason": reason,
+            }
+        )
+
+    def fake_run(*_args: object, **_kwargs: object) -> _FakeCompleted:
+        result = _FakeCompleted(returncode=0, stderr=marker)
+        result.stdout = output
+        return result
+
     monkeypatch.setattr(executor.subprocess, "run", fake_run)
     monkeypatch.setattr(
         sys,
@@ -422,7 +445,17 @@ def test_zero_exit_without_clearing_obligation_fails_closed(
     assert '"failed": 1' in receipt
     assert '"no_progress": 1' in receipt
     events = _dict_log_events(caplog)
-    assert any(event.get("event") == "drain_no_progress" for event in events)
+    failed = next(event for event in events if event.get("event") == "drain_no_progress")
+    assert marker not in json.dumps(events)
+    if outcome is not None:
+        assert failed["producer_outcome"] == {
+            "schema_version": "native-producer-v1",
+            "purpose": "bear_case",
+            "status": outcome[0],
+            "reason": outcome[1],
+        }
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT dirty FROM llm_artifacts").fetchone()[0] == 1
 
 
 def test_zero_exit_projects_a_fresh_typed_native_cache_before_progress_check(
@@ -567,6 +600,7 @@ def test_duplicate_native_obligations_share_one_producer_and_one_successor(
     assert len(successors) == 1
 
 
+@pytest.mark.parametrize("purpose", ["bear_case", "company_description", "valuation_basis"])
 @pytest.mark.parametrize("failure_mode", ["stderr", "exception"])
 def test_child_failure_text_is_redacted_before_structured_logging(
     executor: Any,
@@ -574,6 +608,7 @@ def test_child_failure_text_is_redacted_before_structured_logging(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     failure_mode: str,
+    purpose: str,
     migrated_db: Callable[..., Path],
 ) -> None:
     """API keys, bearer tokens, and signed URLs never survive child failures."""
@@ -582,7 +617,7 @@ def test_child_failure_text_is_redacted_before_structured_logging(
     db_path = repo_root / "data" / "portfolio.db"
     conn = _make_portfolio_db(db_path, migrated_db)
     try:
-        _insert_dirty(conn, ticker="ABNB", purpose="bear_case")
+        _insert_dirty(conn, ticker="ABNB", purpose=purpose)
     finally:
         conn.close()
 
@@ -621,7 +656,10 @@ def test_child_failure_text_is_redacted_before_structured_logging(
     assert "plain-secret" not in serialized_events
     assert "signed-secret" not in serialized_events
     assert "bearer-secret" not in serialized_events
-    assert "example.test" in serialized_events
+    if purpose == "valuation_basis":
+        assert "example.test" in serialized_events
+    else:
+        assert "example.test" not in serialized_events
 
 
 def test_cost_ledger_error_halts_before_child_and_is_redacted(
@@ -1135,6 +1173,7 @@ def test_unmapped_purpose_logs_warning_and_skips(
         sys.executable,
         str(repo_root / "execution" / "sqlite_bootstrap.py"),
         str(repo_root / "execution" / "build_artifacts.py"),
+        "--native-producer-outcome",
         "--ticker",
         "META",
         "--regenerate-purpose",
