@@ -16,6 +16,10 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from provenance.canonical_fact_resolution import CanonicalFactRead, CanonicalFactResolutionEngine
 from provenance.fact_plane_v2 import FactDimensionV2
 from provenance.fact_read_model import ProvenanceBundle
+from provenance.financial_statement_admission import (
+    ReviewedFinancialStatementRole,
+    verify_reviewed_financial_role,
+)
 from provenance.metric_ontology import (
     BindingRevision,
     CanonicalMetricDefinitionRevision,
@@ -293,7 +297,11 @@ def discover_canonical_financial_tickers(
             "JOIN canonical_metric_cells target ON target.canonical_metric_cell_id=binding.canonical_metric_cell_id "
             "JOIN canonical_metrics metric ON metric.metric_id=target.metric_id "
             "WHERE binding.source_observation_id=observation.observation_id AND binding.binding_status='bound' "
-            "AND metric.canonical_name IN (SELECT value FROM json_each(?)))) "
+            "AND (metric.canonical_name IN (SELECT value FROM json_each(?)) OR EXISTS ("
+            "SELECT 1 FROM canonical_metric_definition_revisions definition "
+            "WHERE definition.metric_id=target.metric_id AND json_extract("
+            "definition.scope_constraints_json,'$.financial_statement_concept') "
+            "IN (SELECT value FROM json_each(?)))))) "
             "UNION SELECT origin.root_observation_id,edge.input_observation_id FROM origins origin "
             "JOIN fact_derivation_input_edges_v2 edge ON edge.output_observation_id=origin.input_observation_id) "
             "SELECT document.ticker,source.period_start,source.period_end,source.fiscal_period,"
@@ -302,7 +310,12 @@ def discover_canonical_financial_tickers(
             "JOIN fact_cells_v2 source ON source.fact_cell_id=observation.fact_cell_id "
             "JOIN fact_observations_v2 input ON input.observation_id=origin.input_observation_id "
             "JOIN evidence_document_versions document ON document.document_version_id=input.document_version_id",
-            (FINANCIAL_CONCEPT_NAMESPACE, json.dumps(metrics), json.dumps(metrics)),
+            (
+                FINANCIAL_CONCEPT_NAMESPACE,
+                json.dumps(metrics),
+                json.dumps(metrics),
+                json.dumps(metrics),
+            ),
         ).fetchall()
     except sqlite3.Error as exc:
         raise CanonicalFinancialReadError("canonical_financial_schema_unavailable") from exc
@@ -468,12 +481,30 @@ class CanonicalFinancialSeriesReader:
                 covered.update(read.bundle.derivation.input_observation_ids)
         return covered
 
-    def _metric_name_matches(self, metric_id: str, metric: str) -> bool:
+    def _metric_name_matches(self, metric_id: str, metric: str, bundle: ProvenanceBundle) -> bool:
+        """Match the exact metric name or a re-verified reviewed statement role."""
         row = self._conn.execute(
             "SELECT canonical_name FROM canonical_metrics WHERE metric_id=?",
             (metric_id,),
         ).fetchone()
-        return row is not None and str(row[0]) == metric
+        if row is not None and str(row[0]) == metric:
+            return True
+        definition = self._ontology.metric_definition_as_known(metric_id, self._cutoff)
+        if (
+            definition is None
+            or definition.scope_constraints.get("financial_statement_concept") != metric
+        ):
+            return False
+        reviews = definition.scope_constraints.get("financial_statement_reviews")
+        if not isinstance(reviews, dict):
+            return False
+        raw_role = cast(dict[str, object], reviews).get(bundle.observation.observation_id)
+        try:
+            role = ReviewedFinancialStatementRole.model_validate(raw_role)
+            verify_reviewed_financial_role(self._conn, role, bundle, cutoff=self._cutoff)
+        except (ValueError, RuntimeError, sqlite3.Error):
+            return False
+        return role.concept == metric
 
     def provenance_for(self, observation_id: str) -> ProvenanceBundle | None:
         """Return evidence already admitted in this reader's caller-owned snapshot."""
@@ -552,11 +583,15 @@ class CanonicalFinancialSeriesReader:
                     ON target.canonical_metric_cell_id=binding.canonical_metric_cell_id
                   JOIN canonical_metrics metric ON metric.metric_id=target.metric_id
                   WHERE binding.source_observation_id=observation.observation_id
-                    AND binding.binding_status='bound' AND metric.canonical_name=?))
+                    AND binding.binding_status='bound' AND (metric.canonical_name=? OR EXISTS (
+                      SELECT 1 FROM canonical_metric_definition_revisions definition
+                      WHERE definition.metric_id=target.metric_id
+                        AND json_extract(definition.scope_constraints_json,
+                          '$.financial_statement_concept')=?))))
               AND source.period_kind='duration'
             ORDER BY source.period_end,observation.observation_id
             """,
-            (self._ticker, self._ticker, FINANCIAL_CONCEPT_NAMESPACE, metric, metric),
+            (self._ticker, self._ticker, FINANCIAL_CONCEPT_NAMESPACE, metric, metric, metric),
         ).fetchall()
 
     def _prepare(self, metric: str, cadence: FinancialCadence) -> _FinancialPreparation:
@@ -736,7 +771,7 @@ class CanonicalFinancialSeriesReader:
                 bundle.cell.concept_namespace == FINANCIAL_CONCEPT_NAMESPACE
                 and bundle.cell.concept_name == metric
             )
-            or self._metric_name_matches(metric_id, metric)
+            or self._metric_name_matches(metric_id, metric, bundle)
         ):
             return "selected_financial_concept_mismatch"
         current_definition = self._ontology.metric_definition_as_known(metric_id, self._cutoff)
@@ -1245,6 +1280,26 @@ def financial_metric_catalog(
     except sqlite3.Error:
         reviewed = []
     for name, count in reviewed:
+        names.setdefault(str(name), int(count))
+    try:
+        roles = conn.execute(
+            "SELECT json_extract(definition.scope_constraints_json,'$.financial_statement_concept'),"
+            "COUNT(DISTINCT upper(document.ticker)) "
+            "FROM fact_cell_canonical_binding_revisions binding "
+            "JOIN canonical_metric_cells target ON target.canonical_metric_cell_id=binding.canonical_metric_cell_id "
+            "JOIN canonical_metric_definition_revisions definition ON definition.metric_id=target.metric_id "
+            "JOIN fact_observations_v2 observation ON observation.observation_id=binding.source_observation_id "
+            "JOIN evidence_document_versions document ON document.document_version_id=observation.document_version_id "
+            "WHERE upper(document.ticker) IN (SELECT value FROM json_each(?)) "
+            "AND binding.binding_status='bound' "
+            "AND json_extract(definition.scope_constraints_json,'$.financial_statement_concept') IS NOT NULL "
+            "GROUP BY 1 ORDER BY 1 LIMIT ?",
+            (json.dumps(symbols), limit),
+        ).fetchall()
+    except sqlite3.Error:
+        roles = []
+    # Reviewed statement roles name the economic concept a reader asks for.
+    for name, count in roles:
         names.setdefault(str(name), int(count))
     if include_legacy:
         try:

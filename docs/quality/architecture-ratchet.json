@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "b2b3de9249d00a1763c23f1e447ec2f18419c91d",
+  "scoped_commit": "3ea927b4b4a1a2fd25f1a32aa0471231b108747b",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "f053f354fb50a62cc85ff728627596fe1e1f9bdb59cc11a51e600430595f2265",
+  "source_sha256": "9302eb1c1db6c1673204eadce21e505d481d38e45fa1ff6c79829529e45a40a3",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1393,
-    "total_noncomment_loc": 555687,
+    "total_noncomment_loc": 555741,
     "modules_over_1000_loc": 116,
     "modules_over_2000_loc": 23,
     "modules_at_least_3000_loc": 5,
@@ -19546,11 +19546,11 @@
         "path": "src/sources/canonical_financial_series.py",
         "module": "sources.canonical_financial_series",
         "lines": {
-          "physical": 1386,
-          "nonblank": 1288,
-          "noncomment": 1288
+          "physical": 1441,
+          "nonblank": 1343,
+          "noncomment": 1342
         },
-        "internal_fan_out": 7,
+        "internal_fan_out": 8,
         "responsibilities": [
           "database",
           "network"
