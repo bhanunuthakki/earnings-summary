@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -40,6 +41,11 @@ from provenance.reporting_entity_registry import (
     ReportingEntityRegistry,
 )
 from provenance.sec_companyfacts_capture import parse_companyfacts_body
+from sources.canonical_financial_series import (
+    FinancialCadence,
+    financial_metric_catalog,
+    read_financial_consumer_series,
+)
 from sources.report_financials import read_financial_table
 from tests.test_sec_companyfacts_capture import (
     ACCESSION_ONE,
@@ -262,6 +268,34 @@ def test_companyfacts_capture_reaches_reader_without_rewriting_legacy(
             )
             == counts
         )
+    finally:
+        conn.close()
+
+
+def test_reviewed_role_name_reaches_consumer_series(
+    tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn, request = _setup(tmp_path, migrated_db, monkeypatch)
+    try:
+        before = read_financial_consumer_series(
+            conn, "ACME", "revenue", cutoff=datetime.now(UTC), cadence=FinancialCadence.ANNUAL
+        )
+        assert before.series.status == "unavailable"
+        continue_companyfacts_statements(conn, request)
+        # The fixture clock leads wall time by one second; readers reject future cutoffs.
+        while datetime.now(UTC) <= request.recorded_at:
+            time.sleep(0.05)
+        cutoff = datetime.now(UTC)
+        assert "revenue" in dict(financial_metric_catalog(conn, ["ACME"]))
+        result = read_financial_consumer_series(
+            conn, "ACME", "revenue", cutoff=cutoff, cadence=FinancialCadence.ANNUAL
+        )
+        assert result.series.status == "available", result.series.reason_code
+        assert [item.value for item in result.series.observations] == [100]
+        unrelated = read_financial_consumer_series(
+            conn, "ACME", "operating_income", cutoff=cutoff, cadence=FinancialCadence.ANNUAL
+        )
+        assert unrelated.series.status == "unavailable"
     finally:
         conn.close()
 
