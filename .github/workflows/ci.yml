@@ -444,7 +444,10 @@ jobs:
       - name: Install Playwright chromium shell
         # Always runs: the browser is cached separately (or absent on a fresh
         # runner), independent of the venv cache above.
-        run: python -m playwright install --with-deps --only-shell chromium
+        run: |
+          printf 'https://archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://security.ubuntu.com/ubuntu/\tpriority:2\n' \
+            | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+          python -m playwright install --with-deps --only-shell chromium
       - name: Verify canonical design tokens and production Work OS contract
         env:
           # gen_design_conformance_debt.py REFUSES --allow-missing-base with an
