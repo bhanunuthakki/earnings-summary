@@ -85,6 +85,54 @@ replace an accepted issuer metric. If the mechanism cannot be tested publicly,
 say **unproven from public evidence** and explain what remains uncertain. Missing
 disclosure does not itself prove moat deterioration or change an approved rule.
 
+### Sense-check draft valuations
+
+Apply these checks before relying on a draft valuation, including valuations in
+company briefs. For an earnings brief that only updates an existing valuation,
+test the assumptions the new evidence changes. Keep the work in the existing
+valuation, thesis and sources fields and use the model owner for calculations.
+
+1. **Bridge historical to forecast revenue.** Show comparable historical levels
+   and growth through the latest period, then reconcile the forecast by material
+   segment or driver. Quantify volume, price, mix, penetration/share, FX and M&A
+   where material. For pass-through-heavy models, bridge reported revenue to
+   gross profit or another economic measure. Tie the growth path to observable
+   capacity, adoption, customer budgets or market size and explain the fade.
+2. **Reconcile growth with returns and cash.** Show historical, forecast and
+   mature returns on invested capital and incremental returns where measurable.
+   Specify the tax rate, capital base and adjustments for leases, goodwill,
+   capitalized acquisition or R&D costs, and work in progress when material.
+   Bridge margins, capital turnover, capex, working capital and dilution to the
+   cash-flow path. Use a clearly labeled operating proxy or appropriate sector
+   measure such as ROE and required regulatory capital if standard ROIC is
+   misleading. Mark unresolved inputs and test the returns the valuation needs.
+3. **Check the terminal economics.** Explain terminal growth against the mature
+   market and long-run nominal growth in the model currency. Keep the growth,
+   margin, reinvestment and incremental return assumptions internally consistent
+   (steady-state reinvestment = growth / incremental return under the applicable
+   model). Check that the discount rate exceeds perpetual growth. Show terminal
+   value share, an implied exit multiple on a comparable basis, and sensitivity
+   to the assumptions that could reverse the conclusion. If using an exit
+   multiple, cross-check the mature cash economics it implies.
+4. **Bridge to dated consensus and the price.** Compare fiscal-period-aligned
+   revenue, profit/EPS and cash flow on a comparable accounting and currency
+   basis. Cite the source, vintage and available estimate range. Explain major
+   deviations in operating terms and reverse the price into the key required
+   assumption when feasible. Record unavailable or incomparable consensus
+   without substituting guidance or treating agreement as validation.
+5. **Cross-check the value chain and the competitive set.** Use independent
+   public evidence from relevant customers, suppliers, competitors or substitutes
+   for the assumptions that drive value. State what each data point measures,
+   what it confirms or challenges, and the timing, product-mix, scope or
+   double-counting limits. Connect the modeled price, share, margin or return
+   advantage to the moat mechanism above and show how a credible competitor,
+   substitution or capacity response could erode it.
+6. **Record the disposition.** State what passed, what is assumption-dependent,
+   and which gaps could reverse the range or investment view. Carry the key
+   assumption and next public test into the brief. A draft can be conditional
+   where evidence is unavailable. A validated calculation establishes arithmetic
+   and does not establish the economic assumptions or owner approval.
+
 ## Earnings: preserve the bar before judging the result
 
 Before earnings, record each priority's observable, dated baseline/source,
@@ -156,7 +204,7 @@ method changes the analysis inside sections; it does not require new sections.
 | Company description; financials; segments; peer/comparison context | Business drivers, mechanism-based moat evidence, comparability and alternative causes; no forced number/competitor in every paragraph |
 | Thesis and bear case | Accepted pillar versus draft hypothesis; strongest company-specific counter; supported public proof/disproof; avoid “non-consensus” claims without a consensus reference |
 | Earnings; say-do; Q&A roster; transcript appendix | Dated bar/result, complete exchanges, matched language and commitments; roster/appendix remain evidence access rather than inferred judgment |
-| Valuation | Exact affected model assumption and existing calculation/scenario; if assumptions are absent, name what requires review without inventing fair value |
+| Valuation | Apply the draft valuation sense checks at the decision’s depth, identify affected assumptions and use existing calculations; if evidence is missing, state its effect on the valuation conclusion |
 | Signals; recent developments; filing intelligence; executive compensation | Material supporting/contrary evidence, time relevance and incentive implications; a signal is not proof of cause |
 | IR documents; provenance; supplementary data | Source access, coverage, missing/stale inputs and lineage; context panels stay available without forced investment claims |
 | Synthesis and Investment Decision Card | What changed, why it matters, strongest counter, confidence limits and next public proof; distinguish company quality, security value and portfolio action |

@@ -41,9 +41,11 @@ earnings exchanges and decision implications within these paths.
 2. Compare the approved assumptions with admitted results, guidance and current
    source-backed expectations. Show which revenue, margin, reinvestment, dilution,
    discount-rate or terminal assumptions changed. Respect the business-model route.
-3. Reuse existing model calculations for base, upside and downside cases. Show
-   the assumption or price that reverses the view. Do not silently change the
-   owner's model inputs or treat missing data as a valuation conclusion.
+3. Apply the [draft valuation sense checks](research-method.md#sense-check-draft-valuations)
+   to standalone valuations, analyst scenario requests and valuations embedded
+   in briefs. Reuse the existing model for base, upside and downside cases.
+   Show the assumption or price that reverses the view. Retain the evidence
+   and disposition with the draft and preserve the owner's model inputs.
 4. State whether the evidence supports the current thesis and valuation, the
    strongest counter-case and what would change the view. A sizing, funding or
    increase/reduce request also uses the allocation skill's full-book context.
