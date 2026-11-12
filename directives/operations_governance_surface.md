@@ -1297,6 +1297,11 @@ requires complete admitted evidence and accepted scenarios. Selected-input proof
 is bounded without changing the verifier byte limit or rewriting old runs; the
 workbook retains the historical evidence population.
 
+The existing hosted Windows application CI job also requires the retained DCF
+reader, builder, recipe and workbook evidence cases. A missing or skipped required
+case fails that job. This adds verification coverage without a production-host
+test runner or a new operator action.
+
 ### Canonical evaluation snapshot
 
 The existing evaluation report snapshot now projects admitted financial cells and

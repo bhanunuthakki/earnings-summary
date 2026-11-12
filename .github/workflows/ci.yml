@@ -697,7 +697,11 @@ jobs:
             tests/test_job_runtime.py `
             tests/test_owner_proposal_approval.py `
             tests/test_cockpit_fundamentals.py `
-            tests/test_sqlite_bootstrap.py
+            tests/test_sqlite_bootstrap.py `
+            tests/test_dcf_retained_availability.py `
+            tests/test_dcf_canonical_statements.py `
+            tests/test_redesign_input_evidence.py `
+            tests/test_redesign_workbook_evidence.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python .github/scripts/ci_gate.py verify-windows-app --junit "$env:RUNNER_TEMP/native-app.xml"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

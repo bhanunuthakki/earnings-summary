@@ -6,7 +6,6 @@ import os
 import shutil
 import sqlite3
 import subprocess
-import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -22,6 +21,7 @@ from provenance.fact_read_model import FactReadModel, ProvenanceBundleRead
 from provenance.metric_ontology import MetricOntology
 from provenance.source_fact_publication import VerifiedSourceFactPublication
 from runtime.deterministic import as_utc
+from runtime.python_process import managed_python_prefix
 from sources.dcf_statements import DcfStatementCell, DcfStatementInputs, read_dcf_statements
 from tests.fixtures.dcf_statements import STAMP, seed_dcf_statements
 
@@ -437,7 +437,7 @@ def test_actual_builder_preserves_zero_capex_and_emits_no_unavailable_gross_marg
     destination = repo / "synthetic.xlsx"
     completed = subprocess.run(
         [
-            sys.executable,
+            *managed_python_prefix(Path(__file__).resolve().parents[1]),
             str(Path(__file__).resolve().parents[1] / "execution" / "build_redesigned_dcf.py"),
         ],
         env={
@@ -550,7 +550,7 @@ def test_actual_generic_builder_rejects_unbound_series_and_long_partial_quarter(
     destination = repo / "rejected.xlsx"
     completed = subprocess.run(
         [
-            sys.executable,
+            *managed_python_prefix(Path(__file__).resolve().parents[1]),
             str(Path(__file__).resolve().parents[1] / "execution" / "build_redesigned_dcf.py"),
         ],
         env={
