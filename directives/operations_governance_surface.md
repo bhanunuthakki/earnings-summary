@@ -1280,6 +1280,23 @@ or production activation; the Operations registry and visible workspace contract
 remain unchanged. `tests/test_dcf_canonical_statements.py` and
 `tests/test_redesigned_dcf_smoke.py` exercise the admitted and rejected boundaries.
 
+### DCF retained-evidence repair
+
+The existing FCFF refresh accepts `--current-assumptions` to use the current
+assumption file instead of saved Dashboard edits. The default preserves workbook
+edits. This option cannot be combined with an imported input workbook. It adds
+no collection, deployment, promotion or publication authority.
+
+Reviewed native statement roles use the same provenance resolver as legacy
+statements. The model requires a complete latest fiscal year and the current
+cash, debt and diluted-share bridge. Optional expense breakdowns and unused
+historical capital metrics do not block the build. Missing historical values
+remain unavailable. Generic model receipts retain exact source observations,
+explicit unit conversions, effective inputs and replay hashes. Readiness still
+requires complete admitted evidence and accepted scenarios. Selected-input proof
+is bounded without changing the verifier byte limit or rewriting old runs; the
+workbook retains the historical evidence population.
+
 ### Canonical evaluation snapshot
 
 The existing evaluation report snapshot now projects admitted financial cells and

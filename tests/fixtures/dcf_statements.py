@@ -24,6 +24,10 @@ from provenance.population_metric_ontology import (
     MetricOntologyPopulationRequest,
     populate_metric_ontology,
 )
+from provenance.reporting_entity_registry import (
+    EvidenceSubjectBindingRevision,
+    ReportingEntityRegistry,
+)
 from provenance.source_fact_repository import (
     ReportedSourceFact,
     SourceFactPublication,
@@ -46,6 +50,8 @@ def seed_dcf_statements(
     namespace: str = "",
     document_id: int = 1,
     seed_foundation: bool = True,
+    legacy_document_link: bool = True,
+    recorded_issuer_id: str | None = None,
 ) -> int:
     """Publish one ticker's statement observations through the real writers.
 
@@ -112,19 +118,45 @@ def seed_dcf_statements(
                 None,
             ),
         )
+    if recorded_issuer_id is not None:
+        subject_binding_id = f"{namespace}dcf-recorded-subject"
+        ReportingEntityRegistry(conn).persist(
+            EvidenceSubjectBindingRevision(
+                binding_revision_id=subject_binding_id,
+                idempotency_key=subject_binding_id,
+                recorded_issuer_id=recorded_issuer_id,
+                issuer_id=issuer_id,
+                reporting_entity_id=reporting_entity_id,
+                revision=1,
+                outcome="selected",
+                decision_kind="deterministic",
+                material_dissent=False,
+                reason_code="synthetic_exact_subject",
+                reason_details=(("fixture", "native-dcf-subject"),),
+                effective_at=STAMP,
+                knowledge_at=STAMP,
+                recorded_at=STAMP,
+            )
+        )
+    if not legacy_document_link:
+        conn.execute(
+            "INSERT INTO evidence_source_observations SELECT ?,?,'sec_filing',source_url,blob_sha256,source_published_at,filing_at,accepted_at,observed_at,retrieved_at,retrieval_config_sha256,collector_code_version FROM evidence_source_observations WHERE observation_id='source-1'",
+            (f"{namespace}dcf-native-source", f"{namespace}dcf-native-source"),
+        )
     conn.execute(
         "INSERT INTO documents (id,ticker,source_type,doc_type,source_url,file_path,sha256,fetched_at,fetch_status,raw_bytes_size,source_quality_tier) VALUES (?,?,'sec_xbrl','10-K','https://data.sec.gov/example.json','synthetic.json',?,'2026-07-27T12:00:00+00:00','ok',12,'sec_official')",
         (document_id, ticker, hashlib.sha256(f"filing bytes {ticker}".encode()).hexdigest()),
     )
     conn.execute(
         "INSERT INTO evidence_document_versions(document_version_id,document_key,version_sequence,observation_id,blob_sha256,issuer_id,ticker,document_type,form_type,language,legacy_document_id,recorded_at) "
-        "SELECT ?,?,1,observation_id,blob_sha256,?,?,'regulatory_filing','10-K','en',?,recorded_at FROM evidence_document_versions WHERE document_version_id='document-1'",
+        "SELECT ?,?,1,?,blob_sha256,?,?,'regulatory_filing','10-K','en',?,recorded_at FROM evidence_document_versions WHERE document_version_id='document-1'",
         (
             document_version_id,
             document_version_id,
-            issuer_id,
+            "source-1" if legacy_document_link else f"{namespace}dcf-native-source",
+            recorded_issuer_id or issuer_id,
             ticker,
-            document_id,
+            document_id if legacy_document_link else None,
         ),
     )
     facts: list[ReportedSourceFact] = []

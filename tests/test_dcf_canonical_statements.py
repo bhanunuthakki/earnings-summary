@@ -165,8 +165,6 @@ def test_statement_reader_uses_one_sealed_provenance_batch(
     "concept",
     [
         "capital_expenditure",
-        "cost_of_revenue",
-        "research_and_development",
         "total_debt",
         "cash_and_equivalents",
         "weighted_avg_shares_diluted",
@@ -393,13 +391,43 @@ def test_definition_change_without_comparability_rejects_existing_actuals(
         after.require_complete_actuals()
 
 
+@pytest.mark.parametrize("reported_breakdown", [True, False])
 def test_actual_builder_preserves_zero_capex_and_emits_no_unavailable_gross_margin(
-    statement_database: Path, tmp_path: Path
+    statement_database: Path,
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    reported_breakdown: bool,
 ) -> None:
     repo = tmp_path / "repo"
     (repo / "data").mkdir(parents=True)
     database = repo / "data" / "canonical.sqlite"
-    shutil.copyfile(statement_database, database)
+    if reported_breakdown:
+        shutil.copyfile(statement_database, database)
+    else:
+        migrated_db(database)
+        with sqlite3.connect(statement_database) as conn:
+            inputs = read_dcf_statements(conn, "TEST", as_of=STAMP)
+        statements: dict[Statement, list[dict[str, object]]] = {
+            statement: inputs.builder_records(statement)
+            for statement in ("income", "balance", "cash_flow")
+        }
+        for row in statements["income"]:
+            for field in (
+                "costOfRevenue",
+                "researchAndDevelopmentExpenses",
+                "sellingGeneralAndAdministrativeExpenses",
+            ):
+                row.pop(field, None)
+        statements["income"].extend(
+            {"fiscalYear": 2024, "period": f"Q{quarter}", "revenue": 900} for quarter in range(1, 5)
+        )
+        for row in statements["balance"]:
+            row.pop("totalStockholdersEquity", None)
+            if row["period"] != "Q4":
+                row.pop("totalDebt", None)
+                row.pop("cashAndCashEquivalents", None)
+        with sqlite3.connect(database) as conn:
+            seed_dcf_statements(conn, "TEST", statements, currency="USD")
     profile = repo / "data" / "historical" / "fmp" / "TEST_profile.json"
     profile.parent.mkdir(parents=True)
     profile.write_text('{"companyName":"Synthetic","price":50,"beta":1,"currency":"USD"}')
@@ -424,11 +452,26 @@ def test_actual_builder_preserves_zero_capex_and_emits_no_unavailable_gross_marg
         timeout=90,
         check=False,
     )
-    assert completed.returncode == 0, completed.stderr
+    assert completed.returncode == 0, completed.stderr[-1800:]
     inputs = redesign.read_inputs(destination)
     assert inputs is not None and inputs.capex_2026_m == 0
     wb = openpyxl.load_workbook(destination)
     try:
+        if not reported_breakdown:
+            labels = {
+                str(wb["Model"].cell(row, 1).value) for row in range(1, wb["Model"].max_row + 1)
+            }
+            assert "Total operating expenses" in labels
+            assert "R&D / Technology" not in labels
+            assert "SG&A" not in labels
+            model = wb["Model"]
+            assert model.cell(1, 2).value == "FY2024A"
+            operating_row = next(
+                row
+                for row in range(1, model.max_row + 1)
+                if model.cell(row, 1).value == "Operating income (EBIT)"
+            )
+            assert model.cell(operating_row, 2).value is None
         sheet = wb["Financials"]
         row = next(
             row

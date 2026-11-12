@@ -39,7 +39,7 @@ from zoneinfo import ZoneInfo
 from dcf import valuation
 from dcf.artifact_promotion import ArtifactPromotion, DcfCommittedCleanupError
 from dcf.forecast_series import ForecastSeriesPoint
-from dcf.provenance import DcfInputProvenance
+from dcf.provenance import DcfInputProvenance, validate_dcf_evidence_population
 from model_provenance.versioning import mark_superseded_by, supersede_current
 from schema_compat import require_current_for_write
 
@@ -926,6 +926,17 @@ def persist_run(
     (the bespoke archetype builders) keep working on either schema.
     """
     _validate_input_cutoff(row)
+    if row.provenance is not None:
+        validate_dcf_evidence_population(
+            assumption_snapshot_json=row.assumption_snapshot_json,
+            provenance=row.provenance,
+            metadata=(
+                row.ticker,
+                row.provenance.engine_version,
+                row.provenance.input_sha256,
+                row.provenance.workbook_sha256 or "",
+            ),
+        )
     if row.calculated_at is not None and (
         row.calculated_at.tzinfo is None or row.calculated_at.utcoffset() is None
     ):

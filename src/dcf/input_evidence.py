@@ -157,6 +157,16 @@ def input_role_matches(
     requirement: InputRequirement,
     dimensions: tuple[CanonicalDimension, ...],
 ) -> bool:
+    if requirement.role.startswith("financial_statement."):
+        concept = requirement.role.removeprefix("financial_statement.")
+        aliases = {"total_financial_debt": {"total_financial_debt", "total_debt"}}
+        return (
+            not dimensions
+            and scope.get("financial_statement_concept") in aliases.get(concept, {concept})
+            and all(
+                scope.get(key) == value for key, value in requirement.definition_constraints.items()
+            )
+        )
     if "valuation_role_selectors" in scope:
         if "valuation_role" in scope:
             return False
@@ -202,6 +212,8 @@ class VerifiedInput(FrozenModel):
     unit_key: str
     currency: str | None
     observation_kind: str
+    native_value: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    scale_factor: str | None = Field(default=None, exclude_if=lambda value: value is None)
     knowledge_at: datetime
     recorded_at: datetime
     document_recorded_at: datetime | None = None
@@ -919,7 +931,7 @@ def verify_model_inputs(
             != sha256_json(mapping.commitment_payload)
         ):
             raise InputEvidenceError(f"input_snapshot_context_mismatch:{requirement.key}")
-        if requirement.role.startswith("cashflow_equity."):
+        if requirement.role.startswith(("cashflow_equity.", "financial_statement.")):
             reviews = definition.scope_constraints.get("financial_statement_reviews")
             try:
                 if not isinstance(reviews, dict):
@@ -928,7 +940,11 @@ def verify_model_inputs(
                     reviews.get(ref.observation_id)
                 )
                 verify_reviewed_financial_role(conn, review, bundle, cutoff=cutoff)
-                if requirement.role != f"cashflow_equity.{review.concept}":
+                requested_concept = requirement.role.split(".", 1)[1]
+                acceptable = {requested_concept}
+                if requested_concept == "total_financial_debt":
+                    acceptable.add("total_debt")
+                if review.concept not in acceptable:
                     raise ValueError("reviewed statement role mismatch")
             except (ValueError, RuntimeError, sqlite3.Error) as exc:
                 raise InputEvidenceError(
@@ -991,6 +1007,12 @@ def verify_model_inputs(
                 unit_key=fact.unit_key,
                 currency=fact.currency,
                 observation_kind=fact.observation_kind,
+                native_value=str(fact.decimal_value)
+                if requirement.role.startswith("financial_statement.")
+                else None,
+                scale_factor=str(requirement.scale)
+                if requirement.role.startswith("financial_statement.")
+                else None,
                 knowledge_at=fact.knowledge_at,
                 recorded_at=fact.recorded_at,
                 document_recorded_at=bundle.evidence.document_recorded_at

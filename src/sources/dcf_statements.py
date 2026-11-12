@@ -8,12 +8,17 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from dcf.fiscal_periods import detect_fy_periods
 from dcf.primary_fact_overlay import Statement, primary_source_eligible, statement_field_mappings
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.fact_read_model import ProvenanceBundle
+from provenance.financial_statement_admission import (
+    ReviewedFinancialStatementRole,
+    financial_statement_scale,
+    verify_reviewed_financial_role,
+)
 from provenance.metric_ontology import MetricOntology
 from provenance.source_fact_publication import publication_verification_scope
 
@@ -26,17 +31,13 @@ _MAPPING = {
 _REQUIRED_DURATION = frozenset(
     {
         "revenue",
-        "cost_of_revenue",
-        "research_and_development",
-        "sga",
         "operating_income",
-        "net_income",
         "depreciation_and_amortization",
         "stock_based_compensation",
         "capital_expenditure",
     }
 )
-_REQUIRED_BALANCE = frozenset({"total_stockholders_equity", "total_debt"})
+_REQUIRED_BALANCE = frozenset({"total_debt"})
 
 
 class DcfStatementCell(BaseModel):
@@ -54,6 +55,16 @@ class DcfStatementCell(BaseModel):
     source_url: str | None = None
 
     @property
+    def numeric_value(self) -> Decimal | None:
+        if self.provenance is None or self.provenance.observation.decimal_value is None:
+            return None
+        value = self.provenance.observation
+        numeric = value.decimal_value
+        if numeric is None:
+            return None
+        return numeric * financial_statement_scale(value.unit_key, value.currency, self.concept)
+
+    @property
     def available(self) -> bool:
         return self.provenance is not None and not self.reason_codes
 
@@ -63,6 +74,7 @@ class DcfStatementInputs(BaseModel):
     schema_version: Literal["canonical-dcf-statements/v1"] = "canonical-dcf-statements/v1"
     ticker: str
     as_of: datetime
+    fiscal_year_start: int | None = Field(default=None, exclude_if=lambda value: value is None)
     cells: tuple[DcfStatementCell, ...] = ()
     reason_codes: tuple[str, ...] = ()
 
@@ -71,17 +83,15 @@ class DcfStatementInputs(BaseModel):
         if self.reason_codes:
             raise ValueError("canonical DCF statements unavailable: " + ";".join(self.reason_codes))
         periods: dict[tuple[int, str], dict[str, DcfStatementCell]] = defaultdict(dict)
-        identities: dict[str, set[tuple[str, str | None]]] = defaultdict(set)
+        identities: dict[str, set[str]] = defaultdict(set)
         for item in self.cells:
             if not item.available or item.provenance is None:
-                if item.concept in _REQUIRED_DURATION | _REQUIRED_BALANCE | {
-                    "weighted_avg_shares_diluted"
-                }:
+                if item.concept == "revenue":
                     raise ValueError(
                         f"canonical DCF input unavailable: {item.concept}: {item.reason_codes}"
                     )
                 continue
-            identities[item.concept].add((item.metric_id, item.definition_revision_id))
+            identities[item.concept].add(item.metric_id)
             source = item.provenance.cell
             if source.fiscal_year is not None and source.fiscal_period is not None:
                 key = (source.fiscal_year, source.fiscal_period)
@@ -95,9 +105,8 @@ class DcfStatementInputs(BaseModel):
         currencies: set[str] = set()
         coordinate_scope: set[tuple[str, str, str]] = set()
         for key, fields in periods.items():
-            missing = (_REQUIRED_DURATION | _REQUIRED_BALANCE) - fields.keys()
-            if missing:
-                raise ValueError(f"canonical DCF required actuals missing: {key} {sorted(missing)}")
+            if "revenue" not in fields:
+                raise ValueError(f"canonical DCF required actuals missing: {key} revenue")
             revenue = fields["revenue"].provenance
             if revenue is None:
                 raise ValueError("canonical DCF revenue evidence unavailable")
@@ -122,8 +131,6 @@ class DcfStatementInputs(BaseModel):
                     and source.period_start != revenue.cell.period_start
                 ):
                     raise ValueError(f"canonical DCF duration mismatch: {key} {item.concept}")
-            if not {"cash_and_short_term_investments", "cash_and_equivalents"} & fields.keys():
-                raise ValueError(f"canonical DCF cash unavailable: {key}")
         if len(currencies) != 1 or len(coordinate_scope) != 1:
             raise ValueError("canonical DCF currency or issuer/basis/scope mismatch")
         cadence = detect_fy_periods(periods)
@@ -173,7 +180,24 @@ class DcfStatementInputs(BaseModel):
             # Existing annual admission tolerance includes 52/53-week fiscal years.
             if abs(span - 365) > 20:
                 raise ValueError(f"canonical DCF unsupported annual span: {year} {span} days")
+        complete_years = [
+            year
+            for year in {year for year, _ in periods}
+            if all((year, period) in periods for period in cadence)
+        ]
+        for period in cadence:
+            key = (max(complete_years), period)
+            missing = _REQUIRED_DURATION - periods[key].keys()
+            if missing:
+                raise ValueError(f"canonical DCF required actuals missing: {key} {sorted(missing)}")
         latest = periods[max(periods)]
+        if not {"cash_and_short_term_investments", "cash_and_equivalents"} & latest.keys():
+            raise ValueError("canonical DCF cash unavailable: latest period")
+        if not (
+            {"total_debt"} <= latest.keys()
+            or {"short_term_debt", "long_term_debt"} <= latest.keys()
+        ):
+            raise ValueError("canonical DCF required actuals missing: latest period total_debt")
         shares = latest.get("weighted_avg_shares_diluted")
         if (
             shares is None
@@ -211,7 +235,10 @@ class DcfStatementInputs(BaseModel):
             )
             if value.currency is not None:
                 record["reportedCurrency"] = value.currency
-            record[_MAPPING[item.concept][1].fmp_field] = float(value.decimal_value)
+            normalized = item.numeric_value
+            if normalized is None:
+                continue
+            record[_MAPPING[item.concept][1].fmp_field] = float(normalized)
         return [rows[key] for key in sorted(rows, reverse=True)]
 
     def bridge_lineage(self, statement: Statement) -> dict[str, object]:
@@ -231,10 +258,26 @@ class DcfStatementInputs(BaseModel):
                     "fmp_field": _MAPPING[item.concept][1].fmp_field,
                     "period_end": bundle.cell.period_end.date().isoformat(),
                     "fiscal_period_type": bundle.cell.fiscal_period,
-                    "primary_value": float(bundle.observation.decimal_value or Decimal(0)),
+                    "primary_value": float(item.numeric_value or Decimal(0)),
+                    "reported_native_value": str(bundle.observation.decimal_value),
+                    "reported_native_unit": bundle.observation.unit_key,
+                    "value_normalization": {
+                        "formula": "reported_value*scale",
+                        "scale": str(
+                            financial_statement_scale(
+                                bundle.observation.unit_key,
+                                bundle.observation.currency,
+                                item.concept,
+                            )
+                        ),
+                        "source_observation_id": bundle.observation.observation_id,
+                    },
                     "unit": "count" if item.concept == "weighted_avg_shares_diluted" else "actual",
                     "currency": bundle.observation.currency,
                     "source_doc_id": item.source_document_id,
+                    "source_document_version_id": bundle.evidence.document_version_id
+                    if bundle.evidence
+                    else None,
                     "source_type": item.source_type,
                     "source_tier": item.source_tier,
                     "source_url": item.source_url,
@@ -282,6 +325,24 @@ def _read_cell(
     }
     source, value = bundle.cell, bundle.observation
     reasons: list[str] = []
+    reviewed_native = source.concept_namespace != "urn:earnings-summary:legacy:financial"
+    if reviewed_native or (
+        definition and definition.scope_constraints.get("financial_statement_concept") is not None
+    ):
+        try:
+            if definition is None:
+                raise ValueError("financial definition unavailable")
+            reviews = definition.scope_constraints.get("financial_statement_reviews")
+            if not isinstance(reviews, dict):
+                raise ValueError("reviewed financial role unavailable")
+            role = ReviewedFinancialStatementRole.model_validate(reviews.get(value.observation_id))
+            if (
+                "total_debt" if role.concept == "total_financial_debt" else role.concept
+            ) != concept:
+                raise ValueError("reviewed financial role mismatch")
+            verify_reviewed_financial_role(conn, role, bundle, cutoff=cutoff)
+        except (ValueError, RuntimeError, sqlite3.Error):
+            reasons.append("reviewed_financial_statement_context_unavailable")
     expected_kind = "instant" if _MAPPING[concept][0] == "balance" else "duration"
     expected_family = "shares" if concept == "weighted_avg_shares_diluted" else "currency"
     if (
@@ -312,24 +373,42 @@ def _read_cell(
         or source.period_kind != expected_kind
     ):
         reasons.append("exact_reported_fiscal_coordinate_unavailable")
-    if expected_family == "shares":
-        if value.unit_key != "shares" or value.currency is not None:
-            reasons.append("exact_share_unit_unavailable")
-    elif value.currency is None or value.unit_key != value.currency:
-        reasons.append("exact_currency_unit_unavailable")
+    try:
+        financial_statement_scale(value.unit_key, value.currency, concept)
+        if not reviewed_native and value.unit_key != (
+            "shares" if expected_family == "shares" else value.currency
+        ):
+            raise ValueError("legacy presentation scale unreviewed")
+    except ValueError:
+        reasons.append(
+            "exact_share_unit_unavailable"
+            if expected_family == "shares"
+            else "exact_currency_unit_unavailable"
+        )
     document = (
         None
         if bundle.evidence is None
         else conn.execute(
-            "SELECT legacy.id,legacy.source_type,legacy.source_quality_tier,observation.source_url "
+            "SELECT legacy.id,legacy.source_type,legacy.source_quality_tier,observation.source_url,observation.source_kind,document.legacy_document_id "
             "FROM evidence_document_versions document JOIN evidence_source_observations observation "
-            "ON observation.observation_id=document.observation_id JOIN documents legacy "
+            "ON observation.observation_id=document.observation_id LEFT JOIN documents legacy "
             "ON legacy.id=document.legacy_document_id WHERE document.document_version_id=? "
-            "AND UPPER(legacy.ticker)=? AND UPPER(document.ticker)=?",
+            "AND (document.legacy_document_id IS NULL OR UPPER(legacy.ticker)=?) AND UPPER(document.ticker)=?",
             (bundle.evidence.document_version_id, ticker, ticker),
         ).fetchone()
     )
-    if document is None or not primary_source_eligible(document[1], document[2]):
+    native_primary = bool(
+        document is not None
+        and document[5] is None
+        and reviewed_native
+        and (
+            document[4] in {"sec_filing", "ir_document"}
+            or primary_source_eligible(document[4], None)
+        )
+    )
+    if document is None or not (
+        native_primary or primary_source_eligible(document[1], document[2])
+    ):
         reasons.append("primary_document_authority_unavailable")
     return initial.model_copy(
         update={
@@ -339,20 +418,26 @@ def _read_cell(
             "resolution_revision_id": resolution_revision_id,
             "provenance": bundle,
             "reason_codes": tuple(reasons),
-            "source_document_id": int(document[0]) if document else None,
-            "source_type": str(document[1]) if document else None,
-            "source_tier": str(document[2]) if document else None,
+            "source_document_id": int(document[0])
+            if document and document[0] is not None
+            else None,
+            "source_type": str(document[4] if native_primary else document[1])
+            if document
+            else None,
+            "source_tier": str(document[2]) if document and document[2] is not None else None,
             "source_url": str(document[3]) if document else None,
         }
     )
 
 
 def read_dcf_statements(
-    conn: sqlite3.Connection, ticker: str, *, as_of: datetime
+    conn: sqlite3.Connection, ticker: str, *, as_of: datetime, fiscal_year_start: int | None = None
 ) -> DcfStatementInputs:
     """Read approved normalized concepts via the canonical resolver and sealed fact boundary."""
     if as_of.tzinfo is None:
         raise ValueError("DCF statement cutoff must be timezone-aware")
+    if fiscal_year_start is not None and not 1 <= fiscal_year_start <= 9999:
+        raise ValueError("DCF statement fiscal-year start must be between 1 and 9999")
     cutoff, ticker = as_of.astimezone(UTC), ticker.upper()
     original_factory = conn.row_factory
     try:
@@ -360,19 +445,39 @@ def read_dcf_statements(
         with publication_verification_scope(conn):
             try:
                 rows = conn.execute(
-                    "SELECT DISTINCT binding.canonical_metric_cell_id,source.concept_name,target.metric_id "
+                    "SELECT DISTINCT binding.canonical_metric_cell_id,source.concept_name,target.metric_id,source.concept_namespace "
                     "FROM fact_cell_canonical_binding_revisions binding "
                     "JOIN fact_cells_v2 source ON source.fact_cell_id=binding.fact_cell_id "
                     "JOIN canonical_metric_cells target ON target.canonical_metric_cell_id=binding.canonical_metric_cell_id "
                     "JOIN fact_observations_v2 observation ON observation.observation_id=binding.source_observation_id "
                     "JOIN evidence_document_versions document ON document.document_version_id=observation.document_version_id "
-                    "WHERE document.ticker=? AND source.concept_namespace='urn:earnings-summary:legacy:financial' "
+                    "WHERE document.ticker=? AND (? IS NULL OR source.fiscal_year>=?) "
                     "AND (source.fiscal_period IS NULL OR source.fiscal_period NOT IN ('FY','TTM')) "
                     "AND binding.binding_status='bound' AND julianday(binding.recorded_at)<=julianday(?) "
                     "AND julianday(binding.knowledge_at)<=julianday(?) ORDER BY source.concept_name,binding.canonical_metric_cell_id",
-                    (ticker, cutoff.isoformat(), cutoff.isoformat()),
+                    (
+                        ticker,
+                        fiscal_year_start,
+                        fiscal_year_start,
+                        cutoff.isoformat(),
+                        cutoff.isoformat(),
+                    ),
                 ).fetchall()
-                selected_rows = tuple(row for row in rows if str(row[1]) in _MAPPING)
+                selected_rows: list[tuple[str, str, str]] = []
+                ontology = MetricOntology(conn)
+                for cell_id, source_concept, metric_id, namespace in rows:
+                    concept = str(source_concept)
+                    if namespace != "urn:earnings-summary:legacy:financial":
+                        definition = ontology.metric_definition_as_known(str(metric_id), cutoff)
+                        role = (
+                            definition.scope_constraints.get("financial_statement_concept")
+                            if definition
+                            else None
+                        )
+                        concept = "total_debt" if role == "total_financial_debt" else str(role)
+                    if concept in _MAPPING:
+                        selected_rows.append((str(cell_id), concept, str(metric_id)))
+                selected_rows = list(dict.fromkeys(selected_rows))
                 resolver = CanonicalFactResolutionEngine(conn)
                 try:
                     reads = resolver.read_as_known(
@@ -429,7 +534,12 @@ def read_dcf_statements(
                                 reason_codes=("canonical_evidence_invalid",),
                             )
                         )
-                return DcfStatementInputs(ticker=ticker, as_of=cutoff, cells=tuple(cells))
+                return DcfStatementInputs(
+                    ticker=ticker,
+                    as_of=cutoff,
+                    fiscal_year_start=fiscal_year_start,
+                    cells=tuple(cells),
+                )
             except sqlite3.Error:
                 return DcfStatementInputs(
                     ticker=ticker,

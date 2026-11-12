@@ -25,7 +25,7 @@ class ScenarioReview(FrozenModel):
 
 class ScenarioAcceptance(FrozenModel):
     schema_version: Literal["dcf_scenario_acceptance.v1"] = "dcf_scenario_acceptance.v1"
-    ticker: Literal["MELI", "ONON"]
+    ticker: str = Field(min_length=1, max_length=32, pattern=r"^[A-Z][A-Z0-9.-]*$")
     recipe: str = Field(min_length=1)
     model: str = Field(min_length=1)
     engine_version: str = Field(min_length=1)
