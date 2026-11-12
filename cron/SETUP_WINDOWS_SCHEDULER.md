@@ -9,8 +9,8 @@ under the `\earnings-summary\` namespace.
 
 ## Active crons
 
-29 operational declarations remain in this checkout. The generated script defines
-29 Task Scheduler registrations; the installed set is unverified. The authoritative set is
+30 operational declarations remain in this checkout. The generated script defines
+30 Task Scheduler registrations; the installed set is unverified. The authoritative set is
 `cron/task_manifest.json`; `cron/TASKS.generated.md` is its deterministic
 human-readable inventory. This source change does not query, disable, or remove
 existing Windows Task Scheduler registrations. The normal company collection,
@@ -66,6 +66,26 @@ existing dynamic Jobs projection shows its declaration, ten-minute cadence, regi
 latest attempt, and failure state. This adds no dashboard control or request-time producer; the
 read-only review endpoints serve only the producer's precomputed current ticker manifest and its
 current-index-bound content-addressed partitions.
+
+### Recorded trade reconciliation
+
+| Task name | Cadence | XML | Wrapper | What it does |
+|---|---|---|---|---|
+| `earnings-summary\reconcile-recorded-trades` | Daily 12:12 Pacific | `reconcile_recorded_trades.task.xml` | `run_reconcile_recorded_trades.bat` | Reconciles approved decision annotations against typed Portfolio Tracker v1 transactions. It writes only the approved annotations and compact job receipts. The wrapper derives the private state root from `EARNINGS_SUMMARY_DB_PATH` and calls the canonical runtime with `--apply`. It uses the owner account's S4U logon for unattended local-only access. S4U does not provide network credentials or access to encrypted files. The job reads the loopback Tracker API and local state only; it does not refresh broker data or use an LLM. |
+
+Register this task separately from the full scheduler fleet when activating the
+standalone reconciliation job. Use its exact task name so the generated installer
+cannot register other declarations:
+
+```powershell
+& (Join-Path $EarningsSummaryCodeRoot 'cron\register_tasks.generated.ps1') `
+  -Python $EarningsSummaryPython `
+  -RepoRoot $EarningsSummaryCodeRoot `
+  -TaskName '\earnings-summary\reconcile-recorded-trades'
+```
+
+The installer verifies that this task is enabled and has the owner account's
+S4U principal. The ordinary bulk registration flow remains unchanged.
 
 ### Pre-chain backup
 
@@ -442,7 +462,7 @@ if ($LASTEXITCODE -ne 0) { throw 'scheduler source validation failed' }
 if ($LASTEXITCODE -ne 0) { throw 'scheduler registration failed' }
 ```
 
-This is the only supported bulk registration path. It registers every
+This is the supported bulk registration path. It registers every
 Scheduler-backed declaration in `cron/task_manifest.json`, including
 `\earnings-summary\portfolio_tracker_api` and
 `\earnings-summary\refresh_portfolio_tracker`; the separately managed Windows

@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import cast
 
 import pytest
 
+import decision_extractor
 from decision_extractor import (
     OutcomeLabel,
     ProcessQuality,
@@ -677,6 +679,74 @@ def test_reconcile_followed_on_matching_buy(db: Path) -> None:
     tally = reconcile_decision_actions(db_path=db, portfolio=pf, now=_NOW)
     assert tally["followed"] == 1
     assert _action(db, did) == "followed"
+
+
+def test_reconcile_preserves_owner_metadata(db: Path) -> None:
+    did = _insert_decision(db, ticker="NU", kind="add", made_at="2026-01-10T00:00:00")
+    notes = json.dumps({"owner_rationale": "Long-term allocation"})
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute("UPDATE decisions SET user_notes = ? WHERE id = ?", (notes, did))
+    tally = reconcile_decision_actions(
+        db_path=db, portfolio=_portfolio([("2026-01-15", "NU", "buy")]), now=_NOW
+    )
+    with sqlite3.connect(str(db)) as conn:
+        action, saved_notes = conn.execute(
+            "SELECT user_action_kind, user_notes FROM decisions WHERE id = ?", (did,)
+        ).fetchone()
+    assert tally["followed"] == 1
+    assert action == "followed"
+    assert saved_notes == notes
+
+
+@pytest.mark.parametrize("transactions", [[], [("2026-01-15", "NU", "buy")]])
+@pytest.mark.parametrize("status", ["owner_reported_not_broker_reconciled", "broker_reconciled"])
+def test_reconcile_leaves_exact_verification_pending(
+    db: Path, transactions: list[tuple[str, str, str]], status: str
+) -> None:
+    did = _insert_decision(db, ticker="NU", kind="add", made_at="2026-01-10T00:00:00")
+    notes = json.dumps({"execution_verification": status})
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute("UPDATE decisions SET user_notes = ? WHERE id = ?", (notes, did))
+    reconcile_decision_actions(db_path=db, portfolio=_portfolio(transactions), now=_NOW)
+    with sqlite3.connect(str(db)) as conn:
+        action, saved_notes = conn.execute(
+            "SELECT user_action_kind, user_notes FROM decisions WHERE id = ?", (did,)
+        ).fetchone()
+    assert action is None
+    assert saved_notes == notes
+
+
+def test_reconcile_does_not_overwrite_concurrent_owner_correction(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    did = _insert_decision(db, ticker="NU", kind="add", made_at="2026-01-10T00:00:00")
+    notes = json.dumps({"execution_verification": "owner_reported_not_broker_reconciled"})
+    original_open = cast(
+        Callable[..., sqlite3.Connection | None], getattr(decision_extractor, "_open")
+    )
+    opens = 0
+
+    def open_with_owner_update(
+        db_path: Path | str | None, *, read_only: bool = False
+    ) -> sqlite3.Connection | None:
+        nonlocal opens
+        opens += 1
+        if opens == 2:
+            with sqlite3.connect(str(db)) as conn:
+                conn.execute("UPDATE decisions SET user_notes = ? WHERE id = ?", (notes, did))
+        return original_open(db_path, read_only=read_only)
+
+    monkeypatch.setattr(decision_extractor, "_open", open_with_owner_update)
+    tally = reconcile_decision_actions(
+        db_path=db, portfolio=_portfolio([("2026-01-15", "NU", "buy")]), now=_NOW
+    )
+    with sqlite3.connect(str(db)) as conn:
+        action, saved_notes = conn.execute(
+            "SELECT user_action_kind, user_notes FROM decisions WHERE id = ?", (did,)
+        ).fetchone()
+    assert tally["followed"] == 0
+    assert action is None
+    assert saved_notes == notes
 
 
 def test_reconcile_reversed_on_opposite_fill(db: Path) -> None:

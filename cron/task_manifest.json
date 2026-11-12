@@ -290,6 +290,21 @@
    }
   },
   {
+   "task_name": "\\earnings-summary\\reconcile-recorded-trades",
+   "xml": "reconcile_recorded_trades.task.xml",
+   "wrapper": "run_reconcile_recorded_trades.bat",
+   "schedule": {
+    "trigger": "CalendarTrigger",
+    "start_boundary": "2026-11-12T12:12:00",
+    "repetition_interval": null,
+    "days_interval": 1,
+    "weeks_interval": null,
+    "days_of_week": [],
+    "days_of_month": [],
+    "months": []
+   }
+  },
+  {
    "task_name": "\\earnings-summary\\refresh_cache",
    "xml": "refresh_cache.task.xml",
    "wrapper": "run_refresh_cache.bat",

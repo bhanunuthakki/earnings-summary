@@ -15,6 +15,7 @@ TASK_NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 NS = f"{{{TASK_NS}}}"
 MANIFEST_VERSION = 1
 SYSTEM_OWNED_TASKS = frozenset({r"\earnings-summary\portfolio_tracker_api".casefold()})
+LOCAL_ONLY_TASKS = frozenset({r"\earnings-summary\reconcile-recorded-trades".casefold()})
 MONTHS = (
     "January",
     "February",
@@ -90,6 +91,7 @@ class XmlTaskMetadata:
     task_name: str
     command: str
     enabled: bool
+    logon_type: str | None
     schedule: ScheduleSpec
 
 
@@ -247,10 +249,12 @@ def extract_xml_metadata(path: Path) -> XmlTaskMetadata:
     )
     months = _child_names(monthly.find(f"{NS}Months") if monthly is not None else None)
     enabled_text = _text(root, f".//{NS}Settings/{NS}Enabled")
+    logon_type = _text(root, f".//{NS}Principals/{NS}Principal/{NS}LogonType")
     return XmlTaskMetadata(
         task_name=uri,
         command=command,
         enabled=enabled_text is None or enabled_text.casefold() != "false",
+        logon_type=logon_type,
         schedule=ScheduleSpec(
             trigger=trigger_name,
             start_boundary=start_boundary,
@@ -292,6 +296,15 @@ def validate_source_tree(
 ) -> list[str]:
     errors: list[str] = []
     task_names = [task.task_name.casefold() for task in manifest.tasks]
+    manifest_task_names = set(task_names)
+    errors.extend(
+        f"local-only task missing from manifest: {name}"
+        for name in sorted(LOCAL_ONLY_TASKS - manifest_task_names)
+    )
+    errors.extend(
+        f"task is both system-owned and local-only: {name}"
+        for name in sorted(SYSTEM_OWNED_TASKS & LOCAL_ONLY_TASKS)
+    )
     xml_names = [task.xml.casefold() for task in manifest.tasks]
     wrapper_names = [task.wrapper.casefold() for task in manifest.tasks]
     for label, values in (
@@ -338,6 +351,9 @@ def validate_source_tree(
             )
         if metadata.schedule != task.schedule:
             errors.append(f"{task.xml}: schedule differs from manifest")
+        task_name = task.task_name.casefold()
+        if task_name in LOCAL_ONLY_TASKS and metadata.logon_type != "S4U":
+            errors.append(f"{task.xml}: local-only task must use S4U logon")
         wrapper_path = cron_dir / task.wrapper
         if not wrapper_path.is_file():
             continue
@@ -398,6 +414,7 @@ def generated_registration_script(manifest: TaskManifest) -> str:
         "param(",
         "    [Parameter(Mandatory=$true)][string]$Python,",
         "    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path,",
+        "    [string]$TaskName,",
         "    [PSCredential]$BackgroundCredential",
         ")",
         "$ErrorActionPreference = 'Stop'",
@@ -408,8 +425,20 @@ def generated_registration_script(manifest: TaskManifest) -> str:
         "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
         "$rollbackDir = Join-Path $RepoRoot ('.tmp\\scheduler_rollback\\' + (Get-Date -Format 'yyyyMMddTHHmmss'))",
         "New-Item -ItemType Directory -Path $rollbackDir -Force | Out-Null",
+        "$localOnlyTaskNames = @("
+        + ", ".join(f"'{name}'" for name in sorted(LOCAL_ONLY_TASKS))
+        + ")",
+        "if ($TaskName -and $TaskName -notin $localOnlyTaskNames) { throw 'TaskName selection is restricted to declared local-only tasks' }",
+        '$localOnlyUser = "$env:USERDOMAIN\\$env:USERNAME"',
+        "$localOnlySid = ([System.Security.Principal.NTAccount]::new($localOnlyUser)).Translate([System.Security.Principal.SecurityIdentifier]).Value",
+        "$currentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+        "if ($localOnlySid -ne $currentUserSid) { throw 'Local-only task must be registered for the current owner account' }",
         "function Register-ManifestTask {",
-        "    param([string]$TaskName, [string]$TaskPath, [string]$XmlPath, [switch]$System)",
+        "    param([string]$TaskName, [string]$TaskPath, [string]$XmlPath, [switch]$System, [switch]$LocalOnly)",
+        "    if ($LocalOnly) {",
+        "        Register-ScheduledTask -TaskName $TaskName -TaskPath $TaskPath -Xml (Get-Content -LiteralPath $XmlPath -Raw) -User $localOnlyUser -Force | Out-Null",
+        "        return",
+        "    }",
         "    if ($System -or -not $BackgroundCredential) {",
         "        & schtasks.exe /Create /TN ($TaskPath + $TaskName) /XML $XmlPath /F",
         '        if ($LASTEXITCODE -ne 0) { throw "Failed to register scheduled task $TaskPath$TaskName" }',
@@ -428,6 +457,12 @@ def generated_registration_script(manifest: TaskManifest) -> str:
         "}",
     ]
     for task in manifest.tasks:
+        condition = (
+            f"if (-not $TaskName -or $TaskName -eq '{task.task_name}') {{"
+            if task.task_name.casefold() in LOCAL_ONLY_TASKS
+            else "if (-not $TaskName) {"
+        )
+        lines.append(condition)
         rendered_xml = f"(Join-Path $renderDir '{task.xml}')"
         task_leaf = PureWindowsPath(task.task_name).name
         task_path = str(PureWindowsPath(task.task_name).parent) + "\\"
@@ -438,18 +473,29 @@ def generated_registration_script(manifest: TaskManifest) -> str:
         lines.append(
             f"if ($existing) {{ Export-ScheduledTask -TaskName '{task_leaf}' -TaskPath '{task_path}' | Set-Content -LiteralPath {rollback_xml} -Encoding Unicode }}"
         )
+        is_local_only = task.task_name.casefold() in LOCAL_ONLY_TASKS
         system_switch = " -System" if task.task_name.casefold() in SYSTEM_OWNED_TASKS else ""
+        local_switch = " -LocalOnly" if is_local_only else ""
         lines.append(
             f"Register-ManifestTask -TaskName '{task_leaf}' -TaskPath '{task_path}' "
-            f"-XmlPath {rendered_xml}{system_switch}"
+            f"-XmlPath {rendered_xml}{system_switch}{local_switch}"
         )
         lines.append(
             f"& $taskSecurityScript -TaskPath '{task.task_name}' -RenderedXmlPath {rendered_xml}"
         )
+        if is_local_only:
+            lines.extend(
+                [
+                    f"    $registered = Get-ScheduledTask -TaskName '{task_leaf}' -TaskPath '{task_path}'",
+                    "    $registeredSid = ([System.Security.Principal.NTAccount]::new($registered.Principal.UserId)).Translate([System.Security.Principal.SecurityIdentifier]).Value",
+                    "    if ($registered.State -eq 'Disabled' -or $registered.Principal.LogonType -ne 'S4U' -or $registeredSid -ne $currentUserSid) { throw 'Local-only task registration verification failed' }",
+                ]
+            )
+        lines.append("}")
     lines.extend(
         [
-            "if ($BackgroundCredential) {",
-            "    $remaining = @(Get-ScheduledTask -TaskPath '\\earnings-summary\\' | Where-Object { $_.State -ne 'Disabled' -and $_.TaskName -ne 'portfolio_tracker_api' -and $_.Principal.LogonType -ne 'Password' })",
+            "if ($BackgroundCredential -and -not $TaskName) {",
+            "    $remaining = @(Get-ScheduledTask -TaskPath '\\earnings-summary\\' | Where-Object { $_.State -ne 'Disabled' -and $_.TaskName -ne 'portfolio_tracker_api' -and $_.TaskName -ne 'reconcile-recorded-trades' -and $_.Principal.LogonType -ne 'Password' })",
             '    if ($remaining.Count -ne 0) { throw "Background registration verification failed for $($remaining.Count) enabled task(s)" }',
             "}",
             'Write-Host "Scheduler rollback XML: $rollbackDir"',

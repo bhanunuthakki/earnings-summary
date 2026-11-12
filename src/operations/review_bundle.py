@@ -32,6 +32,8 @@ REVIEW_CODE_IDENTITY_DEPENDENCY_CLASSES = (
     (
         "operations_projection",
         (
+            "cron/reconcile_recorded_trades.task.xml",
+            "cron/run_reconcile_recorded_trades.bat",
             "execution/collect_operations_runtime_observations.py",
             "execution/comments_server.py",
             "src/operations/models.py",
