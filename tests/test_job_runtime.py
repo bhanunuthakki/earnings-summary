@@ -144,6 +144,7 @@ _PORTFOLIO_DB_POLICY = {
     "refresh-dirty-artifacts": "artifact-refresh",
     "refresh-expected-earnings": "market-data-refresh",
     "refresh-ir-kpis": "ir-discovery",
+    "reconcile-recorded-trades": "owner-reconciliation",
     "refresh_fmp": "fmp-refresh",
     "refresh_cache": "fmp-refresh",
     "restore-drill": "backup-restore",
@@ -1542,6 +1543,51 @@ def test_manual_sec_run_keeps_interactive_contract_without_scheduler_policy(
         )
         == 0
     )
+
+
+def test_owner_reconciliation_uses_bounded_child_tree_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(job_runtime, "_schema_preflight", _no_schema_drift)
+
+    def accepted_journal(**_kwargs: object) -> JournalHandleForTest:
+        return runtime_test_api.journal_handle("operation:" + "a" * 64, "b" * 32, True)
+
+    def no_journal_write(**_kwargs: object) -> None:
+        pass
+
+    monkeypatch.setattr(job_runtime, "_accept_operation_journal", accepted_journal)
+    monkeypatch.setattr(job_runtime, "_mark_operation_journal_started", no_journal_write)
+    monkeypatch.setattr(job_runtime, "_finish_operation_journal", no_journal_write)
+
+    def refuse_sec_recovery(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("unrelated job must not run SEC recovery")
+
+    monkeypatch.setattr(job_runtime, "_finish_timed_out_sec_attempt", refuse_sec_recovery)
+
+    def timeout(*_args: object, **kwargs: object) -> int:
+        remaining = kwargs["timeout_seconds"]
+        assert isinstance(remaining, float) and 0 < remaining <= 110
+        raise job_runtime.JobDeadlineExceededError(remaining)
+
+    monkeypatch.setattr(job_runtime, "_run_managed_child", timeout)
+    code = run_job(
+        repo_root=tmp_path,
+        code_root=PROJECT_ROOT,
+        job_name="reconcile-recorded-trades",
+        write_sets=["portfolio-db"],
+        command=[sys.executable, "-c", "pass"],
+        trigger_kind="scheduled",
+        **_request_fields("reconcile-recorded-trades"),
+    )
+    assert code == 124
+    receipt = json.loads(
+        (tmp_path / ".tmp/job_health/reconcile-recorded-trades/latest.json").read_text()
+    )
+    assert receipt["status"] == "failed" and receipt["exit_code"] == 124
+    assert "unrelated job must not run SEC recovery" not in json.dumps(receipt)
+    with JobLock(tmp_path, "next-run", ["portfolio-db"], wait_s=0):
+        pass
 
 
 def test_missing_sec_deadline_policy_fails_without_child_launch(
