@@ -22,17 +22,31 @@ def test_method_is_canonical_and_mode_specific() -> None:
 def test_source_edit_changes_identity(tmp_path: Path) -> None:
     original = load_research_method("company")
     source = tmp_path / "method.md"
-    source.write_text(original.instructions)
+    source.write_text(original.instructions, encoding="utf-8")
     first = load_research_method("company", source_path=source)
-    source.write_text(original.instructions + "\nNew source requirement.\n")
+    source.write_text(original.instructions + "\nNew source requirement.\n", encoding="utf-8")
     assert load_research_method("company", source_path=source).source_sha256 != first.source_sha256
 
 
 def test_incomplete_source_fails_closed(tmp_path: Path) -> None:
     source = tmp_path / "method.md"
-    source.write_text("## Evidence to judgment\nSome evidence.\n")
+    source.write_text("## Evidence to judgment\nSome evidence.\n", encoding="utf-8")
     with pytest.raises(ResearchOutputContractError, match="missing"):
         load_research_method("earnings", source_path=source)
+
+
+def test_method_crlf_line_endings_supported(tmp_path: Path) -> None:
+    original = load_research_method("company")
+    crlf_text = original.instructions.replace("\n", "\r\n")
+    source = tmp_path / "method_crlf.md"
+    source.write_bytes(crlf_text.encode("utf-8"))
+    loaded = load_research_method("company", source_path=source)
+    assert loaded.mode == "company"
+    assert loaded.instructions.replace("\r\n", "\n") == original.instructions
+
+
+def test_validate_research_markdown_crlf() -> None:
+    validate_research_markdown("## First\r\nbody\r\n## Second\r\nbody\r\n", ["First", "Second"])
 
 
 @pytest.mark.parametrize(

@@ -53,7 +53,7 @@ def load_research_method(mode: ResearchMode, *, source_path: Path | None = None)
     """Read each time so source edits invalidate cache identities without restart."""
     raw = (source_path or _SOURCE).read_bytes()
     text = raw.decode("utf-8")
-    matches = list(re.finditer(r"^## (.+)$", text, re.MULTILINE))
+    matches = list(re.finditer(r"^## (.+?)\s*$", text, re.MULTILINE))
     sections = {
         match.group(1): text[
             match.start() : matches[i + 1].start() if i + 1 < len(matches) else len(text)

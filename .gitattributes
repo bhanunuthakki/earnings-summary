@@ -10,3 +10,6 @@ config/filing_xbrl_processor_approval.json text eol=lf
 
 # Runtime admission-policy bytes are hashed; keep LF-stable on Windows checkouts.
 src/quality/admission_policy.py text eol=lf
+
+# Research method document is byte-hashed; keep LF-stable on Windows checkouts.
+src/advisor/skills/earnings-summary-investing/references/research-method.md text eol=lf
