@@ -144,6 +144,66 @@ def test_compile_context_spec_grounds_refinement(db: Path, monkeypatch: pytest.M
     assert "REFINING" in prompts[0]
 
 
+@pytest.mark.parametrize(
+    ("question", "cadence", "selected"),
+    [
+        (
+            "TST revenue and operating margin Q2 2026 vs Q2 2025",
+            "quarterly",
+            ("2025-Q2", "2026-Q2"),
+        ),
+        ("TST revenue Q2'25 against 2Q24", "quarterly", ("2024-Q2", "2025-Q2")),
+        ("TST revenue Q3 FY2025", "quarterly", ("2025-Q3",)),
+        ("TST revenue FY2024 vs FY 2023", "annual", ("FY2023", "FY2024")),
+    ],
+)
+def test_compile_pins_the_periods_the_question_names(
+    db: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    question: str,
+    cadence: str,
+    selected: tuple[str, ...],
+) -> None:
+    """The model only chooses a trailing window; named periods are read
+    deterministically from the question and override that window."""
+
+    def fake_call(prompt: str, **_kw: object) -> str:
+        return (
+            '{"tickers": ["TST"], "metrics": ["fin:revenue"], "transform": "margin", "periods": 2}'
+        )
+
+    monkeypatch.setattr(nlc, "call_llm", fake_call)
+    res = nlc.compile_nl_to_viewspec(question, db_path=db, context_tickers=["TST"])
+    assert res.status == "ok" and res.spec is not None
+    assert res.spec.cadence == cadence
+    assert res.spec.selected_periods == selected
+    assert res.spec.transform == "margin"
+
+
+def test_compile_without_named_periods_keeps_window_and_carries_context(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_call(prompt: str, **_kw: object) -> str:
+        return '{"tickers": ["TST", "ALT"], "metrics": ["fin:revenue"], "periods": 8, "selected_periods": ["2020-Q1"]}'
+
+    monkeypatch.setattr(nlc, "call_llm", fake_call)
+    fresh = nlc.compile_nl_to_viewspec("TST revenue trend", db_path=db, context_tickers=["TST"])
+    assert fresh.spec is not None and fresh.spec.selected_periods == ()
+    assert fresh.spec.periods == 8
+
+    prev: dict[str, object] = {
+        "tickers": ["TST"],
+        "metrics": ["fin:revenue"],
+        "cadence": "quarterly",
+        "selected_periods": ["2024-Q2", "2025-Q2"],
+    }
+    refined = nlc.compile_nl_to_viewspec(
+        "add ALT", db_path=db, context_tickers=["TST"], context_spec=prev
+    )
+    assert refined.spec is not None
+    assert refined.spec.selected_periods == ("2024-Q2", "2025-Q2")
+
+
 def test_compile_repairs_once_then_succeeds(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     outputs = ["this is not json at all", _GOOD_SPEC_JSON]
     prompts: list[str] = []

@@ -807,6 +807,13 @@ def _to_bucket(year: int, month: int, cadence: str) -> _Bucket:
     return (year, (month - 1) // 3 + 1)
 
 
+def _window(spec: ViewSpec, available: set[_Bucket]) -> list[_Bucket]:
+    """Named buckets when the spec selects them, else the trailing window."""
+    if spec.selected_periods:
+        return list(spec.selected_buckets())
+    return sorted(available)[-spec.periods :]
+
+
 def _lookback(bucket: _Bucket, years: int) -> _Bucket:
     return (bucket[0] - years, bucket[1])
 
@@ -942,7 +949,7 @@ def execute_view(
 
         forecast_overlays: list[tuple[str, MetricRef, ForecastOverlay, str | None]] = []
         display_buckets = set(
-            sorted({bucket for _, _, cells, _ in raw_rows for bucket in cells})[-spec.periods :]
+            _window(spec, {bucket for _, _, cells, _ in raw_rows for bucket in cells})
         )
         resolved_db = db_path
         if resolved_db is None and repo_root is not None:
@@ -998,7 +1005,10 @@ def execute_view(
         all_buckets: set[_Bucket] = set()
         for _t, _m, cells, _u in raw_rows:
             all_buckets.update(cells)
-    actual_buckets = sorted(all_buckets)[-spec.periods :]
+    actual_buckets = _window(spec, all_buckets)
+    for bucket in actual_buckets:
+        if spec.selected_periods and bucket not in all_buckets:
+            warnings.append(f"no data for {_bucket_label(bucket, spec.cadence)}")
     forecast_bucket_set = {
         _to_bucket(point.period_end.year, point.period_end.month, "annual")
         for _ticker, _metric, overlay, _unit in forecast_overlays

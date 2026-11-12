@@ -138,7 +138,15 @@ def view_summary(result: ViewResult) -> str:
         escape(spec.cadence),
         _cadence_noun(spec.cadence, n_returned),
     ]
-    missing = spec.periods - n_returned
+    if spec.selected_periods:
+        # Named periods are always shown; a gap is a column with no value.
+        missing = sum(
+            1
+            for i in range(n_returned)
+            if all(i >= len(row.cells) or row.cells[i].value is None for row in result.rows)
+        )
+    else:
+        missing = spec.periods - n_returned
     if missing > 0:
         parts.append(f"⚠ {missing} missing")
     nm_count = sum(1 for row in result.rows for c in row.cells if _is_nm(c.value, spec.transform))

@@ -31,7 +31,7 @@ from timeseries.loaders import (
 from user_state.saved_views import delete_view, get_view, list_views, save_view
 from viewspec import engine
 from viewspec.engine import ViewCell, ViewResult, ViewRow, execute_view, metric_catalog
-from viewspec.render import render_view_fragment
+from viewspec.render import render_view_fragment, view_summary
 from viewspec.spec import MetricRef, ViewSpec, ViewSpecError
 
 _DDL = """
@@ -584,6 +584,39 @@ def test_engine_yoy_and_periods_window(canonical_db: Path) -> None:
     assert row.cells[0].raw == 120  # the underlying level rides along
     assert len(row.cells[0].financial_inputs) == 2
     assert {point.value for point in row.cells[0].financial_inputs} == {100, 120}
+
+
+def test_engine_selected_periods_show_exactly_the_named_quarters(canonical_db: Path) -> None:
+    """A question that names quarters ("Q2 2025 vs Q2 2024") must show those
+    quarters, not the latest window. A named quarter with no data stays a
+    visible empty column with a warning, never a silent substitution."""
+    spec = _spec(selected_periods=["2025-Q2", "2023-Q2", "2024-Q2"])
+    assert spec.selected_periods == ("2023-Q2", "2024-Q2", "2025-Q2")
+    result = execute_view(spec, db_path=canonical_db)
+    assert result.period_labels == ["Q2'23", "Q2'24", "Q2'25"]
+    (row,) = result.rows
+    assert [c.value for c in row.cells] == [None, 110, 132]
+    assert any("Q2'23" in warning for warning in result.warnings)
+    assert view_summary(result) == "1 series · level · quarterly · 3 quarters · ⚠ 1 missing"
+
+    yoy = execute_view(_spec(transform="yoy", selected_periods=["2025-Q2"]), db_path=canonical_db)
+    assert yoy.period_labels == ["Q2'25"]
+    assert yoy.rows[0].cells[0].value == pytest.approx(20.0)  # 132 vs 110, prior outside view
+
+
+def test_spec_selected_periods_validation_and_round_trip() -> None:
+    spec = _spec(selected_periods=["2025-Q2", "2024-Q2"])
+    assert spec.to_dict()["selected_periods"] == ["2024-Q2", "2025-Q2"]
+    assert ViewSpec.from_dict(spec.to_dict()) == spec
+    assert "selected_periods" not in _spec().to_dict()
+    annual = _spec(cadence="annual", selected_periods=["FY2024"])
+    assert annual.selected_periods == ("FY2024",)
+    with pytest.raises(ViewSpecError, match="selected_periods"):
+        _spec(selected_periods=["FY2024"])  # annual token on a quarterly view
+    with pytest.raises(ViewSpecError, match="selected_periods"):
+        _spec(selected_periods=["2025-Q5"])
+    with pytest.raises(ViewSpecError, match="selected_periods"):
+        _spec(selected_periods="2025-Q2")
 
 
 def test_engine_cagr(canonical_db: Path) -> None:

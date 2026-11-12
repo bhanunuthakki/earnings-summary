@@ -26,8 +26,13 @@ Serialized shape (the contract the P5.2 compiler must emit)::
       "transform": "yoy",                        # level|yoy|cagr|margin
       "cadence": "quarterly",                    # quarterly|annual
       "periods": 12,                             # display window, 1..MAX_PERIODS
-      "cagr_years": 3                            # lookback for transform="cagr"
+      "cagr_years": 3,                           # lookback for transform="cagr"
+      "selected_periods": ["2025-Q2", "2026-Q2"] # optional: exactly these buckets
     }
+
+``selected_periods`` (optional) replaces the trailing ``periods`` window with
+the named calendar buckets: ``YYYY-Qn`` for quarterly views, ``FYYYYY`` for
+annual views. The engine shows every named bucket, empty when no data exists.
 
 `from_dict` validates hard and raises ViewSpecError listing every problem
 (the NL-compile path surfaces these to degrade onto the builder UI);
@@ -36,6 +41,7 @@ unknown top-level keys are ignored for forward compatibility.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import cast
 from urllib.parse import quote, unquote
@@ -51,6 +57,20 @@ MAX_TICKERS = 16
 MAX_METRICS = 10
 MAX_PERIODS = 40
 MAX_CAGR_YEARS = 10
+
+
+_QUARTER_TOKEN_RE = re.compile(r"^(\d{4})-Q([1-4])$")
+_ANNUAL_TOKEN_RE = re.compile(r"^FY(\d{4})$")
+
+
+def period_token_bucket(token: str, cadence: str) -> tuple[int, int] | None:
+    """``2025-Q2`` -> (2025, 2) on a quarterly view; ``FY2024`` -> (2024, 0)
+    on an annual view; None when the token does not fit the cadence."""
+    if cadence == "annual":
+        match = _ANNUAL_TOKEN_RE.match(token)
+        return (int(match.group(1)), 0) if match else None
+    match = _QUARTER_TOKEN_RE.match(token)
+    return (int(match.group(1)), int(match.group(2))) if match else None
 
 
 class ViewSpecError(ValueError):
@@ -167,9 +187,10 @@ class ViewSpec:
     cadence: str = "quarterly"
     periods: int = 12
     cagr_years: int = 3
+    selected_periods: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        d: dict[str, object] = {
             "tickers": list(self.tickers),
             "metrics": [m.to_dict() for m in self.metrics],
             "transform": self.transform,
@@ -177,6 +198,14 @@ class ViewSpec:
             "periods": self.periods,
             "cagr_years": self.cagr_years,
         }
+        if self.selected_periods:
+            d["selected_periods"] = list(self.selected_periods)
+        return d
+
+    def selected_buckets(self) -> tuple[tuple[int, int], ...]:
+        """The validated ``selected_periods`` as engine buckets, in order."""
+        buckets = (period_token_bucket(token, self.cadence) for token in self.selected_periods)
+        return tuple(bucket for bucket in buckets if bucket is not None)
 
     @classmethod
     def from_dict(cls, raw: object) -> ViewSpec:
@@ -255,6 +284,8 @@ class ViewSpec:
             errors.append(f"cagr_years must be an integer in 1..{MAX_CAGR_YEARS}")
             cagr_years = 3
 
+        selected_periods = _parse_selected_periods(spec.get("selected_periods"), cadence, errors)
+
         if errors:
             raise ViewSpecError("; ".join(errors))
         return cls(
@@ -264,7 +295,28 @@ class ViewSpec:
             cadence=cadence,
             periods=periods,
             cagr_years=cagr_years,
+            selected_periods=selected_periods,
         )
+
+
+def _parse_selected_periods(raw: object, cadence: str, errors: list[str]) -> tuple[str, ...]:
+    """Validate optional named buckets; sorted oldest first, deduplicated."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        errors.append("selected_periods must be a list of period tokens")
+        return ()
+    tokens = [str(item).strip().upper() for item in cast("list[object]", raw)]
+    expected = "FYYYYY" if cadence == "annual" else "YYYY-Qn"
+    bad = [token for token in tokens if period_token_bucket(token, cadence) is None]
+    if bad:
+        errors.append(f"selected_periods must be {expected} tokens for a {cadence} view: {bad}")
+        return ()
+    unique = sorted(set(tokens), key=lambda token: period_token_bucket(token, cadence) or (0, 0))
+    if len(unique) > MAX_PERIODS:
+        errors.append(f"at most {MAX_PERIODS} selected_periods, got {len(unique)}")
+        return ()
+    return tuple(unique)
 
 
 def _coerce_int(raw: object, *, default: int) -> int | None:

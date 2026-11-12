@@ -62,7 +62,11 @@ def describe_view_spec(spec_dict: dict[str, object]) -> tuple[str, str]:
             if key:
                 labels.append(key[:1].upper() + key[1:])
     periods = spec_dict.get("periods")
-    span = f"last {periods} quarters" if periods else "full history"
+    selected = spec_dict.get("selected_periods")
+    if isinstance(selected, list) and selected:
+        span = ", ".join(str(item) for item in cast("list[object]", selected))
+    else:
+        span = f"last {periods} quarters" if periods else "full history"
     title = f"Tracking table for {tickers or 'the portfolio'} — {len(labels)} series, {span}"
     body = (
         " · ".join(labels or ["(no series)"])

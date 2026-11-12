@@ -22,6 +22,12 @@ Grounding: the prompt carries the metric vocabulary (the engine's
 tickers named in the query, so the model copies real tokens instead of
 inventing metric names. Tokens it still invents fail validation or render
 as no-data warnings — never an exception, never a query.
+
+Named periods: the model only picks a trailing ``periods`` window, which
+cannot express "Q2 2026 vs Q2 2025". Quarters (``Q2 2026``, ``Q2'26``,
+``2Q26``, ``Q2 FY2026``) and fiscal years (``FY2024``) named in the question
+are parsed deterministically and pinned as ``selected_periods``; a refinement
+that names none keeps the previous turn's selection.
 """
 
 from __future__ import annotations
@@ -30,7 +36,7 @@ import json
 import logging
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
@@ -52,6 +58,11 @@ PURPOSE = "viewspec_compile"
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$")
 _TICKERISH_RE = re.compile(r"\b[A-Z][A-Z0-9.\-]{0,5}\b")
+_YEAR = r"((?:19|20)\d{2}|\d{2})"
+_NAMED_QUARTER_RE = re.compile(
+    rf"\b(?:Q([1-4])\s*(?:FY\s*)?'?\s*{_YEAR}|([1-4])Q\s*'?\s*{_YEAR})\b", re.IGNORECASE
+)
+_NAMED_FISCAL_YEAR_RE = re.compile(rf"\bFY\s*'?\s*{_YEAR}\b", re.IGNORECASE)
 
 # Vocabulary caps bound the grounding prompt so an interactive compile stays
 # fast. Raised well above the old 60/120/80 so the "capture every reported
@@ -199,13 +210,56 @@ JSON:"""
 
 def _parse_and_validate(raw: str) -> ViewSpec:
     """Fenced/raw model output → validated ViewSpec. Raises ViewSpecError
-    with a readable message on any failure (fed back to the repair pass)."""
+    with a readable message on any failure (fed back to the repair pass).
+    Period selection never comes from the model (see ``_pin_periods``)."""
     text = _strip_fences(raw)
     try:
         parsed: object = json.loads(text)
     except ValueError as exc:
         raise ViewSpecError(f"not valid JSON ({exc})") from exc
+    if isinstance(parsed, dict):
+        fields = cast("dict[str, object]", parsed)
+        fields.pop("selected_periods", None)
+        return ViewSpec.from_dict(fields)
     return ViewSpec.from_dict(parsed)
+
+
+def _full_year(raw: str) -> int:
+    year = int(raw)
+    return year + 2000 if year < 100 else year
+
+
+def named_periods(query: str) -> tuple[str, list[str]] | None:
+    """(cadence, period tokens) for quarters or fiscal years the question
+    names; None when it names neither. Quarters win over fiscal years."""
+    quarters: list[str] = []
+    for match in _NAMED_QUARTER_RE.finditer(query):
+        quarter = match.group(1) or match.group(3)
+        year = match.group(2) or match.group(4)
+        quarters.append(f"{_full_year(year)}-Q{quarter}")
+    if quarters:
+        return "quarterly", quarters
+    years = [f"FY{_full_year(m.group(1))}" for m in _NAMED_FISCAL_YEAR_RE.finditer(query)]
+    return ("annual", years) if years else None
+
+
+def _pin_periods(spec: ViewSpec, query: str, context_spec: dict[str, object] | None) -> ViewSpec:
+    """Pin the periods the question names, or carry the previous turn's
+    selection through a refinement that names none and keeps its cadence."""
+    named = named_periods(query)
+    if named is None:
+        carried = (context_spec or {}).get("selected_periods")
+        if not carried or (context_spec or {}).get("cadence", "quarterly") != spec.cadence:
+            return spec
+        cadence, tokens = spec.cadence, carried
+    else:
+        cadence, tokens = named
+    candidate = {**spec.to_dict(), "cadence": cadence, "selected_periods": tokens}
+    try:
+        return ViewSpec.from_dict(candidate)
+    except ViewSpecError as exc:
+        log.info({"event": "viewspec_nl_compile_period_pin_rejected", "error": str(exc)})
+        return replace(spec, selected_periods=())
 
 
 def compile_nl_to_viewspec(
@@ -301,7 +355,11 @@ def compile_nl_to_viewspec(
             )
             continue
         return NLCompileResult(
-            status="ok", spec=spec, attempts=attempts, prompt_text=ask, raw_response=raw
+            status="ok",
+            spec=_pin_periods(spec, q, context_spec),
+            attempts=attempts,
+            prompt_text=ask,
+            raw_response=raw,
         )
 
     return NLCompileResult(
