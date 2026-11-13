@@ -893,6 +893,7 @@ def test_migration_mode_rejects_stale_source_bound_restore_receipt(
 
 def test_operational_mode_accepts_verified_ancestor_rollback_after_upgrade(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     prior_revision = "0000_prior"
     checkout = _revision_repo(
@@ -914,6 +915,27 @@ def test_operational_mode_accepts_verified_ancestor_rollback_after_upgrade(
         )
         connection.commit()
 
+    validate = readiness.validate_receipt_for_source
+    validation_modes: list[bool] = []
+
+    def artifact_only_validation(
+        receipt: backup_receipt.BackupRestoreReadinessReceipt,
+        *,
+        source_db: Path,
+        source_revision: str | None,
+        require_current_identity: bool = True,
+    ) -> tuple[str, ...]:
+        validation_modes.append(require_current_identity)
+        assert require_current_identity is False
+        return validate(
+            receipt,
+            source_db=source_db,
+            source_revision=source_revision,
+            require_current_identity=require_current_identity,
+        )
+
+    monkeypatch.setattr(readiness, "validate_receipt_for_source", artifact_only_validation)
+
     receipt = readiness.collect_readiness(
         checkout_root=checkout,
         runtime_root=runtime,
@@ -925,6 +947,9 @@ def test_operational_mode_accepts_verified_ancestor_rollback_after_upgrade(
     assert receipt.ready is True
     assert receipt.operationally_aligned is True
     assert receipt.migration_preconditions_met is False
+
+    assert validation_modes == [False]
+    assert "backup_restore_source_revision_mismatch" in receipt.migration_blocking_reasons
 
 
 def test_collect_readiness_rejects_tampered_snapshot_artifact(tmp_path: Path) -> None:
