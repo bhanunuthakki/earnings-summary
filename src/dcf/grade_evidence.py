@@ -173,7 +173,16 @@ def _project_primary_fact_overlay(value: object) -> dict[str, object] | None:
         return None
     overlay = cast("dict[str, object]", value)
     projected: dict[str, object] = {}
-    for key in ("status", "degraded_reason", "reasons"):
+    for key in (
+        "schema_version",
+        "scope",
+        "status",
+        "degraded_reason",
+        "reasons",
+        "historical_overlay_locator",
+        "historical_overlay_sha256",
+        "selected_observation_ids",
+    ):
         if key in overlay:
             projected[key] = overlay[key]
     statements = overlay.get("statements")
@@ -184,7 +193,13 @@ def _project_primary_fact_overlay(value: object) -> dict[str, object] | None:
                 continue
             item = cast("dict[str, object]", raw)
             summary: dict[str, object] = {}
-            for key in ("status", "degraded_reason"):
+            for key in (
+                "status",
+                "degraded_reason",
+                "historical_applied_count",
+                "historical_conflicts_count",
+                "historical_rejected_count",
+            ):
                 if key in item:
                     summary[key] = item[key]
             for key in ("applied", "conflicts", "rejected"):

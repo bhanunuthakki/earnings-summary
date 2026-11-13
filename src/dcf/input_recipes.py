@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Mapping
 from datetime import datetime
 
-from dcf import cashflow_inputs, meli_inputs
+from dcf import cashflow_inputs, meli_inputs, redesign_inputs
 from dcf.input_evidence import (
     InputEvidenceError,
     ModelInputReceipt,
@@ -20,11 +20,15 @@ def model_engine(recipe: str) -> str:
         return "meli_platform_sotp"
     if recipe == cashflow_inputs.RECIPE:
         return cashflow_inputs.ENGINE
+    if recipe == redesign_inputs.RECIPE:
+        return redesign_inputs.ENGINE
     raise InputEvidenceError("input_recipe_unsupported")
 
 
 def effective_numeric_inputs(recipe: str, values: Mapping[str, object]) -> dict[str, float]:
     model_engine(recipe)
+    if recipe == redesign_inputs.RECIPE:
+        return redesign_inputs.effective_numeric_inputs(values)
     return (
         meli_inputs.effective_numeric_inputs(values, recipe=recipe)
         if meli_inputs.is_meli_recipe(recipe)
@@ -43,6 +47,14 @@ def prepare_model_inputs(
     model_engine(request.recipe)
     if meli_inputs.is_meli_recipe(request.recipe):
         return meli_inputs.prepare_meli_inputs(
+            conn,
+            request,
+            effective_inputs=effective_inputs,
+            as_of=as_of,
+            source_context=source_context,
+        )
+    if request.recipe == redesign_inputs.RECIPE:
+        return redesign_inputs.prepare_redesign_inputs(
             conn,
             request,
             effective_inputs=effective_inputs,
@@ -75,6 +87,14 @@ def verify_model_input_receipt(
             as_of=as_of,
             source_context=source_context,
         )
+    if receipt.recipe == redesign_inputs.RECIPE:
+        return redesign_inputs.verify_redesign_inputs(
+            conn,
+            receipt,
+            effective_inputs=effective_inputs,
+            as_of=as_of,
+            source_context=source_context,
+        )
     return cashflow_inputs.verify_cashflow_inputs(
         conn,
         receipt,
@@ -86,6 +106,8 @@ def verify_model_input_receipt(
 
 def model_output(recipe: str, inputs: Mapping[str, float]) -> dict[str, object]:
     model_engine(recipe)
+    if recipe == redesign_inputs.RECIPE:
+        return redesign_inputs.model_output(inputs)
     return (
         meli_inputs.model_output(inputs)
         if meli_inputs.is_meli_recipe(recipe)

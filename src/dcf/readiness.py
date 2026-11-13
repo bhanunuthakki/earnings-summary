@@ -14,7 +14,7 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from dcf import meli_inputs, onon_inputs
+from dcf import meli_inputs, onon_inputs, redesign_inputs
 from dcf.cashflow_inputs import RECIPE as CASHFLOW_RECIPE
 from dcf.cashflow_scenarios import (
     AnalystCashflowScenarioReview,
@@ -402,6 +402,16 @@ def _assess(
                     source_context=source_context,
                 )
                 replay = model_output(receipt.recipe, effective)
+                if receipt.recipe == redesign_inputs.RECIPE:
+                    if (
+                        evidence.checks is None
+                        or not evidence.checks.market_price_consistent
+                        or effective["current_price"] != evidence.live_price
+                    ):
+                        raise InputEvidenceError("reviewed_market_price_mismatch")
+                    replay_model_scenarios(
+                        ticker, effective, replay, snapshot, recipe=receipt.recipe
+                    )
             else:
                 effective = onon_inputs.effective_numeric_inputs(
                     _mapping(snapshot.get("effective_model_inputs"))
@@ -483,7 +493,10 @@ def _assess(
             verified_population = True
             outputs = [
                 ("vps", evidence.npv_per_share),
-                ("equity_value", evidence.npv),
+                (
+                    "operating_ev" if receipt.recipe == redesign_inputs.RECIPE else "equity_value",
+                    evidence.npv,
+                ),
                 ("vps", snapshot.get("value_per_share")),
                 ("equity_value", snapshot.get("equity_value_m")),
                 ("operating_ev", snapshot.get("operating_ev_m")),
@@ -625,6 +638,25 @@ def replay_model_scenarios(
     *,
     recipe: str = meli_inputs.RECIPE,
 ) -> dict[str, object]:
+    if recipe == redesign_inputs.RECIPE:
+        if canonical_digest(snapshot.get("model_output")) != canonical_digest(replay):
+            raise InputEvidenceError("persisted_model_output_replay_mismatch")
+        if "scenarios" in snapshot:
+            scenarios = _mapping(snapshot["scenarios"])
+            expected_scenarios = _mapping(replay.get("scenarios"))
+            if set(scenarios) != {"bear", "base", "bull"}:
+                raise InputEvidenceError("persisted_scenario_output_replay_mismatch")
+            nested = all(isinstance(value, dict) for value in scenarios.values())
+            for name, raw in scenarios.items():
+                value = _mapping(raw).get("fair_value_per_share_usd") if nested else raw
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                    or value != expected_scenarios.get(name)
+                ):
+                    raise InputEvidenceError("persisted_scenario_output_replay_mismatch")
+        return replay
     if ticker == "ONON":
         # The fixed ONON vector includes all three complete scenario schedules.
         if canonical_digest(snapshot.get("scenarios")) != canonical_digest(replay.get("scenarios")):
@@ -679,8 +711,8 @@ def load_valuation_readiness(
 ) -> ValuationReadiness:
     """Assess persisted evidence under one read snapshot; no writes/network/fallback.
 
-    Legacy receipts remain degraded. MELI and ONON receipts are reconstructed against
-    current canonical admission and source coverage before eligibility is granted.
+    Legacy receipts remain degraded. Supported model receipts are reconstructed
+    against current canonical admission and source coverage before eligibility is granted.
     This API is for consumption of an existing run, not permission to build its
     replacement. It does not erase or mutate the stored valuation.
     """

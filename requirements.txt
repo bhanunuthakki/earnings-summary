@@ -57,6 +57,9 @@ faster-whisper
 # Security floor: beautifulsoup4 parses UNTRUSTED HTML — keep it past the old
 # ReDoS CVEs.
 beautifulsoup4>=4.12.3
+# Security floor: CSS selection on untrusted filings must include the sibling
+# and descendant-combinator fixes (CVE-2026-126192 and CVE-2026-126190).
+soupsieve>=4.0
 # Security floor: markdown renders to HTML in the report/UI layer — keep current.
 markdown>=3.5
 # Free fallback source for live price + earnings calendar (src/sources/) and

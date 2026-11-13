@@ -9,7 +9,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
+
+from dcf.grade_evidence import MAX_VERIFICATION_EVIDENCE_BYTES
 
 EquityDirectValuationArchetype = Literal[
     "bank_excess_return",
@@ -36,6 +38,108 @@ class DcfInputProvenance:
 
     def inputs_as_of_iso(self) -> str:
         return self.inputs_as_of.isoformat()
+
+
+def selected_statement_provenance(
+    overlay: Mapping[str, object],
+    *,
+    selected_observation_ids: frozenset[str],
+    historical_overlay_locator: str,
+) -> dict[str, object]:
+    """Keep exact selected lineage and commit the separately retained history."""
+    if not selected_observation_ids or not historical_overlay_locator.strip():
+        raise ValueError("selected_provenance_population_missing")
+    raw_statements = overlay.get("statements")
+    if not isinstance(raw_statements, Mapping):
+        raise ValueError("selected_provenance_statements_missing")
+    found: set[str] = set()
+    statements: dict[str, object] = {}
+    for name, raw in cast("Mapping[str, object]", raw_statements).items():
+        if not isinstance(raw, Mapping):
+            raise ValueError("selected_provenance_statement_invalid")
+        statement = cast("Mapping[str, object]", raw)
+        summary = {
+            key: value
+            for key, value in statement.items()
+            if key not in {"applied", "conflicts", "rejected"}
+        }
+        for key in ("applied", "conflicts", "rejected"):
+            entries = statement.get(key, [])
+            if not isinstance(entries, list):
+                raise ValueError("selected_provenance_entries_invalid")
+            population = cast("list[object]", entries)
+            summary[f"historical_{key}_count"] = len(population)
+            if key == "applied":
+                selected: list[dict[str, object]] = []
+                for entry in population:
+                    if not isinstance(entry, dict):
+                        raise ValueError("selected_provenance_entry_invalid")
+                    item = cast("dict[str, object]", entry)
+                    observation_id = item.get("reported_observation_id")
+                    if (
+                        isinstance(observation_id, str)
+                        and observation_id in selected_observation_ids
+                    ):
+                        selected.append(dict(item))
+                        found.add(observation_id)
+                summary["applied"] = selected
+        statements[name] = summary
+    if found != set(selected_observation_ids):
+        raise ValueError("selected_observation_missing")
+    if overlay.get("scope") == "selected_model_inputs":
+        digest = overlay.get("historical_overlay_sha256")
+        if (
+            overlay.get("schema_version") != "dcf_selected_statement_provenance.v1"
+            or overlay.get("selected_observation_ids") != sorted(selected_observation_ids)
+            or overlay.get("historical_overlay_locator") != historical_overlay_locator
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise ValueError("selected_provenance_population_mismatch")
+        return dict(overlay)
+    encoded = json.dumps(
+        dict(overlay), sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    )
+    return {
+        **{key: value for key, value in overlay.items() if key != "statements"},
+        "schema_version": "dcf_selected_statement_provenance.v1",
+        "scope": "selected_model_inputs",
+        "historical_overlay_locator": historical_overlay_locator,
+        "historical_overlay_sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+        "selected_observation_ids": sorted(selected_observation_ids),
+        "statements": statements,
+    }
+
+
+def validate_dcf_evidence_population(
+    *,
+    assumption_snapshot_json: str | None,
+    provenance: DcfInputProvenance,
+    metadata: Sequence[str] = (),
+) -> None:
+    """Reject an unverifiable new population without changing historical records."""
+    repeated_checks: list[str] = []
+    for block, field in (
+        ("primary_fact_overlay", "status"),
+        ("equity_bridge_receipt", "status"),
+        ("country_risk_context", "authority"),
+    ):
+        raw = (provenance.detail or {}).get(block)
+        if isinstance(raw, dict):
+            value = cast("dict[str, object]", raw).get(field)
+            if isinstance(value, str):
+                repeated_checks.append(value)
+    serialized = (
+        assumption_snapshot_json or "",
+        provenance.as_json(),
+        json.dumps((*metadata, *repeated_checks), ensure_ascii=False, allow_nan=False),
+    )
+    # Reserve the typed read model's keys, checks and numeric fields. The source
+    # population must fit without display truncation or a larger verifier limit.
+    population_budget = MAX_VERIFICATION_EVIDENCE_BYTES - 16_384
+    if sum(len(value.encode("utf-8")) for value in serialized) > population_budget:
+        raise ValueError("verification_evidence_byte_limit")
 
 
 def _sha256_file(path: Path) -> str:

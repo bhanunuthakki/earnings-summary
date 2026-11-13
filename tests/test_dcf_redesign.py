@@ -35,6 +35,7 @@ import refresh_dcf
 from openpyxl.cell.cell import Cell
 
 from dcf import redesign
+from dcf.input_evidence import InputEvidenceError
 from sources.dcf_statements import DcfStatementInputs
 from tests.fixtures.dcf_fmp_payloads import write_canonical_statement_facts, write_fmp
 from tests.kpi_semantic_support import admit_all_kpi_facts
@@ -1380,6 +1381,58 @@ def test_builder_reads_wacc_override_from_block(
     assert _dashboard_cell(dest, 39) == pytest.approx(0.055)
 
 
+@pytest.mark.parametrize("operation", ["refresh", "save"])
+def test_receipt_failure_preserves_workbook_and_current_run(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
+    initial = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    assert initial["status"] == "ok", initial
+    before = dest.read_bytes()
+    with sqlite3.connect(db) as conn:
+        count = conn.execute("SELECT count(*) FROM dcf_runs").fetchone()[0]
+
+    def unavailable(*args: object, **kwargs: object) -> None:
+        raise InputEvidenceError("synthetic_receipt_unavailable")
+
+    monkeypatch.setattr(refresh_dcf, "redesign_run_evidence", unavailable)
+    if operation == "refresh":
+        result = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    else:
+        inputs = redesign.read_inputs(dest)
+        assert inputs is not None
+        result = refresh_dcf.apply_edits("TESTCO", refresh_repo, db, inputs)
+    assert result["status"] == "blocked", result
+    assert result["reason"] == "synthetic_receipt_unavailable"
+    assert dest.read_bytes() == before
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT count(*) FROM dcf_runs").fetchone()[0] == count
+
+
+def test_refresh_current_assumptions_uses_file_instead_of_saved_workbook(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
+    assumptions = refresh_repo / "data" / "dcf_assumptions" / "TESTCO.json"
+    assumptions.parent.mkdir(parents=True)
+    assumptions.write_text(json.dumps({"redesign": {"exit_multiple": 12.0}}))
+    first = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    assert first["status"] == "ok", first
+    wb = openpyxl.load_workbook(dest)
+    wb["Dashboard"].cell(45, 2, 8.0)
+    wb.save(dest)
+    wb.close()
+    result = refresh_dcf.refresh_one(
+        "TESTCO", refresh_repo, db, valuation_year=2026, current_assumptions=True
+    )
+    assert result["status"] == "ok", result
+    assert _dashboard_cell(dest, 45) == 12.0
+
+
 def test_refresh_redesign_preserves_dashboard_edit_and_updates_actuals(
     refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2014,6 +2067,16 @@ def test_apply_edits_persists_without_rebuild_and_records_override(
     npv0 = seeded[0]
     seeded_provenance = json.loads(str(seeded[1]))
     primary_overlay = json.loads(json.dumps(seeded_provenance["primary_fact_overlay"]))
+    for key in (
+        "schema_version",
+        "scope",
+        "historical_overlay_locator",
+        "historical_overlay_sha256",
+        "selected_observation_ids",
+    ):
+        primary_overlay.pop(key, None)
+    for statement in primary_overlay["statements"].values():
+        statement.pop("model_input_observation_ids", None)
     primary_overlay["statements"]["income"] = {
         "status": "ok",
         "applied": [

@@ -11,6 +11,7 @@ import json
 import re
 import sqlite3
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Literal, cast
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
@@ -28,21 +29,93 @@ from provenance.metric_ontology import (
     MetricOntology,
     canonical_json,
 )
+from provenance.reporting_entity_registry import ReportingEntityRegistry
 
 FinancialStatementConcept = Literal[
     "revenue",
+    "cost_of_revenue",
     "gross_profit",
+    "research_and_development",
+    "sga",
     "operating_income",
     "net_income",
     "eps_diluted",
+    "depreciation_and_amortization",
     "operating_cash_flow",
     "free_cash_flow",
     "capital_expenditure",
     "stock_based_compensation",
     "cash_and_equivalents",
+    "short_term_investments",
+    "cash_and_short_term_investments",
+    "total_current_assets",
+    "total_assets",
+    "total_current_liabilities",
+    "short_term_debt",
+    "long_term_debt",
+    "long_term_debt_current_excluding_leases",
+    "long_term_debt_non_current_excluding_leases",
+    "total_debt",
+    "finance_lease_liability",
+    "finance_lease_liability_current",
+    "finance_lease_liability_non_current",
+    "operating_lease_liability",
+    "operating_lease_liability_current",
+    "operating_lease_liability_non_current",
+    "total_stockholders_equity",
     "total_financial_debt",
     "shares_outstanding",
+    "weighted_avg_shares_diluted",
 ]
+
+FINANCIAL_STATEMENT_SHARE_CONCEPTS = frozenset(
+    {"shares_outstanding", "weighted_avg_shares_diluted"}
+)
+FINANCIAL_STATEMENT_INSTANT_CONCEPTS = frozenset(
+    {
+        "cash_and_equivalents",
+        "short_term_investments",
+        "cash_and_short_term_investments",
+        "total_current_assets",
+        "total_assets",
+        "total_current_liabilities",
+        "short_term_debt",
+        "long_term_debt",
+        "long_term_debt_current_excluding_leases",
+        "long_term_debt_non_current_excluding_leases",
+        "total_debt",
+        "total_financial_debt",
+        "finance_lease_liability",
+        "finance_lease_liability_current",
+        "finance_lease_liability_non_current",
+        "operating_lease_liability",
+        "operating_lease_liability_current",
+        "operating_lease_liability_non_current",
+        "total_stockholders_equity",
+        "shares_outstanding",
+    }
+)
+
+
+def financial_statement_scale(unit_key: str, currency: str | None, concept: str) -> Decimal:
+    """Return an explicit presentation-scale conversion without changing the source fact."""
+    if concept in FINANCIAL_STATEMENT_SHARE_CONCEPTS:
+        if unit_key != "shares" or currency is not None:
+            raise ValueError("reviewed financial share unit mismatch")
+        return Decimal(1)
+    if currency is None:
+        raise ValueError("reviewed financial currency unavailable")
+    if concept == "eps_diluted":
+        if unit_key not in {f"{currency}/shares", f"{currency}/share"}:
+            raise ValueError("reviewed financial per-share unit mismatch")
+        return Decimal(1)
+    if unit_key == currency:
+        return Decimal(1)
+    if unit_key == "millions":
+        return Decimal(1000000)
+    if unit_key == "billions":
+        return Decimal(1000000000)
+    raise ValueError("reviewed financial monetary unit mismatch")
 
 
 class _Closed(BaseModel):
@@ -180,12 +253,22 @@ def verify_financial_statement_context(
     ).fetchone()
     if row is None or (
         str(row[0]) != context.document_sha256
-        or str(row[1]) != context.issuer_id
         or str(row[4]) != context.evidence_locator_sha256
         or context.source_wording not in str(row[3])
         or str(row[7]) != "succeeded"
     ):
         raise ValueError("financial statement context lacks exact source evidence")
+    if str(row[1]) != context.issuer_id:
+        subject = ReportingEntityRegistry(conn).canonicalize_recorded_subject(
+            str(row[1]), knowledge_at=cutoff
+        )
+        if (
+            subject.issuer_id != context.issuer_id
+            or subject.reporting_entity_id != context.reporting_entity_id
+            or subject.security_id is not None
+            or subject.material_dissent
+        ):
+            raise ValueError("financial statement context issuer/entity mismatch")
     for index in (2, 5, 6):
         clock = datetime.fromisoformat(str(row[index]))
         clock = clock.replace(tzinfo=UTC) if clock.tzinfo is None else clock.astimezone(UTC)
@@ -208,9 +291,11 @@ def verify_reviewed_financial_role(
 ) -> None:
     verify_financial_statement_context(conn, role.context, cutoff=cutoff)
     source, observation, context = bundle.cell, bundle.observation, role.context
+    if (source.period_start is None) != (role.concept in FINANCIAL_STATEMENT_INSTANT_CONCEPTS):
+        raise ValueError("reviewed financial role instant/duration mismatch")
     standard = _standard_concept(source.concept_namespace, source.concept_name)
     if (
-        role.concept == "total_financial_debt"
+        role.concept in {"total_financial_debt", "total_debt"}
         and source.concept_namespace.startswith(
             (
                 "urn:sec:companyfacts:us-gaap",
@@ -328,22 +413,7 @@ def verify_reviewed_financial_role(
         or source.fiscal_period != context.fiscal_period
     ):
         raise ValueError("reviewed financial role does not match exact reported context")
-    currency = observation.currency
-    if role.concept == "shares_outstanding" and currency is not None:
-        raise ValueError("reviewed financial share count must not carry a currency")
-    units = (
-        {"shares"}
-        if role.concept == "shares_outstanding"
-        else (
-            {f"{currency}/shares", f"{currency}/share"}
-            if role.concept == "eps_diluted"
-            else {currency}
-        )
-    )
-    if (
-        currency is None and role.concept != "shares_outstanding"
-    ) or observation.unit_key not in units:
-        raise ValueError("reviewed financial role unit/currency mismatch")
+    financial_statement_scale(observation.unit_key, observation.currency, role.concept)
 
 
 def admit_reviewed_financial_statements(

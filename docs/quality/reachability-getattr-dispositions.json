@@ -444,6 +444,37 @@
     },
     {
       "disposition": "closed_literal_set",
+      "evidence": "Serialization reads only the checked-in SCALARS literal set on the typed RedesignInputs record and converts each value to float. No callable, module or command is selected.",
+      "fingerprint": "bc3708bfce05ace89a829459b146d1a8ac33c28d90948c11fb166ae49910956f",
+      "line": 263,
+      "path": "src/dcf/redesign_inputs.py",
+      "targets": [
+        "SCALARS"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "The fixed bull/bear loop reads only the declared ScenarioDeltas records on RedesignInputs. Source data cannot choose the attribute name or an execution target.",
+      "fingerprint": "d4125bb0ebcbe3415242117e9b9276988afe0d0993a70337161242e1a2b542c6",
+      "line": 282,
+      "path": "src/dcf/redesign_inputs.py",
+      "targets": [
+        "bull_deltas",
+        "bear_deltas"
+      ]
+    },
+    {
+      "disposition": "schema_field",
+      "evidence": "DELTA_KEYS comes only from dataclasses.fields(redesign.ScenarioDeltas). Serialization converts each declared scenario field to float; no callable, module or command is selected.",
+      "fingerprint": "e9ba0791913fa48f6491c15d1a8b2f04dd2a3a6882cb24eed347df7beae65806",
+      "line": 283,
+      "path": "src/dcf/redesign_inputs.py",
+      "targets": [
+        "DELTA_KEYS"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
       "evidence": "Decimal loop accesses only the six persisted earnings-surprise fields.",
       "fingerprint": "1c8acfb60ced1db04ac029ba9a1851d8a289982a0f5e70561b48ff4c913aa4ce",
       "line": 141,
@@ -1090,7 +1121,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "5e617a3d2b2589dcee1cf868c4595f4413383090f47912e4a57f468620639eb9",
+      "source_sha256": "8f91a869c5b631a9947a5803b54242bcf9be60e2dcafe11cce02ddfce65ac123",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

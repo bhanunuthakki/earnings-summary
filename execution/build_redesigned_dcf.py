@@ -57,12 +57,20 @@ from dcf import (
     country_risk,
     equity_bridge,
     fade_calibration,
+    redesign_evidence,
+    redesign_inputs,
     segment_coverage,
 )
 from dcf import global_assumptions as global_dcf
 from dcf import redesign as redesign_mod
 from dcf.artifact_promotion import DcfRecoveryError, hold_dcf_artifacts
 from dcf.fiscal_periods import detect_fy_periods
+from dcf.input_evidence import (
+    InputEvidenceError,
+    ModelInputReceipt,
+    ModelInputRequest,
+    SourceReadContext,
+)
 from runtime.job_runtime import JobAlreadyRunningError
 from sources.dcf_statements import read_dcf_statements
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -192,7 +200,14 @@ def ie(expr: str) -> str:
 with closing(
     connect_sqlite(str(DATABASE_PATH), role=SQLiteConnectionRole.READ_ONLY)
 ) as _statement_connection:
-    STATEMENT_INPUTS = read_dcf_statements(_statement_connection, ticker, as_of=datetime.now(UTC))
+    STATEMENT_INPUTS = read_dcf_statements(
+        _statement_connection,
+        ticker,
+        as_of=datetime.now(UTC),
+        fiscal_year_start=int(os.environ["DCF_ACTUALS_START_YEAR"])
+        if "DCF_ACTUALS_START_YEAR" in os.environ
+        else None,
+    )
 STATEMENT_INPUTS.require_complete_actuals()
 income_records = STATEMENT_INPUTS.builder_records("income")
 balance_records = STATEMENT_INPUTS.builder_records("balance")
@@ -201,19 +216,6 @@ PRIMARY_FACT_OVERLAY = {
     statement: STATEMENT_INPUTS.bridge_lineage(statement)
     for statement in ("income", "balance", "cash_flow")
 }
-for _statement, _detail in PRIMARY_FACT_OVERLAY.items():
-    print(
-        json.dumps(
-            {
-                "event": "dcf_primary_fact_overlay",
-                "ticker": ticker,
-                "statement": _statement,
-                **_detail,
-            },
-            sort_keys=True,
-        ),
-        file=sys.stderr,
-    )
 
 
 def _loadjson(name: str) -> list[dict[str, object]]:
@@ -381,27 +383,66 @@ def fy_sum_raw(records_i: Mapping[tuple[int, str], dict[str, object]], field: st
 
 
 ly = full_fys[-1]
+_latest_coordinate = max(income_by_period)
+_model_observation_ids = {
+    item.provenance.observation.observation_id
+    for item in STATEMENT_INPUTS.cells
+    if item.provenance is not None
+    and item.available
+    and (
+        item.provenance.cell.fiscal_year == ly
+        or (item.provenance.cell.fiscal_year, item.provenance.cell.fiscal_period)
+        == _latest_coordinate
+    )
+}
+for _statement, _detail in PRIMARY_FACT_OVERLAY.items():
+    _statement_ids = {
+        str(entry["reported_observation_id"])
+        for entry in _RECORDS.validate_python(_detail.get("applied", []))
+    }
+    _detail["model_input_observation_ids"] = sorted(_model_observation_ids & _statement_ids)
+    print(
+        json.dumps(
+            {
+                "event": "dcf_primary_fact_overlay",
+                "ticker": ticker,
+                "statement": _statement,
+                **_detail,
+            },
+            sort_keys=True,
+        ),
+        file=sys.stderr,
+    )
+
 rev_ly = fy_sum_raw(income_by_period, "revenue", ly)
 if rev_ly <= 0:
     # Zero reported base-year revenue: every ratio
     # below divides by it. SKIP cleanly rather than crash through the ratio block.
     print(f"SKIP\t{ticker}\tbase-year revenue is zero\t(insufficient data for a DCF)")
     raise SystemExit(0)
+_expense_fields = {
+    "cogs": "costOfRevenue",
+    "rnd": "researchAndDevelopmentExpenses",
+    "sga": "sellingGeneralAndAdministrativeExpenses",
+}
+_has_expense_breakdown = all(
+    isinstance(income_by_period.get((ly, period), {}).get(field), (int, float))
+    for field in _expense_fields.values()
+    for period in PERIODS
+)
 ratios_ly = {
-    "cogs": fy_sum_raw(income_by_period, "costOfRevenue", ly) / rev_ly,
-    "rnd": fy_sum_raw(income_by_period, "researchAndDevelopmentExpenses", ly) / rev_ly,
-    "sga": fy_sum_raw(income_by_period, "sellingGeneralAndAdministrativeExpenses", ly) / rev_ly,
     "da": fy_sum_raw(cashflow_by_period, "depreciationAndAmortization", ly) / rev_ly,
     "sbc": fy_sum_raw(cashflow_by_period, "stockBasedCompensation", ly) / rev_ly,
+    **(
+        {
+            key: fy_sum_raw(income_by_period, field, ly) / rev_ly
+            for key, field in _expense_fields.items()
+        }
+        if _has_expense_breakdown
+        else {}
+    ),
 }
 oi_ly = fy_sum_raw(income_by_period, "operatingIncome", ly)
-other_ly = (
-    rev_ly
-    - fy_sum_raw(income_by_period, "costOfRevenue", ly)
-    - fy_sum_raw(income_by_period, "researchAndDevelopmentExpenses", ly)
-    - fy_sum_raw(income_by_period, "sellingGeneralAndAdministrativeExpenses", ly)
-    - oi_ly
-) / rev_ly
 
 
 def fade(a: float, b: float, n: int = N_FC) -> list[float]:
@@ -530,9 +571,9 @@ for j, y in enumerate(FC_YEARS):
 
 # margin: COGS/R&D/SG&A held at last-actual %; Other-opex is the plug set so
 # NOPAT (= EBIT x (1-tax)) lands on consensus net income each consensus year.
-cogs_pct = [ratios_ly["cogs"]] * N_FC
-rnd_pct = [ratios_ly["rnd"]] * N_FC
-sga_pct = [ratios_ly["sga"]] * N_FC
+cogs_pct = [ratios_ly["cogs"]] * N_FC if _has_expense_breakdown else None
+rnd_pct = [ratios_ly["rnd"]] * N_FC if _has_expense_breakdown else None
+sga_pct = [ratios_ly["sga"]] * N_FC if _has_expense_breakdown else None
 other_pct = [0.0] * N_FC
 oim_list: list[float] = []
 target_oim = oi_ly / rev_ly
@@ -540,8 +581,10 @@ for j, y in enumerate(FC_YEARS):
     if y in cons_ni and y in cons_rev:
         target_oim = (cons_ni[y] / (1 - TAX)) / cons_rev[y]
     oim_list.append(target_oim)
-    other_pct[j] = max(
-        1 - ratios_ly["cogs"] - ratios_ly["rnd"] - ratios_ly["sga"] - target_oim, 0.02
+    other_pct[j] = (
+        max(1 - sum(ratios_ly[key] for key in _expense_fields) - target_oim, 0.02)
+        if _has_expense_breakdown
+        else 1 - target_oim
     )
 da_pct = fade(ratios_ly["da"], ratios_ly["da"])
 sbc_pct = fade(ratios_ly["sbc"], ratios_ly["sbc"] * 0.6)
@@ -756,16 +799,17 @@ print(
     ),
     file=sys.stderr,
 )
-# Historical invested-capital formulas reference these same exact cash/debt
-# perimeters. Reject a missing historical component before any ledger/output write.
+_capital_history_complete = True
 for _history_key in keys:
-    _history = balance_by_period[_history_key]
+    _history = balance_by_period.get(_history_key, {})
     _history_end = _history.get("date")
     _history_currency = _history.get("reportedCurrency")
     if not isinstance(_history_end, str) or not isinstance(_history_currency, str):
-        raise ValueError(f"canonical DCF historical balance coordinate missing: {_history_key}")
+        _capital_history_complete = False
+        continue
     if (
-        equity_bridge.resolve_primary_reported_aggregate(
+        not isinstance(_history.get("totalStockholdersEquity"), (int, float))
+        or equity_bridge.resolve_primary_reported_aggregate(
             _history,
             aggregate_field=_cash_field,
             overlay={"statements": PRIMARY_FACT_OVERLAY},
@@ -784,9 +828,8 @@ for _history_key in keys:
         )
         is None
     ):
-        raise ValueError(f"canonical DCF historical cash/debt scope unavailable: {_history_key}")
+        _capital_history_complete = False
 # Seed the existing immutable assumption baseline only after actuals admission.
-_baseline = assumptions_doc.ensure_opus_baseline(cache)
 beta = BETA
 ke = RF + beta * ERP + CRP
 mktcap = price * shares_now
@@ -1033,7 +1076,48 @@ _inp = redesign_mod.RedesignInputs(
     fx_to_usd=FX,
     bull_deltas=BULL_D,
     bear_deltas=BEAR_D,
+    weight_bull=WEIGHTS[0],
+    weight_base=WEIGHTS[1],
+    weight_bear=WEIGHTS[2],
 )
+_input_receipt: ModelInputReceipt | None = None
+_reviewed_input_request = _assumptions.get("input_evidence")
+if _reviewed_input_request is not None:
+    _request = ModelInputRequest.model_validate(_reviewed_input_request)
+    if _request.ticker != ticker or _request.recipe != redesign_inputs.RECIPE:
+        raise InputEvidenceError("redesign_workbook_input_request_mismatch")
+    _recipe_context = redesign_inputs.context_for(_request)
+    _expected_cash_scope = (
+        "cash_and_short_term_investments"
+        if _cash_field == "cashAndShortTermInvestments"
+        else "cash_and_equivalents"
+    )
+    if (
+        _recipe_context.cash_scope != _expected_cash_scope
+        or _recipe_context.debt_scope != DCF_DEBT_SCOPE
+    ):
+        raise InputEvidenceError("redesign_workbook_equity_bridge_scope_mismatch")
+    _selected_ids = {
+        cell.provenance.observation.observation_id
+        for cell in STATEMENT_INPUTS.cells
+        if cell.available and cell.provenance is not None
+    }
+    if not {ref.observation_id for ref in _request.facts.values()} <= _selected_ids:
+        raise InputEvidenceError("redesign_workbook_source_population_mismatch")
+    with closing(
+        connect_sqlite(str(DATABASE_PATH), role=SQLiteConnectionRole.READ_ONLY)
+    ) as _input_conn:
+        _complete_inputs, _input_receipt = redesign_inputs.prepare_redesign_inputs(
+            _input_conn,
+            _request,
+            effective_inputs=redesign_inputs.serialize_flat_inputs(_inp),
+            as_of=datetime.now(UTC),
+            source_context=SourceReadContext.for_product_state_root(
+                Path(os.environ.get("DCF_SOURCE_STATE_ROOT", str(REPO)))
+            ),
+        )
+    _inp = redesign_inputs.reconstruct_inputs(_complete_inputs, segments=tuple(PROD))
+_baseline = assumptions_doc.ensure_opus_baseline(cache)
 _streams = redesign_mod.project(_inp)
 _value = redesign_mod.value(_inp)
 rev_p, oi_p, da_p, vf_p = _streams.revenue, _streams.ebit, _streams.da, _streams.valuation_fcf
@@ -1048,13 +1132,16 @@ ann_g = [ann_rev[i] / ann_rev[i - 1] - 1 for i in range(1, len(ann_rev)) if ann_
 ann_oim: list[float] = []
 for _y in full_fys:
     _rev = fy_sum_raw(income_by_period, "revenue", _y)
-    if _rev:
+    if _rev and all(
+        isinstance(income_by_period.get((_y, period), {}).get("operatingIncome"), (int, float))
+        for period in PERIODS
+    ):
         ann_oim.append(fy_sum_raw(income_by_period, "operatingIncome", _y) / _rev)
 cagr0 = (rev_p[-1] / rev_ly) ** (1 / N_FC) - 1
 mT0 = oi_p[-1] / rev_p[-1] if rev_p[-1] else margin_term_def
 SIG = {
-    "cagr": float(min(max(np.std(ann_g) * 0.5, 0.012), 0.03)),
-    "margin": float(min(max(np.std(ann_oim), 0.015), 0.03)),
+    "cagr": float(min(max((np.std(ann_g) * 0.5 if len(ann_g) > 1 else 0.012), 0.012), 0.03)),
+    "margin": float(min(max((np.std(ann_oim) if len(ann_oim) > 1 else 0.015), 0.015), 0.03)),
     "wacc": 0.005,
     "exit": 1.5,
 }
@@ -1469,6 +1556,7 @@ for y in ALL[1:]:
     put(md, r, yc[y], ie(f"{mc(y)}{rev_row}/{mc(y - 1)}{rev_row}-1"), fmt=PCT)
 r += 2
 
+_historical_model_start = r
 band(md, r, "COST STRUCTURE (yellow = % of revenue)", len(ALL) + 1)
 r += 1
 cost_rows: dict[str, int] = {}
@@ -1477,6 +1565,8 @@ for lab, fin_lab, ser in [
     ("R&D / Technology", "R&D Expense", rnd_pct),
     ("SG&A", "SG&A Expense", sga_pct),
 ]:
+    if ser is None:
+        continue
     cost_rows[lab] = r
     put(md, r, 1, lab)
     for y in full_fys:
@@ -1491,13 +1581,18 @@ for lab, fin_lab, ser in [
         put(md, r, yc[y], ser[fcj[y]], fmt=PCT, kind="in")
     r += 1
 other_row = r
-put(md, r, 1, "Other opex (fulfilment, etc.)")
+put(
+    md,
+    r,
+    1,
+    "Other opex (fulfilment, etc.)" if _has_expense_breakdown else "Total operating expenses",
+)
 for y in full_fys:
-    parts = "+".join(f"{mc(y)}{cost_rows[c]}" for c in cost_rows)
+    parts = "+".join(f"{mc(y)}{cost_rows[c]}" for c in cost_rows) or "0"
     put(md, r, yc[y], f"={mc(y)}{rev_row}-({parts})-{fref('Operating Income', y)}", fmt=USD)
 for y in FC_YEARS:  # plug so operating margin = Dashboard near->terminal ramp (green link)
     j = fcj[y]
-    parts = "+".join(f"{mc(y)}{cost_rows[c]}" for c in cost_rows)
+    parts = "+".join(f"{mc(y)}{cost_rows[c]}" for c in cost_rows) or "0"
     ramp = f"({DB['margin_near']}+({DB['margin_term']}-{DB['margin_near']})*MIN(1,{j}/{ncons - 1}))"
     put(md, r, yc[y], f"={mc(y)}{rev_row}*(1-{ramp})-({parts})", fmt=USD)
 r += 1
@@ -1508,7 +1603,7 @@ r += 2
 oi_row = r
 put(md, r, 1, "Operating income (EBIT)", bold=True)
 for y in ALL:
-    parts = "+".join(f"{mc(y)}{cost_rows[c]}" for c in cost_rows)
+    parts = "+".join(f"{mc(y)}{cost_rows[c]}" for c in cost_rows) or "0"
     put(md, r, yc[y], f"={mc(y)}{rev_row}-({parts})-{mc(y)}{other_row}", fmt=USD, bold=True)
 r += 1
 put(md, r, 1, "    operating margin")
@@ -1608,6 +1703,7 @@ def q4(y: int) -> str:
 
 
 ic_row = r
+_capital_block_start = r
 put(md, r, 1, "Invested capital (debt + equity - cash)")
 for y in full_fys:
     put(
@@ -1691,6 +1787,34 @@ for y in ALL:
         put(md, r, yc[y], ie(f"({mc(y)}{ic_row}-{mc(y - 1)}{ic_row})/{mc(y)}{nopat_row}"), fmt=PCT)
 put(md, r + 2, 1, "Blue/green = actual  ·  Yellow = assumption  ·  Black = formula").font = SUB
 
+if not _capital_history_complete:
+    for _capital_row in range(_capital_block_start, r + 1):
+        for _capital_column in range(2, len(ALL) + 2):
+            md.cell(_capital_row, _capital_column).value = None
+    put(
+        md,
+        _capital_block_start,
+        1,
+        "Capital metrics unavailable: incomplete historical equity, cash or debt evidence",
+    )
+
+for _historical_year in full_fys:
+    _historical_complete = all(
+        isinstance(records.get((_historical_year, period), {}).get(field), (int, float))
+        for records, fields in (
+            (income_by_period, ("operatingIncome",)),
+            (
+                cashflow_by_period,
+                ("depreciationAndAmortization", "stockBasedCompensation", "capitalExpenditure"),
+            ),
+        )
+        for field in fields
+        for period in PERIODS
+    )
+    if not _historical_complete:
+        for _historical_row in range(_historical_model_start, r + 1):
+            md.cell(_historical_row, yc[_historical_year]).value = None
+
 # ===== Consensus =====
 cs = wb.create_sheet("Consensus")
 cs.sheet_view.showGridLines = False
@@ -1713,10 +1837,13 @@ metrics: list[tuple[str, str, Callable[[int], str], str]] = [
     ("Revenue", "revenueAvg", lambda y: f"=Model!{mc(y)}{rev_row}", USD),
     ("EBITDA*", "ebitdaAvg", lambda y: f"=Model!{mc(y)}{oi_row}+Model!{mc(y)}{da_row}", USD),
     ("EBIT*", "ebitAvg", lambda y: f"=Model!{mc(y)}{oi_row}", USD),
-    ("SG&A", "sgaExpenseAvg", lambda y: f"=Model!{mc(y)}{cost_rows['SG&A']}", USD),
     ("Net income (NOPAT)", "netIncomeAvg", lambda y: f"=Model!{mc(y)}{nopat_row}", USD),
     ("EPS", "epsAvg", lambda y: f"=Model!{mc(y)}{nopat_row}/{shares_ref}", PXS),
 ]
+if "SG&A" in cost_rows:
+    metrics.insert(
+        3, ("SG&A", "sgaExpenseAvg", lambda y: f"=Model!{mc(y)}{cost_rows['SG&A']}", USD)
+    )
 band(cs, 3, "EVERY AVAILABLE FMP CONSENSUS FIELD (consensus / model / % diff)", len(CYEARS) + 1)
 r = 4
 for lab, fld, mexpr, fmt in metrics:
@@ -2072,9 +2199,9 @@ guards = [
     ),
     (
         "ROIC - WACC (2026)",
-        f'=IF({ic_beg26}<=0,"n/a (neg. capital)",{roic26}-WACC!B{WACC_ROW})',
+        f'=IF(COUNT({ic_beg26})=0,"n/a",IF({ic_beg26}<=0,"n/a (neg. capital)",{roic26}-WACC!B{WACC_ROW}))',
         PCT,
-        f'=IF({ic_beg26}<=0,"n/a",IF({roic26}-WACC!B{WACC_ROW}<0,"! destroys","creates"))',
+        f'=IF(COUNT({ic_beg26})=0,"n/a",IF({ic_beg26}<=0,"n/a",IF({roic26}-WACC!B{WACC_ROW}<0,"! destroys","creates")))',
         "> 0",
     ),
     (
@@ -2429,6 +2556,8 @@ _statement_json = STATEMENT_INPUTS.model_dump_json()
 # ordered chunks rather than truncate evidence or silently omit source cells.
 for _offset in range(0, len(_statement_json), 16000):
     _source_manifest.append([_offset // 16000, _statement_json[_offset : _offset + 16000]])
+if _input_receipt is not None:
+    redesign_evidence.write_workbook_receipt(wb, _input_receipt)
 wb.save(str(DEST))
 _up = (full_value / price - 1) if price else 0.0
 _seg = "single" if SINGLE_SEG else str(len(PROD))

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import json
 import os
 import sqlite3
 from collections.abc import Callable
@@ -1108,3 +1109,101 @@ def test_pre_overwrite_workbook_input_receipt_retains_the_exact_old_bytes(
     typed_sources = cast("list[dict[str, object]]", sources)
     owner_input = next(item for item in typed_sources if item["role"] == "owner_workbook_inputs")
     assert owner_input["sha256"] == receipt["sha256"]
+
+
+def test_selected_provenance_keeps_exact_input_lineage_without_historical_growth() -> None:
+    from dcf.provenance import selected_statement_provenance
+
+    selected: dict[str, object] = {
+        "reported_observation_id": "selected-observation",
+        "period_end": "2026-06-30",
+        "line_item": "revenue",
+        "primary_value": 100.0,
+        "resolution_id": "selected-resolution",
+        "metric_definition_revision_id": "selected-definition",
+        "locator": '{"table":"income","row":2}',
+    }
+    applied = [selected] + [
+        {"reported_observation_id": f"old-{index}", "locator": "x" * 2048} for index in range(600)
+    ]
+    overlay = {"status": "ok", "statements": {"income": {"status": "ok", "applied": applied}}}
+    result = selected_statement_provenance(
+        overlay,
+        selected_observation_ids=frozenset({"selected-observation"}),
+        historical_overlay_locator="workbook:StatementEvidence",
+    )
+    assert len(json.dumps(overlay).encode()) > 1_000_000
+    assert len(json.dumps(result).encode()) < 5000
+    statements = cast("dict[str, dict[str, object]]", result["statements"])
+    assert statements["income"]["applied"] == [selected]
+    assert result["scope"] == "selected_model_inputs"
+    assert result["historical_overlay_locator"] == "workbook:StatementEvidence"
+    assert (
+        result["historical_overlay_sha256"]
+        == hashlib.sha256(
+            json.dumps(
+                overlay, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+            ).encode()
+        ).hexdigest()
+    )
+    assert len(applied) == 601
+    assert (
+        selected_statement_provenance(
+            result,
+            selected_observation_ids=frozenset({"selected-observation"}),
+            historical_overlay_locator="workbook:StatementEvidence",
+        )
+        == result
+    )
+    with pytest.raises(ValueError, match="selected_observation_missing"):
+        selected_statement_provenance(
+            result,
+            selected_observation_ids=frozenset({"selected-observation", "old-1"}),
+            historical_overlay_locator="workbook:StatementEvidence",
+        )
+    with pytest.raises(ValueError, match="selected_observation_missing"):
+        selected_statement_provenance(
+            overlay,
+            selected_observation_ids=frozenset({"missing"}),
+            historical_overlay_locator="workbook:StatementEvidence",
+        )
+
+
+@pytest.mark.parametrize(
+    "population", ["provenance", "snapshot", "engine", "escaped_engine", "duplicated_status"]
+)
+def test_oversized_critical_provenance_is_rejected_before_any_persistence(population: str) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_SCHEMA)
+    row = _row()
+    assert row.provenance is not None
+    detail = dict(row.provenance.detail or {})
+    if population == "provenance":
+        detail["model_input_receipt"] = {"required_evidence": "x" * 262_144}
+    elif population == "duplicated_status":
+        detail["primary_fact_overlay"] = {"status": "x" * 130_000}
+    oversized = dataclasses.replace(
+        row,
+        assumption_snapshot_json=(
+            json.dumps({"critical_inputs": "x" * 262_144})
+            if population == "snapshot"
+            else row.assumption_snapshot_json
+        ),
+        provenance=dataclasses.replace(
+            row.provenance,
+            engine_version=(
+                "λ" * 131_072
+                if population == "engine"
+                else "\x00" * 100_000
+                if population == "escaped_engine"
+                else row.provenance.engine_version
+            ),
+            detail=detail,
+        ),
+    )
+    before = conn.total_changes
+    with pytest.raises(ValueError, match="verification_evidence_byte_limit"):
+        upsert(conn, oversized)
+    assert conn.total_changes == before
+    assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
+    conn.close()

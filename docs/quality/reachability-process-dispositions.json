@@ -280,8 +280,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_bank runs the fixed _BANK_BUILDER via managed_python_prefix.",
-      "fingerprint": "99c3d08efa16361e43086e82181cf95ed50c111524daf237a4af0c8a576b72aa",
-      "line": 915,
+      "fingerprint": "adbd1f10b45414407aee3867efe1b7646c9cb74e457974a6f27e4b5ea67e027b",
+      "line": 987,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_bank_dcf.py"
@@ -290,8 +290,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_holdco runs the fixed _HOLDCO_BUILDER via managed_python_prefix.",
-      "fingerprint": "979a260a68d088238c3e6c92f5ce07dc1a7dfacece661e46e88e4603b1550e30",
-      "line": 960,
+      "fingerprint": "d4dd2d4a48f93a60da04b8618b75b4658f80057fdce319f10dd8642c0fefb9c8",
+      "line": 1032,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_holdco_sotp.py"
@@ -300,8 +300,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_fintech_sotp runs the fixed _FINTECH_BUILDER via managed_python_prefix.",
-      "fingerprint": "c2584c4acf97bdc09c07ff1e5081acbc18cbc84a12b78ab12dc4059bf2b50c65",
-      "line": 1013,
+      "fingerprint": "c101fd7e1fba9ae4ae1c4fc063d88663a269da8f03975893617f67cbeca386ad",
+      "line": 1085,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_fintech_sotp.py"
@@ -310,8 +310,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_platform runs the fixed _PLATFORM_BUILDER via managed_python_prefix.",
-      "fingerprint": "f9006e0c0fe80606603efd1856d747bb9d026ab7347668467c29d478db35b2e2",
-      "line": 1074,
+      "fingerprint": "db5b88f617265041901edcba3dc6fce9c839acf3235391a2ee740587f3c7a576",
+      "line": 1146,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_nu_platform_dcf.py"
@@ -320,8 +320,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_meli_sotp runs the fixed _MELI_SOTP_BUILDER via managed_python_prefix.",
-      "fingerprint": "cce7ce50f07e5b90231a5e3cc7737cef586de1e2c1bec13908389d9bf1f86070",
-      "line": 1168,
+      "fingerprint": "9ba6dd3afb8fc8b9e76473284bf02d9a2cad7847375a6d2fe8679d13b12f4c0e",
+      "line": 1240,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_meli_platform_dcf.py"
@@ -330,8 +330,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_onon runs only the fixed _ONON_BUILDER execution/build_onon_dcf.py through managed_python_prefix; the explicit hash-bound reviewed input artifact supplies model inputs, not executable code.",
-      "fingerprint": "a19811d3e58c0ff0e94bb4e7664235ac10d63b13ab1ea64c8c8285a3d3d2f220",
-      "line": 1261,
+      "fingerprint": "ecebb484726ba088a97a0b0f2268050033a2494d5a4e6d042c8ea2414393aa5c",
+      "line": 1333,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_onon_dcf.py"
@@ -340,8 +340,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_builder runs the fixed _BUILDER_SCRIPT via managed_python_prefix.",
-      "fingerprint": "cf205bb2c7840f5e9150c83509340741a94fd63fcc2b7f286439d37eae4a33ce",
-      "line": 1326,
+      "fingerprint": "12a71bb814cf1cd1ce9b1a381d0ed4faf252191c7a45a90da2de4dd8af09faf7",
+      "line": 1401,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_redesigned_dcf.py"
@@ -1000,8 +1000,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Synthetic export regression invokes only the fixed managed SQLite bootstrap and checked-in shareable-report CLI through sys.executable. Input and destination are pytest-owned synthetic files; neither executable target is supplied by report content.",
-      "fingerprint": "590a96948414cbc66394fe2624f5c27db78a660cc56c3149ef3ffee1859fd8f0",
-      "line": 197,
+      "fingerprint": "f7a1b6cccd95270147064600a0a44de594e2d038a7abd657c67b5f0ca1630f94",
+      "line": 215,
       "path": "tests/test_shareable_report.py",
       "targets": [
         "execution/sqlite_bootstrap.py",
@@ -1014,7 +1014,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "5e617a3d2b2589dcee1cf868c4595f4413383090f47912e4a57f468620639eb9",
+      "source_sha256": "8f91a869c5b631a9947a5803b54242bcf9be60e2dcafe11cce02ddfce65ac123",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
