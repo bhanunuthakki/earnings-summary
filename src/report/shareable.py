@@ -141,7 +141,7 @@ def _reading_copy(text: str) -> str:
         node.extract()
     for node in soup.select(
         "script, link, base, iframe, frame, frameset, object, embed, portal, noscript, "
-        "form, input, textarea, select, audio, video, source, track, "
+        "form, input, textarea, select, audio, video, source, track, template, "
         "#cmt-sidebar, #chat-sidebar, .cmt-sidebar, .chat-sidebar"
     ):
         node.decompose()

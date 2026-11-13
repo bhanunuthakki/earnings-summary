@@ -101,6 +101,10 @@ WINDOWS_APP_TEST_FILES = (
     "tests/test_job_runtime.py",
     "tests/test_cockpit_fundamentals.py",
     "tests/test_sqlite_bootstrap.py",
+    "tests/test_dcf_retained_availability.py",
+    "tests/test_dcf_canonical_statements.py",
+    "tests/test_redesign_input_evidence.py",
+    "tests/test_redesign_workbook_evidence.py",
 )
 # Cases whose absence would void the native evidence, including every Windows
 # parametrization. A deselected case leaves no testcase element, so module
@@ -108,6 +112,23 @@ WINDOWS_APP_TEST_FILES = (
 WINDOWS_APP_REQUIRED_CASES = frozenset(
     f"{module}::{name}"
     for module, names in {
+        "tests.test_dcf_retained_availability": (
+            "test_native_statement_roles_require_review_and_keep_exact_input_lineage[currency]",
+            "test_native_statement_roles_require_review_and_keep_exact_input_lineage[millions]",
+        ),
+        "tests.test_dcf_canonical_statements": (
+            "test_actual_builder_preserves_zero_capex_and_emits_no_unavailable_gross_margin[True]",
+            "test_actual_builder_preserves_zero_capex_and_emits_no_unavailable_gross_margin[False]",
+        ),
+        "tests.test_redesign_input_evidence": (
+            "test_real_retained_source_recipe_and_changed_source_bytes[currency]",
+            "test_real_retained_source_recipe_and_changed_source_bytes[millions]",
+            "test_real_retained_source_recipe_and_changed_source_bytes[billions]",
+        ),
+        "tests.test_redesign_workbook_evidence": (
+            "test_workbook_receipt_roundtrip_and_replay",
+            "test_native_debt_operand_arithmetic_matches_workbook_display",
+        ),
         "tests.test_owner_proposal_approval": (
             "test_register_and_approve_through_existing_routes[False]",
             "test_register_and_approve_through_existing_routes[True]",

@@ -47,6 +47,7 @@ from provenance.fact_plane_v2 import (
     ExtractionRunCompletenessSealV2,
     FactCellV2,
     FactDimensionV2,
+    FiscalPeriod,
 )
 from provenance.fact_read_model import FactReadModel
 from provenance.immutable_artifact import ImmutableArtifactConflictError
@@ -191,6 +192,7 @@ def _seed_real_inputs(
     page_overrides: dict[str, int] | None = None,
     requirements: tuple[evidence.InputRequirement, ...] | None = None,
     amounts_override: dict[str, float] | None = None,
+    fiscal_periods: dict[str, FiscalPeriod] | None = None,
 ) -> dict[str, evidence.FactBinding]:
     """No mocking source publication, ontology, binding, resolver or fact reader."""
     seed_foundation(conn, source_path=source_path)
@@ -348,6 +350,11 @@ def _seed_real_inputs(
                     "unit_key": req.unit_key,
                     "currency": req.currency,
                     "fiscal_period": None,
+                    **(
+                        {"fiscal_year": end.year, "fiscal_period": fiscal_periods[key]}
+                        if fiscal_periods is not None
+                        else {}
+                    ),
                     "accounting_basis": req.accounting_basis or "us_gaap",
                     "consolidation_scope": req.consolidation_scope,
                 }

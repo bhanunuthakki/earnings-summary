@@ -62,7 +62,7 @@ except ImportError:  # ``python -m execution.refresh_dcf``
     from execution._lib import PROJECT_ROOT
 
 from db_paths import configured_db_path
-from dcf import assumptions_doc, family_editor
+from dcf import assumptions_doc, family_editor, redesign_evidence
 from dcf import equity_bridge as equity_bridge_mod
 from dcf import forecast_series as forecast_series_mod
 from dcf import persist as persist_mod
@@ -86,7 +86,8 @@ from dcf.input_evidence import (
 )
 from dcf.meli_inputs import RECIPE as MELI_INPUT_RECIPE
 from dcf.onon_inputs import RECIPE as ONON_INPUT_RECIPE
-from dcf.provenance import DcfInputProvenance, input_clock_summary
+from dcf.provenance import DcfInputProvenance, input_clock_summary, selected_statement_provenance
+from dcf.scenario_acceptance import ScenarioAcceptance
 from pipeline.db_writer_gate import hold_writer_gate
 from runtime.job_runtime import JobAlreadyRunningError
 from runtime.python_process import managed_python_prefix
@@ -210,9 +211,53 @@ def build_dcf_provenance(
     country_risk_context: Mapping[str, object] | None = None,
     assumptions_path: Path | None = None,
     workbook_locator: Path | None = None,
+    model_input_receipt: ModelInputReceipt | None = None,
+    scenario_acceptance: Mapping[str, object] | None = None,
 ) -> DcfInputProvenance:
     """Build reproducible lineage for the effective DCF input set."""
     ticker = ticker.upper()
+    selected_ids: frozenset[str] = frozenset()
+    if model_input_receipt is not None:
+        selected_ids = frozenset(
+            ref.observation_id for ref in model_input_receipt.request.facts.values()
+        )
+    elif primary_fact_overlay is not None:
+        statements = primary_fact_overlay.get("statements")
+        if isinstance(statements, dict):
+            selected: set[str] = set()
+            for statement in cast(dict[str, object], statements).values():
+                if isinstance(statement, dict):
+                    raw_ids = cast(dict[str, object], statement).get("model_input_observation_ids")
+                    if isinstance(raw_ids, list):
+                        selected.update(
+                            item for item in cast(list[object], raw_ids) if isinstance(item, str)
+                        )
+            selected_ids = frozenset(selected)
+    if selected_ids:
+        if primary_fact_overlay is None:
+            raise InputEvidenceError("redesign_selected_source_overlay_missing")
+        primary_fact_overlay = selected_statement_provenance(
+            primary_fact_overlay,
+            selected_observation_ids=selected_ids,
+            historical_overlay_locator="workbook:Statement Evidence",
+        )
+    if model_input_receipt is not None and scenario_acceptance is None:
+        authority_path = (
+            assumptions_path or repo_root / "data" / "dcf_assumptions" / f"{ticker}.json"
+        )
+        raw_authority: object = (
+            json.loads(authority_path.read_text(encoding="utf-8"))
+            if authority_path.is_file()
+            else {}
+        )
+        if not isinstance(raw_authority, dict):
+            raise InputEvidenceError("redesign_assumption_authority_invalid")
+        authority = cast(dict[str, object], raw_authority)
+        raw_acceptance = authority.get("scenario_acceptance")
+        if raw_acceptance is not None:
+            scenario_acceptance = ScenarioAcceptance.model_validate(raw_acceptance).model_dump(
+                mode="json"
+            )
     source_specs: list[tuple[Path, str]] = [
         *[
             (
@@ -301,6 +346,10 @@ def build_dcf_provenance(
             dict(country_risk_context) if country_risk_context is not None else None
         ),
     }
+    if model_input_receipt is not None:
+        canonical_inputs["model_input_receipt"] = model_input_receipt.model_dump(mode="json")
+    if scenario_acceptance is not None:
+        canonical_inputs["scenario_acceptance"] = dict(scenario_acceptance)
     canonical = json.dumps(
         canonical_inputs,
         sort_keys=True,
@@ -315,6 +364,16 @@ def build_dcf_provenance(
         engine_version=DCF_ENGINE_VERSION,
         inputs_as_of=max(observed_times, default=datetime(1970, 1, 1, tzinfo=UTC)),
         detail={
+            **(
+                {"model_input_receipt": model_input_receipt.model_dump(mode="json")}
+                if model_input_receipt is not None
+                else {}
+            ),
+            **(
+                {"scenario_acceptance": dict(scenario_acceptance)}
+                if scenario_acceptance is not None
+                else {}
+            ),
             "input_clocks": input_clock_summary(sources, market_observed_at=normalized_live_at),
             "market_price": market_price,
             "sources": sources,
@@ -509,6 +568,7 @@ def main() -> int:
             meli_assumptions_path=args.meli_assumptions_path,
             onon_assumptions_path=args.onon_assumptions_path,
             source_state_root=args.state_root,
+            current_assumptions=args.current_assumptions,
         )
         results.append(result)
     print(json.dumps(results, indent=2, default=str))
@@ -531,6 +591,11 @@ def _parse_args() -> argparse.Namespace:
         type=Path,
         default=PROJECT_ROOT,
         help="Repo root containing data/, dcf/, micro_thesis/. Default: this repo.",
+    )
+    p.add_argument(
+        "--current-assumptions",
+        action="store_true",
+        help="Use current assumption files instead of saved workbook edits (FCFF only).",
     )
     p.add_argument("--state-root", type=Path, help="Explicit model source-byte read authority.")
     p.add_argument(
@@ -657,6 +722,7 @@ def refresh_one(
     onon_assumptions_path: Path | None = None,
     input_workbook: Path | None = None,
     source_state_root: Path | None = None,
+    current_assumptions: bool = False,
 ) -> dict[str, object]:
     """Refresh under one artifact owner; imported inputs never replace live bytes."""
     try:
@@ -672,6 +738,7 @@ def refresh_one(
                 onon_assumptions_path=onon_assumptions_path,
                 input_workbook=input_workbook,
                 source_state_root=source_state_root,
+                current_assumptions=current_assumptions,
             )
     except JobAlreadyRunningError:
         return {"ticker": ticker, "status": "blocked", "reason": "dcf_writer_busy"}
@@ -695,6 +762,7 @@ def _refresh_one_owned(
     onon_assumptions_path: Path | None = None,
     input_workbook: Path | None = None,
     source_state_root: Path | None = None,
+    current_assumptions: bool = False,
 ) -> dict[str, object]:
     """Refresh one ticker's redesigned DCF. Returns a structured result dict.
 
@@ -711,6 +779,8 @@ def _refresh_one_owned(
       - "meli_platform_sotp"  -> the MELI Commerce/Fintech SOTP (`_refresh_meli_sotp`).
       - "new"/"none"/unknown  -> skip, surfacing any Opus-proposed new-model spec.
     """
+    if current_assumptions and input_workbook is not None:
+        return {"ticker": ticker, "status": "blocked", "reason": "conflicting_assumption_baselines"}
     if input_workbook is not None and (
         _valuation_model(repo_root, ticker)[0] != "fcff_dcf"
         or not redesign_mod.is_redesign_format(input_workbook)
@@ -801,6 +871,8 @@ def _refresh_one_owned(
         dest=dest,
         valuation_year=valuation_year,
         input_workbook=input_workbook,
+        current_assumptions=current_assumptions,
+        source_state_root=source_state_root,
     )
 
 
@@ -1305,6 +1377,7 @@ def _run_builder(
     db_path: Path,
     country_risk_override: float | None = None,
     assumptions_path: Path | None = None,
+    source_state_root: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run the redesigned-DCF builder for one ticker, writing to `dest`.
 
@@ -1319,6 +1392,8 @@ def _run_builder(
         EARNINGS_SUMMARY_DB_PATH=str(db_path.resolve()),
     )
     env.update(dcf_child_environment(repo_root, ticker))
+    if source_state_root is not None:
+        env["DCF_SOURCE_STATE_ROOT"] = str(source_state_root.resolve())
     if assumptions_path is not None:
         env["DCF_ASSUMPTIONS_PATH"] = str(assumptions_path)
     if country_risk_override is not None:
@@ -1439,6 +1514,31 @@ def _unconverted_fx_reason(repo_root: Path, ticker: str, fx_to_usd: float) -> st
             "rebuild the workbook (builder now fails loud on unknown currencies)"
         )
     return None
+
+
+def redesign_run_evidence(
+    db_path: Path,
+    repo_root: Path,
+    workbook_path: Path,
+    inp: redesign_mod.RedesignInputs,
+    snapshot_json: str,
+    *,
+    source_state_root: Path | None = None,
+) -> tuple[str, ModelInputReceipt | None]:
+    receipt = redesign_evidence.read_workbook_receipt(workbook_path)
+    if receipt is None:
+        return snapshot_json, None
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
+        verified = redesign_evidence.verify_workbook_receipt(
+            conn,
+            workbook_path,
+            inp,
+            as_of=datetime.now(UTC),
+            source_context=SourceReadContext.for_product_state_root(source_state_root or repo_root),
+        )
+    if verified is None:
+        raise InputEvidenceError("redesign_workbook_input_receipt_missing")
+    return redesign_evidence.snapshot_with_receipt(snapshot_json, inp, verified), verified
 
 
 def _redesign_snapshot(
@@ -1797,6 +1897,8 @@ def _refresh_redesign(
     dest: Path,
     valuation_year: int,
     input_workbook: Path | None = None,
+    current_assumptions: bool = False,
+    source_state_root: Path | None = None,
 ) -> dict[str, object]:
     """Rebuild the redesigned workbook from the latest FMP, preserve the user's
     Dashboard inputs, recompute the value-of-record, and upsert `dcf_runs`.
@@ -1810,7 +1912,11 @@ def _refresh_redesign(
 
     holdings = _load_holdings(repo_root, ticker)
     capture_source = input_workbook or dest
-    captured = redesign_mod.capture_dashboard(capture_source) if capture_source.exists() else None
+    captured = (
+        redesign_mod.capture_dashboard(capture_source)
+        if capture_source.exists() and not current_assumptions
+        else None
+    )
     # Guard 3 (Monthly Red Team): an UNTOUCHED BEAR_SEED Bear column is a labeled
     # fallback, not an owner edit — don't let the capture→inject loop re-inject it
     # over a freshly thesis-seeded Bear column when the holdings JSON names a
@@ -1830,6 +1936,7 @@ def _refresh_redesign(
             tmp,
             db_path=db_path,
             assumptions_path=staged_assumptions,
+            **({"source_state_root": source_state_root} if source_state_root is not None else {}),
             country_risk_override=(
                 captured.scalars.get(redesign_mod.COUNTRY_RISK_PREMIUM_ROW)
                 if captured is not None
@@ -1928,6 +2035,14 @@ def _refresh_redesign(
         scenario_prior_meta=_load_scenario_prior_meta(repo_root, ticker),
         holdings=holdings,
     )
+    try:
+        assumption_snapshot, _model_receipt = redesign_run_evidence(
+            db_path, repo_root, tmp, inp, assumption_snapshot, source_state_root=source_state_root
+        )
+    except InputEvidenceError as exc:
+        _unlink(tmp)
+        _unlink(staged_assumptions)
+        return {"ticker": ticker, "status": "blocked", "reason": str(exc)}
     equity_bridge_receipt = equity_bridge_mod.build_equity_bridge_receipt(
         ticker=ticker,
         operating_value_usd_m=rv.operating_value_usd_m,
@@ -1943,22 +2058,28 @@ def _refresh_redesign(
     sync = sync_assumptions_json(repo_root, ticker, inp, assumptions_path=staged_assumptions)
     if sync.status == "failed":
         sys.stderr.write(f"WARNING: assumptions sync for {ticker} failed: {sync.detail}\n")
-    input_provenance = build_dcf_provenance(
-        ticker=ticker,
-        repo_root=repo_root,
-        workbook_path=tmp,
-        assumptions_path=staged_assumptions,
-        workbook_locator=dest,
-        input_payload=inp.to_dict(),
-        assumption_snapshot_json=assumption_snapshot,
-        live_price=live.price if live else None,
-        live_price_at=live.fetched_at if live else None,
-        live_price_source=getattr(live, "source_name", None) if live else None,
-        mos_bar=mos_bar_f,
-        primary_fact_overlay=primary_fact_overlay,
-        equity_bridge_receipt=equity_bridge_receipt.to_dict(),
-        country_risk_context=country_risk_context,
-    )
+    try:
+        input_provenance = build_dcf_provenance(
+            ticker=ticker,
+            repo_root=repo_root,
+            workbook_path=tmp,
+            assumptions_path=staged_assumptions,
+            workbook_locator=dest,
+            input_payload=inp.to_dict(),
+            assumption_snapshot_json=assumption_snapshot,
+            live_price=live.price if live else None,
+            live_price_at=live.fetched_at if live else None,
+            live_price_source=getattr(live, "source_name", None) if live else None,
+            mos_bar=mos_bar_f,
+            primary_fact_overlay=primary_fact_overlay,
+            equity_bridge_receipt=equity_bridge_receipt.to_dict(),
+            country_risk_context=country_risk_context,
+            model_input_receipt=_model_receipt,
+        )
+    except ValueError as exc:
+        _unlink(tmp)
+        _unlink(staged_assumptions)
+        return {"ticker": ticker, "status": "blocked", "reason": str(exc)}
 
     row = persist_mod.DcfRunRow(
         ticker=ticker,
@@ -1977,6 +2098,7 @@ def _refresh_redesign(
         assumptions_sync_status=None,
         assumptions_synced_at=None,
         provenance=input_provenance,
+        calculated_at=datetime.now(UTC),
     )
     with (
         hold_writer_gate(db_path, owner=f"refresh_dcf:{ticker}"),
@@ -2330,6 +2452,9 @@ def _probe_redesign_reuse(
                 scenario_prior_meta=_load_scenario_prior_meta(repo_root, ticker),
                 holdings=holdings,
             )
+            assumption_snapshot, _model_receipt = redesign_run_evidence(
+                db_path, repo_root, dest, inp_edited, assumption_snapshot
+            )
             prior_overlay = prior_primary_fact_overlay(db_path, ticker)
             prior_bridge = prior_equity_bridge_context(db_path, ticker)
             equity_bridge_receipt = equity_bridge_mod.build_equity_bridge_receipt(
@@ -2360,6 +2485,7 @@ def _probe_redesign_reuse(
                 primary_fact_overlay=prior_overlay,
                 equity_bridge_receipt=equity_bridge_receipt.to_dict(),
                 country_risk_context=country_context,
+                model_input_receipt=_model_receipt,
             )
             row = persist_mod.DcfRunRow(
                 ticker=ticker,
@@ -2385,6 +2511,7 @@ def _probe_redesign_reuse(
                     workbook_path=dest,
                     valuation=rv,
                 ),
+                calculated_at=datetime.now(UTC),
             )
             matched = persist_mod.matching_current_run_id(conn, row, run_id=context.run_id)
             if matched is None:
@@ -2506,6 +2633,14 @@ def _apply_edits_owned(
         scenario_prior_meta=_load_scenario_prior_meta(repo_root, ticker),
         holdings=holdings,
     )
+    try:
+        assumption_snapshot, _model_receipt = redesign_run_evidence(
+            db_path, repo_root, staged_dest, inp, assumption_snapshot
+        )
+    except InputEvidenceError as exc:
+        _unlink(staged_dest)
+        _unlink(staged_assumptions)
+        return {"ticker": ticker, "status": "blocked", "reason": str(exc)}
     prior_overlay = prior_primary_fact_overlay(db_path, ticker)
     prior_bridge_context = prior_equity_bridge_context(db_path, ticker)
     prior_country_context = prior_country_risk_context(db_path, ticker)
@@ -2535,22 +2670,28 @@ def _apply_edits_owned(
     sync = sync_assumptions_json(repo_root, ticker, inp, assumptions_path=staged_assumptions)
     if sync.status == "failed":
         sys.stderr.write(f"WARNING: assumptions sync for {ticker} failed: {sync.detail}\n")
-    input_provenance = build_dcf_provenance(
-        ticker=ticker,
-        repo_root=repo_root,
-        workbook_path=staged_dest,
-        assumptions_path=staged_assumptions,
-        workbook_locator=dest,
-        input_payload=inp.to_dict(),
-        assumption_snapshot_json=assumption_snapshot,
-        live_price=live_price,
-        live_price_at=prior_price_at,
-        live_price_source="prior_dcf_run",
-        mos_bar=mos_bar_f,
-        primary_fact_overlay=prior_overlay,
-        equity_bridge_receipt=equity_bridge_receipt.to_dict(),
-        country_risk_context=effective_country_context,
-    )
+    try:
+        input_provenance = build_dcf_provenance(
+            ticker=ticker,
+            repo_root=repo_root,
+            workbook_path=staged_dest,
+            assumptions_path=staged_assumptions,
+            workbook_locator=dest,
+            input_payload=inp.to_dict(),
+            assumption_snapshot_json=assumption_snapshot,
+            live_price=live_price,
+            live_price_at=prior_price_at,
+            live_price_source="prior_dcf_run",
+            mos_bar=mos_bar_f,
+            primary_fact_overlay=prior_overlay,
+            equity_bridge_receipt=equity_bridge_receipt.to_dict(),
+            country_risk_context=effective_country_context,
+            model_input_receipt=_model_receipt,
+        )
+    except ValueError as exc:
+        _unlink(staged_dest)
+        _unlink(staged_assumptions)
+        return {"ticker": ticker, "status": "blocked", "reason": str(exc)}
 
     row = persist_mod.DcfRunRow(
         ticker=ticker,
@@ -2569,6 +2710,7 @@ def _apply_edits_owned(
         assumptions_sync_status=None,
         assumptions_synced_at=None,
         provenance=input_provenance,
+        calculated_at=datetime.now(UTC),
     )
     with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
         conn.execute("BEGIN IMMEDIATE")

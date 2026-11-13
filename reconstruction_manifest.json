@@ -262,6 +262,8 @@
         "src/dcf/cashflow_refresh.py",
         "src/dcf/cashflow_scenarios.py",
         "src/dcf/input_recipes.py",
+        "src/dcf/redesign_inputs.py",
+        "src/dcf/redesign_evidence.py",
         "src/dcf/onon_model.py",
         "src/dcf/onon_inputs.py",
         "src/dcf/scenario_acceptance.py",
@@ -285,6 +287,7 @@
       "test_commands": [
         "pytest tests/test_metrics_engine.py -q",
         "pytest tests/test_dcf_grade_evidence.py -q",
+        "pytest tests/test_redesign_input_evidence.py tests/test_redesign_workbook_evidence.py tests/test_dcf_retained_availability.py -q",
         "pytest tests/test_cashflow_input_evidence.py tests/test_cashflow_scenarios.py tests/test_valuation_readiness.py -q",
         "pytest tests/test_onon_model.py tests/test_onon_inputs.py tests/test_build_onon_dcf.py tests/test_scenario_acceptance.py -q",
         "pytest tests/test_reviewed_input_roles.py tests/test_review_onon_input_roles.py -q",

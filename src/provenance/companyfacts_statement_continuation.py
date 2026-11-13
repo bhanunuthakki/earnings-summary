@@ -30,6 +30,8 @@ from provenance.fact_plane_v2 import (
 )
 from provenance.fact_read_model import FactReadModel
 from provenance.financial_statement_admission import (
+    FINANCIAL_STATEMENT_INSTANT_CONCEPTS,
+    FINANCIAL_STATEMENT_SHARE_CONCEPTS,
     FinancialStatementAdmissionRequest,
     FinancialStatementConcept,
     FinancialStatementConceptReview,
@@ -219,10 +221,13 @@ def continue_companyfacts_statements(
         entry_start = None if entry.start is None else _clock(entry.start)
         if entry_start != context.period_start or _clock(entry.end) != context.period_end:
             raise ValueError("CompanyFacts exact period does not match reviewed fiscal context")
-        point_concepts = {"cash_and_equivalents", "total_financial_debt", "shares_outstanding"}
-        if (context.period_start is None) != (item.concept in point_concepts):
+        if (context.period_start is None) != (item.concept in FINANCIAL_STATEMENT_INSTANT_CONCEPTS):
             raise ValueError("CompanyFacts instant/duration differs from the reviewed role")
-        currency = None if item.concept == "shares_outstanding" else locator.unit.split("/")[0]
+        currency = (
+            None
+            if item.concept in FINANCIAL_STATEMENT_SHARE_CONCEPTS
+            else locator.unit.split("/")[0]
+        )
         expected_unit = (
             "shares"
             if currency is None

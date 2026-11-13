@@ -401,6 +401,21 @@ def test_every_required_windows_case_belongs_to_a_selected_file() -> None:
     assert {case.split("::", 1)[0] for case in helper.WINDOWS_APP_REQUIRED_CASES} == modules
 
 
+@pytest.mark.parametrize(
+    "path",
+    (
+        "tests/test_dcf_retained_availability.py",
+        "tests/test_dcf_canonical_statements.py",
+        "tests/test_redesign_input_evidence.py",
+        "tests/test_redesign_workbook_evidence.py",
+    ),
+)
+def test_windows_app_requires_dcf_evidence_cases(helper: ModuleType, path: str) -> None:
+    assert path in helper.WINDOWS_APP_TEST_FILES
+    module = path.removesuffix(".py").replace("/", ".")
+    assert any(case.startswith(module + "::") for case in helper.WINDOWS_APP_REQUIRED_CASES)
+
+
 def test_windows_app_job_runs_the_harness_on_hosted_windows_and_is_required() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     app_job = workflow.split("\n  windows-app:\n", maxsplit=1)[1].split(

@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "06450250d98396809f687bf3a5083d0549ec2bc6",
+  "scoped_commit": "6b8587c6b91fc7508ffcbd3dd65fff030b61607a",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "55d1a5f6c5857ce82329cb609943b7c7fea672d3f6053c6e467ecf141689c9b8",
+  "source_sha256": "e2b00b901ba3f799554e7c8625f5be46043fe97092abda06ec1dc1c7b873c849",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,9 +22,9 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1395,
-    "total_noncomment_loc": 556668,
-    "modules_over_1000_loc": 116,
+    "executable_modules": 1397,
+    "total_noncomment_loc": 558232,
+    "modules_over_1000_loc": 117,
     "modules_over_2000_loc": 23,
     "modules_at_least_3000_loc": 5,
     "max_internal_fan_out": 39,
@@ -1332,11 +1332,11 @@
         "path": "execution/build_redesigned_dcf.py",
         "module": "execution.build_redesigned_dcf",
         "lines": {
-          "physical": 2445,
-          "nonblank": 2270,
-          "noncomment": 2046
+          "physical": 2574,
+          "nonblank": 2396,
+          "noncomment": 2174
         },
-        "internal_fan_out": 17,
+        "internal_fan_out": 20,
         "responsibilities": [
           "database",
           "filesystem",
@@ -4946,19 +4946,19 @@
         "path": "execution/refresh_dcf.py",
         "module": "execution.refresh_dcf",
         "lines": {
-          "physical": 3693,
-          "nonblank": 3449,
-          "noncomment": 3385
+          "physical": 3835,
+          "nonblank": 3589,
+          "noncomment": 3525
         },
-        "internal_fan_out": 26,
+        "internal_fan_out": 28,
         "responsibilities": [
           "database",
           "filesystem",
           "network",
           "process"
         ],
-        "public_functions": 20,
-        "fully_annotated_public_functions": 20
+        "public_functions": 21,
+        "fully_annotated_public_functions": 21
       },
       {
         "path": "execution/refresh_dcf_assumptions.py",
@@ -8980,9 +8980,9 @@
         "path": "src/dcf/grade_evidence.py",
         "module": "dcf.grade_evidence",
         "lines": {
-          "physical": 783,
-          "nonblank": 716,
-          "noncomment": 698
+          "physical": 798,
+          "nonblank": 731,
+          "noncomment": 713
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -8996,9 +8996,9 @@
         "path": "src/dcf/input_evidence.py",
         "module": "dcf.input_evidence",
         "lines": {
-          "physical": 1017,
-          "nonblank": 958,
-          "noncomment": 937
+          "physical": 1039,
+          "nonblank": 980,
+          "noncomment": 959
         },
         "internal_fan_out": 11,
         "responsibilities": [
@@ -9012,11 +9012,11 @@
         "path": "src/dcf/input_recipes.py",
         "module": "dcf.input_recipes",
         "lines": {
-          "physical": 93,
-          "nonblank": 80,
-          "noncomment": 80
+          "physical": 115,
+          "nonblank": 102,
+          "noncomment": 102
         },
-        "internal_fan_out": 4,
+        "internal_fan_out": 5,
         "responsibilities": [
           "database"
         ],
@@ -9145,9 +9145,9 @@
         "path": "src/dcf/persist.py",
         "module": "dcf.persist",
         "lines": {
-          "physical": 1129,
-          "nonblank": 1004,
-          "noncomment": 990
+          "physical": 1140,
+          "nonblank": 1015,
+          "noncomment": 1001
         },
         "internal_fan_out": 7,
         "responsibilities": [
@@ -9177,28 +9177,28 @@
         "path": "src/dcf/provenance.py",
         "module": "dcf.provenance",
         "lines": {
-          "physical": 273,
-          "nonblank": 249,
-          "noncomment": 249
+          "physical": 377,
+          "nonblank": 348,
+          "noncomment": 346
         },
-        "internal_fan_out": 0,
+        "internal_fan_out": 1,
         "responsibilities": [
           "database",
           "filesystem",
           "network"
         ],
-        "public_functions": 4,
-        "fully_annotated_public_functions": 4
+        "public_functions": 6,
+        "fully_annotated_public_functions": 6
       },
       {
         "path": "src/dcf/readiness.py",
         "module": "dcf.readiness",
         "lines": {
-          "physical": 712,
-          "nonblank": 681,
-          "noncomment": 675
+          "physical": 744,
+          "nonblank": 713,
+          "noncomment": 707
         },
-        "internal_fan_out": 15,
+        "internal_fan_out": 16,
         "responsibilities": [
           "database",
           "network"
@@ -9220,6 +9220,38 @@
         ],
         "public_functions": 21,
         "fully_annotated_public_functions": 21
+      },
+      {
+        "path": "src/dcf/redesign_evidence.py",
+        "module": "dcf.redesign_evidence",
+        "lines": {
+          "physical": 300,
+          "nonblank": 279,
+          "noncomment": 279
+        },
+        "internal_fan_out": 8,
+        "responsibilities": [
+          "database",
+          "network"
+        ],
+        "public_functions": 4,
+        "fully_annotated_public_functions": 4
+      },
+      {
+        "path": "src/dcf/redesign_inputs.py",
+        "module": "dcf.redesign_inputs",
+        "lines": {
+          "physical": 674,
+          "nonblank": 637,
+          "noncomment": 637
+        },
+        "internal_fan_out": 4,
+        "responsibilities": [
+          "database",
+          "network"
+        ],
+        "public_functions": 13,
+        "fully_annotated_public_functions": 13
       },
       {
         "path": "src/dcf/reprice.py",
@@ -15222,9 +15254,9 @@
         "path": "src/provenance/companyfacts_statement_continuation.py",
         "module": "provenance.companyfacts_statement_continuation",
         "lines": {
-          "physical": 441,
-          "nonblank": 418,
-          "noncomment": 414
+          "physical": 446,
+          "nonblank": 423,
+          "noncomment": 419
         },
         "internal_fan_out": 12,
         "responsibilities": [
@@ -15505,17 +15537,17 @@
         "path": "src/provenance/financial_statement_admission.py",
         "module": "provenance.financial_statement_admission",
         "lines": {
-          "physical": 520,
-          "nonblank": 489,
-          "noncomment": 483
+          "physical": 590,
+          "nonblank": 556,
+          "noncomment": 550
         },
-        "internal_fan_out": 5,
+        "internal_fan_out": 6,
         "responsibilities": [
           "database",
           "network"
         ],
-        "public_functions": 3,
-        "fully_annotated_public_functions": 3
+        "public_functions": 4,
+        "fully_annotated_public_functions": 4
       },
       {
         "path": "src/provenance/foreign_issuer_bootstrap.py",
@@ -19594,11 +19626,11 @@
         "path": "src/sources/dcf_statements.py",
         "module": "sources.dcf_statements",
         "lines": {
-          "physical": 440,
-          "nonblank": 423,
-          "noncomment": 417
+          "physical": 550,
+          "nonblank": 532,
+          "noncomment": 526
         },
-        "internal_fan_out": 6,
+        "internal_fan_out": 7,
         "responsibilities": [
           "database",
           "network"

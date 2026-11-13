@@ -600,3 +600,47 @@ def test_internal_exact_envelope_byte_boundary(delta: int) -> None:
             assert exact.status == "invalid"
             assert exact.invalid_reason == "verification_evidence_byte_limit"
     conn.close()
+
+
+def test_selected_model_lineage_fits_exact_verifier_without_losing_critical_receipts() -> None:
+    from dcf.provenance import selected_statement_provenance
+
+    exact_input = {
+        "reported_observation_id": "revenue-2026-q2",
+        "resolution_id": "resolution-2026-q2",
+        "metric_definition_revision_id": "definition-v2",
+        "canonical_metric_cell_id": "revenue-cell",
+        "primary_value": 100.0,
+        "locator": "issuer-document:table-2:row-1",
+    }
+    overlay = {
+        "status": "ok",
+        "statements": {
+            "income": {
+                "applied": [exact_input]
+                + [
+                    {"reported_observation_id": f"old-{index}", "locator": "x" * 2048}
+                    for index in range(600)
+                ],
+            },
+        },
+    }
+    selected = selected_statement_provenance(
+        overlay,
+        selected_observation_ids=frozenset({"revenue-2026-q2"}),
+        historical_overlay_locator="workbook:StatementEvidence",
+    )
+    receipt = {"request": {"facts": {"revenue": exact_input}}}
+    provenance = {"primary_fact_overlay": selected, "model_input_receipt": receipt}
+    with _verification_db({"forecast": {"growth": 0.1}}, provenance) as conn:
+        evidence = load_dcf_verification_evidence(conn, "ONON")
+        assert evidence.status == "available" and evidence.projection_status == "complete"
+        assert evidence.provenance == provenance
+        public = load_dcf_grade_evidence(conn, "ONON")
+        assert public.provenance is not None
+        projected = public.provenance["primary_fact_overlay"]
+        assert isinstance(projected, dict)
+        assert projected["scope"] == "selected_model_inputs"
+        assert projected["historical_overlay_sha256"] == selected["historical_overlay_sha256"]
+        assert len(evidence.model_dump_json().encode()) < MAX_VERIFICATION_EVIDENCE_BYTES
+    conn.close()

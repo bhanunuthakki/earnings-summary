@@ -103,6 +103,24 @@ def test_export_removes_private_payloads_and_app_access_without_changing_source(
 
 
 @pytest.mark.parametrize(
+    "hidden",
+    [
+        '<aside id="cmt-sidebar">SYNTHETIC-TEMPLATE-PRIVATE</aside>',
+        '<aside class="chat-sidebar">SYNTHETIC-TEMPLATE-PRIVATE</aside>',
+        '<script type="application/json">{"private":"SYNTHETIC-TEMPLATE-PRIVATE"}</script>',
+        '<template><aside id="cmt-sidebar">SYNTHETIC-TEMPLATE-PRIVATE</aside></template>',
+    ],
+)
+def test_export_removes_private_content_inside_templates(tmp_path: Path, hidden: str) -> None:
+    original = workspace().replace("</body>", f"<template>{hidden}</template></body>")
+    source, destination = export(tmp_path, original)
+    result = destination.read_text(encoding="utf-8")
+    assert source.read_text(encoding="utf-8") == original
+    assert "SYNTHETIC-TEMPLATE-PRIVATE" not in result
+    assert "Synthetic visible analysis" in result
+
+
+@pytest.mark.parametrize(
     "altered",
     [
         "<html><head></head><body>not a workspace</body></html>",
