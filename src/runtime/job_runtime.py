@@ -78,6 +78,7 @@ _SCHEDULER_PORTFOLIO_DB_POLICY: tuple[tuple[str, str], ...] = (
     ("refresh-dirty-artifacts", "artifact-refresh"),
     ("refresh-expected-earnings", "market-data-refresh"),
     ("refresh-ir-kpis", "ir-discovery"),
+    ("reconcile-recorded-trades", "owner-reconciliation"),
     ("refresh_fmp", "fmp-refresh"),
     ("refresh_cache", "fmp-refresh"),
     ("restore-drill", "backup-restore"),
@@ -908,10 +909,15 @@ class JobDeadlineExceededError(RuntimeError):
 
 
 def _scheduled_deadline_seconds(code_root: Path, job_name: str) -> float | None:
-    """Use the SEC scheduler's checked policy as its application backstop."""
-    if job_name != "fetch-sec-xbrl":
+    """Use each enrolled scheduler policy as its application backstop."""
+    policies = {
+        "fetch-sec-xbrl": "fetch_sec_xbrl.task.xml",
+        "reconcile-recorded-trades": "reconcile_recorded_trades.task.xml",
+    }
+    filename = policies.get(job_name)
+    if filename is None:
         return None
-    policy = code_root / "cron/fetch_sec_xbrl.task.xml"
+    policy = code_root / "cron" / filename
     try:
         root = ElementTree.parse(policy).getroot()
         if root is None:
@@ -1517,6 +1523,16 @@ def health_receipt_directory(repo_root: Path, job_name: str) -> Path:
 def _child_health_semantics(job_name: str, exit_code: int) -> tuple[str, str, str | None]:
     """Translate reviewed child receipts without erasing Scheduler exit codes."""
 
+    if job_name == "reconcile-recorded-trades" and exit_code == 3:
+        return "deferred", "info", "owner reconciliation deferred for writer contention"
+
+    if job_name == "reconcile-recorded-trades" and exit_code == 2:
+        return (
+            "needs_review",
+            "warning",
+            "posted activity requires owner review; no funding attribution inferred",
+        )
+
     if job_name in {"refresh_cache", "fetch-macro-series"}:
         if exit_code == 2:
             return (
@@ -1835,6 +1851,12 @@ def run_job(
                 )
             else:
                 try:
+                    if job_name == "reconcile-recorded-trades":
+                        elapsed = (datetime.now(UTC) - started).total_seconds()
+                        reserve = min(10.0, timeout_seconds / 10)
+                        timeout_seconds -= elapsed + reserve
+                        if timeout_seconds <= 0:
+                            raise JobDeadlineExceededError(0)
                     exit_code = _run_managed_child(
                         managed_command,
                         cwd=repo_root,
@@ -1843,6 +1865,8 @@ def run_job(
                         timeout_seconds=timeout_seconds,
                     )
                 except JobDeadlineExceededError as exc:
+                    if job_name != "fetch-sec-xbrl":
+                        raise
                     if journal.accepted:
                         try:
                             recovery = _finish_timed_out_sec_attempt(

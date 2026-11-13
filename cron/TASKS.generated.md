@@ -22,6 +22,7 @@ Generated from `cron/task_manifest.json`; do not edit by hand.
 | `\earnings-summary\onboard_pending` | daily from 00:17:00, repeats PT1H | `onboard_pending_tickers.task.xml` | `run_onboard_pending.bat` | Task Scheduler |
 | `\earnings-summary\portfolio_tracker_api` | BootTrigger | `portfolio_tracker_api.task.xml` | `run_portfolio_tracker_api.bat` | Task Scheduler |
 | `\earnings-summary\prepare_kpi_semantic_review` | daily from 00:05:00, repeats PT10M | `prepare_kpi_semantic_review.task.xml` | `run_prepare_kpi_semantic_review.bat` | Task Scheduler |
+| `\earnings-summary\reconcile-recorded-trades` | daily at 12:12:00 | `reconcile_recorded_trades.task.xml` | `run_reconcile_recorded_trades.bat` | Task Scheduler |
 | `\earnings-summary\refresh_cache` | daily at 03:00:00 | `refresh_cache.task.xml` | `run_refresh_cache.bat` | Task Scheduler |
 | `\earnings-summary\refresh_dirty_artifacts` | daily at 05:00:00 | `refresh_dirty_artifacts.task.xml` | `run_refresh_dirty_artifacts.bat` | Task Scheduler |
 | `\earnings-summary\refresh_ir_kpis` | weekly Sunday at 01:00:00 | `refresh_ir_kpis.task.xml` | `run_refresh_ir_kpis.bat` | Task Scheduler |

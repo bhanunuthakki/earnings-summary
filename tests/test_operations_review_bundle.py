@@ -238,6 +238,22 @@ def test_review_code_identity_binds_fulltext_extractor_direct_ooxml_dependency(
     assert review_code_identity(tmp_path) != before
 
 
+@pytest.mark.parametrize(
+    "dependency",
+    ["cron/reconcile_recorded_trades.task.xml", "cron/run_reconcile_recorded_trades.bat"],
+)
+def test_review_code_identity_binds_owner_reconciliation_scheduler(
+    tmp_path: Path, dependency: str
+) -> None:
+    assert dependency in REVIEW_CODE_IDENTITY_DEPENDENCIES
+    target = tmp_path / dependency
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("first", encoding="utf-8")
+    before = review_code_identity(tmp_path)
+    target.write_text("changed", encoding="utf-8")
+    assert review_code_identity(tmp_path) != before
+
+
 def test_mac_validator_rejects_origin_identity_change_and_staleness() -> None:
     from execution.fetch_windows_review_bundle import (
         ReviewFetchError,

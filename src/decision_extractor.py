@@ -36,6 +36,7 @@ depend on this module; this is downstream-only.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import sqlite3
@@ -628,7 +629,7 @@ def reconcile_decision_actions(
     try:
         cutoff = (now_naive - timedelta(days=lookback_days)).isoformat()
         rows = conn.execute(
-            "SELECT id, ticker, recommendation_kind, made_at FROM decisions "
+            "SELECT id, ticker, recommendation_kind, made_at, user_notes FROM decisions "
             "WHERE user_action_kind IS NULL AND made_at >= ? ORDER BY made_at DESC",
             (cutoff,),
         ).fetchall()
@@ -659,6 +660,18 @@ def reconcile_decision_actions(
 
     for row in rows:
         tally["scanned"] += 1
+        notes = row["user_notes"]
+        if notes:
+            try:
+                metadata = json.loads(notes)
+            except (TypeError, ValueError):
+                metadata = None
+            if isinstance(metadata, dict) and metadata.get("execution_verification") in (
+                "owner_reported_not_broker_reconciled",
+                "broker_reconciled",
+            ):
+                tally["skipped_undetermined"] += 1
+                continue
         ticker = str(row["ticker"] or "").upper()
         made_dt = _parse_dt(row["made_at"])
         if not ticker or made_dt is None:
@@ -702,13 +715,32 @@ def reconcile_decision_actions(
         acted_at = (
             datetime.combine(fill_day, datetime.min.time()) if fill_day is not None else window_end
         )
-        ok = record_user_action(
-            decision_id=int(row["id"]),
-            user_action_kind=action,
-            user_notes=f"auto-reconciled from tracker fills ({window_days}d window)",
-            user_acted_at=acted_at,
-            db_path=db_path,
-        )
+        write_conn = _open(db_path)
+        ok = False
+        if write_conn is not None:
+            try:
+                result = write_conn.execute(
+                    "UPDATE decisions SET user_acted_at = ?, user_action_kind = ?, "
+                    "user_notes = COALESCE(user_notes, ?) "
+                    "WHERE id = ? AND user_action_kind IS NULL AND user_notes IS ? "
+                    "AND ticker IS ? AND recommendation_kind IS ? AND made_at IS ?",
+                    (
+                        acted_at.isoformat(),
+                        action,
+                        f"auto-reconciled from tracker fills ({window_days}d window)",
+                        row["id"],
+                        notes,
+                        row["ticker"],
+                        row["recommendation_kind"],
+                        row["made_at"],
+                    ),
+                )
+                write_conn.commit()
+                ok = result.rowcount == 1
+            except sqlite3.Error as exc:
+                log.warning({"event": "decision_user_action_failed", "error": str(exc)})
+            finally:
+                write_conn.close()
         tally[action if ok else "skipped_undetermined"] += 1
 
     tally.update(
