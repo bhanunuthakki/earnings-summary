@@ -8,6 +8,7 @@ from pathlib import Path, PureWindowsPath
 import pytest
 
 from scheduler_manifest import (
+    LOCAL_ONLY_TASKS,
     TaskManifest,
     TaskSpec,
     extract_xml_metadata,
@@ -50,7 +51,7 @@ def test_manifest_rejects_duplicate_json_keys(tmp_path: Path) -> None:
 
 def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     manifest = load_manifest(MANIFEST_PATH)
-    assert len(manifest.tasks) == 29
+    assert len(manifest.tasks) == 30
     assert all(
         task.task_name != r"\earnings-summary\backfill_financial_fact_resolutions"
         for task in manifest.tasks
@@ -101,14 +102,49 @@ def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     assert "--user-id" not in semantic_wrapper
     assert '--code-root "%PROJECT_ROOT%" --publish' in semantic_wrapper
     assert "http" not in semantic_wrapper.casefold()
+
+    reconciliation = next(
+        task
+        for task in manifest.tasks
+        if task.task_name == r"\earnings-summary\reconcile-recorded-trades"
+    )
+    assert reconciliation.schedule.days_interval == 1
+    assert reconciliation.schedule.start_boundary == "2026-11-12T12:12:00"
+    assert reconciliation.wrapper == "run_reconcile_recorded_trades.bat"
+    reconciliation_xml = (CRON_DIR / reconciliation.xml).read_text(encoding="utf-8")
+    assert {r"\earnings-summary\reconcile-recorded-trades"} == LOCAL_ONLY_TASKS
+    assert "<LogonType>S4U</LogonType>" in reconciliation_xml
+    assert "<ExecutionTimeLimit>PT2M</ExecutionTimeLimit>" in reconciliation_xml
+    assert "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>" in reconciliation_xml
+    assert "<StartWhenAvailable>true</StartWhenAvailable>" in reconciliation_xml
+    assert "<WakeToRun>false</WakeToRun>" in reconciliation_xml
+    assert "<RestartOnFailure>" not in reconciliation_xml
+    assert r"runtime\earnings-summary\cron\run_reconcile_recorded_trades.bat" in reconciliation_xml
+    reconciliation_wrapper = (CRON_DIR / reconciliation.wrapper).read_text(encoding="utf-8")
+    assert "if not defined EARNINGS_SUMMARY_DB_PATH" in reconciliation_wrapper
+    assert (
+        'for %%I in ("%EARNINGS_SUMMARY_DB_PATH%") do set "DB_DIR=%%~dpI"' in reconciliation_wrapper
+    )
+    assert 'for %%I in ("%DB_DIR%..") do set "PRODUCT_STATE_ROOT=%%~fI"' in reconciliation_wrapper
+    assert 'set "ES_JOB_RUNTIME_REPO_ROOT=%PRODUCT_STATE_ROOT%"' in reconciliation_wrapper
+    assert 'set "ES_JOB_RUNTIME_CODE_ROOT=%PROJECT_ROOT%"' in reconciliation_wrapper
+    assert '"reconcile-recorded-trades" "portfolio-db"' in reconciliation_wrapper
+    assert r"execution\reconcile_recorded_trades.py" in reconciliation_wrapper
+    assert "--apply" in reconciliation_wrapper
+    assert "cron_logs" not in reconciliation_wrapper
+    assert "openai_api_key" not in reconciliation_wrapper.casefold()
+    assert "http" not in reconciliation_wrapper.casefold()
     prepare_source = (PROJECT_ROOT / "execution" / "prepare_kpi_semantic_review.py").read_text(
         encoding="utf-8"
     )
     assert 'parser.add_argument("--user-id", default=DEFAULT_USER_ID)' in prepare_source
     assert 'default="default"' not in prepare_source
     shared_wrapper = (CRON_DIR / "run_python.bat").read_text(encoding="utf-8")
-    scope_gate = 'if /I not "%~1"=="prepare-kpi-semantic-review" goto clear_runtime_root_env'
-    assert scope_gate in shared_wrapper
+    assert (
+        'if /I "%~1"=="prepare-kpi-semantic-review" goto accept_runtime_root_env' in shared_wrapper
+    )
+    assert 'if /I "%~1"=="reconcile-recorded-trades" goto accept_runtime_root_env' in shared_wrapper
+    assert "goto clear_runtime_root_env" in shared_wrapper
     assert 'set "JOB_RUNTIME_REPO_ROOT=%ES_JOB_RUNTIME_REPO_ROOT%"' in shared_wrapper
     assert 'set "JOB_RUNTIME_CODE_ROOT=%ES_JOB_RUNTIME_CODE_ROOT%"' in shared_wrapper
     assert '--repo-root "%JOB_RUNTIME_REPO_ROOT%"' in shared_wrapper
@@ -119,7 +155,9 @@ def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     first_launch = shared_wrapper.index('"%PYTHON_EXE%" -u', clear_label)
     assert shared_wrapper.index('set "ES_JOB_RUNTIME_REPO_ROOT="', clear_label) < first_launch
     assert shared_wrapper.index('set "ES_JOB_RUNTIME_CODE_ROOT="', clear_label) < first_launch
-    assert shared_wrapper.index(scope_gate) < shared_wrapper.index(
+    assert shared_wrapper.index(
+        'if /I "%~1"=="reconcile-recorded-trades" goto accept_runtime_root_env'
+    ) < shared_wrapper.index(
         "if defined ES_JOB_RUNTIME_REPO_ROOT if not defined ES_JOB_RUNTIME_CODE_ROOT"
     )
     assert "%ES_JOB_RUNTIME_REPO_ROOT%" not in shared_wrapper[first_launch:]
@@ -259,6 +297,15 @@ def test_generated_registration_and_inventory_are_deterministic_and_current() ->
     assert "-Password $password" in first_script
     assert "scheduler_rollback" in first_script
     assert "Principal.LogonType -ne 'Password'" in first_script
+    assert "[string]$TaskName" in first_script
+    assert "TaskName selection is restricted to declared local-only tasks" in first_script
+    assert "-LocalOnly" in first_script
+    assert "-Password $password" in first_script
+    assert "LogonType -ne 'S4U'" in first_script
+    assert "State -eq 'Disabled'" in first_script
+    assert "-TaskName 'reconcile-recorded-trades'" in first_script
+    assert "WindowsIdentity]::GetCurrent().User.Value" in first_script
+    assert "registeredSid -ne $currentUserSid" in first_script
     assert "| Task Scheduler |" in first_doc
     assert "| Windows service |" not in first_doc
 

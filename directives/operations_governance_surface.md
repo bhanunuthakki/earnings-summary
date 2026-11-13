@@ -1,5 +1,51 @@
 # Operations & Governance Surface Impact
 
+## Recorded owner execution reconciliation
+
+`reconcile_recorded_trades` is a deterministic Windows scheduled job at 12:12
+Pacific. Its wrapper enters the managed Python and shared job runtime. It reads
+existing Tracker v1 activity with an explicit date window and complete, stable
+cursor traversal. It does not refresh a broker, invoke an LLM, or place trades.
+
+Private requests live under the configured product-state root at
+`output/research/owner-decisions/*/reconciliation-request.json`. They bind stable
+owner decision IDs to exact source-event identities. A unique observed same-date, ticker,
+direction and currency match can confirm an execution. Missing, ambiguous,
+stale, partial or conflicting evidence cannot confirm a trade. Funding candidates
+remain unassigned; an execution match does not prove a funding chain.
+
+The current provider has no transaction revision shared across cursor pages.
+Confirmation therefore requires one complete provider query (at most 1,000 rows).
+Multi-page traversal remains available for preview, but cannot authorize a write.
+Each included account must have a non-future provider sync on the Pacific query
+date. These timestamps establish refresh recency; they do not prove that all
+broker transactions have posted. The current Tracker SQLite adapter can return
+naive UTC sync timestamps. This boundary interprets only those sync values as UTC
+and retains the original evidence. Response generation times require offsets.
+The existing Windows evidence fence holds each private request unchanged until
+the transaction ends. A separate whole-job lane permits reads without holding
+the database write lane; only the bounded annotation phase claims `portfolio-db`.
+
+The writer preserves decision dates, reported approximate sizes, rationale and
+review triggers. It merges exact execution metadata and supersedes linked notes
+in one transaction. Original notes remain recoverable. Repeated evidence does
+not create another note. Private `reconciliation-latest.json` receipts replace
+their predecessor; note supersession retains meaningful history. Shared job
+health and the existing Jobs projection expose the scheduled operation. Keep
+personal request and receipt payloads out of source control and public logs.
+
+The task uses the owner's local-only S4U account. It needs no interactive login
+or new stored password and cannot authenticate to remote broker services. The
+normal broker refresh remains a separate owner. Retire the Codex follow-up only
+after the Windows definition and native execution have passed verification.
+
+The account boundary follows Microsoft's [Task Scheduler logon types](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskschedulerschema-logontype-simpletype)
+(updated December 11, 2020; checked November 12, 2026). The application deadline
+uses the existing kill-on-close [Windows Job Object](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects)
+owner (updated July 14, 2025; checked November 12, 2026). The native checks must
+prove loopback access, immutable request ownership and child-process cleanup;
+documentation alone does not pass those gates.
+
 ## Native dirty-producer outcome diagnostics — November 11, 2026
 
 The existing dirty-artifact refresh retains a bounded typed terminal reason from
