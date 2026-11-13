@@ -22,12 +22,20 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from backup_restore_readiness_receipt import (
+    BackupRestoreReadinessReceipt,
+    validate_receipt_for_source,
+)
+from upgrade_database import ACTIVE_HEAD
+
+from runtime.job_runtime import portfolio_db_path
+from schema_compat import describe_drift, expected_head
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC = PROJECT_ROOT / "src"
-EXECUTION = PROJECT_ROOT / "execution"
-for import_root in (SRC, EXECUTION):
-    if str(import_root) not in sys.path:
-        sys.path.insert(0, str(import_root))
 
 # The managed launcher executes this file as a top-level sibling module while
 # tests and other library callers may import it through ``execution``.  Keep a
@@ -35,16 +43,6 @@ for import_root in (SRC, EXECUTION):
 # receipt classes cannot diverge between those two supported entrypoints.
 sys.modules.setdefault("execution.portfolio_readiness_receipt", sys.modules[__name__])
 sys.modules.setdefault("portfolio_readiness_receipt", sys.modules[__name__])
-
-from backup_restore_readiness_receipt import (  # noqa: E402
-    BackupRestoreReadinessReceipt,
-    validate_receipt_for_source,
-)
-from upgrade_database import ACTIVE_HEAD  # noqa: E402
-
-from runtime.job_runtime import portfolio_db_path  # noqa: E402
-from schema_compat import describe_drift, expected_head  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 _GIT_SHA = re.compile(r"[0-9a-f]{40,64}")
 _RELEVANT_GIT_PATHS = (
@@ -260,7 +258,6 @@ def collect_readiness(
     observed_at = datetime.now(UTC)
     checkout = checkout_root.resolve()
     runtime = runtime_root.resolve()
-    requested_db = None if db_path is None else str(db_path)
     database = (db_path or portfolio_db_path(runtime)).resolve()
     base_reasons: list[str] = []
 
@@ -410,12 +407,15 @@ def collect_readiness(
         if artifact_reasons:
             current_source_reasons = artifact_reasons
         else:
-            current_source_reasons = validate_receipt_for_source(
-                backup_receipt,
-                source_db=database,
-                source_revision=db_revision,
-                require_current_identity=True,
-            )
+            if mode == "operational" and backup_receipt.source_db_revision != db_revision:
+                current_source_reasons = ("backup_restore_source_revision_mismatch",)
+            else:
+                current_source_reasons = validate_receipt_for_source(
+                    backup_receipt,
+                    source_db=database,
+                    source_revision=db_revision,
+                    require_current_identity=True,
+                )
             try:
                 snapshot_drift = describe_drift(
                     Path(backup_receipt.snapshot_resolved_path),
@@ -439,8 +439,6 @@ def collect_readiness(
         migration_reasons.append(f"migration_requires_db_behind_code:{drift_state}")
     migration_blocking_reasons = tuple(dict.fromkeys(migration_reasons))
     operational_blocking_reasons = tuple(dict.fromkeys(operational_reasons))
-    migration_preconditions_met = not migration_blocking_reasons
-    operationally_aligned = not operational_blocking_reasons
     blocking_reasons = (
         migration_blocking_reasons if mode == "migration" else operational_blocking_reasons
     )
@@ -457,7 +455,7 @@ def collect_readiness(
         origin_main_fetched_at=None if origin is None else origin.fetched_at,
         checkout_is_ancestor_of_origin_main=checkout_ancestor,
         runtime_is_ancestor_of_origin_main=runtime_ancestor,
-        db_path_requested=requested_db,
+        db_path_requested=None if db_path is None else str(db_path),
         db_path_resolved=str(database),
         expected_active_alembic_head=ACTIVE_HEAD,
         checkout_alembic_head=checkout_head,
@@ -467,8 +465,8 @@ def collect_readiness(
         backup_restore_receipt_path=resolved_backup_receipt,
         backup_restore_evidence_id=backup_evidence_id,
         requested_mode=mode,
-        migration_preconditions_met=migration_preconditions_met,
-        operationally_aligned=operationally_aligned,
+        migration_preconditions_met=not migration_blocking_reasons,
+        operationally_aligned=not operational_blocking_reasons,
         migration_blocking_reasons=migration_blocking_reasons,
         operational_blocking_reasons=operational_blocking_reasons,
         ready=not blocking_reasons,
