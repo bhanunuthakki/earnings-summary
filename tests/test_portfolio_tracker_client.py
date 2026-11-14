@@ -529,22 +529,16 @@ _AFTER_TAX = {
     "st_rate": "0.37",
     "lt_rate": "0.20",
     "realized_gain_pretax": "12000.00",
-    "realized_gain_aftertax": "8740.00",
-    "total_tax": "3260.00",
+    "wash_sale_disallowed": "0",
+    "total_tax": "3080.00",
+    "realized_gain_aftertax": "8920.00",
+    "effective_tax_rate_pct": "25.67",
+    # The tracker's real per-term shape (services/after_tax.py TermSummary).
     "by_term": [
-        {
-            "term": "short",
-            "realized_gain_pretax": "4000.00",
-            "tax": "1480.00",
-            "realized_gain_aftertax": "2520.00",
-        },
-        {
-            "term": "long",
-            "realized_gain_pretax": "8000.00",
-            "tax": "1600.00",
-            "realized_gain_aftertax": "6400.00",
-        },
+        {"term": "short", "taxable_gain": "4000.00", "rate": "0.37", "tax": "1480.00"},
+        {"term": "long", "taxable_gain": "8000.00", "rate": "0.20", "tax": "1600.00"},
     ],
+    "lots_count": 3,
     "notes": ["Rates are the caller's assumptions; state taxes not modeled."],
 }
 
@@ -1164,11 +1158,13 @@ def test_fetch_after_tax_standalone(mock_tracker: None) -> None:
     )
     assert at is not None
     assert at.tax_year == 2026
-    assert at.total_tax == pytest.approx(3260.0)
-    assert at.realized_gain_aftertax == pytest.approx(8740.0)
+    assert at.total_tax == pytest.approx(3080.0)
+    assert at.realized_gain_aftertax == pytest.approx(8920.0)
+    assert at.lots_count == 3
     by_term = {t.term: t for t in at.by_term}
     assert by_term["short"].tax == pytest.approx(1480.0)
-    assert by_term["long"].realized_gain_aftertax == pytest.approx(6400.0)
+    assert by_term["long"].taxable_gain == pytest.approx(8000.0)
+    assert by_term["long"].rate == pytest.approx(0.20)
     assert at.notes and "assumptions" in at.notes[0]
 
 

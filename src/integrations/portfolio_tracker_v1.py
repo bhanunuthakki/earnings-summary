@@ -930,6 +930,35 @@ class ExitQualityV1Result(V1Model):
     result: ExitQualityResult
 
 
+class AfterTaxTermV1(V1Model):
+    term: str
+    taxable_gain: Money
+    rate: Money
+    tax: Money
+
+
+class AfterTaxResultV1(V1Model):
+    tax_year: int | None
+    st_rate: Money
+    lt_rate: Money
+    realized_gain_pretax: Money
+    wash_sale_disallowed: Money
+    total_tax: Money
+    realized_gain_aftertax: Money
+    effective_tax_rate_pct: MoneyOrNone
+    by_term: list[AfterTaxTermV1] = Field(default_factory=list[AfterTaxTermV1])
+    lots_count: int
+    notes: list[str] = Field(default_factory=list[str])
+
+
+class AfterTaxV1Result(V1Model):
+    """``GET /api/v1/analytics/after-tax`` — realized 1099-B gains at the
+    caller's flat short/long rates. One top-level result key, ``after_tax``."""
+
+    meta: V1Meta
+    after_tax: AfterTaxResultV1
+
+
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
@@ -1592,10 +1621,28 @@ class TrackerV1Client:
             timeout=self._analytics_read_timeout,
         )
 
+    def get_after_tax(
+        self,
+        *,
+        tax_year: int | None = None,
+        st_rate: float | None = None,
+        lt_rate: float | None = None,
+    ) -> V1Fetch[AfterTaxV1Result]:
+        params = _query_params(tax_year=tax_year, st_rate=st_rate, lt_rate=lt_rate)
+        return self._get(
+            "/api/v1/analytics/after-tax",
+            AfterTaxV1Result,
+            params=params,
+            timeout=self._analytics_read_timeout,
+        )
+
 
 __all__ = [
     "AccountV1",
     "AccountsV1Result",
+    "AfterTaxResultV1",
+    "AfterTaxTermV1",
+    "AfterTaxV1Result",
     "BetaResult",
     "CashFlowV1",
     "CashFlowsV1Result",

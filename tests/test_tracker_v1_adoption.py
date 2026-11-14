@@ -354,6 +354,24 @@ def test_exit_quality_v1_standalone_carries_envelope(
     assert legacy_guard == []
 
 
+def test_after_tax_v1_standalone_carries_envelope(
+    v1_on: None, legacy_guard: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _route_v1(monkeypatch, {"/api/v1/analytics/after-tax": _fixture("after-tax")})
+    at = tc.fetch_after_tax()
+    assert at is not None
+    assert at.lots_count == 2
+    assert at.total_tax == pytest.approx(155.0)
+    assert at.realized_gain_aftertax == pytest.approx(145.0)
+    assert at.wash_sale_disallowed == pytest.approx(50.0)
+    by_term = {t.term: t for t in at.by_term}
+    assert by_term["short"].tax == pytest.approx(185.0)
+    assert by_term["long"].taxable_gain == pytest.approx(-150.0)
+    assert at.as_of is not None
+    assert isinstance(at.is_stale, bool)
+    assert legacy_guard == []
+
+
 # ---------------------------------------------------------------------------
 # Parity harness comparison logic (pure functions)
 # ---------------------------------------------------------------------------

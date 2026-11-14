@@ -1,0 +1,60 @@
+{
+  "after_tax": {
+    "by_term": [
+      {
+        "rate": "0.37",
+        "tax": "185.00",
+        "taxable_gain": "500.00",
+        "term": "short"
+      },
+      {
+        "rate": "0.20",
+        "tax": "-30.00",
+        "taxable_gain": "-150.00",
+        "term": "long"
+      }
+    ],
+    "effective_tax_rate_pct": "51.67",
+    "lots_count": 2,
+    "lt_rate": "0.20",
+    "notes": [
+      "Flat marginal ST/LT rates; no income-bracket tiers, NIIT, state tax, or loss carryforward. 'undetermined'-term lots are taxed at the ST rate. The 1099-B and a tax professional are authoritative for filing."
+    ],
+    "realized_gain_aftertax": "145.00",
+    "realized_gain_pretax": "300.00",
+    "st_rate": "0.37",
+    "tax_year": 2025,
+    "total_tax": "155.00",
+    "wash_sale_disallowed": "50.00"
+  },
+  "meta": {
+    "account_coverage": {
+      "excluded_account_ids": [
+        4
+      ],
+      "included_account_ids": [
+        1,
+        2,
+        3
+      ],
+      "lagging_account_ids": []
+    },
+    "as_of": "2026-07-22",
+    "currency": "USD",
+    "generated_at": "2026-07-23T06:00:00Z",
+    "is_partial": false,
+    "is_stale": false,
+    "last_successful_sync_at": "2026-07-22T12:00:00",
+    "links": {
+      "transactions": "/api/v1/transactions"
+    },
+    "methodology": "after_tax.realized_1099b",
+    "methodology_version": "1",
+    "schema_version": "1.4.0",
+    "source_providers": [
+      "plaid",
+      "snaptrade"
+    ],
+    "warnings": []
+  }
+}
