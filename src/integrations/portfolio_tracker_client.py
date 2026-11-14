@@ -1406,13 +1406,14 @@ class ExitQuality:
 @dataclass(slots=True)
 class AfterTaxTerm:
     """One holding-period bucket of the after-tax realized-gain breakdown
-    (``term`` is 'short' / 'long'): the pre-tax realized gain in the bucket, the
-    tax on it, and the after-tax remainder."""
+    (``term`` is 'short' / 'long' / 'undetermined'): the taxable gain in the
+    bucket (net gain plus any disallowed wash-sale loss), the flat rate applied,
+    and the tax on it."""
 
     term: str
-    realized_gain_pretax: float | None
+    taxable_gain: float | None
+    rate: float | None
     tax: float | None
-    realized_gain_aftertax: float | None
 
 
 @dataclass(slots=True)
@@ -1431,6 +1432,14 @@ class AfterTax:
     total_tax: float | None
     by_term: list[AfterTaxTerm] = field(default_factory=list[AfterTaxTerm])
     notes: list[str] = field(default_factory=list[str])
+    wash_sale_disallowed: float | None = None
+    effective_tax_rate_pct: float | None = None
+    lots_count: int | None = None
+    # v1 envelope (None/False/[] on the legacy transport).
+    as_of: str | None = None
+    is_stale: bool = False
+    is_partial: bool = False
+    envelope_warnings: list[str] = field(default_factory=list[str])
 
 
 @dataclass(slots=True)
@@ -2734,9 +2743,9 @@ def _parse_after_tax(data: dict[str, object]) -> AfterTax:
     by_term = [
         AfterTaxTerm(
             term=_s(t.get("term")) or "?",
-            realized_gain_pretax=_f(t.get("realized_gain_pretax")),
+            taxable_gain=_f(t.get("taxable_gain")),
+            rate=_f(t.get("rate")),
             tax=_f(t.get("tax")),
-            realized_gain_aftertax=_f(t.get("realized_gain_aftertax")),
         )
         for t in _dicts(data.get("by_term"))
     ]
@@ -2755,6 +2764,9 @@ def _parse_after_tax(data: dict[str, object]) -> AfterTax:
         total_tax=_f(data.get("total_tax")),
         by_term=by_term,
         notes=notes,
+        wash_sale_disallowed=_f(data.get("wash_sale_disallowed")),
+        effective_tax_rate_pct=_f(data.get("effective_tax_rate_pct")),
+        lots_count=_i(data.get("lots_count")),
     )
 
 
@@ -2956,6 +2968,14 @@ def fetch_after_tax(
     short/long rates. Orthogonal params (a tax-year, not a TWR window) so it has
     its own fetcher rather than riding the windowed aggregate. None when the
     tracker can't answer."""
+    if _v1_reads_enabled():
+        return _fetch_after_tax_v1(
+            _resolve_base(api_url),
+            timeout=timeout,
+            tax_year=tax_year,
+            st_rate=st_rate,
+            lt_rate=lt_rate,
+        )
     params: dict[str, str] = {}
     if tax_year is not None:
         params["tax_year"] = str(int(tax_year))
@@ -3440,6 +3460,29 @@ def _fetch_portfolio_analytics_v1(
     if observation_unmarked and _UNMARKED_OBSERVATION_CODE not in out.envelope_warnings:
         out.envelope_warnings.append(_UNMARKED_OBSERVATION_CODE)
     return out
+
+
+def _fetch_after_tax_v1(
+    base: str,
+    *,
+    timeout: float,
+    tax_year: int | None,
+    st_rate: float | None,
+    lt_rate: float | None,
+) -> AfterTax | None:
+    """v1 transport for :func:`fetch_after_tax`."""
+    client = TrackerV1Client(base_url=base, analytics_read_timeout=max(timeout, 20.0))
+    res = client.get_after_tax(tax_year=tax_year, st_rate=st_rate, lt_rate=lt_rate)
+    if not res.available or res.data is None:
+        return None
+    parsed = _parse_after_tax(_dump_model(res.data.after_tax))
+    meta = res.meta
+    if meta is not None:
+        parsed.as_of = meta.as_of.isoformat() if meta.as_of is not None else None
+        parsed.is_stale = meta.is_stale
+        parsed.is_partial = meta.is_partial
+        parsed.envelope_warnings = _envelope_codes(meta)
+    return parsed
 
 
 def _fetch_exit_quality_v1(

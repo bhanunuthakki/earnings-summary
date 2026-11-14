@@ -220,6 +220,8 @@ _NEWLY_COVERED_FIXTURES: list[tuple[str, type[BaseModel]]] = [
     ("position-performance.json", tv1.PositionPerformanceV1Result),
     ("risk.json", tv1.RiskV1Result),
     ("exit-quality.json", tv1.ExitQualityV1Result),
+    # Added 2026-11-12 (provider PR #80).
+    ("after-tax.json", tv1.AfterTaxV1Result),
 ]
 
 
