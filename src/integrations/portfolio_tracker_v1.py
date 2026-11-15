@@ -959,6 +959,36 @@ class AfterTaxV1Result(V1Model):
     after_tax: AfterTaxResultV1
 
 
+class PolicyWeightV1(V1Model):
+    ticker: str
+    weight_pct: Money
+    notes: str | None = None
+
+
+class PolicyRecomputationV1(V1Model):
+    status: Literal["current", "required"]
+    policy_revision: int
+    reason: str | None = None
+
+
+class BenchmarkPolicyV1(V1Model):
+    weights: list[PolicyWeightV1] = Field(default_factory=list[PolicyWeightV1])
+    total_pct: Money
+    is_balanced: bool
+    revision: int
+    source: str
+    as_of: str
+    recomputation: PolicyRecomputationV1
+
+
+class BenchmarkPolicyV1Result(V1Model):
+    """``GET /api/v1/settings/benchmark-policy`` — the read-only policy weights
+    behind the policy counterfactual. Replacement stays on ``PUT /api/policy``."""
+
+    meta: V1Meta
+    policy: BenchmarkPolicyV1
+
+
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
@@ -1636,6 +1666,13 @@ class TrackerV1Client:
             timeout=self._analytics_read_timeout,
         )
 
+    def get_benchmark_policy(self) -> V1Fetch[BenchmarkPolicyV1Result]:
+        return self._get(
+            "/api/v1/settings/benchmark-policy",
+            BenchmarkPolicyV1Result,
+            timeout=self._read_timeout,
+        )
+
 
 __all__ = [
     "AccountV1",
@@ -1643,6 +1680,8 @@ __all__ = [
     "AfterTaxResultV1",
     "AfterTaxTermV1",
     "AfterTaxV1Result",
+    "BenchmarkPolicyV1",
+    "BenchmarkPolicyV1Result",
     "BetaResult",
     "CashFlowV1",
     "CashFlowsV1Result",
@@ -1662,6 +1701,8 @@ __all__ = [
     "PerformancePoint",
     "PerformanceSeries",
     "PerformanceV1Result",
+    "PolicyRecomputationV1",
+    "PolicyWeightV1",
     "PortfolioSnapshotV1",
     "PositionAlphaResult",
     "PositionAlphaRow",
