@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
@@ -1415,3 +1416,227 @@ def test_earnings_readout_peek_degrades_without_quarter_data(repo: Path, db_path
 # ----------------------------------------------------------------------------
 # /api/peek/weekly-packet (wave3b Task 3 — the Sunday-packet band's doorway)
 # ----------------------------------------------------------------------------
+
+
+# --------------------------------------------------------------------------- #
+# Earnings prep / readout view-data parity. The goldens were rendered from the
+# HTML-only implementation before the view-data split; each peek now renders
+# from the builder that also serves /api/view-data/<view>, and these tests
+# prove the HTML is byte-identical. Regenerate only for an intended visible
+# change: UPDATE_VIEW_GOLDENS=1.
+# --------------------------------------------------------------------------- #
+
+_VIEW_GOLDEN_DIR = Path(__file__).parent / "fixtures" / "earnings_view_parity"
+
+
+def _freeze_peeks(monkeypatch: pytest.MonkeyPatch, day: date) -> None:
+    import pipeline.peeks as peeks
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:
+            return datetime(day.year, day.month, day.day, tzinfo=UTC)
+
+    monkeypatch.setattr(peeks, "datetime", FrozenDateTime)
+
+
+def _insert_readout_artifact(db_path: Path, artifact_id: int, period_end: str) -> None:
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO llm_artifacts "
+            "(id, ticker, scope, purpose, fiscal_period, content_md, input_sha256, "
+            "prompt_version, generated_at) VALUES "
+            "(?, 'NU', 'ticker', 'post_earnings_readout', ?, "
+            "'## Q2 readout\\nMargins held; deposits grew.', ?, 'v1', ?)",
+            (artifact_id, period_end, "b" * 64, "2026-07-21T00:00:00+00:00"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _assert_golden(name: str, html: str | None) -> None:
+    assert html is not None
+    path = _VIEW_GOLDEN_DIR / f"{name}.html"
+    if os.environ.get("UPDATE_VIEW_GOLDENS") == "1":
+        _VIEW_GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
+        path.write_text(html, encoding="utf-8", newline="\n")
+    assert html == path.read_text(encoding="utf-8")
+
+
+def test_view_parity_readout_without_persisted_artifact(
+    repo: Path, db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pipeline.peeks import render_earnings_readout_peek
+
+    _freeze_peeks(monkeypatch, date(2026, 7, 25))
+    _seed_readout_ticker(db_path)
+
+    _assert_golden("readout_template", render_earnings_readout_peek(db_path, repo, "NU"))
+
+
+def test_view_parity_readout_with_current_persisted_artifact(
+    repo: Path, db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pipeline.peeks import render_earnings_readout_peek
+
+    _freeze_peeks(monkeypatch, date(2026, 7, 25))
+    _seed_readout_ticker(db_path)
+    _insert_readout_artifact(db_path, 701, "2026-06-30")
+
+    _assert_golden("readout_persisted", render_earnings_readout_peek(db_path, repo, "NU"))
+
+
+def test_view_parity_readout_exact_artifact(
+    repo: Path, db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pipeline.peeks import render_earnings_readout_peek
+
+    _freeze_peeks(monkeypatch, date(2026, 7, 25))
+    _seed_readout_ticker(db_path)
+    _insert_readout_artifact(db_path, 702, "2026-06-30")
+
+    _assert_golden(
+        "readout_exact", render_earnings_readout_peek(db_path, repo, "NU", artifact_id=702)
+    )
+
+
+def test_view_parity_prep_with_current_brief(
+    repo: Path, db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pipeline.peeks import render_earnings_prep_peek
+
+    _freeze_peeks(monkeypatch, date(2026, 8, 2))
+    _seed_readout_ticker(db_path)
+    _seed_brief_artifact(
+        db_path, "NU", "2026-08-05", "**What this quarter must show** — NIM holds."
+    )
+
+    _assert_golden("prep_brief", render_earnings_prep_peek(db_path, repo, "NU"))
+
+
+def test_view_parity_prep_without_brief(
+    repo: Path, db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pipeline.peeks import render_earnings_prep_peek
+
+    _freeze_peeks(monkeypatch, date(2026, 8, 2))
+    _seed_readout_ticker(db_path)
+
+    _assert_golden("prep_no_brief", render_earnings_prep_peek(db_path, repo, "NU"))
+
+
+def _seed_rich_sections(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every optional section: watch items, a news event, a call-tone alert,
+    an unreviewed DCF, and tier-1 KPI moves (stubbed at the one reader)."""
+    import pipeline.research_cockpit as cockpit
+    from pipeline.research_cockpit import KpiDelta
+    from user_state.notes import create_note
+
+    create_note(ticker="NU", kind="watch", body="Watch the NIM print.", db_path=db_path)
+    create_note(ticker="NU", kind="question", body="Mexico deposit ramp?", db_path=db_path)
+    fire_alert(
+        ticker="NU",
+        trigger_kind="earnings_tone",
+        fired_at=datetime(2026, 7, 21, tzinfo=UTC),
+        evidence_json=json.dumps(
+            {"summary": "More cautious on credit.", "shifts": ["credit", " ", "Mexico <growth>"]}
+        ),
+        signature_sha="c" * 64,
+        db_path=db_path,
+    )
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("UPDATE dcf_runs SET sanity_flag = 'fail' WHERE ticker = 'NU'")
+        conn.execute(
+            "INSERT INTO news_events(ticker, news_id, headline, url, published_at, "
+            "event_key, event_type, relevance, why_material, classified_at) VALUES "
+            "('NU', 'n1', 'Nu & a charter', 'https://news.example/ev', "
+            "'2026-07-28 12:00:00', 'k1', 'primary', 0.9, 'expands lending', "
+            "'2026-07-28 12:00:00')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    deltas = [
+        KpiDelta("Monthly ARPAC", "usd", 11.5, 10.0, "2026-06-30", "2026-03-31", "ok", "rule ok"),
+        KpiDelta("NIM", "percent", 17.0, 18.0, "2026-06-30", "2026-03-31", "warn", ""),
+        KpiDelta("Customers", "count", 100.0, 0.0, "2026-06-30", "2026-03-31", "neutral", ""),
+    ]
+
+    def fake_deltas(*_args: object, **_kwargs: object) -> dict[str, list[KpiDelta]]:
+        return {"NU": deltas}
+
+    monkeypatch.setattr(cockpit, "tier1_kpi_deltas", fake_deltas)
+
+
+def test_view_parity_readout_all_sections(
+    repo: Path, db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pipeline.peeks import render_earnings_readout_peek
+
+    _freeze_peeks(monkeypatch, date(2026, 7, 25))
+    _seed_readout_ticker(db_path)
+    _seed_rich_sections(db_path, monkeypatch)
+
+    _assert_golden("readout_all_sections", render_earnings_readout_peek(db_path, repo, "NU"))
+
+
+def test_view_parity_prep_all_sections(
+    repo: Path, db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pipeline.peeks import render_earnings_prep_peek
+
+    _freeze_peeks(monkeypatch, date(2026, 8, 2))
+    _seed_readout_ticker(db_path)
+    _seed_rich_sections(db_path, monkeypatch)
+    _seed_brief_artifact(db_path, "NU", "2026-08-05", "Brief body.")
+
+    _assert_golden("prep_all_sections", render_earnings_prep_peek(db_path, repo, "NU"))
+
+
+def test_view_data_routes_serve_the_models_the_peeks_render(
+    repo: Path, db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+
+    from pipeline.earnings_view_data import EarningsPrepView, EarningsReadoutView
+
+    _seed_readout_ticker(db_path)
+    _insert_readout_artifact(db_path, 703, "2026-06-30")
+    _seed_rich_sections(db_path, monkeypatch)
+    client = comments_server.create_app(repo).test_client()
+
+    readout = client.get("/api/view-data/earnings-readout?ticker=nu")
+    assert readout.status_code == 200
+    assert readout.mimetype == "application/json"
+    rv = EarningsReadoutView.model_validate_json(readout.data)
+    assert rv.view == "earnings_readout" and rv.schema_version == "1" and rv.ticker == "NU"
+    assert rv.quarter is not None and rv.quarter.document_id == 9000
+    assert rv.surprise is not None and [s.label for s in rv.surprise.sides] == ["EPS", "Revenue"]
+    assert [k.name for k in rv.kpi_moves] == ["Monthly ARPAC", "NIM", "Customers"]
+    assert rv.call_tone is not None and rv.call_tone.shifts == ["credit", "Mexico <growth>"]
+    assert rv.watch_items is not None and rv.watch_items[0].kind == "watch"
+    assert rv.valuation is not None and rv.valuation.unreviewed
+    refs = {s.ref for s in rv.sources}
+    assert "documents:9000" in refs
+    assert rv.readout is not None and rv.readout.id == 703
+    assert "llm_artifacts:703" in refs
+
+    exact = client.get("/api/view-data/earnings-readout?ticker=NU&artifact_id=703")
+    ev = EarningsReadoutView.model_validate_json(exact.data)
+    assert ev.exact_artifact and ev.readout is not None and ev.readout.id == 703
+    assert ev.surprise is None and ev.kpi_moves == []
+
+    prep = client.get("/api/view-data/earnings-prep?ticker=NU")
+    assert prep.status_code == 200
+    pv = EarningsPrepView.model_validate_json(prep.data)
+    assert pv.view == "earnings_prep" and pv.list_type == "portfolio"
+
+    assert client.get("/api/view-data/earnings-readout?ticker=NOPE").status_code == 404
+    assert client.get("/api/view-data/earnings-prep").status_code == 404
+    assert client.get("/api/view-data/earnings-readout?ticker=NU&artifact_id=x").status_code == 400
+    assert client.get("/api/view-data/earnings-prep?ticker=NU&artifact_id=0").status_code == 400
+    assert (
+        client.get("/api/view-data/earnings-readout?ticker=NU&artifact_id=999").status_code == 404
+    )

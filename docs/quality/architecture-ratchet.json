@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "6b8587c6b91fc7508ffcbd3dd65fff030b61607a",
+  "scoped_commit": "8a3eb506f605a64faa73ced2e29fd95017f3400f",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "e2b00b901ba3f799554e7c8625f5be46043fe97092abda06ec1dc1c7b873c849",
+  "source_sha256": "0984c337d752afa48ec569d94bfb88cdee55ee36b0b35b3df656237d707f9293",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,10 +22,10 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1397,
-    "total_noncomment_loc": 558232,
+    "executable_modules": 1398,
+    "total_noncomment_loc": 558524,
     "modules_over_1000_loc": 117,
-    "modules_over_2000_loc": 23,
+    "modules_over_2000_loc": 22,
     "modules_at_least_3000_loc": 5,
     "max_internal_fan_out": 39,
     "scc_count": 17,
@@ -1812,11 +1812,11 @@
         "path": "execution/comments_server_content_routes.py",
         "module": "execution.comments_server_content_routes",
         "lines": {
-          "physical": 1180,
-          "nonblank": 1095,
-          "noncomment": 1072
+          "physical": 1216,
+          "nonblank": 1124,
+          "noncomment": 1101
         },
-        "internal_fan_out": 19,
+        "internal_fan_out": 20,
         "responsibilities": [
           "database",
           "filesystem",
@@ -4280,9 +4280,9 @@
         "path": "execution/portfolio_readiness_receipt.py",
         "module": "execution.portfolio_readiness_receipt",
         "lines": {
-          "physical": 514,
-          "nonblank": 464,
-          "noncomment": 454
+          "physical": 512,
+          "nonblank": 461,
+          "noncomment": 451
         },
         "internal_fan_out": 3,
         "responsibilities": [
@@ -13217,6 +13217,22 @@
         "fully_annotated_public_functions": 1
       },
       {
+        "path": "src/pipeline/earnings_view_data.py",
+        "module": "pipeline.earnings_view_data",
+        "lines": {
+          "physical": 672,
+          "nonblank": 578,
+          "noncomment": 575
+        },
+        "internal_fan_out": 9,
+        "responsibilities": [
+          "database",
+          "network"
+        ],
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
+      },
+      {
         "path": "src/pipeline/evals_panel.py",
         "module": "pipeline.evals_panel",
         "lines": {
@@ -13917,18 +13933,18 @@
         "path": "src/pipeline/peeks.py",
         "module": "pipeline.peeks",
         "lines": {
-          "physical": 2661,
-          "nonblank": 2413,
-          "noncomment": 2298
+          "physical": 2330,
+          "nonblank": 2104,
+          "noncomment": 1989
         },
-        "internal_fan_out": 33,
+        "internal_fan_out": 29,
         "responsibilities": [
           "database",
           "filesystem",
           "network"
         ],
-        "public_functions": 18,
-        "fully_annotated_public_functions": 18
+        "public_functions": 20,
+        "fully_annotated_public_functions": 20
       },
       {
         "path": "src/pipeline/performance_notice.py",

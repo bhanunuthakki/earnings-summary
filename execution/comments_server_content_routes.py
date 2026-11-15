@@ -671,19 +671,23 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             mimetype="text/html",
         )
 
+    def _earnings_artifact_id_arg() -> int | None:
+        raw_artifact_id = request.args.get("artifact_id")
+        if raw_artifact_id is None:
+            return None
+        try:
+            artifact_id = int(raw_artifact_id)
+        except ValueError:
+            abort(400)
+        if artifact_id <= 0:
+            abort(400)
+        return artifact_id
+
     @app.route("/api/peek/earnings-prep", methods=["GET"])
     def peek_earnings_prep():
         from pipeline.peeks import render_earnings_prep_peek
 
-        raw_artifact_id = request.args.get("artifact_id")
-        artifact_id: int | None = None
-        if raw_artifact_id is not None:
-            try:
-                artifact_id = int(raw_artifact_id)
-            except ValueError:
-                abort(400)
-            if artifact_id <= 0:
-                abort(400)
+        artifact_id = _earnings_artifact_id_arg()
         html = render_earnings_prep_peek(
             db_path,
             repo_root,
@@ -699,15 +703,7 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
     def peek_earnings_readout():
         from pipeline.peeks import render_earnings_readout_peek
 
-        raw_artifact_id = request.args.get("artifact_id")
-        artifact_id: int | None = None
-        if raw_artifact_id is not None:
-            try:
-                artifact_id = int(raw_artifact_id)
-            except ValueError:
-                abort(400)
-            if artifact_id <= 0:
-                abort(400)
+        artifact_id = _earnings_artifact_id_arg()
         html = render_earnings_readout_peek(
             db_path,
             repo_root,
@@ -718,6 +714,46 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
         if html is None:
             abort(404)
         return Response(html, mimetype="text/html")
+
+    @app.route("/api/view-data/earnings-prep", methods=["GET"])
+    def view_data_earnings_prep():
+        """The earnings prep peek's data as JSON (the HTML renders this model)."""
+        from datetime import UTC, datetime
+
+        from pipeline.earnings_view_data import build_earnings_prep_view
+
+        artifact_id = _earnings_artifact_id_arg()
+        view = build_earnings_prep_view(
+            db_path,
+            repo_root,
+            request.args.get("ticker") or "",
+            now=datetime.now(UTC),
+            artifact_id=artifact_id,
+            conn=context.get_read_db(),
+        )
+        if view is None:
+            abort(404)
+        return Response(view.model_dump_json(), mimetype="application/json")
+
+    @app.route("/api/view-data/earnings-readout", methods=["GET"])
+    def view_data_earnings_readout():
+        """The post-earnings readout peek's data as JSON (the HTML renders this model)."""
+        from datetime import UTC, datetime
+
+        from pipeline.earnings_view_data import build_earnings_readout_view
+
+        artifact_id = _earnings_artifact_id_arg()
+        view = build_earnings_readout_view(
+            db_path,
+            repo_root,
+            request.args.get("ticker") or "",
+            now=datetime.now(UTC),
+            artifact_id=artifact_id,
+            conn=context.get_read_db(),
+        )
+        if view is None:
+            abort(404)
+        return Response(view.model_dump_json(), mimetype="application/json")
 
     @app.route("/api/peek/earnings-draft", methods=["GET"])
     def peek_earnings_draft():
