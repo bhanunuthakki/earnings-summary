@@ -676,8 +676,8 @@
     {
       "disposition": "schema_field",
       "evidence": "The renderer calls this helper only while iterating the checked-in _COMPARE_METRIC_ROWS field tuple.",
-      "fingerprint": "602c11283c6e3c52df69b274f66506129c97fa62603696a63bdd7c17d2988899",
-      "line": 1899,
+      "fingerprint": "7e84420eef89eb9fb713f7684682839a588a8bb7f6976e86f3fe88ca6ec67c21",
+      "line": 1913,
       "path": "src/pipeline/peeks.py",
       "targets": [
         "_COMPARE_METRIC_ROWS"
