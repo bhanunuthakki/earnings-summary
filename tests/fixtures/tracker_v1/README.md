@@ -38,6 +38,9 @@ fake account/institution names) — none of this is real portfolio data.
 - `after-tax.json` was added 2026-11-12, vendored verbatim from
   `portfolio-tracker` PR #80 ("add the after-tax v1 consumer fixture"), which
   publishes the fixture for `GET /api/v1/analytics/after-tax` (provider PR #78).
+- `benchmark-policy.json` was added 2026-11-15, vendored verbatim from
+  `portfolio-tracker` PR #82, which publishes the fixture for
+  `GET /api/v1/settings/benchmark-policy` (provider PR #78).
 
 ## Files
 
@@ -60,6 +63,7 @@ fake account/institution names) — none of this is real portfolio data.
 | `risk.json` (added 2026-07-24) | `GET /api/v1/analytics/risk` | `RiskV1Result` (`{meta, beta, drawdown}` — two top-level result keys, not one nested `result`) |
 | `exit-quality.json` (added 2026-07-24) | `GET /api/v1/analytics/exit-quality` | `ExitQualityV1Result` |
 | `after-tax.json` (added 2026-11-12) | `GET /api/v1/analytics/after-tax` | `AfterTaxV1Result` (`{meta, after_tax}`; two synthetic 1099-B lots) |
+| `benchmark-policy.json` (added 2026-11-15) | `GET /api/v1/settings/benchmark-policy` | `BenchmarkPolicyV1Result` (`{meta, policy}`; VOO 60 / QQQ 40) |
 
 Every v1 endpoint now has an official provider fixture. See
 `tests/fixtures/tracker_v1/synthetic/README.md` — that directory is now empty

@@ -42,10 +42,9 @@ switch defaults OFF; it flips ON only after ``execution/tracker_v1_parity.py``
 passes and the owner approves cutover, and the legacy transport paths are
 deleted in Phase 5. A broken v1 read reports ``available=False`` with the v1
 reason — it never silently falls back to the legacy endpoints, which would
-mask contract breaks. One documented exception: ``/api/policy`` has no v1
-successor (policy weights are provider-owned calculation config, Phase-0
-ruling PT-6), so the ``policy`` analytics section stays on its legacy
-endpoint under either transport — tracked as a shared-contract gap.
+mask contract breaks. The ``policy`` analytics section reads the read-only
+``/api/v1/settings/benchmark-policy``; policy replacement stays on the operator
+``PUT /api/policy`` (provider-owned calculation config, Phase-0 ruling PT-6).
 """
 
 from __future__ import annotations
@@ -3320,10 +3319,10 @@ def _fetch_portfolio_analytics_v1(
 ) -> PortfolioAnalytics:
     """v1 transport for :func:`fetch_portfolio_analytics`. Same per-section
     fault isolation and ``only=`` semantics; ``beta`` and ``drawdown`` share
-    the single ``analytics/risk`` read. The ``policy`` section stays on the
-    legacy ``/api/policy`` endpoint under either transport — it has no v1
-    successor (provider-owned calculation config, Phase-0 ruling PT-6);
-    documented shared-contract gap, not a silent fallback."""
+    the single ``analytics/risk`` read. The ``policy`` section reads the
+    read-only ``/api/v1/settings/benchmark-policy`` (provider-owned calculation
+    config, Phase-0 ruling PT-6); policy replacement stays on the operator
+    ``PUT /api/policy``. No section falls back to a legacy read."""
     # The legacy 6s analytics budget models per-endpoint cost; v1 bundles more
     # work per call (risk = beta+drawdown, position-performance carries the
     # counterfactual series) and measured >6s live. Floor the read budget at
@@ -3392,24 +3391,15 @@ def _fetch_portfolio_analytics_v1(
         else:
             out.errors["positioning"] = f"v1: {positioning.error}"
     if want("policy"):
-        try:
-            remaining = client.remaining_budget_seconds()
-            if remaining is not None and remaining <= 0:
-                out.errors["policy"] = "total_deadline_exceeded"
+        remaining = client.remaining_budget_seconds()
+        if remaining is not None and remaining <= 0:
+            out.errors["policy"] = "total_deadline_exceeded"
+        else:
+            policy_read = client.get_benchmark_policy()
+            if policy_read.available and policy_read.data is not None:
+                out.policy = _parse_policy(_dump_model(policy_read.data.policy))
             else:
-                policy_budget = timeout if remaining is None else min(timeout, remaining / 2)
-                policy = _parse_policy(
-                    _get_obj(base, "/api/policy", timeout=policy_budget, total_timeout=remaining)
-                )
-                remaining = client.remaining_budget_seconds()
-                if remaining is not None and remaining <= 0:
-                    out.errors["policy"] = "total_deadline_exceeded"
-                else:
-                    out.policy = policy
-        except requests.RequestException as exc:
-            out.errors["policy"] = f"{type(exc).__name__}: {exc}"
-        except ValueError as exc:
-            out.errors["policy"] = f"bad response: {exc}"
+                out.errors["policy"] = f"v1: {policy_read.error}"
     if want("beta") or want("drawdown"):
         risk = client.get_risk(start_date=start_date, end_date=end_date)
         if risk.available and risk.data is not None:

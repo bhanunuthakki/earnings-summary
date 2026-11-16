@@ -1,0 +1,59 @@
+{
+  "meta": {
+    "account_coverage": {
+      "excluded_account_ids": [
+        4
+      ],
+      "included_account_ids": [
+        1,
+        2,
+        3
+      ],
+      "lagging_account_ids": []
+    },
+    "as_of": "2026-07-22",
+    "currency": "USD",
+    "generated_at": "2026-07-23T06:00:00Z",
+    "is_partial": false,
+    "is_stale": false,
+    "last_successful_sync_at": "2026-07-22T12:00:00",
+    "links": {
+      "performance": "/api/v1/analytics/performance"
+    },
+    "methodology": "benchmark_policy.weights",
+    "methodology_version": "1",
+    "schema_version": "1.4.0",
+    "source_providers": [
+      "plaid",
+      "snaptrade"
+    ],
+    "warnings": []
+  },
+  "policy": {
+    "as_of": "2026-07-22T12:00:00Z",
+    "is_balanced": true,
+    "receipt": null,
+    "recomputation": {
+      "policy_revision": 3,
+      "reason": null,
+      "status": "current"
+    },
+    "revision": 3,
+    "source": "operator",
+    "total_pct": "100.00",
+    "weights": [
+      {
+        "notes": "growth",
+        "ticker": "QQQ",
+        "updated_at": "2026-07-22T12:00:00Z",
+        "weight_pct": "40.00"
+      },
+      {
+        "notes": null,
+        "ticker": "VOO",
+        "updated_at": "2026-07-22T12:00:00Z",
+        "weight_pct": "60.00"
+      }
+    ]
+  }
+}

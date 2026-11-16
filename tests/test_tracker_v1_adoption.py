@@ -221,14 +221,8 @@ def test_transaction_history_v1_paginates(
 
 
 def test_analytics_v1_sections_adapt_and_risk_feeds_two_sections(
-    v1_on: None, monkeypatch: pytest.MonkeyPatch
+    v1_on: None, legacy_guard: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    policy_payload = {
-        "total_pct": 100.0,
-        "is_balanced": True,
-        "weights": [{"ticker": "XXXX", "weight_pct": 100.0, "notes": None}],
-    }
-
     router = _route_v1(
         monkeypatch,
         {
@@ -237,18 +231,9 @@ def test_analytics_v1_sections_adapt_and_risk_feeds_two_sections(
             "/api/v1/analytics/positioning": _fixture("positioning"),
             "/api/v1/analytics/risk": _fixture("risk"),
             "/api/v1/analytics/exit-quality": _fixture("exit-quality"),
+            "/api/v1/settings/benchmark-policy": _fixture("benchmark-policy"),
         },
     )
-    # The policy section legitimately stays on the legacy endpoint (no v1
-    # successor, Phase-0 ruling PT-6) — the ONE allowed legacy GET.
-    legacy_calls: list[str] = []
-
-    def _legacy(url: str, **kwargs: object) -> _FakeResp:
-        legacy_calls.append(url)
-        assert url.endswith("/api/policy"), f"unexpected legacy GET {url}"
-        return _FakeResp(policy_payload)
-
-    monkeypatch.setattr(tc.requests, "get", _legacy)
 
     analytics = tc.fetch_portfolio_analytics(
         only={"performance", "position_alpha", "positioning", "policy", "beta", "drawdown"}
@@ -275,7 +260,13 @@ def test_analytics_v1_sections_adapt_and_risk_feeds_two_sections(
         float(cast("str", expected_drawdown["max_drawdown_pct"]))
     )
     assert analytics.policy is not None and analytics.policy.total_pct == pytest.approx(100.0)
-    assert legacy_calls == [f"{analytics.api_url}/api/policy"]
+    assert [(w.ticker, w.weight_pct) for w in analytics.policy.weights] == [
+        ("QQQ", pytest.approx(40.0)),
+        ("VOO", pytest.approx(60.0)),
+    ]
+    assert analytics.policy.revision == 3
+    assert analytics.policy.recomputation_status == "current"
+    assert legacy_guard == []
     # beta + drawdown share ONE /analytics/risk read.
     risk_calls = [u for u in router.calls if "analytics/risk" in u]
     assert len(risk_calls) == 1
