@@ -216,7 +216,9 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # Approved retirement also removes optional coaching, packet, ETF-workup,
     # README, memo-generation and automatic-distillation actions.
     # -7: generated position review, distillation, and direct profile mutations.
-    assert len(rules) == 155
+    # +2 read-only earnings view-data JSON routes (the prep and readout peeks'
+    # typed models).
+    assert len(rules) == 157
     assert not {
         "start_socratic_questions",
         "socratic_questions_result",

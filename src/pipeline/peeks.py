@@ -36,15 +36,12 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Mapping
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from html import escape
 from io import StringIO
 from pathlib import Path
-from typing import TYPE_CHECKING, NamedTuple, cast
+from typing import NamedTuple, cast
 from urllib.parse import urlencode
-
-if TYPE_CHECKING:
-    from earnings_readout import ReportedQuarter
 
 from alerts import AlertRow, get_alert, list_alerts, list_queued_actions_for_alert
 from compute.metrics_engine.io import latest_ttm_value
@@ -53,6 +50,23 @@ from dashboard._card import render_alert_card
 from dashboard.evidence_drawer import load_brief_provenance
 from identity import DEFAULT_USER_ID
 from models.facts import DerivedInputRef, DerivedRef, FactLocator, LocatorKind, VendorFieldRef
+from pipeline.earnings_view_data import (
+    BRIEF_BODY_LIMIT,
+    READOUT_BODY_LIMIT,
+    ArtifactRefView,
+    CallToneView,
+    EarningsPrepView,
+    EarningsReadoutView,
+    KpiMoveView,
+    NewsEventView,
+    ReportedQuarterView,
+    SurpriseView,
+    ValuationView,
+    WatchItemView,
+    build_earnings_prep_view,
+    build_earnings_readout_view,
+    news_events_since,
+)
 from pipeline.research_cockpit import latest_dcf_runs, next_earnings, profile_quote
 from pipeline.research_panel_styles import RESEARCH_PANEL_STYLE
 from pipeline.source_viewers import (
@@ -1993,55 +2007,33 @@ def render_earnings_prep_peek(
 ) -> str | None:
     """The on-demand earnings-prep memo for one upcoming name.
 
-    Sections, each best-effort (a missing table drops its block, never the
-    memo): next-ER header with thesis status · the owner's open watch items /
-    questions (ask doorways, including alert-derived next-call prompts) · the
-    valuation stance (latest consolidated DCF). ``None`` (→ the route
-    404s) only when the ticker isn't a tracked, non-archived name."""
-    t = (ticker or "").strip().upper()
-    if not t:
-        return None
-    own = conn is None
-    if own:
-        try:
-            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-        except sqlite3.Error:
-            return None
-    try:
-        try:
-            tracked = conn.execute(
-                "SELECT list_type FROM tracked_companies WHERE ticker = ? AND archived_at IS NULL",
-                (t,),
-            ).fetchone()
-        except sqlite3.Error:
-            tracked = None
-        if tracked is None:
-            return None
-        header = _prep_header(conn, repo_root, t)
-        valuation = _prep_valuation(conn, t)
-        try:
-            from expected_earnings import upcoming_by_ticker
-
-            next_er = upcoming_by_ticker(conn, datetime.now(UTC).date()).get(t)
-        except Exception:
-            next_er = None
-    finally:
-        if own:
-            conn.close()
-
-    brief = _prep_brief_block(
-        db_path,
-        t,
-        next_er.isoformat() if next_er else None,
-        artifact_id=artifact_id,
+    Renders ``build_earnings_prep_view`` — the same data
+    ``/api/view-data/earnings-prep`` serves. Sections, each best-effort (a
+    missing table drops its block, never the memo): next-ER header with thesis
+    status · the pre-earnings brief · material events since the last call ·
+    the owner's open watch items / questions (ask doorways) · the valuation
+    stance (latest consolidated DCF). ``None`` (→ the route 404s) only when
+    the ticker isn't a tracked, non-archived name, or an exact ``artifact_id``
+    doesn't resolve."""
+    view = build_earnings_prep_view(
+        db_path, repo_root, ticker, now=datetime.now(UTC), artifact_id=artifact_id, conn=conn
     )
-    if brief is None:
-        return None
+    return None if view is None else render_earnings_prep_html(view)
+
+
+def render_earnings_prep_html(view: EarningsPrepView) -> str:
+    t = view.ticker
+    when_txt = escape(view.next_er) if view.next_er else "date not on the calendar yet"
+    header = (
+        f'<div class="prep-head"><span class="prep-when">reports {when_txt}</span>'
+        f"{_thesis_pill(view.thesis_status)}</div>"
+    )
     events = (
-        _prep_events_block(db_path, t, conn=conn) if not own else _prep_events_block(db_path, t)
+        '<div class="prep-sec"><h4>Since last call — material events</h4>'
+        f"{_news_events_list_html(view.events)}</div>"
+        if view.events
+        else ""
     )
-    watch = _prep_watch_items(db_path, t)
-
     ask_q = (
         f"Prep me for {t}'s upcoming earnings call — synthesize what to listen for "
         "from my open questions, watch items, prior-quarter tone, and the thesis."
@@ -2053,171 +2045,37 @@ def render_earnings_prep_peek(
         f'<a href="/#holding={escape(t, quote=True)}">open the holding →</a></div>'
     )
     return (
-        f'<div class="cc-prep">{header}{brief}{events}{watch}{valuation}</div>{foot}'
+        f'<div class="cc-prep">{header}{_prep_brief_html(view.brief)}{events}'
+        f"{_watch_items_html(view.watch_items, t)}{_valuation_html(view.valuation)}</div>{foot}"
         f"<style>{_PREP_CSS}</style>"
     )
 
 
-def _prep_brief_block(
-    db_path: Path,
-    t: str,
-    er_iso: str | None,
-    *,
-    artifact_id: int | None = None,
-) -> str | None:
-    """The pre-generated pre-earnings brief (owner ruling 2026-07-31), served
-    instantly when one exists for THIS upcoming ER date — keyed exactly the
-    way the stage-1c generator persisted it, so a brief for a past quarter
-    can never masquerade as current. Absent (no calendar date, no artifact,
-    pre-0260 DB) the peek simply keeps its deterministic assembly."""
-    if artifact_id is not None:
-        try:
-            from earnings_brief import PURPOSE as _BRIEF_PURPOSE
-            from llm_artifact_store import read_artifact
+def _thesis_pill(status: str | None) -> str:
+    if not status:
+        return ""
+    return f' <span class="k-pill{pill_tone_class(thesis_status_tone(status))}">{escape(status)}</span>'
 
-            art = read_artifact(artifact_id, db_path=db_path)
-        except Exception:
-            return None
-        if (
-            art is None
-            or art.ticker != t
-            or art.scope != "ticker"
-            or art.purpose != _BRIEF_PURPOSE
-            or art.superseded_by_id is not None
-            or not (art.content_md or "").strip()
-        ):
-            return None
-        exact_period = str(art.fiscal_period or "")
-        stamp = art.generated_at.date().isoformat()
-        return (
-            '<div class="prep-sec"><h4>Pre-earnings brief</h4>'
-            f'<div class="synthesis-body">{render_prose((art.content_md or "")[:20000])}</div>'
-            f'<p class="muted">{escape(f"generated {stamp} · for ER {exact_period}")}</p></div>'
-        )
-    if not er_iso:
-        return ""
-    try:
-        from earnings_brief import PURPOSE as _BRIEF_PURPOSE
-        from llm_artifact_store import read_current
 
-        art = read_current(ticker=t, purpose=_BRIEF_PURPOSE, fiscal_period=er_iso, db_path=db_path)
-    except Exception:
+def _prep_brief_html(brief: ArtifactRefView | None) -> str:
+    """The pre-generated pre-earnings brief (owner ruling 2026-07-31), keyed
+    exactly the way the stage-1c generator persisted it."""
+    if brief is None:
         return ""
-    if art is None or not (art.content_md or "").strip():
-        return ""
-    stamp = ""
-    try:
-        stamp = art.generated_at.date().isoformat()
-    except Exception:
-        stamp = ""
-    receipt_bits = [b for b in (f"generated {stamp}" if stamp else "", f"for ER {er_iso}") if b]
+    stamp = brief.generated_at.date().isoformat() if brief.generated_at else ""
+    receipt_bits = [
+        b
+        for b in (f"generated {stamp}" if stamp else "", f"for ER {brief.fiscal_period or ''}")
+        if b
+    ]
     return (
         '<div class="prep-sec"><h4>Pre-earnings brief</h4>'
-        f'<div class="synthesis-body">{render_prose((art.content_md or "")[:20000])}</div>'
+        f'<div class="synthesis-body">{render_prose(brief.content_md[:BRIEF_BODY_LIMIT])}</div>'
         f'<p class="muted">{escape(" · ".join(receipt_bits))}</p></div>'
     )
 
 
-def _prep_header(conn: sqlite3.Connection, repo_root: Path, t: str) -> str:
-    when: str | None = None
-    try:
-        from expected_earnings import upcoming_by_ticker
-
-        cal = upcoming_by_ticker(conn, datetime.now(UTC).date())
-        d = cal.get(t)
-        when = d.isoformat() if d is not None else None
-    except Exception:
-        when = None
-    if when is None:
-        try:
-            when = next_earnings(repo_root, t, datetime.now(UTC))
-        except Exception:
-            when = None
-    status = ""
-    try:
-        row = conn.execute(
-            "SELECT breach_status FROM thesis_state WHERE ticker = ?", (t,)
-        ).fetchone()
-        if row is not None and row[0]:
-            pill_tone = pill_tone_class(thesis_status_tone(str(row[0])))
-            status = f' <span class="k-pill{pill_tone}">{escape(str(row[0]))}</span>'
-    except sqlite3.Error:
-        status = ""
-    when_txt = escape(when) if when else "date not on the calendar yet"
-    return f'<div class="prep-head"><span class="prep-when">reports {when_txt}</span>{status}</div>'
-
-
-class _NewsEventRow(NamedTuple):
-    published: str  # YYYY-MM-DD
-    headline: str
-    url: str
-    why: str
-
-
-def _news_events_since(
-    db_path: Path,
-    t: str,
-    *,
-    limit: int = 12,
-    conn: sqlite3.Connection | None = None,
-) -> list[_NewsEventRow]:
-    """Material events noted for ``t`` since its last reported ER (fallback:
-    120 days), newest first, one row per real-world event (latest per
-    event_key — the write path already suppresses most duplicates; this
-    read-side pass keeps the list one-per-event even across guard windows).
-    Empty on a pre-0262 DB or any sqlite error — the section simply drops.
-    """
-    own = conn is None
-    if own:
-        try:
-            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-        except sqlite3.Error:
-            return []
-    try:
-        since: str | None = None
-        try:
-            from expected_earnings import last_reported_by_ticker
-
-            last = last_reported_by_ticker(conn, datetime.now(UTC).date()).get(t)
-            since = last.isoformat() if last else None
-        except Exception:
-            since = None
-        if since is None:
-            since = (datetime.now(UTC) - timedelta(days=120)).date().isoformat()
-        try:
-            rows = conn.execute(
-                "SELECT published_at, headline, url, why_material, event_key "
-                "FROM news_events WHERE ticker = ? AND published_at >= ? "
-                "ORDER BY published_at DESC",
-                (t, since),
-            ).fetchall()
-        except sqlite3.Error:
-            return []
-    finally:
-        if own:
-            conn.close()
-    out: list[_NewsEventRow] = []
-    seen_keys: set[str] = set()
-    for published_at, headline, url, why, event_key in rows:
-        key = str(event_key or "")
-        if key and key in seen_keys:
-            continue
-        if key:
-            seen_keys.add(key)
-        out.append(
-            _NewsEventRow(
-                published=str(published_at or "")[:10],
-                headline=str(headline or ""),
-                url=str(url or ""),
-                why=str(why or ""),
-            )
-        )
-        if len(out) >= limit:
-            break
-    return out
-
-
-def _news_events_list_html(events: list[_NewsEventRow]) -> str:
+def _news_events_list_html(events: list[NewsEventView]) -> str:
     """The shared one-line-per-event list body (prep section + events peek)."""
     items: list[str] = []
     for e in events:
@@ -2232,20 +2090,6 @@ def _news_events_list_html(events: list[_NewsEventRow]) -> str:
     return f"<ul>{''.join(items)}</ul>"
 
 
-def _prep_events_block(db_path: Path, t: str, *, conn: sqlite3.Connection | None = None) -> str:
-    """ "Since last call" — the material primary events noted between the last
-    reported ER and now (the news_events store; owner ruling 2026-07-31: news
-    never alerts, the catch-up happens HERE). Renders nothing when the store
-    is empty for the window — a quiet quarter is one line less, not a stub."""
-    events = _news_events_since(db_path, t, conn=conn)
-    if not events:
-        return ""
-    return (
-        '<div class="prep-sec"><h4>Since last call — material events</h4>'
-        f"{_news_events_list_html(events)}</div>"
-    )
-
-
 def render_news_events_peek(
     db_path: Path, ticker: str, *, conn: sqlite3.Connection | None = None
 ) -> str:
@@ -2254,7 +2098,7 @@ def render_news_events_peek(
     t = (ticker or "").strip().upper()
     if not t:
         return '<div class="cc-empty">No ticker.</div>'
-    events = _news_events_since(db_path, t, conn=conn)
+    events = news_events_since(db_path, t, now=datetime.now(UTC), conn=conn)
     if not events:
         return '<div class="cc-empty">No material events noted since the last call.</div>'
     foot = (
@@ -2269,59 +2113,41 @@ def render_news_events_peek(
     )
 
 
-def _prep_watch_items(db_path: Path, t: str, *, heading: str = "What you said to watch") -> str:
-    try:
-        from user_state.notes import list_notes
-
-        notes = list_notes(ticker=t, status="open", db_path=db_path)
-    except Exception:
+def _watch_items_html(
+    items: list[WatchItemView] | None, t: str, *, heading: str = "What you said to watch"
+) -> str:
+    if items is None:
         return ""
-    kind_rank = {"watch": 0, "question": 1}
-    notes = [note for note in notes if note.kind in kind_rank]
-    notes = sorted(notes, key=lambda n: kind_rank[n.kind])[:6]
-    if not notes:
+    if not items:
         return (
             f'<div class="prep-sec"><h4>{escape(heading)}</h4>'
             '<p class="muted">No open watch items or questions on this name — capture one '
             "and it becomes this list.</p></div>"
         )
-    items = "".join(
+    lis = "".join(
         '<li><button type="button" class="prep-ask" '
-        f'data-ask-q="{escape(f"{n.body.strip()} ({t})", quote=True)}" '
+        f'data-ask-q="{escape(f"{n.body} ({t})", quote=True)}" '
         f'title="open in Ask"><span class="k-chip">{escape(n.kind)}</span> '
-        f"{escape(n.body.strip())}</button></li>"
-        for n in notes
+        f"{escape(n.body)}</button></li>"
+        for n in items
     )
-    return f'<div class="prep-sec"><h4>{escape(heading)}</h4><ul>{items}</ul></div>'
+    return f'<div class="prep-sec"><h4>{escape(heading)}</h4><ul>{lis}</ul></div>'
 
 
-def _prep_valuation(conn: sqlite3.Connection, t: str) -> str:
-    try:
-        row = conn.execute(
-            "SELECT live_price, npv_per_share, over_under_pct, "
-            "COALESCE(sanity_flag, '') FROM dcf_runs "
-            "WHERE ticker = ? AND (segment_name IS NULL OR segment_name = '') "
-            "ORDER BY valuation_date DESC, rowid DESC LIMIT 1",
-            (t,),
-        ).fetchone()
-    except sqlite3.Error:
+def _valuation_html(v: ValuationView | None) -> str:
+    if v is None:
         return ""
-    if row is None:
-        return ""
-    live, fair, ou, sanity = row
     bits: list[str] = []
-    if live is not None:
-        bits.append(f"live ${float(live):,.0f}")
-    if fair is not None:
-        bits.append(f"fair ${float(fair):,.0f}")
-    if ou is not None:
-        bits.append(f"{float(ou) * 100.0:+.0f}% vs fair")
-    if not bits:
-        return ""
+    if v.live_price is not None:
+        bits.append(f"live ${v.live_price:,.0f}")
+    if v.npv_per_share is not None:
+        bits.append(f"fair ${v.npv_per_share:,.0f}")
+    if v.over_under_pct is not None:
+        bits.append(f"{v.over_under_pct * 100.0:+.0f}% vs fair")
     pill = (
         ' <span class="k-pill k-pill-warn" title="model failed the DCF trust gate; '
         'read the gap as unreviewed">unreviewed model</span>'
-        if sanity
+        if v.unreviewed
         else ""
     )
     return (
@@ -2348,114 +2174,60 @@ def render_earnings_readout_peek(
 ) -> str | None:
     """The persisted POST-earnings readout plus its deterministic source template.
 
-    Portfolio artifacts pre-generate in the morning pipeline. Evaluation-name
-    artifacts are generated only by the explicit action rendered here. Until
-    an artifact exists, this remains a zero-token deterministic template
-    grounded in what the platform recorded about the just-reported quarter:
+    Renders ``build_earnings_readout_view`` — the same data
+    ``/api/view-data/earnings-readout`` serves. Portfolio artifacts
+    pre-generate in the morning pipeline. Evaluation-name artifacts are
+    generated only by the explicit action rendered here. Until an artifact
+    exists, this remains a zero-token deterministic template grounded in what
+    the platform recorded about the just-reported quarter:
 
     header (last reported date + thesis breach pill) · beat/miss vs street
     (latest quarter + the 8-quarter base rate) · tier-1 KPI moves latest-vs-
     prior · the call-tone shift summary (``earnings_tone`` alert, when one
     fired) · the transcript doorway (``/source/<doc_id>``) · your open watch
-    items ("did they answer it?") · the valuation stance — then the dedicated persisted-generation
-    doorway. Every block is best-effort (a missing table
-    drops its block, never the memo); ``None`` (→ the route 404s) only when
-    the ticker isn't a tracked, non-archived name."""
-    t = (ticker or "").strip().upper()
-    if not t:
-        return None
-    own = conn is None
-    if own:
-        try:
-            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-        except sqlite3.Error:
-            return None
-    try:
-        try:
-            tracked = conn.execute(
-                "SELECT list_type FROM tracked_companies WHERE ticker = ? AND archived_at IS NULL",
-                (t,),
-            ).fetchone()
-        except sqlite3.Error:
-            tracked = None
-        if tracked is None:
-            return None
-        list_type = str(tracked[0])
-        if artifact_id is not None:
-            from earnings_readout import PURPOSE as _READOUT_PURPOSE
-            from llm_artifact_store import read_artifact
+    items ("did they answer it?") · the valuation stance — then the dedicated
+    persisted-generation doorway. ``None`` (→ the route 404s) only when the
+    ticker isn't a tracked, non-archived name, or an exact ``artifact_id``
+    doesn't resolve."""
+    view = build_earnings_readout_view(
+        db_path, repo_root, ticker, now=datetime.now(UTC), artifact_id=artifact_id, conn=conn
+    )
+    return None if view is None else render_earnings_readout_html(view)
 
-            exact_artifact = read_artifact(artifact_id, db_path=db_path)
-            if (
-                exact_artifact is None
-                or exact_artifact.ticker != t
-                or exact_artifact.scope != "ticker"
-                or exact_artifact.purpose != _READOUT_PURPOSE
-                or exact_artifact.superseded_by_id is not None
-                or not (exact_artifact.content_md or "").strip()
-            ):
-                return None
-            persisted = (
-                '<div class="prep-sec"><h4>Persisted post-earnings readout</h4>'
-                f'<div class="synthesis-body">{render_prose((exact_artifact.content_md or "")[:30000])}</div>'
-                f'<p class="muted">quarter ended {escape(str(exact_artifact.fiscal_period or ""))} · '
-                f"artifact #{exact_artifact.id}</p></div>"
-            )
-            foot = (
-                '<div class="cc-peek-foot">'
-                f'<a href="/#holding={escape(t, quote=True)}">open the holding →</a></div>'
-            )
-            return (
-                f'<div class="cc-prep"><div class="prep-head"><span class="prep-when">'
-                f"{escape(t)} · quarter-stable artifact</span></div>{persisted}</div>{foot}"
-                f"<style>{_PREP_CSS}</style>"
-            )
-        from earnings_readout import latest_reported_quarter
 
-        ref = datetime.now(UTC).date()
-        quarter = latest_reported_quarter(db_path, t, today=ref, conn=conn)
-        header = _readout_header(conn, t)
-        surprise = _readout_surprise(conn, t)
-        kpis = _readout_kpi_moves(conn, t)
-        transcript = _readout_transcript_link(quarter)
-        valuation = _prep_valuation(conn, t)
-    finally:
-        if own:
-            conn.close()
-
-    tone = _readout_tone(db_path, t)
-    watch = _prep_watch_items(db_path, t, heading="What you said to watch — did they answer it?")
-
-    persisted = ""
-    try:
-        from earnings_readout import PURPOSE as _READOUT_PURPOSE
-        from llm_artifact_store import read_current
-
-        art = (
-            read_current(
-                ticker=t,
-                purpose=_READOUT_PURPOSE,
-                fiscal_period=quarter.period_end,
-                db_path=db_path,
-            )
-            if quarter is not None
-            else None
+def render_earnings_readout_html(view: EarningsReadoutView) -> str:
+    t = view.ticker
+    persisted = _readout_artifact_html(view.readout)
+    if view.exact_artifact:
+        foot = (
+            '<div class="cc-peek-foot">'
+            f'<a href="/#holding={escape(t, quote=True)}">open the holding →</a></div>'
         )
-    except Exception:
-        art = None
-    if art is not None and (art.content_md or "").strip():
-        persisted = (
-            '<div class="prep-sec"><h4>Persisted post-earnings readout</h4>'
-            f'<div class="synthesis-body">{render_prose((art.content_md or "")[:30000])}</div>'
-            f'<p class="muted">quarter ended {escape(str(art.fiscal_period or ""))} · '
-            f"artifact #{art.id}</p></div>"
+        return (
+            f'<div class="cc-prep"><div class="prep-head"><span class="prep-when">'
+            f"{escape(t)} · quarter-stable artifact</span></div>{persisted}</div>{foot}"
+            f"<style>{_PREP_CSS}</style>"
         )
-
+    if view.reported_on:
+        when_txt = (
+            f"reported {escape(view.reported_on)} ({view.days_since_report}d ago)"
+            if view.days_since_report is not None
+            else f"reported {escape(view.reported_on)}"
+        )
+    else:
+        when_txt = "no reported quarter on record yet"
+    header = (
+        f'<div class="prep-head"><span class="prep-when">{when_txt}</span>'
+        f"{_thesis_pill(view.thesis_status)}</div>"
+    )
+    watch = _watch_items_html(
+        view.watch_items, t, heading="What you said to watch — did they answer it?"
+    )
     action = ""
-    if not persisted and quarter is not None:
+    if not persisted and view.quarter is not None:
         note = (
             "Evaluation names generate only when you request them."
-            if list_type == "evaluation"
+            if view.list_type == "evaluation"
             else "Portfolio names also generate automatically after the morning trigger pass."
         )
         action = (
@@ -2463,7 +2235,7 @@ def render_earnings_readout_peek(
             f'data-generate-readout="{escape(t, quote=True)}">generate persisted readout</button>'
             f'<span class="muted">{escape(note)}</span>'
         )
-    elif quarter is None:
+    elif view.quarter is None:
         action = '<span class="muted">Cannot persist yet: no selected quarterly transcript.</span>'
     foot = (
         '<div class="cc-peek-foot">'
@@ -2471,132 +2243,50 @@ def render_earnings_readout_peek(
         f'<a href="/#holding={escape(t, quote=True)}">open the holding →</a></div>'
     )
     return (
-        f'<div class="cc-prep">{header}{persisted}{surprise}{kpis}{tone}{transcript}{watch}'
-        f"{valuation}</div>{foot}<style>{_PREP_CSS}</style>"
+        f'<div class="cc-prep">{header}{persisted}{_readout_surprise_html(view.surprise)}'
+        f"{_readout_kpi_moves_html(view.kpi_moves)}{_readout_tone_html(view.call_tone)}"
+        f"{_readout_transcript_html(view.quarter)}{watch}"
+        f"{_valuation_html(view.valuation)}</div>{foot}<style>{_PREP_CSS}</style>"
     )
 
 
-def _readout_header(conn: sqlite3.Connection, t: str) -> str:
-    """ "reported <date> (Nd ago)" + the thesis breach pill. The date prefers an
-    actual report event (``earnings_surprises.release_date``), falling back to
-    the earnings calendar's kept-as-history past rows."""
-    when: str | None = None
-    try:
-        row = conn.execute(
-            "SELECT MAX(release_date) FROM earnings_surprises WHERE ticker = ?", (t,)
-        ).fetchone()
-        if row is not None and row[0]:
-            when = str(row[0])[:10]
-    except sqlite3.Error:
-        when = None
-    if when is None:
-        try:
-            from expected_earnings import last_reported_by_ticker
-
-            d = last_reported_by_ticker(conn, datetime.now(UTC).date()).get(t)
-            when = d.isoformat() if d is not None else None
-        except Exception:
-            when = None
-    status = ""
-    try:
-        row = conn.execute(
-            "SELECT breach_status FROM thesis_state WHERE ticker = ?", (t,)
-        ).fetchone()
-        if row is not None and row[0]:
-            pill_tone = pill_tone_class(thesis_status_tone(str(row[0])))
-            status = f' <span class="k-pill{pill_tone}">{escape(str(row[0]))}</span>'
-    except sqlite3.Error:
-        status = ""
-    if when:
-        try:
-            days = (datetime.now(UTC).date() - date.fromisoformat(when)).days
-            when_txt = f"reported {escape(when)} ({days}d ago)"
-        except ValueError:
-            when_txt = f"reported {escape(when)}"
-    else:
-        when_txt = "no reported quarter on record yet"
-    return f'<div class="prep-head"><span class="prep-when">{when_txt}</span>{status}</div>'
-
-
-def _readout_surprise(conn: sqlite3.Connection, t: str) -> str:
-    """Latest quarter's beat/miss vs street plus the 8-quarter base rate, from
-    ``earnings_surprises`` — absent entirely when the ingest hasn't landed."""
-    try:
-        row = conn.execute(
-            "SELECT eps_estimate, eps_actual, eps_surprise_pct, "
-            "revenue_estimate, revenue_actual, revenue_surprise_pct "
-            "FROM earnings_surprises WHERE ticker = ? "
-            "ORDER BY release_date DESC LIMIT 1",
-            (t,),
-        ).fetchone()
-    except sqlite3.Error:
+def _readout_artifact_html(art: ArtifactRefView | None) -> str:
+    if art is None:
         return ""
-    if row is None:
-        return ""
+    return (
+        '<div class="prep-sec"><h4>Persisted post-earnings readout</h4>'
+        f'<div class="synthesis-body">{render_prose(art.content_md[:READOUT_BODY_LIMIT])}</div>'
+        f'<p class="muted">quarter ended {escape(art.fiscal_period or "")} · '
+        f"artifact #{art.id}</p></div>"
+    )
 
-    def _side(label: str, est: object, act: object, pct: object) -> str:
-        if act is None or pct is None:
-            return ""
-        try:
-            p = float(str(pct))
-        except ValueError:
-            return ""
-        tone = "k-num-pos" if p >= 0 else "k-num-neg"
-        verb = "beat" if p >= 0 else "miss"
-        vs = ""
-        if est is not None:
-            vs = f" vs {escape(str(est))} est"
-        return (
-            f"{label} {escape(str(act))}{vs} "
-            f'<span class="{tone}">({verb} {escape(fmt_pct(p, signed=True))})</span>'
+
+def _readout_surprise_html(s: SurpriseView | None) -> str:
+    if s is None:
+        return ""
+    bits: list[str] = []
+    for side in s.sides:
+        tone = "k-num-pos" if side.surprise_pct >= 0 else "k-num-neg"
+        verb = "beat" if side.surprise_pct >= 0 else "miss"
+        vs = f" vs {escape(str(side.estimate))} est" if side.estimate is not None else ""
+        bits.append(
+            f"{side.label} {escape(str(side.actual))}{vs} "
+            f'<span class="{tone}">({verb} {escape(fmt_pct(side.surprise_pct, signed=True))})</span>'
         )
-
-    bits = [
-        b
-        for b in (
-            _side("EPS", row[0], row[1], row[2]),
-            _side("Revenue", row[3], row[4], row[5]),
-        )
-        if b
-    ]
-    if not bits:
-        return ""
-    rate = ""
-    try:
-        from compute.earnings_surprise import surprise_scorecard_for
-
-        previous_row_factory = conn.row_factory
-        conn.row_factory = sqlite3.Row
-        try:
-            sc = surprise_scorecard_for(conn, t, lookback_quarters=8)
-        finally:
-            conn.row_factory = previous_row_factory
-        if sc.total_quarters and sc.eps.beat_rate_pct is not None:
-            rate = (
-                f'<p class="muted">EPS beat rate {sc.eps.beat_rate_pct}% '
-                f"over the last {sc.total_quarters} quarter(s)</p>"
-            )
-    except Exception:
-        rate = ""
+    rate = (
+        f'<p class="muted">EPS beat rate {s.eps_beat_rate_pct}% '
+        f"over the last {s.lookback_quarters} quarter(s)</p>"
+        if s.eps_beat_rate_pct is not None
+        else ""
+    )
     return f'<div class="prep-sec"><h4>Vs street</h4><p>{" · ".join(bits)}</p>{rate}</div>'
 
 
-def _readout_kpi_moves(conn: sqlite3.Connection, t: str) -> str:
-    """Tier-1 KPI moves, latest vs prior fact — the same deltas the cockpit
-    chips render (one reader, so the peek can't disagree with the cockpit)."""
-    try:
-        from pipeline.research_cockpit import (
-            tier1_kpi_deltas,
-        )
-
-        deltas = tier1_kpi_deltas(conn, {t}, as_of=datetime.now(UTC).date()).get(t, [])
-    except Exception:
+def _readout_kpi_moves_html(moves: list[KpiMoveView]) -> str:
+    if not moves:
         return ""
-    if not deltas:
-        return ""
-    deltas = sorted(deltas, key=lambda d: d.magnitude, reverse=True)[:8]
     rows: list[str] = []
-    for d in deltas:
+    for d in moves:
         tone_cls = {"ok": "k-num-pos", "bad": "k-num-neg", "warn": "k-num-neg"}.get(d.tone, "")
         why = f' title="{escape(d.tone_why, quote=True)}"' if d.tone_why else ""
         delta_html = (
@@ -2614,43 +2304,22 @@ def _readout_kpi_moves(conn: sqlite3.Connection, t: str) -> str:
     )
 
 
-def _readout_tone(db_path: Path, t: str) -> str:
-    """The latest ``earnings_tone`` alert's LLM diff summary + shifts — the
-    call-tone read the trigger already produced (never recomputed here)."""
-    try:
-        alerts = list_alerts(ticker=t, limit=50, db_path=db_path)
-    except sqlite3.Error:
+def _readout_tone_html(tone: CallToneView | None) -> str:
+    if tone is None:
         return ""
-    tone = next((a for a in alerts if a.trigger_kind == "earnings_tone"), None)
-    if tone is None or not tone.evidence_json:
-        return ""
-    try:
-        parsed = json.loads(tone.evidence_json)
-    except ValueError:
-        return ""
-    if not isinstance(parsed, dict):
-        return ""
-    ev = cast("dict[str, object]", parsed)
-    summary = str(ev.get("summary") or "").strip()
-    if not summary:
-        return ""
-    shifts = ev.get("shifts")
-    shift_items = ""
-    if isinstance(shifts, list) and shifts:
-        shift_list = cast("list[object]", shifts)
-        shift_items = (
-            "<ul>"
-            + "".join(f"<li>{escape(str(s))}</li>" for s in shift_list[:4] if str(s).strip())
-            + "</ul>"
-        )
-    stamp = escape(str(tone.fired_at)[:10])
+    shift_items = (
+        "<ul>" + "".join(f"<li>{escape(s)}</li>" for s in tone.shifts) + "</ul>"
+        if tone.shifts
+        else ""
+    )
     return (
         '<div class="prep-sec"><h4>Call tone vs prior quarters</h4>'
-        f'<p>{escape(summary)} <span class="muted">({stamp})</span></p>{shift_items}</div>'
+        f'<p>{escape(tone.summary)} <span class="muted">({escape(tone.fired_on)})</span></p>'
+        f"{shift_items}</div>"
     )
 
 
-def _readout_transcript_link(quarter: ReportedQuarter | None) -> str:
+def _readout_transcript_html(quarter: ReportedQuarterView | None) -> str:
     """Link the same selected reported transcript used for the readout body."""
     if quarter is None:
         return ""

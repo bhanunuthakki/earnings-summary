@@ -676,8 +676,8 @@
     {
       "disposition": "schema_field",
       "evidence": "The renderer calls this helper only while iterating the checked-in _COMPARE_METRIC_ROWS field tuple.",
-      "fingerprint": "602c11283c6e3c52df69b274f66506129c97fa62603696a63bdd7c17d2988899",
-      "line": 1899,
+      "fingerprint": "7e84420eef89eb9fb713f7684682839a588a8bb7f6976e86f3fe88ca6ec67c21",
+      "line": 1913,
       "path": "src/pipeline/peeks.py",
       "targets": [
         "_COMPARE_METRIC_ROWS"
@@ -1121,7 +1121,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "044397c2bdc436a25e696578f108e570815dedaf0322e137e9d20581f23363ea",
+      "source_sha256": "5df2dd08932d9e6bd320407ea96a77b66b3855e23e5c01523e26b8c762c40c50",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
