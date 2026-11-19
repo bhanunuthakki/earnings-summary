@@ -759,7 +759,7 @@ def unreviewed_fallback_clauses(
         and _table_exists(conn, "fact_resolution_outcomes")
     ):
         predicates.append(
-            "NOT EXISTS ("
+            "NOT EXISTS ("  # nosec B608
             "SELECT 1 FROM fact_observation_revisions forv "
             "JOIN v_observation_resolution_current res "
             "ON res.selected_observation_id=forv.observation_id "
