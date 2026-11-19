@@ -80,8 +80,10 @@ from provenance.sec_companyfacts_capture import CompanyFactsContractError
 _PER_TICKER_DELAY_S = 0.2
 
 
-def _active_list_types(conn: sqlite3.Connection) -> dict[str, str]:
+def _active_list_types(conn: object) -> dict[str, str]:
     """Return non-archived uppercase ticker -> list_type when the table is present."""
+    if not isinstance(conn, sqlite3.Connection):
+        return {}
     columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
     if not {"ticker", "list_type"}.issubset(columns):
         return {}
@@ -352,7 +354,6 @@ def main() -> int:
     try:
         scope_issues: list[dict[str, object]] = []
         tickers = _resolve_tickers(args, conn, scope_issues=scope_issues)
-        list_types = _active_list_types(conn)
         try:
             run_id = start_run(conn, directive="fetch_sec_xbrl", ticker_scope=tickers)
         except PipelineRunSuppressedError as exc:
@@ -361,6 +362,7 @@ def main() -> int:
                 payload["scope_issues"] = scope_issues
             print(json.dumps(payload))
             return 1 if scope_issues else 0
+        list_types = _active_list_types(conn)
         rows: list[dict[str, object]] = []
         failed = 0
         failed_portfolio = 0
