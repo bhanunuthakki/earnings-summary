@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from db_paths import configured_db_path, require_db_path
+from db_paths import configured_db_path, default_product_state_root, require_db_path
 from llm_artifact_store import Artifact, DirtyQueueReadError, drain_dirty
 from log_redact import redact
 from native_artifact_projection import (
@@ -364,6 +364,7 @@ def _project_native_job(
     db_path: Path,
 ) -> str | None:
     """Project every freshly written native cache owned by this exact job."""
+    state_root = default_product_state_root(repo_root, db_path=db_path)
     grouped: dict[tuple[str, str, str | None], list[int]] = defaultdict(list)
     for obligation in job.obligations:
         if obligation.purpose in PROJECTABLE_NATIVE_PURPOSES:
@@ -378,7 +379,7 @@ def _project_native_job(
             project_native_artifact(
                 ticker=job.ticker,
                 purpose=purpose,
-                repo_root=repo_root,
+                repo_root=state_root,
                 db_path=db_path,
                 queued_at=job.queued_at,
                 scope=scope,
@@ -529,6 +530,9 @@ def _halt_for_unavailable_cost_ledger(
     return 1
 
 
+_MAX_CONSECUTIVE_NO_PROGRESS_PER_PURPOSE = 2
+
+
 def _execute_jobs(
     jobs: list[_PendingJob],
     *,
@@ -536,12 +540,28 @@ def _execute_jobs(
     db_path: Path,
     max_cost_usd: float,
     run_started_at: datetime,
+    max_consecutive_no_progress: int = _MAX_CONSECUTIVE_NO_PROGRESS_PER_PURPOSE,
 ) -> int:
     """Drain jobs serially; queue progress and spend accounting both fail closed."""
     ran = 0
     failed = 0
     no_progress = 0
+    deferred_circuit_breaker = 0
+    consecutive_no_progress: dict[str, int] = {}
     for idx, job in enumerate(jobs):
+        primary_purpose = job.purposes[0]
+        if consecutive_no_progress.get(primary_purpose, 0) >= max_consecutive_no_progress:
+            deferred_circuit_breaker += 1
+            log.warning(
+                {
+                    "event": "drain_skipped_circuit_breaker",
+                    "ticker": job.ticker,
+                    "purpose": primary_purpose,
+                    "purposes": job.purposes,
+                    "consecutive_no_progress": consecutive_no_progress[primary_purpose],
+                }
+            )
+            continue
         cost_result = _accrued_cost_usd(db_path, since=run_started_at)
         if isinstance(cost_result, _CostUnavailable):
             return _halt_for_unavailable_cost_ledger(
@@ -549,7 +569,7 @@ def _execute_jobs(
                 ran=ran,
                 failed=failed,
                 no_progress=no_progress,
-                deferred=len(jobs) - idx,
+                deferred=(len(jobs) - idx) + deferred_circuit_breaker,
                 cap_usd=max_cost_usd,
             )
         accrued = cost_result.cost_usd
@@ -574,7 +594,7 @@ def _execute_jobs(
                         "run": ran,
                         "failed": failed,
                         "no_progress": no_progress,
-                        "deferred": remaining,
+                        "deferred": remaining + deferred_circuit_breaker,
                         "accrued_cost_usd": round(accrued, 4),
                         "cap_usd": max_cost_usd,
                     },
@@ -611,6 +631,9 @@ def _execute_jobs(
             if projection_error is not None or not progress.satisfied:
                 failed += 1
                 no_progress += 1
+                consecutive_no_progress[primary_purpose] = (
+                    consecutive_no_progress.get(primary_purpose, 0) + 1
+                )
                 log.warning(
                     {
                         "event": "drain_no_progress",
@@ -621,6 +644,7 @@ def _execute_jobs(
                     }
                 )
             else:
+                consecutive_no_progress[primary_purpose] = 0
                 log.info({"event": "drain_subprocess_ok", **result})
         ran += 1
 
@@ -631,7 +655,7 @@ def _execute_jobs(
             ran=ran,
             failed=failed,
             no_progress=no_progress,
-            deferred=0,
+            deferred=deferred_circuit_breaker,
             cap_usd=max_cost_usd,
         )
     final_cost = final_cost_result.cost_usd
@@ -648,7 +672,7 @@ def _execute_jobs(
                 "run": ran,
                 "failed": failed,
                 "no_progress": no_progress,
-                "deferred": 0,
+                "deferred": deferred_circuit_breaker,
                 "accrued_cost_usd": round(final_cost, 4),
                 "cap_usd": max_cost_usd,
             },

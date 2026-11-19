@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "484790bce7dcf56da52e24ee6c444070efb2c669",
+  "scoped_commit": "0ea4299fe6d9a00519fb69096140759538b32056",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "b18a836760fbbe17db1f7a6a4866b753f52992fb1a864eef53b4c62b34805dcc",
+  "source_sha256": "109de073a4318e0c223b5afbc08f39860b97b29077ff6d3cd22c6e710c4e45af",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1400,
-    "total_noncomment_loc": 559602,
+    "total_noncomment_loc": 559648,
     "modules_over_1000_loc": 117,
     "modules_over_2000_loc": 22,
     "modules_at_least_3000_loc": 5,
@@ -1049,9 +1049,9 @@
         "path": "execution/build_artifacts.py",
         "module": "execution.build_artifacts",
         "lines": {
-          "physical": 1252,
-          "nonblank": 1178,
-          "noncomment": 1127
+          "physical": 1256,
+          "nonblank": 1182,
+          "noncomment": 1131
         },
         "internal_fan_out": 39,
         "responsibilities": [
@@ -2331,9 +2331,9 @@
         "path": "execution/daily_fetch_and_brief.py",
         "module": "execution.daily_fetch_and_brief",
         "lines": {
-          "physical": 702,
-          "nonblank": 624,
-          "noncomment": 583
+          "physical": 706,
+          "nonblank": 628,
+          "noncomment": 587
         },
         "internal_fan_out": 10,
         "responsibilities": [
@@ -4995,9 +4995,9 @@
         "path": "execution/refresh_dirty_artifacts.py",
         "module": "execution.refresh_dirty_artifacts",
         "lines": {
-          "physical": 759,
-          "nonblank": 692,
-          "noncomment": 663
+          "physical": 783,
+          "nonblank": 714,
+          "noncomment": 685
         },
         "internal_fan_out": 7,
         "responsibilities": [
@@ -8720,16 +8720,16 @@
         "path": "src/db_paths.py",
         "module": "db_paths",
         "lines": {
-          "physical": 152,
-          "nonblank": 132,
-          "noncomment": 126
+          "physical": 171,
+          "nonblank": 148,
+          "noncomment": 142
         },
-        "internal_fan_out": 1,
+        "internal_fan_out": 2,
         "responsibilities": [
           "network"
         ],
-        "public_functions": 5,
-        "fully_annotated_public_functions": 5
+        "public_functions": 6,
+        "fully_annotated_public_functions": 6
       },
       {
         "path": "src/dcf/__init__.py",

@@ -1376,3 +1376,88 @@ def test_subprocess_failure_continues_drain(
         if isinstance(r.msg, dict) and r.msg.get("event") == "drain_subprocess_failed"
     ]
     assert len(failures) == 2
+
+
+def test_consecutive_no_progress_trips_circuit_breaker_per_purpose(
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+    migrated_db: Callable[..., Path],
+) -> None:
+    """Two consecutive no-progress outcomes for the same purpose skip further
+    jobs for that purpose while still running unrelated purposes, and a
+    successful job resets the streak."""
+    repo_root = tmp_path
+    (repo_root / "data").mkdir()
+    db_path = repo_root / "data" / "portfolio.db"
+    conn = _make_portfolio_db(db_path, migrated_db)
+    try:
+        _insert_dirty(conn, ticker="AAPL", purpose="bear_case")
+        _insert_dirty(conn, ticker="BKNG", purpose="bear_case")
+        _insert_dirty(conn, ticker="GOOG", purpose="bear_case")
+        _insert_dirty(conn, ticker="META", purpose="bear_case")
+        _insert_dirty(conn, ticker="NVDA", purpose="company_description")
+    finally:
+        conn.close()
+
+    call_tickers: list[str] = []
+
+    def _fake_subprocess(argv: list[str], **kwargs: object) -> _FakeCompleted:
+        del kwargs
+        ticker_idx = argv.index("--ticker") + 1
+        ticker = argv[ticker_idx]
+        call_tickers.append(ticker)
+        # First job (AAPL) succeeds and resets the counter; BKNG and GOOG make
+        # no progress so META (4th bear_case) is skipped, while NVDA still runs.
+        if ticker in {"AAPL", "NVDA"}:
+            upd = sqlite3.connect(str(db_path))
+            try:
+                upd.execute(
+                    "UPDATE llm_artifacts SET dirty = 0, expires_at = ? "
+                    "WHERE ticker = ? AND superseded_by_id IS NULL",
+                    ((datetime.now(UTC) + timedelta(days=30)).isoformat(), ticker),
+                )
+                upd.commit()
+            finally:
+                upd.close()
+        return _FakeCompleted(returncode=0, stderr="")
+
+    monkeypatch.setattr(executor, "project_native_artifact", _projection_ok)
+    monkeypatch.setattr(executor.subprocess, "run", _fake_subprocess)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "refresh_dirty_artifacts.py",
+            "--repo-root",
+            str(repo_root),
+            "--execute",
+            "--max-cost-usd",
+            "100",
+        ],
+    )
+
+    with caplog.at_level("WARNING", logger="refresh_dirty_artifacts"):
+        rc = executor.main()
+
+    assert rc == 1
+    assert call_tickers == ["AAPL", "BKNG", "GOOG", "NVDA"]
+    receipt_line = next(
+        line for line in capsys.readouterr().out.splitlines() if line.startswith("drain receipt:")
+    )
+    receipt = json.loads(receipt_line.removeprefix("drain receipt: "))
+    assert receipt["status"] == "partial_failure"
+    assert receipt["run"] == 4
+    assert receipt["failed"] == 2
+    assert receipt["no_progress"] == 2
+    assert receipt["deferred"] == 1
+    skipped = [
+        event
+        for event in _dict_log_events(caplog)
+        if event.get("event") == "drain_skipped_circuit_breaker"
+    ]
+    assert len(skipped) == 1
+    assert skipped[0]["ticker"] == "META"
+    assert skipped[0]["purpose"] == "bear_case"

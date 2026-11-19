@@ -336,3 +336,26 @@ def test_resolve_tickers_dirty_only_from_fresh_schema(tmp_path: Path) -> None:
     finally:
         conn.close()
     assert tickers == ["DIRT", "TIDY"]
+
+
+def test_default_product_state_root_prefers_configured_scratch_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from db_paths import default_product_state_root
+
+    code_root = tmp_path / "runtime" / "earnings-summary"
+    state_root = tmp_path / "scratch" / "earnings-summary"
+    code_root.mkdir(parents=True)
+    (state_root / "data").mkdir(parents=True)
+
+    monkeypatch.delenv("EARNINGS_SUMMARY_DB_PATH", raising=False)
+    monkeypatch.setenv("EARNINGS_SUMMARY_ENV_FILE", str(tmp_path / "missing.env"))
+    assert default_product_state_root(code_root) == code_root.resolve()
+
+    scratch_db = state_root / "data" / "portfolio.db"
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(scratch_db))
+    assert default_product_state_root(code_root) == state_root.resolve()
+    assert default_product_state_root(code_root, db_path=scratch_db) == state_root.resolve()
+
+    non_standard_db = tmp_path / "custom" / "test.db"
+    assert default_product_state_root(code_root, db_path=non_standard_db) == code_root.resolve()
