@@ -35,11 +35,21 @@ from pathlib import Path
 from typing import cast
 
 import db
-from net.client import FMP_CLIENT, HttpCallError, JsonShape, JsonValue, require_fmp_admission
+from db_paths import default_product_state_root
+from models.companies import ListType
+from net.client import (
+    FMP_CLIENT,
+    HttpCallError,
+    HttpErrorKind,
+    JsonShape,
+    JsonValue,
+    require_fmp_admission,
+)
+from pipeline.ticker_scope import load_active_capabilities
 from runtime.secrets import load_project_env
 
 PROJECT_ROOT = str(Path(__file__).resolve().parents[1])
-DATA_DIR = os.path.join(PROJECT_ROOT, "data", "historical", "fmp")
+DATA_DIR = str(default_product_state_root(Path(PROJECT_ROOT)) / "data" / "historical" / "fmp")
 FMP_API_KEY: str | None = None
 
 DATA_TYPE = "earnings_calendar"
@@ -91,15 +101,20 @@ def process_ticker(ticker: str, limit: int) -> bool:
 def select_tickers(args: argparse.Namespace) -> list[str]:
     if args.ticker:
         return [args.ticker.upper()]
-    companies = db.get_tracked_companies()
     if args.portfolio:
-        return [str(c["ticker"]) for c in companies if c["list_type"] == "portfolio"]
-    if args.watchlist:
-        return [str(c["ticker"]) for c in companies if c["list_type"] == "watchlist"]
-    if args.evaluation:
-        return [str(c["ticker"]) for c in companies if c["list_type"] == "evaluation"]
-    # --all: active universe (db.ACTIVE_LIST_TYPES)
-    return [str(c["ticker"]) for c in companies if c["list_type"] in db.ACTIVE_LIST_TYPES]
+        roles = frozenset({ListType.PORTFOLIO})
+    elif args.watchlist:
+        roles = frozenset({ListType.WATCHLIST})
+    elif args.evaluation:
+        roles = frozenset({ListType.EVALUATION})
+    else:
+        roles = frozenset(ListType(lt) for lt in db.ACTIVE_LIST_TYPES)
+    conn = db.get_connection()
+    try:
+        caps = load_active_capabilities(conn, list_types=roles)
+    finally:
+        conn.close()
+    return sorted(cap.ticker for cap in caps if cap.supports_earnings_calendar)
 
 
 def main() -> None:
@@ -129,6 +144,12 @@ def main() -> None:
             load_project_env(Path(PROJECT_ROOT))
             require_fmp_admission()
     except HttpCallError as exc:
+        if exc.kind is HttpErrorKind.PROVIDER_DISABLED_BY_OWNER and not args.force:
+            print(
+                json.dumps({"event": "fmp_calendar_skipped", "reason": exc.kind.value}),
+                file=sys.stderr,
+            )
+            sys.exit(0)
         print(
             json.dumps({"event": "fmp_calendar_unavailable", "reason": exc.kind.value}),
             file=sys.stderr,

@@ -85,8 +85,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_step executes only the five fixed managed-Python stage scripts.",
-      "fingerprint": "850cd44d969e927987a0ad1a42c8473c18ed718f55c15bebe789d202fe828022",
-      "line": 679,
+      "fingerprint": "5cce91eba8dbc72207d87174c727328aad9f6f00a9293266f70042dce438c57a",
+      "line": 698,
       "path": "execution/daily_fetch_and_brief.py",
       "targets": [
         "execution/run_thesis_evaluator.py",
@@ -109,8 +109,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Fixed _run_child callers assemble only discovery, fetch, canonical document-evidence, IR-anchor or direct process_ir_documents.py summary argv before ensure_managed_python_argv. process_document_evidence.py retains byte-capture, extraction and coverage authority. Explicit ticker, database and state-root arguments do not select executable identity. The retired state-rebinding summary adapter stays absent; narrative and summary outputs remain derived views.",
-      "fingerprint": "9d269109d5fbc63a7775d07583881b44cbd9138c1d37d28078adf59f8b31aee6",
-      "line": 266,
+      "fingerprint": "190a3c5caf46067a07f9db7d39d9b384f55c28dc773fc7dae3fd1a6b42f661c9",
+      "line": 297,
       "path": "execution/discover_ir_documents_all.py",
       "targets": [
         "execution/discover_ir_documents.py",
@@ -1014,7 +1014,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "bd93f2a03ed0674e100542c40372f5f93404e59d45d2075f41bd63b306e8041a",
+      "source_sha256": "c4d0746fa3f83a141ec2fedb2660cd9214ef0c4a1f213f0e4176570a0233ef02",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

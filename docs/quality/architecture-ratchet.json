@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "9a9dbd2d6fa4b96e58b9e2e36d5b1232e92b2de2",
+  "scoped_commit": "bfa64560542e3310b1b2043b1812459aaf57381a",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "2fafe1e5658580ac0b43c8d07ab1a325a04e6ef41997da8c4f86e4a876d03de7",
+  "source_sha256": "3ac05c3e3fa21b6b69ea4d800307d9180bbdbfd81e764a33966f610713c95cf9",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,8 +22,8 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1404,
-    "total_noncomment_loc": 560491,
+    "executable_modules": 1405,
+    "total_noncomment_loc": 560853,
     "modules_over_1000_loc": 117,
     "modules_over_2000_loc": 22,
     "modules_at_least_3000_loc": 5,
@@ -597,11 +597,11 @@
         "path": "execution/backfill_earnings_surprises.py",
         "module": "execution.backfill_earnings_surprises",
         "lines": {
-          "physical": 420,
-          "nonblank": 383,
-          "noncomment": 373
+          "physical": 428,
+          "nonblank": 391,
+          "noncomment": 381
         },
-        "internal_fan_out": 5,
+        "internal_fan_out": 7,
         "responsibilities": [
           "database",
           "filesystem",
@@ -2331,9 +2331,9 @@
         "path": "execution/daily_fetch_and_brief.py",
         "module": "execution.daily_fetch_and_brief",
         "lines": {
-          "physical": 706,
-          "nonblank": 628,
-          "noncomment": 587
+          "physical": 725,
+          "nonblank": 647,
+          "noncomment": 606
         },
         "internal_fan_out": 10,
         "responsibilities": [
@@ -2591,9 +2591,9 @@
         "path": "execution/discover_ir_documents_all.py",
         "module": "execution.discover_ir_documents_all",
         "lines": {
-          "physical": 1356,
-          "nonblank": 1267,
-          "noncomment": 1257
+          "physical": 1392,
+          "nonblank": 1303,
+          "noncomment": 1293
         },
         "internal_fan_out": 11,
         "responsibilities": [
@@ -3159,11 +3159,11 @@
         "path": "execution/fetch_fmp_earnings_calendar.py",
         "module": "execution.fetch_fmp_earnings_calendar",
         "lines": {
-          "physical": 171,
-          "nonblank": 148,
-          "noncomment": 140
+          "physical": 192,
+          "nonblank": 169,
+          "noncomment": 162
         },
-        "internal_fan_out": 3,
+        "internal_fan_out": 6,
         "responsibilities": [
           "filesystem",
           "network"
@@ -3261,11 +3261,11 @@
         "path": "execution/fetch_news.py",
         "module": "execution.fetch_news",
         "lines": {
-          "physical": 662,
-          "nonblank": 595,
-          "noncomment": 549
+          "physical": 695,
+          "nonblank": 625,
+          "noncomment": 579
         },
-        "internal_fan_out": 15,
+        "internal_fan_out": 17,
         "responsibilities": [
           "database",
           "process"
@@ -3320,9 +3320,9 @@
         "path": "execution/fetch_sec_xbrl.py",
         "module": "execution.fetch_sec_xbrl",
         "lines": {
-          "physical": 497,
-          "nonblank": 459,
-          "noncomment": 448
+          "physical": 536,
+          "nonblank": 496,
+          "noncomment": 485
         },
         "internal_fan_out": 10,
         "responsibilities": [
@@ -3702,11 +3702,11 @@
         "path": "execution/ingest_earnings_surprises.py",
         "module": "execution.ingest_earnings_surprises",
         "lines": {
-          "physical": 596,
-          "nonblank": 550,
-          "noncomment": 550
+          "physical": 625,
+          "nonblank": 579,
+          "noncomment": 579
         },
-        "internal_fan_out": 4,
+        "internal_fan_out": 6,
         "responsibilities": [
           "database",
           "filesystem",
@@ -5028,11 +5028,11 @@
         "path": "execution/refresh_expected_earnings.py",
         "module": "execution.refresh_expected_earnings",
         "lines": {
-          "physical": 126,
-          "nonblank": 105,
-          "noncomment": 103
+          "physical": 162,
+          "nonblank": 140,
+          "noncomment": 138
         },
-        "internal_fan_out": 6,
+        "internal_fan_out": 9,
         "responsibilities": [
           "database",
           "network"
@@ -14653,6 +14653,22 @@
         ],
         "public_functions": 7,
         "fully_annotated_public_functions": 7
+      },
+      {
+        "path": "src/pipeline/ticker_scope.py",
+        "module": "pipeline.ticker_scope",
+        "lines": {
+          "physical": 170,
+          "nonblank": 146,
+          "noncomment": 146
+        },
+        "internal_fan_out": 3,
+        "responsibilities": [
+          "database",
+          "network"
+        ],
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
       },
       {
         "path": "src/pipeline/ticker_settings_panel.py",

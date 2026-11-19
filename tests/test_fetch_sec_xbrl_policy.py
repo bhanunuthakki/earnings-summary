@@ -447,3 +447,59 @@ def test_sec_excludes_newly_documented_non_us_filers(
         "1548.HK",
         "LVMUY",
     }
+
+
+def test_sec_cli_without_project_root_resolves_state_root_from_db_path(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    state_root = tmp_path / "scratch" / "earnings-summary"
+    (state_root / "data").mkdir(parents=True)
+    database = state_root / "data" / "portfolio.db"
+    conn = sqlite3.connect(database)
+    conn.execute("CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT)")
+    conn.execute("INSERT INTO tracked_companies VALUES ('META', 'portfolio', NULL)")
+    conn.commit()
+    seen_roots: list[Path] = []
+
+    def open_conn(_path: Path) -> sqlite3.Connection:
+        return conn
+
+    def resolve_only(*_args: object, **_kwargs: object) -> list[str]:
+        return ["META"]
+
+    def begin(*_args: object, **_kwargs: object) -> str:
+        return "run-state"
+
+    def finish(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    def fake_ingest(
+        _conn: sqlite3.Connection,
+        *,
+        ticker: str,
+        project_root: Path,
+        run_id: str,
+        timing_sink: Callable[[sec_xbrl.SecIngestTimingReceipt], None],
+    ) -> sec_xbrl.IngestStats:
+        del ticker, run_id, timing_sink
+        seen_roots.append(project_root)
+        return sec_xbrl.IngestStats(accessions_inserted=0, facts_inserted=1)
+
+    def no_staleness(*_args: object, **_kwargs: object) -> tuple[bool, int]:
+        return False, 0
+
+    monkeypatch.setattr(fetch_sec_xbrl, "open_db", open_conn)
+    monkeypatch.setattr(fetch_sec_xbrl, "_resolve_tickers", resolve_only)
+    monkeypatch.setattr(fetch_sec_xbrl, "start_run", begin)
+    monkeypatch.setattr(fetch_sec_xbrl, "end_run", finish)
+    monkeypatch.setattr(fetch_sec_xbrl, "ingest_for_ticker", fake_ingest)
+    monkeypatch.setattr(fetch_sec_xbrl, "handle_silent_staleness", no_staleness)
+    monkeypatch.setattr(sys, "argv", ["fetch_sec_xbrl.py", "--db", str(database)])
+
+    assert fetch_sec_xbrl.main() == 0
+    assert seen_roots == [state_root.resolve()]
+    out = json.loads(capsys.readouterr().out)
+    assert out["failed_portfolio"] == 0
+    assert out["failed_non_portfolio"] == 0

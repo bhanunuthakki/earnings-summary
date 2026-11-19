@@ -58,7 +58,7 @@ except ImportError:
 
 import ir_fetch_status
 from compute.ir_narrative import has_pending_narrative
-from db_paths import require_db_path
+from db_paths import default_product_state_root, require_db_path
 from ir_uploads import calendar_id_from_fye
 from log_redact import redact
 from models.companies import ListType
@@ -68,6 +68,7 @@ from pipeline.source_policy import (
     CollectionSource,
     CollectionTarget,
     authorize_stored_collection_target,
+    instrument_allows_artifact,
     select_collection_targets,
 )
 from provenance.document_evidence_pipeline import DocumentEvidenceResult
@@ -127,12 +128,17 @@ def _resolve_roster(db_path: Path, requested: list[str] | None) -> tuple[list[st
     """Resolve active companies admitted by the shared collection policy."""
 
     targets: list[CollectionTarget] = []
+    instruments: dict[str, str | None] = {}
+    has_instrument = False
     try:
         conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
+            cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(tracked_companies)")}
+            has_instrument = "instrument_type" in cols
+            inst_expr = "instrument_type" if has_instrument else "NULL AS instrument_type"
             rows = conn.execute(
-                "SELECT ticker,list_type FROM tracked_companies "
+                f"SELECT ticker,list_type,{inst_expr} FROM tracked_companies "  # nosec B608
                 "WHERE archived_at IS NULL ORDER BY ticker"
             ).fetchall()
         finally:
@@ -148,6 +154,8 @@ def _resolve_roster(db_path: Path, requested: list[str] | None) -> tuple[list[st
             role = ListType(str(row["list_type"]))
         except ValueError as exc:
             raise RuntimeError(f"IR roster has an invalid role for {ticker}") from exc
+        raw_inst = row["instrument_type"]
+        instruments[ticker] = str(raw_inst).strip().lower() if raw_inst else None
         targets.append(
             CollectionTarget(
                 ticker=ticker,
@@ -175,7 +183,30 @@ def _resolve_roster(db_path: Path, requested: list[str] | None) -> tuple[list[st
             )
             + "\n"
         )
-    selected = [item.target.ticker for item in selection.allowed]
+    if has_instrument:
+        selected: list[str] = []
+        for item in selection.allowed:
+            ticker = item.target.ticker
+            if instrument_allows_artifact(
+                instruments.get(ticker),
+                source=CollectionSource.IR,
+                artifact_kind=ArtifactKind.IR_DOCUMENT,
+            ):
+                selected.append(ticker)
+            else:
+                sys.stderr.write(
+                    json.dumps(
+                        {
+                            "event": "source_collection_instrument_denied",
+                            "ticker": ticker,
+                            "instrument_type": instruments.get(ticker),
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+    else:
+        selected = [item.target.ticker for item in selection.allowed]
     if not requested:
         return selected, []
     skipped = sorted({ticker.upper() for ticker in requested} - set(selected))
@@ -1091,12 +1122,17 @@ def _record_result(db_path: Path, result: TickerResult) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    repo_root = cast("Path", args.repo_root)
     try:
         db_path = require_db_path(cast("Path | None", args.db))
     except (FileNotFoundError, RuntimeError) as exc:
         sys.stderr.write(f"IR discovery stopped: {redact(exc)}\n")
         return 2
+    explicit_root = cast("Path | None", args.repo_root)
+    repo_root = (
+        explicit_root.resolve()
+        if explicit_root is not None
+        else default_product_state_root(PROJECT_ROOT, db_path=db_path)
+    )
     requested = cast("list[str] | None", args.tickers)
 
     t0 = time.monotonic()
@@ -1333,7 +1369,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument(
         "--db", type=Path, help="portfolio.db path (default: <repo-root>/data/portfolio.db)"
     )
-    p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    p.add_argument("--repo-root", type=Path, default=None)
     args = p.parse_args(argv)
     positive_fields = (
         "discover_timeout",

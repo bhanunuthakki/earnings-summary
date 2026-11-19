@@ -220,7 +220,26 @@ def _refresh_tickers(
         # executor's context exit then waits for the remaining chains instead of
         # orphaning them.
         for index, future in enumerate(futures):
-            results[index] = future.result()
+            ticker = tickers[index]
+            try:
+                results[index] = future.result()
+            except Exception as exc:
+                sys.stderr.write(
+                    json.dumps(
+                        {
+                            "event": "daily_brief_ticker_exception",
+                            "ticker": ticker,
+                            "error": f"{type(exc).__name__}: {exc}"[:200],
+                        }
+                    )
+                    + "\n"
+                )
+                results[index] = {
+                    "ticker": ticker,
+                    "status": "failed",
+                    "error": f"{type(exc).__name__}: {exc}"[:200],
+                    "stages": [],
+                }
     return [result for result in results if result is not None]
 
 

@@ -72,6 +72,7 @@ except ModuleNotFoundError:
 from competitive.sec_watch import check_s1_watch, load_watches
 from db import DB_PATH
 from llm.cli import is_hard_stop
+from models.companies import ListType
 from net.client import HttpCallError, HttpErrorKind
 from news.store import (
     NewsFeedUnavailableError,
@@ -79,6 +80,7 @@ from news.store import (
     drop_duplicate_stories,
     upsert_news_rows,
 )
+from pipeline.ticker_scope import load_active_capabilities
 from signals.quality import score_unscored_signals
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -238,6 +240,28 @@ def _safe_yf_news(ticker: str, *, days: int) -> list[NewsRow]:
         raise NewsFeedUnavailableError("yf_news collection unavailable") from None
 
 
+def _additive_blocked_tickers(db_path: str) -> tuple[frozenset[str], frozenset[str]]:
+    """Return `(edgar_blocked, grades_blocked)` sets from active roster capabilities."""
+    from pathlib import Path
+
+    if not db_path or not Path(db_path).is_file():
+        return (frozenset(), frozenset())
+    try:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    except (OSError, sqlite3.Error):
+        return (frozenset(), frozenset())
+    try:
+        try:
+            caps = load_active_capabilities(conn, list_types=frozenset(ListType))
+        except sqlite3.Error:
+            return (frozenset(), frozenset())
+        edgar_blocked = frozenset(cap.ticker for cap in caps if not cap.supports_sec_xbrl)
+        grades_blocked = frozenset(cap.ticker for cap in caps if not cap.supports_corporate_grades)
+        return (edgar_blocked, grades_blocked)
+    finally:
+        conn.close()
+
+
 def _collect_additive(
     tickers: list[str],
     *,
@@ -246,6 +270,8 @@ def _collect_additive(
     skip_grades: bool,
     skip_s1_watch: bool,
     skip_yf_news: bool = False,
+    skip_edgar_tickers: frozenset[str] = frozenset(),
+    skip_grades_tickers: frozenset[str] = frozenset(),
     unavailable_feeds: list[str] | None = None,
 ) -> list[NewsRow]:
     """The additive non-FMP feeds for the whole book: EDGAR sequentially (its
@@ -256,11 +282,15 @@ def _collect_additive(
     rows: list[NewsRow] = []
     if not skip_edgar:
         for ticker in tickers:
+            if ticker.upper() in skip_edgar_tickers:
+                continue
             rows.extend(_safe_edgar(ticker.upper(), days=days))
     if not skip_grades:
+        grades_tickers = [t for t in tickers if t.upper() not in skip_grades_tickers]
         with ThreadPoolExecutor(max_workers=_GRADES_WORKERS) as executor:
             futures = [
-                executor.submit(_safe_grades, ticker.upper(), days=days) for ticker in tickers
+                executor.submit(_safe_grades, ticker.upper(), days=days)
+                for ticker in grades_tickers
             ]
             for future in futures:
                 rows.extend(future.result())
@@ -528,6 +558,7 @@ def run(
         # misses this run are scored next run.
         _score_diet_quality(db_path)
 
+        edgar_blocked, grades_blocked = _additive_blocked_tickers(db_path)
         additive = _collect_additive(
             tickers,
             days=days,
@@ -535,6 +566,8 @@ def run(
             skip_grades=skip_grades,
             skip_yf_news=skip_yf_news,
             skip_s1_watch=skip_s1_watch,
+            skip_edgar_tickers=edgar_blocked,
+            skip_grades_tickers=grades_blocked,
             unavailable_feeds=unavailable_feeds,
         )
         # Additive feeds supplement, never duplicate: drop any story the policy

@@ -33,14 +33,18 @@ import sys
 from datetime import date
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-import db  # noqa: E402
-from expected_earnings import record_next_earnings  # noqa: E402
-from log_redact import redact as _redact  # noqa: E402
-from sources import registry as sources_registry  # noqa: E402
-from sources.earnings_calendar import next_earnings_date  # noqa: E402
+import db
+from db_paths import default_product_state_root
+from expected_earnings import record_next_earnings
+from log_redact import redact as _redact
+from pipeline.ticker_scope import load_active_capabilities, partition_by_capability
+from sources import registry as sources_registry
+from sources.earnings_calendar import next_earnings_date
 
 # sources.earnings_calendar source_name -> expected_earnings.detected_source
 # (0025's vocabulary: 'fmp' / 'yfinance' / 'manual').
@@ -81,11 +85,29 @@ def refresh_tickers(
     return {"tickers": len(tickers), "written": written, "no_source": missed, "errors": errors}
 
 
+def _select_tickers_with_skips(
+    conn: sqlite3.Connection, ticker: str | None
+) -> tuple[list[str], list[dict[str, str]]]:
+    if ticker:
+        return [ticker.upper()], []
+    capabilities = load_active_capabilities(conn)
+    eligible, skipped = partition_by_capability(
+        capabilities,
+        predicate=lambda cap: cap.supports_earnings_calendar,
+        skip_reason="ineligible_instrument_type",
+    )
+    return sorted(cap.ticker for cap in eligible), skipped
+
+
 def _select_tickers(ticker: str | None) -> list[str]:
     if ticker:
         return [ticker.upper()]
-    companies = db.get_tracked_companies()
-    return sorted(str(c["ticker"]) for c in companies if c["list_type"] in db.ACTIVE_LIST_TYPES)
+    conn = db.get_connection()
+    try:
+        selected, _ = _select_tickers_with_skips(conn, None)
+        return selected
+    finally:
+        conn.close()
 
 
 def main() -> int:
@@ -94,20 +116,19 @@ def main() -> int:
     parser.add_argument(
         "--repo-root",
         type=Path,
-        default=PROJECT_ROOT,
-        help="Repo whose data/ + portfolio.db to use (default: this checkout)",
+        default=None,
+        help="State root containing data/portfolio.db (default: resolved product state root)",
     )
     args = parser.parse_args()
 
-    repo_root = args.repo_root.resolve()
-    if repo_root != PROJECT_ROOT:
+    repo_root = (
+        args.repo_root.resolve()
+        if args.repo_root is not None
+        else default_product_state_root(PROJECT_ROOT)
+    )
+    if args.repo_root is not None and repo_root != PROJECT_ROOT:
         db.set_db_path(str(repo_root / "data" / "portfolio.db"))
         sources_registry.set_db_path(repo_root / "data" / "portfolio.db")
-
-    tickers = _select_tickers(args.ticker)
-    if not tickers:
-        print(json.dumps({"status": "ok", "tickers": 0}))
-        return 0
 
     try:
         conn = db.get_connection()
@@ -115,10 +136,25 @@ def main() -> int:
         print(f"DB unavailable: {_redact(e)}", file=sys.stderr)
         return 1
     try:
+        tickers, skipped = _select_tickers_with_skips(conn, args.ticker)
+        if skipped:
+            print(
+                json.dumps(
+                    {
+                        "event": "expected_earnings_skipped_ineligible",
+                        "count": len(skipped),
+                        "skipped": skipped,
+                    }
+                ),
+                file=sys.stderr,
+            )
+        if not tickers:
+            print(json.dumps({"status": "ok", "tickers": 0, "skipped_ineligible": len(skipped)}))
+            return 0
         summary = refresh_tickers(repo_root, tickers, conn)
     finally:
         conn.close()
-    print(json.dumps({"status": "ok", **summary}))
+    print(json.dumps({"status": "ok", **summary, "skipped_ineligible": len(skipped)}))
     return 0
 
 
