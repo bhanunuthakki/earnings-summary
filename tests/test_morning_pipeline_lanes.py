@@ -472,9 +472,9 @@ def test_hung_lane_stage_hits_its_own_manifest_budget(
     rc = run_morning_pipeline.main([])
 
     assert rc == 1
-    # The budget is the manifest's own (stage 0d = 60s), not something the
+    # The budget is the manifest's own (stage 0d = 300s), not something the
     # lane scheduler invented or extended.
-    assert probe.timeouts_seen[FUNDAMENTALS_SCRIPT] == 60
+    assert probe.timeouts_seen[FUNDAMENTALS_SCRIPT] == 300
     assert sorted(probe.scripts) == sorted(_ALL_SCRIPTS)
 
 

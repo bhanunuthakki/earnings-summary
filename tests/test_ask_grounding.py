@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import replace
 from pathlib import Path
 from typing import Protocol, cast
@@ -758,3 +758,197 @@ def test_enrichment_is_inert_without_a_validation_issues_table(repo: Path) -> No
     fin = next(i for i in items if i.label == "TST · Revenue")
     assert "[" not in fin.text  # no bracketed caution tag at all
     assert "⚠" not in fin.text
+
+
+def test_ask_non_strict_surfaces_tagged_unreviewed_kpi_while_strict_remains_fail_closed(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC, date, datetime
+    from types import SimpleNamespace
+
+    from pipeline.kpi_semantics import (
+        KpiAccountingBasis,
+        KpiConsolidationScope,
+        KpiPeriodRole,
+        KpiPublicationLane,
+        KpiSemanticContext,
+        KpiSemanticStatus,
+        KpiUnitScale,
+        persist_kpi_semantic_context,
+        unclassified_kpi_context,
+    )
+    from provenance.financial_fact_resolution import resolve_fact_row
+    from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+    def _no_packs(*_a: object, **_k: object) -> SimpleNamespace:
+        return SimpleNamespace(packs=())
+
+    monkeypatch.setattr("ask.grounding.route_packs", _no_packs)
+    db = tmp_path / "data" / "portfolio.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    migrated_db(db)
+    now = datetime(2026, 2, 1, 12, 0, tzinfo=UTC)
+    stamp = now.isoformat()
+    sha = "a" * 64
+
+    conn = connect_sqlite(db, role=SQLiteConnectionRole.WRITER)
+    try:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, name, list_type) VALUES ('TST', 'Test Co', 'portfolio')"
+        )
+        conn.execute(
+            "INSERT INTO issuer_entities (issuer_id, idempotency_key, entity_kind, created_at) "
+            "VALUES ('issuer-tst', 'issuer:tst', 'operating_company', ?)",
+            (stamp,),
+        )
+        conn.execute(
+            "INSERT INTO documents "
+            "(id, ticker, source_type, doc_type, period_end, file_path, sha256, fetched_at, "
+            "fetch_status, raw_bytes_size, source_quality_tier) VALUES "
+            "(1, 'TST', 'ir_doc', 'ir_press_release', '2025-12-31', 'data/tst.pdf', ?, ?, 'ok', 100, 'fmp_normalized')",
+            (sha, stamp),
+        )
+        conn.execute(
+            "INSERT INTO evidence_content_blobs (sha256, byte_size, media_type, storage_uri, recorded_at) "
+            "VALUES (?, 100, 'text/html', 'https://example.invalid/tst/1', ?)",
+            (sha, stamp),
+        )
+        conn.execute(
+            "INSERT INTO evidence_source_observations "
+            "(observation_id, idempotency_key, source_kind, source_url, blob_sha256, observed_at, "
+            "retrieved_at, retrieval_config_sha256, collector_code_version) VALUES "
+            "('obs-tst-1', 'obs:tst:1', 'ir_document', 'https://example.invalid/tst/1', ?, ?, ?, ?, 'v1')",
+            (sha, stamp, stamp, "b" * 64),
+        )
+        conn.execute(
+            "INSERT INTO evidence_document_versions "
+            "(document_version_id, document_key, version_sequence, observation_id, blob_sha256, "
+            "issuer_id, ticker, document_type, form_type, period_end, language, legacy_document_id, "
+            "recorded_at) VALUES "
+            "('docver-tst-1', 'doc:tst:1', 1, 'obs-tst-1', ?, 'issuer-tst', 'TST', 'ir_press_release', "
+            "'ir_press_release', '2025-12-31', 'en', 1, ?)",
+            (sha, stamp),
+        )
+        conn.execute(
+            "INSERT INTO evidence_extraction_runs "
+            "(extraction_run_id, idempotency_key, document_version_id, input_sha256, "
+            "extractor_name, extractor_config_sha256, extractor_code_version, output_sha256, "
+            "started_at, completed_at, outcome) VALUES "
+            "('run-tst-1', 'run:tst:1', 'docver-tst-1', ?, 'test', ?, 'v1', ?, ?, ?, 'succeeded')",
+            (sha, "c" * 64, "d" * 64, stamp, stamp),
+        )
+        conn.execute(
+            "INSERT INTO evidence_nodes "
+            "(node_id, evidence_key, revision, extraction_run_id, parent_node_id, supersedes_node_id, "
+            "node_kind, text, locator_json, locator_sha256, recorded_at) VALUES "
+            "('node-tst-1', 'node:tst:1', 1, 'run-tst-1', NULL, NULL, 'document', 'Release.', NULL, NULL, ?)",
+            (stamp,),
+        )
+        conn.executescript(
+            """
+            INSERT INTO kpi_definitions (id, ticker, name, unit, primary_source) VALUES
+                (501, 'TST', 'Active subscribers', 'count', 'ir_doc'),
+                (502, 'TST', 'Quarantined ratio', 'percent', 'ir_doc'),
+                (503, 'TST', 'Verified margin', 'percent', 'ir_doc'),
+                (504, 'TST', 'Overridden churn', 'percent', 'ir_doc');
+            INSERT INTO kpi_facts (
+                id, ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, source_doc_id
+            ) VALUES
+                (501, 'TST', '2025-12-31', 'Q4', 501, '5000000', 'count', 1),
+                (502, 'TST', '2099-12-31', 'Q4', 501, '9999999', 'count', 1),
+                (503, 'TST', '2025-12-31', 'Q4', 502, '44.0', 'percent', 1),
+                (504, 'TST', '2025-12-31', 'Q4', 503, '22.5', 'percent', 1),
+                (505, 'TST', '2025-12-31', 'Q4', 504, '3.1', 'percent', 1);
+            INSERT INTO fact_overrides (
+                user_id, ticker, period_end, fiscal_period_type, fact_kind, fact_key, action,
+                source_doc_type, status, created_by, created_at
+            ) VALUES (
+                'bhanu', 'TST', '2025-12-31', 'Q4', 'kpi', 'Overridden churn', 'drop',
+                'ir_press_release', 'active', 'owner', '2026-02-01T12:00:00Z'
+            );
+            """
+        )
+        persist_kpi_semantic_context(
+            conn,
+            kpi_fact_id=501,
+            context=unclassified_kpi_context(
+                metric_name_as_reported="Active subscribers",
+                reported_period_end=date(2025, 12, 31),
+            ),
+            reviewed_by="pipeline",
+            knowledge_at=now,
+        )
+        persist_kpi_semantic_context(
+            conn,
+            kpi_fact_id=503,
+            context=KpiSemanticContext(
+                metric_name_as_reported="Quarantined ratio",
+                reported_period_end=date(2025, 12, 31),
+                period_role=KpiPeriodRole.CURRENT,
+                publication_lane=KpiPublicationLane.CURRENT_ACTUAL,
+                accounting_basis=KpiAccountingBasis.GAAP,
+                consolidation_scope=KpiConsolidationScope.CONSOLIDATED,
+                unit_scale=KpiUnitScale.NONE,
+                status=KpiSemanticStatus.QUARANTINED,
+                reason_code="bad",
+            ),
+            reviewed_by="owner",
+            knowledge_at=now,
+        )
+        persist_kpi_semantic_context(
+            conn,
+            kpi_fact_id=504,
+            context=KpiSemanticContext(
+                metric_name_as_reported="Verified margin",
+                reported_period_end=date(2025, 12, 31),
+                period_role=KpiPeriodRole.CURRENT,
+                publication_lane=KpiPublicationLane.CURRENT_ACTUAL,
+                accounting_basis=KpiAccountingBasis.GAAP,
+                consolidation_scope=KpiConsolidationScope.CONSOLIDATED,
+                unit_scale=KpiUnitScale.NONE,
+                status=KpiSemanticStatus.ADMITTED,
+                reason_code=None,
+            ),
+            reviewed_by="owner",
+            knowledge_at=now,
+        )
+        # Resolve only 503 and 504; leave 501 and 505 unlinked from v_kpi_facts_resolved_current.
+        resolve_fact_row(conn, fact_table="kpi_facts", fact_row_id=503, knowledge_cutoff=now)
+        resolve_fact_row(conn, fact_table="kpi_facts", fact_row_id=504, knowledge_cutoff=now)
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Non-strict mode surfaces legacy unlinked KPI clearly marked; hides quarantined, overridden & future.
+    non_strict = gather_evidence(
+        "What are TST active subscribers, quarantined ratio, overridden churn, and verified margin? kpi:TST:501",
+        repo_root=tmp_path,
+        db_path=db,
+        scope_tickers=["TST"],
+        strict=False,
+    )
+    subs = [i for i in non_strict if i.label == "TST · Active subscribers"]
+    assert len(subs) == 1
+    assert "[unreviewed retained — not semantically admitted]" in subs[0].text
+    assert subs[0].source_manifest is not None
+    assert subs[0].source_manifest["semantic_admission"] == "unreviewed_fallback"
+    assert "9999999" not in subs[0].text
+    assert not any(i.label == "TST · Quarantined ratio" for i in non_strict)
+    assert not any(i.label == "TST · Overridden churn" for i in non_strict)
+
+    # Admitted KPI renders cleanly with no unreviewed marker.
+    verified = next(i for i in non_strict if i.label == "TST · Verified margin")
+    assert "[unreviewed retained — not semantically admitted]" not in verified.text
+
+    # Strict mode remains fail-closed on unreviewed/unlinked KPIs while keeping admitted ones.
+    strict_items = gather_evidence(
+        "What are TST active subscribers and verified margin? kpi:TST:501",
+        repo_root=tmp_path,
+        db_path=db,
+        scope_tickers=["TST"],
+        strict=True,
+    )
+    assert not any(i.label == "TST · Active subscribers" for i in strict_items)
+    assert any(i.label == "TST · Verified margin" for i in strict_items)

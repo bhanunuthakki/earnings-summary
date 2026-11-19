@@ -35,12 +35,24 @@ class _FailureMode(BaseModel):
     refutation_criteria: str = Field(min_length=1)
 
 
-class _BearCaseCache(BaseModel):
+class _BearCaseResearchContract(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    prompt_version: str = Field(min_length=1)
+    method: dict[str, object]
+    input_digest: str | None = None
+    dependency_digest: str | None = None
+
+
+class _BearCaseCache(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     failure_modes: list[_FailureMode] = Field(min_length=1)
     most_underweighted: str | None = None
     out_of_scope_flags: list[str] = Field(default_factory=list[str])
+    research_contract: _BearCaseResearchContract | None = Field(
+        default=None, alias="_research_contract"
+    )
 
 
 class _ValuationHistoryPoint(BaseModel):
@@ -278,7 +290,7 @@ def project_native_artifact(
             f"{purpose} native cache schema validation failed: {exc}"
         ) from exc
 
-    payload = validated.model_dump(mode="json")
+    payload = validated.model_dump(mode="json", by_alias=True)
     payload_ticker = payload.get("ticker")
     if isinstance(payload_ticker, str) and payload_ticker.upper() != normalized_ticker:
         raise NativeArtifactProjectionError(

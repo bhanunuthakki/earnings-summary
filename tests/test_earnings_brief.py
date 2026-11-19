@@ -450,3 +450,82 @@ def test_legacy_manifest_gap_respects_refresh_window_instead_of_cache_hit(
         == GENERATED
     )
     assert fake_llm == ["NU"]
+
+
+def test_kpi_context_surfaces_unreviewed_fallback_clearly_without_weakening_strict_cockpit() -> (
+    None
+):
+    from pipeline.research_cockpit import tier1_kpi_deltas
+
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE kpi_definitions (
+                id INTEGER PRIMARY KEY, ticker TEXT, name TEXT, unit TEXT, threshold_tier TEXT
+            );
+            CREATE TABLE kpi_facts (
+                id INTEGER PRIMARY KEY, ticker TEXT, period_end TEXT, fiscal_period_type TEXT,
+                kpi_definition_id INTEGER, value REAL, unit TEXT, source_doc_id INTEGER,
+                supersedes_id INTEGER
+            );
+            CREATE TABLE kpi_fact_semantic_contexts (
+                id INTEGER PRIMARY KEY, kpi_fact_id INTEGER, revision INTEGER,
+                supersedes_context_id INTEGER, metric_name_as_reported TEXT,
+                reported_period_end TEXT, period_role TEXT, publication_lane TEXT,
+                accounting_basis TEXT, consolidation_scope TEXT, dimensions_json TEXT,
+                unit_scale TEXT, status TEXT, reason_code TEXT
+            );
+            CREATE VIEW v_kpi_facts_resolved_current AS
+                SELECT * FROM kpi_facts WHERE id < 0;
+            INSERT INTO kpi_definitions VALUES
+                (1, 'NU', 'Monthly ARPAC', 'usd', 'tier_1_break'),
+                (2, 'NU', 'Quarantined KPI', 'percent', 'tier_1_break'),
+                (3, 'NU', 'Admitted Margin', 'percent', 'tier_1_break');
+            INSERT INTO kpi_facts VALUES
+                (10, 'NU', '2026-03-31', 'Q1', 1, 10.0, 'usd', 1, NULL),
+                (11, 'NU', '2026-06-30', 'Q2', 1, 12.0, 'usd', 2, NULL),
+                (12, 'NU', '2026-09-30', 'Q3', 1, 99.0, 'usd', 3, NULL),
+                (20, 'NU', '2026-03-31', 'Q1', 2, 10.0, 'percent', 1, NULL),
+                (21, 'NU', '2026-06-30', 'Q2', 2, 50.0, 'percent', 2, NULL),
+                (30, 'BKNG', '2026-03-31', 'Q1', 3, 25.0, 'percent', 1, NULL),
+                (31, 'BKNG', '2026-06-30', 'Q2', 3, 28.0, 'percent', 2, NULL);
+            INSERT INTO kpi_definitions VALUES
+                (4, 'BKNG', 'Room night growth', 'percent', 'tier_1_break');
+            UPDATE kpi_facts SET kpi_definition_id = 4 WHERE id IN (30, 31);
+            INSERT INTO kpi_fact_semantic_contexts VALUES
+                (1, 11, 1, NULL, 'Monthly ARPAC', '2026-06-30', 'unknown', 'unclassified',
+                 'unknown', 'unknown', '{}', 'unknown', 'legacy_unknown', 'missing'),
+                (2, 20, 1, NULL, 'Quarantined KPI', '2026-03-31', 'current', 'current_actual',
+                 'gaap', 'consolidated', '{}', 'none', 'quarantined', 'bad_def'),
+                (3, 21, 1, NULL, 'Quarantined KPI', '2026-06-30', 'current', 'current_actual',
+                 'gaap', 'consolidated', '{}', 'none', 'quarantined', 'bad_def'),
+                (4, 30, 1, NULL, 'Room night growth', '2026-03-31', 'current', 'current_actual',
+                 'management', 'consolidated', '{}', 'none', 'admitted', NULL),
+                (5, 31, 1, NULL, 'Room night growth', '2026-06-30', 'current', 'current_actual',
+                 'management', 'consolidated', '{}', 'none', 'admitted', NULL);
+            """
+        )
+
+        # Cockpit strict default remains fail-closed.
+        assert tier1_kpi_deltas(conn, {"NU"}, as_of=TODAY) == {}
+
+        # Pre-earnings brief kpi_text shows unreviewed unlinked KPI cleanly tagged
+        # while excluding quarantined (def 2) and future-dated (2026-09-30 > TODAY=2026-08-01).
+        unreviewed_ctx = earnings_brief.kpi_text(conn, "NU", TODAY)
+        assert (
+            "Monthly ARPAC: 12 usd as of 2026-06-30 (+20.0% vs 10 on 2026-03-31)" in unreviewed_ctx
+        )
+        assert "[unreviewed retained — not semantically admitted]" in unreviewed_ctx
+        assert "Quarantined KPI" not in unreviewed_ctx
+        assert "99" not in unreviewed_ctx
+
+        # Admitted KPIs render cleanly without the unreviewed marker (legacy_pre_cutover or resolved).
+        conn.execute("DROP VIEW v_kpi_facts_resolved_current")
+        conn.execute("CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts")
+        admitted_ctx = earnings_brief.kpi_text(conn, "BKNG", TODAY)
+        assert "Room night growth: 28 percent as of 2026-06-30" in admitted_ctx
+        assert "[unreviewed retained — not semantically admitted]" not in admitted_ctx
+    finally:
+        conn.close()

@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "ff2b119898ccc540c23e4e706df9b3598de31cc5",
+  "scoped_commit": "9a9dbd2d6fa4b96e58b9e2e36d5b1232e92b2de2",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "403965ef18ac65ff5cf4290112e12cfa78e8a2d598a5a999b2a845c96f652350",
+  "source_sha256": "2fafe1e5658580ac0b43c8d07ab1a325a04e6ef41997da8c4f86e4a876d03de7",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,8 +22,8 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1402,
-    "total_noncomment_loc": 559388,
+    "executable_modules": 1404,
+    "total_noncomment_loc": 560491,
     "modules_over_1000_loc": 117,
     "modules_over_2000_loc": 22,
     "modules_at_least_3000_loc": 5,
@@ -82,6 +82,21 @@
         "responsibilities": [],
         "public_functions": 1,
         "fully_annotated_public_functions": 1
+      },
+      {
+        "path": "execution/admit_verified_kpis.py",
+        "module": "execution.admit_verified_kpis",
+        "lines": {
+          "physical": 94,
+          "nonblank": 82,
+          "noncomment": 82
+        },
+        "internal_fan_out": 4,
+        "responsibilities": [
+          "database"
+        ],
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
       },
       {
         "path": "execution/analyze_code_duplicates.py",
@@ -582,11 +597,11 @@
         "path": "execution/backfill_earnings_surprises.py",
         "module": "execution.backfill_earnings_surprises",
         "lines": {
-          "physical": 404,
-          "nonblank": 367,
-          "noncomment": 357
+          "physical": 420,
+          "nonblank": 383,
+          "noncomment": 373
         },
-        "internal_fan_out": 4,
+        "internal_fan_out": 5,
         "responsibilities": [
           "database",
           "filesystem",
@@ -1034,9 +1049,9 @@
         "path": "execution/build_artifacts.py",
         "module": "execution.build_artifacts",
         "lines": {
-          "physical": 1252,
-          "nonblank": 1178,
-          "noncomment": 1127
+          "physical": 1256,
+          "nonblank": 1182,
+          "noncomment": 1131
         },
         "internal_fan_out": 39,
         "responsibilities": [
@@ -2316,9 +2331,9 @@
         "path": "execution/daily_fetch_and_brief.py",
         "module": "execution.daily_fetch_and_brief",
         "lines": {
-          "physical": 702,
-          "nonblank": 624,
-          "noncomment": 583
+          "physical": 706,
+          "nonblank": 628,
+          "noncomment": 587
         },
         "internal_fan_out": 10,
         "responsibilities": [
@@ -3246,9 +3261,9 @@
         "path": "execution/fetch_news.py",
         "module": "execution.fetch_news",
         "lines": {
-          "physical": 655,
-          "nonblank": 588,
-          "noncomment": 542
+          "physical": 662,
+          "nonblank": 595,
+          "noncomment": 549
         },
         "internal_fan_out": 15,
         "responsibilities": [
@@ -4980,9 +4995,9 @@
         "path": "execution/refresh_dirty_artifacts.py",
         "module": "execution.refresh_dirty_artifacts",
         "lines": {
-          "physical": 759,
-          "nonblank": 692,
-          "noncomment": 663
+          "physical": 783,
+          "nonblank": 714,
+          "noncomment": 685
         },
         "internal_fan_out": 7,
         "responsibilities": [
@@ -7058,11 +7073,11 @@
         "path": "src/ask/grounding.py",
         "module": "ask.grounding",
         "lines": {
-          "physical": 1885,
-          "nonblank": 1700,
-          "noncomment": 1580
+          "physical": 1974,
+          "nonblank": 1780,
+          "noncomment": 1660
         },
-        "internal_fan_out": 17,
+        "internal_fan_out": 18,
         "responsibilities": [
           "database",
           "filesystem",
@@ -8705,16 +8720,16 @@
         "path": "src/db_paths.py",
         "module": "db_paths",
         "lines": {
-          "physical": 152,
-          "nonblank": 132,
-          "noncomment": 126
+          "physical": 171,
+          "nonblank": 148,
+          "noncomment": 142
         },
-        "internal_fan_out": 1,
+        "internal_fan_out": 2,
         "responsibilities": [
           "network"
         ],
-        "public_functions": 5,
-        "fully_annotated_public_functions": 5
+        "public_functions": 6,
+        "fully_annotated_public_functions": 6
       },
       {
         "path": "src/dcf/__init__.py",
@@ -9648,9 +9663,9 @@
         "path": "src/earnings_brief.py",
         "module": "earnings_brief",
         "lines": {
-          "physical": 642,
-          "nonblank": 564,
-          "noncomment": 549
+          "physical": 655,
+          "nonblank": 577,
+          "noncomment": 562
         },
         "internal_fan_out": 15,
         "responsibilities": [
@@ -12313,9 +12328,9 @@
         "path": "src/native_artifact_projection.py",
         "module": "native_artifact_projection",
         "lines": {
-          "physical": 403,
-          "nonblank": 338,
-          "noncomment": 338
+          "physical": 415,
+          "nonblank": 347,
+          "noncomment": 347
         },
         "internal_fan_out": 2,
         "responsibilities": [
@@ -13646,6 +13661,22 @@
         "fully_annotated_public_functions": 4
       },
       {
+        "path": "src/pipeline/kpi_batch_admission.py",
+        "module": "pipeline.kpi_batch_admission",
+        "lines": {
+          "physical": 889,
+          "nonblank": 804,
+          "noncomment": 804
+        },
+        "internal_fan_out": 4,
+        "responsibilities": [
+          "database",
+          "network"
+        ],
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
+      },
+      {
         "path": "src/pipeline/kpi_definition_revisions.py",
         "module": "pipeline.kpi_definition_revisions",
         "lines": {
@@ -14234,11 +14265,11 @@
         "path": "src/pipeline/research_cockpit.py",
         "module": "pipeline.research_cockpit",
         "lines": {
-          "physical": 1615,
-          "nonblank": 1462,
-          "noncomment": 1322
+          "physical": 1666,
+          "nonblank": 1508,
+          "noncomment": 1368
         },
-        "internal_fan_out": 21,
+        "internal_fan_out": 22,
         "responsibilities": [
           "database",
           "network"
@@ -14417,8 +14448,8 @@
         "path": "src/pipeline/sec_xbrl.py",
         "module": "pipeline.sec_xbrl",
         "lines": {
-          "physical": 3006,
-          "nonblank": 2766,
+          "physical": 3008,
+          "nonblank": 2768,
           "noncomment": 2592
         },
         "internal_fan_out": 15,

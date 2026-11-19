@@ -25,7 +25,6 @@
     "execution/backfill_confidence.py",
     "execution/backfill_decision_basis.py",
     "execution/backfill_document_accessions.py",
-    "execution/backfill_earnings_surprises.py",
     "execution/backfill_financial_fact_resolutions.py",
     "execution/backfill_fulltext_evidence.py",
     "execution/backfill_image_ocr_evidence.py",

@@ -52,7 +52,7 @@ from compute.peer_selection import (
 from compute.segment_definitions import (
     extract_for_ticker as _extract_segment_definitions,
 )
-from db_paths import db_path_context, require_db_path
+from db_paths import db_path_context, default_product_state_root, require_db_path
 from dcf.input_evidence import canonical_digest
 from instrument_store import get_instrument_kind
 from models.companies import InstrumentType
@@ -298,7 +298,11 @@ def configure_artifact_runtime(repo_root: Path) -> None:
 
 def main() -> int:
     args = _parse_args()
-    repo_root = args.repo_root.resolve()
+    repo_root = (
+        args.repo_root.resolve()
+        if args.repo_root is not None
+        else default_product_state_root(PROJECT_ROOT, db_path=args.db_path)
+    )
     source_state_root = getattr(args, "source_state_root", None)
     source_context = (
         SourceReadContext.for_product_state_root(source_state_root)
@@ -785,8 +789,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--repo-root",
         type=Path,
-        default=PROJECT_ROOT,
-        help="Repo root containing data/, transcripts/, micro_thesis/. Default: this repo.",
+        default=None,
+        help="State root containing data/, transcripts/, micro_thesis/. Default: resolved from DB config or this repo.",
     )
     parser.add_argument(
         "--source-state-root",

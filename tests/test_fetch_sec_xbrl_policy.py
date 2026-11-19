@@ -420,3 +420,30 @@ def test_sec_auth_denial_halts_before_the_next_ticker(
             "total_ms": 2.0,
         }
     ]
+
+
+def test_sec_excludes_newly_documented_non_us_filers(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def tracked(_conn: sqlite3.Connection, **_kwargs: object) -> list[Company]:
+        return _companies(
+            [
+                ("1548.HK", ListType.EVALUATION),
+                ("LVMUY", ListType.EVALUATION),
+                ("META", ListType.PORTFOLIO),
+            ]
+        )
+
+    monkeypatch.setattr(fetch_sec_xbrl, "tracked_companies_for_user", tracked)
+    resolve = cast(
+        "Callable[[argparse.Namespace, sqlite3.Connection], list[str]]",
+        getattr(fetch_sec_xbrl, "_resolve_tickers"),
+    )
+    with sqlite3.connect(":memory:") as conn:
+        assert resolve(_args(all_mapped=True), conn) == ["META"]
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert {e["ticker"] for e in events if e.get("event") == "sec_no_filer_disposition"} == {
+        "1548.HK",
+        "LVMUY",
+    }

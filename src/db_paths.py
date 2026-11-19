@@ -150,3 +150,22 @@ def require_db_path(override: Path | str | None = None) -> Path:
     if not resolved.is_file():
         raise FileNotFoundError("The configured portfolio database is unavailable")
     return resolved
+
+
+def default_product_state_root(code_root: Path, *, db_path: Path | None = None) -> Path:
+    """Resolve the default state root from DB config, falling back to ``code_root``."""
+    from runtime.secrets import load_project_env
+
+    if db_path is not None:
+        candidate_db = db_path.expanduser().resolve()
+    else:
+        load_project_env(code_root)
+        if not os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip():
+            return code_root.resolve()
+        candidate_db = configured_db_path(code_root)
+    if (
+        candidate_db.name.casefold() == "portfolio.db"
+        and candidate_db.parent.name.casefold() == "data"
+    ):
+        return candidate_db.parent.parent.resolve()
+    return code_root.resolve()

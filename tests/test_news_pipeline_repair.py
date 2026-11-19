@@ -296,3 +296,91 @@ def test_failed_yahoo_collection_preserves_other_rows_and_returns_partial(
     )
     assert '"collection_status": "partial"' in capsys.readouterr().err
     assert _persisted(news_db) == [("ACME", "https://example.com/retained")]
+
+
+def test_auto_source_owner_disabled_fmp_returns_zero_when_other_feeds_succeed(
+    news_db: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    policy = tmp_path / "fmp-policy.json"
+    policy.write_text('{"schema_version":1,"enabled":false}', encoding="utf-8")
+    monkeypatch.setenv("EARNINGS_SUMMARY_FMP_POLICY_FILE", str(policy))
+    monkeypatch.setattr(fetch_news, "_score_diet_quality", _no_scored)
+    monkeypatch.setattr(fetch_news, "_fire_deadman_if_stale", _no_scored)
+    monkeypatch.setattr(fetch_news.yfnews, "fetch_news_for_ticker", _no_additive_rows)
+
+    rc = fetch_news.run(
+        ["NU"],
+        source="auto",
+        db_path=str(news_db),
+        days=2,
+        limit=10,
+        skip_edgar=True,
+        skip_grades=True,
+        skip_s1_watch=True,
+    )
+    err = capsys.readouterr().err
+    assert rc == 0
+    assert '"collection_status": "completed_attempt"' in err
+    assert '"fmp:provider_disabled_by_owner"' in err
+
+
+def test_auto_source_owner_disabled_fmp_still_returns_two_on_yf_failure(
+    news_db: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from news.store import NewsFeedUnavailableError
+
+    policy = tmp_path / "fmp-policy.json"
+    policy.write_text('{"schema_version":1,"enabled":false}', encoding="utf-8")
+    monkeypatch.setenv("EARNINGS_SUMMARY_FMP_POLICY_FILE", str(policy))
+    monkeypatch.setattr(fetch_news, "_score_diet_quality", _no_scored)
+    monkeypatch.setattr(fetch_news, "_fire_deadman_if_stale", _no_scored)
+
+    def fail_yf(*_a: object, **_k: object) -> list[NewsRow]:
+        raise NewsFeedUnavailableError("yf down")
+
+    monkeypatch.setattr(fetch_news.yfnews, "fetch_news_for_ticker", fail_yf)
+    rc = fetch_news.run(
+        ["NU"],
+        source="auto",
+        db_path=str(news_db),
+        days=2,
+        limit=10,
+        skip_edgar=True,
+        skip_grades=True,
+        skip_s1_watch=True,
+    )
+    assert rc == 2
+    assert '"collection_status": "partial"' in capsys.readouterr().err
+
+
+def test_fmp_source_owner_disabled_still_returns_two(
+    news_db: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    policy = tmp_path / "fmp-policy.json"
+    policy.write_text('{"schema_version":1,"enabled":false}', encoding="utf-8")
+    monkeypatch.setenv("EARNINGS_SUMMARY_FMP_POLICY_FILE", str(policy))
+    monkeypatch.setattr(fetch_news, "_score_diet_quality", _no_scored)
+    monkeypatch.setattr(fetch_news, "_fire_deadman_if_stale", _no_scored)
+    monkeypatch.setattr(fetch_news.yfnews, "fetch_news_for_ticker", _no_additive_rows)
+
+    rc = fetch_news.run(
+        ["NU"],
+        source="fmp",
+        db_path=str(news_db),
+        days=2,
+        limit=10,
+        skip_edgar=True,
+        skip_grades=True,
+        skip_s1_watch=True,
+    )
+    assert rc == 2
+    assert '"collection_status": "partial"' in capsys.readouterr().err

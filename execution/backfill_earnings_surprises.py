@@ -37,12 +37,9 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import db  # noqa: E402
-from earnings_surprise_store import cache_generation_identity  # noqa: E402
-from pipeline.data_coverage_dispositions import (  # noqa: E402
+import db
+from earnings_surprise_store import cache_generation_identity
+from pipeline.data_coverage_dispositions import (
     EARNINGS_SURPRISE_POLICY_NAME,
     EARNINGS_SURPRISE_POLICY_VERSION,
     CoverageArtifactKind,
@@ -54,12 +51,15 @@ from pipeline.data_coverage_dispositions import (  # noqa: E402
     policy_config_sha256,
     recent_completed_fiscal_quarters,
 )
-from surprise_sources import (  # noqa: E402
+from pipeline.sec_xbrl import NO_SEC_FILERS
+from surprise_sources import (
     SurpriseHit,
     SurpriseSource,
     default_sources,
     fetch_surprises_with_outcomes,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 _SURPRISE_DIR = PROJECT_ROOT / "data" / "surprise"
 _FMP_DIR = PROJECT_ROOT / "data" / "historical" / "fmp"
@@ -101,7 +101,7 @@ class TickerBackfillResult:
 
 
 def _resolve_tickers(arg_ticker: str | None) -> list[str]:
-    """Return active-universe tickers (or [arg_ticker] if specified)."""
+    """Return active-universe company tickers (or [arg_ticker] if specified)."""
     conn = db.get_connection()
     try:
         if arg_ticker:
@@ -110,10 +110,17 @@ def _resolve_tickers(arg_ticker: str | None) -> list[str]:
                 (arg_ticker.upper(),),
             )
         else:
+            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
+            etf_filter = (
+                "AND LOWER(COALESCE(instrument_type, '')) != 'etf' "
+                if "instrument_type" in columns
+                else ""
+            )
             cur = conn.execute(
                 f"SELECT ticker FROM tracked_companies "
                 f"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} "
                 f"AND archived_at IS NULL "
+                f"{etf_filter}"
                 f"ORDER BY ticker"
             )
         return [row["ticker"] for row in cur.fetchall()]
@@ -189,6 +196,15 @@ def _backfill_one(
                 as_of=date.today(),
                 lookback=lookback,
             )
+        except ValueError as exc:
+            if (
+                result.ticker in NO_SEC_FILERS
+                and result.hits_total == 0
+                and "fiscal_year_end is unavailable" in str(exc)
+            ):
+                result.coverage_dispositions = [f"skipped_non_sec_filer_no_fye:{result.ticker}"]
+            else:
+                result.error = f"coverage disposition: {type(exc).__name__}: {exc}"[:200]
         except Exception as exc:
             result.error = f"coverage disposition: {type(exc).__name__}: {exc}"[:200]
     return result

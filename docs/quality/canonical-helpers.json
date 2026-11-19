@@ -678,7 +678,7 @@
       "canonical_extra": null,
       "canonical_target": null,
       "disposition": "retained",
-      "end_line": 121,
+      "end_line": 128,
       "family": "tickers",
       "file": "execution/backfill_earnings_surprises.py",
       "line": 103,
@@ -691,7 +691,7 @@
       },
       "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
       "scope": "module",
-      "source": "def _resolve_tickers(arg_ticker: str | None) -> list[str]:\n    \"\"\"Return active-universe tickers (or [arg_ticker] if specified).\"\"\"\n    conn = db.get_connection()\n    try:\n        if arg_ticker:\n            cur = conn.execute(\n                \"SELECT ticker FROM tracked_companies WHERE ticker = ? AND archived_at IS NULL\",\n                (arg_ticker.upper(),),\n            )\n        else:\n            cur = conn.execute(\n                f\"SELECT ticker FROM tracked_companies \"\n                f\"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} \"\n                f\"AND archived_at IS NULL \"\n                f\"ORDER BY ticker\"\n            )\n        return [row[\"ticker\"] for row in cur.fetchall()]\n    finally:\n        conn.close()",
+      "source": "def _resolve_tickers(arg_ticker: str | None) -> list[str]:\n    \"\"\"Return active-universe company tickers (or [arg_ticker] if specified).\"\"\"\n    conn = db.get_connection()\n    try:\n        if arg_ticker:\n            cur = conn.execute(\n                \"SELECT ticker FROM tracked_companies WHERE ticker = ? AND archived_at IS NULL\",\n                (arg_ticker.upper(),),\n            )\n        else:\n            columns = {str(row[1]) for row in conn.execute(\"PRAGMA table_info(tracked_companies)\")}\n            etf_filter = (\n                \"AND LOWER(COALESCE(instrument_type, '')) != 'etf' \"\n                if \"instrument_type\" in columns\n                else \"\"\n            )\n            cur = conn.execute(\n                f\"SELECT ticker FROM tracked_companies \"\n                f\"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} \"\n                f\"AND archived_at IS NULL \"\n                f\"{etf_filter}\"\n                f\"ORDER BY ticker\"\n            )\n        return [row[\"ticker\"] for row in cur.fetchall()]\n    finally:\n        conn.close()",
       "unresolved": []
     },
     {

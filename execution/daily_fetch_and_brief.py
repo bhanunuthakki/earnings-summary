@@ -90,7 +90,7 @@ except ImportError:  # ``python -m execution.daily_fetch_and_brief``
     from execution._lib import PROJECT_ROOT
 
 import db
-from db_paths import configured_db_path
+from db_paths import configured_db_path, default_product_state_root
 from llm_artifact_store import mark_artifacts_dirty_for_fact_change
 from models.companies import schedule_class_for_list_type
 from pipeline.db_writer_gate import chain_writer_scope, hold_writer_gate
@@ -146,7 +146,11 @@ def main() -> int:
     if args.workers < 1:
         sys.stderr.write(f"FATAL: --workers must be >= 1 (got {args.workers})\n")
         return 2
-    repo_root = args.repo_root.resolve()
+    repo_root = (
+        args.repo_root.resolve()
+        if args.repo_root is not None
+        else default_product_state_root(PROJECT_ROOT)
+    )
     db_path = configured_db_path(repo_root)
     if not db_path.exists():
         sys.stderr.write(f"FATAL: no DB at {db_path}\n")
@@ -277,8 +281,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--repo-root",
         type=Path,
-        default=PROJECT_ROOT,
-        help="Repo root containing data/, micro_thesis/. Default: this repo.",
+        default=None,
+        help="State root containing data/, micro_thesis/. Default: resolved from EARNINGS_SUMMARY_DB_PATH or this repo.",
     )
     p.add_argument(
         "--enable-llm",
