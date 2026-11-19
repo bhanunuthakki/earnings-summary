@@ -431,3 +431,63 @@ def test_each_current_native_purpose_has_a_typed_projection(
         ).fetchone() == (purpose, 0)
     finally:
         conn.close()
+
+
+def test_bear_case_projection_accepts_research_contract_and_rejects_unknown_extra(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = tmp_path / "data" / "portfolio.db"
+    db_path.parent.mkdir()
+    conn = _make_db(db_path, migrated_db)
+    try:
+        old_bear_id = _seed_dirty(conn, purpose="bear_case")
+    finally:
+        conn.close()
+    queued_at = datetime.now(UTC) - timedelta(seconds=1)
+    payload = _valid_bear_payload()
+    payload["_research_contract"] = {
+        "prompt_version": "bear_case_v2",
+        "method": {"kind": "company", "version": 1},
+        "input_digest": "sha256:abc",
+        "dependency_digest": "sha256:abc",
+    }
+    cache_path = _write_bear_cache(tmp_path, payload)
+
+    new_id = project_native_artifact(
+        ticker="NU",
+        purpose="bear_case",
+        repo_root=tmp_path,
+        db_path=db_path,
+        queued_at=queued_at,
+        obligation_ids=(old_bear_id,),
+    )
+
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT dirty, content_json FROM llm_artifacts WHERE id = ?", (new_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    assert int(row[0]) == 0
+    stored = json.loads(str(row[1]))
+    assert stored["_research_contract"] == payload["_research_contract"]
+
+    conn2 = sqlite3.connect(db_path)
+    try:
+        second_id = _seed_dirty(conn2, purpose="bear_case")
+    finally:
+        conn2.close()
+    bad_payload = _valid_bear_payload()
+    bad_payload["unexpected_field"] = "bad"
+    cache_path.write_text(json.dumps(bad_payload), encoding="utf-8")
+    with pytest.raises(NativeArtifactProjectionError, match="schema validation failed"):
+        project_native_artifact(
+            ticker="NU",
+            purpose="bear_case",
+            repo_root=tmp_path,
+            db_path=db_path,
+            queued_at=datetime.now(UTC) - timedelta(seconds=1),
+            obligation_ids=(second_id,),
+        )

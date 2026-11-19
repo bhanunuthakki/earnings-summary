@@ -736,10 +736,12 @@ CIK_MAP: dict[str, str] = {
 # Tracked names with NO SEC registration — EDGAR can never cover them; FMP /
 # yfinance remain their only statement sources (honest degradation, do not
 # approximate via a different entity's CIK):
-#   FLKR  — Franklin FTSE South Korea ETF (fund, no companyfacts)
-#   IVN   — Ivanhoe Mines: TSX-listed, no US registration
-#   NTDOY — Nintendo: unsponsored OTC ADR, no SEC filings
-NO_SEC_FILERS: frozenset[str] = frozenset({"FLKR", "IVN", "NTDOY"})
+#   1548.HK — GenScript Biotech: HKEX-listed, no US SEC registration
+#   FLKR    — Franklin FTSE South Korea ETF (fund, no companyfacts)
+#   IVN     — Ivanhoe Mines: TSX-listed, no US registration
+#   LVMUY   — LVMH Moet Hennessy Louis Vuitton: unsponsored OTC ADR, no SEC filings
+#   NTDOY   — Nintendo: unsponsored OTC ADR, no SEC filings
+NO_SEC_FILERS: frozenset[str] = frozenset({"1548.HK", "FLKR", "IVN", "LVMUY", "NTDOY"})
 
 
 # How a ladder's XBRL unit keys are parsed:

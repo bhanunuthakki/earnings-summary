@@ -739,3 +739,48 @@ def test_cli_forwards_exact_target_and_rejects_unpaired_flags(
     assert calls[0]["period_end"] == "2026-06-30"
     assert calls[0]["fiscal_period_type"] == "Q2"
     assert calls[0]["only_tickers"] == {"WIX"}
+
+
+def test_readout_assemble_context_surfaces_tagged_unreviewed_tier1_kpis(db: Path) -> None:
+    import earnings_readout
+
+    with sqlite3.connect(db) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE kpi_definitions (
+                id INTEGER PRIMARY KEY, ticker TEXT, name TEXT, unit TEXT, threshold_tier TEXT
+            );
+            CREATE TABLE kpi_facts (
+                id INTEGER PRIMARY KEY, ticker TEXT, period_end TEXT, fiscal_period_type TEXT,
+                kpi_definition_id INTEGER, value REAL, unit TEXT, source_doc_id INTEGER,
+                supersedes_id INTEGER
+            );
+            CREATE TABLE kpi_fact_semantic_contexts (
+                id INTEGER PRIMARY KEY, kpi_fact_id INTEGER, revision INTEGER,
+                supersedes_context_id INTEGER, metric_name_as_reported TEXT,
+                reported_period_end TEXT, period_role TEXT, publication_lane TEXT,
+                accounting_basis TEXT, consolidation_scope TEXT, dimensions_json TEXT,
+                unit_scale TEXT, status TEXT, reason_code TEXT
+            );
+            INSERT INTO kpi_definitions VALUES
+                (1, 'WIX', 'Net revenue retention', 'percent', 'tier_1_break'),
+                (2, 'WIX', 'Quarantined rate', 'percent', 'tier_1_break');
+            INSERT INTO kpi_facts VALUES
+                (1, 'WIX', '2026-03-31', 'Q1', 1, 100.0, 'percent', 1, NULL),
+                (2, 'WIX', '2026-06-30', 'Q2', 1, 108.0, 'percent', 2, NULL),
+                (3, 'WIX', '2026-03-31', 'Q1', 2, 10.0, 'percent', 1, NULL),
+                (4, 'WIX', '2026-06-30', 'Q2', 2, 12.0, 'percent', 2, NULL);
+            INSERT INTO kpi_fact_semantic_contexts VALUES
+                (1, 3, 1, NULL, 'Quarantined rate', '2026-03-31', 'current', 'current_actual',
+                 'gaap', 'consolidated', '{}', 'none', 'quarantined', 'bad'),
+                (2, 4, 1, NULL, 'Quarantined rate', '2026-06-30', 'current', 'current_actual',
+                 'gaap', 'consolidated', '{}', 'none', 'quarantined', 'bad');
+            """
+        )
+    quarter = earnings_readout.latest_reported_quarter(db, "WIX", today=date(2026, 11, 15))
+    assert quarter is not None
+    sections = earnings_readout.assemble_context(db, db.parent, quarter, today=date(2026, 11, 15))
+    joined = "\n\n".join(sections)
+    assert "Net revenue retention: 108 percent as of 2026-06-30" in joined
+    assert "[unreviewed retained — not semantically admitted]" in joined
+    assert "Quarantined rate" not in joined

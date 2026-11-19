@@ -76,6 +76,7 @@ from pipeline.cockpit_file_inputs import (
 )
 from pipeline.dashboard_status import DashboardRow, build_dashboard_rows
 from pipeline.freshness import freshness_verdict
+from pipeline.kpi_batch_admission import read_unreviewed_kpi_fallback_rows
 from pipeline.kpi_semantics import semantic_admission_sql
 from portfolio_weights import read_materialized_weights
 from provenance.financial_fact_resolution import canonical_fact_relation
@@ -138,6 +139,7 @@ class KpiDelta:
     tone_why: str = ""  # the matched break rule + its status ("" when neutral)
     latest_input: KpiInputReference | None = None
     prior_input: KpiInputReference | None = None
+    unreviewed_fallback: bool = False
 
     @property
     def is_pp(self) -> bool:
@@ -1031,8 +1033,61 @@ def _latest_evaluations(
     return out
 
 
+def _append_delta_rows(
+    out: dict[str, list[KpiDelta]],
+    rows: list[sqlite3.Row],
+    *,
+    as_of_iso: str | None,
+    selection_mode: str,
+    unreviewed_fallback: bool,
+) -> set[tuple[str, int]]:
+    """Group active rows by (ticker, def_id) and append resolved latest-vs-prior deltas."""
+    superseded_ids = {int(r["supersedes_id"]) for r in rows if r["supersedes_id"] is not None}
+    series: dict[tuple[str, int], list[sqlite3.Row]] = {}
+    for r in rows:
+        if int(r["fact_id"]) in superseded_ids:
+            continue
+        if as_of_iso is not None:
+            period_date = r["period_date"]
+            if period_date is None or str(period_date) > as_of_iso:
+                continue
+        key = (str(r["ticker"]), int(r["def_id"]))
+        bucket = series.setdefault(key, [])
+        if len(bucket) < 2:
+            bucket.append(r)
+    emitted: set[tuple[str, int]] = set()
+    for (ticker, def_id), pair in series.items():
+        if len(pair) < 2:
+            continue
+        latest, prior = pair
+        try:
+            latest_v, prior_v = float(latest["value"]), float(prior["value"])
+        except (TypeError, ValueError):
+            continue
+        emitted.add((ticker.upper(), def_id))
+        out.setdefault(ticker, []).append(
+            KpiDelta(
+                name=str(latest["name"]),
+                unit=str(latest["unit"] or ""),
+                latest_value=latest_v,
+                prior_value=prior_v,
+                latest_period=str(latest["period_end"])[:10],
+                prior_period=str(prior["period_end"])[:10],
+                tone="neutral",
+                latest_input=kpi_input_reference(latest, selection_mode=selection_mode),
+                prior_input=kpi_input_reference(prior, selection_mode=selection_mode),
+                unreviewed_fallback=unreviewed_fallback,
+            )
+        )
+    return emitted
+
+
 def tier1_kpi_deltas(
-    conn: sqlite3.Connection, tickers: set[str], as_of: date | None = None
+    conn: sqlite3.Connection,
+    tickers: set[str],
+    as_of: date | None = None,
+    *,
+    allow_unreviewed_fallback: bool = False,
 ) -> dict[str, list[KpiDelta]]:
     """Latest-vs-prior move per tier-1 KPI definition (portfolio names only).
     Superseded facts are excluded; tone is stamped later from the evaluation's
@@ -1041,7 +1096,12 @@ def tier1_kpi_deltas(
     ``as_of`` (default: no filter) drops facts whose ``period_end`` is in the
     future relative to that date, so a guidance/forecast row stamped with a
     forward period (e.g. a next-FY estimate) cannot masquerade as the latest
-    *actual* and skew the move. The render path passes the cockpit's ``now``."""
+    *actual* and skew the move. The render path passes the cockpit's ``now``.
+
+    ``allow_unreviewed_fallback`` (default ``False``) permits non-strict brief
+    and readout surfaces to surface retained unreviewed (missing-context or
+    ``legacy_unknown``) tier-1 KPIs when admitted rows are unavailable, marked
+    with ``unreviewed_fallback=True``. Strict surfaces must keep the default."""
     if not tickers:
         return {}
     marks = ",".join("?" for _ in tickers)
@@ -1102,46 +1162,36 @@ def tier1_kpi_deltas(
         "ORDER BY f.ticker, d.id, f.period_end DESC",
         (*ticker_params, *definition_ids),
     )
-    superseded_ids = {int(r["supersedes_id"]) for r in rows if r["supersedes_id"] is not None}
     as_of_iso = as_of.isoformat() if as_of is not None else None
-    series: dict[tuple[str, int], list[sqlite3.Row]] = {}
-    for r in rows:
-        if int(r["fact_id"]) in superseded_ids:
-            continue
-        if as_of_iso is not None:
-            period_date = r["period_date"]
-            if period_date is None or str(period_date) > as_of_iso:
-                continue
-        key = (str(r["ticker"]), int(r["def_id"]))
-        bucket = series.setdefault(key, [])
-        if len(bucket) < 2:
-            bucket.append(r)
     out: dict[str, list[KpiDelta]] = {}
-    for (ticker, _def_id), pair in series.items():
-        if len(pair) < 2:
-            continue
-        latest, prior = pair
-        try:
-            latest_v, prior_v = float(latest["value"]), float(prior["value"])
-        except (TypeError, ValueError):
-            continue
-        out.setdefault(ticker, []).append(
-            KpiDelta(
-                name=str(latest["name"]),
-                unit=str(latest["unit"] or ""),
-                latest_value=latest_v,
-                prior_value=prior_v,
-                latest_period=str(latest["period_end"])[:10],
-                prior_period=str(prior["period_end"])[:10],
-                tone="neutral",
-                latest_input=kpi_input_reference(
-                    latest, selection_mode=selected_relation.selection_mode
-                ),
-                prior_input=kpi_input_reference(
-                    prior, selection_mode=selected_relation.selection_mode
-                ),
-            )
-        )
+    admitted_pairs = _append_delta_rows(
+        out,
+        rows,
+        as_of_iso=as_of_iso,
+        selection_mode=selected_relation.selection_mode,
+        unreviewed_fallback=False,
+    )
+    if not allow_unreviewed_fallback:
+        return out
+
+    admitted_def_ids = {def_id for (_ticker, def_id) in admitted_pairs}
+    missing_def_ids = tuple(did for did in definition_ids if did not in admitted_def_ids)
+    if not missing_def_ids:
+        return out
+
+    fb_rows = read_unreviewed_kpi_fallback_rows(
+        conn,
+        tickers=ticker_params,
+        definition_ids=missing_def_ids,
+        tier1_only=True,
+    )
+    _append_delta_rows(
+        out,
+        fb_rows,
+        as_of_iso=as_of_iso,
+        selection_mode="unreviewed_fallback",
+        unreviewed_fallback=True,
+    )
     return out
 
 
@@ -1208,6 +1258,7 @@ def _toned(deltas: list[KpiDelta], rule_tones: dict[str, str]) -> list[KpiDelta]
                 tone_why=why,
                 latest_input=d.latest_input,
                 prior_input=d.prior_input,
+                unreviewed_fallback=d.unreviewed_fallback,
             )
         )
     toned.sort(key=lambda d: (_TONE_PRIORITY.get(d.tone, 2), -d.magnitude, d.name))

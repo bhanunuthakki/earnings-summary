@@ -159,6 +159,7 @@ def test_no_sec_filers_never_carry_a_cik() -> None:
     """A NO_SEC_FILERS entry with a CIK is a contradiction — one list must win."""
     overlap = NO_SEC_FILERS & set(CIK_MAP)
     assert not overlap, f"tickers in both NO_SEC_FILERS and CIK_MAP: {sorted(overlap)}"
+    assert {"1548.HK", "FLKR", "IVN", "LVMUY", "NTDOY"} <= NO_SEC_FILERS
 
 
 def test_ciks_are_ten_digit_zero_padded() -> None:

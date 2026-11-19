@@ -363,3 +363,92 @@ def test_main_exits_nonzero_on_partial_backfill_failure(
     receipt = json.loads(capsys.readouterr().out)
     assert receipt["terminal_status"] == "partial_failure"
     assert receipt["totals"]["errors"] == 1
+
+
+def test_resolve_tickers_excludes_etfs_when_instrument_type_column_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "portfolio_with_etf.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE tracked_companies (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER DEFAULT 1,
+            ticker TEXT NOT NULL,
+            name TEXT NOT NULL,
+            list_type TEXT NOT NULL,
+            instrument_type TEXT,
+            archived_at TIMESTAMP,
+            UNIQUE(user_id, ticker)
+        );
+        """
+    )
+    conn.executemany(
+        "INSERT INTO tracked_companies (ticker, name, list_type, instrument_type, archived_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [
+            ("META", "Meta", "portfolio", "equity", None),
+            ("AVDV", "Avantis ETF", "portfolio", "etf", None),
+            ("VDE", "Vanguard Energy ETF", "portfolio", "ETF", None),
+            ("NTDOY", "Nintendo", "evaluation", "adr", None),
+            ("OLD", "Old", "portfolio", "equity", "2024-01-01"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    import db
+
+    monkeypatch.setattr(db, "DB_PATH", str(db_path))
+    mod = _load_module()
+    assert mod._resolve_tickers(None) == ["META", "NTDOY"]
+    assert mod._resolve_tickers("AVDV") == ["AVDV"]
+
+
+def test_backfill_one_skips_missing_fye_error_for_zero_hit_non_sec_filer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+
+    def no_hits(*_args: object, **_kwargs: object) -> tuple[list[SurpriseHit], list[object]]:
+        return [], []
+
+    def missing_fye(*_args: object, **_kwargs: object) -> list[str]:
+        raise ValueError("1548.HK: fiscal_year_end is unavailable")
+
+    monkeypatch.setattr(mod, "fetch_surprises_with_outcomes", no_hits)
+    monkeypatch.setattr(mod, "_persist_surprise_coverage", missing_fye)
+
+    res_non_sec = mod._backfill_one(
+        "1548.HK",
+        [],
+        tmp_path,
+        lookback=8,
+        dry_run=False,
+        persist_coverage=True,
+    )
+    assert res_non_sec.error is None
+    assert res_non_sec.coverage_dispositions == ["skipped_non_sec_filer_no_fye:1548.HK"]
+
+    res_equity = mod._backfill_one(
+        "TJX",
+        [],
+        tmp_path,
+        lookback=8,
+        dry_run=False,
+        persist_coverage=True,
+    )
+    assert (
+        res_equity.error
+        == "coverage disposition: ValueError: 1548.HK: fiscal_year_end is unavailable"
+    )
+
+
+def test_backfill_wrapper_continues_to_ingest_on_partial_failure() -> None:
+    bat = (
+        Path(__file__).resolve().parents[1] / "cron" / "run_backfill_earnings_surprises.bat"
+    ).read_text(encoding="utf-8")
+    assert 'if "!STAGE1_RC!"=="2" set "RUN_INGEST=1"' in bat
+    assert 'if "!RUN_INGEST!"=="0"' in bat
+    assert 'if not "!STAGE1_RC!"=="0" if "!STAGE2_RC!"=="0" set "RC=!STAGE1_RC!"' in bat

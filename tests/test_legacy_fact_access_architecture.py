@@ -240,6 +240,26 @@ _TRANSITIONAL_READ_EXEMPTIONS = {
             ),
         ),
     ),
+    "src/pipeline/kpi_batch_admission.py": (
+        _TransitionalReadExemption(
+            function_name="_load_active_fact_rows",
+            read_count=1,
+            retirement_criterion=(
+                "Retire after legacy kpi_facts rows are cut over into the immutable canonical "
+                "observation plane and batch semantic admission reads canonical source facts "
+                "directly."
+            ),
+        ),
+        _TransitionalReadExemption(
+            function_name="read_unreviewed_kpi_fallback_rows",
+            read_count=1,
+            retirement_criterion=(
+                "Retire after observation-resolution cutover and semantic admission cover active "
+                "KPIs so non-strict brief, readout, and Ask readers no longer need an unreviewed "
+                "legacy fallback."
+            ),
+        ),
+    ),
     "src/pipeline/kpi_semantic_review.py": (
         _TransitionalReadExemption(
             function_name="build_quarantined_kpi_correction_review",
@@ -443,7 +463,10 @@ def test_transitional_legacy_reader_exemptions_are_narrow_and_retirable() -> Non
         assert (ROOT / relative).is_file()
         if relative == "src/compute/kpi_revision_shadow_census.py":
             assert len(exemptions) == 3
-        elif relative == "src/provenance/financial_fact_resolution.py":
+        elif relative in {
+            "src/provenance/financial_fact_resolution.py",
+            "src/pipeline/kpi_batch_admission.py",
+        }:
             assert len(exemptions) == 2
         else:
             assert len(exemptions) == 1
@@ -530,3 +553,15 @@ def test_financial_catalogue_compatibility_is_name_only_and_extra_reads_remain_d
         source + "\ndef _unapproved_reader():\n    return 'SELECT value FROM financial_facts'\n"
     )
     assert _legacy_read_count_for_tree(relative, with_unapproved_read) == 1
+
+
+def test_kpi_batch_admission_transitional_reads_are_exact() -> None:
+    batch_rel = "src/pipeline/kpi_batch_admission.py"
+    batch_src = (ROOT / batch_rel).read_text(encoding="utf-8")
+    batch_tree = ast.parse(batch_src)
+    assert _read_count(batch_tree) == 2
+    assert _legacy_read_count_for_tree(batch_rel, batch_tree) == 0
+    with_extra_batch_read = ast.parse(
+        batch_src + "\ndef _unapproved_reader():\n    return 'SELECT id FROM kpi_facts'\n"
+    )
+    assert _legacy_read_count_for_tree(batch_rel, with_extra_batch_read) == 1

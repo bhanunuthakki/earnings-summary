@@ -545,6 +545,13 @@ def run(
     finally:
         conn.close()
 
+    blocking_unavailable = sorted(
+        {
+            feed
+            for feed in unavailable_feeds
+            if not (source == "auto" and feed == "fmp:provider_disabled_by_owner")
+        }
+    )
     _log(
         "news_dispatch_done",
         source=source,
@@ -556,11 +563,11 @@ def run(
         persist_failures=persist_failures,
         unavailable_feeds=sorted(set(unavailable_feeds)),
         collection_status="partial"
-        if unavailable_feeds or persist_failures
+        if blocking_unavailable or persist_failures
         else "completed_attempt",
     )
     _fire_deadman_if_stale(db_path, tickers_n=len(tickers), inserted_total=inserted_total)
-    return 1 if persist_failures else 2 if unavailable_feeds else 0
+    return 1 if persist_failures else 2 if blocking_unavailable else 0
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:

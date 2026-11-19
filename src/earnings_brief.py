@@ -238,19 +238,32 @@ def kpi_context(conn: sqlite3.Connection, t: str, today: date) -> KpiContext:
             tier1_kpi_deltas,
         )
 
-        deltas = tier1_kpi_deltas(conn, {t}, as_of=today).get(t, [])
+        deltas = tier1_kpi_deltas(conn, {t}, as_of=today, allow_unreviewed_fallback=True).get(t, [])
     except Exception:
         return KpiContext("")
     deltas = sorted(deltas, key=lambda d: d.magnitude, reverse=True)[:10]
     lines: list[str] = []
     inputs: list[KpiInputReference] = []
+    has_unreviewed = False
     for d in deltas:
         why = f" [{d.tone}: {d.tone_why}]" if d.tone_why else ""
+        unreviewed = (
+            " [unreviewed retained — not semantically admitted]" if d.unreviewed_fallback else ""
+        )
+        if d.unreviewed_fallback:
+            has_unreviewed = True
         lines.append(
             f"- {d.name}: {d.latest_value:g} {d.unit} as of {d.latest_period[:10]} "
-            f"({d.delta_display} vs {d.prior_value:g} on {d.prior_period[:10]}){why}"
+            f"({d.delta_display} vs {d.prior_value:g} on {d.prior_period[:10]}){why}{unreviewed}"
         )
         inputs.extend(point for point in (d.latest_input, d.prior_input) if point is not None)
+    if has_unreviewed:
+        lines.insert(
+            0,
+            "Note: Metrics tagged [unreviewed retained — not semantically admitted] "
+            "have not completed semantic qualification and must not be treated as "
+            "decision-grade.",
+        )
     return KpiContext("\n".join(lines), tuple(inputs))
 
 

@@ -71,11 +71,16 @@ from pipeline.confidence import (
     display_issues_for_fact,
     load_unresolved_issues,
 )
+from pipeline.kpi_batch_admission import read_unreviewed_kpi_fallback_rows
 from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import (
+    KPI as OVERRIDE_KPI,
+)
+from provenance.overrides import (
     FactOverride,
     OverrideAction,
+    active_scalar_override_key_set,
     active_scalar_override_map,
 )
 from provenance.selection import selected_transcripts_relation
@@ -712,24 +717,25 @@ def _overlay_fact_rows(
     return out, ov_map
 
 
-def _fact_ref_kpi_item(
+_UNREVIEWED_KPI_MARKER = "[unreviewed retained — not semantically admitted]"
+
+
+def _kpi_series_rows(
     conn: sqlite3.Connection,
     ticker: str,
     def_id: int,
-    issues_by_ticker: IssuesByTicker | None = None,
-) -> dict[str, object] | None:
-    """Resolve a ``kpi:{ticker}:{def_id}`` handle to its series by PK."""
-    try:
-        drow = conn.execute(
-            "SELECT name, unit FROM kpi_definitions WHERE id = ? AND ticker = ?",
-            (def_id, ticker),
-        ).fetchone()
-    except sqlite3.Error:
-        return None
-    if drow is None:
-        return None
-    name = str(drow[0])
-    unit = str(drow[1] or "")
+    name: str,
+    *,
+    allow_unreviewed_fallback: bool,
+    cutoff: datetime | None,
+) -> tuple[list[tuple[object, ...]], bool]:
+    """Return ``(series_rows, is_unreviewed_fallback)`` for one KPI definition.
+
+    Strictly prefers admitted rows via ``semantic_admission_sql(fail_closed=True)``
+    and ``semantic_series_identity_sql``. Only when ``allow_unreviewed_fallback``
+    is True and no admitted rows exist, falls back to retained, non-quarantined,
+    non-overridden rows with ``source_doc_id IS NOT NULL`` and ``period_end <= cutoff``.
+    """
     tier_rank, doc_join = _tier_bits(conn, "kf")
     fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
     semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
@@ -746,6 +752,80 @@ def _fact_ref_kpi_item(
             (ticker, def_id),
         )
     )
+    if rows or not allow_unreviewed_fallback:
+        return rows, False
+
+    if (ticker.upper(), name) in active_scalar_override_key_set(conn, fact_kind=OVERRIDE_KPI):
+        return [], False
+
+    cutoff_iso = (cutoff or datetime.now(UTC)).date().isoformat()
+    fb_sql_rows = read_unreviewed_kpi_fallback_rows(
+        conn,
+        tickers=(ticker,),
+        definition_ids=(def_id,),
+        max_period_end=cutoff_iso,
+        order_by_tier=True,
+        limit=64,
+    )
+    fb_rows = _dedupe_series(
+        [
+            (
+                row["period_end"],
+                row["fiscal_period_type"],
+                row["value"],
+                row["unit"],
+                row["source_doc_id"],
+                row["confidence"],
+            )
+            for row in fb_sql_rows
+        ]
+    )
+    return (fb_rows, True) if fb_rows else ([], False)
+
+
+def _tag_unreviewed_kpi_item(
+    item: dict[str, object], *, is_unreviewed_fallback: bool
+) -> dict[str, object]:
+    if not is_unreviewed_fallback:
+        return item
+    item["text"] = f"{item['text']} {_UNREVIEWED_KPI_MARKER}"
+    existing_manifest = cast("dict[str, object] | None", item.get("source_manifest"))
+    item["source_manifest"] = {
+        **(existing_manifest or {}),
+        "semantic_admission": "unreviewed_fallback",
+    }
+    return item
+
+
+def _fact_ref_kpi_item(
+    conn: sqlite3.Connection,
+    ticker: str,
+    def_id: int,
+    issues_by_ticker: IssuesByTicker | None = None,
+    *,
+    allow_unreviewed_fallback: bool = True,
+    cutoff: datetime | None = None,
+) -> dict[str, object] | None:
+    """Resolve a ``kpi:{ticker}:{def_id}`` handle to its series by PK."""
+    try:
+        drow = conn.execute(
+            "SELECT name, unit FROM kpi_definitions WHERE id = ? AND ticker = ?",
+            (def_id, ticker),
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    if drow is None:
+        return None
+    name = str(drow[0])
+    unit = str(drow[1] or "")
+    rows, is_unreviewed_fallback = _kpi_series_rows(
+        conn,
+        ticker,
+        def_id,
+        name,
+        allow_unreviewed_fallback=allow_unreviewed_fallback,
+        cutoff=cutoff,
+    )
     if not rows:
         return None
     item = _fact_item(
@@ -759,7 +839,7 @@ def _fact_ref_kpi_item(
         override_map={},
     )
     item["fact_ref"] = f"kpi:{ticker}:{def_id}"
-    return item
+    return _tag_unreviewed_kpi_item(item, is_unreviewed_fallback=is_unreviewed_fallback)
 
 
 def _financial_evidence_items(
@@ -862,6 +942,7 @@ def _fact_ref_evidence(
     issues_by_ticker: IssuesByTicker | None = None,
     *,
     cutoff: datetime | None = None,
+    strict: bool = False,
 ) -> list[dict[str, object]]:
     """The PK fast-path: every fact_ref token in ``question`` resolves its exact
     series directly, bypassing NL name-matching. The token names its own ticker
@@ -875,7 +956,14 @@ def _fact_ref_evidence(
         if def_id in seen_kpi:
             continue
         seen_kpi.add(def_id)
-        item = _fact_ref_kpi_item(conn, m.group(1).upper(), def_id, issues_by_ticker)
+        item = _fact_ref_kpi_item(
+            conn,
+            m.group(1).upper(),
+            def_id,
+            issues_by_ticker,
+            allow_unreviewed_fallback=not strict,
+            cutoff=cutoff,
+        )
         if item is not None:
             out.append(item)
         if len(out) >= _MAX_FACT_ITEMS:
@@ -903,6 +991,7 @@ def _fact_evidence(
     issues_by_ticker: IssuesByTicker | None = None,
     *,
     cutoff: datetime | None = None,
+    strict: bool = False,
 ) -> list[dict[str, object]]:
     """Metric series the question names, newest first, with provenance."""
     found: list[dict[str, object]] = []
@@ -925,35 +1014,28 @@ def _fact_evidence(
         for def_id, name, unit in matched_kpis:
             if per_ticker >= _MAX_FACT_ITEMS_PER_TICKER:
                 break
-            kpi_tier_rank, kpi_doc_join = _tier_bits(conn, "kf")
-            fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
-            semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
-            semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
-            rows = _dedupe_series(
-                _series_rows_conf(
-                    conn,
-                    "SELECT kf.period_end, kf.fiscal_period_type, kf.value, kf.unit, "
-                    "kf.source_doc_id{conf} "
-                    f"FROM {fact_relation} kf {kpi_doc_join} {semantic_join} "
-                    "WHERE kf.ticker = ? AND kf.kpi_definition_id = ? "
-                    f"AND {semantic_where} AND {semantic_identity} "
-                    f"ORDER BY kf.period_end DESC, {kpi_tier_rank} DESC, kf.id DESC LIMIT 64",
-                    (ticker, def_id),
-                )
+            rows, is_unreviewed_fallback = _kpi_series_rows(
+                conn,
+                ticker,
+                def_id,
+                name,
+                allow_unreviewed_fallback=not strict,
+                cutoff=cutoff,
             )
             if not rows:
                 continue
+            item = _fact_item(
+                ticker,
+                name,
+                unit or str(rows[0][3] or ""),
+                rows,
+                conn,
+                item=name,
+                issues_by_ticker=issues_by_ticker,
+                override_map={},
+            )
             found.append(
-                _fact_item(
-                    ticker,
-                    name,
-                    unit or str(rows[0][3] or ""),
-                    rows,
-                    conn,
-                    item=name,
-                    issues_by_ticker=issues_by_ticker,
-                    override_map={},
-                )
+                _tag_unreviewed_kpi_item(item, is_unreviewed_fallback=is_unreviewed_fallback)
             )
             per_ticker += 1
 
@@ -1532,7 +1614,7 @@ def gather_evidence(
     if not q:
         return []
     memo_key: tuple[object, ...] | None = None
-    if cache_key:
+    if cache_key and not strict:
         memo_key = turn_cache.gather_key(
             cache_key=cache_key,
             repo_root=repo_root,
@@ -1587,13 +1669,20 @@ def gather_evidence(
                 # PK fast-path first: fact_ref tokens resolve the EXACT series
                 # and lead the fact channel; the NL name-match then fills the
                 # rest, deduped by label so a token doesn't double its metric.
-                ref_facts = _fact_ref_evidence(conn, q, issues_by_ticker, cutoff=cutoff)
+                ref_facts = _fact_ref_evidence(
+                    conn, q, issues_by_ticker, cutoff=cutoff, strict=strict
+                )
                 raw.extend(ref_facts)
                 pinned = {str(it["label"]) for it in ref_facts}
                 raw.extend(
                     it
                     for it in _fact_evidence(
-                        conn, question_squashed, tickers, issues_by_ticker, cutoff=cutoff
+                        conn,
+                        question_squashed,
+                        tickers,
+                        issues_by_ticker,
+                        cutoff=cutoff,
+                        strict=strict,
                     )
                     if str(it["label"]) not in pinned
                 )
