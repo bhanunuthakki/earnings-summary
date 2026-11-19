@@ -29,7 +29,9 @@ second scheduler or rerun production jobs. Read the quota registry before dispat
    copy business logic or model-promotion policy into skill prose.
    For affected research instructions, select a bounded case from
    [research cases](research-cases.json) and load the actual
-   [method](research-method.md). Give the worker only the case request/evidence,
+   [method](research-method.md). A case with a `method` field loads that
+   reference instead, for example the
+   [forecast-assumption method](forecast-assumptions.md). Give the worker only the case request/evidence,
    withholding expected outcomes until its response is recorded. Check sources,
    judgment restraint and public actionability against the retained expectations.
    Rotate cases within the existing time cap; defer untested cases explicitly.
