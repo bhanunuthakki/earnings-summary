@@ -148,12 +148,13 @@ def load_dcf_assumptions_golden(path: Path) -> list[DcfAssumptionsCase]:
 
 
 def _value(payload: DcfAssumptionsPayload, key: str) -> float | None:
-    if key.startswith("segments."):
-        _, name, attr = key.split(".", 2) if key.count(".") >= 2 else ("", "", "")
-        segment = payload.segments.get(name)
-        return None if segment is None else cast("float | None", getattr(segment, attr, None))
-    value = getattr(payload, key, None)
-    return float(value) if isinstance(value, (int, float)) else None
+    """The number at a dotted ``key`` such as ``segments.Cloud.near_term_growth``."""
+    node: object = payload.model_dump()
+    for part in key.split(".") if key.count(".") <= 2 else ():
+        node = cast("dict[str, object]", node).get(part) if isinstance(node, dict) else None
+    if isinstance(node, bool) or not isinstance(node, (int, float)):
+        return None
+    return float(node)
 
 
 def check_payload(
