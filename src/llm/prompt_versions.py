@@ -312,7 +312,7 @@ _PROMPT_VERSIONS: dict[str, str] = {
     "bear_case_grading": "v1",
     "canonicalize_segments": "v1",
     "customer_concentration_extraction": "v1",
-    "dcf_assumptions": "v2",
+    "dcf_assumptions": "v3",
     "decision_extraction": "v1",
     "exec_comp_alignment": "v1",
     "exec_comp_extraction": "v1",

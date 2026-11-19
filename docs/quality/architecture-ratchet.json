@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "0ea4299fe6d9a00519fb69096140759538b32056",
+  "scoped_commit": "9a9dbd2d6fa4b96e58b9e2e36d5b1232e92b2de2",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "109de073a4318e0c223b5afbc08f39860b97b29077ff6d3cd22c6e710c4e45af",
+  "source_sha256": "2fafe1e5658580ac0b43c8d07ab1a325a04e6ef41997da8c4f86e4a876d03de7",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,8 +22,8 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1400,
-    "total_noncomment_loc": 559648,
+    "executable_modules": 1404,
+    "total_noncomment_loc": 560491,
     "modules_over_1000_loc": 117,
     "modules_over_2000_loc": 22,
     "modules_at_least_3000_loc": 5,
@@ -4979,11 +4979,11 @@
         "path": "execution/refresh_dcf_assumptions.py",
         "module": "execution.refresh_dcf_assumptions",
         "lines": {
-          "physical": 355,
-          "nonblank": 308,
-          "noncomment": 299
+          "physical": 315,
+          "nonblank": 271,
+          "noncomment": 261
         },
-        "internal_fan_out": 8,
+        "internal_fan_out": 10,
         "responsibilities": [
           "filesystem",
           "network"
@@ -5527,11 +5527,11 @@
         "path": "execution/run_llm_evals.py",
         "module": "execution.run_llm_evals",
         "lines": {
-          "physical": 501,
-          "nonblank": 456,
-          "noncomment": 428
+          "physical": 525,
+          "nonblank": 479,
+          "noncomment": 449
         },
-        "internal_fan_out": 18,
+        "internal_fan_out": 19,
         "responsibilities": [],
         "public_functions": 1,
         "fully_annotated_public_functions": 1
@@ -8775,6 +8775,35 @@
         "fully_annotated_public_functions": 6
       },
       {
+        "path": "src/dcf/assumption_evidence.py",
+        "module": "dcf.assumption_evidence",
+        "lines": {
+          "physical": 98,
+          "nonblank": 81,
+          "noncomment": 81
+        },
+        "internal_fan_out": 2,
+        "responsibilities": [
+          "database",
+          "network"
+        ],
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
+      },
+      {
+        "path": "src/dcf/assumption_prompt.py",
+        "module": "dcf.assumption_prompt",
+        "lines": {
+          "physical": 159,
+          "nonblank": 139,
+          "noncomment": 139
+        },
+        "internal_fan_out": 2,
+        "responsibilities": [],
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
+      },
+      {
         "path": "src/dcf/assumptions_doc.py",
         "module": "dcf.assumptions_doc",
         "lines": {
@@ -8884,6 +8913,21 @@
         ],
         "public_functions": 4,
         "fully_annotated_public_functions": 4
+      },
+      {
+        "path": "src/dcf/driver_model.py",
+        "module": "dcf.driver_model",
+        "lines": {
+          "physical": 370,
+          "nonblank": 326,
+          "noncomment": 326
+        },
+        "internal_fan_out": 0,
+        "responsibilities": [
+          "process"
+        ],
+        "public_functions": 5,
+        "fully_annotated_public_functions": 5
       },
       {
         "path": "src/dcf/equity_bridge.py",
@@ -9890,6 +9934,22 @@
         "fully_annotated_public_functions": 7
       },
       {
+        "path": "src/evals/dcf_assumptions.py",
+        "module": "evals.dcf_assumptions",
+        "lines": {
+          "physical": 282,
+          "nonblank": 254,
+          "noncomment": 254
+        },
+        "internal_fan_out": 6,
+        "responsibilities": [
+          "filesystem",
+          "network"
+        ],
+        "public_functions": 4,
+        "fully_annotated_public_functions": 4
+      },
+      {
         "path": "src/evals/evidence_governance.py",
         "module": "evals.evidence_governance",
         "lines": {
@@ -10064,9 +10124,9 @@
         "path": "src/evals/run_registry.py",
         "module": "evals.run_registry",
         "lines": {
-          "physical": 54,
-          "nonblank": 46,
-          "noncomment": 42
+          "physical": 55,
+          "nonblank": 47,
+          "noncomment": 43
         },
         "internal_fan_out": 3,
         "responsibilities": [],
@@ -11428,9 +11488,9 @@
         "path": "src/llm/contracts.py",
         "module": "llm.contracts",
         "lines": {
-          "physical": 228,
-          "nonblank": 173,
-          "noncomment": 173
+          "physical": 301,
+          "nonblank": 236,
+          "noncomment": 232
         },
         "internal_fan_out": 0,
         "responsibilities": [],

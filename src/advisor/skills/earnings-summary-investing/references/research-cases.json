@@ -132,6 +132,50 @@
       "held_out_request": "Recreate the questions we could have asked before that Q3 call, without using what we learned afterward."
     },
     {
+      "id": "forecast-driver-tree-undisclosed-driver",
+      "method": "forecast-assumptions.md",
+      "request": "Build the ten-year revenue assumptions for SYNADS and tell me which assumptions decide the result.",
+      "evidence": [
+        "Synthetic filings F1-F3, MD&A table 5: ad revenue grew 8%, 12% and 13% in fiscal 2024-2026. The issuer reports paid clicks change (+7%, +5%, +6%) and cost-per-click change (+1%, +7%, +7%) for the same years, admitted through the fact resolver.",
+        "The issuer does not disclose query volume or market share. Synthetic panel P1 (publisher PanelCo, 2026-10-01, web and app sessions, publisher states +/- 20%) estimates share fell from 81% to 76% in fifteen months. Synthetic call C9 segment 12, CEO: query growth was the fastest in five years.",
+        "Consensus revenue growth for fiscal 2027 is 11%. A second line, partner network revenue, is 8% of revenue and flat. No market price is supplied."
+      ],
+      "expected": [
+        "State the decision question, then write ad revenue as volume x share x paid clicks per unit x cost per click. Check that the reported click and price changes reproduce reported growth in each year before forecasting.",
+        "Reconcile falling share with record query growth by solving for the total-market growth that makes both true, and label it a calculation on an external estimate with its error. Prefer the direction of the panel series over its level.",
+        "Give each material driver an anchor class, reported history beside the value, a counter-argument, confidence, a two-sided shock range with its reason and a public observable or 'none'. Rank the drivers by output effect, report a joint stress, compare the first forecast year with the latest run-rate and with consensus without fitting to consensus, give the small flat line one rate, and name what is not modeled.",
+        "Do not call the result decision-grade while material drivers rest on an external estimate. Do not store the panel value in a reported series."
+      ],
+      "held_out_request": "Model SYNADS revenue out to 2036. I want to see what has to be true, not a single growth rate."
+    },
+    {
+      "id": "forecast-residual-and-capture-gap",
+      "method": "forecast-assumptions.md",
+      "request": "What operating margin should the model use for SYNCO's core segment?",
+      "evidence": [
+        "Synthetic 10-K K4, segment note: group operating margin 40.7%. The issuer discloses no margin for the core segment or for its video segment.",
+        "Video segment pays 55% of ad revenue to creators under published contract terms (synthetic terms page T1). Synthetic analog issuer ANALOG reports R&D and overhead at 18% of revenue. An independent analyst estimate E1 (2026-03-01) puts the video margin at 16%.",
+        "A KPI definition for core paid clicks exists in the store, with zero facts. The 10-K table that contains the value is in the document store."
+      ],
+      "expected": [
+        "Estimate the other segments first, back out the core margin as the remainder, and label it a residual calculation with low confidence because it absorbs every other error.",
+        "Use the contractual payout as a bound on the video margin path, use the analog as an external estimate with the reason it fits, and cross-check against E1. Report a gap; do not tune to remove it.",
+        "Report the capture gap for paid clicks and its owner. A direct read of the filing can continue the analysis, stated as not passed through the resolver, and the output is not decision-grade.",
+        "Do not extend recent margin expansion when the growth forecast slows."
+      ]
+    },
+    {
+      "id": "forecast-quick-question-negative-control",
+      "method": "forecast-assumptions.md",
+      "request": "Roughly what multiple of next year's earnings does SYNCO trade at? One line.",
+      "evidence": [
+        "Synthetic price 100 on 2026-11-13. Synthetic consensus EPS for fiscal 2027 is 5.00, dated 2026-11-10, same share class and currency."
+      ],
+      "expected": [
+        "Answer 20x with the price date and estimate date. Do not build a driver tree, assumption records or a stress test."
+      ]
+    },
+    {
       "id": "simple-definition-negative-control",
       "request": "What does operating margin mean? One sentence, please.",
       "evidence": [],
