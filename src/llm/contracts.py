@@ -173,9 +173,46 @@ class DcfSegmentGrowth(_ClosedPayload):
 
     @model_validator(mode="after")
     def _growth_fades(self) -> Self:
-        if self.near_term_growth <= self.terminal_growth:
+        # Growth fades toward a mature rate. A declining segment (negative near-term
+        # rate) fades the other way: its decline eases toward a higher terminal rate.
+        if self.near_term_growth >= 0 and self.near_term_growth <= self.terminal_growth:
             raise ValueError("near_term_growth must exceed terminal_growth")
+        if self.near_term_growth < 0 and self.terminal_growth < self.near_term_growth:
+            raise ValueError("a declining segment cannot decline faster at maturity")
         return self
+
+
+DcfAnchorClass = Literal[
+    "reported_fact", "management_statement", "calculation", "external_estimate", "judgment"
+]
+
+
+class DcfAssumptionRecord(_ClosedPayload):
+    """Why one assumption has its value (forecast-assumption method record)."""
+
+    field: str = Field(min_length=1, max_length=200)
+    anchor_class: DcfAnchorClass
+    anchor: str = Field(min_length=1, max_length=800)
+    counter_argument: str = Field(min_length=1, max_length=600)
+    confidence: Literal["high", "medium", "low"]
+    observable: str = Field(min_length=1, max_length=400)
+
+    @model_validator(mode="after")
+    def _judgment_is_not_high_confidence(self) -> Self:
+        if self.anchor_class == "judgment" and self.confidence == "high":
+            raise ValueError("a judgment anchor cannot carry high confidence")
+        return self
+
+
+_DCF_OPTIONAL_RECORD_FIELDS = frozenset(
+    {
+        "tax_rate",
+        "capex_pct_revenue_2026",
+        "terminal_capex_da",
+        "exit_multiple",
+        "terminal_growth_g",
+    }
+)
 
 
 class DcfAssumptionsPayload(_ClosedPayload):
@@ -197,6 +234,42 @@ class DcfAssumptionsPayload(_ClosedPayload):
     terminal_growth_g: float = Field(ge=-0.05, le=0.10)
     narrative: str = Field(min_length=1, max_length=4_000)
     reasoning: str = Field(min_length=1, max_length=4_000)
+    # Prompt v3. Defaults keep stored v2 payloads valid; the refresh guardrail
+    # requires them for a new FCFF result.
+    consensus_comparison: str = Field(default="", max_length=1_500)
+    assumption_records: list[DcfAssumptionRecord] = Field(
+        default_factory=list["DcfAssumptionRecord"], max_length=60
+    )
+
+    def required_record_fields(self) -> frozenset[str]:
+        """Assumptions that need a record: the ones that decide an FCFF value."""
+        if self.valuation_model != "fcff_dcf":
+            return frozenset()
+        terminal = (
+            "exit_multiple" if self.terminal_method == "Exit multiple" else "terminal_growth_g"
+        )
+        return frozenset(
+            {f"segments.{name}.near_term_growth" for name in self.segments}
+            | {"near_term_op_margin", "terminal_op_margin", terminal}
+        )
+
+    def assumption_record_issues(self) -> list[str]:
+        """Method violations in the records. Empty means every required field is covered."""
+        required = self.required_record_fields()
+        allowed = (
+            required
+            | _DCF_OPTIONAL_RECORD_FIELDS
+            | {f"segments.{name}.terminal_growth" for name in self.segments}
+        )
+        fields = [record.field for record in self.assumption_records]
+        issues = [
+            f"duplicate record for {f}" for f in sorted({f for f in fields if fields.count(f) > 1})
+        ]
+        issues += [f"record for unknown field {f}" for f in sorted(set(fields) - allowed)]
+        issues += [f"missing record for {f}" for f in sorted(required - set(fields))]
+        if required and not self.consensus_comparison:
+            issues.append("consensus_comparison is empty")
+        return issues
 
     @model_validator(mode="after")
     def _valuation_archetype_is_consistent(self) -> Self:

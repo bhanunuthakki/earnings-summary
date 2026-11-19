@@ -150,6 +150,14 @@ def _parse_args() -> argparse.Namespace:
         "fixed, so this measures judge stability. Do not act on a change smaller "
         "than the spread.",
     )
+    parser.add_argument(
+        "--mode",
+        choices=("auto", "golden", "capture"),
+        default="auto",
+        help="For a purpose with both a golden set and a capture spec "
+        "(dcf_assumptions): auto keeps the capture replay; golden runs the pinned "
+        "golden set through the current prompt.",
+    )
     coverage_mode = parser.add_mutually_exclusive_group()
     coverage_mode.add_argument(
         "--coverage",
@@ -167,7 +175,11 @@ def _parse_args() -> argparse.Namespace:
 
 def _run_purpose(args: argparse.Namespace, *, repo_root: Path, db_path: Path) -> EvalRunSummary:
     """One eval run for ``args.purpose``. Usage errors raise ValueError."""
-    if args.purpose in CAPTURE_AUDIT_PURPOSES:
+    if args.mode == "golden" and args.purpose not in GOLDEN_PURPOSES:
+        raise ValueError(f"--mode golden: {args.purpose} has no golden set.")
+    if args.mode == "capture" and args.purpose not in CAPTURE_AUDIT_PURPOSES:
+        raise ValueError(f"--mode capture: {args.purpose} has no capture-quality spec.")
+    if args.purpose in CAPTURE_AUDIT_PURPOSES and args.mode != "golden":
         if args.no_judge:
             raise ValueError(
                 "--no-judge cannot score a capture replay; capture audits are judge-driven."
@@ -245,6 +257,18 @@ def _run_purpose(args: argparse.Namespace, *, repo_root: Path, db_path: Path) ->
 
         golden_path = (args.golden or (PROJECT_ROOT / SP_GOLDEN)).resolve()
         summary = run_scenario_prior_eval(
+            golden_path=golden_path,
+            code_root=PROJECT_ROOT,
+            limit=args.limit,
+        )
+    elif args.purpose == "dcf_assumptions":
+        # Mode-A: the production v3 prompt over pinned synthetic contexts, graded by
+        # code (records, evidence-supported bounds, capture gaps, confidence). No judge.
+        from evals.dcf_assumptions import DEFAULT_GOLDEN_RELPATH as DCFA_GOLDEN
+        from evals.dcf_assumptions import run_dcf_assumptions_eval
+
+        golden_path = (args.golden or (PROJECT_ROOT / DCFA_GOLDEN)).resolve()
+        summary = run_dcf_assumptions_eval(
             golden_path=golden_path,
             code_root=PROJECT_ROOT,
             limit=args.limit,

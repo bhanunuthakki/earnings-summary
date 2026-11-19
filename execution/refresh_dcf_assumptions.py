@@ -27,8 +27,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from compute.segment_cache import apply_overrides
 from db_paths import require_db_path
 from dcf.artifact_promotion import DcfRecoveryError, hold_dcf_artifacts, unique_staged_path
+from dcf.assumption_evidence import kpi_evidence
+from dcf.assumption_prompt import build_prompt, call_dcf_assumptions, segment_guard
 from dcf.fiscal_periods import detect_fy_periods
-from llm.contracts import DCF_ASSUMPTIONS_SCHEMA, DcfAssumptionsPayload
+from llm.contracts import DcfAssumptionsPayload
 from llm.structured import call_llm_structured
 from runtime.job_runtime import JobAlreadyRunningError
 
@@ -157,8 +159,8 @@ lines = [
     f"Country: {company_profile.get('country', '?')}  |  Beta: {company_profile.get('beta', '?')}  |  Current price (USD): {company_profile.get('price', '?')}",
     "",
 ]
-lines.append("Recent fiscal-year actuals (reporting currency, $M):")
-for y in full[-3:]:
+lines.append("Fiscal-year actuals, up to five years (reporting currency, $M):")
+for y in full[-5:]:
     rev = fiscal_year_total(income_by_period, "revenue", y)
     if rev is None or rev == 0:
         continue
@@ -193,6 +195,24 @@ else:
         "\nNo usable product-segment data — model a single revenue line ('Total company')."
     )
 
+# admitted company-reported KPIs (business drivers)
+KPI_EVIDENCE = kpi_evidence(DATABASE_PATH, TICKER, repo_root=REPO)
+if KPI_EVIDENCE.lines:
+    lines.append(
+        "\nCompany-reported KPIs admitted through the fact resolver "
+        "(period end and value, oldest to newest):"
+    )
+    lines.extend(KPI_EVIDENCE.lines)
+    if KPI_EVIDENCE.omitted:
+        lines.append(f"  ({KPI_EVIDENCE.omitted} further admitted KPI series not shown.)")
+else:
+    lines.append("\nNo admitted company-reported KPI series for this ticker.")
+if KPI_EVIDENCE.capture_gaps:
+    lines.append(
+        "KPIs defined for this ticker with NO admitted facts (capture gaps; do not "
+        "treat them as reported): " + "; ".join(KPI_EVIDENCE.capture_gaps)
+    )
+
 # consensus
 estimates_by_year: dict[int, dict[str, object]] = {}
 for e in est:
@@ -200,7 +220,10 @@ for e in est:
         estimates_by_year[int(str(e.get("date"))[:4])] = e
 fwd = [y for y in sorted(estimates_by_year) if y >= (full[-1] + 1 if full else 2026)][:5]
 if fwd:
-    lines.append("\nStreet consensus (FMP) forward estimates ($M, EPS per share):")
+    lines.append(
+        "\nStreet consensus (FMP) forward estimates ($M, EPS per share). "
+        "A comparison only, not a target:"
+    )
     for y in fwd:
         e = estimates_by_year[y]
         lines.append(
@@ -221,81 +244,18 @@ for d in ("holdings", "evaluation"):
 
 CONTEXT = "\n".join(lines)
 SEG_KEYS = seg_names if seg_names else ["Total company"]
-
-PROMPT = f"""You are a valuation analyst building a 10-year FCFF DCF in the style of Aswath \
-Damodaran. Set realistic, defensible drivers for {TICKER} grounded in the data below. Fade growth \
-toward a mature terminal rate; let margins normalize via operating leverage; converge capex \
-toward maintenance (capex/D&A -> ~1.0x) in the terminal year.
-
-{CONTEXT}
-
-VALUATION MODEL — FIRST decide which archetype fits {TICKER}. The pipeline has these templates:
-  - "fcff_dcf": the 10-year FCFF DCF below. DEFAULT for operating companies (software, \
-consumer, industrial, healthcare, semis, energy, payments, etc.).
-  - "bank_excess_return": equity-side excess-return for deposit/credit BANKS — value equity as \
-book + PV[(ROE - cost of equity) x regulatory capital]. Use for spread-lending banks.
-  - "holdco_sotp": sum-of-the-parts / NAV for capital-allocator HOLDING COMPANIES that \
-consolidate non-recourse subsidiary debt + large minorities (NAV of the parts: fee business, \
-carry, insurance, invested capital, less corporate). Use for Brookfield-style holdcos.
-  - "new": NONE of the above fits well — e.g. a pure insurer needing embedded value, a REIT \
-needing NAV + FFO, a pure asset manager needing an FRE multiple, a yieldco needing a DDM, a \
-pre-revenue biotech needing risk-adjusted NPV, a commodity/royalty needing a NAV. Set \
-valuation_model="new" and put the proposed archetype + a one-sentence spec in \
-valuation_model_suggestion.
-Keep dcf_applicable consistent: true if and only if valuation_model="fcff_dcf". The FCFF drivers \
-below are only USED when valuation_model="fcff_dcf"; still fill them best-effort.
-
-Return ONLY a JSON object (no prose, no markdown fences) with EXACTLY these keys:
-{{
-  "dcf_applicable": true,
-  "business_model": "operating",
-  "valuation_model": "fcff_dcf",
-  "valuation_model_suggestion": "",
-  "segments": {{ {", ".join(f'"{s}": {{"near_term_growth": 0.10, "terminal_growth": 0.03}}' for s in SEG_KEYS)} }},
-  "near_term_op_margin": 0.20,
-  "terminal_op_margin": 0.25,
-  "tax_rate": 0.21,
-  "capex_pct_revenue_2026": 0.05,
-  "terminal_capex_da": 1.05,
-  "terminal_method": "Exit multiple",
-  "exit_basis": "EV/EBITDA",
-  "exit_multiple": 15.0,
-  "terminal_growth_g": 0.03,
-  "narrative": "Margins expand as growth fades toward maturity.",
-  "reasoning": "The path anchors to actual margins and a mature multiple."
-}}
-Growth must fade (near-term > terminal). For software/SaaS prefer EV/Sales or EV/EBITDA; for \
-mature cash generators EV/FCF or EV/EBIT; pick the basis the market actually uses for {TICKER}. \
-Be conservative: anchor near-term to consensus where shown."""
+PROMPT = build_prompt(TICKER, CONTEXT, SEG_KEYS)
 
 
 def _segment_guard(value: object) -> tuple[bool, str]:
-    if not isinstance(value, DcfAssumptionsPayload):  # pragma: no cover - schema runs first
-        return (False, "DCF assumptions are not the expected schema")
-    expected = frozenset(SEG_KEYS)
-    actual = frozenset(value.segments)
-    if actual != expected:
-        return (False, f"expected segments {sorted(expected)}; got {sorted(actual)}")
-    return (True, "")
+    return segment_guard(SEG_KEYS)(value)
 
 
 def _call_dcf_assumptions() -> DcfAssumptionsPayload:
     issues = _required_actual_issues()
     if issues:
         raise RuntimeError(f"required_actual_unavailable: {','.join(issues)}")
-    decoded = call_llm_structured(
-        PROMPT,
-        purpose="dcf_assumptions",
-        ticker=TICKER,
-        scope="dcf_assumptions_redesign",
-        expect="object",
-        schema=DCF_ASSUMPTIONS_SCHEMA,
-        domain_guardrail=_segment_guard,
-        max_escalation_tier=0,
-    )
-    if not isinstance(decoded, DcfAssumptionsPayload):  # pragma: no cover
-        raise TypeError("dcf_assumptions schema returned an unexpected value")
-    return decoded
+    return call_dcf_assumptions(TICKER, CONTEXT, SEG_KEYS, call=call_llm_structured)
 
 
 def main() -> int:

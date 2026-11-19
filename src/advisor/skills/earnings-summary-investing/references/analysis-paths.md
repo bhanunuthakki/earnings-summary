@@ -46,6 +46,9 @@ earnings exchanges and decision implications within these paths.
    in briefs. Reuse the existing model for base, upside and downside cases.
    Show the assumption or price that reverses the view. Retain the evidence
    and disposition with the draft and preserve the owner's model inputs.
+   To build or revise forecast assumptions, use the
+   [forecast-assumption method](forecast-assumptions.md): driver tree, anchored
+   assumption records, driver ranking and joint stress.
 4. State whether the evidence supports the current thesis and valuation, the
    strongest counter-case and what would change the view. A sizing, funding or
    increase/reduce request also uses the allocation skill's full-book context.

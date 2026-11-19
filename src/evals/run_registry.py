@@ -24,6 +24,7 @@ _SPECIAL_GOLDEN_PURPOSES: tuple[str, ...] = (
     "key_metrics",
     "scenario_prior",
     "sector_benchmark_proposal",
+    "dcf_assumptions",
 )
 
 GOLDEN_PURPOSES: tuple[str, ...] = _SPECIAL_GOLDEN_PURPOSES + tuple(

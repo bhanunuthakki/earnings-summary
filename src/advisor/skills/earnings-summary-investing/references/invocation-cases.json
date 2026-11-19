@@ -109,6 +109,22 @@
         "earnings-summary-investing"
       ],
       "mode": "portfolio risk with signed option positions"
+    },
+    {
+      "id": "V1",
+      "prompt": "Build the long-range revenue and margin assumptions for this holding. Show which assumptions decide the result and what would have to go wrong together.",
+      "expected_investing_skills": [
+        "earnings-summary-investing"
+      ],
+      "mode": "valuation with forecast-assumption method"
+    },
+    {
+      "id": "V1H",
+      "prompt": "I want a proper model of this company's main business line, driver by driver, not one growth rate.",
+      "expected_investing_skills": [
+        "earnings-summary-investing"
+      ],
+      "mode": "valuation with forecast-assumption method held-out paraphrase"
     }
   ]
 }

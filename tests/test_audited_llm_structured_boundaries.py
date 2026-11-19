@@ -24,6 +24,7 @@ from db_paths import db_path_context
 from llm.contracts import (
     DCF_ASSUMPTIONS_SCHEMA,
     PRESSURE_TEST_SCHEMA,
+    DcfAssumptionRecord,
     DcfAssumptionsPayload,
     DcfSegmentGrowth,
     PressureTestPayload,
@@ -303,6 +304,23 @@ def _valid_dcf_payload() -> DcfAssumptionsPayload:
         terminal_growth_g=0.03,
         narrative="Margins expand as growth fades toward maturity.",
         reasoning="The path anchors to actual margins and a mature multiple.",
+        consensus_comparison="Near-term growth matches consensus; no fixture KPIs.",
+        assumption_records=[
+            DcfAssumptionRecord(
+                field=field,
+                anchor_class="reported_fact",
+                anchor="FY2024-FY2025 fixture actuals.",
+                counter_argument="Two flat years do not show a trend.",
+                confidence="medium",
+                observable="Quarterly income statement.",
+            )
+            for field in (
+                "segments.Total company.near_term_growth",
+                "near_term_op_margin",
+                "terminal_op_margin",
+                "exit_multiple",
+            )
+        ],
     )
 
 
@@ -324,6 +342,13 @@ def test_dcf_assumptions_use_structured_schema_and_exact_segments(
         assert guard(expected) == (True, "")
         missing = expected.model_copy(update={"segments": {}})
         assert guard(missing)[0] is False
+        no_records = expected.model_copy(update={"assumption_records": []})
+        ok, reason = guard(no_records)
+        assert ok is False and "missing record for near_term_op_margin" in reason
+        assert "anchor near-term to consensus" not in _prompt
+        assert "A comparison only, not a target" not in _prompt  # fixture has no consensus
+        assert "No admitted company-reported KPI series" in _prompt
+        assert "up to five years" in _prompt
         return expected
 
     monkeypatch.setattr(module, "call_llm_structured", fake)
@@ -534,3 +559,56 @@ def test_dcf_schema_accepts_new_archetype_with_suggestion() -> None:
         }
     )
     assert DCF_ASSUMPTIONS_SCHEMA.validate_python(payload).valuation_model == "new"
+
+
+def test_dcf_assumption_records_cover_deciding_fields() -> None:
+    payload = _valid_dcf_payload()
+    assert payload.assumption_record_issues() == []
+    perpetuity = payload.model_copy(update={"terminal_method": "Perpetuity"})
+    assert "missing record for terminal_growth_g" in perpetuity.assumption_record_issues()
+    duplicated = payload.model_copy(
+        update={"assumption_records": [*payload.assumption_records, payload.assumption_records[0]]}
+    )
+    assert any("duplicate" in issue for issue in duplicated.assumption_record_issues())
+    unknown = payload.model_copy(
+        update={
+            "assumption_records": [
+                *payload.assumption_records,
+                payload.assumption_records[0].model_copy(update={"field": "wacc"}),
+            ]
+        }
+    )
+    assert "record for unknown field wacc" in unknown.assumption_record_issues()
+    no_comparison = payload.model_copy(update={"consensus_comparison": ""})
+    assert "consensus_comparison is empty" in no_comparison.assumption_record_issues()
+    bank = payload.model_copy(
+        update={"valuation_model": "bank_excess_return", "assumption_records": []}
+    )
+    assert bank.assumption_record_issues() == []
+
+
+def test_dcf_judgment_record_cannot_be_high_confidence() -> None:
+    record = _valid_dcf_payload().assumption_records[0].model_dump()
+    record.update({"anchor_class": "judgment", "confidence": "high"})
+    with pytest.raises(ValidationError):
+        DcfAssumptionRecord.model_validate(record)
+
+
+def test_stored_v2_payload_without_records_still_validates() -> None:
+    payload = _valid_dcf_payload().model_dump()
+    del payload["assumption_records"], payload["consensus_comparison"]
+    assert DCF_ASSUMPTIONS_SCHEMA.validate_python(payload).assumption_records == []
+
+
+@pytest.mark.parametrize(
+    ("near", "terminal", "valid"),
+    [(0.10, 0.03, True), (0.02, 0.03, False), (-0.11, -0.03, True), (-0.03, -0.08, False)],
+)
+def test_dcf_segment_growth_fades_toward_terminal(
+    near: float, terminal: float, valid: bool
+) -> None:
+    if valid:
+        DcfSegmentGrowth(near_term_growth=near, terminal_growth=terminal)
+    else:
+        with pytest.raises(ValidationError):
+            DcfSegmentGrowth(near_term_growth=near, terminal_growth=terminal)

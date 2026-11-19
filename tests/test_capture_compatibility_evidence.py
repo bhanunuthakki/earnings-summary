@@ -218,13 +218,14 @@ def test_tracked_complete_collection_still_holds_for_deferred_verification(
     receipt = capture_compatibility_evidence(root, baseline)
     receipts = receipt.legacy_route_golden
 
-    assert len(receipts) == 23
-    assert sum(receipt.cases for receipt in receipts) == 279
+    assert len(receipts) == 24
+    assert sum(receipt.cases for receipt in receipts) == 290
     assert {item.path: item.cases for item in receipts} == {
         "evals/golden/ask_claim_audit.json": 10,
         "evals/golden/ask_claim_grounding.json": 18,
         "evals/golden/ask_evidence_followup.json": 6,
         "evals/golden/ask_pack_router.json": 26,
+        "evals/golden/dcf_assumptions.json": 11,
         "evals/golden/decision_conditions_extract.json": 12,
         "evals/golden/decision_draft_parse.json": 19,
         "evals/golden/disclosure_item_specificity_triage.json": 25,
