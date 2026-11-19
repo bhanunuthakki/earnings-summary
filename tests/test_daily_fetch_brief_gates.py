@@ -359,3 +359,56 @@ def test_default_product_state_root_prefers_configured_scratch_root(
 
     non_standard_db = tmp_path / "custom" / "test.db"
     assert default_product_state_root(code_root, db_path=non_standard_db) == code_root.resolve()
+
+
+def test_daily_brief_isolates_per_ticker_worker_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json
+    import sys
+
+    db_path = tmp_path / "data" / "portfolio.db"
+    db_path.parent.mkdir(parents=True)
+    _bootstrap_min_schema(db_path)
+    conn = sqlite3.connect(str(db_path))
+    conn.executemany(
+        "INSERT INTO tracked_companies (ticker, name, list_type, instrument_type, brief_dirty) "
+        "VALUES (?, ?, 'portfolio', 'equity', 1)",
+        [("BOOM", "Boom Co"), ("GOOD", "Good Co")],
+    )
+    conn.commit()
+    conn.close()
+
+    def refresh_one(
+        ticker: str,
+        _repo_root: Path,
+        _db_path: Path,
+        _args: argparse.Namespace,
+    ) -> dict[str, object]:
+        if ticker == "BOOM":
+            raise RuntimeError("simulated worker boom")
+        return {"ticker": ticker, "status": "ok", "stages": []}
+
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db_path))
+    monkeypatch.setattr(daily, "_refresh_one_ticker", refresh_one)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "daily_fetch_and_brief.py",
+            "--repo-root",
+            str(tmp_path),
+            "--ignore-tier",
+            "--workers",
+            "2",
+        ],
+    )
+
+    assert daily.main() == 0
+    io_out = capsys.readouterr()
+    assert '"event": "daily_brief_ticker_exception"' in io_out.err
+    payload = json.loads(io_out.out)
+    assert [row["ticker"] for row in payload["tickers"]] == ["BOOM", "GOOD"]
+    assert payload["tickers"][0]["status"] == "failed"
+    assert "RuntimeError: simulated worker boom" in str(payload["tickers"][0]["error"])
+    assert payload["tickers"][1]["status"] == "ok"

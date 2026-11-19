@@ -13,6 +13,7 @@ import importlib.util
 import json
 import sqlite3
 import sys
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -96,7 +97,7 @@ def _seed_schema(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _write_cache(surprise_dir: Path, ticker: str, records: list[dict[str, object]]) -> Path:
+def _write_cache(surprise_dir: Path, ticker: str, records: Sequence[object]) -> Path:
     """Write `<TICKER>_surprises.json` in the exact shape the backfill writer
     produces — payload root + records list."""
     surprise_dir.mkdir(parents=True, exist_ok=True)
@@ -105,17 +106,17 @@ def _write_cache(surprise_dir: Path, ticker: str, records: list[dict[str, object
         "ticker": ticker.upper(),
         "generated_at": "2026-05-13",
         "record_count": len(records),
-        "records": records,
+        "records": list(records),
     }
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
 
 def _record(
-    release_date: str = "2025-08-06",
-    eps_actual: str = "2.28",
-    eps_estimate: str = "1.75",
-    source: str = "fmp_calendar",
+    release_date: object = "2025-08-06",
+    eps_actual: object = "2.28",
+    eps_estimate: object = "1.75",
+    source: object = "fmp_calendar",
     **overrides: object,
 ) -> dict[str, object]:
     """Build a record matching SurpriseHit.to_json() shape."""
@@ -185,7 +186,7 @@ def test_parse_record_treats_non_string_decimal_as_none() -> None:
     """If JSON ever contains a raw int/float for a Decimal field, treat as None.
     The source layer always emits strings, so non-strings indicate schema drift."""
     mod = _load_module()
-    parsed = mod._parse_record(_record(eps_actual=2.28))  # type: ignore[arg-type]
+    parsed = mod._parse_record(_record(eps_actual=2.28))
     assert parsed is None
 
 
@@ -200,7 +201,7 @@ def test_parse_record_analyst_counts_typed() -> None:
 def test_parse_record_rejects_bool_for_analyst_count() -> None:
     """bool is an int subclass; must not slip into an integer column."""
     mod = _load_module()
-    parsed = mod._parse_record(_record(num_analysts_eps=True))  # type: ignore[arg-type]
+    parsed = mod._parse_record(_record(num_analysts_eps=True))
     assert parsed is None
 
 
@@ -293,7 +294,7 @@ def test_ingest_updates_when_source_changes(tmp_path: Path) -> None:
         tmp_path / "surprise",
         "WIX",
         [
-            _record(source="yfinance", revenue_actual=None, revenue_estimate=None),  # type: ignore[arg-type]
+            _record(source="yfinance", revenue_actual=None, revenue_estimate=None),
         ],
     )
     mod.ingest_one_ticker(conn, cache_v1, dry_run=False)
@@ -337,7 +338,7 @@ def test_ingest_skips_malformed_records(tmp_path: Path) -> None:
         [
             {"ticker": "WIX"},  # missing release_date + source_name
             _record(release_date="2025-08-06"),
-            "not-a-dict",  # type: ignore[list-item]
+            "not-a-dict",
         ],
     )
     result = mod.ingest_one_ticker(conn, cache, dry_run=False)
@@ -481,7 +482,7 @@ def test_missing_fetched_at_is_quarantined_not_synthesized(tmp_path: Path) -> No
     cache = _write_cache(
         tmp_path / "surprise",
         "WIX",
-        [_record(fetched_at=None)],  # type: ignore[arg-type]
+        [_record(fetched_at=None)],
     )
     result = mod.ingest_one_ticker(conn, cache, dry_run=False)
     conn.commit()
@@ -689,3 +690,38 @@ def test_main_emits_one_redacted_terminal_receipt_on_unexpected_database_failure
     assert receipt["error_type"] == "OperationalError"
     assert "super-secret-value" not in stdout
     assert "api_key=***" in receipt["error"]
+
+
+def test_main_skips_missing_fye_coverage_without_rolling_back_ingest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    mod = _load_module()
+    state_root = tmp_path / "scratch" / "earnings-summary"
+    surprise_dir = state_root / "data" / "surprise"
+    _write_cache(surprise_dir, "ON", [_record(ticker="ON")])
+    db_path = state_root / "data" / "portfolio.db"
+    conn = _seed_schema(db_path)
+    conn.execute(
+        "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, fiscal_year_end TEXT, archived_at TEXT)"
+    )
+    conn.execute("INSERT INTO tracked_companies VALUES ('ON', 'evaluation', NULL, NULL)")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db_path))
+    reopened = sqlite3.connect(db_path)
+    reopened.row_factory = sqlite3.Row
+    monkeypatch.setattr(mod.db, "get_connection", lambda: reopened)
+    monkeypatch.setattr(sys, "argv", ["ingest_earnings_surprises.py"])
+
+    assert mod.main() == 0
+    out_text = capsys.readouterr()
+    receipt = json.loads(out_text.out)
+    assert receipt["terminal_status"] == "completed"
+    assert receipt["totals"]["inserted"] == 1
+    assert receipt["totals"]["errors"] == 0
+    assert '"event": "earnings_surprise_coverage_skipped_missing_fye"' in out_text.err
+    with sqlite3.connect(db_path) as verify:
+        assert verify.execute("SELECT COUNT(*) FROM earnings_surprises").fetchone()[0] == 1

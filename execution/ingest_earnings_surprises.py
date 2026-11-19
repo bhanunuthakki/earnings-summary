@@ -19,11 +19,14 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-import db  # noqa: E402
-from earnings_surprise_store import (  # noqa: E402
+import db
+from db_paths import default_product_state_root
+from earnings_surprise_store import (
     EarningsSurpriseRecordV1,
     append_observation,
     cache_generation_identity,
@@ -34,8 +37,8 @@ from earnings_surprise_store import (  # noqa: E402
     validate_source_record,
     verify_persisted_observation_row,
 )
-from log_redact import redact  # noqa: E402
-from pipeline.data_coverage_dispositions import (  # noqa: E402
+from log_redact import redact
+from pipeline.data_coverage_dispositions import (
     EARNINGS_SURPRISE_POLICY_NAME,
     EARNINGS_SURPRISE_POLICY_PROVIDERS,
     EARNINGS_SURPRISE_POLICY_VERSION,
@@ -489,15 +492,23 @@ def main() -> int:
     parser.add_argument(
         "--repo-root",
         type=Path,
-        default=PROJECT_ROOT,
-        help="Repo root containing data/. Default: this repo.",
+        default=None,
+        help="State root containing data/. Default: resolved product state root.",
     )
     args = parser.parse_args()
 
-    if args.repo_root.resolve() != PROJECT_ROOT:
-        surprise_dir = _retarget_paths(args.repo_root.resolve())
+    if args.repo_root is not None:
+        resolved_root = args.repo_root.resolve()
+        if resolved_root != PROJECT_ROOT:
+            surprise_dir = _retarget_paths(resolved_root)
+        else:
+            surprise_dir = _SURPRISE_DIR
     else:
-        surprise_dir = _SURPRISE_DIR
+        state_root = default_product_state_root(PROJECT_ROOT)
+        if state_root != PROJECT_ROOT:
+            surprise_dir = state_root / "data" / "surprise"
+        else:
+            surprise_dir = _SURPRISE_DIR
 
     caches = _candidate_caches(surprise_dir, args.ticker)
     if not caches:
@@ -532,11 +543,29 @@ def main() -> int:
                 ingestion_run_id=run_id,
             )
             if not args.dry_run and (result.inserted or result.updated or result.unchanged):
-                result.coverage_dispositions = _persist_ingested_coverage(
-                    conn,
-                    ticker=result.ticker,
-                    observed_at=run_recorded_at,
-                )
+                try:
+                    result.coverage_dispositions = _persist_ingested_coverage(
+                        conn,
+                        ticker=result.ticker,
+                        observed_at=run_recorded_at,
+                    )
+                except ValueError as exc:
+                    if "fiscal_year_end is unavailable" in str(exc):
+                        print(
+                            json.dumps(
+                                {
+                                    "event": "earnings_surprise_coverage_skipped_missing_fye",
+                                    "ingestion_run_id": run_id,
+                                    "ticker": result.ticker,
+                                }
+                            ),
+                            file=sys.stderr,
+                        )
+                        result.coverage_dispositions = [f"skipped_missing_fye:{result.ticker}"]
+                    else:
+                        result.errors.append(
+                            f"coverage disposition: {type(exc).__name__}: {exc}"[:200]
+                        )
             results.append(result)
             print(
                 json.dumps(

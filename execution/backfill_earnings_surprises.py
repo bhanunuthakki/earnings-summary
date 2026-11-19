@@ -38,6 +38,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import db
+from db_paths import default_product_state_root
 from earnings_surprise_store import cache_generation_identity
 from pipeline.data_coverage_dispositions import (
     EARNINGS_SURPRISE_POLICY_NAME,
@@ -52,6 +53,7 @@ from pipeline.data_coverage_dispositions import (
     recent_completed_fiscal_quarters,
 )
 from pipeline.sec_xbrl import NO_SEC_FILERS
+from pipeline.ticker_scope import load_active_capabilities
 from surprise_sources import (
     SurpriseHit,
     SurpriseSource,
@@ -105,25 +107,10 @@ def _resolve_tickers(arg_ticker: str | None) -> list[str]:
     conn = db.get_connection()
     try:
         if arg_ticker:
-            cur = conn.execute(
-                "SELECT ticker FROM tracked_companies WHERE ticker = ? AND archived_at IS NULL",
-                (arg_ticker.upper(),),
-            )
-        else:
-            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
-            etf_filter = (
-                "AND LOWER(COALESCE(instrument_type, '')) != 'etf' "
-                if "instrument_type" in columns
-                else ""
-            )
-            cur = conn.execute(
-                f"SELECT ticker FROM tracked_companies "
-                f"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} "
-                f"AND archived_at IS NULL "
-                f"{etf_filter}"
-                f"ORDER BY ticker"
-            )
-        return [row["ticker"] for row in cur.fetchall()]
+            caps = load_active_capabilities(conn, ticker=arg_ticker)
+            return [cap.ticker for cap in caps]
+        caps = load_active_capabilities(conn)
+        return sorted(cap.ticker for cap in caps if cap.supports_earnings_surprises)
     finally:
         conn.close()
 
@@ -203,6 +190,18 @@ def _backfill_one(
                 and "fiscal_year_end is unavailable" in str(exc)
             ):
                 result.coverage_dispositions = [f"skipped_non_sec_filer_no_fye:{result.ticker}"]
+            elif result.hits_total > 0 and "fiscal_year_end is unavailable" in str(exc):
+                print(
+                    json.dumps(
+                        {
+                            "event": "surprise_coverage_skipped_missing_fye",
+                            "ticker": result.ticker,
+                            "hits_written": result.hits_written,
+                        }
+                    ),
+                    file=sys.stderr,
+                )
+                result.coverage_dispositions = [f"skipped_missing_fye:{result.ticker}"]
             else:
                 result.error = f"coverage disposition: {type(exc).__name__}: {exc}"[:200]
         except Exception as exc:
@@ -358,16 +357,25 @@ def main() -> int:
     p.add_argument(
         "--repo-root",
         type=Path,
-        default=PROJECT_ROOT,
-        help="Repo root containing data/. Default: this repo. Worktree-based runs "
-        "should pass the main repo path.",
+        default=None,
+        help="State root containing data/. Default: resolved product state root.",
     )
     args = p.parse_args()
 
-    if args.repo_root.resolve() != PROJECT_ROOT:
-        surprise_dir, fmp_dir, yf_snapshots_dir = _retarget_paths(args.repo_root.resolve())
+    if args.repo_root is not None:
+        resolved_root = args.repo_root.resolve()
+        if resolved_root != PROJECT_ROOT:
+            surprise_dir, fmp_dir, yf_snapshots_dir = _retarget_paths(resolved_root)
+        else:
+            surprise_dir, fmp_dir, yf_snapshots_dir = _SURPRISE_DIR, _FMP_DIR, _YF_SNAPSHOTS_DIR
     else:
-        surprise_dir, fmp_dir, yf_snapshots_dir = _SURPRISE_DIR, _FMP_DIR, _YF_SNAPSHOTS_DIR
+        state_root = default_product_state_root(PROJECT_ROOT)
+        if state_root != PROJECT_ROOT:
+            surprise_dir = state_root / "data" / "surprise"
+            fmp_dir = state_root / "data" / "historical" / "fmp"
+            yf_snapshots_dir = state_root / "data" / "historical" / "yfinance_snapshots"
+        else:
+            surprise_dir, fmp_dir, yf_snapshots_dir = _SURPRISE_DIR, _FMP_DIR, _YF_SNAPSHOTS_DIR
 
     tickers = _resolve_tickers(args.ticker)
     if not tickers:

@@ -50,7 +50,7 @@ try:
 except ImportError:
     from execution._lib import PROJECT_ROOT
 
-from db_paths import require_db_path
+from db_paths import default_product_state_root, require_db_path
 from llm_artifact_store import mark_artifacts_dirty_for_fact_change
 from models.companies import ListType
 from models.runs import StageStatus
@@ -78,6 +78,16 @@ from pipeline.source_policy import (
 from provenance.sec_companyfacts_capture import CompanyFactsContractError
 
 _PER_TICKER_DELAY_S = 0.2
+
+
+def _active_list_types(conn: sqlite3.Connection) -> dict[str, str]:
+    """Return non-archived uppercase ticker -> list_type when the table is present."""
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
+    if not {"ticker", "list_type"}.issubset(columns):
+        return {}
+    archived_sql = " WHERE archived_at IS NULL" if "archived_at" in columns else ""
+    rows = conn.execute(f"SELECT ticker, list_type FROM tracked_companies{archived_sql}").fetchall()  # nosec B608
+    return {str(row[0]).strip().upper(): str(row[1]).strip().lower() for row in rows}
 
 
 def _integer_stat(row: dict[str, object], key: str) -> int:
@@ -315,7 +325,7 @@ def main() -> int:
     parser.add_argument(
         "--project-root",
         type=Path,
-        default=PROJECT_ROOT,
+        default=None,
         help="Explicit artifact root for retained SEC responses and immutable snapshots",
     )
     args = parser.parse_args()
@@ -333,10 +343,16 @@ def main() -> int:
             )
         )
         return 3
+    artifact_root = (
+        args.project_root
+        if args.project_root is not None
+        else default_product_state_root(PROJECT_ROOT, db_path=database)
+    )
     conn = open_db(database)
     try:
         scope_issues: list[dict[str, object]] = []
         tickers = _resolve_tickers(args, conn, scope_issues=scope_issues)
+        list_types = _active_list_types(conn)
         try:
             run_id = start_run(conn, directive="fetch_sec_xbrl", ticker_scope=tickers)
         except PipelineRunSuppressedError as exc:
@@ -347,16 +363,19 @@ def main() -> int:
             return 1 if scope_issues else 0
         rows: list[dict[str, object]] = []
         failed = 0
+        failed_portfolio = 0
+        failed_non_portfolio = 0
         skipped_unchanged = 0
 
         for i, ticker in enumerate(tickers):
             if i > 0:
                 time.sleep(_PER_TICKER_DELAY_S)
+            is_portfolio = list_types.get(ticker.upper()) == ListType.PORTFOLIO.value
             try:
                 stats = ingest_for_ticker(
                     conn,
                     ticker=ticker,
-                    project_root=args.project_root,
+                    project_root=artifact_root,
                     run_id=run_id,
                     timing_sink=lambda receipt: emit_ingest_timing(
                         receipt,
@@ -370,9 +389,14 @@ def main() -> int:
                         "error": str(e),
                         "class": "auth_denial",
                         "http_status": e.status_code,
+                        "portfolio_holding": is_portfolio,
                     }
                 )
                 failed += 1
+                if is_portfolio:
+                    failed_portfolio += 1
+                else:
+                    failed_non_portfolio += 1
                 break
             except OSError as e:
                 # Transient: network / filesystem. Continue with next ticker.
@@ -381,9 +405,14 @@ def main() -> int:
                         "ticker": ticker,
                         "error": f"OSError: {e}"[:200],
                         "class": "transient",
+                        "portfolio_holding": is_portfolio,
                     }
                 )
                 failed += 1
+                if is_portfolio:
+                    failed_portfolio += 1
+                else:
+                    failed_non_portfolio += 1
                 continue
             except CompanyFactsContractError as e:
                 rows.append(
@@ -394,20 +423,21 @@ def main() -> int:
                         "raw_response_path": (
                             None if e.raw_response_path is None else str(e.raw_response_path)
                         ),
+                        "portfolio_holding": is_portfolio,
                     }
                 )
                 failed += 1
+                if is_portfolio:
+                    failed_portfolio += 1
+                else:
+                    failed_non_portfolio += 1
                 continue
             except (ValueError, KeyError) as e:
                 # Schema drift: the SEC payload didn't parse as expected.
                 # Per GEMINI.md, capture the raw response location so the
                 # operator can inspect it before re-running.
                 raw_path = (
-                    args.project_root
-                    / "data"
-                    / "historical"
-                    / "sec"
-                    / f"{ticker}_companyfacts.json"
+                    artifact_root / "data" / "historical" / "sec" / f"{ticker}_companyfacts.json"
                 )
                 rows.append(
                     {
@@ -415,9 +445,14 @@ def main() -> int:
                         "error": f"{type(e).__name__}: {e}"[:200],
                         "class": "schema_drift",
                         "raw_response_path": str(raw_path) if raw_path.exists() else None,
+                        "portfolio_holding": is_portfolio,
                     }
                 )
                 failed += 1
+                if is_portfolio:
+                    failed_portfolio += 1
+                else:
+                    failed_non_portfolio += 1
                 continue
             if stats.disposition == "skipped_unchanged":
                 # A conditional 304 / digest match is a positive freshness
@@ -480,6 +515,8 @@ def main() -> int:
                     "scope_issue_count": len(scope_issues),
                     "tickers": len(tickers),
                     "failed": failed,
+                    "failed_portfolio": failed_portfolio,
+                    "failed_non_portfolio": failed_non_portfolio,
                     "skipped_unchanged": skipped_unchanged,
                     "total_accessions_registered": total_accessions,
                     "total_facts_inserted": total_facts,

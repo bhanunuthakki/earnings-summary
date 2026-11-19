@@ -967,3 +967,42 @@ def test_processing_continuation_retains_request_context(
     assert len(evidence) == 1
     assert ("--requested" in evidence[0]) is owner_requested
     assert _ticker_of(evidence[0]) == "NU"
+
+
+def test_roster_excludes_etfs_when_instrument_type_column_present(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db = tmp_path / "ir.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, instrument_type TEXT, archived_at TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO tracked_companies VALUES (?, ?, ?, NULL)",
+        [
+            ("NU", "portfolio", "adr"),
+            ("AVDV", "portfolio", "etf"),
+            ("META", "evaluation", "equity"),
+            ("RSP", "evaluation", "ETF"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    selected, skipped = cast(
+        Callable[[Path, list[str] | None], tuple[list[str], list[str]]],
+        getattr(batch, "_resolve_roster"),
+    )(db, None)
+    assert selected == ["NU", "META"]
+    assert skipped == []
+    stderr = capsys.readouterr().err
+    assert '"event": "source_collection_instrument_denied"' in stderr
+    assert '"ticker": "AVDV"' in stderr
+    assert '"ticker": "RSP"' in stderr
+
+    sel_req, skip_req = cast(
+        Callable[[Path, list[str] | None], tuple[list[str], list[str]]],
+        getattr(batch, "_resolve_roster"),
+    )(db, ["NU", "AVDV"])
+    assert sel_req == ["NU"]
+    assert skip_req == ["AVDV"]

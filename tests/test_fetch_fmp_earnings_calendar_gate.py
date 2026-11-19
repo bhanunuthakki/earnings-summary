@@ -70,3 +70,62 @@ def test_paid_tier_does_not_skip(monkeypatch: pytest.MonkeyPatch) -> None:
     mod.main()
 
     assert called == ["NU"]
+
+
+def test_owner_disabled_fmp_exits_zero_without_force_and_nonzero_with_force(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: object,
+) -> None:
+    from pathlib import Path
+
+    assert isinstance(tmp_path, Path)
+    policy = tmp_path / "fmp-policy.json"
+    policy.write_text('{"schema_version":1,"enabled":false}', encoding="utf-8")
+    monkeypatch.setenv("EARNINGS_SUMMARY_FMP_POLICY_FILE", str(policy))
+
+    monkeypatch.setattr(sys, "argv", ["prog", "--all"])
+    with pytest.raises(SystemExit) as clean_exit:
+        mod.main()
+    assert clean_exit.value.code == 0
+    assert '"event": "fmp_calendar_skipped"' in capsys.readouterr().err
+
+    monkeypatch.setattr(sys, "argv", ["prog", "--all", "--force"])
+    with pytest.raises(SystemExit) as forced_exit:
+        mod.main()
+    assert forced_exit.value.code == 1
+    assert '"event": "fmp_calendar_unavailable"' in capsys.readouterr().err
+
+
+def test_calendar_select_tickers_excludes_etfs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    import sqlite3
+    from pathlib import Path
+
+    assert isinstance(tmp_path, Path)
+    db_path = tmp_path / "calendar.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, instrument_type TEXT, archived_at TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO tracked_companies VALUES (?, ?, ?, NULL)",
+        [
+            ("META", "portfolio", "equity"),
+            ("AVDV", "portfolio", "etf"),
+            ("NU", "portfolio", "adr"),
+            ("RSP", "evaluation", "etf"),
+            ("1548.HK", "evaluation", "equity"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(mod.db, "DB_PATH", str(db_path))
+    assert mod.select_tickers(
+        argparse.Namespace(ticker=None, portfolio=True, watchlist=False, evaluation=False)
+    ) == ["META", "NU"]
+    assert mod.select_tickers(
+        argparse.Namespace(ticker=None, portfolio=False, watchlist=False, evaluation=False)
+    ) == ["1548.HK", "META", "NU"]

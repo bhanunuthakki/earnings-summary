@@ -452,3 +452,79 @@ def test_backfill_wrapper_continues_to_ingest_on_partial_failure() -> None:
     assert 'if "!STAGE1_RC!"=="2" set "RUN_INGEST=1"' in bat
     assert 'if "!RUN_INGEST!"=="0"' in bat
     assert 'if not "!STAGE1_RC!"=="0" if "!STAGE2_RC!"=="0" set "RC=!STAGE1_RC!"' in bat
+
+
+def test_backfill_one_skips_missing_fye_when_hits_exist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    mod = _load_module()
+    hit = _hit(date(2026, 8, 5), source="yfinance")
+
+    def fake_fetch(*_args: object, **_kwargs: object) -> tuple[list[SurpriseHit], list[object]]:
+        return [hit], []
+
+    monkeypatch.setattr(mod, "fetch_surprises_with_outcomes", fake_fetch)
+
+    def missing_fye(*_args: object, **_kwargs: object) -> list[str]:
+        raise ValueError("ONON: fiscal_year_end is unavailable")
+
+    monkeypatch.setattr(mod, "_persist_surprise_coverage", missing_fye)
+
+    result = mod._backfill_one(
+        "ONON",
+        [],
+        tmp_path,
+        lookback=8,
+        dry_run=False,
+        persist_coverage=True,
+    )
+    assert result.error is None
+    assert result.hits_written == 1
+    assert result.coverage_dispositions == ["skipped_missing_fye:ONON"]
+    assert '"event": "surprise_coverage_skipped_missing_fye"' in capsys.readouterr().err
+
+
+def test_backfill_main_defaults_to_resolved_product_state_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    state_root = tmp_path / "scratch" / "earnings-summary"
+    (state_root / "data").mkdir(parents=True)
+    db_path = state_root / "data" / "portfolio.db"
+    db_path.touch()
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db_path))
+
+    seen_dirs: list[Path] = []
+    hit = _hit(date(2026, 8, 5), source="yfinance")
+
+    def fake_resolve(_ticker: str | None) -> list[str]:
+        return ["META"]
+
+    def fake_sources(**_kwargs: object) -> list[SurpriseSource]:
+        return []
+
+    monkeypatch.setattr(mod, "_resolve_tickers", fake_resolve)
+
+    def record_backfill(
+        ticker: str,
+        sources: list[SurpriseSource],
+        surprise_dir: Path,
+        lookback: int,
+        dry_run: bool,
+        persist_coverage: bool = False,
+    ) -> object:
+        del sources, lookback, dry_run, persist_coverage
+        seen_dirs.append(surprise_dir)
+        return mod.TickerBackfillResult(
+            ticker=ticker,
+            hits_total=1,
+            hits_written=1,
+            output_path=str(surprise_dir / f"{ticker}_surprises.json"),
+        )
+
+    monkeypatch.setattr(mod, "_backfill_one", record_backfill)
+    monkeypatch.setattr(mod, "default_sources", fake_sources)
+    monkeypatch.setattr(sys, "argv", ["backfill_earnings_surprises.py"])
+    assert mod.main() == 0
+    assert seen_dirs == [state_root.resolve() / "data" / "surprise"]
+    assert hit.ticker == "X"
