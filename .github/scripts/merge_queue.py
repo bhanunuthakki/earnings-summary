@@ -114,8 +114,14 @@ class GitHubApi:
         return self._request(method, path, body)
 
 
+def _mapping(value: object) -> Mapping[str, Any]:
+    return cast(Mapping[str, Any], value) if isinstance(value, dict) else {}
+
+
 def _labels(pr: Mapping[str, Any]) -> set[str]:
-    return {str(label.get("name", "")) for label in pr.get("labels") or []}
+    raw = pr.get("labels")
+    items = cast(list[object], raw) if isinstance(raw, list) else []
+    return {str(_mapping(label).get("name", "")) for label in items}
 
 
 def queued_entries(prs: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
@@ -129,9 +135,9 @@ def eligibility_problem(pr: Mapping[str, Any], repo: str) -> str | None:
         return "the pull request is not open"
     if pr.get("draft"):
         return "the pull request is a draft"
-    if (pr.get("base") or {}).get("ref") != BASE_BRANCH:
+    if _mapping(pr.get("base")).get("ref") != BASE_BRANCH:
         return f"the base branch is not {BASE_BRANCH}"
-    head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
+    head_repo = _mapping(_mapping(pr.get("head")).get("repo")).get("full_name")
     if head_repo != repo:
         # Only collaborators can push same-repository heads, which keeps the
         # label an approval of code that outsiders cannot replace.
@@ -148,7 +154,7 @@ def candidate_state(
     if mergeable is False:
         return "the pull request has merge conflicts with main"
     merge = pr.get("merge_commit_sha")
-    head = str((pr.get("head") or {}).get("sha") or "")
+    head = str(_mapping(pr.get("head")).get("sha") or "")
     if mergeable is None or not merge or merge_parents is None:
         return None
     if list(merge_parents) != [main_sha, head]:
@@ -191,7 +197,7 @@ def binding_problems(
         problems.append(reason)
     if LABEL not in _labels(pr):
         problems.append("the merge-queue label was removed")
-    if (pr.get("head") or {}).get("sha") != expected.head:
+    if _mapping(pr.get("head")).get("sha") != expected.head:
         problems.append("the pull request head changed after selection")
     if main_sha != expected.base:
         problems.append("main moved after selection")
