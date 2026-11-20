@@ -1258,3 +1258,21 @@ def test_partial_clone_materializes_the_accepted_replay_blob_before_tests() -> N
     assert blob is not None
     assert f"git cat-file blob {blob.group(1)} >/dev/null" in workflow
     assert workflow.index("git cat-file blob") < workflow.index("actions/setup-python@")
+
+
+def test_quality_reuses_the_exact_main_seeded_core_environment_and_refreshes_ruff() -> None:
+    workflow = WORKFLOW_PATH.read_text()
+    quality = workflow.split("\n  quality:\n", 1)[1].split("\n  typecheck:\n", 1)[0]
+    fast = workflow.split("\n  fast-signal:\n", 1)[1].split("\n  tests:\n", 1)[0]
+    pattern = r"key: (ci-venv-[^\n]+)"
+    assert re.findall(pattern, quality) == re.findall(pattern, fast)
+    assert "restore-keys:" not in quality
+    assert "path: ${{ runner.temp }}/ci-venv" in quality
+    assert "uses: actions/cache/restore@" in quality
+    assert "uses: actions/cache@" not in quality
+    assert "if: steps.venv_cache.outputs.cache-hit != 'true'" in quality
+    refresh = quality.split("      - name: Refresh the quality scanner\n", 1)[1].split(
+        "      - name:", 1
+    )[0]
+    assert "if:" not in refresh
+    assert "run: python -m pip install --upgrade ruff" in refresh
