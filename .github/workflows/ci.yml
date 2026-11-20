@@ -118,32 +118,11 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}/sqlite-3.53.4
-          key: ci-sqlite-${{ runner.os }}-3.53.4-${{ hashFiles('.github/workflows/ci.yml') }}
+          key: ci-sqlite-${{ runner.os }}-${{ runner.arch }}-3.53.4-${{ hashFiles('.github/scripts/build_sqlite.sh') }}
       - name: Build verified SQLite writer runtime
         if: steps.sqlite_cache.outputs.cache-hit != 'true'
         shell: bash
-        run: |
-          set -euo pipefail
-          sqlite_dir="$RUNNER_TEMP/sqlite-3.53.4"
-          archive="$RUNNER_TEMP/sqlite-amalgamation-3530400.zip"
-          mkdir -p "$sqlite_dir"
-          curl --fail --location --proto '=https' --tlsv1.2 --retry 3 \
-            https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip \
-            --output "$archive"
-          python - "$archive" <<'PY'
-          import hashlib
-          import pathlib
-          import sys
-
-          expected = "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e"
-          observed = hashlib.sha3_256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest()
-          if observed != expected:
-              raise SystemExit(f"SQLite archive SHA3-256 mismatch: {observed}")
-          PY
-          unzip -q "$archive" -d "$sqlite_dir"
-          gcc -O2 -fPIC -shared -pthread -DSQLITE_ENABLE_FTS5 \
-            "$sqlite_dir/sqlite-amalgamation-3530400/sqlite3.c" \
-            -o "$sqlite_dir/libsqlite3.so.0" -lm -ldl
+        run: bash .github/scripts/build_sqlite.sh
       - name: Preload verified SQLite writer runtime
         shell: bash
         run: |
@@ -248,35 +227,14 @@ jobs:
           path: ${{ runner.temp }}/sqlite-3.53.4
           # Exact key ONLY — deliberately no restore-keys. The key is the
           # runner OS, the SQLite version, and the hash of the build recipe
-          # (which lives in this workflow), so a fuzzy restore can never pair
+          # (the shared build script), so a fuzzy restore can never pair
           # a stale binary with a fresh workflow. On a miss the build step
           # below runs exactly as before; on a hit this shard skips it.
-          key: ci-sqlite-${{ runner.os }}-3.53.4-${{ hashFiles('.github/workflows/ci.yml') }}
+          key: ci-sqlite-${{ runner.os }}-${{ runner.arch }}-3.53.4-${{ hashFiles('.github/scripts/build_sqlite.sh') }}
       - name: Build verified SQLite writer runtime
         if: steps.sqlite_cache.outputs.cache-hit != 'true'
         shell: bash
-        run: |
-          set -euo pipefail
-          sqlite_dir="$RUNNER_TEMP/sqlite-3.53.4"
-          archive="$RUNNER_TEMP/sqlite-amalgamation-3530400.zip"
-          mkdir -p "$sqlite_dir"
-          curl --fail --location --proto '=https' --tlsv1.2 --retry 3 \
-            https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip \
-            --output "$archive"
-          python - "$archive" <<'PY'
-          import hashlib
-          import pathlib
-          import sys
-
-          expected = "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e"
-          observed = hashlib.sha3_256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest()
-          if observed != expected:
-              raise SystemExit(f"SQLite archive SHA3-256 mismatch: {observed}")
-          PY
-          unzip -q "$archive" -d "$sqlite_dir"
-          gcc -O2 -fPIC -shared -pthread -DSQLITE_ENABLE_FTS5 \
-            "$sqlite_dir/sqlite-amalgamation-3530400/sqlite3.c" \
-            -o "$sqlite_dir/libsqlite3.so.0" -lm -ldl
+        run: bash .github/scripts/build_sqlite.sh
       - name: Preload verified SQLite writer runtime
         # Runs on both paths: the built artifact and the cached one must prove
         # they load as SQLite 3.53.4 before any shard touches the database.
@@ -382,32 +340,11 @@ jobs:
           # Same exact-key contract as the tests job: runner OS + SQLite
           # version + build recipe hash, no restore-keys. On a hit the build
           # step below is skipped; the preload step still proves the runtime.
-          key: ci-sqlite-${{ runner.os }}-3.53.4-${{ hashFiles('.github/workflows/ci.yml') }}
+          key: ci-sqlite-${{ runner.os }}-${{ runner.arch }}-3.53.4-${{ hashFiles('.github/scripts/build_sqlite.sh') }}
       - name: Build verified SQLite writer runtime
         if: steps.sqlite_cache.outputs.cache-hit != 'true'
         shell: bash
-        run: |
-          set -euo pipefail
-          sqlite_dir="$RUNNER_TEMP/sqlite-3.53.4"
-          archive="$RUNNER_TEMP/sqlite-amalgamation-3530400.zip"
-          mkdir -p "$sqlite_dir"
-          curl --fail --location --proto '=https' --tlsv1.2 --retry 3 \
-            https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip \
-            --output "$archive"
-          python - "$archive" <<'PY'
-          import hashlib
-          import pathlib
-          import sys
-
-          expected = "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e"
-          observed = hashlib.sha3_256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest()
-          if observed != expected:
-              raise SystemExit(f"SQLite archive SHA3-256 mismatch: {observed}")
-          PY
-          unzip -q "$archive" -d "$sqlite_dir"
-          gcc -O2 -fPIC -shared -pthread -DSQLITE_ENABLE_FTS5 \
-            "$sqlite_dir/sqlite-amalgamation-3530400/sqlite3.c" \
-            -o "$sqlite_dir/libsqlite3.so.0" -lm -ldl
+        run: bash .github/scripts/build_sqlite.sh
       - name: Preload verified SQLite writer runtime
         shell: bash
         run: |

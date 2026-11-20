@@ -1052,7 +1052,7 @@ def test_env_caches_sqlite_by_version_os_and_recipe_hash() -> None:
     assert "id: sqlite_cache" in workflow
     assert "path: ${{ runner.temp }}/sqlite-3.53.4" in workflow
     assert (
-        "key: ci-sqlite-${{ runner.os }}-3.53.4-${{ hashFiles('.github/workflows/ci.yml') }}"
+        "key: ci-sqlite-${{ runner.os }}-${{ runner.arch }}-3.53.4-${{ hashFiles('.github/scripts/build_sqlite.sh') }}"
         in workflow
     )
     # Both the tests matrix and Design Sync gate the build on a miss and keep
@@ -1143,15 +1143,16 @@ def test_durations_loader_fails_closed_on_malformed_input(
 
 def test_env_cache_miss_falls_back_to_build_and_install() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    # SQLite build remains in the workflow on the miss path: archive URL,
-    # hash verification, FTS5 compile, hash check, and version assert.
-    assert "https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip" in workflow
+    recipe = (REPO_ROOT / ".github/scripts/build_sqlite.sh").read_text(encoding="utf-8")
+    assert "https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip" in recipe
     assert (
         "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e"  # pragma: allowlist secret
-        in workflow
+        in recipe
     )
-    assert "-DSQLITE_ENABLE_FTS5" in workflow
-    assert "gcc -O2 -fPIC -shared -pthread" in workflow
+    assert "-DSQLITE_ENABLE_FTS5" in recipe
+    assert "gcc -O2 -fPIC -shared -pthread" in recipe
+    assert "--retry" not in recipe
+    assert workflow.count("run: bash .github/scripts/build_sqlite.sh") == 3
     # pip install falls back to the full hash-pinned install into the venv.
     assert (
         '"$RUNNER_TEMP/ci-venv/bin/pip" install --require-hashes -r requirements.lock' in workflow
@@ -1206,3 +1207,30 @@ def test_secret_scan_covers_every_file_and_propagates_worker_failure(tmp_path: P
     scanned = [path for receipt in output.iterdir() for path in json.loads(receipt.read_text())]
     assert Counter(scanned) == Counter(paths)
     assert result.returncode != 0
+
+
+def test_sqlite_build_rejects_corrupt_archive_before_compiling(tmp_path: Path) -> None:
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    curl = binaries / "curl"
+    curl.write_text(
+        '#!/bin/sh\nfor argument; do output=$argument; done\nprintf corrupt > "$output"\n',
+        encoding="utf-8",
+    )
+    curl.chmod(0o755)
+    result = subprocess.run(
+        ["bash", str(REPO_ROOT / ".github/scripts/build_sqlite.sh")],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "RUNNER_TEMP": str(tmp_path),
+            "PATH": os.pathsep.join(
+                (str(binaries), str(Path(sys.executable).parent), os.environ["PATH"])
+            ),
+        },
+    )
+    assert result.returncode != 0
+    assert "SQLite archive SHA3-256 mismatch" in result.stderr
+    assert not (tmp_path / "sqlite-3.53.4/libsqlite3.so.0").exists()
