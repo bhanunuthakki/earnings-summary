@@ -1270,6 +1270,7 @@ def test_quality_reuses_the_exact_main_seeded_core_environment_and_refreshes_ruf
     assert "path: ${{ runner.temp }}/ci-venv" in quality
     assert "uses: actions/cache/restore@" in quality
     assert "uses: actions/cache@" not in quality
+    assert "cache: pip" not in quality
     assert "if: steps.venv_cache.outputs.cache-hit != 'true'" in quality
     refresh = quality.split("      - name: Refresh the quality scanner\n", 1)[1].split(
         "      - name:", 1
