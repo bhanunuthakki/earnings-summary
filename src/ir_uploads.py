@@ -428,7 +428,7 @@ _MELI_Q2_2026_LETTER_TO_SHAREHOLDERS_URL = (
 _RX_QUARTER_APOSTROPHE = re.compile(r"Q(?P<q>[1-4])['\u2018\u2019\u02bc]\s*(?P<yy>\d{2})\b")
 _RX_QUARTER_SPACE = re.compile(r"Q(?P<q>[1-4])\s*(?P<y>20\d{2})\b")
 _RX_QUARTER_FULL = re.compile(
-    r"\b(?P<word>First|Second|Third|Fourth)\s+Quarter(?:\s+Fiscal)?\s+(?:20)?(?P<y>\d{2,4})\b",
+    r"\b(?P<word>First|Second|Third|Fourth)\s+Quarter(?:\s+(?:of|Fiscal))?\s+(?:20)?(?P<y>\d{2,4})\b",
     re.IGNORECASE,
 )
 _RX_QUARTER_FY = re.compile(
@@ -610,12 +610,14 @@ def fingerprint_xlsx(path: Path) -> str:
     wb = load_workbook(str(path), read_only=True, data_only=True)
     try:
         parts: list[str] = [f"sheets={wb.sheetnames}"]
-        for sn in wb.sheetnames[:2]:
+        for sn in wb.sheetnames[:3]:
             ws = wb[sn]
             for i, row in enumerate(ws.iter_rows(values_only=True)):
                 if i >= 12:
                     break
-                parts.append(" | ".join("" if v is None else str(v)[:80] for v in row))
+                cells = [str(v)[:80] for v in row if v is not None and str(v).strip()]
+                if cells:
+                    parts.append(" | ".join(cells))
         return "\n".join(parts)[:_PDF_FINGERPRINT_CHARS]
     finally:
         wb.close()
@@ -1012,6 +1014,35 @@ def _sec_cover_year_quarter(cal: str, m: re.Match[str]) -> tuple[int, int]:
     return year, _MONTH_TO_Q[m.group("m").lower()]
 
 
+def _latest_xlsx_period(
+    text: str,
+    ticker_calendar: str,
+) -> tuple[tuple[int, int], list[str]] | None:
+    """Infer latest non-future fiscal quarter-end from XLSX fingerprint dates."""
+    if not text.startswith("sheets=["):
+        return None
+    today = date.today()
+    matches: list[tuple[date, tuple[int, int]]] = []
+    for rx in (
+        r"\b(?P<y>20\d{2})-(?P<m>\d{1,2})-(?P<d>\d{1,2})\b",
+        r"\b(?P<d>\d{1,2})/(?P<m>\d{1,2})/(?P<y>20\d{2})\b",
+    ):
+        for m in re.finditer(rx, text):
+            try:
+                candidate = date(int(m.group("y")), int(m.group("m")), int(m.group("d")))
+            except ValueError:
+                continue
+            if candidate > today:
+                continue
+            yq = _fiscal_year_quarter_for_date(ticker_calendar, candidate)
+            if yq is not None:
+                matches.append((candidate, yq))
+    if not matches:
+        return None
+    latest, yq = max(matches, key=lambda item: item[0])
+    return yq, [f"xlsx_latest_period_date:{latest.isoformat()}"]
+
+
 def _detect_period(
     text: str,
     ticker_calendar: str,
@@ -1101,10 +1132,14 @@ def _detect_period(
     m = re.search(r"q(?P<q>[1-4])(?P<y>20\d{2})", flat)
     if m:
         return (int(m.group("y")), int(m.group("q"))), [f"quarter_squashed:{m.group(0)!r}"]
-    m = re.search(r"(?P<word>first|second|third|fourth)quarter(?:fiscal)?(?P<y>20\d{2})", flat)
+    m = re.search(r"(?P<word>first|second|third|fourth)quarter(?:of|fiscal)?(?P<y>20\d{2})", flat)
     if m:
         q = _WORD_TO_Q[m.group("word")]
         return (int(m.group("y")), q), [f"quarter_word_squashed:{m.group(0)!r}"]
+
+    xlsx_period = _latest_xlsx_period(text, ticker_calendar)
+    if xlsx_period is not None:
+        return xlsx_period
 
     return None, []
 

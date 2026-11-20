@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -673,6 +674,20 @@ def direct_publisher_quarter_selection_in_connection(
             conn.rollback()
 
 
+def _read_only_quarter_selection(
+    db_path: Path,
+    selector: Callable[[sqlite3.Connection], bool | None],
+) -> bool | None:
+    try:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    except (OSError, sqlite3.Error):
+        return None
+    try:
+        return selector(conn)
+    finally:
+        conn.close()
+
+
 def reported_quarter_selection(
     db_path: Path,
     *,
@@ -684,18 +699,42 @@ def reported_quarter_selection(
 ) -> bool | None:
     """Read-only source selection for entrypoints without a caller-owned connection."""
 
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except (OSError, sqlite3.Error):
-        return None
-    try:
-        return reported_quarter_selection_in_connection(
+    return _read_only_quarter_selection(
+        db_path,
+        lambda conn: reported_quarter_selection_in_connection(
             conn,
             ticker=ticker,
             fiscal_year=fiscal_year,
             fiscal_quarter=fiscal_quarter,
             fiscal_year_end_month=fiscal_year_end_month,
             as_of=as_of,
-        )
-    finally:
-        conn.close()
+        ),
+    )
+
+
+def direct_publisher_quarter_selection(
+    db_path: Path,
+    *,
+    ticker: str,
+    fiscal_year: int,
+    fiscal_quarter: int,
+    fiscal_year_end_month: int | None,
+    as_of: date,
+    max_quarters: int = 8,
+    has_verified_fiscal_witness: bool = False,
+) -> bool | None:
+    """Read-only direct-publisher selection for entrypoints without a caller-owned connection."""
+
+    return _read_only_quarter_selection(
+        db_path,
+        lambda conn: direct_publisher_quarter_selection_in_connection(
+            conn,
+            ticker=ticker,
+            fiscal_year=fiscal_year,
+            fiscal_quarter=fiscal_quarter,
+            fiscal_year_end_month=fiscal_year_end_month,
+            as_of=as_of,
+            max_quarters=max_quarters,
+            has_verified_fiscal_witness=has_verified_fiscal_witness,
+        ),
+    )
