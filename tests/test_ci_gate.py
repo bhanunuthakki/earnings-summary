@@ -1294,6 +1294,7 @@ def test_windows_environment_cache_is_exact_and_does_not_skip_native_tests() -> 
     ):
         assert identity in app
     assert "restore-keys:" not in app
+    assert "cache: pip" not in app
     assert "if: steps.windows_venv_cache.outputs.cache-hit != 'true'" in app
     checks = app.split("      - name: Verify restored Windows test dependencies\n", 1)[1]
     assert "if: steps.windows_venv_cache" not in checks
