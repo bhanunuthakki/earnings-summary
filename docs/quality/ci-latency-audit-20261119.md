@@ -118,3 +118,11 @@ Validation: `make check-fast BASE=HEAD` passed; 125 CI-gate tests and 1,226 narr
 secret-filter tests passed. The new batching regression failed before the workflow
 edit and passed after it. No test, scanner, retry policy, or timeout was removed or
 relaxed. The full suite remains in CI.
+
+First hosted experiment: [run 44674571873](https://github.com/bhanunuthakki/earnings-summary/actions/runs/44674571873)
+reported an 87-second successful secret scan. The full run failed on stale
+reachability provenance, so its 357-second turnaround is not a successful CI
+result. No retry was requested. Only the parser source digest in the three
+reachability disposition files was rebound; every reviewed edge remained
+unchanged. `test_actual_head_is_supported` then passed locally in 44.46 seconds.
+The fix requires a new commit and a fresh full run.
