@@ -286,11 +286,10 @@ def build_atomic_semantic_context(
         resolved_precision = resolved_precision or KpiSourcePrecision(
             kind="approximate", qualifiers=(qualifier,)
         )
-    elif metric_nature is KpiMetricNature.BINARY_OR_ADHOC_MILESTONE:
-        if excerpt is None:
-            raise ValueError(
-                "binary_or_adhoc_milestone atomic admission requires non-empty source_excerpt"
-            )
+    elif metric_nature is KpiMetricNature.BINARY_OR_ADHOC_MILESTONE and excerpt is None:
+        raise ValueError(
+            "binary_or_adhoc_milestone atomic admission requires non-empty source_excerpt"
+        )
 
     if accounting_basis is not None and accounting_basis is not KpiAccountingBasis.UNKNOWN:
         resolved_basis = accounting_basis
