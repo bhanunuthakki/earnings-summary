@@ -375,6 +375,7 @@ class KpiLedgerRow(BaseModel):
     name: str
     tier: Literal["tier_1", "tier_2", "tier_3"]
     unit: str | None = None
+    metric_nature: str | None = None
     source_hint: str | None = None
     # Stable PK handle for the metric (kpi_definitions.id), resolved at build
     # time alongside the definition metadata. This is the metric's identity

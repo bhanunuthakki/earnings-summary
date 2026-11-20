@@ -113,6 +113,7 @@ _PEEK_KINDS = (
     LocatorKind.FMP_JSON_TABLE,
     LocatorKind.VENDOR_FIELD,
     LocatorKind.PDF_SLIDE,
+    LocatorKind.SPREADSHEET_CELL,
     LocatorKind.DERIVED,
 )
 
@@ -182,6 +183,11 @@ def _locator_hint(src: CellSource, loc: FactLocator | None) -> str | None:
     if kind == LocatorKind.PDF_SLIDE and loc.pdf_page is not None:
         noun = _PDF_HINT_NOUN.get(src.doc_type or "", "PDF")
         return f"{noun} p.{loc.pdf_page}"
+    if kind == LocatorKind.SPREADSHEET_CELL and loc.spreadsheet_cell is not None:
+        coord = loc.spreadsheet_cell.cell_address or loc.spreadsheet_cell.cell_range or ""
+        sheet = loc.spreadsheet_cell.sheet_name
+        short_sheet = sheet if len(sheet) <= 20 else f"{sheet[:19]}\u2026"
+        return f"{short_sheet}!{coord}" if coord else short_sheet
     if kind == LocatorKind.DERIVED and loc.derived is not None:
         n = len(loc.derived.inputs)
         return f"derived · {n} input{'s' if n != 1 else ''}"

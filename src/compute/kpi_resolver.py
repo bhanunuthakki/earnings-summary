@@ -889,6 +889,25 @@ class KpiResolverReadMemo:
         return self._cadence_rows[key]
 
 
+def _normalized_reported_name_sql(column_expr: str) -> str:
+    """SQLite normalization for ``metric_name_as_reported`` matching Python identity."""
+    collapsed = (
+        f"REPLACE(REPLACE(REPLACE({column_expr}, CHAR(13), ' '), CHAR(10), ' '), CHAR(9), ' ')"
+    )
+    for _ in range(4):
+        collapsed = f"REPLACE({collapsed}, '  ', ' ')"
+    return f"RTRIM(LOWER(TRIM({collapsed})), ':* ')"
+
+
+def normalize_reported_series_key(value: str) -> str:
+    """Canonical identity key for ``metric_name_as_reported`` matching the SQL twin."""
+    return (
+        " ".join(value.replace("\r", " ").replace("\n", " ").replace("\t", " ").split())
+        .lower()
+        .rstrip(":* ")
+    )
+
+
 def _latest_identity_signature(
     conn: sqlite3.Connection,
     definition_id: int,
@@ -927,7 +946,7 @@ def _latest_identity_signature(
     if row is None:
         return None
     return (
-        str(row[0]),
+        normalize_reported_series_key(str(row[0])),
         str(row[1]),
         str(row[2]),
         str(row[3]),
@@ -1083,7 +1102,6 @@ def semantic_series_identity_sql(
     anchor_context = f"{context_alias}_identity_context"
     successor = f"{anchor_context}_successor"
     signature_fields = (
-        "metric_name_as_reported",
         "accounting_basis",
         "consolidation_scope",
         "dimensions_json",
@@ -1100,11 +1118,23 @@ def semantic_series_identity_sql(
         f"AND {anchor_context}.publication_lane='current_actual'"
     )
     current_signature = (
-        "(" + ",".join(f"{context_alias}.{field}" for field in signature_fields) + ")"
+        "("
+        + ",".join(
+            [
+                _normalized_reported_name_sql(f"{context_alias}.metric_name_as_reported"),
+                *(f"{context_alias}.{field}" for field in signature_fields),
+            ]
+        )
+        + ")"
     )
     anchor_signature = (
         "(SELECT "
-        + ",".join(f"{anchor_context}.{field}" for field in signature_fields)
+        + ",".join(
+            [
+                _normalized_reported_name_sql(f"{anchor_context}.metric_name_as_reported"),
+                *(f"{anchor_context}.{field}" for field in signature_fields),
+            ]
+        )
         + f" {anchor_relation} ORDER BY {anchor_fact}.period_end DESC,"
         + f"{anchor_fact}.id DESC LIMIT 1)"
     )
@@ -1210,7 +1240,9 @@ def semantic_series_identity_anchor_sql(
     if not _SERIES_IDENTITY_REQUIRED_COLUMNS.issubset(columns):
         return None
     signature_select = ", ".join(
-        f"context.{field} AS m{index}"
+        f"{_normalized_reported_name_sql('context.metric_name_as_reported')} AS m1"
+        if field == "metric_name_as_reported"
+        else f"context.{field} AS m{index}"
         for index, field in enumerate(_SERIES_IDENTITY_SIGNATURE_FIELDS, start=1)
     )
     return (
@@ -1254,7 +1286,12 @@ def semantic_series_identity_flat_sql(
     """
     current_signature = (
         "("
-        + ",".join(f"{context_alias}.{field}" for field in _SERIES_IDENTITY_SIGNATURE_FIELDS)
+        + ",".join(
+            _normalized_reported_name_sql(f"{context_alias}.{field}")
+            if field == "metric_name_as_reported"
+            else f"{context_alias}.{field}"
+            for field in _SERIES_IDENTITY_SIGNATURE_FIELDS
+        )
         + ")"
     )
     anchor_signature = "(" + ",".join(f"{anchor_alias}.m{index}" for index in range(1, 6)) + ")"

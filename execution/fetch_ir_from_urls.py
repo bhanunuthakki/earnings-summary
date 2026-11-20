@@ -50,6 +50,7 @@ except ImportError:
     from fetch_ir_documents import process_ticker, registered_source_urls
 
 import ir_fetch_status
+from db_paths import default_product_state_root, require_db_path
 from ir_pipeline.manifest import ManifestEntry, merge_write
 from ir_uploads import calendar_id_from_fye
 from pipeline.issuer_document_inventory import FiscalPeriodWitness
@@ -57,7 +58,10 @@ from pipeline.managed_ir_sources import (
     IssuerDocumentPreparationError,
     resolve_fiscal_period_witness,
 )
-from pipeline.reported_period_inventory import reported_quarter_selection_in_connection
+from pipeline.reported_period_inventory import (
+    direct_publisher_quarter_selection_in_connection,
+    reported_quarter_selection_in_connection,
+)
 from pipeline.source_policy import (
     ArtifactKind,
     CollectionSource,
@@ -156,6 +160,8 @@ def register_urls(
     quarter: int,
     process: bool = True,
     document_version_id: str | None = None,
+    direct_verified: bool = False,
+    max_quarters: int = 8,
 ) -> int:
     """Return ready URL entries, including repaired/unchanged registrations.
 
@@ -231,14 +237,26 @@ def register_urls(
     )
     conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
-        in_window = reported_quarter_selection_in_connection(
-            conn,
-            ticker=ticker,
-            fiscal_year=year,
-            fiscal_quarter=quarter,
-            fiscal_year_end_month=fiscal_year_end_month,
-            as_of=current_utc_date(),
-        )
+        if direct_verified or fiscal_witness is not None:
+            in_window = direct_publisher_quarter_selection_in_connection(
+                conn,
+                ticker=ticker,
+                fiscal_year=year,
+                fiscal_quarter=quarter,
+                fiscal_year_end_month=fiscal_year_end_month,
+                as_of=current_utc_date(),
+                max_quarters=max_quarters,
+                has_verified_fiscal_witness=fiscal_witness is not None,
+            )
+        else:
+            in_window = reported_quarter_selection_in_connection(
+                conn,
+                ticker=ticker,
+                fiscal_year=year,
+                fiscal_quarter=quarter,
+                fiscal_year_end_month=fiscal_year_end_month,
+                as_of=current_utc_date(),
+            )
     finally:
         conn.close()
     if (
@@ -304,16 +322,30 @@ def register_urls(
         if fiscal_witness is not None
         else _ticker_fye(db_path, ticker)
     )
-    summary = process_ticker(
-        ticker,
-        root=repo_root,
-        db_path=db_path,
-        categorize=True,
-        calendar=calendar,
-        owner_requested=True,
-        fiscal_witness_document_version_id=document_version_id,
-        fiscal_witness_urls=frozenset(urls) if document_version_id is not None else frozenset(),
-    )
+    if direct_verified:
+        summary = process_ticker(
+            ticker,
+            root=repo_root,
+            db_path=db_path,
+            categorize=True,
+            calendar=calendar,
+            owner_requested=True,
+            fiscal_witness_document_version_id=document_version_id,
+            fiscal_witness_urls=frozenset(urls) if document_version_id is not None else frozenset(),
+            direct_verified=True,
+            max_quarters=max_quarters,
+        )
+    else:
+        summary = process_ticker(
+            ticker,
+            root=repo_root,
+            db_path=db_path,
+            categorize=True,
+            calendar=calendar,
+            owner_requested=True,
+            fiscal_witness_document_version_id=document_version_id,
+            fiscal_witness_urls=frozenset(urls) if document_version_id is not None else frozenset(),
+        )
     downloaded = summary.get("downloaded")
     downloaded_n = downloaded if isinstance(downloaded, int) else 0
     transport_skips = summary.get("transport_skipped")
@@ -370,8 +402,14 @@ def register_urls(
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    repo_root = cast("Path", args.repo_root)
-    db_path = cast("Path", args.db) if args.db else repo_root / "data" / "portfolio.db"
+    raw_root = cast("Path | None", args.repo_root)
+    raw_db = cast("Path | None", args.db)
+    if raw_root is not None:
+        repo_root = raw_root
+        db_path = raw_db if raw_db is not None else repo_root / "data" / "portfolio.db"
+    else:
+        db_path = require_db_path(raw_db)
+        repo_root = default_product_state_root(PROJECT_ROOT, db_path=db_path)
     urls = collect_urls(cast("list[str] | None", args.url), cast("Path | None", args.urls_file))
     if not urls:
         sys.stderr.write("No URLs provided (use --url and/or --urls-file).\n")
@@ -385,6 +423,8 @@ def main(argv: list[str] | None = None) -> int:
         quarter=cast("int", args.quarter),
         process=not cast("bool", args.no_process),
         document_version_id=cast("str | None", args.document_version_id),
+        direct_verified=cast("bool", args.direct_verified),
+        max_quarters=cast("int", args.max_quarters),
     )
     return 0 if registered else 1
 
@@ -400,6 +440,17 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--document-version-id",
         help="Exact current SEC filing version that proves this fiscal period.",
     )
+    p.add_argument(
+        "--direct-verified",
+        action="store_true",
+        help="Verify period against sealed sec_submissions without requiring an ir_crawl seal.",
+    )
+    p.add_argument(
+        "--max-quarters",
+        type=int,
+        default=8,
+        help="Trailing reported-quarter window size when --direct-verified is used (default: 8).",
+    )
     p.add_argument("--url", action="append", help="A document URL (repeatable)")
     p.add_argument(
         "--urls-file", type=Path, help="File with one document URL per line (# comments ok)"
@@ -410,9 +461,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Register only; skip the ir_narrative anchor refresh + brief_dirty flag",
     )
     p.add_argument(
-        "--db", type=Path, help="portfolio.db path (default: <repo-root>/data/portfolio.db)"
+        "--db", type=Path, help="portfolio.db path (otherwise configured authority / <repo-root>)"
     )
-    p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    p.add_argument("--repo-root", type=Path, default=None)
     return p.parse_args(argv)
 
 

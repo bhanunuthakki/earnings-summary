@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from alerts import AlertRow
 from dashboard.evidence_drawer import load_brief_provenance, render_evidence_drawer
+from models.facts import FactLocator, LocatorKind, SpreadsheetCellRef
 from report.models import CellSource, QuarterlyEarningsCard, QuarterlyLineItem
 from report.renderers import workspace_styles
 from report.renderers.charts_v2 import MatrixRow, yoy_heatmap_table
@@ -619,3 +620,35 @@ def test_drawer_attaches_open_notes(tmp_path: Path) -> None:
 def test_drawer_without_notes_renders_no_notes_section(tmp_path: Path) -> None:
     out = render_evidence_drawer(_make_alert(json.dumps({"summary": "s"})), None)
     assert "Related notes" not in out
+
+
+def test_spreadsheet_cell_chip_href_and_label_hint() -> None:
+    short_loc = FactLocator(
+        locator_version=2,
+        kind=LocatorKind.SPREADSHEET_CELL,
+        spreadsheet_cell=SpreadsheetCellRef(sheet_name="P&L", cell_address="G14"),
+    )
+    src = CellSource(
+        source="fmp_normalized",
+        doc_type="ir_historical_spreadsheet",
+        fact_table="kpi_facts",
+        fact_id=42,
+        doc_id=9,
+        locator=short_loc.to_json(),
+    )
+    assert viewer_href(src) == "/api/peek/provenance/kpi_facts:42"
+    chip = source_chip_html(src, link_only=True)
+    assert "FMP · P&amp;L!G14" in chip
+    assert 'href="/api/peek/provenance/kpi_facts:42"' in chip
+
+    long_loc = FactLocator(
+        locator_version=2,
+        kind=LocatorKind.SPREADSHEET_CELL,
+        spreadsheet_cell=SpreadsheetCellRef(
+            sheet_name="Consolidated Quarterly Statements", cell_address="C8"
+        ),
+    )
+    long_chip = source_chip_html(
+        src.model_copy(update={"locator": long_loc.to_json()}), link_only=True
+    )
+    assert "Consolidated Quarte\u2026!C8" in long_chip
