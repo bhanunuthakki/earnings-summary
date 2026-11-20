@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "bfa64560542e3310b1b2043b1812459aaf57381a",
+  "scoped_commit": "4deaa43c595d5eb96be50398db7eed7e81210114",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "3ac05c3e3fa21b6b69ea4d800307d9180bbdbfd81e764a33966f610713c95cf9",
+  "source_sha256": "1d0e796fbaf2f1c77c41566f5aaac61e0ea09cff1e546be62e3ba840321e167c",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1405,
-    "total_noncomment_loc": 560853,
+    "total_noncomment_loc": 560889,
     "modules_over_1000_loc": 117,
     "modules_over_2000_loc": 22,
     "modules_at_least_3000_loc": 5,
@@ -6513,9 +6513,9 @@
         "path": "execution/verify_public_tree.py",
         "module": "execution.verify_public_tree",
         "lines": {
-          "physical": 388,
-          "nonblank": 342,
-          "noncomment": 342
+          "physical": 428,
+          "nonblank": 378,
+          "noncomment": 378
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -6523,8 +6523,8 @@
           "network",
           "process"
         ],
-        "public_functions": 10,
-        "fully_annotated_public_functions": 10
+        "public_functions": 11,
+        "fully_annotated_public_functions": 11
       },
       {
         "path": "execution/verify_reader_parity.py",

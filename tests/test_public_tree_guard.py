@@ -280,3 +280,41 @@ def test_outgoing_history_requires_a_valid_base(tmp_path: Path) -> None:
     _commit(tmp_path, "public root")
     with pytest.raises(subprocess.CalledProcessError):
         public_guard.audit_outgoing_history(tmp_path, "missing-base")
+
+
+def test_push_scan_reuses_only_identical_path_and_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_repo(tmp_path)
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    (reports / "unchanged.md").write_text("Public research.\n", encoding="utf-8")
+    _commit(tmp_path, "baseline")
+    base = subprocess.check_output(
+        ["git", "-C", tmp_path, "rev-parse", "HEAD"], text=True, env=_git_env()
+    ).strip()
+    removed = reports / "removed.md"
+    removed.write_text("Cost basis: $123\n", encoding="utf-8")
+    changed = reports / "changed.md"
+    changed.write_text("Cost basis: $123\n", encoding="utf-8")
+    _commit(tmp_path, "transient private fact")
+    removed.unlink()
+    _commit(tmp_path, "remove private fact")
+    changed.write_text("Public research.\n", encoding="utf-8")
+    (reports / "untracked.md").write_text("Cost basis: $123\n", encoding="utf-8")
+    fixtures = tmp_path / "tests"
+    fixtures.mkdir()
+    (fixtures / "synthetic.md").write_text("Cost basis: $123\n", encoding="utf-8")
+    expected = (verify(tmp_path), public_guard.audit_outgoing_history(tmp_path, base))
+    original = public_guard.content_violation_categories
+    calls: list[tuple[str, bytes]] = []
+
+    def classify(relative: str, data: bytes) -> set[str]:
+        calls.append((relative, data))
+        return original(relative, data)
+
+    monkeypatch.setattr(public_guard, "content_violation_categories", classify)
+    assert public_guard.verify_push_candidate(tmp_path, base) == expected
+    assert calls.count(("reports/unchanged.md", b"Public research.\n")) == 1
+    assert expected[0] == ["account-level-fact in: reports/untracked.md"]
+    assert expected[1] == {"account-level-fact": {"files": 3, "refs": 2}}
