@@ -320,3 +320,57 @@ def test_pdf_fingerprint_validates_optional_extractor_text(
     result = ir_uploads.fingerprint_pdf(tmp_path / "source.pdf")
     assert result == expected
     assert closed == [True]
+
+
+def test_nu_third_quarter_of_year_transcript_beats_prior_q4_mention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    staged = tmp_path / "opaque-call.pdf"
+    staged.write_bytes(b"%PDF-1.4\n")
+    text = (
+        "Operator: Ladies and gentlemen, welcome to Nu Holdings conference call to discuss the "
+        "results for the third quarter of 2026.\n"
+        "Management also compared unit economics against Q4 2025 strong net additions."
+    )
+
+    def _fingerprint_stub(_path: Path) -> str:
+        return text
+
+    monkeypatch.setattr(ir_uploads, "fingerprint", _fingerprint_stub)
+    result = classify_ir_file(staged, ticker_hint="NU")
+    assert isinstance(result, CategorizationResult)
+    assert result.doc_type is DocType.IR_TRANSCRIPT
+    assert result.period_end == date(2026, 9, 30)
+    assert result.period_label == "Q3 2026"
+
+
+def test_classify_xlsx_multisheet_padded_dates_prefers_latest_non_future_quarter(
+    tmp_path: Path,
+) -> None:
+    p = tmp_path / "historical_data.xlsx"
+    wb = openpyxl.Workbook()
+    contents = wb.active
+    assert contents is not None
+    contents.title = "Contents"
+    contents.cell(1, 1, "Index")
+    contents.cell(2, 1, "Managerial indicators")
+
+    pnl = wb.create_sheet("Managerial P&L")
+    for row_idx in range(1, 13):
+        for col_idx in range(1, 40):
+            pnl.cell(row_idx, col_idx, "" if col_idx > 1 else ("P&L" if row_idx == 1 else ""))
+
+    ind = wb.create_sheet("Managerial indicators")
+    ind.cell(1, 1, "Nu Holdings Ltd.")
+    ind.cell(2, 1, "Managerial Indicators")
+    ind.cell(9, 18, "30/06/2026")
+    ind.cell(9, 19, "30/09/2026")
+    ind.cell(9, 20, "31/12/2029")
+    wb.save(str(p))
+
+    res = classify_ir_file(p)
+    assert isinstance(res, CategorizationResult)
+    assert res.doc_type is DocType.IR_SUPPLEMENT
+    assert res.ticker == "NU"
+    assert res.period_end == date(2026, 9, 30)
+    assert res.period_label == "Q3 2026"

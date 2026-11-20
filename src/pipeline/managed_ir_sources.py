@@ -39,7 +39,10 @@ from pipeline.issuer_document_inventory import (
     resolve_registered_document_period,
     validate_fiscal_period_witness,
 )
-from pipeline.reported_period_inventory import reported_quarter_selection
+from pipeline.reported_period_inventory import (
+    direct_publisher_quarter_selection,
+    reported_quarter_selection,
+)
 from pipeline.source_policy import (
     SOURCE_POLICY_CONFIG,
     ArtifactKind,
@@ -677,7 +680,12 @@ def _configured(root: Path, db_path: Path) -> Path:
 
 
 def _policy(
-    request: IssuerDocumentStagingRequest, db_path: Path, *, permit_pending: bool = False
+    request: IssuerDocumentStagingRequest,
+    db_path: Path,
+    *,
+    permit_pending: bool = False,
+    direct_verified: bool = False,
+    max_quarters: int | None = None,
 ) -> StoredCollectionAuthorization:
     inv = request.inventory_request
     auth = authorize_stored_collection_target(
@@ -698,6 +706,22 @@ def _policy(
     if request.historical_window is not None:
         decision: bool | None = issuer_request_period_is_allowed(
             request, fiscal_year_end_month=auth.fiscal_year_end_month, as_of=current_utc_date()
+        )
+    elif direct_verified:
+        resolved_max_quarters = (
+            SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters
+            if max_quarters is None
+            else max_quarters
+        )
+        decision = direct_publisher_quarter_selection(
+            db_path,
+            ticker=inv.ticker,
+            fiscal_year=inv.fiscal_year,
+            fiscal_quarter=inv.fiscal_quarter,
+            fiscal_year_end_month=auth.fiscal_year_end_month,
+            as_of=current_utc_date(),
+            max_quarters=resolved_max_quarters,
+            has_verified_fiscal_witness=inv.fiscal_period_witness is not None,
         )
     else:
         decision = reported_quarter_selection(
@@ -782,6 +806,8 @@ def validate_prepared_staging(
     state_root: Path,
     db_path: Path,
     permit_pending: bool = False,
+    direct_verified: bool = False,
+    max_quarters: int | None = None,
 ) -> IssuerDocumentStagingReceipt:
     """Stable-read, reclassify and re-authorize a receipt; never publishes."""
     root = state_root.resolve(strict=True)
@@ -792,7 +818,17 @@ def validate_prepared_staging(
         or receipt.verifier_code_sha256 != verifier_code_identity()
     ):
         raise PreparedIssuerDocumentPublisherError("staging_code_identity_changed")
-    authorization = _policy(request, db_path, permit_pending=permit_pending)
+    authorization = (
+        _policy(
+            request,
+            db_path,
+            permit_pending=permit_pending,
+            direct_verified=True,
+            max_quarters=max_quarters,
+        )
+        if direct_verified
+        else _policy(request, db_path, permit_pending=permit_pending)
+    )
     staging = root / ".tmp" / "managed_ir_staging" / request.attempt_id
     require_no_reparse_points(staging)
     objects = staging / "objects"
@@ -1983,6 +2019,8 @@ def _publish_prepared_issuer_documents_impl(
     state_root: Path,
     db_path: Path,
     held_claims: bool,
+    direct_verified: bool = False,
+    max_quarters: int | None = None,
 ) -> PreparedIssuerDocumentPublication:
     """Implementation reached only by the standalone or verified held-lock seams."""
     root = state_root.resolve(strict=True)
@@ -2030,7 +2068,17 @@ def _publish_prepared_issuer_documents_impl(
             )
         if _result_path(root, request.attempt_id).exists():
             raise PreparedIssuerDocumentPublisherError("publication_record_missing")
-        receipt = validate_prepared_staging(request, state_root=root, db_path=db_path)
+        receipt = (
+            validate_prepared_staging(
+                request,
+                state_root=root,
+                db_path=db_path,
+                direct_verified=True,
+                max_quarters=max_quarters,
+            )
+            if direct_verified
+            else validate_prepared_staging(request, state_root=root, db_path=db_path)
+        )
         intent = _read_intent(receipt, root, authority)
         staged = root / ".tmp" / "managed_ir_staging" / request.attempt_id
         items = [
@@ -2239,7 +2287,12 @@ def _publish_prepared_issuer_documents_impl(
 
 
 def _publish_prepared_issuer_documents_held(
-    request: IssuerDocumentStagingRequest, *, state_root: Path, db_path: Path
+    request: IssuerDocumentStagingRequest,
+    *,
+    state_root: Path,
+    db_path: Path,
+    direct_verified: bool = False,
+    max_quarters: int | None = None,
 ) -> PreparedIssuerDocumentPublication:
     """Private outer-admission seam; it borrows, never reacquires, exact claims."""
     root = state_root.resolve(strict=True)
@@ -2249,12 +2302,22 @@ def _publish_prepared_issuer_documents_held(
     _claim(root, "ir-discovery")
     _claim(root, "portfolio-db")
     return _publish_prepared_issuer_documents_impl(
-        request, state_root=root, db_path=configured, held_claims=True
+        request,
+        state_root=root,
+        db_path=configured,
+        held_claims=True,
+        direct_verified=direct_verified,
+        max_quarters=max_quarters,
     )
 
 
 def publish_prepared_issuer_documents(
-    request: IssuerDocumentStagingRequest, *, state_root: Path, db_path: Path
+    request: IssuerDocumentStagingRequest,
+    *,
+    state_root: Path,
+    db_path: Path,
+    direct_verified: bool = False,
+    max_quarters: int | None = None,
 ) -> PreparedIssuerDocumentPublication:
     """Standalone publisher: acquire exact lanes then delegate to the held seam."""
     root = state_root.resolve(strict=True)
@@ -2262,7 +2325,13 @@ def publish_prepared_issuer_documents(
     with JobLock(
         root, "managed-issuer-document-publication", ["ir-discovery", "portfolio-db"], wait_s=0
     ):
-        return _publish_prepared_issuer_documents_held(request, state_root=root, db_path=configured)
+        return _publish_prepared_issuer_documents_held(
+            request,
+            state_root=root,
+            db_path=configured,
+            direct_verified=direct_verified,
+            max_quarters=max_quarters,
+        )
 
 
 class IssuerDocumentPreparationError(RuntimeError):
@@ -2559,6 +2628,9 @@ def _seal_prepared_staging(
     root: Path,
     db_path: Path,
     objects: Path,
+    *,
+    direct_verified: bool = False,
+    max_quarters: int | None = None,
 ) -> IssuerDocumentStagingReceipt:
     receipt_path = objects.parent / "staging_receipt.json"
     try:
@@ -2588,7 +2660,17 @@ def _seal_prepared_staging(
         ) from exc
     try:
         _publish_attempt_text(receipt_path, receipt.canonical_json)
-        return validate_prepared_staging(request, state_root=root, db_path=db_path)
+        return (
+            validate_prepared_staging(
+                request,
+                state_root=root,
+                db_path=db_path,
+                direct_verified=True,
+                max_quarters=max_quarters,
+            )
+            if direct_verified
+            else validate_prepared_staging(request, state_root=root, db_path=db_path)
+        )
     except (
         IssuerDocumentPreparationError,
         PreparedIssuerDocumentPublisherError,
@@ -2628,6 +2710,7 @@ def prepare_issuer_document_candidate(
     download: Callable[[str, Path, str], Path | None],
     fiscal_witness_document_version_id: str | None = None,
     max_quarters: int = SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters,
+    direct_verified: bool = False,
 ) -> tuple[Path, IssuerDocumentStagingRequest | None, BoundIRClassification | None]:
     """Download once, then seal qualified quarterly IR documents.
 
@@ -2785,7 +2868,18 @@ def prepare_issuer_document_candidate(
         document = _staged_document(
             request, destination, outcome, source_url, document_type, objects, classified_bytes
         )
-        _seal_prepared_staging(request, [document], root, db_path, objects)
+        if direct_verified:
+            _seal_prepared_staging(
+                request,
+                [document],
+                root,
+                db_path,
+                objects,
+                direct_verified=True,
+                max_quarters=max_quarters,
+            )
+        else:
+            _seal_prepared_staging(request, [document], root, db_path, objects)
         return destination, request, None
 
 

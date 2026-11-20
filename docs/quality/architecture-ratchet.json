@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "27983851d927178f82187548afcdb34eebc0ef7d",
+  "scoped_commit": "65d3d73b3b6b22bc8574fbf243c6e4954509128d",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "de04da5795188b912a455b714d57f3046f366bfb3ca4d284cac508b8c7e9d745",
+  "source_sha256": "1e561870c4f94a128acd65651da067ecb6474d8053ca9d6ff55d2cbc5a893b84",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1406,
-    "total_noncomment_loc": 561588,
+    "total_noncomment_loc": 561752,
     "modules_over_1000_loc": 117,
     "modules_over_2000_loc": 23,
     "modules_at_least_3000_loc": 5,
@@ -3210,9 +3210,9 @@
         "path": "execution/fetch_ir_documents.py",
         "module": "execution.fetch_ir_documents",
         "lines": {
-          "physical": 1128,
-          "nonblank": 1043,
-          "noncomment": 1021
+          "physical": 1133,
+          "nonblank": 1048,
+          "noncomment": 1026
         },
         "internal_fan_out": 13,
         "responsibilities": [
@@ -11315,9 +11315,9 @@
         "path": "src/ir_uploads.py",
         "module": "ir_uploads",
         "lines": {
-          "physical": 1592,
-          "nonblank": 1419,
-          "noncomment": 1243
+          "physical": 1627,
+          "nonblank": 1451,
+          "noncomment": 1275
         },
         "internal_fan_out": 3,
         "responsibilities": [
@@ -13664,9 +13664,9 @@
         "path": "src/pipeline/kpi_atomic_admission.py",
         "module": "pipeline.kpi_atomic_admission",
         "lines": {
-          "physical": 341,
-          "nonblank": 306,
-          "noncomment": 306
+          "physical": 340,
+          "nonblank": 305,
+          "noncomment": 305
         },
         "internal_fan_out": 3,
         "responsibilities": [
@@ -13884,9 +13884,9 @@
         "path": "src/pipeline/managed_ir_sources.py",
         "module": "pipeline.managed_ir_sources",
         "lines": {
-          "physical": 2874,
-          "nonblank": 2671,
-          "noncomment": 2655
+          "physical": 2968,
+          "nonblank": 2765,
+          "noncomment": 2749
         },
         "internal_fan_out": 15,
         "responsibilities": [
@@ -14263,9 +14263,9 @@
         "path": "src/pipeline/reported_period_inventory.py",
         "module": "pipeline.reported_period_inventory",
         "lines": {
-          "physical": 701,
-          "nonblank": 672,
-          "noncomment": 669
+          "physical": 740,
+          "nonblank": 706,
+          "noncomment": 703
         },
         "internal_fan_out": 8,
         "responsibilities": [
@@ -14273,8 +14273,8 @@
           "filesystem",
           "network"
         ],
-        "public_functions": 4,
-        "fully_annotated_public_functions": 4
+        "public_functions": 5,
+        "fully_annotated_public_functions": 5
       },
       {
         "path": "src/pipeline/research_cockpit.py",

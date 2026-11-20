@@ -24,15 +24,23 @@ from pipeline.issuer_document_inventory import (
     IssuerDocumentInventoryRequest,
 )
 from pipeline.managed_ir_sources import (
+    IssuerDocumentPreparationError,
     IssuerDocumentStagingReceipt,
     IssuerDocumentStagingRequest,
     PreparedIssuerDocumentPublisherError,
     StagedIssuerDocument,
     classification_evidence,
     classifier_code_identity,
+    prepare_issuer_document_candidate,
     publish_prepared_issuer_documents,
     validate_prepared_staging,
     verifier_code_identity,
+)
+from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
+from provenance.source_coverage_reconcile import (
+    InventoryComponentImport,
+    SourceCoverageImport,
+    reconcile_source_coverage,
 )
 from runtime.job_runtime import JobLock
 
@@ -1119,3 +1127,196 @@ def test_evidence_less_inventory_must_equal_current_pinned_snapshot(
     ) as raised:
         publish_prepared_issuer_documents(request, state_root=root, db_path=db_path)
     assert raised.value.committed and raised.value.inventory_state == "failed"
+
+
+def test_direct_verified_candidate_and_publish_with_sec_seal_without_ir_crawl(
+    migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "state"
+    (root / "data").mkdir(parents=True)
+    db_path = migrated_db(root / "data" / "portfolio.db")
+
+    today = date.today()
+    latest_q_idx = (today.year * 4) + (today.month - 1) // 3 - 1
+    target_q_idx = latest_q_idx - 5  # 6 quarters back: outside default 5, inside 8
+    latest_year, latest_q_rem = divmod(latest_q_idx, 4)
+    latest_q = latest_q_rem + 1
+    target_year, target_q_rem = divmod(target_q_idx, 4)
+    target_q = target_q_rem + 1
+    latest_month = latest_q * 3
+    latest_day = 31 if latest_month in (3, 12) else 30
+    latest_period_end = date(latest_year, latest_month, latest_day)
+    target_month = target_q * 3
+    target_day = 31 if target_month in (3, 12) else 30
+    target_period_end = date(target_year, target_month, target_day)
+
+    now = datetime.now(UTC)
+    sec_url = "https://data.sec.gov/submissions/CIK0001691493.json"
+    sec_body = b"{}"
+    sec_digest = hashlib.sha256(sec_body).hexdigest()
+    blob_path = tmp_path / f"{sec_digest}.json"
+    blob_path.write_bytes(sec_body)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (user_id, ticker, name, list_type, fiscal_year_end, instrument_type) "
+            "VALUES ('1', 'NU', 'Nu Holdings', 'portfolio', '12-31', 'equity')",
+        )
+        ledger = EvidenceLedger(conn)
+        ledger.persist(
+            ContentBlob(
+                sha256=sec_digest,
+                byte_size=len(sec_body),
+                media_type="application/json",
+                storage_uri=blob_path.as_uri(),
+                recorded_at=now,
+            )
+        )
+        ledger.persist(
+            SourceObservation(
+                observation_id="obs-nu-sec-1",
+                idempotency_key="obs-nu-sec-1",
+                source_kind="sec_submissions",
+                source_url=sec_url,
+                blob_sha256=sec_digest,
+                source_published_at=None,
+                filing_at=None,
+                accepted_at=None,
+                observed_at=now,
+                retrieved_at=now,
+                retrieval_config_sha256="a" * 64,
+                collector_code_version="sec_submissions@1",
+            )
+        )
+        conn.commit()
+        reconcile_source_coverage(
+            conn,
+            SourceCoverageImport(
+                inventory_key="issuer-nu:sec-submissions",
+                revision=1,
+                issuer_id="issuer-nu",
+                ticker="NU",
+                source_kind="sec_submissions",
+                source_url=sec_url,
+                source_observation_id="obs-nu-sec-1",
+                outcome="succeeded",
+                authoritative=True,
+                retrieval_config_sha256="a" * 64,
+                collector_code_version="sec_submissions@1",
+                started_at=now,
+                completed_at=now,
+                recorded_at=now,
+                reconciled_at=now,
+                components=(
+                    InventoryComponentImport(
+                        component_key="primary",
+                        component_kind="primary",
+                        source_url=sec_url,
+                        source_observation_id="obs-nu-sec-1",
+                        outcome="succeeded",
+                        required=True,
+                        ordinal=0,
+                    ),
+                ),
+                expected_documents=(),
+                apply=True,
+            ),
+        )
+
+    source_url = "https://filemanager-cdn.mziq.com/published/example/nu_pres.pdf"
+    payload = b"%PDF-1.4\nNu Holdings earnings presentation\n"
+
+    def _download(_url: str, target_dir: Path, base_name: str) -> Path:
+        dest = target_dir / f"{base_name}.pdf"
+        dest.write_bytes(payload)
+        return dest
+
+    def _fake_classify(
+        _path: Path,
+        *,
+        ticker_hint: str | None = None,
+        calendar_override: str | None = None,
+        source_url: str | None = None,
+    ) -> CategorizationResult:
+        del ticker_hint, calendar_override
+        is_latest = source_url is not None and source_url.endswith("latest_pres.pdf")
+        return CategorizationResult(
+            ticker="NU",
+            doc_type=DocType.IR_PRESENTATION,
+            period_end=latest_period_end if is_latest else target_period_end,
+            period_label=f"Q{latest_q} {latest_year}"
+            if is_latest
+            else f"Q{target_q} {target_year}",
+            confidence=Confidence.HIGH,
+            ticker_evidence=["issuer"],
+            doc_type_evidence=["slides"],
+            period_evidence=[f"q{latest_q if is_latest else target_q}"],
+        )
+
+    monkeypatch.setattr(managed_ir_sources, "classify_ir_file", _fake_classify)
+
+    with pytest.raises(
+        IssuerDocumentPreparationError, match="staging_validation_failed"
+    ) as prep_err:
+        prepare_issuer_document_candidate(
+            "NU",
+            "https://filemanager-cdn.mziq.com/published/example/latest_pres.pdf",
+            state_root=root,
+            db_path=db_path,
+            owner_requested=True,
+            calendar_override="calendar",
+            fiscal_year=latest_year,
+            fiscal_quarter=latest_q,
+            legacy_base_name=f"NU_ir_presentation_{latest_year}Q{latest_q}",
+            download=_download,
+            direct_verified=False,
+        )
+    assert isinstance(prep_err.value.__cause__, PreparedIssuerDocumentPublisherError)
+    assert "reported_period_selection_pending" in str(prep_err.value.__cause__)
+
+    dest, request, _ = prepare_issuer_document_candidate(
+        "NU",
+        source_url,
+        state_root=root,
+        db_path=db_path,
+        owner_requested=True,
+        calendar_override="calendar",
+        fiscal_year=target_year,
+        fiscal_quarter=target_q,
+        legacy_base_name=f"NU_ir_presentation_{target_year}Q{target_q}",
+        download=_download,
+        max_quarters=8,
+        direct_verified=True,
+    )
+    assert dest.is_file()
+    assert request is not None
+
+    with pytest.raises(
+        PreparedIssuerDocumentPublisherError, match="reported_period_selection_pending"
+    ):
+        validate_prepared_staging(request, state_root=root, db_path=db_path)
+
+    with pytest.raises(
+        PreparedIssuerDocumentPublisherError, match="reported_period_selection_pending"
+    ):
+        publish_prepared_issuer_documents(request, state_root=root, db_path=db_path)
+
+    publication = publish_prepared_issuer_documents(
+        request,
+        state_root=root,
+        db_path=db_path,
+        direct_verified=True,
+        max_quarters=8,
+    )
+    assert len(publication.inserted_document_ids) == 1
+    with sqlite3.connect(db_path) as conn:
+        docs_count = conn.execute(
+            "SELECT COUNT(*) FROM documents WHERE ticker='NU' AND period_end=?",
+            (target_period_end.isoformat(),),
+        ).fetchone()
+        edv_count = conn.execute(
+            "SELECT COUNT(*) FROM evidence_document_versions WHERE blob_sha256=?",
+            (hashlib.sha256(payload).hexdigest(),),
+        ).fetchone()
+    assert docs_count == (1,)
+    assert edv_count == (1,)

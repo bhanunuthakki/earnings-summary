@@ -857,6 +857,7 @@ def process_ticker(
                     fiscal_witness_document_version_id=entry_witness_document_version_id,
                     download=download,
                     max_quarters=max_quarters,
+                    direct_verified=direct_verified,
                 )
                 downloaded += 1
                 did_download = True
@@ -864,7 +865,11 @@ def process_ticker(
                     legacy_classifications[dest] = classification
                 if request is not None:
                     publication = publish_prepared_issuer_documents(
-                        request, state_root=root, db_path=db_path
+                        request,
+                        state_root=root,
+                        db_path=db_path,
+                        direct_verified=direct_verified,
+                        max_quarters=max_quarters,
                     )
                     count = len(publication.inserted_document_ids) + len(
                         publication.reused_document_ids
