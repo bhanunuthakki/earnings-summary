@@ -1234,3 +1234,26 @@ def test_sqlite_build_rejects_corrupt_archive_before_compiling(tmp_path: Path) -
     assert result.returncode != 0
     assert "SQLite archive SHA3-256 mismatch" in result.stderr
     assert not (tmp_path / "sqlite-3.53.4/libsqlite3.so.0").exists()
+
+
+def test_every_ci_checkout_has_complete_blobless_history() -> None:
+    for path in (WORKFLOW_PATH, WORKFLOW_PATH.with_name("public-boundary.yml")):
+        workflow = path.read_text()
+        checkouts = re.findall(
+            r"      - uses: actions/checkout@[^\n]+\n(.*?)(?=      - |\Z)",
+            workflow,
+            re.DOTALL,
+        )
+        assert checkouts, path
+        for checkout in checkouts:
+            assert "filter: blob:none" in checkout, path
+            assert "fetch-depth: 0" in checkout, path
+
+
+def test_partial_clone_materializes_the_accepted_replay_blob_before_tests() -> None:
+    workflow = WORKFLOW_PATH.read_text().split("\n  tests:\n", 1)[1].split("\n  design:\n", 1)[0]
+    fixture_source = (REPO_ROOT / "tests/test_evidence_bundle.py").read_text()
+    blob = re.search(r'ACCEPTED_BASELINE_BLOB = "([0-9a-f]{40})"', fixture_source)
+    assert blob is not None
+    assert f"git cat-file blob {blob.group(1)} >/dev/null" in workflow
+    assert workflow.index("git cat-file blob") < workflow.index("actions/setup-python@")
