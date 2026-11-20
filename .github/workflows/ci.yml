@@ -18,6 +18,15 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_call:
+    # The merge-queue controller (merge-queue.yml) calls this exact workflow
+    # from trusted main to run the complete suite on GitHub's test merge
+    # commit. Every path group is forced on; selection never applies here.
+    inputs:
+      candidate_sha:
+        description: Exact test merge commit whose first parent is main.
+        type: string
+        required: true
   schedule:
     # Nightly Design Sync safety net (declared new scope, workstream C1): the
     # design job's `if:` runs it on this trigger even when the classifier found
@@ -31,7 +40,7 @@ concurrency:
   # its own group so it can never cancel an in-progress main-push run (and is
   # itself cancelled by one — that push runs the design job anyway). PR and
   # push cancellation semantics are unchanged by the suffix.
-  group: ci-${{ github.ref }}-${{ github.event_name }}
+  group: ci-${{ github.ref }}-${{ github.event_name }}${{ inputs.candidate_sha && format('-queue-{0}', inputs.candidate_sha) || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -48,6 +57,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
           fetch-depth: 0
       - name: Classify changed paths
         id: classify
@@ -58,8 +69,16 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
           CURRENT_SHA: ${{ github.sha }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
+          if [ -n "$CANDIDATE_SHA" ]; then
+            # Merge-queue candidate: the complete suite, with no path selection.
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "python=true" >> "$GITHUB_OUTPUT"
+            echo "design=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$EVENT_NAME" = "schedule" ]; then
             # The nightly trigger exists solely for the scheduled Design Sync
             # run (the design job's `if:` names it); it must not fan out the
@@ -90,6 +109,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
@@ -104,6 +126,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
@@ -228,6 +253,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
           # Deletion governance verifies every cataloged rollback blob, not
           # only the audited-head ancestry. Those recovery commits outlive any
           # fixed cleanup window, so the test job requires complete history.
@@ -357,6 +384,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
@@ -454,7 +483,7 @@ jobs:
           # empty --base-ref, which a schedule event (no PR base, no before)
           # would otherwise produce — so the nightly run compares against
           # HEAD~1 ("did the last commit grow design debt") instead.
-          DESIGN_DEBT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD~1' }}
+          DESIGN_DEBT_BASE_REF: ${{ inputs.candidate_sha && 'HEAD^1' || (github.event.pull_request.base.sha || github.event.before || 'HEAD~1') }}
         run: |
           python scripts/check_design_sync.py
           python scripts/gen_design_conformance_debt.py --base-ref "$DESIGN_DEBT_BASE_REF" --allow-missing-base
@@ -481,6 +510,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
@@ -500,7 +531,10 @@ jobs:
         id: changed
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
+          if [ -n "${{ inputs.candidate_sha }}" ]; then
+            # A queue candidate is a merge commit; its first parent is main.
+            base="HEAD^1"
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
             git fetch --no-tags origin "${{ github.base_ref }}"
             base="origin/${{ github.base_ref }}"
           else
@@ -534,6 +568,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
@@ -554,7 +590,10 @@ jobs:
         id: base
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
+          if [ -n "${{ inputs.candidate_sha }}" ]; then
+            # A queue candidate is a merge commit; its first parent is main.
+            base="HEAD^1"
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
             git fetch --no-tags origin "${{ github.base_ref }}"
             base="origin/${{ github.base_ref }}"
           else
@@ -581,6 +620,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
@@ -672,6 +714,9 @@ jobs:
       PYTHONNOUSERSITE: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
@@ -724,6 +769,9 @@ jobs:
       PYTHONPATH: src
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
@@ -762,6 +810,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
       - name: Require every applicable job to pass
         env:
           CODE_CHANGED: ${{ needs.changes.outputs.code || 'false' }}
