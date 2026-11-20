@@ -339,11 +339,17 @@ jobs:
           cache-dependency-path: |
             requirements.lock
             requirements-design.lock
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: design-system/package-lock.json
+          bun-version: "1.4.5"
+      - name: Restore locked JavaScript dependency tree
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: design-system/node_modules
+          key: ci-bun-${{ runner.os }}-${{ runner.arch }}-1.4.5-${{ hashFiles('design-system/bun.lock') }}
+      - name: Verify and install locked JavaScript dependencies
+        working-directory: design-system
+        run: bun install --frozen-lockfile
       - name: Resolve python version for dependency cache key
         id: pyver
         shell: bash
@@ -414,8 +420,8 @@ jobs:
       - name: Verify React component types and visual token purity
         working-directory: design-system
         run: |
-          npm ci
-          npm run check
+          bun run check
+          bun run build
       - name: Run mandatory rendered route canary matrix
         run: |
           # The CLI owns the single full 9-route x 2-viewport matrix. Unit
@@ -557,11 +563,14 @@ jobs:
         run: |
           pip-audit -r requirements.lock --progress-spinner off
           pip-audit -r requirements-design.lock --progress-spinner off
-      - name: npm audit — design dependency CVEs
-        id: npm_audit
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.5"
+      - name: bun audit — design dependency CVEs
+        id: bun_audit
         continue-on-error: true
         working-directory: design-system
-        run: npm audit --package-lock-only --ignore-scripts --registry=https://registry.npmjs.org
+        run: bun audit
       - name: bandit — no new medium+ SAST findings
         id: bandit
         continue-on-error: true
@@ -593,7 +602,7 @@ jobs:
         if: ${{ always() }}
         env:
           PIP_AUDIT_OUTCOME: ${{ steps.pip_audit.outcome }}
-          NPM_AUDIT_OUTCOME: ${{ steps.npm_audit.outcome }}
+          BUN_AUDIT_OUTCOME: ${{ steps.bun_audit.outcome }}
           BANDIT_OUTCOME: ${{ steps.bandit.outcome }}
           DETECT_SECRETS_OUTCOME: ${{ steps.detect_secrets.outcome }}
           SBOM_OUTCOME: ${{ steps.sbom.outcome }}
@@ -603,7 +612,7 @@ jobs:
           status=0
           for result in \
             "$PIP_AUDIT_OUTCOME" \
-            "$NPM_AUDIT_OUTCOME" \
+            "$BUN_AUDIT_OUTCOME" \
             "$BANDIT_OUTCOME" \
             "$DETECT_SECRETS_OUTCOME" \
             "$SBOM_OUTCOME"; do
