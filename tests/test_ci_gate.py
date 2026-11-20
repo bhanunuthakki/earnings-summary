@@ -426,6 +426,7 @@ def test_windows_app_job_runs_the_harness_on_hosted_windows_and_is_required() ->
     )[0]
     assert "runs-on: windows-latest" in app_job
     assert "--noconftest" not in app_job
+    assert "-n 4 --dist=loadfile" in app_job
     recipe = (REPO_ROOT / ".github/scripts/install_windows_app.ps1").read_text()
     assert "--require-hashes -r requirements.lock" in recipe
     assert "run: ./.github/scripts/install_windows_app.ps1" in app_job
