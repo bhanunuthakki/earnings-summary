@@ -964,15 +964,16 @@ def test_public_boundary_is_unconditional_and_pre_push_uses_same_guard() -> None
 def test_security_job_runs_every_scanner_before_failing_closed() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 
-    for step_id in ("pip_audit", "npm_audit", "bandit", "detect_secrets", "sbom"):
+    for step_id in ("pip_audit", "bun_audit", "bandit", "detect_secrets", "sbom"):
         assert f"id: {step_id}" in workflow
     assert "Require every security scanner to pass" in workflow
     assert "PIP_AUDIT_OUTCOME" in workflow
-    assert "NPM_AUDIT_OUTCOME" in workflow
-    assert (
-        "npm audit --package-lock-only --ignore-scripts --registry=https://registry.npmjs.org"
-        in workflow
-    )
+    assert "BUN_AUDIT_OUTCOME" in workflow
+    assert "run: bun audit" in workflow
+    assert 'bun-version: "1.4.5"' in workflow
+    assert "path: design-system/node_modules" in workflow
+    assert "hashFiles('design-system/bun.lock')" in workflow
+    assert "npm " not in workflow
     assert "BANDIT_OUTCOME" in workflow
     assert "DETECT_SECRETS_OUTCOME" in workflow
     assert "SBOM_OUTCOME" in workflow
