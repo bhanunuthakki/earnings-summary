@@ -66,6 +66,15 @@ class DefinitionOrigin(StrEnum):
     CAPTURE = "capture"
 
 
+class KpiMetricNature(StrEnum):
+    """Nature of a KPI series for nature-aware qualification and admission."""
+
+    REPORTED_SCALAR = "reported_scalar"
+    INFERRED_EXTRAPOLATED = "inferred_extrapolated"
+    QUALITATIVE_OR_WEAKLY_QUANTIFIED = "qualitative_or_weakly_quantified"
+    BINARY_OR_ADHOC_MILESTONE = "binary_or_adhoc_milestone"
+
+
 class BreachStatus(StrEnum):
     OK = "ok"
     WARN = "warn"
@@ -96,3 +105,4 @@ class KpiDefinition(BaseModel):
     # so rendering / break-rule period-counting / DCF reads switch to the annual
     # axis. See migration 0072.
     reporting_cadence: ReportingCadence = ReportingCadence.QUARTERLY
+    metric_nature: KpiMetricNature = KpiMetricNature.REPORTED_SCALAR

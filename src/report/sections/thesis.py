@@ -26,6 +26,7 @@ from compute.kpi_resolver import (
 )
 from compute.thesis_evaluation_episodes import episode_history_source
 from identity import DEFAULT_USER_ID
+from models.kpis import KpiMetricNature
 from pipeline.kpi_report_reference_resolver import (
     report_kpi_reference_at,
     verified_report_kpi_reference_definition,
@@ -302,6 +303,41 @@ def _build_ledger(
                         )
                 else:
                     history, latest_excerpt, def_id, notes, db_unit = [], None, None, None, None
+                raw_nature = kd.get("metric_nature")
+                valid_natures = {item.value for item in KpiMetricNature}
+                metric_nature = (
+                    str(raw_nature).strip()
+                    if isinstance(raw_nature, str) and str(raw_nature).strip() in valid_natures
+                    else None
+                )
+                current_status = _status_for(name, history, by_kpi)
+                definition = _derive_definition(name, notes, db_unit)
+                non_scalar_display_natures = {
+                    KpiMetricNature.QUALITATIVE_OR_WEAKLY_QUANTIFIED.value,
+                    KpiMetricNature.BINARY_OR_ADHOC_MILESTONE.value,
+                }
+                if (
+                    metric_nature in non_scalar_display_natures
+                    and not history
+                    and name.strip().lower() not in by_kpi
+                ):
+                    raw_status = kd.get("status")
+                    if isinstance(raw_status, str):
+                        normalized_status = raw_status.strip().lower()
+                        if normalized_status == "green":
+                            current_status = "green"
+                        elif normalized_status == "yellow":
+                            current_status = "yellow"
+                        elif normalized_status == "red":
+                            current_status = "red"
+                    if latest_excerpt is None:
+                        fallback_excerpt = kd.get("source_excerpt") or kd.get("current")
+                        if isinstance(fallback_excerpt, str) and fallback_excerpt.strip():
+                            latest_excerpt = fallback_excerpt.strip()
+                    if definition is None:
+                        fallback_def = kd.get("note") or kd.get("break_condition")
+                        if isinstance(fallback_def, str) and fallback_def.strip():
+                            definition = fallback_def.strip()
                 holdings_unit = str(kd.get("unit")) if kd.get("unit") else None
                 tier_rows.append(
                     KpiLedgerRow(
@@ -312,6 +348,7 @@ def _build_ledger(
                         # holdings JSON declares none (schema-v2 tickers like NU
                         # leave it blank) so the Unit column stops rendering empty.
                         unit=holdings_unit or _unit_label(db_unit),
+                        metric_nature=metric_nature,
                         source_hint=str(kd.get("source")) if kd.get("source") else None,
                         # Schema-v2 holdings JSONs key this `break_condition`; older
                         # ones use `break`. Accept either so the ledger's Break column
@@ -319,9 +356,9 @@ def _build_ledger(
                         break_condition=str(kd.get("break") or kd.get("break_condition") or "")
                         or None,
                         history=history,
-                        current_status=_status_for(name, history, by_kpi),
+                        current_status=current_status,
                         latest_source_excerpt=latest_excerpt,
-                        definition=_derive_definition(name, notes, db_unit),
+                        definition=definition,
                     )
                 )
             tier_rows.sort(key=lambda r: r.name.lower())

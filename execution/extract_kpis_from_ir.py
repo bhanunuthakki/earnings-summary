@@ -80,6 +80,7 @@ from compute.kpi_extract_summaries import (
     revalidate_ir_pdf_doc,
     write_log,
 )
+from db_paths import configured_db_path, default_product_state_root
 from models.documents import SourceType
 from models.facts import FactLocator, LocatorKind
 from models.runs import StageName, StageStatus
@@ -88,12 +89,17 @@ from pipeline.document_completeness import (
     document_completeness,
 )
 from pipeline.invocation_fingerprint import files_fingerprint, payload_sha256
+from pipeline.kpi_atomic_admission import validate_spreadsheet_workbook_sheet
 from pipeline.kpi_persistence import (
     KpiExtractionManifest,
     KpiValue,
     persist_manifest,
 )
-from pipeline.locators import locate_char_span, pdf_slide_locator
+from pipeline.locators import (
+    locate_char_span,
+    pdf_slide_locator,
+    spreadsheet_cell_locator,
+)
 from pipeline.pdf_render import find_quote_bbox
 from pipeline.queries import open_db
 from pipeline.refresh_eval import refresh_for_tickers
@@ -117,6 +123,7 @@ from provenance.ir_reported_facts import (
     validate_ir_source_context_review,
 )
 from provenance.source_read_context import SourceReadContext
+from runtime.deterministic import table_or_view_exists
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
@@ -126,6 +133,7 @@ _IR_DOC_TYPES = (
     "ir_press_release",
     "ir_supplement",
     "ir_investor_update",
+    "ir_historical_spreadsheet",
     "ir_transcript",
 )
 
@@ -253,12 +261,52 @@ def _upgrade_pdf_locators(
 upgrade_pdf_locators = _upgrade_pdf_locators
 
 
-def _apply_manifest(
+def _upgrade_spreadsheet_locators(manifest: KpiExtractionManifest) -> KpiExtractionManifest:
+    """Promote v1 ``spreadsheet_cell`` locators to v2 and carry source_excerpt."""
+    upgraded: list[KpiValue] = []
+    changed = False
+    for value in manifest.values:
+        loc = value.locator
+        if (
+            not isinstance(loc, FactLocator)
+            or loc.effective_kind() is not LocatorKind.SPREADSHEET_CELL
+            or loc.spreadsheet_cell is None
+        ):
+            upgraded.append(value)
+            continue
+        snippet = (value.source_excerpt or "").strip() or loc.verbatim_snippet
+        if (
+            loc.kind is LocatorKind.SPREADSHEET_CELL
+            and loc.locator_version >= 2
+            and loc.verbatim_snippet == snippet
+        ):
+            upgraded.append(value)
+            continue
+        cell = loc.spreadsheet_cell
+        upgraded.append(
+            value.model_copy(
+                update={
+                    "locator": spreadsheet_cell_locator(
+                        sheet_name=cell.sheet_name,
+                        cell_address=cell.cell_address,
+                        cell_range=cell.cell_range,
+                        table_name=cell.table_name,
+                        verbatim_snippet=snippet,
+                    )
+                }
+            )
+        )
+        changed = True
+    return manifest.model_copy(update={"values": upgraded}) if changed else manifest
+
+
+def apply_manifest(
     conn: sqlite3.Connection,
     manifest_file: ManifestFile,
     *,
     with_eval: bool = False,
     force: bool = False,
+    state_root: Path = PROJECT_ROOT,
 ) -> dict[str, object]:
     """Apply each KpiExtractionManifest under one ingestion run."""
     if not manifest_file.manifests:
@@ -269,7 +317,9 @@ def _apply_manifest(
         conn,
         directive="extract_kpis_from_ir",
         ticker_scope=ticker_scope,
-        invocation_inputs=_manifest_invocation_inputs(conn, manifest_file, with_eval=with_eval),
+        invocation_inputs=_manifest_invocation_inputs(
+            conn, manifest_file, with_eval=with_eval, state_root=state_root
+        ),
         force=force,
         deduplicate_completed=not with_eval,
     )
@@ -280,8 +330,11 @@ def _apply_manifest(
     failed = 0
     for m in manifest_file.manifests:
         try:
-            _validate_manifest_source(conn, m)
-            result = persist_manifest(conn, run_id=run_id, manifest=_upgrade_pdf_locators(conn, m))
+            _validate_manifest_source(conn, m, state_root=state_root)
+            upgraded = _upgrade_spreadsheet_locators(
+                _upgrade_pdf_locators(conn, m, repo_root=state_root)
+            )
+            result = persist_manifest(conn, run_id=run_id, manifest=upgraded)
         except (ValueError, KeyError) as e:
             record_stage(
                 conn,
@@ -404,10 +457,31 @@ def _validate_transcript_locator(
         raise ValueError(f"transcript KPI {value.name!r} character span does not match its excerpt")
 
 
-def _validate_manifest_source(conn: sqlite3.Connection, manifest: KpiExtractionManifest) -> None:
+def _has_evidence_version_binding(conn: sqlite3.Connection, source_doc_id: int) -> bool:
+    if table_or_view_exists(conn, "v_legacy_document_evidence_bindings_current"):
+        bound = conn.execute(
+            "SELECT 1 FROM v_legacy_document_evidence_bindings_current "
+            "WHERE legacy_document_id=? LIMIT 1",
+            (source_doc_id,),
+        ).fetchone()
+        if bound is not None:
+            return True
+    row = conn.execute(
+        "SELECT 1 FROM evidence_document_versions WHERE legacy_document_id=? LIMIT 1",
+        (source_doc_id,),
+    ).fetchone()
+    return row is not None
+
+
+def _validate_manifest_source(
+    conn: sqlite3.Connection,
+    manifest: KpiExtractionManifest,
+    *,
+    state_root: Path = PROJECT_ROOT,
+) -> None:
     """Bind the submitted manifest to its registered IR document and locator."""
     row = conn.execute(
-        "SELECT ticker, source_type, doc_type, period_end FROM documents WHERE id=?",
+        "SELECT ticker, source_type, doc_type, period_end, file_path FROM documents WHERE id=?",
         (manifest.source_doc_id,),
     ).fetchone()
     if row is None:
@@ -416,20 +490,56 @@ def _validate_manifest_source(conn: sqlite3.Connection, manifest: KpiExtractionM
         raise ValueError("manifest ticker does not match its source document")
     if str(row["source_type"]) != manifest.primary_source.value:
         raise ValueError("manifest source type does not match its source document")
-    if (
-        str(row["source_type"]) != SourceType.IR_DOC.value
-        or str(row["doc_type"]) not in _IR_DOC_TYPES
-    ):
+    doc_type = str(row["doc_type"])
+    if str(row["source_type"]) != SourceType.IR_DOC.value or doc_type not in _IR_DOC_TYPES:
         raise ValueError("manifest source must be a registered IR document")
-    source_period_end = _date_from_source(row["period_end"], field="period end")
-    if source_period_end != manifest.period_end.date():
-        raise ValueError("manifest period does not match its source document")
+    if doc_type == "ir_historical_spreadsheet" and row["period_end"] is None:
+        source_period_end = manifest.period_end.date()
+    else:
+        source_period_end = _date_from_source(row["period_end"], field="period end")
+        if source_period_end != manifest.period_end.date():
+            raise ValueError("manifest period does not match its source document")
+
+    if (
+        manifest.auto_admit
+        and table_or_view_exists(conn, "evidence_document_versions")
+        and not _has_evidence_version_binding(conn, manifest.source_doc_id)
+    ):
+        raise ValueError(
+            f"source document {manifest.source_doc_id} lacks an evidence_document_versions binding"
+        )
+
+    raw_file_path = str(row["file_path"] or "")
+    doc_suffix = Path(raw_file_path).suffix.lower() if raw_file_path else ""
+    spreadsheet_capable = doc_type in {
+        "ir_historical_spreadsheet",
+        "ir_supplement",
+    } or doc_suffix in {".xlsx", ".xls", ".xlsm"}
+    wb_path = Path(raw_file_path) if raw_file_path else None
+    if wb_path is not None and not wb_path.is_absolute():
+        wb_path = state_root / wb_path
+    checked_sheets: set[str] = set()
+    for value in manifest.values:
+        locator = value.locator
+        if (
+            isinstance(locator, FactLocator)
+            and locator.effective_kind() is LocatorKind.SPREADSHEET_CELL
+            and locator.spreadsheet_cell is not None
+        ):
+            if not spreadsheet_capable:
+                raise ValueError(
+                    "spreadsheet-cell locator requires an Excel/spreadsheet source document"
+                )
+            sheet_name = locator.spreadsheet_cell.sheet_name
+            if sheet_name not in checked_sheets and wb_path is not None and wb_path.exists():
+                validate_spreadsheet_workbook_sheet(wb_path, sheet_name)
+                checked_sheets.add(sheet_name)
 
     transcript_rows = conn.execute(
         "SELECT id, ticker, period_end, fiscal_period_type FROM transcripts WHERE document_id=?",
         (manifest.source_doc_id,),
     ).fetchall()
-    if str(row["doc_type"]) != "ir_transcript":
+    if doc_type != "ir_transcript":
         for value in manifest.values:
             locator = value.locator
             if (
@@ -459,7 +569,11 @@ def _validate_manifest_source(conn: sqlite3.Connection, manifest: KpiExtractionM
 
 
 def _manifest_invocation_inputs(
-    conn: sqlite3.Connection, manifest_file: ManifestFile, *, with_eval: bool
+    conn: sqlite3.Connection,
+    manifest_file: ManifestFile,
+    *,
+    with_eval: bool,
+    state_root: Path = PROJECT_ROOT,
 ) -> dict[str, JsonValue]:
     """Fingerprint manifest content and PDFs used for locator enrichment."""
     manifest_payload = cast(
@@ -473,13 +587,14 @@ def _manifest_invocation_inputs(
             path := _source_pdf_path(
                 conn,
                 manifest.source_doc_id,
+                repo_root=state_root,
             )
         )
         is not None
     ]
     return {
         "manifest_sha256": payload_sha256(manifest_payload),
-        "source_pdfs": files_fingerprint(pdf_paths, root=PROJECT_ROOT),
+        "source_pdfs": files_fingerprint(pdf_paths, root=state_root),
         "with_eval": with_eval,
     }
 
@@ -673,12 +788,19 @@ def main() -> int:
         help="After --apply, re-run the thesis evaluator for each affected ticker.",
     )
     parser.add_argument(
+        "--admit",
+        action="store_true",
+        help="With --apply, atomically qualify and admit extracted KPI values cleanly.",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="With --apply, persist again even when the same immutable manifest already completed.",
     )
     args = parser.parse_args()
 
+    if args.admit and args.apply is None:
+        parser.error("--admit requires --apply")
     if args.ocr_projection_file is not None and (not args.capture or not args.ticker):
         parser.error("--ocr-projection-file requires --capture and --ticker")
     if args.apply_source_review and args.source_review_file is None:
@@ -712,7 +834,14 @@ def main() -> int:
         print(json.dumps(result, indent=2))
         return 0
 
-    conn = open_db(args.db or str(PROJECT_ROOT / "data" / "portfolio.db"))
+    default_db = configured_db_path(PROJECT_ROOT)
+    db_path_arg = Path(args.db) if isinstance(args.db, str) and args.db else None
+    db_target = str(db_path_arg) if db_path_arg is not None else str(default_db)
+    raw_state_root = cast("Path | None", args.source_state_root)
+    state_root = raw_state_root or default_product_state_root(
+        PROJECT_ROOT, db_path=db_path_arg or default_db
+    )
+    conn = open_db(db_target)
     try:
         if args.list_pending:
             pending = list_pending_documents(conn, args.ticker)
@@ -750,11 +879,18 @@ def main() -> int:
             with open(args.apply, encoding="utf-8") as f:
                 payload = json.load(f)
             manifest_file = ManifestFile.model_validate(payload)
-            result = _apply_manifest(
+            if args.admit:
+                manifest_file = ManifestFile(
+                    manifests=[
+                        m.model_copy(update={"auto_admit": True}) for m in manifest_file.manifests
+                    ]
+                )
+            result = apply_manifest(
                 conn,
                 manifest_file,
                 with_eval=args.with_eval,
                 force=bool(args.force),
+                state_root=state_root,
             )
             print(json.dumps(result, indent=2, default=str))
             return 0 if result.get("failed", 0) == 0 else 1

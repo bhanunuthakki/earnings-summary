@@ -1581,6 +1581,12 @@ def _dispatch_fact_provenance_peek(
         )
         if html is not None:
             return html
+    if (
+        kind == LocatorKind.SPREADSHEET_CELL
+        and locator is not None
+        and locator.spreadsheet_cell is not None
+    ):
+        return _render_spreadsheet_cell_peek(doc, row, locator)
     if kind == LocatorKind.TRANSCRIPT_SPAN and doc is not None:
         html = render_transcript_page(repo_root, db_path, doc.id, fragment=True)
         if html is not None:
@@ -1845,6 +1851,43 @@ def _render_vendor_field_peek(
         "this is the value FMP's API returned.</div>"
     )
     return f'<div class="cc-prov"><div class="cc-prov-rows">{"".join(rows)}</div>{caption}</div>'
+
+
+def _render_spreadsheet_cell_peek(
+    doc: _SourceDocRow | None, row: _FactRow, locator: FactLocator
+) -> str:
+    """Render structured provenance for one ``spreadsheet_cell`` locator."""
+    cell = locator.spreadsheet_cell
+    if cell is None:
+        return _render_legacy_provenance_peek(doc, row, locator)
+    coord = cell.cell_address or cell.cell_range or ""
+    rows = [
+        f'<div class="cc-prov-row"><b>{escape(row.label)}</b> &middot; {escape(row.ticker)}</div>',
+        f'<div class="cc-prov-row"><span class="cc-prov-src">Sheet</span>'
+        f'<span class="cc-prov-when">{escape(cell.sheet_name)}</span></div>',
+    ]
+    if coord:
+        rows.append(
+            f'<div class="cc-prov-row"><span class="cc-prov-src">Cell</span>'
+            f'<span class="cc-prov-when mono">{escape(coord)}</span></div>'
+        )
+    if cell.table_name:
+        rows.append(
+            f'<div class="cc-prov-row"><span class="cc-prov-src">Table</span>'
+            f'<span class="cc-prov-when">{escape(cell.table_name)}</span></div>'
+        )
+    if locator.verbatim_snippet:
+        rows.append(
+            f'<div class="cc-prov-row"><span class="cc-prov-src">Excerpt</span>'
+            f'<span class="cc-prov-when">{escape(locator.verbatim_snippet)}</span></div>'
+        )
+    if doc is not None:
+        rows.append(f'<div class="cc-prov-row">{escape(doc.doc_type)} &middot; doc #{doc.id}</div>')
+        rows.append(
+            f'<div class="cc-prov-row"><a href="/source/{doc.id}" target="_blank" '
+            'rel="noopener">open in viewer &#8599;</a></div>'
+        )
+    return f'<div class="cc-prov"><div class="cc-prov-rows">{"".join(rows)}</div></div>'
 
 
 def _render_legacy_provenance_peek(

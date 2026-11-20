@@ -41,6 +41,7 @@ from pipeline.issuer_document_inventory import (
 )
 from pipeline.reported_period_inventory import reported_quarter_selection
 from pipeline.source_policy import (
+    SOURCE_POLICY_CONFIG,
     ArtifactKind,
     CollectionSource,
     StoredCollectionAuthorization,
@@ -2626,6 +2627,7 @@ def prepare_issuer_document_candidate(
     legacy_base_name: str,
     download: Callable[[str, Path, str], Path | None],
     fiscal_witness_document_version_id: str | None = None,
+    max_quarters: int = SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters,
 ) -> tuple[Path, IssuerDocumentStagingRequest | None, BoundIRClassification | None]:
     """Download once, then seal qualified quarterly IR documents.
 
@@ -2667,6 +2669,7 @@ def prepare_issuer_document_candidate(
         fiscal_quarter=fiscal_quarter,
         fiscal_year_end_month=fiscal_year_end_month,
         as_of=date.today(),
+        max_quarters=max_quarters,
     ):
         raise IssuerDocumentPreparationError("reported_quarter_window_denied")
     attempt = f"candidate-{uuid.uuid4().hex}"

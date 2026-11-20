@@ -9,12 +9,14 @@ the wiring around it (manifest write, brief_dirty, status, URL dedup).
 from __future__ import annotations
 
 import sqlite3
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
 
 from execution import fetch_ir_from_urls as mod
 from ir_pipeline.manifest import load_manifest
+from provenance.source_inventory_seal import InventoryComponent, component_digest
 
 
 def _make_db(db: Path, *, role: str = "portfolio", fiscal_year_end: str = "12-31") -> None:
@@ -229,6 +231,215 @@ def test_approved_url_rejects_period_outside_five_quarter_window(
             db_path=db,
             year=2024,
             quarter=4,
+        )
+        == 0
+    )
+
+
+def _seed_sealed_sec_submissions(db: Path, *, ticker: str, recorded_at: str) -> None:
+    comp = InventoryComponent(
+        component_id="comp-sec-1",
+        idempotency_key="comp-sec-1",
+        snapshot_id="snap-sec-1",
+        component_key="primary",
+        component_kind="primary",
+        source_url="https://data.sec.gov/submissions/CIK0001373715.json",
+        source_observation_id="obs-sec-1",
+        outcome="succeeded",
+        required=True,
+        ordinal=0,
+        recorded_at=datetime.fromisoformat(recorded_at),
+    )
+    digest = component_digest((comp,))
+    conn = sqlite3.connect(str(db))
+    conn.executescript(
+        """
+        CREATE TABLE v_source_inventory_current (
+            snapshot_id TEXT, idempotency_key TEXT, inventory_key TEXT, revision INTEGER,
+            issuer_id TEXT, ticker TEXT, source_kind TEXT, source_url TEXT,
+            source_observation_id TEXT, outcome TEXT, authoritative INTEGER,
+            retrieval_config_sha256 TEXT, collector_code_version TEXT,
+            started_at TEXT, completed_at TEXT, recorded_at TEXT,
+            supersedes_snapshot_id TEXT
+        );
+        CREATE TABLE source_inventory_snapshot_seals (
+            snapshot_id TEXT PRIMARY KEY,
+            expected_component_count INTEGER,
+            component_digest_sha256 TEXT,
+            completion_status TEXT,
+            sealed_at TEXT
+        );
+        CREATE TABLE source_inventory_components (
+            component_id TEXT, idempotency_key TEXT, snapshot_id TEXT,
+            component_key TEXT, component_kind TEXT, source_url TEXT,
+            source_observation_id TEXT, outcome TEXT, required INTEGER,
+            failure_reason TEXT, ordinal INTEGER, recorded_at TEXT
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO v_source_inventory_current VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "snap-sec-1",
+            "snap-sec-1",
+            "sec_submissions:issuer-now",
+            1,
+            "issuer-now",
+            ticker,
+            "sec_submissions",
+            "https://data.sec.gov/submissions/CIK0001373715.json",
+            "obs-sec-1",
+            "succeeded",
+            1,
+            "a" * 64,
+            "sec_submissions@1",
+            recorded_at,
+            recorded_at,
+            recorded_at,
+            None,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO source_inventory_snapshot_seals VALUES (?, 1, ?, 'complete', ?)",
+        ("snap-sec-1", digest, recorded_at),
+    )
+    conn.execute(
+        "INSERT INTO source_inventory_components VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            comp.component_id,
+            comp.idempotency_key,
+            comp.snapshot_id,
+            comp.component_key,
+            comp.component_kind,
+            comp.source_url,
+            comp.source_observation_id,
+            comp.outcome,
+            1,
+            None,
+            comp.ordinal,
+            recorded_at,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _install_direct_fake_process(
+    monkeypatch: pytest.MonkeyPatch, *, captured: dict[str, object]
+) -> None:
+    def _fake_process(
+        ticker: str,
+        *,
+        root: Path,
+        db_path: Path,
+        categorize: bool,
+        calendar: str | None,
+        owner_requested: bool,
+        fiscal_witness_document_version_id: str | None = None,
+        fiscal_witness_urls: frozenset[str] = frozenset(),
+        direct_verified: bool = False,
+        max_quarters: int = 5,
+    ) -> dict[str, object]:
+        captured["ticker"] = ticker
+        captured["categorize"] = categorize
+        captured["direct_verified"] = direct_verified
+        captured["max_quarters"] = max_quarters
+        return {
+            "ticker": ticker,
+            "status": "done",
+            "downloaded": 1,
+            "registered": 1,
+            "ready": 1,
+            "failed": 0,
+        }
+
+    monkeypatch.setattr("execution.fetch_ir_from_urls.process_ticker", _fake_process)
+    monkeypatch.setattr("execution.fetch_ir_from_urls._run_narrative", _noop)
+
+
+def _fixed_as_of() -> date:
+    return date(2026, 11, 19)
+
+
+def test_direct_verified_succeeds_with_sealed_sec_submissions_without_ir_crawl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = tmp_path / "data" / "portfolio.db"
+    _make_db(db)
+    _seed_sealed_sec_submissions(db, ticker="NOW", recorded_at="2026-11-18T12:00:00+00:00")
+    monkeypatch.setattr(mod, "current_utc_date", _fixed_as_of)
+    captured: dict[str, object] = {}
+    _install_direct_fake_process(monkeypatch, captured=captured)
+
+    urls = ["https://s205.q4cdn.com/x/ER-Q3-FY26.pdf"]
+    n = mod.register_urls(
+        "NOW",
+        urls,
+        repo_root=tmp_path,
+        db_path=db,
+        year=2026,
+        quarter=3,
+        process=True,
+        direct_verified=True,
+        max_quarters=8,
+    )
+    assert n == 1
+    assert captured["categorize"] is True
+    assert captured["direct_verified"] is True
+    assert captured["max_quarters"] == 8
+
+
+def test_direct_verified_rejects_future_or_outside_window_and_holds_unsealed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = tmp_path / "data" / "portfolio.db"
+    _make_db(db)
+    monkeypatch.setattr(mod, "current_utc_date", _fixed_as_of)
+
+    # Without sealed sec_submissions or witness -> pending (categorize=False)
+    captured: dict[str, object] = {}
+    _install_direct_fake_process(monkeypatch, captured=captured)
+    assert (
+        mod.register_urls(
+            "NOW",
+            ["https://s205.q4cdn.com/x/q3.pdf"],
+            repo_root=tmp_path,
+            db_path=db,
+            year=2026,
+            quarter=3,
+            direct_verified=True,
+        )
+        == 1
+    )
+    assert captured["categorize"] is False
+
+    # Future period (Q4 2026 as of 2026-11-19) -> denied (0), never hits process_ticker
+    def _fail_process(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("must not process future or out-of-window period")
+
+    monkeypatch.setattr(mod, "process_ticker", _fail_process)
+    assert (
+        mod.register_urls(
+            "NOW",
+            ["https://s205.q4cdn.com/x/future.pdf"],
+            repo_root=tmp_path,
+            db_path=db,
+            year=2026,
+            quarter=4,
+            direct_verified=True,
+        )
+        == 0
+    )
+    assert (
+        mod.register_urls(
+            "NOW",
+            ["https://s205.q4cdn.com/x/old.pdf"],
+            repo_root=tmp_path,
+            db_path=db,
+            year=2024,
+            quarter=1,
+            direct_verified=True,
+            max_quarters=8,
         )
         == 0
     )

@@ -76,9 +76,11 @@ from pipeline.managed_ir_sources import (
     prepare_issuer_document_sources as prepare_managed_issuer_document_sources,
 )
 from pipeline.reported_period_inventory import (
+    direct_publisher_quarter_selection_in_connection,
     reported_quarter_selection_in_connection,
 )
 from pipeline.source_policy import (
+    SOURCE_POLICY_CONFIG,
     ArtifactKind,
     CollectionSource,
     StoredCollectionAuthorization,
@@ -629,6 +631,8 @@ def process_ticker(
     owner_requested: bool = False,
     fiscal_witness_document_version_id: str | None = None,
     fiscal_witness_urls: frozenset[str] = frozenset(),
+    direct_verified: bool = False,
+    max_quarters: int = SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters,
 ) -> dict[str, object]:
     """Download every manifest URL for ``ticker`` into staging; optionally categorize."""
     ticker = ticker.upper()
@@ -680,10 +684,25 @@ def process_ticker(
                 selected.append(entry)
                 continue
             period = _reported_quarter(entry)
-            decision = (
-                None
-                if period is None
-                else reported_quarter_selection_in_connection(
+            entry_url = str(entry.get("url") or "")
+            has_witness = (
+                fiscal_witness_document_version_id is not None and entry_url in fiscal_witness_urls
+            )
+            if period is None:
+                decision = None
+            elif direct_verified:
+                decision = direct_publisher_quarter_selection_in_connection(
+                    conn,
+                    ticker=ticker,
+                    fiscal_year=period[0],
+                    fiscal_quarter=period[1],
+                    fiscal_year_end_month=authorization.fiscal_year_end_month,
+                    as_of=current_utc_date(),
+                    max_quarters=max_quarters,
+                    has_verified_fiscal_witness=has_witness,
+                )
+            else:
+                decision = reported_quarter_selection_in_connection(
                     conn,
                     ticker=ticker,
                     fiscal_year=period[0],
@@ -691,7 +710,6 @@ def process_ticker(
                     fiscal_year_end_month=authorization.fiscal_year_end_month,
                     as_of=current_utc_date(),
                 )
-            )
             if decision is False:
                 policy_skipped += 1
                 continue
@@ -838,6 +856,7 @@ def process_ticker(
                     legacy_base_name=base,
                     fiscal_witness_document_version_id=entry_witness_document_version_id,
                     download=download,
+                    max_quarters=max_quarters,
                 )
                 downloaded += 1
                 did_download = True

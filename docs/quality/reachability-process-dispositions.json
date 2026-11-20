@@ -135,8 +135,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "The on-demand URL registrar invokes the fixed src/compute/ir_narrative.py anchor extractor through managed_python_prefix; ticker and repo-root are input arguments, not executable selectors.",
-      "fingerprint": "435c9440c743d8a0678ee5527542479ae5b0ead180731c90149333b3826274a5",
-      "line": 114,
+      "fingerprint": "85558660d26fc73e287fb3a85dd38bf0f718619f1cbc2a1450f942ccd30b45ce",
+      "line": 118,
       "path": "execution/fetch_ir_from_urls.py",
       "targets": [
         "src/compute/ir_narrative.py"
@@ -1014,7 +1014,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "c4d0746fa3f83a141ec2fedb2660cd9214ef0c4a1f213f0e4176570a0233ef02",
+      "source_sha256": "d0ec8226f343ac51c0881b46e956b757f46b6184cb5220a4c0e9402bc8c1236a",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
