@@ -5,8 +5,10 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import textwrap
 from collections import Counter
 from pathlib import Path
 from types import ModuleType
@@ -1258,3 +1260,60 @@ def test_partial_clone_materializes_the_accepted_replay_blob_before_tests() -> N
     assert blob is not None
     assert f"git cat-file blob {blob.group(1)} >/dev/null" in workflow
     assert workflow.index("git cat-file blob") < workflow.index("actions/setup-python@")
+
+
+@pytest.mark.parametrize("event", ["merge_group", "push"])
+def test_complete_safety_net_ignores_false_selection(helper: ModuleType, event: str) -> None:
+    results = dict.fromkeys(("changes", "public-boundary", *helper.CONDITIONAL_JOBS), "success")
+    for job in helper.CONDITIONAL_JOBS:
+        hidden = {**results, job: "skipped"}
+        failures = helper.gate_failures(
+            code=False, python=False, design=False, results=hidden, event=event
+        )
+        assert len(failures) == 1
+        assert failures[0].startswith(f"{job} must succeed")
+    assert (
+        helper.gate_failures(code=False, python=False, design=False, results=results, event=event)
+        == []
+    )
+
+
+@pytest.mark.parametrize("event", ["merge_group", "push"])
+def test_full_suite_classification_does_not_consult_a_diff(tmp_path: Path, event: str) -> None:
+    workflow = WORKFLOW_PATH.read_text()
+    script = textwrap.dedent(
+        workflow.split("        run: |\n", 1)[1].split("\n  public-boundary:", 1)[0]
+    )
+    output = tmp_path / "groups"
+    bash = shutil.which("bash")
+    assert bash is not None
+    result = subprocess.run(
+        [bash, "-c", script],
+        env={"EVENT_NAME": event, "GITHUB_OUTPUT": str(output), "PATH": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert output.read_text().splitlines() == ["code=true", "python=true", "design=true"]
+
+
+def test_workflows_prepare_a_full_merge_queue_without_cancelling_it() -> None:
+    workflow = WORKFLOW_PATH.read_text()
+    assert "  merge_group:\n    types: [checks_requested]" in workflow
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in workflow
+    assert " --event " in workflow or '--event "$CI_EVENT_NAME"' in workflow
+    assert "CI_EVENT_NAME: ${{ github.event_name }}" in workflow
+    assert workflow.count('base="${{ github.event.merge_group.base_sha }}"') == 2
+    assert "github.event.merge_group.base_sha || github.event.pull_request.base.sha" in workflow
+    for group in ("code", "python", "design"):
+        assert (
+            f"github.event_name == 'merge_group' || needs.changes.outputs.{group}" in workflow
+            or (
+                f"github.event_name == 'merge_group' || github.event_name == 'push' || needs.changes.outputs.{group}"
+                in workflow
+            )
+        )
+    boundary = WORKFLOW_PATH.with_name("public-boundary.yml").read_text()
+    assert "concurrency:" in boundary
+    assert "cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}" in boundary

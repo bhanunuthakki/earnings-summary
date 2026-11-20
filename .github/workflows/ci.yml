@@ -16,6 +16,8 @@ name: CI
 
 on:
   pull_request:
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   schedule:
@@ -27,12 +29,9 @@ on:
     - cron: "17 6 * * *"
 
 concurrency:
-  # The event name keeps the nightly schedule run (ref = refs/heads/main) in
-  # its own group so it can never cancel an in-progress main-push run (and is
-  # itself cancelled by one — that push runs the design job anyway). PR and
-  # push cancellation semantics are unchanged by the suffix.
+  # Supersede stale PR feedback. Never cancel a complete pre-main or main run.
   group: ci-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -71,6 +70,13 @@ jobs:
             echo "design=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          if [ "$EVENT_NAME" = "merge_group" ] || [ "$EVENT_NAME" = "push" ]; then
+            # A selector cannot narrow the full pre-main or main safety net.
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "python=true" >> "$GITHUB_OUTPUT"
+            echo "design=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$EVENT_NAME" = "pull_request" ]; then
             base="$PR_BASE_SHA"
             head="$PR_HEAD_SHA"
@@ -103,7 +109,7 @@ jobs:
   fast-signal:
     name: Fast Signal
     needs: [changes]
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    if: ${{ github.event_name == 'merge_group' || github.event_name == 'push' || needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -171,7 +177,7 @@ jobs:
   tests:
     name: tests (shard ${{ matrix.label }}/8)
     needs: [changes]
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    if: ${{ github.event_name == 'merge_group' || github.event_name == 'push' || needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
     # 40, not 25: the heaviest shards legitimately run 14-15 min, and hosted
     # runners routinely deliver ~2x slowdowns (disk/CPU contention), which put
@@ -324,7 +330,7 @@ jobs:
     # push to main, and for the nightly schedule trigger. A PR with no design
     # path skips the job, and the aggregate gate tolerates that skip only
     # because classify_paths said design=false.
-    if: ${{ needs.changes.outputs.design == 'true' || github.ref == 'refs/heads/main' || github.event_name == 'schedule' }}
+    if: ${{ github.event_name == 'merge_group' || needs.changes.outputs.design == 'true' || github.ref == 'refs/heads/main' || github.event_name == 'schedule' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -413,7 +419,7 @@ jobs:
           # empty --base-ref, which a schedule event (no PR base, no before)
           # would otherwise produce — so the nightly run compares against
           # HEAD~1 ("did the last commit grow design debt") instead.
-          DESIGN_DEBT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD~1' }}
+          DESIGN_DEBT_BASE_REF: ${{ github.event.merge_group.base_sha || github.event.pull_request.base.sha || github.event.before || 'HEAD~1' }}
         run: |
           python scripts/check_design_sync.py
           python scripts/gen_design_conformance_debt.py --base-ref "$DESIGN_DEBT_BASE_REF" --allow-missing-base
@@ -434,7 +440,7 @@ jobs:
 
   quality:
     needs: [changes]
-    if: ${{ needs.changes.outputs.python == 'true' }}
+    if: ${{ github.event_name == 'merge_group' || github.event_name == 'push' || needs.changes.outputs.python == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -463,6 +469,9 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             git fetch --no-tags origin "${{ github.base_ref }}"
             base="origin/${{ github.base_ref }}"
+          elif [ "${{ github.event_name }}" = "merge_group" ]; then
+            base="${{ github.event.merge_group.base_sha }}"
+            git cat-file -e "$base^{commit}"
           else
             base="${{ github.event.before }}"
             if ! git rev-parse --quiet --verify "$base^{commit}" >/dev/null 2>&1; then
@@ -483,7 +492,7 @@ jobs:
 
   typecheck:
     needs: [changes]
-    if: ${{ needs.changes.outputs.python == 'true' }}
+    if: ${{ github.event_name == 'merge_group' || github.event_name == 'push' || needs.changes.outputs.python == 'true' }}
     # Every changed retained file must be clean. The complete active population
     # also has exact, checked-in subsystem ceilings that must move downward with
     # each debt cleanup; hidden files and diagnostic substitution cannot pass.
@@ -518,6 +527,9 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             git fetch --no-tags origin "${{ github.base_ref }}"
             base="origin/${{ github.base_ref }}"
+          elif [ "${{ github.event_name }}" = "merge_group" ]; then
+            base="${{ github.event.merge_group.base_sha }}"
+            git cat-file -e "$base^{commit}"
           else
             base="${{ github.event.before }}"
             if ! git rev-parse --quiet --verify "$base^{commit}" >/dev/null 2>&1; then
@@ -534,7 +546,7 @@ jobs:
 
   security:
     needs: [changes]
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    if: ${{ github.event_name == 'merge_group' || github.event_name == 'push' || needs.changes.outputs.code == 'true' }}
     # Blocking supply-chain, secret, and SAST checks. Bandit carries an explicit
     # reviewed legacy baseline so regressions fail without pretending the
     # historical findings have already been remediated.
@@ -625,7 +637,7 @@ jobs:
   windows-app:
     name: Native Windows Application Tests
     needs: [changes]
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    if: ${{ github.event_name == 'merge_group' || github.event_name == 'push' || needs.changes.outputs.code == 'true' }}
     runs-on: windows-latest
     # The application's own harness (conftest, migrated fixture databases, the
     # vendored hash-verified SQLite DLL) on a disposable hosted Windows VM, for
@@ -685,7 +697,7 @@ jobs:
   windows-native:
     name: Native Windows Process Tree
     needs: [changes]
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    if: ${{ github.event_name == 'merge_group' || github.event_name == 'push' || needs.changes.outputs.code == 'true' }}
     runs-on: windows-latest
     timeout-minutes: 5
     env:
@@ -740,6 +752,7 @@ jobs:
           fetch-depth: 0
       - name: Require every applicable job to pass
         env:
+          CI_EVENT_NAME: ${{ github.event_name }}
           CODE_CHANGED: ${{ needs.changes.outputs.code || 'false' }}
           PYTHON_CHANGED: ${{ needs.changes.outputs.python || 'false' }}
           DESIGN_CHANGED: ${{ needs.changes.outputs.design || 'false' }}
@@ -755,6 +768,7 @@ jobs:
           SECURITY_RESULT: ${{ needs.security.result }}
         run: >-
           python .github/scripts/ci_gate.py verify
+          --event "$CI_EVENT_NAME"
           --code "$CODE_CHANGED"
           --python "$PYTHON_CHANGED"
           --design "$DESIGN_CHANGED"

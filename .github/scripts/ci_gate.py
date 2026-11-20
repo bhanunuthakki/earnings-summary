@@ -413,7 +413,12 @@ def select_test_files(
 
 
 def gate_failures(
-    *, code: bool, python: bool, design: bool, results: Mapping[str, str]
+    *,
+    code: bool,
+    python: bool,
+    design: bool,
+    results: Mapping[str, str],
+    event: str = "pull_request",
 ) -> list[str]:
     """Explain every terminal result that makes the aggregate gate unsafe."""
 
@@ -428,7 +433,12 @@ def gate_failures(
         if result not in TERMINAL_SUCCESS_RESULTS:
             failures.append(f"{job_name} finished with {result or 'missing result'}")
 
-    required_groups = {"code": code, "python": python, "design": design}
+    full_suite = event not in {"pull_request", "schedule"}
+    required_groups = {
+        "code": code or full_suite,
+        "python": python or full_suite,
+        "design": design or full_suite,
+    }
     for job_name, group in CONDITIONAL_JOBS.items():
         result = results.get(job_name, "")
         if required_groups[group] and result in TERMINAL_SUCCESS_RESULTS and result != "success":
@@ -639,7 +649,7 @@ def _verify_command(args: argparse.Namespace) -> int:
         "security": args.security_result,
     }
     failures = gate_failures(
-        code=args.code, python=args.python, design=args.design, results=results
+        code=args.code, python=args.python, design=args.design, results=results, event=args.event
     )
     for failure in failures:
         print(f"::error::{failure}")
@@ -709,6 +719,11 @@ def _build_parser() -> argparse.ArgumentParser:
     classify.add_argument("--github-output", type=Path, required=True)
 
     verify = subparsers.add_parser("verify")
+    verify.add_argument(
+        "--event",
+        choices=("pull_request", "merge_group", "push", "schedule"),
+        default="pull_request",
+    )
     verify.add_argument("--code", type=_parse_bool, required=True)
     verify.add_argument("--python", type=_parse_bool, required=True)
     verify.add_argument("--design", type=_parse_bool, required=True)
