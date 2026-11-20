@@ -48,6 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          filter: blob:none
           fetch-depth: 0
       - name: Classify changed paths
         id: classify
@@ -90,6 +91,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          filter: blob:none
+          fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
@@ -104,6 +108,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          filter: blob:none
+          fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
@@ -207,10 +214,18 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          filter: blob:none
           # Deletion governance verifies every cataloged rollback blob, not
           # only the audited-head ancestry. Those recovery commits outlive any
           # fixed cleanup window, so the test job requires complete history.
           fetch-depth: 0
+      - name: Materialize immutable historical test evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The replay denominator is an immutable historical blob. Resolve it
+          # during setup so the test does not need the network in a partial clone.
+          git cat-file blob 3cab2fae6f728fd74bef6d0c241d906c4b8c9798 >/dev/null # pragma: allowlist secret
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
@@ -315,6 +330,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          filter: blob:none
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
@@ -418,6 +434,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          filter: blob:none
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
@@ -471,6 +488,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          filter: blob:none
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
@@ -518,6 +536,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          filter: blob:none
+          fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
@@ -609,6 +630,9 @@ jobs:
       PYTHONNOUSERSITE: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          filter: blob:none
+          fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
@@ -661,6 +685,9 @@ jobs:
       PYTHONPATH: src
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          filter: blob:none
+          fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
@@ -699,6 +726,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          filter: blob:none
+          fetch-depth: 0
       - name: Require every applicable job to pass
         env:
           CODE_CHANGED: ${{ needs.changes.outputs.code || 'false' }}
