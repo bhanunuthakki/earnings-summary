@@ -426,7 +426,9 @@ def test_windows_app_job_runs_the_harness_on_hosted_windows_and_is_required() ->
     )[0]
     assert "runs-on: windows-latest" in app_job
     assert "--noconftest" not in app_job
-    assert "--require-hashes -r requirements.lock" in app_job
+    recipe = (REPO_ROOT / ".github/scripts/install_windows_app.ps1").read_text()
+    assert "--require-hashes -r requirements.lock" in recipe
+    assert "run: ./.github/scripts/install_windows_app.ps1" in app_job
     assert "verify-windows-app --junit" in app_job
     assert "retention-days: 7" in app_job
     for path in _load_helper().WINDOWS_APP_TEST_FILES:
@@ -1277,3 +1279,25 @@ def test_quality_reuses_the_exact_main_seeded_core_environment_and_refreshes_ruf
     )[0]
     assert "if:" not in refresh
     assert "run: python -m pip install --upgrade ruff" in refresh
+
+
+def test_windows_environment_cache_is_exact_and_does_not_skip_native_tests() -> None:
+    workflow = WORKFLOW_PATH.read_text()
+    app = workflow.split("\n  windows-app:\n", 1)[1].split("\n  windows-native:\n", 1)[0]
+    for identity in (
+        "runner.os",
+        "runner.arch",
+        "steps.pyver.outputs.version",
+        "hashFiles('requirements.lock')",
+        "hashFiles('pyproject.toml')",
+        "hashFiles('.github/scripts/install_windows_app.ps1')",
+    ):
+        assert identity in app
+    assert "restore-keys:" not in app
+    assert "cache: pip" not in app
+    assert "if: steps.windows_venv_cache.outputs.cache-hit != 'true'" in app
+    checks = app.split("      - name: Verify restored Windows test dependencies\n", 1)[1]
+    assert "if: steps.windows_venv_cache" not in checks
+    assert "-m pip check" in checks
+    assert "Run Windows-relevant application tests" in checks
+    assert "verify-windows-app --junit" in checks
