@@ -4,6 +4,9 @@ import importlib.util
 import json
 import os
 import re
+import shlex
+import subprocess
+import sys
 from collections import Counter
 from pathlib import Path
 from types import ModuleType
@@ -1168,3 +1171,38 @@ def test_security_browser_canary_has_one_mandatory_ci_owner() -> None:
     assert "continue-on-error" not in design
     assert "Ensure data dir exists" not in workflow
     assert "one migrated template per worker" in workflow
+
+
+def test_secret_scan_covers_every_file_and_propagates_worker_failure(tmp_path: Path) -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    command = next(
+        line.strip()
+        for line in workflow.splitlines()
+        if "xargs -0" in line and "detect-secrets-hook" in line
+    )
+    arguments = shlex.split(command[command.index("xargs") :])
+    assert arguments[:7] == ["xargs", "-0", "-r", "-P", "$(nproc)", "-n", "128"]
+    arguments[4] = "2"
+    scanner_index = arguments.index("detect-secrets-hook")
+    scanner = tmp_path / "scanner.py"
+    scanner.write_text(
+        "import json, os, pathlib, sys\n"
+        "paths = sys.argv[1:]\n"
+        "pathlib.Path(os.environ['SCAN_OUTPUT'], str(os.getpid())).write_text(json.dumps(paths))\n"
+        "raise SystemExit(1 if 'bad file.py' in paths else 0)\n",
+        encoding="utf-8",
+    )
+    arguments[scanner_index:] = [sys.executable, str(scanner)]
+    paths = [f"file {index}.py" for index in range(300)] + ["bad file.py", "line\nbreak.py"]
+    output = tmp_path / "output"
+    output.mkdir()
+    result = subprocess.run(
+        arguments,
+        input="\0".join(paths).encode() + b"\0",
+        capture_output=True,
+        check=False,
+        env={**os.environ, "SCAN_OUTPUT": str(output)},
+    )
+    scanned = [path for receipt in output.iterdir() for path in json.loads(receipt.read_text())]
+    assert Counter(scanned) == Counter(paths)
+    assert result.returncode != 0
