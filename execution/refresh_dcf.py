@@ -1414,6 +1414,39 @@ def _unlink(path: Path) -> None:
         path.unlink()
 
 
+def _write_outputs_and_provenance(
+    workbook_path: Path,
+    inp: redesign_mod.RedesignInputs,
+    assumptions_path: Path,
+    *,
+    ticker: str,
+) -> tuple[redesign_mod.ScenarioValues, dict[str, object]]:
+    """Rewrite computed outputs, then provenance, with one workbook open and save.
+
+    ``ProvenanceError`` is raised only while reading or writing the assumptions
+    JSON, before any provenance cell changes, so the saved workbook still holds
+    the computed outputs exactly as the former two-save sequence did.
+    """
+    import openpyxl
+
+    workbook = openpyxl.load_workbook(str(workbook_path), data_only=False)
+    try:
+        scenarios = redesign_mod.write_computed_outputs_into(workbook, inp)
+        provenance: dict[str, object]
+        try:
+            sources = assumptions_doc.write_provenance_into(
+                workbook, inp, assumptions_path, ticker=ticker, update_ledger=True
+            )
+            provenance = {"status": "ok", "sources": sources}
+        except assumptions_doc.ProvenanceError as e:
+            provenance = {"status": "error", "detail": str(e)}
+            sys.stderr.write(f"WARNING: assumption provenance for {ticker} failed: {e}\n")
+        workbook.save(str(workbook_path))
+    finally:
+        workbook.close()
+    return scenarios, provenance
+
+
 def stage_assumptions(path: Path) -> Path:
     """Copy an existing assumptions mirror so provenance writes are reversible."""
     staged = unique_staged_path(path, "assumptions")
@@ -1988,27 +2021,13 @@ def _refresh_redesign(
     # Rewrite the Python-computed static cells (Dashboard scenario fair values +
     # the Sensitivity grid) from the INJECTED inputs — the builder wrote them
     # from its from-scratch defaults, which the user's preserved edits supersede.
-    scenarios = redesign_mod.write_computed_outputs(tmp, inp)
-
     # Assumption provenance from the same injected inputs: reconcile the
     # override ledger against the Opus baseline, rewrite the Assumptions sheet
     # + yellow-cell comments. A corrupt assumptions JSON must not block the
     # valuation refresh, but it surfaces in the result + stderr, never silently.
-    provenance: dict[str, object]
-    try:
-        provenance = {
-            "status": "ok",
-            "sources": assumptions_doc.write_provenance(
-                tmp,
-                inp,
-                staged_assumptions,
-                ticker=ticker,
-                update_ledger=True,
-            ),
-        }
-    except assumptions_doc.ProvenanceError as e:
-        provenance = {"status": "error", "detail": str(e)}
-        sys.stderr.write(f"WARNING: assumption provenance for {ticker} failed: {e}\n")
+    scenarios, provenance = _write_outputs_and_provenance(
+        tmp, inp, staged_assumptions, ticker=ticker
+    )
 
     mos_bar = holdings.get("mos_bar") if holdings else None
     mos_bar_f = float(mos_bar) if isinstance(mos_bar, (int, float)) else None
@@ -2590,23 +2609,9 @@ def _apply_edits_owned(
         _unlink(staged_assumptions)
         return {"ticker": ticker, "status": "failed", "reason": "workbook not redesign after edit"}
 
-    scenarios = redesign_mod.write_computed_outputs(staged_dest, inp)
-
-    provenance: dict[str, object]
-    try:
-        provenance = {
-            "status": "ok",
-            "sources": assumptions_doc.write_provenance(
-                staged_dest,
-                inp,
-                staged_assumptions,
-                ticker=ticker,
-                update_ledger=True,
-            ),
-        }
-    except assumptions_doc.ProvenanceError as e:
-        provenance = {"status": "error", "detail": str(e)}
-        sys.stderr.write(f"WARNING: assumption provenance for {ticker} failed: {e}\n")
+    scenarios, provenance = _write_outputs_and_provenance(
+        staged_dest, inp, staged_assumptions, ticker=ticker
+    )
 
     holdings = _load_holdings(repo_root, ticker)
     mos_bar = holdings.get("mos_bar") if holdings else None
