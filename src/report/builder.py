@@ -10,6 +10,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 from industry_classifier import suppressed_sections_for_ticker
 from llm.calibration import daily_avg_scores, summarize_by_prompt_version
@@ -89,6 +90,10 @@ def hydrate_tier_1_kpi_strip(
     snapshot_section: SnapshotSection, thesis_section: ThesisSection
 ) -> SnapshotSection:
     """Fill §1 tier_1_kpi_row current/prior/status values from §3 kpi_ledger."""
+    if not isinstance(cast(object, snapshot_section), SnapshotSection) or not isinstance(
+        cast(object, thesis_section), ThesisSection
+    ):
+        return snapshot_section
     if not snapshot_section.tier_1_kpi_row or not thesis_section.kpi_ledger:
         return snapshot_section
     by_name: dict[str, KpiLedgerRow] = {}

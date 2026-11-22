@@ -358,8 +358,9 @@ def _parse_quarter_year(
     if not 1 <= month <= 12:
         return None
     if has_table(conn, "transcripts"):
+        rel = selected_transcripts_relation(conn).sql
         row = conn.execute(
-            "SELECT fiscal_period_type FROM transcripts "
+            f"SELECT fiscal_period_type FROM {rel} "  # nosec B608 -- internal selection relation
             "WHERE UPPER(ticker) = ? AND date(period_end) = date(?) "
             "ORDER BY id DESC LIMIT 1",
             (ticker.upper(), text),

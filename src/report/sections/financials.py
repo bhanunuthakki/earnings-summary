@@ -37,6 +37,10 @@ from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import KPI as OVERRIDE_KPI
 from provenance.overrides import OverrideAction, chip_override_map, qualify_note
+from provenance.semantic_disposition import (
+    explicit_document_quarantine_sql,
+    semantic_quarantine_available,
+)
 from provenance.source_read_context import SourceReadContext
 from report.file_capture import read_captured_text
 from report.models import (
@@ -1269,11 +1273,42 @@ def _query_facts_rows(
     rows = [dict(r) for r in cursor.fetchall()]
     rev_rows = sum(1 for r in rows if r.get("revenue") is not None)
     if rev_rows < 2 and fact_rel != "financial_facts":
-        extra_where = (
-            "AND NOT EXISTS (SELECT 1 FROM financial_facts s WHERE s.supersedes_id = ff.id)"
-            if _has_financial_facts_supersedes_id(conn)
-            else ""
-        )
+        extra_parts: list[str] = []
+        if _has_financial_facts_supersedes_id(conn):
+            extra_parts.append(
+                "AND NOT EXISTS (SELECT 1 FROM financial_facts s WHERE s.supersedes_id = ff.id)"
+            )
+        if semantic_quarantine_available(conn):
+            quarantine = explicit_document_quarantine_sql("run.document_version_id", as_known=False)
+            if (
+                has_table(conn, "fact_observation_revisions")
+                and has_table(conn, "reported_observations")
+                and has_table(conn, "evidence_nodes")
+                and has_table(conn, "evidence_extraction_runs")
+            ):
+                extra_parts.append(
+                    "AND NOT EXISTS ("  # nosec B608 -- internal quarantine predicate
+                    "SELECT 1 FROM fact_observation_revisions AS link "
+                    "JOIN reported_observations AS observation "
+                    "ON observation.observation_id = link.observation_id "
+                    "JOIN evidence_nodes AS node ON node.node_id = observation.evidence_node_id "
+                    "JOIN evidence_extraction_runs AS run "
+                    "ON run.extraction_run_id = node.extraction_run_id "
+                    "WHERE link.fact_table = 'financial_facts' AND link.fact_row_id = ff.id "
+                    f"AND {quarantine})"
+                )
+            if has_table(conn, "evidence_document_versions") and has_table(
+                conn, "evidence_extraction_runs"
+            ):
+                extra_parts.append(
+                    "AND NOT EXISTS ("  # nosec B608 -- internal quarantine predicate
+                    "SELECT 1 FROM evidence_document_versions AS edv "
+                    "JOIN evidence_extraction_runs AS run "
+                    "ON run.document_version_id = edv.document_version_id "
+                    "WHERE edv.legacy_document_id = ff.source_doc_id "
+                    f"AND {quarantine})"
+                )
+        extra_where = " ".join(extra_parts)
         cursor.execute(
             sql_template.format(
                 marks=placeholders,

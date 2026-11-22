@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "c0f30258e0ebbf340797f51bfde4f13316727290",
+  "scoped_commit": "7568b0ce9acca28cb725f9d514c8caa64f857e7b",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "6ffa7c3e1d7e6074f2149b8463bb04573ab3022b5ccb5ed29f68256274c40d1b",
+  "source_sha256": "ee481d907511aea6aed13199530eef94b1e8b055a80182d7b98cda1e1bbebea4",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1406,
-    "total_noncomment_loc": 562004,
+    "total_noncomment_loc": 562045,
     "modules_over_1000_loc": 117,
     "modules_over_2000_loc": 23,
     "modules_at_least_3000_loc": 5,
@@ -17537,9 +17537,9 @@
         "path": "src/report/builder.py",
         "module": "report.builder",
         "lines": {
-          "physical": 359,
-          "nonblank": 338,
-          "noncomment": 328
+          "physical": 364,
+          "nonblank": 343,
+          "noncomment": 333
         },
         "internal_fan_out": 31,
         "responsibilities": [
@@ -18244,9 +18244,9 @@
         "path": "src/report/sections/earnings.py",
         "module": "report.sections.earnings",
         "lines": {
-          "physical": 997,
-          "nonblank": 897,
-          "noncomment": 841
+          "physical": 998,
+          "nonblank": 898,
+          "noncomment": 842
         },
         "internal_fan_out": 10,
         "responsibilities": [
@@ -18309,11 +18309,11 @@
         "path": "src/report/sections/financials.py",
         "module": "report.sections.financials",
         "lines": {
-          "physical": 1967,
-          "nonblank": 1800,
-          "noncomment": 1718
+          "physical": 2002,
+          "nonblank": 1835,
+          "noncomment": 1753
         },
-        "internal_fan_out": 17,
+        "internal_fan_out": 18,
         "responsibilities": [
           "database",
           "network"
