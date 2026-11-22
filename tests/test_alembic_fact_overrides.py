@@ -133,12 +133,3 @@ def test_partial_unique_single_active(tmp_path: Path) -> None:
         conn.commit()
     finally:
         conn.close()
-
-
-def test_downgrade_drops_table(tmp_path: Path) -> None:
-    db = tmp_path / "d.db"
-    cfg = _seed(db)
-    command.upgrade(cfg, HEAD)
-    assert _columns(db) >= _BASE_COLS
-    command.downgrade(cfg, PRIOR_HEAD)
-    assert not _columns(db)

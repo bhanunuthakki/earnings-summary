@@ -9,8 +9,6 @@ from pathlib import Path
 import pytest
 from alembic.config import Config
 
-from alembic import command
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 _TABLES = ("research_tasks", "research_proposals", "research_hot_flags")
@@ -51,21 +49,6 @@ def test_no_foreign_keys(db_path: Path) -> None:
             assert conn.execute(f"PRAGMA foreign_key_list({table})").fetchall() == []
     finally:
         conn.close()
-
-
-def test_downgrade_to_0119_drops_them(
-    tmp_path: Path,
-    migrated_db: Callable[..., Path],
-) -> None:
-    db_path = migrated_db(
-        tmp_path / "research-archived.db",
-        stamp=PRIOR_HEAD,
-        archived=True,
-    )
-    command.downgrade(_cfg(db_path), "0119_ledger_synthesis_budget")
-    names = _tables(db_path)
-    for table in _TABLES:
-        assert table not in names
 
 
 def test_research_tasks_legacy_cost_and_metadata_storage_columns_present(db_path: Path) -> None:

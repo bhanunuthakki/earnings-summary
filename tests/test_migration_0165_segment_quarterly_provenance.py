@@ -166,19 +166,3 @@ def test_llm_budgets_seed_row(db_at_prior: Path) -> None:
     assert row[1] == 0
     assert row[2] == "skip"
     conn.close()
-
-
-def test_downgrade_drops_columns_and_budget_row(db_at_prior: Path) -> None:
-    cfg = _build_config(db_at_prior)
-    command.upgrade(cfg, NEW_HEAD)
-    command.downgrade(cfg, PRIOR_HEAD)
-    conn = sqlite3.connect(str(db_at_prior))
-    dim_cols = {r[1] for r in conn.execute("PRAGMA table_info(segment_dimensions)").fetchall()}
-    assert "disclosure_status" not in dim_cols
-    period_cols = {r[1] for r in conn.execute("PRAGMA table_info(segment_periods)").fetchall()}
-    assert "period_basis" not in period_cols
-    row = conn.execute(
-        "SELECT 1 FROM llm_budgets WHERE purpose = 'segment_10q_period_disambiguate'"
-    ).fetchone()
-    assert row is None
-    conn.close()

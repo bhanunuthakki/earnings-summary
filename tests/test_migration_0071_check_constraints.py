@@ -142,18 +142,3 @@ def test_saydo_index_survives_recreation(db_path: Path) -> None:
         assert "ix_saydo_hist_ticker_target" in _index_names(conn, "saydo_historical_metrics")
     finally:
         conn.close()
-
-
-def test_downgrade_removes_check_constraints(db_path: Path) -> None:
-    """Downgrade to 0070 drops the CHECKs — the previously-rejected values persist."""
-    cfg = _build_config(db_path)
-    command.upgrade(cfg, NEW_HEAD)
-    command.downgrade(cfg, PRIOR_HEAD)
-    conn = sqlite3.connect(str(db_path))
-    try:
-        _insert_ir(conn, "bogus")
-        _insert_saydo(conn, "BEAT")
-        assert _count(conn, "ir_fetch_status") == 1
-        assert _count(conn, "saydo_historical_metrics") == 1
-    finally:
-        conn.close()

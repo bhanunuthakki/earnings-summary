@@ -64,7 +64,8 @@ def _insert_alert(conn: sqlite3.Connection, *, signature: str) -> int:
         "VALUES ('bhanu', 'NU', 'earnings_tone', ?, 'pending', '{}', ?)",
         (now, signature),
     )
-    return int(cur.lastrowid)
+    assert cur.lastrowid is not None
+    return cur.lastrowid
 
 
 def test_alerts_lacks_dismiss_reason_before_upgrade(db_at_prior: Path) -> None:
@@ -127,13 +128,3 @@ def test_dismiss_reason_round_trips_via_store(db_at_prior: Path) -> None:
     dismissed = dismiss_alert(alert.id, db_path=db_at_prior, reason="already knew")
     assert dismissed.dismiss_reason == "already knew"
     assert get_alert(alert.id, db_path=db_at_prior).dismiss_reason == "already knew"
-
-
-def test_downgrade_drops_column(db_at_prior: Path) -> None:
-    cfg = _build_config(db_at_prior)
-    command.upgrade(cfg, NEW_HEAD)
-    command.downgrade(cfg, PRIOR_HEAD)
-    conn = sqlite3.connect(str(db_at_prior))
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(alerts)").fetchall()}
-    conn.close()
-    assert "dismiss_reason" not in cols

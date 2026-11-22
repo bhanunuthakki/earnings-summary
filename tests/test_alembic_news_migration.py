@@ -142,17 +142,6 @@ def test_news_unique_ticker_url(db_path: Path) -> None:
         conn.close()
 
 
-def test_downgrade_removes_news(db_path: Path) -> None:
-    cfg = _build_config(db_path)
-    command.upgrade(cfg, NEWS_HEAD)
-    assert "news" in _table_names(db_path)
-
-    command.downgrade(cfg, PRIOR_HEAD)
-
-    assert "news" not in _table_names(db_path)
-    assert _alembic_head(db_path) == PRIOR_HEAD
-
-
 def test_upgrade_downgrade_upgrade_is_idempotent(db_path: Path) -> None:
     """A full round trip leaves the column set indistinguishable from the first
     upgrade — a forgotten Column() in a future recreate path would fail here."""

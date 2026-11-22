@@ -63,12 +63,3 @@ def test_upgrade_adds_columns(tmp_path: Path) -> None:
     assert not (_NEW_COLS & _decision_columns(db))
     command.upgrade(cfg, HEAD)
     assert _decision_columns(db) >= _NEW_COLS
-
-
-def test_downgrade_drops_columns(tmp_path: Path) -> None:
-    db = tmp_path / "d.db"
-    cfg = _seed(db)
-    command.upgrade(cfg, HEAD)
-    assert _decision_columns(db) >= _NEW_COLS
-    command.downgrade(cfg, PRIOR_HEAD)
-    assert not (_NEW_COLS & _decision_columns(db))

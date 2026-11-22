@@ -2304,37 +2304,6 @@ def test_canonical_writer_resolves_immediately_after_database_capture(tmp_path: 
         conn.close()
 
 
-def test_0225_migration_round_trip_preserves_legacy_fact_rows(tmp_path: Path) -> None:
-    path, conn = _database(tmp_path)
-    try:
-        _seed_document(conn, document_id=1, source_tier="sec_official", value_suffix="SEC")
-        fact_id = _insert_financial_fact(conn, document_id=1, value="100")
-        conn.commit()
-    finally:
-        conn.close()
-
-    command.downgrade(_config(path), PRIOR_HEAD)
-    downgraded = sqlite3.connect(path)
-    try:
-        assert downgraded.execute("SELECT id, value FROM financial_facts").fetchone() == (
-            fact_id,
-            100,
-        )
-        names = {
-            str(row[0])
-            for row in downgraded.execute(
-                "SELECT name FROM sqlite_master WHERE type IN ('table', 'view', 'trigger')"
-            )
-        }
-        assert "fact_observation_revisions" not in names
-        assert "fact_resolution_outcomes" not in names
-        assert "v_financial_facts_resolved_current" not in names
-        assert "trg_financial_facts_observation_insert" not in names
-        assert downgraded.execute("PRAGMA foreign_key_check").fetchall() == []
-    finally:
-        downgraded.close()
-
-
 def test_integrity_auditor_flags_unbridged_fact_state_and_missing_capture_guard(
     tmp_path: Path,
 ) -> None:

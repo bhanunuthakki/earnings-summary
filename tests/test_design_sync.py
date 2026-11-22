@@ -168,9 +168,10 @@ def test_design_sync_gate_is_wired_into_hosted_ci() -> None:
     assert "python scripts/gen_design_conformance_debt.py --base-ref" in design_job
     assert "--allow-missing-base" in design_job
     assert "fetch-depth: 0" in design_job
-    assert "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020" in design_job
-    assert "npm ci" in design_job
-    assert "npm run check" in design_job
+    assert "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6" in design_job
+    assert "bun install --frozen-lockfile" in design_job
+    assert "bun run check" in design_job
+    assert "bun run build" in design_job
 
 
 def test_work_os_contract_checks_the_runtime_prototype_and_mobile_rail() -> None:

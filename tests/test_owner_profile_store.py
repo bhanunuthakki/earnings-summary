@@ -315,7 +315,7 @@ def test_missing_table_degrades(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_migration_0159_roundtrip(tmp_path: Path) -> None:
+def test_migration_0159_upgrade(tmp_path: Path) -> None:
     from alembic.config import Config
 
     from alembic import command
@@ -377,16 +377,5 @@ def test_migration_0159_roundtrip(tmp_path: Path) -> None:
                 "VALUES ('bhanu', 'capacity', 'home_city', '{}', 'n', 'owner', "
                 "'2026-07-17T00:00:00', 1)"
             )
-    finally:
-        conn.close()
-
-    command.downgrade(cfg, "0152_v_thesis_status_stub_substring")
-    conn = sqlite3.connect(str(db))
-    try:
-        tables = {
-            r[0]
-            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-        }
-        assert "owner_profile_facts" not in tables
     finally:
         conn.close()

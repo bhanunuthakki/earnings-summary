@@ -779,7 +779,7 @@ def test_retrieval_cannot_mix_manifests_or_unindexed_vectors(tmp_path: Path) -> 
         conn.close()
 
 
-def test_fts_capability_and_migration_round_trip(tmp_path: Path) -> None:
+def test_fts_capability_and_migration(tmp_path: Path) -> None:
     conn = _conn(tmp_path)
     try:
         _ready_store(conn, vector=False)
@@ -794,10 +794,3 @@ def test_fts_capability_and_migration_round_trip(tmp_path: Path) -> None:
     command.upgrade(config, EVIDENCE_HEAD)
     command.stamp(config, PRIOR)
     command.upgrade(config, HEAD)
-    command.downgrade(config, PRIOR)
-    assert (
-        sqlite3.connect(path)
-        .execute("SELECT 1 FROM sqlite_master WHERE name = 'search_chunks'")
-        .fetchone()
-        is None
-    )

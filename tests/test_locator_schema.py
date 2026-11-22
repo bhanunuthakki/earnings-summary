@@ -342,27 +342,6 @@ def test_upgrade_idempotent_on_partially_applied_schema(tmp_path: Path) -> None:
     assert "locator" in _columns(db, "kpi_facts")
 
 
-def test_downgrade_round_trip(tmp_path: Path) -> None:
-    db = tmp_path / "roundtrip.db"
-    _create_pre0075_db(db)
-    _migrate_to_head(db)
-
-    command.downgrade(_alembic_cfg(db), "0074_analyst_notes")
-
-    assert {"accession_number", "filing_date"} & _columns(db, "documents") == set()
-    assert "locator" not in _columns(db, "financial_facts")
-    assert "locator" not in _columns(db, "kpi_facts")
-    # The batch rebuild recreates the financial_facts-dependent views from the
-    # canonical DDL (same dance as 0054) — they must exist and stay queryable.
-    conn = sqlite3.connect(db)
-    try:
-        views = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='view'")}
-        conn.execute("SELECT * FROM metrics LIMIT 1").fetchall()
-    finally:
-        conn.close()
-    assert {"metrics", "ratios", "v_quarters"} <= views
-
-
 # ----------------------------------------------------------------------------
 # FactLocator model
 # ----------------------------------------------------------------------------

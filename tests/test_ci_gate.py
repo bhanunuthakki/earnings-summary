@@ -4,6 +4,9 @@ import importlib.util
 import json
 import os
 import re
+import shutil
+import subprocess
+import sys
 from collections import Counter
 from pathlib import Path
 from types import ModuleType
@@ -423,7 +426,12 @@ def test_windows_app_job_runs_the_harness_on_hosted_windows_and_is_required() ->
     )[0]
     assert "runs-on: windows-latest" in app_job
     assert "--noconftest" not in app_job
-    assert "--require-hashes -r requirements.lock" in app_job
+    run_step = app_job.split("      - name: Run Windows-relevant application tests", 1)[1]
+    assert "TEMP: ${{ runner.temp }}" in run_step
+    assert "TMP: ${{ runner.temp }}" in run_step
+    recipe = (REPO_ROOT / ".github/scripts/install_windows_app.ps1").read_text()
+    assert "--require-hashes -r requirements.lock" in recipe
+    assert "run: ./.github/scripts/install_windows_app.ps1" in app_job
     assert "verify-windows-app --junit" in app_job
     assert "retention-days: 7" in app_job
     for path in _load_helper().WINDOWS_APP_TEST_FILES:
@@ -831,6 +839,52 @@ def test_pack_test_shards_is_duration_aware_and_deterministic(helper: ModuleType
     assert shard_of[heavy[0][0]] in helper.SHARD_LABELS
 
 
+def test_selected_files_start_longest_first(helper: ModuleType) -> None:
+    files = [f"tests/test_{index:04d}.py" for index in range(60)]
+    seconds = {path: float((index * 7) % 23 + 1) for index, path in enumerate(files)}
+    durations = _test_durations(helper, seconds)
+    for label in helper.SHARD_LABELS:
+        selected = helper.select_test_files(files, shard_label=label, durations=durations)
+        assert selected == sorted(selected, key=lambda path: (-seconds[path], path))
+
+
+def test_durations_regenerate_from_junit_with_canonical_packing(
+    helper: ModuleType, tmp_path: Path
+) -> None:
+    junit = tmp_path / "shard.xml"
+    junit.write_text(
+        '<testsuites><testsuite name="pytest">'
+        '<testcase classname="tests.test_alpha" name="a" time="2.5" />'
+        '<testcase classname="tests.test_alpha.TestGroup" name="b" time="1.5" />'
+        '<testcase classname="tests.test_beta" name="c" time="0.000" />'
+        '<testcase classname="" name="tests.test_gamma" time="0.000">'
+        "<skipped>collection skipped</skipped></testcase>"
+        "</testsuite></testsuites>",
+        encoding="utf-8",
+    )
+    files = ["tests/test_alpha.py", "tests/test_beta.py", "tests/test_gamma.py"]
+    payload = helper.regenerate_test_durations(
+        [junit], files, source="unit fixture", generated="2026-11-22"
+    )
+    assert payload["files"]["tests/test_alpha.py"]["seconds"] == 4.0
+    assert payload["files"]["tests/test_beta.py"]["seconds"] == 0.001
+    output = tmp_path / "durations.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+    durations = helper.load_test_durations(output)
+    repacked = helper.pack_test_shards(sorted(durations.seconds_by_file), durations)
+    assert {
+        path: label for label, paths in repacked.items() for path in paths
+    } == durations.shard_by_file
+
+    unknown = tmp_path / "unknown.xml"
+    unknown.write_text(
+        '<testsuites><testcase classname="tests.test_missing" name="x" time="1" /></testsuites>',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="names no test file"):
+        helper.junit_seconds_by_file([unknown], files)
+
+
 def test_pack_reproduces_the_checked_in_pinned_assignment(helper: ModuleType) -> None:
     """The checked-in table is the output of the generator: re-packing the
     table's own durations must reproduce every pinned file's shard."""
@@ -961,15 +1015,16 @@ def test_public_boundary_is_unconditional_and_pre_push_uses_same_guard() -> None
 def test_security_job_runs_every_scanner_before_failing_closed() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 
-    for step_id in ("pip_audit", "npm_audit", "bandit", "detect_secrets", "sbom"):
+    for step_id in ("pip_audit", "bun_audit", "bandit", "detect_secrets", "sbom"):
         assert f"id: {step_id}" in workflow
     assert "Require every security scanner to pass" in workflow
     assert "PIP_AUDIT_OUTCOME" in workflow
-    assert "NPM_AUDIT_OUTCOME" in workflow
-    assert (
-        "npm audit --package-lock-only --ignore-scripts --registry=https://registry.npmjs.org"
-        in workflow
-    )
+    assert "BUN_AUDIT_OUTCOME" in workflow
+    assert "run: bun audit" in workflow
+    assert 'bun-version: "1.4.5"' in workflow
+    assert "path: design-system/node_modules" in workflow
+    assert "hashFiles('design-system/bun.lock')" in workflow
+    assert "npm " not in workflow
     assert "BANDIT_OUTCOME" in workflow
     assert "DETECT_SECRETS_OUTCOME" in workflow
     assert "SBOM_OUTCOME" in workflow
@@ -977,9 +1032,7 @@ def test_security_job_runs_every_scanner_before_failing_closed() -> None:
     assert "cyclonedx-py requirements requirements-design.lock" in workflow
     assert "always() && hashFiles('sbom-*.cdx.json')" in workflow
 
-    exclude_match = re.search(r"--exclude-files\s+'([^']+)'", workflow)
-    assert exclude_match is not None
-    exclude_pattern = exclude_match.group(1)
+    exclude_pattern = _load_secret_scan().EXCLUDE_FILES
     receipt_pattern = (
         r"docs[\\/]quality[\\/]"
         r"(?:architecture-initial-09d35d1a|duplicates-initial-09d35d1a|"
@@ -1049,7 +1102,7 @@ def test_env_caches_sqlite_by_version_os_and_recipe_hash() -> None:
     assert "id: sqlite_cache" in workflow
     assert "path: ${{ runner.temp }}/sqlite-3.53.4" in workflow
     assert (
-        "key: ci-sqlite-${{ runner.os }}-3.53.4-${{ hashFiles('.github/workflows/ci.yml') }}"
+        "key: ci-sqlite-${{ runner.os }}-${{ runner.arch }}-3.53.4-${{ hashFiles('.github/scripts/build_sqlite.sh') }}"
         in workflow
     )
     # Both the tests matrix and Design Sync gate the build on a miss and keep
@@ -1057,7 +1110,14 @@ def test_env_caches_sqlite_by_version_os_and_recipe_hash() -> None:
     assert "if: steps.sqlite_cache.outputs.cache-hit != 'true'" in workflow
     assert "Preload verified SQLite writer runtime" in workflow
     assert 'assert sqlite3.sqlite_version == "3.53.4"' in workflow
-    assert "restore-keys:" not in workflow
+    _assert_only_salted_secret_scan_cache_uses_prefix_restore(workflow)
+
+
+def _assert_only_salted_secret_scan_cache_uses_prefix_restore(workflow: str) -> None:
+    # Environment caches restore by exact key only. The secret-scan cache alone
+    # restores by prefix: every entry is salted and verified in leak_scan.py.
+    restore_lines = [line.strip() for line in workflow.splitlines() if "restore-keys:" in line]
+    assert restore_lines == ["restore-keys: secret-scan-v1-"]
 
 
 def test_env_caches_virtualenv_by_locks_and_python_version() -> None:
@@ -1084,7 +1144,7 @@ def test_env_caches_virtualenv_by_locks_and_python_version() -> None:
     # The Playwright browser is a separate artifact and must install on every
     # run (it is not venv-cached) — the canary matrix needs Chromium.
     assert "python -m playwright install --with-deps --only-shell chromium" in workflow
-    assert "restore-keys:" not in workflow
+    _assert_only_salted_secret_scan_cache_uses_prefix_restore(workflow)
 
 
 def test_durations_report_is_available_on_the_real_table(
@@ -1140,15 +1200,16 @@ def test_durations_loader_fails_closed_on_malformed_input(
 
 def test_env_cache_miss_falls_back_to_build_and_install() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    # SQLite build remains in the workflow on the miss path: archive URL,
-    # hash verification, FTS5 compile, hash check, and version assert.
-    assert "https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip" in workflow
+    recipe = (REPO_ROOT / ".github/scripts/build_sqlite.sh").read_text(encoding="utf-8")
+    assert "https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip" in recipe
     assert (
         "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e"  # pragma: allowlist secret
-        in workflow
+        in recipe
     )
-    assert "-DSQLITE_ENABLE_FTS5" in workflow
-    assert "gcc -O2 -fPIC -shared -pthread" in workflow
+    assert "-DSQLITE_ENABLE_FTS5" in recipe
+    assert "gcc -O2 -fPIC -shared -pthread" in recipe
+    assert "--retry" not in recipe
+    assert workflow.count("run: bash .github/scripts/build_sqlite.sh") == 3
     # pip install falls back to the full hash-pinned install into the venv.
     assert (
         '"$RUNNER_TEMP/ci-venv/bin/pip" install --require-hashes -r requirements.lock' in workflow
@@ -1168,3 +1229,239 @@ def test_security_browser_canary_has_one_mandatory_ci_owner() -> None:
     assert "continue-on-error" not in design
     assert "Ensure data dir exists" not in workflow
     assert "one migrated template per worker" in workflow
+
+
+def _load_secret_scan() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "secret_scan_under_test", REPO_ROOT / ".github" / "scripts" / "leak_scan.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _secret_scan_repo(tmp_path: Path, files: dict[str, str]) -> Path:
+    root = tmp_path / "repo"
+    (root / ".github" / "scripts").mkdir(parents=True)
+    shutil.copyfile(
+        REPO_ROOT / ".github" / "scripts" / "quality_hash_filter.py",
+        root / ".github" / "scripts" / "quality_hash_filter.py",
+    )
+    for name, text in files.items():
+        (root / name).write_text(text, encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    return root
+
+
+def _install_recording_scanner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Put a fake ``detect-secrets-hook`` first on PATH that records its files."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    scanner = bin_dir / "detect-secrets-hook"
+    scanner.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, pathlib, sys\n"
+        "paths = sys.argv[sys.argv.index('--') + 1:]\n"
+        "pathlib.Path(os.environ['SCAN_OUTPUT'], str(os.getpid())).write_text(json.dumps(paths))\n"
+        "raise SystemExit(1 if any('bad' in path for path in paths) else 0)\n",
+        encoding="utf-8",
+    )
+    scanner.chmod(0o755)
+    monkeypatch.setenv("PATH", os.pathsep.join((str(bin_dir), os.environ["PATH"])))
+
+
+def _scanned(output: Path) -> Counter[str]:
+    scanned = Counter(
+        path for receipt in output.iterdir() for path in json.loads(receipt.read_text())
+    )
+    for receipt in output.iterdir():
+        receipt.unlink()
+    return scanned
+
+
+def test_secret_scan_covers_every_file_then_skips_only_proven_clean_blobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    helper = _load_secret_scan()
+    files = {f"file {index}.py": f"VALUE = {index}\n" for index in range(70)}
+    root = _secret_scan_repo(tmp_path, files)
+    tracked = {path for path, _blob in helper.tracked_blobs(root)}
+    output = tmp_path / "output"
+    output.mkdir()
+    monkeypatch.setenv("SCAN_OUTPUT", str(output))
+    cache = tmp_path / "cache.json"
+    _install_recording_scanner(tmp_path, monkeypatch)
+
+    def run(*, write_cache: bool, version: str = "1.5.0") -> int:
+        return helper.scan(
+            root,
+            cache,
+            detector_version=version,
+            jobs=2,
+            write_cache=write_cache,
+        )
+
+    # Cold: every tracked file is scanned exactly once.
+    assert run(write_cache=True) == 0
+    assert _scanned(output) == Counter(tracked)
+
+    # Warm: nothing is rescanned; an edited file is rescanned alone.
+    assert run(write_cache=False) == 0
+    assert _scanned(output) == Counter()
+    (root / "file 3.py").write_text("VALUE = 'changed'\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    assert run(write_cache=False) == 0
+    assert _scanned(output) == Counter({"file 3.py": 1})
+
+    # A different detector version (or any salt input) discards the cache.
+    assert run(write_cache=False, version="9.9.9") == 0
+    assert _scanned(output) == Counter(tracked)
+
+
+def test_secret_scan_failure_fails_closed_and_is_never_cached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    helper = _load_secret_scan()
+    root = _secret_scan_repo(tmp_path, {"good.py": "A = 1\n", "bad file.py": "B = 2\n"})
+    output = tmp_path / "output"
+    output.mkdir()
+    monkeypatch.setenv("SCAN_OUTPUT", str(output))
+    cache = tmp_path / "cache.json"
+    _install_recording_scanner(tmp_path, monkeypatch)
+    kwargs = {
+        "detector_version": "1.5.0",
+        "jobs": 2,
+        "write_cache": True,
+    }
+    assert helper.scan(root, cache, **kwargs) == 1
+    assert not cache.exists()
+    _scanned(output)
+    assert helper.scan(root, cache, **kwargs) == 1
+    assert "bad file.py" in _scanned(output)
+
+
+def test_secret_scan_real_detector_rejects_a_private_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    helper = _load_secret_scan()
+    # The real hook is installed beside the interpreter running the tests.
+    monkeypatch.setenv(
+        "PATH", os.pathsep.join((str(Path(sys.executable).parent), os.environ["PATH"]))
+    )
+    header = "-----BEGIN " + "RSA PRIVATE KEY-----"
+    root = _secret_scan_repo(tmp_path, {"key.txt": f"{header}\nMIIB\n"})
+    cache = tmp_path / "cache.json"
+    result = helper.scan(
+        root,
+        cache,
+        detector_version="real",
+        jobs=1,
+        write_cache=True,
+    )
+    assert result == 1
+    assert not cache.exists()
+
+
+def test_workflow_saves_the_secret_scan_cache_only_from_main_pushes() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    security = workflow.split("\n  security:\n", 1)[1].split("\n  windows-app:\n", 1)[0]
+    assert "python .github/scripts/leak_scan.py" in security
+    assert "detect-secrets-hook" not in security
+    trusted = "github.event_name == 'push' && github.ref == 'refs/heads/main'"
+    save = security.split("- name: Save detect-secrets clean-file cache", 1)[1]
+    assert trusted in save.split("\n      - name:", 1)[0]
+    assert f"TRUSTED_CACHE_WRITE: ${{{{ {trusted} }}}}" in security
+    assert "actions/cache/restore@" in security
+
+
+def test_sqlite_build_rejects_corrupt_archive_before_compiling(tmp_path: Path) -> None:
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    curl = binaries / "curl"
+    curl.write_text(
+        '#!/bin/sh\nfor argument; do output=$argument; done\nprintf corrupt > "$output"\n',
+        encoding="utf-8",
+    )
+    curl.chmod(0o755)
+    result = subprocess.run(
+        ["bash", str(REPO_ROOT / ".github/scripts/build_sqlite.sh")],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "RUNNER_TEMP": str(tmp_path),
+            "PATH": os.pathsep.join(
+                (str(binaries), str(Path(sys.executable).parent), os.environ["PATH"])
+            ),
+        },
+    )
+    assert result.returncode != 0
+    assert "SQLite archive SHA3-256 mismatch" in result.stderr
+    assert not (tmp_path / "sqlite-3.53.4/libsqlite3.so.0").exists()
+
+
+def test_every_ci_checkout_has_complete_blobless_history() -> None:
+    for path in (WORKFLOW_PATH, WORKFLOW_PATH.with_name("public-boundary.yml")):
+        workflow = path.read_text()
+        checkouts = re.findall(
+            r"      - uses: actions/checkout@[^\n]+\n(.*?)(?=      - |\Z)",
+            workflow,
+            re.DOTALL,
+        )
+        assert checkouts, path
+        for checkout in checkouts:
+            assert "filter: blob:none" in checkout, path
+            assert "fetch-depth: 0" in checkout, path
+
+
+def test_partial_clone_materializes_the_accepted_replay_blob_before_tests() -> None:
+    workflow = WORKFLOW_PATH.read_text().split("\n  tests:\n", 1)[1].split("\n  design:\n", 1)[0]
+    fixture_source = (REPO_ROOT / "tests/test_evidence_bundle.py").read_text()
+    blob = re.search(r'ACCEPTED_BASELINE_BLOB = "([0-9a-f]{40})"', fixture_source)
+    assert blob is not None
+    assert f"git cat-file blob {blob.group(1)} >/dev/null" in workflow
+    assert workflow.index("git cat-file blob") < workflow.index("actions/setup-python@")
+
+
+def test_quality_reuses_the_exact_main_seeded_core_environment_and_refreshes_ruff() -> None:
+    workflow = WORKFLOW_PATH.read_text()
+    quality = workflow.split("\n  quality:\n", 1)[1].split("\n  typecheck:\n", 1)[0]
+    fast = workflow.split("\n  fast-signal:\n", 1)[1].split("\n  tests:\n", 1)[0]
+    pattern = r"key: (ci-venv-[^\n]+)"
+    assert re.findall(pattern, quality) == re.findall(pattern, fast)
+    assert "restore-keys:" not in quality
+    assert "path: ${{ runner.temp }}/ci-venv" in quality
+    assert "uses: actions/cache/restore@" in quality
+    assert "uses: actions/cache@" not in quality
+    assert "cache: pip" not in quality
+    assert "if: steps.venv_cache.outputs.cache-hit != 'true'" in quality
+    refresh = quality.split("      - name: Refresh the quality scanner\n", 1)[1].split(
+        "      - name:", 1
+    )[0]
+    assert "if:" not in refresh
+    assert "run: python -m pip install --upgrade ruff" in refresh
+
+
+def test_windows_environment_cache_is_exact_and_does_not_skip_native_tests() -> None:
+    workflow = WORKFLOW_PATH.read_text()
+    app = workflow.split("\n  windows-app:\n", 1)[1].split("\n  windows-native:\n", 1)[0]
+    for identity in (
+        "runner.os",
+        "runner.arch",
+        "steps.pyver.outputs.version",
+        "hashFiles('requirements.lock')",
+        "hashFiles('pyproject.toml')",
+        "hashFiles('.github/scripts/install_windows_app.ps1')",
+    ):
+        assert identity in app
+    assert "restore-keys:" not in app
+    assert "cache: pip" not in app
+    assert "if: steps.windows_venv_cache.outputs.cache-hit != 'true'" in app
+    checks = app.split("      - name: Verify restored Windows test dependencies\n", 1)[1]
+    assert "if: steps.windows_venv_cache" not in checks
+    assert "-m pip check" in checks
+    assert "Run Windows-relevant application tests" in checks
+    assert "verify-windows-app --junit" in checks

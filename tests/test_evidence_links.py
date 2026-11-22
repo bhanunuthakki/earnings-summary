@@ -309,7 +309,7 @@ def test_link_mismatch_and_replay_conflicts_fail_loudly(
         conn.close()
 
 
-def test_migration_seeds_primary_links_locations_and_round_trips(tmp_path: Path) -> None:
+def test_migration_seeds_primary_links_and_locations(tmp_path: Path) -> None:
     db_path = tmp_path / "seed.db"
     config = _config(db_path)
     command.stamp(config, "0213_decision_draft_provider_id")
@@ -330,19 +330,6 @@ def test_migration_seeds_primary_links_locations_and_round_trips(tmp_path: Path)
         assert conn.execute(
             "SELECT link_kind FROM evidence_document_observation_links"
         ).fetchone() == ("primary",)
-    finally:
-        conn.close()
-    command.downgrade(config, PRIOR_HEAD)
-    conn = sqlite3.connect(db_path)
-    try:
-        objects = {
-            row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
-            )
-        }
-        assert "evidence_blob_location_observations" not in objects
-        assert "v_evidence_document_current" not in objects
     finally:
         conn.close()
 

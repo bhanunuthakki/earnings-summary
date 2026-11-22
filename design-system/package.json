@@ -21,9 +21,12 @@
     "dist"
   ],
   "scripts": {
-    "build": "node build.mjs",
-    "check": "tsc --noEmit && node scripts/check-tokens.mjs",
-    "dev": "node build.mjs --watch"
+    "build": "bun build.mjs",
+    "check:types": "bun check --no-script",
+    "check:types:local": "tsrs --noEmit",
+    "check:tokens": "bun scripts/check-tokens.mjs",
+    "check": "bun run check:types && bun run check:tokens",
+    "dev": "bun build.mjs --watch"
   },
   "peerDependencies": {
     "react": ">=18",
@@ -35,6 +38,8 @@
     "esbuild": "^0.25.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
+    "tsrs": "7.1.0-beta.tsrs3",
     "typescript": "^5.6.0"
-  }
+  },
+  "packageManager": "bun@1.4.5"
 }

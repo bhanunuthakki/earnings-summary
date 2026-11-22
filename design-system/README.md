@@ -1,6 +1,6 @@
 # @earnings-summary/design-system
 
-A self-contained npm package used as a **prototyping sandbox** for `claude.ai/design` via the
+A self-contained Bun package used as a **prototyping sandbox** for `claude.ai/design` via the
 `/design-sync` skill. It is not a replacement for the Flask surfaces earnings-summary actually
 ships. The Python design system under `src/ui/` (one level up, in the main repo) is canonical —
 tokens and components are defined there first; changes flow forward into this package (generated
@@ -30,9 +30,9 @@ tokens and controls), not the other way. Current contract: `../directives/design
 ## Build
 
 ```sh
-npm install
-npm run build   # -> dist/index.js, dist/index.d.ts, dist/index.css
-npm run check   # tsc --noEmit + the token/off-system lint (scripts/check-tokens.mjs)
+bun install --frozen-lockfile
+bun run build   # -> dist/index.js, dist/index.d.ts, dist/index.css
+bun run check   # native typecheck + the token/off-system lint (scripts/check-tokens.mjs)
 ```
 
 ## Update the shared kit
@@ -50,3 +50,6 @@ controls, tokens and registered component contracts. Build the package before a
 separately authorized design-sync upload. A local build does not update that remote project.
 
 See `../docs/architecture/design_artifact_lifecycle.md` for runtime and prototype ownership.
+
+Use Bun 1.4.5. Run `bun run check:types:local` for the local tsrs checker.
+The build keeps TypeScript to emit declaration files; native Bun checking does not emit them.

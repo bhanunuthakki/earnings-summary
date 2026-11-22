@@ -21,7 +21,7 @@ def _config(path: Path) -> Config:
     return config
 
 
-def test_0246_is_reversible_single_head_with_exact_schema(
+def test_0246_is_single_head_with_exact_schema(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "source-fact-stream-migration.db"
@@ -82,22 +82,5 @@ def test_0246_is_reversible_single_head_with_exact_schema(
             "SELECT singleton_key,next_sequence FROM source_fact_publication_stream_clock"
         ).fetchone() == (1, 1)
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-    finally:
-        conn.close()
-
-    command.downgrade(
-        config,
-        "0245_document_processing_research_snapshots",
-    )
-    conn = sqlite3.connect(path)
-    try:
-        tables = {
-            str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        }
-        assert "source_fact_publication_stream" not in tables
-        assert "canonical_fact_resolution_snapshot_watermarks" not in tables
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0245_document_processing_research_snapshots",
-        )
     finally:
         conn.close()

@@ -5,7 +5,7 @@
 //   - index.css   bundle of src/index.css (which @imports the token/control CSS)
 //   - index.d.ts  (+ nested .d.ts) via `tsc --emitDeclarationOnly`
 //
-// Usage: `node build.mjs` (one-shot) or `node build.mjs --watch` (rebuild on change).
+// Usage: `bun build.mjs` (one-shot) or `bun build.mjs --watch` (rebuild on change).
 
 import { build, context } from "esbuild";
 import { execSync } from "node:child_process";
@@ -38,7 +38,7 @@ const cssOptions = {
 };
 
 function emitTypes() {
-  execSync("npx tsc --emitDeclarationOnly --outDir dist", {
+  execSync("bun x --no-install --bun tsc --emitDeclarationOnly --outDir dist", {
     stdio: "inherit",
   });
 }

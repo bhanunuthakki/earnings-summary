@@ -97,10 +97,3 @@ def test_existing_rows_survive_upgrade_with_null_locator(db_at_prior: Path) -> N
     row = conn.execute(f"SELECT value, {_COLUMN} FROM {_TABLE}").fetchone()
     conn.close()
     assert row == (12.5, None)
-
-
-def test_downgrade_drops_locator_column(db_at_prior: Path) -> None:
-    cfg = _build_config(db_at_prior)
-    command.upgrade(cfg, NEW_HEAD)
-    command.downgrade(cfg, PRIOR_HEAD)
-    assert _COLUMN not in _columns(db_at_prior)

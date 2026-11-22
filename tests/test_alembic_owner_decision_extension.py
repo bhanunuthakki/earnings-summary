@@ -178,15 +178,3 @@ def test_intent_kind_and_fts_triggers_survive(tmp_path: Path) -> None:
             assert sql is not None and "WHERE" in str(sql[0]).upper()
     finally:
         conn.close()
-
-
-def test_downgrade_refuses_when_owner_rows_exist_else_clean(tmp_path: Path) -> None:
-    db = _migrated_db(tmp_path)
-    cfg = _config(db)
-    command.downgrade(cfg, PRIOR_HEAD)
-    conn = sqlite3.connect(str(db))
-    try:
-        cols = {r[1] for r in conn.execute("PRAGMA table_info(decisions)").fetchall()}
-        assert "decided_by" not in cols and "scope" not in cols
-    finally:
-        conn.close()

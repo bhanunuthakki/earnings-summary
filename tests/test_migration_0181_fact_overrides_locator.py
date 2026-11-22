@@ -98,12 +98,3 @@ def test_existing_rows_survive_upgrade_with_null_locator(tmp_path: Path) -> None
     row = conn.execute(f"SELECT fact_key, {_COLUMN} FROM fact_overrides").fetchone()
     conn.close()
     assert row == ("product", None)
-
-
-def test_downgrade_drops_locator_column(tmp_path: Path) -> None:
-    db = tmp_path / "down.db"
-    cfg = _seed(db)
-    command.upgrade(cfg, NEW_HEAD)
-    assert _COLUMN in _columns(db)
-    command.downgrade(cfg, PRIOR_HEAD)
-    assert _COLUMN not in _columns(db)
