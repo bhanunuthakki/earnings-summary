@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -19,6 +20,7 @@ from pipeline.source_policy import (
     ReportedPeriodStatus,
     ReportedPeriodWindow,
     fiscal_quarter_end,
+    reported_quarter_is_in_window,
 )
 from runtime import deterministic
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -222,6 +224,85 @@ def _captured_reported_period_proof(
     return True
 
 
+def _verify_sealed_inventory_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    snapshot_row: dict[str, object],
+    as_of: date,
+) -> tuple[object, object, ReportedPeriodWindow | None]:
+    """Verify seal, timestamps, and component digest for one inventory snapshot row."""
+    from provenance.source_coverage import SourceInventorySnapshot
+    from provenance.source_inventory_seal import (
+        InventoryComponent,
+        InventorySeal,
+        component_digest,
+    )
+
+    end_of_day = datetime.combine(as_of + timedelta(days=1), time.min, tzinfo=UTC)
+    snapshot = SourceInventorySnapshot.model_validate(snapshot_row)
+    seal_row = conn.execute(
+        "SELECT * FROM source_inventory_snapshot_seals WHERE snapshot_id=?",
+        (snapshot.snapshot_id,),
+    ).fetchone()
+    if seal_row is None:
+        return (
+            None,
+            None,
+            ReportedPeriodWindow(status=ReportedPeriodStatus.STALE, reason="inventory_unsealed"),
+        )
+    seal_columns = tuple(
+        item[1] for item in conn.execute("PRAGMA table_info(source_inventory_snapshot_seals)")
+    )
+    seal = InventorySeal.model_validate(dict(zip(seal_columns, seal_row, strict=True)))
+    recorded_at = snapshot.recorded_at
+    sealed_at = seal.sealed_at
+    if (
+        not snapshot.authoritative
+        or snapshot.outcome != "succeeded"
+        or seal.completion_status != "complete"
+        or (
+            recorded_at.replace(tzinfo=UTC)
+            if recorded_at.tzinfo is None
+            else recorded_at.astimezone(UTC)
+        )
+        >= end_of_day
+        or (
+            sealed_at.replace(tzinfo=UTC) if sealed_at.tzinfo is None else sealed_at.astimezone(UTC)
+        )
+        >= end_of_day
+    ):
+        return (
+            None,
+            None,
+            ReportedPeriodWindow(
+                status=ReportedPeriodStatus.STALE, reason="inventory_not_current_complete"
+            ),
+        )
+    component_cursor = conn.execute(
+        "SELECT * FROM source_inventory_components WHERE snapshot_id=? "
+        "ORDER BY ordinal,component_key",
+        (snapshot.snapshot_id,),
+    )
+    component_columns = tuple(item[0] for item in component_cursor.description or ())
+    components = tuple(
+        InventoryComponent.model_validate(dict(zip(component_columns, row, strict=True)))
+        for row in component_cursor.fetchall()
+    )
+    if (
+        len(components) != seal.expected_component_count
+        or component_digest(components) != seal.component_digest_sha256
+        or any(item.required and item.outcome != "succeeded" for item in components)
+    ):
+        return (
+            None,
+            None,
+            ReportedPeriodWindow(
+                status=ReportedPeriodStatus.AMBIGUOUS, reason="inventory_seal_mismatch"
+            ),
+        )
+    return snapshot, seal, None
+
+
 def _reported_period_window_from_inventory_unpinned(
     conn: sqlite3.Connection,
     *,
@@ -238,11 +319,7 @@ def _reported_period_window_from_inventory_unpinned(
     from ir_pipeline.source_inventory import reviewed_document_type, reviewed_period_candidate
     from pipeline.issuer_document_inventory import reviewed_current_period_for_url
     from provenance.source_coverage import ExpectedDocument, SourceInventorySnapshot
-    from provenance.source_inventory_seal import (
-        InventoryComponent,
-        InventorySeal,
-        component_digest,
-    )
+    from provenance.source_inventory_seal import InventorySeal
 
     if max_quarters < 1:
         raise ValueError("max_quarters must be positive")
@@ -281,62 +358,26 @@ def _reported_period_window_from_inventory_unpinned(
     seal_proofs: list[tuple[str, str, str]] = []
     coverage_proofs: list[tuple[str, str, str, str]] = []
     for kind in ("sec_submissions", "ir_crawl"):
-        snapshot = SourceInventorySnapshot.model_validate(by_kind[kind])
+        raw_snapshot, raw_seal, seal_err = _verify_sealed_inventory_snapshot(
+            conn, snapshot_row=by_kind[kind], as_of=as_of
+        )
+        if seal_err is not None or raw_snapshot is None or raw_seal is None:
+            return seal_err or ReportedPeriodWindow(
+                status=ReportedPeriodStatus.UNKNOWN, reason="inventory_unsealed"
+            )
+        snapshot = cast_snapshot = raw_snapshot
+        if not isinstance(snapshot, SourceInventorySnapshot) or not isinstance(
+            raw_seal, InventorySeal
+        ):
+            raise TypeError("unexpected inventory snapshot model")
+        _ = cast_snapshot
         snapshots.append(snapshot.snapshot_id)
-        seal_row = conn.execute(
-            "SELECT * FROM source_inventory_snapshot_seals WHERE snapshot_id=?",
-            (snapshot.snapshot_id,),
-        ).fetchone()
-        if seal_row is None:
-            return ReportedPeriodWindow(
-                status=ReportedPeriodStatus.STALE, reason="inventory_unsealed"
-            )
-        seal_columns = tuple(
-            item[1] for item in conn.execute("PRAGMA table_info(source_inventory_snapshot_seals)")
-        )
-        seal = InventorySeal.model_validate(dict(zip(seal_columns, seal_row, strict=True)))
-        recorded_at = snapshot.recorded_at
-        sealed_at = seal.sealed_at
-        if (
-            not snapshot.authoritative
-            or snapshot.outcome != "succeeded"
-            or seal.completion_status != "complete"
-            or (
-                recorded_at.replace(tzinfo=UTC)
-                if recorded_at.tzinfo is None
-                else recorded_at.astimezone(UTC)
-            )
-            >= end_of_day
-            or (
-                sealed_at.replace(tzinfo=UTC)
-                if sealed_at.tzinfo is None
-                else sealed_at.astimezone(UTC)
-            )
-            >= end_of_day
-        ):
-            return ReportedPeriodWindow(
-                status=ReportedPeriodStatus.STALE, reason="inventory_not_current_complete"
-            )
-        component_cursor = conn.execute(
-            "SELECT * FROM source_inventory_components WHERE snapshot_id=? "
-            "ORDER BY ordinal,component_key",
-            (snapshot.snapshot_id,),
-        )
-        component_columns = tuple(item[0] for item in component_cursor.description or ())
-        components = tuple(
-            InventoryComponent.model_validate(dict(zip(component_columns, row, strict=True)))
-            for row in component_cursor.fetchall()
-        )
-        if (
-            len(components) != seal.expected_component_count
-            or component_digest(components) != seal.component_digest_sha256
-            or any(item.required and item.outcome != "succeeded" for item in components)
-        ):
-            return ReportedPeriodWindow(
-                status=ReportedPeriodStatus.AMBIGUOUS, reason="inventory_seal_mismatch"
-            )
         seal_proofs.append(
-            (snapshot.snapshot_id, seal.component_digest_sha256, seal.sealed_at.isoformat())
+            (
+                snapshot.snapshot_id,
+                raw_seal.component_digest_sha256,
+                raw_seal.sealed_at.isoformat(),
+            )
         )
         document_cursor = conn.execute(
             "SELECT * FROM expected_documents WHERE snapshot_id=?",
@@ -561,6 +602,92 @@ def reported_quarter_selection_in_connection(
     )
 
 
+def direct_publisher_quarter_selection_in_connection(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    fiscal_year: int,
+    fiscal_quarter: int,
+    fiscal_year_end_month: int | None,
+    as_of: date,
+    max_quarters: int = 8,
+    has_verified_fiscal_witness: bool = False,
+) -> bool | None:
+    """Validate direct publisher IR registration without requiring an ``ir_crawl`` seal.
+
+    Requires valid FYE + non-future period inside ``max_quarters`` plus either an
+    explicit verified fiscal witness or a sealed ``sec_submissions`` inventory.
+    """
+    if max_quarters < 1:
+        raise ValueError("max_quarters must be positive")
+    if fiscal_year_end_month is None:
+        return None
+    try:
+        following = (
+            date(fiscal_year + 1, 1, 1)
+            if fiscal_year_end_month == 12
+            else date(fiscal_year, fiscal_year_end_month + 1, 1)
+        )
+        fye = date.fromordinal(following.toordinal() - 1).strftime("%m-%d")
+        period_end = fiscal_quarter_end(
+            fiscal_year=fiscal_year,
+            fiscal_quarter=fiscal_quarter,
+            fiscal_year_end=fye,
+        )
+    except ValueError:
+        return None
+    if period_end > as_of:
+        return False
+    if not reported_quarter_is_in_window(
+        fiscal_year=fiscal_year,
+        fiscal_quarter=fiscal_quarter,
+        fiscal_year_end_month=fiscal_year_end_month,
+        as_of=as_of,
+        max_quarters=max_quarters,
+    ):
+        return False
+    if has_verified_fiscal_witness:
+        return True
+    try:
+        current = conn.execute(
+            "SELECT * FROM v_source_inventory_current WHERE UPPER(ticker)=? "
+            "AND source_kind='sec_submissions'",
+            (ticker.strip().upper(),),
+        )
+    except sqlite3.OperationalError:
+        return None
+    columns = tuple(item[0] for item in current.description or ())
+    rows = [dict(zip(columns, row, strict=True)) for row in current.fetchall()]
+    if len(rows) != 1:
+        return None
+    own_snapshot = not conn.in_transaction
+    if own_snapshot:
+        conn.execute("BEGIN")
+        conn.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone()
+    try:
+        snapshot, seal, err = _verify_sealed_inventory_snapshot(
+            conn, snapshot_row=rows[0], as_of=as_of
+        )
+        return True if (err is None and snapshot is not None and seal is not None) else None
+    finally:
+        if own_snapshot:
+            conn.rollback()
+
+
+def _read_only_quarter_selection(
+    db_path: Path,
+    selector: Callable[[sqlite3.Connection], bool | None],
+) -> bool | None:
+    try:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    except (OSError, sqlite3.Error):
+        return None
+    try:
+        return selector(conn)
+    finally:
+        conn.close()
+
+
 def reported_quarter_selection(
     db_path: Path,
     *,
@@ -572,18 +699,42 @@ def reported_quarter_selection(
 ) -> bool | None:
     """Read-only source selection for entrypoints without a caller-owned connection."""
 
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except (OSError, sqlite3.Error):
-        return None
-    try:
-        return reported_quarter_selection_in_connection(
+    return _read_only_quarter_selection(
+        db_path,
+        lambda conn: reported_quarter_selection_in_connection(
             conn,
             ticker=ticker,
             fiscal_year=fiscal_year,
             fiscal_quarter=fiscal_quarter,
             fiscal_year_end_month=fiscal_year_end_month,
             as_of=as_of,
-        )
-    finally:
-        conn.close()
+        ),
+    )
+
+
+def direct_publisher_quarter_selection(
+    db_path: Path,
+    *,
+    ticker: str,
+    fiscal_year: int,
+    fiscal_quarter: int,
+    fiscal_year_end_month: int | None,
+    as_of: date,
+    max_quarters: int = 8,
+    has_verified_fiscal_witness: bool = False,
+) -> bool | None:
+    """Read-only direct-publisher selection for entrypoints without a caller-owned connection."""
+
+    return _read_only_quarter_selection(
+        db_path,
+        lambda conn: direct_publisher_quarter_selection_in_connection(
+            conn,
+            ticker=ticker,
+            fiscal_year=fiscal_year,
+            fiscal_quarter=fiscal_quarter,
+            fiscal_year_end_month=fiscal_year_end_month,
+            as_of=as_of,
+            max_quarters=max_quarters,
+            has_verified_fiscal_witness=has_verified_fiscal_witness,
+        ),
+    )

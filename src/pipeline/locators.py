@@ -29,6 +29,7 @@ from models.facts import (
     HtmlSpanRef,
     LegacyEscapeHatch,
     LocatorKind,
+    SpreadsheetCellRef,
     TranscriptSpanRef,
     VendorFieldRef,
 )
@@ -197,6 +198,28 @@ def pdf_slide_locator(
         locator_version=2,
         kind=LocatorKind.PDF_SLIDE,
         pdf_bbox=bbox,
+        verbatim_snippet=verbatim_snippet,
+    )
+
+
+def spreadsheet_cell_locator(
+    *,
+    sheet_name: str,
+    cell_address: str | None = None,
+    cell_range: str | None = None,
+    table_name: str | None = None,
+    verbatim_snippet: str | None = None,
+) -> FactLocator:
+    """A ``spreadsheet_cell`` locator pointing to one workbook sheet and cell/range."""
+    return FactLocator(
+        locator_version=2,
+        kind=LocatorKind.SPREADSHEET_CELL,
+        spreadsheet_cell=SpreadsheetCellRef(
+            sheet_name=sheet_name,
+            cell_address=cell_address,
+            cell_range=cell_range,
+            table_name=table_name,
+        ),
         verbatim_snippet=verbatim_snippet,
     )
 

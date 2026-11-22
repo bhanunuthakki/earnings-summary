@@ -24,14 +24,18 @@ from compute.kpi_resolver import canonical_metric_name
 from credibility.observations import KPI_FACTS, record_restatement_observation
 from models.documents import SourceType, tier_for_source_type
 from models.facts import Currency, FactLocator, FiscalPeriodType, LegacyEscapeHatch, Unit
-from models.kpis import DefinitionOrigin, ReportingCadence, ThesisTier
+from models.kpis import DefinitionOrigin, KpiMetricNature, ReportingCadence, ThesisTier
 from models.unit_convert import convert_unit
 from models.validation import Severity, ValidationRule
 from pipeline.confidence import score_confidence
+from pipeline.kpi_atomic_admission import build_atomic_semantic_context
 from pipeline.kpi_semantics import (
+    KpiAccountingBasis,
+    KpiConsolidationScope,
     KpiPublicationLane,
     KpiSemanticContext,
     KpiSemanticStatus,
+    KpiSourcePrecision,
     KpiUnitScale,
     current_kpi_semantic_context,
     normalize_source_numeric,
@@ -97,6 +101,16 @@ class KpiValue(BaseModel):
     # Source-bound meaning. Legacy deterministic producers may leave this null;
     # semantic extraction and refresh paths supply it.
     semantic_context: KpiSemanticContext | None = None
+    metric_nature: KpiMetricNature = KpiMetricNature.REPORTED_SCALAR
+    basis_note: str | None = Field(default=None, max_length=512)
+    metric_name_as_reported: str | None = Field(default=None, max_length=256)
+    accounting_basis: KpiAccountingBasis | None = None
+    consolidation_scope: KpiConsolidationScope | None = None
+    dimensions: dict[str, str] = Field(default_factory=dict)
+    unit_scale: KpiUnitScale | None = None
+    source_row_label: str | None = Field(default=None, max_length=512)
+    source_column_header: str | None = Field(default=None, max_length=512)
+    source_precision: KpiSourcePrecision | None = None
 
     @model_validator(mode="after")
     def _monetary_currency_required(self) -> KpiValue:
@@ -166,6 +180,9 @@ class KpiExtractionManifest(BaseModel):
     # manifest-level `origin` at ANALYST, so persist_manifest's capture-mode
     # name-collapse is a no-op and the already-canonical names are stored verbatim).
     origins: dict[str, DefinitionOrigin] = Field(default_factory=dict)
+    auto_admit: bool = False
+    reviewed_by: str = Field(default="pipeline:atomic_ingest", min_length=1, max_length=128)
+    metric_natures: dict[str, KpiMetricNature] = Field(default_factory=dict)
     values: list[KpiValue]
 
 
@@ -855,29 +872,61 @@ def persist_manifest(
     )
 
     for kpi in manifest.values:
-        excerpt = normalize_source_excerpt(kpi.source_excerpt)
-        semantic_context = kpi.semantic_context or unclassified_kpi_context(
-            metric_name_as_reported=kpi.name,
-            reported_period_end=manifest.period_end.date(),
+        effective_nature = (
+            kpi.metric_nature
+            if kpi.metric_nature is not KpiMetricNature.REPORTED_SCALAR
+            else manifest.metric_natures.get(kpi.name, KpiMetricNature.REPORTED_SCALAR)
         )
+        excerpt = normalize_source_excerpt(kpi.source_excerpt)
+        if (
+            manifest.auto_admit
+            and kpi.semantic_context is None
+            and effective_nature is KpiMetricNature.INFERRED_EXTRAPOLATED
+            and excerpt is None
+            and kpi.basis_note
+        ):
+            excerpt = normalize_source_excerpt(f"[inferred] {kpi.basis_note}")
         source_value = kpi.source_value_text
-        if source_value is not None:
-            if excerpt is None or source_value not in excerpt:
-                raise ValueError("source value text must occur in the exact source excerpt")
-            semantic_context = semantic_context.model_copy(
-                update={"source_value_text": source_value}
-            )
+        if source_value is not None and (excerpt is None or source_value not in excerpt):
+            raise ValueError("source value text must occur in the exact source excerpt")
+
         extracted_value = kpi.value
-        if kpi.unit is Unit.COUNT and semantic_context.unit_scale is not KpiUnitScale.UNKNOWN:
-            if source_value is None:
-                if semantic_context.status is KpiSemanticStatus.ADMITTED:
-                    raise ValueError("admitted COUNT extraction requires exact source value text")
-            else:
+        pre_context: KpiSemanticContext | None = kpi.semantic_context
+        if pre_context is not None:
+            if source_value is not None:
+                pre_context = pre_context.model_copy(update={"source_value_text": source_value})
+            if kpi.unit is Unit.COUNT and pre_context.unit_scale is not KpiUnitScale.UNKNOWN:
+                if source_value is None:
+                    if pre_context.status is KpiSemanticStatus.ADMITTED:
+                        raise ValueError(
+                            "admitted COUNT extraction requires exact source value text"
+                        )
+                else:
+                    extracted_value = normalize_source_numeric(
+                        parse_source_numeric(source_value),
+                        unit=kpi.unit,
+                        unit_scale=pre_context.unit_scale,
+                    )
+        elif manifest.auto_admit:
+            if (
+                kpi.unit is Unit.COUNT
+                and kpi.unit_scale is not None
+                and kpi.unit_scale is not KpiUnitScale.UNKNOWN
+                and source_value is not None
+            ):
                 extracted_value = normalize_source_numeric(
                     parse_source_numeric(source_value),
                     unit=kpi.unit,
-                    unit_scale=semantic_context.unit_scale,
+                    unit_scale=kpi.unit_scale,
                 )
+        else:
+            pre_context = unclassified_kpi_context(
+                metric_name_as_reported=kpi.name,
+                reported_period_end=manifest.period_end.date(),
+            )
+            if source_value is not None:
+                pre_context = pre_context.model_copy(update={"source_value_text": source_value})
+
         # Reconcile the extracted value/unit to the KPI's canonical unit (the
         # holding's break-rule unit) BEFORE validating/storing, so kpi_facts is
         # written in the unit its threshold is compared against — not the LLM's
@@ -915,6 +964,31 @@ def persist_manifest(
             issues += 1
             continue
 
+        semantic_context = (
+            pre_context
+            if pre_context is not None
+            else build_atomic_semantic_context(
+                metric_name=kpi.name,
+                metric_name_as_reported=kpi.metric_name_as_reported,
+                period_end=manifest.period_end.date(),
+                value=value,
+                unit=unit,
+                extracted_by=extracted_by,
+                locator=kpi.locator,
+                source_excerpt=excerpt,
+                source_value_text=source_value,
+                metric_nature=effective_nature,
+                basis_note=kpi.basis_note,
+                accounting_basis=kpi.accounting_basis,
+                consolidation_scope=kpi.consolidation_scope,
+                dimensions=kpi.dimensions,
+                unit_scale=kpi.unit_scale,
+                source_row_label=kpi.source_row_label,
+                source_column_header=kpi.source_column_header,
+                source_precision=kpi.source_precision,
+            )
+        )
+
         # Capture mode (origin=CAPTURE): collapse the raw label onto an existing
         # definition (or mint a clean canonical) BEFORE find_or_create, so the
         # long tail doesn't explode the registry with unit/casing variants. The
@@ -947,16 +1021,20 @@ def persist_manifest(
             origin=manifest.origins.get(kpi.name, manifest.origin),
         )
 
-        violation = _magnitude_guard_violation(
-            conn,
-            ticker=manifest.ticker,
-            kpi_definition_id=kpi_def_id,
-            period_end=manifest.period_end,
-            value=value,
-            unit=unit,
-            currency=kpi.currency,
-            context=semantic_context,
-            fiscal_period_type=manifest.fiscal_period_type,
+        violation = (
+            None
+            if effective_nature is KpiMetricNature.BINARY_OR_ADHOC_MILESTONE
+            else _magnitude_guard_violation(
+                conn,
+                ticker=manifest.ticker,
+                kpi_definition_id=kpi_def_id,
+                period_end=manifest.period_end,
+                value=value,
+                unit=unit,
+                currency=kpi.currency,
+                context=semantic_context,
+                fiscal_period_type=manifest.fiscal_period_type,
+            )
         )
         if violation is not None:
             log.error(
@@ -1017,12 +1095,14 @@ def persist_manifest(
             source_excerpt=excerpt,
             semantic_context=semantic_context,
             kpi_definition_revision_id=None,
+            semantic_reviewed_by=manifest.reviewed_by,
         )
         if fact_id is not None:
             persist_kpi_semantic_context(
                 conn,
                 kpi_fact_id=fact_id,
                 context=semantic_context,
+                reviewed_by=manifest.reviewed_by,
                 kpi_definition_revision_id=None,
             )
         if was_inserted:

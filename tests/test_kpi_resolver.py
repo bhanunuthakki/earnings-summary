@@ -760,3 +760,68 @@ def test_matching_alias_family_never_unions_incompatible_currencies() -> None:
     _add_facts(conn, "MELI", usd, _QUARTER_ENDS[:1], currency="USD")
     _add_facts(conn, "MELI", brl, _QUARTER_ENDS[:1], currency="BRL")
     assert matching_kpi_definition_ids(conn, "MELI", "Revenue (USD)") == (usd,)
+
+
+def test_series_identity_unifies_cosmetic_whitespace_and_case_but_keeps_distinct_names_split() -> (
+    None
+):
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE kpi_definitions (
+          id INTEGER PRIMARY KEY, ticker TEXT, name TEXT, unit TEXT
+        );
+        CREATE TABLE kpi_facts (
+          id INTEGER PRIMARY KEY, ticker TEXT, kpi_definition_id INTEGER,
+          period_end TEXT, currency TEXT
+        );
+        CREATE TABLE kpi_fact_semantic_contexts (
+          id INTEGER PRIMARY KEY, kpi_fact_id INTEGER, revision INTEGER,
+          supersedes_context_id INTEGER, status TEXT, publication_lane TEXT,
+          metric_name_as_reported TEXT, accounting_basis TEXT,
+          consolidation_scope TEXT, dimensions_json TEXT, unit_scale TEXT
+        );
+        INSERT INTO kpi_definitions VALUES
+          (1, 'BKNG', 'Gross bookings', 'millions'),
+          (2, 'BKNG', 'Gross bookings (USD)', 'millions');
+        INSERT INTO kpi_facts VALUES
+          (1, 'BKNG', 1, '2025-09-30', 'USD'),
+          (2, 'BKNG', 1, '2025-12-31', 'USD'),
+          (3, 'BKNG', 1, '2026-03-31', 'USD'),
+          (4, 'BKNG', 1, '2026-06-30', 'USD'),
+          (5, 'BKNG', 1, '2024-12-31', 'USD'),
+          (6, 'BKNG', 2, '2025-06-30', 'USD');
+        INSERT INTO kpi_fact_semantic_contexts VALUES
+          (1, 1, 1, NULL, 'admitted', 'current_actual', 'Total Gross \nBookings',
+           'management', 'consolidated', '{}', 'millions'),
+          (2, 2, 1, NULL, 'admitted', 'current_actual', 'total  gross\tbookings:',
+           'management', 'consolidated', '{}', 'millions'),
+          (3, 3, 1, NULL, 'admitted', 'current_actual', 'Active customers',
+           'management', 'consolidated', '{}', 'millions'),
+          (4, 4, 1, NULL, 'admitted', 'current_actual', 'Total Gross Bookings',
+           'management', 'consolidated', '{}', 'millions'),
+          (5, 5, 1, NULL, 'admitted', 'current_actual', 'Total Gross Bookings',
+           'non_gaap', 'consolidated', '{}', 'millions'),
+          (6, 6, 2, NULL, 'admitted', 'current_actual', 'Total Gross \nBookings',
+           'management', 'consolidated', '{}', 'millions');
+        """
+    )
+    correlated = conn.execute(
+        "SELECT kf.id FROM kpi_facts kf JOIN kpi_fact_semantic_contexts ksc "
+        "ON ksc.kpi_fact_id=kf.id WHERE " + semantic_series_identity_sql(conn) + " ORDER BY kf.id"
+    ).fetchall()
+    anchor_sql = semantic_series_identity_anchor_sql(conn)
+    assert anchor_sql is not None
+    flat = conn.execute(
+        "SELECT kf.id FROM kpi_facts kf JOIN kpi_fact_semantic_contexts ksc "
+        f"ON ksc.kpi_fact_id=kf.id LEFT JOIN ({anchor_sql}) series_identity_anchor "
+        "ON series_identity_anchor.definition_id=kf.kpi_definition_id "
+        "WHERE " + semantic_series_identity_flat_sql(conn) + " ORDER BY kf.id"
+    ).fetchall()
+    # Facts 1, 2, 4 share normalized metric name + basis/scope/scale; fact 3 differs in wording
+    # ("Active customers") and fact 5 differs in basis ("non_gaap"); fact 6 is latest on def 2.
+    assert [int(r[0]) for r in correlated] == [1, 2, 4, 6]
+    assert [int(r[0]) for r in flat] == [1, 2, 4, 6]
+    assert matching_kpi_definition_ids(conn, "BKNG", "Gross bookings") == (1, 2)
+    conn.close()
