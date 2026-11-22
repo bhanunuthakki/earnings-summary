@@ -58,11 +58,11 @@ Identification, acquisition, parsing, storage, resolution, and surfacing of comp
 
 - Profile: dense-desktop
 - Contract: directives/design_language.md
-- Executable authority: src/ui/tokens.py, src/ui/controls.py, src/ui/design_registry.py, src/ui/conformance_scan.py, src/ui/source_chip.py, src/report/renderers/workspace_styles.py
+- Executable authority: src/ui/tokens.py, src/ui/controls.py, src/ui/source_chip.py, src/report/renderers/workspace_styles.py
 - Render: `python execution/sqlite_bootstrap.py execution/comments_server.py --port 7421`, then exercise the affected primary task and its supported widths
-- Gate: `python scripts/check_design_sync.py`; report-renderer changes also require `python -m pytest tests/test_workspace_golden.py` (comparison mode) plus visual diff review
+- Gate: report-renderer changes require `python -m pytest tests/test_workspace_golden.py` (comparison mode) plus visual diff review. The project is mostly headless; no design-conformance CI gate exists.
 
-UI work uses the shared `frontend-quality` procedure. Registered controls and family recipes are the default. An authorized redesign may evolve the design language through its master/registry extension path, with evidence for the changed user task; do not bypass that owner with local visual CSS, open-ended style APIs, or runtime style mutations. Golden regeneration (`GOLDEN_REGEN=1`) is an intentional expectation update, never the checking gate: review the changed expectations, then rerun comparison mode. Preserve the protected behavior when updating an obsolete expectation. `source_chip.py` and `workspace_styles.py` are existing surface-specific authorities whose shared semantics must remain aligned even where geometry differs. Material frontend work requires before/after browser evidence for the affected task and an explicit note for any unverified state.
+UI work uses the shared `frontend-quality` procedure. Registered controls and family recipes are the default. An authorized redesign may evolve the design language through its token and family-master owners, with evidence for the changed user task; do not bypass that owner with local visual CSS, open-ended style APIs, or runtime style mutations. Golden regeneration (`GOLDEN_REGEN=1`) is an intentional expectation update, never the checking gate: review the changed expectations, then rerun comparison mode. Preserve the protected behavior when updating an obsolete expectation. `source_chip.py` and `workspace_styles.py` are existing surface-specific authorities whose shared semantics must remain aligned even where geometry differs. Material frontend work requires before/after browser evidence for the affected task and an explicit note for any unverified state.
 
 ## Tests and merge gates
 

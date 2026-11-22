@@ -1,4 +1,4 @@
-# Generated for the hosted rendered-route design gate.
+# Generated for the hosted browser security canary.
 # Keep the browser adapter separate from the application lock so the runtime
 # dependency set stays unchanged. Both Linux CI and local Windows wheels are
 # pinned where the package publishes platform-specific artifacts.
@@ -9,7 +9,7 @@ greenlet==3.2.4 \
 playwright==1.60.0 \
     --hash=sha256:1c2bfae7884fb3fb05b853290eab8f343d524e5016f2f1def702acbbdf14c93e \
     --hash=sha256:9566821ce6030a1f9e7146a24e19355ab0d98805fd0f9be50bb3d8fef1750c02
-    # via the hosted design gate
+    # via the hosted browser security canary
 pyee==13.0.0 \
     --hash=sha256:48195a3cddb3b1515ce0695ed76036b5ccc2ef3a9f963ff9f77aec0139845498
     # via playwright

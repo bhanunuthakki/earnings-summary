@@ -8,7 +8,6 @@ import json
 import sys
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
-from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import cast
 from xml.etree import ElementTree
@@ -20,7 +19,6 @@ CODE_PREFIXES = (
     "alembic/",
     "cron/",
     "scripts/",
-    "design-system/",
     ".githooks/",
     "config/",
     "templates/",
@@ -36,58 +34,16 @@ CODE_ROOT_FILES = {
     "pyproject.toml",
     "requirements.lock",
     "requirements.txt",
-    "directives/design_language.md",
+    "requirements-browser.lock",
 }
 PYTHON_ROOT_FILES = {"pyproject.toml", "requirements.lock"}
 DOCUMENTATION_SUFFIXES = {".md", ".rst"}
-# Design-impacting paths (workstream C1). Anything that owns rendered-surface
-# truth must run the Design Sync job, so a doubtful path is classified as
-# design (fail toward running the gate). A PR that touches no design path
-# skips Design Sync; pushes to main and the nightly schedule trigger run it
-# regardless of this classification (see the design job's `if:` in ci.yml).
-DESIGN_PREFIXES = (
-    "design-system/",
-    "mockups/",
-    # conformance_scan.discover_emitters scans both complete Python roots.
-    # New and currently unregistered emitters must reach that gate too; the
-    # registry remains the owner of the surface inventory.
-    "src/",
-    "execution/",
-    "tests/golden/",
-)
-DESIGN_FILES = {
-    # Work OS shell/style contract sources.
-    "src/pipeline/work_os_shell.py",
-    "src/pipeline/work_os_runtime.js",
-    "src/pipeline/work_os_styles.py",
-    # Browser security shares the Chromium-equipped Design job.
-    "execution/comments_server.py",
-    "src/server_runtime/access.py",
-    "tests/test_browser_security_canary.py",
-    # Design guard tooling.
-    "scripts/check_design_sync.py",
-    "execution/verify_design_conformance.py",
-    "execution/design_route_canaries.py",
-    # Contract document and machine-readable design baselines.
-    "directives/design_language.md",
-    "tests/design_conformance_debt.json",
-    "tests/design_geometry_baseline.json",
-    # Design guard inputs.
-    "requirements-design.lock",
-    # Design golden/shell tests. The canary and the other design-tool tests
-    # are covered by DESIGN_FILE_PATTERNS below.
-    "tests/test_workspace_golden.py",
-    "tests/test_work_os_shell.py",
-    "tests/test_extracted_runtime_design.py",
-    "tests/test_work_os_style_master.py",
-}
-DESIGN_FILE_PATTERNS = ("scripts/gen_design_*.py", "tests/test_design_*.py")
 CONDITIONAL_JOBS = {
     "fast-signal": "code",
     "windows-native": "code",
     "windows-app": "code",
     "tests": "code",
-    "design": "design",
+    "browser-security": "code",
     "quality": "python",
     "typecheck": "python",
     "security": "code",
@@ -269,19 +225,11 @@ def _normalize(path: str) -> str:
     return path.replace("\\", "/").removeprefix("./")
 
 
-def _is_design_path(path: str) -> bool:
-    """Design classification fails toward running the Design Sync job."""
-    if path in DESIGN_FILES or path.startswith(DESIGN_PREFIXES):
-        return True
-    return any(fnmatchcase(path, pattern) for pattern in DESIGN_FILE_PATTERNS)
-
-
 def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
     """Return the expensive CI groups required by *paths*."""
 
     code = False
     python = False
-    design = False
     for raw_path in paths:
         path = _normalize(raw_path)
         if not path:
@@ -291,8 +239,7 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
         is_python = path in PYTHON_ROOT_FILES or path.endswith(".py")
         code = code or is_code
         python = python or is_python
-        design = design or _is_design_path(path)
-    return {"code": code, "python": python, "design": design}
+    return {"code": code, "python": python}
 
 
 def _positive_float(value: object, *, what: str) -> float:
@@ -477,9 +424,7 @@ def regenerate_test_durations(
     }
 
 
-def gate_failures(
-    *, code: bool, python: bool, design: bool, results: Mapping[str, str]
-) -> list[str]:
+def gate_failures(*, code: bool, python: bool, results: Mapping[str, str]) -> list[str]:
     """Explain every terminal result that makes the aggregate gate unsafe."""
 
     failures: list[str] = []
@@ -493,7 +438,7 @@ def gate_failures(
         if result not in TERMINAL_SUCCESS_RESULTS:
             failures.append(f"{job_name} finished with {result or 'missing result'}")
 
-    required_groups = {"code": code, "python": python, "design": design}
+    required_groups = {"code": code, "python": python}
     for job_name, group in CONDITIONAL_JOBS.items():
         result = results.get(job_name, "")
         if required_groups[group] and result in TERMINAL_SUCCESS_RESULTS and result != "success":
@@ -695,12 +640,9 @@ def _classify_command(github_output: Path) -> int:
     paths = [path.decode("utf-8", errors="surrogateescape") for path in raw_paths if path]
     groups = classify_paths(paths)
     with github_output.open("a", encoding="utf-8", newline="\n") as output:
-        for name in ("code", "python", "design"):
+        for name in ("code", "python"):
             print(f"{name}={str(groups[name]).lower()}", file=output)
-    print(
-        f"Changed paths: {len(paths)}; code={groups['code']}; "
-        f"python={groups['python']}; design={groups['design']}"
-    )
+    print(f"Changed paths: {len(paths)}; code={groups['code']}; python={groups['python']}")
     return 0
 
 
@@ -712,14 +654,12 @@ def _verify_command(args: argparse.Namespace) -> int:
         "windows-native": args.windows_native_result,
         "windows-app": args.windows_app_result,
         "tests": args.tests_result,
-        "design": args.design_result,
+        "browser-security": args.browser_security_result,
         "quality": args.quality_result,
         "typecheck": args.typecheck_result,
         "security": args.security_result,
     }
-    failures = gate_failures(
-        code=args.code, python=args.python, design=args.design, results=results
-    )
+    failures = gate_failures(code=args.code, python=args.python, results=results)
     for failure in failures:
         print(f"::error::{failure}")
     if failures:
@@ -790,7 +730,6 @@ def _build_parser() -> argparse.ArgumentParser:
     verify = subparsers.add_parser("verify")
     verify.add_argument("--code", type=_parse_bool, required=True)
     verify.add_argument("--python", type=_parse_bool, required=True)
-    verify.add_argument("--design", type=_parse_bool, required=True)
     for job_name in ("changes", "public-boundary", *CONDITIONAL_JOBS):
         verify.add_argument(f"--{job_name}-result", required=True)
     native = subparsers.add_parser("verify-windows-native")

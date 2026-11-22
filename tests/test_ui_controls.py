@@ -18,14 +18,6 @@ from pathlib import Path
 
 import pytest
 
-from ui.conformance_scan import (
-    css_text as _css_text,
-)
-from ui.conformance_scan import (
-    scan_surface,
-    split_top_commas,
-    strip_css_comments,
-)
 from ui.controls import (
     controls_css,
     controls_js,
@@ -35,26 +27,10 @@ from ui.controls import (
     panel_toolbar,
     ticker_label,
 )
-from ui.design_registry import (
-    BESPOKE_BUTTON_OK,
-    CCACTION_PINNED,
-    CHROME_TOKENS,
-    EXEMPT,
-    MONO_TABLE_ALLOWLIST,
-    PALETTE_DARK,
-    PALETTE_LIGHT,
-    QUARANTINE,
-    REGISTERED,
-    palette_css,
-)
+from ui.tokens import CHROME_TOKENS, PALETTE_DARK, PALETTE_LIGHT, palette_css
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC = PROJECT_ROOT / "src"
-
-
-def _registered_path(rel: str) -> Path:
-    source_path = SRC / rel
-    return source_path if source_path.exists() else PROJECT_ROOT / rel
 
 
 # ---------------------------------------------------------------------------
@@ -664,91 +640,6 @@ def test_k_empty_escapes_the_line_but_not_the_chip() -> None:
 #     new drift fails immediately without an ignore path.
 # ===========================================================================
 
-# Every scanner input comes from the typed, immutable design registry. Detection
-# lives in ui.conformance_scan; adding or approving vocabulary here is forbidden
-# by tests/test_design_registry.py.
-
-
-def test_quarantine_only_shrinks() -> None:
-    """The ratchet: a quarantined (surface, dimension) that is now CLEAN must be
-    graduated out of QUARANTINE — leaving stale entries would let real drift
-    hide behind a no-longer-true exemption. Also keeps QUARANTINE honest
-    (registered, non-exempt)."""
-    graduated: dict[str, list[str]] = {}
-    for rel, dims in QUARANTINE.items():
-        assert rel in REGISTERED, f"quarantined surface not registered: {rel}"
-        assert rel not in EXEMPT, f"quarantined surface is also EXEMPT: {rel}"
-        violations = scan_surface(rel, _css_text(_registered_path(rel)))
-        clean_now = sorted(d for d in dims if d not in violations)
-        if clean_now:
-            graduated[rel] = clean_now
-    assert not graduated, (
-        "these surfaces are now clean in the listed dimension(s) — remove them "
-        f"from QUARANTINE (the ratchet only shrinks): {graduated}"
-    )
-
-
-def test_sanctioned_escapes_survive() -> None:
-    """Each design_language §1 escape must NOT be flagged — the guard would be
-    wrong to deny them."""
-    # Token definitions remain master-owned. Charts are governed and clean,
-    # rather than retained as an exemption or a debt island.
-    assert "report/renderers/charts_v2.py" not in EXEMPT
-    assert (
-        scan_surface(
-            "report/renderers/charts_v2.py", _css_text(SRC / "report/renderers/charts_v2.py")
-        )
-        == {}
-    )
-    assert scan_surface("ui/tokens.py", _css_text(SRC / "ui/tokens.py")) == {}
-    # Source chips and the workspace report now use the shared four-step scale.
-    assert "font-size" not in scan_surface(
-        "ui/source_chip.py", _css_text(SRC / "ui/source_chip.py")
-    )
-    assert "radius" not in scan_surface("ui/source_chip.py", _css_text(SRC / "ui/source_chip.py"))
-    assert "font-size" not in scan_surface(
-        "report/renderers/workspace_styles.py",
-        _css_text(SRC / "report/renderers/workspace_styles.py"),
-    )
-    ws = _css_text(SRC / "report/renderers/workspace_styles.py")
-    assert "font-size: 60px" not in ws and "font-size: 100px" not in ws
-    # The chevron data-URIs (%23-encoded) are not raw colors. Remaining relative
-    # type and SVG geometry are explicit legacy debt, not invisible exceptions.
-    assert "color" not in scan_surface("ui/controls.py", _css_text(SRC / "ui/controls.py"))
-    assert scan_surface("x", "code { font-size: 0.93em; }")["font-size"] == ["0.93em"]
-
-
-def test_func_color_dimension_catches_raw_rgba_hsl() -> None:
-    """The color dimension now also denies rgb()/rgba()/hsl()/hsla() — the gap
-    that hid every freehand shadow/wash/hover. It must NOT false-fire on the
-    ``rgb`` inside ``color-mix(in srgb, …)`` (the sanctioned token idiom)."""
-    assert "rgba(0, 0, 0, 0.3)" in scan_surface(
-        "x", ".a { box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3); }"
-    ).get("color", [])
-    assert "rgba(255,255,255,0.04)" in scan_surface(
-        "x", ".a:hover { background: rgba(255,255,255,0.04); }"
-    ).get("color", [])
-    assert scan_surface("x", ".a { color: hsl(210, 50%, 40%); }").get("color")
-    # NEGATIVE: the kit's color-mix idiom (note the "rgb" inside "srgb") is clean.
-    assert "color" not in scan_surface(
-        "x", ".a { background: color-mix(in srgb, var(--bad) 16%, transparent); }"
-    )
-    # NEGATIVE: a tokenized scrim / shadow carries no raw color.
-    assert scan_surface("x", ".k-scrim { background: var(--scrim); }") == {}
-
-
-def test_font_weight_and_transition_dimensions() -> None:
-    """font-weight 700/800/900/bold (the kit tops out at 600) and ``transition:
-    all`` (explicit properties only, §3) are denied; 600 and explicit-prop
-    transitions are clean."""
-    assert scan_surface("x", ".a { font-weight: 700; }")["font-weight"] == ["700"]
-    assert scan_surface("x", ".a { font-weight: bold; }")["font-weight"] == ["bold"]
-    assert "font-weight" not in scan_surface("x", ".a { font-weight: 600; }")
-    assert scan_surface("x", ".a { transition: all 150ms ease; }")["transition"] == ["all"]
-    assert "transition" not in scan_surface(
-        "x", ".a { transition: color var(--transition), border-color var(--transition); }"
-    )
-
 
 # ===========================================================================
 # Layer B — button kit-coverage (design_language §4: "compose the kit, never
@@ -760,146 +651,8 @@ def test_font_weight_and_transition_dimensions() -> None:
 # composes the kit — the structural backstop that stops button reinvention the
 # way the workspace-consistency sweep had to fix it by hand.
 # ===========================================================================
-_BUTTON_TAG = re.compile(r"<button\b[^>]*>", re.IGNORECASE)
-_CLASS_ATTR = re.compile(r'class="([^"]*)"')
 #: A button is kit-composed if any of its classes is one of these.
-_KIT_BUTTON = frozenset({"k-btn", "k-chip"})
 # Bespoke approvals are typed registry data; this scanner only consumes them.
-
-
-def _emitted_button_classes(text: str) -> list[set[str]]:
-    """Class token-sets of every ``<button>`` emitted in a source file. Skips
-    classless buttons (JS-wired/structural — out of scope) and dynamic classes
-    (``{…}`` / string concatenation — unverifiable statically, kit in practice)."""
-    out: list[set[str]] = []
-    for tag in _BUTTON_TAG.findall(text):
-        m = _CLASS_ATTR.search(tag)
-        if not m:
-            continue
-        cls = m.group(1)
-        if "{" in cls or "+" in cls:
-            continue
-        out.append(set(cls.split()))
-    return out
-
-
-def test_buttons_compose_the_kit() -> None:
-    """Every emitted ``<button>`` carries a kit button/chip class or an
-    allowlisted bespoke control — a reinvented button cannot ship (design_language
-    §4). Scans ALL of ``src`` (buttons live in markup files, not only the
-    CSS-emitting surfaces). Seeded green; a net-new freehand button fails here."""
-    offenders: dict[str, list[str]] = {}
-    for path in sorted(SRC.rglob("*.py")):
-        for classes in _emitted_button_classes(path.read_text(encoding="utf-8")):
-            if classes & _KIT_BUTTON or classes & BESPOKE_BUTTON_OK:
-                continue
-            offenders.setdefault(path.relative_to(SRC).as_posix(), []).append(
-                " ".join(sorted(classes))
-            )
-    assert not offenders, (
-        "reinvented <button>(s) — compose the kit (.k-btn / .k-chip) instead of a "
-        "freehand class. A genuinely-bespoke control (close glyph, segmented "
-        "selector, …) is justified into _BESPOKE_BUTTON_OK, not skinned ad hoc:\n"
-        + "\n".join(f"  {rel}: {sorted(set(v))}" for rel, v in offenders.items())
-    )
-
-
-def test_button_coverage_fires_on_reinvention() -> None:
-    """The Layer-B check's own contract: it flags a freehand button, passes kit
-    + allowlisted ones, and ignores dynamic / classless buttons."""
-    freehand = _emitted_button_classes('<button class="my-save-btn" type="button">Save</button>')
-    assert freehand == [{"my-save-btn"}]
-    assert not (freehand[0] & _KIT_BUTTON or freehand[0] & BESPOKE_BUTTON_OK)  # → flagged
-    assert _emitted_button_classes('<button class="k-btn k-btn-quiet">x</button>')[0] & _KIT_BUTTON
-    assert _emitted_button_classes('<button class="cc-tab">x</button>')[0] & BESPOKE_BUTTON_OK
-    assert _emitted_button_classes('<button class="{cls}">x</button>') == []  # dynamic → skipped
-    assert _emitted_button_classes("<button type='button'>x</button>") == []  # classless → skipped
-
-
-def test_kit_badge_flags_reinvented_status_pills_only() -> None:
-    """The COMPONENT dimension (design_language §4): a selector NAMED a
-    pill/badge/chip/tag carrying an ok/warn/bad ``color-mix`` fill is a reinvented
-    filled status pill — token-clean, so the five token dimensions never see it;
-    this is the check that fails it. It must fire ONLY there — never on tone
-    washes, accent unread/count marks, §2 report category tags, or the kit."""
-    # FIRES: a hand-rolled filled status pill — including the base+modifier split
-    # (the radius is on the base rule, the tone fill on a modifier rule).
-    assert scan_surface(
-        "x",
-        ".x-pill { border-radius: var(--radius-full); }\n"
-        ".x-pill.bad { background: color-mix(in srgb, var(--bad) 16%, transparent); }",
-    )["kit-badge"] == [".x-pill"]
-    assert "kit-badge" in scan_surface(
-        "x",
-        ".foo-badge { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }",
-    )
-    # DOES NOT fire on a tone WASH (not named a badge/pill/chip/tag) …
-    assert "kit-badge" not in scan_surface(
-        "x", ".chat-role-user { background: color-mix(in srgb, var(--ok) 7%, transparent); }"
-    )
-    # … an ACCENT unread/count mark (accent is not a status tone) …
-    assert "kit-badge" not in scan_surface(
-        "x", ".ix-badge { background: var(--accent); color: var(--accent-contrast); }"
-    )
-    # … a §2 report CATEGORY tag (accent-soft, not ok/warn/bad) …
-    assert "kit-badge" not in scan_surface(
-        "x", ".qa-tag { background: var(--accent-soft); color: var(--accent); }"
-    )
-    # … the kit's OWN tone fills (.k-pill / .k-well are the canonical source) …
-    assert "kit-badge" not in scan_surface(
-        "x", ".k-pill-bad { background: color-mix(in srgb, var(--bad) 16%, transparent); }"
-    )
-    # … and a /* commented-out */ rule never reads as a live one.
-    assert "kit-badge" not in scan_surface(
-        "x", "/* .old-pill { background: color-mix(in srgb, var(--bad) 16%, transparent); } */"
-    )
-
-
-def test_scope_is_color_font_radius_never_layout() -> None:
-    """Dimension scoping: layout px (width/margin/padding/gap/top/left/height)
-    is never a violation; color/size/radius — in CSS rules AND inline style — is.
-    This is the separate inline-style scan, folded into one pass."""
-    assert (
-        scan_surface("x", ".a { width: 60px; margin: 12px; gap: 7px; top: 3px; height: 40px; }")
-        == {}
-    )
-    assert scan_surface("x", ".a { padding: 5px 9px; left: 4px; }") == {}
-    # color / off-scale size / off-scale radius in a CSS rule → flagged.
-    assert scan_surface("x", ".a { color: #ff0000; }")["color"] == ["#ff0000"]
-    assert scan_surface("x", ".a { font-size: 19px; }")["font-size"] == ["19px"]
-    assert scan_surface("x", ".a { border-radius: 4px; }")["radius"] == ["4px"]
-    # an alien font literal and a legacy alias → flagged.
-    assert "font-family" in scan_surface("x", ".a { font-family: 'Roboto', sans-serif; }")
-    assert "alias" in scan_surface("x", ".a { color: var(--ink); }")
-    # var(--mono, monospace) is ONE sanctioned family, not drift.
-    assert "font-family" not in scan_surface("x", ".a { font-family: var(--mono, monospace); }")
-    # INLINE style: a color is caught, a layout width is not.
-    assert scan_surface("x", '<i style="color:#abc123"></i>')["color"] == ["#abc123"]
-    assert scan_surface("x", '<i style="width:60px;font-size:19px"></i>')["font-size"] == ["19px"]
-    # href fragments that look like hex are NOT colors.
-    assert scan_surface("x", '<a href="#dcf">x</a>') == {}
-
-
-def test_full_conformance_has_no_quarantine() -> None:
-    """Full conformance stays green only while the quarantine remains empty."""
-    assert not QUARANTINE, f"still quarantined: {sorted(QUARANTINE)}"
-
-
-def test_workspace_local_css_standardizes_primitives() -> None:
-    """The report's local CSS uses shared color, type, and control primitives."""
-    from report.renderers.workspace_styles import CSS as WS_CSS
-    from ui.controls import controls_css as _ccss
-
-    local = WS_CSS.replace(palette_css("paper"), "").replace(_ccss("paper"), "")
-    raw_hex = [
-        value for value in scan_surface("x", local).get("color", []) if value.startswith("#")
-    ]
-    assert not raw_hex, f"raw hex in workspace local CSS: {raw_hex}"
-    assert "rgba(" not in local.replace("rgba(0,0,0", "").replace("rgba(0, 0, 0", ""), (
-        "non-neutral rgba wash in workspace local CSS"
-    )
-    assert "font-size: 60px" not in local and "font-size: 100px" not in local
-    assert "font-size: 8.5px" not in local
 
 
 def test_combobox_renders_two_part_ticker_labels() -> None:
@@ -927,34 +680,6 @@ def test_combobox_renders_two_part_ticker_labels() -> None:
 # a valid token — just the WRONG one for a control row, which should match the
 # 13px ``.k-btn`` buttons beside it.) Split at rule boundaries first so this
 # guard stays linear instead of backtracking across every registered surface.
-_FONT_SIZE_DECL = re.compile(r"(?:^|[;\s])font-size\s*:")
-
-
-def _inputrow_font_rules(css: str) -> list[str]:
-    """Find input-row font declarations without cross-surface backtracking."""
-    hits: list[str] = []
-    for chunk in css.split("}"):
-        selector, separator, body = chunk.rpartition("{")
-        if separator and "-inputrow" in selector and _FONT_SIZE_DECL.search(body):
-            hits.append(f"{selector}{{{body}}}")
-    return hits
-
-
-def test_no_font_size_on_inputrow_controls() -> None:
-    """Guard #2: an Ask/DIY-style ``*-inputrow`` row pins no font-size on its
-    input or buttons — they inherit the kit baseline (--fs-body, 13px) so the
-    input matches the ``.k-btn`` buttons beside it and the mobile 16px floor
-    (controls.py) is never overridden by a panel rule. Scanned over every
-    registered CSS surface, not just the Ask panel."""
-    offenders: dict[str, list[str]] = {}
-    for rel in sorted(REGISTERED - EXEMPT):
-        hits = _inputrow_font_rules(_css_text(_registered_path(rel)))
-        if hits:
-            offenders[rel] = [" ".join(h.split()) for h in hits]
-    assert not offenders, (
-        "a *-inputrow control pins a font-size — drop it so the control inherits "
-        f"the kit baseline (--fs-body, matching the .k-btn buttons): {offenders}"
-    )
 
 
 def test_fact_anchor_attrs_emits_handle_and_degrades() -> None:
@@ -1239,25 +964,6 @@ def _classless_buttons_in_overlay_heads(text: str) -> list[str]:
     return offenders
 
 
-def test_overlay_head_buttons_are_named_not_classless() -> None:
-    """Every ``<button>`` inside an ``ask-pop-head`` / ``cc-drawer-head`` /
-    ``cc-peek-head`` / ``cite-pop-head`` / ``tcc-drawer-head`` / ``ask-dock-
-    head`` overlay head carries a class. Passes on the current tree — the
-    explore_panel ``ask-pop-close`` fix (this same change) removed the one
-    classless close button that used to hang off ``.ask-pop-head button``."""
-    offenders: dict[str, list[str]] = {}
-    for rel in sorted(REGISTERED - EXEMPT):
-        hits = _classless_buttons_in_overlay_heads(
-            _registered_path(rel).read_text(encoding="utf-8")
-        )
-        if hits:
-            offenders[rel] = hits
-    assert not offenders, (
-        "classless <button> inside a *-head overlay container — give it a named, "
-        f"styled class (see .ask-pop-close / .cc-peek-close): {offenders}"
-    )
-
-
 def test_overlay_head_classless_button_check_fires_on_known_violation() -> None:
     """Self-test: this is the exact pre-fix markup shape explore_panel.py used
     to emit (`<button type="button" id="ask-pop-close" title="Close (Esc)">`
@@ -1296,72 +1002,8 @@ def test_overlay_head_classless_button_check_fires_on_known_violation() -> None:
 # descendant qualifier (no " td" / " th" / anything after it) — e.g.
 # ".sv-stmt-table" fires, ".sv-stmt-table td" and ".vx-matrix" (no "table" in
 # the name) do not.
-_BARE_TABLE_SELECTOR = re.compile(r"^\.[\w-]*table[\w-]*$")
 # Deliberate whole-table mono approvals are typed registry data; the selector
 # scanner remains here.
-
-
-def _whole_table_mono_selectors(text: str) -> list[str]:
-    """Bare table-level selectors (no td/th qualifier) whose rule body pins
-    ``font-family: var(--mono...)``. Mirrors this file's existing rule-split
-    idiom (split CSS text on ``}``, partition each chunk on ``{``) rather than
-    a full CSS parse — consistent with ``scan_surface``'s kit-badge scan
-    above, and sufficient for the flat (non-nested) rule shapes every
-    registered surface actually emits."""
-    offenders: list[str] = []
-    for rule in strip_css_comments(text).split("}"):
-        head, sep, body = rule.partition("{")
-        if not sep or "var(--mono" not in body:
-            continue
-        for sel in split_top_commas(head):
-            sel = sel.strip()
-            if sel in MONO_TABLE_ALLOWLIST:
-                continue
-            if _BARE_TABLE_SELECTOR.match(sel):
-                offenders.append(sel)
-    return offenders
-
-
-def test_no_whole_table_mono_outside_the_documented_allowlist() -> None:
-    """No bare table-level selector pins mono across the whole table (which
-    would also mono the label/header column) except the documented
-    ``.pfc-table`` keep. Passes on the current tree — source_viewers'
-    ``.sv-stmt-table`` (this same change) was rescoped to
-    ``.sv-stmt-table td:not(:first-child)`` per the ``.vx-matrix td``
-    pattern."""
-    offenders: dict[str, list[str]] = {}
-    for rel in sorted(REGISTERED - EXEMPT):
-        hits = _whole_table_mono_selectors(_css_text(_registered_path(rel)))
-        if hits:
-            offenders[rel] = hits
-    assert not offenders, (
-        "whole-table mono outside the documented .pfc-table keep — rescope to "
-        f"value cells only (the .vx-matrix td pattern): {offenders}"
-    )
-
-
-def test_whole_table_mono_check_fires_on_known_violation() -> None:
-    """Self-test: the exact pre-fix rule source_viewers.py used to emit
-    (`.sv-stmt-table { font-family: var(--mono); ... }`, unqualified) —
-    proving the guard detects it. The rescoped post-fix rule
-    (`.sv-stmt-table td:not(:first-child)`) must come back clean, and the
-    documented `.pfc-table` allowlist entry must never fire."""
-    pre_fix = ".sv-stmt-table { border-collapse: collapse; font-family: var(--mono); }"
-    assert _whole_table_mono_selectors(pre_fix) == [".sv-stmt-table"]
-
-    post_fix = (
-        ".sv-stmt-table { border-collapse: collapse; }\n"
-        ".sv-stmt-table td:not(:first-child) { font-family: var(--mono); }"
-    )
-    assert _whole_table_mono_selectors(post_fix) == []
-
-    allowlisted = ".pfc-table { border-collapse: collapse; font-family: var(--mono); }"
-    assert _whole_table_mono_selectors(allowlisted) == []
-
-    # A cell-scoped selector sharing a rule with something else must not
-    # false-fire either (comma-split selector list).
-    shared = ".vx-matrix td, .cv2-matrix td { font-family: var(--mono); }"
-    assert _whole_table_mono_selectors(shared) == []
 
 
 # ---------------------------------------------------------------------------
@@ -1384,19 +1026,6 @@ def _ccaction_regressions(pinned: frozenset[str], read_text: Callable[[str], str
     detection logic is unit-testable against synthetic text without a real
     filesystem round-trip."""
     return [rel for rel in sorted(pinned) if "CCAction.busy" not in read_text(rel)]
-
-
-def test_ccaction_adopters_do_not_regress() -> None:
-    """The ratchet: none of the pinned CCAction adopters may drop to zero
-    ``CCAction.busy`` references. Passes today (the pinned set is exactly
-    today's adopters); it exists to catch tomorrow's regression."""
-    offenders = _ccaction_regressions(
-        CCACTION_PINNED, lambda rel: (SRC / rel).read_text(encoding="utf-8")
-    )
-    assert not offenders, (
-        "CCAction adopter(s) regressed to zero CCAction.busy references — restore "
-        f"the busy/release/receipt/leave wiring (PR #1092): {offenders}"
-    )
 
 
 def test_ccaction_ratchet_fires_on_regression_but_never_forces_adoption() -> None:

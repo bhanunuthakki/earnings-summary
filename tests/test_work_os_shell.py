@@ -20,7 +20,6 @@ from pipeline.work_os_shell import (
     render_work_os_shell_result,
 )
 from pipeline.work_os_styles import WORK_OS_CSS
-from ui.conformance_scan import scan_surface_evidence
 
 
 def _screen_fragment(html: str, screen_id: str) -> str:
@@ -833,53 +832,6 @@ def test_l2_l3_mobile_uses_target_scoped_block_without_mutating_rail_signature()
         ".k-grid-split-rail { display: grid; grid-template-columns: minmax(0, 1fr) 1fr;" not in html
     )
     assert ".k-grid-split-rail-lg { display: grid; grid-template-columns: 1fr 1fr;" not in html
-
-
-def test_rendered_l2_l3_shell_has_no_target_scan_findings_or_unverifiable_markup() -> None:
-    evidence = scan_surface_evidence("rendered-work-os", render_work_os_shell())
-
-    target_dimensions = {
-        "floating-card-title",
-        "off-scale-grid-column",
-        "unsanctioned-shape-geometry",
-    }
-    assert not target_dimensions.intersection(evidence.violations())
-    # The rendered shell deliberately contains remote HTML response bodies and
-    # a dynamically created stylesheet link. Source-level digest contracts pin
-    # both recipes; the rendered probe keeps the boundary explicit rather than
-    # silently treating it as statically verified.
-    assert evidence.unverifiable_markup == (
-        "dynamic-html-markup",
-        "dynamic-visual-value",
-    )
-
-
-def test_rendered_shell_scan_proves_each_target_dimension_is_enforced() -> None:
-    # The clean shell has none of these findings (see the test above), and each
-    # fault targets a different dimension, so one scan of all three faults
-    # proves each dimension is enforced on the real rendered shell.
-    mutated = (
-        render_work_os_shell()
-        .replace(
-            '<h2 class="k-card-title" id="workOsBriefLibraryHeading">Brief Library</h2>',
-            '<h1 class="k-toolbar-title">Brief Library</h1>',
-            1,
-        )
-        .replace(
-            "</head>",
-            "<style>.k-grid-split-rail-lg { grid-template-columns: 1fr 1fr; }</style>"
-            "<style>.k-card { border-radius: var(--radius); "
-            "border: var(--bw-thin) solid var(--border); "
-            "box-shadow: var(--shadow-pop); }</style></head>",
-            1,
-        )
-    )
-    violations = scan_surface_evidence("rendered-work-os", mutated).violations()
-    assert {
-        "floating-card-title",
-        "off-scale-grid-column",
-        "unsanctioned-shape-geometry",
-    } <= set(violations)
 
 
 def test_work_os_shell_render_signature_remains_keyword_only() -> None:
