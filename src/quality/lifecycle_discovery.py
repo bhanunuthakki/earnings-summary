@@ -47,7 +47,6 @@ REGISTRY_AUTHORITIES: tuple[str, ...] = (
     "src/runtime/service_registry.py",
     "src/sources/registry.py",
     "src/triggers/registry.py",
-    "src/ui/design_registry.py",
     "src/user_state/registry.py",
 )
 PYTHON_ROOTS = ("execution/", "cron/", "scripts/", ".github/scripts/")

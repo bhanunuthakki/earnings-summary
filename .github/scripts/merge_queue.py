@@ -51,7 +51,7 @@ EXPECTED_CI_JOBS: tuple[str, ...] = (
     "Public Boundary",
     "Fast Signal",
     *(f"tests (shard {label}/8)" for label in SHARD_LABELS),
-    "Design Sync",
+    "Browser Security",
     "quality",
     "typecheck",
     "security",

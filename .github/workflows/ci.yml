@@ -27,19 +27,8 @@ on:
         description: Exact test merge commit whose first parent is main.
         type: string
         required: true
-  schedule:
-    # Nightly Design Sync safety net (declared new scope, workstream C1): the
-    # design job's `if:` runs it on this trigger even when the classifier found
-    # no design path, so a missed cross-surface coupling in a PR is caught
-    # within a day. The `changes` job requires no path group on schedule, so
-    # every other conditional job skips and the nightly run stays cheap.
-    - cron: "17 6 * * *"
 
 concurrency:
-  # The event name keeps the nightly schedule run (ref = refs/heads/main) in
-  # its own group so it can never cancel an in-progress main-push run (and is
-  # itself cancelled by one — that push runs the design job anyway). PR and
-  # push cancellation semantics are unchanged by the suffix.
   group: ci-${{ github.ref }}-${{ github.event_name }}${{ inputs.candidate_sha && format('-queue-{0}', inputs.candidate_sha) || '' }}
   cancel-in-progress: true
 
@@ -53,7 +42,6 @@ jobs:
     outputs:
       code: ${{ steps.classify.outputs.code }}
       python: ${{ steps.classify.outputs.python }}
-      design: ${{ steps.classify.outputs.design }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -77,17 +65,6 @@ jobs:
             # Merge-queue candidate: the complete suite, with no path selection.
             echo "code=true" >> "$GITHUB_OUTPUT"
             echo "python=true" >> "$GITHUB_OUTPUT"
-            echo "design=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ "$EVENT_NAME" = "schedule" ]; then
-            # The nightly trigger exists solely for the scheduled Design Sync
-            # run (the design job's `if:` names it); it must not fan out the
-            # expensive matrix, so no path group is required and every other
-            # conditional job skips.
-            echo "code=false" >> "$GITHUB_OUTPUT"
-            echo "python=false" >> "$GITHUB_OUTPUT"
-            echo "design=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$EVENT_NAME" = "pull_request" ]; then
@@ -316,11 +293,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Browser canaries have one authoritative owner below: Design Sync,
-          # which installs the hash-locked Playwright adapter and Chromium.
+          # The browser canary has one authoritative owner below: Browser
+          # Security, which installs the hash-locked Playwright adapter.
           mapfile -t all_files < <(
             find tests -type f -name 'test_*.py' \
-              | grep -v '^tests/test_design_computed_canary.py$' \
               | grep -v '^tests/test_browser_security_canary.py$' \
               | sort
           )
@@ -353,14 +329,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  design:
-    name: Design Sync
+  browser-security:
+    name: Browser Security
     needs: [changes]
-    # Runs for a PR that touched a design path (classifier output), for every
-    # push to main, and for the nightly schedule trigger. A PR with no design
-    # path skips the job, and the aggregate gate tolerates that skip only
-    # because classify_paths said design=false.
-    if: ${{ needs.changes.outputs.design == 'true' || github.ref == 'refs/heads/main' || github.event_name == 'schedule' }}
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -376,18 +348,7 @@ jobs:
           cache: pip
           cache-dependency-path: |
             requirements.lock
-            requirements-design.lock
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: "1.4.5"
-      - name: Restore locked JavaScript dependency tree
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: design-system/node_modules
-          key: ci-bun-${{ runner.os }}-${{ runner.arch }}-1.4.5-${{ hashFiles('design-system/bun.lock') }}
-      - name: Verify and install locked JavaScript dependencies
-        working-directory: design-system
-        run: bun install --frozen-lockfile
+            requirements-browser.lock
       - name: Resolve python version for dependency cache key
         id: pyver
         shell: bash
@@ -427,13 +388,13 @@ jobs:
           # Chromium download is deliberately NOT part of this cache — the
           # browser lives in ~/.cache/ms-playwright, so it is installed by its
           # own always-run step below on every run.
-          key: ci-venv-${{ runner.os }}-py${{ steps.pyver.outputs.version }}-lock${{ hashFiles('requirements.lock') }}-design${{ hashFiles('requirements-design.lock') }}-pyproject${{ hashFiles('pyproject.toml') }}
+          key: ci-venv-${{ runner.os }}-py${{ steps.pyver.outputs.version }}-lock${{ hashFiles('requirements.lock') }}-browser${{ hashFiles('requirements-browser.lock') }}-pyproject${{ hashFiles('pyproject.toml') }}
       - name: Install runtime dependencies
         if: steps.venv_cache.outputs.cache-hit != 'true'
         run: |
           python -m venv "$RUNNER_TEMP/ci-venv"
           "$RUNNER_TEMP/ci-venv/bin/pip" install --require-hashes -r requirements.lock
-          "$RUNNER_TEMP/ci-venv/bin/pip" install --require-hashes -r requirements-design.lock
+          "$RUNNER_TEMP/ci-venv/bin/pip" install --require-hashes -r requirements-browser.lock
           "$RUNNER_TEMP/ci-venv/bin/pip" install -e .[dev]
       - name: Activate dependency environment
         shell: bash
@@ -445,28 +406,6 @@ jobs:
           printf 'https://archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://security.ubuntu.com/ubuntu/\tpriority:2\n' \
             | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
           python -m playwright install --with-deps --only-shell chromium
-      - name: Verify canonical design tokens and production Work OS contract
-        env:
-          # gen_design_conformance_debt.py REFUSES --allow-missing-base with an
-          # empty --base-ref, which a schedule event (no PR base, no before)
-          # would otherwise produce — so the nightly run compares against
-          # HEAD~1 ("did the last commit grow design debt") instead.
-          DESIGN_DEBT_BASE_REF: ${{ inputs.candidate_sha && 'HEAD^1' || (github.event.pull_request.base.sha || github.event.before || 'HEAD~1') }}
-        run: |
-          python scripts/check_design_sync.py
-          python scripts/gen_design_conformance_debt.py --base-ref "$DESIGN_DEBT_BASE_REF" --allow-missing-base
-      - name: Verify React component types and visual token purity
-        working-directory: design-system
-        run: |
-          bun run check
-          bun run build
-      - name: Run mandatory rendered route canary matrix
-        run: |
-          # The CLI owns the single full 9-route x 2-viewport matrix. Unit
-          # tests retain the positive and adversarial browser checks without
-          # paying for that matrix a second time.
-          python -m pytest -q tests/test_design_computed_canary.py -k "not route_canary_matrix_covers_all_required_routes_and_viewports"
-          python execution/verify_design_conformance.py --check --route-canaries
       - name: Verify browser security boundaries with isolated synthetic state
         run: python -m pytest -q -n 0 tests/test_browser_security_canary.py --basetemp="$RUNNER_TEMP/browser-security-canary"
 
@@ -619,7 +558,7 @@ jobs:
           cache: pip
           cache-dependency-path: |
             requirements.lock
-            requirements-design.lock
+            requirements-browser.lock
       - name: Install scanners + runtime deps
         run: |
           python -m pip install --upgrade pip
@@ -630,15 +569,7 @@ jobs:
         continue-on-error: true
         run: |
           pip-audit -r requirements.lock --progress-spinner off
-          pip-audit -r requirements-design.lock --progress-spinner off
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: "1.4.5"
-      - name: bun audit — design dependency CVEs
-        id: bun_audit
-        continue-on-error: true
-        working-directory: design-system
-        run: bun audit
+          pip-audit -r requirements-browser.lock --progress-spinner off
       - name: bandit — no new medium+ SAST findings
         id: bandit
         continue-on-error: true
@@ -674,7 +605,7 @@ jobs:
         continue-on-error: true
         run: |
           cyclonedx-py requirements requirements.lock --output-file sbom-runtime.cdx.json
-          cyclonedx-py requirements requirements-design.lock --output-file sbom-design.cdx.json
+          cyclonedx-py requirements requirements-browser.lock --output-file sbom-browser.cdx.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: ${{ always() && hashFiles('sbom-*.cdx.json') != '' }}
         with:
@@ -684,7 +615,6 @@ jobs:
         if: ${{ always() }}
         env:
           PIP_AUDIT_OUTCOME: ${{ steps.pip_audit.outcome }}
-          BUN_AUDIT_OUTCOME: ${{ steps.bun_audit.outcome }}
           BANDIT_OUTCOME: ${{ steps.bandit.outcome }}
           DETECT_SECRETS_OUTCOME: ${{ steps.detect_secrets.outcome }}
           SBOM_OUTCOME: ${{ steps.sbom.outcome }}
@@ -694,7 +624,6 @@ jobs:
           status=0
           for result in \
             "$PIP_AUDIT_OUTCOME" \
-            "$BUN_AUDIT_OUTCOME" \
             "$BANDIT_OUTCOME" \
             "$DETECT_SECRETS_OUTCOME" \
             "$SBOM_OUTCOME"; do
@@ -833,7 +762,7 @@ jobs:
   merge-gate:
     name: CI Gate
     if: ${{ always() }}
-    needs: [changes, public-boundary, fast-signal, windows-native, windows-app, tests, design, quality, typecheck, security]
+    needs: [changes, public-boundary, fast-signal, windows-native, windows-app, tests, browser-security, quality, typecheck, security]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -846,14 +775,13 @@ jobs:
         env:
           CODE_CHANGED: ${{ needs.changes.outputs.code || 'false' }}
           PYTHON_CHANGED: ${{ needs.changes.outputs.python || 'false' }}
-          DESIGN_CHANGED: ${{ needs.changes.outputs.design || 'false' }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           PUBLIC_BOUNDARY_RESULT: ${{ needs.public-boundary.result }}
           FAST_SIGNAL_RESULT: ${{ needs.fast-signal.result }}
           WINDOWS_NATIVE_RESULT: ${{ needs.windows-native.result }}
           WINDOWS_APP_RESULT: ${{ needs.windows-app.result }}
           TESTS_RESULT: ${{ needs.tests.result }}
-          DESIGN_RESULT: ${{ needs.design.result }}
+          BROWSER_SECURITY_RESULT: ${{ needs.browser-security.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
           TYPECHECK_RESULT: ${{ needs.typecheck.result }}
           SECURITY_RESULT: ${{ needs.security.result }}
@@ -861,14 +789,13 @@ jobs:
           python .github/scripts/ci_gate.py verify
           --code "$CODE_CHANGED"
           --python "$PYTHON_CHANGED"
-          --design "$DESIGN_CHANGED"
           --changes-result "$CHANGES_RESULT"
           --public-boundary-result "$PUBLIC_BOUNDARY_RESULT"
           --fast-signal-result "$FAST_SIGNAL_RESULT"
           --windows-native-result "$WINDOWS_NATIVE_RESULT"
           --windows-app-result "$WINDOWS_APP_RESULT"
           --tests-result "$TESTS_RESULT"
-          --design-result "$DESIGN_RESULT"
+          --browser-security-result "$BROWSER_SECURITY_RESULT"
           --quality-result "$QUALITY_RESULT"
           --typecheck-result "$TYPECHECK_RESULT"
           --security-result "$SECURITY_RESULT"

@@ -385,11 +385,10 @@ def test_ci_runs_every_job_on_the_exact_candidate_in_queue_mode() -> None:
                 assert step["with"]["persist-credentials"] is False
     classify = wf["jobs"]["changes"]["steps"][1]["run"]
     forced = classify.split('if [ -n "$CANDIDATE_SHA" ]; then', 1)[1].split("fi", 1)[0]
-    for group in ("code", "python", "design"):
+    for group in ("code", "python"):
         assert f'echo "{group}=true"' in forced
     text = CI.read_text(encoding="utf-8")
     assert text.count('base="HEAD^1"') == 2
-    assert "inputs.candidate_sha && 'HEAD^1'" in text
 
 
 def test_queue_status_context_is_not_a_job_name_any_workflow_can_emit() -> None:

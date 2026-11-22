@@ -59,7 +59,7 @@
     "cron": 8,
     "execution": 652,
     "instruction_tests": 0,
-    "scripts": 4,
+    "scripts": 0,
     "src": 11,
     "src/advisor": 0,
     "src/alerts": 0,
@@ -104,6 +104,6 @@
     "src/ui": 0,
     "src/user_state": 0,
     "src/viewspec": 0,
-    "tests": 510
+    "tests": 503
   }
 }
