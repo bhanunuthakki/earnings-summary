@@ -19,24 +19,21 @@ from ir_pipeline.discover._docmeta import CandidateDoc
 from ir_pipeline.discover.generic import CrawlPageOutcome, DocumentDiscoveryInventory
 from ir_pipeline.source_inventory import source_inventory_request, sync_ir_source_inventory
 from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
+from tests.evidence_support import seed_issuer, seed_source_obligation
 
 STAMP = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
 CONFIG_SHA = "a" * 64
 URL = "https://ir.acme.test/q4-2025-results.pdf"
-_PRIOR_HEAD = "0213_decision_draft_provider_id"
-_TARGET = "0220_source_inventory_seals"
 
 
 def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     path = tmp_path / "authority.db"
-    migrated_db(
-        path,
-        stamp=_PRIOR_HEAD,
-        target=_TARGET,
-        archived=True,
-    )
+    migrated_db(path)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
+    seed_issuer(conn, "issuer-acme")
+    seed_source_obligation(conn, "issuer-acme")
+    conn.commit()
     return conn
 
 

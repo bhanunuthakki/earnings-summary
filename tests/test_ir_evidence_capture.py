@@ -31,6 +31,7 @@ from ir_pipeline.evidence_capture import (
     fetch_exact_ir_bytes,
 )
 from ir_pipeline.source_inventory import source_inventory_request, sync_ir_source_inventory
+from tests.evidence_support import seed_issuer, seed_source_obligation
 
 STAMP = datetime(2026, 7, 27, 14, 0, tzinfo=UTC)
 CONFIG_SHA = "d" * 64
@@ -38,8 +39,6 @@ INVENTORY_KEY = "issuer-acme:ir-crawl"
 URL = "https://ir.acme.test/q4-2025-results.pdf"
 EXACT_PUBLIC_URL = "https://93.184.216.34/q4-2025-results.pdf"
 BODY = b"%PDF-1.7 investor presentation bytes"
-_PRIOR_HEAD = "0213_decision_draft_provider_id"
-_TARGET = "0220_source_inventory_seals"
 ROBOTS_ALLOWS = cast(
     Callable[[str, str], bool],
     getattr(evidence_capture, "_robots_allows"),
@@ -144,14 +143,12 @@ def _conn(
     source_url: str = URL,
 ) -> sqlite3.Connection:
     path = tmp_path / "ir-capture.db"
-    migrated_db(
-        path,
-        stamp=_PRIOR_HEAD,
-        target=_TARGET,
-        archived=True,
-    )
+    migrated_db(path)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
+    seed_issuer(conn, "issuer-acme")
+    seed_source_obligation(conn, "issuer-acme")
+    conn.commit()
     inventory = DocumentDiscoveryInventory(
         candidates=(
             CandidateDoc(

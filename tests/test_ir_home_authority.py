@@ -26,8 +26,6 @@ from provenance.issuer_registry import (
     LegacyIssuerBindingRevision,
 )
 
-HEAD = "0231_legacy_document_evidence_bindings"
-_PRIOR_HEAD = "0213_decision_draft_provider_id"
 STAMP = datetime(2026, 7, 28, 2, 0, tzinfo=UTC)
 URL = "https://investor.acme.test/"
 BODY = b"<html><title>Acme Investor Relations</title><body>Quarterly Results</body></html>"
@@ -82,7 +80,7 @@ class _Session:
 
 def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     path = tmp_path / "ir-home-authority.db"
-    migrated_db(path, stamp=_PRIOR_HEAD, target=HEAD, archived=True)
+    migrated_db(path)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     registry = IssuerRegistry(conn)

@@ -43,7 +43,7 @@ def isolated_authoritative_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 @pytest.fixture
 def legacy_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     path = migrated_db(tmp_path / "legacy.db", target=PRIOR)
-    script = ScriptDirectory.from_config(config(ROOT, path, archived=False))
+    script = ScriptDirectory.from_config(config(ROOT, path))
     lexical = script.get_revision("0061_bulk_lexical_projection_coverage")
     assert lexical is not None
     # The retained Hero branch differs from 0059 only by this exact trigger.

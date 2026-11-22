@@ -33,15 +33,12 @@ from news.store import (
     upsert_news_rows,
 )
 
-PRIOR_HEAD = "0064_queued_actions"
-NEWS_HEAD = "0065_news"
-
 
 @pytest.fixture
 def news_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     """Tmp DB with the real `news` table (migration 0065_news on top of 0064)."""
     db = tmp_path / "news_store.db"
-    return migrated_db(db, stamp=PRIOR_HEAD, target=NEWS_HEAD, archived=True)
+    return migrated_db(db)
 
 
 def _row(

@@ -9,10 +9,10 @@ from datetime import datetime
 from pathlib import Path
 from types import ModuleType
 
+from tests.evidence_support import seed_evidence_document, seed_issuer
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "execution" / "prune_misscaled_capture_facts.py"
-PRIOR = "0216_search_corpus_foundation"
-HEAD = "0217_fact_selection_ledger"
 
 
 def _module() -> ModuleType:
@@ -23,27 +23,40 @@ def _module() -> ModuleType:
     return module
 
 
+def _seed_kpi_facts(conn: sqlite3.Connection, facts: tuple[tuple[int, str, float], ...]) -> None:
+    """Insert an evidence-backed source document, definition and the KPI rows under test."""
+    seed_issuer(conn, "issuer-acme")
+    seed_evidence_document(
+        conn,
+        doc_id=1,
+        ticker="ACME",
+        issuer_id="issuer-acme",
+        period_end="2025-12-31",
+        file_path="acme.htm",
+        sha_char="0",
+    )
+    conn.execute(
+        "INSERT INTO kpi_definitions (id, ticker, name, primary_source, definition_origin) "
+        "VALUES (9001, 'ACME', 'Authorized Shares (in shares)', 'sec', 'capture')"
+    )
+    conn.executemany(
+        "INSERT INTO kpi_facts (id, ticker, period_end, fiscal_period_type, "
+        "kpi_definition_id, value, unit, source_doc_id) "
+        "VALUES (?, 'ACME', ?, 'Q4', 9001, ?, ?, 1)",
+        [
+            (fact_id, f"{2025 - index}-12-31", value, unit)
+            for index, (fact_id, unit, value) in enumerate(facts)
+        ],
+    )
+
+
 def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     path = tmp_path / "prune.db"
-    migrated_db(path, stamp=PRIOR, archived=True, target=HEAD)
+    migrated_db(path)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("CREATE TABLE evidence_nodes (node_id TEXT PRIMARY KEY)")
-    conn.execute("CREATE TABLE validation_issues (id INTEGER PRIMARY KEY)")
-    conn.execute(
-        "CREATE TABLE kpi_definitions (id INTEGER PRIMARY KEY, ticker TEXT, name TEXT, definition_origin TEXT)"
-    )
-    conn.execute(
-        "CREATE TABLE kpi_facts (id INTEGER PRIMARY KEY, kpi_definition_id INTEGER, unit TEXT, value REAL)"
-    )
-    conn.execute(
-        "INSERT INTO kpi_definitions (id, ticker, name, definition_origin) "
-        "VALUES (1, 'ACME', 'Authorized Shares (in shares)', 'capture')"
-    )
-    conn.execute(
-        "INSERT INTO kpi_facts (id, kpi_definition_id, unit, value) VALUES (7, 1, 'actual', 24000000000)"
-    )
+    _seed_kpi_facts(conn, ((7, "actual", 24000000000),))
     return conn
 
 

@@ -223,9 +223,7 @@ def test_fetch_schema_drift_dumps_and_halts(
 
 @pytest.fixture
 def news_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
-    return migrated_db(
-        tmp_path / "fmp_news.db", stamp="0064_queued_actions", archived=True, target="0065_news"
-    )
+    return migrated_db(tmp_path / "fmp_news.db")
 
 
 def test_run_persists_mapped_rows(news_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
