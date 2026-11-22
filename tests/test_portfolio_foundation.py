@@ -2081,6 +2081,10 @@ def test_runtime_manager_fails_loudly_before_persist_when_lease_release_deadline
         start_listener=lambda _: None,
         now=lambda: datetime(2026, 8, 20, 12, 0, tzinfo=UTC),
         lease=cast(Any, _OrphanedLease()),
+        # The listener never becomes healthy; a short deadline reaches the same
+        # startup timeout without waiting out the 10 s production default.
+        sleep=lambda _seconds: None,
+        startup_timeout_seconds=0.05,
     )
 
     receipt_path = tmp_path / "activation.latest.json"

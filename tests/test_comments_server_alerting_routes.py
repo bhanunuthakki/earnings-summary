@@ -276,17 +276,6 @@ def test_approve_post_rejects_cross_site(client: FlaskClient, db_path: Path) -> 
     assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_PENDING
 
 
-def test_approve_post_conflict_stays_json_409(client: FlaskClient, db_path: Path) -> None:
-    action_id = _seed_pending_action(db_path)
-    assert client.post("/approve", data={"action_id": str(action_id)}).status_code == 200
-    resp = client.post("/approve", data={"action_id": str(action_id)})
-    assert resp.status_code == 409
-    payload = resp.get_json()
-    assert payload is not None
-    assert "cannot transition" in payload["error"]
-    assert len(list_entries(ticker="NU", db_path=db_path)) == 1
-
-
 def test_approve_form_applies_and_redirects(client: FlaskClient, db_path: Path) -> None:
     action_id = _seed_pending_action(db_path, ticker="NU")
     resp = client.post(

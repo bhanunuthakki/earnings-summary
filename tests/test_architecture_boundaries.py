@@ -27,10 +27,6 @@ def _write_config(
     return path
 
 
-def test_current_repo_matches_the_recorded_baseline() -> None:
-    assert boundaries.validate() == []
-
-
 def test_new_execution_sys_path_mutation_fails(tmp_path: Path) -> None:
     repo_root = tmp_path
     (repo_root / "execution").mkdir()

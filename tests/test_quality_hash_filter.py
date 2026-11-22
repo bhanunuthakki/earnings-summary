@@ -128,16 +128,16 @@ def test_ir_authority_golden_identity_does_not_mask_other_content(filename: str,
     assert not FILTER.is_quality_evidence_hash(filename, line)
 
 
-@pytest.mark.parametrize("filename", CANONICAL_PATHS)
-@pytest.mark.parametrize("key", HASH40_KEYS)
-def test_all_canonical_paths_accept_each_40_character_hash_key(filename: str, key: str) -> None:
-    assert FILTER.is_quality_evidence_hash(filename, f'  "{key}": "{"a" * 40}",')
-
-
-@pytest.mark.parametrize("filename", CANONICAL_PATHS)
-@pytest.mark.parametrize("key", HASH64_KEYS)
-def test_all_canonical_paths_accept_each_64_character_hash_key(filename: str, key: str) -> None:
-    assert FILTER.is_quality_evidence_hash(filename, f'  "{key}": "{"b" * 64}",')
+@pytest.mark.parametrize(("keys", "digest"), ((HASH40_KEYS, "a" * 40), (HASH64_KEYS, "b" * 64)))
+def test_all_canonical_paths_accept_each_hash_key(keys: tuple[str, ...], digest: str) -> None:
+    # One case per digest length: every path x key pair is one equivalent check.
+    rejected = [
+        (filename, key)
+        for filename in CANONICAL_PATHS
+        for key in keys
+        if not FILTER.is_quality_evidence_hash(filename, f'  "{key}": "{digest}",')
+    ]
+    assert rejected == []
 
 
 def test_windows_separator_is_normalized_only_on_native_windows() -> None:
@@ -249,14 +249,8 @@ def _json_document(member: str) -> str:
 
 @pytest.mark.parametrize(
     "canonical_path",
-    [
-        "docs/quality/architecture-ratchet.json",
-        "docs/quality/roadmap-freeze.json",
-        "config/quality_roadmap_claims.json",
-        "config/quality_roadmap_owners.json",
-        "docs/quality/pipeline-completion-exchange-review-20261023.json",
-        "docs/quality/pipeline-completion-bulk-review-20261023.json",
-    ],
+    # The real detector shares one code path; pure-filter tests cover every path.
+    ["docs/quality/architecture-ratchet.json", "config/quality_roadmap_claims.json"],
 )
 def test_detect_secrets_filter_drops_only_known_metadata_hashes(
     tmp_path: Path,
