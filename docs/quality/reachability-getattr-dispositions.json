@@ -662,8 +662,8 @@
     {
       "disposition": "schema_field",
       "evidence": "_magnitude_guard_violation compares only this literal tuple of KpiSemanticContext data fields between admitted contexts. The returned attributes are compared for equality; they are not invoked or used to select code.",
-      "fingerprint": "da529716f3925be1878d9ad85db3586b0d08059cd6dda4d5b4acc4e52ab03998",
-      "line": 424,
+      "fingerprint": "cacd0beb574e2b17313610fadc8fc7447517941cbc21d4d073889c4010012f84",
+      "line": 441,
       "path": "src/pipeline/kpi_persistence.py",
       "targets": [
         "accounting_basis",
@@ -676,8 +676,8 @@
     {
       "disposition": "schema_field",
       "evidence": "The renderer calls this helper only while iterating the checked-in _COMPARE_METRIC_ROWS field tuple.",
-      "fingerprint": "7e84420eef89eb9fb713f7684682839a588a8bb7f6976e86f3fe88ca6ec67c21",
-      "line": 1913,
+      "fingerprint": "03e79c5f95dff6223b6cd57e105e5ce089007caad7ec6c2959b97510f1d12a96",
+      "line": 1956,
       "path": "src/pipeline/peeks.py",
       "targets": [
         "_COMPARE_METRIC_ROWS"
@@ -1121,7 +1121,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "141d8a7d1ac1f8134583e1ff49bb7bd794d653d76de412b3d79da5da056e5ee1",
+      "source_sha256": "90f16e83c32008dc3835fd42c365fdba60a962899a816fcd5d1db013ad04c72c",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
