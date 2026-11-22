@@ -562,7 +562,7 @@ def test_db_module_default_is_checkout_local_when_env_unset(tmp_path: Path) -> N
     assert Path(proc.stdout.strip()) == (PROJECT_ROOT / "data" / "portfolio.db")
 
 
-def test_archived_revision_requires_guarded_bridge_not_new_checkout(tmp_path: Path) -> None:
+def test_archived_revision_requires_backup_restore_not_new_checkout(tmp_path: Path) -> None:
     root = _checkout(tmp_path / "repo", ["0001_active"])
     archive = root / "alembic" / "versions_archived"
     archive.mkdir()
@@ -570,6 +570,6 @@ def test_archived_revision_requires_guarded_bridge_not_new_checkout(tmp_path: Pa
     db = _versioned_db(tmp_path / "legacy.db", "0273_old")
     drift = describe_drift(db, project_root=root)
     assert drift is not None
-    assert drift.reason == "legacy_upgrade_required"
-    assert "upgrade_database.py" in drift.fix_command
+    assert drift.reason == "pre_squash_unsupported"
+    assert "post-squash backup" in drift.fix_command
     assert "git pull" not in drift.fix_command

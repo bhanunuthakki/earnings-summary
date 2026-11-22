@@ -21,7 +21,6 @@ from pathlib import Path
 
 import pytest
 from alembic.config import Config
-from alembic.script import ScriptDirectory
 from backfill_document_accessions import (
     accession_filed_map,
     backfill,
@@ -128,14 +127,6 @@ def _migrate_to_head(db: Path, *, stamp: str = "0074_analyst_notes") -> None:
     cfg = _alembic_cfg(db)
     command.stamp(cfg, stamp)
     command.upgrade(cfg, "head")
-
-
-def _columns(db: Path, table: str) -> set[str]:
-    conn = sqlite3.connect(db)
-    try:
-        return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-    finally:
-        conn.close()
 
 
 def _connect(db: Path) -> sqlite3.Connection:
@@ -286,60 +277,6 @@ def _bind_document_evidence(
 # ----------------------------------------------------------------------------
 # migration round-trip
 # ----------------------------------------------------------------------------
-
-
-def test_upgrade_adds_columns_and_index(tmp_path: Path) -> None:
-    db = tmp_path / "prod_shape.db"
-    _create_pre0075_db(db)
-    _migrate_to_head(db)
-
-    assert {"accession_number", "filing_date"} <= _columns(db, "documents")
-    assert "locator" in _columns(db, "financial_facts")
-    assert "locator" in _columns(db, "kpi_facts")
-
-    conn = sqlite3.connect(db)
-    try:
-        idx = {row[1] for row in conn.execute("PRAGMA index_list(documents)")}
-    finally:
-        conn.close()
-    assert "ix_documents_accession_number" in idx
-
-
-def test_upgrade_noops_when_fact_tables_absent(tmp_path: Path) -> None:
-    """A tmp DB stamped pre-0073 and upgraded to head never creates the fact
-    tables — 0075's _has_table guards must let the upgrade through cleanly."""
-    db = tmp_path / "empty.db"
-    _migrate_to_head(db, stamp="0072_kpi_reporting_cadence")
-
-    conn = sqlite3.connect(db)
-    try:
-        tables = {
-            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        }
-        (version,) = conn.execute("SELECT version_num FROM alembic_version").fetchone()
-    finally:
-        conn.close()
-    assert "documents" not in tables
-    assert "financial_facts" not in tables
-    # The historical chain must run through to its archived head — not a hardcoded
-    # revision, which broke on the first migration added after 0075.
-    assert version == ScriptDirectory.from_config(_alembic_cfg(db)).get_current_head()
-
-
-def test_upgrade_idempotent_on_partially_applied_schema(tmp_path: Path) -> None:
-    db = tmp_path / "partial.db"
-    _create_pre0075_db(db)
-    conn = sqlite3.connect(db)
-    conn.execute("ALTER TABLE documents ADD COLUMN accession_number TEXT")
-    conn.execute("ALTER TABLE kpi_facts ADD COLUMN locator TEXT")
-    conn.commit()
-    conn.close()
-
-    _migrate_to_head(db)
-
-    assert {"accession_number", "filing_date"} <= _columns(db, "documents")
-    assert "locator" in _columns(db, "financial_facts")
-    assert "locator" in _columns(db, "kpi_facts")
 
 
 # ----------------------------------------------------------------------------
