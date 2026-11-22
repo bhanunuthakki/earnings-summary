@@ -1337,3 +1337,28 @@ def test_scope_rechecks_evidence_on_each_request(tmp_path: Path, mutation: str) 
     )
     assert "report" not in next(row for row in second if row.kpi_definition_id == 1).reasons
     conn.close()
+
+
+def test_confidence_rescore_preserves_verified_binding(tmp_path: Path) -> None:
+    """Weekly confidence rescores must not invalidate resolved KPI reference bindings."""
+    conn = _db()
+    _apply_ready(conn)
+    repo = _repo(tmp_path)
+    reference, _ = _accepted_binding(conn, repo)
+    assert (
+        verified_report_kpi_reference_definition(
+            conn, repo_root=repo, user_id="owner", reference=reference
+        )
+        is not None
+    )
+
+    conn.execute("UPDATE kpi_facts SET confidence = 0.855 WHERE id = 21")
+    conn.commit()
+
+    verified = verified_report_kpi_reference_definition(
+        conn, repo_root=repo, user_id="owner", reference=reference
+    )
+    assert verified is not None
+    assert verified.kpi_definition_id == 1
+    assert verified.definition_name == "Total customers (millions)"
+    conn.close()

@@ -43,6 +43,7 @@ POLICY_CONFIG_SHA256 = _canonical_sha256(
     {
         "candidate_key": "conservative_unit_surface_normalization",
         "candidate_cardinality": "exactly_one_definition",
+        "confidence": "excluded_mutable_heuristic",
         "evidence": "canonical_current_fact_and_current_admitted_context",
         "lane": "current_actual",
         "overrides": "active_replace_or_drop_blocks",
@@ -183,7 +184,7 @@ def _evidence_row(
         "SELECT fact.id AS fact_id,fact.ticker AS fact_ticker,fact.period_end,"
         "fact.fiscal_period_type,fact.kpi_definition_id,fact.value,fact.unit AS fact_unit,"
         "fact.currency,fact.source_doc_id,fact.locator,fact.source_excerpt,fact.extracted_by,"
-        "fact.confidence,fact.supersedes_id,context.id AS context_id,"
+        "fact.supersedes_id,context.id AS context_id,"
         "context.kpi_fact_id,context.revision AS context_revision,"
         "context.metric_name_as_reported,context.reported_period_end,context.period_role,"
         "context.publication_lane,context.accounting_basis,context.consolidation_scope,"

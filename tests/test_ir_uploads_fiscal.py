@@ -374,3 +374,25 @@ def test_classify_xlsx_multisheet_padded_dates_prefers_latest_non_future_quarter
     assert res.ticker == "NU"
     assert res.period_end == date(2026, 9, 30)
     assert res.period_label == "Q3 2026"
+
+
+@pytest.mark.parametrize(
+    ("filename", "issuer_text", "want_ticker"),
+    [
+        ("supplement.xlsx", "Uber Technologies, Inc.", "UBER"),
+        ("supplement.xlsx", "Taiwan Semiconductor Manufacturing", "TSM"),
+        ("UBER_document_2026Q3__19a1b3f1.xlsx", "Earnings Supplemental Data", "UBER"),
+        ("TSMC_document_2026Q3__abcd1234.xlsx", "Financial Supplemental Data", "TSM"),
+    ],
+)
+def test_classify_detects_uber_and_tsm_without_calendar_override(
+    tmp_path: Path, filename: str, issuer_text: str, want_ticker: str
+) -> None:
+    p = tmp_path / filename
+    _write_xlsx(p, issuer_text, "Q3 2026 Supplemental Data")
+    res = classify_ir_file(p)
+    assert isinstance(res, CategorizationResult)
+    assert res.ticker == want_ticker
+    assert res.doc_type is DocType.IR_SUPPLEMENT
+    assert res.period_end == date(2026, 9, 30)
+    assert res.period_label == "Q3 2026"
