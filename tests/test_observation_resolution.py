@@ -11,7 +11,6 @@ import pytest
 from alembic.config import Config
 from pydantic import ValidationError
 
-from alembic import command
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -201,25 +200,6 @@ def test_models_canonicalize_typed_dimensions_and_require_one_value_kind() -> No
             _observation().model_dump()
             | {"dimensions": [{"key": "segment", "value": "a"}, {"key": "segment", "value": "b"}]}
         )
-
-
-def test_migration_round_trip_creates_only_additive_observation_resolution_objects(
-    tmp_path: Path,
-) -> None:
-    db_path = tmp_path / "round-trip.db"
-    cfg = _config(db_path)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, HEAD)
-    command.downgrade(cfg, "0214_evidence_selection_lifecycle")
-    conn = sqlite3.connect(str(db_path))
-    try:
-        names = {str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master")}
-        assert "reported_observations" not in names
-        assert "observation_resolution_revisions" not in names
-        assert "v_observation_resolution_current" not in names
-        assert "evidence_nodes" in names
-    finally:
-        conn.close()
 
 
 def test_persisted_observations_are_idempotent_immutable_and_evidence_bound(

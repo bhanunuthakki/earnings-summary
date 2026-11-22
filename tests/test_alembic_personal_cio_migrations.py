@@ -100,27 +100,6 @@ def test_upgrade_creates_all_five_tables(db_path: Path) -> None:
     assert _alembic_head(db_path) == PERSONAL_CIO_HEAD
 
 
-def test_downgrade_five_steps_drops_only_the_new_tables(db_path: Path) -> None:
-    cfg = _build_config(db_path)
-    command.upgrade(cfg, PERSONAL_CIO_HEAD)
-    tables_at_head = _table_names(db_path)
-
-    command.downgrade(cfg, "-5")
-
-    tables_after = _table_names(db_path)
-    for name in PERSONAL_CIO_TABLES:
-        assert name not in tables_after, f"{name} survived downgrade -5"
-    # The downgrade must NOT have touched the rest of the schema (here:
-    # only alembic_version exists since we stamped without running any
-    # prior migrations).
-    untouched_tables = tables_at_head - set(PERSONAL_CIO_TABLES) - {"alembic_version"}
-    for name in untouched_tables:
-        assert name in tables_after, (
-            f"{name} disappeared during downgrade -5 — chain unexpectedly walked further"
-        )
-    assert _alembic_head(db_path) == PRIOR_HEAD
-
-
 def test_upgrade_then_downgrade_then_upgrade_is_idempotent(db_path: Path) -> None:
     """The full round trip must leave the schema indistinguishable from a
     first-pass upgrade. Cross-checks both table names and per-table

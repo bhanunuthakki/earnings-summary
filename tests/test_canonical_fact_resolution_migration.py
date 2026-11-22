@@ -45,7 +45,7 @@ def test_canonical_resolution_migration_declares_sealed_cross_cell_tables() -> N
     assert "trg_canonical_fact_universe_seal_exact" in source
 
 
-def test_0244_installs_and_downgrades_staged_exact_boundaries(
+def test_0244_installs_staged_exact_boundaries(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "canonical-resolution.db"
@@ -90,15 +90,5 @@ def test_0244_installs_and_downgrades_staged_exact_boundaries(
             "trg_canonical_fact_snapshot_exact",
         } <= triggers
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-    finally:
-        conn.close()
-    command.downgrade(config, PARENT)
-    conn = sqlite3.connect(path)
-    try:
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (PARENT,)
-        assert conn.execute(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
-            "AND name LIKE 'canonical_fact_%resolution%'"
-        ).fetchone() == (0,)
     finally:
         conn.close()

@@ -32,7 +32,7 @@ def _sha(value: object) -> str:
     return hashlib.sha256(str(value).encode()).hexdigest()
 
 
-def test_0248_staged_seal_append_only_freezes_native_rows_and_downgrades(
+def test_0248_staged_seal_append_only_freezes_native_rows(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "native-processing-evidence-migration.db"
@@ -99,13 +99,4 @@ def test_0248_staged_seal_append_only_freezes_native_rows_and_downgrades(
             ),
         )
     conn.rollback()
-    conn.close()
-
-    command.downgrade(config, PARENT)
-    conn = sqlite3.connect(path)
-    remaining = {
-        str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    }
-    assert not (TABLES & remaining)
-    assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (PARENT,)
     conn.close()

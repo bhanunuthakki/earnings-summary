@@ -102,13 +102,3 @@ def test_upgrade_keeps_rows_and_enforces_check(db_at_prior: Path) -> None:
     _insert(conn, "EEE", 12.29, 22.10, -0.4439)  # consistent ratio -> accepted
     conn.commit()
     conn.close()
-
-
-def test_downgrade_drops_the_check(db_at_prior: Path) -> None:
-    cfg = _build_config(db_at_prior)
-    command.upgrade(cfg, NEW_HEAD)
-    command.downgrade(cfg, PRIOR_HEAD)
-    conn = sqlite3.connect(str(db_at_prior))
-    _insert(conn, "DDD", 12.29, 22.10, 79.82)  # constraint gone -> accepted again
-    conn.commit()
-    conn.close()

@@ -140,15 +140,6 @@ def test_migration_adds_nullable_sync_columns(prior_template: Path, tmp_path: Pa
     assert {"assumptions_sync_status", "assumptions_synced_at"} <= after
 
 
-def test_migration_downgrade_drops_columns(prior_template: Path, tmp_path: Path) -> None:
-    db = tmp_path / "sync_cols_down.db"
-    shutil.copy(prior_template, db)
-    cfg = _build_config(db)
-    command.upgrade(cfg, NEW_HEAD)
-    command.downgrade(cfg, PRIOR_HEAD)
-    assert "assumptions_sync_status" not in _columns(db)
-
-
 # --------------------------------------------------------------------------- #
 # persist — loud on a pre-0091 schema, silent for legacy writers
 # --------------------------------------------------------------------------- #

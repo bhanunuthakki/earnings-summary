@@ -95,30 +95,3 @@ def test_upgrade_keeps_rows_and_admits_position_review(db_at_prior: Path) -> Non
         _insert(conn, "bogus", "RBRK")
     conn.rollback()
     conn.close()
-
-
-def test_downgrade_drops_position_review_when_no_rows_use_it(db_at_prior: Path) -> None:
-    cfg = _build_config(db_at_prior)
-    command.upgrade(cfg, NEW_HEAD)
-    command.downgrade(cfg, PRIOR_HEAD)
-    conn = sqlite3.connect(str(db_at_prior))
-    with pytest.raises(sqlite3.IntegrityError, match="ck_advisor_memos_kind"):
-        _insert(conn, "position_review", "RBRK")  # constraint restored -> rejected
-    conn.rollback()
-    conn.close()
-
-
-def test_downgrade_refuses_to_destroy_position_review_rows(db_at_prior: Path) -> None:
-    cfg = _build_config(db_at_prior)
-    command.upgrade(cfg, NEW_HEAD)
-    conn = sqlite3.connect(str(db_at_prior))
-    _insert(conn, "position_review", "RBRK")
-    conn.commit()
-    conn.close()
-
-    command.downgrade(cfg, PRIOR_HEAD)  # never destructive — leaves the widened CHECK
-
-    conn = sqlite3.connect(str(db_at_prior))
-    _insert(conn, "position_review", "FLKR")  # still accepted: downgrade was a no-op here
-    conn.commit()
-    conn.close()

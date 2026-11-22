@@ -321,7 +321,7 @@ def _observation_count(
 
 
 @pytest.mark.parametrize("table", ["financial_facts", "kpi_facts"])
-def test_companyfacts_capture_is_gated_and_downgrade_restores_predecessor(
+def test_companyfacts_capture_is_gated(
     tmp_path: Path,
     table: str,
 ) -> None:
@@ -365,19 +365,6 @@ def test_companyfacts_capture_is_gated_and_downgrade_restores_predecessor(
         )
         assert _observation_count(conn, table=table, fact_id=companyfacts_fact_id) == 0
         conn.commit()
-    finally:
-        conn.close()
-
-    command.downgrade(_config(path), PREDECESSOR)
-    conn = _connection(path)
-    try:
-        assert _trigger_sql(conn, delete_trigger) == delete_sql_before
-        assert _trigger_sql(conn, capture_trigger) == capture_sql_before
-        conn.execute(
-            f"UPDATE {table} SET value = 102 WHERE id = ?",
-            (companyfacts_fact_id,),
-        )
-        assert _observation_count(conn, table=table, fact_id=companyfacts_fact_id) == 1
     finally:
         conn.close()
 

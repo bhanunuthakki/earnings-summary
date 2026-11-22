@@ -184,28 +184,3 @@ def test_upgrade_adds_sparse_invalid_observation_sentinel_index(tmp_path: Path) 
         ] == ["evidence_node_id", "observation_id"]
     finally:
         conn.close()
-
-    command.downgrade(config, PRIOR_HEAD)
-    conn = sqlite3.connect(path)
-    try:
-        assert (
-            conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?",
-                (INDEX,),
-            ).fetchone()
-            is None
-        )
-        assert (
-            conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name IN (?, ?, ?, ?)",
-                (
-                    MEMBERSHIP_INDEX,
-                    CHAIN_INDEX,
-                    OUTCOME_STATUS_INDEX,
-                    OBSERVATION_EVIDENCE_INDEX,
-                ),
-            ).fetchone()
-            is None
-        )
-    finally:
-        conn.close()

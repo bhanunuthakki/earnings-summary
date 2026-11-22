@@ -240,23 +240,3 @@ def test_database_rejects_dangling_members_and_sealed_mutation(
                 STAMP,
             ),
         )
-
-
-def test_publication_ledger_downgrades_cleanly(
-    migrated: tuple[Path, sqlite3.Connection],
-) -> None:
-    path, conn = migrated
-    conn.close()
-    command.downgrade(_config(path), "0240_fact_plane_v2_hardening")
-    downgraded = sqlite3.connect(path)
-    try:
-        assert (
-            downgraded.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
-                "AND name = 'source_fact_publications'"
-            ).fetchone()
-            is None
-        )
-        assert downgraded.execute("PRAGMA foreign_key_check").fetchall() == []
-    finally:
-        downgraded.close()

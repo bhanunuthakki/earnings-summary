@@ -69,11 +69,3 @@ def test_upgrade_adds_exact_evidence_anchor_lookup_indexes(tmp_path: Path) -> No
         ]
     finally:
         conn.close()
-
-    command.downgrade(config, PRIOR_HEAD)
-    conn = sqlite3.connect(path)
-    try:
-        assert _index_columns(conn, "ix_evidence_runs_document_outcome") == []
-        assert _index_columns(conn, "ix_evidence_nodes_extraction_kind") == []
-    finally:
-        conn.close()

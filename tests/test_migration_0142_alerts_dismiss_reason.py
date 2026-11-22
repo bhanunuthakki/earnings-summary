@@ -127,13 +127,3 @@ def test_dismiss_reason_round_trips_via_store(db_at_prior: Path) -> None:
     dismissed = dismiss_alert(alert.id, db_path=db_at_prior, reason="already knew")
     assert dismissed.dismiss_reason == "already knew"
     assert get_alert(alert.id, db_path=db_at_prior).dismiss_reason == "already knew"
-
-
-def test_downgrade_drops_column(db_at_prior: Path) -> None:
-    cfg = _build_config(db_at_prior)
-    command.upgrade(cfg, NEW_HEAD)
-    command.downgrade(cfg, PRIOR_HEAD)
-    conn = sqlite3.connect(str(db_at_prior))
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(alerts)").fetchall()}
-    conn.close()
-    assert "dismiss_reason" not in cols

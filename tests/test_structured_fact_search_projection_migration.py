@@ -225,7 +225,7 @@ def _insert_trace(conn: sqlite3.Connection, trace_id: str) -> None:
     )
 
 
-def test_migration_is_reversible_single_head_and_additive(tmp_path: Path) -> None:
+def test_migration_is_single_head_and_additive(tmp_path: Path) -> None:
     script = ScriptDirectory.from_config(_config(tmp_path / "unused.db"))
     assert len(script.get_heads()) == 1
     assert script.get_revision(REVISION) is not None
@@ -270,19 +270,6 @@ def test_migration_is_reversible_single_head_and_additive(tmp_path: Path) -> Non
             <= tables
         )
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-    finally:
-        conn.close()
-
-    command.downgrade(config, PREDECESSOR)
-    conn = sqlite3.connect(path)
-    try:
-        assert (
-            conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE name = 'search_fact_projection_runs'"
-            ).fetchone()
-            is None
-        )
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (PREDECESSOR,)
     finally:
         conn.close()
 

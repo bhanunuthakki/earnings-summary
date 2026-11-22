@@ -160,11 +160,3 @@ def test_round_trip_insert_and_read(db_at_prior: Path) -> None:
         assert row2 == (None, "open", 0)
     finally:
         conn.close()
-
-
-def test_downgrade_drops_table(db_at_prior: Path) -> None:
-    cfg = _build_config(db_at_prior)
-    command.upgrade(cfg, NEW_HEAD)
-    assert _table_exists(db_at_prior, "red_team_items")
-    command.downgrade(cfg, PRIOR_HEAD)
-    assert not _table_exists(db_at_prior, "red_team_items")

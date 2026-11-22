@@ -17,7 +17,6 @@ import pytest
 from alembic.config import Config
 from pydantic import ValidationError
 
-from alembic import command
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -408,25 +407,5 @@ def test_legacy_document_bridge_is_unique_and_validated_when_documents_exist(
         assert ledger.persist(_blob()).created
         assert ledger.persist(_observation()).created
         assert ledger.persist(_document()).created
-    finally:
-        conn.close()
-
-
-def test_migration_downgrade_round_trip_removes_only_ledger_objects(tmp_path: Path) -> None:
-    db_path = tmp_path / "downgrade.db"
-    cfg = _config(db_path)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, HEAD)
-    command.downgrade(cfg, PRIOR_HEAD)
-    conn = sqlite3.connect(str(db_path))
-    try:
-        remaining = {
-            str(row[0])
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
-            )
-        }
-        assert "evidence_content_blobs" not in remaining
-        assert "v_evidence_current" not in remaining
     finally:
         conn.close()

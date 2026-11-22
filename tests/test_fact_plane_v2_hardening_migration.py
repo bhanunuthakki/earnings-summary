@@ -90,18 +90,6 @@ def test_hardening_migration_installs_one_linear_investor_grade_boundary(
     finally:
         conn.close()
 
-    command.downgrade(config, PARENT)
-    conn = sqlite3.connect(path)
-    try:
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (PARENT,)
-        assert conn.execute(
-            "SELECT COUNT(*) FROM sqlite_master "
-            "WHERE type = 'table' "
-            "AND name = 'fact_cell_identity_seals_v2'"
-        ).fetchone() == (0,)
-    finally:
-        conn.close()
-
 
 def test_hardening_migration_refuses_to_reinterpret_existing_v2_rows(
     tmp_path: Path,

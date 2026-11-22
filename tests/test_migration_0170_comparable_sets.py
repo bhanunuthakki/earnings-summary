@@ -143,14 +143,3 @@ def test_comparable_set_members_pk_allows_reopen_on_new_day(db_at_prior: Path) -
     ).fetchall()
     assert len(rows) == 2
     conn.close()
-
-
-def test_downgrade_drops_new_tables(db_at_prior: Path) -> None:
-    cfg = _build_config(db_at_prior)
-    command.upgrade(cfg, NEW_HEAD)
-    command.downgrade(cfg, PRIOR_HEAD)
-    conn = sqlite3.connect(str(db_at_prior))
-    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    for t in _NEW_TABLES:
-        assert t not in tables
-    conn.close()

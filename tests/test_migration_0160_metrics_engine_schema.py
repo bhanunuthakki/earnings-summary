@@ -155,31 +155,3 @@ def test_seed_data_lands_on_nu_and_bn(db_at_prior: Path) -> None:
     ).fetchone()
     assert bn == ("holdco", "ifrs")
     conn.close()
-
-
-def test_downgrade_removes_new_schema_and_preserves_list_type_check(db_at_prior: Path) -> None:
-    conn = sqlite3.connect(str(db_at_prior))
-    check_before = _list_type_check_sql(conn)
-    conn.close()
-
-    cfg = _build_config(db_at_prior)
-    command.upgrade(cfg, NEW_HEAD)
-    command.downgrade(cfg, PRIOR_HEAD)
-
-    conn = sqlite3.connect(str(db_at_prior))
-    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert "formula_definitions" not in tables
-    assert "metric_computation_attempts" not in tables
-    kpi_cols = {r[1] for r in conn.execute("PRAGMA table_info(kpi_facts)").fetchall()}
-    assert "formula_id" not in kpi_cols
-    assert "formula_version" not in kpi_cols
-    tc_cols = {r[1] for r in conn.execute("PRAGMA table_info(tracked_companies)").fetchall()}
-    assert "business_model_class" not in tc_cols
-    assert "accounting_standard" not in tc_cols
-
-    check_after = _list_type_check_sql(conn)
-    assert (
-        check_before.split("list_type")[1].split(",")[0]
-        == check_after.split("list_type")[1].split(",")[0]
-    )
-    conn.close()

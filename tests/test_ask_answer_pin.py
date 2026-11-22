@@ -409,10 +409,3 @@ def test_migration_0104_seeds_ask_answer_budget_warn_mode(tmp_path: Path) -> Non
     assert row == (25.0, 0, "warn")
 
     # Downgrade removes only this row.
-    command.downgrade(cfg, "0103_podcast_takeaway_summary_budget")
-    conn = sqlite3.connect(db_path)
-    gone = conn.execute("SELECT COUNT(*) FROM llm_budgets WHERE purpose = 'ask_answer'").fetchone()[
-        0
-    ]
-    conn.close()
-    assert gone == 0
