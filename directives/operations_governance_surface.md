@@ -46,6 +46,29 @@ owner (updated July 14, 2025; checked November 12, 2026). The native checks must
 prove loopback access, immutable request ownership and child-process cleanup;
 documentation alone does not pass those gates.
 
+## Test-only module retirement — November 22, 2026
+
+Disposition: **no current surface change**. The owner approved removing
+production modules that only tests import. No scheduler definition, installed
+task, CLI, dashboard control or stored row changes.
+
+- `pipeline.sec_delta_planner` and `pipeline.sec_delta_admission` are removed.
+  Saved SEC refresh plans and terminal receipts are not rewritten or deleted, but
+  no application code reads them any more. This supersedes the retained reader
+  models in "SEC refresh-plan creation retirement — 2026-10-23".
+- `provenance.nu_historical_backfill` is removed. The NU Q2 2025 ratios it
+  published stay unchanged. A new historical publication needs a new reviewed
+  owner.
+- `advisor.exit_quality`, `dcf.fact_drivers`, `ir_pipeline.discover.meli`,
+  `research.decision_capture`, `research.memo_financial_links` and
+  `user_state.thesis_status` are removed with their tests. None had an
+  application caller.
+
+Retained because a current owner uses them outside tests:
+`allocation.model` (`directives/next_dollar_model.md`), `dcf.driver_model`,
+`etf_overlap` and `research.run` (investing skill sources), and
+`user_state.kpi_catalog` (`scratch/seed_kpi_registry.py` catalog guard).
+
 ## Native dirty-producer outcome diagnostics — November 11, 2026
 
 The existing dirty-artifact refresh retains a bounded typed terminal reason from
