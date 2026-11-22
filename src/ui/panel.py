@@ -28,12 +28,11 @@ sanctioned migration to ``k_empty`` (a reviewed golden update) happens in one
 place instead of forty.
 
 Design-language ownership. This module emits markup only — no CSS. It is
-registered in ``ui.design_registry`` (owner ``design-system``); the shell's
-visual vocabulary lives in the registered family style masters
+the shell's visual vocabulary lives in the family style masters
 (``pipeline/operations_styles.py``, ``pipeline/research_panel_styles.py``,
 ``pipeline/portfolio_styles.py``, ``pipeline/analysis_styles.py``) and the
-shell's ``.panel`` rules. A shell visual change is a registry mutation, not a
-per-panel edit.
+shell's ``.panel`` rules. A shell visual change belongs in those masters, not
+in a per-panel edit.
 """
 
 from __future__ import annotations

@@ -46,6 +46,17 @@ owner (updated July 14, 2025; checked November 12, 2026). The native checks must
 prove loopback access, immutable request ownership and child-process cleanup;
 documentation alone does not pass those gates.
 
+## Design enforcement retirement — November 22, 2026
+
+Disposition: **no surface change**. The owner retired design enforcement because
+the project is mostly headless. The Design Sync CI job, its nightly schedule, the
+design registry, the conformance scanner and debt ledger, the rendered route
+canaries, the React design-system mirror and their tests are removed. The cockpit
+at 127.0.0.1:7421 still renders from the same tokens, controls and family masters.
+The browser security canary keeps one mandatory owner: the new Browser Security CI
+job runs it for every code change. No operator action, panel, route, scheduler
+task, managed service, mutable state or network call changed.
+
 ## Test-only module retirement — November 22, 2026
 
 Disposition: **no current surface change**. The owner approved removing
