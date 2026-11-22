@@ -68,17 +68,16 @@ fi
 grep -q 'PRE-PUSH FAILED at:.*-m pytest --version' "$tmp_dir/stderr"
 
 : >"$log"
-printf '%s\n' 'refs/heads/main checked-head refs/heads/main old-head' | FAST_PUSH=1 run_hook
+printf '%s\n' 'refs/heads/main checked-head refs/heads/main old-head' | run_hook
 grep -qx -- 'execution/verify_public_tree.py' "$log"
 grep -qx -- 'execution/verify_public_tree.py --outgoing base' "$log"
 grep -qx -- 'execution/validate_directive_manifest.py' "$log"
 grep -qx -- 'execution/validate_folder_contract.py' "$log"
 grep -qx -- '-m quality.check_changed --base base --mode committed --check tests' "$log"
 grep -qx -- '-m quality.check_changed --base base --mode committed --check format --check lint --check suppressions' "$log"
-unset FAST_PUSH
 
 : >"$log"
-run_hook
+FULL_PUSH=1 run_hook
 grep -qx -- 'execution/verify_public_tree.py' "$log"
 grep -qx -- 'execution/verify_public_tree.py --outgoing base' "$log"
 grep -qx -- '-m quality.check_changed --base base --mode committed --check full-tests' "$log"

@@ -51,11 +51,13 @@ run "$python_bin" execution/verify_public_tree.py --outgoing "$base"
 export PYTHONPATH="$root/src${PYTHONPATH:+:$PYTHONPATH}"
 run "$python_bin" -m quality.check_changed --base "$base" --mode committed --check format --check lint --check suppressions
 
-# Full Pyright ceilings remain in CI. Both local paths preserve the public guard.
-if [ "${FAST_PUSH:-0}" = "1" ]; then
-  run "$python_bin" -m quality.check_changed --base "$base" --mode committed --check tests
-else
+# CI runs the complete suite on every pull request, so a push checks only the
+# changed tests by default. FULL_PUSH=1 opts into the serial complete suite.
+# Full Pyright ceilings remain in CI. Both paths preserve the public guard.
+if [ "${FULL_PUSH:-0}" = "1" ]; then
   run "$python_bin" -m quality.check_changed --base "$base" --mode committed --check full-tests
+else
+  run "$python_bin" -m quality.check_changed --base "$base" --mode committed --check tests
 fi
 
 printf 'pre-push gate passed.\n' >&2
