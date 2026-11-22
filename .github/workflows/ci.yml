@@ -315,7 +315,18 @@ jobs:
           # which test caused it (this is what made the 2026-07-31 shard-6 kills
           # undiagnosable). The slowest-test table costs nothing and makes the
           # next occurrence attributable.
-          pytest -q -n 2 --dist=loadfile --durations=25 "${selected[@]}"
+          pytest -q -n 2 --dist=loadfile --durations=25 \
+            --junitxml="$RUNNER_TEMP/test-shard.xml" "${selected[@]}"
+      - name: Upload per-file shard timings
+        # Per-testcase times regenerate .github/test-durations.json from real
+        # CI measurements (ci_gate.py durations-from-junit) instead of samples.
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-shard-timings-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/test-shard.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
   design:
     name: Design Sync
