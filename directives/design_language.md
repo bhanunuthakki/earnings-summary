@@ -180,7 +180,7 @@ Inspect the deterministic conformance receipt:
 
 ```powershell
 python execution/verify_design_conformance.py --check --route-canaries
-python -m pytest tests/test_design_registry.py tests/test_design_conformance_canonical.py tests/test_design_sync.py tests/test_ui_controls.py -q
+python -m pytest tests/test_design_registry.py tests/test_design_conformance_*.py tests/test_design_sync.py tests/test_ui_controls.py -q
 ```
 
 Route canaries use production renders at both widths, wait for hydration, walk light/open-shadow
