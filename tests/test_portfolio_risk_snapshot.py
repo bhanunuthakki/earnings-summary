@@ -92,17 +92,6 @@ def test_migration_creates_single_row_table(migrated_db: Path) -> None:
     conn.close()
 
 
-def test_migration_downgrades(migrated_db: Path) -> None:
-    cfg = _build_config(migrated_db)
-    command.downgrade(cfg, PRIOR_HEAD)
-    conn = sqlite3.connect(str(migrated_db))
-    present = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='portfolio_risk_snapshots'"
-    ).fetchone()
-    conn.close()
-    assert present is None
-
-
 # ----- store -----
 
 

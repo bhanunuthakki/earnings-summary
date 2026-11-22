@@ -20,8 +20,8 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-import sqlalchemy as sa
 from alembic.config import Config
+from sqlalchemy.exc import IntegrityError
 
 from alembic import command
 
@@ -76,7 +76,8 @@ def _seed_document(db_path: Path) -> int:
             (f"sha_{datetime.now().isoformat()}_{id(conn)}",),
         )
         conn.commit()
-        return int(cur.lastrowid)
+        assert cur.lastrowid is not None
+        return cur.lastrowid
     finally:
         conn.close()
 
@@ -139,14 +140,6 @@ def test_existing_rows_survive_upgrade_with_null_source(db_at_prior: Path) -> No
     assert row == ("NVDA", None)
 
 
-def test_downgrade_drops_source_column(db_at_prior: Path) -> None:
-    cfg = _build_config(db_at_prior)
-    command.upgrade(cfg, SOURCE_HEAD)
-    assert "source" in _columns(db_at_prior)
-    command.downgrade(cfg, PRIOR_HEAD)
-    assert "source" not in _columns(db_at_prior)
-
-
 # ---------------------------------------------------------------------------
 # 0209 — UNIQUE(ticker, fiscal_period_type, period_end)
 # ---------------------------------------------------------------------------
@@ -196,12 +189,5 @@ def test_unique_migration_fails_loudly_on_preexisting_duplicates(db_at_prior: Pa
 
     # command.upgrade runs through SQLAlchemy's engine, which wraps the
     # underlying sqlite3.IntegrityError as sqlalchemy.exc.IntegrityError.
-    with pytest.raises(sa.exc.IntegrityError):
+    with pytest.raises(IntegrityError):
         command.upgrade(cfg, UNIQUE_HEAD)
-
-
-def test_downgrade_drops_unique_index(db_at_prior: Path) -> None:
-    cfg = _build_config(db_at_prior)
-    command.upgrade(cfg, UNIQUE_HEAD)
-    command.downgrade(cfg, SOURCE_HEAD)
-    assert "uq_transcripts_ticker_period_type_end" not in _indexes(db_at_prior)

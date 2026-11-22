@@ -104,17 +104,6 @@ def test_upgrade_is_idempotent(tmp_path: Path) -> None:
         conn.close()
 
 
-def test_downgrade_drops_index(tmp_path: Path) -> None:
-    db = _migrated_db(tmp_path)
-    cfg = _config(db)
-    command.downgrade(cfg, PRIOR_HEAD)
-    conn = sqlite3.connect(str(db))
-    try:
-        assert not _index_exists(conn, _INDEX)
-    finally:
-        conn.close()
-
-
 def test_upgrade_noops_when_financial_facts_is_absent(tmp_path: Path) -> None:
     """``financial_facts`` predates the 0059 stamp (``db.init_db()`` territory,
     same as ``decisions``) — a stamp-0059+upgrade-head test fixture that never

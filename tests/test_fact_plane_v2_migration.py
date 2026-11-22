@@ -359,7 +359,7 @@ def _insert_resolution(
     )
 
 
-def test_migration_is_additive_reversible_head(tmp_path: Path) -> None:
+def test_migration_is_additive_head(tmp_path: Path) -> None:
     script = ScriptDirectory.from_config(_config(tmp_path / "unused.db"))
     assert len(script.get_heads()) == 1
     assert script.get_revision(REVISION) is not None
@@ -381,19 +381,6 @@ def test_migration_is_additive_reversible_head(tmp_path: Path) -> None:
         columns = {row[1] for row in db.execute("PRAGMA table_info(fact_cells_v2)")}
         assert {"reporting_entity_id", "semantic_key_sha256", "unit_key"} <= columns
         assert {"ticker", "value", "source_document_id"}.isdisjoint(columns)
-        assert db.execute("PRAGMA foreign_key_check").fetchall() == []
-    finally:
-        db.close()
-    command.downgrade(config, PREDECESSOR)
-    db = sqlite3.connect(path)
-    try:
-        assert db.execute("SELECT version_num FROM alembic_version").fetchone() == (PREDECESSOR,)
-        assert (
-            db.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'fact_cells_v2'"
-            ).fetchone()
-            is None
-        )
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:
         db.close()

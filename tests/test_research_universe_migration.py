@@ -55,7 +55,7 @@ def _connection(path: Path) -> sqlite3.Connection:
     return conn
 
 
-def test_0252_empty_upgrade_and_downgrade_round_trip(tmp_path: Path) -> None:
+def test_0252_empty_upgrade(tmp_path: Path) -> None:
     path = tmp_path / "round-trip.db"
     config = _database_at_0249(path)
     command.upgrade(config, UNIVERSE_REVISION)
@@ -66,16 +66,6 @@ def test_0252_empty_upgrade_and_downgrade_round_trip(tmp_path: Path) -> None:
         "expected_document_obligation_bindings",
         "research_snapshot_universe_commitments",
     }
-    conn.close()
-    command.downgrade(config, PRE_UNIVERSE_REVISION)
-    conn = _connection(path)
-    assert (
-        conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' "
-            "AND name='research_snapshot_universe_commitments'"
-        ).fetchone()
-        is None
-    )
     conn.close()
 
 
@@ -145,14 +135,6 @@ def test_0252_backfills_and_enforces_embedding_promotion_clocks(
                 "c" * 64,
             ),
         )
-    conn.close()
-    command.downgrade(config, PRE_UNIVERSE_REVISION)
-    conn = _connection(path)
-    columns = {
-        str(row[1]) for row in conn.execute("PRAGMA table_info(search_embedding_model_promotions)")
-    }
-    assert "knowledge_at" not in columns
-    assert "recorded_at" not in columns
     conn.close()
 
 

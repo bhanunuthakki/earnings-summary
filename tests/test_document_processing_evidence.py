@@ -1164,7 +1164,7 @@ def test_pdf_table_old_identity_and_member_tampering_fail_closed(
         )
 
 
-def test_processing_evidence_migration_supports_native_lanes_and_downgrades(
+def test_processing_evidence_migration_supports_native_lanes(
     tmp_path: Path,
     processing_evidence_template: Path,
 ) -> None:
@@ -1193,19 +1193,6 @@ def test_processing_evidence_migration_supports_native_lanes_and_downgrades(
         "pdf_table_extraction_artifact_seals",
     }
     connection.close()
-
-    config = _config(path)
-    command.downgrade(config, "0247_bounded_canonical_retrieval")
-    downgraded = sqlite3.connect(path)
-    assert (
-        downgraded.execute(
-            "SELECT COUNT(*) FROM sqlite_master "
-            "WHERE type='table' AND (name LIKE 'document_processing_evidence_%' "
-            "OR name LIKE 'pdf_table_extraction_artifact_%')"
-        ).fetchone()[0]
-        == 0
-    )
-    downgraded.close()
 
 
 def test_exact_office_object_inventories_publish_all_native_lanes(

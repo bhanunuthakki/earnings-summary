@@ -22,7 +22,7 @@
 //   4. `font-weight: 700` or higher, or `font-weight: bold`, used outside a
 //      `.k-*` kit class (CSS) — best-effort, rule-block scoped.
 //
-// Exit 0 if clean, exit 1 (with a listing) otherwise. `npm run check` wires
+// Exit 0 if clean, exit 1 (with a listing) otherwise. `bun run check` wires
 // this in alongside `tsc --noEmit`.
 
 import { readFileSync, readdirSync, statSync } from "node:fs";

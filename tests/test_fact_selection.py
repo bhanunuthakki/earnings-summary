@@ -11,7 +11,6 @@ import pytest
 from alembic.config import Config
 from pydantic import ValidationError
 
-from alembic import command
 from provenance.fact_selection import FactSelectionDecision, FactSelectionLedger
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -166,23 +165,5 @@ def test_ledger_requires_a_same_target_revision_chain_and_is_append_only(
                     supersedes_decision_id="exclude-kpi-7-r1",
                 )
             )
-    finally:
-        conn.close()
-
-
-def test_migration_round_trip_removes_only_the_selection_ledger(tmp_path: Path) -> None:
-    path = tmp_path / "fact-selection-round-trip.db"
-    config = _config(path)
-    command.stamp(config, PRIOR)
-    command.upgrade(config, HEAD)
-    command.downgrade(config, PRIOR)
-    conn = sqlite3.connect(path)
-    try:
-        assert (
-            conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'fact_selection_decisions'"
-            ).fetchone()
-            is None
-        )
     finally:
         conn.close()

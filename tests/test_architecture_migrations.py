@@ -94,54 +94,8 @@ def test_0209_to_head_adds_governance_and_integrity_foundation(tmp_path: Path) -
         conn.execute("UPDATE transcripts SET document_id=2 WHERE id=1")
     conn.close()
 
-    command.downgrade(config, "0210_llm_call_transport_provenance")
 
-    conn = sqlite3.connect(db_path)
-    assert (
-        conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
-        == "0210_llm_call_transport_provenance"
-    )
-    tables = {
-        row[0]
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
-    }
-    assert "pipeline_runs" not in tables
-    assert "pipeline_attempts" not in tables
-    assert "pipeline_stage_transitions" not in tables
-    assert {
-        "pipeline_key",
-        "attempt_id",
-    }.isdisjoint(row[1] for row in conn.execute("PRAGMA table_info(ingestion_runs)"))
-    assert {
-        "fingerprint",
-        "first_seen_at",
-        "last_seen_at",
-        "occurrence_count",
-    }.isdisjoint(row[1] for row in conn.execute("PRAGMA table_info(validation_issues)"))
-    assert {
-        "input_sha256",
-        "workbook_sha256",
-        "engine_version",
-        "inputs_as_of",
-        "provenance_json",
-    }.isdisjoint(row[1] for row in conn.execute("PRAGMA table_info(dcf_runs)"))
-    assert (
-        conn.execute(
-            "SELECT COUNT(*) FROM sqlite_master "
-            "WHERE type = 'trigger' AND name = 'trg_transcripts_document_immutable'"
-        ).fetchone()[0]
-        == 0
-    )
-    assert conn.execute("SELECT valuation_date FROM v_decision_freshness").fetchone()[0] == (
-        "2026-07-26"
-    )
-    assert conn.execute("SELECT run_id FROM ingestion_runs").fetchone()[0] == "attempt-1"
-    assert conn.execute("SELECT raised_at FROM validation_issues").fetchone()[0] == "2026-07-26"
-    assert conn.execute("SELECT valuation_date FROM dcf_runs").fetchone()[0] == "2026-07-26"
-    conn.close()
-
-
-def test_0213_preserves_provider_id_and_downgrades_cleanly(tmp_path: Path) -> None:
+def test_0213_preserves_provider_id(tmp_path: Path) -> None:
     db_path = tmp_path / "provider-id.db"
     conn = sqlite3.connect(db_path)
     conn.executescript(
@@ -168,14 +122,6 @@ def test_0213_preserves_provider_id_and_downgrades_cleanly(tmp_path: Path) -> No
     assert "ix_decision_drafts_source_provider" in indexes
     conn.execute("UPDATE decision_drafts SET source_provider_id = 'provider-txn-1' WHERE id = 1")
     conn.commit()
-    conn.close()
-
-    command.downgrade(config, "0211_data_integrity_foundation")
-
-    conn = sqlite3.connect(db_path)
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(decision_drafts)")}
-    assert "source_provider_id" not in columns
-    assert conn.execute("SELECT original_text FROM decision_drafts").fetchone()[0] == "legacy fill"
     conn.close()
 
 

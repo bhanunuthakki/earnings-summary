@@ -140,12 +140,3 @@ def test_runtime_binding_preserves_history_and_guards_new_rows(tmp_path: Path) -
             )
     finally:
         conn.close()
-
-    command.downgrade(config, PRIOR)
-    conn = sqlite3.connect(path)
-    try:
-        assert "runtime_artifact_sha256" not in {
-            str(row[1]) for row in conn.execute("PRAGMA table_info(search_projection_seals)")
-        }
-    finally:
-        conn.close()

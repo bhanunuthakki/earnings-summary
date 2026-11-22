@@ -67,7 +67,7 @@ UI work uses the shared `frontend-quality` procedure. Registered controls and fa
 ## Tests and merge gates
 
 - Keep PRs small enough to review migrations and golden changes together; long Alembic history makes migration-head collisions costly.
-- Use `make check-fast` (format, lint, typecheck, and changed test files) during iteration. Use `make check` before pushing, or `FAST_PUSH=1 git push` to delegate the full matrix to CI.
+- Use `make check-fast` (format, lint, typecheck, and changed test files) during iteration. The pre-push hook checks changed tests and leaves the full matrix to CI; `FULL_PUSH=1 git push` runs the complete suite locally.
 - **Bounded Test Execution:** Direct and targeted `pytest` runs are serial so they do not fan out across every local CPU. `make test` caps distribution at `PYTEST_WORKERS=2` with `--dist=loadfile` (override only after measuring the machine); CI also passes its worker count explicitly. Keep tests hermetic; use session-scoped `migrated_db` in `tests/conftest.py` rather than re-running Alembic migrations from scratch inside test functions.
 - **Ratchet Quality Gates:** Ruff linting and strict Pyright type-checking use diff-aware ratchets against `origin/main`. PRs must be clean on changed lines/files and must not increase overall Pyright error counts.
 

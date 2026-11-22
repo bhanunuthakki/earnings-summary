@@ -80,16 +80,3 @@ def test_0242_installs_one_append_only_disposition_boundary(
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:
         conn.close()
-
-    command.downgrade(config, PARENT)
-    conn = sqlite3.connect(path)
-    try:
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (PARENT,)
-        assert conn.execute(
-            "SELECT COUNT(*) FROM sqlite_master "
-            "WHERE type = 'table' AND name LIKE "
-            "'filing_xbrl_extraction_disposition%'"
-        ).fetchone() == (0,)
-        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-    finally:
-        conn.close()

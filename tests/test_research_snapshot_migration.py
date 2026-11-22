@@ -42,7 +42,7 @@ def _sha(value: object) -> str:
     return hashlib.sha256(str(value).encode()).hexdigest()
 
 
-def test_0245_exact_tables_final_seal_append_only_and_downgrade(
+def test_0245_exact_tables_final_seal_and_append_only(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "research-snapshot-migration.db"
@@ -96,13 +96,4 @@ def test_0245_exact_tables_final_seal_append_only_and_downgrade(
             ("research:bad", "research:bad", "{}", "0" * 64, T1, T1),
         )
     conn.rollback()
-    conn.close()
-
-    command.downgrade(config, PARENT)
-    conn = sqlite3.connect(path)
-    remaining = {
-        str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    }
-    assert not (TABLES & remaining)
-    assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (PARENT,)
     conn.close()

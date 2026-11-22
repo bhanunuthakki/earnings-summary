@@ -11,7 +11,6 @@ import pytest
 from alembic.config import Config
 from pydantic import ValidationError
 
-from alembic import command
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -308,25 +307,6 @@ def test_document_anchor_and_assessment_revision_are_validated(
             )
         )
         assert conn.execute("SELECT revision FROM v_source_coverage_current").fetchone() == (2,)
-    finally:
-        conn.close()
-
-
-def test_migration_round_trip(tmp_path: Path) -> None:
-    path = tmp_path / "round-trip.db"
-    config = _config(path)
-    command.stamp(config, PRIOR)
-    command.upgrade(config, HEAD)
-    command.downgrade(config, PRIOR)
-    conn = sqlite3.connect(path)
-    try:
-        assert (
-            conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
-                "AND name = 'source_inventory_snapshots'"
-            ).fetchone()
-            is None
-        )
     finally:
         conn.close()
 

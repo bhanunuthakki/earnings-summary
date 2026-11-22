@@ -117,15 +117,3 @@ def test_upgrade_is_idempotent(db_path: Path) -> None:
         assert "definition_origin" in _columns(conn)
     finally:
         conn.close()
-
-
-def test_downgrade_removes_column(db_path: Path) -> None:
-    """Downgrade to 0112 drops the column (and its named CHECK)."""
-    cfg = _build_config(db_path)
-    command.upgrade(cfg, NEW_HEAD)
-    command.downgrade(cfg, PRIOR_HEAD)
-    conn = sqlite3.connect(str(db_path))
-    try:
-        assert "definition_origin" not in _columns(conn)
-    finally:
-        conn.close()

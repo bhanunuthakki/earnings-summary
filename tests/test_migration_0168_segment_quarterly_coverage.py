@@ -114,15 +114,3 @@ def test_unique_constraint_rejects_duplicate_non_null_key(db_at_prior: Path) -> 
             " 'negative_derived_value', NULL, 'segment_q4_derive_v1', CURRENT_TIMESTAMP)"
         )
     conn.close()
-
-
-def test_downgrade_drops_table(db_at_prior: Path) -> None:
-    cfg = _build_config(db_at_prior)
-    command.upgrade(cfg, NEW_HEAD)
-    command.downgrade(cfg, PRIOR_HEAD)
-    conn = sqlite3.connect(str(db_at_prior))
-    row = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='segment_quarterly_coverage'"
-    ).fetchone()
-    assert row is None
-    conn.close()

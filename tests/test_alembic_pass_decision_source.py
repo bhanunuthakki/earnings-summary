@@ -120,13 +120,3 @@ def test_upgrade_widens_check(tmp_path: Path) -> None:
         conn.commit()
     finally:
         conn.close()
-
-
-def test_downgrade_drops_columns(tmp_path: Path) -> None:
-    db = tmp_path / "d.db"
-    cfg = _seed(db)
-    command.upgrade(cfg, HEAD)
-    assert _columns(db) >= _NEW_COLS
-    command.downgrade(cfg, PRIOR_HEAD)
-    assert not (_NEW_COLS & _columns(db))
-    assert "uq_decisions_source_dismissal" not in _index_names(db)

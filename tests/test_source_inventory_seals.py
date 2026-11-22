@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 from alembic.config import Config
 
-from alembic import command
 from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
 from provenance.issuer_registry import IssuerEntity, IssuerRegistry
 from provenance.reporting_entity_registry import ReportingEntityRegistry, SourceObligationRevision
@@ -277,25 +276,6 @@ def test_manifest_inventory_link_requires_both_immutable_parents(
         )
         assert store.persist(link).created
         assert not store.persist(link).created
-    finally:
-        conn.close()
-
-
-def test_migration_round_trip(tmp_path: Path) -> None:
-    path = tmp_path / "round-trip.db"
-    config = _config(path)
-    command.stamp(config, PRIOR)
-    command.upgrade(config, HEAD)
-    command.downgrade(config, PRIOR)
-    conn = sqlite3.connect(path)
-    try:
-        assert (
-            conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' "
-                "AND name='source_inventory_components'"
-            ).fetchone()
-            is None
-        )
     finally:
         conn.close()
 

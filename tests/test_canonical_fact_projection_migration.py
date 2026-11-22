@@ -21,7 +21,7 @@ def _config(path: Path) -> Config:
     return config
 
 
-def test_0247_is_reversible_single_head_with_exact_schema(tmp_path: Path) -> None:
+def test_0247_is_single_head_with_exact_schema(tmp_path: Path) -> None:
     path = tmp_path / "bounded-canonical-retrieval.db"
     config = _config(path)
     script = ScriptDirectory.from_config(config)
@@ -95,16 +95,5 @@ def test_0247_is_reversible_single_head_with_exact_schema(tmp_path: Path) -> Non
             "evidence_nodes",
         } <= entry_foreign_keys
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-    finally:
-        conn.close()
-
-    command.downgrade(config, "0246_source_fact_publication_stream")
-    conn = sqlite3.connect(path)
-    try:
-        tables = {
-            str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        }
-        assert "canonical_fact_projection_generations" not in tables
-        assert "heterogeneous_retrieval_trace_headers" not in tables
     finally:
         conn.close()

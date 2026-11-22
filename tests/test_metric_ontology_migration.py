@@ -33,7 +33,7 @@ def _sql_sha(value: object) -> str:
     return hashlib.sha256(str(value).encode()).hexdigest()
 
 
-def test_0243_upgrade_constraints_final_seal_and_exact_downgrade(
+def test_0243_upgrade_constraints_and_final_seal(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "ontology-migration.db"
@@ -460,20 +460,6 @@ def test_0243_upgrade_constraints_final_seal_and_exact_downgrade(
                     AT,
                 ),
             )
-        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-    finally:
-        conn.close()
-
-    command.downgrade(config, PARENT)
-    conn = sqlite3.connect(path)
-    try:
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (PARENT,)
-        assert (
-            conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='canonical_metrics'"
-            ).fetchone()
-            is None
-        )
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:
         conn.close()

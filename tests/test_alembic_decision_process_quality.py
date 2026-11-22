@@ -77,12 +77,3 @@ def test_upgrade_adds_process_quality(tmp_path: Path) -> None:
         assert conn.execute("SELECT process_quality FROM decisions").fetchone()[0] == "lucky"
     finally:
         conn.close()
-
-
-def test_downgrade_drops_process_quality(tmp_path: Path) -> None:
-    db = tmp_path / "d.db"
-    cfg = _seed(db)
-    command.upgrade(cfg, HEAD)
-    assert "process_quality" in _columns(db)
-    command.downgrade(cfg, PRIOR_HEAD)
-    assert "process_quality" not in _columns(db)

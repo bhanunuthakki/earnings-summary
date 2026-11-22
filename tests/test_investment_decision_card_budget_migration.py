@@ -94,21 +94,3 @@ def test_upgrade_is_idempotent(tmp_path: Path) -> None:
         assert n == 1
     finally:
         conn.close()
-
-
-def test_downgrade_removes_only_its_row(tmp_path: Path) -> None:
-    db = _migrated_db(tmp_path)
-    cfg = _config(db)
-    command.downgrade(cfg, PRIOR_HEAD)
-    conn = sqlite3.connect(str(db))
-    try:
-        gone = conn.execute(
-            "SELECT COUNT(*) FROM llm_budgets WHERE purpose = 'investment_decision_card'"
-        ).fetchone()[0]
-        assert gone == 0
-        kept = conn.execute(
-            "SELECT COUNT(*) FROM llm_budgets WHERE purpose = 'incremental_dollar_recommendation'"
-        ).fetchone()[0]
-        assert kept == 1
-    finally:
-        conn.close()

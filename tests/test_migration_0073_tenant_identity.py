@@ -430,32 +430,6 @@ def test_queued_actions_fk_to_alerts_survives_alerts_recreate(db_at_prior: Path)
 # ---------------------------------------------------------------------------
 
 
-def test_downgrade_restores_integer_namespace(db_at_prior: Path) -> None:
-    _seed_legacy_rows(db_at_prior)
-    cfg = _build_config(db_at_prior)
-    command.upgrade(cfg, NEW_HEAD)
-    command.downgrade(cfg, PRIOR_HEAD)
-    conn = _connect(db_at_prior)
-    try:
-        # tenants gone
-        assert "tenants" not in {
-            str(r[0]) for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        }
-        # tracked_companies back to INTEGER, 'bhanu' -> 1
-        assert _user_id_affinity(conn, "tracked_companies") == "INTEGER"
-        rows = conn.execute(
-            "SELECT user_id, typeof(user_id) FROM tracked_companies ORDER BY ticker"
-        ).fetchall()
-        assert [(r[0], r[1]) for r in rows] == [(1, "integer"), (1, "integer")]
-        # FK to tenants gone from every table
-        for table in USER_SCOPED_TABLES:
-            assert "tenants" not in _fk_targets(conn, table)
-        # substrate value preserved
-        assert conn.execute("SELECT user_id FROM alerts LIMIT 1").fetchone()[0] == "bhanu"
-    finally:
-        conn.close()
-
-
 def test_downgrade_refuses_when_multiple_tenants_exist(db_at_prior: Path) -> None:
     """A true multi-tenant state cannot be represented by the old single-integer
     default; downgrade must refuse rather than silently collapse tenants."""

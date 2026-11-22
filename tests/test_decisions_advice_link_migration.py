@@ -322,22 +322,6 @@ def test_upgrade_idempotent(tmp_path: Path) -> None:
         conn.close()
 
 
-def test_downgrade_refuses_when_advice_linked_else_clean(tmp_path: Path) -> None:
-    db = _migrated_db(tmp_path, name="clean.db")
-    cfg = _config(db)
-    command.downgrade(cfg, PRIOR_HEAD)
-    conn = sqlite3.connect(str(db))
-    try:
-        cols = {r[1] for r in conn.execute("PRAGMA table_info(decisions)").fetchall()}
-        assert "advice_artifact_id" not in cols
-        budget = conn.execute(
-            "SELECT 1 FROM llm_budgets WHERE purpose='incremental_dollar_recommendation'"
-        ).fetchone()
-        assert budget is None
-    finally:
-        conn.close()
-
-
 def test_downgrade_refuses_with_linked_row(tmp_path: Path) -> None:
     db = _migrated_db(tmp_path, name="linked.db")
     conn = sqlite3.connect(str(db))

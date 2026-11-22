@@ -6,11 +6,13 @@ Pending deletions are skipped once their path no longer exists on disk.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
 import zipfile
 from collections import Counter
+from collections.abc import Callable
 from io import BytesIO
 from pathlib import Path
 
@@ -218,7 +220,9 @@ def audit_public_refs(repo_root: Path) -> dict[str, dict[str, int]]:
     return _audit_trees(repo_root, _public_refs(repo_root))
 
 
-def audit_outgoing_history(repo_root: Path, base: str) -> dict[str, dict[str, int]]:
+def audit_outgoing_history(
+    repo_root: Path, base: str, *, classify: Callable[[str, bytes], set[str]] | None = None
+) -> dict[str, dict[str, int]]:
     """Check every outgoing tree, including private content later removed."""
 
     resolved = subprocess.run(
@@ -243,10 +247,14 @@ def audit_outgoing_history(repo_root: Path, base: str) -> dict[str, dict[str, in
         text=True,
         env=_clean_git_env(),
     ).stdout.splitlines()
-    return _audit_trees(repo_root, commits)
+    return _audit_trees(repo_root, commits, classify=classify)
 
 
-def _audit_trees(repo_root: Path, refs: list[str]) -> dict[str, dict[str, int]]:
+def _audit_trees(
+    repo_root: Path, refs: list[str], *, classify: Callable[[str, bytes], set[str]] | None = None
+) -> dict[str, dict[str, int]]:
+    if classify is None:
+        classify = content_violation_categories
 
     file_counts: Counter[str] = Counter()
     ref_counts: Counter[str] = Counter()
@@ -281,7 +289,7 @@ def _audit_trees(repo_root: Path, refs: list[str]) -> dict[str, dict[str, int]]:
             cache_key = (relative, oid)
             file_categories = classification_cache.get(cache_key)
             if file_categories is None:
-                detected_categories = content_violation_categories(relative, blobs[oid])
+                detected_categories = classify(relative, blobs[oid])
                 path_category = forbidden_path_category(relative)
                 if path_category is not None:
                     detected_categories.add(path_category)
@@ -324,7 +332,11 @@ def _read_blobs(repo_root: Path, object_ids: set[str]) -> dict[str, bytes]:
     return blobs
 
 
-def verify(repo_root: Path) -> list[str]:
+def verify(
+    repo_root: Path, *, classify: Callable[[str, bytes], set[str]] | None = None
+) -> list[str]:
+    if classify is None:
+        classify = content_violation_categories
     violations: list[str] = []
     for relative in working_tree_candidates(repo_root):
         path = Path(relative)
@@ -337,9 +349,26 @@ def verify(repo_root: Path) -> list[str]:
             data = (repo_root / path).read_bytes()
         except (FileNotFoundError, IsADirectoryError):
             continue
-        for category in sorted(content_violation_categories(relative, data)):
+        for category in sorted(classify(relative, data)):
             violations.append(f"{category} in: {relative}")
     return violations
+
+
+def verify_push_candidate(
+    repo_root: Path, base: str
+) -> tuple[list[str], dict[str, dict[str, int]]]:
+    """Check working files and every outgoing tree with one content classification per identity."""
+    cache: dict[tuple[str, bytes], frozenset[str]] = {}
+
+    def classify(relative: str, data: bytes) -> set[str]:
+        key = (relative, hashlib.sha256(data).digest())
+        if key not in cache:
+            cache[key] = frozenset(content_violation_categories(relative, data))
+        return set(cache[key])
+
+    return verify(repo_root, classify=classify), audit_outgoing_history(
+        repo_root, base, classify=classify
+    )
 
 
 def main() -> int:
@@ -354,19 +383,30 @@ def main() -> int:
     parser.add_argument(
         "--outgoing", metavar="BASE", help="audit every commit after BASE before publication"
     )
+    parser.add_argument(
+        "--pre-push", metavar="BASE", help="audit working files and outgoing history"
+    )
     args = parser.parse_args()
-    if args.all_refs and args.outgoing:
-        parser.error("--all-refs and --outgoing are mutually exclusive")
+    if sum(bool(value) for value in (args.all_refs, args.outgoing, args.pre_push)) > 1:
+        parser.error("--all-refs, --outgoing and --pre-push are mutually exclusive")
     repo_root = Path(__file__).resolve().parents[1]
-    if args.all_refs or args.outgoing:
+    if args.all_refs or args.outgoing or args.pre_push:
         try:
-            summary = (
-                audit_outgoing_history(repo_root, args.outgoing)
-                if args.outgoing
-                else audit_public_refs(repo_root)
-            )
+            violations: list[str] = []
+            if args.pre_push:
+                violations, summary = verify_push_candidate(repo_root, args.pre_push)
+            else:
+                summary = (
+                    audit_outgoing_history(repo_root, args.outgoing)
+                    if args.outgoing
+                    else audit_public_refs(repo_root)
+                )
         except subprocess.CalledProcessError:
             print("Public history could not be verified; publication blocked.")
+            return 1
+        if violations:
+            print("Public-tree verification failed:")
+            print("\n".join(f"- {item}" for item in violations))
             return 1
         if summary:
             print("Public-ref path audit failed:")

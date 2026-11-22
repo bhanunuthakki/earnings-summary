@@ -27,7 +27,7 @@ cat >"$bin_dir/fake-python" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$TEST_PYTHON_LOG"
 if [ "${FAKE_FAIL_MODULE:-}" = "ruff" ] && [ "$*" = "-m ruff --version" ]; then exit 1; fi
-if [ "${FAKE_FAIL_MODULE:-}" = "pytest" ] && [ "$*" = "-m pytest --version" ]; then exit 1; fi
+if [ "${FAKE_FAIL_MODULE:-}" = "pyright" ] && echo "$*" | grep -q -- "--check types"; then exit 1; fi
 exit 0
 EOF
 chmod +x "$bin_dir/fake-python"
@@ -59,28 +59,30 @@ if TEST_REPO_ROOT="$repo_root" TEST_PYTHON_LOG="$log" \
 fi
 grep -q 'PYTHON_BIN is not executable' "$tmp_dir/stderr"
 
-if TEST_REPO_ROOT="$repo_root" TEST_PYTHON_LOG="$log" FAKE_FAIL_MODULE=pytest \
+if TEST_REPO_ROOT="$repo_root" TEST_PYTHON_LOG="$log" FAKE_FAIL_MODULE=pyright \
   PATH="$bin_dir:/usr/bin:/bin" PYTHON_BIN="$bin_dir/fake-python" \
   "$hook" >/dev/null 2>"$tmp_dir/stderr"; then
-  printf 'expected missing pytest module to fail\n' >&2
+  printf 'expected failed typecheck to block the push\n' >&2
   exit 1
 fi
-grep -q 'PRE-PUSH FAILED at:.*-m pytest --version' "$tmp_dir/stderr"
+grep -q 'PRE-PUSH FAILED at:.*--check types' "$tmp_dir/stderr"
 
 : >"$log"
-printf '%s\n' 'refs/heads/main checked-head refs/heads/main old-head' | FAST_PUSH=1 run_hook
-grep -qx -- 'execution/verify_public_tree.py' "$log"
-grep -qx -- 'execution/verify_public_tree.py --outgoing base' "$log"
+printf '%s\n' 'refs/heads/main checked-head refs/heads/main old-head' | run_hook
+grep -qx -- 'execution/verify_public_tree.py --pre-push base' "$log"
 grep -qx -- 'execution/validate_directive_manifest.py' "$log"
 grep -qx -- 'execution/validate_folder_contract.py' "$log"
+grep -qx -- '-m quality.check_changed --base base --mode committed --check format --check lint --check types --check suppressions' "$log"
 grep -qx -- '-m quality.check_changed --base base --mode committed --check tests' "$log"
-grep -qx -- '-m quality.check_changed --base base --mode committed --check format --check lint --check suppressions' "$log"
-unset FAST_PUSH
+if grep -q -- "--check full-tests" "$log"; then
+  printf "unexpected complete-suite execution without FULL_PUSH\n" >&2
+  exit 1
+fi
 
 : >"$log"
-run_hook
-grep -qx -- 'execution/verify_public_tree.py' "$log"
-grep -qx -- 'execution/verify_public_tree.py --outgoing base' "$log"
+FULL_PUSH=1 run_hook </dev/null
+grep -qx -- 'execution/verify_public_tree.py --pre-push base' "$log"
+grep -qx -- '-m quality.check_changed --base base --mode committed --check format --check lint --check types --check suppressions' "$log"
 grep -qx -- '-m quality.check_changed --base base --mode committed --check full-tests' "$log"
 
 printf 'pre-push-tests: ok\n'
