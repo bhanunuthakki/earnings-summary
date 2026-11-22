@@ -49,7 +49,7 @@ from report.models import (
     ThemeRollup,
 )
 from report.render_clock import render_now
-from report.sections._common import budget_gate, missing, open_repo_db
+from report.sections._common import budget_gate, has_table, missing, open_repo_db
 from report.sections._ts_signals import (
     format_signals_as_prompt_block,
     load_signals_for_metrics,
@@ -118,6 +118,12 @@ def build(
         ticker, repo_root, conn
     )
     transcripts = _scan_transcripts(tr_root, ticker)
+    if not summaries:
+        readout_summaries = _load_post_earnings_readout_summaries(ticker, repo_root, conn)
+        if readout_summaries:
+            summaries = readout_summaries
+            transcript_links = transcripts
+            summary_detail = None
     surprise_card = _build_surprise_card(ticker, repo_root, conn=conn)
 
     if not summaries and not transcripts:
@@ -338,21 +344,91 @@ def _load_verified_document_summaries(
     return summaries, transcript_links, detail
 
 
+def _parse_quarter_year(
+    conn: sqlite3.Connection, ticker: str, fiscal_period: str
+) -> tuple[int, int] | None:
+    text = fiscal_period.strip()[:10]
+    if len(text) < 7 or text[4] != "-":
+        return None
+    try:
+        year = int(text[:4])
+        month = int(text[5:7])
+    except ValueError:
+        return None
+    if not 1 <= month <= 12:
+        return None
+    if has_table(conn, "transcripts"):
+        row = conn.execute(
+            "SELECT fiscal_period_type FROM transcripts "
+            "WHERE UPPER(ticker) = ? AND date(period_end) = date(?) "
+            "ORDER BY id DESC LIMIT 1",
+            (ticker.upper(), text),
+        ).fetchone()
+        if row and row[0]:
+            m = re.match(r"Q([1-4])\b", str(row[0]).strip(), re.IGNORECASE)
+            if m:
+                return (int(m.group(1)), year)
+    return ((month - 1) // 3 + 1, year)
+
+
+def _load_post_earnings_readout_summaries(
+    ticker: str, repo_root: Path, conn: sqlite3.Connection | None
+) -> dict[tuple[int, int], str]:
+    """Load active persisted post_earnings_readout cards when verified doc summaries are absent."""
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn is None:
+        return {}
+    try:
+        if not has_table(db_conn, "llm_artifacts"):
+            return {}
+        cols = {
+            str(r[1])
+            for r in db_conn.execute("PRAGMA table_info(llm_artifacts)").fetchall()
+            if len(r) > 1
+        }
+        superseded_sql = "AND superseded_by_id IS NULL " if "superseded_by_id" in cols else ""
+        rows = db_conn.execute(
+            f"SELECT fiscal_period, content_md FROM llm_artifacts "  # nosec B608 -- internal literal clause only; ticker stays bound
+            f"WHERE UPPER(ticker) = ? AND purpose = 'post_earnings_readout' "
+            f"{superseded_sql}"
+            f"AND content_md IS NOT NULL AND TRIM(content_md) != '' "
+            f"ORDER BY fiscal_period DESC, id DESC",
+            (ticker.upper(),),
+        ).fetchall()
+        out: dict[tuple[int, int], str] = {}
+        for row in rows:
+            if not row[0] or not row[1]:
+                continue
+            key = _parse_quarter_year(db_conn, ticker, str(row[0]))
+            if key is not None and key not in out:
+                out[key] = str(row[1])
+        return out
+    except sqlite3.Error:
+        return {}
+    finally:
+        if conn is None:
+            db_conn.close()
+
+
 def _extract_digest(summary_md: str) -> str:
     """Pull just the Executive Summary block from the per-quarter summary.
 
     Per-quarter summaries follow a stable structure starting with
-    `## 1. Executive Summary` and ending at the next H2 header. We lift that
-    block verbatim — no LLM call. Falls back to the first 600 chars on miss.
+    `## 1. Executive Summary` (or `## Quarter in one line` for readouts) and
+    ending at the next H2 header. Falls back to the first 600 chars on miss.
     """
     lines = summary_md.splitlines()
     in_block = False
     block: list[str] = []
     for line in lines:
-        if line.lstrip().startswith("## ") and "Executive Summary" in line:
+        stripped = line.lstrip()
+        lower = stripped.casefold()
+        if stripped.startswith("## ") and (
+            "executive summary" in lower or "quarter in one line" in lower
+        ):
             in_block = True
             continue
-        if in_block and line.lstrip().startswith("## "):
+        if in_block and stripped.startswith("## "):
             break
         if in_block:
             block.append(line)

@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "65d3d73b3b6b22bc8574fbf243c6e4954509128d",
+  "scoped_commit": "2f77eadfb4217b42c29b45022dae0ee86979733c",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "1e561870c4f94a128acd65651da067ecb6474d8053ca9d6ff55d2cbc5a893b84",
+  "source_sha256": "3df686e24e8833d02c7b2280dd8c91c03d4f24347d4659d0d7933fa107f2ca7e",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1406,
-    "total_noncomment_loc": 561752,
+    "total_noncomment_loc": 562002,
     "modules_over_1000_loc": 117,
     "modules_over_2000_loc": 23,
     "modules_at_least_3000_loc": 5,
@@ -2913,9 +2913,9 @@
         "path": "execution/extract_kpis_from_ir.py",
         "module": "execution.extract_kpis_from_ir",
         "lines": {
-          "physical": 905,
-          "nonblank": 840,
-          "noncomment": 838
+          "physical": 936,
+          "nonblank": 869,
+          "noncomment": 867
         },
         "internal_fan_out": 22,
         "responsibilities": [
@@ -2923,8 +2923,8 @@
           "filesystem",
           "network"
         ],
-        "public_functions": 3,
-        "fully_annotated_public_functions": 3
+        "public_functions": 4,
+        "fully_annotated_public_functions": 4
       },
       {
         "path": "execution/extract_nvo_patent_timeline.py",
@@ -3553,9 +3553,9 @@
         "path": "execution/generate_post_earnings_readouts.py",
         "module": "execution.generate_post_earnings_readouts",
         "lines": {
-          "physical": 96,
-          "nonblank": 86,
-          "noncomment": 86
+          "physical": 103,
+          "nonblank": 93,
+          "noncomment": 93
         },
         "internal_fan_out": 3,
         "responsibilities": [],
@@ -11919,9 +11919,9 @@
         "path": "src/llm_budget.py",
         "module": "llm_budget",
         "lines": {
-          "physical": 801,
-          "nonblank": 728,
-          "noncomment": 712
+          "physical": 812,
+          "nonblank": 739,
+          "noncomment": 723
         },
         "internal_fan_out": 5,
         "responsibilities": [
@@ -17537,17 +17537,17 @@
         "path": "src/report/builder.py",
         "module": "report.builder",
         "lines": {
-          "physical": 288,
-          "nonblank": 272,
-          "noncomment": 262
+          "physical": 359,
+          "nonblank": 338,
+          "noncomment": 328
         },
         "internal_fan_out": 31,
         "responsibilities": [
           "database",
           "network"
         ],
-        "public_functions": 2,
-        "fully_annotated_public_functions": 2
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
       },
       {
         "path": "src/report/file_capture.py",
@@ -18244,9 +18244,9 @@
         "path": "src/report/sections/earnings.py",
         "module": "report.sections.earnings",
         "lines": {
-          "physical": 921,
-          "nonblank": 825,
-          "noncomment": 769
+          "physical": 997,
+          "nonblank": 897,
+          "noncomment": 841
         },
         "internal_fan_out": 10,
         "responsibilities": [
@@ -18309,9 +18309,9 @@
         "path": "src/report/sections/financials.py",
         "module": "report.sections.financials",
         "lines": {
-          "physical": 1892,
-          "nonblank": 1733,
-          "noncomment": 1651
+          "physical": 1965,
+          "nonblank": 1798,
+          "noncomment": 1716
         },
         "internal_fan_out": 17,
         "responsibilities": [

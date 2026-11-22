@@ -129,6 +129,28 @@ _DEFAULT_CHART_PRIORITIES: tuple[str, ...] = (
 )
 
 
+def _conn_db_path(conn: sqlite3.Connection) -> Path | None:
+    """Return the main SQLite database file for `conn`, or None for :memory:."""
+    row = next(
+        (r[2] for r in conn.execute("PRAGMA database_list").fetchall() if r[1] == "main"),
+        "",
+    )
+    return Path(str(row)) if row else None
+
+
+def _has_financial_facts_supersedes_id(conn: sqlite3.Connection) -> bool:
+    return any(
+        row[1] == "supersedes_id"
+        for row in conn.execute("PRAGMA table_info(financial_facts)").fetchall()
+    )
+
+
+def _format_currency_unit(currency: str, col: str, default_unit: str) -> str:
+    if currency == "USD":
+        return default_unit
+    return f"{currency}/share" if col == "eps_diluted" else f"{currency} millions"
+
+
 def build_legacy_shadow(
     ticker: str,
     repo_root: Path,
@@ -169,14 +191,31 @@ def build_legacy_shadow(
     quarter_labels_full = [quarter_label(str(r["period_end"])) for r in deduped_quarterly]
     display_labels = quarter_labels_full[-DISPLAY_QUARTERS:]
 
+    currencies = {
+        str(r["currency"]).strip().upper()
+        for r in [*deduped_quarterly, *annual_rows]
+        if isinstance(r.get("currency"), str) and str(r["currency"]).strip()
+    }
+    if len(currencies) == 1:
+        currency = next(iter(currencies))
+    elif deduped_quarterly and isinstance(deduped_quarterly[-1].get("currency"), str):
+        raw_ccy = str(deduped_quarterly[-1]["currency"]).strip().upper()
+        currency = raw_ccy or "USD"
+    else:
+        currency = "USD"
+
     # Per-cell source provenance for the P3.3 chips — one query for every
     # (line_item, period) pair; best-effort ({} on legacy DBs).
     cell_prov = load_financial_cell_provenance(
-        ticker, sorted(set(_COL_TO_FACT_LINE_ITEM.values())), repo_root
+        ticker,
+        sorted(set(_COL_TO_FACT_LINE_ITEM.values())),
+        repo_root,
+        db_path=_conn_db_path(db_conn),
     )
 
     line_items: list[QuarterlyLineItem] = []
-    for col, name, unit, digits in _LINE_ITEM_SPECS:
+    for col, name, spec_unit, digits in _LINE_ITEM_SPECS:
+        unit = _format_currency_unit(currency, col, spec_unit)
         full_series = [_to_display(r.get(col), col) for r in deduped_quarterly]
         if all(v is None for v in full_series):
             continue
@@ -219,7 +258,7 @@ def build_legacy_shadow(
             )
         )
 
-    annual_years, annual_items = _build_annual(annual_rows)
+    annual_years, annual_items = _build_annual(annual_rows, currency=currency)
 
     quarterly_ok = bool(line_items)
     annual_ok = bool(annual_items)
@@ -248,12 +287,6 @@ def build_legacy_shadow(
     )
     if conn is None:
         db_conn.close()
-
-    currency = "USD"
-    if deduped_quarterly:
-        raw_ccy = deduped_quarterly[-1].get("currency")
-        if isinstance(raw_ccy, str) and raw_ccy.strip():
-            currency = raw_ccy.strip().upper()
 
     return FinancialsSection(
         status=status,
@@ -1197,7 +1230,7 @@ WITH dedup AS (
         ) AS rn
     FROM {fact_relation} ff
     {doc_join}
-    WHERE ff.ticker = ? AND ff.fiscal_period_type IN ({marks})
+    WHERE ff.ticker = ? AND ff.fiscal_period_type IN ({marks}) {extra_where}
 )
 SELECT
 {pivot}
@@ -1209,28 +1242,69 @@ LIMIT ?
 """
 
 
+def _query_facts_rows(
+    conn: sqlite3.Connection,
+    *,
+    sql_template: str,
+    ticker: str,
+    period_types: tuple[str, ...],
+    limit: int,
+) -> list[dict[str, object]]:
+    placeholders = ",".join("?" * len(period_types))
+    tier_rank = reader_tier_rank_sql(conn)
+    doc_join = reader_tier_join_sql(conn)
+    fact_rel = canonical_fact_relation(conn, "financial_facts").sql
+    cursor = conn.cursor()
+    cursor.execute(
+        sql_template.format(
+            marks=placeholders,
+            pivot=_FACT_PIVOT,
+            tier_rank=tier_rank,
+            doc_join=doc_join,
+            fact_relation=fact_rel,
+            extra_where="",
+        ),
+        (ticker.upper(), *period_types, limit),
+    )
+    rows = [dict(r) for r in cursor.fetchall()]
+    if len(rows) < 2 and fact_rel != "financial_facts":
+        extra_where = (
+            "AND NOT EXISTS (SELECT 1 FROM financial_facts s WHERE s.supersedes_id = ff.id)"
+            if _has_financial_facts_supersedes_id(conn)
+            else ""
+        )
+        cursor.execute(
+            sql_template.format(
+                marks=placeholders,
+                pivot=_FACT_PIVOT,
+                tier_rank=tier_rank,
+                doc_join=doc_join,
+                fact_relation="financial_facts",
+                extra_where=extra_where,
+            ),
+            (ticker.upper(), *period_types, limit),
+        )
+        direct_rows = [dict(r) for r in cursor.fetchall()]
+        if len(direct_rows) > len(rows):
+            rows = direct_rows
+    rows.reverse()  # → oldest first
+    return rows
+
+
 def _load_quarterly(conn: sqlite3.Connection, ticker: str) -> list[dict[str, object]]:
-    """One deduped row per calendar quarter from the canonical fact relation.
+    """One deduped row per calendar quarter from the canonical or direct fact relation.
 
     See ``_QUARTERLY_FACTS_SQL`` for why this bypasses the ``metrics`` view.
     Over-pulls a generous window; ``_dedupe_by_calendar_quarter`` runs
     downstream as a defensive pass-through (the SQL already returns one row per
     calendar quarter)."""
-    placeholders = ",".join("?" * len(QUARTERLY_PERIOD_TYPES))
-    cursor = conn.cursor()
-    cursor.execute(
-        _QUARTERLY_FACTS_SQL.format(
-            marks=placeholders,
-            pivot=_FACT_PIVOT,
-            tier_rank=reader_tier_rank_sql(conn),
-            doc_join=reader_tier_join_sql(conn),
-            fact_relation=canonical_fact_relation(conn, "financial_facts").sql,
-        ),
-        (ticker.upper(), *QUARTERLY_PERIOD_TYPES, UNDERLYING_QUARTERS * 4),
+    return _query_facts_rows(
+        conn,
+        sql_template=_QUARTERLY_FACTS_SQL,
+        ticker=ticker,
+        period_types=QUARTERLY_PERIOD_TYPES,
+        limit=UNDERLYING_QUARTERS * 4,
     )
-    rows = [dict(r) for r in cursor.fetchall()]
-    rows.reverse()  # → oldest first
-    return rows
 
 
 def _dedupe_by_calendar_quarter(rows: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -1311,7 +1385,7 @@ WITH dedup AS (
         ) AS rn
     FROM {fact_relation} ff
     {doc_join}
-    WHERE ff.ticker = ? AND ff.fiscal_period_type IN ({marks})
+    WHERE ff.ticker = ? AND ff.fiscal_period_type IN ({marks}) {extra_where}
 )
 SELECT
 {pivot}
@@ -1324,21 +1398,13 @@ LIMIT ?
 
 
 def _load_annual(conn: sqlite3.Connection, ticker: str) -> list[dict[str, object]]:
-    placeholders = ",".join("?" * len(ANNUAL_PERIOD_TYPES))
-    cursor = conn.cursor()
-    cursor.execute(
-        _ANNUAL_FACTS_SQL.format(
-            marks=placeholders,
-            pivot=_FACT_PIVOT,
-            tier_rank=reader_tier_rank_sql(conn),
-            doc_join=reader_tier_join_sql(conn),
-            fact_relation=canonical_fact_relation(conn, "financial_facts").sql,
-        ),
-        (ticker.upper(), *ANNUAL_PERIOD_TYPES, ANNUAL_HISTORY_YEARS * 3),
+    return _query_facts_rows(
+        conn,
+        sql_template=_ANNUAL_FACTS_SQL,
+        ticker=ticker,
+        period_types=ANNUAL_PERIOD_TYPES,
+        limit=ANNUAL_HISTORY_YEARS * 3,
     )
-    rows = [dict(r) for r in cursor.fetchall()]
-    rows.reverse()
-    return rows
 
 
 def financials_reader_value(
@@ -1376,7 +1442,9 @@ def financials_reader_value(
     return None
 
 
-def _build_annual(rows: list[dict[str, object]]) -> tuple[list[int], list[AnnualLineItem]]:
+def _build_annual(
+    rows: list[dict[str, object]], *, currency: str = "USD"
+) -> tuple[list[int], list[AnnualLineItem]]:
     if not rows:
         return ([], [])
     by_year: dict[int, list[dict[str, object]]] = {}
@@ -1390,7 +1458,8 @@ def _build_annual(rows: list[dict[str, object]]) -> tuple[list[int], list[Annual
     years = sorted(merged_by_year.keys())[-ANNUAL_HISTORY_YEARS:]
 
     items: list[AnnualLineItem] = []
-    for col, name, unit, digits in _LINE_ITEM_SPECS:
+    for col, name, spec_unit, digits in _LINE_ITEM_SPECS:
+        unit = _format_currency_unit(currency, col, spec_unit)
         series = [_to_display(merged_by_year[y].get(col), col) for y in years]
         if all(v is None for v in series):
             continue
@@ -1691,6 +1760,10 @@ def build(
     try:
         conn.row_factory = sqlite3.Row
         projection = read_financial_table(conn, ticker, as_of=cutoff, source_context=source_context)
+        if as_of is None and not projection.cells and has_table(conn, "financial_facts"):
+            legacy_section = build_legacy_shadow(ticker, repo_root, conn=conn)
+            if legacy_section.line_items or legacy_section.annual_line_items:
+                return legacy_section
         quarters = sorted(
             {
                 cell.display_coordinate

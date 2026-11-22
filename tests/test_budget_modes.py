@@ -255,3 +255,17 @@ def test_pre_0066_fallback_derives_mode_from_hard_block(tmp_path: Path) -> None:
     blocked = check_budget("bear_case", db_path=db, now=_NOW)
     assert blocked.allowed is False
     assert blocked.hard_block is True
+
+
+def test_zero_cap_disables_budget_warnings_and_skips(tmp_path: Path) -> None:
+    db = _db(tmp_path)
+    _insert_budget(db, "post_earnings_readout", 0, on_exceed="skip")
+    _insert_call(db, "post_earnings_readout", 12.5)
+    check = check_budget("post_earnings_readout", db_path=db, now=_NOW)
+    assert check.allowed is True
+    assert check.warn is False
+    assert check.hard_block is False
+    assert check.on_exceed == "warn"
+    assert check.headroom_pct == 1.0
+    assert check.reason is None
+    assert should_skip_for_budget("post_earnings_readout", db_path=db, now=_NOW) is None

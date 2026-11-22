@@ -203,7 +203,7 @@ def _latest_quarter(
         target_sql = ""
         params: list[str] = [ticker, today.isoformat(), today.isoformat()]
         if period_end is not None and fiscal_period_type is not None:
-            target_sql = "AND period_end = ? AND UPPER(fiscal_period_type) = ? "
+            target_sql = "AND date(period_end) = date(?) AND UPPER(fiscal_period_type) = ? "
             params.extend((period_end, fiscal_period_type))
         row = conn.execute(
             f"SELECT id, document_id, fiscal_period_type, period_end, call_date "  # nosec B608 -- trusted selected-relation shape; ticker remains bound
