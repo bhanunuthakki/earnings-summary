@@ -126,9 +126,7 @@ def test_cli_check_uses_shared_scanner_for_all_four_dimensions(tmp_path: Path) -
 def test_cli_clean_fixture_and_emitted_receipt_are_deterministic(tmp_path: Path) -> None:
     source_root = _write_complete_fixture_tree(tmp_path, include_live_drift=False)
     first = _run_cli("--check", "--source-root", str(source_root))
-    second = _run_cli("--check", "--source-root", str(source_root))
-    assert first.returncode == second.returncode == 0
-    assert first.stdout == second.stdout
+    assert first.returncode == 0, first.stderr
     receipt = json.loads(first.stdout)
     assert receipt["verdict"] == "pass"
     assert receipt["findings"] == []
@@ -142,7 +140,9 @@ def test_cli_clean_fixture_and_emitted_receipt_are_deterministic(tmp_path: Path)
         str(source_root),
     )
     assert emitted.returncode == 0, emitted.stderr
-    assert json.loads(destination.read_text(encoding="utf-8")) == receipt
+    # The emitted receipt is an independent second scan: byte equality with the
+    # first scan's stdout proves the receipt is deterministic.
+    assert destination.read_text(encoding="utf-8") == first.stdout
     summary = json.loads(emitted.stdout)
     assert summary["receipt_path"] == str(destination.resolve())
     assert summary["verdict"] == "pass"

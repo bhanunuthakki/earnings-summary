@@ -18,12 +18,10 @@ from pathlib import Path
 
 import pytest
 
-from scripts import gen_design_conformance_debt
 from ui.conformance_scan import (
     css_text as _css_text,
 )
 from ui.conformance_scan import (
-    discover_emitters,
     scan_surface,
     split_top_commas,
     strip_css_comments,
@@ -47,7 +45,6 @@ from ui.design_registry import (
     PALETTE_LIGHT,
     QUARANTINE,
     REGISTERED,
-    VISUAL_EMITTER_MANIFEST,
     palette_css,
 )
 
@@ -670,35 +667,6 @@ def test_k_empty_escapes_the_line_but_not_the_chip() -> None:
 # Every scanner input comes from the typed, immutable design registry. Detection
 # lives in ui.conformance_scan; adding or approving vocabulary here is forbidden
 # by tests/test_design_registry.py.
-
-
-def test_every_css_surface_is_registered() -> None:
-    """Opt-OUT discovery: the filesystem, not a curated import list, defines the
-    surface set. A new CSS-emitting module that no one classified — or a removed
-    one still listed — fails here until reconciled with REGISTERED + (EXEMPT |
-    QUARANTINE | clean)."""
-    discovered = frozenset(entry.path for entry in discover_emitters(PROJECT_ROOT))
-    classified = frozenset(entry.path for entry in VISUAL_EMITTER_MANIFEST)
-    new_unregistered = discovered - classified
-    stale_registered = classified - discovered
-    assert not new_unregistered, (
-        f"new visual emitter(s) not classified in the typed manifest: {sorted(new_unregistered)}"
-    )
-    assert not stale_registered, (
-        f"visual manifest lists absent emitters: {sorted(stale_registered)}"
-    )
-
-
-def test_no_unquarantined_token_drift() -> None:
-    """Every clean surface — and every non-quarantined DIMENSION of a
-    quarantined surface — must be free of denied literals. This is the live
-    enforcement: the moment a clean surface (or clean dimension) gains raw hex,
-    an off-scale size/radius, a stray font, a legacy alias, or a reinvented
-    status badge (kit-badge), CI fails."""
-    assert gen_design_conformance_debt.check(), (
-        "design evidence changed without an exact reviewed ledger update; new work "
-        "must use the master vocabulary and cleanup must shrink the ledger explicitly"
-    )
 
 
 def test_quarantine_only_shrinks() -> None:

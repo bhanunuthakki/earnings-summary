@@ -260,27 +260,28 @@ class FactReadModel:
         self._source_context = source_context
 
     def cell(self, fact_cell_id: str, *, cutoff: datetime) -> FactCellV2:
-        row = self._fetchone(
-            "SELECT knowledge_at,recorded_at FROM fact_cells_v2 WHERE fact_cell_id = ?",
-            (fact_cell_id,),
-        )
-        if row is None:
-            raise FactEvidenceIntegrityError(f"fact cell {fact_cell_id!r} does not exist")
-        if any(
-            _utc(self._datetime(row[column])) > _utc(cutoff)
-            for column in ("knowledge_at", "recorded_at")
-        ):
-            raise FactAdmissionError(
-                "fact_cell_after_cutoff",
-                record_kind="fact_cell",
-                record_id=fact_cell_id,
-                disposition="missing_provenance",
+        with publication_verification_scope(self._conn):
+            row = self._fetchone(
+                "SELECT knowledge_at,recorded_at FROM fact_cells_v2 WHERE fact_cell_id = ?",
+                (fact_cell_id,),
             )
-        self._admit_record("fact_cell", fact_cell_id, cutoff=cutoff)
-        try:
-            return self._plane.as_reported(fact_cell_id).cell
-        except (FactPlaneDecodeError, ValidationError) as exc:
-            raise FactEvidenceIntegrityError("stored fact cell cannot be decoded") from exc
+            if row is None:
+                raise FactEvidenceIntegrityError(f"fact cell {fact_cell_id!r} does not exist")
+            if any(
+                _utc(self._datetime(row[column])) > _utc(cutoff)
+                for column in ("knowledge_at", "recorded_at")
+            ):
+                raise FactAdmissionError(
+                    "fact_cell_after_cutoff",
+                    record_kind="fact_cell",
+                    record_id=fact_cell_id,
+                    disposition="missing_provenance",
+                )
+            self._admit_record("fact_cell", fact_cell_id, cutoff=cutoff)
+            try:
+                return self._plane.as_reported(fact_cell_id).cell
+            except (FactPlaneDecodeError, ValidationError) as exc:
+                raise FactEvidenceIntegrityError("stored fact cell cannot be decoded") from exc
 
     def as_reported(
         self,
@@ -288,34 +289,36 @@ class FactReadModel:
         *,
         cutoff: datetime,
     ) -> tuple[FactValueRecord, ...]:
-        cell = self.cell(fact_cell_id, cutoff=cutoff)
-        rows = self._fetchall(
-            "SELECT * FROM fact_observations_v2 "
-            "WHERE fact_cell_id = ? AND observation_kind = 'reported' "
-            "AND knowledge_at <= ? AND recorded_at <= ? "
-            "ORDER BY knowledge_at,recorded_at,observation_id",
-            (fact_cell_id, cutoff, cutoff),
-        )
-        observations = tuple(self._load_observation(row) for row in rows)
-        for observation in observations:
-            self._admit_observation_graph(observation, cutoff=cutoff)
-        return tuple(self._value_record(observation, cell) for observation in observations)
+        with publication_verification_scope(self._conn):
+            cell = self.cell(fact_cell_id, cutoff=cutoff)
+            rows = self._fetchall(
+                "SELECT * FROM fact_observations_v2 "
+                "WHERE fact_cell_id = ? AND observation_kind = 'reported' "
+                "AND knowledge_at <= ? AND recorded_at <= ? "
+                "ORDER BY knowledge_at,recorded_at,observation_id",
+                (fact_cell_id, cutoff, cutoff),
+            )
+            observations = tuple(self._load_observation(row) for row in rows)
+            for observation in observations:
+                self._admit_observation_graph(observation, cutoff=cutoff)
+            return tuple(self._value_record(observation, cell) for observation in observations)
 
     def as_known(self, fact_cell_id: str, cutoff: datetime) -> FactSnapshot:
-        try:
-            known = self._plane.as_known(fact_cell_id, cutoff)
-        except (FactPlaneDecodeError, ValidationError) as exc:
-            raise FactEvidenceIntegrityError("stored fact snapshot cannot be decoded") from exc
-        self._admit_record("fact_cell", fact_cell_id, cutoff=cutoff)
-        if known.resolution is not None:
-            self._admit_record(
-                "resolution_revision",
-                known.resolution.resolution_revision_id,
-                cutoff=cutoff,
-            )
-            for observation in known.candidates:
-                self._admit_observation_graph(observation, cutoff=cutoff)
-        return self._snapshot(known)
+        with publication_verification_scope(self._conn):
+            try:
+                known = self._plane.as_known(fact_cell_id, cutoff)
+            except (FactPlaneDecodeError, ValidationError) as exc:
+                raise FactEvidenceIntegrityError("stored fact snapshot cannot be decoded") from exc
+            self._admit_record("fact_cell", fact_cell_id, cutoff=cutoff)
+            if known.resolution is not None:
+                self._admit_record(
+                    "resolution_revision",
+                    known.resolution.resolution_revision_id,
+                    cutoff=cutoff,
+                )
+                for observation in known.candidates:
+                    self._admit_observation_graph(observation, cutoff=cutoff)
+            return self._snapshot(known)
 
     def current_resolved(
         self,
@@ -415,17 +418,18 @@ class FactReadModel:
         *,
         cutoff: datetime,
     ) -> tuple[FactValueRecord, ...]:
-        cell = self.cell(fact_cell_id, cutoff=cutoff)
-        rows = self._fetchall(
-            "SELECT * FROM fact_observations_v2 WHERE fact_cell_id = ? "
-            "AND knowledge_at <= ? AND recorded_at <= ? "
-            "ORDER BY knowledge_at,recorded_at,observation_id",
-            (fact_cell_id, cutoff, cutoff),
-        )
-        observations = tuple(self._load_observation(row) for row in rows)
-        for observation in observations:
-            self._admit_observation_graph(observation, cutoff=cutoff)
-        return tuple(self._value_record(item, cell) for item in observations)
+        with publication_verification_scope(self._conn):
+            cell = self.cell(fact_cell_id, cutoff=cutoff)
+            rows = self._fetchall(
+                "SELECT * FROM fact_observations_v2 WHERE fact_cell_id = ? "
+                "AND knowledge_at <= ? AND recorded_at <= ? "
+                "ORDER BY knowledge_at,recorded_at,observation_id",
+                (fact_cell_id, cutoff, cutoff),
+            )
+            observations = tuple(self._load_observation(row) for row in rows)
+            for observation in observations:
+                self._admit_observation_graph(observation, cutoff=cutoff)
+            return tuple(self._value_record(item, cell) for item in observations)
 
     def relations(
         self,
@@ -433,19 +437,20 @@ class FactReadModel:
         *,
         cutoff: datetime,
     ) -> tuple[FactRelationRecord, ...]:
-        self._admit_record(
-            "fact_observation",
-            observation_id,
-            cutoff=cutoff,
-        )
-        rows = self._bounded_relation_rows(observation_id, cutoff=cutoff)
-        for row in rows:
+        with publication_verification_scope(self._conn):
             self._admit_record(
-                "observation_relation",
-                str(row["relation_id"]),
+                "fact_observation",
+                observation_id,
                 cutoff=cutoff,
             )
-        return tuple(self._relation_record(row) for row in rows)
+            rows = self._bounded_relation_rows(observation_id, cutoff=cutoff)
+            for row in rows:
+                self._admit_record(
+                    "observation_relation",
+                    str(row["relation_id"]),
+                    cutoff=cutoff,
+                )
+            return tuple(self._relation_record(row) for row in rows)
 
     def _bounded_relation_rows(
         self,
@@ -467,16 +472,17 @@ class FactReadModel:
         *,
         cutoff: datetime,
     ) -> ProvenanceBundle:
-        row = self._fetchone(
-            self._provenance_bundle_select()
-            + "WHERE observation.observation_id = ? "
-            + "AND observation.knowledge_at <= ? "
-            + "AND observation.recorded_at <= ?",
-            (observation_id, cutoff, cutoff),
-        )
-        if row is None:
-            raise ObservationUnavailableError(observation_id)
-        return self._provenance_bundle_from_row(row, cutoff=cutoff)
+        with publication_verification_scope(self._conn):
+            row = self._fetchone(
+                self._provenance_bundle_select()
+                + "WHERE observation.observation_id = ? "
+                + "AND observation.knowledge_at <= ? "
+                + "AND observation.recorded_at <= ?",
+                (observation_id, cutoff, cutoff),
+            )
+            if row is None:
+                raise ObservationUnavailableError(observation_id)
+            return self._provenance_bundle_from_row(row, cutoff=cutoff)
 
     @staticmethod
     def _provenance_bundle_select() -> str:
@@ -524,35 +530,36 @@ class FactReadModel:
         unit_key: str,
     ) -> ProvenanceBundle | None:
         """Verify one derived output's sealed graph and current resolution."""
-        try:
-            bundle = self.provenance_bundle(observation_id, cutoff=cutoff)
-        except (FactAdmissionError, ValueError, sqlite3.Error):
-            return None
-        derivation = bundle.derivation
-        if (
-            bundle.observation.observation_kind != "derived"
-            or bundle.observation.value_kind != "numeric"
-            or bundle.observation.decimal_value is None
-            or derivation is None
-            or derivation.formula_id != formula_id
-            or derivation.formula_version != formula_version
-            or bundle.cell.concept_namespace != concept_namespace
-            or bundle.cell.concept_name != formula_id
-            or bundle.cell.taxonomy_name != taxonomy_name
-            or bundle.cell.taxonomy_version != f"formula-v{formula_version}"
-            or bundle.cell.unit_key != unit_key
-            or bundle.cell.currency is not None
-        ):
-            return None
-        snapshot = self.current_resolved(bundle.cell.fact_cell_id, cutoff=cutoff)
-        if (
-            snapshot is None
-            or snapshot.resolution is None
-            or snapshot.resolution.status != "resolved"
-            or snapshot.resolution.selected_observation_id != observation_id
-        ):
-            return None
-        return bundle
+        with publication_verification_scope(self._conn):
+            try:
+                bundle = self.provenance_bundle(observation_id, cutoff=cutoff)
+            except (FactAdmissionError, ValueError, sqlite3.Error):
+                return None
+            derivation = bundle.derivation
+            if (
+                bundle.observation.observation_kind != "derived"
+                or bundle.observation.value_kind != "numeric"
+                or bundle.observation.decimal_value is None
+                or derivation is None
+                or derivation.formula_id != formula_id
+                or derivation.formula_version != formula_version
+                or bundle.cell.concept_namespace != concept_namespace
+                or bundle.cell.concept_name != formula_id
+                or bundle.cell.taxonomy_name != taxonomy_name
+                or bundle.cell.taxonomy_version != f"formula-v{formula_version}"
+                or bundle.cell.unit_key != unit_key
+                or bundle.cell.currency is not None
+            ):
+                return None
+            snapshot = self.current_resolved(bundle.cell.fact_cell_id, cutoff=cutoff)
+            if (
+                snapshot is None
+                or snapshot.resolution is None
+                or snapshot.resolution.status != "resolved"
+                or snapshot.resolution.selected_observation_id != observation_id
+            ):
+                return None
+            return bundle
 
     def reported_source_leaves(
         self,
@@ -561,32 +568,33 @@ class FactReadModel:
         cutoff: datetime,
     ) -> tuple[ProvenanceBundle, ...]:
         """Return admitted reported leaves of a bounded derived input graph."""
-        if not observation_ids:
-            raise ValueError("source graph requires an observation")
-        frontier = observation_ids
-        seen: set[str] = set()
-        leaves: list[ProvenanceBundle] = []
-        for _ in range(32):
-            next_frontier: list[str] = []
-            for bundle in self.required_provenance_bundles(frontier, cutoff=cutoff):
-                observation_id = bundle.observation.observation_id
-                if observation_id in seen:
-                    continue
-                seen.add(observation_id)
-                if len(seen) > 500:
-                    raise ValueError("source graph exceeds admission bound")
-                if bundle.evidence is not None:
-                    leaves.append(bundle)
-                elif bundle.derivation is not None:
-                    next_frontier.extend(bundle.derivation.input_observation_ids)
-                else:
-                    raise ValueError("source graph has no reported evidence")
-            if not next_frontier:
-                if not leaves:
-                    raise ValueError("source graph has no reported evidence")
-                return tuple(leaves)
-            frontier = tuple(next_frontier)
-        raise ValueError("source graph exceeds admission depth")
+        with publication_verification_scope(self._conn):
+            if not observation_ids:
+                raise ValueError("source graph requires an observation")
+            frontier = observation_ids
+            seen: set[str] = set()
+            leaves: list[ProvenanceBundle] = []
+            for _ in range(32):
+                next_frontier: list[str] = []
+                for bundle in self.required_provenance_bundles(frontier, cutoff=cutoff):
+                    observation_id = bundle.observation.observation_id
+                    if observation_id in seen:
+                        continue
+                    seen.add(observation_id)
+                    if len(seen) > 500:
+                        raise ValueError("source graph exceeds admission bound")
+                    if bundle.evidence is not None:
+                        leaves.append(bundle)
+                    elif bundle.derivation is not None:
+                        next_frontier.extend(bundle.derivation.input_observation_ids)
+                    else:
+                        raise ValueError("source graph has no reported evidence")
+                if not next_frontier:
+                    if not leaves:
+                        raise ValueError("source graph has no reported evidence")
+                    return tuple(leaves)
+                frontier = tuple(next_frontier)
+            raise ValueError("source graph exceeds admission depth")
 
     def required_provenance_bundles(
         self,

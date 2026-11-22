@@ -657,9 +657,11 @@ def test_closed_parse_unsupported_envelopes(token: str) -> None:
         parse_source_numeric(token)
 
 
-@pytest.mark.parametrize(
-    "sign",
-    [
+def test_closed_boundary_unicode_sign_catalog() -> None:
+    # Exhaustive over every Unicode sign; one case because each sign is one check.
+    from pipeline.kpi_semantics import source_numeric_token_occurs
+
+    signs = [
         char
         for char in map(chr, range(sys.maxunicode + 1))
         if char not in "+-"
@@ -668,32 +670,30 @@ def test_closed_parse_unsupported_envelopes(token: str) -> None:
             or (unicodedata.category(char) == "Sm" and "MINUS" in unicodedata.name(char, ""))
             or unicodedata.normalize("NFKC", char) in {"+", "-"}
         )
-    ],
-)
-def test_closed_boundary_unicode_sign_catalog(sign: str) -> None:
+    ]
+    assert signs
+    for sign in signs:
+        for quote in (f"Revenue {sign}20", f"Revenue {sign} $20", f'Revenue: "{sign}20"'):
+            assert not source_numeric_token_occurs("20", quote), repr(quote)
+        assert not source_numeric_token_occurs("1", f"Revenue 1{sign}20"), repr(sign)
+
+
+def test_closed_boundary_format_control_catalog() -> None:
+    # Exhaustive over every format/control character; one case for one check.
     from pipeline.kpi_semantics import source_numeric_token_occurs
 
-    for quote in (f"Revenue {sign}20", f"Revenue {sign} $20", f'Revenue: "{sign}20"'):
-        assert not source_numeric_token_occurs("20", quote), repr(quote)
-    assert not source_numeric_token_occurs("1", f"Revenue 1{sign}20")
-
-
-@pytest.mark.parametrize(
-    "control",
-    [
+    controls = [
         char
         for char in map(chr, range(sys.maxunicode + 1))
         if unicodedata.category(char) == "Cf"
         or (unicodedata.category(char) == "Cc" and not char.isspace())
-    ],
-)
-def test_closed_boundary_format_control_catalog(control: str) -> None:
-    from pipeline.kpi_semantics import source_numeric_token_occurs
-
-    for quote in (f"Revenue {control}-20", f"Revenue -{control}20", f"Revenue 20{control}"):
-        assert not source_numeric_token_occurs("20", quote), repr(quote)
-    assert not source_numeric_token_occurs("2", f"Revenue 2{control}0")
-    assert not source_numeric_token_occurs("0", f"Revenue 2{control}0")
+    ]
+    assert controls
+    for control in controls:
+        for quote in (f"Revenue {control}-20", f"Revenue -{control}20", f"Revenue 20{control}"):
+            assert not source_numeric_token_occurs("20", quote), repr(quote)
+        assert not source_numeric_token_occurs("2", f"Revenue 2{control}0"), repr(control)
+        assert not source_numeric_token_occurs("0", f"Revenue 2{control}0"), repr(control)
 
 
 @pytest.mark.parametrize(

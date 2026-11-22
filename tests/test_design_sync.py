@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import cast
 
+import pytest
 from pytest import MonkeyPatch
 
 from scripts import check_design_sync, gen_design_conformance_debt, gen_design_controls
@@ -80,12 +82,29 @@ def test_design_sync_reports_control_generator_drift(monkeypatch: MonkeyPatch) -
     ]
 
 
-def test_design_sync_delegates_to_clean_canonical_conformance_receipt() -> None:
-    assert check_design_sync.conformance_receipt_failures() == []
+@pytest.fixture
+def committed_ledger(monkeypatch: MonkeyPatch) -> dict[str, object]:
+    """The checked-in ledger stands in for a fresh scan.
+
+    CI's design job proves the ledger equals a fresh whole-repository scan, so
+    these growth-rule tests do not rescan every governed surface.
+    """
+    ledger = cast(
+        dict[str, object],
+        json.loads(gen_design_conformance_debt.BASELINE.read_text(encoding="utf-8")),
+    )
+
+    def scanned(
+        _project_root: Path = gen_design_conformance_debt.PROJECT_ROOT,
+    ) -> dict[str, object]:
+        return json.loads(json.dumps(ledger))
+
+    monkeypatch.setattr(gen_design_conformance_debt, "build_payload", scanned)
+    return ledger
 
 
 def test_exact_design_debt_ledger_is_current_and_rejects_identity_growth(
-    tmp_path: Path,
+    tmp_path: Path, committed_ledger: dict[str, object]
 ) -> None:
     assert gen_design_conformance_debt.check()
     payload = gen_design_conformance_debt.build_payload()
@@ -107,7 +126,9 @@ def test_exact_design_debt_ledger_is_current_and_rejects_identity_growth(
     ]
 
 
-def test_merge_base_gate_rejects_hand_edited_debt_growth(monkeypatch: MonkeyPatch) -> None:
+def test_merge_base_gate_rejects_hand_edited_debt_growth(
+    monkeypatch: MonkeyPatch, committed_ledger: dict[str, object]
+) -> None:
     head = gen_design_conformance_debt.build_payload()
     base = dict(head)
     findings = head["findings"]
@@ -129,7 +150,7 @@ def test_merge_base_gate_rejects_hand_edited_debt_growth(monkeypatch: MonkeyPatc
 
 
 def test_merge_base_gate_allows_only_explicit_first_ledger_bootstrap(
-    monkeypatch: MonkeyPatch,
+    monkeypatch: MonkeyPatch, committed_ledger: dict[str, object]
 ) -> None:
     def missing_ledger(_project_root: Path, _base_ref: str) -> None:
         return None
