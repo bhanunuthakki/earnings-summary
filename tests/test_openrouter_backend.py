@@ -203,6 +203,11 @@ def test_call_llm_explicit_backend_forces_openrouter(monkeypatch: pytest.MonkeyP
     assert seen["model"] == _DEEPSEEK
 
 
+def test_call_llm_unknown_backend_still_raises() -> None:
+    with pytest.raises(ValueError, match="Unknown LLM backend"):
+        llm_cli.call_llm("p", purpose="bear_case", backend="grok")
+
+
 def test_openrouter_operational_failure_degrades_to_claude(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

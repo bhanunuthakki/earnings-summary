@@ -13,7 +13,6 @@ upgrade to head), mirroring tests/test_dashboard_feed.py.
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -34,12 +33,8 @@ from alerts import (
     list_queued_actions_for_alert,
     queue_action,
 )
+from execution import comments_server
 from user_state.ledger import list_entries
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import comments_server  # noqa: E402
 
 _PRIOR_HEAD = "0059_kpi_facts_restatement"
 
@@ -86,7 +81,7 @@ def _seed_pending_action(
     return qa.id
 
 
-def test_digest_route_redirects_to_home(client) -> None:
+def test_digest_route_redirects_to_home(client: FlaskClient) -> None:
     """The standalone digest retired (2026-06-11): /digest 302s to the Home
     rail — old bookmarks (with or without query args) land on the shell,
     never a 404."""
@@ -96,7 +91,7 @@ def test_digest_route_redirects_to_home(client) -> None:
         assert resp.headers["Location"].endswith("/#home")
 
 
-def test_feed_route_renders_empty_state(client) -> None:
+def test_feed_route_renders_empty_state(client: FlaskClient) -> None:
     resp = client.get("/feed")
     assert resp.status_code == 200
     body = resp.data.decode()
@@ -104,13 +99,13 @@ def test_feed_route_renders_empty_state(client) -> None:
     assert "No items match" in body  # empty substrate → empty-state document
 
 
-def test_feed_route_echoes_filters(client) -> None:
+def test_feed_route_echoes_filters(client: FlaskClient) -> None:
     resp = client.get("/feed?ticker=NU&status=pending&limit=10")
     assert resp.status_code == 200
     assert "NU" in resp.data.decode()  # the filter strip echoes the slice
 
 
-def test_alerts_alias_redirects_to_feed_preserving_filters(client) -> None:
+def test_alerts_alias_redirects_to_feed_preserving_filters(client: FlaskClient) -> None:
     resp = client.get("/alerts?ticker=NU", follow_redirects=False)
     assert resp.status_code in (301, 302)
     location = resp.headers["Location"]
