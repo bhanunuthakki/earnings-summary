@@ -6,6 +6,9 @@ import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from execution.extract_kpis_from_ir import refresh_sqlite_planner_stats
 from report import builder as report_builder
@@ -172,3 +175,51 @@ def test_refresh_sqlite_planner_stats_runs_analyze_then_optimize(tmp_path: Path)
         refresh_sqlite_planner_stats(conn)
     finally:
         conn.close()
+
+
+def test_financials_fallback_triggers_when_canonical_relation_has_only_balance_sheet_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = tmp_path / "sparse_bs.db"
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE documents (
+                id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, source_type TEXT NOT NULL,
+                doc_type TEXT NOT NULL, file_path TEXT NOT NULL, sha256 TEXT NOT NULL,
+                fetched_at TIMESTAMP NOT NULL, fetch_status TEXT NOT NULL,
+                raw_bytes_size INTEGER NOT NULL DEFAULT 0, source_quality_tier TEXT NOT NULL
+            );
+            CREATE TABLE financial_facts (
+                id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, period_end TIMESTAMP NOT NULL,
+                fiscal_period_type TEXT NOT NULL, line_item TEXT NOT NULL, value TEXT NOT NULL,
+                currency TEXT, unit TEXT NOT NULL DEFAULT 'actual', source_doc_id INTEGER NOT NULL,
+                supersedes_id INTEGER
+            );
+            CREATE VIEW v_financial_facts_resolved_current AS
+                SELECT * FROM financial_facts WHERE line_item = 'cash_and_equivalents';
+            INSERT INTO documents VALUES
+                (1, 'SPARSE', 'sec_xbrl', '10k', 's.json', 'a', '2026-01-01', 'ok', 1, 'sec_official'),
+                (2, 'SPARSE', 'fmp', 'fmp', 'f.json', 'b', '2026-01-02', 'ok', 1, 'fmp_normalized');
+            INSERT INTO financial_facts VALUES
+                (1, 'SPARSE', '2024-12-31 00:00:00', 'Q4', 'cash_and_equivalents', '100000000', 'USD', 'actual', 1, NULL),
+                (2, 'SPARSE', '2025-12-31 00:00:00', 'Q4', 'cash_and_equivalents', '200000000', 'USD', 'actual', 1, NULL),
+                (3, 'SPARSE', '2025-03-31 00:00:00', 'Q1', 'revenue', '500000000', 'USD', 'actual', 2, NULL),
+                (4, 'SPARSE', '2025-06-30 00:00:00', 'Q2', 'revenue', '550000000', 'USD', 'actual', 2, NULL);
+            """
+        )
+        conn.commit()
+
+        def _fake_canonical_relation(*_args: object, **_kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(sql="v_financial_facts_resolved_current")
+
+        monkeypatch.setattr(financials_section, "canonical_fact_relation", _fake_canonical_relation)
+        section = financials_section.build_legacy_shadow("SPARSE", tmp_path, conn=conn)
+    finally:
+        conn.close()
+
+    rev = next(item for item in section.line_items if item.line_item == "Revenue")
+    assert section.quarter_labels == ["2024 Q4", "2025 Q1", "2025 Q2", "2025 Q4"]
+    assert rev.values == [None, 500.0, 550.0, None]

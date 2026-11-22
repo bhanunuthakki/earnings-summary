@@ -1267,7 +1267,8 @@ def _query_facts_rows(
         (ticker.upper(), *period_types, limit),
     )
     rows = [dict(r) for r in cursor.fetchall()]
-    if len(rows) < 2 and fact_rel != "financial_facts":
+    rev_rows = sum(1 for r in rows if r.get("revenue") is not None)
+    if rev_rows < 2 and fact_rel != "financial_facts":
         extra_where = (
             "AND NOT EXISTS (SELECT 1 FROM financial_facts s WHERE s.supersedes_id = ff.id)"
             if _has_financial_facts_supersedes_id(conn)
@@ -1285,7 +1286,8 @@ def _query_facts_rows(
             (ticker.upper(), *period_types, limit),
         )
         direct_rows = [dict(r) for r in cursor.fetchall()]
-        if len(direct_rows) > len(rows):
+        direct_rev_rows = sum(1 for r in direct_rows if r.get("revenue") is not None)
+        if direct_rev_rows > rev_rows or len(direct_rows) > len(rows):
             rows = direct_rows
     rows.reverse()  # → oldest first
     return rows

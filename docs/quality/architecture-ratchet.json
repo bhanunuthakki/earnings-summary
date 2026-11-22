@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "2f77eadfb4217b42c29b45022dae0ee86979733c",
+  "scoped_commit": "c0f30258e0ebbf340797f51bfde4f13316727290",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "3df686e24e8833d02c7b2280dd8c91c03d4f24347d4659d0d7933fa107f2ca7e",
+  "source_sha256": "6ffa7c3e1d7e6074f2149b8463bb04573ab3022b5ccb5ed29f68256274c40d1b",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1406,
-    "total_noncomment_loc": 562002,
+    "total_noncomment_loc": 562004,
     "modules_over_1000_loc": 117,
     "modules_over_2000_loc": 23,
     "modules_at_least_3000_loc": 5,
@@ -18309,9 +18309,9 @@
         "path": "src/report/sections/financials.py",
         "module": "report.sections.financials",
         "lines": {
-          "physical": 1965,
-          "nonblank": 1798,
-          "noncomment": 1716
+          "physical": 1967,
+          "nonblank": 1800,
+          "noncomment": 1718
         },
         "internal_fan_out": 17,
         "responsibilities": [
