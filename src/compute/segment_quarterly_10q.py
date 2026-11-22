@@ -261,6 +261,7 @@ class _CapturedCell:
     raw_label: str
     section_key: str
     confidence: float
+    is_prior_year: bool = False
 
 
 def extract_for_ticker(
@@ -431,10 +432,14 @@ def extract_for_ticker(
                     if cls.classification in ("current_discrete", "current_cumulative")
                     else cls.prior_year_end
                 )
-                fpt = _fiscal_period_type_for(cls.classification, quarter)
-                basis: Literal["discrete", "cumulative"] = (
-                    "cumulative" if cls.classification == "current_cumulative" else "discrete"
+                fpt = _fiscal_period_type_for(
+                    cls.classification, quarter, cls.parsed.duration_months
                 )
+                is_prior = cls.classification == "prior_year_comparative"
+                is_cum = cls.classification == "current_cumulative" or (
+                    is_prior and cls.parsed.duration_months in (6, 9, 12)
+                )
+                basis: Literal["discrete", "cumulative"] = "cumulative" if is_cum else "discrete"
                 captured.append(
                     _CapturedCell(
                         dim_name=segment_name,
@@ -446,6 +451,7 @@ def extract_for_ticker(
                         raw_label=labels[col] if col < len(labels) else "",
                         section_key=section_key,
                         confidence=confidence,
+                        is_prior_year=is_prior,
                     )
                 )
 
@@ -471,12 +477,24 @@ def extract_for_ticker(
     return result
 
 
-def _fiscal_period_type_for(classification: str, quarter: NominalQuarter) -> FiscalPeriodType:
+def _fiscal_period_type_for(
+    classification: str, quarter: NominalQuarter, duration_months: int | None = None
+) -> FiscalPeriodType:
     if classification == "current_discrete":
         return FiscalPeriodType(quarter)
     if classification == "current_cumulative":
-        return FiscalPeriodType.H1 if quarter == "Q2" else FiscalPeriodType.NINE_MONTHS
-    # prior_year_comparative: same nominal shape, prior fiscal year.
+        if quarter == "Q2" or duration_months == 6:
+            return FiscalPeriodType.H1
+        if quarter == "Q4" or duration_months == 12:
+            return FiscalPeriodType.FY
+        return FiscalPeriodType.NINE_MONTHS
+    # prior_year_comparative: preserve cumulative vs discrete cadence.
+    if duration_months == 6:
+        return FiscalPeriodType.H1
+    if duration_months == 9:
+        return FiscalPeriodType.NINE_MONTHS
+    if duration_months == 12:
+        return FiscalPeriodType.FY
     return FiscalPeriodType(quarter)
 
 
@@ -547,9 +565,9 @@ def _derive_discrete_from_cumulative(
       3. confidence decays one hop (``_DERIVE_CONFIDENCE_DECAY``).
       4. cross-check against consolidated revenue (RECONCILE_TOLERANCE_OVER).
     """
-    if quarter == "Q1":
+    if quarter in ("Q1", "Q4"):
         return 0
-    cumulative_cells = [c for c in cells if c.period_basis == "cumulative"]
+    cumulative_cells = [c for c in cells if c.period_basis == "cumulative" and not c.is_prior_year]
     if not cumulative_cells:
         return 0
 

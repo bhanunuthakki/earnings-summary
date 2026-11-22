@@ -8,6 +8,7 @@ anchoring, table/narrative extraction, and fact persistence for FPI filers
 from __future__ import annotations
 
 import hashlib
+import html
 import logging
 import re
 import sqlite3
@@ -20,7 +21,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from log_redact import redact as _redact
 from models.documents import SourceType
@@ -172,7 +173,13 @@ def locate_fpi_exhibit(
         return None
 
     sess = session or requests.Session()
-    form_filter = ("6-K", "6-K/A") if form.upper() in ("6-K", "6-K/A") else ("20-F", "20-F/A")
+    upper_form = form.upper()
+    if "6-K" in upper_form:
+        form_filter: tuple[str, ...] = ("6-K", "6-K/A")
+    elif "40-F" in upper_form:
+        form_filter = ("40-F", "40-F/A")
+    else:
+        form_filter = ("20-F", "20-F/A")
     candidates = _candidate_filings(cik, form_filter, sess)
 
     window_start = None
@@ -255,14 +262,18 @@ def locate_fpi_exhibit(
     return None
 
 
+_SCRIPT_STYLE_RE = re.compile(
+    r"<(?:script|style)\b[^>]*>.*?</(?:script|style)>", re.IGNORECASE | re.DOTALL
+)
+_DATA_URI_RE = re.compile(r"data:[^\s\"'<>]+", re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^>]+>")
-_ENTITY_WS_RE = re.compile(r"&nbsp;|&#\d+;")
 _WS_RE = re.compile(r"\s+")
 
 
 def strip_html(raw_html: str) -> str:
-    plain = _TAG_RE.sub(" ", raw_html)
-    plain = _ENTITY_WS_RE.sub(" ", plain)
+    cleaned = _SCRIPT_STYLE_RE.sub(" ", raw_html)
+    plain = _TAG_RE.sub(" ", cleaned)
+    plain = html.unescape(plain)
     return _WS_RE.sub(" ", plain).strip()
 
 
@@ -281,7 +292,8 @@ def fetch_fpi_exhibit(
 
     raw_html = r.text
     plain_text = strip_html(raw_html)
-    density = len(plain_text) / max(len(raw_html), 1)
+    density_html = _DATA_URI_RE.sub("", raw_html)
+    density = len(plain_text) / max(len(density_html), 1)
     is_image_only = len(plain_text) < _MIN_TEXT_CHARS or density < _MIN_TEXT_DENSITY
     sha256 = hashlib.sha256(raw_html.encode("utf-8")).hexdigest()
 
@@ -318,9 +330,92 @@ def register_and_anchor_fpi_document(
     )
 
 
+_UNICODE_MINUS_RE = re.compile(r"[\u2212\u2013\u2014]")
+_YEAR_ONLY_RE = re.compile(r"^(?:19|20)\d{2}$")
+_NOTE_COL_RE = re.compile(r"^(?:notes?|refs?|references?)$", re.IGNORECASE)
+_EXCLUDED_COL_RE = re.compile(
+    r"(?:%|growth|change|\bat\s+cer\b|effect\s+of|adjusted|provisions?|impairments?|legal|ex\s*rate)",
+    re.IGNORECASE,
+)
+_PERIOD_HDR_RE = re.compile(
+    r"(?:\b20\d{2}\b|\bq[1-4]\b|\b(?:three|six|nine|twelve)[- ]months?\b|"
+    r"\b(?:3|6|9|12)m\b|\bmonths?\s+ended\b|\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{2}-\d{2})",
+    re.IGNORECASE,
+)
+_YTD_HDR_RE = re.compile(
+    r"(?:\b(?:6|9)m\b|\b(?:six|nine)[- ]?months?(?:\s+periods?)?\b|\bytd\b|\bhalf[- ]?year\b|\bfirst\s+half\b)",
+    re.IGNORECASE,
+)
+_STANDALONE_Q_HDR_RE = re.compile(
+    r"(?:\b3m\b|\bthree[- ]?months?(?:\s+periods?)?\b|\bquarterly\b)",
+    re.IGNORECASE,
+)
+_CURRENCY_ALIASES: tuple[tuple[str, Currency], ...] = (
+    (r"\bUS\s*\$|\bU\.?S\.?\s+DOLLARS?\b|\bUS\s+DOLLARS?\b", Currency.USD),
+    (r"\bDANISH\s+KRONER?\b", Currency.DKK),
+    (r"\bBRAZILIAN\s+REAIS?\b", Currency.BRL),
+    (r"\bEUROS?\b|€", Currency.EUR),
+    (r"\bPOUNDS?\s+STERLING\b|£", Currency.GBP),
+    (r"NT\$|\bNEW\s+TAIWAN\s+DOLLARS?\b", Currency.TWD),
+    (r"\bCANADIAN\s+DOLLARS?\b", Currency.CAD),
+    (r"\bSWISS\s+FRANCS?\b", Currency.CHF),
+)
+_SCALE_BILLIONS_RE = re.compile(
+    r"(?:\bin\s+(?:[a-z]{2,4}\s+|us\$\s*|nt\$\s*|u\.?s\.?\s+dollars?\s+)?billions?\b|"
+    r"\bbillions?\s+of\s+(?:[a-z.]+\s+){0,3}(?:dollars?|kroner|reais|euros?|pounds?|francs?)\b|"
+    r"\b(?:dkk|usd|eur|cad|twd|gbp|chf|brl|kr)\s+billions?\b|"
+    r"(?:€|£|\$|nt\$|us\$)\s+billions?\b)",
+    re.IGNORECASE,
+)
+_SCALE_MILLIONS_RE = re.compile(
+    r"(?:\bin\s+(?:[a-z]{2,4}\s+|us\$\s*|nt\$\s*|u\.?s\.?\s+dollars?\s+)?millions?\b|"
+    r"\bmillions?\s+of\s+(?:[a-z.]+\s+){0,3}(?:dollars?|kroner|reais|euros?|pounds?|francs?)\b|"
+    r"\b(?:dkk|usd|eur|cad|twd|gbp|chf|brl|kr)\s+millions?\b|"
+    r"(?:€|£|\$|nt\$|us\$)\s+millions?\b)",
+    re.IGNORECASE,
+)
+_SCALE_THOUSANDS_RE = re.compile(
+    r"(?:\bin\s+(?:[a-z]{2,4}\s+|us\$\s*|nt\$\s*|u\.?s\.?\s+dollars?\s+)?thousands?\b|"
+    r"\bthousands?\s+of\s+(?:[a-z.]+\s+){0,3}(?:dollars?|kroner|reais|euros?|pounds?|francs?)\b|"
+    r"\b(?:dkk|usd|eur|cad|twd|gbp|chf|brl|kr)\s+thousands?\b|"
+    r"(?:€|£|\$|nt\$|us\$)\s+thousands?\b|"
+    r"\(000'?s?\))",
+    re.IGNORECASE,
+)
+_SCALE_PAIRED_CURRENCY_RE = re.compile(
+    r"(?:"
+    r"\b(USD|EUR|GBP|JPY|DKK|BRL|CAD|INR|AUD|KRW|CHF|TWD)\b"
+    r"|(\bUS\s*\$|\bU\.?S\.?\s+DOLLARS?\b|\bUS\s+DOLLARS?\b)"
+    r"|(NT\$|\bNEW\s+TAIWAN\s+DOLLARS?\b)"
+    r"|(\bDANISH\s+KRONER?\b)"
+    r"|(\bCANADIAN\s+DOLLARS?\b)"
+    r"|(\bSWISS\s+FRANCS?\b)"
+    r"|(\bBRAZILIAN\s+REAIS?\b)"
+    r"|(\bEUROS?\b|€)"
+    r"|(\bPOUNDS?\s+STERLING\b|£)"
+    r")\s+(?:in\s+)?(?:thousands?|millions?|billions?)"
+    r"|(?:thousands?|millions?|billions?)\s+(?:of\s+)?"
+    r"(?:"
+    r"\b(USD|EUR|GBP|JPY|DKK|BRL|CAD|INR|AUD|KRW|CHF|TWD)\b"
+    r"|(\bUS\s*\$|\bU\.?S\.?\s+DOLLARS?\b|\bUS\s+DOLLARS?\b)"
+    r"|(NT\$|\bNEW\s+TAIWAN\s+DOLLARS?\b)"
+    r"|(\bDANISH\s+KRONER?\b)"
+    r"|(\bCANADIAN\s+DOLLARS?\b)"
+    r"|(\bSWISS\s+FRANCS?\b)"
+    r"|(\bBRAZILIAN\s+REAIS?\b)"
+    r"|(\bEUROS?\b|€)"
+    r"|(\bPOUNDS?\s+STERLING\b|£)"
+    r")",
+    re.IGNORECASE,
+)
+
+
 def parse_numeric(val_str: str) -> Decimal | None:
     """Parse string formatted currency/number into Decimal."""
-    cleaned = val_str.replace("$", "").replace(",", "").replace("%", "").strip()
+    cleaned = html.unescape(val_str)
+    for token in ("US$", "NT$", "$", "€", "£", ",", "%"):
+        cleaned = cleaned.replace(token, "")
+    cleaned = _UNICODE_MINUS_RE.sub("-", cleaned).strip()
     if not cleaned:
         return None
     is_neg = False
@@ -337,24 +432,324 @@ def parse_numeric(val_str: str) -> Decimal | None:
         return None
 
 
-def _declared_currency(text: str) -> Currency | None:
-    """Return an explicitly declared filing currency; a dollar glyph is ambiguous."""
+def _all_declared_currencies(text: str) -> set[Currency]:
     upper = text.upper()
     found: set[Currency] = set()
     for currency in Currency:
         if re.search(rf"\b{currency.value}\b", upper):
             found.add(currency)
-    aliases = (
-        (r"\bUS\s*\$|\bU\.?S\.?\s+DOLLARS?\b|\bUS\s+DOLLARS?\b", Currency.USD),
-        (r"\bDANISH\s+KRONER?\b", Currency.DKK),
-        (r"\bBRAZILIAN\s+REAIS?\b", Currency.BRL),
-        (r"\bEUROS?\b", Currency.EUR),
-        (r"\bPOUNDS?\s+STERLING\b", Currency.GBP),
-    )
-    for pattern, currency in aliases:
+    for pattern, currency in _CURRENCY_ALIASES:
         if re.search(pattern, upper):
             found.add(currency)
+    return found
+
+
+def _declared_currency(text: str) -> Currency | None:
+    """Return an explicitly declared filing currency; a dollar glyph is ambiguous."""
+    found = _all_declared_currencies(text)
     return next(iter(found)) if len(found) == 1 else None
+
+
+def _extract_scale(text: str) -> Decimal:
+    if _SCALE_BILLIONS_RE.search(text):
+        return Decimal("1000000000")
+    if _SCALE_MILLIONS_RE.search(text):
+        return Decimal("1000000")
+    if _SCALE_THOUSANDS_RE.search(text):
+        return Decimal("1000")
+    return Decimal(1)
+
+
+def _preceding_table_headers(table: Tag) -> list[str]:
+    """Collect up to 5 non-empty block headers immediately preceding ``table``,
+    stopping at the previous table and skipping ancestor wrappers."""
+    ancestors = {id(parent) for parent in table.parents}
+    headers: list[str] = []
+    cur: Tag = table
+    steps = 0
+    while steps < 24 and len(headers) < 5:
+        prev = cur.find_previous(
+            ["p", "div", "span", "h1", "h2", "h3", "h4", "h5", "b", "strong", "table"]
+        )
+        if prev is None or prev.name == "table":
+            break
+        cur = prev
+        steps += 1
+        if id(prev) in ancestors:
+            continue
+        txt = _WS_RE.sub(" ", prev.get_text(" ", strip=True)).strip()
+        if not txt or len(txt) > 400:
+            continue
+        if not headers or headers[-1] != txt:
+            headers.append(txt)
+    headers.reverse()
+    return headers
+
+
+def _detect_table_currency_and_scale(
+    header_text: str, table_text: str
+) -> tuple[Currency | None, Decimal]:
+    """Detect currency and scale with header priority and scale-paired tie-breaking."""
+    scale = _extract_scale(header_text)
+    if scale == Decimal(1):
+        scale = _extract_scale(table_text)
+
+    currency = _declared_currency(header_text)
+    if currency is None:
+        paired: set[Currency] = set()
+        for match in _SCALE_PAIRED_CURRENCY_RE.finditer(header_text):
+            paired.update(_all_declared_currencies(match.group(0)))
+        if len(paired) == 1:
+            currency = next(iter(paired))
+    if currency is None:
+        currency = _declared_currency(table_text)
+    return currency, scale
+
+
+def _expand_table_rows(table: Tag) -> list[tuple[list[str], int]]:
+    """Expand ``tr`` elements into colspan-aligned cell lists plus non-empty cell count."""
+    expanded: list[tuple[list[str], int]] = []
+    for tr in table.find_all("tr"):
+        raw_cells = tr.find_all(["td", "th"])
+        row_cells: list[str] = []
+        non_empty = 0
+        for cell in raw_cells:
+            txt = _WS_RE.sub(" ", html.unescape(cell.get_text(" ", strip=True))).strip()
+            raw_cs = cell.get("colspan")
+            try:
+                cs = max(1, min(int(str(raw_cs)), 32)) if raw_cs is not None else 1
+            except ValueError:
+                cs = 1
+            if txt:
+                non_empty += 1
+            row_cells.extend([txt] * cs)
+        if non_empty > 0:
+            expanded.append((row_cells, non_empty))
+    return expanded
+
+
+def _looks_like_data_row(cells: list[str]) -> bool:
+    if len(cells) < 2 or not cells[0]:
+        return False
+    numeric_cells = [c for c in cells[1:] if c and "%" not in c and parse_numeric(c) is not None]
+    if not numeric_cells:
+        return False
+    # Exclude pure year header rows like ["Period", "2026", "2025"].
+    return not all(_YEAR_ONLY_RE.match(c) for c in numeric_cells)
+
+
+def _split_headers_and_data(
+    rows: list[tuple[list[str], int]],
+) -> tuple[list[list[str]], list[str], list[list[str]]]:
+    """Split expanded table rows into multi-column header rows, full-width banners, and data rows."""
+    header_rows: list[list[str]] = []
+    banner_texts: list[str] = []
+    data_start = len(rows)
+    for idx, (row_cells, non_empty) in enumerate(rows):
+        if _looks_like_data_row(row_cells):
+            data_start = idx
+            break
+        if non_empty == 1 and len(row_cells) > 1:
+            unique_non_empty = [c for c in row_cells if c]
+            if unique_non_empty:
+                banner_texts.append(unique_non_empty[0])
+        else:
+            header_rows.append(row_cells)
+    data_rows = [r for r, _ in rows[data_start:]]
+    return header_rows, banner_texts, data_rows
+
+
+def _is_ytd_only_table(context_text: str, fiscal_period_type: str) -> bool:
+    fpt = fiscal_period_type.upper()
+    if fpt not in ("Q1", "Q2", "Q3"):
+        return False
+    if not _YTD_HDR_RE.search(context_text):
+        return False
+    if _STANDALONE_Q_HDR_RE.search(context_text):
+        return False
+    return re.search(rf"\b{re.escape(fpt.lower())}\b", context_text, re.IGNORECASE) is None
+
+
+def _select_target_column(
+    header_rows: list[list[str]],
+    *,
+    period_end: datetime,
+    fiscal_period_type: str,
+) -> tuple[int | None, set[int]]:
+    """Build combined per-column headers and return ``(target_col_idx, excluded_cols)``."""
+    if not header_rows:
+        return None, set()
+    width = max(len(r) for r in header_rows)
+    col_headers: list[str] = []
+    excluded: set[int] = set()
+    for col in range(width):
+        parts: list[str] = []
+        for row in header_rows:
+            val = row[col] if col < len(row) else ""
+            if val and (not parts or parts[-1] != val):
+                parts.append(val)
+        hdr = " ".join(parts).strip()
+        col_headers.append(hdr)
+        if col >= 1 and (_NOTE_COL_RE.match(hdr) or _EXCLUDED_COL_RE.search(hdr)):
+            excluded.add(col)
+
+    period_cols = [c for c in range(1, width) if _PERIOD_HDR_RE.search(col_headers[c])]
+    if not period_cols:
+        return None, excluded
+
+    target_q = fiscal_period_type.lower()
+    target_year = str(period_end.year)
+    best_col: int | None = None
+    best_score = 0.0
+    for col in period_cols:
+        if col in excluded:
+            continue
+        hdr_l = col_headers[col].lower()
+        score = 0.0
+        years_in_hdr = re.findall(r"\b20\d{2}\b", hdr_l)
+        if years_in_hdr and target_year not in years_in_hdr:
+            score -= 100.0
+        elif target_year in years_in_hdr:
+            score += 100.0
+
+        has_q = re.search(rf"\b{re.escape(target_q)}\b", hdr_l) is not None
+        has_3m = _STANDALONE_Q_HDR_RE.search(hdr_l) is not None
+        has_ytd = _YTD_HDR_RE.search(hdr_l) is not None
+        if fiscal_period_type.upper() in ("Q1", "Q2", "Q3") and has_ytd and not (has_q or has_3m):
+            score -= 200.0
+        if has_q:
+            score += 100.0
+        elif has_3m:
+            score += 80.0
+        elif not has_ytd:
+            # Prefer a matching-year period date over unrelated columns when unlabeled by duration.
+            score += 20.0
+
+        score += 10.0 - (col * 0.01)
+        if score > best_score:
+            best_score = score
+            best_col = col
+    return best_col, excluded
+
+
+_LABEL_FOOTNOTE_RE = re.compile(r"(?:\s+\d+\))+\s*$")
+_DISQUALIFY_LABEL_TOKENS = (
+    "margin",
+    "ratio",
+    "%",
+    "non-controlling",
+    "noncontrolling",
+    "adjusted",
+    "at cer",
+    "effect of",
+    "previous period",
+    "reconciliation",
+    "other operating",
+    "segment operating",
+)
+
+
+def _match_line_item_label(raw_label: str) -> tuple[str, int, bool] | None:
+    """Map a normalized table row label to ``(line_item, priority, is_unscaled)``."""
+    norm = _UNICODE_MINUS_RE.sub("-", _WS_RE.sub(" ", raw_label)).strip().lower()
+    norm = _LABEL_FOOTNOTE_RE.sub("", norm).strip()
+    if not norm or any(tok in norm for tok in _DISQUALIFY_LABEL_TOKENS):
+        return None
+
+    if "earnings per share" in norm or "diluted eps" in norm:
+        if "diluted" in norm and "basic" not in norm:
+            return ("eps_diluted", 1, True)
+        return None
+
+    if "per share" in norm or "cost of" in norm or "changes in" in norm:
+        return None
+
+    if norm in (
+        "total revenue",
+        "total revenues",
+        "revenue",
+        "revenues",
+        "net sales",
+        "net sales ifrs",
+    ) or norm.startswith(("total revenue", "net sales")):
+        return ("revenue", 1, False)
+
+    if norm == "gross profit" or norm.startswith("gross profit"):
+        return ("gross_profit", 1, False)
+
+    if norm in (
+        "operating income",
+        "operating profit",
+        "operating profit (ebit)",
+        "operating (loss) income",
+        "operating profit ifrs",
+        "profit from operations",
+        "income from operations",
+    ) or norm.startswith(("operating income", "operating profit", "operating (loss) income")):
+        return ("operating_income", 1, False)
+
+    if (
+        "attributable to" in norm
+        and any(k in norm for k in ("shareholder", "owner", "parent"))
+        and any(k in norm for k in ("net income", "net profit", "net loss", "profit"))
+    ):
+        return ("net_income", 2, False)
+
+    if norm in (
+        "net income",
+        "net profit",
+        "net loss",
+        "net (loss) income",
+        "net income for the period",
+        "profit for the period",
+        "net profit for the period",
+    ) or norm.startswith(("net income", "net profit", "net loss", "net (loss) income")):
+        return ("net_income", 1, False)
+
+    if "before" not in norm and (
+        "net cash provided by operating activities" in norm
+        or "net cash generated from operating activities" in norm
+        or "operating cash flow" in norm
+        or "cash flows from operating activities" in norm
+        or "cash flows generated from (used in) operating activities" in norm
+    ):
+        return ("operating_cash_flow", 1, False)
+
+    if (
+        "capital expenditures" in norm
+        or "purchase of property and equipment" in norm
+        or "purchase of property, plant and equipment" in norm
+        or "purchases of property, plant and equipment" in norm
+    ):
+        return ("capital_expenditure", 1, False)
+
+    if norm == "free cash flow" or norm.startswith("free cash flow"):
+        return ("free_cash_flow", 2, False)
+
+    return None
+
+
+def _pick_row_cell_value(
+    row_cells: list[str], target_col: int | None, excluded_cols: set[int]
+) -> tuple[Decimal, str] | None:
+    if target_col is not None:
+        if target_col >= len(row_cells):
+            return None
+        raw = row_cells[target_col]
+        if raw in ("$", "€", "£", "US$", "NT$") and target_col + 1 < len(row_cells):
+            raw = row_cells[target_col + 1]
+        if not raw or "%" in raw:
+            return None
+        num = parse_numeric(raw)
+        return (num, raw) if num is not None else None
+
+    for idx, raw in enumerate(row_cells[1:], start=1):
+        if idx in excluded_cols or not raw or "%" in raw:
+            continue
+        num = parse_numeric(raw)
+        if num is not None:
+            return num, raw
+    return None
 
 
 def extract_fpi_financial_facts_html(
@@ -365,113 +760,79 @@ def extract_fpi_financial_facts_html(
     Returns dict mapping line_item -> (Decimal value in whole currency, unit, locator/excerpt).
     """
     soup = BeautifulSoup(html_text, "html.parser")
-    tables = soup.find_all("table")
     results: dict[str, tuple[Decimal, str, str]] = {}
+    results_priority: dict[str, int] = {}
 
-    for table in tables:
-        # Scale detection (check table text and preceding headers)
-        t_text = table.get_text().lower()
+    for table in soup.find_all("table"):
+        rows = _expand_table_rows(table)
+        if not rows:
+            continue
+        header_rows, banner_texts, data_rows = _split_headers_and_data(rows)
+        if not data_rows:
+            continue
+
         caption = table.find("caption")
-        nearest_heading = table.find_previous(["h1", "h2", "h3", "h4", "h5"])
-        local_context = " ".join(
-            part
-            for part in (
-                t_text,
-                caption.get_text(" ", strip=True).lower() if caption is not None else "",
-                nearest_heading.get_text(" ", strip=True).lower()
-                if nearest_heading is not None
-                else "",
-            )
-            if part
+        caption_txt = (
+            _WS_RE.sub(" ", caption.get_text(" ", strip=True)).strip()
+            if caption is not None
+            else ""
         )
-        context_text = local_context
-        currency = _declared_currency(context_text)
+        preceding = _preceding_table_headers(table)
+        hdr_rows_text = " ".join(" ".join(c for c in r if c) for r in header_rows)
+        header_text = " ".join(
+            part for part in (*preceding, caption_txt, *banner_texts, hdr_rows_text) if part
+        )
+        t_text = _WS_RE.sub(" ", table.get_text(" ", strip=True)).strip()
+
+        if _is_ytd_only_table(header_text, fiscal_period_type):
+            continue
+
+        currency, scale = _detect_table_currency_and_scale(header_text, t_text)
         if currency is None:
             # Never turn an unqualified "$" into USD.
             continue
-        scale = Decimal(1)
-        if re.search(r"\bin\s+(?:[a-z]{3}\s+)?thousands?\b", context_text):
-            scale = Decimal("1000")
-        elif re.search(r"\bin\s+(?:[a-z]{3}\s+)?millions?\b", context_text):
-            scale = Decimal("1000000")
 
-        # Line item matching patterns
-        rows = table.find_all("tr")
-        for r in rows:
-            cells = [c.get_text().strip() for c in r.find_all(["td", "th"]) if c.get_text().strip()]
-            if len(cells) < 2:
+        target_col, excluded_cols = _select_target_column(
+            header_rows, period_end=period_end, fiscal_period_type=fiscal_period_type
+        )
+        # If header explicitly declared multiple period columns and none matched the target quarter, skip.
+        if (
+            header_rows
+            and target_col is None
+            and any(_PERIOD_HDR_RE.search(" ".join(r)) for r in header_rows)
+        ):
+            continue
+
+        for row_cells in data_rows:
+            if len(row_cells) < 2:
                 continue
-            label = cells[0].lower()
-            nums: list[tuple[Decimal, str]] = []
-            for c in cells[1:]:
-                num = parse_numeric(c)
-                if num is not None:
-                    nums.append((num, c))
-
-            if not nums:
+            matched = _match_line_item_label(row_cells[0])
+            if matched is None:
                 continue
-            first_val: Decimal
-            raw_str: str
-            first_val, raw_str = nums[0]
+            line_item, priority, is_unscaled = matched
+            if results_priority.get(line_item, 0) >= priority:
+                continue
 
-            # Revenues
-            if (
-                "total revenue" in label or label == "revenues" or label == "revenue"
-            ) and "revenue" not in results:
-                results["revenue"] = (
-                    first_val * scale,
-                    currency.value,
-                    f"Table: {cells[0]} = {raw_str}",
-                )
-            elif "gross profit" in label and "gross_profit" not in results:
-                results["gross_profit"] = (
-                    first_val * scale,
-                    currency.value,
-                    f"Table: {cells[0]} = {raw_str}",
-                )
-            elif (
-                "operating income" in label
-                or "operating profit" in label
-                or "operating (loss) income" in label
-            ) and "operating_income" not in results:
-                results["operating_income"] = (
-                    first_val * scale,
-                    currency.value,
-                    f"Table: {cells[0]} = {raw_str}",
-                )
-            elif (
-                "net income" in label or "net loss" in label or "net (loss) income" in label
-            ) and "net_income" not in results:
-                results["net_income"] = (
-                    first_val * scale,
-                    currency.value,
-                    f"Table: {cells[0]} = {raw_str}",
-                )
-            elif (
-                "net cash provided by operating activities" in label
-                or "operating cash flow" in label
-                or "cash flows from operating activities" in label
-            ) and "operating_cash_flow" not in results:
-                results["operating_cash_flow"] = (
-                    first_val * scale,
-                    currency.value,
-                    f"Table: {cells[0]} = {raw_str}",
-                )
-            elif (
-                "capital expenditures" in label
-                or "purchase of property and equipment" in label
-                or "purchase of property, plant and equipment" in label
-            ) and "capital_expenditure" not in results:
-                # Store capex as negative per FMP/system convention
-                results["capital_expenditure"] = (
-                    -abs(first_val * scale),
-                    currency.value,
-                    f"Table: {cells[0]} = {raw_str}",
-                )
+            picked = _pick_row_cell_value(row_cells, target_col, excluded_cols)
+            if picked is None:
+                continue
+            raw_val, raw_str = picked
+            effective_scale = Decimal(1) if is_unscaled else scale
+            scaled_val = raw_val * effective_scale
+            if line_item == "capital_expenditure":
+                scaled_val = -abs(scaled_val)
 
-    # If both OCF and Capex exist, compute FCF
+            results[line_item] = (
+                scaled_val,
+                currency.value,
+                f"Table: {row_cells[0]} = {raw_str}",
+            )
+            results_priority[line_item] = priority
+
+    # Derive FCF only when not directly reported in standalone quarterly statements.
     if (
-        "operating_cash_flow" in results
+        "free_cash_flow" not in results
+        and "operating_cash_flow" in results
         and "capital_expenditure" in results
         and results["operating_cash_flow"][1] == results["capital_expenditure"][1]
     ):
@@ -663,11 +1024,24 @@ def ingest_fpi_for_ticker(
 ) -> FpiIngestResult:
     """Execute end-to-end ingestion and extraction for one FPI ticker/period."""
     ticker = ticker.upper()
+    fye_row = conn.execute(
+        "SELECT fiscal_year_end FROM tracked_companies WHERE ticker = ?",
+        (ticker,),
+    ).fetchone()
+    fye_str = fye_row[0] if fye_row and fye_row[0] else "12-31"
+    try:
+        parts = fye_str.split("-")
+        fye_month, fye_day = int(parts[0]), int(parts[1])
+    except Exception:
+        fye_month, fye_day = 12, 31
+
     located = locate_fpi_exhibit(
         ticker,
         quarter=quarter,
         year=year,
         form=form,
+        fye_month=fye_month,
+        fye_day=fye_day,
         session=session,
     )
     if located is None:
@@ -711,19 +1085,7 @@ def ingest_fpi_for_ticker(
         )
 
     p_quarter = quarter or "FY"
-    # Resolve company FYE
-    fye_row = conn.execute(
-        "SELECT fiscal_year_end FROM tracked_companies WHERE ticker = ?",
-        (ticker.upper(),),
-    ).fetchone()
-    fye_str = fye_row[0] if fye_row and fye_row[0] else "12-31"
-    try:
-        parts = fye_str.split("-")
-        fye_month, fye_day = int(parts[0]), int(parts[1])
-    except Exception:
-        fye_month, fye_day = 12, 31
-
-    nom_q = cast("NominalQuarter", quarter if quarter in ("Q1", "Q2", "Q3", "Q4") else "Q4")
+    nom_q: NominalQuarter = quarter if quarter is not None else "Q4"
     current_end, _ = expected_period_ends(nom_q, year, fye_month=fye_month, fye_day=fye_day)
     period_end_dt = datetime(current_end.year, current_end.month, current_end.day, tzinfo=UTC)
 

@@ -201,19 +201,20 @@ def find_incumbent(
     chained (A <- B <- C), `find_incumbent` returns C — the head of the
     chain — so the new row D supersedes C, preserving the linked list.
     """
+    period_day = period_end.strftime("%Y-%m-%d")
     try:
         if table == "financial_facts":
             row = conn.execute(
-                "SELECT id FROM financial_facts WHERE ticker = ? AND period_end = ? "
+                "SELECT id FROM financial_facts WHERE ticker = ? AND date(period_end) = date(?) "
                 "AND fiscal_period_type = ? AND line_item = ? ORDER BY id DESC LIMIT 1",
-                (ticker.upper(), period_end, fiscal_period_type, line_item),
+                (ticker.upper(), period_day, fiscal_period_type, line_item),
             ).fetchone()
         elif table == "kpi_facts":
             row = conn.execute(
-                "SELECT id FROM kpi_facts WHERE ticker = ? AND period_end = ? "
+                "SELECT id FROM kpi_facts WHERE ticker = ? AND date(period_end) = date(?) "
                 "AND fiscal_period_type = ? AND kpi_definition_id = ? "
                 "ORDER BY id DESC LIMIT 1",
-                (ticker.upper(), period_end, fiscal_period_type, line_item),
+                (ticker.upper(), period_day, fiscal_period_type, line_item),
             ).fetchone()
         else:
             raise ValueError(f"Unsupported table for restatement detection: {table!r}")
@@ -243,6 +244,110 @@ def _decimal_eq(stored: object, new: Decimal) -> bool:
         return Decimal(str(stored)) == new
     except (InvalidOperation, ValueError, TypeError):
         return str(stored) == str(new)
+
+
+def _heal_or_detect_same_document_fact(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    period_end: datetime,
+    fiscal_period_type: str,
+    line_item: str,
+    value: Decimal,
+    currency: str | None,
+    unit: str,
+    source_doc_id: int,
+    extracted_by: str | None,
+    schema_profile: FinancialFactSchemaProfile | None = None,
+) -> tuple[int | None, bool]:
+    """Return ``(corrected_row_id, existed_with_same_doc_date)`` using one lookup."""
+    if schema_profile is not None:
+        has_extracted_by = schema_profile.has_extracted_by
+    else:
+        has_extracted_by = _table_has_column(conn, "financial_facts", "extracted_by")
+    if not has_extracted_by:
+        return None, False
+    period_day = period_end.strftime("%Y-%m-%d")
+    try:
+        row = conn.execute(
+            """
+            SELECT id, value, currency, unit, extracted_by
+            FROM financial_facts
+            WHERE ticker = ?
+              AND date(period_end) = date(?)
+              AND fiscal_period_type = ?
+              AND line_item = ?
+              AND source_doc_id = ?
+            """,
+            (ticker.upper(), period_day, fiscal_period_type, line_item, source_doc_id),
+        ).fetchone()
+    except sqlite3.Error as exc:
+        log.error(
+            {
+                "event": "restatement_same_doc_lookup_failed",
+                "outcome": "raised",
+                "ticker": ticker,
+                "line_item": line_item,
+                "error": str(exc),
+            }
+        )
+        raise
+    if row is None:
+        return None, False
+    inc_id = int(row["id"] if hasattr(row, "keys") else row[0])
+    inc_value = row["value"] if hasattr(row, "keys") else row[1]
+    inc_currency = row["currency"] if hasattr(row, "keys") else row[2]
+    inc_unit = row["unit"] if hasattr(row, "keys") else row[3]
+    inc_extracted_by = row["extracted_by"] if hasattr(row, "keys") else row[4]
+
+    if inc_extracted_by != extracted_by:
+        return None, True
+
+    unchanged = (
+        _decimal_eq(inc_value, value)
+        and (inc_currency == currency)
+        and (str(inc_unit) == str(unit))
+    )
+    if unchanged:
+        return None, True
+
+    new_value_str = str(value)
+    try:
+        conn.execute(
+            "UPDATE financial_facts SET value = ?, currency = ?, unit = ? WHERE id = ?",
+            (new_value_str, currency, unit, inc_id),
+        )
+    except sqlite3.Error as exc:
+        log.error(
+            {
+                "event": "restatement_same_doc_correction_failed",
+                "outcome": "raised",
+                "ticker": ticker,
+                "line_item": line_item,
+                "error": str(exc),
+            }
+        )
+        raise
+
+    log.info(
+        {
+            "event": "financial_fact_same_doc_correction",
+            "ticker": ticker.upper(),
+            "period_end": str(period_end),
+            "fiscal_period_type": fiscal_period_type,
+            "line_item": line_item,
+            "source_doc_id": source_doc_id,
+            "row_id": inc_id,
+            "old_value": str(inc_value),
+            "new_value": new_value_str,
+            "old_currency": inc_currency,
+            "new_currency": currency,
+            "old_unit": str(inc_unit),
+            "new_unit": str(unit),
+        }
+    )
+    resolve_fact_row(conn, fact_table="financial_facts", fact_row_id=inc_id)
+    return inc_id, True
 
 
 def _correct_same_document_fact(
@@ -281,97 +386,20 @@ def _correct_same_document_fact(
     true no-op), the safety rail blocked the write, or the schema predates the
     `extracted_by` audit column (synthetic pre-0054 fixtures). Database and
     invariant failures propagate to the transaction owner; they are not replays."""
-    if schema_profile is not None:
-        has_extracted_by = schema_profile.has_extracted_by
-    else:
-        has_extracted_by = _table_has_column(conn, "financial_facts", "extracted_by")
-    if not has_extracted_by:
-        # Pre-0054 fixture schema: no audit column to gate the safety rail on,
-        # and same-document correction is a prod-healing concern only. Skip.
-        return None
-    try:
-        row = conn.execute(
-            """
-            SELECT id, value, currency, unit, extracted_by
-            FROM financial_facts
-            WHERE ticker = ?
-              AND period_end = ?
-              AND fiscal_period_type = ?
-              AND line_item = ?
-              AND source_doc_id = ?
-            """,
-            (ticker.upper(), period_end, fiscal_period_type, line_item, source_doc_id),
-        ).fetchone()
-    except sqlite3.Error as exc:
-        log.error(
-            {
-                "event": "restatement_same_doc_lookup_failed",
-                "outcome": "raised",
-                "ticker": ticker,
-                "line_item": line_item,
-                "error": str(exc),
-            }
-        )
-        raise
-    if row is None:
-        return None
-    inc_id = int(row["id"] if hasattr(row, "keys") else row[0])
-    inc_value = row["value"] if hasattr(row, "keys") else row[1]
-    inc_currency = row["currency"] if hasattr(row, "keys") else row[2]
-    inc_unit = row["unit"] if hasattr(row, "keys") else row[3]
-    inc_extracted_by = row["extracted_by"] if hasattr(row, "keys") else row[4]
-
-    # Safety rail: never overwrite a row authored by a different extractor.
-    # A NULL incumbent extractor is not the current sec_xbrl/fmp writer, so it
-    # is also left alone (it can only have come from a legacy/manual path).
-    if inc_extracted_by != extracted_by:
-        return None
-
-    unchanged = (
-        _decimal_eq(inc_value, value)
-        and (inc_currency == currency)
-        and (str(inc_unit) == str(unit))
+    corrected_id, _ = _heal_or_detect_same_document_fact(
+        conn,
+        ticker=ticker,
+        period_end=period_end,
+        fiscal_period_type=fiscal_period_type,
+        line_item=line_item,
+        value=value,
+        currency=currency,
+        unit=unit,
+        source_doc_id=source_doc_id,
+        extracted_by=extracted_by,
+        schema_profile=schema_profile,
     )
-    if unchanged:
-        return None  # identical replay stays a true no-op
-
-    new_value_str = str(value)
-    try:
-        conn.execute(
-            "UPDATE financial_facts SET value = ?, currency = ?, unit = ? WHERE id = ?",
-            (new_value_str, currency, unit, inc_id),
-        )
-    except sqlite3.Error as exc:
-        log.error(
-            {
-                "event": "restatement_same_doc_correction_failed",
-                "outcome": "raised",
-                "ticker": ticker,
-                "line_item": line_item,
-                "error": str(exc),
-            }
-        )
-        raise
-
-    log.info(
-        {
-            "event": "financial_fact_same_doc_correction",
-            "ticker": ticker.upper(),
-            "period_end": str(period_end),
-            "fiscal_period_type": fiscal_period_type,
-            "line_item": line_item,
-            "source_doc_id": source_doc_id,
-            "row_id": inc_id,
-            "old_value": str(inc_value),
-            "new_value": new_value_str,
-            "old_currency": inc_currency,
-            "new_currency": currency,
-            "old_unit": str(inc_unit),
-            "new_unit": str(unit),
-        }
-    )
-    resolve_fact_row(conn, fact_table="financial_facts", fact_row_id=inc_id)
-    return inc_id
+    return corrected_id
 
 
 def _validate_financial_fact_plausibility(line_item: str, value: Decimal, unit: str) -> None:
@@ -483,6 +511,22 @@ def insert_with_restatement_detection(
                 incumbent_source_doc_id=incumbent_doc_id,
             ):
                 supersedes_id = incumbent_id
+
+    _, same_doc_exists = _heal_or_detect_same_document_fact(
+        conn,
+        ticker=ticker,
+        period_end=period_end,
+        fiscal_period_type=fiscal_period_type,
+        line_item=line_item,
+        value=value,
+        currency=currency,
+        unit=unit,
+        source_doc_id=source_doc_id,
+        extracted_by=extracted_by,
+        schema_profile=schema_profile,
+    )
+    if same_doc_exists:
+        return (None, None)
 
     if schema_profile is not None:
         has_audit_cols = schema_profile.has_audit_cols
@@ -718,9 +762,15 @@ def insert_kpi_with_restatement_detection(
         tail_vals.append(formula_version)
     if currency is not None and _table_has_column(conn, "kpi_facts", "currency"):
         existing_currency = conn.execute(
-            "SELECT id, value, unit, currency FROM kpi_facts WHERE ticker=? AND period_end=? "
+            "SELECT id, value, unit, currency FROM kpi_facts WHERE ticker=? AND date(period_end)=date(?) "
             "AND fiscal_period_type=? AND kpi_definition_id=? AND source_doc_id=?",
-            (ticker.upper(), period_end, fiscal_period_type, kpi_definition_id, source_doc_id),
+            (
+                ticker.upper(),
+                period_end.strftime("%Y-%m-%d"),
+                fiscal_period_type,
+                kpi_definition_id,
+                source_doc_id,
+            ),
         ).fetchone()
         if existing_currency is not None:
             stored = (

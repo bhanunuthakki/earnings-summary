@@ -41,6 +41,25 @@ RATE_TOKENS: tuple[str, ...] = (
     "basis point",
     "per annum",
 )
+_RATE_SYMBOL_TOKENS: tuple[str, ...] = (" %", "(%)")
+_RATE_WORD_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\brates?\b"),
+    re.compile(r"\bpercents?\b"),
+    re.compile(r"\bpercentages?\b"),
+    re.compile(r"\byields?\b"),
+    re.compile(r"\bratios?\b"),
+    re.compile(r"\bbasis points?\b"),
+    re.compile(r"\bper annum\b"),
+)
+
+
+def _is_rate_label(label_lower: str) -> bool:
+    """Match genuine rate/ratio/percent labels without colliding on substrings like 'operations' or 'corporate'."""
+    return any(tok in label_lower for tok in _RATE_SYMBOL_TOKENS) or any(
+        rx.search(label_lower) is not None for rx in _RATE_WORD_PATTERNS
+    )
+
+
 # Per-share dollar amounts — real money, but reported per-share and so NOT
 # scaled by the section's $-in-millions factor.
 PER_SHARE_TOKENS: tuple[str, ...] = ("per share", "per diluted", "per basic")
@@ -124,7 +143,7 @@ def classify_value(label: str, raw: object, factor: int) -> tuple[Decimal | None
     ``(None, reason, 1.0)`` to defer.
     """
     ll = label.lower()
-    if any(tok in ll for tok in RATE_TOKENS):
+    if _is_rate_label(ll):
         return None, "rate_or_percent", 1.0
     if any(tok in ll for tok in COUNT_TOKENS):
         return None, "share_or_count", 1.0
