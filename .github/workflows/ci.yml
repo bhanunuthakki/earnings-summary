@@ -315,7 +315,8 @@ jobs:
           # which test caused it (this is what made the 2026-07-31 shard-6 kills
           # undiagnosable). The slowest-test table costs nothing and makes the
           # next occurrence attributable.
-          pytest -q -n 2 --dist=loadfile --durations=25 "${selected[@]}"
+          if [ '${{ matrix.label }}' = "1" ]; then PYTHONPATH=src python .github/scripts/io_probe.py; fi
+          pytest -q -n 4 --dist=loadfile --durations=25 "${selected[@]}"
 
   design:
     name: Design Sync
@@ -685,10 +686,16 @@ jobs:
         run: |
           & "$env:RUNNER_TEMP/app-venv/Scripts/python.exe" -m pip check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Diagnostic Windows IO probe
+        shell: pwsh
+        run: |
+          Get-MpComputerStatus | Select-Object AMServiceEnabled, RealTimeProtectionEnabled, OnAccessProtectionEnabled | Format-List
+          $env:PYTHONPATH = "src"
+          & "$env:RUNNER_TEMP/app-venv/Scripts/python.exe" .github/scripts/io_probe.py
       - name: Run Windows-relevant application tests with the repository harness
         shell: pwsh
         run: |
-          & "$env:RUNNER_TEMP/app-venv/Scripts/python.exe" -m pytest -q -p no:cacheprovider --junitxml="$env:RUNNER_TEMP/native-app.xml" `
+          & "$env:RUNNER_TEMP/app-venv/Scripts/python.exe" -m pytest -q -p no:cacheprovider --durations=40 --junitxml="$env:RUNNER_TEMP/native-app.xml" `
             tests/test_storage_reservation.py `
             tests/test_job_runtime.py `
             tests/test_owner_proposal_approval.py `
