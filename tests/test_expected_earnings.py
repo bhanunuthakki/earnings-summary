@@ -9,30 +9,23 @@ stack (``next_earnings_date``) is monkeypatched so tests stay offline.
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from execution import refresh_expected_earnings as ree
 from expected_earnings import record_next_earnings, upcoming_by_ticker
 from sources.earnings_calendar import NextEarnings
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PRIOR_HEAD = "0081_discovery_candidates"
-EXPECTED_EARNINGS_HEAD = "0082_expected_earnings_revival"
 TODAY = date(2026, 6, 11)
-
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import refresh_expected_earnings as ree  # noqa: E402
 
 
 @pytest.fixture
 def conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> Iterator[sqlite3.Connection]:
     db = tmp_path / "expected_earnings.db"
-    migrated_db(db, stamp=PRIOR_HEAD, target=EXPECTED_EARNINGS_HEAD, archived=True)
+    migrated_db(db)
     c = sqlite3.connect(str(db))
     yield c
     c.close()

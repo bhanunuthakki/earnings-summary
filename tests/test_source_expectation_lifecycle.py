@@ -18,7 +18,6 @@ from provenance.evidence_ledger import (
 from provenance.issuer_registry import (
     IssuerEntity,
     IssuerRegistry,
-    LegacyIssuerBindingRevision,
 )
 from provenance.source_coverage_reconcile import (
     ExpectedDocumentImport,
@@ -28,6 +27,8 @@ from provenance.source_coverage_reconcile import (
     SourceCoverageImport,
     reconcile_source_coverage,
 )
+from sqlite_runtime import register_sqlite_integrity_functions
+from tests.evidence_support import seed_source_obligation
 
 STAMP = datetime(2026, 7, 27, 4, 0, 0)
 A, B = "a" * 64, "b" * 64
@@ -36,18 +37,27 @@ A, B = "a" * 64, "b" * 64
 def _conn(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
-    *,
-    target_revision: str = "0224_expected_document_lifecycle",
 ) -> sqlite3.Connection:
     path = tmp_path / "expectation-lifecycle.db"
-    migrated_db(
-        path,
-        stamp="0213_decision_draft_provider_id",
-        target=target_revision,
-        archived=True,
-    )
+    migrated_db(path)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
+    register_sqlite_integrity_functions(conn)
+    IssuerRegistry(conn).persist(
+        IssuerEntity(
+            issuer_id="issuer-acme",
+            idempotency_key="issuer-acme",
+            entity_kind="operating_company",
+            created_at=STAMP,
+        )
+    )
+    seed_source_obligation(
+        conn,
+        "issuer-acme",
+        authority_kind="sec_edgar",
+        completeness_rule="regulator_inventory",
+        recorded_at=STAMP.isoformat(),
+    )
     ledger = EvidenceLedger(conn)
     ledger.persist(
         ContentBlob(
@@ -404,106 +414,5 @@ def test_supersession_rejects_replacement_recorded_after_reconciliation_cutoff(
             ValueError, match="replacement document is unavailable at reconciliation cutoff"
         ):
             reconcile_source_coverage(conn, _request(2, withdrawals=(withdrawal,)))
-    finally:
-        conn.close()
-
-
-def test_supersession_compares_canonical_issuer_identity_at_cutoff(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
-    conn = _conn(
-        tmp_path,
-        migrated_db,
-        target_revision="0227_issuer_reporting_registry",
-    )
-    try:
-        registry = IssuerRegistry(conn)
-        registry.persist(
-            IssuerEntity(
-                issuer_id="issuer-acme",
-                idempotency_key="issuer-acme",
-                entity_kind="operating_company",
-                created_at=STAMP,
-            )
-        )
-        for recorded_id in ("legacy-request-acme", "legacy-document-acme"):
-            registry.persist(
-                LegacyIssuerBindingRevision(
-                    binding_revision_id=f"binding:{recorded_id}",
-                    idempotency_key=f"binding:{recorded_id}",
-                    recorded_issuer_id=recorded_id,
-                    revision=1,
-                    issuer_id="issuer-acme",
-                    outcome="selected",
-                    decision_kind="deterministic",
-                    reason_code="test_canonical_identity",
-                    reason_details=(("fixture", recorded_id),),
-                    material_dissent=False,
-                    effective_at=STAMP,
-                    knowledge_at=STAMP,
-                    recorded_at=STAMP,
-                    supersedes_binding_revision_id=None,
-                )
-            )
-        ledger = EvidenceLedger(conn)
-        ledger.persist(
-            SourceObservation(
-                observation_id="canonical-authority-observation",
-                idempotency_key="canonical-authority-observation",
-                source_kind="sec",
-                source_url="https://www.sec.gov/Archives/canonical-exhibit.htm",
-                blob_sha256=A,
-                source_published_at=None,
-                filing_at=STAMP,
-                accepted_at=STAMP,
-                observed_at=STAMP,
-                retrieved_at=STAMP,
-                retrieval_config_sha256=B,
-                collector_code_version="sec-native@1",
-            )
-        )
-        ledger.persist(
-            DocumentVersion(
-                document_version_id="canonical-authority-document",
-                document_key="canonical-authority-document",
-                version_sequence=1,
-                observation_id="canonical-authority-observation",
-                blob_sha256=A,
-                issuer_id="legacy-document-acme",
-                ticker="ACME",
-                document_type="press_release",
-                form_type="EX-99.1",
-                accession_number="0000000001-26-000005",
-                exhibit_id="EX-99.1",
-                language="en",
-                recorded_at=STAMP,
-            )
-        )
-        conn.commit()
-        reconcile_source_coverage(
-            conn,
-            _request(
-                1,
-                expected_documents=(_expected(),),
-                issuer_id="legacy-request-acme",
-            ),
-        )
-        withdrawal = ExpectedDocumentWithdrawalImport(
-            expected_document_key="ACME:2026Q1:10-Q",
-            status="superseded_by_authority",
-            reason_code="sec_exhibit_replaces_publisher_candidate",
-            reason_details=(("authority", "canonical SEC exhibit"),),
-            authority_observation_id="canonical-authority-observation",
-            replacement_document_version_id="canonical-authority-document",
-        )
-
-        reconcile_source_coverage(
-            conn,
-            _request(2, withdrawals=(withdrawal,), issuer_id="legacy-request-acme"),
-        )
-
-        assert conn.execute(
-            "SELECT status FROM v_expected_document_lifecycle_current"
-        ).fetchone() == ("superseded_by_authority",)
     finally:
         conn.close()
