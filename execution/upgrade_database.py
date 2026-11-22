@@ -1,12 +1,9 @@
-"""Safely upgrade fresh, active, or pre-squash earnings-summary databases.
+"""Safely upgrade fresh or active-graph earnings-summary databases.
 
-The active Alembic graph begins at the consolidated baseline, while
-pre-squash databases carry a revision from ``alembic/versions_archived``.  A
-plain ``alembic upgrade head`` cannot resolve those archived revision IDs.
-This command provides the explicit bridge: acquire the shared write lock,
-create and verify an online SQLite backup, finish the archived graph, validate
-the legacy schema, re-anchor its version metadata at the squashed baseline,
-then run the active cleanup/recovery migrations.
+The command acquires the shared write lock, creates and verifies an online
+SQLite backup, then runs the active Alembic graph to head. Pre-squash
+databases are not supported: they fail closed and must be restored from a
+post-squash backup.
 """
 
 from __future__ import annotations
@@ -46,7 +43,6 @@ from sqlite_runtime import (
     require_safe_sqlite_writer_runtime,
 )
 
-ACTIVE_BASE = "0001_initial_schema"
 ACTIVE_HEAD = expected_head()
 _HERO_REVISION = "0060_bulk_lexical_projection_coverage"
 _HERO_PREDECESSOR = "0059_scoped_research_universe_commitments"
@@ -54,13 +50,6 @@ _OWNER_REVISION = "0060_owner_governed_proposals"
 _LEXICAL_REVISION = "0061_bulk_lexical_projection_coverage"
 _MANAGED_RUNTIME_REPOSITORY = "earnings-summary"
 _WINDOWS_CSIDL_PROFILE = 0x0028
-
-_LEGACY_SCHEMA_REQUIREMENTS: dict[str, frozenset[str]] = {
-    "tracked_companies": frozenset({"ticker", "list_type"}),
-    "documents": frozenset({"id", "ticker"}),
-    "llm_calls": frozenset({"purpose", "called_at"}),
-    "llm_budgets": frozenset({"purpose", "on_exceed"}),
-}
 
 
 class UpgradeDatabaseError(RuntimeError):
@@ -150,11 +139,10 @@ def authoritative_managed_database_paths(runtime_root: Path) -> tuple[Path, ...]
     return (default_database, configured_database)
 
 
-def _config(repo_root: Path, db_path: Path, *, archived: bool) -> Config:
+def _config(repo_root: Path, db_path: Path) -> Config:
     config = Config(str(repo_root / "alembic.ini"))
     config.set_main_option("script_location", str(repo_root / "alembic"))
-    versions = "versions_archived" if archived else "versions"
-    config.set_main_option("version_locations", str(repo_root / "alembic" / versions))
+    config.set_main_option("version_locations", str(repo_root / "alembic" / "versions"))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path.as_posix()}")
     return config
 
@@ -236,57 +224,6 @@ def _default_backup_path(db_path: Path) -> Path:
     return db_path.with_name(f"{db_path.stem}.pre-upgrade-{stamp}{db_path.suffix}")
 
 
-def _validate_legacy_schema(db_path: Path) -> None:
-    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    try:
-        tables = {
-            str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        }
-        issues: list[str] = []
-        for table, required_columns in _LEGACY_SCHEMA_REQUIREMENTS.items():
-            if table not in tables:
-                issues.append(f"missing_table:{table}")
-                continue
-            columns = {
-                str(row[0])
-                for row in conn.execute("SELECT name FROM pragma_table_info(?)", (table,))
-            }
-            missing = sorted(required_columns - columns)
-            if missing:
-                issues.append(f"missing_columns:{table}:{','.join(missing)}")
-    finally:
-        conn.close()
-    if issues:
-        raise UpgradeDatabaseError(
-            "pre-squash schema is incomplete; restore a complete backup before bridging: "
-            + ";".join(issues)
-        )
-
-
-def _replace_single_revision(db_path: Path, *, expected: str, target: str) -> None:
-    revisions = _read_revisions(db_path)
-    if revisions != (expected,):
-        raise UpgradeDatabaseError(
-            f"database did not carry the expected single revision: expected={expected!r} "
-            f"actual={list(revisions)!r}"
-        )
-    conn = connect_sqlite(
-        db_path,
-        role=SQLiteConnectionRole.WRITER,
-        schema_preflight=False,
-    )
-    try:
-        with conn:
-            updated = conn.execute(
-                "UPDATE alembic_version SET version_num=? WHERE version_num=?",
-                (target, expected),
-            )
-            if updated.rowcount != 1:
-                raise UpgradeDatabaseError("failed to re-anchor the single Alembic revision row")
-    finally:
-        conn.close()
-
-
 def _migration_engine(db_path: Path) -> Engine:
     return create_engine(
         "sqlite://",
@@ -343,7 +280,7 @@ def _bridge_hero_revision(db_path: Path, repo_root: Path, script: ScriptDirector
 
     with TemporaryDirectory(prefix="earnings-hero-schema-") as temporary:
         reference_path = Path(temporary) / "reference.sqlite3"
-        command.upgrade(_config(repo_root, reference_path, archived=False), _HERO_PREDECESSOR)
+        command.upgrade(_config(repo_root, reference_path), _HERO_PREDECESSOR)
         reference_engine = _migration_engine(reference_path)
         try:
             with reference_engine.begin() as reference:
@@ -536,7 +473,7 @@ def upgrade_database(
             raise UpgradeDatabaseError(f"multiple Alembic heads in database: {list(initial)!r}")
         from_revision = initial[0] if initial else None
 
-        active = _config(repo_root, db_path, archived=False)
+        active = _config(repo_root, db_path)
         active_script = ScriptDirectory.from_config(active)
         active_revisions = {revision.revision for revision in active_script.walk_revisions()}
         if from_revision == active_head:
@@ -596,29 +533,10 @@ def upgrade_database(
             command.upgrade(active, "head")
             status = "created" if not existed else "upgraded"
         else:
-            if "operation_events" in _user_tables(db_path):
-                raise UpgradeDatabaseError(
-                    "archived revision conflicts with active schema (operation_events); "
-                    "refusing destructive downgrade: restore consistent revision metadata "
-                    "from a verified backup before retrying"
-                )
-            archived = _config(repo_root, db_path, archived=True)
-            archived_script = ScriptDirectory.from_config(archived)
-            try:
-                archived_script.get_revision(from_revision)
-            except CommandError as exc:
-                raise UpgradeDatabaseError(f"unknown Alembic revision: {from_revision}") from exc
-            archived_heads = archived_script.get_heads()
-            if len(archived_heads) != 1:
-                raise UpgradeDatabaseError(
-                    f"archived graph must have one head, found {archived_heads!r}"
-                )
-            archived_head = archived_heads[0]
-            command.upgrade(archived, "head")
-            _validate_legacy_schema(db_path)
-            _replace_single_revision(db_path, expected=archived_head, target=ACTIVE_BASE)
-            command.upgrade(active, "head")
-            status = "bridged"
+            raise UpgradeDatabaseError(
+                f"unsupported Alembic revision {from_revision!r}: pre-squash databases are "
+                "no longer upgraded; restore a post-squash backup"
+            )
 
         final = _read_revisions(db_path)
         if final != (active_head,):

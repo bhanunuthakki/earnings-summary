@@ -19,30 +19,17 @@ from provenance.issuer_registry_bootstrap import (
 )
 from provenance.reporting_entity_registry import ReportingEntityRegistry
 
-HEAD = "0230_evidence_subject_bindings"
 STAMP = datetime(2026, 7, 27, 23, 0, tzinfo=UTC)
 SOURCE_URL = "https://www.sec.gov/files/company_tickers_mf.json"
 
 
 def _database(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     path = tmp_path / "fund-registry.db"
-    migrated_db(path, stamp="0213_decision_draft_provider_id", archived=True, target=HEAD)
+    migrated_db(path)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute(
-        """
-        CREATE TABLE tracked_companies (
-            id INTEGER PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            ticker TEXT NOT NULL,
-            name TEXT NOT NULL,
-            list_type TEXT NOT NULL,
-            archived_at TIMESTAMP
-        )
-        """
-    )
     conn.executemany(
-        "INSERT INTO tracked_companies VALUES (?, 'bhanu', ?, ?, ?, NULL)",
+        "INSERT INTO tracked_companies (id, user_id, ticker, name, list_type, archived_at) VALUES (?, 'bhanu', ?, ?, ?, NULL)",
         (
             (1, "AVDV", "Avantis International Small Cap Value ETF", "portfolio"),
             (2, "AVUV", "Avantis U.S. Small Cap Value ETF", "watchlist"),

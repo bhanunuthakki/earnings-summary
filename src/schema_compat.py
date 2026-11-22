@@ -99,7 +99,7 @@ def _expected_head_cached(root: Path) -> tuple[str, frozenset[str]]:
 
 @lru_cache(maxsize=8)
 def archived_revisions(project_root: Path) -> frozenset[str]:
-    """Known pre-squash revisions require the guarded upgrade bridge."""
+    """Known pre-squash revisions, which this checkout no longer upgrades."""
     revisions: set[str] = set()
     for path in (project_root / "alembic" / "versions_archived").glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -154,12 +154,11 @@ DRIFT_DB_BEHIND_CODE = "db_behind_code"
 DRIFT_CHECKOUT_BEHIND_DB = "checkout_behind_db"
 DRIFT_CHECKOUT_FORKED = "checkout_forked"
 DRIFT_DB_UNREADABLE = "db_unreadable"
-DRIFT_LEGACY_UPGRADE_REQUIRED = "legacy_upgrade_required"
+DRIFT_PRE_SQUASH_UNSUPPORTED = "pre_squash_unsupported"
 
 _FIX_COMMANDS: dict[str, str] = {
-    DRIFT_LEGACY_UPGRADE_REQUIRED: (
-        "run the guarded execution/upgrade_database.py bridge with an explicit database "
-        "and the required backup/restore receipt"
+    DRIFT_PRE_SQUASH_UNSUPPORTED: (
+        "restore a post-squash backup; pre-squash databases are no longer upgraded"
     ),
     DRIFT_DB_BEHIND_CODE: "alembic upgrade head",
     DRIFT_CHECKOUT_BEHIND_DB: "git pull (this checkout is older than the database)",
@@ -287,8 +286,8 @@ def describe_drift(db_path: str | Path, *, project_root: Path | None = None) -> 
             db_path=str(path),
             db_revisions=actual,
             expected_revision=expected,
-            reason=DRIFT_LEGACY_UPGRADE_REQUIRED,
-            detail="database carries a supported pre-squash revision and requires the guarded bridge",
+            reason=DRIFT_PRE_SQUASH_UNSUPPORTED,
+            detail="database carries a pre-squash revision, which is no longer upgraded",
         )
     if unknown:
         return SchemaDrift(

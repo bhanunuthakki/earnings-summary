@@ -44,24 +44,6 @@ from viewspec.engine import cell_source_from_provenance
 # ----------------------------------------------------------------------------
 
 
-def test_migration_0087_chain() -> None:
-    import importlib.util
-    from pathlib import Path
-
-    mig = (
-        Path(__file__).resolve().parents[1]
-        / "alembic"
-        / "versions_archived"
-        / "0087_kpi_computed_from.py"
-    )
-    spec = importlib.util.spec_from_file_location("mig_0087", mig)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    assert mod.revision == "0087_kpi_computed_from"
-    assert mod.down_revision == "0086_decision_conditions"
-
-
 # ----------------------------------------------------------------------------
 # derivers emit computed_from
 # ----------------------------------------------------------------------------
