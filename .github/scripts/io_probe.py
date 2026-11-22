@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import importlib
 import os
-import sqlite3
 import sys
 import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
+
+sys.path.insert(0, os.getcwd())
+bootstrap = importlib.import_module("execution.sqlite_bootstrap")
+print("PROBE sqlite runtime", bootstrap.preload_sqlite(), flush=True)
+sqlite3 = importlib.import_module("sqlite3")
 
 ROOT = Path(tempfile.mkdtemp(dir=os.environ.get("RUNNER_TEMP")))
 
