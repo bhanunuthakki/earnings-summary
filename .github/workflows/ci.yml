@@ -604,18 +604,32 @@ jobs:
         id: bandit
         continue-on-error: true
         run: bandit -q -r src execution -ll -b .bandit-baseline.json
-      # Canonical evidence hash fields are generated metadata. Keep scanning
-      # every other field and file with the unchanged detector set.
+      # Each tracked (path, blob) pair is scanned unless a trusted main push
+      # run already proved that exact pair clean with the same detector,
+      # arguments and filter. Pull requests read that cache but never save it.
+      - name: Restore detect-secrets clean-file cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/secret-scan-cache.json
+          key: secret-scan-v1-${{ github.sha }}
+          restore-keys: secret-scan-v1-
       - name: detect-secrets - no new credential material
         id: detect_secrets
         continue-on-error: true
         shell: bash
-        run: >-
-          git ls-files -z |
-          xargs -0 -r -P "$(nproc)" -n 128 detect-secrets-hook
-          --filter file://.github/scripts/quality_hash_filter.py::is_quality_evidence_hash
-          --exclude-files
-          '^(?:data[\\/]fmp_canary_manifest\.json|evals[\\/]receipts[\\/].*|docs[\\/]hardening[\\/].*|docs[\\/]quality[\\/](?:architecture-initial-09d35d1a|duplicates-initial-09d35d1a|static-baseline|compatibility-baseline)\.json|docs[\\/]quality[\\/]reachability-(?:dynamic-import|getattr|process)-dispositions\.json|config[\\/]filing_xbrl_processor_(?:approval|bundle)\.json|docs[\\/]design[\\/]deletion_catalog_2026_08\.json|evals[\\/]golden[\\/]metric_lifecycle_triage\.json|tests[\\/](?:test_etf_instrument_mvp|test_gemini_backend|test_peer_selection|test_validate_environment)\.py)$'
+        env:
+          TRUSTED_CACHE_WRITE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: |
+          write=()
+          if [ "$TRUSTED_CACHE_WRITE" = "true" ]; then write=(--write-cache); fi
+          python .github/scripts/leak_scan.py \
+            --cache "$RUNNER_TEMP/secret-scan-cache.json" --jobs "$(nproc)" "${write[@]}"
+      - name: Save detect-secrets clean-file cache
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.detect_secrets.outcome == 'success' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/secret-scan-cache.json
+          key: secret-scan-v1-${{ github.sha }}
       - name: Generate CycloneDX SBOM
         id: sbom
         continue-on-error: true

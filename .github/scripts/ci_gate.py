@@ -389,6 +389,11 @@ def select_test_files(
     shard: the least-loaded label at their position in the sorted list, with the
     earliest label breaking ties, at `default_seconds` each. The file list is
     sorted internally so the assignment never depends on caller input order.
+
+    The returned files are ordered longest-first (path tie-break). pytest
+    collects arguments in the given order and xdist `--dist=loadfile` hands out
+    whole files in collection order, so this order lets the slowest files
+    start first instead of finishing last on one worker.
     """
     if shard_label not in durations.labels:
         raise ValueError(
@@ -409,7 +414,67 @@ def select_test_files(
         totals[known_shard] += seconds
         if known_shard == shard_label:
             selected.append(path)
-    return selected
+    return sorted(selected, key=lambda path: (-durations.duration_seconds(path), path))
+
+
+def junit_seconds_by_file(junit_paths: Sequence[Path], files: Sequence[str]) -> dict[str, float]:
+    """Sum JUnit testcase seconds per test file (fail closed on unknown classes).
+
+    pytest writes `classname="tests.test_x"` or `"tests.test_x.TestClass"`; the
+    longest dotted prefix that names a file in `files` owns the case.
+    """
+    by_module = {path.removesuffix(".py").replace("/", "."): path for path in files}
+    seconds: dict[str, float] = {}
+    for junit_path in junit_paths:
+        root = ElementTree.parse(junit_path).getroot()
+        for case in root.iter("testcase"):
+            # A module skipped at collection reports classname="" and its
+            # dotted module path as the case name.
+            classname = case.get("classname", "") or case.get("name", "")
+            parts = classname.split(".")
+            owner = next(
+                (
+                    by_module[".".join(parts[:end])]
+                    for end in range(len(parts), 0, -1)
+                    if ".".join(parts[:end]) in by_module
+                ),
+                None,
+            )
+            if owner is None:
+                raise ValueError(f"{junit_path}: testcase class {classname!r} names no test file")
+            seconds[owner] = seconds.get(owner, 0.0) + float(case.get("time", "0") or 0)
+    return seconds
+
+
+def regenerate_test_durations(
+    junit_paths: Sequence[Path], files: Sequence[str], *, source: str, generated: str
+) -> dict[str, object]:
+    """Build the checked-in durations table from CI JUnit with canonical packing."""
+    measured = junit_seconds_by_file(junit_paths, files)
+    default_seconds = 1.6
+    # Files whose cases all report 0.000 s still cost collection; keep the floor.
+    seconds = {path: round(max(value, 0.001), 3) for path, value in sorted(measured.items())}
+    durations = TestDurations(
+        labels=SHARD_LABELS,
+        default_seconds=default_seconds,
+        seconds_by_file=seconds,
+        shard_by_file={},
+    )
+    packed = pack_test_shards(list(seconds), durations)
+    shard_by_file = {path: label for label, paths in packed.items() for path in paths}
+    return {
+        "schema": 1,
+        "generated": generated,
+        "source": source,
+        "default_seconds": default_seconds,
+        "labels": list(SHARD_LABELS),
+        "shard_timings_seconds": {
+            label: round(sum(seconds[path] for path in packed[label]), 3) for label in SHARD_LABELS
+        },
+        "files": {
+            path: {"seconds": seconds[path], "shard": shard_by_file[path]} for path in seconds
+        },
+    }
 
 
 def gate_failures(
@@ -583,6 +648,20 @@ def _select_tests_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _durations_from_junit_command(args: argparse.Namespace) -> int:
+    """Write a regenerated durations table from CI JUnit; test files on stdin."""
+    files = [line for raw in sys.stdin for line in [raw.strip()] if line]
+    try:
+        payload = regenerate_test_durations(
+            args.junit, files, source=args.source, generated=args.generated
+        )
+    except (ValueError, ElementTree.ParseError) as exc:
+        print(f"::error::{exc}", file=sys.stderr)
+        return 1
+    args.output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return 0
+
+
 def _durations_report_command(args: argparse.Namespace) -> int:
     """Print the predicted per-label file counts and serial seconds."""
     files = [line for raw in sys.stdin for line in [raw.strip()] if line]
@@ -727,6 +806,11 @@ def _build_parser() -> argparse.ArgumentParser:
     select_tests = subparsers.add_parser("select-tests")
     select_tests.add_argument("--shard-label", required=True)
     select_tests.add_argument("--durations-file", type=Path, default=Path(DURATIONS_FILE))
+    from_junit = subparsers.add_parser("durations-from-junit")
+    from_junit.add_argument("--junit", type=Path, action="append", required=True)
+    from_junit.add_argument("--source", required=True)
+    from_junit.add_argument("--generated", required=True)
+    from_junit.add_argument("--output", type=Path, default=Path(DURATIONS_FILE))
     durations_report = subparsers.add_parser("durations-report")
     durations_report.add_argument("--durations-file", type=Path, default=Path(DURATIONS_FILE))
     return parser
@@ -742,6 +826,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _pyright_diff_command(args)
     if args.command == "select-tests":
         return _select_tests_command(args)
+    if args.command == "durations-from-junit":
+        return _durations_from_junit_command(args)
     if args.command == "durations-report":
         return _durations_report_command(args)
     if args.command == "verify-windows-native":

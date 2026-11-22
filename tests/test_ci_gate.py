@@ -4,7 +4,7 @@ import importlib.util
 import json
 import os
 import re
-import shlex
+import shutil
 import subprocess
 import sys
 from collections import Counter
@@ -839,6 +839,52 @@ def test_pack_test_shards_is_duration_aware_and_deterministic(helper: ModuleType
     assert shard_of[heavy[0][0]] in helper.SHARD_LABELS
 
 
+def test_selected_files_start_longest_first(helper: ModuleType) -> None:
+    files = [f"tests/test_{index:04d}.py" for index in range(60)]
+    seconds = {path: float((index * 7) % 23 + 1) for index, path in enumerate(files)}
+    durations = _test_durations(helper, seconds)
+    for label in helper.SHARD_LABELS:
+        selected = helper.select_test_files(files, shard_label=label, durations=durations)
+        assert selected == sorted(selected, key=lambda path: (-seconds[path], path))
+
+
+def test_durations_regenerate_from_junit_with_canonical_packing(
+    helper: ModuleType, tmp_path: Path
+) -> None:
+    junit = tmp_path / "shard.xml"
+    junit.write_text(
+        '<testsuites><testsuite name="pytest">'
+        '<testcase classname="tests.test_alpha" name="a" time="2.5" />'
+        '<testcase classname="tests.test_alpha.TestGroup" name="b" time="1.5" />'
+        '<testcase classname="tests.test_beta" name="c" time="0.000" />'
+        '<testcase classname="" name="tests.test_gamma" time="0.000">'
+        "<skipped>collection skipped</skipped></testcase>"
+        "</testsuite></testsuites>",
+        encoding="utf-8",
+    )
+    files = ["tests/test_alpha.py", "tests/test_beta.py", "tests/test_gamma.py"]
+    payload = helper.regenerate_test_durations(
+        [junit], files, source="unit fixture", generated="2026-11-22"
+    )
+    assert payload["files"]["tests/test_alpha.py"]["seconds"] == 4.0
+    assert payload["files"]["tests/test_beta.py"]["seconds"] == 0.001
+    output = tmp_path / "durations.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+    durations = helper.load_test_durations(output)
+    repacked = helper.pack_test_shards(sorted(durations.seconds_by_file), durations)
+    assert {
+        path: label for label, paths in repacked.items() for path in paths
+    } == durations.shard_by_file
+
+    unknown = tmp_path / "unknown.xml"
+    unknown.write_text(
+        '<testsuites><testcase classname="tests.test_missing" name="x" time="1" /></testsuites>',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="names no test file"):
+        helper.junit_seconds_by_file([unknown], files)
+
+
 def test_pack_reproduces_the_checked_in_pinned_assignment(helper: ModuleType) -> None:
     """The checked-in table is the output of the generator: re-packing the
     table's own durations must reproduce every pinned file's shard."""
@@ -986,9 +1032,7 @@ def test_security_job_runs_every_scanner_before_failing_closed() -> None:
     assert "cyclonedx-py requirements requirements-design.lock" in workflow
     assert "always() && hashFiles('sbom-*.cdx.json')" in workflow
 
-    exclude_match = re.search(r"--exclude-files\s+'([^']+)'", workflow)
-    assert exclude_match is not None
-    exclude_pattern = exclude_match.group(1)
+    exclude_pattern = _load_secret_scan().EXCLUDE_FILES
     receipt_pattern = (
         r"docs[\\/]quality[\\/]"
         r"(?:architecture-initial-09d35d1a|duplicates-initial-09d35d1a|"
@@ -1066,7 +1110,14 @@ def test_env_caches_sqlite_by_version_os_and_recipe_hash() -> None:
     assert "if: steps.sqlite_cache.outputs.cache-hit != 'true'" in workflow
     assert "Preload verified SQLite writer runtime" in workflow
     assert 'assert sqlite3.sqlite_version == "3.53.4"' in workflow
-    assert "restore-keys:" not in workflow
+    _assert_only_salted_secret_scan_cache_uses_prefix_restore(workflow)
+
+
+def _assert_only_salted_secret_scan_cache_uses_prefix_restore(workflow: str) -> None:
+    # Environment caches restore by exact key only. The secret-scan cache alone
+    # restores by prefix: every entry is salted and verified in leak_scan.py.
+    restore_lines = [line.strip() for line in workflow.splitlines() if "restore-keys:" in line]
+    assert restore_lines == ["restore-keys: secret-scan-v1-"]
 
 
 def test_env_caches_virtualenv_by_locks_and_python_version() -> None:
@@ -1093,7 +1144,7 @@ def test_env_caches_virtualenv_by_locks_and_python_version() -> None:
     # The Playwright browser is a separate artifact and must install on every
     # run (it is not venv-cached) — the canary matrix needs Chromium.
     assert "python -m playwright install --with-deps --only-shell chromium" in workflow
-    assert "restore-keys:" not in workflow
+    _assert_only_salted_secret_scan_cache_uses_prefix_restore(workflow)
 
 
 def test_durations_report_is_available_on_the_real_table(
@@ -1180,39 +1231,149 @@ def test_security_browser_canary_has_one_mandatory_ci_owner() -> None:
     assert "one migrated template per worker" in workflow
 
 
-def test_secret_scan_covers_every_file_and_propagates_worker_failure(tmp_path: Path) -> None:
-    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    command = next(
-        line.strip()
-        for line in workflow.splitlines()
-        if "xargs -0" in line and "detect-secrets-hook" in line
+def _load_secret_scan() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "secret_scan_under_test", REPO_ROOT / ".github" / "scripts" / "leak_scan.py"
     )
-    arguments = shlex.split(command[command.index("xargs") :])
-    assert arguments[:7] == ["xargs", "-0", "-r", "-P", "$(nproc)", "-n", "128"]
-    arguments[4] = "2"
-    scanner_index = arguments.index("detect-secrets-hook")
-    scanner = tmp_path / "scanner.py"
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _secret_scan_repo(tmp_path: Path, files: dict[str, str]) -> Path:
+    root = tmp_path / "repo"
+    (root / ".github" / "scripts").mkdir(parents=True)
+    shutil.copyfile(
+        REPO_ROOT / ".github" / "scripts" / "quality_hash_filter.py",
+        root / ".github" / "scripts" / "quality_hash_filter.py",
+    )
+    for name, text in files.items():
+        (root / name).write_text(text, encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    return root
+
+
+def _install_recording_scanner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Put a fake ``detect-secrets-hook`` first on PATH that records its files."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    scanner = bin_dir / "detect-secrets-hook"
     scanner.write_text(
+        f"#!{sys.executable}\n"
         "import json, os, pathlib, sys\n"
-        "paths = sys.argv[1:]\n"
+        "paths = sys.argv[sys.argv.index('--') + 1:]\n"
         "pathlib.Path(os.environ['SCAN_OUTPUT'], str(os.getpid())).write_text(json.dumps(paths))\n"
-        "raise SystemExit(1 if 'bad file.py' in paths else 0)\n",
+        "raise SystemExit(1 if any('bad' in path for path in paths) else 0)\n",
         encoding="utf-8",
     )
-    arguments[scanner_index:] = [sys.executable, str(scanner)]
-    paths = [f"file {index}.py" for index in range(300)] + ["bad file.py", "line\nbreak.py"]
+    scanner.chmod(0o755)
+    monkeypatch.setenv("PATH", os.pathsep.join((str(bin_dir), os.environ["PATH"])))
+
+
+def _scanned(output: Path) -> Counter[str]:
+    scanned = Counter(
+        path for receipt in output.iterdir() for path in json.loads(receipt.read_text())
+    )
+    for receipt in output.iterdir():
+        receipt.unlink()
+    return scanned
+
+
+def test_secret_scan_covers_every_file_then_skips_only_proven_clean_blobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    helper = _load_secret_scan()
+    files = {f"file {index}.py": f"VALUE = {index}\n" for index in range(70)}
+    root = _secret_scan_repo(tmp_path, files)
+    tracked = {path for path, _blob in helper.tracked_blobs(root)}
     output = tmp_path / "output"
     output.mkdir()
-    result = subprocess.run(
-        arguments,
-        input="\0".join(paths).encode() + b"\0",
-        capture_output=True,
-        check=False,
-        env={**os.environ, "SCAN_OUTPUT": str(output)},
+    monkeypatch.setenv("SCAN_OUTPUT", str(output))
+    cache = tmp_path / "cache.json"
+    _install_recording_scanner(tmp_path, monkeypatch)
+
+    def run(*, write_cache: bool, version: str = "1.5.0") -> int:
+        return helper.scan(
+            root,
+            cache,
+            detector_version=version,
+            jobs=2,
+            write_cache=write_cache,
+        )
+
+    # Cold: every tracked file is scanned exactly once.
+    assert run(write_cache=True) == 0
+    assert _scanned(output) == Counter(tracked)
+
+    # Warm: nothing is rescanned; an edited file is rescanned alone.
+    assert run(write_cache=False) == 0
+    assert _scanned(output) == Counter()
+    (root / "file 3.py").write_text("VALUE = 'changed'\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    assert run(write_cache=False) == 0
+    assert _scanned(output) == Counter({"file 3.py": 1})
+
+    # A different detector version (or any salt input) discards the cache.
+    assert run(write_cache=False, version="9.9.9") == 0
+    assert _scanned(output) == Counter(tracked)
+
+
+def test_secret_scan_failure_fails_closed_and_is_never_cached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    helper = _load_secret_scan()
+    root = _secret_scan_repo(tmp_path, {"good.py": "A = 1\n", "bad file.py": "B = 2\n"})
+    output = tmp_path / "output"
+    output.mkdir()
+    monkeypatch.setenv("SCAN_OUTPUT", str(output))
+    cache = tmp_path / "cache.json"
+    _install_recording_scanner(tmp_path, monkeypatch)
+    kwargs = {
+        "detector_version": "1.5.0",
+        "jobs": 2,
+        "write_cache": True,
+    }
+    assert helper.scan(root, cache, **kwargs) == 1
+    assert not cache.exists()
+    _scanned(output)
+    assert helper.scan(root, cache, **kwargs) == 1
+    assert "bad file.py" in _scanned(output)
+
+
+def test_secret_scan_real_detector_rejects_a_private_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    helper = _load_secret_scan()
+    # The real hook is installed beside the interpreter running the tests.
+    monkeypatch.setenv(
+        "PATH", os.pathsep.join((str(Path(sys.executable).parent), os.environ["PATH"]))
     )
-    scanned = [path for receipt in output.iterdir() for path in json.loads(receipt.read_text())]
-    assert Counter(scanned) == Counter(paths)
-    assert result.returncode != 0
+    header = "-----BEGIN " + "RSA PRIVATE KEY-----"
+    root = _secret_scan_repo(tmp_path, {"key.txt": f"{header}\nMIIB\n"})
+    cache = tmp_path / "cache.json"
+    result = helper.scan(
+        root,
+        cache,
+        detector_version="real",
+        jobs=1,
+        write_cache=True,
+    )
+    assert result == 1
+    assert not cache.exists()
+
+
+def test_workflow_saves_the_secret_scan_cache_only_from_main_pushes() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    security = workflow.split("\n  security:\n", 1)[1].split("\n  windows-app:\n", 1)[0]
+    assert "python .github/scripts/leak_scan.py" in security
+    assert "detect-secrets-hook" not in security
+    trusted = "github.event_name == 'push' && github.ref == 'refs/heads/main'"
+    save = security.split("- name: Save detect-secrets clean-file cache", 1)[1]
+    assert trusted in save.split("\n      - name:", 1)[0]
+    assert f"TRUSTED_CACHE_WRITE: ${{{{ {trusted} }}}}" in security
+    assert "actions/cache/restore@" in security
 
 
 def test_sqlite_build_rejects_corrupt_archive_before_compiling(tmp_path: Path) -> None:
