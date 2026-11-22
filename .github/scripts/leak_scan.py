@@ -23,6 +23,7 @@ import sys
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import cast
 
 SCHEMA = "secret-scan-clean-blobs/v1"
 FILTER_FILE = Path(".github/scripts/quality_hash_filter.py")
@@ -85,13 +86,20 @@ def load_clean(cache: Path, salt: str) -> set[str]:
     """Return trusted clean keys; a missing or differently salted cache is empty."""
     if not cache.is_file():
         return set()
-    payload = json.loads(cache.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or payload.get("salt") != salt:
+    payload: object = json.loads(cache.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
         return set()
-    keys = payload.get("clean")
-    if not isinstance(keys, list) or not all(isinstance(key, str) for key in keys):
+    fields = cast("dict[str, object]", payload)
+    if fields.get("salt") != salt:
+        return set()
+    keys = fields.get("clean")
+    if not isinstance(keys, list):
         raise ValueError(f"{cache}: clean must be a list of strings")
-    return set(keys)
+    items = cast("list[object]", keys)
+    clean = [key for key in items if isinstance(key, str)]
+    if len(clean) != len(items):
+        raise ValueError(f"{cache}: clean must be a list of strings")
+    return set(clean)
 
 
 def _batches(root: Path, paths: Sequence[str]) -> list[list[str]]:

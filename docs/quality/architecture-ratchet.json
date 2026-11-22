@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "bfa64560542e3310b1b2043b1812459aaf57381a",
+  "scoped_commit": "050c9f0ab67170afef53343c1f23e954fb638234",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "3ac05c3e3fa21b6b69ea4d800307d9180bbdbfd81e764a33966f610713c95cf9",
+  "source_sha256": "4cff60617f197d74a5441555f7e88e8463f60ff7a9faba62afa79d8c19b79c82",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1405,
-    "total_noncomment_loc": 560853,
+    "total_noncomment_loc": 560861,
     "modules_over_1000_loc": 117,
     "modules_over_2000_loc": 22,
     "modules_at_least_3000_loc": 5,
@@ -17135,9 +17135,9 @@
         "path": "src/quality/reachability.py",
         "module": "quality.reachability",
         "lines": {
-          "physical": 1390,
-          "nonblank": 1305,
-          "noncomment": 1302
+          "physical": 1389,
+          "nonblank": 1304,
+          "noncomment": 1300
         },
         "internal_fan_out": 1,
         "responsibilities": [
@@ -21038,9 +21038,9 @@
         "path": "src/ui/conformance_scan.py",
         "module": "ui.conformance_scan",
         "lines": {
-          "physical": 3247,
-          "nonblank": 2959,
-          "noncomment": 2949
+          "physical": 3261,
+          "nonblank": 2971,
+          "noncomment": 2959
         },
         "internal_fan_out": 2,
         "responsibilities": [

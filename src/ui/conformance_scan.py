@@ -2530,18 +2530,16 @@ def _effective_declarations(
     ] = {}
     # Index events and keys by selector: only same-selector events can apply,
     # so the cascade stays linear in rule count (order inside a group is kept).
-    events_by_selector: dict[
-        str, list[tuple[int, tuple[str, ...], tuple[tuple[str, str], ...]]]
-    ] = {}
+    by_selector: dict[str, list[tuple[int, tuple[str, ...], tuple[tuple[str, str], ...]]]] = {}
     for event_index, (event_context, event_selector, declarations) in enumerate(events):
-        events_by_selector.setdefault(event_selector, []).append(
+        by_selector.setdefault(event_selector, []).append(
             (event_index, event_context, declarations)
         )
     keys_by_selector: dict[str, list[tuple[tuple[str, ...], str]]] = {}
     for target_context, target_selector in display:
         keys_by_selector.setdefault(target_selector, []).append((target_context, target_selector))
         state: dict[str, tuple[str, bool, tuple[int, int, int], int]] = {}
-        for event_index, event_context, declarations in events_by_selector[target_selector]:
+        for event_index, event_context, declarations in by_selector[target_selector]:
             if not (
                 len(event_context) <= len(target_context)
                 and target_context[: len(event_context)] == event_context
