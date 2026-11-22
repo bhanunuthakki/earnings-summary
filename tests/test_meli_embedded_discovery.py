@@ -10,6 +10,7 @@ import pytest
 from ir_pipeline.discover.meli import (
     MeliEmbeddedDiscoveryError,
     discover_embedded_quarterly_inventory,
+    extract_nordic_quarterly_anchors,
 )
 
 
@@ -135,3 +136,14 @@ def test_rejects_missing_target_period_instead_of_guessing_a_nearby_quarter() ->
             fiscal_year=2026,
             fiscal_quarter=2,
         )
+
+
+def test_extract_nordic_quarterly_anchors_returns_links_and_degrades_empty() -> None:
+    anchors = extract_nordic_quarterly_anchors(_page(_q2_items()))
+    assert anchors == [
+        ("https://files.example.test/q2-letter.pdf", "Results Q2'26 Letter to Shareholders"),
+        ("https://files.example.test/q2-deck.pdf", "Results Q2'26 Earnings Presentation"),
+        ("https://files.example.test/q2-10q.pdf", "Results Q2'26 SEC Filing"),
+        ("https://files.example.test/q2-transcript.pdf", "Results Q2'26 Webcast Transcript"),
+    ]
+    assert extract_nordic_quarterly_anchors("<html><body><p>no context</p></body></html>") == []

@@ -196,6 +196,20 @@ def discover_embedded_quarterly_inventory(
         raise MeliEmbeddedDiscoveryError("incomplete_document_inventory") from exc
 
 
+def extract_nordic_quarterly_anchors(rendered_html: str) -> list[tuple[str, str]]:
+    """Extract ``(href, title + label)`` anchors from embedded Nordic quarterly results."""
+    try:
+        quarterly_results = _quarterly_results_from_html(rendered_html)
+    except MeliEmbeddedDiscoveryError:
+        return []
+    return [
+        (link.href, f"{item.title} {link.label}")
+        for item in quarterly_results.items
+        for link in item.links
+        if link.href
+    ]
+
+
 def _quarterly_results_from_html(rendered_html: str) -> _PublisherQuarterlyResults:
     parser = _NordicContextParser()
     parser.feed(rendered_html)

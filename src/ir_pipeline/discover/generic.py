@@ -79,6 +79,10 @@ _HISTORY_NAV_RX = re.compile(
     r"\binvestors?\b|investor[-\s]?relation|financial[-\s]?(?:information|results|reports?)",
     re.IGNORECASE,
 )
+_PRIORITY_NAV_RX = re.compile(
+    r"quarter|financial[-_\s]?(?:information|results|reports?)|\bfinancials\b|\bearnings\b|\bresults\b",
+    re.IGNORECASE,
+)
 
 # Tier-1 period guesses (hint only — content classification is authoritative).
 # Q (English) and T (Portuguese "trimestre" — NU/MELI/DLO use 1T26 etc.).
@@ -232,6 +236,9 @@ def discover_document_inventory(
             ):
                 candidates[target] = _to_candidate(target, text, page_url, do_fetch)
         if depth < _MAX_DEPTH:
+            priority_nav: list[tuple[str, int]] = []
+            other_nav: list[tuple[str, int]] = []
+            queued = {queued_url for queued_url, _ in frontier} | visited
             for href, text in anchors:
                 target = _document_url(urllib.parse.urljoin(page_url, href))
                 if not href or is_document_anchor(
@@ -244,8 +251,14 @@ def discover_document_inventory(
                     continue
                 if not _HISTORY_NAV_RX.search(f"{href} {text}"):
                     continue
-                if _hostname(target) == base_host and target not in visited:
-                    frontier.append((target, depth + 1))
+                if _hostname(target) == base_host and target not in queued:
+                    queued.add(target)
+                    bucket = (
+                        priority_nav if _PRIORITY_NAV_RX.search(f"{href} {text}") else other_nav
+                    )
+                    bucket.append((target, depth + 1))
+            frontier.extend(priority_nav)
+            frontier.extend(other_nav)
         if effective_delay > 0:
             time.sleep(effective_delay)
     page_failures = any(page.outcome != "succeeded" for page in pages)
@@ -527,6 +540,10 @@ _DOC_LINK_SELECTOR = (
 )
 _DOC_WAIT_MS = 6000  # wait up to this for JS-injected doc links to attach
 _SETTLE_FALLBACK_MS = 2000  # no doc link appeared (nav/landing page) — settle, then harvest anyway
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 
 
 def _playwright_render(url: str, timeout_ms: int) -> list[Anchor]:
@@ -544,6 +561,8 @@ def _playwright_render(url: str, timeout_ms: int) -> list[Anchor]:
     """
     from playwright.sync_api import sync_playwright
 
+    from ir_pipeline.discover.meli import extract_nordic_quarterly_anchors
+
     js = "els => els.map(a => [a.href, (a.textContent || '').trim()])"
     with sync_playwright() as pw:
         # --disable-http2: some IR servers mis-negotiate HTTP/2 with headless
@@ -554,7 +573,7 @@ def _playwright_render(url: str, timeout_ms: int) -> list[Anchor]:
         )
         try:
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                user_agent=_BROWSER_UA,
                 service_workers="block",
             )
             install_public_only_playwright_routing(context, timeout_s=timeout_ms / 1000)
@@ -571,6 +590,10 @@ def _playwright_render(url: str, timeout_ms: int) -> list[Anchor]:
             except Exception:  # no doc link surfaced — a nav/landing page; harvest its links
                 page.wait_for_timeout(_SETTLE_FALLBACK_MS)
             raw = page.eval_on_selector_all("a[href]", js)
+            nordic_html = page.eval_on_selector_all(
+                "script#__NORDIC_RENDERING_CTX__",
+                "els => els.map(e => e.outerHTML).join('')",
+            )
         finally:
             browser.close()
 
@@ -581,4 +604,6 @@ def _playwright_render(url: str, timeout_ms: int) -> list[Anchor]:
         except (TypeError, ValueError):
             continue
         out.append((str(href), str(text)))
+    if isinstance(nordic_html, str) and nordic_html:
+        out.extend(extract_nordic_quarterly_anchors(nordic_html))
     return out
