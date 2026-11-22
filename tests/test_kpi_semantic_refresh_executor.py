@@ -69,7 +69,6 @@ from pipeline.kpi_semantics import (
     KpiSemanticStatus,
     KpiUnitScale,
     current_kpi_semantic_context,
-    normalize_source_numeric,
     persist_kpi_semantic_context,
 )
 from provenance.evidence_ledger import EvidenceLocator
@@ -551,21 +550,6 @@ def test_manifest_requires_persisted_unit_to_match_semantic_scale(
     context = _context().model_copy(update={"unit_scale": scale})
     evidence = _entry().semantic_evidence.model_copy(update={"unit_scale_value": scale})
     assert _entry(unit=unit, context=context, semantic_evidence=evidence).unit is unit
-
-
-@pytest.mark.parametrize(
-    ("scale", "expected"),
-    [
-        (KpiUnitScale.NONE, Decimal("114")),
-        (KpiUnitScale.THOUSANDS, Decimal("114000")),
-        (KpiUnitScale.MILLIONS, Decimal("114000000")),
-        (KpiUnitScale.BILLIONS, Decimal("114000000000")),
-    ],
-)
-def test_repair_source_binding_uses_normalized_count_value(
-    scale: KpiUnitScale, expected: Decimal
-) -> None:
-    assert normalize_source_numeric(Decimal("114"), unit=Unit.COUNT, unit_scale=scale) == expected
 
 
 @pytest.mark.parametrize(

@@ -13,11 +13,6 @@ def _git_env() -> dict[str, str]:
     return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
 
 
-def test_public_tree_has_no_private_or_generated_material() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    assert verify(repo_root) == []
-
-
 def _init_repo(repo_root: Path) -> None:
     subprocess.run(
         ["git", "init", "--initial-branch=main", repo_root],

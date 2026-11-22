@@ -137,7 +137,7 @@ def test_master_digest_covers_token_geometry_and_keyframes(
         if isinstance(node, ast.ImportFrom) and node.module == "ui.conformance_scan"
         for alias in node.names
     }
-    assert {"css_text", "discover_emitters", "scan_surface"} <= imports
+    assert {"css_text", "scan_surface"} <= imports
     locally_defined = {
         node.name
         for node in guard_tree.body

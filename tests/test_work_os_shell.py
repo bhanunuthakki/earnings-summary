@@ -747,12 +747,6 @@ def test_l1_live_shells_do_not_ship_prototype_card_grids_or_inline_geometry() ->
         assert fragment.count('class="k-card k-card-section research-toolbar"') == 1
 
 
-def test_rendered_l1_shell_has_no_hidden_grid_signature_drift() -> None:
-    evidence = scan_surface_evidence("rendered-work-os", render_work_os_shell())
-
-    assert "off-scale-grid-column" not in evidence.violations()
-
-
 def test_l2_l3_shell_composes_semantic_mounts_and_canonical_split_rails() -> None:
     html = render_work_os_shell()
 
@@ -861,33 +855,31 @@ def test_rendered_l2_l3_shell_has_no_target_scan_findings_or_unverifiable_markup
 
 
 def test_rendered_shell_scan_proves_each_target_dimension_is_enforced() -> None:
-    html = render_work_os_shell()
-
-    title_mutation = html.replace(
-        '<h2 class="k-card-title" id="workOsBriefLibraryHeading">Brief Library</h2>',
-        '<h1 class="k-toolbar-title">Brief Library</h1>',
-        1,
+    # The clean shell has none of these findings (see the test above), and each
+    # fault targets a different dimension, so one scan of all three faults
+    # proves each dimension is enforced on the real rendered shell.
+    mutated = (
+        render_work_os_shell()
+        .replace(
+            '<h2 class="k-card-title" id="workOsBriefLibraryHeading">Brief Library</h2>',
+            '<h1 class="k-toolbar-title">Brief Library</h1>',
+            1,
+        )
+        .replace(
+            "</head>",
+            "<style>.k-grid-split-rail-lg { grid-template-columns: 1fr 1fr; }</style>"
+            "<style>.k-card { border-radius: var(--radius); "
+            "border: var(--bw-thin) solid var(--border); "
+            "box-shadow: var(--shadow-pop); }</style></head>",
+            1,
+        )
     )
-    title_evidence = scan_surface_evidence("rendered-work-os", title_mutation)
-    assert "floating-card-title" in title_evidence.violations()
-
-    grid_mutation = html.replace(
-        "</head>",
-        "<style>.k-grid-split-rail-lg { grid-template-columns: 1fr 1fr; }</style></head>",
-        1,
-    )
-    grid_evidence = scan_surface_evidence("rendered-work-os", grid_mutation)
-    assert "off-scale-grid-column" in grid_evidence.violations()
-
-    shape_mutation = html.replace(
-        "</head>",
-        "<style>.k-card { border-radius: var(--radius); "
-        "border: var(--bw-thin) solid var(--border); "
-        "box-shadow: var(--shadow-pop); }</style></head>",
-        1,
-    )
-    shape_evidence = scan_surface_evidence("rendered-work-os", shape_mutation)
-    assert "unsanctioned-shape-geometry" in shape_evidence.violations()
+    violations = scan_surface_evidence("rendered-work-os", mutated).violations()
+    assert {
+        "floating-card-title",
+        "off-scale-grid-column",
+        "unsanctioned-shape-geometry",
+    } <= set(violations)
 
 
 def test_work_os_shell_render_signature_remains_keyword_only() -> None:

@@ -1435,15 +1435,20 @@ def write_computed_outputs(workbook_path: Path, inp: RedesignInputs) -> Scenario
     preserved edits, not the builder's from-scratch defaults. Returns the
     scenario values so the caller can persist them without re-deriving.
     """
-    sv = scenario_values(inp)
-    grid = sensitivity_grid(inp)
     wb = openpyxl.load_workbook(str(workbook_path), data_only=False)
     try:
-        write_scenario_fair_values(wb, sv)
-        write_sensitivity_sheet(wb, grid)
+        sv = write_computed_outputs_into(wb, inp)
         wb.save(str(workbook_path))
     finally:
         wb.close()
+    return sv
+
+
+def write_computed_outputs_into(wb: Workbook, inp: RedesignInputs) -> ScenarioValues:
+    """``write_computed_outputs`` onto an already-open workbook; does NOT save."""
+    sv = scenario_values(inp)
+    write_scenario_fair_values(wb, sv)
+    write_sensitivity_sheet(wb, sensitivity_grid(inp))
     return sv
 
 
