@@ -802,6 +802,22 @@ def test_typecheck_enforces_changed_files_and_exact_population_ceilings() -> Non
     assert "ci_gate.py pyright-diff" not in typecheck_job
 
 
+def test_typecheck_receipt_is_exact_keyed_and_written_only_by_main() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    job = workflow.split("\n  typecheck:\n", maxsplit=1)[1].split("\n  security:\n", maxsplit=1)[0]
+    # Every main push leaves a receipt, even one with no Python change.
+    assert "github.event_name == 'push'" in job.split("runs-on:", 1)[0]
+    restore = job.split("Restore base commit Pyright receipt", 1)[1].split("- name:", 1)[0]
+    assert "actions/cache/restore@" in restore
+    assert "key: pyright-receipt-v1-${{ steps.base.outputs.sha }}" in restore
+    assert "restore-keys" not in job
+    assert 'echo "sha=$(git rev-parse HEAD^1)"' in job
+    assert '--receipt-in "$RUNNER_TEMP/pyright-receipt.json" --receipt-commit "$BASE_SHA"' in job
+    save = job.split("Save this commit's Pyright receipt", 1)[1]
+    assert "github.event_name == 'push' && github.ref == 'refs/heads/main'" in save
+    assert "key: pyright-receipt-v1-${{ github.sha }}" in save
+
+
 def test_public_boundary_is_unconditional_and_pre_push_uses_same_guard() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     all_refs_workflow = (REPO_ROOT / ".github" / "workflows" / "public-boundary.yml").read_text(

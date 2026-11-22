@@ -452,10 +452,15 @@ jobs:
 
   typecheck:
     needs: [changes]
-    if: ${{ needs.changes.outputs.python == 'true' }}
+    # Every push to main runs the full scan so each main commit leaves a
+    # per-file Pyright receipt for pull requests based on it.
+    if: ${{ needs.changes.outputs.python == 'true' || github.event_name == 'push' }}
     # Every changed retained file must be clean. The complete active population
     # also has exact, checked-in subsystem ceilings that must move downward with
     # each debt cleanup; hidden files and diagnostic substitution cannot pass.
+    # A pull request re-checks only changed files and their transitive
+    # importers and carries every other per-file count from the full-scan
+    # receipt of its exact base commit; without that receipt it scans fully.
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -487,6 +492,9 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             git fetch --no-tags origin "${{ github.base_ref }}"
             base="origin/${{ github.base_ref }}"
+            # The checkout is the PR merge commit; its first parent is the
+            # exact base tree that this run's diff is measured against.
+            echo "sha=$(git rev-parse HEAD^1)" >> "$GITHUB_OUTPUT"
           else
             base="${{ github.event.before }}"
             if ! git rev-parse --quiet --verify "$base^{commit}" >/dev/null 2>&1; then
@@ -498,8 +506,35 @@ jobs:
         env:
           CHECK_BASE: ${{ steps.base.outputs.ref }}
         run: PYTHONPATH=src python -m quality.check_changed --base "$CHECK_BASE" --mode committed --check types
+      - name: Restore base commit Pyright receipt
+        id: receipt
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/pyright-receipt.json
+          key: pyright-receipt-v1-${{ steps.base.outputs.sha }}
       - name: pyright and suppression ceilings — complete active population is exact
-        run: PYTHONPATH=src python execution/enforce_static_quality.py --pythonpath "$(command -v python)" --base "${{ steps.base.outputs.ref }}" --failure-diagnostics
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RECEIPT_HIT: ${{ steps.receipt.outputs.cache-hit }}
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+          BASE_REF: ${{ steps.base.outputs.ref }}
+        run: |
+          set -euo pipefail
+          receipt=()
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$RECEIPT_HIT" = "true" ]; then
+            receipt=(--receipt-in "$RUNNER_TEMP/pyright-receipt.json" --receipt-commit "$BASE_SHA")
+          elif [ "$EVENT_NAME" = "push" ]; then
+            receipt=(--receipt-out "$RUNNER_TEMP/pyright-receipt.json")
+          fi
+          PYTHONPATH=src python execution/enforce_static_quality.py --pythonpath "$(command -v python)" --base "$BASE_REF" --failure-diagnostics "${receipt[@]}"
+      - name: Save this commit's Pyright receipt
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/pyright-receipt.json
+          key: pyright-receipt-v1-${{ github.sha }}
 
   security:
     needs: [changes]
