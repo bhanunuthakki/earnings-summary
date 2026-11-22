@@ -687,8 +687,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Run Windows-relevant application tests with the repository harness
         shell: pwsh
+        env:
+          # Hosted Windows system temp is on C:, where each SQLite commit
+          # flushes to a slow OS disk: 500 commits took 14.46 s there versus
+          # 0.40 s on RUNNER_TEMP (D:) in run 45001415371. Keeping the test
+          # databases on D: cut this step from 183-255 s to 62 s with all 338
+          # cases passing. Durability semantics are unchanged.
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: |
-          & "$env:RUNNER_TEMP/app-venv/Scripts/python.exe" -m pytest -q -p no:cacheprovider --junitxml="$env:RUNNER_TEMP/native-app.xml" `
+          & "$env:RUNNER_TEMP/app-venv/Scripts/python.exe" -m pytest -q -p no:cacheprovider --durations=25 --junitxml="$env:RUNNER_TEMP/native-app.xml" `
             tests/test_storage_reservation.py `
             tests/test_job_runtime.py `
             tests/test_owner_proposal_approval.py `
