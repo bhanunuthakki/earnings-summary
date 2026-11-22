@@ -8,7 +8,6 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from pydantic import ValidationError
 
 from provenance.evidence_ledger import (
@@ -26,25 +25,15 @@ from provenance.observation_resolution import (
     ResolutionRevision,
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PRIOR_HEAD = "0213_decision_draft_provider_id"
-HEAD = "0215_observation_resolution_ledger"
 _STAMP = datetime(2026, 7, 26, 12, 0, 0)
 _SHA_A = "a" * 64
 _SHA_B = "b" * 64
 _SHA_C = "c" * 64
 
 
-def _config(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
 def _migrated_conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     db_path = tmp_path / "observation-resolution.db"
-    migrated_db(db_path, stamp=PRIOR_HEAD, archived=True, target=HEAD)
+    migrated_db(db_path)
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
