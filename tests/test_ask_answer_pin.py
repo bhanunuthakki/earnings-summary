@@ -17,7 +17,7 @@ import json
 import sqlite3
 import subprocess
 import threading
-from collections.abc import Generator, Iterator
+from collections.abc import Callable, Generator, Iterator
 from pathlib import Path
 from types import GeneratorType, SimpleNamespace
 from typing import cast
@@ -159,7 +159,11 @@ def test_stream_pins_resolved_model_and_records_ledger(monkeypatch: pytest.Monke
     monkeypatch.setattr(llm_cli.subprocess, "Popen", fake_popen)
     records = _patch_ledger(monkeypatch)
     captures: list[dict[str, object]] = []
-    monkeypatch.setattr(llm_cli, "capture_exchange", lambda **kwargs: captures.append(kwargs))
+
+    def capture(**kwargs: object) -> None:
+        captures.append(kwargs)
+
+    monkeypatch.setattr(llm_cli, "capture_exchange", capture)
 
     events = list(real_stream_llm_text("PROMPT"))
 
@@ -261,10 +265,17 @@ def test_partial_failed_stream_is_never_captured_or_final(
     if not with_error_envelope:
         proc.returncode = 1
 
-    monkeypatch.setattr(llm_cli.subprocess, "Popen", lambda *_args, **_kwargs: proc)
+    def fake_popen(*_args: object, **_kwargs: object) -> object:
+        return proc
+
+    monkeypatch.setattr(llm_cli.subprocess, "Popen", fake_popen)
     records = _patch_ledger(monkeypatch)
     captures: list[dict[str, object]] = []
-    monkeypatch.setattr(llm_cli, "capture_exchange", lambda **kwargs: captures.append(kwargs))
+
+    def capture(**kwargs: object) -> None:
+        captures.append(kwargs)
+
+    monkeypatch.setattr(llm_cli, "capture_exchange", capture)
 
     events = list(real_stream_llm_text("PROMPT"))
 
@@ -339,7 +350,11 @@ def test_stream_generator_close_terminates_child(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(llm_cli.subprocess, "Popen", fake_popen)
     records = _patch_ledger(monkeypatch)
     captures: list[dict[str, object]] = []
-    monkeypatch.setattr(llm_cli, "capture_exchange", lambda **kwargs: captures.append(kwargs))
+
+    def capture(**kwargs: object) -> None:
+        captures.append(kwargs)
+
+    monkeypatch.setattr(llm_cli, "capture_exchange", capture)
 
     stream = real_stream_llm_text("PROMPT")
     assert isinstance(stream, GeneratorType)
@@ -365,7 +380,11 @@ def test_windows_tree_kill_uses_safe_pid_argv(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(llm_cli.subprocess, "run", fake_run)
     proc = cast("subprocess.Popen[str]", SimpleNamespace(pid=4312))
 
-    assert llm_cli._kill_windows_process_tree(proc) is True  # pyright: ignore[reportPrivateUsage]
+    kill_tree = cast(
+        "Callable[[subprocess.Popen[str]], bool]",
+        getattr(llm_cli, "_kill_windows_process_tree"),
+    )
+    assert kill_tree(proc) is True
     assert captured == [["taskkill", "/PID", "4312", "/T", "/F"]]
 
 

@@ -64,7 +64,8 @@ def _insert_alert(conn: sqlite3.Connection, *, signature: str) -> int:
         "VALUES ('bhanu', 'NU', 'earnings_tone', ?, 'pending', '{}', ?)",
         (now, signature),
     )
-    return int(cur.lastrowid)
+    assert cur.lastrowid is not None
+    return cur.lastrowid
 
 
 def test_alerts_lacks_dismiss_reason_before_upgrade(db_at_prior: Path) -> None:

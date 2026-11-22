@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 from alembic.config import Config
 
 from alembic import command
+from compute.metrics_engine import io as metrics_io
 from compute.metrics_engine.inputs import CanonicalConcept
-from compute.metrics_engine.io import (
-    _unsealed_lineage_reason,  # pyright: ignore[reportPrivateUsage]
-)
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -45,6 +45,15 @@ PREDECESSOR = "0236_fact_observation_match_proofs"
 HEAD = "0237_companyfacts_match_gated_capture"
 STAMP = datetime(2026, 7, 27, 12, 0, 0)
 CONFIG_SHA = hashlib.sha256(b"companyfacts-gate-test-config").hexdigest()
+
+
+def _unsealed_lineage_reason() -> Callable[
+    [sqlite3.Connection, list[metrics_io.LineageEntry]], str | None
+]:
+    return cast(
+        "Callable[[sqlite3.Connection, list[metrics_io.LineageEntry]], str | None]",
+        getattr(metrics_io, "_unsealed_lineage_reason"),
+    )
 
 
 def _config(path: Path) -> Config:
@@ -532,7 +541,7 @@ def test_staged_companyfacts_fact_requires_match_and_captures_proof_atomically(
         # trust the legacy documents.source_type compatibility label.
         conn.execute("UPDATE documents SET source_type = 'legacy_cache' WHERE id = 2")
         assert (
-            _unsealed_lineage_reason(
+            _unsealed_lineage_reason()(
                 conn,
                 [(CanonicalConcept.REVENUE, datetime(2026, 6, 30), 2)],
             )

@@ -20,30 +20,38 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
-import sys
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from io import StringIO
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from alembic.config import Config
 
 from alembic import command
+from dcf import persist as persist_mod
+from dcf.provenance import DcfInputProvenance
+from pipeline.dcf_coverage_panel import collect_rows, render_dcf_coverage_panel
+from report.models import SectionStatus, SnapshotSection, ValuationSnapshot
+from report.renderers import markdown as markdown_renderer
+from report.renderers import workspace_html
+from report.sections import snapshot as snapshot_mod
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from dcf import persist as persist_mod  # noqa: E402
-from dcf.provenance import DcfInputProvenance  # noqa: E402
-from pipeline.dcf_coverage_panel import collect_rows, render_dcf_coverage_panel  # noqa: E402
-from report.models import SectionStatus, SnapshotSection, ValuationSnapshot  # noqa: E402
-from report.renderers.markdown import (  # noqa: E402
-    _valuation_card_md,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
+# Internal render and snapshot seams under test (private by design).
+_valuation_card_md = cast(
+    "Callable[[StringIO, ValuationSnapshot], None]",
+    getattr(markdown_renderer, "_valuation_card_md"),
 )
-from report.renderers.workspace_html import (  # noqa: E402
-    _valuation_summary_panel,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
+_valuation_summary_panel = cast(
+    "Callable[[StringIO, SnapshotSection], None]",
+    getattr(workspace_html, "_valuation_summary_panel"),
 )
-from report.sections import snapshot as snapshot_mod  # noqa: E402
+_valuation_snapshot = cast(
+    "Callable[..., ValuationSnapshot]", getattr(snapshot_mod, "_valuation_snapshot")
+)
 
 PRIOR_HEAD = "0090_ask_claim_grounding_budget"
 NEW_HEAD = "0091_dcf_runs_assumptions_sync"
@@ -96,7 +104,7 @@ def _row(**overrides: object) -> persist_mod.DcfRunRow:
         ),
     }
     base.update(overrides)
-    return persist_mod.DcfRunRow(**base)  # pyright: ignore[reportArgumentType]
+    return persist_mod.DcfRunRow(**cast("dict[str, Any]", base))
 
 
 # --------------------------------------------------------------------------- #
@@ -182,18 +190,14 @@ def _seed_repo(tmp_path: Path, *, schema: str, sync_cols: bool) -> Path:
 
 def test_valuation_snapshot_reads_sync_columns(tmp_path: Path) -> None:
     repo = _seed_repo(tmp_path, schema=_SYNCED_DCF_RUNS, sync_cols=True)
-    v = snapshot_mod._valuation_snapshot(  # pyright: ignore[reportPrivateUsage]
-        "TEST", repo, current_price=None, model_link=None, mos_bar=None
-    )
+    v = _valuation_snapshot("TEST", repo, current_price=None, model_link=None, mos_bar=None)
     assert v.assumptions_sync_status == "synced"
     assert v.assumptions_synced_at == datetime(2026, 6, 12, 9, 30)
 
 
 def test_valuation_snapshot_degrades_without_sync_columns(tmp_path: Path) -> None:
     repo = _seed_repo(tmp_path, schema=_LEGACY_DCF_RUNS, sync_cols=False)
-    v = snapshot_mod._valuation_snapshot(  # pyright: ignore[reportPrivateUsage]
-        "TEST", repo, current_price=None, model_link=None, mos_bar=None
-    )
+    v = _valuation_snapshot("TEST", repo, current_price=None, model_link=None, mos_bar=None)
     assert v.consolidated_npv_per_share == 610.79  # the read itself still works
     assert v.assumptions_sync_status is None
     assert v.assumptions_synced_at is None

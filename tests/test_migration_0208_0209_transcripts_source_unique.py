@@ -20,8 +20,8 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-import sqlalchemy as sa
 from alembic.config import Config
+from sqlalchemy.exc import IntegrityError
 
 from alembic import command
 
@@ -76,7 +76,8 @@ def _seed_document(db_path: Path) -> int:
             (f"sha_{datetime.now().isoformat()}_{id(conn)}",),
         )
         conn.commit()
-        return int(cur.lastrowid)
+        assert cur.lastrowid is not None
+        return cur.lastrowid
     finally:
         conn.close()
 
@@ -188,5 +189,5 @@ def test_unique_migration_fails_loudly_on_preexisting_duplicates(db_at_prior: Pa
 
     # command.upgrade runs through SQLAlchemy's engine, which wraps the
     # underlying sqlite3.IntegrityError as sqlalchemy.exc.IntegrityError.
-    with pytest.raises(sa.exc.IntegrityError):
+    with pytest.raises(IntegrityError):
         command.upgrade(cfg, UNIQUE_HEAD)
