@@ -435,8 +435,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only _SCALAR_ROW_ATTR dashboard scalar attributes.",
-      "fingerprint": "90b15a52dcf79ed10d08b00b3c3e98e62a9b10ef6d54d3586ad8e34962abf733",
-      "line": 1491,
+      "fingerprint": "ffa30a87932374b1c3a2c2740fe3e87bdcc2a2520b2ffad5e53cd1a24ba93921",
+      "line": 1496,
       "path": "src/dcf/redesign.py",
       "targets": [
         "_SCALAR_ROW_ATTR"
@@ -1121,7 +1121,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "90f16e83c32008dc3835fd42c365fdba60a962899a816fcd5d1db013ad04c72c",
+      "source_sha256": "dbda0bbfae94e472434acb9df86fef42ea1661a46dac53c33b7890dc294837ce",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
