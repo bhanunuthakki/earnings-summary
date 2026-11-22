@@ -8,6 +8,7 @@ surface exemptions, and compatibility approvals all come from
 from __future__ import annotations
 
 import ast
+import functools
 import hashlib
 import io
 import re
@@ -2346,6 +2347,7 @@ def _has_structural_pseudo_element(selector: str) -> bool:
     return bool(_PSEUDO_ELEMENT.search("".join(structural)))
 
 
+@functools.lru_cache(maxsize=8192)
 def _selector_specificity(selector: str) -> tuple[int, int, int]:
     ids = classes = elements = 0
     cursor = 0
@@ -2501,9 +2503,12 @@ def _uses_only_token_geometry(values: tuple[str, str, str]) -> bool:
     )
 
 
+_EffectiveDeclarations = tuple[tuple[str, Mapping[str, str]], ...]
+
+
 def _effective_declarations(
     rules: tuple[_CssRule, ...],
-) -> tuple[tuple[str, Mapping[str, str]], ...]:
+) -> _EffectiveDeclarations:
     events: list[tuple[tuple[str, ...], str, tuple[tuple[str, str], ...]]] = []
     display: dict[tuple[tuple[str, ...], str], str] = {}
     base_by_key: dict[tuple[tuple[str, ...], str], str] = {}
@@ -2523,10 +2528,21 @@ def _effective_declarations(
         tuple[tuple[str, ...], str],
         dict[str, tuple[str, bool, tuple[int, int, int], int]],
     ] = {}
+    # Index events and keys by selector: only same-selector events can apply,
+    # so the cascade stays linear in rule count (order inside a group is kept).
+    events_by_selector: dict[
+        str, list[tuple[int, tuple[str, ...], tuple[tuple[str, str], ...]]]
+    ] = {}
+    for event_index, (event_context, event_selector, declarations) in enumerate(events):
+        events_by_selector.setdefault(event_selector, []).append(
+            (event_index, event_context, declarations)
+        )
+    keys_by_selector: dict[str, list[tuple[tuple[str, ...], str]]] = {}
     for target_context, target_selector in display:
+        keys_by_selector.setdefault(target_selector, []).append((target_context, target_selector))
         state: dict[str, tuple[str, bool, tuple[int, int, int], int]] = {}
-        for event_index, (event_context, event_selector, declarations) in enumerate(events):
-            if event_selector != target_selector or not (
+        for event_index, event_context, declarations in events_by_selector[target_selector]:
+            if not (
                 len(event_context) <= len(target_context)
                 and target_context[: len(event_context)] == event_context
             ):
@@ -2539,7 +2555,7 @@ def _effective_declarations(
                     state[property_name] = (
                         bare_value,
                         important,
-                        _selector_specificity(event_selector),
+                        _selector_specificity(target_selector),
                         event_index,
                     )
         states[(target_context, target_selector)] = state
@@ -2563,9 +2579,8 @@ def _effective_declarations(
         if base_selector is not None:
             candidates = [
                 candidate
-                for candidate in states
-                if candidate[1] == base_selector
-                and len(candidate[0]) <= len(target_context)
+                for candidate in keys_by_selector.get(base_selector, ())
+                if len(candidate[0]) <= len(target_context)
                 and target_context[: len(candidate[0])] == candidate[0]
             ]
             if candidates:
@@ -2608,10 +2623,10 @@ def _shape_archetype(atom_name: str) -> str | None:
     return None
 
 
-def _scan_indent(rules: tuple[_CssRule, ...]) -> list[str]:
+def _scan_indent(effective: _EffectiveDeclarations) -> list[str]:
     findings: set[str] = set()
     allowed = _allowed_indent_values()
-    for selector, declarations in _effective_declarations(rules):
+    for selector, declarations in effective:
         scoped_atoms = {
             f"{prefix}{name}"
             for prefix, name in _subject_selector_atoms(selector)
@@ -2628,9 +2643,9 @@ def _scan_indent(rules: tuple[_CssRule, ...]) -> list[str]:
     return sorted(findings)
 
 
-def _scan_grid_columns(rules: tuple[_CssRule, ...]) -> list[str]:
+def _scan_grid_columns(effective: _EffectiveDeclarations) -> list[str]:
     findings: set[str] = set()
-    for selector, declarations in _effective_declarations(rules):
+    for selector, declarations in effective:
         value = declarations.get("grid-template-columns")
         if value is None:
             continue
@@ -2641,9 +2656,9 @@ def _scan_grid_columns(rules: tuple[_CssRule, ...]) -> list[str]:
     return sorted(findings)
 
 
-def _scan_shape_geometry(rules: tuple[_CssRule, ...]) -> list[str]:
+def _scan_shape_geometry(effective: _EffectiveDeclarations) -> list[str]:
     findings: set[str] = set()
-    for selector, declarations in _effective_declarations(rules):
+    for selector, declarations in effective:
         radius = declarations.get("border-radius")
         border = declarations.get("border")
         elevation = declarations.get("box-shadow")
@@ -3226,13 +3241,14 @@ def scan_surface_evidence(rel: str, text: str) -> SurfaceScanEvidence:
         unverifiable_markup.append("static-composition-limit")
     if floating_titles:
         found["floating-card-title"] = floating_titles
-    indents = _scan_indent(rules)
+    effective = _effective_declarations(rules)
+    indents = _scan_indent(effective)
     if indents:
         found["off-scale-indent"] = indents
-    shapes = _scan_shape_geometry(rules)
+    shapes = _scan_shape_geometry(effective)
     if shapes:
         found["unsanctioned-shape-geometry"] = shapes
-    columns = _scan_grid_columns(rules)
+    columns = _scan_grid_columns(effective)
     if columns:
         found["off-scale-grid-column"] = columns
 
