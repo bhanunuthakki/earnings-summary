@@ -3995,55 +3995,6 @@
       "unresolved": []
     },
     {
-      "canonical_extra": null,
-      "canonical_target": "canonical_json_ascii",
-      "disposition": "collapsed",
-      "end_line": 46,
-      "family": "json",
-      "file": "src/pipeline/sec_delta_admission.py",
-      "line": 45,
-      "name": "_canonical_json",
-      "referenced": {},
-      "retained_reason": null,
-      "scope": "module",
-      "source": "def _canonical_json(value: object) -> str:\n    return json.dumps(value, sort_keys=True, separators=(\",\", \":\"), ensure_ascii=True)",
-      "unresolved": []
-    },
-    {
-      "canonical_extra": null,
-      "canonical_target": "canonical_json_ascii",
-      "disposition": "collapsed",
-      "end_line": 104,
-      "family": "json",
-      "file": "src/pipeline/sec_delta_planner.py",
-      "line": 103,
-      "name": "_canonical_json",
-      "referenced": {},
-      "retained_reason": null,
-      "scope": "module",
-      "source": "def _canonical_json(value: object) -> str:\n    return json.dumps(value, sort_keys=True, separators=(\",\", \":\"), ensure_ascii=True)",
-      "unresolved": []
-    },
-    {
-      "canonical_extra": null,
-      "canonical_target": "content_sha256_ascii",
-      "disposition": "collapsed",
-      "end_line": 108,
-      "family": "sha",
-      "file": "src/pipeline/sec_delta_planner.py",
-      "line": 107,
-      "name": "_digest",
-      "referenced": {
-        "_canonical_json": {
-          "source": "def _canonical_json(value: object) -> str:\n    return json.dumps(value, sort_keys=True, separators=(\",\", \":\"), ensure_ascii=True)"
-        }
-      },
-      "retained_reason": null,
-      "scope": "module",
-      "source": "def _digest(value: object) -> str:\n    return hashlib.sha256(_canonical_json(value).encode(\"utf-8\")).hexdigest()",
-      "unresolved": []
-    },
-    {
       "canonical_extra": {
         "default_table": null
       },
@@ -7822,15 +7773,15 @@
   ],
   "summary": {
     "json": {
-      "total": 77,
-      "mappable": 54,
-      "collapsed": 49,
+      "total": 75,
+      "mappable": 52,
+      "collapsed": 47,
       "retained": 28
     },
     "sha": {
-      "total": 139,
-      "mappable": 83,
-      "collapsed": 64,
+      "total": 138,
+      "mappable": 82,
+      "collapsed": 63,
       "retained": 75
     },
     "tables": {
@@ -7877,6 +7828,61 @@
         "retained_reason": null,
         "scope": "module",
         "source": "def canonical_json(value: object) -> str:\n    return json.dumps(value, ensure_ascii=False, separators=(\",\", \":\"), sort_keys=True)",
+        "unresolved": []
+      }
+    ]
+  },
+  "test_only_module_retirement_reconciliation": {
+    "source_commit": "9a8db5335aa30ac6a3c6e2c1a38d8fab01b83cbd",
+    "scope": "Remove helper sites whose module was deleted as test-only code. Preserve each captured site here as history; every other active record remains exact. No test weakening.",
+    "retired_sites": [
+      {
+        "canonical_extra": null,
+        "canonical_target": "canonical_json_ascii",
+        "disposition": "collapsed",
+        "end_line": 46,
+        "family": "json",
+        "file": "src/pipeline/sec_delta_admission.py",
+        "line": 45,
+        "name": "_canonical_json",
+        "referenced": {},
+        "retained_reason": null,
+        "scope": "module",
+        "source": "def _canonical_json(value: object) -> str:\n    return json.dumps(value, sort_keys=True, separators=(\",\", \":\"), ensure_ascii=True)",
+        "unresolved": []
+      },
+      {
+        "canonical_extra": null,
+        "canonical_target": "canonical_json_ascii",
+        "disposition": "collapsed",
+        "end_line": 104,
+        "family": "json",
+        "file": "src/pipeline/sec_delta_planner.py",
+        "line": 103,
+        "name": "_canonical_json",
+        "referenced": {},
+        "retained_reason": null,
+        "scope": "module",
+        "source": "def _canonical_json(value: object) -> str:\n    return json.dumps(value, sort_keys=True, separators=(\",\", \":\"), ensure_ascii=True)",
+        "unresolved": []
+      },
+      {
+        "canonical_extra": null,
+        "canonical_target": "content_sha256_ascii",
+        "disposition": "collapsed",
+        "end_line": 108,
+        "family": "sha",
+        "file": "src/pipeline/sec_delta_planner.py",
+        "line": 107,
+        "name": "_digest",
+        "referenced": {
+          "_canonical_json": {
+            "source": "def _canonical_json(value: object) -> str:\n    return json.dumps(value, sort_keys=True, separators=(\",\", \":\"), ensure_ascii=True)"
+          }
+        },
+        "retained_reason": null,
+        "scope": "module",
+        "source": "def _digest(value: object) -> str:\n    return hashlib.sha256(_canonical_json(value).encode(\"utf-8\")).hexdigest()",
         "unresolved": []
       }
     ]
