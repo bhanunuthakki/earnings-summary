@@ -30,6 +30,7 @@ from provenance.metric_ontology import (
     SourceTaxonomyComponent,
 )
 from provenance.population_completeness import PopulationTemporalScope
+from provenance.source_fact_publication import publication_verification_scope
 from runtime.deterministic import as_utc as _utc
 from runtime.deterministic import canonical_json as _canonical_json
 from runtime.deterministic import sha256_joined_unit_sep as _digest
@@ -297,57 +298,61 @@ def _admit_exact_source_observations(
     request_sha = _model_sha(request)
     repository = MetricOntology(conn)
     selected: list[dict[str, object]] = []
-    # Validate the complete bounded set before any write.
-    for review in request.observations:
-        bundle = FactReadModel(conn).provenance_bundle(review.observation_id, cutoff=cutoff)
-        evidence = bundle.evidence
-        if bundle.observation.observation_kind != "reported" or evidence is None:
-            raise ValueError("exact source admission requires sealed reported evidence")
-        row = conn.execute(
-            "SELECT cell.*,seal.semantic_key_sha256,anchor.source_taxonomy_version,"
-            "entity.created_at AS reporting_entity_created_at,observation.value_kind,"
-            "observation.observation_id,observation.recorded_at AS observation_recorded_at,"
-            "cell.recorded_at AS cell_recorded_at,anchor.extraction_run_id,"
-            "anchor.anchor_payload_sha256,anchor.extraction_output_sha256,anchor.raw_entry_sha256,"
-            "payload.observation_payload_sha256,completeness.observation_set_sha256 "
-            "FROM fact_observations_v2 observation "
-            "JOIN fact_cells_v2 cell ON cell.fact_cell_id=observation.fact_cell_id "
-            "JOIN reporting_entities entity ON entity.reporting_entity_id=cell.reporting_entity_id "
-            "JOIN fact_cell_identity_seals_v2 seal ON seal.fact_cell_id=cell.fact_cell_id "
-            "JOIN fact_reported_observation_anchors_v2 anchor ON anchor.observation_id=observation.observation_id "
-            "JOIN fact_observation_payload_commitments_v2 payload ON payload.observation_id=observation.observation_id "
-            "JOIN fact_extraction_run_completeness_seals_v2 completeness ON completeness.extraction_run_id=anchor.extraction_run_id "
-            "WHERE observation.observation_id=?",
-            (review.observation_id,),
-        ).fetchone()
-        if row is None:
-            raise ValueError("exact source admission requires extraction completeness seals")
-        if (
-            evidence.document_version_id != review.document_version_id
-            or evidence.subject_binding_revision_id != review.subject_binding_revision_id
-            or evidence.source_locator_sha256 != review.source_locator_sha256
-            or bundle.observation_payload_sha256 != review.observation_payload_sha256
-            or str(row["semantic_key_sha256"]) != review.fact_cell_semantic_key_sha256
-        ):
-            raise ValueError("exact source review commitment changed")
-        if bundle.cell.dimensions or bundle.observation.value_kind != "numeric":
-            raise ValueError("exact source admission currently requires unsegmented numeric facts")
-        head = repository.binding_as_known(review.observation_id, cutoff)
-        expected = review.expected_prior_binding_revision_id
-        generated = _binding_id(review.observation_id)
-        if head is not None and head.binding_revision_id == generated and expected is None:
+    # Validate the complete bounded set before any write, under one read snapshot
+    # so each source publication is verified once rather than once per fact.
+    with publication_verification_scope(conn):
+        for review in request.observations:
+            bundle = FactReadModel(conn).provenance_bundle(review.observation_id, cutoff=cutoff)
+            evidence = bundle.evidence
+            if bundle.observation.observation_kind != "reported" or evidence is None:
+                raise ValueError("exact source admission requires sealed reported evidence")
+            row = conn.execute(
+                "SELECT cell.*,seal.semantic_key_sha256,anchor.source_taxonomy_version,"
+                "entity.created_at AS reporting_entity_created_at,observation.value_kind,"
+                "observation.observation_id,observation.recorded_at AS observation_recorded_at,"
+                "cell.recorded_at AS cell_recorded_at,anchor.extraction_run_id,"
+                "anchor.anchor_payload_sha256,anchor.extraction_output_sha256,anchor.raw_entry_sha256,"
+                "payload.observation_payload_sha256,completeness.observation_set_sha256 "
+                "FROM fact_observations_v2 observation "
+                "JOIN fact_cells_v2 cell ON cell.fact_cell_id=observation.fact_cell_id "
+                "JOIN reporting_entities entity ON entity.reporting_entity_id=cell.reporting_entity_id "
+                "JOIN fact_cell_identity_seals_v2 seal ON seal.fact_cell_id=cell.fact_cell_id "
+                "JOIN fact_reported_observation_anchors_v2 anchor ON anchor.observation_id=observation.observation_id "
+                "JOIN fact_observation_payload_commitments_v2 payload ON payload.observation_id=observation.observation_id "
+                "JOIN fact_extraction_run_completeness_seals_v2 completeness ON completeness.extraction_run_id=anchor.extraction_run_id "
+                "WHERE observation.observation_id=?",
+                (review.observation_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("exact source admission requires extraction completeness seals")
             if (
-                head.binding_status != "bound"
-                or head.canonical_metric_cell_id != _canonical_cell_id(row)
+                evidence.document_version_id != review.document_version_id
+                or evidence.subject_binding_revision_id != review.subject_binding_revision_id
+                or evidence.source_locator_sha256 != review.source_locator_sha256
+                or bundle.observation_payload_sha256 != review.observation_payload_sha256
+                or str(row["semantic_key_sha256"]) != review.fact_cell_semantic_key_sha256
             ):
-                raise ValueError("exact source replay binding changed")
-        elif (None if head is None else head.binding_revision_id) != expected:
-            raise ValueError("exact source expected binding head changed")
-        if head is not None and head.binding_revision_id != generated:
-            raise ValueError(
-                "existing reviewed binding requires its explicit owning revision route"
-            )
-        selected.append(dict(row))
+                raise ValueError("exact source review commitment changed")
+            if bundle.cell.dimensions or bundle.observation.value_kind != "numeric":
+                raise ValueError(
+                    "exact source admission currently requires unsegmented numeric facts"
+                )
+            head = repository.binding_as_known(review.observation_id, cutoff)
+            expected = review.expected_prior_binding_revision_id
+            generated = _binding_id(review.observation_id)
+            if head is not None and head.binding_revision_id == generated and expected is None:
+                if (
+                    head.binding_status != "bound"
+                    or head.canonical_metric_cell_id != _canonical_cell_id(row)
+                ):
+                    raise ValueError("exact source replay binding changed")
+            elif (None if head is None else head.binding_revision_id) != expected:
+                raise ValueError("exact source expected binding head changed")
+            if head is not None and head.binding_revision_id != generated:
+                raise ValueError(
+                    "existing reviewed binding requires its explicit owning revision route"
+                )
+            selected.append(dict(row))
     targets: list[str] = []
     resolutions: list[str] = []
     with _atomic_population(conn):
