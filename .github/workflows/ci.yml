@@ -691,13 +691,13 @@ jobs:
         run: |
           Get-MpComputerStatus | Select-Object AMServiceEnabled, RealTimeProtectionEnabled, OnAccessProtectionEnabled | Format-List
           $env:PYTHONPATH = "src"
+          $env:SYSTEM_TEMP_PROBE = $env:TEMP
           & "$env:RUNNER_TEMP/app-venv/Scripts/python.exe" .github/scripts/io_probe.py
-          & "$env:RUNNER_TEMP/app-venv/Scripts/python.exe" -m cProfile -s cumulative -m pytest -q -p no:cacheprovider -n 0 --durations=10 `
-            "tests/test_job_runtime.py::test_deadline_finishes_only_child_sec_attempt_and_allows_next_run" `
-            "tests/test_dcf_retained_availability.py::test_native_statement_roles_require_review_and_keep_exact_input_lineage" 2>&1 | Select-Object -First 140
       - name: Run Windows-relevant application tests with the repository harness
         shell: pwsh
         run: |
+          $env:TEMP = $env:RUNNER_TEMP
+          $env:TMP = $env:RUNNER_TEMP
           & "$env:RUNNER_TEMP/app-venv/Scripts/python.exe" -m pytest -q -p no:cacheprovider --durations=40 --junitxml="$env:RUNNER_TEMP/native-app.xml" `
             tests/test_storage_reservation.py `
             tests/test_job_runtime.py `

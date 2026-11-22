@@ -48,6 +48,12 @@ def build_template() -> None:
 
 
 timed("500 commits default", lambda: commits("default", ()))
+SYSTEM_TEMP = Path(tempfile.mkdtemp(dir=os.environ.get("SYSTEM_TEMP_PROBE") or None))
+print(f"PROBE runner temp={ROOT} system temp={SYSTEM_TEMP}", flush=True)
+_runner_root = ROOT
+ROOT = SYSTEM_TEMP
+timed("500 commits default (system temp)", lambda: commits("system-default", ()))
+ROOT = _runner_root
 timed("500 commits synchronous=OFF", lambda: commits("off", ("PRAGMA synchronous=OFF",)))
 timed(
     "500 commits WAL synchronous=NORMAL",
