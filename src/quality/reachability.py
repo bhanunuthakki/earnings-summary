@@ -436,15 +436,21 @@ def _import_base(source_rel: str, module: str, level: int) -> str:
 
 
 def _resolve_module(
-    source_rel: str, module: str, level: int, index: dict[str, str]
+    source_rel: str,
+    module: str,
+    level: int,
+    index: dict[str, str],
+    module_roots: frozenset[str],
 ) -> tuple[str | None, bool]:
-    """Return (path, is_project_name), distinguishing external imports."""
+    """Return (path, is_project_name), distinguishing external imports.
+
+    ``module_roots`` holds the top-level name of every key in ``index``; the
+    caller computes it once per graph build instead of once per import.
+    """
     candidate = _import_base(source_rel, module, level)
     if level:
         return index.get(candidate), True
-    return index.get(candidate), candidate.split(".", 1)[0] in {
-        key.split(".", 1)[0] for key in index
-    }
+    return index.get(candidate), candidate.split(".", 1)[0] in module_roots
 
 
 def _literal_target(root: Path, value: str, index: dict[str, str]) -> str | None:
@@ -799,7 +805,7 @@ def build_graph(repo_root: str | Path) -> ReachabilityGraph:
     )
     files = [root / PurePosixPath(relative) for relative in population]
     module_index = _module_index(root, files)
-    project_roots = {key.split(".", 1)[0] for key in module_index}
+    module_roots = frozenset(key.split(".", 1)[0] for key in module_index)
     nodes: dict[str, GraphNode] = {}
     edges: list[GraphEdge] = []
     source_hashes: dict[str, str] = {}
@@ -925,7 +931,9 @@ def build_graph(repo_root: str | Path) -> ReachabilityGraph:
             for item in ast.walk(tree):
                 if isinstance(item, ast.Import):
                     for alias in item.names:
-                        target, internal = _resolve_module(rel, alias.name, 0, module_index)
+                        target, internal = _resolve_module(
+                            rel, alias.name, 0, module_index, module_roots
+                        )
                         if target:
                             node(target, "package" if target.endswith("/") else "python")
                             add(rel, target, "import", f"import {alias.name}", "high", item.lineno)
@@ -948,7 +956,7 @@ def build_graph(repo_root: str | Path) -> ReachabilityGraph:
                 elif isinstance(item, ast.ImportFrom):
                     module = "." * item.level + (item.module or "")
                     target, internal = _resolve_module(
-                        rel, item.module or "", item.level, module_index
+                        rel, item.module or "", item.level, module_index, module_roots
                     )
                     if target:
                         node(target, "package" if target.endswith("/") else "python")
@@ -1055,7 +1063,7 @@ def build_graph(repo_root: str | Path) -> ReachabilityGraph:
                                 item.lineno,
                                 True,
                             )
-                            if val and val.split(".", 1)[0] in project_roots:
+                            if val and val.split(".", 1)[0] in module_roots:
                                 diagnostics.append(
                                     Diagnostic(
                                         path=rel,
