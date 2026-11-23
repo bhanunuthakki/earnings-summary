@@ -959,14 +959,19 @@ def test_env_caches_sqlite_by_version_os_and_recipe_hash() -> None:
     assert "if: steps.sqlite_cache.outputs.cache-hit != 'true'" in workflow
     assert "Preload verified SQLite writer runtime" in workflow
     assert 'assert sqlite3.sqlite_version == "3.53.4"' in workflow
-    _assert_only_salted_secret_scan_cache_uses_prefix_restore(workflow)
+    _assert_only_verified_caches_use_prefix_restore(workflow)
 
 
-def _assert_only_salted_secret_scan_cache_uses_prefix_restore(workflow: str) -> None:
-    # Environment caches restore by exact key only. The secret-scan cache alone
-    # restores by prefix: every entry is salted and verified in leak_scan.py.
+def _assert_only_verified_caches_use_prefix_restore(workflow: str) -> None:
+    # Environment caches restore by exact key only. Two caches restore by prefix
+    # because each entry is verified before use: secret-scan entries are salted
+    # and checked in leak_scan.py, and a test impact receipt names its commit,
+    # which test_selection.py uses only when it is an ancestor of the base.
     restore_lines = [line.strip() for line in workflow.splitlines() if "restore-keys:" in line]
-    assert restore_lines == ["restore-keys: secret-scan-v1-"]
+    assert sorted(restore_lines) == [
+        "restore-keys: secret-scan-v1-",
+        "restore-keys: test-impact-v1-",
+    ]
 
 
 def test_env_caches_virtualenv_by_locks_and_python_version() -> None:
@@ -993,7 +998,7 @@ def test_env_caches_virtualenv_by_locks_and_python_version() -> None:
     # The Playwright browser is a separate artifact and must install on every
     # run (it is not venv-cached) — the canary matrix needs Chromium.
     assert "python -m playwright install --with-deps --only-shell chromium" in workflow
-    _assert_only_salted_secret_scan_cache_uses_prefix_restore(workflow)
+    _assert_only_verified_caches_use_prefix_restore(workflow)
 
 
 def test_durations_report_is_available_on_the_real_table(
@@ -1348,6 +1353,7 @@ def test_pull_requests_select_tests_from_main_recorded_impact() -> None:
     # Only a pull request selects, and only from the exact base commit's receipt.
     assert "python -m quality.test_selection --base HEAD^1" in tests_job
     assert "key: test-impact-v1-${{ steps.base.outputs.sha }}" in tests_job
+    assert "restore-keys: test-impact-v1-\n" in tests_job
     assert 'if [ "$EVENT_NAME" = "pull_request" ]; then' in tests_job
     assert "select-tests --repack" in tests_job
     # An empty selected shard skips setup and passes; a full run never may.
