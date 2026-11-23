@@ -741,6 +741,48 @@ def test_cli_forwards_exact_target_and_rejects_unpaired_flags(
     assert calls[0]["only_tickers"] == {"WIX"}
 
 
+def test_cli_threads_repo_root_and_matches_timestamp_period_end(
+    db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import earnings_readout
+
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE transcripts SET period_end = '2026-06-30 00:00:00' "
+            "WHERE ticker = 'WIX' AND period_end = '2026-06-30'"
+        )
+        conn.commit()
+    quarter = earnings_readout.latest_reported_quarter(
+        db,
+        "WIX",
+        today=date(2026, 11, 15),
+        period_end="2026-06-30",
+        fiscal_period_type="Q2",
+    )
+    assert quarter is not None
+    assert quarter.period_end == "2026-06-30"
+
+    seen_roots: list[Path] = []
+
+    def capture_run(db_path: Path, repo_root: Path, **kwargs: object) -> dict[str, int]:
+        del db_path, kwargs
+        seen_roots.append(repo_root)
+        return {"generated": 0}
+
+    state_root = tmp_path / "product_state"
+    state_root.mkdir()
+    monkeypatch.setattr(earnings_readout, "generate_all", capture_run)
+    script = Path(__file__).resolve().parents[1] / "execution/generate_post_earnings_readouts.py"
+    main = cast(Callable[[], int], runpy.run_path(str(script))["main"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(script), "--db-path", str(db), "--repo-root", str(state_root), "--ticker", "WIX"],
+    )
+    assert main() == 0
+    assert seen_roots == [state_root.resolve()]
+
+
 def test_readout_assemble_context_surfaces_tagged_unreviewed_tier1_kpis(db: Path) -> None:
     import earnings_readout
 

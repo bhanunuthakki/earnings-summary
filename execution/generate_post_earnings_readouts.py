@@ -28,6 +28,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db-path", type=Path, default=None)
     parser.add_argument(
+        "--repo-root",
+        type=Path,
+        default=None,
+        help="product-state root holding micro_thesis/ and data/ (defaults to checkout root)",
+    )
+    parser.add_argument(
         "--ticker",
         action="append",
         default=None,
@@ -60,15 +66,16 @@ def main() -> int:
     args = parser.parse_args()
     if (args.period_end is None) != (args.fiscal_period_type is None):
         parser.error("--period-end and --fiscal-period-type must be supplied together")
+    repo_root = (args.repo_root or _REPO_ROOT).resolve()
     try:
-        database_path = require_db_path(resolve_db_path(args.db_path, configured_root=_REPO_ROOT))
+        database_path = require_db_path(resolve_db_path(args.db_path, configured_root=repo_root))
     except (RuntimeError, FileNotFoundError) as exc:
         parser.error(str(exc))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     try:
         tally = generate_all(
             database_path,
-            _REPO_ROOT,
+            repo_root,
             today=args.as_of or datetime.now(UTC).date(),
             force=args.force,
             only_tickers=set(args.ticker) if args.ticker else None,
