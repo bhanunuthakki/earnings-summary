@@ -19,8 +19,11 @@ Static rules add tests that the recording cannot see: tests that name a changed
 file (subprocess entry points, fixtures), tests that name a ledger listing a
 changed file, and tests that scan the whole repository. A test file missing
 from the receipt always runs. A change to a shared test input (conftest,
-migrations, dependency locks, pytest settings, CI, this selector) or a missing
-receipt for the exact base commit needs the full suite. Selection only shortens
+migrations, dependency locks, pytest settings, CI, this selector) needs the
+full suite. Without a receipt for the base commit, the change is measured from
+the nearest recorded ancestor instead, so main commits that recorded nothing
+(docs-only commits skip the tests) count as part of the change; a receipt from
+any other commit, or none at all, needs the full suite. Selection only shortens
 pull-request feedback: main and the merge queue always run the full suite.
 """
 
@@ -528,6 +531,27 @@ def data_referrers(references: ReferenceIndex, path: str) -> tuple[set[str], str
     return set(), None
 
 
+def receipt_base(root: Path, receipt_path: Path | None, base: str) -> str:
+    """The commit to measure from: ``base``, or the receipt's commit when it is an ancestor."""
+    if receipt_path is None or not receipt_path.is_file():
+        return base
+    try:
+        with gzip.open(receipt_path, "rt", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, EOFError, UnicodeDecodeError, json.JSONDecodeError):
+        return base
+    recorded = cast(dict[str, object], payload).get("commit") if isinstance(payload, dict) else None
+    if not isinstance(recorded, str) or recorded == base:
+        return base
+    ancestor = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", recorded, base],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    return recorded if ancestor.returncode == 0 else base
+
+
 def changed_paths(root: Path, base: str) -> list[str]:
     output = _git(root, "diff", "--name-only", "--no-renames", "-z", base, "HEAD", "--")
     return sorted({item for item in output.split("\0") if item})
@@ -545,6 +569,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     default = 1.0
     try:
         base = _git(root, "rev-parse", "--verify", f"{args.base}^{{commit}}").strip()
+        base = receipt_base(root, args.receipt, base)
         if args.durations_file:
             payload = json.loads(args.durations_file.read_text(encoding="utf-8"))
             default = float(payload["default_seconds"])

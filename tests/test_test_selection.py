@@ -290,3 +290,30 @@ def test_selection_requires_the_full_suite_without_an_exact_receipt(
     assert other.full and "another commit" in other.reason
     shared = test_selection.select(root, ["tests/conftest.py"], base=base, receipt_path=receipt)
     assert shared.full
+
+
+def test_selection_measures_from_the_nearest_recorded_ancestor(
+    recorded: tuple[Path, str, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    root, base, receipt = recorded
+    try:
+        # A docs-only main commit records no receipt of its own.
+        (root / "README.md").write_text("docs\n", encoding="utf-8")
+        _git(root, "add", "README.md")
+        _git(root, "commit", "-qm", "docs")
+        _change(root, "lib/other.py", "x * 2", "x * 3")
+        args = ["--repo-root", str(root), "--base", "HEAD^1", "--receipt", str(receipt)]
+        assert test_selection.main(args) == 0
+        lines = capsys.readouterr().out.splitlines()
+        assert lines[0].startswith("SELECTED")
+        assert set(lines[1:]) == {"tests/test_shared.py", "tests/test_child.py"}
+        # A receipt from a commit that is not an ancestor still needs every test.
+        foreign = root.parent / "foreign.json.gz"
+        with gzip.open(receipt, "rt", encoding="utf-8") as handle:
+            payload = cast(dict[str, object], json.load(handle))
+        with gzip.open(foreign, "wt", encoding="utf-8") as handle:
+            json.dump({**payload, "commit": "0" * 40}, handle)
+        assert test_selection.main([*args[:-1], str(foreign)]) == 0
+        assert capsys.readouterr().out.startswith("FULL\ttest impact receipt belongs to another")
+    finally:
+        _git(root, "reset", "-q", "--hard", base)

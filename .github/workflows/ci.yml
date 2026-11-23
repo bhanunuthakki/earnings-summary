@@ -239,12 +239,15 @@ jobs:
         shell: bash
         run: echo "sha=$(git rev-parse HEAD^1)" >> "$GITHUB_OUTPUT"
       - name: Restore base commit test impact receipt
-        # Exact key only: the receipt must describe the PR's base commit.
+        # The base commit's receipt, else main's newest one: selection then
+        # measures from that receipt's commit if it is an ancestor of the
+        # base, and runs the full suite if it is not.
         if: github.event_name == 'pull_request'
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}/test-impact-receipt
           key: test-impact-v1-${{ steps.base.outputs.sha }}
+          restore-keys: test-impact-v1-
       - name: Choose this shard's test files
         id: pick
         shell: bash
