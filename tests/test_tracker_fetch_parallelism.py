@@ -593,21 +593,29 @@ def test_desk_route_probe_failure_is_prompt_and_discards_the_inflight_fetch(
         probe_calls["count"] += 1
         return (False, "http://tracker.test")
 
+    # The fetch stays blocked until the test releases it, so "never waits" is
+    # proved by order of events, not by a wall-clock bound on a busy runner.
+    release = threading.Event()
+    fetch_finished = threading.Event()
+
     def fake_fetch() -> LivePortfolio:
-        time.sleep(0.6)
+        release.wait(timeout=10.0)
+        fetch_finished.set()
         return _healthy_live()
 
     patch_server_seam(monkeypatch, "probe_tracker", fake_probe)
     patch_server_seam(monkeypatch, "fetch_live_portfolio", fake_fetch)
     client = comments_server.create_app(tracker_app_repo).test_client()
 
-    started = time.monotonic()
-    response = client.get("/api/work-os/companies/NU/desk")
-    elapsed = time.monotonic() - started
+    try:
+        response = client.get("/api/work-os/companies/NU/desk")
+        returned_before_fetch = not fetch_finished.is_set()
+    finally:
+        release.set()
 
     assert response.status_code == 200
     assert probe_calls["count"] == 1
-    assert elapsed < 0.3
+    assert returned_before_fetch
     payload = response.get_json()
     assert payload["position"]["position_state"] == "unavailable"
     assert "portfolio_tracker_unavailable" in payload["warnings"]
