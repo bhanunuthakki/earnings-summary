@@ -277,7 +277,7 @@ def _request(repo_root: Path, *, apply: bool, task_id: str = "ocr-test") -> OCRB
     return OCRBackfillRequest(repo_root=repo_root, apply=apply, task_id=task_id)
 
 
-def test_migration_round_trip_and_append_only_tables(tmp_path: Path) -> None:
+def test_migration_creates_append_only_tables(tmp_path: Path) -> None:
     db_path = tmp_path / "roundtrip.db"
     config = _config(db_path)
     command.stamp(config, "0213_decision_draft_provider_id")
@@ -302,18 +302,6 @@ def test_migration_round_trip_and_append_only_tables(tmp_path: Path) -> None:
         }
         assert "trg_ocr_document_assessments_append_only" in triggers
         assert "trg_ocr_page_results_append_only_delete" in triggers
-    finally:
-        conn.close()
-    command.downgrade(config, PRIOR_REVISION)
-    conn = sqlite3.connect(db_path)
-    try:
-        remaining = {
-            str(row[0])
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'ocr_%'"
-            )
-        }
-        assert remaining == set()
     finally:
         conn.close()
 

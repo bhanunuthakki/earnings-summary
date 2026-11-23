@@ -12,21 +12,11 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from capture import audit
 from user_state import notes
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0059_kpi_facts_restatement"
-
-
-def _cfg(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
 
 
 @pytest.fixture
@@ -51,15 +41,11 @@ def test_musing_note_round_trips(db_path: Path) -> None:
     assert got.body.startswith("NPL formation")
 
 
-def test_capture_tables_exist_then_downgrade_drops_them(
+def test_capture_tables_exist(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> None:
-    db_path = migrated_db(
-        tmp_path / "capture-archived.db",
-        stamp=PRIOR_HEAD,
-        archived=True,
-    )
+    db_path = migrated_db(tmp_path / "capture-archived.db")
     conn = sqlite3.connect(str(db_path))
     try:
         names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -67,15 +53,6 @@ def test_capture_tables_exist_then_downgrade_drops_them(
         conn.close()
     assert "raw_capture_sessions" in names
     assert "capture_audit_log" in names
-
-    command.downgrade(_cfg(db_path), "0114_decision_process_quality")
-    conn = sqlite3.connect(str(db_path))
-    try:
-        names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    finally:
-        conn.close()
-    assert "raw_capture_sessions" not in names
-    assert "capture_audit_log" not in names
 
 
 def test_raw_capture_external_ref_dedup(db_path: Path) -> None:

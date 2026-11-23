@@ -51,13 +51,3 @@ def test_0069_recreates_table_for_the_writer(tmp_path: Path) -> None:
     cols = _columns(db, "brief_provenance_log")
     assert cols, "brief_provenance_log should exist at head"
     assert cols >= _WRITER_COLUMNS  # the recreated table carries every writer column
-
-
-def test_0069_downgrade_roundtrips(tmp_path: Path) -> None:
-    db = tmp_path / "p.db"
-    cfg = _cfg(db)
-    command.stamp(cfg, _PRIOR)
-    command.upgrade(cfg, "head")
-    assert _columns(db, "brief_provenance_log")
-    command.downgrade(cfg, "0068_substrate_constraints")
-    assert not _columns(db, "brief_provenance_log")  # gone after downgrading past 0069

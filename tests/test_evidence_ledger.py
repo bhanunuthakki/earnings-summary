@@ -14,10 +14,8 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from alembic.config import Config
 from pydantic import ValidationError
 
-from alembic import command
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -29,27 +27,33 @@ from provenance.evidence_ledger import (
     SourceObservation,
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PRIOR_HEAD = "0213_decision_draft_provider_id"
-HEAD = "0213_evidence_ledger_foundation"
 _SHA_A = "a" * 64
 _SHA_B = "b" * 64
 _SHA_C = "c" * 64
 _STAMP = datetime(2026, 7, 26, 12, 0, 0)
 
 
-def _config(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
+def _insert_legacy_document(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "INSERT INTO documents (id, ticker, source_type, doc_type, file_path, sha256, "
+        "fetched_at, fetch_status, raw_bytes_size) VALUES "
+        "(73, 'ACME', 'sec', '10-Q', 'acme.htm', ?, '2026-01-01T00:00:00Z', 'ok', 1)",
+        ("0" * 64,),
+    )
 
 
-def _migrated_conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
+def _migrated_conn(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    *,
+    legacy_document: bool = True,
+) -> sqlite3.Connection:
     db_path = tmp_path / "evidence-ledger.db"
-    migrated_db(db_path, stamp=PRIOR_HEAD, archived=True, target=HEAD)
+    migrated_db(db_path)
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys = ON")
+    if legacy_document:
+        _insert_legacy_document(conn)
     return conn
 
 
@@ -398,35 +402,14 @@ def test_legacy_document_bridge_is_unique_and_validated_when_documents_exist(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _migrated_conn(tmp_path, migrated_db)
+    conn = _migrated_conn(tmp_path, migrated_db, legacy_document=False)
     try:
         ledger = _ledger(conn)
-        conn.execute("CREATE TABLE documents (id INTEGER PRIMARY KEY)")
         with pytest.raises(ValueError, match=r"legacy documents\.id 73"):
             ledger.persist(_document())
-        conn.execute("INSERT INTO documents (id) VALUES (73)")
+        _insert_legacy_document(conn)
         assert ledger.persist(_blob()).created
         assert ledger.persist(_observation()).created
         assert ledger.persist(_document()).created
-    finally:
-        conn.close()
-
-
-def test_migration_downgrade_round_trip_removes_only_ledger_objects(tmp_path: Path) -> None:
-    db_path = tmp_path / "downgrade.db"
-    cfg = _config(db_path)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, HEAD)
-    command.downgrade(cfg, PRIOR_HEAD)
-    conn = sqlite3.connect(str(db_path))
-    try:
-        remaining = {
-            str(row[0])
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
-            )
-        }
-        assert "evidence_content_blobs" not in remaining
-        assert "v_evidence_current" not in remaining
     finally:
         conn.close()

@@ -23,13 +23,12 @@ Consumers select master recipes; they cannot create visual recipes.
 |---|---|
 | Tokens and scales | `src/ui/tokens.py` |
 | Controls and composition | `src/ui/controls.py` |
-| React mirrors | `scripts/gen_design_tokens.py`, `scripts/gen_design_controls.py` |
-| Family masters and approvals | `src/ui/design_registry.py` |
-| Conformance detection | `src/ui/conformance_scan.py` |
-| Census, debt, and receipt | `execution/verify_design_conformance.py` |
-| Merge check | `scripts/check_design_sync.py` |
+| Report renderer styles | `src/report/renderers/workspace_styles.py` |
+| Source chips | `src/ui/source_chip.py` |
 
-`src/ui/design_registry.py` owns the inventory. Do not copy paths, counts, approvals, or debt.
+The project is mostly headless. The design registry, conformance scanner, React
+mirror, and Design Sync CI gate were retired on 2026-11-22; this contract stays
+as guidance for any rendered surface that remains.
 
 ## 2. Consumer contract
 
@@ -158,9 +157,7 @@ For a new visual need:
    recipe, or exact dynamic/runtime contract. Do not add an open-ended style bag.
 3. Add a red/green adversarial test that proves the requested decision passes and
    a nearby drift attempt fails.
-4. Update `src/ui/design_registry.py` with owner and rationale when the census,
-   master set, geometry, evidence mode, or approval changes.
-5. Regenerate mirrors and run the merge-facing check.
+4. Record the owner and rationale in the owning master.
 
 Approvals are exact and typed. Only nonvisual policy infrastructure has permanent exemptions.
 Quarantine is temporary, owned, and shrink-only; debt must not grow.
@@ -170,21 +167,11 @@ counts, and product specifications.
 
 ## 7. Verification
 
-Run the composed guard after visual changes:
+After visual changes, run the token guard and the shell tests:
 
 ```powershell
-python scripts/check_design_sync.py
+python -m pytest tests/test_ui_controls.py tests/test_work_os_shell.py -q
 ```
 
-Inspect the deterministic conformance receipt:
-
-```powershell
-python execution/verify_design_conformance.py --check --route-canaries
-python -m pytest tests/test_design_registry.py tests/test_design_conformance_canonical.py tests/test_design_sync.py tests/test_ui_controls.py -q
-```
-
-Route canaries use production renders at both widths, wait for hydration, walk light/open-shadow
-DOM, and check archetype, anatomy, type, spacing, shape, depth, alignment, fit, and reduced motion.
-
-Report-renderer changes require workspace golden regeneration and diff review;
-generated React changes require the design-system check/build.
+Report-renderer changes require workspace golden regeneration and diff review.
+Check the affected task in a browser before and after the change.

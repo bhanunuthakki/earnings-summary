@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import os
 import subprocess
 import time
@@ -263,6 +264,17 @@ def test_supervisor_keeps_owned_liveness_when_data_endpoint_fails(
     factory = Mock(return_value=connection)
     monkeypatch.setattr(tracker_server.http.client, "HTTPConnection", factory)
     monkeypatch.setattr(tracker_server.time, "sleep", Mock())
+    # A failing endpoint never turns healthy; a short startup deadline reaches
+    # the same timeout path without waiting out the 10 s production default.
+    monkeypatch.setattr(
+        tracker_server,
+        "PortfolioTrackerRuntimeManager",
+        functools.partial(
+            runtime.PortfolioTrackerRuntimeManager,
+            sleep=lambda _seconds: None,
+            startup_timeout_seconds=0.05,
+        ),
+    )
     supervisor = tracker_server.TrackerServiceSupervisor(
         argv=("synthetic",),
         tracker_root=tmp_path,

@@ -215,7 +215,7 @@ def test_frontend_continuity_has_one_project_owner_and_browser_proof() -> None:
     assert "nearest shipped sibling" in design
     assert "new visual family" in design
     assert "browser" in agents.lower()
-    assert "src/ui/design_registry.py" in agents
+    assert "src/ui/tokens.py" in agents
     assert "four visible roles" in design
     assert "Decorative left rails" in design
 

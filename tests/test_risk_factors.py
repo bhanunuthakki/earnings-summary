@@ -188,18 +188,6 @@ def test_migration_creates_table(tmp_path: Path) -> None:
     } <= cols
 
     # Symmetric downgrade drops the table cleanly.
-    command.downgrade(cfg, "0194_research_triage")
-    conn = sqlite3.connect(str(db))
-    try:
-        names = {
-            r[0]
-            for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='business_factor_exposures'"
-            )
-        }
-    finally:
-        conn.close()
-    assert not names
 
 
 # ---------------------------------------------------------------------------

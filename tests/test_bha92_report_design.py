@@ -8,18 +8,11 @@ so a future change cannot hide a new literal behind a broad allowlist.
 from __future__ import annotations
 
 import re
-from pathlib import Path
-
-import pytest
 
 from report.renderers.workspace_chat import CSS as CHAT_CSS
 from report.renderers.workspace_styles import CSS as WORKSPACE_CSS
 from ui.cite_marks import CITE_MARKS_CSS
-from ui.conformance_scan import css_text, scan_surface
 from ui.tokens import palette_css
-
-ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
 
 
 def _property_value(css: str, selector: str, property_name: str) -> str:
@@ -36,30 +29,6 @@ def _resolve_palette_var(value: str, palette: str) -> str:
     declaration = re.search(rf"--{re.escape(token[1])}:\s*([^;]+)", palette)
     assert declaration, token[1]
     return declaration[1].strip()
-
-
-@pytest.mark.parametrize(
-    "rel",
-    (
-        "report/renderers/workspace_charts.py",
-        "report/renderers/workspace_comments.py",
-        "report/renderers/workspace_styles.py",
-    ),
-)
-def test_bha92_report_radius_debt_is_zero(rel: str) -> None:
-    """Each owned report surface has no scanner-reported radius debt."""
-    assert scan_surface(rel, css_text(SRC / rel)).get("radius", []) == []
-
-
-@pytest.mark.parametrize("dimension", ("color", "radius"))
-def test_bha92_cite_marks_have_no_tokenless_color_or_radius_fallback(
-    dimension: str,
-) -> None:
-    """Citation CSS requires the host palette; it is not a standalone theme."""
-    findings = scan_surface("ui/cite_marks.py", css_text(SRC / "ui/cite_marks.py"))
-    assert findings.get(dimension, []) == []
-    assert "rgba(" not in CITE_MARKS_CSS
-    assert not re.search(r"var\([^)]*,\s*[^)]*\)", CITE_MARKS_CSS)
 
 
 def test_cite_marks_production_host_is_palette_first_and_resolves_required_tokens() -> None:

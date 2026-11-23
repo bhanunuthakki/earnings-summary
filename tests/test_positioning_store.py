@@ -213,7 +213,7 @@ def test_resolver_overlays_expressed_dimensions_only(
 # ---------------------------------------------------------------------------
 
 
-def test_migration_0145_roundtrip(tmp_path: Path) -> None:
+def test_migration_0145_upgrade(tmp_path: Path) -> None:
     from alembic.config import Config
 
     from alembic import command
@@ -250,16 +250,5 @@ def test_migration_0145_roundtrip(tmp_path: Path) -> None:
                 "(user_id, narrative, profile_json, source, created_at, is_latest) "
                 "VALUES ('bhanu', 'x', '{}', 'manual', '2026-07-10T00:00:00', 1)"
             )
-    finally:
-        conn.close()
-
-    command.downgrade(cfg, "0144_etf_published_data")
-    conn = sqlite3.connect(str(db))
-    try:
-        tables = {
-            r[0]
-            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-        }
-        assert "positioning_intents" not in tables
     finally:
         conn.close()

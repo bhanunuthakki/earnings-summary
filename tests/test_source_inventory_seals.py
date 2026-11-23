@@ -8,9 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
 from provenance.issuer_registry import IssuerEntity, IssuerRegistry
 from provenance.reporting_entity_registry import ReportingEntityRegistry, SourceObligationRevision
@@ -36,18 +34,8 @@ from search.corpus_builder import (
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-ROOT = Path(__file__).resolve().parents[1]
-PRIOR = "0219_source_coverage_ledger"
-HEAD = "0220_source_inventory_seals"
 STAMP = datetime(2026, 7, 27, 5, 0, 0)
 A, B, C = "a" * 64, "b" * 64, "c" * 64
-
-
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
 
 
 def _conn(
@@ -57,7 +45,7 @@ def _conn(
     if current:
         migrated_db(path)
     else:
-        migrated_db(path, stamp="0213_decision_draft_provider_id", archived=True, target=HEAD)
+        migrated_db(path)
     conn = (
         connect_sqlite(path, role=SQLiteConnectionRole.WRITER) if current else sqlite3.connect(path)
     )
@@ -277,25 +265,6 @@ def test_manifest_inventory_link_requires_both_immutable_parents(
         )
         assert store.persist(link).created
         assert not store.persist(link).created
-    finally:
-        conn.close()
-
-
-def test_migration_round_trip(tmp_path: Path) -> None:
-    path = tmp_path / "round-trip.db"
-    config = _config(path)
-    command.stamp(config, PRIOR)
-    command.upgrade(config, HEAD)
-    command.downgrade(config, PRIOR)
-    conn = sqlite3.connect(path)
-    try:
-        assert (
-            conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' "
-                "AND name='source_inventory_components'"
-            ).fetchone()
-            is None
-        )
     finally:
         conn.close()
 

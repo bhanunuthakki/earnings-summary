@@ -20,7 +20,6 @@ from pipeline.work_os_shell import (
     render_work_os_shell_result,
 )
 from pipeline.work_os_styles import WORK_OS_CSS
-from ui.conformance_scan import scan_surface_evidence
 
 
 def _screen_fragment(html: str, screen_id: str) -> str:
@@ -747,12 +746,6 @@ def test_l1_live_shells_do_not_ship_prototype_card_grids_or_inline_geometry() ->
         assert fragment.count('class="k-card k-card-section research-toolbar"') == 1
 
 
-def test_rendered_l1_shell_has_no_hidden_grid_signature_drift() -> None:
-    evidence = scan_surface_evidence("rendered-work-os", render_work_os_shell())
-
-    assert "off-scale-grid-column" not in evidence.violations()
-
-
 def test_l2_l3_shell_composes_semantic_mounts_and_canonical_split_rails() -> None:
     html = render_work_os_shell()
 
@@ -839,55 +832,6 @@ def test_l2_l3_mobile_uses_target_scoped_block_without_mutating_rail_signature()
         ".k-grid-split-rail { display: grid; grid-template-columns: minmax(0, 1fr) 1fr;" not in html
     )
     assert ".k-grid-split-rail-lg { display: grid; grid-template-columns: 1fr 1fr;" not in html
-
-
-def test_rendered_l2_l3_shell_has_no_target_scan_findings_or_unverifiable_markup() -> None:
-    evidence = scan_surface_evidence("rendered-work-os", render_work_os_shell())
-
-    target_dimensions = {
-        "floating-card-title",
-        "off-scale-grid-column",
-        "unsanctioned-shape-geometry",
-    }
-    assert not target_dimensions.intersection(evidence.violations())
-    # The rendered shell deliberately contains remote HTML response bodies and
-    # a dynamically created stylesheet link. Source-level digest contracts pin
-    # both recipes; the rendered probe keeps the boundary explicit rather than
-    # silently treating it as statically verified.
-    assert evidence.unverifiable_markup == (
-        "dynamic-html-markup",
-        "dynamic-visual-value",
-    )
-
-
-def test_rendered_shell_scan_proves_each_target_dimension_is_enforced() -> None:
-    html = render_work_os_shell()
-
-    title_mutation = html.replace(
-        '<h2 class="k-card-title" id="workOsBriefLibraryHeading">Brief Library</h2>',
-        '<h1 class="k-toolbar-title">Brief Library</h1>',
-        1,
-    )
-    title_evidence = scan_surface_evidence("rendered-work-os", title_mutation)
-    assert "floating-card-title" in title_evidence.violations()
-
-    grid_mutation = html.replace(
-        "</head>",
-        "<style>.k-grid-split-rail-lg { grid-template-columns: 1fr 1fr; }</style></head>",
-        1,
-    )
-    grid_evidence = scan_surface_evidence("rendered-work-os", grid_mutation)
-    assert "off-scale-grid-column" in grid_evidence.violations()
-
-    shape_mutation = html.replace(
-        "</head>",
-        "<style>.k-card { border-radius: var(--radius); "
-        "border: var(--bw-thin) solid var(--border); "
-        "box-shadow: var(--shadow-pop); }</style></head>",
-        1,
-    )
-    shape_evidence = scan_surface_evidence("rendered-work-os", shape_mutation)
-    assert "unsanctioned-shape-geometry" in shape_evidence.violations()
 
 
 def test_work_os_shell_render_signature_remains_keyword_only() -> None:

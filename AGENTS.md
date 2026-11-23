@@ -58,16 +58,16 @@ Identification, acquisition, parsing, storage, resolution, and surfacing of comp
 
 - Profile: dense-desktop
 - Contract: directives/design_language.md
-- Executable authority: src/ui/tokens.py, src/ui/controls.py, src/ui/design_registry.py, src/ui/conformance_scan.py, src/ui/source_chip.py, src/report/renderers/workspace_styles.py
+- Executable authority: src/ui/tokens.py, src/ui/controls.py, src/ui/source_chip.py, src/report/renderers/workspace_styles.py
 - Render: `python execution/sqlite_bootstrap.py execution/comments_server.py --port 7421`, then exercise the affected primary task and its supported widths
-- Gate: `python scripts/check_design_sync.py`; report-renderer changes also require `python -m pytest tests/test_workspace_golden.py` (comparison mode) plus visual diff review
+- Gate: report-renderer changes require `python -m pytest tests/test_workspace_golden.py` (comparison mode) plus visual diff review. The project is mostly headless; no design-conformance CI gate exists.
 
-UI work uses the shared `frontend-quality` procedure. Registered controls and family recipes are the default. An authorized redesign may evolve the design language through its master/registry extension path, with evidence for the changed user task; do not bypass that owner with local visual CSS, open-ended style APIs, or runtime style mutations. Golden regeneration (`GOLDEN_REGEN=1`) is an intentional expectation update, never the checking gate: review the changed expectations, then rerun comparison mode. Preserve the protected behavior when updating an obsolete expectation. `source_chip.py` and `workspace_styles.py` are existing surface-specific authorities whose shared semantics must remain aligned even where geometry differs. Material frontend work requires before/after browser evidence for the affected task and an explicit note for any unverified state.
+UI work uses the shared `frontend-quality` procedure. Registered controls and family recipes are the default. An authorized redesign may evolve the design language through its token and family-master owners, with evidence for the changed user task; do not bypass that owner with local visual CSS, open-ended style APIs, or runtime style mutations. Golden regeneration (`GOLDEN_REGEN=1`) is an intentional expectation update, never the checking gate: review the changed expectations, then rerun comparison mode. Preserve the protected behavior when updating an obsolete expectation. `source_chip.py` and `workspace_styles.py` are existing surface-specific authorities whose shared semantics must remain aligned even where geometry differs. Material frontend work requires before/after browser evidence for the affected task and an explicit note for any unverified state.
 
 ## Tests and merge gates
 
 - Keep PRs small enough to review migrations and golden changes together; long Alembic history makes migration-head collisions costly.
-- Use `make check-fast` (format, lint, typecheck, and changed test files) during iteration. Use `make check` before pushing, or `FAST_PUSH=1 git push` to delegate the full matrix to CI.
+- Use `make check-fast` (format, lint, typecheck, and changed test files) during iteration. The pre-push hook checks changed tests and leaves the full matrix to CI; `FULL_PUSH=1 git push` runs the complete suite locally.
 - **Bounded Test Execution:** Direct and targeted `pytest` runs are serial so they do not fan out across every local CPU. `make test` caps distribution at `PYTEST_WORKERS=2` with `--dist=loadfile` (override only after measuring the machine); CI also passes its worker count explicitly. Keep tests hermetic; use session-scoped `migrated_db` in `tests/conftest.py` rather than re-running Alembic migrations from scratch inside test functions.
 - **Ratchet Quality Gates:** Ruff linting and strict Pyright type-checking use diff-aware ratchets against `origin/main`. PRs must be clean on changed lines/files and must not increase overall Pyright error counts.
 

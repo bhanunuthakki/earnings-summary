@@ -69,16 +69,45 @@ SOURCE = datetime(2026, 10, 3, 20, tzinfo=UTC)
 REVIEW = SOURCE + timedelta(seconds=1)
 
 
+# One seeded source database per fixture parameter; each test gets its own copy.
+_BUILT_SOURCES: dict[object, tuple[Path, InputRoleManifest]] = {}
+
+
 @pytest.fixture
 def reviewed_source(
-    tmp_path: Path, migrated_db: Callable[..., Path], request: pytest.FixtureRequest
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    migrated_db: Callable[..., Path],
+    request: pytest.FixtureRequest,
 ) -> Generator[tuple[sqlite3.Connection, InputRoleManifest], None, None]:
-    path = tmp_path / "reviewed-input-roles.db"
+    fixture_param: object = getattr(request, "param", None)
+    if fixture_param not in _BUILT_SOURCES:
+        template = tmp_path_factory.mktemp("reviewed-input-roles") / "source.db"
+        _BUILT_SOURCES[fixture_param] = (
+            template,
+            _build_reviewed_source(template, migrated_db, fixture_param),
+        )
+    template, manifest = _BUILT_SOURCES[fixture_param]
+    conn = sqlite3.connect(tmp_path / "reviewed-input-roles.db")
+    source = sqlite3.connect(template)
+    try:
+        source.backup(conn)
+    finally:
+        source.close()
+    conn.execute("PRAGMA foreign_keys=ON")
+    try:
+        yield conn, manifest
+    finally:
+        conn.close()
+
+
+def _build_reviewed_source(
+    path: Path, migrated_db: Callable[..., Path], fixture_param: object
+) -> InputRoleManifest:
     migrated_db(path)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys=ON")
     seed_foundation(conn)
-    fixture_param: object = getattr(request, "param", None)
     period_end = fixture_param if isinstance(fixture_param, date) else date(2026, 6, 30)
     requirements = requirements_for(period_end)
     reported: list[ReportedSourceFact] = []
@@ -223,10 +252,8 @@ def reviewed_source(
         inputs=inputs,
     )
     conn.commit()
-    try:
-        yield conn, manifest
-    finally:
-        conn.close()
+    conn.close()
+    return manifest
 
 
 @pytest.mark.parametrize("reviewed_source", [date(2026, 6, 30), date(2025, 12, 31)], indirect=True)
