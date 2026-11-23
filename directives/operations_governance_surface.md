@@ -579,6 +579,9 @@ inventory. The cleanup does not infer ownership or deletion rights from that cou
 
 ## Outcome
 
+### Custom full-suite merge queue (2026-11-20)
+Disposition: **no surface change** (repository merge governance in GitHub Actions; not an application operator workflow). `.github/workflows/merge-queue.yml` runs the complete `ci.yml` suite on GitHub's test merge commit and moves `main` only to that exact tested commit. `.github/workflows/merge-queue-revoke.yml` withdraws queue approval when a new head is pushed. The application, its database authority and the Operations surface are unchanged. Owner setup and the acceptance evidence still required before any enforcement claim: `docs/quality/merge-queue.md`. Evidence: `tests/test_merge_queue.py`.
+
 ### Pytest failed-run payload trim and future timestamps (2026-10-24)
 Disposition: **no surface change** (internal test-harness storage behavior; not an operator workflow). Failed full-suite runs each kept up to 36 GB of fixture databases for the seven-day review window, and 489 of them held about 248 GB on one Mac, cutting free space from 733 GB to 407 GB in about a day and a half. Session-start pruning now trims a failed or holder-gone active run to its review evidence (manifest, resolution, logs, JUnit XML, JSONL, retirement receipts) one hour after it ends; the root still goes after seven days. Links inside a run are removed, never followed. Some tests stamp fixtures years ahead, which kept manifest-less roots "recent" forever; future modification times are now ignored. Owner decision recorded in `data_pipeline_dag.md`. Regression evidence: `tests/test_temp_run_pruning.py`.
 

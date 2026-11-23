@@ -814,7 +814,11 @@ def test_typecheck_receipt_is_exact_keyed_and_written_only_by_main() -> None:
     assert 'echo "sha=$(git rev-parse HEAD^1)"' in job
     assert '--receipt-in "$RUNNER_TEMP/pyright-receipt.json" --receipt-commit "$BASE_SHA"' in job
     save = job.split("Save this commit's Pyright receipt", 1)[1]
-    assert "github.event_name == 'push' && github.ref == 'refs/heads/main'" in save
+    assert (
+        "github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.candidate_sha"
+        in save
+    )
+    assert '[ "$EVENT_NAME" = "push" ] && [ -z "$CANDIDATE_SHA" ]' in job
     assert "key: pyright-receipt-v1-${{ github.sha }}" in save
 
 
