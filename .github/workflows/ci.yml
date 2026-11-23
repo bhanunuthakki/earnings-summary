@@ -42,6 +42,8 @@ jobs:
     outputs:
       code: ${{ steps.classify.outputs.code }}
       python: ${{ steps.classify.outputs.python }}
+      tests: ${{ steps.tests.outputs.tests }}
+      test_matrix: ${{ steps.tests.outputs.matrix }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -81,6 +83,41 @@ jobs:
             git diff-tree --root --no-commit-id --name-only --no-renames -z -r "$CURRENT_SHA" \
               | python .github/scripts/ci_gate.py classify --github-output "$GITHUB_OUTPUT"
           fi
+      - name: Resolve pull request base commit
+        id: base
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD^1)" >> "$GITHUB_OUTPUT"
+      - name: Restore base commit test impact receipt
+        # The base commit's receipt, else main's newest one: selection then
+        # measures from that receipt's commit if it is an ancestor of the
+        # base, and runs the full suite if it is not.
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/test-impact-receipt
+          key: test-impact-v1-${{ steps.base.outputs.sha }}
+          restore-keys: test-impact-v1-
+      - name: Choose test files and size the test shards
+        id: tests
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CODE_CHANGED: ${{ steps.classify.outputs.code }}
+        run: |
+          set -euo pipefail
+          selection="$RUNNER_TEMP/selection.txt"
+          printf 'FULL\tnot a pull request\n' > "$selection"
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$CODE_CHANGED" = "true" ]; then
+            # A pull request runs only the test files whose recorded run on
+            # the base commit executed code its diff alters (see
+            # src/quality/test_selection.py), in just enough shards for their
+            # measured time. Main and the merge queue run all thirteen shards.
+            PYTHONPATH=src python -m quality.test_selection --base HEAD^1 \
+              --receipt "$RUNNER_TEMP/test-impact-receipt/receipt.json.gz" \
+              --durations-file .github/test-durations.json > "$selection"
+          fi
+          python .github/scripts/ci_gate.py test-matrix --github-output "$GITHUB_OUTPUT" < "$selection"
 
   public-boundary:
     name: Public Boundary
@@ -171,7 +208,8 @@ jobs:
   tests:
     name: tests (shard ${{ matrix.label }}/8)
     needs: [changes]
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    # A pull request whose selection chose no test file skips every shard.
+    if: ${{ needs.changes.outputs.code == 'true' && needs.changes.outputs.tests == 'true' }}
     runs-on: ubuntu-24.04
     # 40, not 25: the heaviest shards legitimately run 14-15 min, and hosted
     # runners routinely deliver ~2x slowdowns (disk/CPU contention), which put
@@ -183,34 +221,16 @@ jobs:
     timeout-minutes: 40
     strategy:
       fail-fast: false
-      matrix:
-        # Test files are assigned to these 13 shards by deterministic
-        # duration-aware packing (not hand-maintained modulo splits): the
-        # checked-in .github/test-durations.json pins every known file to a
-        # shard and supplies its measured duration, so a file whose cost did
-        # not change never moves shards. Only new (unpinned) files receive a
-        # deterministic least-loaded default shard. The labels are the CI
-        # surface — the job count and names are stable, and the aggregate gate
-        # keys on the whole `tests` job, so the packer can rebalance freely
-        # without touching this list (the helper refuses a table whose labels
-        # drift from it). Setup is env-cached: the hash-verified SQLite runtime
-        # and the pip dependency environment are exact-key cached per runner OS
-        # / tool version / lock hash; any miss falls back to the full build and
-        # install below.
-        include:
-          - { label: "1" }
-          - { label: "1 overflow" }
-          - { label: "2" }
-          - { label: "2 overflow" }
-          - { label: "3" }
-          - { label: "3 overflow" }
-          - { label: "4" }
-          - { label: "5" }
-          - { label: "6" }
-          - { label: "6 overflow" }
-          - { label: "7" }
-          - { label: "8" }
-          - { label: "8 overflow" }
+      # Check Changed Paths builds this matrix (ci_gate.py test-matrix). Main
+      # and the merge queue get all 13 canonical labels (ci_gate.SHARD_LABELS)
+      # and no files: each shard runs its pinned share of the full suite, by
+      # deterministic duration-aware packing from .github/test-durations.json.
+      # A pull request gets only as many shards as its selected files need,
+      # each listing its files. Setup is env-cached: the hash-verified SQLite
+      # runtime and the pip dependency environment are exact-key cached per
+      # runner OS / tool version / lock hash; any miss falls back to the full
+      # build and install below.
+      matrix: ${{ fromJSON(needs.changes.outputs.test_matrix) }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -233,73 +253,37 @@ jobs:
           python-version: "3.13"
           cache: pip
           cache-dependency-path: requirements.lock
-      - name: Resolve pull request base commit
-        id: base
-        if: github.event_name == 'pull_request'
-        shell: bash
-        run: echo "sha=$(git rev-parse HEAD^1)" >> "$GITHUB_OUTPUT"
-      - name: Restore base commit test impact receipt
-        # The base commit's receipt, else main's newest one: selection then
-        # measures from that receipt's commit if it is an ancestor of the
-        # base, and runs the full suite if it is not.
-        if: github.event_name == 'pull_request'
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ${{ runner.temp }}/test-impact-receipt
-          key: test-impact-v1-${{ steps.base.outputs.sha }}
-          restore-keys: test-impact-v1-
       - name: Choose this shard's test files
         id: pick
         shell: bash
         env:
-          EVENT_NAME: ${{ github.event_name }}
           SHARD_LABEL: ${{ matrix.label }}
+          SHARD_FILES: ${{ matrix.files }}
         run: |
           set -euo pipefail
-          # The browser canary has one authoritative owner below: Browser
-          # Security, which installs the hash-locked Playwright adapter.
-          mapfile -t all_files < <(
+          list="$RUNNER_TEMP/shard-files.txt"
+          if [ -n "$SHARD_FILES" ]; then
+            # A pull request's selected files for this shard, longest first.
+            printf '%s\n' "$SHARD_FILES" > "$list"
+          else
+            # The browser canary has one authoritative owner below: Browser
+            # Security, which installs the hash-locked Playwright adapter.
             find tests -type f -name 'test_*.py' \
               | grep -v '^tests/test_browser_security_canary.py$' \
-              | sort
-          )
-          list="$RUNNER_TEMP/shard-files.txt"
-          verdict="FULL	not a pull request"
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            # A pull request runs only the test files whose recorded run on
-            # the base commit executed code its diff alters (see
-            # src/quality/test_selection.py); main and the merge queue run all.
-            PYTHONPATH=src python -m quality.test_selection --base HEAD^1 \
-              --receipt "$RUNNER_TEMP/test-impact-receipt/receipt.json.gz" \
-              --durations-file .github/test-durations.json > "$RUNNER_TEMP/selection.txt"
-            verdict="$(head -n 1 "$RUNNER_TEMP/selection.txt")"
-          fi
-          echo "Test selection: $verdict"
-          if [[ "$verdict" == SELECTED* ]]; then
-            # A shard may receive no files; it then skips setup and passes.
-            tail -n +2 "$RUNNER_TEMP/selection.txt" \
-              | { grep -v '^tests/test_browser_security_canary.py$' || true; } \
-              | python .github/scripts/ci_gate.py select-tests --repack \
+              | sort \
+              | python .github/scripts/ci_gate.py select-tests \
                   --shard-label "$SHARD_LABEL" \
                   --durations-file .github/test-durations.json > "$list"
-          else
-            printf '%s\n' "${all_files[@]}" |
-              python .github/scripts/ci_gate.py select-tests \
-                --shard-label "$SHARD_LABEL" \
-                --durations-file .github/test-durations.json > "$list"
             if [ ! -s "$list" ]; then
               echo "::error::test shard $SHARD_LABEL selected no files"
               exit 1
             fi
           fi
-          echo "count=$(grep -c . "$list" || true)" >> "$GITHUB_OUTPUT"
       - name: Resolve python version for dependency cache key
-        if: steps.pick.outputs.count != '0'
         id: pyver
         shell: bash
         run: echo "version=$(python -c 'import platform; print(platform.python_version())')" >> "$GITHUB_OUTPUT"
       - name: Restore verified SQLite 3.53.4 writer runtime
-        if: steps.pick.outputs.count != '0'
         id: sqlite_cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -311,11 +295,10 @@ jobs:
           # below runs exactly as before; on a hit this shard skips it.
           key: ci-sqlite-${{ runner.os }}-${{ runner.arch }}-3.53.4-${{ hashFiles('.github/scripts/build_sqlite.sh') }}
       - name: Build verified SQLite writer runtime
-        if: steps.pick.outputs.count != '0' && steps.sqlite_cache.outputs.cache-hit != 'true'
+        if: steps.sqlite_cache.outputs.cache-hit != 'true'
         shell: bash
         run: bash .github/scripts/build_sqlite.sh
       - name: Preload verified SQLite writer runtime
-        if: steps.pick.outputs.count != '0'
         # Runs on both paths: the built artifact and the cached one must prove
         # they load as SQLite 3.53.4 before any shard touches the database.
         shell: bash
@@ -330,7 +313,6 @@ jobs:
           assert sqlite3.sqlite_version == "3.53.4", sqlite3.sqlite_version
           PY
       - name: Restore pip dependency environment
-        if: steps.pick.outputs.count != '0'
         id: venv_cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -341,21 +323,19 @@ jobs:
           # install below (never a silently older dependency set).
           key: ci-venv-${{ runner.os }}-py${{ steps.pyver.outputs.version }}-lock${{ hashFiles('requirements.lock') }}-pyproject${{ hashFiles('pyproject.toml') }}
       - name: Install dependencies
-        if: steps.pick.outputs.count != '0' && steps.venv_cache.outputs.cache-hit != 'true'
+        if: steps.venv_cache.outputs.cache-hit != 'true'
         run: |
           python -m venv "$RUNNER_TEMP/ci-venv"
           "$RUNNER_TEMP/ci-venv/bin/python" -m pip install --upgrade pip
           "$RUNNER_TEMP/ci-venv/bin/pip" install --require-hashes -r requirements.lock
           "$RUNNER_TEMP/ci-venv/bin/pip" install -e .[dev]
       - name: Activate dependency environment
-        if: steps.pick.outputs.count != '0'
         shell: bash
         run: echo "$RUNNER_TEMP/ci-venv/bin" >> "$GITHUB_PATH"
       # tests/conftest.py creates one migrated template per worker and clones
       # disposable databases for tests. The checkout data/portfolio.db is never
       # bootstrapped or used as a test/live authority.
       - name: Run test-suite shard
-        if: steps.pick.outputs.count != '0'
         shell: bash
         env:
           # Queue candidates run the full suite but never record main's receipt.
@@ -921,6 +901,7 @@ jobs:
         env:
           CODE_CHANGED: ${{ needs.changes.outputs.code || 'false' }}
           PYTHON_CHANGED: ${{ needs.changes.outputs.python || 'false' }}
+          TESTS_NEEDED: ${{ needs.changes.outputs.tests || 'true' }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           PUBLIC_BOUNDARY_RESULT: ${{ needs.public-boundary.result }}
           FAST_SIGNAL_RESULT: ${{ needs.fast-signal.result }}
@@ -935,6 +916,7 @@ jobs:
           python .github/scripts/ci_gate.py verify
           --code "$CODE_CHANGED"
           --python "$PYTHON_CHANGED"
+          --tests "$TESTS_NEEDED"
           --changes-result "$CHANGES_RESULT"
           --public-boundary-result "$PUBLIC_BOUNDARY_RESULT"
           --fast-signal-result "$FAST_SIGNAL_RESULT"
