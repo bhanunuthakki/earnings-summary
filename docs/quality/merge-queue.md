@@ -1,9 +1,10 @@
 # Custom full-suite merge queue
 
-Status: **prepared, not active.** No App, secret, environment or ruleset exists yet.
-Until the owner completes the setup and the acceptance checks below pass, `main` is
-protected only by the existing `CI Gate` ruleset. Do not narrow pull-request tests
-before then.
+Status: **active since 2026-11-23.** Ruleset 20593590 ("Require Queue Gate on main")
+requires `Queue Gate` from App 5881047 and blocks force pushes and deletion, with no
+bypass actors. Pull requests run selected tests and check types only in changed
+files; the queue runs the complete suite and the population ceilings on every
+candidate before it reaches `main`.
 
 ## Why a custom queue
 
@@ -49,7 +50,7 @@ Standard GitHub-hosted runners on a public repository: $0. No server is needed.
 Each queued pull request runs the complete suite once more (about 5–6 minutes of
 wall time on free runners). The push to `main` also starts the existing `main` CI run.
 
-## Owner setup (not done; each step needs the owner)
+## Owner setup (done 2026-11-23)
 
 1. **Register a private GitHub App** under the personal account.
    - Webhook: off.
@@ -76,23 +77,36 @@ wall time on free runners). The push to `main` also starts the existing `main` C
 The App needs Workflows write because C can contain `.github/workflows` changes.
 Without that permission, GitHub rejects those pushes.
 
-## Acceptance before claiming enforcement
+## Acceptance
 
-Run these against a temporary protected test branch and ruleset first, then once
-on `main` after the owner approves activation. Record run IDs and SHAs here.
+The queue code and its environment admit only `main`, so a temporary test branch
+was not possible. The non-merging checks ran on `main` under the old `CI Gate`
+rule; the rest ran after the owner approved activation.
 
-- [ ] A direct push to the protected branch without `Queue Gate` is rejected.
+- [x] A direct update of `main` without `Queue Gate` is rejected. 2026-11-23: an
+  API ref update to empty commit `34875dd` failed with HTTP 422 "Required status
+  check "Queue Gate" is expected"; `main` stayed `ca05573`.
 - [ ] A pull-request job named `Queue Gate` (Actions app) does not satisfy the pinned rule.
-- [ ] A failing candidate is dequeued once, gets no status, and the branch is unchanged.
-- [ ] A passing candidate moves the branch to exactly C; C's parents are [B, H].
+- [x] A failing candidate is dequeued once, gets no status, and the branch is
+  unchanged. Probe #1794, run 45115381135, candidate `28ef665`: one comment, label
+  removed, no statuses on the candidate, `main` stayed `ca05573`.
+- [x] A passing candidate moves the branch to exactly C; C's parents are [B, H].
+  #1793, run 45122501460: `main` moved to `59725f5` with parents
+  [`ca05573`, `1c84dd7`] and one `Queue Gate: success` status from the App.
 - [ ] Moving the branch during the run makes the lease reject the push.
 - [ ] Pushing a new head during the run removes the label, and finalization refuses.
-- [ ] A cancelled shard and a missing job each fail closed.
-- [ ] No personal access token is used anywhere.
-- [ ] Candidate jobs cannot save a cache in the `main` scope.
+- [ ] A cancelled shard and a missing job each fail closed (unit tests in
+  `tests/test_merge_queue.py` only; not yet observed live).
+- [x] No personal access token is used anywhere. The only secret any workflow reads
+  is `MERGE_QUEUE_PRIVATE_KEY`; other steps use `github.token` or the App token.
+- [x] Candidate jobs cannot save a cache in the `main` scope. During probe #1794 the
+  only new `main` cache was `pyright-receipt-v1-ca05573…`, which main's own push run
+  saves; the candidate saved none.
 - [ ] Several labelled pull requests are all processed, in order, with no lost entry.
-- [ ] A pull request that changes `.github/workflows` merges through the queue.
-- [ ] Read back the live ruleset and attach it here.
+- [x] A pull request that changes `.github/workflows` merges through the queue (#1793).
+- [x] Read back the live ruleset: `GET /repos/.../rules/branches/main` returns
+  `required_status_checks` [`Queue Gate`, integration 5881047], `non_fast_forward`
+  and `deletion`, all from ruleset 20593590.
 
 ## Known limits
 
