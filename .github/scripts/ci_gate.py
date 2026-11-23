@@ -584,7 +584,15 @@ def _select_tests_command(args: argparse.Namespace) -> int:
     files = [line for raw in sys.stdin for line in [raw.strip()] if line]
     try:
         durations = load_test_durations(args.durations_file)
-        selected = select_test_files(files, shard_label=args.shard_label, durations=durations)
+        if args.repack:
+            if args.shard_label not in durations.labels:
+                raise ValueError(f"unknown shard label {args.shard_label!r}")
+            # A pull request's selected subset: balance only those files, so the
+            # selection's time spreads over every shard instead of its pinned few.
+            packed = pack_test_shards(files, durations)[args.shard_label]
+            selected = sorted(packed, key=lambda path: (-durations.duration_seconds(path), path))
+        else:
+            selected = select_test_files(files, shard_label=args.shard_label, durations=durations)
     except ValueError as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1
@@ -745,6 +753,9 @@ def _build_parser() -> argparse.ArgumentParser:
     select_tests = subparsers.add_parser("select-tests")
     select_tests.add_argument("--shard-label", required=True)
     select_tests.add_argument("--durations-file", type=Path, default=Path(DURATIONS_FILE))
+    select_tests.add_argument(
+        "--repack", action="store_true", help="pack the given subset over all shards"
+    )
     from_junit = subparsers.add_parser("durations-from-junit")
     from_junit.add_argument("--junit", type=Path, action="append", required=True)
     from_junit.add_argument("--source", required=True)

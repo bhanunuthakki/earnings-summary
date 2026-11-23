@@ -59,6 +59,8 @@ EXPECTED_CI_JOBS: tuple[str, ...] = (
     "Native Windows Process Tree",
     "CI Gate",
 )
+# Main-only jobs: a candidate run lists each once, and each must be skipped there.
+SKIPPED_CI_JOBS: tuple[str, ...] = ("Test Impact Receipt",)
 READY_ATTEMPTS = 24
 READY_DELAY_SECONDS = 5.0
 
@@ -174,12 +176,19 @@ def inventory_problems(jobs: Sequence[Mapping[str, Any]]) -> list[str]:
             continue
         short = name.removeprefix(prefix)
         names[short] += 1
+        if short in SKIPPED_CI_JOBS:
+            if job.get("conclusion") != "skipped":
+                problems.append(f"{short} must not run on a candidate")
+            continue
         if job.get("status") != "completed" or job.get("conclusion") != "success":
             problems.append(f"{short} finished {job.get('status')}/{job.get('conclusion')}")
     for name in EXPECTED_CI_JOBS:
         if names[name] != 1:
             problems.append(f"{name} ran {names[name]} times; expected exactly once")
-    for name in sorted(set(names) - set(EXPECTED_CI_JOBS)):
+    for name in SKIPPED_CI_JOBS:
+        if names[name] > 1:
+            problems.append(f"{name} ran {names[name]} times; expected at most once")
+    for name in sorted(set(names) - set(EXPECTED_CI_JOBS) - set(SKIPPED_CI_JOBS)):
         problems.append(f"unexpected job {name}")
     return problems
 

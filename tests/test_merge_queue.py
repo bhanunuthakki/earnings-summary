@@ -112,7 +112,8 @@ def test_expected_inventory_matches_every_ci_job_in_queue_mode() -> None:
             names.extend(name.replace("${{ matrix.label }}", label) for label in labels)
         else:
             names.append(name)
-    assert sorted(names) == sorted(mq.EXPECTED_CI_JOBS)
+    assert set(mq.SKIPPED_CI_JOBS) <= set(names)
+    assert sorted(set(names) - set(mq.SKIPPED_CI_JOBS)) == sorted(mq.EXPECTED_CI_JOBS)
     assert len(set(mq.EXPECTED_CI_JOBS)) == len(mq.EXPECTED_CI_JOBS)
 
 
@@ -129,6 +130,16 @@ def test_any_non_success_job_fails_closed(conclusion: str | None) -> None:
 def test_running_job_fails_closed() -> None:
     jobs = _jobs(overrides={"CI Gate": {"status": "in_progress", "conclusion": None}})["jobs"]
     assert mq.inventory_problems(jobs)
+
+
+def test_main_only_jobs_must_be_skipped_on_a_candidate() -> None:
+    skipped = {name: {"conclusion": "skipped"} for name in mq.SKIPPED_CI_JOBS}
+    names = [*mq.EXPECTED_CI_JOBS, *mq.SKIPPED_CI_JOBS]
+    assert mq.inventory_problems(_jobs(names, skipped)["jobs"]) == []
+    ran = mq.inventory_problems(_jobs(names)["jobs"])
+    assert [p for p in ran if "must not run" in p] == [
+        f"{name} must not run on a candidate" for name in mq.SKIPPED_CI_JOBS
+    ]
 
 
 def test_missing_duplicate_and_unexpected_jobs_fail_closed() -> None:

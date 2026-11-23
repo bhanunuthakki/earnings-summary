@@ -892,7 +892,8 @@ def test_test_job_labels_count_and_picker_are_stable() -> None:
     assert len(labels_in_workflow) == 13
     assert labels_in_workflow == list(_load_helper().SHARD_LABELS)
     assert "ci_gate.py select-tests" in workflow
-    assert "--shard-label '${{ matrix.label }}'" in workflow
+    assert "SHARD_LABEL: ${{ matrix.label }}" in workflow
+    assert '--shard-label "$SHARD_LABEL"' in workflow
     assert "--durations-file .github/test-durations.json" in workflow
     assert "--source-shard" not in workflow
     assert "--split-count" not in workflow
@@ -1295,3 +1296,57 @@ def test_windows_environment_cache_is_exact_and_does_not_skip_native_tests() -> 
     assert "-m pip check" in checks
     assert "Run Windows-relevant application tests" in checks
     assert "verify-windows-app --junit" in checks
+
+
+def test_repack_spreads_a_selected_subset_over_every_shard(
+    helper: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import io
+    import sys
+
+    table = REPO_ROOT / ".github" / "test-durations.json"
+    durations = helper.load_test_durations(table)
+    subset = sorted(durations.seconds_by_file)[:40]
+    picked: list[str] = []
+    for label in helper.SHARD_LABELS:
+        monkeypatch.setattr(sys, "stdin", io.StringIO("\n".join(subset) + "\n"))
+        argv = ["select-tests", "--repack", "--shard-label", label, "--durations-file", str(table)]
+        assert helper.main(argv) == 0
+        picked += [line for line in capsys.readouterr().out.splitlines() if line]
+    # Every selected file runs exactly once, whatever shard pinned it before.
+    assert sorted(picked) == subset
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    assert (
+        helper.main(
+            ["select-tests", "--repack", "--shard-label", "1", "--durations-file", str(table)]
+        )
+        == 0
+    )
+
+
+def test_pull_requests_select_tests_from_main_recorded_impact() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    tests_job = workflow[workflow.index("\n  tests:\n") : workflow.index("\n  browser-security:\n")]
+    # Only a pull request selects, and only from the exact base commit's receipt.
+    assert "python -m quality.test_selection --base HEAD^1" in tests_job
+    assert "key: test-impact-v1-${{ steps.base.outputs.sha }}" in tests_job
+    assert 'if [ "$EVENT_NAME" = "pull_request" ]; then' in tests_job
+    assert "select-tests --repack" in tests_job
+    # An empty selected shard skips setup and passes; a full run never may.
+    assert tests_job.count("if: steps.pick.outputs.count != '0'") >= 6
+    assert 'echo "::error::test shard $SHARD_LABEL selected no files"' in tests_job
+    # Main records; the receipt is merged only after every shard passed.
+    # A merge-queue candidate runs on main's ref but must never record.
+    main_only = (
+        "github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.candidate_sha"
+    )
+    assert f"RECORD_IMPACT: ${{{{ {main_only} }}}}" in tests_job
+    assert f"if: ${{{{ {main_only} }}}}" in tests_job
+    assert "-p src.quality.test_impact_plugin" in tests_job
+    receipt_job = workflow[workflow.index("\n  test-impact-receipt:\n") :]
+    receipt_job = receipt_job[: receipt_job.index("\n\n  ") if "\n\n  " in receipt_job else None]
+    assert "needs: [tests]" in receipt_job
+    assert f"if: ${{{{ {main_only} }}}}" in receipt_job
+    assert "key: test-impact-v1-${{ steps.merge.outputs.commit }}" in receipt_job
