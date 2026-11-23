@@ -822,6 +822,22 @@ def test_typecheck_receipt_is_exact_keyed_and_written_only_by_main() -> None:
     assert "key: pyright-receipt-v1-${{ github.sha }}" in save
 
 
+def test_pull_requests_check_changed_files_and_the_queue_checks_every_file() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    job = workflow.split("\n  typecheck:\n", maxsplit=1)[1].split("\n  security:\n", maxsplit=1)[0]
+    # The changed-file check runs on every event, pull requests included.
+    changed = job.split("changed retained files are wholly clean", 1)[1].split("- name:", 1)[0]
+    assert "if:" not in changed
+    # The population ceilings never run on a pull request: the merge queue
+    # runs them on each candidate before it can reach main.
+    ceilings = job.split("complete active population is exact", 1)[1].split("- name:", 1)[0]
+    assert "if: ${{ github.event_name != 'pull_request' }}" in ceilings
+    # Only a queue candidate restores main's receipt to re-check incrementally.
+    restore = job.split("Restore base commit Pyright receipt", 1)[1].split("- name:", 1)[0]
+    assert "if: ${{ inputs.candidate_sha }}" in restore
+    assert '[ -n "$CANDIDATE_SHA" ] && [ "$RECEIPT_HIT" = "true" ]' in ceilings
+
+
 def test_public_boundary_is_unconditional_and_pre_push_uses_same_guard() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     all_refs_workflow = (REPO_ROOT / ".github" / "workflows" / "public-boundary.yml").read_text(
