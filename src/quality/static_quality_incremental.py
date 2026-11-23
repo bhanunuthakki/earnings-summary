@@ -120,7 +120,7 @@ def _dotted(path: PurePosixPath) -> str:
     return ".".join(parts)
 
 
-class _Index:
+class ImportIndex:
     """Module names each Python path answers to, under every search root and folder."""
 
     def __init__(self, paths: Iterable[str]) -> None:
@@ -168,7 +168,7 @@ class _Index:
 def reverse_closure(sources: Mapping[str, str], seeds: Iterable[str]) -> set[str]:
     """Seeds plus every file that imports one of them, directly or transitively."""
     seed_set = set(seeds)
-    index = _Index(set(sources) | seed_set)
+    index = ImportIndex(set(sources) | seed_set)
     importers: defaultdict[str, set[str]] = defaultdict(set)
     for path, source in sources.items():
         for dependency in index.dependencies(path, source):
