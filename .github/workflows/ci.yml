@@ -18,9 +18,18 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_call:
+    # The merge-queue controller (merge-queue.yml) calls this exact workflow
+    # from trusted main to run the complete suite on GitHub's test merge
+    # commit. Every path group is forced on; selection never applies here.
+    inputs:
+      candidate_sha:
+        description: Exact test merge commit whose first parent is main.
+        type: string
+        required: true
 
 concurrency:
-  group: ci-${{ github.ref }}-${{ github.event_name }}
+  group: ci-${{ github.ref }}-${{ github.event_name }}${{ inputs.candidate_sha && format('-queue-{0}', inputs.candidate_sha) || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -36,6 +45,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
           filter: blob:none
           fetch-depth: 0
       - name: Classify changed paths
@@ -47,8 +58,15 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
           CURRENT_SHA: ${{ github.sha }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
+          if [ -n "$CANDIDATE_SHA" ]; then
+            # Merge-queue candidate: the complete suite, with no path selection.
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "python=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$EVENT_NAME" = "pull_request" ]; then
             base="$PR_BASE_SHA"
             head="$PR_HEAD_SHA"
@@ -70,6 +88,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
           filter: blob:none
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -87,6 +107,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
           filter: blob:none
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -192,6 +214,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
           filter: blob:none
           # Deletion governance verifies every cataloged rollback blob, not
           # only the audited-head ancestry. Those recovery commits outlive any
@@ -331,7 +355,8 @@ jobs:
         if: steps.pick.outputs.count != '0'
         shell: bash
         env:
-          RECORD_IMPACT: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          # Queue candidates run the full suite but never record main's receipt.
+          RECORD_IMPACT: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.candidate_sha }}
         run: |
           set -euo pipefail
           mapfile -t selected < "$RUNNER_TEMP/shard-files.txt"
@@ -352,7 +377,7 @@ jobs:
           pytest -q -n 2 --dist=loadfile --durations=25 "${record[@]}" \
             --junitxml="$RUNNER_TEMP/test-shard.xml" "${selected[@]}"
       - name: Upload test impact records
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.candidate_sha }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: test-impact-${{ strategy.job-index }}
@@ -376,14 +401,16 @@ jobs:
     # receipt keyed by this exact commit. Pull requests based on this commit
     # restore it to choose their tests; any other base runs the full suite.
     needs: [tests]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.candidate_sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.candidate_sha }}
           filter: blob:none
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
@@ -416,6 +443,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
           filter: blob:none
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -493,6 +522,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
           filter: blob:none
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -531,7 +562,10 @@ jobs:
         id: changed
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
+          if [ -n "${{ inputs.candidate_sha }}" ]; then
+            # A queue candidate is a merge commit; its first parent is main.
+            base="HEAD^1"
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
             git fetch --no-tags origin "${{ github.base_ref }}"
             base="origin/${{ github.base_ref }}"
           else
@@ -570,6 +604,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
           filter: blob:none
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -591,7 +627,10 @@ jobs:
         id: base
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
+          if [ -n "${{ inputs.candidate_sha }}" ]; then
+            # A queue candidate is a merge commit; its first parent is main.
+            base="HEAD^1"
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
             git fetch --no-tags origin "${{ github.base_ref }}"
             base="origin/${{ github.base_ref }}"
             # The checkout is the PR merge commit; its first parent is the
@@ -622,17 +661,20 @@ jobs:
           RECEIPT_HIT: ${{ steps.receipt.outputs.cache-hit }}
           BASE_SHA: ${{ steps.base.outputs.sha }}
           BASE_REF: ${{ steps.base.outputs.ref }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
           receipt=()
           if [ "$EVENT_NAME" = "pull_request" ] && [ "$RECEIPT_HIT" = "true" ]; then
             receipt=(--receipt-in "$RUNNER_TEMP/pyright-receipt.json" --receipt-commit "$BASE_SHA")
-          elif [ "$EVENT_NAME" = "push" ]; then
+          elif [ "$EVENT_NAME" = "push" ] && [ -z "$CANDIDATE_SHA" ]; then
+            # A queue candidate also reports event "push"; only a real main
+            # push describes the commit that its cache key names.
             receipt=(--receipt-out "$RUNNER_TEMP/pyright-receipt.json")
           fi
           PYTHONPATH=src python execution/enforce_static_quality.py --pythonpath "$(command -v python)" --base "$BASE_REF" --failure-diagnostics "${receipt[@]}"
       - name: Save this commit's Pyright receipt
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.candidate_sha }}
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}/pyright-receipt.json
@@ -649,6 +691,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
           filter: blob:none
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -750,6 +794,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
           filter: blob:none
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -821,6 +867,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
           filter: blob:none
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -862,6 +910,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
           filter: blob:none
           fetch-depth: 0
       - name: Require every applicable job to pass

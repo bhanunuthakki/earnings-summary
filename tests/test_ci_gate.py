@@ -814,7 +814,11 @@ def test_typecheck_receipt_is_exact_keyed_and_written_only_by_main() -> None:
     assert 'echo "sha=$(git rev-parse HEAD^1)"' in job
     assert '--receipt-in "$RUNNER_TEMP/pyright-receipt.json" --receipt-commit "$BASE_SHA"' in job
     save = job.split("Save this commit's Pyright receipt", 1)[1]
-    assert "github.event_name == 'push' && github.ref == 'refs/heads/main'" in save
+    assert (
+        "github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.candidate_sha"
+        in save
+    )
+    assert '[ "$EVENT_NAME" = "push" ] && [ -z "$CANDIDATE_SHA" ]' in job
     assert "key: pyright-receipt-v1-${{ github.sha }}" in save
 
 
@@ -1334,13 +1338,15 @@ def test_pull_requests_select_tests_from_main_recorded_impact() -> None:
     assert tests_job.count("if: steps.pick.outputs.count != '0'") >= 6
     assert 'echo "::error::test shard $SHARD_LABEL selected no files"' in tests_job
     # Main records; the receipt is merged only after every shard passed.
-    assert (
-        "RECORD_IMPACT: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}"
-        in tests_job
+    # A merge-queue candidate runs on main's ref but must never record.
+    main_only = (
+        "github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.candidate_sha"
     )
+    assert f"RECORD_IMPACT: ${{{{ {main_only} }}}}" in tests_job
+    assert f"if: ${{{{ {main_only} }}}}" in tests_job
     assert "-p src.quality.test_impact_plugin" in tests_job
     receipt_job = workflow[workflow.index("\n  test-impact-receipt:\n") :]
     receipt_job = receipt_job[: receipt_job.index("\n\n  ") if "\n\n  " in receipt_job else None]
     assert "needs: [tests]" in receipt_job
-    assert "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" in receipt_job
+    assert f"if: ${{{{ {main_only} }}}}" in receipt_job
     assert "key: test-impact-v1-${{ steps.merge.outputs.commit }}" in receipt_job
