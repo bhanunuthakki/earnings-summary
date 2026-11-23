@@ -103,12 +103,21 @@ def _no_sleep(_seconds: float) -> None:
 
 
 def test_expected_inventory_matches_every_ci_job_in_queue_mode() -> None:
+    spec = importlib.util.spec_from_file_location(
+        "ci_gate", REPO_ROOT / ".github" / "scripts" / "ci_gate.py"
+    )
+    assert spec is not None and spec.loader is not None
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    assert gate.SHARD_LABELS == mq.SHARD_LABELS
     workflow = yaml.safe_load(CI.read_text(encoding="utf-8"))
     names: list[str] = []
     for job_id, job in workflow["jobs"].items():
         name = str(job.get("name", job_id))
         if "matrix.label" in name:
-            labels = [row["label"] for row in job["strategy"]["matrix"]["include"]]
+            # A candidate's verdict is FULL, so its matrix is every canonical label.
+            _, matrix = gate.test_matrix(["FULL\tmerge queue"], None)
+            labels = [row["label"] for row in matrix["include"]]
             names.extend(name.replace("${{ matrix.label }}", label) for label in labels)
         else:
             names.append(name)
