@@ -34,6 +34,7 @@ from compute import evidence_snapshot
 from compute.transcript_ingest import (
     IngestResult,
     ParsedFilename,
+    find_existing_transcript_id,
     ingest_evidence_file,
     map_to_period,
     parse_transcript_filename,
@@ -408,13 +409,7 @@ def _backfill_existing_ir_transcripts(
     failed = 0
     for row in rows:
         doc_id = int(row["id"])
-        if (
-            conn.execute(
-                "SELECT 1 FROM transcripts WHERE document_id = ? LIMIT 1",
-                (doc_id,),
-            ).fetchone()
-            is not None
-        ):
+        if find_existing_transcript_id(conn, doc_id) is not None:
             skipped_existing += 1
             continue
         ticker = row["ticker"]
