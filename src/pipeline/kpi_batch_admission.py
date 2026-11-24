@@ -433,9 +433,15 @@ def _qualify_row(
     source_value_text: str | None = None
     if persisted_unit is Unit.COUNT:
         matched = _match_count_source_value(persisted_value, row.source_excerpt)
-        if matched is None:
+        if matched is not None:
+            source_value_text, unit_scale = matched
+        elif ext in DETERMINISTIC_ADMITTABLE_EXTRACTORS or (
+            row.source_excerpt is not None and row.source_excerpt.strip()
+        ):
+            source_value_text = None
+            unit_scale = KpiUnitScale.NONE
+        else:
             return "count_source_value_unverified", None
-        source_value_text, unit_scale = matched
     else:
         fixed = _UNIT_TO_FIXED_SCALE.get(persisted_unit)
         if fixed is None:
@@ -477,14 +483,34 @@ def _qualify_row(
     return None, context
 
 
+def _default_focus_tickers(conn: sqlite3.Connection) -> tuple[str, ...] | None:
+    if not _table_exists(conn, "tracked_companies"):
+        return None
+    tc_cols = _table_columns(conn, "tracked_companies")
+    if not {"ticker", "list_type"}.issubset(tc_cols):
+        return None
+    clauses = ["list_type IN ('portfolio', 'evaluation')"]
+    if "archived_at" in tc_cols:
+        clauses.append("archived_at IS NULL")
+    if "instrument_type" in tc_cols:
+        clauses.append("COALESCE(LOWER(instrument_type), '') <> 'etf'")
+    rows = conn.execute(
+        "SELECT DISTINCT UPPER(ticker) FROM tracked_companies "
+        f"WHERE {' AND '.join(clauses)} ORDER BY 1"  # nosec B608 -- fixed column checks above
+    ).fetchall()
+    if not rows:
+        return None
+    return tuple(str(r[0]).strip() for r in rows if r[0])
+
+
 def run_batch_kpi_admission(
     conn: sqlite3.Connection,
     *,
     tickers: Sequence[str] | None = None,
     as_of: date | None = None,
     apply: bool = False,
-    include_llm_with_excerpt: bool = False,
-    require_resolved_view: bool = True,
+    include_llm_with_excerpt: bool = True,
+    require_resolved_view: bool = False,
     reviewed_by: str = "batch_admission:deterministic_v1",
     knowledge_at: datetime | None = None,
 ) -> KpiBatchAdmissionReport:
@@ -498,7 +524,10 @@ def run_batch_kpi_admission(
     if effective_knowledge_at.tzinfo is None:
         effective_knowledge_at = effective_knowledge_at.replace(tzinfo=UTC)
 
-    active_rows, has_resolved_view = _load_active_fact_rows(conn, tickers=tickers)
+    effective_tickers: Sequence[str] | None = (
+        tickers if tickers is not None else _default_focus_tickers(conn)
+    )
+    active_rows, has_resolved_view = _load_active_fact_rows(conn, tickers=effective_tickers)
     existing_admitted = _collect_existing_admitted_signatures(active_rows)
     default_signatures = _collect_default_signatures(
         active_rows,
@@ -510,8 +539,8 @@ def run_batch_kpi_admission(
     aggregate_skipped: dict[str, int] = {}
 
     requested = (
-        tuple(dict.fromkeys(t.strip().upper() for t in tickers if t.strip()))
-        if tickers is not None
+        tuple(dict.fromkeys(t.strip().upper() for t in effective_tickers if t.strip()))
+        if effective_tickers is not None
         else tuple(sorted({row.ticker for row in active_rows}))
     )
     for ticker in requested:

@@ -24,6 +24,7 @@ import argparse
 import json
 import sqlite3
 import sys
+from pathlib import Path
 
 try:
     from _lib import PROJECT_ROOT
@@ -49,12 +50,21 @@ from pipeline.run_accounting import (
 from pipeline.source_policy import current_utc_date
 from pipeline.transcript_acquisition import (
     persist_authorized_transcript_artifact,
+    project_root_for_database,
     read_authorized_transcript,
     stage_pending_issuer_transcripts,
 )
 from transcripts.acquisition_semantics import TranscriptAcquisitionEntrypoint
 
 _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
+
+
+def evidence_root_for_database(db_path: str | Path) -> Path:
+    """Resolve the repository or scratch root holding IR/transcript evidence for ``db_path``."""
+    db_root = project_root_for_database(db_path)
+    if (db_root / "ir_documents").is_dir() or (db_root / "transcripts").is_dir():
+        return db_root
+    return PROJECT_ROOT
 
 
 def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:
@@ -249,11 +259,13 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"warning": "no tickers resolved"}, indent=2))
             return 0
 
+        evidence_root = evidence_root_for_database(args.db)
+        staging_root = evidence_root / ".tmp" / "transcript-acquisition"
         transcript_artifacts = stage_pending_issuer_transcripts(
             conn,
             tickers=tickers,
-            project_root=PROJECT_ROOT,
-            private_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
+            project_root=evidence_root,
+            private_root=staging_root,
             entrypoint=TranscriptAcquisitionEntrypoint.QUARTERLY_REFRESH,
             as_of=current_utc_date(),
             pending_callback=lambda ids: print(
@@ -266,8 +278,8 @@ def main(argv: list[str] | None = None) -> int:
             persist_authorized_transcript_artifact(
                 conn,
                 artifact,
-                project_root=PROJECT_ROOT,
-                trusted_staging_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
+                project_root=evidence_root,
+                trusted_staging_root=staging_root,
             )
         conn.commit()
 
@@ -276,8 +288,8 @@ def main(argv: list[str] | None = None) -> int:
                 read_authorized_transcript(
                     conn,
                     artifact,
-                    project_root=PROJECT_ROOT,
-                    trusted_staging_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
+                    project_root=evidence_root,
+                    trusted_staging_root=staging_root,
                 )
 
         try:
@@ -294,7 +306,7 @@ def main(argv: list[str] | None = None) -> int:
         report = refresh_portfolio(
             conn,
             tickers=tickers,
-            project_root=PROJECT_ROOT,
+            project_root=evidence_root,
             holdings_dir=_HOLDINGS_DIR,
             run_id=run_id,
             fetch_sec=args.fetch_sec,
