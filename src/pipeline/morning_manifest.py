@@ -159,7 +159,9 @@ STAGE_MANIFEST: tuple[StageSpec, ...] = (
         STAGE_DOCUMENT_EVIDENCE,
         "Stage 0d1 - deterministic source evidence (process_document_evidence.py)",
         "process_document_evidence.py",
-        ("--apply", "--resume", "--batch-size", "100"),
+        # The budget leaves time for coverage refresh and the receipt write, so
+        # a slow page still persists its cursor before the 600 s stage timeout.
+        ("--apply", "--resume", "--batch-size", "100", "--time-budget-seconds", "420"),
         600,
         (STAGE_PREFLIGHT, STAGE_LIST_TYPE),
         ("skip_triggers",),
