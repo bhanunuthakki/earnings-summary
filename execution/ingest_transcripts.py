@@ -34,6 +34,7 @@ from compute import evidence_snapshot
 from compute.transcript_ingest import (
     IngestResult,
     ParsedFilename,
+    find_existing_transcript_id,
     ingest_evidence_file,
     map_to_period,
     parse_transcript_filename,
@@ -59,6 +60,7 @@ from pipeline.transcript_acquisition import (
     load_authorized_transcript_receipt,
     load_authorized_transcript_replay,
     persist_authorized_transcript_artifact,
+    project_root_for_database,
     read_authorized_transcript,
     stage_pending_issuer_transcripts,
     transcript_acquisition_receipt_id,
@@ -78,6 +80,15 @@ _TRANSCRIPT_DIRS = (
     PROJECT_ROOT / "transcripts" / "processed",
     PROJECT_ROOT / "transcripts" / "raw",
 )
+_DEFAULT_TRANSCRIPT_DIRS = _TRANSCRIPT_DIRS
+
+
+def evidence_root_for_database(db_path: str | Path) -> Path:
+    """Resolve the repository or scratch root holding IR/transcript evidence for ``db_path``."""
+    db_root = project_root_for_database(db_path)
+    if (db_root / "ir_documents").is_dir() or (db_root / "transcripts").is_dir():
+        return db_root
+    return PROJECT_ROOT
 
 
 class EvidencePathConflictError(ValueError):
@@ -247,10 +258,14 @@ def _load_tracked_tickers(conn: sqlite3.Connection) -> frozenset[str]:
     return frozenset(r["ticker"].upper() for r in cur.fetchall())
 
 
-def _candidate_files(restrict_ticker: str | None) -> list[tuple[Path, ParsedFilename]]:
+def _candidate_files(
+    restrict_ticker: str | None,
+    *,
+    transcript_dirs: tuple[Path, Path] | None = None,
+) -> list[tuple[Path, ParsedFilename]]:
     """Return [(path, parsed)] across both transcript directories. Restrict if requested."""
     out: list[tuple[Path, ParsedFilename]] = []
-    for d in _TRANSCRIPT_DIRS:
+    for d in _TRANSCRIPT_DIRS if transcript_dirs is None else transcript_dirs:
         if not d.exists():
             continue
         for path in sorted(d.iterdir()):
@@ -372,11 +387,14 @@ def _backfill_existing_ir_transcripts(
     run_id: str,
     restrict_ticker: str | None,
     authorized_artifacts: dict[int, AuthorizedTranscriptArtifact],
+    *,
+    project_root: Path | None = None,
 ) -> tuple[list[dict[str, object]], int, int]:
     """Walk `documents WHERE doc_type='ir_transcript'` and emit transcripts/segments rows.
 
     Returns (ingested_records, skipped_existing_count, failed_count).
     """
+    evidence_root = PROJECT_ROOT if project_root is None else project_root
     sql = "SELECT id, ticker, file_path FROM documents WHERE doc_type = 'ir_transcript'"
     params: tuple[str, ...] = ()
     if restrict_ticker is not None:
@@ -391,9 +409,12 @@ def _backfill_existing_ir_transcripts(
     failed = 0
     for row in rows:
         doc_id = int(row["id"])
+        if find_existing_transcript_id(conn, doc_id) is not None:
+            skipped_existing += 1
+            continue
         ticker = row["ticker"]
         rel_path = str(row["file_path"])
-        location = evidence_snapshot.recorded_evidence_location(PROJECT_ROOT, rel_path)
+        location = evidence_snapshot.recorded_evidence_location(evidence_root, rel_path)
         if location is None:
             record_stage(
                 conn,
@@ -418,7 +439,7 @@ def _backfill_existing_ir_transcripts(
                 document_id=doc_id,
                 file_path=abs_path,
                 allowed_root=allowed_root,
-                project_root=PROJECT_ROOT,
+                project_root=evidence_root,
                 authorized_artifact=artifact,
             )
             assert result is not None
@@ -469,8 +490,12 @@ def _backfill_existing_ir_transcripts(
 
 
 def _ir_transcript_sources(
-    conn: sqlite3.Connection, restrict_ticker: str | None
+    conn: sqlite3.Connection,
+    restrict_ticker: str | None,
+    *,
+    project_root: Path | None = None,
 ) -> list[tuple[int, str, str | None, Path]]:
+    evidence_root = PROJECT_ROOT if project_root is None else project_root
     sql = "SELECT id, ticker, period_end, file_path FROM documents WHERE doc_type = 'ir_transcript'"
     params: tuple[str, ...] = ()
     if restrict_ticker is not None:
@@ -483,7 +508,7 @@ def _ir_transcript_sources(
         raw_path = str(row["file_path"]) if row["file_path"] else ""
         path = Path(raw_path)
         if not path.is_absolute():
-            path = PROJECT_ROOT / path
+            path = evidence_root / path
         sources.append(
             (
                 int(row["id"]),
@@ -502,12 +527,14 @@ def _invocation_inputs(
     include_ir_transcripts: bool,
     no_promote: bool,
     receipt_artifacts: dict[Path, AuthorizedTranscriptArtifact],
+    project_root: Path | None = None,
 ) -> dict[str, JsonValue]:
+    evidence_root = PROJECT_ROOT if project_root is None else project_root
     source_paths = [path for path, _ in in_scope]
     return {
         "include_ir_transcripts": include_ir_transcripts,
         "no_promote": no_promote,
-        "candidate_files": files_fingerprint(source_paths, root=PROJECT_ROOT),
+        "candidate_files": files_fingerprint(source_paths, root=evidence_root),
         "transcript_receipts": [
             {
                 "receipt_id": transcript_acquisition_receipt_id(artifact),
@@ -565,6 +592,17 @@ def main() -> int:
 
     conn = open_db(args.db)
     try:
+        dirs_overridden = _TRANSCRIPT_DIRS != _DEFAULT_TRANSCRIPT_DIRS
+        evidence_root = PROJECT_ROOT if dirs_overridden else evidence_root_for_database(args.db)
+        staging_root = evidence_root / ".tmp" / "transcript-acquisition"
+        transcript_dirs = (
+            _TRANSCRIPT_DIRS
+            if dirs_overridden
+            else (
+                evidence_root / "transcripts" / "processed",
+                evidence_root / "transcripts" / "raw",
+            )
+        )
         tracked = _load_tracked_tickers(conn)
         selected_artifacts: dict[Path, AuthorizedTranscriptArtifact] = {}
         try:
@@ -574,10 +612,10 @@ def main() -> int:
                     args.receipt_id,
                     restrict_ticker=args.ticker,
                     expected_owner_requested=bool(args.ticker) and not args.automatic,
-                    project_root=PROJECT_ROOT,
+                    project_root=evidence_root,
                 )
             else:
-                candidates = _candidate_files(args.ticker)
+                candidates = _candidate_files(args.ticker, transcript_dirs=transcript_dirs)
         except TranscriptAcquisitionDeniedError as exc:
             sys.stderr.write(
                 json.dumps(
@@ -599,7 +637,7 @@ def main() -> int:
             "candidates_total": len(candidates),
             "receipt_ids": list(args.receipt_id),
             "in_scope": [
-                {"file": str(p.relative_to(PROJECT_ROOT)), "ticker": parsed.ticker}
+                {"file": str(p.relative_to(evidence_root)), "ticker": parsed.ticker}
                 for p, parsed in in_scope
             ],
             "out_of_scope": sorted({parsed.ticker for _, parsed in out_of_scope}),
@@ -609,7 +647,7 @@ def main() -> int:
             print(json.dumps(plan, indent=2))
             return 0
 
-        processed_root = PROJECT_ROOT / "transcripts" / "processed"
+        processed_root = evidence_root / "transcripts" / "processed"
         processed_root.mkdir(parents=True, exist_ok=True)
         already_ingested = [
             (path, parsed)
@@ -618,7 +656,7 @@ def main() -> int:
                 conn,
                 path=path,
                 parsed=parsed,
-                project_root=PROJECT_ROOT,
+                project_root=evidence_root,
                 processed_root=processed_root,
             )
         ]
@@ -681,16 +719,16 @@ def main() -> int:
                 artifact = load_authorized_transcript_replay(
                     conn,
                     request=request,
-                    project_root=PROJECT_ROOT,
-                    trusted_staging_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
+                    project_root=evidence_root,
+                    trusted_staging_root=staging_root,
                 )
                 if (
                     artifact is None
                     or read_authorized_transcript(
                         conn,
                         artifact,
-                        project_root=PROJECT_ROOT,
-                        trusted_staging_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
+                        project_root=evidence_root,
+                        trusted_staging_root=staging_root,
                     )
                     != path.read_bytes()
                 ):
@@ -712,7 +750,7 @@ def main() -> int:
                 return 2
             raw_authorizations[path] = artifact
 
-        raw_root = PROJECT_ROOT / "transcripts" / "raw"
+        raw_root = evidence_root / "transcripts" / "raw"
         snapshots: dict[Path, evidence_snapshot.EvidenceSnapshot] = {}
         staged_authorizations: dict[Path, AuthorizedTranscriptArtifact] = {}
         staged_scope: list[tuple[Path, ParsedFilename]] = []
@@ -727,7 +765,7 @@ def main() -> int:
                     )
                 staged = _stage_evidence_file(
                     path,
-                    PROJECT_ROOT,
+                    evidence_root,
                     raw_root,
                     processed_root,
                     snapshot=stable,
@@ -735,7 +773,7 @@ def main() -> int:
                 _assert_evidence_path_identity(
                     conn,
                     file_path=staged,
-                    project_root=PROJECT_ROOT,
+                    project_root=evidence_root,
                     current_sha=stable.sha256,
                 )
                 staged_scope.append((staged, parsed))
@@ -778,15 +816,17 @@ def main() -> int:
         in_scope = staged_scope
 
         ir_sources = (
-            _ir_transcript_sources(conn, args.ticker) if args.include_ir_transcripts else []
+            _ir_transcript_sources(conn, args.ticker, project_root=evidence_root)
+            if args.include_ir_transcripts
+            else []
         )
         try:
             ir_artifacts = (
                 stage_pending_issuer_transcripts(
                     conn,
                     tickers=sorted({ticker for _, ticker, _, _ in ir_sources}),
-                    project_root=PROJECT_ROOT,
-                    private_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
+                    project_root=evidence_root,
+                    private_root=staging_root,
                     entrypoint=TranscriptAcquisitionEntrypoint.INGEST_TRANSCRIPTS,
                     as_of=current_utc_date(),
                     pending_callback=lambda ids: print(
@@ -817,8 +857,8 @@ def main() -> int:
             persist_authorized_transcript_artifact(
                 conn,
                 artifact,
-                project_root=PROJECT_ROOT,
-                trusted_staging_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
+                project_root=evidence_root,
+                trusted_staging_root=staging_root,
             )
         conn.commit()
         if not in_scope and not ir_sources:
@@ -852,6 +892,7 @@ def main() -> int:
                     include_ir_transcripts=bool(args.include_ir_transcripts),
                     no_promote=bool(args.no_promote),
                     receipt_artifacts=selected_artifacts,
+                    project_root=evidence_root,
                 ),
                 force=bool(args.force),
                 deduplicate_completed=True,
@@ -900,7 +941,7 @@ def main() -> int:
                     _assert_evidence_path_identity(
                         conn,
                         file_path=processed_target,
-                        project_root=PROJECT_ROOT,
+                        project_root=evidence_root,
                         current_sha=snapshot.sha256,
                     )
                     ingest_path = install_transcript_output(
@@ -914,21 +955,21 @@ def main() -> int:
                     _assert_evidence_path_identity(
                         conn,
                         file_path=ingest_path,
-                        project_root=PROJECT_ROOT,
+                        project_root=evidence_root,
                         current_sha=snapshot.sha256,
                     )
                 result = ingest_evidence_file(
                     conn,
                     file_path=ingest_path,
                     allowed_root=ingest_root,
-                    project_root=PROJECT_ROOT,
+                    project_root=evidence_root,
                     tracked_tickers=tracked,
                     authorized_artifact=artifact,
                     commit=False,
                 )
                 if result is not None and not result.skipped_existing and not args.no_promote:
                     new_path = _promote_raw_to_processed(
-                        result, parsed, conn, PROJECT_ROOT, commit=False
+                        result, parsed, conn, evidence_root, commit=False
                     )
                     if new_path != result.file_path:
                         result = dataclasses.replace(result, file_path=new_path)
@@ -986,7 +1027,7 @@ def main() -> int:
                         "document_id": result.document_id,
                         "transcript_id": result.transcript_id,
                         "segments": result.segment_count,
-                        "file": str(result.file_path.relative_to(PROJECT_ROOT)),
+                        "file": str(result.file_path.relative_to(evidence_root)),
                         "qa_status": result.qa_status.value,
                         "qa_signals": list(result.qa_signals),
                     }
@@ -997,7 +1038,11 @@ def main() -> int:
         ir_failed = 0
         if args.include_ir_transcripts:
             ir_ingested, ir_skipped, ir_failed = _backfill_existing_ir_transcripts(
-                conn, run_id, args.ticker, ir_artifacts
+                conn,
+                run_id,
+                args.ticker,
+                ir_artifacts,
+                project_root=evidence_root,
             )
 
         total_failed = failed + ir_failed

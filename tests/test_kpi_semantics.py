@@ -155,6 +155,41 @@ def test_admitted_scaled_count_rejects_unreconciled_persisted_value() -> None:
         )
 
 
+def test_admitted_unscaled_count_allows_omitted_source_value_but_scaled_count_requires_it() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE kpi_facts (id INTEGER PRIMARY KEY, unit TEXT NOT NULL, "
+        "value NUMERIC NOT NULL, source_excerpt TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO kpi_facts VALUES "
+        "(1, 'count', 4200000, 'Strong customer growth'), "
+        "(2, 'count', 114000000, '114 million customers')"
+    )
+    _semantic_table(conn)
+    assert (
+        persist_kpi_semantic_context(
+            conn,
+            kpi_fact_id=1,
+            context=_context().model_copy(
+                update={"unit_scale": KpiUnitScale.NONE, "source_value_text": None}
+            ),
+        )
+        == 1
+    )
+    with pytest.raises(
+        ValueError, match="admitted COUNT context requires retained source value text"
+    ):
+        persist_kpi_semantic_context(
+            conn,
+            kpi_fact_id=2,
+            context=_context().model_copy(
+                update={"unit_scale": KpiUnitScale.MILLIONS, "source_value_text": None}
+            ),
+        )
+
+
 def test_unclassified_producer_context_is_explicitly_quarantined() -> None:
     context = unclassified_kpi_context(
         metric_name_as_reported="Legacy KPI",
