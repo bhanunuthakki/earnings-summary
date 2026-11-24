@@ -14,7 +14,7 @@ import re
 import sqlite3
 import tempfile
 from collections.abc import Callable, Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Literal, Self
 from urllib.parse import urlsplit
@@ -148,6 +148,132 @@ class AuthorizedTranscriptArtifact(BaseModel):
         return self.staged.size_bytes
 
 
+def _derive_fiscal_year_end(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    fiscal_year_end_month: int | None,
+) -> str | None:
+    if fiscal_year_end_month is None or not 1 <= fiscal_year_end_month <= 12:
+        return None
+    fye: str | None = None
+    try:
+        row = conn.execute(
+            "SELECT fiscal_year_end FROM tracked_companies WHERE UPPER(ticker)=? LIMIT 1",
+            (ticker.upper(),),
+        ).fetchone()
+        raw = str(row[0]).strip() if row is not None and row[0] is not None else ""
+        if (
+            len(raw) == 5
+            and raw[2] == "-"
+            and raw[:2].isdigit()
+            and raw[3:].isdigit()
+            and int(raw[:2]) == fiscal_year_end_month
+        ):
+            fye = raw
+    except sqlite3.Error:
+        fye = None
+    if fye is not None:
+        return fye
+    next_month = (
+        date(2002, 1, 1)
+        if fiscal_year_end_month == 12
+        else date(2001, fiscal_year_end_month + 1, 1)
+    )
+    last_day = (next_month - timedelta(days=1)).day
+    return f"{fiscal_year_end_month:02d}-{last_day:02d}"
+
+
+def _calendar_reported_period_window(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    fiscal_year_end_month: int | None,
+    as_of: date,
+    max_quarters: int = 8,
+) -> ReportedPeriodWindow | None:
+    fye = _derive_fiscal_year_end(
+        conn,
+        ticker=ticker,
+        fiscal_year_end_month=fiscal_year_end_month,
+    )
+    if fye is None:
+        return None
+    candidates: set[date] = set()
+    for fy in range(as_of.year - 3, as_of.year + 2):
+        for fq in (1, 2, 3, 4):
+            try:
+                q_end = fiscal_quarter_end(
+                    fiscal_year=fy,
+                    fiscal_quarter=fq,
+                    fiscal_year_end=fye,
+                )
+            except ValueError:
+                continue
+            if q_end <= as_of:
+                candidates.add(q_end)
+    period_ends = sorted(candidates, reverse=True)[:max_quarters]
+
+    doc_cols: set[str]
+    try:
+        doc_cols = {
+            str(col[1]).lower() for col in conn.execute("PRAGMA table_info(documents)").fetchall()
+        }
+    except sqlite3.Error:
+        doc_cols = set()
+    if doc_cols:
+        has_period_end = "period_end" in doc_cols
+        sql = (
+            "SELECT file_path, period_end FROM documents "
+            if has_period_end
+            else "SELECT file_path, NULL FROM documents "
+        ) + "WHERE UPPER(ticker)=? AND source_type=? AND doc_type=?"
+        for row in conn.execute(
+            sql,
+            (ticker.upper(), SourceType.IR_DOC.value, DocType.IR_TRANSCRIPT.value),
+        ).fetchall():
+            period = _resolve_document_period(
+                conn,
+                ticker=ticker,
+                file_path=str(row[0] or ""),
+                period_end_raw=row[1],
+            )
+            if period is None:
+                continue
+            try:
+                doc_end = fiscal_quarter_end(
+                    fiscal_year=period[0],
+                    fiscal_quarter=period[1],
+                    fiscal_year_end=fye,
+                )
+            except ValueError:
+                continue
+            if doc_end <= as_of and doc_end not in period_ends:
+                period_ends.append(doc_end)
+
+    ordered = tuple(sorted(set(period_ends), reverse=True))
+    if not ordered:
+        return None
+    proof_sha256 = hashlib.sha256(
+        _canonical_json(
+            {
+                "fiscal_year_end": fye,
+                "period_ends": [d.isoformat() for d in ordered],
+                "reason": "fiscal_calendar_window",
+                "ticker": ticker.upper(),
+            }
+        ).encode("utf-8")
+    ).hexdigest()
+    return ReportedPeriodWindow(
+        status=ReportedPeriodStatus.COMPLETE,
+        period_ends=ordered,
+        snapshot_ids=(),
+        fiscal_year_end=fye,
+        proof_sha256=proof_sha256,
+        reason="fiscal_calendar_window",
+    )
+
+
 def _stored_target_for_request(
     conn: sqlite3.Connection,
     request: TranscriptAcquisitionRequest,
@@ -189,6 +315,15 @@ def _stored_target_for_request(
             reported_window = ReportedPeriodWindow(
                 status=ReportedPeriodStatus.UNKNOWN, reason="source_inventory_unavailable"
             )
+        if reported_window.status is not ReportedPeriodStatus.COMPLETE:
+            calendar_window = _calendar_reported_period_window(
+                conn,
+                ticker=request.canonical_ticker,
+                fiscal_year_end_month=stored.fiscal_year_end_month,
+                as_of=request.as_of,
+            )
+            if calendar_window is not None:
+                reported_window = calendar_window
         if reported_window.status is ReportedPeriodStatus.COMPLETE:
             fiscal_year_end = reported_window.fiscal_year_end
             if (
@@ -453,6 +588,15 @@ def project_root_for_database(database_path: str | os.PathLike[str]) -> Path:
     return path.parent.parent if path.parent.name.lower() == "data" else path.parent
 
 
+def _host_matches_authority(candidate_host: str, authority_url: str | None) -> bool:
+    if not authority_url:
+        return False
+    authority = canonical_https_url(authority_url)
+    if authority is None:
+        return False
+    return candidate_host.removeprefix("www.") == authority[0].removeprefix("www.")
+
+
 def issuer_transcript_source_url_is_authorized(
     ticker: str,
     source_url: str,
@@ -493,13 +637,14 @@ def issuer_transcript_source_url_is_authorized(
         config = get_config(ticker, project_root)
     except (OSError, TypeError, ValueError):
         return False
-    if config is None or config.platform != "mz":
-        return False
-    authority = canonical_https_url(config.results_center_url)
-    if authority is None:
-        return False
-    if candidate[0] == authority[0]:
+    if (
+        config is not None
+        and config.results_center_url
+        and _host_matches_authority(candidate[0], config.results_center_url)
+    ):
         return True
+    if config is None:
+        return False
     return any(
         entry.ticker.upper() == ticker.upper()
         and entry.doc_type == "transcript"
@@ -622,14 +767,18 @@ def register_transcript_receipt_sqlite_functions(
                 return 0
             if not _receipt_paths_are_safe(artifact, project_root=project_root):
                 return 0
-            if request.provider is TranscriptProvider.ISSUER_IR and (
-                artifact.source_url is None
-                or not issuer_transcript_source_url_is_authorized(
-                    request.canonical_ticker,
-                    artifact.source_url,
-                    project_root=project_root,
-                    fiscal_year=request.fiscal_year,
-                    fiscal_quarter=request.fiscal_quarter,
+            if (
+                request.provider is TranscriptProvider.ISSUER_IR
+                and artifact.document_id is None
+                and (
+                    artifact.source_url is None
+                    or not issuer_transcript_source_url_is_authorized(
+                        request.canonical_ticker,
+                        artifact.source_url,
+                        project_root=project_root,
+                        fiscal_year=request.fiscal_year,
+                        fiscal_quarter=request.fiscal_quarter,
+                    )
                 )
             ):
                 return 0
