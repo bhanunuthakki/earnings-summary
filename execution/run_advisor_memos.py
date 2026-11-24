@@ -1,17 +1,15 @@
 """Run advisor memos (master build P2.3): next-dollar and/or swap checks.
 
-The single entry point for every way a memo run starts:
-
-* **Dashboard button** — the Memos panel POSTs ``/actions/advisor-memo``,
-  which streams this script through the jobs SSE machinery.
-* **Manual** — run it directly when the owner requests a memo.
+Headless entrypoint for manual and scheduled memo generation using the explicit
+or configured canonical database authority. Fails closed if no valid database
+is configured or if the checkout-default database is selected.
 
 Advisor memos run on demand only; no monthly task is declared.
 
 Usage:
-    python execution/run_advisor_memos.py --kind next_dollar
-    python execution/run_advisor_memos.py --kind swap_checks --margin-pp 20
-    python execution/run_advisor_memos.py --kind all --repo-root <path>
+    python execution/run_advisor_memos.py --kind next_dollar --db <path>
+    python execution/run_advisor_memos.py --kind swap_checks --margin-pp 20 --db <path>
+    python execution/run_advisor_memos.py --kind all --repo-root <path> --db <path>
 
 Exit status: 0 when every attempted memo persisted (including the
 nothing-cleared-the-bar swap outcome — that is a healthy result, not a
@@ -41,6 +39,12 @@ def main(argv: list[str] | None = None) -> int:
         help="which memo run to execute",
     )
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=None,
+        help="Explicit canonical SQLite database path; falls back to configured DB authority.",
+    )
     parser.add_argument(
         "--state-root", type=Path, help="Explicit model source-byte read authority."
     )
@@ -78,7 +82,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         # One context fetch serves both kinds (tracker + DB round-trips are
         # the slow part; the memos only differ in prompts).
-        ctx = build_advisor_context(repo_root, user_id=user_id, source_context=source_context)
+        ctx = build_advisor_context(
+            repo_root,
+            user_id=user_id,
+            db_path=args.db,
+            source_context=source_context,
+        )
         print(
             f"context: {len(ctx.audit_rows)} holdings · "
             f"{len(ctx.candidates_val)} external candidates with DCFs · "
@@ -89,6 +98,7 @@ def main(argv: list[str] | None = None) -> int:
             result = generate_next_dollar_memo(
                 repo_root,
                 user_id=user_id,
+                db_path=args.db,
                 ctx=ctx,
                 force_budget_bypass=args.force_budget_bypass,
             )
@@ -101,6 +111,7 @@ def main(argv: list[str] | None = None) -> int:
             results = run_swap_checks(
                 repo_root,
                 user_id=user_id,
+                db_path=args.db,
                 margin_pp=args.margin_pp,
                 max_memos=args.max_memos,
                 ctx=ctx,
