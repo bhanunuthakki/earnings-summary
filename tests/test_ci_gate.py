@@ -1373,6 +1373,14 @@ def test_the_windows_app_job_runs_only_when_selection_needs_it(helper: ModuleTyp
     assert helper.windows_app_needed(["SELECTED\t2 files", "tests/test_other.py", windows_file])
     assert not helper.windows_app_needed(["SELECTED\t1 file", "tests/test_other.py"])
     assert not helper.windows_app_needed(["SELECTED\t0 files"])
+    # A Windows file chosen only because it scans the repository does not
+    # run the job; chosen for the change itself, or with no reason, it does.
+    scan = f"{windows_file}\t{helper.SCANS_REPOSITORY}"
+    assert not helper.windows_app_needed(
+        ["SELECTED\t2 files", "tests/test_other.py\tchanged", scan]
+    )
+    assert helper.windows_app_needed(["SELECTED\t1 file", f"{windows_file}\truns src/x.py:f"])
+    assert helper.windows_app_needed(["SELECTED\t1 file", windows_file])
     results = dict.fromkeys(("changes", "public-boundary", *helper.CONDITIONAL_JOBS), "success") | {
         "windows-app": "skipped"
     }
@@ -1387,6 +1395,19 @@ def test_the_windows_app_job_runs_only_when_selection_needs_it(helper: ModuleTyp
     assert "windows_app: ${{ steps.tests.outputs.windows_app }}" in workflow
     assert "WINDOWS_APP_NEEDED: ${{ needs.changes.outputs.windows_app || 'true' }}" in workflow
     assert '--windows-app "$WINDOWS_APP_NEEDED"' in workflow
+
+
+def test_the_gate_and_selection_share_the_repository_scan_reason(helper: ModuleType) -> None:
+    from quality import test_selection
+
+    assert helper.SCANS_REPOSITORY == test_selection.SCANS_REPOSITORY
+    durations = helper.load_test_durations(REPO_ROOT / ".github" / "test-durations.json")
+    _, matrix = helper.test_matrix(
+        ["SELECTED\t1 file", f"tests/test_ci_gate.py\t{helper.SCANS_REPOSITORY}"], durations
+    )
+    assert matrix == {
+        "include": [{"label": helper.SHARD_LABELS[0], "files": "tests/test_ci_gate.py"}]
+    }
 
 
 def test_the_test_matrix_command_reports_the_windows_app_decision(
