@@ -51,6 +51,7 @@ from advisor.context import (
     thesis_one_liner,
 )
 from advisor.store import insert_memo, link_memory
+from db_paths import db_path_context, require_db_path
 from identity import DEFAULT_USER_ID
 from llm.cli import is_hard_stop
 from llm_client import call_llm
@@ -315,14 +316,17 @@ def generate_next_dollar_memo(
     *,
     user_id: str = DEFAULT_USER_ID,
     api_url: str | None = None,
+    db_path: Path | None = None,
     ctx: AdvisorContext | None = None,
     force_budget_bypass: bool = False,
 ) -> MemoResult:
     """Generate + persist the next-dollar allocation memo. Hard stops (budget
     cap with block mode, missing CLI) propagate; transient LLM failures return
     a skipped MemoResult."""
-    db_path = repo_root / "data" / "portfolio.db"
-    context = ctx or build_advisor_context(repo_root, user_id=user_id, api_url=api_url)
+    resolved_db = require_db_path(db_path)
+    context = ctx or build_advisor_context(
+        repo_root, user_id=user_id, api_url=api_url, db_path=resolved_db
+    )
     if not _next_dollar_model_rows(context):
         return MemoResult(
             ok=False, kind="next_dollar", skipped_reason="valuation_evidence_not_ready"
@@ -334,12 +338,13 @@ def generate_next_dollar_memo(
         notes=context.open_notes_block or "(no open notes)",
     )
     try:
-        body = call_llm(
-            prompt,
-            purpose=NEXT_DOLLAR_PURPOSE,
-            scope="portfolio",
-            force_budget_bypass=force_budget_bypass,
-        )
+        with db_path_context(resolved_db):
+            body = call_llm(
+                prompt,
+                purpose=NEXT_DOLLAR_PURPOSE,
+                scope="portfolio",
+                force_budget_bypass=force_budget_bypass,
+            )
     except Exception as exc:
         if is_hard_stop(exc):
             raise
@@ -371,7 +376,7 @@ def generate_next_dollar_memo(
         "model_rows": _next_dollar_model_rows(context),
     }
     return persist_memo(
-        db_path=db_path,
+        db_path=resolved_db,
         user_id=user_id,
         kind="next_dollar",
         ticker=None,
@@ -388,6 +393,7 @@ def run_swap_checks(
     *,
     user_id: str = DEFAULT_USER_ID,
     api_url: str | None = None,
+    db_path: Path | None = None,
     margin_pp: float = 15.0,
     max_memos: int = 2,
     max_dcf_age_days: int = 365,
@@ -401,8 +407,10 @@ def run_swap_checks(
     first; each holding and each candidate gets at most one memo per run, and
     at most ``max_memos`` LLM calls are spent.
     """
-    db_path = repo_root / "data" / "portfolio.db"
-    context = ctx or build_advisor_context(repo_root, user_id=user_id, api_url=api_url)
+    resolved_db = require_db_path(db_path)
+    context = ctx or build_advisor_context(
+        repo_root, user_id=user_id, api_url=api_url, db_path=resolved_db
+    )
     screen = screen_swap_candidates(
         context.holdings_val,
         context.candidates_val,
@@ -424,7 +432,7 @@ def run_swap_checks(
             _swap_memo(
                 context,
                 pair,
-                db_path=db_path,
+                db_path=resolved_db,
                 user_id=user_id,
                 margin_pp=margin_pp,
                 force_budget_bypass=force_budget_bypass,
@@ -486,12 +494,13 @@ def _swap_memo(
         notes=notes_h or "(no open notes)",
     )
     try:
-        body = call_llm(
-            prompt,
-            purpose=SWAP_CHECK_PURPOSE,
-            ticker=pair.holding,
-            force_budget_bypass=force_budget_bypass,
-        )
+        with db_path_context(db_path):
+            body = call_llm(
+                prompt,
+                purpose=SWAP_CHECK_PURPOSE,
+                ticker=pair.holding,
+                force_budget_bypass=force_budget_bypass,
+            )
     except Exception as exc:
         if is_hard_stop(exc):
             raise
