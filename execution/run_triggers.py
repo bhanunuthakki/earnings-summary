@@ -835,10 +835,13 @@ def _run_scan_sweep(
 
     Per-ticker timeout: each scan gets its own wall-clock budget from its
     wave's dispatch; a ticker that exceeds it is explicitly deferred with
-    reason ``per_ticker_timeout`` and its worker is abandoned (the executor
+    reason ``per_ticker_timeout`` and its worker is abandoned (its executor
     shuts down with ``wait=False`` — the run never blocks on an abandoned
     scan; its late writes are idempotent, and the LLM transport's own
-    per-call subprocess timeout bounds the abandoned thread).
+    per-call subprocess timeout bounds the abandoned thread). An abandoned
+    thread still holds its executor slot, so the next wave gets a fresh
+    executor: every dispatched scan can start at once and its budget is
+    never spent waiting in a queue behind a hung one.
 
     The summary and event stream are mutated only from this (coordinator)
     thread; worker threads only run the scan.
@@ -861,8 +864,15 @@ def _run_scan_sweep(
     deferred_timeout = 0
     remaining = deque(tickers)
     executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="trigger-scan")
+    abandoned = False
     try:
         while remaining:
+            if abandoned:
+                executor.shutdown(wait=False)
+                executor = ThreadPoolExecutor(
+                    max_workers=workers, thread_name_prefix="trigger-scan"
+                )
+                abandoned = False
             spend = query_run_cost_usd(db_path, run_started_at)
             if spend >= max_cost_usd:
                 _emit(
@@ -950,6 +960,7 @@ def _run_scan_sweep(
                     if deadline <= now:
                         pending.pop(future)
                         future.cancel()  # no-op if running; the worker is abandoned
+                        abandoned = True
                         deferred_timeout += 1
                         _record_scan_deferral(
                             summary,
