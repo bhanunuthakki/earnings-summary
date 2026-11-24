@@ -527,3 +527,183 @@ def test_models_are_frozen_and_reject_unknown_fields() -> None:
         PortfolioAllocationBucket.model_validate(
             {"value": Decimal("1"), "weight_pct": Decimal("1"), "extra": "nope"}
         )
+
+
+def test_mmf_mutual_funds_non_equity_funds_and_100pct_reconciliation() -> None:
+    from integrations.portfolio_allocation import read_portfolio_allocation
+
+    base_pos = _positions()
+    base_sec = _classified_securities()
+    # 9 positions totaling 10000 so weights sum cleanly to 100%.
+    rows = [
+        (1, "EQ_US", "US Stock", "Stock", "Technology", "US", False, Decimal("2000")),
+        (2, "VTI", "US ETF", "ETF", "Broad", "US", False, Decimal("1000")),
+        (3, "VXUS", "Intl ETF", "ETF", "Intl", "International", False, Decimal("1000")),
+        (4, "VT", "Global ETF", "ETF", "Global", "Global", False, Decimal("1000")),
+        (5, "FXAIX", "US Index MF", "Mutual_Fund", "Large Blend", "US", False, Decimal("1200")),
+        (
+            6,
+            "FSPSX",
+            "Intl Index MF",
+            "Mutual Fund",
+            "Foreign Large",
+            "International",
+            False,
+            Decimal("800"),
+        ),
+        (7, "VTWAX", "Global MF", "Mutual_Fund", "Global", "Global", False, Decimal("500")),
+        (8, "BND", "Bond ETF", "ETF", "Fixed Income", "US", False, Decimal("700")),
+        (9, "GLD", "Gold ETF", "ETF", "Commodities", "Global", False, Decimal("300")),
+        (10, "AOK", "Balanced MF", "Mutual_Fund", "Multi-Asset", "Global", False, Decimal("500")),
+        (11, "VMFXX", "Federal MMF", "Other", "Cash/MMF", "US", True, Decimal("600")),
+        (12, "SWVXX", "Value Advantage", "Other", "Cash/MMF", "US", False, Decimal("400")),
+    ]
+    total = Decimal("10000")
+    pos_list: list[PositionV1] = []
+    sec_list = []
+    for sid, ticker, name, atype, sector, region, is_mmf, mv in rows:
+        pos_list.append(
+            base_pos.positions[0].model_copy(
+                update={
+                    "security_id": sid,
+                    "ticker": ticker,
+                    "name": name,
+                    "quantity": mv,
+                    "market_value": mv,
+                    "percent_of_portfolio": mv / total * Decimal(100),
+                    "accounts": [
+                        base_pos.positions[0]
+                        .accounts[0]
+                        .model_copy(update={"market_value": mv, "quantity": mv})
+                    ],
+                }
+            )
+        )
+        sec_list.append(
+            base_sec.securities[0].model_copy(
+                update={
+                    "security_id": sid,
+                    "ticker": ticker,
+                    "name": name,
+                    "asset_type": atype,
+                    "sector": sector,
+                    "region": region,
+                    "is_cash_equivalent": is_mmf,
+                }
+            )
+        )
+
+    result = read_portfolio_allocation(
+        _reader(
+            positions=base_pos.model_copy(
+                update={"positions": pos_list, "total_market_value": total}
+            ),
+            securities=base_sec.model_copy(update={"securities": sec_list}),
+        )
+    )
+    assert result.state == "available"
+    assert result.reason_codes == ()
+    assert result.unclassified_positions == ()
+    assert result.buckets.us_equity.value == Decimal("2000")
+    assert result.buckets.us_etf.value == Decimal("1000")
+    assert result.buckets.international_etf.value == Decimal("1000")
+    assert result.buckets.global_etf.value == Decimal("1000")
+    assert result.buckets.us_mutual_fund.value == Decimal("1200")
+    assert result.buckets.international_mutual_fund.value == Decimal("800")
+    assert result.buckets.global_mutual_fund.value == Decimal("500")
+    assert result.buckets.non_equity_fund.value == Decimal("1500")
+    assert result.buckets.cash.value == Decimal(
+        "1000"
+    )  # VMFXX (is_cash_equivalent) + SWVXX (sector Cash/MMF)
+    assert result.buckets.unclassified.value == Decimal("0")
+    assert result.reconciliation.is_reconciled
+    assert result.reconciliation.bucket_total == total
+    weight_sum = sum(
+        getattr(result.buckets, field).weight_pct for field in type(result.buckets).model_fields
+    )
+    assert weight_sum == Decimal("100")
+
+
+def test_unclassified_positions_explain_every_unresolved_dollar_with_reason_codes() -> None:
+    from integrations.portfolio_allocation import read_portfolio_allocation
+
+    positions, securities = _covered_call_book(units=Decimal(100), market_value=Decimal(200))
+    # Position 0 (equity AAAA): missing region -> region_missing_or_unknown
+    # Position 1 (ETF): region Unknown -> region_missing_or_unknown
+    # Position 2 (Cash): stays Cash
+    # Position 10 (Long Call): long_option
+    sec0 = securities.securities[0].model_copy(update={"region": None, "ticker": "NO_REG"})
+    sec1 = securities.securities[1].model_copy(update={"region": "Unknown", "ticker": "UNK_ETF"})
+    sec_extra_pos = securities.securities[2].model_copy(
+        update={
+            "security_id": 99,
+            "ticker": "CRYPTO1",
+            "asset_type": "Crypto",
+            "region": "Global",
+            "is_cash_equivalent": False,
+        }
+    )
+    # Add CRYPTO1 position of 500 to test unsupported_asset_type alongside others
+    total = (positions.total_market_value or Decimal(0)) + Decimal(500)
+    updated_rows = [
+        row.model_copy(
+            update={"percent_of_portfolio": (row.market_value or Decimal(0)) / total * 100}
+        )
+        for row in positions.positions
+    ]
+    crypto_pos = positions.positions[0].model_copy(
+        update={
+            "security_id": 99,
+            "ticker": "CRYPTO1",
+            "name": "Crypto Unit",
+            "quantity": Decimal(1),
+            "market_value": Decimal(500),
+            "percent_of_portfolio": Decimal(500) / total * 100,
+            "accounts": [
+                positions.positions[0]
+                .accounts[0]
+                .model_copy(update={"quantity": Decimal(1), "market_value": Decimal(500)})
+            ],
+        }
+    )
+    pos2 = positions.model_copy(
+        update={"positions": [*updated_rows, crypto_pos], "total_market_value": total}
+    )
+    sec2 = securities.model_copy(
+        update={
+            "securities": [
+                sec0,
+                sec1,
+                securities.securities[2],
+                securities.securities[3],
+                sec_extra_pos,
+            ]
+        }
+    )
+
+    result = read_portfolio_allocation(_reader(positions=pos2, securities=sec2))
+    assert result.state == "incomplete"
+    reasons_by_sid = {u.security_id: u for u in result.unclassified_positions}
+    assert reasons_by_sid[sec0.security_id].reason_code == "region_missing_or_unknown"
+    assert reasons_by_sid[sec1.security_id].reason_code == "region_missing_or_unknown"
+    assert reasons_by_sid[10].reason_code == "long_option"
+    assert reasons_by_sid[99].reason_code == "unsupported_asset_type"
+    assert (
+        sum((u.market_value for u in result.unclassified_positions), Decimal(0))
+        == result.buckets.unclassified.value
+    )
+    assert result.reconciliation.is_reconciled
+
+
+def test_failed_covered_call_records_option_reason_in_unclassified_positions() -> None:
+    from integrations.portfolio_allocation import read_portfolio_allocation
+
+    positions, securities = _covered_call_book(contract_type="put")
+    result = read_portfolio_allocation(_reader(positions=positions, securities=securities))
+    assert result.state == "incomplete"
+    assert len(result.unclassified_positions) == 1
+    entry = result.unclassified_positions[0]
+    assert entry.security_id == 10
+    assert entry.reason_code == "option_strategy_unsupported"
+    assert entry.market_value == result.buckets.unclassified.value
+    assert result.reconciliation.is_reconciled
