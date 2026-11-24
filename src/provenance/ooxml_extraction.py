@@ -16,13 +16,18 @@ import re
 import zipfile
 from hashlib import sha256
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import unquote, urlparse
 
 from defusedxml import ElementTree
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from provenance.evidence_ledger import EvidenceLocator
+
+if TYPE_CHECKING:
+    from xml.etree.ElementTree import (
+        Element as XmlElement,  # nosec B405 -- type-only import; runtime parses via defusedxml
+    )
 
 OfficeFormat = Literal["pptx", "xlsx", "legacy_ppt", "legacy_xls"]
 OfficeNodeKind = Literal["passage", "table", "table_row", "table_cell"]
@@ -184,7 +189,7 @@ def _read_xml_part(
     archive: zipfile.ZipFile,
     inventory: dict[str, zipfile.ZipInfo],
     part_name: str,
-) -> ElementTree.Element:
+) -> XmlElement:
     info = inventory.get(part_name)
     if info is None:
         raise OfficeExtractionError("office_required_part_missing")
@@ -223,6 +228,8 @@ def _relationships(
         relationship_type = relationship.get("Type")
         target_mode = relationship.get("TargetMode")
         if target_mode == "External":
+            if relationship_type == f"{_DOC_REL_NS}/hyperlink":
+                continue
             raise OfficeExtractionError("office_external_relationship_forbidden")
         if target_mode not in {None, "Internal"}:
             raise OfficeExtractionError("office_relationship_contract_invalid")
@@ -309,7 +316,7 @@ def _extract_presentation(
     return nodes
 
 
-def _presentation_text_blocks(root: ElementTree.Element) -> list[str]:
+def _presentation_text_blocks(root: XmlElement) -> list[str]:
     blocks: list[str] = []
     table_paragraphs = {
         id(paragraph)
@@ -336,7 +343,7 @@ def _slide_chart_nodes(
     archive: zipfile.ZipFile,
     inventory: dict[str, zipfile.ZipInfo],
     slide_part: str,
-    slide_root: ElementTree.Element,
+    slide_root: XmlElement,
     source_ref: str,
     slide_number: int,
 ) -> list[StructuredOfficeNode]:
@@ -422,7 +429,7 @@ def _slide_chart_nodes(
     return nodes
 
 
-def _chart_series_metadata(series: ElementTree.Element) -> _ChartSeriesMetadata:
+def _chart_series_metadata(series: XmlElement) -> _ChartSeriesMetadata:
     return _ChartSeriesMetadata(
         series_index=_chart_unsigned_attribute(series, "idx"),
         series_order=_chart_unsigned_attribute(series, "order"),
@@ -432,7 +439,7 @@ def _chart_series_metadata(series: ElementTree.Element) -> _ChartSeriesMetadata:
     )
 
 
-def _chart_unsigned_attribute(series: ElementTree.Element, local_name: str) -> int:
+def _chart_unsigned_attribute(series: XmlElement, local_name: str) -> int:
     element = series.find(f"{{{_CHART_NS}}}{local_name}")
     if element is None:
         raise OfficeExtractionError("presentation_chart_contract_invalid")
@@ -443,7 +450,7 @@ def _chart_unsigned_attribute(series: ElementTree.Element, local_name: str) -> i
 
 
 def _chart_dimension(
-    series: ElementTree.Element,
+    series: XmlElement,
     local_names: tuple[str, ...],
 ) -> _ChartDimension:
     container = next(
@@ -499,7 +506,7 @@ def _chart_dimension(
     )
 
 
-def _chart_cache(cache: ElementTree.Element) -> _ChartCache:
+def _chart_cache(cache: XmlElement) -> _ChartCache:
     point_count_element = cache.find(f"{{{_CHART_NS}}}ptCount")
     point_count = None
     if point_count_element is not None:
@@ -545,12 +552,12 @@ def _chart_cache(cache: ElementTree.Element) -> _ChartCache:
 
 def _slide_table_nodes(
     slide_part: str,
-    slide_root: ElementTree.Element,
+    slide_root: XmlElement,
     source_ref: str,
     slide_number: int,
 ) -> list[StructuredOfficeNode]:
     frames = slide_root.findall(f".//{{{_PRESENTATION_NS}}}graphicFrame")
-    tables: list[tuple[int, ElementTree.Element, str]] = []
+    tables: list[tuple[int, XmlElement, str]] = []
     for shape_index, frame in enumerate(frames):
         table = frame.find(f".//{{{_DRAWING_NS}}}tbl")
         if table is None:
@@ -647,7 +654,7 @@ def _slide_table_nodes(
     return nodes
 
 
-def _presentation_table_cell_text(cell: ElementTree.Element) -> str:
+def _presentation_table_cell_text(cell: XmlElement) -> str:
     paragraphs: list[str] = []
     for paragraph in cell.findall(f".//{{{_DRAWING_NS}}}p"):
         paragraphs.append(
@@ -713,7 +720,11 @@ def _extract_workbook(
         sheet_name = (sheet.get("name") or "").strip()
         relationship_id = sheet.get(f"{{{_DOC_REL_NS}}}id")
         relationship = relationships.get(relationship_id or "")
-        if not sheet_name or relationship is None or not relationship[1].endswith("/worksheet"):
+        if not sheet_name or relationship is None:
+            raise OfficeExtractionError("workbook_sheet_relationship_missing")
+        if relationship[1].endswith(("/chartsheet", "/dialogsheet")):
+            continue
+        if not relationship[1].endswith("/worksheet"):
             raise OfficeExtractionError("workbook_sheet_relationship_missing")
         worksheet_part = relationship[0]
         worksheet_root = _read_xml_part(archive, inventory, worksheet_part)
@@ -783,7 +794,7 @@ def _shared_strings(
 
 
 def _worksheet_rows(
-    root: ElementTree.Element,
+    root: XmlElement,
     source_ref: str,
     sheet_name: str,
     sheet_index: int,
@@ -831,7 +842,7 @@ def _worksheet_named_table_nodes(
     archive: zipfile.ZipFile,
     inventory: dict[str, zipfile.ZipInfo],
     worksheet_part: str,
-    worksheet_root: ElementTree.Element,
+    worksheet_root: XmlElement,
     source_ref: str,
     sheet_name: str,
     sheet_index: int,
@@ -913,7 +924,7 @@ def _worksheet_named_table_nodes(
 
 
 def _render_cell(
-    cell: ElementTree.Element,
+    cell: XmlElement,
     shared_strings: tuple[str, ...],
 ) -> str | None:
     cell_type = cell.get("t")

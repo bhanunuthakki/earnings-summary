@@ -370,3 +370,33 @@ def test_xlsx_table_relationship_contract_fails_closed() -> None:
     with pytest.raises(OfficeExtractionError) as error:
         extract_office_nodes("bad.xlsx", _package(parts), "xlsx")
     assert error.value.reason == "worksheet_table_relationship_missing"
+
+
+def test_pptx_external_hyperlink_relationship_is_allowed() -> None:
+    raw = _pptx(
+        _slide(_text_shape("Investor Relations Link")),
+        slide_relationships=_relationship(
+            "rId2",
+            "hyperlink",
+            "https://ir.example.test/q3",
+            target_mode="External",
+        ),
+    )
+    nodes = extract_office_nodes("deck.pptx", raw, "pptx")
+    assert any(
+        node.local_key == "slide:1" and "Investor Relations Link" in node.text for node in nodes
+    )
+
+
+def test_xlsx_skips_chartsheet_and_extracts_worksheet() -> None:
+    parts = {
+        "xl/workbook.xml": _workbook(("Chart1", "Summary")),
+        "xl/_rels/workbook.xml.rels": _relationships(
+            _relationship("rId1", "chartsheet", "chartsheets/sheet1.xml"),
+            _relationship("rId2", "worksheet", "worksheets/sheet2.xml"),
+        ),
+        "xl/chartsheets/sheet1.xml": f'<chartsheet xmlns="{S_NS}"/>',
+        "xl/worksheets/sheet2.xml": _worksheet((), '<row r="1"><c r="A1"><v>42</v></c></row>'),
+    }
+    nodes = extract_office_nodes("book.xlsx", _package(parts), "xlsx")
+    assert any(node.local_key == "sheet:2:row:1" and "42" in node.text for node in nodes)

@@ -112,10 +112,21 @@ class AuthorizedTranscriptArtifact(BaseModel):
         expected_name = (
             f"{request.canonical_ticker}_Q{request.fiscal_quarter}_{request.fiscal_year}.txt"
         )
-        if relative.name != expected_name:
-            raise ValueError("canonical document path does not match authorized target")
-        if self.document_id is None and relative.parts[:2] != ("transcripts", "raw"):
-            raise ValueError("new acquisition must target the canonical raw transcript directory")
+        if self.document_id is None:
+            if relative.parts[:2] != ("transcripts", "raw"):
+                raise ValueError(
+                    "new acquisition must target the canonical raw transcript directory"
+                )
+            if relative.name != expected_name:
+                raise ValueError("canonical document path does not match authorized target")
+        else:
+            is_canonical_issuer_path = (
+                len(relative.parts) >= 3
+                and relative.parts[0] == "ir_documents"
+                and relative.parts[1].upper() == request.canonical_ticker
+            )
+            if relative.name != expected_name and not is_canonical_issuer_path:
+                raise ValueError("canonical document path does not match authorized target")
         if self.source_url is not None:
             parsed = urlsplit(self.source_url)
             if (
@@ -871,6 +882,68 @@ def _document_request(
     )
 
 
+_ISO_DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _resolve_document_period(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    file_path: str,
+    period_end_raw: object | None,
+) -> tuple[int, int] | None:
+    """Resolve ``(fiscal_year, fiscal_quarter)`` from legacy filename, ``period_end``, or ISO directory."""
+    path_obj = Path(file_path)
+    parts = path_obj.name.rsplit("_", 2)
+    if len(parts) == 3 and parts[1].upper().startswith("Q"):
+        try:
+            quarter = int(parts[1][1:])
+            year = int(Path(parts[2]).stem)
+        except ValueError:
+            pass
+        else:
+            if 1 <= quarter <= 4:
+                return year, quarter
+
+    pe_date: date | None = None
+    if period_end_raw is not None:
+        raw_str = str(period_end_raw).strip()
+        if len(raw_str) >= 10:
+            try:
+                pe_date = date.fromisoformat(raw_str[:10])
+            except ValueError:
+                pe_date = None
+    if pe_date is None:
+        for part in reversed(path_obj.parts[:-1]):
+            if _ISO_DATE_DIR_RE.fullmatch(part):
+                try:
+                    pe_date = date.fromisoformat(part)
+                    break
+                except ValueError:
+                    continue
+    if pe_date is None:
+        return None
+
+    fye_row = conn.execute(
+        "SELECT fiscal_year_end FROM tracked_companies WHERE UPPER(ticker)=? LIMIT 1",
+        (ticker.upper(),),
+    ).fetchone()
+    fye = str(fye_row[0]).strip() if fye_row and fye_row[0] else "12-31"
+    best_period: tuple[int, int] | None = None
+    best_delta = 8
+    for fy in (pe_date.year - 1, pe_date.year, pe_date.year + 1):
+        for fq in (1, 2, 3, 4):
+            try:
+                q_end = fiscal_quarter_end(fiscal_year=fy, fiscal_quarter=fq, fiscal_year_end=fye)
+            except ValueError:
+                continue
+            delta = abs((pe_date - q_end).days)
+            if delta <= 7 and delta < best_delta:
+                best_delta = delta
+                best_period = (fy, fq)
+    return best_period
+
+
 def stage_pending_issuer_transcripts(
     conn: sqlite3.Connection,
     *,
@@ -887,32 +960,38 @@ def stage_pending_issuer_transcripts(
     if not normalized:
         return {}
     placeholders = ",".join("?" for _ in normalized)
+    doc_cols = {str(r[1]).lower() for r in conn.execute("PRAGMA table_info(documents)").fetchall()}
+    has_period_end = "period_end" in doc_cols
     rows = conn.execute(
-        "SELECT id,ticker,file_path,sha256,raw_bytes_size,source_url "
-        "FROM documents WHERE source_type=? AND doc_type=? "
-        f"AND ticker IN ({placeholders}) "  # nosec B608 -- placeholders derive from tuple length only
-        "AND id NOT IN (SELECT document_id FROM transcripts) ORDER BY id",
+        (
+            "SELECT id,ticker,file_path,sha256,raw_bytes_size,source_url,period_end "
+            "FROM documents WHERE source_type=? AND doc_type=? "
+            if has_period_end
+            else "SELECT id,ticker,file_path,sha256,raw_bytes_size,source_url "
+            "FROM documents WHERE source_type=? AND doc_type=? "
+        )
+        + f"AND ticker IN ({placeholders}) "  # nosec B608 -- placeholders derive from tuple length only
+        + "AND id NOT IN (SELECT document_id FROM transcripts) ORDER BY id",
         (SourceType.IR_DOC.value, DocType.IR_TRANSCRIPT.value, *normalized),
     ).fetchall()
     planned: list[tuple[sqlite3.Row, TranscriptAcquisitionAuthorization, Path, Path, int, int]] = []
     pending_ids: list[int] = []
     for row in rows:
-        name = Path(str(row["file_path"])).name
-        parts = name.rsplit("_", 2)
-        if len(parts) != 3 or not parts[1].upper().startswith("Q"):
+        ticker_upper = str(row["ticker"]).upper()
+        period = _resolve_document_period(
+            conn,
+            ticker=ticker_upper,
+            file_path=str(row["file_path"]),
+            period_end_raw=row["period_end"] if has_period_end else None,
+        )
+        if period is None:
             raise TranscriptAcquisitionDeniedError(
                 f"document {row['id']} lacks canonical period identity"
             )
-        try:
-            quarter = int(parts[1][1:])
-            year = int(Path(parts[2]).stem)
-        except ValueError as exc:
-            raise TranscriptAcquisitionDeniedError(
-                f"document {row['id']} lacks canonical period identity"
-            ) from exc
+        year, quarter = period
         request = _document_request(
             entrypoint=entrypoint,
-            ticker=str(row["ticker"]).upper(),
+            ticker=ticker_upper,
             year=year,
             quarter=quarter,
             as_of=as_of,

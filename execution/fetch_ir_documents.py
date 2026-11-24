@@ -357,10 +357,9 @@ def _fetch_bytes(url: str) -> tuple[bytes, str, str] | None:
     """``(data, content_disposition, content_type)`` for ``url``, or None.
 
     A plain browser-UA urllib GET first (fast, no extra dep for the ~95% of CDNs
-    that serve cleanly); on a connection/timeout failure — the signature of a
-    TLS-fingerprint tarpit — fall back to a Chrome-impersonating ``curl_cffi`` GET.
-    An explicit HTTP error (403/404) is a real refusal, not a tarpit, so it is NOT
-    retried.
+    that serve cleanly); on a connection/timeout failure or HTTP 403 challenge —
+    fall back to a Chrome-impersonating ``curl_cffi`` GET. HTTP 401 and unresolved
+    403 denials raise ``SourceAuthenticationDeniedError``.
     """
     try:
         ensure_safe_public_url(url)
@@ -386,6 +385,11 @@ def _fetch_bytes(url: str) -> tuple[bytes, str, str] | None:
                 resp.headers.get("Content-Type", "") or "",
             )
     except urllib.error.HTTPError as e:
+        if e.code == 403:
+            log.warning({"event": "urllib_403_trying_curl", "url": redact(url)})
+            fallback = _fetch_curl_cffi(url)
+            if fallback is not None:
+                return fallback
         if e.code in {401, 403}:
             log.error(
                 {
@@ -676,6 +680,7 @@ def process_ticker(
     already = registered_source_urls(db_path, ticker, root=root)
     policy_skipped = 0
     pending_period_selection = False
+    pending_urls: set[str] = set()
     selected: list[dict[str, object]] = []
     conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
@@ -713,7 +718,10 @@ def process_ticker(
             if decision is False:
                 policy_skipped += 1
                 continue
-            pending_period_selection |= decision is None
+            if decision is None:
+                pending_period_selection = True
+                if entry_url:
+                    pending_urls.add(entry_url)
             selected.append(entry)
     finally:
         conn.close()
@@ -768,8 +776,8 @@ def process_ticker(
 
     dest_dir = root / "ir_documents" / ticker
     sidecar: dict[str, str] = {}
-    legacy_paths: list[Path] = []
-    legacy_downloaded_urls: set[str] = set()
+    ready_legacy_paths: list[Path] = []
+    ready_legacy_urls: set[str] = set()
     legacy_classifications: dict[Path, BoundIRClassification] = {}
     downloaded = failed = registered = managed_registered = ready = 0
     projection_repaired = projection_failed = ready_existing = alias_held = transport_skipped = 0
@@ -827,15 +835,22 @@ def process_ticker(
             print(f"[DRY RUN] would download {redact(url)} -> {dest_dir / base}.<ext>")
             skipped += 1
             continue
-        allow_html_release = entry.get("doc_type") == "press_release" and Path(
-            urllib.parse.urlsplit(url).path
-        ).suffix.lower() not in {".pdf", ".xlsx", ".xls", ".pptx", ".ppt"}
+        allow_html_release = entry.get("doc_type") in {
+            "press_release",
+            "earnings_announcement",
+        } and Path(urllib.parse.urlsplit(url).path).suffix.lower() not in {
+            ".pdf",
+            ".xlsx",
+            ".xls",
+            ".pptx",
+            ".ppt",
+        }
         download = partial(_download, allow_html_release=True) if allow_html_release else _download
         did_download = False
         try:
             if (
                 categorize
-                and not pending_period_selection
+                and url not in pending_urls
                 and (
                     authorization.fiscal_year_end_month == 12
                     or entry_witness_document_version_id is not None
@@ -913,8 +928,9 @@ def process_ticker(
                 "size_bytes": snapshot.size_bytes,
             }
             sidecar[dest.name] = url
-            legacy_downloaded_urls.add(url)
-            legacy_paths.append(dest)
+            if url not in pending_urls:
+                ready_legacy_urls.add(url)
+                ready_legacy_paths.append(dest)
         except JobAlreadyRunningError as exc:
             failed += 1
             log.warning(
@@ -961,21 +977,23 @@ def process_ticker(
         )
 
     cat_rc: int | None = None
-    if categorize and not dry_run and not pending_period_selection:
+    if categorize and not dry_run:
         for entry in retained_entries:
             url = str(entry["url"])
+            if url in pending_urls:
+                continue
             value = retained[url]
             if not isinstance(value, dict):
                 raise ValueError("retained source metadata changed")
             name = cast("dict[str, object]", value)["filename"]
             path = dest_dir / str(name)
-            legacy_paths.append(path)
-            legacy_downloaded_urls.add(url)
+            ready_legacy_paths.append(path)
+            ready_legacy_urls.add(url)
             sidecar[path.name] = url
     legacy_outcomes: tuple[LegacyCategorizationOutcome, ...] = ()
-    if categorize and not dry_run and not pending_period_selection and legacy_paths:
+    if categorize and not dry_run and ready_legacy_paths:
         legacy_outcomes = _run_categorize(
-            ticker, root, db_path, calendar, legacy_paths, sidecar, legacy_classifications
+            ticker, root, db_path, calendar, ready_legacy_paths, sidecar, legacy_classifications
         )
         legacy_registered = sum(item.status == "registered" for item in legacy_outcomes)
         legacy_failed = len(legacy_outcomes) - legacy_registered
@@ -985,9 +1003,9 @@ def process_ticker(
         cat_rc = 1 if legacy_failed else 0
 
     registration_missing: int | None = None
-    if categorize and not dry_run and not pending_period_selection and legacy_downloaded_urls:
+    if categorize and not dry_run and ready_legacy_urls:
         registration_missing = len(
-            legacy_downloaded_urls - registered_source_urls(db_path, ticker, root=root)
+            ready_legacy_urls - registered_source_urls(db_path, ticker, root=root)
         )
     status = (
         "partial"
@@ -1080,6 +1098,8 @@ def main(argv: list[str] | None = None) -> int:
                     categorize=args.categorize,
                     calendar=args.calendar,
                     owner_requested=False,
+                    direct_verified=args.direct_verified,
+                    max_quarters=args.max_quarters,
                 )
                 if summary["status"] != "policy_denied":
                     exit_code = max(exit_code, _exit_code(summary))
@@ -1096,6 +1116,8 @@ def main(argv: list[str] | None = None) -> int:
             categorize=args.categorize,
             calendar=args.calendar,
             owner_requested=not args.automatic,
+            direct_verified=args.direct_verified,
+            max_quarters=args.max_quarters,
         )
     except SourceAuthenticationDeniedError:
         return 10
@@ -1116,6 +1138,17 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--calendar",
         help="Fiscal-calendar id passed to the categorizer (auto-fetch attribution for "
         "tickers not in ISSUER_REGISTRY; see ir_uploads.calendar_id_from_fye)",
+    )
+    p.add_argument(
+        "--direct-verified",
+        action="store_true",
+        help="Authorize direct publisher IR quarters without requiring an ir_crawl seal",
+    )
+    p.add_argument(
+        "--max-quarters",
+        type=int,
+        default=SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters,
+        help="Maximum recent completed quarters to admit per ticker",
     )
     p.add_argument(
         "--verify", action="store_true", help="Report manifest-vs-documents coverage; no download"

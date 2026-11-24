@@ -12,9 +12,17 @@ from ir_pipeline.ir_url_overrides import IR_URL_OVERRIDES, resolve_ir_url
 def test_typed_candidates_are_unique_and_preserve_legacy_url_coverage() -> None:
     tickers = [candidate.ticker for candidate in IR_HOME_AUTHORITY_CANDIDATES]
     assert len(tickers) == len(set(tickers))
-    assert len(IR_HOME_AUTHORITY_CANDIDATES) == 35
-    assert len(IR_URL_OVERRIDES) == 36
+    assert len(IR_HOME_AUTHORITY_CANDIDATES) == 36
+    assert len(IR_URL_OVERRIDES) == 37
     assert IR_URL_OVERRIDES["GOOG"] == IR_URL_OVERRIDES["GOOGL"]
+    tsm = candidate_for_ticker("TSM")
+    assert tsm is not None
+    assert tsm.requested_url == "https://investor.tsmc.com/english/quarterly-results"
+    assert IR_URL_OVERRIDES["TSM"] == tsm.requested_url
+    for candidate in IR_HOME_AUTHORITY_CANDIDATES:
+        assert IR_URL_OVERRIDES[candidate.ticker] == candidate.requested_url
+        for alias in candidate.ticker_aliases:
+            assert IR_URL_OVERRIDES[alias] == candidate.requested_url
     assert all(
         candidate.required_marker_groups
         and all(group for group in candidate.required_marker_groups)
