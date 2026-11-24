@@ -730,6 +730,34 @@ def _run_capture(
     }
 
 
+def refresh_sqlite_planner_stats(conn: sqlite3.Connection) -> None:
+    """Ensure SQLite query-planner statistics exist after bulk KPI ingestion."""
+    try:
+        has_stat1 = (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_stat1'"
+            ).fetchone()
+            is not None
+        )
+        if not has_stat1:
+            conn.execute("ANALYZE")
+        else:
+            existing_tbls = {
+                str(r[0])
+                for r in conn.execute("SELECT DISTINCT tbl FROM sqlite_stat1").fetchall()
+                if r and r[0]
+            }
+            if not {"kpi_fact_semantic_contexts", "fact_resolution_outcomes"}.issubset(
+                existing_tbls
+            ):
+                conn.execute("ANALYZE")
+            else:
+                conn.execute("PRAGMA optimize")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
@@ -892,6 +920,9 @@ def main() -> int:
                 force=bool(args.force),
                 state_root=state_root,
             )
+            inserted = result.get("inserted")
+            if isinstance(inserted, int) and inserted > 0:
+                refresh_sqlite_planner_stats(conn)
             print(json.dumps(result, indent=2, default=str))
             return 0 if result.get("failed", 0) == 0 else 1
         except PipelineRunSuppressedError as exc:

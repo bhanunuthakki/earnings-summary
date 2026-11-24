@@ -10,7 +10,7 @@ used in tests/test_timeseries.py.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -1378,3 +1378,52 @@ def test_kpi_loader_prefers_sec_official_over_llm_extracted(
     assert len(obs) == 1
     # FMP (fmp_normalized) beats IR doc (llm_extracted) regardless of id order.
     assert obs[0].value == pytest.approx(13.5)
+
+
+def test_same_doc_naive_and_utc_aware_period_end_do_not_duplicate(tmp_path: Path) -> None:
+    db_path = tmp_path / "tz-dedupe.db"
+    _make_schema(db_path)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        doc_id = _insert_document(
+            conn,
+            ticker="NU",
+            source_type="sec_6k",
+            doc_type="sec_6k",
+            period_end="2026-09-30 00:00:00",
+            fetched_at="2026-11-12 00:00:00",
+            sha256="c" * 64,
+            tier="fmp_normalized",
+        )
+        new_id_1, _ = insert_with_restatement_detection(
+            conn,
+            ticker="NU",
+            period_end=datetime(2026, 9, 30, 0, 0),  # naive
+            fiscal_period_type="Q3",
+            line_item="net_income",
+            value=Decimal("1090836000"),
+            currency="USD",
+            unit="actual",
+            source_doc_id=doc_id,
+            extracted_by="sec_fpi_ingest@1",
+        )
+        assert new_id_1 is not None
+
+        # Re-ingest with UTC-aware timestamp for the exact same date & doc: updates/skips without duplicating
+        new_id_2, _ = insert_with_restatement_detection(
+            conn,
+            ticker="NU",
+            period_end=datetime(2026, 9, 30, 0, 0, tzinfo=UTC),
+            fiscal_period_type="Q3",
+            line_item="net_income",
+            value=Decimal("1090836000"),
+            currency="USD",
+            unit="actual",
+            source_doc_id=doc_id,
+            extracted_by="sec_fpi_ingest@1",
+        )
+        assert new_id_2 is None
+        count = conn.execute("SELECT COUNT(*) FROM financial_facts WHERE ticker='NU'").fetchone()[0]
+        assert count == 1
+    finally:
+        conn.close()

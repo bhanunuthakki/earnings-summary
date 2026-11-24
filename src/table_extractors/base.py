@@ -52,6 +52,7 @@ class Units:
 
     currency: str = "USD"
     scale: str = "units"  # 'thousands' | 'millions' | 'billions' | 'units'
+    currency_explicit: bool = False
 
 
 @dataclass(slots=True)
@@ -105,7 +106,14 @@ class ExtractorContract:
 
 
 _SCALE_RX = re.compile(r"\bin\s+(thousands|millions|billions)\b", re.IGNORECASE)
-_CURRENCY_RX = re.compile(r"\b(USD|EUR|GBP|JPY|DKK|BRL|CAD|CNY|CNH|AUD|CHF)\b")
+_MONETARY_SCALE_RX = re.compile(
+    r"(?:\$|USD|EUR|GBP|DKK|TWD|INR|KRW|ILS|SEK|NOK|HKD|SGD|MXN|CAD|CNY|CNH|JPY|CHF|BRL|AUD|kr|€|£|NT\$)\s+in\s+(thousands|millions|billions)\b",
+    re.IGNORECASE,
+)
+_CURRENCY_RX = re.compile(
+    r"\b(USD|EUR|GBP|JPY|DKK|BRL|CAD|CNY|CNH|AUD|CHF|TWD|INR|KRW|ILS|SEK|NOK|HKD|SGD|MXN)\b"
+)
+_TWD_ALIAS_RX = re.compile(r"NT\$|\bNew\s+Taiwan\s+Dollars?\b", re.IGNORECASE)
 
 
 def parse_units(section_title: str) -> Units:
@@ -116,15 +124,21 @@ def parse_units(section_title: str) -> Units:
         'USD ($) shares in Millions, $ in Millions'
         'DKK (kr) kr in Thousands'
 
-    Falls back to ('USD', 'units') when nothing matches — safe default
-    that won't mis-scale a value silently (caller can spot 'units' and
-    flag for review).
+    Falls back to ('USD', 'units', currency_explicit=False) when nothing matches.
     """
     currency_m = _CURRENCY_RX.search(section_title)
-    scale_m = _SCALE_RX.search(section_title)
-    currency = currency_m.group(1).upper() if currency_m else "USD"
+    if currency_m is not None:
+        currency = currency_m.group(1).upper()
+        currency_explicit = True
+    elif _TWD_ALIAS_RX.search(section_title) is not None:
+        currency = "TWD"
+        currency_explicit = True
+    else:
+        currency = "USD"
+        currency_explicit = False
+    scale_m = _MONETARY_SCALE_RX.search(section_title) or _SCALE_RX.search(section_title)
     scale = scale_m.group(1).lower() if scale_m else "units"
-    return Units(currency=currency, scale=scale)
+    return Units(currency=currency, scale=scale, currency_explicit=currency_explicit)
 
 
 def _is_axis_marker(values: list[object]) -> bool:
@@ -196,7 +210,19 @@ def iter_xbrl_table(section: list[dict[str, object]]) -> Iterator[XbrlRow]:
     if len(section) >= 2:
         second = section[1]
         if "items" in second and isinstance(second["items"], list):
-            period_labels = [str(x) for x in cast("list[object]", second["items"])]
+            items_labels = [str(x) for x in cast("list[object]", second["items"])]
+            if (
+                period_labels
+                and len(period_labels) == len(items_labels)
+                and any("ended" in h.lower() for h in period_labels)
+                and not any("ended" in item.lower() for item in items_labels)
+            ):
+                period_labels = [
+                    f"{head.strip()} {item.strip()}".strip()
+                    for head, item in zip(period_labels, items_labels, strict=True)
+                ]
+            else:
+                period_labels = items_labels
             body_start = 2
 
     axis_path: list[str] = []

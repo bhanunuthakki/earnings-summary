@@ -549,3 +549,28 @@ def test_hybrid_retains_observed_cdn_binary_without_authority(
     assert result.authority_complete is False
     assert len(calls) == 1
     assert calls[0]["candidate_link_scope"] == "observed_binary"
+
+
+def test_priority_quarterly_nav_visits_results_before_generic_press_releases() -> None:
+    root = "https://ir.x/"
+    webcast_links = [
+        (f"https://ir.x/events/item-{idx}", f"Webcast Replay {idx}") for idx in range(10)
+    ]
+    quarterly_url = "https://ir.x/financials/quarterly-results"
+    pdf_url = "https://ir.x/q3-2026-release.pdf"
+    pages = {
+        root: [*webcast_links, (quarterly_url, "Quarterly Results")],
+        quarterly_url: [(pdf_url, "Q3 2026 Earnings Release")],
+        **{link_url: [] for link_url, _ in webcast_links},
+    }
+    renderer = _Renderer(pages)
+    inventory = discover_document_inventory(
+        ir_url=root,
+        render=renderer,
+        fetch_filename=_no_fetch,
+        rate_limit_s=0.0,
+        check_robots=False,
+        max_pages=3,
+    )
+    assert quarterly_url in renderer.calls
+    assert [candidate.url for candidate in inventory.candidates] == [pdf_url]

@@ -1295,3 +1295,115 @@ def test_shared_staged_object_does_not_hide_unregistered_source(
     assert summary["status"] == "registration_failed"
     assert first not in captured.err
     assert second not in captured.err
+
+
+def test_mixed_dated_and_undated_manifest_categorizes_dated_entry(
+    tmp_path: Path,
+    legacy_registration_db: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = legacy_registration_db
+    dated_url = "https://issuer.example/q3-2026-release.pdf"
+    undated_url = "https://issuer.example/fact-sheet.pdf"
+    mdir = fid.manifest_dir(tmp_path)
+    mdir.mkdir(parents=True, exist_ok=True)
+    (mdir / "PORT_urls.json").write_text(
+        json.dumps(
+            [
+                {"url": dated_url, "doc_type": "press_release", "year": 2026, "quarter": "Q3"},
+                {"url": undated_url, "doc_type": "supplement"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def download(url: str, dest: Path, base: str) -> Path:
+        return _staged_download(dest, base)
+
+    categorized: list[Path] = []
+
+    def categorize(
+        _ticker: str,
+        _root: Path,
+        _db: Path,
+        _calendar: str | None,
+        paths: list[Path],
+        urls: dict[str, str],
+        _classifications: dict[Path, BoundIRClassification],
+    ) -> tuple[fid.LegacyCategorizationOutcome, ...]:
+        categorized.extend(paths)
+        assert [urls[p.name] for p in paths] == [dated_url]
+        _register_legacy_source(db, paths[0], dated_url)
+        return tuple(fid.LegacyCategorizationOutcome(str(p), "registered") for p in paths)
+
+    monkeypatch.setattr(fid, "_download", download)
+    monkeypatch.setattr(fid, "_run_categorize", categorize)
+    monkeypatch.setattr(
+        fid,
+        "direct_publisher_quarter_selection_in_connection",
+        _source_qualified_period,
+    )
+    monkeypatch.setattr(fid.time, "sleep", _no_sleep)
+    summary = fid.process_ticker(
+        "PORT",
+        root=tmp_path,
+        db_path=db,
+        categorize=True,
+        direct_verified=True,
+        max_quarters=8,
+    )
+    assert len(categorized) == 1
+    assert summary["registered"] == 1
+    assert summary["pending_period_selection"] is True
+    assert summary["status"] == "period_selection_pending"
+
+
+def test_downloader_403_retries_curl_cffi_and_fails_closed_if_denied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def safe_url(_url: str) -> None:
+        return None
+
+    def raise_403(req: urllib.request.Request, timeout: float | None = None) -> _FakeResp:
+        _ = timeout
+        raise urllib.error.HTTPError(
+            req.full_url,
+            403,
+            "Forbidden",
+            email.message.Message(),
+            None,
+        )
+
+    def fake_opener(*_args: object) -> _FakeOpener:
+        return _FakeOpener(raise_403)
+
+    monkeypatch.setattr(fid, "ensure_safe_public_url", safe_url)
+    monkeypatch.setattr(fid, "build_public_opener", fake_opener)
+
+    def _curl_ok(_url: str) -> tuple[bytes, str, str]:
+        return b"%PDF-1.4 ok", "", "application/pdf"
+
+    def _curl_none(_url: str) -> None:
+        return None
+
+    fetch_bytes = cast(Callable[[str], tuple[bytes, str, str] | None], getattr(fid, "_fetch_bytes"))
+    monkeypatch.setattr(fid, "_fetch_curl_cffi", _curl_ok)
+    assert fetch_bytes("https://cdn.example/release.pdf") == (
+        b"%PDF-1.4 ok",
+        "",
+        "application/pdf",
+    )
+
+    monkeypatch.setattr(fid, "_fetch_curl_cffi", _curl_none)
+    with pytest.raises(fid.SourceAuthenticationDeniedError) as exc_info:
+        fetch_bytes("https://cdn.example/release.pdf")
+    assert exc_info.value.status_code == 403
+
+
+def test_parse_args_accepts_direct_verified_and_max_quarters() -> None:
+    parse_args = cast(Callable[[list[str]], fid.argparse.Namespace], getattr(fid, "_parse_args"))
+    args = parse_args(
+        ["--ticker", "BKNG", "--categorize", "--direct-verified", "--max-quarters", "8"]
+    )
+    assert args.direct_verified is True
+    assert args.max_quarters == 8

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
@@ -42,7 +43,7 @@ CONDITIONAL_JOBS = {
     "fast-signal": "code",
     "windows-native": "code",
     "windows-app": "code",
-    "tests": "code",
+    "tests": "tests",
     "browser-security": "code",
     "quality": "python",
     "typecheck": "python",
@@ -191,6 +192,11 @@ SHARD_LABELS = (
     "8 overflow",
 )
 DURATIONS_FILE = ".github/test-durations.json"
+# A selected pull-request subset gets one shard per this many measured test
+# seconds, so a small selection runs in a few jobs instead of thirteen.
+SELECTED_SHARD_SECONDS = 60.0
+# The browser canary has one owner, Browser Security; test shards never run it.
+BROWSER_CANARY = "tests/test_browser_security_canary.py"
 
 
 class TestDurations:
@@ -316,11 +322,16 @@ def pack_test_shards(files: Sequence[str], durations: TestDurations) -> dict[str
     does not re-pack known files, which is exactly what keeps an unchanged file
     in its shard when unrelated files change.
     """
-    labels = durations.labels
+    return _pack(files, durations, durations.labels)
+
+
+def _pack(
+    files: Sequence[str], durations: TestDurations, labels: Sequence[str]
+) -> dict[str, list[str]]:
     totals = {label: 0.0 for label in labels}
     bins: dict[str, list[str]] = {label: [] for label in labels}
     for path in sorted(files, key=lambda p: (-durations.duration_seconds(p), p)):
-        label = min(labels, key=lambda cand: (totals[cand], labels.index(cand)))
+        label = min(labels, key=lambda cand: (totals[cand], list(labels).index(cand)))
         totals[label] += durations.duration_seconds(path)
         bins[label].append(path)
     return bins
@@ -424,8 +435,43 @@ def regenerate_test_durations(
     }
 
 
-def gate_failures(*, code: bool, python: bool, results: Mapping[str, str]) -> list[str]:
-    """Explain every terminal result that makes the aggregate gate unsafe."""
+def test_matrix(lines: Sequence[str], durations: TestDurations) -> tuple[bool, dict[str, object]]:
+    """The tests job matrix for a test-selection verdict, and whether any shard runs.
+
+    A ``SELECTED`` verdict packs its files over just enough of the canonical
+    labels, about ``SELECTED_SHARD_SECONDS`` of measured time each; each entry
+    carries its files, longest first. Any other verdict gets every label with
+    no files, and each shard then runs its pinned share of the full suite.
+    """
+    full: dict[str, object] = {"include": [{"label": label, "files": ""} for label in SHARD_LABELS]}
+    if not lines or not lines[0].startswith("SELECTED"):
+        return True, full
+    files = sorted({line.strip() for line in lines[1:] if line.strip()} - {BROWSER_CANARY})
+    if not files:
+        return False, full
+    total = sum(durations.duration_seconds(path) for path in files)
+    count = max(1, min(len(SHARD_LABELS), len(files), math.ceil(total / SELECTED_SHARD_SECONDS)))
+    bins = _pack(files, durations, SHARD_LABELS[:count])
+    include = [
+        {
+            "label": label,
+            "files": "\n".join(
+                sorted(bins[label], key=lambda path: (-durations.duration_seconds(path), path))
+            ),
+        }
+        for label in SHARD_LABELS[:count]
+    ]
+    return True, {"include": include}
+
+
+def gate_failures(
+    *, code: bool, python: bool, results: Mapping[str, str], tests: bool | None = None
+) -> list[str]:
+    """Explain every terminal result that makes the aggregate gate unsafe.
+
+    ``tests`` is False only when a pull request's selection chose no test file;
+    the tests job may then be skipped. It defaults to ``code``.
+    """
 
     failures: list[str] = []
     for job_name in ("changes", "public-boundary"):
@@ -438,7 +484,7 @@ def gate_failures(*, code: bool, python: bool, results: Mapping[str, str]) -> li
         if result not in TERMINAL_SUCCESS_RESULTS:
             failures.append(f"{job_name} finished with {result or 'missing result'}")
 
-    required_groups = {"code": code, "python": python}
+    required_groups = {"code": code, "python": python, "tests": code and tests is not False}
     for job_name, group in CONDITIONAL_JOBS.items():
         result = results.get(job_name, "")
         if required_groups[group] and result in TERMINAL_SUCCESS_RESULTS and result != "success":
@@ -593,6 +639,23 @@ def _select_tests_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _test_matrix_command(args: argparse.Namespace) -> int:
+    lines = [raw.rstrip("\n") for raw in sys.stdin]
+    try:
+        durations = load_test_durations(args.durations_file)
+    except ValueError as exc:
+        print(f"::error::{exc}", file=sys.stderr)
+        return 1
+    run, matrix = test_matrix(lines, durations)
+    shards = cast(list[dict[str, str]], matrix["include"])
+    with args.github_output.open("a", encoding="utf-8", newline="\n") as output:
+        print(f"tests={str(run).lower()}", file=output)
+        print(f"matrix={json.dumps(matrix, separators=(',', ':'))}", file=output)
+    verdict = lines[0].split("\t", 1)[0] if lines else "FULL"
+    print(f"Test selection: {verdict}; {len(shards) if run else 0} test shard(s)")
+    return 0
+
+
 def _durations_from_junit_command(args: argparse.Namespace) -> int:
     """Write a regenerated durations table from CI JUnit; test files on stdin."""
     files = [line for raw in sys.stdin for line in [raw.strip()] if line]
@@ -659,7 +722,7 @@ def _verify_command(args: argparse.Namespace) -> int:
         "typecheck": args.typecheck_result,
         "security": args.security_result,
     }
-    failures = gate_failures(code=args.code, python=args.python, results=results)
+    failures = gate_failures(code=args.code, python=args.python, results=results, tests=args.tests)
     for failure in failures:
         print(f"::error::{failure}")
     if failures:
@@ -730,6 +793,7 @@ def _build_parser() -> argparse.ArgumentParser:
     verify = subparsers.add_parser("verify")
     verify.add_argument("--code", type=_parse_bool, required=True)
     verify.add_argument("--python", type=_parse_bool, required=True)
+    verify.add_argument("--tests", type=_parse_bool, default=None)
     for job_name in ("changes", "public-boundary", *CONDITIONAL_JOBS):
         verify.add_argument(f"--{job_name}-result", required=True)
     native = subparsers.add_parser("verify-windows-native")
@@ -742,6 +806,9 @@ def _build_parser() -> argparse.ArgumentParser:
     pyright_diff.add_argument("--head-json", type=Path, required=True)
     pyright_diff.add_argument("--base-root", type=Path, required=True)
     pyright_diff.add_argument("--head-root", type=Path, required=True)
+    matrix = subparsers.add_parser("test-matrix")
+    matrix.add_argument("--durations-file", type=Path, default=Path(DURATIONS_FILE))
+    matrix.add_argument("--github-output", type=Path, required=True)
     select_tests = subparsers.add_parser("select-tests")
     select_tests.add_argument("--shard-label", required=True)
     select_tests.add_argument("--durations-file", type=Path, default=Path(DURATIONS_FILE))
@@ -765,6 +832,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _pyright_diff_command(args)
     if args.command == "select-tests":
         return _select_tests_command(args)
+    if args.command == "test-matrix":
+        return _test_matrix_command(args)
     if args.command == "durations-from-junit":
         return _durations_from_junit_command(args)
     if args.command == "durations-report":

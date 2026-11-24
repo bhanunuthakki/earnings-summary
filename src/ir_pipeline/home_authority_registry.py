@@ -253,6 +253,12 @@ IR_HOME_AUTHORITY_CANDIDATES = (
         "https://investors.toasttab.com/",
         "Toast",
     ),
+    _candidate(
+        "TSM",
+        "https://investor.tsmc.com/english/quarterly-results",
+        "TSMC",
+        "Taiwan Semiconductor",
+    ),
 )
 
 _BY_TICKER: dict[str, IRHomeAuthorityCandidate] = {}

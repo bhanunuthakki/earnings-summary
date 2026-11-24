@@ -620,3 +620,31 @@ def test_unbound_selector_binds_exact_local_keys_and_rejects_changed_text(
     )
     with pytest.raises(ValueError, match="commitment"):
         bind_reviewed_sec_financial_selector(evidence, tainted)
+
+
+def test_reviewed_calendar_context_supports_jan31_fye_feb_end_and_eu_abbrev_dates() -> None:
+    from provenance.reviewed_sec_financial_tables import assert_reviewed_calendar_period_context
+
+    # Jan-31 FYE cross-year annual period (VEEV/RBRK)
+    assert_reviewed_calendar_period_context(
+        text="Twelve Months Ended January 31, 2026",
+        period_start=datetime(2025, 2, 1, tzinfo=UTC),
+        period_end=datetime(2026, 1, 31, tzinfo=UTC),
+    )
+    # Abbreviated month + European day-first format + Feb 28/29 end
+    assert_reviewed_calendar_period_context(
+        text="Three months ended 31 Mar 2026",
+        period_start=datetime(2026, 1, 1, tzinfo=UTC),
+        period_end=datetime(2026, 3, 31, tzinfo=UTC),
+    )
+    assert_reviewed_calendar_period_context(
+        text="As of Feb. 29, 2024",
+        period_end=datetime(2024, 2, 29, tzinfo=UTC),
+    )
+    # Invalid 2-month span must still fail closed
+    with pytest.raises(ValueError, match="unsupported reviewed SEC calendar duration"):
+        assert_reviewed_calendar_period_context(
+            text="Two months ended Feb. 28, 2026",
+            period_start=datetime(2026, 1, 1, tzinfo=UTC),
+            period_end=datetime(2026, 2, 28, tzinfo=UTC),
+        )

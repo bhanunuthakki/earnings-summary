@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 import os
 import re
 import shutil
@@ -814,8 +815,28 @@ def test_typecheck_receipt_is_exact_keyed_and_written_only_by_main() -> None:
     assert 'echo "sha=$(git rev-parse HEAD^1)"' in job
     assert '--receipt-in "$RUNNER_TEMP/pyright-receipt.json" --receipt-commit "$BASE_SHA"' in job
     save = job.split("Save this commit's Pyright receipt", 1)[1]
-    assert "github.event_name == 'push' && github.ref == 'refs/heads/main'" in save
+    assert (
+        "github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.candidate_sha"
+        in save
+    )
+    assert '[ "$EVENT_NAME" = "push" ] && [ -z "$CANDIDATE_SHA" ]' in job
     assert "key: pyright-receipt-v1-${{ github.sha }}" in save
+
+
+def test_pull_requests_check_changed_files_and_the_queue_checks_every_file() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    job = workflow.split("\n  typecheck:\n", maxsplit=1)[1].split("\n  security:\n", maxsplit=1)[0]
+    # The changed-file check runs on every event, pull requests included.
+    changed = job.split("changed retained files are wholly clean", 1)[1].split("- name:", 1)[0]
+    assert "if:" not in changed
+    # The population ceilings never run on a pull request: the merge queue
+    # runs them on each candidate before it can reach main.
+    ceilings = job.split("complete active population is exact", 1)[1].split("- name:", 1)[0]
+    assert "if: ${{ github.event_name != 'pull_request' }}" in ceilings
+    # Only a queue candidate restores main's receipt to re-check incrementally.
+    restore = job.split("Restore base commit Pyright receipt", 1)[1].split("- name:", 1)[0]
+    assert "if: ${{ inputs.candidate_sha }}" in restore
+    assert '[ -n "$CANDIDATE_SHA" ] && [ "$RECEIPT_HIT" = "true" ]' in ceilings
 
 
 def test_public_boundary_is_unconditional_and_pre_push_uses_same_guard() -> None:
@@ -884,11 +905,12 @@ def test_test_job_labels_count_and_picker_are_stable() -> None:
     # surface the aggregate gate keys on; they must not drift from the helper's
     # canonical labels. The old modulo-8 source-shard/split interface is gone.
     assert "name: tests (shard ${{ matrix.label }}/8)" in workflow
-    labels_in_workflow = re.findall(r'- \{ label: "([^"]+)" \}', workflow)
-    assert len(labels_in_workflow) == 13
-    assert labels_in_workflow == list(_load_helper().SHARD_LABELS)
+    # The labels come from the helper's matrix (test_matrix), never a copy here.
+    assert re.findall(r'- \{ label: "([^"]+)" \}', workflow) == []
+    assert len(_load_helper().SHARD_LABELS) == 13
     assert "ci_gate.py select-tests" in workflow
-    assert "--shard-label '${{ matrix.label }}'" in workflow
+    assert "SHARD_LABEL: ${{ matrix.label }}" in workflow
+    assert '--shard-label "$SHARD_LABEL"' in workflow
     assert "--durations-file .github/test-durations.json" in workflow
     assert "--source-shard" not in workflow
     assert "--split-count" not in workflow
@@ -938,14 +960,19 @@ def test_env_caches_sqlite_by_version_os_and_recipe_hash() -> None:
     assert "if: steps.sqlite_cache.outputs.cache-hit != 'true'" in workflow
     assert "Preload verified SQLite writer runtime" in workflow
     assert 'assert sqlite3.sqlite_version == "3.53.4"' in workflow
-    _assert_only_salted_secret_scan_cache_uses_prefix_restore(workflow)
+    _assert_only_verified_caches_use_prefix_restore(workflow)
 
 
-def _assert_only_salted_secret_scan_cache_uses_prefix_restore(workflow: str) -> None:
-    # Environment caches restore by exact key only. The secret-scan cache alone
-    # restores by prefix: every entry is salted and verified in leak_scan.py.
+def _assert_only_verified_caches_use_prefix_restore(workflow: str) -> None:
+    # Environment caches restore by exact key only. Two caches restore by prefix
+    # because each entry is verified before use: secret-scan entries are salted
+    # and checked in leak_scan.py, and a test impact receipt names its commit,
+    # which test_selection.py uses only when it is an ancestor of the base.
     restore_lines = [line.strip() for line in workflow.splitlines() if "restore-keys:" in line]
-    assert restore_lines == ["restore-keys: secret-scan-v1-"]
+    assert sorted(restore_lines) == [
+        "restore-keys: secret-scan-v1-",
+        "restore-keys: test-impact-v1-",
+    ]
 
 
 def test_env_caches_virtualenv_by_locks_and_python_version() -> None:
@@ -972,7 +999,7 @@ def test_env_caches_virtualenv_by_locks_and_python_version() -> None:
     # The Playwright browser is a separate artifact and must install on every
     # run (it is not venv-cached) — the canary matrix needs Chromium.
     assert "python -m playwright install --with-deps --only-shell chromium" in workflow
-    _assert_only_salted_secret_scan_cache_uses_prefix_restore(workflow)
+    _assert_only_verified_caches_use_prefix_restore(workflow)
 
 
 def test_durations_report_is_available_on_the_real_table(
@@ -1291,3 +1318,85 @@ def test_windows_environment_cache_is_exact_and_does_not_skip_native_tests() -> 
     assert "-m pip check" in checks
     assert "Run Windows-relevant application tests" in checks
     assert "verify-windows-app --junit" in checks
+
+
+def test_full_verdicts_get_every_shard_with_its_pinned_share(helper: ModuleType) -> None:
+    durations = helper.load_test_durations(REPO_ROOT / ".github" / "test-durations.json")
+    for lines in ([], ["FULL\tnot a pull request"], ["FULL\tci.yml is a shared test input"]):
+        run, matrix = helper.test_matrix(lines, durations)
+        assert run is True
+        assert matrix["include"] == [{"label": label, "files": ""} for label in helper.SHARD_LABELS]
+
+
+def test_a_selected_subset_runs_in_just_enough_shards(helper: ModuleType) -> None:
+    durations = helper.load_test_durations(REPO_ROOT / ".github" / "test-durations.json")
+    known = sorted(
+        durations.seconds_by_file, key=lambda path: (durations.seconds_by_file[path], path)
+    )
+    small = known[:5]
+    run, matrix = helper.test_matrix(
+        ["SELECTED\t5 files", *small, helper.BROWSER_CANARY], durations
+    )
+    assert run is True
+    assert [row["label"] for row in matrix["include"]] == ["1"]
+    assert sorted(matrix["include"][0]["files"].split("\n")) == small
+    # A large subset spreads over more shards; every file runs exactly once.
+    large = known[-60:]
+    total = sum(durations.duration_seconds(path) for path in large)
+    run, matrix = helper.test_matrix(["SELECTED\tmany", *large], durations)
+    expected = min(len(helper.SHARD_LABELS), math.ceil(total / helper.SELECTED_SHARD_SECONDS))
+    assert [row["label"] for row in matrix["include"]] == list(helper.SHARD_LABELS[:expected])
+    placed = [path for row in matrix["include"] for path in row["files"].split("\n")]
+    assert sorted(placed) == sorted(large)
+    for row in matrix["include"]:
+        files = row["files"].split("\n")
+        assert files == sorted(files, key=lambda path: (-durations.duration_seconds(path), path))
+
+
+def test_an_empty_selection_runs_no_shard_and_the_gate_allows_it(helper: ModuleType) -> None:
+    durations = helper.load_test_durations(REPO_ROOT / ".github" / "test-durations.json")
+    run, _ = helper.test_matrix(["SELECTED\t0 files", helper.BROWSER_CANARY], durations)
+    assert run is False
+    results = dict.fromkeys(("changes", "public-boundary", *helper.CONDITIONAL_JOBS), "success") | {
+        "tests": "skipped"
+    }
+    assert helper.gate_failures(code=True, python=True, results=results, tests=False) == []
+    assert helper.gate_failures(code=True, python=True, results=results)
+    assert helper.gate_failures(code=True, python=True, results=results, tests=True)
+
+
+def test_pull_requests_select_tests_from_main_recorded_impact() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    changes_job = workflow[
+        workflow.index("\n  changes:\n") : workflow.index("\n  public-boundary:\n")
+    ]
+    tests_job = workflow[workflow.index("\n  tests:\n") : workflow.index("\n  browser-security:\n")]
+    # Check Changed Paths selects once, only for a pull request that changes
+    # code, from the base commit's receipt or main's newest one.
+    assert "python -m quality.test_selection --base HEAD^1" in changes_job
+    assert "key: test-impact-v1-${{ steps.base.outputs.sha }}" in changes_job
+    assert "restore-keys: test-impact-v1-\n" in changes_job
+    assert '[ "$EVENT_NAME" = "pull_request" ] && [ "$CODE_CHANGED" = "true" ]' in changes_job
+    assert "ci_gate.py test-matrix" in changes_job
+    assert "test_matrix: ${{ steps.tests.outputs.matrix }}" in changes_job
+    assert "quality.test_selection" not in tests_job
+    # The shards follow that matrix; no selection means no shard at all.
+    assert "matrix: ${{ fromJSON(needs.changes.outputs.test_matrix) }}" in tests_job
+    assert "needs.changes.outputs.tests == 'true'" in tests_job
+    assert "SHARD_FILES: ${{ matrix.files }}" in tests_job
+    assert 'echo "::error::test shard $SHARD_LABEL selected no files"' in tests_job
+    assert "TESTS_NEEDED: ${{ needs.changes.outputs.tests || 'true' }}" in workflow
+    assert '--tests "$TESTS_NEEDED"' in workflow
+    # Main records; the receipt is merged only after every shard passed.
+    # A merge-queue candidate runs on main's ref but must never record.
+    main_only = (
+        "github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.candidate_sha"
+    )
+    assert f"RECORD_IMPACT: ${{{{ {main_only} }}}}" in tests_job
+    assert f"if: ${{{{ {main_only} }}}}" in tests_job
+    assert "-p src.quality.test_impact_plugin" in tests_job
+    receipt_job = workflow[workflow.index("\n  test-impact-receipt:\n") :]
+    receipt_job = receipt_job[: receipt_job.index("\n\n  ") if "\n\n  " in receipt_job else None]
+    assert "needs: [tests]" in receipt_job
+    assert f"if: ${{{{ {main_only} }}}}" in receipt_job
+    assert "key: test-impact-v1-${{ steps.merge.outputs.commit }}" in receipt_job

@@ -314,6 +314,16 @@ _TRANSITIONAL_READ_EXEMPTIONS = {
             ),
         ),
     ),
+    "src/report/sections/financials.py": (
+        _TransitionalReadExemption(
+            function_name="_query_facts_rows",
+            read_count=1,
+            retirement_criterion=(
+                "Retire after all active FMP and SEC FPI financial_facts rows are resolved into "
+                "v_financial_facts_resolved_current."
+            ),
+        ),
+    ),
 }
 
 

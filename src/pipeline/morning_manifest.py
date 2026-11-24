@@ -280,7 +280,7 @@ STAGE_MANIFEST: tuple[StageSpec, ...] = (
         900,
         (STAGE_TRIGGERS,),
         ("skip_triggers", "skip_post_earnings_readouts"),
-        ArgumentProfile.DB_PATH,
+        ArgumentProfile.DB_PATH_AND_REPO_ROOT,
     ),
     StageSpec(
         STAGE_FEED,

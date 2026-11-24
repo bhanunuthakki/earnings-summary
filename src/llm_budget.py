@@ -357,6 +357,17 @@ def check_budget(
             on_exceed="warn",
             reason=None,
         )
+    if budget.cap <= 0:
+        return BudgetCheck(
+            allowed=True,
+            warn=False,
+            current_spend=spend,
+            cap=budget.cap,
+            headroom_pct=1.0,
+            hard_block=False,
+            on_exceed="warn",
+            reason=None,
+        )
     headroom = _headroom_pct(spend, budget.cap)
     # `on_exceed` is authoritative (migration 0066); `hard_block` is derived so
     # the pre-call gate (which raises on it) propagates iff the mode is 'block'.
