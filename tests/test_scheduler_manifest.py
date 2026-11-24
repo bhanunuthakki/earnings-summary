@@ -51,7 +51,7 @@ def test_manifest_rejects_duplicate_json_keys(tmp_path: Path) -> None:
 
 def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     manifest = load_manifest(MANIFEST_PATH)
-    assert len(manifest.tasks) == 30
+    assert len(manifest.tasks) == 29
     assert all(
         task.task_name != r"\earnings-summary\backfill_financial_fact_resolutions"
         for task in manifest.tasks

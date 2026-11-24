@@ -9,8 +9,8 @@ under the `\earnings-summary\` namespace.
 
 ## Active crons
 
-30 operational declarations remain in this checkout. The generated script defines
-30 Task Scheduler registrations; the installed set is unverified. The authoritative set is
+29 operational declarations remain in this checkout. The generated script defines
+29 Task Scheduler registrations; the installed set is unverified. The authoritative set is
 `cron/task_manifest.json`; `cron/TASKS.generated.md` is its deterministic
 human-readable inventory. This source change does not query, disable, or remove
 existing Windows Task Scheduler registrations. The normal company collection,
