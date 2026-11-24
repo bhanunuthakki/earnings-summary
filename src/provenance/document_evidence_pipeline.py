@@ -7,6 +7,7 @@ never admits facts, initializes source inventories, or claims extraction complet
 from __future__ import annotations
 
 import sqlite3
+import time
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
@@ -52,6 +53,9 @@ class DocumentEvidenceRequest(BaseModel):
     newer_than_document_id: int | None = Field(default=None, ge=0)
     batch_size: int = Field(default=25, ge=1, le=500)
     content_roots: tuple[Path, ...] = ()
+    # time.monotonic() value after which no new document starts. The page then
+    # ends early with has_more, so its caller can persist the cursor reached.
+    deadline_monotonic: float | None = None
 
     @model_validator(mode="after")
     def _requested_scope(self) -> Self:
@@ -192,7 +196,16 @@ def process_document_evidence(
         },
     ).fetchall()
     result.has_more = len(rows) > request.batch_size
-    for row in rows[: request.batch_size]:
+    for index, row in enumerate(rows[: request.batch_size]):
+        # The first document always runs, so every page advances the cursor.
+        if (
+            index
+            and request.deadline_monotonic is not None
+            and time.monotonic() >= request.deadline_monotonic
+        ):
+            result.has_more = True
+            result.findings.append("time_budget_exhausted")
+            break
         item = DocumentEvidenceItem(document_id=int(row[0]), ticker=str(row[1]))
         result.items.append(item)
         result.next_before_document_id = item.document_id
@@ -342,14 +355,17 @@ def _process_item(
 
 def _inventory_context(conn: sqlite3.Connection, item: DocumentEvidenceItem) -> None:
     try:
+        # CROSS JOIN fixes the join order: start from this document's versions.
+        # With table statistics the planner otherwise walks every current
+        # inventory and expected document, which cost seconds per document.
         rows = conn.execute(
             "SELECT DISTINCT inventory.inventory_key, coverage.coverage_status "
             "FROM evidence_document_versions AS version "
-            "JOIN v_source_coverage_current AS coverage "
+            "CROSS JOIN v_source_coverage_current AS coverage "
             "ON coverage.document_version_id = version.document_version_id "
-            "JOIN v_expected_documents_current AS expected "
+            "CROSS JOIN v_expected_documents_current AS expected "
             "ON expected.expected_document_id = coverage.expected_document_id "
-            "JOIN v_source_inventory_current AS inventory "
+            "CROSS JOIN v_source_inventory_current AS inventory "
             "ON inventory.snapshot_id = expected.snapshot_id "
             "WHERE version.legacy_document_id = ? ORDER BY inventory.inventory_key",
             (item.document_id,),
