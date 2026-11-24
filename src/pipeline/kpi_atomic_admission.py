@@ -176,6 +176,7 @@ def _resolve_unit_scale_and_token(
     source_excerpt: str | None,
     source_value_text: str | None,
     unit_scale: KpiUnitScale | None,
+    metric_nature: KpiMetricNature = KpiMetricNature.REPORTED_SCALAR,
 ) -> tuple[KpiUnitScale, str | None]:
     if unit is Unit.COUNT:
         if source_value_text is not None:
@@ -198,12 +199,22 @@ def _resolve_unit_scale_and_token(
                 raise ValueError("admitted COUNT source_value_text does not match value")
             return resolved_scale, source_value_text
         matched = match_count_source_value(value, source_excerpt)
-        if matched is None:
-            raise ValueError(
-                "admitted COUNT extraction requires verifiable source_value_text in source_excerpt"
+        if matched is not None:
+            validate_admitted_unit_scale(unit, matched[1])
+            return matched[1], matched[0]
+        if metric_nature is not KpiMetricNature.REPORTED_SCALAR or (
+            unit_scale is not None and unit_scale is not KpiUnitScale.UNKNOWN
+        ):
+            resolved_scale = (
+                unit_scale
+                if unit_scale is not None and unit_scale is not KpiUnitScale.UNKNOWN
+                else KpiUnitScale.NONE
             )
-        validate_admitted_unit_scale(unit, matched[1])
-        return matched[1], matched[0]
+            validate_admitted_unit_scale(unit, resolved_scale)
+            return resolved_scale, None
+        raise ValueError(
+            "admitted COUNT extraction requires verifiable source_value_text in source_excerpt"
+        )
 
     fixed_scale = UNIT_TO_FIXED_SCALE.get(unit)
     if fixed_scale is None:
@@ -304,6 +315,7 @@ def build_atomic_semantic_context(
         source_excerpt=excerpt,
         source_value_text=source_value_text,
         unit_scale=unit_scale,
+        metric_nature=metric_nature,
     )
 
     return KpiSemanticContext(

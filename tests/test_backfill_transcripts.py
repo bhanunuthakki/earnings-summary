@@ -1230,3 +1230,19 @@ def test_acquisition_scope_does_not_expand_automatic_commitment_llm_work(
     assert [item.ticker for item in selected] == (
         ["PORT", "EVAL", "WATCH"] if owner_requested else ["PORT"]
     )
+
+
+def test_source_reported_quarters_falls_back_to_fiscal_calendar() -> None:
+    mod = _load_module()
+    with sqlite3.connect(":memory:") as conn:
+        window, quarters = mod._source_reported_quarters(
+            conn,
+            ticker="BKNG",
+            fye_month=12,
+            today=mod.date(2026, 11, 24),
+            lookback=5,
+        )
+    assert window.status.value == "complete"
+    assert window.reason == "fiscal_calendar_window"
+    assert (2026, 3) in quarters
+    assert mod.date(2026, 9, 30) in window.period_ends
