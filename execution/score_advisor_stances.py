@@ -9,8 +9,8 @@ price cache gaps, tracker down) stay pending for the next run — the job is
 idempotent.
 
 Usage:
-    python execution/score_advisor_stances.py
-    python execution/score_advisor_stances.py --repo-root <path> --user-id bhanu
+    python execution/score_advisor_stances.py --db <path>
+    python execution/score_advisor_stances.py --repo-root <path> --db <path> --user-id bhanu
 
 Runs from ``cron/weekly_score_stances.task.xml`` (Sun 06:30) and on demand.
 Exit status: always 0 unless the substrate itself is unusable — deferrals
@@ -31,6 +31,12 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=None,
+        help="Explicit canonical SQLite database path; falls back to configured DB authority.",
+    )
     parser.add_argument("--user-id", default=None, help="defaults to identity.DEFAULT_USER_ID")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
@@ -38,7 +44,11 @@ def main(argv: list[str] | None = None) -> int:
     from advisor.scoring import run_scoring
     from identity import DEFAULT_USER_ID
 
-    result = run_scoring(args.repo_root.resolve(), user_id=args.user_id or DEFAULT_USER_ID)
+    result = run_scoring(
+        args.repo_root.resolve(),
+        user_id=args.user_id or DEFAULT_USER_ID,
+        db_path=args.db,
+    )
     for outcome in result.outcomes or []:
         if outcome.scored:
             print(f"memo #{outcome.memo_id}: {outcome.verdict}", flush=True)
