@@ -149,9 +149,15 @@ def assert_reviewed_calendar_period_context(
     This guard rejects a review whose dates or duration lack a source witness.
     """
     normalized = " ".join(text.split()).lower()
-    named = re.search(
-        rf"{period_end.strftime('%B').lower()}\s+0?{period_end.day}(?!\d)", normalized
+    month_full = period_end.strftime("%B").lower()
+    month_abbr = period_end.strftime("%b").lower()
+    month_pat = (
+        re.escape(month_full)
+        if month_full == month_abbr
+        else rf"(?:{re.escape(month_full)}|{re.escape(month_abbr)}\.?)"
     )
+    named = re.search(rf"{month_pat}\s+0?{period_end.day}(?!\d)", normalized)
+    named_eu = re.search(rf"(?<!\d)0?{period_end.day}\s+{month_pat}(?=\s|,|$)", normalized)
     numeric = re.search(
         rf"0?{period_end.day}[./-]0?{period_end.month}[./-]{period_end.year}", normalized
     )
@@ -159,18 +165,24 @@ def assert_reviewed_calendar_period_context(
         rf"0?{period_end.month}[./-]0?{period_end.day}[./-]{period_end.year}", normalized
     )
     iso = period_end.strftime("%Y-%m-%d") in normalized
-    if not (str(period_end.year) in normalized and (named or numeric or numeric_us or iso)):
+    if not (
+        str(period_end.year) in normalized and (named or named_eu or numeric or numeric_us or iso)
+    ):
         raise ValueError("reviewed SEC period end has no exact source context witness")
     if period_start is None:
         if re.search(r"(?:months?|year)\s+(?:period\s+)?ended", normalized):
             raise ValueError("instant source review uses a duration header")
         return
-    months = (period_end.year - period_start.year) * 12 + period_end.month - period_start.month + 1
-    if (
-        period_start.day != 1
-        or period_start.year != period_end.year
-        or period_end.day not in {30, 31}
-    ):
+    span_days = (period_end.date() - period_start.date()).days
+    months = next(
+        (
+            m
+            for lo, hi, m in ((80, 100, 3), (170, 195, 6), (260, 285, 9), (350, 380, 12))
+            if lo <= span_days <= hi
+        ),
+        None,
+    )
+    if months is None:
         raise ValueError("unsupported reviewed SEC calendar duration")
     markers = {
         3: r"(?:three|3)[ -]months?",
@@ -178,11 +190,7 @@ def assert_reviewed_calendar_period_context(
         9: r"(?:nine|9)[ -]months?",
         12: r"(?:year|twelve[ -]months?|12[ -]months?)",
     }
-    if (
-        months not in markers
-        or re.search(markers[months], normalized) is None
-        or "ended" not in normalized
-    ):
+    if re.search(markers[months], normalized) is None or "ended" not in normalized:
         raise ValueError("reviewed SEC duration has no exact source context witness")
 
 

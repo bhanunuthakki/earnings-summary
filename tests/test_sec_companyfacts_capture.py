@@ -1192,3 +1192,39 @@ def test_ingest_captures_evidence_before_post_cutover_fact_write(
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:
         conn.close()
+
+
+def test_parse_companyfacts_body_ignores_unknown_external_metadata_fields() -> None:
+    payload_dict = {
+        "cik": int(CIK),
+        "entityName": "Acme Corp",
+        "extra_sec_envelope_field": {"v": 1},
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "label": "Revenues",
+                    "description": "Revenues",
+                    "extra_concept_meta": "ignored",
+                    "units": {
+                        "USD": [
+                            {
+                                "end": "2026-06-30",
+                                "val": 100,
+                                "accn": ACCESSION_ONE,
+                                "fy": 2026,
+                                "fp": "Q2",
+                                "form": "10-Q",
+                                "filed": "2026-08-01",
+                                "start": "2026-04-01",
+                                "frame": "CY2026Q2",
+                                "extra_entry_flag": True,
+                            }
+                        ]
+                    },
+                }
+            }
+        },
+    }
+    parsed = parse_companyfacts_body(json.dumps(payload_dict).encode("utf-8"), expected_cik=CIK)
+    assert parsed.entity_name == "Acme Corp"
+    assert len(parsed.facts["us-gaap"]["Revenues"].units["USD"]) == 1

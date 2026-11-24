@@ -86,3 +86,27 @@ def test_build_name_qualifies_and_dedupes() -> None:
 def test_build_name_drops_taxonomy_boilerplate() -> None:
     name = build_name("Section", ["Foo [Line Items]"], "Total")
     assert name == "Section — Total"
+
+
+def test_classify_value_does_not_collide_rate_or_ratio_substrings() -> None:
+    for label in (
+        "Income from operations",
+        "Continuing operations",
+        "Corporate and other",
+        "Accelerated share repurchase",
+        "Purchase consideration",
+    ):
+        value, reason, _ = classify_value(label, 500, 1_000_000)
+        assert value == Decimal("500000000"), label
+        assert reason == "", label
+
+    for label in (
+        "Effective tax rates",
+        "Capital ratio",
+        "Dividend yield",
+        "Operating margin (%)",
+        "25 basis points spread",
+    ):
+        value, reason, _ = classify_value(label, 12.5, 1_000_000)
+        assert value is None, label
+        assert reason == "rate_or_percent", label

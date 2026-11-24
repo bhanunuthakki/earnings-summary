@@ -22,6 +22,7 @@ from pipeline.sec_fpi_ingest import (
     strip_html,
 )
 from provenance.evidence_backfill import ensure_legacy_document_evidence
+from table_extractors.period_axis import expected_period_ends
 
 
 def test_resolve_cik() -> None:
@@ -248,3 +249,80 @@ def test_persist_fpi_facts_idempotency(migrated_db: Callable[..., Path], tmp_pat
         assert count_kpi == 2
     finally:
         conn.close()
+
+
+def test_extract_fpi_handles_paragraph_unit_headers_note_cols_and_standalone_vs_ytd() -> None:
+    nu_like = """
+    <html><body>
+      <p>Unaudited Interim Condensed Consolidated Statements of Income</p>
+      <p>For the three and nine-month periods ended September 30, 2026 and 2025</p>
+      <p>(In thousands of U.S. Dollars, except earnings per share)</p>
+      <table>
+        <tr><td></td><td></td><td colspan="2">Three-month period ended</td><td colspan="2">Nine-month period ended</td></tr>
+        <tr><td></td><td>Note</td><td>09/30/2026</td><td>09/30/2025</td><td>09/30/2026</td><td>09/30/2025</td></tr>
+        <tr><td>Total revenue</td><td></td><td>5,820,364</td><td>4,172,716</td><td>16,301,539</td><td>11,088,875</td></tr>
+        <tr><td>Gross profit</td><td></td><td>2,436,898</td><td>1,814,532</td><td>6,648,309</td><td>4,681,963</td></tr>
+        <tr><td>Net income for the period</td><td></td><td>1,091,558</td><td>782,678</td><td>3,024,078</td><td>1,976,873</td></tr>
+        <tr><td>Net income attributable to shareholders of the parent company</td><td></td><td>1,090,836</td><td>782,473</td><td>3,023,091</td><td>1,976,514</td></tr>
+        <tr><td>Net income attributable to non-controlling interests</td><td></td><td>722</td><td>205</td><td>987</td><td>359</td></tr>
+        <tr><td>Earnings per share \u2013 Diluted</td><td>9</td><td>0.2235</td><td>0.1595</td><td>0.6166</td><td>0.4031</td></tr>
+      </table>
+      <p>(In thousands of U.S. Dollars)</p>
+      <p>For the nine-month period ended September 30, 2026 and 2025</p>
+      <table>
+        <tr><td>Note</td><td>09/30/2026</td><td>09/30/2025</td></tr>
+        <tr><td>Cash flows generated from (used in) operating activities</td><td></td><td>(1,049,562)</td><td>2,669,433</td></tr>
+      </table>
+    </body></html>
+    """
+    facts = extract_fpi_financial_facts_html(nu_like, "NU", datetime(2026, 9, 30, tzinfo=UTC), "Q3")
+    assert facts["revenue"][:2] == (Decimal("5820364000"), "USD")
+    assert facts["gross_profit"][:2] == (Decimal("2436898000"), "USD")
+    assert facts["net_income"][:2] == (Decimal("1090836000"), "USD")
+    assert facts["eps_diluted"][:2] == (Decimal("0.2235"), "USD")
+    assert "operating_cash_flow" not in facts  # 9M-only cash flow table must be skipped
+
+
+def test_extract_fpi_handles_dkk_million_standalone_fcf_and_ignores_pct_cells() -> None:
+    nvo_like = """
+    <html><body>
+      <table>
+        <tr><td>FINANCIAL HIGHLIGHTS</td><td>Q3 2026</td><td>Growth in DKK</td><td>9M 2026</td></tr>
+        <tr><td colspan="4">(Amounts are in DKK million, except for earnings per share)</td></tr>
+        <tr><td>Net sales</td><td>79,195</td><td>6%</td><td>254,506</td></tr>
+        <tr><td>Adjusted net sales 1</td><td>79,195</td><td>6%</td><td>227,746</td></tr>
+        <tr><td>Gross profit</td><td>60,958</td><td>7%</td><td>205,571</td></tr>
+        <tr><td>Operating profit (EBIT)</td><td>23,011</td><td>(3%)</td><td>109,690</td></tr>
+        <tr><td>Net profit</td><td>16,740</td><td>(16%)</td><td>86,286</td></tr>
+        <tr><td>Diluted earnings per share / ADR (in DKK)</td><td>3.79</td><td>(16%)</td><td>19.45</td></tr>
+      </table>
+      <table>
+        <tr><td>DKK million</td><td>9M 2026</td><td>9M 2025</td></tr>
+        <tr><td>Net cash flows from operating activities</td><td>120,993</td><td>112,770</td></tr>
+      </table>
+      <table>
+        <tr><td>DKK million</td><td>Q3 2026</td><td>Q3 2025</td><td>9M 2026</td></tr>
+        <tr><td>Net cash generated from operating activities</td><td>41,710</td><td>46,266</td><td>120,993</td></tr>
+        <tr><td>Purchase of property, plant and equipment</td><td>(13,227)</td><td>(13,628)</td><td>(37,213)</td></tr>
+        <tr><td>Free cash flow 1)</td><td>28,483</td><td>32,638</td><td>83,780</td></tr>
+      </table>
+      <table>
+        <tr><td>DKK million</td><td>Q3 2026</td></tr>
+        <tr><td>Gross margin</td><td>77.0%</td></tr>
+      </table>
+    </body></html>
+    """
+    facts = extract_fpi_financial_facts_html(
+        nvo_like, "NVO", datetime(2026, 9, 30, tzinfo=UTC), "Q3"
+    )
+    assert facts["revenue"][:2] == (Decimal("79195000000"), "DKK")
+    assert facts["gross_profit"][:2] == (Decimal("60958000000"), "DKK")
+    assert facts["operating_income"][:2] == (Decimal("23011000000"), "DKK")
+    assert facts["net_income"][:2] == (Decimal("16740000000"), "DKK")
+    assert facts["eps_diluted"][:2] == (Decimal("3.79"), "DKK")
+    assert facts["operating_cash_flow"][:2] == (Decimal("41710000000"), "DKK")
+    assert facts["capital_expenditure"][:2] == (Decimal("-13227000000"), "DKK")
+    assert facts["free_cash_flow"][:2] == (Decimal("28483000000"), "DKK")
+    # Also verify Q4 nominal quarter resolves cleanly without KeyError
+    q4_end, _ = expected_period_ends("Q4", 2025, 12, 31)
+    assert q4_end.isoformat() == "2025-12-31"

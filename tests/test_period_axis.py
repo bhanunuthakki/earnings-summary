@@ -163,3 +163,25 @@ def test_classify_off_cycle_unparseable_label() -> None:
         fye_day=31,
     )
     assert result.classification == "off_cycle"
+
+
+def test_expected_period_ends_q4_and_spelled_out_and_week_durations() -> None:
+    cur, prev = expected_period_ends("Q4", 2025, 12, 31)
+    assert cur == date(2025, 12, 31)
+    assert prev == date(2024, 12, 31)
+
+    three = parse_period_label("Three Months Ended March 31, 2025")
+    assert three.duration_months == 3
+    nine = parse_period_label("Nine Months Ended September 30, 2025")
+    assert nine.duration_months == 9
+    weeks = parse_period_label("13 Weeks Ended March 28, 2025")
+    assert weeks.duration_months == 3
+
+    fifty_two_week = classify_period_column(
+        "13 Weeks Ended March 28, 2025",
+        nominal_quarter="Q1",
+        fiscal_year=2025,
+        fye_month=12,
+        fye_day=31,
+    )
+    assert fifty_two_week.classification == "current_discrete"

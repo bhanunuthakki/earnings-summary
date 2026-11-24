@@ -76,7 +76,11 @@ class _ClosedModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class CompanyFactEntry(_ClosedModel):
+class _PermissiveExternalModel(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+
+class CompanyFactEntry(_PermissiveExternalModel):
     end: str = Field(pattern=_DATE_PATTERN)
     val: int | float
     accn: str = Field(pattern=_ACCESSION_PATTERN)
@@ -95,14 +99,14 @@ class CompanyFactEntry(_ClosedModel):
         return value
 
 
-class CompanyFactConcept(_ClosedModel):
+class CompanyFactConcept(_PermissiveExternalModel):
     label: str | None
     description: str | None
     units: dict[str, tuple[CompanyFactEntry, ...]]
 
 
-class CompanyFactsPayload(_ClosedModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+class CompanyFactsPayload(_PermissiveExternalModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, populate_by_name=True)
 
     cik: int = Field(gt=0, le=9_999_999_999)
     entity_name: str = Field(min_length=1, alias="entityName")
