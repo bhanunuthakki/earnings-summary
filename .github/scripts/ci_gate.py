@@ -42,7 +42,7 @@ DOCUMENTATION_SUFFIXES = {".md", ".rst"}
 CONDITIONAL_JOBS = {
     "fast-signal": "code",
     "windows-native": "code",
-    "windows-app": "code",
+    "windows-app": "windows_app",
     "tests": "tests",
     "browser-security": "code",
     "quality": "python",
@@ -464,13 +464,31 @@ def test_matrix(lines: Sequence[str], durations: TestDurations) -> tuple[bool, d
     return True, {"include": include}
 
 
+def windows_app_needed(lines: Sequence[str]) -> bool:
+    """Whether the Windows application job runs for a test-selection verdict.
+
+    Only a ``SELECTED`` verdict that chose none of ``WINDOWS_APP_TEST_FILES``
+    skips it; every other verdict, including the merge queue's, runs it.
+    """
+    if not lines or not lines[0].startswith("SELECTED"):
+        return True
+    return any(line.strip() in WINDOWS_APP_TEST_FILES for line in lines[1:])
+
+
 def gate_failures(
-    *, code: bool, python: bool, results: Mapping[str, str], tests: bool | None = None
+    *,
+    code: bool,
+    python: bool,
+    results: Mapping[str, str],
+    tests: bool | None = None,
+    windows_app: bool | None = None,
 ) -> list[str]:
     """Explain every terminal result that makes the aggregate gate unsafe.
 
     ``tests`` is False only when a pull request's selection chose no test file;
-    the tests job may then be skipped. It defaults to ``code``.
+    the tests job may then be skipped. ``windows_app`` is False only when that
+    selection chose none of the Windows application files. Both default to
+    ``code``.
     """
 
     failures: list[str] = []
@@ -484,7 +502,12 @@ def gate_failures(
         if result not in TERMINAL_SUCCESS_RESULTS:
             failures.append(f"{job_name} finished with {result or 'missing result'}")
 
-    required_groups = {"code": code, "python": python, "tests": code and tests is not False}
+    required_groups = {
+        "code": code,
+        "python": python,
+        "tests": code and tests is not False,
+        "windows_app": code and windows_app is not False,
+    }
     for job_name, group in CONDITIONAL_JOBS.items():
         result = results.get(job_name, "")
         if required_groups[group] and result in TERMINAL_SUCCESS_RESULTS and result != "success":
@@ -647,12 +670,17 @@ def _test_matrix_command(args: argparse.Namespace) -> int:
         print(f"::error::{exc}", file=sys.stderr)
         return 1
     run, matrix = test_matrix(lines, durations)
+    windows_app = windows_app_needed(lines)
     shards = cast(list[dict[str, str]], matrix["include"])
     with args.github_output.open("a", encoding="utf-8", newline="\n") as output:
         print(f"tests={str(run).lower()}", file=output)
         print(f"matrix={json.dumps(matrix, separators=(',', ':'))}", file=output)
+        print(f"windows_app={str(windows_app).lower()}", file=output)
     verdict = lines[0].split("\t", 1)[0] if lines else "FULL"
-    print(f"Test selection: {verdict}; {len(shards) if run else 0} test shard(s)")
+    print(
+        f"Test selection: {verdict}; {len(shards) if run else 0} test shard(s); "
+        f"Windows application tests: {'yes' if windows_app else 'no'}"
+    )
     return 0
 
 
@@ -722,7 +750,13 @@ def _verify_command(args: argparse.Namespace) -> int:
         "typecheck": args.typecheck_result,
         "security": args.security_result,
     }
-    failures = gate_failures(code=args.code, python=args.python, results=results, tests=args.tests)
+    failures = gate_failures(
+        code=args.code,
+        python=args.python,
+        results=results,
+        tests=args.tests,
+        windows_app=args.windows_app,
+    )
     for failure in failures:
         print(f"::error::{failure}")
     if failures:
@@ -794,6 +828,7 @@ def _build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--code", type=_parse_bool, required=True)
     verify.add_argument("--python", type=_parse_bool, required=True)
     verify.add_argument("--tests", type=_parse_bool, default=None)
+    verify.add_argument("--windows-app", type=_parse_bool, default=None)
     for job_name in ("changes", "public-boundary", *CONDITIONAL_JOBS):
         verify.add_argument(f"--{job_name}-result", required=True)
     native = subparsers.add_parser("verify-windows-native")

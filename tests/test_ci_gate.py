@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import math
 import os
@@ -1363,6 +1364,50 @@ def test_an_empty_selection_runs_no_shard_and_the_gate_allows_it(helper: ModuleT
     assert helper.gate_failures(code=True, python=True, results=results, tests=False) == []
     assert helper.gate_failures(code=True, python=True, results=results)
     assert helper.gate_failures(code=True, python=True, results=results, tests=True)
+
+
+def test_the_windows_app_job_runs_only_when_selection_needs_it(helper: ModuleType) -> None:
+    windows_file = helper.WINDOWS_APP_TEST_FILES[0]
+    assert helper.windows_app_needed(["FULL\tnot a pull request"])
+    assert helper.windows_app_needed([])
+    assert helper.windows_app_needed(["SELECTED\t2 files", "tests/test_other.py", windows_file])
+    assert not helper.windows_app_needed(["SELECTED\t1 file", "tests/test_other.py"])
+    assert not helper.windows_app_needed(["SELECTED\t0 files"])
+    results = dict.fromkeys(("changes", "public-boundary", *helper.CONDITIONAL_JOBS), "success") | {
+        "windows-app": "skipped"
+    }
+    assert helper.gate_failures(code=True, python=True, results=results, windows_app=False) == []
+    assert helper.gate_failures(code=True, python=True, results=results)
+    assert helper.gate_failures(code=True, python=True, results=results, windows_app=True)
+    failed = results | {"windows-app": "failure"}
+    assert helper.gate_failures(code=True, python=True, results=failed, windows_app=False)
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    app_job = workflow.split("\n  windows-app:\n", 1)[1].split("\n  windows-native:\n", 1)[0]
+    assert "needs.changes.outputs.windows_app != 'false'" in app_job
+    assert "windows_app: ${{ steps.tests.outputs.windows_app }}" in workflow
+    assert "WINDOWS_APP_NEEDED: ${{ needs.changes.outputs.windows_app || 'true' }}" in workflow
+    assert '--windows-app "$WINDOWS_APP_NEEDED"' in workflow
+
+
+def test_the_test_matrix_command_reports_the_windows_app_decision(
+    helper: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "output"
+    durations = str(REPO_ROOT / ".github" / "test-durations.json")
+    for selection, expected in (
+        ("FULL\tnot a pull request\n", "windows_app=true"),
+        ("SELECTED\t1 file\ntests/test_ci_gate.py\n", "windows_app=false"),
+        (f"SELECTED\t1 file\n{helper.WINDOWS_APP_TEST_FILES[0]}\n", "windows_app=true"),
+    ):
+        output.write_text("")
+        monkeypatch.setattr("sys.stdin", io.StringIO(selection))
+        assert (
+            helper.main(
+                ["test-matrix", "--github-output", str(output), "--durations-file", durations]
+            )
+            == 0
+        )
+        assert expected in output.read_text().splitlines()
 
 
 def test_pull_requests_select_tests_from_main_recorded_impact() -> None:
