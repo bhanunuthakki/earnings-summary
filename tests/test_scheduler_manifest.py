@@ -76,32 +76,14 @@ def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     assert all(
         task.task_name != r"\earnings-summary\monthly_advisor_memos" for task in manifest.tasks
     )
+    assert all(
+        task.task_name != r"\earnings-summary\prepare_kpi_semantic_review"
+        for task in manifest.tasks
+    )
     assert not (CRON_DIR / "monthly_advisor_memos.task.xml").exists()
     assert not (CRON_DIR / "run_monthly_advisor_memos.bat").exists()
-    semantic_review = next(
-        task
-        for task in manifest.tasks
-        if task.task_name == r"\earnings-summary\prepare_kpi_semantic_review"
-    )
-    assert semantic_review.schedule.repetition_interval == "PT10M"
-    assert semantic_review.xml == "prepare_kpi_semantic_review.task.xml"
-    assert semantic_review.wrapper == "run_prepare_kpi_semantic_review.bat"
-    semantic_xml = (CRON_DIR / semantic_review.xml).read_text(encoding="utf-8")
-    assert "<ExecutionTimeLimit>PT30M</ExecutionTimeLimit>" in semantic_xml
-    assert semantic_xml.index("<Repetition>") < semantic_xml.index("<StartBoundary>")
-    assert r"runtime\earnings-summary\cron\run_prepare_kpi_semantic_review.bat" in semantic_xml
-    semantic_wrapper = (CRON_DIR / semantic_review.wrapper).read_text(encoding="utf-8")
-    assert "if not defined EARNINGS_SUMMARY_DB_PATH" in semantic_wrapper
-    assert 'for %%I in ("%EARNINGS_SUMMARY_DB_PATH%") do set "DB_DIR=%%~dpI"' in semantic_wrapper
-    assert 'for %%I in ("%DB_DIR%..") do set "PRODUCT_STATE_ROOT=%%~fI"' in semantic_wrapper
-    assert 'set "ES_JOB_RUNTIME_REPO_ROOT=%PRODUCT_STATE_ROOT%"' in semantic_wrapper
-    assert 'set "ES_JOB_RUNTIME_CODE_ROOT=%PROJECT_ROOT%"' in semantic_wrapper
-    assert r'set "LOG_DIR=%PRODUCT_STATE_ROOT%\.tmp\cron_logs"' in semantic_wrapper
-    assert r'"%PROJECT_ROOT%\execution\prepare_kpi_semantic_review.py"' in semantic_wrapper
-    assert '--code-root "%PROJECT_ROOT%"' in semantic_wrapper
-    assert "--user-id" not in semantic_wrapper
-    assert '--code-root "%PROJECT_ROOT%" --publish' in semantic_wrapper
-    assert "http" not in semantic_wrapper.casefold()
+    assert not (CRON_DIR / "prepare_kpi_semantic_review.task.xml").exists()
+    assert not (CRON_DIR / "run_prepare_kpi_semantic_review.bat").exists()
 
     reconciliation = next(
         task
@@ -134,16 +116,9 @@ def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     assert "cron_logs" not in reconciliation_wrapper
     assert "openai_api_key" not in reconciliation_wrapper.casefold()
     assert "http" not in reconciliation_wrapper.casefold()
-    prepare_source = (PROJECT_ROOT / "execution" / "prepare_kpi_semantic_review.py").read_text(
-        encoding="utf-8"
-    )
-    assert 'parser.add_argument("--user-id", default=DEFAULT_USER_ID)' in prepare_source
-    assert 'default="default"' not in prepare_source
     shared_wrapper = (CRON_DIR / "run_python.bat").read_text(encoding="utf-8")
-    assert (
-        'if /I "%~1"=="prepare-kpi-semantic-review" goto accept_runtime_root_env' in shared_wrapper
-    )
     assert 'if /I "%~1"=="reconcile-recorded-trades" goto accept_runtime_root_env' in shared_wrapper
+    assert "prepare-kpi-semantic-review" not in shared_wrapper
     assert "goto clear_runtime_root_env" in shared_wrapper
     assert 'set "JOB_RUNTIME_REPO_ROOT=%ES_JOB_RUNTIME_REPO_ROOT%"' in shared_wrapper
     assert 'set "JOB_RUNTIME_CODE_ROOT=%ES_JOB_RUNTIME_CODE_ROOT%"' in shared_wrapper

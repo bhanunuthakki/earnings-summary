@@ -67,10 +67,7 @@ REVIEW_CODE_IDENTITY_DEPENDENCY_CLASSES = (
     (
         "review_producer",
         (
-            "cron/prepare_kpi_semantic_review.task.xml",
-            "cron/run_prepare_kpi_semantic_review.bat",
             "cron/task_manifest.json",
-            "execution/prepare_kpi_semantic_review.py",
             "src/identity.py",
             "src/models/documents.py",
             "src/models/facts.py",
@@ -107,7 +104,6 @@ REVIEW_CODE_IDENTITY_DEPENDENCY_CLASSES = (
         "transport_validator",
         (
             "execution/approve_windows_review_pins.py",
-            "execution/fetch_windows_kpi_semantic_review.py",
             "execution/fetch_windows_review_bundle.py",
         ),
     ),
