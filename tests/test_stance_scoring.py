@@ -411,7 +411,7 @@ def test_run_scoring_flips_status_and_is_idempotent(
     _write_price_cache(tmp_path, "NU", [(start, 10.0), (end, 11.0)])
     far_future = memo.created_at + timedelta(days=60)
 
-    result = run_scoring(tmp_path, user_id="bhanu", now=far_future)
+    result = run_scoring(tmp_path, user_id="bhanu", now=far_future, db_path=db)
     assert result.scored == 2 and result.deferred == 0
     scored_memo = get_memo(memo.id, db_path=db)
     assert scored_memo is not None and scored_memo.score_status == "scored"
@@ -419,9 +419,52 @@ def test_run_scoring_flips_status_and_is_idempotent(
     assert nd_memo is not None and nd_memo.score_status == "unscoreable"
 
     # Idempotent: nothing pending remains, so a second run grades nothing.
-    again = run_scoring(tmp_path, user_id="bhanu", now=far_future)
+    again = run_scoring(tmp_path, user_id="bhanu", now=far_future, db_path=db)
     assert again.scored == 0 and again.deferred == 0
     assert len(list_scores_for_memos([memo.id], db_path=db)) == 1
+
+
+def test_run_scoring_split_root_and_cli_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
+) -> None:
+    from datetime import timedelta
+
+    from execution import score_advisor_stances
+
+    repo_root = tmp_path / "repo"
+    canonical_db = migrated_db(tmp_path / "canonical" / "custom.db")
+    monkeypatch.setattr(scoring_mod, "spy_return_from_tracker", _spy_stub(0.0))
+    memo = insert_memo(
+        user_id="bhanu",
+        kind="socratic",
+        ticker="NU",
+        title="Socratic think-through · NU",
+        body_md="STANCE: add",
+        stance="add",
+        horizon_days=30,
+        db_path=canonical_db,
+    )
+    start = memo.created_at.date().isoformat()
+    end = (memo.created_at + timedelta(days=35)).date().isoformat()
+    _write_price_cache(repo_root, "NU", [(start, 10.0), (end, 11.5)])
+
+    rc = score_advisor_stances.main(
+        ["--repo-root", str(repo_root), "--db", str(canonical_db), "--user-id", "bhanu"]
+    )
+    assert rc == 0
+    assert not (repo_root / "data" / "portfolio.db").exists()
+
+    # Fail closed when DB authority is unavailable even if repo_root/data/portfolio.db exists.
+    _build_db(repo_root, migrated_db)
+    monkeypatch.setattr("db.DB_PATH", str(tmp_path / "nonexistent.db"))
+    with pytest.raises(FileNotFoundError, match="unavailable"):
+        score_memo(repo_root, memo, now=_NOW)
+    with pytest.raises(FileNotFoundError, match="unavailable"):
+        run_scoring(repo_root, user_id="bhanu", now=_NOW)
+    with pytest.raises(FileNotFoundError, match="unavailable"):
+        score_advisor_stances.main(["--repo-root", str(repo_root), "--user-id", "bhanu"])
 
 
 # --------------------------------------------------------------------------- #

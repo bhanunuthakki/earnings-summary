@@ -49,7 +49,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.fixture
 def advisor_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
-    db = tmp_path / "data" / "portfolio.db"
+    db = tmp_path / "canonical" / "advisor.db"
     return migrated_db(db)
 
 
@@ -367,7 +367,7 @@ def test_next_dollar_persists_memo_note_and_backlinks(
     ctx = _ctx(
         tmp_path, {"NU": _val("NU", 30.0, list_type="portfolio")}, {"TSM": _val("TSM", 45.0)}
     )
-    result = generate_next_dollar_memo(tmp_path, user_id="bhanu", ctx=ctx)
+    result = generate_next_dollar_memo(tmp_path, user_id="bhanu", db_path=db, ctx=ctx)
     assert result.ok and result.memo_id is not None
     assert calls == ["advisor_next_dollar"]
 
@@ -412,7 +412,7 @@ def test_next_dollar_model_rows_excludes_breach_and_stub_and_implausible(
             "REAL": _val("REAL", 25.0),
         },
     )
-    result = generate_next_dollar_memo(tmp_path, user_id="bhanu", ctx=ctx)
+    result = generate_next_dollar_memo(tmp_path, user_id="bhanu", db_path=db, ctx=ctx)
     assert result.ok and result.memo_id is not None
     memo = get_memo(result.memo_id, db_path=db)
     assert memo is not None and memo.context is not None
@@ -440,7 +440,11 @@ def test_swap_checks_gate_on_screen_and_write_ledger(
     }
     candidates = {"TSM": _val("TSM", 45.0)}
     results = run_swap_checks(
-        tmp_path, user_id="bhanu", margin_pp=15.0, ctx=_ctx(tmp_path, holdings, candidates)
+        tmp_path,
+        user_id="bhanu",
+        db_path=db,
+        margin_pp=15.0,
+        ctx=_ctx(tmp_path, holdings, candidates),
     )
     # Both pairs clear, but the candidate dedupe spends ONE call (same TSM).
     assert len(results) == 1 and results[0].ok
@@ -456,8 +460,6 @@ def test_swap_checks_gate_on_screen_and_write_ledger(
 def test_swap_checks_spend_nothing_when_bar_holds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, advisor_db: Path
 ) -> None:
-    del advisor_db
-
     def fail_if_called(prompt: str, **kwargs: object) -> str:
         raise AssertionError("LLM must not be called when no pair clears the bar")
 
@@ -465,7 +467,11 @@ def test_swap_checks_spend_nothing_when_bar_holds(
     holdings = {"NU": _val("NU", 30.0, list_type="portfolio")}
     candidates = {"TSM": _val("TSM", 35.0)}  # margin 5pp < 15pp bar
     results = run_swap_checks(
-        tmp_path, user_id="bhanu", margin_pp=15.0, ctx=_ctx(tmp_path, holdings, candidates)
+        tmp_path,
+        user_id="bhanu",
+        db_path=advisor_db,
+        margin_pp=15.0,
+        ctx=_ctx(tmp_path, holdings, candidates),
     )
     assert results == []
 
@@ -473,14 +479,13 @@ def test_swap_checks_spend_nothing_when_bar_holds(
 def test_transient_llm_failure_degrades_hard_stop_propagates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, advisor_db: Path
 ) -> None:
-    del advisor_db
     ctx = _ctx(tmp_path, {"NU": _val("NU", 30.0, list_type="portfolio")}, {})
 
     def transient(prompt: str, **kwargs: object) -> str:
         raise TimeoutError("claude CLI timed out")
 
     monkeypatch.setattr(memos_mod, "call_llm", transient)
-    result = generate_next_dollar_memo(tmp_path, user_id="bhanu", ctx=ctx)
+    result = generate_next_dollar_memo(tmp_path, user_id="bhanu", db_path=advisor_db, ctx=ctx)
     assert not result.ok and result.skipped_reason is not None
     assert "TimeoutError" in result.skipped_reason
 
@@ -489,7 +494,7 @@ def test_transient_llm_failure_degrades_hard_stop_propagates(
 
     monkeypatch.setattr(memos_mod, "call_llm", hard)
     with pytest.raises(LLMSetupError):
-        generate_next_dollar_memo(tmp_path, user_id="bhanu", ctx=ctx)
+        generate_next_dollar_memo(tmp_path, user_id="bhanu", db_path=advisor_db, ctx=ctx)
 
 
 # --------------------------------------------------------------------------- #
@@ -531,7 +536,7 @@ def client(tmp_path: Path, advisor_db: Path) -> FlaskClient:
 
 
 def test_next_dollar_spends_nothing_on_unassessed_valuation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, advisor_db: Path
 ) -> None:
     holding = TickerValuation("MELI", 20, "2026-10-01", "portfolio", "ok")
     candidate = TickerValuation("NU", 60, "2026-10-01", "evaluation", "ok")
@@ -541,6 +546,123 @@ def test_next_dollar_spends_nothing_on_unassessed_valuation(
         pytest.fail("Blocked valuation must not trigger an allocation LLM call")
 
     monkeypatch.setattr(memos_mod, "call_llm", forbidden)
-    result = generate_next_dollar_memo(tmp_path, ctx=ctx)
+    result = generate_next_dollar_memo(tmp_path, db_path=advisor_db, ctx=ctx)
     assert not result.ok
     assert result.skipped_reason == "valuation_evidence_not_ready"
+
+
+def test_split_root_canonical_db_routing_and_cli_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
+) -> None:
+    """Explicit canonical DB receives memo, note, and ledger writes even when
+    repo_root has no data/ directory, including via execution.run_advisor_memos."""
+    import sqlite3
+    from types import SimpleNamespace
+
+    import advisor.context as ctx_mod
+    from execution import run_advisor_memos
+
+    repo_root = tmp_path / "code-repo"
+    repo_root.mkdir()
+    canonical_db = migrated_db(tmp_path / "canonical-state" / "prod.db")
+    today = datetime.now(UTC).date().isoformat()
+
+    conn = sqlite3.connect(canonical_db)
+    conn.execute(
+        "INSERT INTO tracked_companies (ticker, name, list_type) "
+        "VALUES ('NU', 'Nu Holdings', 'portfolio')"
+    )
+    conn.execute(
+        "INSERT INTO tracked_companies (ticker, name, list_type) "
+        "VALUES ('TSM', 'TSMC', 'evaluation')"
+    )
+    conn.execute(
+        "INSERT INTO thesis_state (ticker, thesis, raw_json, ingested_at) "
+        "VALUES ('NU', 'Fintech thesis.', '{}', ?)",
+        (today,),
+    )
+    conn.execute(
+        "INSERT INTO thesis_state (ticker, thesis, raw_json, ingested_at) "
+        "VALUES ('TSM', 'Foundry thesis.', '{}', ?)",
+        (today,),
+    )
+    for ticker, fv in (("NU", 10.5), ("TSM", 14.5)):
+        conn.execute(
+            "INSERT INTO dcf_runs (ticker, valuation_date, horizon_years, "
+            "revenue_growths_json, fcf_margin, wacc, terminal_growth, npv, "
+            "npv_per_share, live_price, created_at) "
+            "VALUES (?, ?, 5, '[0.1]', 0.2, 0.1, 0.03, 100.0, ?, 10.0, ?)",
+            (ticker, today, fv, f"{today}T00:00:00"),
+        )
+    conn.commit()
+    conn.close()
+
+    def ready_stub(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(ready=True, reason_codes=())
+
+    def offline_live(**_kwargs: object) -> LivePortfolio:
+        return LivePortfolio(available=False, api_url="http://x", error="offline")
+
+    def offline_analytics(**_kwargs: object) -> PortfolioAnalytics:
+        return PortfolioAnalytics(available=False, api_url="http://x")
+
+    def split_root_llm(_prompt: str, **_kwargs: object) -> str:
+        return "## Summary\nEvidence-backed split-root memo."
+
+    monkeypatch.setattr(ctx_mod, "load_valuation_readiness", ready_stub)
+    monkeypatch.setattr(ctx_mod, "fetch_live_portfolio", offline_live)
+    monkeypatch.setattr(ctx_mod, "fetch_portfolio_analytics", offline_analytics)
+    monkeypatch.setattr(memos_mod, "call_llm", split_root_llm)
+
+    rc = run_advisor_memos.main(
+        [
+            "--kind",
+            "all",
+            "--repo-root",
+            str(repo_root),
+            "--db",
+            str(canonical_db),
+            "--user-id",
+            "bhanu",
+        ]
+    )
+    assert rc == 0
+    assert not (repo_root / "data").exists()
+
+    persisted = list_memos(user_id="bhanu", db_path=canonical_db)
+    assert {m.kind for m in persisted} == {"next_dollar", "swap_check"}
+    notes = list_notes(user_id="bhanu", db_path=canonical_db)
+    assert len(notes) == 2
+    entries = list_entries(user_id="bhanu", ticker="NU", db_path=canonical_db)
+    assert len(entries) == 1
+
+
+def test_advisor_memos_fail_closed_without_canonical_db_even_with_decoy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
+) -> None:
+    """Missing configured DB must fail closed rather than touching repo_root/data/portfolio.db."""
+    from execution import run_advisor_memos
+
+    repo_root = tmp_path / "code-repo"
+    decoy_db = migrated_db(repo_root / "data" / "portfolio.db")
+    monkeypatch.setattr("db.DB_PATH", str(tmp_path / "missing-canonical.db"))
+
+    ctx = _ctx(
+        repo_root,
+        {"NU": _val("NU", 5.0, list_type="portfolio")},
+        {"TSM": _val("TSM", 45.0)},
+    )
+
+    def forbidden_llm(*_args: object, **_kwargs: object) -> str:
+        pytest.fail("must fail closed")
+
+    monkeypatch.setattr(memos_mod, "call_llm", forbidden_llm)
+
+    with pytest.raises(FileNotFoundError, match="unavailable"):
+        generate_next_dollar_memo(repo_root, user_id="bhanu", ctx=ctx)
+    with pytest.raises(FileNotFoundError, match="unavailable"):
+        run_swap_checks(repo_root, user_id="bhanu", ctx=ctx)
+    with pytest.raises(FileNotFoundError, match="unavailable"):
+        run_advisor_memos.main(["--kind", "next_dollar", "--repo-root", str(repo_root)])
+
+    assert list_memos(user_id="bhanu", db_path=decoy_db) == []
