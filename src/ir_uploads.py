@@ -177,6 +177,16 @@ ISSUER_REGISTRY: list[tuple[str, str, tuple[str, ...]]] = [
     ("TEM", _CAL_CALENDAR, ("Tempus AI, Inc.", "Tempus AI", "Tempus's")),
     ("CRWV", _CAL_CALENDAR, ("CoreWeave, Inc.", "CoreWeave Inc", "CoreWeave")),
     ("NBIS", _CAL_CALENDAR, ("Nebius Group", "Nebius Group N.V.", "Nebius")),
+    (
+        "UBER",
+        _CAL_CALENDAR,
+        ("Uber Technologies", "Uber Announces", "NYSE: UBER", "NYSE:UBER"),
+    ),
+    (
+        "TSM",
+        _CAL_CALENDAR,
+        ("Taiwan Semiconductor Manufacturing", "TSMC", "NYSE: TSM", "NYSE:TSM"),
+    ),
 ]
 
 
@@ -731,6 +741,16 @@ _FILENAME_TICKER_RULES: list[tuple[re.Pattern[str], str, str]] = [
         re.compile(r"^(?:Alphabet[-_]|\d{4}q[1-4]-alphabet[-_])", re.IGNORECASE),
         "GOOG",
         "filename_prefix:Alphabet",
+    ),
+    (
+        re.compile(r"^(?:UBER[-_]|Uber[-_])", re.IGNORECASE),
+        "UBER",
+        "filename_prefix:Uber",
+    ),
+    (
+        re.compile(r"^(?:TSM[-_]|TSMC[-_])", re.IGNORECASE),
+        "TSM",
+        "filename_prefix:TSM",
     ),
 ]
 
