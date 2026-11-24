@@ -45,8 +45,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--include-llm-with-excerpt",
-        action="store_true",
-        help="Also qualify LLM-extracted rows that carry a non-empty source_excerpt.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Qualify LLM-extracted rows that carry a non-empty source_excerpt (default: enabled).",
+    )
+    parser.add_argument(
+        "--require-resolved-view",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Require rows to appear in v_kpi_facts_resolved_current (default: disabled).",
     )
     parser.add_argument(
         "--apply",
@@ -81,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
             as_of=args.as_of,
             apply=args.apply,
             include_llm_with_excerpt=args.include_llm_with_excerpt,
+            require_resolved_view=args.require_resolved_view,
             reviewed_by=args.reviewed_by,
         )
     finally:

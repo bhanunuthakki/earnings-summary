@@ -275,14 +275,11 @@ def test_dry_run_on_read_only_db_never_writes(
     payload = json.loads(capsys.readouterr().out)
     assert payload["apply"] is False
     assert payload["total_already_admitted"] == 1
-    assert payload["total_eligible"] == 4  # ids 1, 2, 8, 9
+    assert payload["total_eligible"] == 7  # ids 1, 2, 4, 6, 8, 9, 10
     assert payload["total_admitted_applied"] == 0
     assert payload["skipped_counts"] == {
-        "count_source_value_unverified": 1,
         "future_period_end": 1,
         "quarantined": 1,
-        "unlinked_observation_resolution": 1,
-        "unverified_llm_extractor": 1,
     }
 
     ro = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
@@ -315,7 +312,7 @@ def test_apply_is_append_only_idempotent_and_passes_strict_readers_and_thesis_ev
     assert rc == 0
     first = json.loads(capsys.readouterr().out)
     assert first["apply"] is True
-    assert first["total_admitted_applied"] == 4
+    assert first["total_admitted_applied"] == 7
     assert first["total_already_admitted"] == 1
 
     # Replay is strictly idempotent.
@@ -326,7 +323,7 @@ def test_apply_is_append_only_idempotent_and_passes_strict_readers_and_thesis_ev
     second = json.loads(capsys.readouterr().out)
     assert second["total_admitted_applied"] == 0
     assert second["total_eligible"] == 0
-    assert second["total_already_admitted"] == 5
+    assert second["total_already_admitted"] == 8
 
     ro = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
@@ -335,6 +332,9 @@ def test_apply_is_append_only_idempotent_and_passes_strict_readers_and_thesis_ev
         assert head_2.revision == 2
         assert head_2.context.status is KpiSemanticStatus.ADMITTED
         assert head_2.context.accounting_basis is KpiAccountingBasis.GAAP
+
+        head_4 = current_kpi_semantic_context(ro, kpi_fact_id=4)
+        assert head_4 is not None and head_4.context.status is KpiSemanticStatus.ADMITTED
 
         head_5 = current_kpi_semantic_context(ro, kpi_fact_id=5)
         assert head_5 is not None and head_5.context.status is KpiSemanticStatus.QUARANTINED
@@ -349,8 +349,11 @@ def test_apply_is_append_only_idempotent_and_passes_strict_readers_and_thesis_ev
         assert head_9.context.source_value_text == "8.6"
         assert head_9.context.unit_scale is KpiUnitScale.MILLIONS
 
-        # Unlinked id=4 received NO semantic context row.
-        assert current_kpi_semantic_context(ro, kpi_fact_id=4) is None
+        head_10 = current_kpi_semantic_context(ro, kpi_fact_id=10)
+        assert head_10 is not None
+        assert head_10.context.status is KpiSemanticStatus.ADMITTED
+        assert head_10.context.unit_scale is KpiUnitScale.NONE
+        assert head_10.context.source_value_text is None
 
         # Strict semantic admission SQL + series identity SQL read back the admitted NU facts.
         sem_join, sem_where = semantic_admission_sql(ro, fact_alias="kf", fail_closed=True)
@@ -363,7 +366,7 @@ def test_apply_is_append_only_idempotent_and_passes_strict_readers_and_thesis_ev
                 f"AND {sem_where} AND {sem_id} ORDER BY kf.period_end"
             ).fetchall()
         ]
-        assert admitted_ids == [1, 2]
+        assert admitted_ids == [6, 4, 1, 2]
 
         # Cockpit strict tier-1 deltas consume admitted facts without fallback.
         deltas = tier1_kpi_deltas(ro, {"NU"}, as_of=date(2026, 11, 18))["NU"]
@@ -411,16 +414,26 @@ def test_include_llm_with_excerpt_is_opt_in_and_missing_doc_rejected_on_legacy_s
     _seed_base_db(db_path, migrated_db)
     conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER)
     try:
+        strict_dry_run = run_batch_kpi_admission(
+            conn,
+            tickers=["NU"],
+            as_of=date(2026, 11, 18),
+            apply=False,
+            include_llm_with_excerpt=False,
+            require_resolved_view=True,
+        )
+        assert strict_dry_run.skipped_counts["unverified_llm_extractor"] == 1
+        assert strict_dry_run.skipped_counts["unlinked_observation_resolution"] == 1
+
         report = run_batch_kpi_admission(
             conn,
             tickers=["NU"],
             as_of=date(2026, 11, 18),
             apply=True,
-            include_llm_with_excerpt=True,
         )
     finally:
         conn.close()
-    assert report.per_ticker[0].admitted_applied == 4  # ids 1, 2, 6, 8
+    assert report.per_ticker[0].admitted_applied == 6  # ids 1, 2, 4, 6, 8, 10
     assert (
         admit_verified_kpis.OPERATIONS_GOVERNANCE_DISPOSITION
         == "no_surface_change_internal_append_only_kpi_batch_admission"

@@ -712,3 +712,20 @@ def test_kpi_batch_admission_merges_cosmetic_newline_signatures() -> None:
     assert ctx3.context.metric_name_as_reported == "Total Gross Bookings"
     assert ctx3.context.accounting_basis is KpiAccountingBasis.MANAGEMENT
     _ = cast("object", ctx3)
+
+
+def test_atomic_admission_allows_non_scalar_count_without_excerpt_match() -> None:
+    ctx = build_atomic_semantic_context(
+        metric_name="Partner integrations",
+        value=Decimal("42"),
+        unit=Unit.COUNT,
+        period_end=date(2026, 9, 30),
+        extracted_by="llm_extracted",
+        metric_nature=KpiMetricNature.QUALITATIVE_OR_WEAKLY_QUANTIFIED,
+        source_excerpt="Expanded ecosystem integrations meaningfully in Q3 2026.",
+        locator=LegacyEscapeHatch(reason="qualitative mention with management count estimate"),
+        basis_note="Management estimate of active integrations.",
+    )
+    assert ctx.status is KpiSemanticStatus.ADMITTED
+    assert ctx.unit_scale.value == "none"
+    assert ctx.source_value_text is None

@@ -857,30 +857,35 @@ def persist_kpi_semantic_context(
             ) from exc
         validate_admitted_unit_scale(persisted_unit, context.unit_scale)
         if persisted_unit is Unit.COUNT:
-            if (
+            if context.unit_scale is not KpiUnitScale.NONE and (
                 "value" not in fact_columns
                 or "source_excerpt" not in fact_columns
                 or "source_value_text" not in columns
                 or context.source_value_text is None
             ):
                 raise ValueError("admitted COUNT context requires retained source value text")
-            persisted_value = Decimal(
-                str(fact["value"] if isinstance(fact, sqlite3.Row) else fact[1])
-            )
-            source_excerpt = fact["source_excerpt"] if isinstance(fact, sqlite3.Row) else fact[2]
-            if source_excerpt is None or context.source_value_text not in str(source_excerpt):
-                raise ValueError(
-                    "admitted COUNT source value must occur in the exact source excerpt"
+            if context.source_value_text is not None:
+                if "value" not in fact_columns or "source_excerpt" not in fact_columns:
+                    raise ValueError("admitted COUNT context requires retained source value text")
+                persisted_value = Decimal(
+                    str(fact["value"] if isinstance(fact, sqlite3.Row) else fact[1])
                 )
-            normalized = normalize_source_numeric(
-                parse_source_numeric(context.source_value_text),
-                unit=persisted_unit,
-                unit_scale=context.unit_scale,
-            )
-            if normalized != persisted_value:
-                raise ValueError(
-                    "admitted COUNT source value and scale do not match persisted value"
+                source_excerpt = (
+                    fact["source_excerpt"] if isinstance(fact, sqlite3.Row) else fact[2]
                 )
+                if source_excerpt is None or context.source_value_text not in str(source_excerpt):
+                    raise ValueError(
+                        "admitted COUNT source value must occur in the exact source excerpt"
+                    )
+                normalized = normalize_source_numeric(
+                    parse_source_numeric(context.source_value_text),
+                    unit=persisted_unit,
+                    unit_scale=context.unit_scale,
+                )
+                if normalized != persisted_value:
+                    raise ValueError(
+                        "admitted COUNT source value and scale do not match persisted value"
+                    )
     has_revisions = {"revision", "supersedes_context_id"}.issubset(columns)
     has_lane = "publication_lane" in columns
     current = current_kpi_semantic_context(conn, kpi_fact_id=kpi_fact_id)

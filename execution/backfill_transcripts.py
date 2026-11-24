@@ -43,6 +43,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 import subprocess
@@ -94,6 +95,7 @@ from pipeline.transcript_acquisition import (
     TranscriptAcquisitionDeniedError,
 )
 from provenance.selection import selected_transcripts_relation
+from runtime.deterministic import canonical_json_ascii
 from runtime.python_process import managed_python_prefix
 from transcripts.acquisition_semantics import (
     TRANSCRIPT_ACQUISITION_POLICY_VERSION,
@@ -172,10 +174,47 @@ def recent_fiscal_quarters(fye_month: int, today: date, n: int) -> list[tuple[in
     return out
 
 
+def _calendar_window_fallback(
+    *, ticker: str, fye_month: int, today: date, lookback: int
+) -> tuple[ReportedPeriodWindow, tuple[tuple[int, int], ...]]:
+    quarters = tuple(recent_fiscal_quarters(fye_month, today, lookback))
+    if not quarters:
+        return (
+            ReportedPeriodWindow(
+                status=ReportedPeriodStatus.UNKNOWN, reason="fiscal_calendar_unavailable"
+            ),
+            (),
+        )
+    period_ends = tuple(quarter_end_date(year, quarter, fye_month) for year, quarter in quarters)
+    fye_day = monthrange(2001, fye_month)[1]
+    fye = f"{fye_month:02d}-{fye_day:02d}"
+    proof_sha256 = hashlib.sha256(
+        canonical_json_ascii(
+            {
+                "fiscal_year_end": fye,
+                "period_ends": [d.isoformat() for d in period_ends],
+                "reason": "fiscal_calendar_window",
+                "ticker": ticker.upper(),
+            }
+        ).encode("utf-8")
+    ).hexdigest()
+    return (
+        ReportedPeriodWindow(
+            status=ReportedPeriodStatus.COMPLETE,
+            period_ends=period_ends,
+            snapshot_ids=(),
+            fiscal_year_end=fye,
+            proof_sha256=proof_sha256,
+            reason="fiscal_calendar_window",
+        ),
+        quarters,
+    )
+
+
 def _source_reported_quarters(
     conn: sqlite3.Connection, *, ticker: str, fye_month: int, today: date, lookback: int
 ) -> tuple[ReportedPeriodWindow, tuple[tuple[int, int], ...]]:
-    """Map a sealed source window to fiscal labels without inventing a quarter."""
+    """Use sealed source window when present, otherwise fall back to fiscal calendar."""
     try:
         window = reported_period_window_from_inventory(
             conn, ticker=ticker, as_of=today, max_quarters=lookback
@@ -185,7 +224,9 @@ def _source_reported_quarters(
             status=ReportedPeriodStatus.UNKNOWN, reason="source_inventory_unavailable"
         )
     if window.status is not ReportedPeriodStatus.COMPLETE:
-        return window, ()
+        return _calendar_window_fallback(
+            ticker=ticker, fye_month=fye_month, today=today, lookback=lookback
+        )
     mapped: list[tuple[int, int]] = []
     for period_end in window.period_ends:
         labels = [

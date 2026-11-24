@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
@@ -15,12 +16,19 @@ from models.documents import DocType, SourceType
 from pipeline import transcript_acquisition
 from pipeline.source_policy import ReportedPeriodStatus, ReportedPeriodWindow
 from pipeline.transcript_acquisition import (
+    COMBINED_SOURCE_REGIME_IDENTITY,
     TranscriptAcquisitionDeniedError,
+    authorize_transcript_request,
+    persist_authorized_transcript_artifact,
     stage_pending_issuer_transcripts,
 )
 from transcripts.acquisition_semantics import (
+    TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+    ExistingArtifactBehavior,
     TranscriptAcquisitionEntrypoint,
+    TranscriptAcquisitionRequest,
     TranscriptAuthorizationStatus,
+    TranscriptProvider,
 )
 from transcripts.immutable_staging import StagedTranscriptArtifact
 
@@ -257,3 +265,169 @@ def test_rejects_persisted_transcript_under_mismatched_ticker_directory(
                 entrypoint=TranscriptAcquisitionEntrypoint.QUARTERLY_REFRESH,
                 as_of=date(2026, 11, 22),
             )
+
+
+def test_calendar_fallback_authorizes_portfolio_and_denies_index_member_without_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_staging_double(monkeypatch)
+    repo_root = tmp_path / "repo"
+    staging_root = repo_root / ".tmp" / "transcript-acquisition"
+    staging_root.mkdir(parents=True)
+
+    rel = "ir_documents/BKNG/2026-09-30/ir_transcript__q3.pdf"
+    pdf_path = repo_root / rel
+    pdf_path.parent.mkdir(parents=True)
+    payload = b"%PDF-1.4\nBKNG Q3 2026"
+    pdf_path.write_bytes(payload)
+
+    with sqlite3.connect(repo_root / "test.db") as conn:
+        _setup_db(conn)
+        conn.execute(
+            "INSERT INTO tracked_companies VALUES ('BKNG', 'portfolio', NULL, '12-31', 'equity')"
+        )
+        conn.execute(
+            "INSERT INTO tracked_companies VALUES ('IDX', 'index_member', NULL, '12-31', 'equity')"
+        )
+        conn.execute(
+            "INSERT INTO documents VALUES (1, 'BKNG', ?, ?, '2026-09-30', ?, ?, ?, ?)",
+            (
+                SourceType.IR_DOC.value,
+                DocType.IR_TRANSCRIPT.value,
+                rel,
+                hashlib.sha256(payload).hexdigest(),
+                len(payload),
+                "https://s25.q4cdn.com/383369491/files/content_files/Q3.pdf",
+            ),
+        )
+        req_ok = TranscriptAcquisitionRequest(
+            schema_version="transcript-acquisition-request@2",
+            entrypoint=TranscriptAcquisitionEntrypoint.QUARTERLY_REFRESH,
+            canonical_ticker="BKNG",
+            fiscal_year=2026,
+            fiscal_quarter=3,
+            as_of=date(2026, 11, 24),
+            source_type=SourceType.IR_DOC,
+            document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+            provider=TranscriptProvider.ISSUER_IR,
+            owner_requested=False,
+            existing_artifact=False,
+            existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+            source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+            source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
+        )
+        auth_ok = authorize_transcript_request(conn, req_ok)
+        assert auth_ok.status is TranscriptAuthorizationStatus.AUTHORIZED
+
+        req_idx = req_ok.model_copy(update={"canonical_ticker": "IDX"})
+        auth_idx = authorize_transcript_request(conn, req_idx)
+        assert auth_idx.status is TranscriptAuthorizationStatus.DENIED
+
+        artifacts = stage_pending_issuer_transcripts(
+            conn,
+            tickers=["BKNG"],
+            project_root=repo_root,
+            private_root=staging_root,
+            entrypoint=TranscriptAcquisitionEntrypoint.INGEST_TRANSCRIPTS,
+            as_of=date(2026, 11, 24),
+        )
+        assert 1 in artifacts
+
+        outside_pdf = tmp_path / "outside.pdf"
+        outside_pdf.write_bytes(payload)
+        conn.execute(
+            "INSERT INTO documents VALUES (2, 'BKNG', ?, ?, '2026-09-30', ?, ?, ?, ?)",
+            (
+                SourceType.IR_DOC.value,
+                DocType.IR_TRANSCRIPT.value,
+                "../outside.pdf",
+                hashlib.sha256(payload).hexdigest(),
+                len(payload),
+                "https://s25.q4cdn.com/383369491/files/content_files/Q3.pdf",
+            ),
+        )
+        with pytest.raises(TranscriptAcquisitionDeniedError, match="escapes project root"):
+            stage_pending_issuer_transcripts(
+                conn,
+                tickers=["BKNG"],
+                project_root=repo_root,
+                private_root=staging_root,
+                entrypoint=TranscriptAcquisitionEntrypoint.INGEST_TRANSCRIPTS,
+                as_of=date(2026, 11, 24),
+            )
+
+
+def test_persisted_ir_document_receipt_allows_cdn_url(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_staging_double(monkeypatch)
+    if sys.platform == "darwin":
+        monkeypatch.setattr(
+            transcript_acquisition,
+            "read_staged_transcript",
+            lambda artifact, **_kwargs: artifact.staged_path.read_bytes(),
+        )
+    repo_root = tmp_path / "repo"
+    staging_root = repo_root / ".tmp" / "transcript-acquisition"
+    staging_root.mkdir(parents=True)
+    rel = "ir_documents/BKNG/2026-09-30/ir_transcript__q3.pdf"
+    pdf_path = repo_root / rel
+    pdf_path.parent.mkdir(parents=True)
+    payload = b"%PDF-1.4\nBKNG Q3 CDN"
+    pdf_path.write_bytes(payload)
+
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, name, list_type, fiscal_year_end, instrument_type) "
+            "VALUES ('BKNG', 'Booking Holdings', 'portfolio', '12-31', 'equity')"
+        )
+        conn.execute(
+            "INSERT INTO documents (id, ticker, source_type, doc_type, period_end, file_path, "
+            "sha256, fetched_at, fetch_status, raw_bytes_size, source_url) VALUES "
+            "(1, 'BKNG', 'ir_doc', 'ir_transcript', '2026-09-30', ?, ?, "
+            "'2026-11-04T00:00:00', 'ok', ?, ?)",
+            (
+                rel,
+                hashlib.sha256(payload).hexdigest(),
+                len(payload),
+                "https://s25.q4cdn.com/383369491/files/content_files/Q3.pdf",
+            ),
+        )
+        artifacts = stage_pending_issuer_transcripts(
+            conn,
+            tickers=["BKNG"],
+            project_root=repo_root,
+            private_root=staging_root,
+            entrypoint=TranscriptAcquisitionEntrypoint.INGEST_TRANSCRIPTS,
+            as_of=date(2026, 11, 24),
+        )
+        receipt_id = persist_authorized_transcript_artifact(
+            conn,
+            artifacts[1],
+            project_root=repo_root,
+            trusted_staging_root=staging_root,
+        )
+        assert len(receipt_id) == 64
+
+
+def test_evidence_root_resolves_db_directory_with_ir_documents(tmp_path: Path) -> None:
+    from execution import ingest_transcripts, quarterly_refresh
+
+    scratch = tmp_path / "scratch" / "earnings-summary"
+    (scratch / "ir_documents").mkdir(parents=True)
+    (scratch / "data").mkdir(parents=True)
+    db_file = scratch / "data" / "portfolio.db"
+    db_file.write_bytes(b"")
+
+    assert ingest_transcripts._evidence_root(db_file) == scratch.resolve()
+    assert quarterly_refresh._evidence_root(db_file) == scratch.resolve()
+
+    other_db = tmp_path / "isolated" / "data" / "test.db"
+    other_db.parent.mkdir(parents=True)
+    other_db.write_bytes(b"")
+    assert ingest_transcripts._evidence_root(other_db) == ingest_transcripts.PROJECT_ROOT
+    assert quarterly_refresh._evidence_root(other_db) == quarterly_refresh.PROJECT_ROOT
