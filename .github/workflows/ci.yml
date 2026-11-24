@@ -44,6 +44,7 @@ jobs:
       python: ${{ steps.classify.outputs.python }}
       tests: ${{ steps.tests.outputs.tests }}
       test_matrix: ${{ steps.tests.outputs.matrix }}
+      windows_app: ${{ steps.tests.outputs.windows_app }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -762,7 +763,9 @@ jobs:
   windows-app:
     name: Native Windows Application Tests
     needs: [changes]
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    # A pull request runs it only when its test selection chose one of these
+    # files (ci_gate.py windows_app_needed); main and the merge queue always do.
+    if: ${{ needs.changes.outputs.code == 'true' && needs.changes.outputs.windows_app != 'false' }}
     runs-on: windows-latest
     # The application's own harness (conftest, migrated fixture databases, the
     # vendored hash-verified SQLite DLL) on a disposable hosted Windows VM, for
@@ -902,6 +905,7 @@ jobs:
           CODE_CHANGED: ${{ needs.changes.outputs.code || 'false' }}
           PYTHON_CHANGED: ${{ needs.changes.outputs.python || 'false' }}
           TESTS_NEEDED: ${{ needs.changes.outputs.tests || 'true' }}
+          WINDOWS_APP_NEEDED: ${{ needs.changes.outputs.windows_app || 'true' }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           PUBLIC_BOUNDARY_RESULT: ${{ needs.public-boundary.result }}
           FAST_SIGNAL_RESULT: ${{ needs.fast-signal.result }}
@@ -917,6 +921,7 @@ jobs:
           --code "$CODE_CHANGED"
           --python "$PYTHON_CHANGED"
           --tests "$TESTS_NEEDED"
+          --windows-app "$WINDOWS_APP_NEEDED"
           --changes-result "$CHANGES_RESULT"
           --public-boundary-result "$PUBLIC_BOUNDARY_RESULT"
           --fast-signal-result "$FAST_SIGNAL_RESULT"
