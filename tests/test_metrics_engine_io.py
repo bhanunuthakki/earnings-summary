@@ -14,7 +14,7 @@ from contextlib import closing
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -1019,3 +1019,139 @@ def test_compute_for_ticker_valuation_idempotent_on_unchanged_price(
     assert first.computed_ok > 0
     assert second.attempts_written == 0
     assert second.skipped_unchanged == first.attempts_written
+
+
+def test_recompute_supersedes_legacy_null_currency_derived_rows(
+    conn: sqlite3.Connection,
+) -> None:
+    """A monetary derived row persisted before currency admission (NULL
+    currency) must not block a later recompute from the same anchor document.
+
+    The recompute appends a successor that names the predecessor; the legacy
+    row stays in place (append-only), and the attempt points at the successor.
+    """
+    _seed_operating_company(conn, "TEST")
+    _set_classification(conn, "TEST", "operating_company", "us_gaap")
+    original_insert = metrics_io.insert_kpi_with_restatement_detection
+
+    def _pre_currency_writer(
+        connection: sqlite3.Connection, **kwargs: Any
+    ) -> tuple[int | None, int | None]:
+        # Reproduce rows written before derived currency admission existed.
+        kwargs["currency"] = None
+        return original_insert(connection, **kwargs)
+
+    with patch.object(metrics_io, "insert_kpi_with_restatement_detection", _pre_currency_writer):
+        compute_for_ticker(conn, "TEST")
+    legacy = _latest_attempt(conn, "TEST", "net_debt_strict")
+    assert legacy["status"] == "ok"
+    legacy_row = conn.execute(
+        "SELECT id, value, currency, source_doc_id FROM kpi_facts WHERE id = ?",
+        (legacy["kpi_fact_id"],),
+    ).fetchone()
+    assert legacy_row["currency"] is None
+
+    summary = compute_for_ticker(conn, "TEST", force=True)
+    assert summary.attempts_written > 0
+
+    current = _latest_attempt(conn, "TEST", "net_debt_strict")
+    successor = conn.execute(
+        "SELECT value, currency, source_doc_id, supersedes_id FROM kpi_facts WHERE id = ?",
+        (current["kpi_fact_id"],),
+    ).fetchone()
+    assert successor["supersedes_id"] == legacy_row["id"]
+    assert successor["currency"] == "USD"
+    assert successor["source_doc_id"] == legacy_row["source_doc_id"]
+    assert Decimal(str(successor["value"])) == Decimal(str(legacy_row["value"]))
+    preserved = conn.execute(
+        "SELECT value, currency FROM kpi_facts WHERE id = ?", (legacy_row["id"],)
+    ).fetchone()
+    assert preserved["currency"] is None
+    assert Decimal(str(preserved["value"])) == Decimal(str(legacy_row["value"]))
+
+    # A third run with the same inputs is a no-op against the successor head.
+    again = compute_for_ticker(conn, "TEST", force=True)
+    assert again.attempts_written == summary.attempts_written
+    assert _latest_attempt(conn, "TEST", "net_debt_strict")["kpi_fact_id"] in (
+        None,
+        current["kpi_fact_id"],
+    )
+    chain = conn.execute(
+        "SELECT COUNT(*) FROM kpi_facts WHERE ticker='TEST' AND source_doc_id=? "
+        "AND kpi_definition_id=(SELECT kpi_definition_id FROM kpi_facts WHERE id=?) "
+        "AND period_end=(SELECT period_end FROM kpi_facts WHERE id=?)",
+        (legacy_row["source_doc_id"], legacy_row["id"], legacy_row["id"]),
+    ).fetchone()[0]
+    assert chain == 2
+
+
+def test_derived_recompute_with_changed_value_appends_successor(
+    conn: sqlite3.Connection,
+) -> None:
+    """Changed inputs behind the same anchor document append a successor.
+
+    This is the production `backfill conflicts with persisted fact identity`
+    case: a NULL-currency legacy head and a recompute with a different value.
+    A non-derived writer with the same shape still fails closed.
+    """
+    _seed_operating_company(conn, "TEST")
+    _set_classification(conn, "TEST", "operating_company", "us_gaap")
+    original_insert = metrics_io.insert_kpi_with_restatement_detection
+
+    def _pre_currency_writer(
+        connection: sqlite3.Connection, **kwargs: Any
+    ) -> tuple[int | None, int | None]:
+        kwargs["currency"] = None
+        return original_insert(connection, **kwargs)
+
+    with patch.object(metrics_io, "insert_kpi_with_restatement_detection", _pre_currency_writer):
+        compute_for_ticker(conn, "TEST")
+    legacy_id = _latest_attempt(conn, "TEST", "net_debt_strict")["kpi_fact_id"]
+    legacy = conn.execute("SELECT * FROM kpi_facts WHERE id = ?", (legacy_id,)).fetchone()
+    period_end = datetime.fromisoformat(str(legacy["period_end"]))
+    fiscal_period_type = str(legacy["fiscal_period_type"])
+    definition_id = int(legacy["kpi_definition_id"])
+    unit = str(legacy["unit"])
+    doc_id = int(legacy["source_doc_id"])
+    computed_from = str(legacy["computed_from"])
+
+    def _write(
+        value: Decimal, currency: str, extracted_by: str, lineage: str | None
+    ) -> tuple[int | None, int | None]:
+        return original_insert(
+            conn,
+            ticker="TEST",
+            period_end=period_end,
+            fiscal_period_type=fiscal_period_type,
+            kpi_definition_id=definition_id,
+            value=value,
+            unit=unit,
+            currency=currency,
+            source_doc_id=doc_id,
+            extracted_by=extracted_by,
+            computed_from=lineage,
+        )
+
+    changed = Decimal(str(legacy["value"])) + Decimal("7")
+
+    with pytest.raises(ValueError, match="backfill conflicts with persisted fact identity"):
+        _write(changed, "USD", "llm_extracted", None)
+
+    new_id, superseded = _write(changed, "USD", "metrics_engine", computed_from)
+    assert new_id is not None
+    assert superseded == legacy_id
+    successor = conn.execute(
+        "SELECT value, currency, supersedes_id FROM kpi_facts WHERE id = ?", (new_id,)
+    ).fetchone()
+    assert Decimal(str(successor["value"])) == changed
+    assert successor["currency"] == "USD"
+    assert successor["supersedes_id"] == legacy_id
+    unchanged = conn.execute(
+        "SELECT value, currency FROM kpi_facts WHERE id = ?", (legacy_id,)
+    ).fetchone()
+    assert Decimal(str(unchanged["value"])) == Decimal(str(legacy["value"]))
+    assert unchanged["currency"] is None
+
+    # A different currency against a currency-bearing head stays a conflict.
+    with pytest.raises(ValueError, match="derived KPI currency conflicts"):
+        _write(changed, "EUR", "metrics_engine", computed_from)

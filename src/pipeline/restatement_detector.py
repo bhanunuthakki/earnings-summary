@@ -43,6 +43,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from typing import NamedTuple
 
 from provenance.financial_fact_resolution import resolve_fact_row
 
@@ -654,6 +655,54 @@ def insert_with_restatement_detection(
     return (new_row_id, supersedes_id)
 
 
+DERIVED_RECOMPUTE_EXTRACTOR = "metrics_engine"
+
+
+class _SameDocumentKpiHead(NamedTuple):
+    id: int
+    value: object
+    unit: str
+    currency: str | None
+    extracted_by: str | None
+
+
+def _same_document_kpi_head(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    period_end: datetime,
+    fiscal_period_type: str,
+    kpi_definition_id: int,
+    source_doc_id: int,
+) -> _SameDocumentKpiHead | None:
+    """Return the current head among same-document rows for one KPI key.
+
+    Rows are append-only and a successor is always inserted after the row it
+    supersedes, so the highest id is the head of the same-document chain.
+    """
+    row = conn.execute(
+        "SELECT id, value, unit, currency, extracted_by FROM kpi_facts "
+        "WHERE ticker=? AND date(period_end)=date(?) AND fiscal_period_type=? "
+        "AND kpi_definition_id=? AND source_doc_id=? ORDER BY id DESC LIMIT 1",
+        (
+            ticker.upper(),
+            period_end.strftime("%Y-%m-%d"),
+            fiscal_period_type,
+            kpi_definition_id,
+            source_doc_id,
+        ),
+    ).fetchone()
+    if row is None:
+        return None
+    return _SameDocumentKpiHead(
+        id=int(row[0]),
+        value=row[1],
+        unit=str(row[2]),
+        currency=None if row[3] is None else str(row[3]),
+        extracted_by=None if row[4] is None else str(row[4]),
+    )
+
+
 def insert_kpi_with_restatement_detection(
     conn: sqlite3.Connection,
     *,
@@ -760,36 +809,46 @@ def insert_kpi_with_restatement_detection(
     if formula_version is not None and _table_has_column(conn, "kpi_facts", "formula_version"):
         tail_cols.append("formula_version")
         tail_vals.append(formula_version)
-    if currency is not None and _table_has_column(conn, "kpi_facts", "currency"):
-        existing_currency = conn.execute(
-            "SELECT id, value, unit, currency FROM kpi_facts WHERE ticker=? AND date(period_end)=date(?) "
-            "AND fiscal_period_type=? AND kpi_definition_id=? AND source_doc_id=?",
-            (
-                ticker.upper(),
-                period_end.strftime("%Y-%m-%d"),
-                fiscal_period_type,
-                kpi_definition_id,
-                source_doc_id,
-            ),
-        ).fetchone()
-        if existing_currency is not None:
-            stored = (
-                existing_currency["currency"]
-                if hasattr(existing_currency, "keys")
-                else existing_currency[3]
-            )
+    has_currency_col = _table_has_column(conn, "kpi_facts", "currency")
+    derived_recompute = (
+        extracted_by == DERIVED_RECOMPUTE_EXTRACTOR and computed_from is not None and has_audit_cols
+    )
+    same_doc_head = (
+        _same_document_kpi_head(
+            conn,
+            ticker=ticker,
+            period_end=period_end,
+            fiscal_period_type=fiscal_period_type,
+            kpi_definition_id=kpi_definition_id,
+            source_doc_id=source_doc_id,
+        )
+        if has_currency_col and (derived_recompute or currency is not None)
+        else None
+    )
+    if (
+        derived_recompute
+        and same_doc_head is not None
+        and same_doc_head.extracted_by == DERIVED_RECOMPUTE_EXTRACTOR
+    ):
+        # A deterministic recomputation from the same anchor document. The
+        # persisted head is a prior calculation, not management wording, so a
+        # changed value, unit or newly admitted currency appends a successor
+        # that names its predecessor. The predecessor row stays unchanged.
+        stored_currency = same_doc_head.currency
+        if stored_currency is not None and stored_currency != currency:
+            raise ValueError("same-document derived KPI currency conflicts with persisted fact")
+        if (
+            _decimal_eq(same_doc_head.value, value)
+            and same_doc_head.unit == unit
+            and stored_currency == currency
+        ):
+            return (None, None)
+        supersedes_id = same_doc_head.id
+    elif currency is not None and has_currency_col:
+        if same_doc_head is not None:
+            stored = same_doc_head.currency
             if stored is None:
-                stored_value = (
-                    existing_currency["value"]
-                    if hasattr(existing_currency, "keys")
-                    else existing_currency[1]
-                )
-                stored_unit = (
-                    existing_currency["unit"]
-                    if hasattr(existing_currency, "keys")
-                    else existing_currency[2]
-                )
-                if not _decimal_eq(stored_value, value) or str(stored_unit) != unit:
+                if not _decimal_eq(same_doc_head.value, value) or same_doc_head.unit != unit:
                     raise ValueError(
                         "same-document KPI currency backfill conflicts with persisted fact identity"
                     )
