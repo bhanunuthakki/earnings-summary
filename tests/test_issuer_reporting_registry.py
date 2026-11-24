@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
 from provenance.evidence_ledger import (
     ContentBlob,
@@ -40,27 +39,12 @@ from provenance.issuer_registry import (
     listing_candidate_digest,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
-PRIOR = "0226_fact_cutover_performance_indexes"
-HEAD = "0227_issuer_reporting_registry"
 STAMP = datetime(2026, 7, 27, 20, 0, tzinfo=UTC)
 SHA = "a" * 64
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
 def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
-    path = migrated_db(
-        tmp_path / "issuer-registry.db",
-        stamp="0213_decision_draft_provider_id",
-        target=HEAD,
-        archived=True,
-    )
+    path = migrated_db(tmp_path / "issuer-registry.db")
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn

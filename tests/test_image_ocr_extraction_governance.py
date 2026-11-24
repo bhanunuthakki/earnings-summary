@@ -42,12 +42,7 @@ def schema_template(
     migrated_db: Callable[..., Path],
 ) -> Path:
     path = tmp_path_factory.mktemp("image-ocr-schema") / "template.db"
-    return migrated_db(
-        path,
-        stamp="0213_decision_draft_provider_id",
-        archived=True,
-        target="0234_image_ocr_governance",
-    )
+    return migrated_db(path)
 
 
 def _png_header(width: int = 640, height: int = 480) -> bytes:

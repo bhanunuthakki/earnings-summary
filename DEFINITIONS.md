@@ -360,13 +360,13 @@ These are the owner-facing verbs that are allowed to mutate durable state. A lab
 
 **Definition.** A single revisable belief-unit in the Worldview — a principle about *how the analyst invests* — with provenance to the insights that formed it; the system proposes revisions the analyst approves and flags contradictions when a new insight conflicts with a standing Tenet.
 **Lives in.** `insight_notes` with `kind='tenet'`, owned by `src/synthesis/tenets.py`; current Tenets compose the Worldview and proposed Tenets remain in the approval queue.
-**Not to be confused with.** A **conviction** (see below) — a `conviction` is a *1–5 confidence rating on a position/decision* (`bucket_for_conviction`, conviction calibration/Brier in `src/advisor/`, and the `conviction` field on `decision_capture`). A Tenet is a cross-company belief about *method*, not a confidence level on a name. Also distinct from a `musing` (an in-the-moment captured thought) and an `insight_note` of `kind='theme'` (a topic cluster, not a belief).
+**Not to be confused with.** A **conviction** (see below) — a `conviction` is a *1–5 confidence rating on a position/decision* (`bucket_for_conviction`, and conviction calibration/Brier in `src/advisor/`). A Tenet is a cross-company belief about *method*, not a confidence level on a name. Also distinct from a `musing` (an in-the-moment captured thought) and an `insight_note` of `kind='theme'` (a topic cluster, not a belief).
 **Subsumes.** — (was proposed as "Conviction" 2026-07-01; renamed to avoid collision with the entrenched `conviction` rating.)
 
 ## conviction (rating)
 
 **Definition.** A 1–5 confidence score the analyst assigns to a position/stance/decision, used for calibration (hit-rate by conviction bucket, Brier scoring).
-**Lives in.** `src/advisor/context.py`, `src/advisor/memos.py`, the sizing-audit conviction column, `src/research/decision_capture.py` (`conviction` field).
+**Lives in.** `src/advisor/context.py`, `src/advisor/memos.py`, and the sizing-audit conviction column.
 **Not to be confused with.** A **Tenet** (a Worldview belief-unit). Lowercase `conviction` = a rating; a Tenet = a belief.
 
 ## Source Taxonomy Component

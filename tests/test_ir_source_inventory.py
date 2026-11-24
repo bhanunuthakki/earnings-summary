@@ -20,11 +20,10 @@ from ir_pipeline.source_inventory import (
     sync_ir_source_inventory,
 )
 from runtime.job_runtime import JobAlreadyRunningError
+from tests.evidence_support import seed_issuer, seed_source_obligation
 
 STAMP = datetime(2026, 7, 27, 8, 0, tzinfo=UTC)
 CONFIG_SHA = "c" * 64
-_PRIOR_HEAD = "0213_decision_draft_provider_id"
-_TARGET = "0220_source_inventory_seals"
 
 
 class _BusyLock:
@@ -44,10 +43,17 @@ class _BusyLock:
 
 def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     path = tmp_path / "ir-source-inventory.db"
-    migrated_db(path, stamp=_PRIOR_HEAD, target=_TARGET, archived=True)
+    migrated_db(path)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
+    seed_issuer(conn, "issuer-acme")
+    seed_source_obligation(conn, "issuer-acme")
+    conn.commit()
     return conn
+
+
+def _registry_unavailable(_conn: sqlite3.Connection) -> bool:
+    return False
 
 
 def _inventory(*, partial: bool = False) -> DocumentDiscoveryInventory:
@@ -227,6 +233,8 @@ def test_cli_defaults_to_structured_read_only_dry_run(
     db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
     conn.close()
     capsys.readouterr()
+    # Identity resolution has its own tests; this one covers dry-run output.
+    monkeypatch.setattr(cli, "issuer_registry_available", _registry_unavailable)
 
     def _discover(**_kwargs: object) -> DocumentDiscoveryInventory:
         return _inventory()
@@ -318,6 +326,9 @@ def test_cli_failure_log_omits_raw_exception_body(
     conn = _conn(tmp_path, migrated_db)
     db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
     conn.close()
+
+    # Identity resolution has its own tests; this one covers log redaction.
+    monkeypatch.setattr(cli, "issuer_registry_available", _registry_unavailable)
 
     def _fail(**_kwargs: object) -> DocumentDiscoveryInventory:
         raise RuntimeError("credential-bearing response body")

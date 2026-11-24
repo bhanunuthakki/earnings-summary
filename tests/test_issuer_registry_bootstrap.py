@@ -26,27 +26,14 @@ from provenance.issuer_registry_bootstrap import (
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-HEAD = "0230_evidence_subject_bindings"
 STAMP = datetime(2026, 7, 27, 21, 0, tzinfo=UTC)
 SOURCE_URL = "https://www.sec.gov/files/company_tickers.json"
 
 
 def _database(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     path = tmp_path / "bootstrap.db"
-    migrated_db(path, stamp="0213_decision_draft_provider_id", archived=True, target=HEAD)
+    migrated_db(path)
     conn = sqlite3.connect(path)
-    conn.execute(
-        """
-        CREATE TABLE tracked_companies (
-            id INTEGER PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            ticker TEXT NOT NULL,
-            name TEXT NOT NULL,
-            list_type TEXT NOT NULL,
-            archived_at TIMESTAMP
-        )
-        """
-    )
     conn.commit()
     conn.close()
     return path
@@ -80,7 +67,7 @@ def test_dry_run_is_read_only_and_excludes_index_members(
     db_path = _database(tmp_path, migrated_db)
     writer = sqlite3.connect(db_path)
     writer.executemany(
-        "INSERT INTO tracked_companies VALUES (?, 'bhanu', ?, ?, ?, NULL)",
+        "INSERT INTO tracked_companies (id, user_id, ticker, name, list_type, archived_at) VALUES (?, 'bhanu', ?, ?, ?, NULL)",
         (
             (1, "ACME", "Acme", "portfolio"),
             (2, "MON", "Monitor", "watchlist"),
@@ -128,7 +115,7 @@ def test_apply_captures_evidence_and_exact_replay_creates_nothing(
     db_path = _database(tmp_path, migrated_db)
     conn = sqlite3.connect(db_path)
     conn.execute(
-        "INSERT INTO tracked_companies VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
+        "INSERT INTO tracked_companies (id, user_id, ticker, name, list_type, archived_at) VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
     )
     conn.commit()
     raw = _body({"cik_str": 123456, "ticker": "ACME", "title": "Acme Corporation"})
@@ -208,7 +195,7 @@ def test_new_source_observation_reuses_immutable_reporting_entity(
     db_path = _database(tmp_path, migrated_db)
     conn = sqlite3.connect(db_path)
     conn.execute(
-        "INSERT INTO tracked_companies VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
+        "INSERT INTO tracked_companies (id, user_id, ticker, name, list_type, archived_at) VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
     )
     conn.commit()
     first_raw = _body({"cik_str": 123456, "ticker": "ACME", "title": "Acme Corporation"})
@@ -254,7 +241,7 @@ def test_document_persistence_auto_binds_resolved_sec_cik_subject(
     db_path = _database(tmp_path, migrated_db)
     conn = sqlite3.connect(db_path)
     conn.execute(
-        "INSERT INTO tracked_companies VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
+        "INSERT INTO tracked_companies (id, user_id, ticker, name, list_type, archived_at) VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
     )
     conn.commit()
     raw = _body({"cik_str": 123456, "ticker": "ACME", "title": "Acme Corporation"})
@@ -333,7 +320,7 @@ def test_bootstrap_reconciles_existing_sec_cik_evidence_subject(
     db_path = _database(tmp_path, migrated_db)
     conn = sqlite3.connect(db_path)
     conn.execute(
-        "INSERT INTO tracked_companies VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
+        "INSERT INTO tracked_companies (id, user_id, ticker, name, list_type, archived_at) VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
     )
     conn.execute(
         "INSERT INTO evidence_document_versions "
@@ -367,7 +354,7 @@ def test_duplicate_and_missing_sec_tickers_remain_explicitly_unresolved(
     db_path = _database(tmp_path, migrated_db)
     conn = sqlite3.connect(db_path)
     conn.executemany(
-        "INSERT INTO tracked_companies VALUES (?, 'bhanu', ?, ?, ?, NULL)",
+        "INSERT INTO tracked_companies (id, user_id, ticker, name, list_type, archived_at) VALUES (?, 'bhanu', ?, ?, ?, NULL)",
         (
             (1, "DUP", "Duplicate", "portfolio"),
             (2, "MISS", "Missing", "evaluation"),
@@ -408,7 +395,7 @@ def test_evidence_only_ticker_is_bound_without_entering_research_scope(
     db_path = _database(tmp_path, migrated_db)
     conn = sqlite3.connect(db_path)
     conn.executemany(
-        "INSERT INTO tracked_companies VALUES (?, 'bhanu', ?, ?, ?, NULL)",
+        "INSERT INTO tracked_companies (id, user_id, ticker, name, list_type, archived_at) VALUES (?, 'bhanu', ?, ?, ?, NULL)",
         (
             (1, "ACME", "Acme", "portfolio"),
             (2, "HIST", "Historical index constituent", "index_member"),
@@ -549,7 +536,7 @@ def test_selected_ticker_scope_does_not_bootstrap_other_active_issuers(
     db_path = _database(tmp_path, migrated_db)
     conn = sqlite3.connect(db_path)
     conn.executemany(
-        "INSERT INTO tracked_companies VALUES (?, 'bhanu', ?, ?, ?, NULL)",
+        "INSERT INTO tracked_companies (id, user_id, ticker, name, list_type, archived_at) VALUES (?, 'bhanu', ?, ?, ?, NULL)",
         ((1, "ONON", "On", "watchlist"), (2, "OTHER", "Other", "portfolio")),
     )
     conn.commit()
@@ -607,7 +594,7 @@ def test_ordinary_ticker_bootstrap_binds_both_subject_keys(
     path = _database(tmp_path, migrated_db)
     conn = sqlite3.connect(path)
     conn.execute(
-        "INSERT INTO tracked_companies VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
+        "INSERT INTO tracked_companies (id, user_id, ticker, name, list_type, archived_at) VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
     )
     conn.commit()
     raw = _body({"cik_str": 123456, "ticker": "ACME", "title": "Acme Corporation"})
@@ -650,7 +637,7 @@ def test_ticker_bootstrap_preserves_conflicting_subject_resolution(
     path = _database(tmp_path, migrated_db)
     conn = sqlite3.connect(path)
     conn.executemany(
-        "INSERT INTO tracked_companies VALUES (?, 'bhanu', ?, ?, 'portfolio', NULL)",
+        "INSERT INTO tracked_companies (id, user_id, ticker, name, list_type, archived_at) VALUES (?, 'bhanu', ?, ?, 'portfolio', NULL)",
         [(1, "ACME", "Acme"), (2, "OTHER", "Other")],
     )
     conn.commit()
@@ -737,7 +724,7 @@ def test_subject_binding_constraint_failure_rolls_back_whole_bootstrap(
     path = _database(tmp_path, migrated_db)
     conn = sqlite3.connect(path)
     conn.execute(
-        "INSERT INTO tracked_companies VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
+        "INSERT INTO tracked_companies (id, user_id, ticker, name, list_type, archived_at) VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
     )
     conn.execute(
         "CREATE TRIGGER reject_canonical_subject BEFORE INSERT ON recorded_subject_binding_revisions "
@@ -776,7 +763,7 @@ def test_ticker_bootstrap_preserves_existing_selected_security(
     path = _database(tmp_path, migrated_db)
     conn = sqlite3.connect(path)
     conn.execute(
-        "INSERT INTO tracked_companies VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
+        "INSERT INTO tracked_companies (id, user_id, ticker, name, list_type, archived_at) VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
     )
     conn.commit()
     raw = _body({"cik_str": 123456, "ticker": "ACME", "title": "Acme Corporation"})
@@ -860,7 +847,7 @@ def test_new_subject_on_retained_authority_uses_current_knowledge_clock(
     path = _database(tmp_path, migrated_db)
     conn = sqlite3.connect(path)
     conn.execute(
-        "INSERT INTO tracked_companies VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
+        "INSERT INTO tracked_companies (id, user_id, ticker, name, list_type, archived_at) VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
     )
     conn.commit()
     raw = _body(
@@ -871,7 +858,7 @@ def test_new_subject_on_retained_authority_uses_current_knowledge_clock(
         conn, raw_body=raw, request=_request(tmp_path, apply=True)
     )
     conn.execute(
-        "INSERT INTO tracked_companies VALUES (2, 'bhanu', 'ALIAS', 'Acme', 'portfolio', NULL)"
+        "INSERT INTO tracked_companies (id, user_id, ticker, name, list_type, archived_at) VALUES (2, 'bhanu', 'ALIAS', 'Acme', 'portfolio', NULL)"
     )
     conn.commit()
     later = STAMP + timedelta(days=1)

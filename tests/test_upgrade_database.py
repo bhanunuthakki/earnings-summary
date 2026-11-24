@@ -14,15 +14,12 @@ from uuid import uuid4
 
 import pytest
 import upgrade_database as upgrade_database_module
-from alembic.config import Config
 from upgrade_database import (
     ACTIVE_HEAD,
     UpgradeDatabaseError,
     upgrade_database,
 )
 
-import db as legacy_db
-from alembic import command
 from execution import portfolio_readiness_receipt as readiness_module
 from execution.backup_restore_readiness_receipt import (
     collect_backup_restore_receipt,
@@ -509,99 +506,6 @@ def test_documented_phase0_sequence_is_repeatable_across_source_changes(tmp_path
                 conn.commit()
 
 
-def test_archived_bridge_rejects_current_schema_without_losing_retained_rows(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
-    db_path = migrated_db(tmp_path / "restamped-current.db")
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "INSERT INTO ask_grounding_traces VALUES "
-            "('trace','key',NULL,'data',?,'[]','sql_viewspec','no_evidence',0,'[]',?,'2026-09-19')",
-            ("a" * 64, "b" * 64),
-        )
-        conn.execute("UPDATE alembic_version SET version_num='0273_post_earnings_readout_budget'")
-    with pytest.raises(UpgradeDatabaseError, match=r"schema.*revision|revision.*schema"):
-        upgrade_database(
-            db_path,
-            repo_root=ROOT,
-            runtime_root=ROOT,
-            allow_isolated_db=True,
-            backup_path=tmp_path / "before.db",
-        )
-    with sqlite3.connect(db_path) as conn:
-        assert conn.execute("SELECT trace_id FROM ask_grounding_traces").fetchall() == [("trace",)]
-    assert _revision(db_path) == "0273_post_earnings_readout_budget"
-
-
-def test_archived_bridge_rejects_closed_detail_lookalike_before_revision_mutation(
-    tmp_path: Path,
-) -> None:
-    db_path = tmp_path / "lookalike-closed-journal.db"
-    upgrade_database(
-        db_path,
-        repo_root=ROOT,
-        runtime_root=ROOT,
-        allow_isolated_db=True,
-    )
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.executescript(
-            """
-            DROP TRIGGER trg_operation_events_no_update;
-            DROP TRIGGER trg_operation_events_no_delete;
-            DROP INDEX ix_operation_events_operation_id;
-            DROP TABLE operation_events;
-            CREATE TABLE operation_events (
-                event_id TEXT NOT NULL PRIMARY KEY,
-                operation_id TEXT NOT NULL,
-                event_kind TEXT NOT NULL,
-                event_sha256 TEXT NOT NULL,
-                occurred_at TEXT NOT NULL,
-                status TEXT,
-                exit_code INTEGER,
-                severity TEXT,
-                detail_code TEXT,
-                detail_reason TEXT,
-                CONSTRAINT ck_lookalike_detail CHECK (
-                    detail_reason IS NULL OR detail_reason='terminal_detail_withheld'
-                )
-            );
-            UPDATE alembic_version
-            SET version_num='0273_post_earnings_readout_budget';
-            """
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    backup_path = tmp_path / "lookalike.before.db"
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(ROOT / "execution" / "sqlite_bootstrap.py"),
-            str(ROOT / "execution" / "upgrade_database.py"),
-            "--db-path",
-            str(db_path),
-            "--repo-root",
-            str(ROOT),
-            "--runtime-root",
-            str(ROOT),
-            "--allow-isolated-db",
-            "--backup-path",
-            str(backup_path),
-        ],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode == 1
-    assert "operation_events" in result.stderr
-    assert _revision(db_path) == "0273_post_earnings_readout_budget"
-    assert _revision(backup_path) == "0273_post_earnings_readout_budget"
-
-
 def test_managed_wrapper_upgrades_exact_0010_to_0014_with_backup_and_closed_journal_schema(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
@@ -847,22 +751,6 @@ def test_upgrade_uses_configured_graph_head(
     assert _revision(db_path) == revision
 
 
-def test_supported_archived_schema_bridges_with_preserved_payload(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
-    db_path = migrated_db(tmp_path / "legacy.db", target="0001_initial_schema")
-    with sqlite3.connect(db_path) as conn:
-        conn.execute("CREATE TABLE retained_payload (value TEXT)")
-        conn.execute("INSERT INTO retained_payload VALUES ('owner state')")
-        conn.execute("UPDATE alembic_version SET version_num='0273_post_earnings_readout_budget'")
-    receipt = upgrade_database(db_path, repo_root=ROOT, runtime_root=ROOT, allow_isolated_db=True)
-    assert receipt.status == "bridged"
-    assert receipt.to_revision == ACTIVE_HEAD
-    assert receipt.backup_path is not None
-    with sqlite3.connect(db_path) as conn:
-        assert conn.execute("SELECT value FROM retained_payload").fetchall() == [("owner state",)]
-
-
 ForeignKeyRow = tuple[int, int, str, str, str | None, str, str, str]
 ForeignKeyColumn = tuple[int, str, str, str | None, str, str, str]
 
@@ -916,25 +804,6 @@ def test_foreign_key_parity_ignores_ids_without_merging_composite_constraints() 
     assert _foreign_key_constraints(original) != _foreign_key_constraints(regrouped)
 
 
-IndexColumn = tuple[int, int, str | None, int, str, int]
-IndexConstraint = tuple[int, str, int, tuple[IndexColumn, ...]]
-
-
-def _index_constraints(connection: sqlite3.Connection, table: str) -> tuple[IndexConstraint, ...]:
-    """Retain index properties and ordered columns without declaration-order IDs."""
-    escaped = table.replace('"', '""')
-    constraints: list[IndexConstraint] = []
-    for _sequence, name, unique, origin, partial in connection.execute(
-        f'PRAGMA index_list("{escaped}")'
-    ):
-        index = str(name).replace('"', '""')
-        columns: list[IndexColumn] = connection.execute(f'PRAGMA index_xinfo("{index}")').fetchall()
-        constraints.append(
-            (unique, origin, partial, tuple(sorted(columns, key=lambda row: row[0])))
-        )
-    return tuple(sorted(constraints, key=repr))
-
-
 def _schema_signature(connection: sqlite3.Connection) -> list[tuple[str, str, tuple[str, ...]]]:
     """Normalize table declaration order; preserve executable SQL statement order."""
     schema_sql = "SELECT type,name,COALESCE(sql,'') FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"
@@ -962,96 +831,3 @@ def test_schema_parity_preserves_trigger_statement_order() -> None:
             "SELECT 2;\nSELECT 1;\nEND;"
         )
         assert _schema_signature(original) != _schema_signature(reordered)
-
-
-def test_genuine_archived_chain_bridges_to_active_schema(
-    tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    database = tmp_path / "genuine-archived.db"
-    with monkeypatch.context() as isolated:
-        isolated.setattr(legacy_db, "DB_PATH", str(database))
-        legacy_db.init_db()
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("version_locations", str(ROOT / "alembic" / "versions_archived"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{database}")
-    command.upgrade(config, "head")
-    with sqlite3.connect(database) as conn:
-        conn.execute(
-            "INSERT INTO tracked_companies (ticker,name,list_type) VALUES ('TST','Retained issuer','portfolio')"
-        )
-        archived_budget = conn.execute(
-            "SELECT hard_block,on_exceed FROM llm_budgets WHERE purpose='senior_partner_brief'"
-        ).fetchone()
-        archived_revision = conn.execute("SELECT version_num FROM alembic_version").fetchone()
-        retained = conn.execute(
-            "SELECT id,ticker,name,list_type FROM tracked_companies WHERE ticker='TST'"
-        ).fetchall()
-    receipt = upgrade_database(database, repo_root=ROOT, runtime_root=ROOT, allow_isolated_db=True)
-    active = migrated_db(tmp_path / "active.db")
-    assert receipt.status == "bridged"
-    assert receipt.to_revision == ACTIVE_HEAD
-    assert receipt.backup_path is not None
-    with sqlite3.connect(receipt.backup_path) as backup:
-        assert (
-            backup.execute("SELECT version_num FROM alembic_version").fetchone()
-            == archived_revision
-        )
-        assert (
-            backup.execute(
-                "SELECT id,ticker,name,list_type FROM tracked_companies WHERE ticker='TST'"
-            ).fetchall()
-            == retained
-        )
-    with sqlite3.connect(database) as conn, sqlite3.connect(active) as control:
-        assert _schema_signature(conn) == _schema_signature(control)
-        # Compare admitted purpose/policy seeds. The historical 0201 hard_block
-        # flag differs from the squash default; bridging must preserve it.
-        assert archived_budget == (0, "block")
-        assert (
-            conn.execute(
-                "SELECT hard_block,on_exceed FROM llm_budgets WHERE purpose='senior_partner_brief'"
-            ).fetchone()
-            == archived_budget
-        )
-        assert control.execute(
-            "SELECT hard_block,on_exceed FROM llm_budgets WHERE purpose='senior_partner_brief'"
-        ).fetchone() == (1, "block")
-        seeds = "SELECT purpose,monthly_cap_usd,warn_threshold_pct,hard_block,on_exceed FROM llm_budgets ORDER BY purpose"
-        bridged_seeds = conn.execute(seeds).fetchall()
-        fresh_seeds = control.execute(seeds).fetchall()
-        assert [row[0] for row in bridged_seeds] == [row[0] for row in fresh_seeds]
-        assert [
-            (old, new) for old, new in zip(bridged_seeds, fresh_seeds, strict=True) if old != new
-        ] == [
-            (
-                ("senior_partner_brief", 6, 0.8, 0, "block"),
-                ("senior_partner_brief", 6, 0.8, 1, "block"),
-            )
-        ]
-
-        assert (
-            conn.execute(
-                "SELECT id,ticker,name,list_type FROM tracked_companies WHERE ticker='TST'"
-            ).fetchall()
-            == retained
-        )
-        objects = "SELECT type,name,tbl_name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name,tbl_name"
-        assert conn.execute(objects).fetchall() == control.execute(objects).fetchall()
-        tables = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-        ).fetchall()
-        for (table,) in tables:
-            assert _index_constraints(conn, str(table)) == _index_constraints(
-                control, str(table)
-            ), table
-            name = str(table).replace('"', '""')
-            assert (
-                conn.execute(f'PRAGMA table_info("{name}")').fetchall()
-                == control.execute(f'PRAGMA table_info("{name}")').fetchall()
-            ), table
-            assert _foreign_key_constraints(
-                conn.execute(f'PRAGMA foreign_key_list("{name}")').fetchall()
-            ) == _foreign_key_constraints(
-                control.execute(f'PRAGMA foreign_key_list("{name}")').fetchall()
-            ), table

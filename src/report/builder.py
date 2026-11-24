@@ -10,12 +10,21 @@ from __future__ import annotations
 import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 from industry_classifier import suppressed_sections_for_ticker
 from llm.calibration import daily_avg_scores, summarize_by_prompt_version
 from pipeline.you_said import render_you_said_strip, render_you_said_strip_for_path
 from provenance.source_read_context import SourceReadContext
-from report.models import BudgetSkip, ReportFlavor, ReportSpec
+from report.models import (
+    BudgetSkip,
+    KpiLedgerRow,
+    KpiSnapshotRow,
+    ReportFlavor,
+    ReportSpec,
+    SnapshotSection,
+    ThesisSection,
+)
 from report.render_clock import render_today
 from report.sections import (
     appendix,
@@ -57,6 +66,72 @@ def _report_database_path(conn: sqlite3.Connection | None, db_path: Path | None)
     if db_path is not None and Path(connected).resolve() != db_path.resolve():
         raise ValueError("Report connection and database path disagree")
     return Path(connected) if connected else None
+
+
+def _format_kpi_snapshot_value(value: float, unit: str | None) -> str:
+    """Format a KPI scalar concisely for the §1 executive snapshot strip."""
+    raw_unit = (unit or "").strip()
+    unit_lower = raw_unit.casefold()
+    num = f"{value:,.2f}".rstrip("0").rstrip(".")
+    if raw_unit == "%" or unit_lower in {"percent", "pct"}:
+        return f"{num}%"
+    if "$" in raw_unit or "usd" in unit_lower:
+        return f"${num}"
+    if "million" in unit_lower:
+        return f"{num}M"
+    if "billion" in unit_lower:
+        return f"{num}B"
+    if not raw_unit or unit_lower in {"actual", "count", "number", "ratio", "score"}:
+        return num
+    return f"{num} {raw_unit}"
+
+
+def hydrate_tier_1_kpi_strip(
+    snapshot_section: SnapshotSection, thesis_section: ThesisSection
+) -> SnapshotSection:
+    """Fill §1 tier_1_kpi_row current/prior/status values from §3 kpi_ledger."""
+    if not isinstance(cast(object, snapshot_section), SnapshotSection) or not isinstance(
+        cast(object, thesis_section), ThesisSection
+    ):
+        return snapshot_section
+    if not snapshot_section.tier_1_kpi_row or not thesis_section.kpi_ledger:
+        return snapshot_section
+    by_name: dict[str, KpiLedgerRow] = {}
+    for row in thesis_section.kpi_ledger:
+        key = row.name.strip().casefold()
+        if not key:
+            continue
+        existing = by_name.get(key)
+        if existing is None or (row.tier == "tier_1" and existing.tier != "tier_1"):
+            by_name[key] = row
+
+    hydrated: list[KpiSnapshotRow] = []
+    for item in snapshot_section.tier_1_kpi_row:
+        ledger_row = by_name.get(item.name.strip().casefold())
+        if ledger_row is None:
+            hydrated.append(item)
+            continue
+        points = [(p, v) for p, v in ledger_row.history if v is not None]
+        if not points:
+            hydrated.append(item)
+            continue
+        latest_period, latest_val = points[-1]
+        current_str = f"{_format_kpi_snapshot_value(latest_val, ledger_row.unit)} ({latest_period})"
+        prior_str: str | None = None
+        if len(points) >= 2:
+            prev_period, prev_val = points[-2]
+            prior_str = f"{_format_kpi_snapshot_value(prev_val, ledger_row.unit)} ({prev_period})"
+        hydrated.append(
+            item.model_copy(
+                update={
+                    "current": current_str,
+                    "prior": prior_str,
+                    "threshold": item.threshold or ledger_row.break_condition,
+                    "status": ledger_row.current_status,
+                }
+            )
+        )
+    return snapshot_section.model_copy(update={"tier_1_kpi_row": hydrated})
 
 
 def build_report(
@@ -121,6 +196,7 @@ def build_report(
     )
     company_description_section = company_description.build(ticker, repo_root, conn=conn)
     thesis_section = thesis.build(ticker, repo_root, conn=conn)
+    snapshot_section = hydrate_tier_1_kpi_strip(snapshot_section, thesis_section)
     financials_section = financials.build(
         ticker,
         repo_root,

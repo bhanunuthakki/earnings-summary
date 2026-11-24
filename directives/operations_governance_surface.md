@@ -46,6 +46,40 @@ owner (updated July 14, 2025; checked November 12, 2026). The native checks must
 prove loopback access, immutable request ownership and child-process cleanup;
 documentation alone does not pass those gates.
 
+## Design enforcement retirement — November 22, 2026
+
+Disposition: **no surface change**. The owner retired design enforcement because
+the project is mostly headless. The Design Sync CI job, its nightly schedule, the
+design registry, the conformance scanner and debt ledger, the rendered route
+canaries, the React design-system mirror and their tests are removed. The cockpit
+at 127.0.0.1:7421 still renders from the same tokens, controls and family masters.
+The browser security canary keeps one mandatory owner: the new Browser Security CI
+job runs it for every code change. No operator action, panel, route, scheduler
+task, managed service, mutable state or network call changed.
+
+## Test-only module retirement — November 22, 2026
+
+Disposition: **no current surface change**. The owner approved removing
+production modules that only tests import. No scheduler definition, installed
+task, CLI, dashboard control or stored row changes.
+
+- `pipeline.sec_delta_planner` and `pipeline.sec_delta_admission` are removed.
+  Saved SEC refresh plans and terminal receipts are not rewritten or deleted, but
+  no application code reads them any more. This supersedes the retained reader
+  models in "SEC refresh-plan creation retirement — 2026-10-23".
+- `provenance.nu_historical_backfill` is removed. The NU Q2 2025 ratios it
+  published stay unchanged. A new historical publication needs a new reviewed
+  owner.
+- `advisor.exit_quality`, `dcf.fact_drivers`, `ir_pipeline.discover.meli`,
+  `research.decision_capture`, `research.memo_financial_links` and
+  `user_state.thesis_status` are removed with their tests. None had an
+  application caller.
+
+Retained because a current owner uses them outside tests:
+`allocation.model` (`directives/next_dollar_model.md`), `dcf.driver_model`,
+`etf_overlap` and `research.run` (investing skill sources), and
+`user_state.kpi_catalog` (`scratch/seed_kpi_registry.py` catalog guard).
+
 ## Native dirty-producer outcome diagnostics — November 11, 2026
 
 The existing dirty-artifact refresh retains a bounded typed terminal reason from
@@ -544,6 +578,9 @@ inventory. The cleanup does not infer ownership or deletion rights from that cou
 - **Failure-mode policy:** render Missing, Stale, Invalid, or Unavailable with evidence source and time. Never turn absent or malformed evidence into a healthy claim, and never block unrelated product work merely because an internal implementation detail is not an operator workflow.
 
 ## Outcome
+
+### Custom full-suite merge queue (2026-11-20)
+Disposition: **no surface change** (repository merge governance in GitHub Actions; not an application operator workflow). `.github/workflows/merge-queue.yml` runs the complete `ci.yml` suite on GitHub's test merge commit and moves `main` only to that exact tested commit. `.github/workflows/merge-queue-revoke.yml` withdraws queue approval when a new head is pushed. The application, its database authority and the Operations surface are unchanged. Owner setup and the acceptance evidence still required before any enforcement claim: `docs/quality/merge-queue.md`. Evidence: `tests/test_merge_queue.py`.
 
 ### Pytest failed-run payload trim and future timestamps (2026-10-24)
 Disposition: **no surface change** (internal test-harness storage behavior; not an operator workflow). Failed full-suite runs each kept up to 36 GB of fixture databases for the seven-day review window, and 489 of them held about 248 GB on one Mac, cutting free space from 733 GB to 407 GB in about a day and a half. Session-start pruning now trims a failed or holder-gone active run to its review evidence (manifest, resolution, logs, JUnit XML, JSONL, retirement receipts) one hour after it ends; the root still goes after seven days. Links inside a run are removed, never followed. Some tests stamp fixtures years ahead, which kept manifest-less roots "recent" forever; future modification times are now ignored. Owner decision recorded in `data_pipeline_dag.md`. Regression evidence: `tests/test_temp_run_pruning.py`.

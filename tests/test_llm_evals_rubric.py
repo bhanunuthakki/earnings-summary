@@ -464,36 +464,11 @@ def test_filter_since_excludes_old_and_undated() -> None:
 
 
 def _migrated_repo(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
-    """A repo-root with data/portfolio.db migrated to 0083 (eval tables) +
-    a hand-built prompt_calibration_scores (its migration predates the
-    stamp), mirroring test_llm_evals._migrated_db."""
+    """A repo-root with data/portfolio.db migrated to the active head."""
     repo = tmp_path / "repo"
     (repo / "data").mkdir(parents=True)
     db_path = repo / "data" / "portfolio.db"
-    migrated_db(
-        db_path,
-        stamp="0082_expected_earnings_revival",
-        archived=True,
-        target="0083_eval_runs",
-    )
-    conn = sqlite3.connect(db_path)
-    conn.executescript(
-        """
-        CREATE TABLE prompt_calibration_scores (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            purpose VARCHAR(64) NOT NULL,
-            prompt_version VARCHAR(32) NOT NULL,
-            ticker VARCHAR(16),
-            score FLOAT,
-            reason VARCHAR(200),
-            scored_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            scored_by VARCHAR(64),
-            artifact_id INTEGER
-        );
-        """
-    )
-    conn.commit()
-    conn.close()
+    migrated_db(db_path)
     return repo
 
 

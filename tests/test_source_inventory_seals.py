@@ -8,7 +8,6 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
 from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
 from provenance.issuer_registry import IssuerEntity, IssuerRegistry
@@ -35,18 +34,8 @@ from search.corpus_builder import (
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-ROOT = Path(__file__).resolve().parents[1]
-PRIOR = "0219_source_coverage_ledger"
-HEAD = "0220_source_inventory_seals"
 STAMP = datetime(2026, 7, 27, 5, 0, 0)
 A, B, C = "a" * 64, "b" * 64, "c" * 64
-
-
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
 
 
 def _conn(
@@ -56,7 +45,7 @@ def _conn(
     if current:
         migrated_db(path)
     else:
-        migrated_db(path, stamp="0213_decision_draft_provider_id", archived=True, target=HEAD)
+        migrated_db(path)
     conn = (
         connect_sqlite(path, role=SQLiteConnectionRole.WRITER) if current else sqlite3.connect(path)
     )

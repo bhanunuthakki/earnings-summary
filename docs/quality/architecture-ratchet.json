@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "9a8db5335aa30ac6a3c6e2c1a38d8fab01b83cbd",
+  "scoped_commit": "2a61cbb06fd9cf8e808bdf84df074728cb1e7df6",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "414a2b7873a3e06a4bfddba3e2a88a8ef0381ae4e7e0317c5ab6653aa0fdf403",
+  "source_sha256": "fd19109c92ed267e97291646010cbc3cd69404ff3628d1b0bec143436c649e46",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1406,
-    "total_noncomment_loc": 562295,
+    "total_noncomment_loc": 561814,
     "modules_over_1000_loc": 117,
     "modules_over_2000_loc": 23,
     "modules_at_least_3000_loc": 5,
@@ -8282,9 +8282,9 @@
         "path": "src/compute/segment_quarterly_10q.py",
         "module": "compute.segment_quarterly_10q",
         "lines": {
-          "physical": 992,
-          "nonblank": 898,
-          "noncomment": 880
+          "physical": 974,
+          "nonblank": 880,
+          "noncomment": 862
         },
         "internal_fan_out": 10,
         "responsibilities": [
@@ -14309,9 +14309,9 @@
         "path": "src/pipeline/restatement_detector.py",
         "module": "pipeline.restatement_detector",
         "lines": {
-          "physical": 895,
-          "nonblank": 824,
-          "noncomment": 803
+          "physical": 845,
+          "nonblank": 777,
+          "noncomment": 751
         },
         "internal_fan_out": 1,
         "responsibilities": [
@@ -14415,9 +14415,9 @@
         "path": "src/pipeline/sec_fpi_ingest.py",
         "module": "pipeline.sec_fpi_ingest",
         "lines": {
-          "physical": 1125,
-          "nonblank": 997,
-          "noncomment": 982
+          "physical": 763,
+          "nonblank": 682,
+          "noncomment": 665
         },
         "internal_fan_out": 12,
         "responsibilities": [
@@ -14463,9 +14463,9 @@
         "path": "src/pipeline/sec_xbrl.py",
         "module": "pipeline.sec_xbrl",
         "lines": {
-          "physical": 3019,
-          "nonblank": 2779,
-          "noncomment": 2603
+          "physical": 3008,
+          "nonblank": 2768,
+          "noncomment": 2592
         },
         "internal_fan_out": 15,
         "responsibilities": [
@@ -16368,9 +16368,9 @@
         "path": "src/provenance/reviewed_sec_financial_tables.py",
         "module": "provenance.reviewed_sec_financial_tables",
         "lines": {
-          "physical": 984,
-          "nonblank": 927,
-          "noncomment": 922
+          "physical": 976,
+          "nonblank": 919,
+          "noncomment": 914
         },
         "internal_fan_out": 9,
         "responsibilities": [
@@ -16430,9 +16430,9 @@
         "path": "src/provenance/sec_companyfacts_capture.py",
         "module": "provenance.sec_companyfacts_capture",
         "lines": {
-          "physical": 717,
-          "nonblank": 629,
-          "noncomment": 628
+          "physical": 713,
+          "nonblank": 627,
+          "noncomment": 626
         },
         "internal_fan_out": 4,
         "responsibilities": [
@@ -20500,9 +20500,9 @@
         "path": "src/table_extractors/base.py",
         "module": "table_extractors.base",
         "lines": {
-          "physical": 252,
-          "nonblank": 212,
-          "noncomment": 204
+          "physical": 226,
+          "nonblank": 186,
+          "noncomment": 178
         },
         "internal_fan_out": 0,
         "responsibilities": [],
@@ -20578,14 +20578,12 @@
         "path": "src/table_extractors/period_axis.py",
         "module": "table_extractors.period_axis",
         "lines": {
-          "physical": 265,
-          "nonblank": 232,
-          "noncomment": 207
+          "physical": 236,
+          "nonblank": 203,
+          "noncomment": 175
         },
         "internal_fan_out": 0,
-        "responsibilities": [
-          "network"
-        ],
+        "responsibilities": [],
         "public_functions": 4,
         "fully_annotated_public_functions": 4
       },
@@ -20593,9 +20591,9 @@
         "path": "src/table_extractors/xbrl_value_classify.py",
         "module": "table_extractors.xbrl_value_classify",
         "lines": {
-          "physical": 182,
-          "nonblank": 159,
-          "noncomment": 131
+          "physical": 163,
+          "nonblank": 144,
+          "noncomment": 116
         },
         "internal_fan_out": 0,
         "responsibilities": [],
