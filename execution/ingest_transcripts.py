@@ -82,7 +82,8 @@ _TRANSCRIPT_DIRS = (
 _DEFAULT_TRANSCRIPT_DIRS = _TRANSCRIPT_DIRS
 
 
-def _evidence_root(db_path: str | Path) -> Path:
+def evidence_root_for_database(db_path: str | Path) -> Path:
+    """Resolve the repository or scratch root holding IR/transcript evidence for ``db_path``."""
     db_root = project_root_for_database(db_path)
     if (db_root / "ir_documents").is_dir() or (db_root / "transcripts").is_dir():
         return db_root
@@ -597,7 +598,7 @@ def main() -> int:
     conn = open_db(args.db)
     try:
         dirs_overridden = _TRANSCRIPT_DIRS != _DEFAULT_TRANSCRIPT_DIRS
-        evidence_root = PROJECT_ROOT if dirs_overridden else _evidence_root(args.db)
+        evidence_root = PROJECT_ROOT if dirs_overridden else evidence_root_for_database(args.db)
         staging_root = evidence_root / ".tmp" / "transcript-acquisition"
         transcript_dirs = (
             _TRANSCRIPT_DIRS

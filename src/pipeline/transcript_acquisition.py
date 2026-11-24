@@ -214,6 +214,7 @@ def _calendar_reported_period_window(
                 candidates.add(q_end)
     period_ends = sorted(candidates, reverse=True)[:max_quarters]
 
+    doc_cols: set[str]
     try:
         doc_cols = {
             str(col[1]).lower() for col in conn.execute("PRAGMA table_info(documents)").fetchall()

@@ -59,7 +59,8 @@ from transcripts.acquisition_semantics import TranscriptAcquisitionEntrypoint
 _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
 
 
-def _evidence_root(db_path: str | Path) -> Path:
+def evidence_root_for_database(db_path: str | Path) -> Path:
+    """Resolve the repository or scratch root holding IR/transcript evidence for ``db_path``."""
     db_root = project_root_for_database(db_path)
     if (db_root / "ir_documents").is_dir() or (db_root / "transcripts").is_dir():
         return db_root
@@ -258,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"warning": "no tickers resolved"}, indent=2))
             return 0
 
-        evidence_root = _evidence_root(args.db)
+        evidence_root = evidence_root_for_database(args.db)
         staging_root = evidence_root / ".tmp" / "transcript-acquisition"
         transcript_artifacts = stage_pending_issuer_transcripts(
             conn,

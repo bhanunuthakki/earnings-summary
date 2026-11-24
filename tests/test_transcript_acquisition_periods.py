@@ -364,10 +364,14 @@ def test_persisted_ir_document_receipt_allows_cdn_url(
 ) -> None:
     _install_staging_double(monkeypatch)
     if sys.platform == "darwin":
+
+        def _read_staged(artifact: StagedTranscriptArtifact, **_kwargs: object) -> bytes:
+            return artifact.staged_path.read_bytes()
+
         monkeypatch.setattr(
             transcript_acquisition,
             "read_staged_transcript",
-            lambda artifact, **_kwargs: artifact.staged_path.read_bytes(),
+            _read_staged,
         )
     repo_root = tmp_path / "repo"
     staging_root = repo_root / ".tmp" / "transcript-acquisition"
@@ -423,11 +427,13 @@ def test_evidence_root_resolves_db_directory_with_ir_documents(tmp_path: Path) -
     db_file = scratch / "data" / "portfolio.db"
     db_file.write_bytes(b"")
 
-    assert ingest_transcripts._evidence_root(db_file) == scratch.resolve()
-    assert quarterly_refresh._evidence_root(db_file) == scratch.resolve()
+    assert ingest_transcripts.evidence_root_for_database(db_file) == scratch.resolve()
+    assert quarterly_refresh.evidence_root_for_database(db_file) == scratch.resolve()
 
     other_db = tmp_path / "isolated" / "data" / "test.db"
     other_db.parent.mkdir(parents=True)
     other_db.write_bytes(b"")
-    assert ingest_transcripts._evidence_root(other_db) == ingest_transcripts.PROJECT_ROOT
-    assert quarterly_refresh._evidence_root(other_db) == quarterly_refresh.PROJECT_ROOT
+    assert (
+        ingest_transcripts.evidence_root_for_database(other_db) == ingest_transcripts.PROJECT_ROOT
+    )
+    assert quarterly_refresh.evidence_root_for_database(other_db) == quarterly_refresh.PROJECT_ROOT
