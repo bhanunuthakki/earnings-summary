@@ -4,3 +4,24 @@ interface:
   default_prompt: "Use $next-dollar-allocation to recommend my next capital move using current holdings, saved goals, taxes, and permitted sales."
 policy:
   allow_implicit_invocation: true
+routing:
+  role: specialist
+  trigger: "Next-dollar allocation, cash deployment, tax-aware rebalancing, consolidating exploratory positions, or position sizing"
+  inputs:
+    - "Full holdings, cash, and account tax treatment (src/integrations/portfolio_tracker_v1.py, src/integrations/portfolio_allocation.py)"
+    - "Recorded sizing intents and affirmed owner profile"
+    - "Company theses, DCF readiness, and full-book risk context"
+  outputs:
+    - "One preferred tax-aware capital-allocation plan with funding sequence and before/after weights (privately saved when requested)"
+  entrypoints:
+    - "execution/review_position.py"
+    - "src/integrations/portfolio_tracker_v1.py"
+    - "src/integrations/portfolio_allocation.py"
+    - "src/advisor/position_review.py"
+    - "src/advisor/position_tax.py"
+    - "src/allocation/book_risk.py"
+    - "src/allocation/what_if.py"
+  handoffs:
+    - to: "earnings-summary-investing"
+      condition: "Candidate needs initiating coverage, thesis refresh, or DCF valuation update before sizing"
+      approval: "Owner scope/effort agreement before new collection; explicit owner approval for thesis or DCF mutations"
