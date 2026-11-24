@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import cast
 
 from advisor.store import AdvisorMemoRow, insert_stance_score, list_memos, mark_scored
+from db_paths import require_db_path
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import fetch_portfolio_analytics
 
@@ -271,7 +272,7 @@ def score_memo(
 ) -> ScoreOutcome:
     """Grade one pending memo, or defer. Writes the stance_scores row +
     flips ``score_status`` when a grade (or unscoreable verdict) lands."""
-    db = db_path or (repo_root / "data" / "portfolio.db")
+    db = require_db_path(db_path)
     today = (now or datetime.now(UTC)).date().isoformat()
 
     if memo.kind == "next_dollar":
@@ -471,10 +472,11 @@ def run_scoring(
     user_id: str = DEFAULT_USER_ID,
     now: datetime | None = None,
     api_url: str | None = None,
+    db_path: Path | None = None,
 ) -> ScoreRunResult:
     """Grade every pending memo that can be graded today. Never raises on a
     single memo's failure — it defers and the weekly cron retries."""
-    db = repo_root / "data" / "portfolio.db"
+    db = require_db_path(db_path)
     try:
         memos = [
             m
