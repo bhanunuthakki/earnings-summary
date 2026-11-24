@@ -666,6 +666,18 @@ class _SameDocumentKpiHead(NamedTuple):
     extracted_by: str | None
 
 
+def _stored_numeric_eq(conn: sqlite3.Connection, stored: object, new: Decimal) -> bool:
+    """True iff `new` would persist as exactly the stored NUMERIC value.
+
+    `kpi_facts.value` has NUMERIC affinity, so SQLite keeps a non-integral
+    value as an 8-byte REAL. A recomputed full-precision Decimal such as
+    100/3 must compare at that storage precision, or every replay of an
+    unchanged ratio would look like a changed value.
+    """
+    projected = conn.execute("SELECT CAST(? AS NUMERIC)", (str(new),)).fetchone()[0]
+    return bool(projected == stored) or _decimal_eq(stored, new)
+
+
 def _same_document_kpi_head(
     conn: sqlite3.Connection,
     *,
@@ -838,7 +850,7 @@ def insert_kpi_with_restatement_detection(
         if stored_currency is not None and stored_currency != currency:
             raise ValueError("same-document derived KPI currency conflicts with persisted fact")
         if (
-            _decimal_eq(same_doc_head.value, value)
+            _stored_numeric_eq(conn, same_doc_head.value, value)
             and same_doc_head.unit == unit
             and stored_currency == currency
         ):

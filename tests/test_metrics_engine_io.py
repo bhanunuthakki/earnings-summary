@@ -32,7 +32,9 @@ from compute.metrics_engine.io import (
 )
 from compute.metrics_engine.registry import REGISTRY, ReasonCode
 from models.companies import AccountingStandard, BusinessModelClass
-from models.facts import Currency, FactLocator, LocatorKind
+from models.documents import SourceType
+from models.facts import Currency, FactLocator, LocatorKind, Unit
+from pipeline.kpi_persistence import find_or_create_kpi_definition
 from provenance.evidence_backfill import ensure_legacy_document_evidence
 from provenance.financial_fact_resolution import resolve_fact_row
 from sources.price import LivePrice
@@ -1155,3 +1157,53 @@ def test_derived_recompute_with_changed_value_appends_successor(
     # A different currency against a currency-bearing head stays a conflict.
     with pytest.raises(ValueError, match="derived KPI currency conflicts"):
         _write(changed, "EUR", "metrics_engine", computed_from)
+
+
+def test_derived_recompute_compares_at_storage_precision(conn: sqlite3.Connection) -> None:
+    """An unchanged non-terminating ratio is a replay, not a new successor.
+
+    SQLite stores `kpi_facts.value` as an 8-byte REAL, so a recomputed
+    full-precision Decimal must be compared at that storage precision. A
+    later real change still appends a successor.
+    """
+    _seed_operating_company(conn, "TEST")
+    _set_classification(conn, "TEST", "operating_company", "us_gaap")
+    compute_for_ticker(conn, "TEST")
+    anchor = conn.execute(
+        "SELECT source_doc_id, period_end, fiscal_period_type, computed_from FROM kpi_facts "
+        "WHERE extracted_by='metrics_engine' AND computed_from IS NOT NULL LIMIT 1"
+    ).fetchone()
+    definition_id = find_or_create_kpi_definition(
+        conn,
+        ticker="TEST",
+        name="storage_precision_probe",
+        unit=Unit.PERCENT,
+        primary_source=SourceType.FMP,
+    )
+    original_insert = metrics_io.insert_kpi_with_restatement_detection
+
+    def _write(value: Decimal) -> tuple[int | None, int | None]:
+        return original_insert(
+            conn,
+            ticker="TEST",
+            period_end=datetime.fromisoformat(str(anchor["period_end"])),
+            fiscal_period_type=str(anchor["fiscal_period_type"]),
+            kpi_definition_id=definition_id,
+            value=value,
+            unit="percent",
+            source_doc_id=int(anchor["source_doc_id"]),
+            extracted_by="metrics_engine",
+            computed_from=str(anchor["computed_from"]),
+        )
+
+    third = Decimal(100) / Decimal(3)
+    first_id, _ = _write(third)
+    assert first_id is not None
+    assert _write(third) == (None, None)
+    changed_id, superseded = _write(third + Decimal("0.01"))
+    assert changed_id is not None
+    assert superseded == first_id
+    rows = conn.execute(
+        "SELECT COUNT(*) FROM kpi_facts WHERE kpi_definition_id = ?", (definition_id,)
+    ).fetchone()[0]
+    assert rows == 2
