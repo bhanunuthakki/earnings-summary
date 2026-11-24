@@ -13,8 +13,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Fixed ingest_transcripts_state.py retained; adds selected --db while --repo-root, owner-requested and exact receipt IDs remain.",
-      "fingerprint": "cae3bc3f56397fb13baf7a46b2b3f189c25ad552db76318dc66479aefafa57ec",
-      "line": 843,
+      "fingerprint": "75992c2872cdb4bed233f91232134daded90be1e4f649cd98e98520e33ecacca",
+      "line": 884,
       "path": "execution/backfill_transcripts.py",
       "targets": [
         "execution/ingest_transcripts_state.py"
@@ -23,8 +23,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Fixed extract_commitments_from_transcript.py retained; --auto/exact transcript ID remain; --db now uses db.DB_PATH rather than derived state-local portfolio.db.",
-      "fingerprint": "513a89938d3585430cfc43d86489f15d7b00e79c05b0275caf94de84daae0d11",
-      "line": 873,
+      "fingerprint": "919ee3068a55c9eb514c863e6481412e7cbeaed9cf0b77bca86b27110c22ed5b",
+      "line": 914,
       "path": "execution/backfill_transcripts.py",
       "targets": [
         "execution/extract_commitments_from_transcript.py"
@@ -994,7 +994,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "5b3371e96f106df890ea662226d75bccbe74c82735f2c93d72c8e1cd3909365f",
+      "source_sha256": "4710e41147415af71253c0411ff72db2be4e0be9e734617d59ddd8b742e52902",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
