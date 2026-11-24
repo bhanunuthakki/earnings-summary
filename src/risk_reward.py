@@ -3,11 +3,12 @@
 Nothing in the book joined risk contribution to reward contribution. Three pure
 engines sat one seam apart: ``allocation.book_risk`` (per-name share of total
 book risk off a shrunk covariance), the DCF bull/base/bear range
-(``dcf.scenario_reward`` — asymmetry-aware expected return on the L6 price-leg-
-fresh price), and the owner's recorded conviction (``position_sizing_intent``).
-This module joins them into one **risk-parity-gap** ranking: each name's share of
-book RISK vs its share of expected REWARD vs the stated CONVICTION, flagging the
-mismatches ("22% of book risk but 9% of expected reward, rated 3/5").
+(``dcf.scenario_reward`` — asymmetry-aware present fair-value upside on the
+L6 price-leg-fresh price, non-annualized), and the owner's recorded conviction
+(``position_sizing_intent``). This module joins them into one **risk-parity-gap**
+ranking: each name's share of book RISK vs its share of scenario FV UPSIDE vs the
+stated CONVICTION, flagging the mismatches ("22% of book risk vs 9% of scenario
+FV upside, rated 3/5").
 
 Honesty is load-bearing. The reward leg is DCF-dependent, so a name whose DCF is
 **missing or stale** is marked *low-confidence* and its gap is shown but NOT
@@ -22,6 +23,7 @@ DCF rows + conviction intents from the DB).
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -62,9 +64,9 @@ CONVICTION_KIND = "conviction"
 
 @dataclass(slots=True)
 class Reward:
-    """The asymmetry-aware reward leg for one name, with its confidence."""
+    """The asymmetry-aware present FV-upside leg for one name, with its confidence."""
 
-    expected_return: float | None  # fraction; None when there is no usable DCF reward
+    expected_upside: float | None  # fraction (present, non-annualized); None when unusable
     has_scenarios: bool
     low_confidence: bool
     confidence_reason: str | None
@@ -73,13 +75,13 @@ class Reward:
 
 @dataclass(slots=True)
 class RiskRewardGapRow:
-    """One position's risk vs reward vs conviction line, scored for attention."""
+    """One position's risk vs present FV-upside vs conviction line, scored for attention."""
 
     ticker: str
     weight_pct: float  # modeled-book weight (renormalized over the covariance names)
     risk_share_pct: float  # share of total book risk (sums to ~100%)
     marginal_vol_ann_pct: float  # annualized marginal vol (waterfall substrate)
-    expected_return_pct: float | None  # asymmetric DCF expected return
+    expected_upside_pct: float | None  # asymmetric DCF present fair-value upside (%)
     reward_share_pct: float | None  # share of the book's measured expected upside
     gap_pct: float | None  # risk_share - reward_share (+ = over-risked for the reward)
     conviction: float | None  # latest recorded conviction (1-5)
@@ -111,12 +113,20 @@ class RiskRewardGap:
 # --------------------------------------------------------------------------- #
 
 
+def _finite_upside(val: object) -> float | None:
+    if isinstance(val, bool) or not isinstance(val, (int, float)):
+        return None
+    if not math.isfinite(val):
+        return None
+    return float(val)
+
+
 def _score_row(
     *,
     risk_share_pct: float,
     reward_share_pct: float | None,
     gap_pct: float | None,
-    expected_return_pct: float | None,
+    expected_upside_pct: float | None,
     conviction: float | None,
     low_confidence: bool,
     confidence_reason: str | None,
@@ -130,7 +140,7 @@ def _score_row(
     reasons: list[str] = []
     confident_reward = reward_share_pct is not None and not low_confidence
 
-    # A. Risk-parity gap — consumes more of the book's risk than of its reward.
+    # A. Risk-parity gap — consumes more of the book's risk than of its FV upside.
     if (
         confident_reward
         and gap_pct is not None
@@ -139,7 +149,7 @@ def _score_row(
     ):
         pts += min(gap_pct, 25.0) * 0.5
         reasons.append(
-            f"{risk_share_pct:.0f}% of book risk vs {reward_share_pct:.0f}% of expected reward"
+            f"{risk_share_pct:.0f}% of book risk vs {reward_share_pct:.0f}% of scenario FV upside"
         )
 
     # B. Conviction undersized vs risk — low conviction carrying a high risk
@@ -157,12 +167,12 @@ def _score_row(
         confident_reward
         and conviction is not None
         and conviction >= HIGH_CONVICTION
-        and expected_return_pct is not None
-        and expected_return_pct < CONV_REWARD_MIN_PCT
+        and expected_upside_pct is not None
+        and expected_upside_pct < CONV_REWARD_MIN_PCT
     ):
         pts += (conviction - 3.0) * 1.5
         reasons.append(
-            f"rated {conviction:g}/5 but the DCF expects only {expected_return_pct:+.0f}%"
+            f"rated {conviction:g}/5 but present DCF FV upside is only {expected_upside_pct:+.0f}%"
         )
 
     # Honest framing: a material-risk name whose reward we can't trust is shown,
@@ -178,17 +188,20 @@ def build_gap_rows(
     rewards: Mapping[str, Reward],
     convictions: Mapping[str, float],
 ) -> tuple[list[RiskRewardGapRow], int]:
-    """Join risk shares × reward legs × conviction into the ranked rows.
+    """Join risk shares × present FV-upside legs × conviction into ranked rows.
 
     Returns ``(rows, valued_names)``. Reward shares distribute the book's
-    *measured* expected upside — the sum of positive weight×expected-return
-    contributions over the names that carry a DCF reward — so a name without a
-    DCF reads as low-confidence with no reward share, not a fabricated zero."""
-    contrib: dict[str, float] = {
-        t: book.weights.get(t, 0.0) * max(-REWARD_CLAMP, min(REWARD_CLAMP, r.expected_return))
-        for t, r in rewards.items()
-        if r.expected_return is not None and t in book.weights
-    }
+    *measured* present FV upside — the sum of positive weight×expected-upside
+    contributions over the names that carry a finite DCF upside — so a name
+    without a DCF reads as low-confidence with no reward share, not a fabricated
+    zero."""
+    contrib: dict[str, float] = {}
+    for t, r in rewards.items():
+        if t not in book.weights:
+            continue
+        u = _finite_upside(r.expected_upside)
+        if u is not None:
+            contrib[t] = book.weights[t] * max(-REWARD_CLAMP, min(REWARD_CLAMP, u))
     gross_upside = sum(v for v in contrib.values() if v > 0.0)
     risk_shares = {t: book.risk_share.get(t, 0.0) * 100.0 for t in book.tickers}
     median_risk = median(risk_shares.values()) if risk_shares else 0.0
@@ -198,9 +211,13 @@ def build_gap_rows(
     for t in book.tickers:
         rs = risk_shares[t]
         reward = rewards.get(t) or Reward(None, False, True, "no DCF on file", None)
-        er_pct = reward.expected_return * 100.0 if reward.expected_return is not None else None
-        if reward.expected_return is not None:
+        u = _finite_upside(reward.expected_upside)
+        raw_er_pct = u * 100.0 if u is not None else None
+        if raw_er_pct is not None and math.isfinite(raw_er_pct):
+            er_pct: float | None = raw_er_pct
             valued += 1
+        else:
+            er_pct = None
         reward_share = (
             contrib[t] / gross_upside * 100.0 if t in contrib and gross_upside > 0.0 else None
         )
@@ -210,7 +227,7 @@ def build_gap_rows(
             risk_share_pct=rs,
             reward_share_pct=reward_share,
             gap_pct=gap,
-            expected_return_pct=er_pct,
+            expected_upside_pct=er_pct,
             conviction=conviction,
             low_confidence=reward.low_confidence,
             confidence_reason=reward.confidence_reason,
@@ -222,7 +239,7 @@ def build_gap_rows(
                 weight_pct=book.weights.get(t, 0.0) * 100.0,
                 risk_share_pct=rs,
                 marginal_vol_ann_pct=book.marginal_vol_ann.get(t, 0.0) * 100.0,
-                expected_return_pct=er_pct,
+                expected_upside_pct=er_pct,
                 reward_share_pct=reward_share,
                 gap_pct=gap,
                 conviction=conviction,
@@ -321,7 +338,7 @@ def _dcf_reward_legs(
             stale_bits.append(f"price {(today - priced_date).days}d stale")
         low_conf = bool(stale_bits)
         out[t] = Reward(
-            expected_return=reward.expected_return,
+            expected_upside=reward.expected_upside,
             has_scenarios=reward.has_scenarios,
             low_confidence=low_conf,
             confidence_reason="; ".join(stale_bits) if stale_bits else None,

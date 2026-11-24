@@ -3634,10 +3634,10 @@ def _risk_reward_gap_section(gap: RiskRewardGap) -> str:
     Uses the S1 control kit (.p-table / .k-chip / .k-pill) — no raw hex."""
     sub = (
         '<p class="sub">Each position\'s share of total book risk (marginal contribution off the '
-        "Ledoit-Wolf covariance) set against its share of the book's expected reward "
-        "(probability-weighted bull/base/bear DCF on the live price) and your recorded "
+        "Ledoit-Wolf covariance) set against its share of the book's scenario fair-value upside "
+        "(probability-weighted present FV upside vs live price, non-annualized) and your recorded "
         "conviction. A positive gap means a name eats more of the book's risk than the "
-        "reward it supplies; where the DCF is stale or missing the reward leg is marked "
+        "upside share it supplies; where the DCF is stale or missing the reward leg is marked "
         "low-confidence and shown but not scored.</p>"
     )
     if gap.hidden_reason is not None:
@@ -3676,7 +3676,7 @@ def _risk_reward_gap_section(gap: RiskRewardGap) -> str:
         "<th>Ticker</th>"
         '<th class="num">Weight</th><th class="num">Risk share</th>'
         '<th class="num">Reward share</th><th class="num">Gap</th>'
-        '<th class="num">Exp. return</th><th class="num">Conviction</th>'
+        '<th class="num">FV upside</th><th class="num">Conviction</th>'
         "<th>Mismatch</th>"
         f"</tr></thead><tbody>{rows_html}</tbody></table>"
     )
@@ -3697,14 +3697,14 @@ def _rrg_row(r: RiskRewardGapRow) -> str:
         gap_cell = f'<span class="{_NUM_CLS[gap_tone]}">{r.gap_pct:+.0f}pp</span>'
     else:
         gap_cell = '<span class="muted">&mdash;</span>'
-    if r.expected_return_pct is not None:
-        e_tone = "pos" if r.expected_return_pct >= 0 else "neg"
+    if r.expected_upside_pct is not None:
+        e_tone = "pos" if r.expected_upside_pct >= 0 else "neg"
         warn = (
             f' <span class="muted" title="{escape(r.confidence_reason)}">&#9888;</span>'
             if r.low_confidence and r.confidence_reason
             else ""
         )
-        exp_cell = f'<span class="{_NUM_CLS[e_tone]}">{r.expected_return_pct:+.0f}%</span>{warn}'
+        exp_cell = f'<span class="{_NUM_CLS[e_tone]}">{r.expected_upside_pct:+.0f}%</span>{warn}'
     else:
         exp_cell = '<span class="muted">&mdash;</span>'
     reward_cell = (
