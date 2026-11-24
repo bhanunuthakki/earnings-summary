@@ -4,3 +4,21 @@ interface:
   default_prompt: "Use $ownership-disclosure-scan to scan recent 13F or congressional disclosures with official-source coverage receipts."
 policy:
   allow_implicit_invocation: true
+routing:
+  role: specialist
+  trigger: "On-demand Form 13F institutional holdings change or congressional Periodic Transaction Report scans"
+  inputs:
+    - "Bounded manager/member/ticker/window scope"
+    - "Official SEC EDGAR 13F filings and House Clerk / Senate eFD disclosure records"
+  outputs:
+    - "Amendment-aware diff, claim-level official links, and per-target/chamber coverage receipts"
+  entrypoints:
+    - "src/advisor/skills/ownership-disclosure-scan/SKILL.md"
+    - "src/advisor/skills/ownership-disclosure-scan/references/methodology.md"
+  handoffs:
+    - to: "earnings-summary-investing"
+      condition: "Disclosed holding or manager activity warrants full company research or new-company evaluation"
+      approval: "Owner request required to initiate coverage or add ticker to evaluation scope"
+    - to: "next-dollar-allocation"
+      condition: "Reviewed research finding informs portfolio positioning or incremental capital allocation"
+      approval: "Owner approval required for any capital move or constraint change"
