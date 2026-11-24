@@ -34,8 +34,6 @@ from runtime.job_runtime import (  # noqa: E402
     portfolio_db_path,
 )
 
-ONBOARD_WRAPPER = PROJECT_ROOT / "cron" / "run_onboard_pending.bat"
-
 
 @pytest.fixture
 def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -160,17 +158,3 @@ def test_run_lock_payload_carries_a_token(repo: Path) -> None:
         assert isinstance(payload.get("token"), str) and payload["token"]
     finally:
         held.release()
-
-
-def test_onboard_wrapper_no_longer_holds_the_db_for_the_whole_run() -> None:
-    """The scheduler retains lock PARTICIPATION (self-serialization of hourly
-    runs), not a whole-pipeline hold of the DB write set — that hold starved
-    13 jobs in one day. The per-ticker claim lives in the script."""
-    text = ONBOARD_WRAPPER.read_text(encoding="utf-8", errors="replace")
-    invocation = next(
-        line
-        for line in text.splitlines()
-        if "run_python.bat" in line and "onboard_pending_tickers" in line
-    )
-    assert '"onboard-pending" "onboard-pending"' in invocation, invocation
-    assert '"portfolio-db"' not in invocation, invocation

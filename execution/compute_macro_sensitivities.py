@@ -46,6 +46,7 @@ from macro_store import (
     upsert_sensitivity,
 )
 from run_lock import hold_run_lock
+from runtime.job_runtime import inherited_lock_is_valid, portfolio_db_path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 log = logging.getLogger("compute_macro_sensitivities")
@@ -197,11 +198,16 @@ def main() -> int:
         parser.error(
             "--db-path or EARNINGS_SUMMARY_DB_PATH must name an existing authoritative database"
         )
+    # The scheduled wrapper (cron/run_fetch_macro_series.bat) already holds the
+    # portfolio-db write-set lock; taking it again would wait on that ancestor.
+    inherited = not args.dry_run and inherited_lock_is_valid(PROJECT_ROOT, "portfolio-db")
+    if inherited and Path(args.db_path).resolve() != portfolio_db_path(PROJECT_ROOT).resolve():
+        parser.error("scheduler lock does not own the requested database")
     with (
         db_path_context(args.db_path),
         (
             nullcontext()
-            if args.dry_run
+            if args.dry_run or inherited
             else hold_run_lock(args.db_path, owner="compute_macro_sensitivities")
         ),
     ):

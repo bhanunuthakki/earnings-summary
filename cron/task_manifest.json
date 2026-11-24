@@ -211,23 +211,6 @@
    }
   },
   {
-   "task_name": "\\earnings-summary\\grade_calibration",
-   "xml": "grade_calibration.task.xml",
-   "wrapper": "run_grade_calibration.bat",
-   "schedule": {
-    "trigger": "CalendarTrigger",
-    "start_boundary": "2026-06-07T10:30:00",
-    "repetition_interval": null,
-    "days_interval": null,
-    "weeks_interval": 1,
-    "days_of_week": [
-     "Sunday"
-    ],
-    "days_of_month": [],
-    "months": []
-   }
-  },
-  {
    "task_name": "\\earnings-summary\\model_eval_sweep",
    "xml": "model_eval_sweep.task.xml",
    "wrapper": "run_weekly_model_eval.bat",
@@ -236,27 +219,25 @@
     "start_boundary": "2026-07-04T20:00:00",
     "repetition_interval": null,
     "days_interval": null,
-    "weeks_interval": 1,
-    "days_of_week": [
-     "Saturday"
-    ],
-    "days_of_month": [],
-    "months": []
-   }
-  },
-  {
-   "task_name": "\\earnings-summary\\onboard_pending",
-   "xml": "onboard_pending_tickers.task.xml",
-   "wrapper": "run_onboard_pending.bat",
-   "schedule": {
-    "trigger": "CalendarTrigger",
-    "start_boundary": "2026-05-09T00:17:00",
-    "repetition_interval": "PT1H",
-    "days_interval": 1,
     "weeks_interval": null,
     "days_of_week": [],
-    "days_of_month": [],
-    "months": []
+    "days_of_month": [
+     1
+    ],
+    "months": [
+     "January",
+     "February",
+     "March",
+     "April",
+     "May",
+     "June",
+     "July",
+     "August",
+     "September",
+     "October",
+     "November",
+     "December"
+    ]
    }
   },
   {

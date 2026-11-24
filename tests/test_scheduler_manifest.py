@@ -27,12 +27,9 @@ EXPECTED_DISABLED_TASKS = {
     r"\earnings-summary\backfill_transcripts",
     r"\earnings-summary\discover_ir_documents",
     r"\earnings-summary\discover_ir_failing",
-    r"\earnings-summary\onboard_pending",
     r"\earnings-summary\refresh_cache",
     r"\earnings-summary\refresh_ir_kpis",
     r"\earnings-summary\scan_ir_transcripts",
-    # Simplification Phase 0 freeze (2026-10-20): outside the core research jobs.
-    r"\earnings-summary\grade_calibration",
     # Preserve the existing Windows hold during retirement activation.
     r"\earnings-summary\weekly_cleanup",
 }
@@ -51,7 +48,7 @@ def test_manifest_rejects_duplicate_json_keys(tmp_path: Path) -> None:
 
 def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     manifest = load_manifest(MANIFEST_PATH)
-    assert len(manifest.tasks) == 30
+    assert len(manifest.tasks) == 28
     assert all(
         task.task_name != r"\earnings-summary\backfill_financial_fact_resolutions"
         for task in manifest.tasks
