@@ -4,9 +4,9 @@
 
 Disposition: **surface retired**. The owner retired the `\earnings-summary\prepare_kpi_semantic_review`
 10-minute Windows scheduled task (`cron/prepare_kpi_semantic_review.task.xml`,
-`cron/run_prepare_kpi_semantic_review.bat`), its exporter CLI (`execution/prepare_kpi_semantic_review.py`),
-the remote review fetcher (`execution/fetch_windows_kpi_semantic_review.py`), and the quarantined
-correction helper CLI (`execution/prepare_quarantined_kpi_correction.py`), along with `cron/run_python.bat`
+`cron/run_prepare_kpi_semantic_review.bat`), its exporter CLI (`prepare_kpi_semantic_review.py`),
+the remote review fetcher (`fetch_windows_kpi_semantic_review.py`), and the quarantined
+correction helper CLI (`prepare_quarantined_kpi_correction.py`), along with `cron/run_python.bat`
 routing for `prepare-kpi-semantic-review`.
 
 The dynamic Jobs projection reads the regenerated scheduler manifest directly and drops the retired
