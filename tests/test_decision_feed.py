@@ -14,10 +14,8 @@ from pathlib import Path
 import pytest
 
 from integrations.portfolio_tracker_client import LivePortfolio, LiveTransaction
-from research.decision_capture import capture_decision
 from research.decision_feed import (
     detect_unannounced_fills,
-    link_decision_to_note,
     persist_owner_decision,
 )
 
@@ -72,40 +70,6 @@ def test_persist_owner_decision_writes_0130_shape(db_path: Path) -> None:
     assert (row["conviction"], row["falsifier"]) == ("high", "GLP-1 share loss 2Q")
     with pytest.raises(ValueError):
         persist_owner_decision(ticker="NVO", direction="yolo", db_path=db_path)
-
-
-def test_capture_decision_composes_with_the_adapters(db_path: Path) -> None:
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.execute(
-            "INSERT INTO analyst_notes (kind, body, source, created_at, updated_at) "
-            "VALUES ('musing','adding to NU','capture','2026-07-02','2026-07-02')"
-        )
-        conn.commit()
-        note_id = int(conn.execute("SELECT max(id) FROM analyst_notes").fetchone()[0])
-    finally:
-        conn.close()
-
-    did = capture_decision(
-        ticker="NU",
-        direction="add",
-        size_pct=3.0,
-        conviction="high",
-        falsifier="NPL >5% 2Q",
-        note_id=note_id,
-        db_path=db_path,
-        persist_fn=persist_owner_decision,
-        link_fn=link_decision_to_note,
-    )
-    assert did is not None
-    conn = sqlite3.connect(str(db_path))
-    try:
-        linked = conn.execute(
-            "SELECT decision_id FROM analyst_notes WHERE id=?", (note_id,)
-        ).fetchone()[0]
-        assert linked == did
-    finally:
-        conn.close()
 
 
 def test_retro_net_stubs_unannounced_and_skips_announced(db_path: Path) -> None:

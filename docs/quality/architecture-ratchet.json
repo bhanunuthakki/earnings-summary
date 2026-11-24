@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "9a8db5335aa30ac6a3c6e2c1a38d8fab01b83cbd",
+  "scoped_commit": "2a61cbb06fd9cf8e808bdf84df074728cb1e7df6",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "1847a7afb46fe4eed7e466b25fe7140fb68d31ecef9279a7d30d2ff53ac4caa5",
+  "source_sha256": "fd19109c92ed267e97291646010cbc3cd69404ff3628d1b0bec143436c649e46",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1406,
-    "total_noncomment_loc": 561940,
+    "total_noncomment_loc": 561814,
     "modules_over_1000_loc": 117,
     "modules_over_2000_loc": 23,
     "modules_at_least_3000_loc": 5,
@@ -3210,9 +3210,9 @@
         "path": "execution/fetch_ir_documents.py",
         "module": "execution.fetch_ir_documents",
         "lines": {
-          "physical": 1166,
-          "nonblank": 1081,
-          "noncomment": 1059
+          "physical": 1133,
+          "nonblank": 1048,
+          "noncomment": 1026
         },
         "internal_fan_out": 13,
         "responsibilities": [
@@ -11075,11 +11075,11 @@
         "path": "src/ir_pipeline/discover/generic.py",
         "module": "ir_pipeline.discover.generic",
         "lines": {
-          "physical": 609,
-          "nonblank": 527,
-          "noncomment": 505
+          "physical": 584,
+          "nonblank": 503,
+          "noncomment": 481
         },
-        "internal_fan_out": 5,
+        "internal_fan_out": 4,
         "responsibilities": [
           "filesystem",
           "network"
@@ -11091,16 +11091,16 @@
         "path": "src/ir_pipeline/discover/meli.py",
         "module": "ir_pipeline.discover.meli",
         "lines": {
-          "physical": 255,
-          "nonblank": 209,
-          "noncomment": 209
+          "physical": 241,
+          "nonblank": 197,
+          "noncomment": 197
         },
         "internal_fan_out": 0,
         "responsibilities": [
           "network"
         ],
-        "public_functions": 2,
-        "fully_annotated_public_functions": 2
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
       },
       {
         "path": "src/ir_pipeline/discover/mz.py",
@@ -11188,9 +11188,9 @@
         "path": "src/ir_pipeline/home_authority_registry.py",
         "module": "ir_pipeline.home_authority_registry",
         "lines": {
-          "physical": 273,
-          "nonblank": 254,
-          "noncomment": 254
+          "physical": 267,
+          "nonblank": 248,
+          "noncomment": 248
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -11220,11 +11220,11 @@
         "path": "src/ir_pipeline/ir_url_overrides.py",
         "module": "ir_pipeline.ir_url_overrides",
         "lines": {
-          "physical": 39,
-          "nonblank": 32,
-          "noncomment": 32
+          "physical": 83,
+          "nonblank": 77,
+          "noncomment": 64
         },
-        "internal_fan_out": 1,
+        "internal_fan_out": 0,
         "responsibilities": [
           "network"
         ],
@@ -14720,9 +14720,9 @@
         "path": "src/pipeline/transcript_acquisition.py",
         "module": "pipeline.transcript_acquisition",
         "lines": {
-          "physical": 1056,
-          "nonblank": 968,
-          "noncomment": 964
+          "physical": 977,
+          "nonblank": 895,
+          "noncomment": 891
         },
         "internal_fan_out": 10,
         "responsibilities": [
@@ -16088,9 +16088,9 @@
         "path": "src/provenance/ooxml_extraction.py",
         "module": "provenance.ooxml_extraction",
         "lines": {
-          "physical": 1022,
-          "nonblank": 933,
-          "noncomment": 929
+          "physical": 1011,
+          "nonblank": 923,
+          "noncomment": 919
         },
         "internal_fan_out": 1,
         "responsibilities": [

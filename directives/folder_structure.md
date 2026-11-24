@@ -34,7 +34,6 @@ apply. Source retirement and actual canonical data deletion are separate states.
     "config",
     "cron",
     "dcf",
-    "design-system",
     "directives",
     "docs",
     "evals",
@@ -61,7 +60,6 @@ apply. Source retirement and actual canonical data deletion are separate states.
   "tooling_directories": [
     ".claude",
     ".codex",
-    ".design-sync",
     ".githooks",
     ".github",
     ".harden"
@@ -100,7 +98,6 @@ tool/runtime directories such as `.git`, `.venv`, and caches.
 | `dcf/` | User-editable canonical per-ticker DCF workbooks. |
 | `cron/` | Windows Task Scheduler manifests and wrappers. |
 | `evals/` | LLM evaluation cases, rubrics, and versioned fixtures. |
-| `design-system/`, `.design-sync/` | Design-system source and generated-sync metadata; `.design-sync/` is a registered tooling root. |
 | `scratch/` | Registered compatibility exception for still-referenced one-offs and historical plans. New durable product logic is prohibited here. |
 | `outputs/` | Registered artifact-tool output. It is not the application `output/` destination and must not be read by product code. |
 

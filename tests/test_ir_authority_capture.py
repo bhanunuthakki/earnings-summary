@@ -41,7 +41,6 @@ from provenance.issuer_registry import (
 from run_lock import hold_run_lock, lock_path_for
 from sqlite_runtime import SQLiteConnectionRole
 
-ROOT = Path(__file__).resolve().parents[1]
 STAMP = datetime(2026, 7, 27, 21, 0, tzinfo=UTC)
 URL = "https://ir.acme.test/archive"
 DOCUMENT_URL = "https://ir.acme.test/q4-2025-results.pdf"
@@ -128,12 +127,7 @@ class FakeSession:
 
 def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     path = tmp_path / "authority-capture.db"
-    migrated_db(
-        path,
-        stamp="0213_decision_draft_provider_id",
-        archived=True,
-        target="0227_issuer_reporting_registry",
-    )
+    migrated_db(path)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     _seed_registry(conn)

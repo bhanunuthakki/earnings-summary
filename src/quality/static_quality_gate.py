@@ -16,6 +16,7 @@ from contextlib import suppress
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
+from quality import static_quality_incremental as incremental
 from quality.changed_suppressions import ChangedSuppressionError, suppression_findings
 from quality.git_env import clean_local_git_env
 
@@ -192,6 +193,19 @@ def parse_pyright_payload(
     retained: Sequence[str],
     aliases: Mapping[str, str] | None = None,
 ) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for path, count in per_file_counts(root, payload, retained, aliases).items():
+        counts[subsystem(path)] += count
+    return {bucket: count for bucket, count in counts.items() if count}
+
+
+def per_file_counts(
+    root: Path,
+    payload: object,
+    retained: Sequence[str],
+    aliases: Mapping[str, str] | None = None,
+) -> dict[str, int]:
+    """Diagnostic count for every file of a completely analyzed population."""
     if not isinstance(payload, dict):
         raise StaticQualityGateError("malformed Pyright JSON")
     payload_map = cast(dict[str, object], payload)
@@ -208,7 +222,7 @@ def parse_pyright_payload(
         )
     retained_set = set(retained)
     path_aliases = aliases or {}
-    counts: Counter[str] = Counter()
+    counts: Counter[str] = Counter(dict.fromkeys(retained, 0))
     for raw in diagnostic_rows:
         if not isinstance(raw, dict):
             raise StaticQualityGateError("malformed Pyright diagnostic")
@@ -217,7 +231,7 @@ def parse_pyright_payload(
         relative = path_aliases.get(relative, relative)
         if relative not in retained_set:
             raise StaticQualityGateError(f"Pyright reported a non-retained file: {relative}")
-        counts[subsystem(relative)] += 1
+        counts[relative] += 1
     return dict(counts)
 
 
@@ -396,8 +410,11 @@ def compare_exact(
 
 
 def _run_pyright(
-    root: Path, pythonpath: str, retained: Sequence[str]
+    root: Path, pythonpath: str, retained: Sequence[str], files: Sequence[str] | None = None
 ) -> tuple[object, dict[str, str]]:
+    """Scan the whole project, or exactly ``files`` when given."""
+    if files is not None and not files:
+        return {"generalDiagnostics": [], "summary": {"filesAnalyzed": 0}}, {}
     executable = Path(sys.executable).with_name("pyright")
     base_command = [
         str(executable) if executable.is_file() else "pyright",
@@ -405,21 +422,16 @@ def _run_pyright(
         pythonpath,
         "--outputjson",
     ]
+    population = retained if files is None else files
     hidden = [
-        path for path in retained if any(part.startswith(".") for part in PurePosixPath(path).parts)
+        path
+        for path in population
+        if any(part.startswith(".") for part in PurePosixPath(path).parts)
     ]
-    try:
-        main_result = subprocess.run(
-            base_command, cwd=root, text=True, capture_output=True, check=False
-        )
-    except (OSError, UnicodeError) as exc:
-        raise StaticQualityGateError("unable to run Pyright") from exc
-    if main_result.returncode not in (0, 1):
-        raise PyrightProcessError("main", main_result.returncode, main_result.stderr)
-    try:
-        payloads: list[object] = [json.loads(main_result.stdout)]
-    except json.JSONDecodeError as exc:
-        raise StaticQualityGateError("Pyright produced malformed JSON") from exc
+    visible = [] if files is None else [path for path in files if path not in set(hidden)]
+    payloads: list[object] = []
+    if files is None or visible:
+        payloads.append(_pyright_json(root, [*base_command, *visible], "main"))
     temporary = Path(tempfile.mkdtemp(prefix="quality_pyright_", dir=root))
     aliases: dict[str, str] = {}
     copied: list[str] = []
@@ -431,19 +443,27 @@ def _run_pyright(
         aliases[relative_copy] = path
         copied.append(relative_copy)
     try:
-        hidden_result = subprocess.run(
-            [*base_command, *copied], cwd=root, text=True, capture_output=True, check=False
-        )
-    except (OSError, UnicodeError) as exc:
-        raise StaticQualityGateError("unable to run Pyright") from exc
+        if copied or files is None:
+            payloads.append(_pyright_json(root, [*base_command, *copied], "hidden"))
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
-    if hidden_result.returncode not in (0, 1):
-        raise PyrightProcessError("hidden", hidden_result.returncode, hidden_result.stderr)
+    return _merge_payloads(payloads), aliases
+
+
+def _pyright_json(root: Path, command: Sequence[str], stage: Literal["main", "hidden"]) -> object:
     try:
-        payloads.append(json.loads(hidden_result.stdout))
+        result = subprocess.run(command, cwd=root, text=True, capture_output=True, check=False)
+    except (OSError, UnicodeError) as exc:
+        raise StaticQualityGateError("unable to run Pyright") from exc
+    if result.returncode not in (0, 1):
+        raise PyrightProcessError(stage, result.returncode, result.stderr)
+    try:
+        return json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         raise StaticQualityGateError("Pyright produced malformed JSON") from exc
+
+
+def _merge_payloads(payloads: Sequence[object]) -> dict[str, object]:
     diagnostics: list[object] = []
     files_analyzed = 0
     for payload in payloads:
@@ -460,10 +480,67 @@ def _run_pyright(
             raise StaticQualityGateError("malformed Pyright file count")
         diagnostics.extend(cast(list[object], rows))
         files_analyzed += analyzed
-    return {
-        "generalDiagnostics": diagnostics,
-        "summary": {"filesAnalyzed": files_analyzed},
-    }, aliases
+    return {"generalDiagnostics": diagnostics, "summary": {"filesAnalyzed": files_analyzed}}
+
+
+def _by_subsystem(files: Mapping[str, int]) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for path, count in files.items():
+        counts[subsystem(path)] += count
+    return {bucket: count for bucket, count in counts.items() if count}
+
+
+def _head_commit(root: Path) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=clean_local_git_env(),
+        )
+    except (OSError, UnicodeError) as exc:
+        raise StaticQualityGateError("unable to resolve HEAD") from exc
+    if result.returncode:
+        raise StaticQualityGateError("unable to resolve HEAD")
+    try:
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=normal", "--", "*.py"],
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=clean_local_git_env(),
+        )
+    except (OSError, UnicodeError) as exc:
+        raise StaticQualityGateError("unable to inspect the worktree") from exc
+    if dirty.returncode or dirty.stdout.strip():
+        raise StaticQualityGateError("a Pyright receipt requires a clean committed tree")
+    return result.stdout.strip()
+
+
+def _incremental_pyright(
+    root: Path, pythonpath: str, retained: Sequence[str], receipt: Path, base_commit: str
+) -> dict[str, int] | None:
+    """Per-file counts from the base receipt plus a re-checked closure, or None."""
+    try:
+        base_counts = incremental.load_receipt(receipt, base_commit)
+        chosen = incremental.plan(
+            root, retained, base_counts, incremental.changed_paths(root, base_commit)
+        )
+    except incremental.IncrementalUnavailableError as exc:
+        print(f"static-quality: full scan required ({exc})", flush=True)
+        return None
+    payload, aliases = _run_pyright(root, pythonpath, retained, chosen.recheck)
+    counts = dict(chosen.carried)
+    counts.update(per_file_counts(root, payload, chosen.recheck, aliases))
+    print(
+        f"static-quality: re-checked {len(chosen.recheck)} files; "
+        f"{len(chosen.carried)} counts carried from {base_commit[:12]}",
+        flush=True,
+    )
+    return counts
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -474,6 +551,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--base", default="origin/main")
     parser.add_argument("--pyright-json", type=Path)
     parser.add_argument("--failure-diagnostics", action="store_true")
+    parser.add_argument(
+        "--receipt-in", type=Path, help="per-file counts of a full scan of --receipt-commit"
+    )
+    parser.add_argument("--receipt-commit", help="exact commit the input receipt must describe")
+    parser.add_argument("--receipt-out", type=Path, help="write per-file counts of a full scan")
     args = parser.parse_args(argv)
     root = args.repo_root.resolve()
     config_path = args.config if args.config.is_absolute() else root / args.config
@@ -489,14 +571,44 @@ def main(argv: Sequence[str] | None = None) -> int:
         violations.extend(
             compare_descending("suppressions", prior_suppressions, expected_suppressions)
         )
+        findings = suppression_findings(root, retained)
+        actual_suppressions = Counter(subsystem(finding.path) for finding in findings)
+        if args.receipt_in and args.receipt_commit and not args.pyright_json and not violations:
+            files = _incremental_pyright(
+                root, args.pythonpath, retained, args.receipt_in, args.receipt_commit
+            )
+            if files is not None:
+                incremental_pyright = _by_subsystem(files)
+                if not compare_exact(
+                    retained,
+                    expected_pyright,
+                    expected_suppressions,
+                    incremental_pyright,
+                    actual_suppressions,
+                ):
+                    print(
+                        "static-quality ceilings exact (incremental): "
+                        f"{len(retained)} retained files, "
+                        f"{sum(incremental_pyright.values())} Pyright diagnostics, "
+                        f"{sum(actual_suppressions.values())} suppressions"
+                    )
+                    return 0
+                print(
+                    "static-quality: incremental counts differ; confirming with a full scan",
+                    flush=True,
+                )
         if args.pyright_json:
             payload = json.loads(args.pyright_json.read_text(encoding="utf-8"))
         else:
             payload, aliases = _run_pyright(root, args.pythonpath, retained)
         actual_pyright = parse_pyright_payload(root, payload, retained, aliases)
         population_validated = True
-        findings = suppression_findings(root, retained)
-        actual_suppressions = Counter(subsystem(finding.path) for finding in findings)
+        if args.receipt_out:
+            incremental.write_receipt(
+                args.receipt_out,
+                _head_commit(root),
+                per_file_counts(root, payload, retained, aliases),
+            )
         violations.extend(
             compare_exact(
                 retained,

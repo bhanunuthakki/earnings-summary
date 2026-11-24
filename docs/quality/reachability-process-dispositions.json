@@ -502,16 +502,6 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "Conformance check runs the fixed execution/verify_design_conformance.py --check command.",
-      "fingerprint": "5d08db5a9e2e5606254cdef07d265af048473600a4be448580c6ec4cec36ec91",
-      "line": 92,
-      "path": "scripts/check_design_sync.py",
-      "targets": [
-        "execution/verify_design_conformance.py"
-      ]
-    },
-    {
-      "disposition": "internal_python_target",
       "evidence": "_spawn_onboard_async constructs the fixed execution/onboard_ticker.py path and uses it as the target of managed_python_argv.",
       "fingerprint": "b0185ed60a552efe411a604f04db0202f4f111d1d60a0ede902cd889f0e293a3",
       "line": 624,
@@ -787,19 +777,9 @@
     },
     {
       "disposition": "external_process",
-      "evidence": "The whole-tree gate invokes only the pinned Pyright executable with the checked-in configuration and selected project interpreter.",
-      "fingerprint": "22e0afb8297cfa70e77121855a7175c36677a6be20531d163b124d78ebe24494",
-      "line": 412,
-      "path": "src/quality/static_quality_gate.py",
-      "targets": [
-        "pyright"
-      ]
-    },
-    {
-      "disposition": "external_process",
-      "evidence": "The hidden-path parity scan invokes only the pinned Pyright executable over byte-identical temporary copies of tracked hidden Python files.",
-      "fingerprint": "2b60f9935b5aa3792ac70196d641821104fa5eefd0704781b1482e160210c65f",
-      "line": 434,
+      "evidence": "The static-quality gate invokes only the pinned Pyright executable with the checked-in configuration and selected project interpreter, over the whole project, an explicit retained-file closure, or byte-identical temporary copies of tracked hidden Python files.",
+      "fingerprint": "089a532d1bac63dab950ccf529ba7e266beb36d17211fd69584cffc60e37cceb",
+      "line": 455,
       "path": "src/quality/static_quality_gate.py",
       "targets": [
         "pyright"
@@ -1014,7 +994,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "29f87ff807d72634aec2cbd5de00970064594fa7852d58ea1487ef76133c6444",
+      "source_sha256": "3f87846c56d68a44f6c243243fd588d4fccaf4a9d996465f9488207c42ba93b4",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

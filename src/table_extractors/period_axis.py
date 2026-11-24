@@ -48,20 +48,39 @@ _TRAILING_DATE_RX = re.compile(r"([A-Z][a-z]{2}\.?\s+\d{1,2},\s+\d{4})$")
 # reused-by-generic_xbrl_capture behavior).
 _TRAILING_DATE_FULL_RX = re.compile(r"([A-Z][a-z]+\.?\s+\d{1,2},\s+\d{4})$")
 
-# "6 Months Ended", "3 Months Ended", "9 months ended" — the duration prefix
-# generic_xbrl_capture._parse_period discards. This is the whole axis fix.
-_DURATION_RX = re.compile(r"(\d{1,2})\s*Months?\s+Ended", re.IGNORECASE)
+# "6 Months Ended", "Three Months Ended", "13 Weeks Ended", etc.
+_DURATION_RX = re.compile(
+    r"\b(three|six|nine|twelve|\d{1,2})\s*[-]?\s*months?\s+(?:period\s+)?ended\b",
+    re.IGNORECASE,
+)
+_DURATION_WEEK_RX = re.compile(
+    r"\b(1[234]|26|39|5[23]|thirteen|twenty[- ]six|thirty[- ]nine|fifty[- ]two|fifty[- ]three)\s*[-]?\s*weeks?\s+(?:period\s+)?ended\b",
+    re.IGNORECASE,
+)
+_MONTH_WORD_MAP: dict[str, int] = {"three": 3, "six": 6, "nine": 9, "twelve": 12}
+_WEEK_DURATION_MAP: dict[str, int] = {
+    "12": 3,
+    "13": 3,
+    "14": 3,
+    "thirteen": 3,
+    "26": 6,
+    "twentysix": 6,
+    "39": 9,
+    "thirtynine": 9,
+    "52": 12,
+    "53": 12,
+    "fiftytwo": 12,
+    "fiftythree": 12,
+}
 
-NominalQuarter = Literal["Q1", "Q2", "Q3"]
+NominalQuarter = Literal["Q1", "Q2", "Q3", "Q4"]
 
 # Nominal quarter -> cumulative-months expectation for its "N Months Ended"
-# YTD column (Q1's own discrete quarter IS its 3-month column, so Q1 never
-# has a distinct cumulative shape).
-_CUMULATIVE_MONTHS: dict[NominalQuarter, int] = {"Q1": 3, "Q2": 6, "Q3": 9}
+# YTD column (Q1's own discrete quarter IS its 3-month column, Q4 cumulative is FY/12M).
+_CUMULATIVE_MONTHS: dict[NominalQuarter, int] = {"Q1": 3, "Q2": 6, "Q3": 9, "Q4": 12}
 # Nominal quarter -> how many months before the fiscal-year-end this quarter's
-# own end-date falls (Q1 = 9 months before FYE, ..., matches a Q4/FY anchor
-# being 0 months before FYE).
-_MONTHS_BEFORE_FYE: dict[NominalQuarter, int] = {"Q1": 9, "Q2": 6, "Q3": 3}
+# own end-date falls (Q1 = 9 months before FYE, ..., Q4 = 0 months before FYE).
+_MONTHS_BEFORE_FYE: dict[NominalQuarter, int] = {"Q1": 9, "Q2": 6, "Q3": 3, "Q4": 0}
 
 PeriodAxisClass = Literal[
     "current_discrete",
@@ -141,8 +160,18 @@ def parse_period_label(label: str) -> ParsedPeriodLabel:
     a spelled-out month — not ``parse_trailing_date``, which stays frozen for
     generic_xbrl_capture's own 10-K FYE-column convention."""
     end_date = _parse_end_date_permissive(label)
+    duration: int | None = None
     m = _DURATION_RX.search(label)
-    duration = int(m.group(1)) if m else None
+    if m is not None:
+        raw_tok = m.group(1).lower()
+        duration = _MONTH_WORD_MAP.get(raw_tok)
+        if duration is None and raw_tok.isdigit():
+            duration = int(raw_tok)
+    else:
+        wm = _DURATION_WEEK_RX.search(label)
+        if wm is not None:
+            week_tok = wm.group(1).lower().replace("-", "").replace(" ", "")
+            duration = _WEEK_DURATION_MAP.get(week_tok)
     return ParsedPeriodLabel(raw=label, duration_months=duration, end_date=end_date)
 
 
@@ -208,7 +237,7 @@ def classify_period_column(
     cumulative_months = _CUMULATIVE_MONTHS[nominal_quarter]
     end = parsed.end_date.date() if parsed.end_date is not None else None
 
-    if end is not None and end == current_end:
+    if end is not None and abs((end - current_end).days) <= 7:
         if parsed.duration_months == 3:
             return PeriodAxisResult("current_discrete", parsed, current_end, prior_year_end)
         if parsed.duration_months == cumulative_months:
@@ -221,7 +250,7 @@ def classify_period_column(
             "period_axis_ambiguous_no_duration_prefix",
         )
 
-    if end is not None and end == prior_year_end:
+    if end is not None and abs((end - prior_year_end).days) <= 7:
         if parsed.duration_months in (3, cumulative_months):
             return PeriodAxisResult("prior_year_comparative", parsed, current_end, prior_year_end)
         # A prior-year column with a duration that fits neither cadence: not

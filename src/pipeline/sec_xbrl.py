@@ -811,6 +811,8 @@ TAG_LADDERS: tuple[LineItemLadder, ...] = (
     _ladder(
         "sga",
         ("us-gaap", "SellingGeneralAndAdministrativeExpense"),
+        ("ifrs-full", "SellingGeneralAndAdministrativeExpense"),
+        ("ifrs-full", "AdministrativeExpense"),
     ),
     _ladder(
         "operating_income",
@@ -830,10 +832,15 @@ TAG_LADDERS: tuple[LineItemLadder, ...] = (
         ("us-gaap", "InterestExpense"),
         ("us-gaap", "InterestExpenseNonoperating"),
         ("us-gaap", "InterestAndDebtExpense"),
+        ("ifrs-full", "FinanceCosts"),
+        ("ifrs-full", "InterestExpense"),
     ),
     _ladder(
         "interest_income",
         ("us-gaap", "InvestmentIncomeInterest"),
+        ("ifrs-full", "FinanceIncome"),
+        ("ifrs-full", "InterestRevenueCalculatedUsingEffectiveInterestMethod"),
+        ("ifrs-full", "InterestIncome"),
     ),
     _ladder(
         "income_before_tax",
@@ -948,6 +955,7 @@ TAG_LADDERS: tuple[LineItemLadder, ...] = (
         "deferred_revenue",
         ("us-gaap", "ContractWithCustomerLiabilityCurrent"),
         ("us-gaap", "DeferredRevenueCurrent"),
+        ("ifrs-full", "ContractLiabilities"),
     ),
     _ladder(
         "total_current_liabilities",
@@ -1104,6 +1112,8 @@ TAG_LADDERS: tuple[LineItemLadder, ...] = (
     _ladder(
         "common_stock_repurchased",
         ("us-gaap", "PaymentsForRepurchaseOfCommonStock"),
+        ("ifrs-full", "PurchaseOfTreasuryShares"),
+        ("ifrs-full", "PaymentsToAcquireOrRedeemEntitysShares"),
         sign=-1,
     ),
     _ladder(
@@ -1120,6 +1130,7 @@ TAG_LADDERS: tuple[LineItemLadder, ...] = (
     _ladder(
         "acquisitions_net",
         ("us-gaap", "PaymentsToAcquireBusinessesNetOfCashAcquired"),
+        ("ifrs-full", "CashFlowsUsedInObtainingControlOfSubsidiariesOrOtherBusinesses"),
         sign=-1,
     ),
     _ladder(

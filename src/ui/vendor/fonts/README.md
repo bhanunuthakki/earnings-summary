@@ -72,5 +72,5 @@ redistribution are vendored beside the binaries:
 3. Regenerate the `@font-face` block in the prototype from the same response,
    keeping family/weight/unicode-range descriptors identical to upstream and
    pointing `src` at the local relative path.
-4. Re-run `python scripts/check_design_sync.py` and the Work OS shell tests;
+4. Re-run the Work OS shell tests;
    capture before/after shell screenshots as the rendering-evidence receipt.
