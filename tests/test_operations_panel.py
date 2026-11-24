@@ -845,7 +845,7 @@ def test_jobs_have_attention_filter_search_and_responsive_cards(tmp_path: Path) 
     assert 'aria-live="polite"' in html
     assert ":focus-visible" in html
     # The manual-only backfill has no Scheduler or Operations task card.
-    assert html.count('data-operations-task-card="true"') == 30
+    assert html.count('data-operations-task-card="true"') == 28
     assert "reconcile-recorded-trades" in html
     assert "monthly_p3_refresh" not in html
     assert "weekly_synthesis" not in html

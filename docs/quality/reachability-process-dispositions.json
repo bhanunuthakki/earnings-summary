@@ -350,8 +350,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Drain routes only the four fixed purpose regenerators in _PURPOSE_TO_REGENERATOR through managed_python_argv; retired SayDo generation is absent.",
-      "fingerprint": "56308a9dda82d3d3e1630a03122fb71f8655f9befa4c6a894277991aaacd488c",
-      "line": 300,
+      "fingerprint": "68acfbaef43544ed629ebbd2ef286d8ce5ccbe56e9368f1be931af6f0e72d48d",
+      "line": 376,
       "path": "execution/refresh_dirty_artifacts.py",
       "targets": [
         "execution/build_artifacts.py",
@@ -828,8 +828,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "This branch executes the operator-supplied command argv in the no-owner/no-timeout path; it is not a repository script target.",
-      "fingerprint": "d30eedebaaef0d4c9bfeb16d27b5f0295412899d29a06e1da3425042c2398d8b",
-      "line": 976,
+      "fingerprint": "ee0323a7ebecd28d94abec0ac9b3a04e29267f123e66424897faa237d87da173",
+      "line": 975,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -838,8 +838,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "This branch launches the operator-supplied command argv with the owned process-tree creation flags.",
-      "fingerprint": "3b4307629e099396122a99b74118b0ef3a2867c0136977b4f7e940370b43c1c0",
-      "line": 983,
+      "fingerprint": "1666f7a47cdab2abae7173c9384815194560f06cce1a14d71a6185c590612281",
+      "line": 982,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -848,8 +848,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "This branch launches the operator-supplied command argv with optional stdout/stderr redirection and owned process-tree cleanup.",
-      "fingerprint": "4d54ac997b94ef9cba860a3cff8fe1e07e4e8724c20d4878837e4d24fc3833c2",
-      "line": 985,
+      "fingerprint": "557a27019dba4c3fd4c7963648dac479be870a10063ff531879656818f874ba0",
+      "line": 984,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -994,7 +994,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "6f1c1c468a6408a161ca2d461760cde0ca4ecc834ef5c924300d768e72487512",
+      "source_sha256": "af6d70db579979c58d329899274030faf4387b35da322fc0bed178f78061deda",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

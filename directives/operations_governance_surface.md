@@ -53,9 +53,8 @@ The disabled `grade_calibration` and `onboard_pending` declarations are removed
 from source (28 tasks remain); their scripts and the onboarding maintenance
 action remain. `model_eval_sweep` runs monthly on day 1 at 20:00 instead of every
 Saturday. `restore_drill` has a 2-hour limit: the November drill on the ~10 GB
-database was killed at 30 minutes. `db_gc` and `compute_macro_sensitivities`
-now accept the `portfolio-db` lock that their `job_runtime` ancestor already
-holds; before this, every scheduled `db_gc` aborted with `RunLockHeldError`
+database was killed at 30 minutes. `db_gc` now accepts the `portfolio-db` lock
+that its `job_runtime` ancestor already holds; before this, every scheduled `db_gc` aborted with `RunLockHeldError`
 (four Sundays to 2026-11-22). Post-earnings readouts are reused unless their
 evidence changes, and the dirty-artifact drain waits 7 days after a paid attempt
 that left a row unresolved. The live tasks change only when the owner
