@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """One database, one write lock — and contention waits instead of dying.
 
 Before 2026-08-03 two independent lock systems guarded portfolio.db with two
@@ -23,14 +22,11 @@ from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import run_lock  # noqa: E402
-from runtime.job_runtime import (  # noqa: E402
+import run_lock
+from runtime import job_runtime
+from runtime.job_runtime import (
     JobAlreadyRunningError,
     JobLock,
-    _write_set_lock_path,
     portfolio_db_path,
 )
 
@@ -46,7 +42,8 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_both_systems_share_one_lock_file(repo: Path) -> None:
     """The unification itself: JobLock's portfolio-db path IS run_lock's path."""
     db = portfolio_db_path(repo)
-    assert _write_set_lock_path(repo, "portfolio-db") == run_lock.lock_path_for(db)
+    write_set_lock_path = getattr(job_runtime, "_write_set_lock_path")
+    assert write_set_lock_path(repo, "portfolio-db") == run_lock.lock_path_for(db)
 
 
 def test_run_lock_holder_blocks_joblock(repo: Path) -> None:
