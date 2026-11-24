@@ -856,19 +856,18 @@ def insert_kpi_with_restatement_detection(
         ):
             return (None, None)
         supersedes_id = same_doc_head.id
-    elif currency is not None and has_currency_col:
-        if same_doc_head is not None:
-            stored = same_doc_head.currency
-            if stored is None:
-                if not _decimal_eq(same_doc_head.value, value) or same_doc_head.unit != unit:
-                    raise ValueError(
-                        "same-document KPI currency backfill conflicts with persisted fact identity"
-                    )
+    elif currency is not None and has_currency_col and same_doc_head is not None:
+        stored = same_doc_head.currency
+        if stored is None:
+            if not _decimal_eq(same_doc_head.value, value) or same_doc_head.unit != unit:
                 raise ValueError(
-                    "same-document KPI currency enrichment requires source-reviewed supersession"
+                    "same-document KPI currency backfill conflicts with persisted fact identity"
                 )
-            if str(stored) != currency:
-                raise ValueError("same-document KPI currency conflicts with persisted fact")
+            raise ValueError(
+                "same-document KPI currency enrichment requires source-reviewed supersession"
+            )
+        if str(stored) != currency:
+            raise ValueError("same-document KPI currency conflicts with persisted fact")
     try:
         if has_audit_cols:
             tail_names = "".join(f", {c}" for c in tail_cols)
