@@ -220,6 +220,55 @@ def test_scheduled_generation_is_portfolio_only_and_idempotent(
     )
 
 
+def _add_dcf_run(db: Path, *, live: float, fair: float, valuation_date: str) -> None:
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS dcf_runs (ticker TEXT, segment_name TEXT, "
+            "valuation_date TEXT, live_price REAL, npv_per_share REAL, "
+            "over_under_pct REAL, sanity_flag TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO dcf_runs(ticker, segment_name, valuation_date, live_price, "
+            "npv_per_share, over_under_pct, sanity_flag) VALUES ('WIX', NULL, ?, ?, ?, ?, NULL)",
+            (valuation_date, live, fair, live / fair - 1.0),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_later_day_and_new_live_price_reuse_the_readout(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A daily run must not pay again when only the date or the live price moved."""
+    import earnings_readout
+
+    calls: list[str] = []
+
+    def capture_llm(prompt: str, **kwargs: object) -> str:
+        calls.append(str(kwargs["ticker"]))
+        return _readout_text()
+
+    monkeypatch.setattr(earnings_readout, "call_llm", capture_llm)
+    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", _no_budget_skip)
+
+    _add_dcf_run(db, live=100.0, fair=120.0, valuation_date="2026-08-04")
+    first = earnings_readout.generate_all(db, db.parent, today=date(2026, 8, 4))
+    _add_dcf_run(db, live=104.5, fair=120.0, valuation_date="2026-08-05")
+    second = earnings_readout.generate_all(db, db.parent, today=date(2026, 8, 5))
+
+    assert first[earnings_readout.GENERATED] == 1
+    assert second[earnings_readout.CACHE_HIT] == 1
+    assert calls == ["WIX"]
+
+    _add_dcf_run(db, live=104.5, fair=150.0, valuation_date="2026-08-06")
+    third = earnings_readout.generate_all(db, db.parent, today=date(2026, 8, 6))
+
+    assert third[earnings_readout.CACHE_HIT] == 0
+    assert calls == ["WIX", "WIX"]
+
+
 def test_evaluation_name_generates_only_when_explicitly_requested(
     db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

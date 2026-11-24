@@ -142,9 +142,17 @@ class ContextBlock:
     label: str
     content: str
     source: ContextSource
+    cache_content: str | None = None
+    """Content for the reuse key when ``content`` carries daily-volatile text."""
 
     def render(self) -> str:
         return f"## {self.label}\n{self.content}"
+
+    def cache_form(self) -> ContextBlock:
+        """This block as it enters the reuse key (dates and live price removed)."""
+        if self.cache_content is None:
+            return self
+        return ContextBlock(self.kind, self.label, self.cache_content, self.source)
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -707,6 +715,7 @@ def _context_blocks(
             "Current context: valuation stance",
             valuation,
             ContextSource("dcf_run", "missing"),
+            cache_content=_without_live_price(valuation),
         ),
         ContextBlock(
             "earnings_call_transcript",
@@ -733,21 +742,40 @@ def _context_blocks(
             "context_time_limits",
             "Call evidence and current-context limits",
             f"Mutable context loaded on {datetime.now(UTC).date().isoformat()} UTC; "
-            f"request as-of date is {today.isoformat()}. "
-            "The estimate/result selector requires the selected call event date; "
-            "source identity and exact-quarter comparability are unavailable. Do not claim "
-            "sourced consensus, an established beat, or an exact-quarter comparison. "
-            "The selected transcript is call evidence. The dated saved brief is owner preparation, "
-            "not automatically management guidance or sourced consensus. Current mutable KPI, thesis, "
-            "notes, language alerts and valuation are current context, not proven known at the call. "
-            "KPI periods stop at the selected fiscal period end; revisions use current admission. "
-            "Historical knowledge cutoff is not enforced for those blocks. Transcript source "
-            "acquisition/extraction and complete material Q&A coverage are unknown. Do not classify "
-            "an unanswered component as avoidance, not addressed, or a dropped topic; use insufficient "
-            "transcript evidence unless all question and response/follow-up locators are supplied.",
+            f"request as-of date is {today.isoformat()}. " + _CONTEXT_LIMITS,
             ContextSource("analysis_limits", "present"),
+            cache_content=_CONTEXT_LIMITS,
         ),
     ]
+
+
+_CONTEXT_LIMITS = (
+    "The estimate/result selector requires the selected call event date; "
+    "source identity and exact-quarter comparability are unavailable. Do not claim "
+    "sourced consensus, an established beat, or an exact-quarter comparison. "
+    "The selected transcript is call evidence. The dated saved brief is owner preparation, "
+    "not automatically management guidance or sourced consensus. Current mutable KPI, thesis, "
+    "notes, language alerts and valuation are current context, not proven known at the call. "
+    "KPI periods stop at the selected fiscal period end; revisions use current admission. "
+    "Historical knowledge cutoff is not enforced for those blocks. Transcript source "
+    "acquisition/extraction and complete material Q&A coverage are unknown. Do not classify "
+    "an unanswered component as avoidance, not addressed, or a dropped topic; use insufficient "
+    "transcript evidence unless all question and response/follow-up locators are supplied."
+)
+
+
+def _without_live_price(valuation: str) -> str:
+    """Valuation stance without the parts that move with the daily price.
+
+    ``valuation_text`` joins ``live $…``, ``DCF fair $…``, ``±N% vs fair`` and
+    the sanity note with `` · ``. The live price and the gap change on every
+    daily reprice; the fair value and the sanity note change only when the
+    model changes, so only those enter the reuse key.
+    """
+    parts = [part for part in valuation.split(" · ") if part]
+    return " · ".join(
+        part for part in parts if not part.startswith("live $") and not part.endswith(" vs fair")
+    )
 
 
 def assemble_context(
@@ -762,6 +790,30 @@ def assemble_context(
         block.render()
         for block in _context_blocks(db_path, repo_root, quarter, today=today)
         if block.content.strip()
+    ]
+
+
+def _reuse_key_inputs(
+    quarter: ReportedQuarter, blocks: list[ContextBlock], method: ResearchMethod
+) -> list[bytes | str]:
+    """Inputs that decide whether a saved readout is still valid.
+
+    ``input_sha256`` still commits to the exact rendered prompt; this separate
+    key, saved as ``reuse_key_sha256`` in the manifest, decides reuse. The key covers the quarter, every evidence block, the method and the prompt
+    template. It leaves out the generation date, the request date and the live
+    price: those change every day without changing what the call said, and
+    including them made the morning pipeline pay for the same readouts daily.
+    The saved manifest still records the exact prompt and dates it was made with.
+    """
+    key_blocks = [block.cache_form() for block in blocks]
+    key_manifest, _ = _context_manifest(key_blocks)
+    key_manifest.update(research_method=method.as_dict(), method_instructions=method.instructions)
+    return [
+        quarter.period_end,
+        quarter.fiscal_period_type,
+        *[block.render() for block in key_blocks if block.content.strip()],
+        json.dumps(key_manifest, sort_keys=True, separators=(",", ":")),
+        _PROMPT,
     ]
 
 
@@ -871,6 +923,10 @@ def _generate_quarter(
         parent_id = baseline.get("artifact_id")
         if isinstance(parent_id, int):
             parent_ids.append(parent_id)
+    reuse_key = compute_input_sha256(
+        prompt_version=prompt_version, cache_inputs=_reuse_key_inputs(quarter, blocks, method)
+    )
+    context_manifest["reuse_key_sha256"] = reuse_key
     cache_inputs: list[bytes | str] = [
         quarter.period_end,
         quarter.fiscal_period_type,
@@ -878,14 +934,19 @@ def _generate_quarter(
         json.dumps(context_manifest, sort_keys=True, separators=(",", ":")),
         prompt,
     ]
-    input_sha = compute_input_sha256(prompt_version=prompt_version, cache_inputs=cache_inputs)
     current = read_current(
         ticker=quarter.ticker,
         purpose=PURPOSE,
         fiscal_period=quarter.period_end,
         db_path=db_path,
     )
-    if current is not None and not force and artifact_is_reusable(current, input_sha256=input_sha):
+    if (
+        current is not None
+        and not force
+        and artifact_is_reusable(current)
+        and isinstance(current.content_json, dict)
+        and current.content_json.get("reuse_key_sha256") == reuse_key
+    ):
         return GenerateOutcome(CACHE_HIT, quarter.ticker, quarter.period_end, current.id)
     if should_skip_for_budget(PURPOSE, db_path=db_path):
         return GenerateOutcome(BUDGET_SKIPPED, quarter.ticker, quarter.period_end)
