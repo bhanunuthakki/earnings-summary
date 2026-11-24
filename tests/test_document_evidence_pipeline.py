@@ -669,3 +669,98 @@ def test_resume_receipt_binds_requested_context(
     assert cli.main([*argv, "--requested"]) == 2
     with pytest.raises(ValueError, match="scope mismatch"):
         cli.main(argv)
+
+
+# sqlite_stat1 rows copied from the 2026-11-23 production snapshot. With these
+# statistics the planner walked every current inventory and expected document
+# for each processed document: about 8 s per document on the canonical host.
+_PRODUCTION_STATISTICS = (
+    ("source_coverage_assessments", "ix_source_coverage_expected_revision", "229577 1 1"),
+    ("source_coverage_assessments", "ix_source_coverage_document_version", "229577 2"),
+    ("evidence_document_versions", "ix_evidence_document_filter", "13774 106 106 19 10 9"),
+    ("evidence_document_versions", "sqlite_autoindex_evidence_document_versions_4", "13774 9"),
+    ("evidence_document_versions", "sqlite_autoindex_evidence_document_versions_1", "13774 1"),
+    ("expected_documents", "ix_expected_document_logical_key", "217506 2 1"),
+    ("expected_documents", "sqlite_autoindex_expected_documents_2", "217506 6042 1"),
+    ("expected_documents", "sqlite_autoindex_expected_documents_1", "217506 1"),
+    ("source_inventory_snapshots", "ix_source_inventory_scope", "36 2 2 1"),
+    ("source_inventory_snapshots", "sqlite_autoindex_source_inventory_snapshots_2", "36 2 1"),
+    ("source_inventory_snapshots", "sqlite_autoindex_source_inventory_snapshots_1", "36 1"),
+)
+
+
+def test_inventory_lookup_seeks_one_document_under_production_statistics(
+    connection: sqlite3.Connection, tmp_path: Path
+) -> None:
+    document_id = _seed(connection, tmp_path)
+    connection.execute("ANALYZE")
+    connection.execute("DELETE FROM sqlite_stat1")
+    connection.executemany(
+        "INSERT INTO sqlite_stat1 (tbl, idx, stat) VALUES (?, ?, ?)", _PRODUCTION_STATISTICS
+    )
+    connection.commit()
+    connection.execute("ANALYZE sqlite_master")  # Reload the planner statistics.
+    statements: list[str] = []
+
+    def capture(statement: str) -> None:
+        if "inventory.inventory_key" in statement:
+            statements.append(statement)
+
+    connection.set_trace_callback(capture)
+    try:
+        process_document_evidence(
+            connection, DocumentEvidenceRequest(repo_root=tmp_path, apply=True)
+        )
+    finally:
+        connection.set_trace_callback(None)
+    lookups = [statement for statement in statements if statement.lstrip().startswith("SELECT")]
+    assert lookups
+    for statement in lookups:
+        plan = [str(row[3]) for row in connection.execute("EXPLAIN QUERY PLAN " + statement)]
+        # The outer loop is this document's versions; every later step is a seek.
+        assert plan[0].startswith("SEARCH version USING INDEX"), plan
+        assert "(legacy_document_id=?)" in plan[0], plan
+        assert not [step for step in plan if step.startswith("SCAN")], plan
+        assert any("ix_source_coverage_document_version" in step for step in plan), plan
+    assert f"= {document_id}" in lookups[0]
+
+
+def test_time_budget_persists_resume_progress_instead_of_repeating_a_page(
+    connection: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from execution import process_document_evidence as cli
+
+    monkeypatch.setattr(cli, "PROJECT_ROOT", tmp_path)
+    ids = [_seed(connection, tmp_path, ticker=name) for name in ("OLD", "MID", "NEW")]
+    for name in ("OLD", "MID", "NEW"):
+        (tmp_path / f"{name}.txt").unlink()  # Each document is quarantined.
+    database = Path(connection.execute("PRAGMA database_list").fetchone()[2])
+    argv = [
+        "--db",
+        str(database),
+        "--repo-root",
+        str(tmp_path),
+        "--apply",
+        "--resume",
+        "--batch-size",
+        "100",
+        "--time-budget-seconds",
+        "0",
+    ]
+    receipt_path = tmp_path / ".tmp" / "operations" / "runtime" / "document-evidence.latest.json"
+    seen: list[int] = []
+    for _ in ids:
+        assert cli.main(argv) == 2
+        receipt = cli.DocumentEvidenceResumeReceipt.model_validate_json(receipt_path.read_text())
+        # An exhausted budget still finishes one document and records the cursor.
+        assert [item.status for item in receipt.result.items] == ["quarantined"]
+        assert "time_budget_exhausted" in receipt.result.findings or not receipt.result.has_more
+        seen.extend(item.document_id for item in receipt.result.items)
+    assert seen == sorted(ids, reverse=True)
+    # Quarantined documents stay visible as degraded pending work.
+    final = cli.DocumentEvidenceResumeReceipt.model_validate_json(receipt_path.read_text())
+    assert set(final.pending_document_ids) == set(ids)
+    capsys.readouterr()

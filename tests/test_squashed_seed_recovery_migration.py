@@ -17,6 +17,9 @@ from schema_compat import expected_head
 
 _RECOVERY_REVISION = "0003_restore_baseline_defaults"
 _ACTIVE_HEAD = expected_head()
+# The newest revision whose downgrade refuses. Reversible revisions above it may
+# step down first; the refusal must still keep every retired-data guarantee.
+_IRREVERSIBLE_BARRIER = "0069_retire_obsolete_input_history"
 
 
 def _digest_rows(rows: list[tuple[object, ...]]) -> str:
@@ -190,7 +193,9 @@ def test_fresh_upgrade_restores_migration_owned_defaults(
             is not None
         )
         assert conn.execute("SELECT COUNT(*) FROM llm_budgets").fetchone() == (58,)
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (_ACTIVE_HEAD,)
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            _IRREVERSIBLE_BARRIER,
+        )
 
 
 def test_upgrade_preserves_operator_owned_values(
