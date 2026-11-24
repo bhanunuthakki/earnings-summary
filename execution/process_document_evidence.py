@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import time
 from collections import Counter
 from contextlib import ExitStack
 from pathlib import Path
@@ -71,6 +72,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--content-root", type=Path, action="append", default=[])
     parser.add_argument("--apply", action="store_true")
     parser.add_argument(
+        "--time-budget-seconds",
+        type=float,
+        help="Start no new document after this many seconds; the page ends with has_more",
+    )
+    parser.add_argument(
         "--resume", action="store_true", help="Apply a page and persist its exact receipt/cursor"
     )
     args = parser.parse_args(argv)
@@ -96,6 +102,11 @@ def main(argv: list[str] | None = None) -> int:
         batch_size=args.batch_size,
         content_roots=tuple(args.content_root),
         apply=args.apply,
+        deadline_monotonic=(
+            time.monotonic() + args.time_budget_seconds
+            if args.time_budget_seconds is not None
+            else None
+        ),
     )
     receipt_path = operations_runtime_directory(root) / "document-evidence.latest.json"
     if request.apply:
@@ -176,6 +187,8 @@ def _run(
                 (item.document_id for item in fresh.items), default=previous.newest_document_id_seen
             )
             remaining = request.batch_size - len(fresh.items)
+            if "time_budget_exhausted" in fresh.findings:
+                remaining = 0
             backlog = (
                 process_document_evidence(
                     conn,
