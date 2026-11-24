@@ -42,7 +42,7 @@ import json
 import sqlite3
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -381,12 +381,17 @@ class _StubMaterialNewsBoundary:
         delay_s: float = 0.0,
         hang_tickers: frozenset[str] = frozenset(),
         wave_probe: Callable[[], int] | None = None,
+        wait_for_entry: Mapping[str, str] | None = None,
     ) -> None:
         self.db_path = db_path
         self.cost_usd = cost_usd
         self.delay_s = delay_s
         self.hang_tickers = hang_tickers
         self.wave_probe = wave_probe
+        # ticker -> another ticker whose call must have started before this
+        # call returns: proves both calls were running at the same time.
+        self.wait_for_entry = dict(wait_for_entry or {})
+        self.entered: dict[str, threading.Event] = {}
         self.trace: list[_SweepCall] = []
         self.release = threading.Event()
         self.calls = 0
@@ -403,7 +408,14 @@ class _StubMaterialNewsBoundary:
             self.calls += 1
             self.in_flight += 1
             self.max_in_flight = max(self.max_in_flight, self.in_flight)
+            self.entered.setdefault(ticker, threading.Event()).set()
+            partner = self.wait_for_entry.get(ticker)
+            partner_entered = (
+                self.entered.setdefault(partner, threading.Event()) if partner else None
+            )
         try:
+            if partner_entered is not None:
+                partner_entered.wait(timeout=5.0)
             if ticker in self.hang_tickers:
                 self.release.wait()
             elif self.delay_s:
@@ -803,6 +815,56 @@ def test_hung_ticker_hits_per_ticker_timeout_while_others_complete(
         time.sleep(0.02)
     assert stub.finished == 4
     assert [row[0] for row in _news_events(db_path)] == ["HANG", "TB", "TC", "TD"]
+
+
+def test_an_abandoned_worker_does_not_starve_later_waves(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """After a hung scan is abandoned, the next wave still runs ``workers``
+    scans at once, so a healthy ticker never waits out its budget in a queue.
+
+    TC returns only after TD's call has started. With the hung thread still
+    holding a slot, TD could start only after TC returned; TC would wait, and
+    TC or TD would be deferred for a timeout that no healthy scan caused.
+    """
+    db_path = _build_db(tmp_path, monkeypatch)
+    tickers = ["HANG", "TB", "TC", "TD"]
+    _seed_news(db_path, tickers)
+    stub = _StubMaterialNewsBoundary(
+        db_path=db_path,
+        hang_tickers=frozenset({"HANG"}),
+        wait_for_entry={"TC": "TD"},
+    )
+    monkeypatch.setattr("triggers.material_news.call_llm", stub)
+
+    try:
+        exit_code = run_triggers.main(
+            [
+                "--tickers",
+                ",".join(tickers),
+                "--triggers",
+                "material_news",
+                "--db-path",
+                str(db_path),
+                "--scan-workers",
+                "2",
+                "--scan-timeout-s",
+                "0.5",
+                "--max-cost-usd",
+                "100",
+            ]
+        )
+        assert exit_code == 0
+        summary, _events = _summary_events(capsys)
+        assert summary["scan_deferrals"] == [
+            {"ticker": "HANG", "trigger_kind": "material_news", "reason": "per_ticker_timeout"}
+        ]
+        assert [row[0] for row in _news_events(db_path)] == ["TB", "TC", "TD"]
+    finally:
+        # Let the abandoned thread finish so it does not outlive the test.
+        stub.release.set()
 
 
 # ---------------------------------------------------------------------------
