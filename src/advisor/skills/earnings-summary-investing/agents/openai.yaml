@@ -5,3 +5,34 @@ interface:
 
 policy:
   allow_implicit_invocation: true
+
+routing:
+  role: router
+  trigger: "Company research, earnings previews/readouts, thesis review/revision, valuation, decision cards, ETF context, or portfolio risk"
+  inputs:
+    - "Approved theses (micro_thesis/holdings/<TICKER>.json)"
+    - "Canonical SQLite research DB"
+    - "Transcripts, IR documents, and SEC filings"
+    - "Current roster (GET /api/work-os/portfolio, GET /api/work-os/evaluation)"
+  outputs:
+    - "Research artifacts, pre-earnings briefs, post-earnings readouts, decision cards, thesis amendment proposals, and DCF updates"
+  entrypoints:
+    - "execution/build_artifacts.py"
+    - "execution/generate_pre_earnings_briefs.py"
+    - "execution/generate_post_earnings_readouts.py"
+    - "execution/build_investment_decision_card.py"
+    - "execution/refresh_dcf.py"
+    - "execution/dcf_sheets.py"
+    - "execution/run_thesis_evaluator.py"
+    - "execution/refresh_portfolio_risk_snapshot.py"
+    - "execution/sync_sec_filing_inventory.py"
+    - "execution/capture_expected_sec_documents.py"
+    - "execution/ingest_sec_filing_xbrl.py"
+    - "execution/backfill_transcripts.py"
+  handoffs:
+    - to: "next-dollar-allocation"
+      condition: "Capital allocation, cash deployment, sizing, tax-aware funding, or buy/add/trim/sell trade-offs"
+      approval: "Owner approval required for target sizing changes, permitted sales, and trade execution"
+    - to: "ownership-disclosure-scan"
+      condition: "13F institutional holdings changes or congressional PTR disclosure research"
+      approval: "Foreground on-demand owner request; read-only scan with no DB writes or trade inference"

@@ -46,6 +46,7 @@ route is not authority to run it on production.
 | ETF portfolio context | [ETF context](analysis-paths.md#etf-portfolio-context); `directives/etf_data.md`; existing portfolio positions and risk evidence | Brief diversification commentary and supported long-term earnings-multiple context only. No saved-workup history viewer, dedicated ETF workup or collection. |
 | Portfolio risk / concentration / overlap | `execution/get_portfolio_risk_matrix.py`; `src/allocation/book_risk.py`; `src/allocation/what_if.py`; snapshot as-of and coverage; full holdings/account readers in the allocation skill | `execution/refresh_portfolio_risk_snapshot.py` for authorized snapshot refresh |
 | Next-dollar allocation / taxes / sizing | `src/advisor/skills/next-dollar-allocation/SKILL.md`; its `references/interfaces.md` | Follow that skill; use full holdings/accounts, owner context and recorded intent; no trade execution |
+| Ownership / 13F / Congress disclosure scan | [ownership-disclosure-scan](../../ownership-disclosure-scan/SKILL.md); [methodology](../../ownership-disclosure-scan/references/methodology.md) | Follow that skill on demand; official-source read-only scan with coverage receipts; no scheduling, DB writes or trade inference |
 | Research conversation / meeting preparation | Existing artifact, sources and typed context | `POST /api/ask/stream`; `execution/comments_server_viewspec_ask_routes.py`; can invoke LLM and retain conversation |
 | Acquisition gaps / issuer releases, slides, filings | Inspect current source receipts first; authorized `execution/capture_issuer_document_inventory.py` reads the DB and writes a local receipt | `execution/manage_issuer_document_sources.py` prepare → validate → publish; `execution/fetch_ir_documents.py`; `execution/intake_documents.py` |
 | SEC expected coverage and financial facts | Existing issuer/filing identity and coverage receipts; [EDGAR mechanics](../../../../../directives/edgar_pipeline.md) | `execution/fetch_sec_xbrl.py` independently captures CompanyFacts and admits supported facts; `execution/sync_sec_filing_inventory.py` → `execution/capture_expected_sec_documents.py` captures native packages; `execution/ingest_sec_filing_xbrl.py` processes supported packages with its approved bundle |
@@ -53,6 +54,8 @@ route is not authority to run it on production.
 | Reviewed KPI and segment population | `src/compute/kpi_resolver.py`; `src/pipeline/kpi_report_reference_resolver.py` | `execution/produce_issuer_fact_manifest.py` creates inert reviewed input; `execution/apply_issuer_fact_manifest.py` admits KPI and segment facts only |
 | Sealed financial-statement facts | `src/provenance/fact_read_model.py`; declared issuer/document scope and governed extraction receipts | `execution/populate_source_fact_plane.py` plans publication from governed extraction runs; inspect its scope and commitments before authorized `--apply` |
 | Research snapshot / completeness | `src/provenance/research_snapshot.py`; `src/provenance/population_research_snapshots.py` | `execution/populate_research_snapshots.py --db <explicit>`; inspect receipt before authorized `--apply` |
+
+Generated overview: see [skill map](skill-map.md) for the tracked skill dependency graph and edge approvals.
 
 ## Route limits and traps
 
