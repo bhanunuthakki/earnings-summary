@@ -6,7 +6,7 @@ Generated from tracked `agents/openai.yaml` routing metadata and [routes](routes
 
 ```mermaid
 flowchart TD
-  skill_earnings_summary_investing["earnings-summary-investing (router)<br/>Trigger: Company research, earnings previews/readouts, thesis re...<br/>Entrypoints: 12"]
+  skill_earnings_summary_investing["earnings-summary-investing (router)<br/>Trigger: Company research, earnings previews/readouts, thesis re...<br/>Entrypoints: 13"]
   skill_next_dollar_allocation["next-dollar-allocation (specialist)<br/>Trigger: Next-dollar allocation, cash deployment, tax-aware reba...<br/>Entrypoints: 7"]
   skill_ownership_disclosure_scan["ownership-disclosure-scan (specialist)<br/>Trigger: On-demand Form 13F institutional holdings change or con...<br/>Entrypoints: 2"]
   skill_earnings_summary_investing -->|"Capital allocation, cash deployment, sizing... | Approval: Owner approval required for target sizing c..."| skill_next_dollar_allocation
@@ -60,6 +60,7 @@ NODES:
     - execution/sync_sec_filing_inventory.py
     - execution/capture_expected_sec_documents.py
     - execution/ingest_sec_filing_xbrl.py
+    - execution/refresh_sec_accession.py
     - execution/backfill_transcripts.py
 - next-dollar-allocation [specialist]
   trigger: Next-dollar allocation, cash deployment, tax-aware rebalancing, consolidating exploratory positions, or position sizing
