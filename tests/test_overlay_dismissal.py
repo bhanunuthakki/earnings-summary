@@ -159,7 +159,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
         check=False,
         capture_output=True,
         text=True,
-        timeout=5,
+        timeout=30,  # hang guard only; loaded CI runners exceeded 5 s
     )
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout == "ok"
