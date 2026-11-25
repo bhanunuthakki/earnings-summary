@@ -1,5 +1,20 @@
 # Operations & Governance Surface Impact
 
+## KPI semantic-review scheduler retirement — November 24, 2026
+
+Disposition: **surface retired**. The owner retired the `\earnings-summary\prepare_kpi_semantic_review`
+10-minute Windows scheduled task (`cron/prepare_kpi_semantic_review.task.xml`,
+`cron/run_prepare_kpi_semantic_review.bat`), its exporter CLI (`prepare_kpi_semantic_review.py`),
+the remote review fetcher (`fetch_windows_kpi_semantic_review.py`), and the quarantined
+correction helper CLI (`prepare_quarantined_kpi_correction.py`), along with `cron/run_python.bat`
+routing for `prepare-kpi-semantic-review`.
+
+The dynamic Jobs projection reads the regenerated scheduler manifest directly and drops the retired
+task automatically. No active collection route or database writer changes. Retained read-only review
+modules (`src/operations/kpi_semantic_review_export.py` and `src/pipeline/kpi_semantic_review.py`)
+remain intact for `comments_server_ops_routes.py`, `build_kpi_semantic_refresh_manifest.py`, and
+`apply_kpi_semantic_refresh.py`.
+
 ## Recorded owner execution reconciliation
 
 `reconcile_recorded_trades` is a deterministic Windows scheduled job at 12:12
@@ -50,7 +65,7 @@ documentation alone does not pass those gates.
 
 Disposition: **scheduler surface changed; no panel, route or service changed**.
 The disabled `grade_calibration` and `onboard_pending` declarations are removed
-from source (28 tasks remain); their scripts and the onboarding maintenance
+from source (27 tasks remain after `prepare_kpi_semantic_review` also retired); their scripts and the onboarding maintenance
 action remain. `model_eval_sweep` runs monthly on day 1 at 20:00 instead of every
 Saturday. `restore_drill` has a 2-hour limit: the November drill on the ~10 GB
 database was killed at 30 minutes. `db_gc` now accepts the `portfolio-db` lock
@@ -59,7 +74,7 @@ that its `job_runtime` ancestor already holds; before this, every scheduled `db_
 evidence changes, and the dirty-artifact drain waits 7 days after a paid attempt
 that left a row unresolved. The live tasks change only when the owner
 re-registers from `cron/register_tasks.generated.ps1` and deletes the two
-retired tasks. Evidence: `execution/generate_cron_artifacts.py --check` (28 tasks
+retired tasks. Evidence: `execution/generate_cron_artifacts.py --check` (27 tasks
 validated), `tests/test_scheduler_manifest.py`, `tests/test_db_gc.py`,
 `tests/test_drain_executor.py`, `tests/test_earnings_readout.py`.
 
@@ -747,8 +762,8 @@ service, schema or financial-data admission is introduced.
 
 The Operations panel and review bundle read each job receipt from its declared
 writer root. `cron/run_python.bat` defaults to the deployed code checkout.
-`prepare-kpi-semantic-review` is the explicit exception: its wrapper derives
-the product-state root from the configured database path and passes that root
+Previously `prepare-kpi-semantic-review` (retired November 24, 2026) and now
+`reconcile-recorded-trades` derive the product-state root from the configured database path and pass that root
 to the job runtime. The dashboard uses the same resolved database declaration
 for this exception. Dashboard scratch artifacts do not replace either writer
 root. Missing, stale and invalid receipts remain explicit; another root never

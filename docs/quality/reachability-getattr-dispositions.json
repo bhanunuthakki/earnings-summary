@@ -101,8 +101,8 @@
     {
       "disposition": "external_adapter",
       "evidence": "The local redacted-failure helper resolves the default error level on the Flask application logger; its sole caller uses that default.",
-      "fingerprint": "0b9fc969bafaac156ed0081d0a8b3f77af937fc883e9d428124432c142b0ff0e",
-      "line": 206,
+      "fingerprint": "61e95d94900dfbbbc7e848ce917b8408381932f0c3d74be22622545c61a148a1",
+      "line": 201,
       "path": "execution/comments_server_context.py",
       "targets": [
         "logging"
@@ -1121,7 +1121,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "598879b6895b5b7ecf6ea246f70e0197fb4b922f93dd72ea1ae3fcbb72d12d79",
+      "source_sha256": "d53c1105f2f7e9da90ef80aa0d64e929cf543d9cb4f08a9e164cda1d588bf5f8",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
