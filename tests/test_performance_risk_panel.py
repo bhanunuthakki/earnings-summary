@@ -17,6 +17,7 @@ from integrations.portfolio_allocation import (
     PortfolioAllocationBuckets,
     PortfolioAllocationProjection,
     PortfolioAllocationReconciliation,
+    UnclassifiedPosition,
 )
 from integrations.portfolio_tracker_client import PolicyMix, PolicyWeight
 from integrations.portfolio_tracker_v1 import TrackerV1Client, V1Fetch, WeeklyPortfolioValues
@@ -25,6 +26,7 @@ from integrations.portfolio_tracker_v1 import TrackerV1Client, V1Fetch, WeeklyPo
 def _allocation(
     *, state: Literal["available", "incomplete", "unavailable"] = "available"
 ) -> PortfolioAllocationProjection:
+    zero = PortfolioAllocationBucket(value=Decimal("0"), weight_pct=Decimal("0"))
     buckets = PortfolioAllocationBuckets(
         us_equity=PortfolioAllocationBucket(value=Decimal("41"), weight_pct=Decimal("41")),
         international_equity=PortfolioAllocationBucket(
@@ -32,9 +34,13 @@ def _allocation(
         ),
         us_etf=PortfolioAllocationBucket(value=Decimal("18"), weight_pct=Decimal("18")),
         international_etf=PortfolioAllocationBucket(value=Decimal("7"), weight_pct=Decimal("7")),
-        global_etf=PortfolioAllocationBucket(value=Decimal("0"), weight_pct=Decimal("0")),
+        global_etf=zero,
+        us_mutual_fund=zero,
+        international_mutual_fund=zero,
+        global_mutual_fund=zero,
+        non_equity_fund=zero,
         cash=PortfolioAllocationBucket(value=Decimal("14"), weight_pct=Decimal("14")),
-        unclassified=PortfolioAllocationBucket(value=Decimal("0"), weight_pct=Decimal("0")),
+        unclassified=zero,
     )
     return PortfolioAllocationProjection(
         state=state,
@@ -55,10 +61,51 @@ def test_long_options_footnote_depends_on_allocation_evidence() -> None:
     allocation = _allocation()
     footnote = "Long options are included in Unclassified at market value."
     assert footnote not in panel.render_allocation_card(allocation)
-    allocation = allocation.model_copy(update={"long_options_unclassified": True})
+    allocation = allocation.model_copy(
+        update={
+            "long_options_unclassified": True,
+            "unclassified_positions": (
+                UnclassifiedPosition(
+                    security_id=10,
+                    ticker="SYNTH_CALL",
+                    name="Synth call",
+                    asset_type="Other",
+                    sector=None,
+                    region="US",
+                    market_value=Decimal("5"),
+                    weight_pct=Decimal("5"),
+                    reason_code="long_option",
+                ),
+            ),
+        }
+    )
     html = panel.render_allocation_card(allocation)
     assert "Unclassified" in html and footnote in html
+    assert "Unclassified positions" in html and "SYNTH_CALL" in html and "long_option" in html
     assert "Incomplete evidence" not in html
+
+
+def test_allocation_card_renders_nonzero_mutual_and_non_equity_funds() -> None:
+    allocation = _allocation()
+    updated_buckets = allocation.buckets.model_copy(
+        update={
+            "us_mutual_fund": PortfolioAllocationBucket(
+                value=Decimal("6"), weight_pct=Decimal("6")
+            ),
+            "international_mutual_fund": PortfolioAllocationBucket(
+                value=Decimal("4"), weight_pct=Decimal("4")
+            ),
+            "global_mutual_fund": PortfolioAllocationBucket(
+                value=Decimal("3"), weight_pct=Decimal("3")
+            ),
+            "non_equity_fund": PortfolioAllocationBucket(
+                value=Decimal("5"), weight_pct=Decimal("5")
+            ),
+        }
+    )
+    html = panel.render_allocation_card(allocation.model_copy(update={"buckets": updated_buckets}))
+    for label in ("US Mutual Fund", "Intl Mutual Fund", "Global Mutual Fund", "Non-Equity Fund"):
+        assert label in html
 
 
 def test_covered_call_details_distinguish_stock_capital_net_value_and_missing_delta() -> None:
