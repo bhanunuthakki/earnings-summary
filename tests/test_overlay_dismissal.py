@@ -27,24 +27,19 @@ import inspect
 import json
 import re
 import subprocess
-import sys
 from io import StringIO
-from pathlib import Path
 
-SRC = Path(__file__).resolve().parents[1] / "src"
-sys.path.insert(0, str(SRC))
-
-from pipeline.cc_overlay import CC_OVERLAY_CSS, CC_OVERLAY_JS  # noqa: E402
-from report.renderers import workspace_html  # noqa: E402
-from report.renderers.workspace_chat import JS as CHAT_JS  # noqa: E402
-from report.renderers.workspace_comments import JS as COMMENTS_JS  # noqa: E402
-from report.renderers.workspace_script import JS as REPORT_JS  # noqa: E402
-from report.renderers.workspace_sections.boot import (  # noqa: E402
+from pipeline.cc_overlay import CC_OVERLAY_CSS, CC_OVERLAY_JS
+from report.renderers import workspace_html
+from report.renderers.workspace_chat import JS as CHAT_JS
+from report.renderers.workspace_comments import JS as COMMENTS_JS
+from report.renderers.workspace_script import JS as REPORT_JS
+from report.renderers.workspace_sections.boot import (
     _chat_drawer_shell,
     _comment_sidebar_shell,
 )
-from ui.cite_marks import CITE_MARKS_CSS, CITE_MARKS_JS  # noqa: E402
-from ui.source_chip import SOURCE_CHIP_JS  # noqa: E402
+from ui.cite_marks import CITE_MARKS_CSS, CITE_MARKS_JS
+from ui.source_chip import SOURCE_CHIP_JS
 
 # ---------------------------------------------------------------------------
 # The primitive: one keydown, one scrim listener, priority resolution
