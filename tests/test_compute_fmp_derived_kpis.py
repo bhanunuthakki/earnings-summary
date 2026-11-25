@@ -19,15 +19,25 @@ from compute.fmp_derived_kpis import (
     KPI_OPERATING_MARGIN_GAAP,
     KPI_REVENUE_YOY_USD,
     KPI_ROE,
+    DerivedKpiRow,
     FmpDerivationReason,
     QuarterlyFacts,
     derive_for_facts,
     derive_for_ticker_outcome,
+    persist_derived_kpis,
 )
 from models.facts import DerivedInputRef, FiscalPeriodType, Unit
 from provenance.evidence_backfill import ensure_legacy_document_evidence
+from provenance.evidence_ledger import (
+    ContentBlob,
+    DocumentVersion,
+    EvidenceLedger,
+    SourceObservation,
+)
 from provenance.financial_fact_resolution import (
+    HistoricalFactAuthorityUnavailableError,
     canonical_fact_selections_as_known,
+    fact_source_is_companyfacts_snapshot,
     resolve_fact_row,
 )
 
@@ -698,3 +708,149 @@ def test_derive_roe_skipped_when_period_end_equity_missing() -> None:
         _qf(2025, 4, Decimal(5), None),
     ]
     assert not [r for r in derive_for_facts(facts) if r.name == KPI_ROE]
+
+
+def _insert_period(conn: sqlite3.Connection, ticker: str, doc_id: int) -> None:
+    for line, val in [
+        ("revenue", 100),
+        ("operating_income", 20),
+        ("net_income", 15),
+        ("gross_profit", 40),
+    ]:
+        _insert_fact(
+            conn,
+            ticker=ticker,
+            period_end=datetime(2024, 12, 31),
+            fpt="Q4",
+            line_item=line,
+            value=val,
+            source_doc_id=doc_id,
+        )
+
+
+def test_unrelated_issuer_drift_does_not_block_derivation(conn: sqlite3.Connection) -> None:
+    """Drift in one issuer's row fails only that issuer, not every ticker."""
+    _insert_period(conn, "Y", _insert_doc(conn, "Y", "data/historical/fmp/Y_is.json"))
+    _insert_period(conn, "Z", _insert_doc(conn, "Z", "data/historical/fmp/Z_is.json"))
+    # An out-of-band edit records a new observation revision without a new
+    # resolution, so Z's selected observation no longer matches its row.
+    conn.execute(
+        "UPDATE financial_facts SET locator=? WHERE ticker='Z' AND line_item='revenue'",
+        (json.dumps({"page": 9}),),
+    )
+    conn.commit()
+
+    assert derive_for_ticker_outcome(conn, "Y").rows_inserted == 3
+    # Z's drifted revenue is never used: every margin needs it, so none is derived.
+    assert derive_for_ticker_outcome(conn, "Z").rows_inserted == 0
+    # Selection over Z's own drifted key still fails closed.
+    drifted_key = conn.execute(
+        "SELECT logical_key FROM fact_observation_revisions WHERE fact_table='financial_facts' "
+        "AND logical_key LIKE 'financial_facts:Z:revenue:%' LIMIT 1"
+    ).fetchone()[0]
+    with pytest.raises(HistoricalFactAuthorityUnavailableError):
+        canonical_fact_selections_as_known(
+            conn,
+            fact_table="financial_facts",
+            effective_at=datetime.now(UTC),
+            known_at=datetime.now(UTC),
+            logical_keys=(drifted_key,),
+        )
+
+
+def _insert_companyfacts_doc(conn: sqlite3.Connection, ticker: str) -> int:
+    stamp = datetime(2026, 7, 27, 12, 0, 0)
+    body = json.dumps({"companyfacts": ticker}).encode()
+    digest = hashlib.sha256(body).hexdigest()
+    config = hashlib.sha256(b"config").hexdigest()
+    cur = conn.execute(
+        "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, fetched_at, "
+        "fetch_status, raw_bytes_size, source_quality_tier) "
+        "VALUES (?, 'sec_xbrl', 'sec_companyfacts_snapshot', ?, ?, ?, 'ok', ?, 'sec_official')",
+        (ticker, f"sec-companyfacts://{ticker}", digest, stamp, len(body)),
+    )
+    assert cur.lastrowid is not None
+    document_id = int(cur.lastrowid)
+    ledger = EvidenceLedger(conn)
+    ledger.persist(
+        ContentBlob(
+            sha256=digest,
+            byte_size=len(body),
+            media_type="application/json",
+            storage_uri=f"file:///snapshots/{digest}.json",
+            recorded_at=stamp,
+        )
+    )
+    ledger.persist(
+        SourceObservation(
+            observation_id="source-cf",
+            idempotency_key="source-cf",
+            source_kind="sec_companyfacts",
+            source_url="https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json",
+            blob_sha256=digest,
+            source_published_at=None,
+            filing_at=None,
+            accepted_at=None,
+            observed_at=stamp,
+            retrieved_at=stamp,
+            retrieval_config_sha256=config,
+            collector_code_version="sec-companyfacts@test",
+        )
+    )
+    ledger.persist(
+        DocumentVersion(
+            document_version_id="snapshot-cf",
+            document_key=f"issuer-{ticker}:sec-companyfacts",
+            version_sequence=1,
+            observation_id="source-cf",
+            blob_sha256=digest,
+            issuer_id=f"issuer-{ticker}",
+            ticker=ticker,
+            document_type="companyfacts_snapshot",
+            form_type="SEC-COMPANYFACTS",
+            accession_number=None,
+            exhibit_id=None,
+            period_start=None,
+            period_end=None,
+            as_of_at=stamp,
+            language="en",
+            replaces_document_version_id=None,
+            legacy_document_id=document_id,
+            recorded_at=stamp,
+        )
+    )
+    return document_id
+
+
+def test_companyfacts_source_check_matches_capture_trigger(conn: sqlite3.Connection) -> None:
+    fmp_doc = _insert_doc(conn, "Y", "data/historical/fmp/Y_is.json")
+    companyfacts_doc = _insert_companyfacts_doc(conn, "C")
+    assert not fact_source_is_companyfacts_snapshot(conn, source_document_id=fmp_doc)
+    assert fact_source_is_companyfacts_snapshot(conn, source_document_id=companyfacts_doc)
+
+
+def test_companyfacts_anchored_derived_kpi_is_skipped_with_reason(
+    conn: sqlite3.Connection,
+) -> None:
+    """A refused anchor is a typed skip, not a crash of the whole refresh."""
+    doc_id = _insert_companyfacts_doc(conn, "C")
+    degradations: list[FmpDerivationReason] = []
+    inserted = persist_derived_kpis(
+        conn,
+        ticker="C",
+        rows=[
+            DerivedKpiRow(
+                period_end=datetime(2024, 12, 31),
+                fiscal_period_type=FiscalPeriodType.Q4,
+                name=KPI_OPERATING_MARGIN_GAAP,
+                value=Decimal("20"),
+                unit=Unit.PERCENT,
+                source_doc_id=doc_id,
+            )
+        ],
+        degradations=degradations,
+    )
+    assert inserted == 0
+    assert degradations == [FmpDerivationReason.COMPANYFACTS_DERIVED_FACT_REQUIRES_INPUT_LINEAGE]
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts WHERE ticker='C'").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM kpi_definitions WHERE ticker='C'").fetchone()[0] == 0

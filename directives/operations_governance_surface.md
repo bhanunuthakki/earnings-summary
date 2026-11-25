@@ -3297,3 +3297,13 @@ selection checkpoints before claiming bounded `JobLock` write sets or opening ne
 requests. Byte acquisition and Inline-XBRL extraction persist separate typed receipts,
 with idempotent resume and `--cancel` support under `.tmp/sec_accession_refresh/`. No UI
 route, scheduled task, managed service, or database schema changes.
+
+## Derivation scope and CompanyFacts-anchored skips (2026-11-25)
+
+The derivation stage now validates canonical input selections only for the
+logical keys of the rows it requested. Drift in another issuer's row no longer
+fails every ticker's derivation; drift in the caller's own keys still fails
+closed. A derived KPI row anchored to a SEC CompanyFacts snapshot is skipped and
+reported as `companyfacts_derived_fact_requires_input_lineage`, matching the
+existing capture refusal, instead of aborting the whole refresh. No surface
+change: no operator action, job, store, provider or schema is added.
