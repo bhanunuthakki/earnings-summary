@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """One database, one write lock — and contention waits instead of dying.
 
 Before 2026-08-03 two independent lock systems guarded portfolio.db with two
@@ -23,18 +22,13 @@ from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import run_lock  # noqa: E402
-from runtime.job_runtime import (  # noqa: E402
+import run_lock
+from runtime import job_runtime
+from runtime.job_runtime import (
     JobAlreadyRunningError,
     JobLock,
-    _write_set_lock_path,
     portfolio_db_path,
 )
-
-ONBOARD_WRAPPER = PROJECT_ROOT / "cron" / "run_onboard_pending.bat"
 
 
 @pytest.fixture
@@ -48,7 +42,8 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_both_systems_share_one_lock_file(repo: Path) -> None:
     """The unification itself: JobLock's portfolio-db path IS run_lock's path."""
     db = portfolio_db_path(repo)
-    assert _write_set_lock_path(repo, "portfolio-db") == run_lock.lock_path_for(db)
+    write_set_lock_path = getattr(job_runtime, "_write_set_lock_path")
+    assert write_set_lock_path(repo, "portfolio-db") == run_lock.lock_path_for(db)
 
 
 def test_run_lock_holder_blocks_joblock(repo: Path) -> None:
@@ -160,17 +155,3 @@ def test_run_lock_payload_carries_a_token(repo: Path) -> None:
         assert isinstance(payload.get("token"), str) and payload["token"]
     finally:
         held.release()
-
-
-def test_onboard_wrapper_no_longer_holds_the_db_for_the_whole_run() -> None:
-    """The scheduler retains lock PARTICIPATION (self-serialization of hourly
-    runs), not a whole-pipeline hold of the DB write set — that hold starved
-    13 jobs in one day. The per-ticker claim lives in the script."""
-    text = ONBOARD_WRAPPER.read_text(encoding="utf-8", errors="replace")
-    invocation = next(
-        line
-        for line in text.splitlines()
-        if "run_python.bat" in line and "onboard_pending_tickers" in line
-    )
-    assert '"onboard-pending" "onboard-pending"' in invocation, invocation
-    assert '"portfolio-db"' not in invocation, invocation

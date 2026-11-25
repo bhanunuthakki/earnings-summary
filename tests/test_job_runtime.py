@@ -139,7 +139,6 @@ _PORTFOLIO_DB_POLICY = {
     "fetch-fmp-earnings-calendar": "fmp-refresh",
     "fetch-macro-series": "market-data-refresh",
     "fetch-sec-xbrl": "sec-companyfacts",
-    "grade-calibration": "llm-evaluation",
     "morning_pipeline": "morning-orchestration",
     "refresh-dirty-artifacts": "artifact-refresh",
     "refresh-expected-earnings": "market-data-refresh",

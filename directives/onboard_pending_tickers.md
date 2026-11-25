@@ -34,8 +34,7 @@ memo. Schedule definitions are unchanged by these repairs.
 | Thesis evaluator | `execution/run_thesis_evaluator.py` |
 | DCF runner | `execution/refresh_dcf.py` |
 | **Auto commitment extractor** | `execution/extract_commitments_from_transcript.py --auto` |
-| Cron wrapper | `cron/run_onboard_pending.bat` |
-| Scheduled-task definition | `cron/onboard_pending_tickers.task.xml` |
+| Schedule | None. The hourly task, held since August, was removed on 2026-11-23; run the CLI or the Operations onboarding action. |
 
 ## Portfolio membership handoff
 

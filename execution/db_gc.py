@@ -121,6 +121,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import threading
 import time
@@ -141,6 +142,7 @@ import sqlite3
 from clock import now_naive_utc
 from pipeline.validation_issue_store import issue_fingerprint
 from run_lock import RunLock, RunLockHeldError, acquire_run_lock
+from runtime.job_runtime import inherited_lock_is_valid
 from schema_compat import require_current_for_write
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -443,6 +445,21 @@ def _facts_depth_apply_preflight(conn: sqlite3.Connection) -> FactsDepthApplyPre
         sqlite_version=sqlite3.sqlite_version,
         lookup_query_plan=lookup_plan,
     )
+
+
+def _ancestor_holds_database_lock(db_path: Path) -> bool:
+    """True when the scheduler wrapper that started this run already owns the lock.
+
+    ``cron/run_db_gc.bat`` runs through ``job_runtime`` with the
+    ``portfolio-db`` write set, which takes the same lock file. Taking it again
+    here made every scheduled run wait on its own ancestor and abort with
+    ``RunLockHeldError`` (four Sundays in a row to 2026-11-22). The proof is
+    the per-acquisition token the ancestor publishes to its descendants only.
+    """
+    configured = os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
+    if not configured or Path(configured).resolve() != db_path.resolve():
+        return False
+    return inherited_lock_is_valid(Path(__file__).resolve().parents[1], "portfolio-db")
 
 
 def _resolve_database_path(db_path: Path, *, apply: bool) -> Path:
@@ -1726,7 +1743,7 @@ def _run_gc_implementation(
     # so an apply can never interleave with the 04:00 write legs. Short
     # timeout on purpose — GC yields, it does not queue.
     lock: RunLock | None = None
-    if apply:
+    if apply and not _ancestor_holds_database_lock(effective_db_path):
         lock = acquire_run_lock(effective_db_path, owner="db_gc", timeout_s=lock_timeout_s)
 
     try:

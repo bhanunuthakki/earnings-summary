@@ -61,6 +61,23 @@ owner (updated July 14, 2025; checked November 12, 2026). The native checks must
 prove loopback access, immutable request ownership and child-process cleanup;
 documentation alone does not pass those gates.
 
+## Scheduled-task cleanup and cadence — November 23, 2026
+
+Disposition: **scheduler surface changed; no panel, route or service changed**.
+The disabled `grade_calibration` and `onboard_pending` declarations are removed
+from source (27 tasks remain after `prepare_kpi_semantic_review` also retired); their scripts and the onboarding maintenance
+action remain. `model_eval_sweep` runs monthly on day 1 at 20:00 instead of every
+Saturday. `restore_drill` has a 2-hour limit: the November drill on the ~10 GB
+database was killed at 30 minutes. `db_gc` now accepts the `portfolio-db` lock
+that its `job_runtime` ancestor already holds; before this, every scheduled `db_gc` aborted with `RunLockHeldError`
+(four Sundays to 2026-11-22). Post-earnings readouts are reused unless their
+evidence changes, and the dirty-artifact drain waits 7 days after a paid attempt
+that left a row unresolved. The live tasks change only when the owner
+re-registers from `cron/register_tasks.generated.ps1` and deletes the two
+retired tasks. Evidence: `execution/generate_cron_artifacts.py --check` (27 tasks
+validated), `tests/test_scheduler_manifest.py`, `tests/test_db_gc.py`,
+`tests/test_drain_executor.py`, `tests/test_earnings_readout.py`.
+
 ## Design enforcement retirement — November 22, 2026
 
 Disposition: **no surface change**. The owner retired design enforcement because
