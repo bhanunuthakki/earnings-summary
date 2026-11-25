@@ -212,17 +212,20 @@ def _canonical_input_refs(
         return {}
     cutoff = datetime.now(UTC)
     requested_ids = list(requested)
-    key_placeholders = ",".join("?" for _ in requested_ids)
-    logical_keys = tuple(
-        str(row[0])
-        for row in conn.execute(
-            "SELECT DISTINCT logical_key FROM fact_observation_revisions "
-            f"WHERE fact_table=? AND fact_row_id IN ({key_placeholders})",  # nosec B608 -- placeholders only
-            (fact_table, *requested_ids),
+    logical_keys: tuple[str, ...] = ()
+    # Without the revision table the resolver's own schema check fails closed.
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='fact_observation_revisions'"
+    ).fetchone():
+        key_placeholders = ",".join("?" for _ in requested_ids)
+        logical_keys = tuple(
+            str(row[0])
+            for row in conn.execute(
+                "SELECT DISTINCT logical_key FROM fact_observation_revisions "
+                f"WHERE fact_table=? AND fact_row_id IN ({key_placeholders})",  # nosec B608 -- placeholders only
+                (fact_table, *requested_ids),
+            )
         )
-    )
-    if not logical_keys:
-        return {}
     # Scope selection and drift validation to this caller's rows: drift in an
     # unrelated issuer's row must not fail this ticker's derivation.
     selections = canonical_fact_selections_as_known(

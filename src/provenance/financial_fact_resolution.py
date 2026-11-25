@@ -1228,12 +1228,13 @@ def canonical_fact_selections_as_known(
     effective_at: datetime,
     known_at: datetime,
     concept_keys: Sequence[str] = (),
-    logical_keys: Sequence[str] = (),
+    logical_keys: Sequence[str] | None = None,
 ) -> tuple[CanonicalFactSelectionAsKnown, ...]:
     """Return exact selections, rejecting any selected compatibility-row drift.
 
     ``logical_keys`` limits selection and drift validation to those keys, so
-    drift in an unrelated issuer's row cannot fail this caller.
+    drift in an unrelated issuer's row cannot fail this caller. ``None`` means
+    every key; an empty sequence selects nothing after the schema checks.
     """
 
     if effective_at.tzinfo is None or known_at.tzinfo is None:
@@ -1307,7 +1308,7 @@ def _canonical_fact_selections_as_known_snapshot(
     effective_at: datetime,
     known_at: datetime,
     concept_keys: Sequence[str] = (),
-    logical_keys: Sequence[str] = (),
+    logical_keys: Sequence[str] | None = None,
     drift_samples: list[FactCompatibilityDriftSample] | None = None,
     drift_counts: list[int] | None = None,
     sample_limit: int = 0,
@@ -1400,7 +1401,9 @@ def _canonical_fact_selections_as_known_snapshot(
             "OR observation.observation_id IS NULL) "
         )
     logical_key_predicate = ""
-    if logical_keys:
+    if logical_keys is not None and not logical_keys:
+        logical_key_predicate = "AND 0 "
+    elif logical_keys:
         logical_key_names: list[str] = []
         for index, logical_key in enumerate(dict.fromkeys(logical_keys)):
             name = f"logical_key_{index}"
@@ -1967,19 +1970,30 @@ def fact_source_is_companyfacts_snapshot(
     refused (``companyfacts_derived_fact_requires_input_lineage``).
     """
 
-    row = conn.execute(
-        "SELECT COALESCE("
-        "(SELECT source.source_kind FROM v_legacy_document_evidence_bindings_current AS binding "
-        "JOIN evidence_document_versions AS version "
-        "ON version.document_version_id = binding.document_version_id "
-        "JOIN evidence_source_observations AS source "
-        "ON source.observation_id = version.observation_id "
-        "WHERE binding.legacy_document_id = :doc LIMIT 1),"
+    if not (
+        _object_exists(conn, "evidence_document_versions", object_type="table")
+        and _object_exists(conn, "evidence_source_observations", object_type="table")
+    ):
+        return False
+    lookups: list[str] = []
+    if _object_exists(conn, "v_legacy_document_evidence_bindings_current", object_type="view"):
+        lookups.append(
+            "(SELECT source.source_kind FROM v_legacy_document_evidence_bindings_current "
+            "AS binding JOIN evidence_document_versions AS version "
+            "ON version.document_version_id = binding.document_version_id "
+            "JOIN evidence_source_observations AS source "
+            "ON source.observation_id = version.observation_id "
+            "WHERE binding.legacy_document_id = :doc LIMIT 1)"
+        )
+    lookups.append(
         "(SELECT source.source_kind FROM evidence_document_versions AS version "
         "JOIN evidence_source_observations AS source "
         "ON source.observation_id = version.observation_id "
         "WHERE version.legacy_document_id = :doc "
-        "ORDER BY version.version_sequence DESC LIMIT 1), '')",
+        "ORDER BY version.version_sequence DESC LIMIT 1)"
+    )
+    row = conn.execute(
+        f"SELECT COALESCE({','.join(lookups)}, '')",  # nosec B608 -- fixed internal SQL fragments
         {"doc": source_document_id},
     ).fetchone()
     return row is not None and row[0] == "sec_companyfacts"
