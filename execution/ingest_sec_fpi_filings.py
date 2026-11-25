@@ -15,16 +15,20 @@ import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from table_extractors.period_axis import NominalQuarter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from pipeline.queries import open_db  # noqa: E402
-from pipeline.sec_fpi_ingest import FpiIngestResult, ingest_fpi_for_ticker  # noqa: E402
-from table_extractors.period_axis import NominalQuarter  # noqa: E402
 
 log = logging.getLogger(__name__)
+
+
+def _ensure_src_on_path() -> None:
+    src_str = str(PROJECT_ROOT / "src")
+    if src_str not in sys.path:
+        sys.path.insert(0, src_str)
 
 
 def list_tracked_fpis(conn: sqlite3.Connection) -> list[str]:
@@ -72,13 +76,31 @@ def main() -> int:
     parser.add_argument(
         "--force", action="store_true", help="Force re-extraction and overwrite existing facts"
     )
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=None,
+        help="Explicit portfolio.db path (defaults to EARNINGS_SUMMARY_DB_PATH).",
+    )
 
     args = parser.parse_args()
 
     if not args.ticker and not args.all_fpi:
         parser.error("Must specify either --ticker <TICKER> or --all-fpi")
 
-    db_path = PROJECT_ROOT / "data" / "portfolio.db"
+    _ensure_src_on_path()
+    from db_paths import require_db_path
+    from pipeline.queries import open_db
+    from pipeline.sec_fpi_ingest import FpiIngestResult, ingest_fpi_for_ticker
+    from pipeline.transcript_acquisition import project_root_for_database
+
+    db_path = require_db_path(args.db)
+    db_root = project_root_for_database(db_path)
+    repo_root = (
+        db_root
+        if (db_root / "ir_documents").is_dir() or (db_root / "transcripts").is_dir()
+        else PROJECT_ROOT
+    )
     conn = open_db(db_path)
 
     tickers: list[str] = []
@@ -119,7 +141,7 @@ def main() -> int:
             year=args.year,
             quarter=nom_quarter,
             form=args.form,
-            repo_root=PROJECT_ROOT,
+            repo_root=repo_root,
             force=args.force,
         )
 
