@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from compute.kpi_resolver import normalize_reported_series_key
 from models.documents import reader_tier_join_sql, reader_tier_rank_sql
-from models.facts import Unit
+from models.facts import Currency, FiscalPeriodType, Unit
 from pipeline.kpi_atomic_admission import (
     DETERMINISTIC_ADMITTABLE_EXTRACTORS as DETERMINISTIC_ADMITTABLE_EXTRACTORS,
 )
@@ -40,6 +40,7 @@ from pipeline.kpi_atomic_admission import (
 from pipeline.kpi_atomic_admission import (
     normalize_reported_metric_label,
 )
+from pipeline.kpi_definition_revisions import bind_forward_kpi_definition_revision
 from pipeline.kpi_semantics import (
     KpiAccountingBasis,
     KpiConsolidationScope,
@@ -101,8 +102,11 @@ class _ActiveFactRow:
     kpi_definition_id: int
     definition_name: str
     period_end_raw: object
+    fiscal_period_type_raw: object
     value_raw: object
     unit_raw: object
+    currency_raw: object
+    locator_raw: object
     source_doc_id: int | None
     doc_exists: bool
     source_excerpt: str | None
@@ -219,6 +223,9 @@ def _load_active_fact_rows(
         else "0"
     )
     supersedes_expr = "f.supersedes_id" if "supersedes_id" in kf_cols else "NULL"
+    fpt_expr = "f.fiscal_period_type" if "fiscal_period_type" in kf_cols else "NULL"
+    currency_expr = "f.currency" if "currency" in kf_cols else "NULL"
+    locator_expr = "f.locator" if "locator" in kf_cols else "NULL"
     lane_expr = "ksc.publication_lane" if has_lane else "NULL"
 
     sql_template = (
@@ -227,7 +234,8 @@ def _load_active_fact_rows(
         "       f.source_excerpt, f.extracted_by, "
         "       ksc.status, {lane_expr}, ksc.metric_name_as_reported, ksc.accounting_basis, "
         "       ksc.consolidation_scope, ksc.dimensions_json, ksc.unit_scale, "
-        "       {resolved_expr}, {unresolved_expr} "
+        "       {resolved_expr}, {unresolved_expr}, "
+        "       {fpt_expr}, {currency_expr}, {locator_expr} "
         "FROM kpi_facts f "
         "JOIN kpi_definitions kd ON kd.id = f.kpi_definition_id "
         "LEFT JOIN kpi_fact_semantic_contexts ksc "
@@ -241,6 +249,9 @@ def _load_active_fact_rows(
         lane_expr=lane_expr,
         resolved_expr=resolved_expr,
         unresolved_expr=unresolved_expr,
+        fpt_expr=fpt_expr,
+        currency_expr=currency_expr,
+        locator_expr=locator_expr,
         head_filter=head_filter,
         where_clause=where_clause,
     )
@@ -260,8 +271,11 @@ def _load_active_fact_rows(
                 kpi_definition_id=int(raw[3]),
                 definition_name=str(raw[4] or "").strip(),
                 period_end_raw=raw[5],
+                fiscal_period_type_raw=raw[21],
                 value_raw=raw[6],
                 unit_raw=raw[7],
+                currency_raw=raw[22],
+                locator_raw=raw[23],
                 source_doc_id=int(raw[8]) if raw[8] is not None else None,
                 doc_exists=bool(raw[9]),
                 source_excerpt=str(raw[10]) if raw[10] is not None else None,
@@ -585,13 +599,63 @@ def run_batch_kpi_admission(
 
         bucket["eligible"] = cast(int, bucket["eligible"]) + 1
         if apply:
-            persist_kpi_semantic_context(
-                conn,
-                kpi_fact_id=row.fact_id,
-                context=context,
-                reviewed_by=reviewed_by,
-                knowledge_at=effective_knowledge_at,
-            )
+            definition_binding = None
+            if context.reported_period_end is not None and row.period_end_raw is not None:
+                try:
+                    parsed_period_end = datetime.fromisoformat(
+                        str(row.period_end_raw).replace("Z", "+00:00")
+                    )
+                    parsed_unit = Unit(str(row.unit_raw))
+                    parsed_fpt = (
+                        FiscalPeriodType(str(row.fiscal_period_type_raw))
+                        if row.fiscal_period_type_raw is not None
+                        else FiscalPeriodType.FY
+                    )
+                    parsed_currency = (
+                        Currency(str(row.currency_raw)) if row.currency_raw is not None else None
+                    )
+                except ValueError:
+                    parsed_period_end = None
+                    parsed_unit = None
+                    parsed_fpt = None
+                    parsed_currency = None
+                if (
+                    parsed_period_end is not None
+                    and parsed_unit is not None
+                    and parsed_fpt is not None
+                ):
+                    definition_binding = bind_forward_kpi_definition_revision(
+                        conn,
+                        kpi_definition_id=row.kpi_definition_id,
+                        period_end=parsed_period_end,
+                        fiscal_period_type=parsed_fpt,
+                        unit=parsed_unit,
+                        currency=parsed_currency,
+                        source_doc_id=row.source_doc_id,
+                        context=context,
+                        reviewed_by=reviewed_by,
+                        knowledge_at=effective_knowledge_at,
+                        source_locator_json=(
+                            None if row.locator_raw is None else str(row.locator_raw)
+                        ),
+                    )
+            if definition_binding is not None:
+                persist_kpi_semantic_context(
+                    conn,
+                    kpi_fact_id=row.fact_id,
+                    context=context,
+                    reviewed_by=reviewed_by,
+                    knowledge_at=definition_binding.knowledge_at,
+                    kpi_definition_revision_id=definition_binding.kpi_definition_revision_id,
+                )
+            else:
+                persist_kpi_semantic_context(
+                    conn,
+                    kpi_fact_id=row.fact_id,
+                    context=context,
+                    reviewed_by=reviewed_by,
+                    knowledge_at=effective_knowledge_at,
+                )
             bucket["applied"] = cast(int, bucket["applied"]) + 1
 
     if apply:
