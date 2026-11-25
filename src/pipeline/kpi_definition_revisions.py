@@ -17,16 +17,19 @@ from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from models.facts import Currency, Unit
+from models.facts import Currency, FiscalPeriodType, Unit
 from pipeline.kpi_semantics import (
     KpiAccountingBasis,
     KpiConsolidationScope,
+    KpiSemanticContext,
+    KpiSemanticStatus,
     KpiUnitScale,
     validate_admitted_unit_scale,
 )
 from provenance.reporting_entity_registry import ReportingEntityRegistry
 from runtime.deterministic import canonical_json_ascii_default_str as _canonical_json
 from runtime.deterministic import sha256_text as _sha256
+from runtime.deterministic import table_or_view_exists as _table_exists
 
 
 class KpiDefinitionStatus(StrEnum):
@@ -1049,3 +1052,474 @@ def kpi_definition_comparability_as_known(
     )
     row = cursor.fetchone()
     return None if row is None else _comparability_from_row(_row_dict(cursor, row))
+
+
+_FORWARD_REQUIRED_TABLES = (
+    "kpi_definitions",
+    "kpi_definition_revisions",
+    "kpi_definition_comparability_revisions",
+    "evidence_document_versions",
+    "evidence_source_observations",
+    "evidence_extraction_runs",
+    "evidence_nodes",
+    "reporting_entities",
+)
+
+
+class ForwardKpiRevisionBinding(BaseModel):
+    """Typed result of binding a forward-admitted KPI fact to a definition revision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kpi_definition_revision_id: str = Field(min_length=1, max_length=128)
+    knowledge_at: datetime
+    created_definition: bool = False
+    created_comparability: bool = False
+    comparability_disposition: KpiDefinitionComparabilityDisposition | None = None
+
+
+def _utc_from_datetime(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _resolve_forward_evidence(
+    conn: sqlite3.Connection,
+    *,
+    source_doc_id: int,
+    source_locator_json: str | None,
+) -> tuple[str, str, str, dict[str, object], datetime, datetime, datetime] | None:
+    """Resolve existing document/observation/node evidence without fabricating missing rows."""
+    doc_row: tuple[object, ...] | None = None
+    if _table_exists(conn, "v_legacy_document_evidence_bindings_current"):
+        doc_row = conn.execute(
+            "SELECT doc.document_version_id, doc.issuer_id, doc.recorded_at, obs.retrieved_at "
+            "FROM v_legacy_document_evidence_bindings_current binding "
+            "JOIN evidence_document_versions doc "
+            "ON doc.document_version_id = binding.document_version_id "
+            "JOIN evidence_source_observations obs "
+            "ON obs.observation_id = doc.observation_id "
+            "WHERE binding.legacy_document_id = ? LIMIT 1",
+            (source_doc_id,),
+        ).fetchone()
+    if doc_row is None:
+        doc_columns = {
+            str(col[1])
+            for col in conn.execute("PRAGMA table_info(evidence_document_versions)").fetchall()
+        }
+        if "legacy_document_id" in doc_columns:
+            doc_row = conn.execute(
+                "SELECT doc.document_version_id, doc.issuer_id, doc.recorded_at, obs.retrieved_at "
+                "FROM evidence_document_versions doc "
+                "JOIN evidence_source_observations obs "
+                "ON obs.observation_id = doc.observation_id "
+                "WHERE doc.legacy_document_id = ? "
+                "ORDER BY doc.version_sequence DESC LIMIT 1",
+                (source_doc_id,),
+            ).fetchone()
+    if doc_row is None:
+        return None
+    document_version_id = str(doc_row[0])
+    raw_issuer_id = str(doc_row[1])
+    doc_recorded_at = _db_datetime(doc_row[2])
+    retrieved_at = _db_datetime(doc_row[3])
+    node_rows = conn.execute(
+        "SELECT node.node_id, node.recorded_at, node.locator_json "
+        "FROM evidence_nodes node "
+        "JOIN evidence_extraction_runs run "
+        "ON run.extraction_run_id = node.extraction_run_id "
+        "WHERE run.document_version_id = ? AND run.outcome = 'succeeded' "
+        "ORDER BY datetime(node.recorded_at) DESC, node.node_id DESC",
+        (document_version_id,),
+    ).fetchall()
+    preferred_locator_canonical: str | None = None
+    if source_locator_json:
+        try:
+            loaded_pref = json.loads(source_locator_json)
+        except json.JSONDecodeError:
+            loaded_pref = None
+        if isinstance(loaded_pref, dict) and loaded_pref:
+            preferred_locator_canonical = _canonical_json(cast(dict[str, object], loaded_pref))
+    fallback_node: tuple[str, datetime, dict[str, object]] | None = None
+    for raw_node in node_rows:
+        locator_raw = raw_node[2]
+        if locator_raw is None:
+            continue
+        try:
+            loaded_locator = json.loads(str(locator_raw))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(loaded_locator, dict) or not loaded_locator:
+            continue
+        locator_dict: dict[str, object] = {
+            str(k): v for k, v in cast("dict[object, object]", loaded_locator).items()
+        }
+        node_tuple = (str(raw_node[0]), _db_datetime(raw_node[1]), locator_dict)
+        if (
+            preferred_locator_canonical is not None
+            and _canonical_json(locator_dict) == preferred_locator_canonical
+        ):
+            fallback_node = node_tuple
+            break
+        if fallback_node is None:
+            fallback_node = node_tuple
+    if fallback_node is None:
+        return None
+    node_id, node_recorded_at, locator_dict = fallback_node
+    return (
+        document_version_id,
+        raw_issuer_id,
+        node_id,
+        locator_dict,
+        retrieved_at,
+        doc_recorded_at,
+        node_recorded_at,
+    )
+
+
+def _resolve_forward_reporting_entity(
+    conn: sqlite3.Connection,
+    *,
+    raw_issuer_id: str,
+    knowledge_at: datetime,
+    recorded_at: datetime,
+) -> str | None:
+    row = conn.execute(
+        "SELECT reporting_entity_id FROM reporting_entities WHERE issuer_id = ? LIMIT 1",
+        (raw_issuer_id,),
+    ).fetchone()
+    if row is not None:
+        return str(row[0])
+    if not _table_exists(conn, "recorded_subject_binding_revisions"):
+        return None
+    try:
+        subject = ReportingEntityRegistry(conn).canonicalize_recorded_subject(
+            raw_issuer_id, knowledge_at=knowledge_at.astimezone(UTC)
+        )
+    except LookupError:
+        return None
+    if subject.material_dissent:
+        return None
+    binding_row = conn.execute(
+        "SELECT recorded_at FROM recorded_subject_binding_revisions WHERE binding_revision_id = ?",
+        (subject.binding_revision_id,),
+    ).fetchone()
+    if binding_row is None or _db_datetime(binding_row[0]) > recorded_at:
+        return None
+    return subject.reporting_entity_id
+
+
+def _forward_period_and_behavior(
+    unit: Unit,
+    *,
+    current: IssuerKpiDefinitionRevision | None,
+) -> tuple[KpiDefinitionPeriodKind, KpiStockFlowBehavior]:
+    if unit in {Unit.PERCENT, Unit.RATIO, Unit.BPS}:
+        return (KpiDefinitionPeriodKind.DURATION, KpiStockFlowBehavior.RATIO)
+    if current is not None and current.unit_key is unit:
+        return (current.period_kind, current.stock_flow_behavior)
+    return (KpiDefinitionPeriodKind.DURATION, KpiStockFlowBehavior.FLOW)
+
+
+def bind_forward_kpi_definition_revision(
+    conn: sqlite3.Connection,
+    *,
+    kpi_definition_id: int,
+    period_end: datetime,
+    fiscal_period_type: FiscalPeriodType,
+    unit: Unit,
+    currency: Currency | None,
+    source_doc_id: int | None,
+    context: KpiSemanticContext,
+    reviewed_by: str,
+    knowledge_at: datetime | None = None,
+    source_locator_json: str | None = None,
+) -> ForwardKpiRevisionBinding | None:
+    """Resolve or append an admitted KPI definition revision for forward persistence.
+
+    Returns ``None`` when the semantic context is not admitted, source evidence or
+    revision tables are absent, or chronological invariants prevent safe binding,
+    so legacy unbound paths remain explicit without fabricating evidence.
+    """
+    del fiscal_period_type
+    if context.status is not KpiSemanticStatus.ADMITTED or source_doc_id is None:
+        return None
+    if not all(_table_exists(conn, table) for table in _FORWARD_REQUIRED_TABLES):
+        return None
+    if kpi_definition_id <= 0:
+        return None
+    if (
+        conn.execute("SELECT 1 FROM kpi_definitions WHERE id = ?", (kpi_definition_id,)).fetchone()
+        is None
+    ):
+        return None
+    effective_at = _utc_from_datetime(period_end)
+    if context.reported_period_end is None or context.reported_period_end != effective_at.date():
+        return None
+    unit_family = _UNIT_FAMILY_BY_UNIT.get(unit)
+    if unit_family is None or unit_family is KpiUnitFamily.UNKNOWN:
+        return None
+    if (
+        context.unit_scale is KpiUnitScale.UNKNOWN
+        or context.accounting_basis is KpiAccountingBasis.UNKNOWN
+        or context.consolidation_scope is KpiConsolidationScope.UNKNOWN
+    ):
+        return None
+    if (
+        context.consolidation_scope
+        in {
+            KpiConsolidationScope.GEOGRAPHY,
+            KpiConsolidationScope.SEGMENT,
+            KpiConsolidationScope.PRODUCT,
+        }
+        and not context.dimensions
+    ):
+        return None
+    try:
+        validate_admitted_unit_scale(unit, context.unit_scale)
+    except ValueError:
+        return None
+    if unit in _MONETARY_UNITS:
+        if currency is None:
+            return None
+        currency_disposition = KpiCurrencyDisposition.EXPLICIT
+    else:
+        if currency is not None:
+            return None
+        currency_disposition = KpiCurrencyDisposition.NOT_APPLICABLE
+
+    evidence = _resolve_forward_evidence(
+        conn,
+        source_doc_id=source_doc_id,
+        source_locator_json=source_locator_json,
+    )
+    if evidence is None:
+        return None
+    (
+        document_version_id,
+        raw_issuer_id,
+        evidence_node_id,
+        locator_dict,
+        observed_at,
+        doc_captured_at,
+        node_captured_at,
+    ) = evidence
+    evidence_floor = max(observed_at, doc_captured_at, node_captured_at)
+    explicit_knowledge = knowledge_at is not None
+    base_ts = _utc_from_datetime(knowledge_at) if knowledge_at is not None else datetime.now(UTC)
+    if explicit_knowledge and base_ts < evidence_floor:
+        return None
+    candidate_ts = max(base_ts, evidence_floor)
+
+    reporting_entity_id = _resolve_forward_reporting_entity(
+        conn,
+        raw_issuer_id=raw_issuer_id,
+        knowledge_at=candidate_ts,
+        recorded_at=candidate_ts,
+    )
+    if reporting_entity_id is None:
+        return None
+
+    current = current_kpi_definition_revision(conn, kpi_definition_id=kpi_definition_id)
+    reviewer = reviewed_by.strip() or "pipeline"
+    if current is not None:
+        if (
+            current.reporting_entity_id != reporting_entity_id
+            or current.status is not KpiDefinitionStatus.ADMITTED
+            or current.lifecycle is not KpiDefinitionLifecycle.ACTIVE
+        ):
+            return None
+        if current.effective_at > effective_at:
+            historical = kpi_definition_revision_as_known(
+                conn,
+                kpi_definition_id=kpi_definition_id,
+                effective_at=effective_at,
+                known_at=candidate_ts,
+            )
+            if (
+                historical is None
+                or historical.reporting_entity_id != reporting_entity_id
+                or historical.status is not KpiDefinitionStatus.ADMITTED
+                or historical.lifecycle is not KpiDefinitionLifecycle.ACTIVE
+            ):
+                return None
+            historical_match = (
+                historical.reported_label == context.metric_name_as_reported
+                and historical.accounting_basis is context.accounting_basis
+                and historical.consolidation_scope is context.consolidation_scope
+                and historical.dimensions == context.dimensions
+                and historical.unit_key is unit
+                and historical.unit_scale is context.unit_scale
+                and historical.currency_disposition is currency_disposition
+                and historical.currency is currency
+            )
+            if not historical_match:
+                return None
+            historical_floor = max(historical.knowledge_at, historical.recorded_at)
+            if explicit_knowledge and candidate_ts < historical_floor:
+                return None
+            resolved_ts = max(candidate_ts, historical_floor)
+            return ForwardKpiRevisionBinding(
+                kpi_definition_revision_id=historical.kpi_definition_revision_id,
+                knowledge_at=resolved_ts,
+                created_definition=False,
+                created_comparability=False,
+                comparability_disposition=None,
+            )
+        current_floor = max(current.knowledge_at, current.recorded_at)
+        if explicit_knowledge and candidate_ts < current_floor:
+            return None
+        candidate_ts = max(candidate_ts, current_floor)
+        exact_match = (
+            current.reported_label == context.metric_name_as_reported
+            and current.accounting_basis is context.accounting_basis
+            and current.consolidation_scope is context.consolidation_scope
+            and current.dimensions == context.dimensions
+            and current.unit_key is unit
+            and current.unit_scale is context.unit_scale
+            and current.currency_disposition is currency_disposition
+            and current.currency is currency
+        )
+        if exact_match:
+            selected = conn.execute(
+                "SELECT kpi_definition_revision_id FROM kpi_definition_revisions "
+                "WHERE kpi_definition_id = ? "
+                "AND datetime(effective_at) <= datetime(?) "
+                "AND datetime(knowledge_at) <= datetime(?) "
+                "AND datetime(recorded_at) <= datetime(?) "
+                "ORDER BY datetime(effective_at) DESC, datetime(knowledge_at) DESC, revision DESC "
+                "LIMIT 1",
+                (
+                    kpi_definition_id,
+                    _utc_text(effective_at),
+                    _utc_text(candidate_ts),
+                    _utc_text(candidate_ts),
+                ),
+            ).fetchone()
+            if selected is None or str(selected[0]) != current.kpi_definition_revision_id:
+                return None
+            return ForwardKpiRevisionBinding(
+                kpi_definition_revision_id=current.kpi_definition_revision_id,
+                knowledge_at=candidate_ts,
+                created_definition=False,
+                created_comparability=False,
+                comparability_disposition=None,
+            )
+
+    period_kind, stock_flow_behavior = _forward_period_and_behavior(unit, current=current)
+    revision_number = 1 if current is None else current.revision + 1
+    supersedes_id = None if current is None else current.kpi_definition_revision_id
+    signature = {
+        "accounting_basis": context.accounting_basis.value,
+        "consolidation_scope": context.consolidation_scope.value,
+        "currency": None if currency is None else currency.value,
+        "currency_disposition": currency_disposition.value,
+        "dimensions": context.dimensions,
+        "effective_at": _utc_text(effective_at),
+        "kpi_definition_id": kpi_definition_id,
+        "period_kind": period_kind.value,
+        "reported_label": context.metric_name_as_reported,
+        "reporting_entity_id": reporting_entity_id,
+        "revision": revision_number,
+        "stock_flow_behavior": stock_flow_behavior.value,
+        "supersedes_definition_revision_id": supersedes_id,
+        "unit_key": unit.value,
+        "unit_scale": context.unit_scale.value,
+    }
+    def_digest = _sha256(_canonical_json(signature))[:24]
+    new_revision = IssuerKpiDefinitionRevision(
+        kpi_definition_revision_id=f"fwd-kdr-{kpi_definition_id}-r{revision_number}-{def_digest}",
+        idempotency_key=f"fwd-kdr-key:{kpi_definition_id}:r{revision_number}:{def_digest}",
+        kpi_definition_id=kpi_definition_id,
+        reporting_entity_id=reporting_entity_id,
+        revision=revision_number,
+        supersedes_definition_revision_id=supersedes_id,
+        status=KpiDefinitionStatus.ADMITTED,
+        lifecycle=KpiDefinitionLifecycle.ACTIVE,
+        reported_label=context.metric_name_as_reported,
+        reported_definition_text=None,
+        definition_text_status=KpiDefinitionTextStatus.NOT_STATED,
+        period_kind=period_kind,
+        stock_flow_behavior=stock_flow_behavior,
+        unit_family=unit_family,
+        unit_key=unit,
+        unit_scale=context.unit_scale,
+        currency_disposition=currency_disposition,
+        currency=currency,
+        accounting_basis=context.accounting_basis,
+        consolidation_scope=context.consolidation_scope,
+        dimensions=dict(context.dimensions),
+        source_document_version_id=document_version_id,
+        source_evidence_node_id=evidence_node_id,
+        source_locator=locator_dict,
+        reviewed_by=reviewer,
+        effective_at=effective_at,
+        knowledge_at=candidate_ts,
+        recorded_at=candidate_ts,
+    )
+
+    comparability_disposition: KpiDefinitionComparabilityDisposition | None = None
+    created_comparability = False
+    with _savepoint(conn, "bind_forward_kpi_definition_revision"):
+        persist_kpi_definition_revision(conn, new_revision)
+        if current is not None:
+            semantic_same = (
+                current.accounting_basis is context.accounting_basis
+                and current.consolidation_scope is context.consolidation_scope
+                and current.dimensions == context.dimensions
+                and current.unit_key is unit
+                and current.unit_scale is context.unit_scale
+                and current.currency_disposition is currency_disposition
+                and current.currency is currency
+                and current.period_kind is period_kind
+                and current.stock_flow_behavior is stock_flow_behavior
+            )
+            if semantic_same and current.reported_label != context.metric_name_as_reported:
+                relation_kind = KpiDefinitionRelationKind.RENAMED
+                comparability_disposition = (
+                    KpiDefinitionComparabilityDisposition.COMPARABLE_WITH_BREAK
+                )
+                reason_code = "forward_label_renamed"
+            else:
+                relation_kind = KpiDefinitionRelationKind.REDEFINED
+                comparability_disposition = KpiDefinitionComparabilityDisposition.NOT_COMPARABLE
+                reason_code = "forward_semantic_redefined"
+            comp_digest = _sha256(
+                _canonical_json(
+                    {
+                        "predecessor": current.kpi_definition_revision_id,
+                        "successor": new_revision.kpi_definition_revision_id,
+                        "disposition": comparability_disposition.value,
+                        "relation_kind": relation_kind.value,
+                    }
+                )
+            )[:24]
+            persist_kpi_definition_comparability_revision(
+                conn,
+                KpiDefinitionComparabilityRevision(
+                    comparability_revision_id=f"fwd-kcr-{comp_digest}",
+                    idempotency_key=f"fwd-kcr-key:{comp_digest}",
+                    predecessor_definition_revision_id=current.kpi_definition_revision_id,
+                    successor_definition_revision_id=new_revision.kpi_definition_revision_id,
+                    revision=1,
+                    supersedes_comparability_revision_id=None,
+                    relation_kind=relation_kind,
+                    disposition=comparability_disposition,
+                    reason_code=reason_code,
+                    reviewed_by=reviewer,
+                    source_document_version_id=document_version_id,
+                    source_evidence_node_id=evidence_node_id,
+                    source_locator=locator_dict,
+                    effective_at=effective_at,
+                    knowledge_at=candidate_ts,
+                    recorded_at=candidate_ts,
+                ),
+            )
+            created_comparability = True
+
+    return ForwardKpiRevisionBinding(
+        kpi_definition_revision_id=new_revision.kpi_definition_revision_id,
+        knowledge_at=candidate_ts,
+        created_definition=True,
+        created_comparability=created_comparability,
+        comparability_disposition=comparability_disposition,
+    )

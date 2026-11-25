@@ -26,11 +26,12 @@ import re
 import sqlite3
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from models.facts import Unit
+from models.facts import Currency, Unit
 from models.kpis import DefinitionOrigin
 from models.unit_convert import same_family
 from pipeline.kpi_definition_revisions import (
@@ -632,6 +633,158 @@ def _resolve_revision_aware_kpi_series(
         eligible_fact_ids=tuple(eligible_fact_ids),
         breaks=tuple(sorted(breaks, key=lambda item: item.related_definition_revision_id)),
         exclusions=exclusions,
+    )
+
+
+class PrimaryKpiSeriesPoint(BaseModel):
+    """One revision-admitted observation returned by the primary KPI series reader."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    fact_id: int = Field(gt=0)
+    ticker: str = Field(min_length=1, max_length=32)
+    kpi_definition_id: int = Field(gt=0)
+    kpi_definition_revision_id: str = Field(min_length=1, max_length=128)
+    period_end: str = Field(min_length=1)
+    fiscal_period_type: str | None = None
+    value: Decimal
+    unit: Unit
+    currency: Currency | None = None
+    source_doc_id: int | None = None
+    reported_label: str = Field(min_length=1)
+    accounting_basis: str = Field(min_length=1)
+    consolidation_scope: str = Field(min_length=1)
+    unit_scale: str = Field(min_length=1)
+
+
+class PrimaryKpiSeriesProjection(BaseModel):
+    """Primary reader output anchored on revision comparability and legacy isolation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kpi_definition_id: int = Field(gt=0)
+    status: KpiRevisionSeriesStatus
+    anchor_definition_revision_id: str | None = None
+    included_definition_revision_ids: tuple[str, ...] = ()
+    comparability_revisions: tuple[KpiRevisionSeriesComparability, ...] = ()
+    breaks: tuple[KpiRevisionSeriesBreak, ...] = ()
+    exclusions: tuple[KpiRevisionSeriesExclusion, ...] = ()
+    points: tuple[PrimaryKpiSeriesPoint, ...] = ()
+
+
+def resolve_primary_kpi_series(
+    conn: sqlite3.Connection,
+    *,
+    kpi_definition_id: int,
+    effective_at: datetime,
+    known_at: datetime,
+) -> PrimaryKpiSeriesProjection:
+    """Resolve primary continuous KPI points from admitted definition revisions.
+
+    Unbound legacy rows remain isolated under ``LEGACY_UNBOUND`` and broken or
+    non-comparable revisions stop traversal cleanly instead of fuzzy merging.
+    """
+    resolution = resolve_revision_aware_kpi_series(
+        conn,
+        kpi_definition_id=kpi_definition_id,
+        effective_at=effective_at,
+        known_at=known_at,
+    )
+    if not resolution.eligible_fact_ids or not resolution.included_definition_revision_ids:
+        return PrimaryKpiSeriesProjection(
+            kpi_definition_id=kpi_definition_id,
+            status=resolution.status,
+            anchor_definition_revision_id=resolution.anchor_definition_revision_id,
+            included_definition_revision_ids=resolution.included_definition_revision_ids,
+            comparability_revisions=resolution.comparability_revisions,
+            breaks=resolution.breaks,
+            exclusions=resolution.exclusions,
+            points=(),
+        )
+    fact_columns = _table_columns(conn, "v_kpi_facts_resolved_current")
+    if not fact_columns:
+        return PrimaryKpiSeriesProjection(
+            kpi_definition_id=kpi_definition_id,
+            status=resolution.status,
+            anchor_definition_revision_id=resolution.anchor_definition_revision_id,
+            included_definition_revision_ids=resolution.included_definition_revision_ids,
+            comparability_revisions=resolution.comparability_revisions,
+            breaks=resolution.breaks,
+            exclusions=resolution.exclusions,
+            points=(),
+        )
+    if "fiscal_period_type" in fact_columns:
+        rows = conn.execute(
+            "SELECT f.id, UPPER(f.ticker) AS ticker, f.kpi_definition_id, "
+            "ksc.kpi_definition_revision_id, f.period_end, f.fiscal_period_type, "
+            "f.value, f.unit, f.currency, f.source_doc_id, "
+            "ksc.metric_name_as_reported, ksc.accounting_basis, "
+            "ksc.consolidation_scope, ksc.unit_scale "
+            "FROM v_kpi_facts_resolved_current f "
+            "JOIN kpi_fact_semantic_contexts ksc ON ksc.kpi_fact_id = f.id "
+            "WHERE f.kpi_definition_id = ? "
+            "AND ksc.kpi_definition_revision_id IS NOT NULL "
+            "AND NOT EXISTS ("
+            "SELECT 1 FROM kpi_fact_semantic_contexts succ "
+            "WHERE succ.supersedes_context_id = ksc.id"
+            ") "
+            "ORDER BY datetime(f.period_end) DESC, f.id DESC",
+            (kpi_definition_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT f.id, UPPER(f.ticker) AS ticker, f.kpi_definition_id, "
+            "ksc.kpi_definition_revision_id, f.period_end, NULL AS fiscal_period_type, "
+            "f.value, f.unit, f.currency, f.source_doc_id, "
+            "ksc.metric_name_as_reported, ksc.accounting_basis, "
+            "ksc.consolidation_scope, ksc.unit_scale "
+            "FROM v_kpi_facts_resolved_current f "
+            "JOIN kpi_fact_semantic_contexts ksc ON ksc.kpi_fact_id = f.id "
+            "WHERE f.kpi_definition_id = ? "
+            "AND ksc.kpi_definition_revision_id IS NOT NULL "
+            "AND NOT EXISTS ("
+            "SELECT 1 FROM kpi_fact_semantic_contexts succ "
+            "WHERE succ.supersedes_context_id = ksc.id"
+            ") "
+            "ORDER BY datetime(f.period_end) DESC, f.id DESC",
+            (kpi_definition_id,),
+        ).fetchall()
+    eligible_fact_ids_set = frozenset(resolution.eligible_fact_ids)
+    included_rev_ids_set = frozenset(resolution.included_definition_revision_ids)
+    points: list[PrimaryKpiSeriesPoint] = []
+    for row in rows:
+        fact_id_val = int(row[0])
+        revision_id_val = str(row[3])
+        if fact_id_val not in eligible_fact_ids_set or revision_id_val not in included_rev_ids_set:
+            continue
+        raw_currency = row[8]
+        points.append(
+            PrimaryKpiSeriesPoint(
+                fact_id=fact_id_val,
+                ticker=str(row[1]),
+                kpi_definition_id=int(row[2]),
+                kpi_definition_revision_id=revision_id_val,
+                period_end=str(row[4]),
+                fiscal_period_type=None if row[5] is None else str(row[5]),
+                value=Decimal(str(row[6])),
+                unit=Unit(str(row[7])),
+                currency=None if raw_currency is None else Currency(str(raw_currency)),
+                source_doc_id=None if row[9] is None else int(row[9]),
+                reported_label=str(row[10]),
+                accounting_basis=str(row[11]),
+                consolidation_scope=str(row[12]),
+                unit_scale=str(row[13]),
+            )
+        )
+    return PrimaryKpiSeriesProjection(
+        kpi_definition_id=kpi_definition_id,
+        status=resolution.status,
+        anchor_definition_revision_id=resolution.anchor_definition_revision_id,
+        included_definition_revision_ids=resolution.included_definition_revision_ids,
+        comparability_revisions=resolution.comparability_revisions,
+        breaks=resolution.breaks,
+        exclusions=resolution.exclusions,
+        points=tuple(points),
     )
 
 
