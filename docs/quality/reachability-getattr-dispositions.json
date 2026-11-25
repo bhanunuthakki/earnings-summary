@@ -1094,8 +1094,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "The parameterized reporting-date regression selects only the two literal quarter and annual cell readers declared in its pytest parameter table.",
-      "fingerprint": "4effa87eadda67eaeba8fbe6e0a75e93df6cd100298445600d9ee1b66176c3ce",
-      "line": 203,
+      "fingerprint": "af9af31888039a8e7e7b19d7ed2e4e8a5e3066cb27b82ec9c14b4713d2df5822",
+      "line": 205,
       "path": "tests/test_metrics_engine_io.py",
       "targets": [
         "_build_quarter_cells",
@@ -1121,7 +1121,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "1bf95c59eee6447f205245485d44cfae8462cc8bd9a0f6cbc61e7cffef50676c",
+      "source_sha256": "47fafe4c8599398275f76c3d509fafd05abde8743411b607f83884040ba6d016",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
