@@ -1141,6 +1141,24 @@ class TestIncidentHardening:
             > 0
         )
 
+    def test_apply_runs_under_the_lock_its_scheduler_ancestor_holds(
+        self, gc_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The scheduled wrapper holds the write-set lock; GC must not wait on it."""
+        self._seed_facts(gc_db)
+        monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(gc_db))
+
+        def ancestor_holds(_root: Path, write_set: str) -> bool:
+            return write_set == "portfolio-db"
+
+        monkeypatch.setattr(db_gc, "inherited_lock_is_valid", ancestor_holds)
+        lock = run_lock.acquire_run_lock(gc_db, owner="job_runtime", timeout_s=0)
+        try:
+            report = _run(gc_db, apply=True, policies=["facts-depth"])
+        finally:
+            lock.release()
+        assert report.policies[0].rows_deleted["financial_facts"] > 0
+
     def test_dry_run_takes_no_lock(self, gc_db: Path) -> None:
         self._seed_facts(gc_db)
         lock = run_lock.acquire_run_lock(gc_db, owner="run_morning_pipeline", timeout_s=0)

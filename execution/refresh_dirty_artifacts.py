@@ -33,7 +33,7 @@ import subprocess
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from db_paths import configured_db_path, default_product_state_root, require_db_path
@@ -44,6 +44,7 @@ from native_artifact_projection import (
     NativeArtifactProjectionError,
     project_native_artifact,
 )
+from runtime.deterministic import as_utc
 from runtime.native_producer_outcome import (
     NativeProducerProtocolError,
     read_native_producer_outcome,
@@ -163,6 +164,7 @@ class _ArtifactObligation:
     scope: str
     fiscal_period: str | None
     was_expired: bool
+    generated_at: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -266,6 +268,7 @@ def _build_pending_jobs(
             scope=art.scope,
             fiscal_period=art.fiscal_period,
             was_expired=expires_at is not None and expires_at < queued_at,
+            generated_at=as_utc(art.generated_at),
         )
         existing_index = job_indexes.get(key)
         if existing_index is not None:
@@ -285,6 +288,74 @@ def _build_pending_jobs(
             )
         )
     return jobs
+
+
+# A producer that was paid after a row was made, and left that row unresolved,
+# failed for a reason the next day will not fix. Wait this long before the next
+# attempt so one bad item costs a weekly call, not a daily one.
+_RETRY_AFTER_UNRESOLVED_ATTEMPT = timedelta(days=7)
+
+
+def _last_attempt_at(conn: sqlite3.Connection, ticker: str, purpose: str) -> datetime | None:
+    row = conn.execute(
+        "SELECT MAX(called_at) FROM llm_calls WHERE ticker = ? AND purpose = ?",
+        (ticker, purpose),
+    ).fetchone()
+    if row is None or row[0] is None:
+        return None
+    try:
+        return as_utc(datetime.fromisoformat(str(row[0])))
+    except ValueError:
+        return None
+
+
+def _defer_recently_attempted(
+    jobs: list[_PendingJob], *, db_path: Path, now: datetime
+) -> list[_PendingJob]:
+    """Drop jobs whose every row already had a recent paid attempt that left it unresolved.
+
+    A successful attempt writes a new row after its call, so the call is older
+    than that row and never defers it. An unreadable ledger defers nothing:
+    the per-job cost check still fails closed before any spend.
+    """
+    try:
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
+    except (OSError, sqlite3.Error):
+        return jobs
+    runnable: list[_PendingJob] = []
+    try:
+        for job in jobs:
+            attempts: list[datetime] = []
+            for obligation in job.obligations:
+                try:
+                    last = _last_attempt_at(conn, job.ticker, obligation.purpose)
+                except sqlite3.Error:
+                    last = None
+                if (
+                    last is None
+                    or obligation.generated_at is None
+                    or last <= obligation.generated_at
+                    or now - last >= _RETRY_AFTER_UNRESOLVED_ATTEMPT
+                ):
+                    break
+                attempts.append(last)
+            else:
+                log.info(
+                    {
+                        "event": "drain_deferred_recent_attempt",
+                        "ticker": job.ticker,
+                        "purposes": job.purposes,
+                        "last_attempt_at": max(attempts).isoformat(),
+                        "retry_after": (
+                            min(attempts) + _RETRY_AFTER_UNRESOLVED_ATTEMPT
+                        ).isoformat(),
+                    }
+                )
+                continue
+            runnable.append(job)
+    finally:
+        conn.close()
+    return runnable
 
 
 def _managed_job_argv(job: _PendingJob, cwd: Path) -> list[str]:
@@ -767,6 +838,10 @@ def main() -> int:
     jobs = _build_pending_jobs(artifacts, queued_at=queue_checked_at)
     if not jobs:
         print("# No mappable jobs (every purpose was unmapped). Manifest-only effect.")
+        return 0
+    jobs = _defer_recently_attempted(jobs, db_path=db_path, now=queue_checked_at)
+    if not jobs:
+        print("# Every mapped job is waiting after a recent unresolved attempt.")
         return 0
 
     run_started_at = datetime.now(UTC)
