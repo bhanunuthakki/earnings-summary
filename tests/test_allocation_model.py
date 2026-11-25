@@ -10,17 +10,38 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Protocol, cast
 
 import numpy as np
 import pytest
 
-from allocation.model import (
-    _dcf_upside,  # pyright: ignore[reportPrivateUsage]  # internal seam under test
-    _zscore,  # pyright: ignore[reportPrivateUsage]  # internal seam under test
-    build_next_dollar_model,
-)
+from allocation import model as allocation_model
+from allocation.model import build_next_dollar_model
+
+
+class _ZScoreFn(Protocol):
+    def __call__(
+        self, readings: Mapping[str, tuple[float, str]], *, clamp: float | None = None
+    ) -> dict[str, float]: ...
+
+
+def _dcf_upside(db_path: Path, tickers: list[str]) -> dict[str, tuple[float, str]]:
+    fn = cast(
+        "Callable[[Path, list[str]], dict[str, tuple[float, str]]]",
+        getattr(allocation_model, "_dcf_upside"),
+    )
+    return fn(db_path, tickers)
+
+
+def _zscore(
+    readings: Mapping[str, tuple[float, str]], *, clamp: float | None = None
+) -> dict[str, float]:
+    fn = cast("_ZScoreFn", getattr(allocation_model, "_zscore"))
+    return fn(readings, clamp=clamp)
+
 
 TICKERS = ["AAA", "BBB", "CCC"]
 
@@ -365,7 +386,9 @@ def test_dcf_upside_uses_scenario_asymmetry(tmp_path: Path) -> None:
     # SKEW: downside-skewed range pulls the reward below the +10% base point.
     skew_raw, skew_detail = out["SKEW"]
     assert skew_raw == pytest.approx(-0.025)  # 0.25*0.30 + 0.5*0.10 + 0.25*(-0.60)
-    assert "exp -2%" in skew_detail and "(2026-06-08)" in skew_detail
+    assert (
+        "FV upside -2% (present, non-annualized)" in skew_detail and "(2026-06-08)" in skew_detail
+    )
     # FLAT: no scenarios → the legacy base point estimate, detail unchanged.
     flat_raw, flat_detail = out["FLAT"]
     assert flat_raw == pytest.approx(0.20)
@@ -507,3 +530,21 @@ def test_low_r_squared_sensitivity_excluded_from_macro_tilt(repo_root: Path) -> 
     by_ticker = {r.ticker: r for r in model.rows}
     assert by_ticker["AAA"].macro is not None  # the floor passes real signal
     assert by_ticker["CCC"].macro is None  # below-floor beta never tilts
+
+
+def test_allocation_ret_and_candidate_fit_sharpe_semantics() -> None:
+    """BHA-158: next-dollar ``ret`` is labeled present fair-value upside while
+    ``candidate_fit`` Marginal Sharpe stays grounded in realized book/candidate Sharpe."""
+    from allocation.candidate_fit import BookContext, CandidateRisk, score_candidate_fit
+    from allocation.model import FACTOR_LABELS
+
+    assert FACTOR_LABELS["ret"] == "present fair-value upside"
+
+    fit = score_candidate_fit(
+        CandidateRisk(ticker="NEW", sharpe=1.50, corr_to_book=0.20, obs=252),
+        BookContext(weights={"AAA": 1.0}, sharpe=1.00),
+    )
+    sharpe_factor = next(f for f in fit.factors if f.key == "sharpe")
+    assert sharpe_factor.label == "Marginal Sharpe"
+    assert sharpe_factor.multiplier == pytest.approx(1.25)
+    assert "SR +1.50 vs book +1.00" in sharpe_factor.detail

@@ -32,7 +32,12 @@ _BUCKET_BY_TYPE_AND_REGION = {
     ("etf", "us"): "us_etf",
     ("etf", "international"): "international_etf",
     ("etf", "global"): "global_etf",
+    ("mutual_fund", "us"): "us_mutual_fund",
+    ("mutual_fund", "international"): "international_mutual_fund",
+    ("mutual_fund", "global"): "global_mutual_fund",
 }
+_KNOWN_EQUITY_TYPES = frozenset({"stock", "etf", "mutual_fund"})
+_NON_EQUITY_FUND_SECTORS = frozenset({"fixed income", "commodities", "multi-asset"})
 _POSITION_PERCENT_TOLERANCE = Decimal("0.0001")
 _ZERO = Decimal(0)
 
@@ -47,7 +52,7 @@ class PortfolioAllocationBucket(BaseModel):
 
 
 class PortfolioAllocationBuckets(BaseModel):
-    """The seven mutually exclusive buckets used by the allocation surface."""
+    """The mutually exclusive buckets used by the allocation surface."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -56,8 +61,28 @@ class PortfolioAllocationBuckets(BaseModel):
     us_etf: PortfolioAllocationBucket
     international_etf: PortfolioAllocationBucket
     global_etf: PortfolioAllocationBucket
+    us_mutual_fund: PortfolioAllocationBucket
+    international_mutual_fund: PortfolioAllocationBucket
+    global_mutual_fund: PortfolioAllocationBucket
+    non_equity_fund: PortfolioAllocationBucket
     cash: PortfolioAllocationBucket
     unclassified: PortfolioAllocationBucket
+
+
+class UnclassifiedPosition(BaseModel):
+    """One nonzero position routed to ``unclassified`` with an explicit reason."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    security_id: int
+    ticker: str | None
+    name: str | None
+    asset_type: str
+    sector: str | None
+    region: str | None
+    market_value: Decimal
+    weight_pct: Decimal
+    reason_code: str
 
 
 class PortfolioAllocationReconciliation(BaseModel):
@@ -85,6 +110,7 @@ class PortfolioAllocationProjection(BaseModel):
     reason_codes: tuple[str, ...] = ()
     covered_calls: tuple[CoveredCallExposure, ...] = ()
     long_options_unclassified: bool = False
+    unclassified_positions: tuple[UnclassifiedPosition, ...] = ()
 
 
 class CoveredCallLeg(BaseModel):
@@ -268,13 +294,26 @@ def _valid_position_measure(
     return abs(recomputed_percent - position.percent_of_portfolio) <= _POSITION_PERCENT_TOLERANCE
 
 
-def _bucket_name(security: SecurityV1) -> str:
+def _bucket_name(security: SecurityV1) -> tuple[str, str | None]:
     """Classify only fields defined by the securities-master contract."""
     asset_type = security.asset_type.strip().casefold()
+    normalized_type = "mutual_fund" if asset_type == "mutual fund" else asset_type
+    sector = (security.sector or "").strip().casefold()
     region = security.region.strip().casefold() if security.region is not None else ""
-    if security.is_cash_equivalent or asset_type == "cash":
-        return "cash"
-    return _BUCKET_BY_TYPE_AND_REGION.get((asset_type, region), "unclassified")
+    if security.is_cash_equivalent or normalized_type == "cash" or sector == "cash/mmf":
+        return "cash", None
+    if normalized_type in {"bond", "fixed_income"} or (
+        normalized_type in {"etf", "mutual_fund"} and sector in _NON_EQUITY_FUND_SECTORS
+    ):
+        return "non_equity_fund", None
+    bucket = _BUCKET_BY_TYPE_AND_REGION.get((normalized_type, region))
+    if bucket is not None:
+        return bucket, None
+    if normalized_type in _KNOWN_EQUITY_TYPES:
+        if not region or region == "unknown":
+            return "unclassified", "region_missing_or_unknown"
+        return "unclassified", "unsupported_region_for_asset_type"
+    return "unclassified", "unsupported_asset_type"
 
 
 def _is_long_option(position: PositionV1, security: SecurityV1) -> bool:
@@ -348,6 +387,7 @@ def project_portfolio_allocation(
         return unavailable_portfolio_allocation(error)
 
     totals = dict.fromkeys(PortfolioAllocationBuckets.model_fields, _ZERO)
+    total = positions.total_market_value
     by_security_id = {security.security_id: security for security in securities.securities}
     by_position_id = {position.security_id: position for position in positions.positions}
     reasons: set[str] = set()
@@ -355,22 +395,39 @@ def project_portfolio_allocation(
     call_legs: dict[int, list[CoveredCallLeg]] = {}
     remaining_shares: dict[tuple[int, int], Decimal] = {}
     long_options_unclassified = False
+    unclassified_positions: list[UnclassifiedPosition] = []
     for position in sorted(positions.positions, key=lambda row: row.security_id):
         security = by_security_id[position.security_id]
         # _structural_error() has proved this field is a finite Decimal.
         market_value = position.market_value
         assert isinstance(market_value, Decimal)
         bucket_security = security
+        option_failure_reason: str | None = None
         if _is_option(security):
             if _is_long_option(position, security):
                 totals["unclassified"] += market_value
                 long_options_unclassified = True
+                if market_value != _ZERO:
+                    unclassified_positions.append(
+                        UnclassifiedPosition(
+                            security_id=security.security_id,
+                            ticker=security.ticker,
+                            name=security.name,
+                            asset_type=security.asset_type,
+                            sector=security.sector,
+                            region=security.region,
+                            market_value=market_value,
+                            weight_pct=market_value / total * Decimal(100),
+                            reason_code="long_option",
+                        )
+                    )
                 continue
             underlying, issue = _covered_call_underlying(
                 position, security, securities.securities, by_position_id
             )
             if underlying is None:
-                reasons.add(issue or "option_metadata_incomplete")
+                option_failure_reason = issue or "option_metadata_incomplete"
+                reasons.add(option_failure_reason)
             else:
                 bucket_security = underlying
                 contract = security.option_contract
@@ -422,15 +479,28 @@ def project_portfolio_allocation(
                             metadata_source=contract.metadata_source,
                         )
                     )
-        bucket_name = _bucket_name(bucket_security)
+        bucket_name, fallback_reason = _bucket_name(bucket_security)
         totals[bucket_name] += market_value
         if bucket_name == "unclassified" and market_value != _ZERO:
             reasons.add("portfolio_allocation_incomplete")
+            unclassified_positions.append(
+                UnclassifiedPosition(
+                    security_id=security.security_id,
+                    ticker=security.ticker,
+                    name=security.name,
+                    asset_type=security.asset_type,
+                    sector=security.sector,
+                    region=security.region,
+                    market_value=market_value,
+                    weight_pct=market_value / total * Decimal(100),
+                    reason_code=option_failure_reason or fallback_reason or "unclassified",
+                )
+            )
 
-    total = positions.total_market_value
     bucket_total = sum(totals.values(), _ZERO)
     difference = bucket_total - total
-    if difference != _ZERO:
+    unclassified_sum = sum((item.market_value for item in unclassified_positions), _ZERO)
+    if difference != _ZERO or unclassified_sum != totals["unclassified"]:
         return unavailable_portfolio_allocation("portfolio_allocation_reconciliation_failed")
 
     allocation_buckets = PortfolioAllocationBuckets.model_validate(
@@ -470,6 +540,7 @@ def project_portfolio_allocation(
         reason_codes=tuple(sorted(reasons)),
         covered_calls=tuple(exposures),
         long_options_unclassified=long_options_unclassified,
+        unclassified_positions=tuple(unclassified_positions),
     )
 
 
@@ -538,6 +609,7 @@ __all__ = [
     "PortfolioAllocationProjection",
     "PortfolioAllocationReader",
     "PortfolioAllocationReconciliation",
+    "UnclassifiedPosition",
     "fetch_portfolio_allocation",
     "project_portfolio_allocation",
     "read_portfolio_allocation",

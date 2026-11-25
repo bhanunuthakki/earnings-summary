@@ -783,9 +783,9 @@ def _scenario_prior_block(body: StringIO, v: ValuationSnapshot) -> None:
         f"{weights} bull/base/bear" + (f" ({src})" if src else ""),
         muted=True,
     )
-    if v.scenario_expected_return is not None:
+    if v.scenario_expected_upside is not None:
         skew_txt = f" · skew {v.scenario_skew * 100:+.1f}pts" if v.scenario_skew is not None else ""
-        _val_row(body, "Expected value E[V]", f"{v.scenario_expected_return * 100:+.0f}%{skew_txt}")
+        _val_row(body, "Scenario FV upside", f"{v.scenario_expected_upside * 100:+.0f}%{skew_txt}")
     if v.scenario_rationale:
         _val_row(body, "Why", v.scenario_rationale)
 

@@ -289,11 +289,22 @@ def render_allocation_card(allocation: PortfolioAllocationProjection) -> str:
             cls="pr-allocation",
         )
     b: PortfolioAllocationBuckets = allocation.buckets
+    optional_rows = tuple(
+        _row(label, bucket)
+        for label, bucket in (
+            ("US Mutual Fund", b.us_mutual_fund),
+            ("Intl Mutual Fund", b.international_mutual_fund),
+            ("Global Mutual Fund", b.global_mutual_fund),
+            ("Non-Equity Fund", b.non_equity_fund),
+        )
+        if bucket.value is not None and bucket.value != Decimal(0)
+    )
     rows = "".join(
         (
             _row("US ETF", b.us_etf),
             _row("Intl ETF", b.international_etf),
             _row("Global ETF", b.global_etf),
+            *optional_rows,
             _row("US Equity", b.us_equity),
             _row("Intl Equity", b.international_equity),
             _row("Cash", b.cash),
@@ -359,6 +370,18 @@ def render_allocation_card(allocation: PortfolioAllocationProjection) -> str:
         if allocation.state == "incomplete"
         else ""
     )
+    unclassified_details = ""
+    if allocation.unclassified_positions:
+        unclassified_items = "".join(
+            f"<li>{escape(pos.ticker or pos.name or str(pos.security_id))} · "
+            f"{pos.weight_pct:.1f}% ({pos.market_value:,.2f}) · "
+            f"{escape(pos.asset_type)} · {escape(pos.reason_code)}</li>"
+            for pos in allocation.unclassified_positions
+        )
+        unclassified_details = (
+            '<details class="pf-alpha-details"><summary>Unclassified positions</summary>'
+            f"<ul>{unclassified_items}</ul></details>"
+        )
     return panel_section(
         f'<p class="sub">{escape(status)} · {escape(allocation.source_identity)} · '
         f"{escape(as_of)} · {escape(reconciliation)}.</p>",
@@ -367,6 +390,7 @@ def render_allocation_card(allocation: PortfolioAllocationProjection) -> str:
         '<p class="sub">Long options are included in Unclassified at market value.</p>'
         if allocation.long_options_unclassified
         else "",
+        unclassified_details,
         option_details,
         title="Portfolio Allocation",
         cls="pr-allocation",
