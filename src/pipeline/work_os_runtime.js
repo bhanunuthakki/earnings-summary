@@ -908,6 +908,23 @@
       ['Domestic Equity', buckets.us_equity], ['Intl Equity', buckets.international_equity],
       ['Cash reserve', buckets.cash], ['Unclassified', buckets.unclassified]
     ];
+    let insertAt = 3;
+    [
+      ['US Mutual Fund', buckets.us_mutual_fund],
+      ['Intl Mutual Fund', buckets.international_mutual_fund],
+      ['Global Mutual Fund', buckets.global_mutual_fund],
+      ['Non-Equity Fund', buckets.non_equity_fund]
+    ].forEach(function (pair) {
+      if (
+        pair[1] &&
+        pair[1].value !== null &&
+        pair[1].value !== undefined &&
+        Number.isFinite(Number(pair[1].value)) &&
+        Number(pair[1].value) !== 0
+      ) {
+        entries.splice(insertAt++, 0, pair);
+      }
+    });
     const rendered = entries.filter(function (entry) { return Number.isFinite(Number(entry[1] && entry[1].weight_pct)); })
       .map(function (entry) { return '<div class="stat-subtext work-os-allocation-row">' + workOsPortfolioPercent(Number(entry[1].weight_pct)) + ' ' + entry[0] + '</div>'; });
     if (!rendered.length) return '<div class="stat-subtext">Allocation mix unavailable</div>';
