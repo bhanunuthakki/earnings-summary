@@ -1,5 +1,20 @@
 # Operations & Governance Surface Impact
 
+## KPI semantic-review scheduler retirement — November 24, 2026
+
+Disposition: **surface retired**. The owner retired the `\earnings-summary\prepare_kpi_semantic_review`
+10-minute Windows scheduled task (`cron/prepare_kpi_semantic_review.task.xml`,
+`cron/run_prepare_kpi_semantic_review.bat`), its exporter CLI (`prepare_kpi_semantic_review.py`),
+the remote review fetcher (`fetch_windows_kpi_semantic_review.py`), and the quarantined
+correction helper CLI (`prepare_quarantined_kpi_correction.py`), along with `cron/run_python.bat`
+routing for `prepare-kpi-semantic-review`.
+
+The dynamic Jobs projection reads the regenerated scheduler manifest directly and drops the retired
+task automatically. No active collection route or database writer changes. Retained read-only review
+modules (`src/operations/kpi_semantic_review_export.py` and `src/pipeline/kpi_semantic_review.py`)
+remain intact for `comments_server_ops_routes.py`, `build_kpi_semantic_refresh_manifest.py`, and
+`apply_kpi_semantic_refresh.py`.
+
 ## Recorded owner execution reconciliation
 
 `reconcile_recorded_trades` is a deterministic Windows scheduled job at 12:12
@@ -730,8 +745,8 @@ service, schema or financial-data admission is introduced.
 
 The Operations panel and review bundle read each job receipt from its declared
 writer root. `cron/run_python.bat` defaults to the deployed code checkout.
-`prepare-kpi-semantic-review` is the explicit exception: its wrapper derives
-the product-state root from the configured database path and passes that root
+Previously `prepare-kpi-semantic-review` (retired November 24, 2026) and now
+`reconcile-recorded-trades` derive the product-state root from the configured database path and pass that root
 to the job runtime. The dashboard uses the same resolved database declaration
 for this exception. Dashboard scratch artifacts do not replace either writer
 root. Missing, stale and invalid receipts remain explicit; another root never
@@ -3252,3 +3267,16 @@ operations remain. The existing backend reader uses explicit or configured
 database authority. This source change does not stop or alter a canonical-host
 service or task. Frontend, input-library and history closure is still in progress;
 final release evidence must cover the integrated candidate.
+
+## Single-accession SEC refresh CLI (BHA-161 — 2026-11-24)
+
+Disposition: **bounded headless backend command, no new dashboard action or schedule**.
+`execution/refresh_sec_accession.py` (`src/provenance/sec_accession_refresh.py`) validates
+and refreshes one explicit `(inventory_key, accession_number, expected_cik)` request
+through existing sealed SEC inventory and approved Inline-XBRL boundaries. Dry-run is
+the default. Upfront read-only SQLite validation rejects missing inventories, CIK
+mismatches, exact amendment-form mismatches (`10-K` vs `10-K/A`), and altered
+selection checkpoints before claiming bounded `JobLock` write sets or opening network
+requests. Byte acquisition and Inline-XBRL extraction persist separate typed receipts,
+with idempotent resume and `--cancel` support under `.tmp/sec_accession_refresh/`. No UI
+route, scheduled task, managed service, or database schema changes.

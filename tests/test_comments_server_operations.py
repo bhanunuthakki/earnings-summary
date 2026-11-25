@@ -847,10 +847,7 @@ def test_operations_route_uses_runtime_root_canonical_receipts(
 
     assert response.status_code == 200
     assert captured["repo_root"] == tmp_path
-    assert captured["job_receipt_roots"] == {
-        step.job: state_root if step.job == "prepare-kpi-semantic-review" else code_root
-        for step in registry.job_steps
-    }
+    assert captured["job_receipt_roots"] == {step.job: code_root for step in registry.job_steps}
     assert captured["scheduler_receipt_path"] == (
         tmp_path / ".tmp" / "operations" / "runtime" / "scheduler.latest.json"
     )
@@ -920,12 +917,7 @@ def test_operations_review_bundle_uses_configured_private_origin(
     assert response.status_code == 200
     assert captured["serving_origin"] == configured_origin
     assert snapshot_roots["job_receipt_roots"] == {
-        step.job: (
-            tmp_path / "declared-state"
-            if step.job == "prepare-kpi-semantic-review"
-            else PROJECT_ROOT
-        )
-        for step in build_operations_registry(PROJECT_ROOT).job_steps
+        step.job: PROJECT_ROOT for step in build_operations_registry(PROJECT_ROOT).job_steps
     }
 
 
@@ -1183,9 +1175,12 @@ def test_operations_route_projects_cached_scheduler_receipt_states(
     assert expected in response.get_data(as_text=True)
 
 
-@pytest.mark.parametrize("job", ["morning_pipeline", "prepare-kpi-semantic-review"])
+@pytest.mark.parametrize(
+    ("job", "use_state_root"),
+    [("morning_pipeline", False), ("morning_pipeline", True)],
+)
 def test_job_receipt_declared_writer_root_has_no_other_root_fallback(
-    tmp_path: Path, job: str
+    tmp_path: Path, job: str, use_state_root: bool
 ) -> None:
     def _job_receipt(path: Path, *, job: str, lane: tuple[str, ...], ended: datetime) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1212,7 +1207,7 @@ def test_job_receipt_declared_writer_root_has_no_other_root_fallback(
     state_root = tmp_path / "state"
     code_root = tmp_path / "code"
     scratch_root = tmp_path / "scratch"
-    writer_root = state_root if job == "prepare-kpi-semantic-review" else code_root
+    writer_root = state_root if use_state_root else code_root
     latest = health_receipt_directory(writer_root, job) / "latest.json"
     _job_receipt(latest, job=job, lane=step.effective_lane, ended=now)
     # A different root has usable evidence, but never supplies fallback truth.

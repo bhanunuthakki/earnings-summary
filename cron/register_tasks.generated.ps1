@@ -138,12 +138,6 @@ if ($existing) { Export-ScheduledTask -TaskName 'portfolio_tracker_api' -TaskPat
 Register-ManifestTask -TaskName 'portfolio_tracker_api' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'portfolio_tracker_api.task.xml') -System
 & $taskSecurityScript -TaskPath '\earnings-summary\portfolio_tracker_api' -RenderedXmlPath (Join-Path $renderDir 'portfolio_tracker_api.task.xml')
 }
-if (-not $TaskName) {
-$existing = Get-ScheduledTask -TaskName 'prepare_kpi_semantic_review' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
-if ($existing) { Export-ScheduledTask -TaskName 'prepare_kpi_semantic_review' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'prepare_kpi_semantic_review.task.xml') -Encoding Unicode }
-Register-ManifestTask -TaskName 'prepare_kpi_semantic_review' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'prepare_kpi_semantic_review.task.xml')
-& $taskSecurityScript -TaskPath '\earnings-summary\prepare_kpi_semantic_review' -RenderedXmlPath (Join-Path $renderDir 'prepare_kpi_semantic_review.task.xml')
-}
 if (-not $TaskName -or $TaskName -eq '\earnings-summary\reconcile-recorded-trades') {
 $existing = Get-ScheduledTask -TaskName 'reconcile-recorded-trades' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
 if ($existing) { Export-ScheduledTask -TaskName 'reconcile-recorded-trades' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'reconcile_recorded_trades.task.xml') -Encoding Unicode }
