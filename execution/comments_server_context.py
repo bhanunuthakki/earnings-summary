@@ -164,12 +164,7 @@ def build_server_context(
     app.config["COCKPIT_DATA_MEMO_KEY"] = cockpit_memo_key_value
     declared_operations = operations_registry or build_operations_registry(resolved_code_root)
     operations_job_receipt_roots = {
-        step.job: (
-            resolved_db_path.parent.parent
-            if step.job == "prepare-kpi-semantic-review"
-            else resolved_code_root
-        )
-        for step in declared_operations.job_steps
+        step.job: resolved_code_root for step in declared_operations.job_steps
     }
     operations_review_code_identity = review_code_identity(resolved_code_root)
     app.config["CODE_ROOT"] = resolved_code_root

@@ -29,7 +29,6 @@ set "CODEX_API_KEY="
 
 set "JOB_RUNTIME_REPO_ROOT="
 set "JOB_RUNTIME_CODE_ROOT="
-if /I "%~1"=="prepare-kpi-semantic-review" goto accept_runtime_root_env
 if /I "%~1"=="reconcile-recorded-trades" goto accept_runtime_root_env
 goto clear_runtime_root_env
 
