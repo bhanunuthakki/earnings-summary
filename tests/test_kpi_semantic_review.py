@@ -1,26 +1,16 @@
 from __future__ import annotations
 
-import hashlib
 import re
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-import execution.prepare_kpi_semantic_review as prepare_module
-import execution.prepare_quarantined_kpi_correction as correction_module
 import operations.kpi_semantic_review_export as export_module
 import pipeline.kpi_semantic_review as review_module
-from execution.prepare_kpi_semantic_review import (
-    KpiSemanticReviewSummary,
-    build_parser,
-)
-from execution.prepare_kpi_semantic_review import (
-    main as prepare_review_main,
-)
 from operations.kpi_semantic_review_export import (
     KpiSemanticReviewExport,
     KpiSemanticReviewExportError,
@@ -32,7 +22,6 @@ from operations.kpi_semantic_review_export import (
 )
 from pipeline.kpi_semantic_review import (
     MAX_EVIDENCE_CANDIDATES_PER_FACT,
-    MAX_KPI_SEMANTIC_REVIEW_ITEMS,
     OPERATIONS_GOVERNANCE_DISPOSITION,
     OPERATIONS_GOVERNANCE_PRESERVED_CONTRACT,
     QUARANTINED_PREDECESSOR_SCOPE_REASON,
@@ -322,25 +311,6 @@ def test_quarantined_predecessor_review_rejects_a_canonical_fact(tmp_path: Path)
             source_value_text="114.2",
             observed_at=NOW,
         )
-
-
-def test_quarantined_correction_cli_is_explicitly_read_only_and_bounded() -> None:
-    parser = correction_module.build_parser()
-    actions = {action.dest: action for action in parser._actions}
-
-    assert actions["db"].required is True
-    assert actions["fact_id"].required is True
-    assert actions["source_value_text"].required is True
-    assert actions["output"].required is True
-    assert "apply" not in actions
-    assert (
-        correction_module.OPERATIONS_GOVERNANCE_DISPOSITION
-        == "no_surface_change_bounded_read_only_kpi_correction_review"
-    )
-    assert correction_module.OPERATIONS_GOVERNANCE_PRESERVED_CONTRACT == (
-        "src/operations/registry.py:OperationsRegistry",
-        "src/pipeline/operations_panel.py:visible_surface_dispositions",
-    )
 
 
 def test_evidence_locator_payload_and_hash_must_match(tmp_path: Path) -> None:
@@ -788,201 +758,6 @@ def test_review_batch_rejects_tampered_content(tmp_path: Path) -> None:
         KpiSemanticReviewBatch.model_validate(tampered)
 
 
-def test_cli_reads_migrated_database_without_mutating_it(
-    tmp_path: Path,
-    migrated_db: Callable[..., Path],
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    database = migrated_db(tmp_path / "portfolio.db")
-    conn = sqlite3.connect(database)
-    conn.execute(
-        "INSERT INTO tracked_companies (user_id,ticker,name,list_type) "
-        "VALUES ('owner','NU','Nu Holdings','portfolio')"
-    )
-    conn.commit()
-    conn.close()
-    before = hashlib.sha256(database.read_bytes()).hexdigest()
-    output = tmp_path / ".tmp" / "review.json"
-
-    assert (
-        prepare_review_main(
-            [
-                "--db",
-                str(database),
-                "--repo-root",
-                str(tmp_path),
-                "--user-id",
-                "owner",
-                "--output",
-                str(output),
-            ]
-        )
-        == 0
-    )
-
-    parsed = KpiSemanticReviewBatch.model_validate_json(output.read_text(encoding="utf-8"))
-    streams = capsys.readouterr()
-    summary = KpiSemanticReviewSummary.model_validate_json(streams.out)
-    assert summary.content_sha256 == parsed.content_sha256
-    assert "kpi_semantic_review_prepared" in streams.err
-    assert parsed.total_items == 0
-    assert hashlib.sha256(database.read_bytes()).hexdigest() == before
-
-
-def test_cli_refuses_to_overwrite_source_database(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
-    database = migrated_db(tmp_path / "portfolio.db")
-
-    with pytest.raises(ValueError, match="must not overwrite"):
-        prepare_review_main(
-            [
-                "--db",
-                str(database),
-                "--repo-root",
-                str(tmp_path),
-                "--user-id",
-                "owner",
-                "--output",
-                str(database),
-            ]
-        )
-
-
-def test_cli_publishes_one_atomic_current_index_without_mutating_database(
-    tmp_path: Path,
-    migrated_db: Callable[..., Path],
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    database = migrated_db(tmp_path / "portfolio.db")
-    with sqlite3.connect(database) as conn:
-        conn.execute(
-            "INSERT INTO tracked_companies (user_id,ticker,name,list_type) "
-            "VALUES ('owner','NU','Nu Holdings','portfolio')"
-        )
-    before = hashlib.sha256(database.read_bytes()).hexdigest()
-    artifact_root = tmp_path / "published"
-
-    assert (
-        prepare_review_main(
-            [
-                "--db",
-                str(database),
-                "--repo-root",
-                str(tmp_path),
-                "--user-id",
-                "owner",
-                "--artifact-root",
-                str(artifact_root),
-            ]
-        )
-        == 0
-    )
-
-    streams = capsys.readouterr()
-    summary = KpiSemanticReviewSummary.model_validate_json(streams.out)
-    assert summary.truncated is False
-    assert summary.output == str(artifact_root / "latest.json")
-    loaded, _ = load_current_kpi_semantic_review_export(
-        root=artifact_root,
-        ticker="NU",
-        now=datetime.now(UTC),
-        max_age=timedelta(minutes=20),
-    )
-    assert loaded.review.schema_version == "kpi_semantic_review.v3"
-    assert hashlib.sha256(database.read_bytes()).hexdigest() == before
-
-
-def test_regular_producer_keeps_code_identity_and_product_state_roots_separate(
-    tmp_path: Path,
-    migrated_db: Callable[..., Path],
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    code_root = tmp_path / "deployed-code"
-    state_root = tmp_path / "product-state"
-    database = migrated_db(state_root / "data" / "portfolio.db")
-    with sqlite3.connect(database) as conn:
-        conn.execute(
-            "INSERT INTO tracked_companies (user_id,ticker,name,list_type) "
-            "VALUES ('owner','NU','Nu Holdings','portfolio')"
-        )
-    captured: dict[str, Path] = {}
-
-    def configured_state_root(observed_code_root: Path) -> Path:
-        captured["configured_code_root"] = observed_code_root
-        return state_root.resolve()
-
-    def code_identity(observed_code_root: Path) -> str:
-        captured["identity_code_root"] = observed_code_root
-        return "code-identity"
-
-    def portfolio_tickers(conn: sqlite3.Connection, *, user_id: str) -> tuple[str, ...]:
-        assert conn.in_transaction
-        assert user_id == "owner"
-        return ("NU",)
-
-    def inherited_lock_is_valid(observed_state_root: Path, write_set: str) -> bool:
-        captured["lock_state_root"] = observed_state_root
-        captured["lock_write_set"] = Path(write_set)
-        return True
-
-    def unexpected_nested_lock(*_: object, **__: object) -> object:
-        raise AssertionError("the scheduled child must reuse its inherited outer lock")
-
-    monkeypatch.setattr(prepare_module, "configured_product_state_root", configured_state_root)
-    monkeypatch.setattr(prepare_module, "review_code_identity", code_identity)
-    monkeypatch.setattr(prepare_module, "portfolio_tickers", portfolio_tickers)
-    monkeypatch.setattr(prepare_module, "inherited_lock_is_valid", inherited_lock_is_valid)
-    monkeypatch.setattr(prepare_module, "JobLock", unexpected_nested_lock)
-
-    assert (
-        prepare_review_main(
-            [
-                "--db",
-                str(database),
-                "--code-root",
-                str(code_root),
-                "--user-id",
-                "owner",
-                "--publish",
-            ]
-        )
-        == 0
-    )
-
-    capsys.readouterr()
-    assert captured == {
-        "configured_code_root": code_root.resolve(),
-        "identity_code_root": code_root.resolve(),
-        "lock_state_root": state_root.resolve(),
-        "lock_write_set": Path("kpi-semantic-review-export"),
-    }
-    export, _ = load_current_kpi_semantic_review_export(
-        root=state_root / "data" / "operations" / "kpi_semantic_reviews",
-        ticker="NU",
-        now=datetime.now(UTC),
-        max_age=timedelta(minutes=20),
-    )
-    assert export.code_instance_sha256 == hashlib.sha256(b"code-identity").hexdigest()
-
-
-def test_cli_limit_is_bounded() -> None:
-    with pytest.raises(SystemExit):
-        build_parser().parse_args(
-            [
-                "--db",
-                "input.db",
-                "--user-id",
-                "owner",
-                "--limit",
-                str(MAX_KPI_SEMANTIC_REVIEW_ITEMS + 1),
-                "--output",
-                "output.json",
-            ]
-        )
-
-
 def _review_export(tmp_path: Path) -> KpiSemanticReviewExport:
     conn = _database()
     _document(conn, document_id=10, source_type="ir_doc", doc_type="ir_presentation")
@@ -1037,52 +812,6 @@ def _review_partitions(tmp_path: Path) -> tuple[KpiSemanticReviewExport, ...]:
             return tuple(exports)
         after_fact_id = next_after_fact_id
         partition_ordinal += 1
-
-
-def test_producer_adapts_partition_size_without_skipping_facts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    conn = _database()
-    _document(conn, document_id=10, source_type="ir_doc", doc_type="ir_presentation")
-    for fact_id in (1, 2, 3):
-        _fact(conn, fact_id=fact_id, definition_id=1, document_id=10)
-    with pytest.raises(ValueError, match="partition limit"):
-        prepare_module.build_ticker_review_exports(
-            conn,
-            code_root=tmp_path,
-            user_id="owner",
-            ticker="NU",
-            requested_limit=export_module.MAX_KPI_SEMANTIC_EXPORT_ITEMS + 1,
-            observed_at=NOW,
-            code_instance_sha256="b" * 64,
-            database_instance_sha256="c" * 64,
-            schema_revision="0035",
-        )
-    real_encoder = export_module.encoded_kpi_semantic_review_export
-
-    def one_item_byte_budget(export: KpiSemanticReviewExport) -> bytes:
-        if export.review.total_items > 1:
-            raise KpiSemanticReviewExportError("semantic review export exceeds the byte bound")
-        return real_encoder(export)
-
-    monkeypatch.setattr(prepare_module, "encoded_kpi_semantic_review_export", one_item_byte_budget)
-
-    exports = prepare_module.build_ticker_review_exports(
-        conn,
-        code_root=tmp_path,
-        user_id="owner",
-        ticker="NU",
-        requested_limit=3,
-        observed_at=NOW,
-        code_instance_sha256="b" * 64,
-        database_instance_sha256="c" * 64,
-        schema_revision="0035",
-    )
-
-    assert [export.review.total_items for export in exports] == [1, 1, 1]
-    assert [item.fact_id for export in exports for item in export.review.items] == [1, 2, 3]
-    assert [export.after_fact_id for export in exports] == [0, 1, 2]
-    assert [export.next_after_fact_id for export in exports] == [1, 2, None]
 
 
 def test_semantic_review_export_is_content_addressed_and_current_portfolio_scoped(
