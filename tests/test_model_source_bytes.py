@@ -270,14 +270,14 @@ def test_governed_reward_consumers_require_present_bytes_and_keep_generic_behavi
         db, ["MELI", "ONON", "META"], STAMP.date(), as_of=STAMP, source_context=context
     )
     assert upside["META"][0] == 1
-    assert rewards["META"].expected_return == 1
+    assert rewards["META"].expected_upside == 1
     for ticker in ("MELI", "ONON"):
         if failure == "verified":
             assert upside[ticker][0] == 1
-            assert rewards[ticker].expected_return == 1
+            assert rewards[ticker].expected_upside == 1
         else:
             assert ticker not in upside
-            assert rewards[ticker].expected_return is None
+            assert rewards[ticker].expected_upside is None
             assert "model_input_source_" in (rewards[ticker].confidence_reason or "")
     assert sorted(calls) == ["MELI", "MELI", "ONON", "ONON"]
     assert not conn.in_transaction

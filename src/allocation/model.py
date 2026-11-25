@@ -70,7 +70,7 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 # execution/import_owner_capacity.py --seed-appetite).
 BLEND_WEIGHTS: dict[str, float] = {"ret": 0.50, "div": 0.30, "macro": 0.20}
 FACTOR_LABELS: dict[str, str] = {
-    "ret": "expected return",
+    "ret": "present fair-value upside",
     "div": "diversification",
     "macro": "macro tilt",
 }
@@ -387,7 +387,7 @@ def _dcf_upside(
         if reward is None:
             continue
         valuation_label = row.valuation_date or "?"
-        out[t] = (reward.expected_return, f"{reward.detail} ({valuation_label})")
+        out[t] = (reward.expected_upside, f"{reward.detail} ({valuation_label})")
     return out
 
 
