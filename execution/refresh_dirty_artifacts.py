@@ -44,6 +44,7 @@ from native_artifact_projection import (
     NativeArtifactProjectionError,
     project_native_artifact,
 )
+from runtime.deterministic import as_utc
 from runtime.native_producer_outcome import (
     NativeProducerProtocolError,
     read_native_producer_outcome,
@@ -267,7 +268,7 @@ def _build_pending_jobs(
             scope=art.scope,
             fiscal_period=art.fiscal_period,
             was_expired=expires_at is not None and expires_at < queued_at,
-            generated_at=_aware(art.generated_at),
+            generated_at=as_utc(art.generated_at),
         )
         existing_index = job_indexes.get(key)
         if existing_index is not None:
@@ -289,12 +290,6 @@ def _build_pending_jobs(
     return jobs
 
 
-def _aware(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
-
-
 # A producer that was paid after a row was made, and left that row unresolved,
 # failed for a reason the next day will not fix. Wait this long before the next
 # attempt so one bad item costs a weekly call, not a daily one.
@@ -309,7 +304,7 @@ def _last_attempt_at(conn: sqlite3.Connection, ticker: str, purpose: str) -> dat
     if row is None or row[0] is None:
         return None
     try:
-        return _aware(datetime.fromisoformat(str(row[0])))
+        return as_utc(datetime.fromisoformat(str(row[0])))
     except ValueError:
         return None
 
