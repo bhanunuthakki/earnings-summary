@@ -3269,3 +3269,16 @@ operations remain. The existing backend reader uses explicit or configured
 database authority. This source change does not stop or alter a canonical-host
 service or task. Frontend, input-library and history closure is still in progress;
 final release evidence must cover the integrated candidate.
+
+## Single-accession SEC refresh CLI (BHA-161 — 2026-11-24)
+
+Disposition: **bounded headless backend command, no new dashboard action or schedule**.
+`execution/refresh_sec_accession.py` (`src/provenance/sec_accession_refresh.py`) validates
+and refreshes one explicit `(inventory_key, accession_number, expected_cik)` request
+through existing sealed SEC inventory and approved Inline-XBRL boundaries. Dry-run is
+the default. Upfront read-only SQLite validation rejects missing inventories, CIK
+mismatches, exact amendment-form mismatches (`10-K` vs `10-K/A`), and altered
+selection checkpoints before claiming bounded `JobLock` write sets or opening network
+requests. Byte acquisition and Inline-XBRL extraction persist separate typed receipts,
+with idempotent resume and `--cancel` support under `.tmp/sec_accession_refresh/`. No UI
+route, scheduled task, managed service, or database schema changes.
