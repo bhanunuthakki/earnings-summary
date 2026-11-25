@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import os
 import sqlite3
 import sys
@@ -1461,3 +1462,78 @@ def test_consecutive_no_progress_trips_circuit_breaker_per_purpose(
     assert len(skipped) == 1
     assert skipped[0]["ticker"] == "META"
     assert skipped[0]["purpose"] == "bear_case"
+
+
+# ---------------------------------------------------------------------------
+# A paid attempt that left the row unresolved waits before the next attempt
+# ---------------------------------------------------------------------------
+
+
+def _insert_stale_bear_case(conn: sqlite3.Connection, *, generated_at: datetime) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO tracked_companies (ticker, name, list_type) "
+        "VALUES ('NTDOY', 'NTDOY', 'portfolio')"
+    )
+    conn.execute(
+        """
+        INSERT INTO llm_artifacts (ticker, scope, purpose, input_sha256,
+                                   prompt_version, generated_at, dirty, expires_at)
+        VALUES ('NTDOY', 'ticker', 'bear_case', 'sha', 'v1', ?, 0, ?)
+        """,
+        (generated_at.isoformat(), (generated_at + timedelta(days=30)).isoformat()),
+    )
+    conn.commit()
+
+
+def _insert_attempt(conn: sqlite3.Connection, *, called_at: datetime) -> None:
+    conn.execute(
+        """
+        INSERT INTO llm_calls (called_at, purpose, ticker, model, prompt_sha256,
+                               prompt_chars, elapsed_ms, cost_estimate_usd)
+        VALUES (?, 'bear_case', 'NTDOY', 'claude-sonnet-4-6', '0', 100, 1000, 0.02)
+        """,
+        (called_at.isoformat(),),
+    )
+    conn.commit()
+
+
+@pytest.mark.parametrize(("attempt_age_days", "expect_run"), [(1, False), (8, True)])
+def test_recent_unresolved_attempt_defers_the_job(
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
+    caplog: pytest.LogCaptureFixture,
+    attempt_age_days: int,
+    expect_run: bool,
+) -> None:
+    """A call after the row was made that did not resolve it must not repeat daily."""
+    repo_root = tmp_path
+    (repo_root / "data").mkdir()
+    db_path = repo_root / "data" / "portfolio.db"
+    now = datetime.now(UTC)
+    conn = _make_portfolio_db(db_path, migrated_db)
+    try:
+        _insert_stale_bear_case(conn, generated_at=now - timedelta(days=90))
+        _insert_attempt(conn, called_at=now - timedelta(days=attempt_age_days))
+    finally:
+        conn.close()
+
+    fake_run = _CapturingFakeRun(returncode=0, on_run=lambda: _clear_all_obligations(db_path))
+    monkeypatch.setattr(executor.subprocess, "run", fake_run)
+    monkeypatch.setattr(executor, "_project_native_job", _projection_ok)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["refresh_dirty_artifacts.py", "--repo-root", str(repo_root), "--execute"],
+    )
+
+    caplog.set_level(logging.INFO)
+    assert executor.main() == 0
+    assert (len(fake_run.calls) == 1) is expect_run
+    deferred = [
+        event
+        for event in _dict_log_events(caplog)
+        if event.get("event") == "drain_deferred_recent_attempt"
+    ]
+    assert bool(deferred) is not expect_run

@@ -17,9 +17,7 @@ Generated from `cron/task_manifest.json`; do not edit by hand.
 | `\earnings-summary\fetch_fmp_earnings_calendar` | daily at 05:45:00 | `fetch_fmp_earnings_calendar.task.xml` | `run_fetch_fmp_earnings_calendar.bat` | Task Scheduler |
 | `\earnings-summary\fetch_macro_series` | daily at 05:35:00 | `fetch_macro_series.task.xml` | `run_fetch_macro_series.bat` | Task Scheduler |
 | `\earnings-summary\fetch_sec_xbrl` | weekly Saturday at 01:40:00 | `fetch_sec_xbrl.task.xml` | `run_fetch_sec_xbrl.bat` | Task Scheduler |
-| `\earnings-summary\grade_calibration` | weekly Sunday at 10:30:00 | `grade_calibration.task.xml` | `run_grade_calibration.bat` | Task Scheduler |
-| `\earnings-summary\model_eval_sweep` | weekly Saturday at 20:00:00 | `model_eval_sweep.task.xml` | `run_weekly_model_eval.bat` | Task Scheduler |
-| `\earnings-summary\onboard_pending` | daily from 00:17:00, repeats PT1H | `onboard_pending_tickers.task.xml` | `run_onboard_pending.bat` | Task Scheduler |
+| `\earnings-summary\model_eval_sweep` | monthly day 1 at 20:00:00 | `model_eval_sweep.task.xml` | `run_weekly_model_eval.bat` | Task Scheduler |
 | `\earnings-summary\portfolio_tracker_api` | BootTrigger | `portfolio_tracker_api.task.xml` | `run_portfolio_tracker_api.bat` | Task Scheduler |
 | `\earnings-summary\reconcile-recorded-trades` | daily at 12:12:00 | `reconcile_recorded_trades.task.xml` | `run_reconcile_recorded_trades.bat` | Task Scheduler |
 | `\earnings-summary\refresh_cache` | daily at 03:00:00 | `refresh_cache.task.xml` | `run_refresh_cache.bat` | Task Scheduler |

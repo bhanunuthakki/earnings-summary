@@ -9,8 +9,8 @@ under the `\earnings-summary\` namespace.
 
 ## Active crons
 
-29 operational declarations remain in this checkout. The generated script defines
-29 Task Scheduler registrations; the installed set is unverified. The authoritative set is
+27 operational declarations remain in this checkout. The generated script defines
+27 Task Scheduler registrations; the installed set is unverified. The authoritative set is
 `cron/task_manifest.json`; `cron/TASKS.generated.md` is its deterministic
 human-readable inventory. This source change does not query, disable, or remove
 existing Windows Task Scheduler registrations. The normal company collection,
@@ -27,9 +27,9 @@ restores the latest backup to a throwaway path and verifies it (see
 sequence (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at
 05:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (typed
 typed manifest with atomic checkpoint/resume); an eighth (02:45) backs up
-the database before the chain starts; the hourly catch-up is independent; the
+the database before the chain starts; the
 retained weekly + monthly tasks run off-cycle for data quality, IR source
-updates, model evaluation, deterministic outcome grading, and restore checks;
+updates, model evaluation, and restore checks;
 and a weekly Thursday audit verifies every declared task is registered and on
 schedule.
 
@@ -117,7 +117,6 @@ let each step's writes commit before the next reads.
 
 | Task name | Cadence | XML | Wrapper | What it does |
 |---|---|---|---|---|
-| `earnings-summary\onboard_pending` | Hourly at :17 | `onboard_pending_tickers.task.xml` | `run_onboard_pending.bat` | Catches up tickers that bypassed `db.track_company`'s auto-onboard hook (raw SQL / external API inserts). Idempotent — no-op when nothing is pending. |
 
 ### On-demand research
 
@@ -210,8 +209,7 @@ These run off the daily chain. They were present on disk but previously undocume
 | Task name | Cadence | XML | Wrapper | What it does |
 |---|---|---|---|---|
 | `earnings-summary\fetch_macro_series` | Daily 05:35 | `fetch_macro_series.task.xml` | `run_fetch_macro_series.bat` | Populates `macro_series` from timeout-bounded Yahoo candidates; direct FMP macro calls remain disabled until admitted by the shared recovery service. Recomputes portfolio `macro_sensitivities` only when every requested series is fresh or explicitly cached-degraded within 45 days, preserving warning/failure exit codes otherwise. |
-| `earnings-summary\model_eval_sweep` | Weekly, Saturday 20:00 | `model_eval_sweep.task.xml` | `run_weekly_model_eval.bat` | The activated model-downgrade eval loop (`directives/model_eval_loop.md`): harvest a rotating 2-ticker sample → sweep every cheaper candidate per active purpose → auto-switch a `model_pin_overrides` row after 3 consecutive SWITCH_DOWN verdicts (revert after 3 KEEP_INCUMBENT). Conservative + reversible; every decision audited via `model_eval_verdicts` + alerts. (The task runs `run_weekly_model_eval.bat`; the older `run_model_eval_sweep.bat` is unused.) |
-| `earnings-summary\grade_calibration` | Weekly, Sunday 10:30 | `grade_calibration.task.xml` | `run_grade_calibration.bat` | Feeds the prompt-calibration loop: `run_calibration_grading.py` runs 3 outcome graders (predictions → decisions → bear_cases, the last over `--all-portfolio`) plus 6 eval-audit rungs (bear_case, transcript_summary, advisor_next_dollar, ask_advisory_answer, material_news_classification, earnings_tone_diff), writing `prompt_calibration_scores`. It also runs the provider-free capture-retention sweep. It attempts every rung; the exit code counts failed rungs. **Owns bear-case grading** (moved here from `weekly_synthesis` in #675). |
+| `earnings-summary\model_eval_sweep` | Monthly, day 1 @ 20:00 | `model_eval_sweep.task.xml` | `run_weekly_model_eval.bat` | The activated model-downgrade eval loop (`directives/model_eval_loop.md`), monthly since 2026-11-23 (the harvest looks back 30 days): harvest a rotating 2-ticker sample → sweep every cheaper candidate per active purpose → auto-switch a `model_pin_overrides` row after 3 consecutive SWITCH_DOWN verdicts (revert after 3 KEEP_INCUMBENT). Conservative + reversible; every decision audited via `model_eval_verdicts` + alerts. (The task runs `run_weekly_model_eval.bat`; the older `run_model_eval_sweep.bat` is unused.) |
 | `earnings-summary\weekly_validation` | Weekly, Sunday 03:00 | `weekly_validation.task.xml` | `run_weekly_validation.bat` | **Confidence backfill.** Rescores `financial_facts`/`kpi_facts` confidence `--apply`, folding fresh validation-issue penalties into per-fact scores (idempotent). The validation-engine SCAN runs DAILY in `run_morning_pipeline` (stage 3), so it is **not** repeated here (#679 dropped the duplicate weekly scan — the backfill reads the issues the daily run already inserted). Recorded in `ingestion_runs` for the cron-health panel. |
 | `earnings-summary\weekly_cleanup` | Weekly, Sunday 13:00 | `weekly_cleanup.task.xml` | `run_weekly_cleanup.bat` | Runs `run_weekly_cleanup.py --apply` against the allowlist in `directives/weekly_cleanup.md`. It has no network dependency, stops after 15 minutes, resumes missed starts when available, and retries a failed run once after 30 minutes. It owns filesystem cleanup in the `filesystem-maintenance` lane. |
 
@@ -221,7 +219,7 @@ The scheduled counterpart to the daily `backup_db` — a backup you have never r
 
 | Task name | Cadence | XML | Wrapper | What it does |
 |---|---|---|---|---|
-| `earnings-summary\restore_drill` | Monthly, 15th @ 09:00 | `restore_drill.task.xml` | `run_restore_drill.bat` | **DB restore drill.** Runs `execution/restore_drill.py`, which restores the **latest authenticated encrypted** backup to a throwaway temp path and verifies AES-GCM authentication, decryption, gunzip, `PRAGMA integrity_check`, core-table row counts, and an exact schema-version match against the live DB when its Alembic revision is available (otherwise requiring a valid versioned snapshot). **Never touches the live DB** except to record one `ingestion_runs` row. Exit 0 = passed, 1 = a hard check failed, 2 = no encrypted snapshot found. Plain `.gz` files are ignored except by the explicit one-time migration utility. |
+| `earnings-summary\restore_drill` | Monthly, 15th @ 09:00 | `restore_drill.task.xml` | `run_restore_drill.bat` | **DB restore drill.** Runs `execution/restore_drill.py`, which restores the **latest authenticated encrypted** backup to a throwaway temp path and verifies AES-GCM authentication, decryption, gunzip, `PRAGMA integrity_check`, core-table row counts, and an exact schema-version match against the live DB when its Alembic revision is available (otherwise requiring a valid versioned snapshot). Its time limit is 2 hours (raised from 30 minutes on 2026-11-23: the November drill on the ~10 GB database was killed at 30 minutes). **Never touches the live DB** except to record one `ingestion_runs` row. Exit 0 = passed, 1 = a hard check failed, 2 = no encrypted snapshot found. Plain `.gz` files are ignored except by the explicit one-time migration utility. |
 
 ### Backup inventory and non-destructive restore verification
 
@@ -359,8 +357,8 @@ The system reads `FMP_TIER` from `.env` (or `--tier` CLI flag). Tiers:
 2. The `refresh_cache` cron at 03:00 will automatically drain only the top
    250 highest-priority endpoints per day. Tier-restricted endpoints get a
    30-day retry cooldown so they don't burn budget hammering 403s.
-3. The other crons (`fetch_fmp_earnings_calendar`, `backfill_earnings_surprises`,
-   `onboard_pending`) will keep firing and generating 403 log noise. That's
+3. The other crons (`fetch_fmp_earnings_calendar`, `backfill_earnings_surprises`)
+   will keep firing and generating 403 log noise. That's
    intentional — they degrade gracefully (yfinance fallback in surprises +
    earnings calendar; no new onboards is the right behavior).
 4. `daily_fetch_and_brief`'s gates B + C prevent redundant LLM-section
@@ -594,8 +592,6 @@ Then check:
   `halted: cost cap reached at $X.XX …` (graceful budget halt). Re-running
   with no dirty/expired rows logs `No dirty artifacts. Pipeline is fresh.`
   and exits 0.
-- For `onboard_pending`: the script exits 0 with an empty results array when
-  nothing is pending; otherwise it logs each onboarded ticker.
 - For `refresh_ir_kpis`: per configured ticker, a `=== IR-spreadsheet refresh -
   <T>` header followed by the child's JSON (`rows_inserted`, `doc_id`, …), then a
   final summary `{ "tickers": [...], "skipped_no_config": [...], "ok": N,
@@ -637,3 +633,5 @@ registration would correctly replace them from source.
 Pairwise SayDo narrative generation and its dedicated batch schedule are retired from source. Source-linked commitment extraction, guidance-versus-actual comparisons and recorded verdicts remain. The live task is unchanged until the canonical release.
 
 Advisor-stance scoring, business-factor refresh and scenario-prior refresh now run on demand through their existing backend commands. Their recurring declarations are retired from source. The live registrations are unchanged until the canonical release. Explicit decision grading and model-quality jobs remain.
+
+On 2026-11-23 the disabled `grade_calibration` and `onboard_pending` declarations were removed from source. Their scripts remain for manual use; the Operations onboarding button still runs `onboard_pending_tickers.py`. LLM capture files prune themselves when new captures are written, so the capture-retention leg of `grade_calibration` is not lost. `model_eval_sweep` moved from weekly to monthly (day 1, 20:00), and `restore_drill` now has a 2-hour limit. The live tasks change only at the next canonical release: re-register from `cron/register_tasks.generated.ps1` (Password logon needs the owner's credential), then delete the two retired tasks with **Uninstall**.

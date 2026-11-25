@@ -115,22 +115,10 @@ Register-ManifestTask -TaskName 'fetch_sec_xbrl' -TaskPath '\earnings-summary\' 
 & $taskSecurityScript -TaskPath '\earnings-summary\fetch_sec_xbrl' -RenderedXmlPath (Join-Path $renderDir 'fetch_sec_xbrl.task.xml')
 }
 if (-not $TaskName) {
-$existing = Get-ScheduledTask -TaskName 'grade_calibration' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
-if ($existing) { Export-ScheduledTask -TaskName 'grade_calibration' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'grade_calibration.task.xml') -Encoding Unicode }
-Register-ManifestTask -TaskName 'grade_calibration' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'grade_calibration.task.xml')
-& $taskSecurityScript -TaskPath '\earnings-summary\grade_calibration' -RenderedXmlPath (Join-Path $renderDir 'grade_calibration.task.xml')
-}
-if (-not $TaskName) {
 $existing = Get-ScheduledTask -TaskName 'model_eval_sweep' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
 if ($existing) { Export-ScheduledTask -TaskName 'model_eval_sweep' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'model_eval_sweep.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'model_eval_sweep' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'model_eval_sweep.task.xml')
 & $taskSecurityScript -TaskPath '\earnings-summary\model_eval_sweep' -RenderedXmlPath (Join-Path $renderDir 'model_eval_sweep.task.xml')
-}
-if (-not $TaskName) {
-$existing = Get-ScheduledTask -TaskName 'onboard_pending' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
-if ($existing) { Export-ScheduledTask -TaskName 'onboard_pending' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'onboard_pending_tickers.task.xml') -Encoding Unicode }
-Register-ManifestTask -TaskName 'onboard_pending' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'onboard_pending_tickers.task.xml')
-& $taskSecurityScript -TaskPath '\earnings-summary\onboard_pending' -RenderedXmlPath (Join-Path $renderDir 'onboard_pending_tickers.task.xml')
 }
 if (-not $TaskName) {
 $existing = Get-ScheduledTask -TaskName 'portfolio_tracker_api' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
