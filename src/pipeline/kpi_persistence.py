@@ -862,6 +862,7 @@ def persist_manifest(
     # Local import: pipeline.locators imports record_validation_issue FROM
     # this module, so a module-level `from pipeline import locators` here
     # would be circular. By call time both modules are fully loaded.
+    from pipeline.kpi_definition_revisions import bind_forward_kpi_definition_revision
     from pipeline.locators import resolve_locator_for_persist
 
     inserted = 0
@@ -1066,6 +1067,29 @@ def persist_manifest(
                     "reason_code": "magnitude_jump",
                 }
             )
+        resolved_locator = resolve_locator_for_persist(
+            conn,
+            locator=kpi.locator,
+            run_id=run_id,
+            source_doc_id=manifest.source_doc_id,
+            ticker=manifest.ticker,
+        )
+        definition_binding = bind_forward_kpi_definition_revision(
+            conn,
+            kpi_definition_id=kpi_def_id,
+            period_end=manifest.period_end,
+            fiscal_period_type=manifest.fiscal_period_type,
+            unit=unit,
+            currency=kpi.currency,
+            source_doc_id=manifest.source_doc_id,
+            context=semantic_context,
+            reviewed_by=manifest.reviewed_by,
+            source_locator_json=resolved_locator,
+        )
+        bound_revision_id = (
+            None if definition_binding is None else definition_binding.kpi_definition_revision_id
+        )
+        bound_knowledge_at = None if definition_binding is None else definition_binding.knowledge_at
         fact_id, was_inserted, _, _ = _insert_kpi_fact(
             conn,
             ticker=manifest.ticker,
@@ -1085,17 +1109,12 @@ def persist_manifest(
                 self_reported=kpi.confidence,
             ),
             extracted_by=extracted_by,
-            locator=resolve_locator_for_persist(
-                conn,
-                locator=kpi.locator,
-                run_id=run_id,
-                source_doc_id=manifest.source_doc_id,
-                ticker=manifest.ticker,
-            ),
+            locator=resolved_locator,
             source_excerpt=excerpt,
             semantic_context=semantic_context,
-            kpi_definition_revision_id=None,
+            kpi_definition_revision_id=bound_revision_id,
             semantic_reviewed_by=manifest.reviewed_by,
+            semantic_knowledge_at=bound_knowledge_at,
         )
         if fact_id is not None:
             persist_kpi_semantic_context(
@@ -1103,7 +1122,8 @@ def persist_manifest(
                 kpi_fact_id=fact_id,
                 context=semantic_context,
                 reviewed_by=manifest.reviewed_by,
-                kpi_definition_revision_id=None,
+                knowledge_at=bound_knowledge_at,
+                kpi_definition_revision_id=bound_revision_id,
             )
         if was_inserted:
             inserted += 1
