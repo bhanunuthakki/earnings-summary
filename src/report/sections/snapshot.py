@@ -304,7 +304,7 @@ def _valuation_snapshot(
     trigger = _trigger_status(over_under, mos_bar_used, held=held)
     bull_fv, bear_fv = _scenario_range(row["assumption_snapshot_json"])
     sp_weights, sp_rationale, sp_set_by = _scenario_prior_card(row["assumption_snapshot_json"])
-    exp_return, skew = _scenario_ev_skew(
+    exp_upside, skew = _scenario_ev_skew(
         live_price, cons_npv_per_share, row["assumption_snapshot_json"]
     )
     sync_status = (
@@ -338,7 +338,7 @@ def _valuation_snapshot(
         scenario_weights=sp_weights,
         scenario_rationale=sp_rationale,
         scenario_set_by=sp_set_by,
-        scenario_expected_return=exp_return,
+        scenario_expected_upside=exp_upside,
         scenario_skew=skew,
         assumptions_sync_status=sync_status,
         assumptions_synced_at=synced_at,
@@ -487,15 +487,16 @@ def _scenario_prior_card(
 def _scenario_ev_skew(
     price: float | None, base_fv: float | None, snapshot_json: object
 ) -> tuple[float | None, float | None]:
-    """The probability-weighted expected value E[V] + its skew vs the base point
-    estimate, for the card (``dcf.scenario_reward``). Both None unless the run
-    carries a real scenario range (tails) — a point estimate has no skew to show."""
+    """Probability-weighted present fair-value upside (non-annualized) + its skew
+    vs the base point estimate, for the card (``dcf.scenario_reward``). Both None
+    unless the run carries a real scenario range (tails) — a point estimate has no
+    skew to show."""
     from dcf.scenario_reward import scenario_reward
 
     reward = scenario_reward(price=price, base_fv=base_fv, snapshot_json=snapshot_json)
     if reward is None or not reward.has_scenarios:
         return None, None
-    return reward.expected_return, reward.skew
+    return reward.expected_upside, reward.skew
 
 
 # Snapshot "model" tag (stamped by the bespoke builders) → card-facing label.

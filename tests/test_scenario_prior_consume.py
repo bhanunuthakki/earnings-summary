@@ -12,24 +12,81 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
+from collections.abc import Callable
 from io import StringIO
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from dcf.scenario_reward import parse_scenario_prior_weights, scenario_reward
+from report.models import SectionStatus, SnapshotSection, ValuationSnapshot
+from report.renderers import markdown as markdown_mod
+from report.renderers import workspace_html as workspace_html_mod
+from report.sections import snapshot as snapshot_mod
 
-from dcf.scenario_reward import parse_scenario_prior_weights, scenario_reward  # noqa: E402
-from report.models import SectionStatus, SnapshotSection, ValuationSnapshot  # noqa: E402
-from report.renderers.markdown import (  # noqa: E402
-    _valuation_card_md,  # pyright: ignore[reportPrivateUsage]  # internal seam
-)
-from report.renderers.workspace_html import (  # noqa: E402
-    _valuation_summary_panel,  # pyright: ignore[reportPrivateUsage]  # internal seam
-)
-from report.sections import snapshot as snapshot_mod  # noqa: E402
+
+class _ValuationSnapshotFn(Protocol):
+    def __call__(
+        self,
+        ticker: str,
+        repo_root: Path,
+        *,
+        current_price: float | None,
+        model_link: str | None,
+        mos_bar: float | None,
+    ) -> ValuationSnapshot: ...
+
+
+def _valuation_card_md(out: StringIO, v: ValuationSnapshot) -> None:
+    fn = cast(
+        "Callable[[StringIO, ValuationSnapshot], None]", getattr(markdown_mod, "_valuation_card_md")
+    )
+    fn(out, v)
+
+
+def _valuation_summary_panel(body: StringIO, snap: SnapshotSection) -> None:
+    fn = cast(
+        "Callable[[StringIO, SnapshotSection], None]",
+        getattr(workspace_html_mod, "_valuation_summary_panel"),
+    )
+    fn(body, snap)
+
+
+def _scenario_prior_card(raw: object) -> tuple[dict[str, float] | None, str | None, str | None]:
+    fn = cast(
+        "Callable[[object], tuple[dict[str, float] | None, str | None, str | None]]",
+        getattr(snapshot_mod, "_scenario_prior_card"),
+    )
+    return fn(raw)
+
+
+def _scenario_ev_skew(
+    price: float | None, base_fv: float | None, raw: object
+) -> tuple[float | None, float | None]:
+    fn = cast(
+        "Callable[[float | None, float | None, object], tuple[float | None, float | None]]",
+        getattr(snapshot_mod, "_scenario_ev_skew"),
+    )
+    return fn(price, base_fv, raw)
+
+
+def _valuation_snapshot(
+    ticker: str,
+    repo_root: Path,
+    *,
+    current_price: float | None,
+    model_link: str | None,
+    mos_bar: float | None,
+) -> ValuationSnapshot:
+    fn = cast("_ValuationSnapshotFn", getattr(snapshot_mod, "_valuation_snapshot"))
+    return fn(
+        ticker,
+        repo_root,
+        current_price=current_price,
+        model_link=model_link,
+        mos_bar=mos_bar,
+    )
 
 
 def _approx(x: float) -> object:
@@ -98,7 +155,7 @@ def test_reward_global_prior_is_symmetric() -> None:
     r = scenario_reward(price=100.0, base_fv=100.0, snapshot_json=_snap())
     assert r is not None
     assert r.weights_source == "global"
-    assert abs(r.expected_return) < 1e-9
+    assert abs(r.expected_upside) < 1e-9
     assert abs(r.skew) < 1e-9
 
 
@@ -111,7 +168,7 @@ def test_reward_bear_heavy_prior_lowers_expectation() -> None:
     assert r is not None
     assert r.weights_source == "per_name"
     # 0.15*(+0.5) + 0.50*0 + 0.35*(-0.5) = -0.10
-    assert r.expected_return == _approx(-0.10)
+    assert r.expected_upside == _approx(-0.10)
     assert r.skew == _approx(-0.10)
 
 
@@ -122,7 +179,7 @@ def test_reward_bull_heavy_prior_raises_expectation() -> None:
         snapshot_json=_snap(weights={"bull": 0.35, "base": 0.50, "bear": 0.15}),
     )
     assert r is not None
-    assert r.expected_return == _approx(0.10)
+    assert r.expected_upside == _approx(0.10)
 
 
 def test_reward_renormalizes_over_present_legs() -> None:
@@ -134,33 +191,31 @@ def test_reward_renormalizes_over_present_legs() -> None:
     )
     assert r is not None
     # present = bull(0.2) + base(0.5) = 0.7 mass → bull 0.2/0.7, base 0.5/0.7.
-    assert r.expected_return == _approx((0.2 / 0.7) * 0.5)
+    assert r.expected_upside == _approx((0.2 / 0.7) * 0.5)
 
 
 # --------------------------------------------------------------------------- #
 # 3. snapshot card parse + E[V]/skew
 # --------------------------------------------------------------------------- #
 def test_scenario_prior_card_parse() -> None:
-    w, rationale, set_by = snapshot_mod._scenario_prior_card(  # pyright: ignore[reportPrivateUsage]
+    w, rationale, set_by = _scenario_prior_card(
         _snap(weights={"bull": 0.15, "base": 0.50, "bear": 0.35})
     )
     assert w == {"bull": 0.15, "base": 0.50, "bear": 0.35}
     assert rationale == "fragile high-multiple thesis"
     assert set_by == "llm"
     # No block → all None.
-    assert snapshot_mod._scenario_prior_card(_snap()) == (None, None, None)  # pyright: ignore[reportPrivateUsage]
+    assert _scenario_prior_card(_snap()) == (None, None, None)
 
 
 def test_scenario_ev_skew() -> None:
-    ev, skew = snapshot_mod._scenario_ev_skew(  # pyright: ignore[reportPrivateUsage]
+    ev, skew = _scenario_ev_skew(
         100.0, 100.0, _snap(weights={"bull": 0.15, "base": 0.50, "bear": 0.35})
     )
     assert ev == _approx(-0.10)
     assert skew == _approx(-0.10)
     # No tails → None (a point estimate has no skew to show).
-    ev2, skew2 = snapshot_mod._scenario_ev_skew(  # pyright: ignore[reportPrivateUsage]
-        100.0, 100.0, json.dumps({"format": "redesign"})
-    )
+    ev2, skew2 = _scenario_ev_skew(100.0, 100.0, json.dumps({"format": "redesign"}))
     assert ev2 is None and skew2 is None
 
 
@@ -198,13 +253,11 @@ def _seed_repo(tmp_path: Path, snapshot_json: str) -> Path:
 
 def test_valuation_snapshot_carries_scenario_prior(tmp_path: Path) -> None:
     repo = _seed_repo(tmp_path, _snap(weights={"bull": 0.15, "base": 0.50, "bear": 0.35}))
-    v = snapshot_mod._valuation_snapshot(  # pyright: ignore[reportPrivateUsage]
-        "TEST", repo, current_price=None, model_link=None, mos_bar=None
-    )
+    v = _valuation_snapshot("TEST", repo, current_price=None, model_link=None, mos_bar=None)
     assert v.scenario_weights == {"bull": 0.15, "base": 0.50, "bear": 0.35}
     assert v.scenario_set_by == "llm"
     assert v.scenario_rationale == "fragile high-multiple thesis"
-    assert v.scenario_expected_return == _approx(-0.10)
+    assert v.scenario_expected_upside == _approx(-0.10)
     assert v.scenario_skew == _approx(-0.10)
 
 
@@ -250,9 +303,7 @@ def test_valuation_snapshot_reads_newest_run_not_superseded_history(tmp_path: Pa
     conn.commit()
     conn.close()
 
-    v = snapshot_mod._valuation_snapshot(  # pyright: ignore[reportPrivateUsage]
-        "TEST", repo, current_price=None, model_link=None, mos_bar=None
-    )
+    v = _valuation_snapshot("TEST", repo, current_price=None, model_link=None, mos_bar=None)
     # The NEWEST run's values + blocks, not the superseded 07-02 row.
     assert v.consolidated_npv_per_share == _approx(100.0)
     assert str(v.valuation_date) == "2026-07-03"
@@ -270,7 +321,7 @@ def _card() -> ValuationSnapshot:
         scenario_weights={"bull": 0.15, "base": 0.50, "bear": 0.35},
         scenario_rationale="fragile high-multiple thesis",
         scenario_set_by="llm",
-        scenario_expected_return=-0.10,
+        scenario_expected_upside=-0.10,
         scenario_skew=-0.10,
     )
 
@@ -280,7 +331,7 @@ def test_markdown_card_renders_scenario_prior() -> None:
     _valuation_card_md(out, _card())
     text = out.getvalue()
     assert "Scenario prior" in text
-    assert "E[V] -10%" in text
+    assert "Scenario FV upside -10%" in text
     assert "skew -10.0pts" in text
     assert "15/50/35" in text
     assert "LLM-set" in text
@@ -302,6 +353,6 @@ def test_workspace_card_renders_scenario_prior() -> None:
     html_out = body.getvalue()
     assert "Scenario prior" in html_out
     assert "15/50/35 bull/base/bear" in html_out
-    assert "Expected value E[V]" in html_out
+    assert "Scenario FV upside" in html_out
     assert "-10%" in html_out
     assert "fragile high-multiple thesis" in html_out

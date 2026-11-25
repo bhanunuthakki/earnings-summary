@@ -664,9 +664,9 @@ def test_refresh_persists_seeded_per_name_prior_and_skews_reward(
     assert reward.weights_source == "per_name"
     assert reward.probabilities["bear"] == pytest.approx(0.35)
     assert reward.probabilities["bull"] == pytest.approx(0.15)
-    # A bear-heavy prior pulls the expected return below the symmetric-prior one.
+    # A bear-heavy prior pulls the present FV upside below the symmetric-prior one.
     global_reward = scenario_reward_mod.ScenarioReward(
-        expected_return=sum(
+        expected_upside=sum(
             scenario_reward_mod.SCENARIO_PROBABILITIES[s]
             * (
                 (
@@ -678,14 +678,14 @@ def test_refresh_persists_seeded_per_name_prior_and_skews_reward(
             )
             for s in ("bull", "base", "bear")
         ),
-        base_return=npv_per_share / live_price - 1.0,
-        bull_return=None,
-        bear_return=None,
+        base_upside=npv_per_share / live_price - 1.0,
+        bull_upside=None,
+        bear_upside=None,
         has_scenarios=True,
         probabilities=scenario_reward_mod.SCENARIO_PROBABILITIES,
         detail="",
     )
-    assert reward.expected_return < global_reward.expected_return
+    assert reward.expected_upside < global_reward.expected_upside
 
 
 def test_owner_workbook_edit_off_default_creates_per_name_owner_prior(

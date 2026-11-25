@@ -9,6 +9,7 @@ the downside-skew case, and the point-estimate fallback.
 from __future__ import annotations
 
 import json
+from typing import cast
 
 import pytest
 
@@ -62,20 +63,22 @@ def test_no_scenarios_is_base_point_estimate() -> None:
     r = scenario_reward(price=100.0, base_fv=120.0, snapshot_json=None)
     assert r is not None
     assert r.has_scenarios is False
-    assert r.expected_return == pytest.approx(0.20)
-    assert r.base_return == pytest.approx(0.20)
+    assert r.expected_upside == pytest.approx(0.20)
+    assert r.base_upside == pytest.approx(0.20)
     assert r.skew == pytest.approx(0.0)
-    assert r.bull_return is None and r.bear_return is None
+    assert r.bull_upside is None and r.bear_upside is None
+    assert r.basis == "present_fair_value_upside"
+    assert r.is_annualized is False
     assert r.detail == "fair $120.00 vs $100.00"
 
 
 def test_symmetric_range_equals_base() -> None:
     # bull/bear equidistant from base in fair-value space, 0.25/0.25 → expectation
-    # collapses to the base return.
+    # collapses to the base present FV upside.
     r = scenario_reward(price=100.0, base_fv=100.0, snapshot_json=_snap(140.0, 100.0, 60.0))
     assert r is not None
     assert r.has_scenarios is True
-    assert r.expected_return == pytest.approx(0.0, abs=1e-9)
+    assert r.expected_upside == pytest.approx(0.0, abs=1e-9)
     assert r.skew == pytest.approx(0.0, abs=1e-9)
     assert r.probabilities == {
         "bull": pytest.approx(0.25),
@@ -88,13 +91,15 @@ def test_downside_skew_drags_expectation_below_base() -> None:
     # bear far below, bull only modestly above → expected < base (negative skew).
     r = scenario_reward(price=100.0, base_fv=110.0, snapshot_json=_snap(130.0, 110.0, 40.0))
     assert r is not None
-    # 0.25*0.30 + 0.5*0.10 + 0.25*(-0.60) = -0.025 → -2.5% expected vs +10% base.
-    assert r.expected_return == pytest.approx(-0.025)
-    assert r.base_return == pytest.approx(0.10)
+    # 0.25*0.30 + 0.5*0.10 + 0.25*(-0.60) = -0.025 → -2.5% present FV upside vs +10% base.
+    assert r.expected_upside == pytest.approx(-0.025)
+    assert r.base_upside == pytest.approx(0.10)
     assert r.skew == pytest.approx(-0.125)
-    assert r.bull_return == pytest.approx(0.30)
-    assert r.bear_return == pytest.approx(-0.60)
-    assert "exp -2%" in r.detail
+    assert r.bull_upside == pytest.approx(0.30)
+    assert r.bear_upside == pytest.approx(-0.60)
+    assert r.basis == "present_fair_value_upside"
+    assert r.is_annualized is False
+    assert "FV upside -2% (present, non-annualized)" in r.detail
     assert "$40.00" in r.detail and "$130.00" in r.detail
 
 
@@ -103,18 +108,18 @@ def test_single_tail_renormalizes_probabilities() -> None:
     r = scenario_reward(price=100.0, base_fv=100.0, snapshot_json=_snap(200.0, 100.0, None))
     assert r is not None
     assert r.has_scenarios is True
-    assert r.bear_return is None
+    assert r.bear_upside is None
     assert r.probabilities == {"bull": pytest.approx(1 / 3), "base": pytest.approx(2 / 3)}
     # (1/3)*1.0 + (2/3)*0.0 = 0.333…
-    assert r.expected_return == pytest.approx(1 / 3)
+    assert r.expected_upside == pytest.approx(1 / 3)
 
 
 def test_value_of_record_base_overrides_snapshot_base() -> None:
     # The snapshot's own base differs from npv_per_share; the value-of-record wins.
     r = scenario_reward(price=100.0, base_fv=110.0, snapshot_json=_snap(150.0, 999.0, 70.0))
     assert r is not None
-    assert r.base_return == pytest.approx(0.10)  # 110/100 - 1, not 999
-    assert r.expected_return == pytest.approx(0.25 * 0.50 + 0.50 * 0.10 + 0.25 * -0.30)
+    assert r.base_upside == pytest.approx(0.10)  # 110/100 - 1, not 999
+    assert r.expected_upside == pytest.approx(0.25 * 0.50 + 0.50 * 0.10 + 0.25 * -0.30)
 
 
 def test_guards_return_none() -> None:
@@ -122,6 +127,22 @@ def test_guards_return_none() -> None:
     assert scenario_reward(price=0.0, base_fv=100.0) is None
     assert scenario_reward(price=100.0, base_fv=None) is None
     assert scenario_reward(price=100.0, base_fv=-1.0) is None
+    # bool, NaN, inf, and overflow inputs/outputs are rejected cleanly.
+    bad_bool = cast("float", True)
+    huge_int = cast("float", 10**400)
+    assert scenario_reward(price=bad_bool, base_fv=100.0) is None
+    assert scenario_reward(price=100.0, base_fv=bad_bool) is None
+    assert scenario_reward(price=huge_int, base_fv=100.0) is None
+    assert scenario_reward(price=100.0, base_fv=huge_int) is None
+    assert scenario_reward(price=float("nan"), base_fv=100.0) is None
+    assert scenario_reward(price=100.0, base_fv=float("nan")) is None
+    assert scenario_reward(price=float("inf"), base_fv=100.0) is None
+    assert scenario_reward(price=100.0, base_fv=float("inf")) is None
+    assert scenario_reward(price=1e-308, base_fv=1e10) is None  # upside overflows to inf
+    assert (
+        scenario_reward(price=1e-308, base_fv=1e-307, snapshot_json=_snap(1e20, 1e-307, 1e-307))
+        is None
+    )  # bull upside overflows to inf
 
 
 def test_probability_prior_is_visible_and_sums_to_one() -> None:
