@@ -273,10 +273,10 @@ def test_booking_quarter_release_body_preserves_document_title_priority(
     ("page_text", "page_count", "expected"),
     [
         ("Issuer financial results", 1, "Issuer financial results"),
-        ({"unexpected": "structured"}, 1, "Fallback financial results"),
-        ("Issuer financial results", True, "Fallback financial results"),
-        ("Issuer financial results", -1, "Fallback financial results"),
-        ("Issuer financial results", "one", "Fallback financial results"),
+        ({"unexpected": "structured"}, 1, ""),
+        ("Issuer financial results", True, ""),
+        ("Issuer financial results", -1, ""),
+        ("Issuer financial results", "one", ""),
     ],
 )
 def test_pdf_fingerprint_validates_optional_extractor_text(
@@ -304,19 +304,10 @@ def test_pdf_fingerprint_validates_optional_extractor_text(
         def close(self) -> None:
             closed.append(True)
 
-    class FallbackPage:
-        def extract_text(self) -> str:
-            return "Fallback financial results"
-
-    class FallbackReader:
-        def __init__(self, _path: str) -> None:
-            self.pages = [FallbackPage()]
-
     def open_document(_path: str) -> OptionalDocument:
         return OptionalDocument()
 
     monkeypatch.setitem(sys.modules, "fitz", SimpleNamespace(open=open_document))
-    monkeypatch.setattr(ir_uploads, "PdfReader", FallbackReader)
     result = ir_uploads.fingerprint_pdf(tmp_path / "source.pdf")
     assert result == expected
     assert closed == [True]

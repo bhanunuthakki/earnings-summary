@@ -111,23 +111,26 @@ ES_CLAUDE_BASE_URL_VAR = "ES_CLAUDE_BASE_URL"
 _stripped_base_url_logged = False
 
 
+_STRIPPED_SUBPROCESS_ENV_KEYS = (
+    "FMP_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "OPENROUTER_API_KEY",
+)
+
+
 def _subprocess_env() -> dict[str, str]:
     """Sanitized environment for the `claude -p` subprocess.
 
-    Strips an inherited ``ANTHROPIC_BASE_URL``: 2026-07 incident — a
-    machine-level (User-scope) ``ANTHROPIC_BASE_URL=http://127.0.0.1:8787``
-    left behind by the interactive Headroom-proxy wrapper silently rerouted
-    every scheduled pipeline's CLI call to a proxy that was only running
-    during interactive sessions; ~10 days of ~95% transport failure across
-    all purposes (llm_calls 07-03..07-13), invisible because the ledger then
-    recorded only exit codes. The same leak recurs process-scoped whenever
-    the dashboard/poller is launched from inside a `ch` session, so cwd-style
-    neutrality (see _neutral_subprocess_cwd) is applied to the env too:
-    rerouting this app's transport must be an explicit app-level decision via
-    ``ES_CLAUDE_BASE_URL``, never an ambient inheritance.
+    Strips an inherited ``ANTHROPIC_BASE_URL`` (2026-07 incident) and unrelated
+    external provider API keys so child CLIs never inherit credentials they do
+    not need. Rerouting this app's transport must be an explicit app-level
+    decision via ``ES_CLAUDE_BASE_URL``, never an ambient inheritance.
     """
     global _stripped_base_url_logged
     env = dict(os.environ)
+    for key in _STRIPPED_SUBPROCESS_ENV_KEYS:
+        env.pop(key, None)
     inherited = env.pop("ANTHROPIC_BASE_URL", None)
     explicit = env.get(ES_CLAUDE_BASE_URL_VAR)
     if explicit:

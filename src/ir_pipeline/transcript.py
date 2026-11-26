@@ -29,7 +29,6 @@ extra (or any render/download failure) degrades to "no hit".
 
 from __future__ import annotations
 
-import io
 import re
 import unicodedata
 import urllib.error
@@ -38,13 +37,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from pypdf import PdfReader
-
 from ir_pipeline._net import UnsafeURLError, build_public_opener, ensure_safe_public_url
 from ir_pipeline.config import IrConfig, get_config
 from ir_pipeline.discover import discover_history_hybrid
 from ir_pipeline.discover._docmeta import classify, filename_for_url
 from ir_pipeline.manifest import load_manifest
+from runtime.pdf_text import extract_pdf_text
 
 # src/ir_pipeline/transcript.py → repo root is parents[2] (mirrors config.py).
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -175,9 +173,8 @@ def _qa_segment(text: str) -> str:
 
 
 def _extract_pdf_text(content: bytes) -> str:
-    """Extract all text from PDF bytes (pypdf, the repo's transcript extractor)."""
-    reader = PdfReader(io.BytesIO(content))
-    return "\n".join((page.extract_text() or "") for page in reader.pages)
+    """Extract all text from PDF bytes via PyMuPDF."""
+    return extract_pdf_text(content)
 
 
 def _match_transcript(

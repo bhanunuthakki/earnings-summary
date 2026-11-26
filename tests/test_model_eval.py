@@ -116,8 +116,12 @@ def test_estimated_call_usd() -> None:
 
 def test_current_gemini_standard_price_constants() -> None:
     flash25 = model_ladder.MODEL_LADDER[GFLASH]
+    flash_lite = model_ladder.MODEL_LADDER[GFLASH_LITE]
     flash3 = model_ladder.MODEL_LADDER[GFLASH3]
     pro31 = model_ladder.MODEL_LADDER[GPRO]
+    assert flash25.retired is True
+    assert flash_lite.retired is False
+    assert (flash_lite.input_usd_per_mtok, flash_lite.output_usd_per_mtok) == (0.30, 2.50)
     assert (
         flash25.input_usd_per_mtok,
         flash25.cached_input_usd_per_mtok,

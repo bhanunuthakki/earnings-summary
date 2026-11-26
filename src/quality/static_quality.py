@@ -474,7 +474,7 @@ def inventory(
         )
     )
     exclusion_map: dict[str, list[str]] = {}
-    for section in ("tool.ruff", "tool.pyright", "tool.basedpyright"):
+    for section in ("tool.ruff", "tool.pyright"):
         node: object = config
         for part in section.split("."):
             mapping: dict[str, object] = (

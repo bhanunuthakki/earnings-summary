@@ -40,11 +40,6 @@ FORBIDDEN_PATH_CATEGORIES = (
     ),
 )
 HOME_PATH = re.compile(r"(?:/Users/[^/\s]+|/home/[^/\s]+|[A-Za-z]:\\Users\\[^\\\s]+)")
-OWNER_HOME_PATH = re.compile(r"(?:/Users/bhanu|/home/bhanu|[A-Za-z]:\\Users\\bhanu)", re.IGNORECASE)
-PERSONAL_EMAIL = re.compile(
-    r"\b(?:bhanu|nuthakki)[^@\s]*@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
-    re.IGNORECASE,
-)
 ACCOUNT_LEVEL_DETAIL = re.compile(
     r"\b(?:cost[\s_-]*basis|account[\s_-]*balance)"
     r"\s*[\"']?\s*[:=]\s*[\"']?[$€£]?[-+]?\d"
@@ -60,9 +55,36 @@ PRIVATE_KEY = re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY----
 HIGH_CONFIDENCE_SECRET = re.compile(
     r"(?<![A-Za-z0-9])(?:AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}"
     r"|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}"
+    r"|sk-ant-[A-Za-z0-9_-]{20,}|sk-or-[A-Za-z0-9_-]{20,}"
+    r"|sk_live_[A-Za-z0-9]{16,}|rk_live_[A-Za-z0-9]{16,}"
+    r"|whsec_[A-Za-z0-9]{16,}|lin_api_[A-Za-z0-9]{20,}"
     r"|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{30,}"
-    r"|xox[baprs]-[A-Za-z0-9-]{10,})"
+    r"|xox[baprs]-[A-Za-z0-9-]{10,}"
+    r"|\d{8,10}:[A-Za-z0-9_-]{35})"
 )
+PAYMENT_CARD_CANDIDATE = re.compile(r"(?<![\dA-Za-z])(?:\d{4}[ -]){3}\d{4}(?![\dA-Za-z])")
+
+
+def _luhn_valid(digits: str) -> bool:
+    total = 0
+    for idx, ch in enumerate(reversed(digits)):
+        val = int(ch)
+        if idx % 2 == 1:
+            val *= 2
+            if val > 9:
+                val -= 9
+        total += val
+    return total % 10 == 0
+
+
+def _contains_payment_card(text: str) -> bool:
+    for match in PAYMENT_CARD_CANDIDATE.finditer(text):
+        digits = "".join(ch for ch in match.group(0) if ch.isdigit())
+        if len(digits) == 16 and _luhn_valid(digits):
+            return True
+    return False
+
+
 CREDENTIAL_ASSIGNMENT = re.compile(
     r"(?i)(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password)"
     r"\s*[=:]\s*(?:[\"'`](?P<quoted>[^\"'`$<{\s]{12,})[\"'`]"
@@ -170,10 +192,12 @@ def content_violation_categories(relative: str, data: bytes) -> set[str]:
 
     categories: set[str] = set()
     is_fixture = relative.startswith(("tests/", "instruction_tests/"))
-    if OWNER_HOME_PATH.search(text) or (not is_fixture and HOME_PATH.search(text)):
+    if not is_fixture and HOME_PATH.search(text):
         categories.add("personal-home-path")
-    if PERSONAL_EMAIL.search(text) or (not is_fixture and SSN.search(text)):
+    if not is_fixture and SSN.search(text):
         categories.add("personal-identifier")
+    if not is_fixture and _contains_payment_card(text):
+        categories.add("payment-card")
     for line in text.splitlines():
         if PRIVATE_KEY.search(line) or HIGH_CONFIDENCE_SECRET.search(line):
             categories.add("credential-material")

@@ -64,6 +64,7 @@ class ModelCost:
     long_input_usd_per_mtok: float | None = None
     long_output_usd_per_mtok: float | None = None
     long_cached_input_usd_per_mtok: float | None = None
+    retired: bool = False
 
     @property
     def blended_usd_per_mtok(self) -> float:
@@ -223,7 +224,7 @@ def ladder_sha() -> str:
             f"{mid}:{c.family}:{c.input_usd_per_mtok}:{c.output_usd_per_mtok}:"
             f"{c.cached_input_usd_per_mtok}:{c.long_context_threshold_tokens}:"
             f"{c.long_input_usd_per_mtok}:{c.long_output_usd_per_mtok}:"
-            f"{c.long_cached_input_usd_per_mtok}"
+            f"{c.long_cached_input_usd_per_mtok}:{c.retired}"
         )
         for mid, c in sorted(MODEL_LADDER.items())
     )
@@ -274,6 +275,7 @@ def cheaper_candidates(
         mid
         for mid, cost in MODEL_LADDER.items()
         if mid != incumbent
+        and not cost.retired
         and cost.blended_usd_per_mtok < inc_rank
         and (include_gemini or cost.family != GEMINI)
         and (include_openrouter or cost.family != OPENROUTER)

@@ -25,7 +25,7 @@ from transcripts.acquisition_semantics import TranscriptProvider
 PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
 CACHE_DIR = os.path.join(PROJECT_ROOT, ".tmp")
 
-# Legacy transcript-only index (kept for backward compat with fetch_audio_transcripts)
+# Legacy transcript-only index (kept for backward compatibility)
 TRANSCRIPT_INDEX_PATH = os.path.join(CACHE_DIR, "transcript_index.json")
 
 # New multi-doc-type index

@@ -53,6 +53,14 @@ _BASIC_RE = re.compile(r"(?i)(\bbasic\s+)(?=[A-Za-z0-9+/=._\-]*[0-9+/=])[A-Za-z0
 _BASIC_URL_RE = re.compile(r"(?i)(\bhttps?://)[^/\s:@]+:[^/\s@]+@")
 _TELEGRAM_URL_RE = re.compile(r"(?i)(\bhttps?://api\.telegram\.org/(?:file/)?bot)[^/\s?#\"'<>]+")
 _JSON_SECRET_RE = re.compile(rf'(?i)("{_CREDENTIAL_NAME}"\s*:\s*")(?:\\.|[^"\\\r\n])*(")')
+_TOKEN_PREFIX_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:sk-ant-[A-Za-z0-9_-]{20,}|sk-or-[A-Za-z0-9_-]{20,}"
+    r"|sk_live_[A-Za-z0-9]{16,}|rk_live_[A-Za-z0-9]{16,}"
+    r"|whsec_[A-Za-z0-9]{16,}|lin_api_[A-Za-z0-9]{20,})"
+)
+_CARD_CANDIDATE_RE = re.compile(
+    r"(?<![\dA-Za-z])(?:\d{4}[ -]\d{4}[ -]\d{4}[ -]\d{4}|\d{13,19})(?![\dA-Za-z])"
+)
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+(@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})")
 _URL_RE = re.compile(r"(?i)\b(?:https?|file)://[^\s<>\"'\u00b7;]+")
 _WINDOWS_PATH_RE = re.compile(r"(?i)(?<![\w])(?:[a-z]:[\\/]|\\\\)[^<>\r\n\"'\u00b7;]*")
@@ -60,6 +68,26 @@ _POSIX_PATH_RE = re.compile(r"(?<![\w:])/(?!/)[^<>\r\n\"'\u00b7;]*")
 _MAX_OPERATIONAL_TEXT = 240
 
 OperationalTextMode = Literal["persisted", "presentation"]
+
+
+def _luhn_valid(digits: str) -> bool:
+    total = 0
+    for idx, ch in enumerate(reversed(digits)):
+        val = int(ch)
+        if idx % 2 == 1:
+            val *= 2
+            if val > 9:
+                val -= 9
+        total += val
+    return total % 10 == 0
+
+
+def _mask_card(match: re.Match[str]) -> str:
+    raw = match.group(0)
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if 13 <= len(digits) <= 19 and _luhn_valid(digits):
+        return "***"
+    return raw
 
 
 def redact(text: object) -> str:
@@ -81,6 +109,8 @@ def redact(text: object) -> str:
     sanitized = _BEARER_RE.sub(lambda match: f"{match.group(1)}***", sanitized)
     sanitized = _BASIC_RE.sub(lambda match: f"{match.group(1)}***", sanitized)
     sanitized = _JSON_SECRET_RE.sub(lambda match: f"{match.group(1)}***{match.group(2)}", sanitized)
+    sanitized = _TOKEN_PREFIX_RE.sub("***", sanitized)
+    sanitized = _CARD_CANDIDATE_RE.sub(_mask_card, sanitized)
     return _EMAIL_RE.sub(lambda match: f"***{match.group(1)}", sanitized)
 
 

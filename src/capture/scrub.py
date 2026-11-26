@@ -17,6 +17,10 @@ from dataclasses import dataclass
 # 3-2-4 SSN isn't half-eaten by the 3-3-4 phone shape (they don't overlap, but
 # order keeps it obvious). Account (13-19 straight digits) is card-length, so it
 # never touches a year (4) or a $ amount (comma/decimal separated).
+_SEPARATED_CARD_RE = re.compile(
+    r"(?<![\dA-Za-z])(?:\d{4}[ -]){2,3}\d{3,4}(?:[ -]\d{1,4})?(?![\dA-Za-z])"
+)
+
 _PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("email", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"), "[email]"),
     ("ssn", re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "[ssn]"),
@@ -27,6 +31,18 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ),
     ("account", re.compile(r"\b\d{13,19}\b"), "[account]"),
 )
+
+
+def _luhn_valid(digits: str) -> bool:
+    total = 0
+    for idx, ch in enumerate(reversed(digits)):
+        val = int(ch)
+        if idx % 2 == 1:
+            val *= 2
+            if val > 9:
+                val -= 9
+        total += val
+    return total % 10 == 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,4 +65,13 @@ def scrub(text: str) -> ScrubResult:
         out, n = pattern.subn(replacement, out)
         if n:
             counts[kind] = n
+
+    def _replace_separated_card(match: re.Match[str]) -> str:
+        digits = "".join(ch for ch in match.group(0) if ch.isdigit())
+        if 13 <= len(digits) <= 19 and _luhn_valid(digits):
+            counts["account"] = counts.get("account", 0) + 1
+            return "[account]"
+        return match.group(0)
+
+    out = _SEPARATED_CARD_RE.sub(_replace_separated_card, out)
     return ScrubResult(text=out, redactions=counts)

@@ -30,30 +30,19 @@ cryptography>=50.0.0
 pypdf>=6.21.4
 # Security floor for the existing Google-auth ASN.1 dependency (four decoder DoS fixes).
 pyasn1>=0.6.5
-# PyMuPDF powers bounded, position-preserving PDF table extraction and is
-# required by the evidence-processing runtime and its CI coverage.
+# PyMuPDF powers bounded, position-preserving PDF text and table extraction.
 pymupdf>=1.27.2.3
 # OOXML packages and publisher feeds are untrusted XML. Use hardened parsers
 # that reject entity expansion and related XML attacks.
 defusedxml>=0.7.1
-# Security floor: CVE-2026-59951 is fixed in 1.30.0. Keep the reviewed 1.x API.
-mcp>=1.30.0,<2
-# Security floor: pyjwt arrives transitively through mcp. Keep it past the
-# 2.13.0 CVE stream (CVE-2026-101917 and CVE-2026-102267 through
-# CVE-2026-102274, all fixed in 2.14.0).
-pyjwt>=2.14.0
 # Provider adapters use the per-purpose routing owned by src/llm/cli.py.
 # The Claude CLI is installed separately; Python SDKs below support the SDK
 # and batch adapters. See directives/model_eval_loop.md for routing changes.
 google-genai
-# Anthropic SDK supports the explicitly selected message-batch adapter.
-anthropic
 # Security floor: openpyxl parses UNTRUSTED IR spreadsheets — keep it past the
 # old XXE-era versions.
 openpyxl>=3.1.0
 pydantic
-yt-dlp
-faster-whisper
 # Security floor: beautifulsoup4 parses UNTRUSTED HTML — keep it past the old
 # ReDoS CVEs.
 beautifulsoup4>=4.12.3

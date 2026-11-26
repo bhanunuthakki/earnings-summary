@@ -45,7 +45,7 @@ MODELS: list[ModelSpec] = [
     ModelSpec("claude-sonnet-4-6 (baseline)", "claude-sonnet-4-6", None),
     ModelSpec("claude-opus-4-8", "claude-opus-4-8", None),
     ModelSpec("gemini-3.1-pro-preview", "gemini-3.1-pro-preview", "gemini"),
-    ModelSpec("gemini-2.5-flash", "gemini-2.5-flash", "gemini"),
+    ModelSpec("gemini-3.5-flash-lite", "gemini-3.5-flash-lite", "gemini"),
 ]
 
 

@@ -313,3 +313,36 @@ def test_push_scan_reuses_only_identical_path_and_content(
     assert calls.count(("reports/unchanged.md", b"Public research.\n")) == 1
     assert expected[0] == ["account-level-fact in: reports/untracked.md"]
     assert expected[1] == {"account-level-fact": {"files": 3, "refs": 2}}
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "sk-ant-" + "a" * 24,
+        "sk-or-" + "b" * 24,
+        "sk_live_" + "c" * 20,
+        "rk_live_" + "d" * 20,
+        "whsec_" + "e" * 20,
+        "lin_api_" + "f" * 24,
+        "123456789:" + "g" * 35,
+    ],
+)
+def test_extended_provider_and_payment_tokens_are_rejected(tmp_path: Path, token: str) -> None:
+    _init_repo(tmp_path)
+    note = tmp_path / "notes.md"
+    note.write_text(f"leaked: {token}\n", encoding="utf-8")
+    _commit(tmp_path, "add leaked token")
+
+    assert verify(tmp_path) == ["credential-material in: notes.md"]
+
+
+def test_luhn_payment_card_rejected_while_non_luhn_number_ignored(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    card_file = tmp_path / "notes" / "card.md"
+    card_file.parent.mkdir()
+    card_file.write_text("card 4111 1111 1111 1111\n", encoding="utf-8")
+    ok_file = tmp_path / "notes" / "table.md"
+    ok_file.write_text("id 4111-1111-1111-1112\n", encoding="utf-8")
+    _commit(tmp_path, "add card and table")
+
+    assert verify(tmp_path) == ["payment-card in: notes/card.md"]

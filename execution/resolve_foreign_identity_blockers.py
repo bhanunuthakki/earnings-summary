@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import io
 import json
 import sys
 from collections.abc import Mapping
@@ -20,7 +19,6 @@ from typing import Literal
 import requests
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, ConfigDict, Field
-from pypdf import PdfReader
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -39,6 +37,7 @@ from provenance.foreign_issuer_bootstrap import (  # noqa: E402
     bootstrap_foreign_issuer,
 )
 from runtime.job_runtime import JobLock  # noqa: E402
+from runtime.pdf_text import extract_pdf_text  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 KnownTicker = Literal["IVN", "NTDOY"]
@@ -446,7 +445,7 @@ def _validate_source_contract(spec: KnownSourceSpec, raw_body: bytes) -> None:
     if spec.media_type == "application/pdf":
         if not raw_body.startswith(b"%PDF-"):
             raise ValueError(f"{spec.source_key} did not return a PDF")
-        page_text = PdfReader(io.BytesIO(raw_body)).pages[0].extract_text() or ""
+        page_text = extract_pdf_text(raw_body, max_pages=1)
         normalized_text = " ".join(page_text.split())
     else:
         normalized_text = " ".join(

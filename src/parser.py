@@ -1,18 +1,15 @@
 from pathlib import Path
 from typing import BinaryIO
 
-from pypdf import PdfReader
+from runtime.pdf_text import extract_pdf_text
 
 
 def extract_text_from_pdf(filepath: str | Path | BinaryIO) -> str:
     """
     Extracts text from a PDF file.
     """
-    reader = PdfReader(filepath)
-    text = ""
-    for page in reader.pages:
-        text += page.extract_text() + "\n"
-    return text
+    text = extract_pdf_text(filepath)
+    return f"{text}\n" if text else ""
 
 
 def read_text_file(filepath: str | Path) -> str:
