@@ -669,7 +669,8 @@ def test_unknown_gate_read_waits_for_recovery_or_shared_deadline(
     with monkeypatch.context() as patch:
         patch.setattr(Path, "read_text", read_text)
         if recovery:
-            with hold_writer_gate(db, owner="after-readable", timeout_s=0.08, poll_s=0.005):
+            # 0.08 s missed the third read on a loaded queue runner (run 45737857584).
+            with hold_writer_gate(db, owner="after-readable", timeout_s=2.0, poll_s=0.005):
                 assert attempts >= 3
         else:
             with (

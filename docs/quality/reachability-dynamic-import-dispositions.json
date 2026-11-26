@@ -3,8 +3,7 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "importlib.import_module loads the optional yfinance provider in _default_yfinance_loader.",
-      "fingerprint": "d467abc7d1ca09f39e91d4634829139c2241a6a03b0c3b9f93d2778d616710e0",
-      "line": 303,
+      "fingerprint": "8d237518cbb6249eedf4e4a5341e55a8c9954d9080251d824ea210c1cf1b612c",
       "path": "execution/fetch_macro_series.py",
       "targets": [
         "yfinance"
@@ -13,8 +12,7 @@
     {
       "disposition": "external_adapter",
       "evidence": "The isolated bridge imports the fixed bundled unit helper. build_filing_xbrl_processor_bundle requires its exact byte equality with src/filings/xbrl_units.py; the bundle seals one earnings_summary_xbrl_units.py member and digest, and the approved loader rechecks current source bytes. This boundary does not prove installed/native qualification.",
-      "fingerprint": "8bce254084bd23c8c99028c18a57a4568248d10234349a6352c2ce80a1db4536",
-      "line": 29,
+      "fingerprint": "cff0eb25f27504bd929f4b36d68518f17e2c84c09fd199f67f08030be600bb17",
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "earnings_summary_xbrl_units"
@@ -23,8 +21,7 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Bridge lazily loads the optional arelle.api.Session factory.",
-      "fingerprint": "c4638d621dc0bcfc15f78c51bddb0b4664af5594815a000333982c472b6956a4",
-      "line": 354,
+      "fingerprint": "788819616b6b04f53160e8b11f6bda0e5e1909d88400da0c918b2f516c4ce0fe",
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "arelle.api.Session"
@@ -33,8 +30,7 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Bridge lazily loads the optional arelle.RuntimeOptions factory.",
-      "fingerprint": "eedfc3afbf857942fdc82b4db2b92a724916319f9b04f02a4feee0d08f463b9c",
-      "line": 358,
+      "fingerprint": "153a8d655acae0e126d8bb6657423c7aaeb03ddb3d7fd3712f4fc91a038fa104",
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "arelle.RuntimeOptions"
@@ -43,8 +39,7 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Bridge lazily loads the optional lxml.etree parser.",
-      "fingerprint": "50ea078df5732958392e95e2f08c01876b21ebca53a1e35815293b26ea90dc3b",
-      "line": 420,
+      "fingerprint": "fdeb580cb5aa8644523fb34501af26c6f3488988c7b839d70795d4d2b0312a71",
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "lxml.etree"
@@ -53,8 +48,7 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Bridge lazily loads the optional arelle.XbrlConst module.",
-      "fingerprint": "1324c58a32fed03bf2731ef0de9a33a870e14070dc5254ac37e36c0e00e8eae2",
-      "line": 868,
+      "fingerprint": "015b7c14b028418f22640165abd3cae71643df4c656f5840e940f4db4ca68a8d",
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "arelle.XbrlConst"
@@ -63,8 +57,7 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Windows snapshot path lazily loads the platform msvcrt module.",
-      "fingerprint": "d758e8f71a80ee247259df3974392457af1e6105ac484eb6acb4ffaefa87b098",
-      "line": 780,
+      "fingerprint": "e529692e4dce94b60d88a243854a19a9ac644e70f79c9935c6ae50e79705aa72",
       "path": "execution/refresh_cache.py",
       "targets": [
         "msvcrt"
@@ -73,8 +66,7 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Preflight probes the optional playwright.sync_api and treats ImportError as a capability.",
-      "fingerprint": "225d75eca9df7b148010515519c4f60623926b1320e9f0881adca86626cb784d",
-      "line": 99,
+      "fingerprint": "7d7d4f24faa66a57c125cfafe721baa3e201c19ab68ea8b1237ac979cbf1f6f6",
       "path": "execution/validate_environment.py",
       "targets": [
         "playwright.sync_api"
@@ -83,8 +75,7 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Windows evidence path lazily loads the platform msvcrt module.",
-      "fingerprint": "5307d08cde8926235804e3b968abe921291a44f3e8d30d7263366afa56062d8f",
-      "line": 91,
+      "fingerprint": "3ae045d7809effa901d2c44d0718b618f27cc1ce215b7b4bc89b04bdc6106a24",
       "path": "src/compute/evidence_snapshot.py",
       "targets": [
         "msvcrt"
@@ -93,8 +84,7 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "_import lazily loads only the fixed optional Google client modules.",
-      "fingerprint": "63bb395143ef017debcf10907b881016613c59d48083345b45fe20505b24efc9",
-      "line": 175,
+      "fingerprint": "8e5afd85aa0765aaaaabb69c712d319aae0d364ae51f29a829d2eea2919da213",
       "path": "src/integrations/gsheets.py",
       "targets": [
         "google.oauth2.service_account",
@@ -108,8 +98,7 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "The aggregates-only Wealthplan reader loads the optional sibling checkout through a typed, fail-closed adapter.",
-      "fingerprint": "3bdf1fbe107c494b4b0d5f91c6d0c24f30438f663cc7c09f84b7ba295a367ae4",
-      "line": 138,
+      "fingerprint": "c716350b818b82a2b9a3c3e99080e1f3539850c81b8c66e88fb57c1fe0ae71e7",
       "path": "src/integrations/wealth_context.py",
       "targets": [
         "wealthplan.persistence"
@@ -118,8 +107,7 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "The cash-need reader loads Wealthplan event classes from the optional sibling checkout through a typed, fail-closed adapter.",
-      "fingerprint": "094f6068ac73a5f0fc501858a3fdca55e3782ba1508df62a32cb17a3f3548fdd",
-      "line": 118,
+      "fingerprint": "37e656d02aee8a08b77f2052fc86450ec4836c319fe88c0ac2209d6102270ff7",
       "path": "src/integrations/wealthplan_capacity.py",
       "targets": [
         "wealthplan.models"
@@ -128,8 +116,7 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "The cash-need reader loads the optional Wealthplan persistence adapter and degrades unavailable on import or load failure.",
-      "fingerprint": "0df2552588c5dc9405dcfa0ed1b759e62c10c44813b2c30f4d6935513460f8b2",
-      "line": 119,
+      "fingerprint": "cc6b3e3e9aefafcace7e9116e391992101eafbd0b51984f3a6224e39fbe6c8a4",
       "path": "src/integrations/wealthplan_capacity.py",
       "targets": [
         "wealthplan.persistence"
@@ -138,8 +125,7 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Browser capture lazily loads the optional playwright.sync_api runtime.",
-      "fingerprint": "af6b69fe88072188405c26d22def8a0ab5ae697f05c8d86263d3d4d9c2ca5a56",
-      "line": 514,
+      "fingerprint": "3188e1a83761fcd2e7dc36b6fce3657b2d51e3bac0681edbecdde173b9640358",
       "path": "src/ir_pipeline/approved_ir_observation_capture.py",
       "targets": [
         "playwright.sync_api"
@@ -148,8 +134,7 @@
     {
       "disposition": "internal_target",
       "evidence": "_ADAPTERS is a fixed registry whose mz entry resolves to this checked-in adapter.",
-      "fingerprint": "fd2cf31ac57e1fde4f51f342c581e912f9d7063b76c458edd3d3771187b69145",
-      "line": 45,
+      "fingerprint": "e46f8f23fd8cfc0dc2215c1f2d98c461382ba5705bbc55d2d8b6df724040d1ea",
       "path": "src/ir_pipeline/discover/__init__.py",
       "targets": [
         "src/ir_pipeline/discover/mz.py"
@@ -158,8 +143,7 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Wrapper loads codex_cli from the external snippets directory.",
-      "fingerprint": "2474ec16a6d90f291b3b206405bf541db25d5924e2b65c14a86004d05ee05735",
-      "line": 142,
+      "fingerprint": "fd3c335b7ab37f1eff4d33b06c621cb75f65b4101b25086cc4bb45c9ebf54ba6",
       "path": "src/llm/codex_backend.py",
       "targets": [
         "codex_cli"
@@ -168,8 +152,7 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Auth probe loads the same external codex_cli module.",
-      "fingerprint": "3977a2f9614244094727aeefe614bef6775d7865ee2fa09df8c84e363bba3888",
-      "line": 169,
+      "fingerprint": "6347c9e0ed1d96fe8c6ff2995657f2e53de26b63d619220af54ebfb11c31e130",
       "path": "src/llm/codex_backend.py",
       "targets": [
         "codex_cli"
@@ -178,8 +161,7 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Table extraction lazily loads the optional fitz PyMuPDF module.",
-      "fingerprint": "9a26cad528f4dd04141a4dc22f3291872f5646f26e136d316e0f3bc3d92b6b7f",
-      "line": 428,
+      "fingerprint": "64e66655732ec60d6b1286e35233d42478776acb82414e1983fe4da0eb15f97a",
       "path": "src/provenance/pdf_table_extraction.py",
       "targets": [
         "fitz"
@@ -188,8 +170,7 @@
     {
       "disposition": "internal_target",
       "evidence": "The fixed MUTATING_KINDS set plus the explicit Ask/owner-kind branch select only these checked-in self-registering artifact modules.",
-      "fingerprint": "62c109c10badeb5b394ecc0f21f12f6f9116102010a975367398c58d22192b51",
-      "line": 217,
+      "fingerprint": "ef6facc5aa196faed3a041a33a4666b2f3b8f02ed3fdeb24b10f65b0216e7f7e",
       "path": "src/research/apply.py",
       "targets": [
         "src/research/ask_proposal_artifact.py",
@@ -201,8 +182,7 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Earnings-calendar fallback lazily loads yfinance and reports a source error when the optional provider is unavailable.",
-      "fingerprint": "793245b95c676e462a53a5bb8c98854c293a9ae5090671abc04e21f8b0d3deff",
-      "line": 238,
+      "fingerprint": "2f040f21a9f909e4357a92164cc621337d09322a6df68ec817fe24935b87a0f8",
       "path": "src/sources/earnings_calendar.py",
       "targets": [
         "yfinance"
@@ -211,8 +191,7 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Inflection detection lazily loads the optional ruptures backend and falls back to rolling-window regression when it is unavailable.",
-      "fingerprint": "7c2c22ab1dbd6ee10c4823b535e11119363e832354fb338a7a7ecc385af0fbbf",
-      "line": 241,
+      "fingerprint": "db0f10017be0543e7c790837e0344f13918f2eeb2954250868dabeb149b9cf4e",
       "path": "src/timeseries/primitives.py",
       "targets": [
         "ruptures"
@@ -221,8 +200,7 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Seasonal decomposition lazily loads the optional statsmodels STL backend and falls back to the local classical decomposition when it is unavailable.",
-      "fingerprint": "958164ffaabd5adff170280df6c4f2d01a426f48c3609e45abb990b4fcb268c8",
-      "line": 482,
+      "fingerprint": "92b72c1ea7b305600231b1a9b909bf95f4c968423c6dcc568f003ceafe5c4bd9",
       "path": "src/timeseries/primitives.py",
       "targets": [
         "statsmodels.tsa.seasonal"
@@ -231,8 +209,7 @@
     {
       "disposition": "internal_target",
       "evidence": "Synthetic service-authority regressions use only the literal pytest entrypoint comments_server. They use temporary files and control environment loading in each test. The fixed entrypoint resolves to execution/comments_server.py; no caller or provider supplies the module name.",
-      "fingerprint": "b090616c03ef3905aaeafefc22bd1e08fe450a60b4f5ad5ecaf2b92094677540",
-      "line": 26,
+      "fingerprint": "50b145af9eba7f9d6a28224dbb5a8554da80676eb677ec1ceb68f053f6054367",
       "path": "tests/test_runtime_state_authority.py",
       "targets": [
         "execution/comments_server.py"
@@ -241,8 +218,7 @@
     {
       "disposition": "internal_target",
       "evidence": "Synthetic service-authority regressions use only the literal pytest entrypoint comments_server. They use temporary files and control environment loading in each test. The fixed entrypoint resolves to execution/comments_server.py; no caller or provider supplies the module name.",
-      "fingerprint": "79926b8f66057c7dec9cf1791b244b9c1af97e5d259e45f3ffa519cbdf88ab2a",
-      "line": 51,
+      "fingerprint": "834f94e87aa76fa64e0a633065455f4edd4e84fe527eae089ff65ded088a174c",
       "path": "tests/test_runtime_state_authority.py",
       "targets": [
         "execution/comments_server.py"
@@ -251,8 +227,7 @@
     {
       "disposition": "internal_target",
       "evidence": "Synthetic service-authority regressions use only the literal pytest entrypoint comments_server. They use temporary files and control environment loading in each test. The fixed entrypoint resolves to execution/comments_server.py; no caller or provider supplies the module name.",
-      "fingerprint": "817077c7a5a5159bc580d9ee69a31a54695cf16ae9b9ec055b9566aeec1a5264",
-      "line": 76,
+      "fingerprint": "53585e423547a4b6e729ce1fedd827e4221e7db27c051a6b3a21fce7bfe38579",
       "path": "tests/test_runtime_state_authority.py",
       "targets": [
         "execution/comments_server.py"
@@ -264,12 +239,11 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "5c3c0ddbb47a2a1831202e93c50aa15db5acc77e3324a5d2fb450fa1fb2edacc",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
-    "scanner_sha256": "11592211772d3a044ff46385303df7cbf4bc3f192b7354bfe72dece798003d76",
+    "scanner_sha256": "aeb9bcbae69f099556a6343a013412cfb1d7e3614ba17a3e1377a0456de6cc51",
     "schema_version": "operational-reachability-raw/v1"
   },
-  "schema_version": "reachability-dynamic-import-dispositions/v2"
+  "schema_version": "reachability-dynamic-import-dispositions/v3"
 }
