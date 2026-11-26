@@ -650,6 +650,16 @@ def test_every_ladder_targets_a_declared_financial_line_item() -> None:
     sec_component_items = {
         "long_term_debt_current_excluding_leases",
         "long_term_debt_non_current_excluding_leases",
+        "construction_in_progress",
+        "unconditional_purchase_obligations",
+        "purchase_obligations_due_next_12m",
+        "remaining_performance_obligations",
+        "unrecognized_sbc_expense",
+        "unvested_rsu_shares",
+        "rsu_granted_shares",
+        "rsu_vested_shares",
+        "cash_taxes_paid_rsu_withholding",
+        "common_shares_outstanding",
     }
     for ladder in TAG_LADDERS:
         assert ladder.line_item in _FMP_LINE_ITEMS | sec_component_items, ladder.line_item

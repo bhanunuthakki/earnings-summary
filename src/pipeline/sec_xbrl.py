@@ -1146,6 +1146,74 @@ TAG_LADDERS: tuple[LineItemLadder, ...] = (
         ("ifrs-full", "InterestPaidClassifiedAsOperatingActivities"),
         ("ifrs-full", "InterestPaidClassifiedAsFinancingActivities"),
     ),
+    # ---- MBI footnote & dilution drivers ----------------------------------
+    _ladder(
+        "construction_in_progress",
+        ("us-gaap", "ConstructionInProgressGross"),
+        ("ifrs-full", "ConstructionInProgress"),
+    ),
+    _ladder(
+        "unconditional_purchase_obligations",
+        ("us-gaap", "UnconditionalPurchaseObligation"),
+        ("us-gaap", "PurchaseObligation"),
+        ("us-gaap", "LongTermPurchaseCommitmentAmount"),
+    ),
+    _ladder(
+        "purchase_obligations_due_next_12m",
+        ("us-gaap", "PurchaseObligationDueInNextTwelveMonths"),
+        ("us-gaap", "UnconditionalPurchaseObligationDueWithinOneYear"),
+    ),
+    _ladder(
+        "remaining_performance_obligations",
+        ("us-gaap", "RevenueRemainingPerformanceObligation"),
+    ),
+    _ladder(
+        "unrecognized_sbc_expense",
+        (
+            "us-gaap",
+            "EmployeeServiceShareBasedCompensationNonvestedAwardsTotalCompensationCostNotYetRecognized",
+        ),
+        (
+            "us-gaap",
+            "EmployeeServiceShareBasedCompensationNonvestedAwardsTotalCompensationCostNotYetRecognizedShareBasedAwardsOtherThanOptions",
+        ),
+    ),
+    _ladder(
+        "unvested_rsu_shares",
+        (
+            "us-gaap",
+            "ShareBasedCompensationArrangementByShareBasedPaymentAwardEquityInstrumentsOtherThanOptionsNonvestedNumber",
+        ),
+        kind="shares",
+    ),
+    _ladder(
+        "rsu_granted_shares",
+        (
+            "us-gaap",
+            "ShareBasedCompensationArrangementByShareBasedPaymentAwardEquityInstrumentsOtherThanOptionsGrantsInPeriod",
+        ),
+        kind="shares",
+    ),
+    _ladder(
+        "rsu_vested_shares",
+        (
+            "us-gaap",
+            "ShareBasedCompensationArrangementByShareBasedPaymentAwardEquityInstrumentsOtherThanOptionsVestedInPeriod",
+        ),
+        kind="shares",
+    ),
+    _ladder(
+        "cash_taxes_paid_rsu_withholding",
+        ("us-gaap", "PaymentsRelatedToTaxWithholdingForShareBasedCompensation"),
+        sign=-1,
+    ),
+    _ladder(
+        "common_shares_outstanding",
+        ("us-gaap", "CommonStockSharesOutstanding"),
+        ("dei", "EntityCommonStockSharesOutstanding"),
+        ("ifrs-full", "NumberOfSharesIssued"),
+        kind="shares",
+    ),
 )
 
 

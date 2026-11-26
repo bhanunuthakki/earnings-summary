@@ -118,6 +118,10 @@ AUDIT_SPECS: dict[str, AuditSpec] = {
     # Q&A topic labels: the JSON array of per-question topic/tag pairs
     # produced by generate_qa_topics per quarter. Corpus = data/qa_topics/<T>.json.
     "qa_topics": AuditSpec("qa_topics", RUBRICS_DIR / "qa_topics.md"),
+    # Long-form company research memos/briefs graded against MBI-style depth
+    # (unit-driver decomposition, footnote-to-model linkage, reverse DCF,
+    # peer cross-checks, and grounding). Corpus = output/research/**/*.md.
+    "deep_dive_analysis": AuditSpec("deep_dive_analysis", RUBRICS_DIR / "deep_dive_analysis.md"),
 }
 
 _THRESHOLD_RX = re.compile(r"^Pass threshold:\s*([0-9.]+)\s*$", re.MULTILINE)
