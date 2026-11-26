@@ -105,6 +105,8 @@ DEFAULT_NO_CHANGE_TTL_DAYS = 7
 # Bounded ticker-overlap pool width. Each pool worker runs at most one step
 # subprocess at a time, so this is also the run's peak subprocess count.
 DEFAULT_WORKERS = 3
+DEFAULT_STEP_TIMEOUT_S = 600
+BUILD_ARTIFACTS_TIMEOUT_S = 1500
 
 _WRITER_LOCKS_GUARD = threading.Lock()
 _WRITER_LOCKS: dict[str, threading.Lock] = {}
@@ -649,7 +651,14 @@ def _refresh_one_ticker(
     ]
     if args.enable_llm:
         build_cmd.append("--enable-llm")
-    stages.append(_run_step("build_artifacts", build_cmd, cwd=repo_root))
+    stages.append(
+        _run_step(
+            "build_artifacts",
+            build_cmd,
+            cwd=repo_root,
+            timeout=BUILD_ARTIFACTS_TIMEOUT_S,
+        )
+    )
 
     # Only sweep when build_artifacts succeeded — otherwise a stale prior
     # artifact is the only thing the user has to look at.
@@ -692,7 +701,9 @@ def _refresh_one_ticker(
     return {"ticker": ticker, "status": "ok" if overall_ok else "failed", "stages": stages}
 
 
-def _run_step(name: str, cmd: list[str], cwd: Path) -> dict[str, object]:
+def _run_step(
+    name: str, cmd: list[str], cwd: Path, *, timeout: int = DEFAULT_STEP_TIMEOUT_S
+) -> dict[str, object]:
     """Run one step. Captures exit code + truncated stderr; never raises."""
     try:
         proc = subprocess.run(
@@ -702,10 +713,10 @@ def _run_step(name: str, cmd: list[str], cwd: Path) -> dict[str, object]:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=600,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        return {"name": name, "exit_code": -1, "error": "timeout after 600s"}
+        return {"name": name, "exit_code": -1, "error": f"timeout after {timeout}s"}
     except OSError as e:
         return {"name": name, "exit_code": -1, "error": f"spawn failed: {e}"}
     return {

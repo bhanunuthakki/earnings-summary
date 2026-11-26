@@ -77,7 +77,7 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_step executes only the five fixed managed-Python stage scripts.",
-      "fingerprint": "4ce489b13147e83a306a67b4b9c5a9e98ec0c8d3a3e31bfde4d25733200edb00",
+      "fingerprint": "b1a3dc2fbcdb1de9ad7b3794f321ea6cca7c6a2745b46fbf2aa1b200eaae5a1c",
       "path": "execution/daily_fetch_and_brief.py",
       "targets": [
         "execution/run_thesis_evaluator.py",
