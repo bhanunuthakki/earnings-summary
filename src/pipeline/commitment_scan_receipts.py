@@ -27,6 +27,7 @@ _OBSERVATION_SCHEMA = "commitment-segment-observations@1"
 _LEGACY_MANIFEST = '{"schema_version":"legacy-unobserved@0","segments":[]}'
 _LEGACY_MANIFEST_SHA256 = "462e7c3d4eb4e810994e1692e3a50c32b4ddf230ee4c7c9690d81f053fa3d929"  # pragma: allowlist secret -- deterministic manifest digest, not a credential
 _EMPTY_SOURCE_SHA256 = "6367e24ff1e38f3e3e590763053263ca9db7d36126e99e65caba76cb9fea37e4"  # pragma: allowlist secret -- deterministic empty-source digest, not a credential
+_ADMITTED_TRANSCRIPT_PROVIDERS = frozenset({"issuer_ir", "roic", "stockanalysis", "tickertrends"})
 
 
 @dataclass(frozen=True)
@@ -481,7 +482,7 @@ def _validated_acquisition_receipt(
         if (
             str(row["receipt_id"]) != _sha256(artifact_json)
             or not re.fullmatch(r"[0-9a-f]{64}", artifact_sha256)
-            or str(row["provider"]) != "issuer_ir"
+            or str(row["provider"]) not in _ADMITTED_TRANSCRIPT_PROVIDERS
             or str(row["source_type"]) != "ir_doc"
             or str(row["document_type"]) != "earnings_call_transcript"
             or str(row["source_regime"]) != "combined"
@@ -503,7 +504,7 @@ def _validated_acquisition_receipt(
             or request.get("canonical_ticker") != canonical_ticker
             or request.get("fiscal_year") != fiscal_year
             or request.get("fiscal_quarter") != fiscal_quarter
-            or request.get("provider") != "issuer_ir"
+            or request.get("provider") != str(row["provider"])
             or request.get("source_type") != "ir_doc"
             or request.get("document_type") != "earnings_call_transcript"
             or source_regime.get("regime") != "combined"
@@ -512,7 +513,7 @@ def _validated_acquisition_receipt(
             return None
         if authorization.get("schema_version") == "transcript-acquisition-authorization@2":
             validate_transcript_acquisition_authorization(
-                TranscriptAcquisitionAuthorization.model_validate(authorization)
+                TranscriptAcquisitionAuthorization.model_validate_json(authorization_json)
             )
         return _AcquisitionReceiptIdentity(
             receipt_id=str(row["receipt_id"]),
@@ -628,7 +629,8 @@ def current_transcript_scan_binding(
         "ON r.canonical_ticker=UPPER(t.ticker) AND r.artifact_sha256=d.sha256 "
         "AND (r.document_id IS NULL OR r.document_id=d.id) "
         "WHERE t.id=? AND t.is_current=1 "
-        "AND r.provider='issuer_ir' AND r.source_type='ir_doc' "
+        "AND r.provider IN ('issuer_ir','roic','stockanalysis','tickertrends') "
+        "AND r.source_type='ir_doc' "
         "AND r.document_type='earnings_call_transcript' "
         "AND EXISTS (SELECT 1 FROM transcript_segments AS s WHERE s.transcript_id=t.id) "
         "ORDER BY r.recorded_at DESC,r.receipt_id DESC",

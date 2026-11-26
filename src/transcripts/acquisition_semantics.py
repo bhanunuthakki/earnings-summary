@@ -151,7 +151,14 @@ _PROVIDERS_BY_ENTRYPOINT = {
     TranscriptAcquisitionEntrypoint.FETCH_AUDIO_TRANSCRIPTS: frozenset(
         {TranscriptProvider.YOUTUBE_AUDIO}
     ),
-    TranscriptAcquisitionEntrypoint.INGEST_TRANSCRIPTS: frozenset({TranscriptProvider.ISSUER_IR}),
+    TranscriptAcquisitionEntrypoint.INGEST_TRANSCRIPTS: frozenset(
+        {
+            TranscriptProvider.ISSUER_IR,
+            TranscriptProvider.ROIC,
+            TranscriptProvider.STOCKANALYSIS,
+            TranscriptProvider.TICKERTRENDS,
+        }
+    ),
 }
 _SOURCE_TYPE_BY_PROVIDER: dict[TranscriptProvider, SourceType | None] = {
     TranscriptProvider.ISSUER_IR: SourceType.IR_DOC,
