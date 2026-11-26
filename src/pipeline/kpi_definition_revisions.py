@@ -11,13 +11,71 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from models.facts import Currency, FiscalPeriodType, Unit
+from pipeline.kpi_comparability_bridges import (
+    AdditiveBridgeDirection as AdditiveBridgeDirection,
+)
+from pipeline.kpi_comparability_bridges import (
+    AdditiveCompositeBridge as AdditiveCompositeBridge,
+)
+from pipeline.kpi_comparability_bridges import (
+    CumulativeDiffInput as CumulativeDiffInput,
+)
+from pipeline.kpi_comparability_bridges import (
+    DerivedCumulativeDiffObservation as DerivedCumulativeDiffObservation,
+)
+from pipeline.kpi_comparability_bridges import (
+    KpiComparabilityBridgeSpec as KpiComparabilityBridgeSpec,
+)
+from pipeline.kpi_comparability_bridges import (
+    KpiPeriodCadenceKind as KpiPeriodCadenceKind,
+)
+from pipeline.kpi_comparability_bridges import (
+    OverlapTolerancePolicy as OverlapTolerancePolicy,
+)
+from pipeline.kpi_comparability_bridges import (
+    OverlapVerificationError as OverlapVerificationError,
+)
+from pipeline.kpi_comparability_bridges import (
+    OverlapWitness as OverlapWitness,
+)
+from pipeline.kpi_comparability_bridges import (
+    RecastComparativeBridge as RecastComparativeBridge,
+)
+from pipeline.kpi_comparability_bridges import (
+    RenameOverlapBridge as RenameOverlapBridge,
+)
+from pipeline.kpi_comparability_bridges import (
+    SplitScaleAppliesTo as SplitScaleAppliesTo,
+)
+from pipeline.kpi_comparability_bridges import (
+    SplitScaleBridge as SplitScaleBridge,
+)
+from pipeline.kpi_comparability_bridges import (
+    build_overlap_witness as build_overlap_witness,
+)
+from pipeline.kpi_comparability_bridges import (
+    classify_period_cadence as classify_period_cadence,
+)
+from pipeline.kpi_comparability_bridges import (
+    cumulative_diff as cumulative_diff,
+)
+from pipeline.kpi_comparability_bridges import (
+    derive_standalone_from_cumulative as derive_standalone_from_cumulative,
+)
+from pipeline.kpi_comparability_bridges import (
+    evaluate_overlap_witness as evaluate_overlap_witness,
+)
+from pipeline.kpi_comparability_bridges import (
+    parse_bridge_spec_json as parse_bridge_spec_json,
+)
 from pipeline.kpi_semantics import (
     KpiAccountingBasis,
     KpiConsolidationScope,
@@ -355,6 +413,7 @@ class KpiDefinitionComparabilityRevision(BaseModel):
     source_document_version_id: str = Field(min_length=1, max_length=128)
     source_evidence_node_id: str = Field(min_length=1, max_length=128)
     source_locator: dict[str, object] = Field(min_length=1)
+    bridge_spec: KpiComparabilityBridgeSpec | None = None
     effective_at: datetime
     knowledge_at: datetime
     recorded_at: datetime
@@ -381,6 +440,55 @@ class KpiDefinitionComparabilityRevision(BaseModel):
             }
         ):
             raise ValueError("only same-definition or renamed relations can be continuous")
+        if isinstance(self.bridge_spec, RenameOverlapBridge):
+            if (
+                self.relation_kind is not KpiDefinitionRelationKind.RENAMED
+                or self.disposition is not KpiDefinitionComparabilityDisposition.CONTINUOUS
+            ):
+                raise ValueError("rename_overlap bridge requires relation=renamed and continuous")
+        elif isinstance(self.bridge_spec, SplitScaleBridge):
+            if (
+                self.relation_kind is not KpiDefinitionRelationKind.RESTATED
+                or self.disposition
+                is not KpiDefinitionComparabilityDisposition.COMPARABLE_WITH_BREAK
+            ):
+                raise ValueError(
+                    "scale_ratio bridge requires relation=restated and comparable_with_break"
+                )
+        elif isinstance(self.bridge_spec, AdditiveCompositeBridge):
+            if self.disposition is not KpiDefinitionComparabilityDisposition.COMPARABLE_WITH_BREAK:
+                raise ValueError("sum_of_revisions bridge requires comparable_with_break")
+            if self.bridge_spec.direction == "combine":
+                if self.relation_kind is not KpiDefinitionRelationKind.COMBINED:
+                    raise ValueError("combine bridge requires relation_kind=combined")
+                if (
+                    self.predecessor_definition_revision_id
+                    not in self.bridge_spec.member_definition_revision_ids
+                    or self.successor_definition_revision_id
+                    != self.bridge_spec.composite_definition_revision_id
+                ):
+                    raise ValueError(
+                        "combine edge must link one member predecessor to the composite successor"
+                    )
+            else:
+                if self.relation_kind is not KpiDefinitionRelationKind.SPLIT:
+                    raise ValueError("split bridge requires relation_kind=split")
+                if (
+                    self.predecessor_definition_revision_id
+                    != self.bridge_spec.composite_definition_revision_id
+                    or self.successor_definition_revision_id
+                    not in self.bridge_spec.member_definition_revision_ids
+                ):
+                    raise ValueError(
+                        "split edge must link the composite predecessor to one member successor"
+                    )
+        elif isinstance(self.bridge_spec, RecastComparativeBridge) and (
+            self.relation_kind is not KpiDefinitionRelationKind.RECAST
+            or self.disposition is not KpiDefinitionComparabilityDisposition.COMPARABLE_WITH_BREAK
+        ):
+            raise ValueError(
+                "recast_comparative_only bridge requires relation=recast and comparable_with_break"
+            )
         return self
 
     @property
@@ -392,8 +500,14 @@ class KpiDefinitionComparabilityRevision(BaseModel):
         return _sha256(self.source_locator_json)
 
     @property
+    def bridge_spec_json(self) -> str | None:
+        if self.bridge_spec is None:
+            return None
+        return _canonical_json(self.bridge_spec.model_dump(mode="json"))
+
+    @property
     def commitment_payload(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "comparability_revision_id": self.comparability_revision_id,
             "disposition": self.disposition.value,
             "effective_at": _utc_text(self.effective_at),
@@ -411,6 +525,9 @@ class KpiDefinitionComparabilityRevision(BaseModel):
             "successor_definition_revision_id": self.successor_definition_revision_id,
             "supersedes_comparability_revision_id": self.supersedes_comparability_revision_id,
         }
+        if self.bridge_spec is not None:
+            payload["bridge_spec"] = self.bridge_spec.model_dump(mode="json")
+        return payload
 
     @property
     def commitment_json(self) -> str:
@@ -438,6 +555,22 @@ _COMPARABILITY_COLUMNS = (
     "source_evidence_node_id,source_locator_json,source_locator_sha256,commitment_json,"
     "commitment_sha256,effective_at,knowledge_at,recorded_at"
 )
+_COMPARABILITY_COLUMNS_WITH_BRIDGE = f"{_COMPARABILITY_COLUMNS},bridge_spec_json"
+
+
+def _has_bridge_spec_column(conn: sqlite3.Connection) -> bool:
+    return any(
+        str(row[1]) == "bridge_spec_json"
+        for row in conn.execute("PRAGMA table_info(kpi_definition_comparability_revisions)")
+    )
+
+
+def _comparability_select_columns(conn: sqlite3.Connection) -> str:
+    return (
+        _COMPARABILITY_COLUMNS_WITH_BRIDGE
+        if _has_bridge_spec_column(conn)
+        else _COMPARABILITY_COLUMNS
+    )
 
 
 def _definition_from_row(row: dict[str, object]) -> IssuerKpiDefinitionRevision:
@@ -488,6 +621,8 @@ def _definition_from_row(row: dict[str, object]) -> IssuerKpiDefinitionRevision:
 
 
 def _comparability_from_row(row: dict[str, object]) -> KpiDefinitionComparabilityRevision:
+    raw_bridge = row.get("bridge_spec_json")
+    bridge_spec = None if raw_bridge is None else parse_bridge_spec_json(str(raw_bridge))
     return KpiDefinitionComparabilityRevision(
         comparability_revision_id=str(row["comparability_revision_id"]),
         idempotency_key=str(row["idempotency_key"]),
@@ -506,6 +641,7 @@ def _comparability_from_row(row: dict[str, object]) -> KpiDefinitionComparabilit
         source_document_version_id=str(row["source_document_version_id"]),
         source_evidence_node_id=str(row["source_evidence_node_id"]),
         source_locator=cast("dict[str, object]", json.loads(str(row["source_locator_json"]))),
+        bridge_spec=bridge_spec,
         effective_at=_db_datetime(row["effective_at"]),
         knowledge_at=_db_datetime(row["knowledge_at"]),
         recorded_at=_db_datetime(row["recorded_at"]),
@@ -789,6 +925,51 @@ def validate_kpi_definition_comparability_candidate(
         or predecessor.currency != successor.currency
     ):
         raise ValueError("a currency change requires an explicit comparability break")
+    if isinstance(revision.bridge_spec, SplitScaleBridge) and (
+        predecessor.period_kind != successor.period_kind
+        or predecessor.accounting_basis != successor.accounting_basis
+        or predecessor.consolidation_scope != successor.consolidation_scope
+        or predecessor.dimensions != successor.dimensions
+        or predecessor.currency_disposition != successor.currency_disposition
+        or predecessor.currency != successor.currency
+    ):
+        raise ValueError(
+            "scale_ratio bridge requires matching period, basis, scope, dimensions, and currency"
+        )
+    if isinstance(revision.bridge_spec, AdditiveCompositeBridge):
+        composite = definition_by_id(revision.bridge_spec.composite_definition_revision_id)
+        if composite is None:
+            raise ValueError("composite bridge requires an existing composite definition revision")
+        for member_id in revision.bridge_spec.member_definition_revision_ids:
+            member = definition_by_id(member_id)
+            if member is None:
+                raise ValueError(f"composite bridge member revision is missing: {member_id}")
+            member_issuer = _validate_source_evidence(
+                conn,
+                reporting_entity_id=member.reporting_entity_id,
+                scope_security_id=member.scope_security_id,
+                source_document_version_id=member.source_document_version_id,
+                source_evidence_node_id=member.source_evidence_node_id,
+                source_locator_json=member.source_locator_json,
+                source_locator_sha256=member.source_locator_sha256,
+                knowledge_at=member.knowledge_at,
+                recorded_at=member.recorded_at,
+            )
+            if member_issuer != relation_issuer:
+                raise ValueError("composite bridge members cannot cross issuer boundaries")
+            if (
+                member.unit_family != composite.unit_family
+                or member.unit_key != composite.unit_key
+                or member.unit_scale != composite.unit_scale
+                or member.currency_disposition != composite.currency_disposition
+                or member.currency != composite.currency
+                or member.period_kind != composite.period_kind
+                or member.stock_flow_behavior != composite.stock_flow_behavior
+                or member.accounting_basis != composite.accounting_basis
+            ):
+                raise ValueError(
+                    "composite bridge members must match composite unit, currency, period, and basis"
+                )
     reverse = conn.execute(
         "SELECT 1 FROM kpi_definition_comparability_revisions "
         "WHERE predecessor_definition_revision_id=? "
@@ -948,9 +1129,15 @@ def persist_kpi_definition_comparability_revision(
 ) -> KpiDefinitionComparabilityRevision:
     """Append an exact pairwise disposition or return an exact replay."""
 
+    has_bridge_col = _has_bridge_spec_column(conn)
+    if revision.bridge_spec is not None and not has_bridge_col:
+        raise ValueError(
+            "bridge_spec requires bridge_spec_json column (migration 0074_kpi_comparability_bridge_spec)"
+        )
+    columns = _COMPARABILITY_COLUMNS_WITH_BRIDGE if has_bridge_col else _COMPARABILITY_COLUMNS
     with _savepoint(conn, "persist_kpi_definition_comparability"):
         cursor = conn.execute(
-            f"SELECT {_COMPARABILITY_COLUMNS} FROM kpi_definition_comparability_revisions "  # nosec B608
+            f"SELECT {columns} FROM kpi_definition_comparability_revisions "  # nosec B608
             "WHERE idempotency_key=?",
             (revision.idempotency_key,),
         )
@@ -964,7 +1151,7 @@ def persist_kpi_definition_comparability_revision(
                 raise ValueError("comparability idempotency key conflicts with persisted content")
             return _comparability_from_row(replay)
         validate_kpi_definition_comparability_candidate(conn, revision)
-        values: tuple[object, ...] = (
+        base_values: tuple[object, ...] = (
             revision.comparability_revision_id,
             revision.idempotency_key,
             revision.predecessor_definition_revision_id,
@@ -985,8 +1172,9 @@ def persist_kpi_definition_comparability_revision(
             _utc_text(revision.knowledge_at),
             _utc_text(revision.recorded_at),
         )
+        values = (*base_values, revision.bridge_spec_json) if has_bridge_col else base_values
         conn.execute(
-            f"INSERT INTO kpi_definition_comparability_revisions ({_COMPARABILITY_COLUMNS}) "  # nosec B608
+            f"INSERT INTO kpi_definition_comparability_revisions ({columns}) "  # nosec B608
             f"VALUES ({','.join('?' for _ in values)})",  # nosec B608
             values,
         )
@@ -1006,8 +1194,9 @@ def current_kpi_definition_comparability_revision(
     predecessor_definition_revision_id: str,
     successor_definition_revision_id: str,
 ) -> KpiDefinitionComparabilityRevision | None:
+    columns = _comparability_select_columns(conn)
     cursor = conn.execute(
-        f"SELECT {_COMPARABILITY_COLUMNS} FROM kpi_definition_comparability_revisions relation "  # nosec B608
+        f"SELECT {columns} FROM kpi_definition_comparability_revisions relation "  # nosec B608
         "WHERE relation.predecessor_definition_revision_id=? "
         "AND relation.successor_definition_revision_id=? AND NOT EXISTS ("
         "SELECT 1 FROM kpi_definition_comparability_revisions successor "
@@ -1033,8 +1222,9 @@ def kpi_definition_comparability_as_known(
 
     _aware(effective_at, "effective_at")
     _aware(known_at, "known_at")
+    columns = _comparability_select_columns(conn)
     cursor = conn.execute(
-        f"SELECT {_COMPARABILITY_COLUMNS} FROM kpi_definition_comparability_revisions "  # nosec B608
+        f"SELECT {columns} FROM kpi_definition_comparability_revisions "  # nosec B608
         "WHERE ((predecessor_definition_revision_id=? AND successor_definition_revision_id=?) "
         "OR (predecessor_definition_revision_id=? AND successor_definition_revision_id=?)) "
         "AND datetime(effective_at)<=datetime(?) AND datetime(knowledge_at)<=datetime(?) "
@@ -1220,6 +1410,64 @@ def _forward_period_and_behavior(
     return (KpiDefinitionPeriodKind.DURATION, KpiStockFlowBehavior.FLOW)
 
 
+class ComparativeOverlapCandidate(BaseModel):
+    """Comparative prior-period value reported in a new filing for overlap verification."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    period_end: str = Field(min_length=10, max_length=10)
+    successor_comparative_value: Decimal
+    fiscal_period_type: FiscalPeriodType | None = None
+    predecessor_value: Decimal | None = None
+    source_locator: dict[str, object] | None = None
+
+
+def lookup_revision_reported_value(
+    conn: sqlite3.Connection,
+    *,
+    kpi_definition_revision_id: str,
+    period_end: str | date,
+    fiscal_period_type: FiscalPeriodType | None = None,
+) -> Decimal | None:
+    """Look up the single admitted non-superseded reported value for a revision and period."""
+    if not _table_exists(conn, "kpi_facts") or not _table_exists(
+        conn, "kpi_fact_semantic_contexts"
+    ):
+        return None
+    iso_period = period_end.isoformat() if isinstance(period_end, date) else str(period_end)[:10]
+    fact_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(kpi_facts)").fetchall()}
+    supersedes_filter = (
+        "AND NOT EXISTS (SELECT 1 FROM kpi_facts succ WHERE succ.supersedes_id = f.id) "
+        if "supersedes_id" in fact_cols
+        else ""
+    )
+    fpt_clause = "AND f.fiscal_period_type = ? " if fiscal_period_type is not None else ""
+    params: list[object] = [kpi_definition_revision_id, iso_period]
+    if fiscal_period_type is not None:
+        params.append(fiscal_period_type.value)
+    rows = conn.execute(
+        "SELECT f.value FROM kpi_facts f "  # nosec B608 -- fixed column predicates
+        "JOIN kpi_fact_semantic_contexts ksc ON ksc.kpi_fact_id = f.id "
+        "AND NOT EXISTS ("
+        "  SELECT 1 FROM kpi_fact_semantic_contexts nxt WHERE nxt.supersedes_context_id = ksc.id"
+        ") "
+        "WHERE ksc.kpi_definition_revision_id = ? "
+        "AND ksc.status = 'admitted' "
+        "AND date(f.period_end) = date(?) "
+        f"{supersedes_filter}{fpt_clause}"
+        "ORDER BY f.id",
+        tuple(params),
+    ).fetchall()
+    if not rows:
+        return None
+    if len(rows) > 1:
+        raise ValueError(
+            f"multiple admitted facts found for {kpi_definition_revision_id} at {iso_period}; "
+            "specify fiscal_period_type"
+        )
+    return Decimal(str(rows[0][0]))
+
+
 def bind_forward_kpi_definition_revision(
     conn: sqlite3.Connection,
     *,
@@ -1233,6 +1481,8 @@ def bind_forward_kpi_definition_revision(
     reviewed_by: str,
     knowledge_at: datetime | None = None,
     source_locator_json: str | None = None,
+    comparative_overlap: ComparativeOverlapCandidate | None = None,
+    overlap_policy: OverlapTolerancePolicy | None = None,
 ) -> ForwardKpiRevisionBinding | None:
     """Resolve or append an admitted KPI definition revision for forward persistence.
 
@@ -1473,26 +1723,67 @@ def bind_forward_kpi_definition_revision(
                 and current.period_kind is period_kind
                 and current.stock_flow_behavior is stock_flow_behavior
             )
+            bridge_spec: KpiComparabilityBridgeSpec | None = None
             if semantic_same and current.reported_label != context.metric_name_as_reported:
-                relation_kind = KpiDefinitionRelationKind.RENAMED
-                comparability_disposition = (
-                    KpiDefinitionComparabilityDisposition.COMPARABLE_WITH_BREAK
-                )
-                reason_code = "forward_label_renamed"
+                if comparative_overlap is not None:
+                    resolved_pred = (
+                        comparative_overlap.predecessor_value
+                        if comparative_overlap.predecessor_value is not None
+                        else lookup_revision_reported_value(
+                            conn,
+                            kpi_definition_revision_id=current.kpi_definition_revision_id,
+                            period_end=comparative_overlap.period_end,
+                            fiscal_period_type=comparative_overlap.fiscal_period_type,
+                        )
+                    )
+                    if resolved_pred is None:
+                        relation_kind = KpiDefinitionRelationKind.RENAMED
+                        comparability_disposition = (
+                            KpiDefinitionComparabilityDisposition.COMPARABLE_WITH_BREAK
+                        )
+                        reason_code = "forward_label_renamed_unverified"
+                    else:
+                        witness_locator = comparative_overlap.source_locator or locator_dict
+                        ok, witness, _ = evaluate_overlap_witness(
+                            period_end=comparative_overlap.period_end,
+                            predecessor_value=resolved_pred,
+                            successor_value=comparative_overlap.successor_comparative_value,
+                            source_locator=witness_locator,
+                            fiscal_period_type=comparative_overlap.fiscal_period_type,
+                            policy=overlap_policy,
+                        )
+                        if ok and witness is not None:
+                            relation_kind = KpiDefinitionRelationKind.RENAMED
+                            comparability_disposition = (
+                                KpiDefinitionComparabilityDisposition.CONTINUOUS
+                            )
+                            reason_code = "verified_rename_overlap"
+                            bridge_spec = RenameOverlapBridge(overlap_witness=witness)
+                        else:
+                            relation_kind = KpiDefinitionRelationKind.REDEFINED
+                            comparability_disposition = (
+                                KpiDefinitionComparabilityDisposition.NOT_COMPARABLE
+                            )
+                            reason_code = "rename_overlap_mismatch"
+                else:
+                    relation_kind = KpiDefinitionRelationKind.RENAMED
+                    comparability_disposition = (
+                        KpiDefinitionComparabilityDisposition.COMPARABLE_WITH_BREAK
+                    )
+                    reason_code = "forward_label_renamed"
             else:
                 relation_kind = KpiDefinitionRelationKind.REDEFINED
                 comparability_disposition = KpiDefinitionComparabilityDisposition.NOT_COMPARABLE
                 reason_code = "forward_semantic_redefined"
-            comp_digest = _sha256(
-                _canonical_json(
-                    {
-                        "predecessor": current.kpi_definition_revision_id,
-                        "successor": new_revision.kpi_definition_revision_id,
-                        "disposition": comparability_disposition.value,
-                        "relation_kind": relation_kind.value,
-                    }
-                )
-            )[:24]
+            comp_digest_payload: dict[str, object] = {
+                "predecessor": current.kpi_definition_revision_id,
+                "successor": new_revision.kpi_definition_revision_id,
+                "disposition": comparability_disposition.value,
+                "relation_kind": relation_kind.value,
+            }
+            if bridge_spec is not None:
+                comp_digest_payload["bridge_spec"] = bridge_spec.model_dump(mode="json")
+            comp_digest = _sha256(_canonical_json(comp_digest_payload))[:24]
             persist_kpi_definition_comparability_revision(
                 conn,
                 KpiDefinitionComparabilityRevision(
@@ -1509,6 +1800,7 @@ def bind_forward_kpi_definition_revision(
                     source_document_version_id=document_version_id,
                     source_evidence_node_id=evidence_node_id,
                     source_locator=locator_dict,
+                    bridge_spec=bridge_spec,
                     effective_at=effective_at,
                     knowledge_at=candidate_ts,
                     recorded_at=candidate_ts,
