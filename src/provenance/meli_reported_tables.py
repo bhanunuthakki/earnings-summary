@@ -27,6 +27,7 @@ from provenance.evidence_native_candidates import (
     resolve_local_storage_uri,
     select_evidence_native_candidates_by_id,
 )
+from provenance.evidence_node_store import load_run_nodes, resolve_state_root_from_roots
 from provenance.fact_plane_v2 import (
     CanonicalJSONObject,
     ExtractionRunCompletenessSealV2,
@@ -85,6 +86,7 @@ class ReportedTableRequest(_Closed):
     content_roots: tuple[Path, ...] = Field(min_length=1)
     recorded_at: datetime
     apply: bool = False
+    state_root: Path | None = Field(default=None, exclude_if=lambda value: value is None)
     analysis_scope: AnalysisEvidenceScope | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -169,6 +171,7 @@ def load_reported_table_evidence(
     request: ReportedTableRequest,
     *,
     allow_annual_statements: bool = False,
+    state_root: Path | None = None,
 ) -> ReportedTableEvidence:
     if request.analysis_scope is not None:
         scope = request.analysis_scope
@@ -251,12 +254,18 @@ def load_reported_table_evidence(
     if len(raw) != primary.byte_size or hashlib.sha256(raw).hexdigest() != primary.blob_sha256:
         raise ValueError("native source byte commitment mismatch")
     source = raw.decode("utf-8", errors="strict")
-    rows = conn.execute(
-        "SELECT node_id,node_kind,text,locator_json,locator_sha256 FROM evidence_nodes WHERE extraction_run_id=? ORDER BY node_id",
-        (request.fulltext_run_id,),
-    ).fetchall()
+    effective_state_root = resolve_state_root_from_roots(
+        state_root if state_root is not None else request.state_root,
+        request.content_roots,
+    )
+    rows = load_run_nodes(conn, request.fulltext_run_id, state_root=effective_state_root)
     nodes: list[ReportedTableNode] = []
-    for node_id, kind, text, locator_json, locator_sha in rows:
+    for node_row in rows:
+        node_id = node_row["node_id"]
+        kind = node_row["node_kind"]
+        text = node_row["text"]
+        locator_json = node_row["locator_json"]
+        locator_sha = node_row["locator_sha256"]
         if locator_json is None:
             raise ValueError("native node lacks locator")
         locator = EvidenceLocator.model_validate_json(str(locator_json))
