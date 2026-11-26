@@ -64,6 +64,9 @@ from typing import cast
 
 from llm.capture import capture_exchange as _capture_exchange
 from llm.fleet_policy import policy_environment_names, subscription_route
+from llm.fleet_policy import (
+    subscription_fallback_disabled as _fleet_subscription_fallback_disabled,
+)
 from llm.ledger import record_llm_call
 from llm.resolver import CapabilityProfile, validate_purpose
 from llm.transport import (
@@ -781,6 +784,10 @@ _CODEX_MODEL_BY_CAPABILITY_TIER: dict[str, str] = {
     "claude-opus-4-7": _CODEX_JUDGMENT_MODEL,
     "claude-opus-4-8": _CODEX_JUDGMENT_MODEL,
     "claude-fable-5": _CODEX_JUDGMENT_MODEL,
+    "gemini-4-hydrogen": _CODEX_FAST_MODEL,
+    "gemini-4-neon": _CODEX_DEFAULT_MODEL,
+    "gemini-4-carbon": _CODEX_JUDGMENT_MODEL,
+    "gemini-3.5-flash-lite": _CODEX_FAST_MODEL,
     "gemini-3-flash-preview": _CODEX_FAST_MODEL,
     "gemini-2.5-flash": _CODEX_FAST_MODEL,
     "gemini-3.1-pro-preview": _CODEX_DEFAULT_MODEL,
@@ -793,6 +800,10 @@ _CLAUDE_MODEL_BY_CAPABILITY_TIER: dict[str, str] = {
     _CODEX_FAST_MODEL: FAST_CLASSIFIER_MODEL,
     _CODEX_DEFAULT_MODEL: DEFAULT_MODEL,
     _CODEX_JUDGMENT_MODEL: "claude-opus-4-8",
+    "gemini-4-hydrogen": FAST_CLASSIFIER_MODEL,
+    "gemini-4-neon": DEFAULT_MODEL,
+    "gemini-4-carbon": "claude-opus-4-8",
+    "gemini-3.5-flash-lite": FAST_CLASSIFIER_MODEL,
     "gemini-3-flash-preview": FAST_CLASSIFIER_MODEL,
     "gemini-2.5-flash": FAST_CLASSIFIER_MODEL,
     "gemini-3.1-pro-preview": DEFAULT_MODEL,
@@ -816,7 +827,7 @@ def primary_subscription_backend() -> str:
 def subscription_fallback_disabled() -> bool:
     """Return whether provider-family fallback is forbidden for this process."""
     try:
-        return len(subscription_route()) == 1
+        return _fleet_subscription_fallback_disabled()
     except (RuntimeError, ValueError) as exc:
         raise LLMSetupError(str(exc)) from None
 
@@ -1319,6 +1330,7 @@ def _call_claude(
         subscription_fallback_disabled()
         or os.environ.get("LLM_FALLBACK_DISABLED", "").lower() in {"1", "true", "yes"}
         or not allow_codex_fallback
+        or _PRIMARY_CODEX not in subscription_route()
     ):
         if last_info.kind == "usage_limit":
             raise LLMQuotaExhausted(

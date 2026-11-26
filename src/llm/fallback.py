@@ -25,11 +25,10 @@ from log_redact import redact
 log = logging.getLogger(__name__)
 
 
-# Gemini fallback model. Single Flash variant for both heavy (thesis tracker)
-# and light (intake classifier) workloads — quality is good enough for backup
-# duty and per-call cost is sub-penny. Override per-call by passing a custom
-# model to try_gemini_fallback if needed.
-GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
+# Gemini fallback model: Gemini 4 Hydrogen workhorse (replaces Flash-Lite and
+# retired gemini-2.5-flash). Override per-call by passing a custom model to
+# try_gemini_fallback if needed.
+GEMINI_FALLBACK_MODEL = "gemini-4-hydrogen"
 
 # Cap the fallback call so a hung Gemini request can't block an unattended
 # pipeline (e.g. a scheduled job) forever. Override via GEMINI_TIMEOUT_S; 120s default.

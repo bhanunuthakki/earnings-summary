@@ -64,6 +64,7 @@ class ModelCost:
     long_input_usd_per_mtok: float | None = None
     long_output_usd_per_mtok: float | None = None
     long_cached_input_usd_per_mtok: float | None = None
+    retired: bool = False
 
     @property
     def blended_usd_per_mtok(self) -> float:
@@ -100,18 +101,30 @@ MODEL_LADDER: dict[str, ModelCost] = {
     # from the stale $15/$75 entry to the verified 2026-07-21 $5/$25.
     "claude-opus-4-8": ModelCost("claude-opus-4-8", CLAUDE, 5.00, 25.00),
     "claude-fable-5": ModelCost("claude-fable-5", CLAUDE, 10.00, 50.00),
-    # Gemini API tiers (public API prices, $/MTok in/out, 2026-06).
+    # Gemini API tiers (public API prices, $/MTok in/out).
     # Matches GEMINI_BACKEND_FAST_MODEL / _DEFAULT_MODEL in src/llm/gemini_backend.py
     # (the Gemini Developer API backend — see directives/gemini_backend.md for the
     # 2026-07 migration off gemini-cli). The fast tier (Flash) self-anneals on
-    # NotFound: gemini-3-flash-preview → API-catalog-discovered model → gemini-2.5-flash
-    # (stable GA fallback).
-    # Both Flash ids live here so family_of() routes either to the Gemini backend.
+    # NotFound: gemini-3-flash-preview → API-catalog-discovered model →
+    # gemini-3.5-flash-lite (stable fallback).
+    # Flash ids live here so family_of() routes them to the Gemini backend.
     "gemini-3-flash-preview": ModelCost(
         "gemini-3-flash-preview", GEMINI, 0.50, 3.00, cached_input_usd_per_mtok=0.05
     ),
+    # Official Dec 1, 2026 replacement for deprecated gemini-2.5-flash (verified 2026-11-25).
+    "gemini-3.5-flash-lite": ModelCost("gemini-3.5-flash-lite", GEMINI, 0.30, 2.50),
+    # Retired from active candidate selection (auto-routes to gemini-3.5-flash-lite
+    # effective 2026-12-01); retained in MODEL_LADDER for historical llm_calls cost
+    # lookup and replay compatibility.
     "gemini-2.5-flash": ModelCost(
-        "gemini-2.5-flash", GEMINI, 0.30, 2.50, cached_input_usd_per_mtok=0.03
+        "gemini-2.5-flash", GEMINI, 0.30, 2.50, cached_input_usd_per_mtok=0.03, retired=True
+    ),
+    # Gemini 4 lineup (verified 2026-11-25 against official Gemini API pricing/model docs).
+    "gemini-4-hydrogen": ModelCost("gemini-4-hydrogen", GEMINI, 1.50, 7.50),
+    # Introductory $2/$10 price through 2026-11-30; re-verify post-intro rate after 2026-12-01.
+    "gemini-4-carbon": ModelCost("gemini-4-carbon", GEMINI, 2.00, 10.00),
+    "gemini-4-neon": ModelCost(
+        "gemini-4-neon", GEMINI, 3.00, 15.00, cached_input_usd_per_mtok=0.15
     ),
     "gemini-3.1-pro-preview": ModelCost(
         "gemini-3.1-pro-preview",
@@ -174,19 +187,13 @@ MODEL_LADDER: dict[str, ModelCost] = {
 # system; drift here silently biases model AND prompt selection.
 DEEPSEEK_JUDGE_MODEL = "deepseek/deepseek-v4-flash"  # reviewed 2026-07-25
 
-# Judge backend -> model. Cross-family by construction: a pool that is all
-# one family measures its own preferences (see llm_quality_program §P4).
-# The judges a SCHEDULED run uses by default. Gemini is deliberately absent:
-# its key is invalid (measured 2026-07-25), so including it made half of every
-# judgment error -> JUDGE_DEGRADED -> nothing could ever clear a promotion bar.
-# The pair below is cross-family by construction (open-weight + OpenAI), which
-# is the point: a same-family pool scored the same candidate 100% where these
-# two scored it 50%. Re-add gemini here once its key is rotated.
-DEFAULT_JUDGES: tuple[str, ...] = ("deepseek", "codex")
+# Default scheduled cross-family judge pool: Gemini 4 Neon (driver) + Claude
+# (external model family). Codex is disabled in fleet policy.
+DEFAULT_JUDGES: tuple[str, ...] = ("gemini", "claude")
 
 JUDGE_POOL: dict[str, str] = {
     CLAUDE: "claude-opus-4-8",
-    GEMINI: "gemini-3.1-pro-preview",
+    GEMINI: "gemini-4-neon",
     "deepseek": DEEPSEEK_JUDGE_MODEL,
     "codex": "gpt-5.6-terra",
 }
@@ -223,7 +230,7 @@ def ladder_sha() -> str:
             f"{mid}:{c.family}:{c.input_usd_per_mtok}:{c.output_usd_per_mtok}:"
             f"{c.cached_input_usd_per_mtok}:{c.long_context_threshold_tokens}:"
             f"{c.long_input_usd_per_mtok}:{c.long_output_usd_per_mtok}:"
-            f"{c.long_cached_input_usd_per_mtok}"
+            f"{c.long_cached_input_usd_per_mtok}:{c.retired}"
         )
         for mid, c in sorted(MODEL_LADDER.items())
     )
@@ -274,6 +281,7 @@ def cheaper_candidates(
         mid
         for mid, cost in MODEL_LADDER.items()
         if mid != incumbent
+        and not cost.retired
         and cost.blended_usd_per_mtok < inc_rank
         and (include_gemini or cost.family != GEMINI)
         and (include_openrouter or cost.family != OPENROUTER)

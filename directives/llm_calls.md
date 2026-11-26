@@ -137,7 +137,10 @@ separate from mocked transport and unit-test results.
 An explicit backend wins; otherwise the registered model family and shared fleet policy
 select the provider order. Normal purpose-resolved subscription calls consume that policy
 without restating a project default; an operational failure advances to the next registered
-fleet adapter. The fleet's canonical primary-backend setting is the rollback switch.
+fleet adapter. The fleet's canonical primary-backend setting is the rollback switch. A
+backend disabled by fleet policy fails closed and is excluded from ordinary selection.
+Gemini API credential resolution (`GEMINI_API_KEY` in project `.env`, then fleet `.env`)
+follows `directives/gemini_backend.md`.
 
 Registered explicit provider-family model IDs route to that provider. A model-routed
 provider adapter may use the operational fallback implemented in `src/llm/cli.py`,

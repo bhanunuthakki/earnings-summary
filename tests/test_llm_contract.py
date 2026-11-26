@@ -91,7 +91,7 @@ def _real_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     def no_effect(*_args: object, **_kwargs: object) -> None:
         return None
 
-    monkeypatch.setenv(cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    monkeypatch.setenv(cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "claude")
     monkeypatch.delenv("LLM_SUBSCRIPTION_FALLBACK_DISABLED", raising=False)
     monkeypatch.setattr(cli, "_enforce_budget_pre_call", no_effect)
     monkeypatch.setattr(cli, "capture_exchange", no_effect)
@@ -113,19 +113,19 @@ def test_actual_dispatch_does_not_fallback_on_budget_or_configuration(
     prompt = "meaning"
     calls: list[str] = []
 
-    def codex(_prompt: str, **_kwargs: object) -> str:
-        calls.append("codex")
-        raise error
-
     def claude(_prompt: str, **_kwargs: object) -> str:
         calls.append("claude")
+        raise error
+
+    def codex(_prompt: str, **_kwargs: object) -> str:
+        calls.append("codex")
         return '{"answer":42}'
 
-    monkeypatch.setattr(codex_backend, "call_codex_llm", codex)
     monkeypatch.setattr(cli, "_call_claude", claude)
+    monkeypatch.setattr(codex_backend, "call_codex_llm", codex)
     with pytest.raises(type(error)) as raised:
         cli.call_llm(prompt, purpose="prompt_variant_propose", scope="meta_eval")
-    assert calls == ["codex"]
+    assert calls == ["claude"]
     assert raised.value is error
 
 
@@ -149,20 +149,24 @@ def test_web_dispatch_preserves_hard_stops(
     _real_dispatch(monkeypatch)
     calls: list[str] = []
 
-    def codex(_prompt: str, **_kwargs: object) -> str:
-        calls.append("codex")
+    def claude_setup() -> None:
+        calls.append("claude")
         raise error
 
-    def forbidden_claude_setup() -> None:
-        calls.append("claude")
-        raise AssertionError("hard stop must not reach Claude")
+    def forbidden_codex(_prompt: str, **_kwargs: object) -> str:
+        calls.append("codex")
+        raise AssertionError("hard stop must not reach Codex")
 
-    monkeypatch.setattr(codex_backend, "call_codex_llm", codex)
-    monkeypatch.setattr(cli, "_verify_setup_once", forbidden_claude_setup)
+    def forbidden_claude_subprocess(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("hard stop must not reach Claude subprocess")
+
+    monkeypatch.setattr(cli, "_verify_setup_once", claude_setup)
+    monkeypatch.setattr(codex_backend, "call_codex_llm", forbidden_codex)
+    monkeypatch.setattr(cli.subprocess, "run", forbidden_claude_subprocess)
     with pytest.raises(type(error)) as raised:
         cli.call_llm_with_web("question", purpose="recent_developments")
     assert raised.value is error
-    assert calls == ["codex"]
+    assert calls == ["claude"]
 
 
 @pytest.mark.parametrize(

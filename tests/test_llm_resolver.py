@@ -87,3 +87,31 @@ def test_sol_candidate_preserves_exact_id_without_purpose_promotion(
     assert cli.model_for_subscription_backend(model, backend) == "gpt-6.1-sol"
     assert cli.LLM_MODELS["kpi_summary_enumerate"] == incumbent
     assert not model_has_capabilities(model, CapabilityProfile(min_context_length=1_050_001))[0]
+
+
+@pytest.mark.parametrize(
+    "gemini_model",
+    ["gemini-4-neon", "gemini-4-hydrogen", "gemini-4-carbon", "gemini-3.5-flash-lite"],
+)
+def test_gemini_4_models_resolve_with_unified_1m_capabilities(gemini_model: str) -> None:
+    profile = CapabilityProfile(
+        min_context_length=1_048_576,
+        requires_vision=True,
+        requires_structured_output=True,
+    )
+    model, backend = resolve_model_and_backend(
+        purpose=None,
+        model=gemini_model,
+        capability_profile=profile,
+    )
+    assert model == gemini_model
+    assert backend == "gemini"
+    assert not model_has_capabilities(
+        gemini_model, CapabilityProfile(min_context_length=1_048_577)
+    )[0]
+
+
+def test_gemini_fallback_constants_avoid_deprecated_25_flash() -> None:
+    from llm import fallback
+
+    assert fallback.GEMINI_FALLBACK_MODEL == "gemini-4-hydrogen"

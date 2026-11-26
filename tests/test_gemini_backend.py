@@ -885,6 +885,73 @@ def test_usage_meta_tolerates_junk_or_missing_usage() -> None:
         assert meta["total_cost_usd"] == 0.0
 
 
+def test_usage_meta_counts_gemini_4_thinking_tokens_in_output_and_cost() -> None:
+    meta = gemini_backend.usage_meta_from_response(
+        {
+            "prompt_token_count": 100_000,
+            "candidates_token_count": 20_000,
+            "thoughts_token_count": 80_000,
+            "cached_content_token_count": 50_000,
+        },
+        model="gemini-4-neon",
+    )
+    usage = cast("dict[str, object]", meta["usage"])
+    assert usage["input_tokens"] == 100_000
+    assert usage["output_tokens"] == 100_000
+    assert usage["cache_read_input_tokens"] == 50_000
+    # Neon: 50k uncached * $3/M ($0.15) + 50k cached * $0.15/M ($0.0075) + 100k out * $15/M ($1.50)
+    assert meta["total_cost_usd"] == pytest.approx(1.6575)
+
+
+def test_call_gemini_records_thoughts_token_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    _no_budget(monkeypatch)
+    _gemini_ready(monkeypatch)
+    recorded: list[dict[str, object]] = []
+    monkeypatch.setattr(gemini_backend, "record_llm_call", _record_to(recorded))
+    monkeypatch.setattr(gemini_backend.genai, "Client", _FakeClient)
+
+    usage = SimpleNamespace(
+        prompt_token_count=10_000,
+        candidates_token_count=1_000,
+        thoughts_token_count=4_000,
+        cached_content_token_count=0,
+    )
+    _FakeClient.returning(SimpleNamespace(text="ok", usage_metadata=usage))
+
+    out = gemini_backend.call_gemini("prompt", model="gemini-4-neon", purpose="bear_case")
+    assert out == "ok"
+    assert len(recorded) == 1
+    meta = cast("dict[str, object]", recorded[0]["meta"])
+    recorded_usage = cast("dict[str, object]", meta["usage"])
+    assert recorded_usage["output_tokens"] == 5_000
+    assert meta["total_cost_usd"] == pytest.approx(0.105)
+
+
+def test_gemini_fast_model_fallback_and_driver_workhorse_roles() -> None:
+    assert gemini_backend.GEMINI_BACKEND_DEFAULT_MODEL == "gemini-4-neon"
+    assert gemini_backend.GEMINI_BACKEND_FAST_MODEL == "gemini-4-hydrogen"
+    assert gemini_backend._GEMINI_FAST_MODEL_FALLBACK == "gemini-3.5-flash-lite"
+
+
+def test_verify_gemini_setup_falls_back_to_fleet_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setattr(gemini_backend, "_gemini_setup_verified", False)
+    monkeypatch.setattr(gemini_backend, "_gemini_api_key", None)
+    placeholder = "fleet-fallback-" + "placeholder"
+    (tmp_path / ".env").write_text(
+        f'{"GEMINI_API_KEY"}="{placeholder}"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AGENT_INSTRUCTIONS_HOME", str(tmp_path))
+
+    gemini_backend._verify_gemini_setup_once()
+    assert gemini_backend._gemini_setup_verified is True
+    assert gemini_backend._gemini_api_key == placeholder
+
+
 # ---------------------------------------------------------------------------
 # Package layout + compare harness
 
