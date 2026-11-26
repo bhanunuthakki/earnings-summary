@@ -437,3 +437,163 @@ def test_evidence_root_resolves_db_directory_with_ir_documents(tmp_path: Path) -
         ingest_transcripts.evidence_root_for_database(other_db) == ingest_transcripts.PROJECT_ROOT
     )
     assert quarterly_refresh.evidence_root_for_database(other_db) == quarterly_refresh.PROJECT_ROOT
+
+
+def test_persisted_ir_document_receipt_skips_legacy_reindex_source_url(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_staging_double(monkeypatch)
+    if sys.platform == "darwin":
+
+        def _read_staged(artifact: StagedTranscriptArtifact, **_kwargs: object) -> bytes:
+            return artifact.staged_path.read_bytes()
+
+        monkeypatch.setattr(
+            transcript_acquisition,
+            "read_staged_transcript",
+            _read_staged,
+        )
+    repo_root = tmp_path / "repo"
+    staging_root = repo_root / ".tmp" / "transcript-acquisition"
+    staging_root.mkdir(parents=True)
+    legacy_rel = "ir_documents/MELI/2024-06-30/ir_transcript__legacy.pdf"
+    q3_rel = "ir_documents/MELI/2026-09-30/ir_transcript__q3.pdf"
+    for rel, body in (
+        (legacy_rel, b"%PDF-1.4\nMELI legacy"),
+        (q3_rel, b"%PDF-1.4\nMELI Q3"),
+    ):
+        p = repo_root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(body)
+
+    legacy_payload = b"%PDF-1.4\nMELI legacy"
+    q3_payload = b"%PDF-1.4\nMELI Q3"
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, name, list_type, fiscal_year_end, instrument_type) "
+            "VALUES ('MELI', 'MercadoLibre', 'portfolio', '12-31', 'equity')"
+        )
+        conn.execute(
+            "INSERT INTO documents (id, ticker, source_type, doc_type, period_end, file_path, "
+            "sha256, fetched_at, fetch_status, raw_bytes_size, source_url) VALUES "
+            "(1, 'MELI', 'ir_doc', 'ir_transcript', '2024-06-30', ?, ?, "
+            "'2026-11-04T00:00:00', 'ok', ?, 'reindex_subdir:ir_transcript__legacy.pdf'), "
+            "(2, 'MELI', 'ir_doc', 'ir_transcript', '2026-09-30', ?, ?, "
+            "'2026-11-04T00:00:00', 'ok', ?, 'https://http2.mlstatic.com/q3.pdf')",
+            (
+                legacy_rel,
+                hashlib.sha256(legacy_payload).hexdigest(),
+                len(legacy_payload),
+                q3_rel,
+                hashlib.sha256(q3_payload).hexdigest(),
+                len(q3_payload),
+            ),
+        )
+        artifacts = stage_pending_issuer_transcripts(
+            conn,
+            tickers=["MELI"],
+            project_root=repo_root,
+            private_root=staging_root,
+            entrypoint=TranscriptAcquisitionEntrypoint.INGEST_TRANSCRIPTS,
+            as_of=date(2026, 11, 24),
+        )
+        assert list(artifacts.keys()) == [2]
+        receipt_id = persist_authorized_transcript_artifact(
+            conn,
+            artifacts[2],
+            project_root=repo_root,
+            trusted_staging_root=staging_root,
+        )
+        assert len(receipt_id) == 64
+
+
+def test_ingest_transcripts_ir_only_skips_unreceipted_raw_files(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from execution import ingest_transcripts
+
+    _install_staging_double(monkeypatch)
+    if sys.platform == "darwin":
+
+        def _read_staged(artifact: StagedTranscriptArtifact, **_kwargs: object) -> bytes:
+            return artifact.staged_path.read_bytes()
+
+        monkeypatch.setattr(
+            transcript_acquisition,
+            "read_staged_transcript",
+            _read_staged,
+        )
+    repo_root = tmp_path / "repo"
+    (repo_root / "transcripts" / "raw").mkdir(parents=True)
+    (repo_root / "transcripts" / "raw" / "BKNG_Q1_2025.txt").write_text("legacy unreceipted")
+    rel = "ir_documents/BKNG/2026-09-30/ir_transcript__q3.pdf"
+    pdf_path = repo_root / rel
+    pdf_path.parent.mkdir(parents=True)
+    payload = b"%PDF-1.4\nBKNG Q3"
+    pdf_path.write_bytes(payload)
+
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, name, list_type, fiscal_year_end, instrument_type) "
+            "VALUES ('BKNG', 'Booking Holdings', 'portfolio', '12-31', 'equity')"
+        )
+        conn.execute(
+            "INSERT INTO documents (id, ticker, source_type, doc_type, period_end, file_path, "
+            "sha256, fetched_at, fetch_status, raw_bytes_size, source_url) VALUES "
+            "(1, 'BKNG', 'ir_doc', 'ir_transcript', '2026-09-30', ?, ?, "
+            "'2026-11-04T00:00:00', 'ok', ?, 'https://s25.q4cdn.com/q3.pdf')",
+            (rel, hashlib.sha256(payload).hexdigest(), len(payload)),
+        )
+        conn.commit()
+
+    ingested_ids: list[int] = []
+
+    def fake_ingest_evidence_file(_conn: sqlite3.Connection, **kwargs: object) -> object:
+        doc_id = int(str(kwargs["document_id"]))
+        ingested_ids.append(doc_id)
+        return SimpleNamespace(
+            skipped_existing=False,
+            ticker="BKNG",
+            period_end=datetime(2026, 9, 30),
+            document_id=doc_id,
+            transcript_id=99,
+            segment_count=1,
+            qa_status=SimpleNamespace(value="ok"),
+            qa_signals=(),
+        )
+
+    monkeypatch.setattr(ingest_transcripts, "ingest_evidence_file", fake_ingest_evidence_file)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["ingest_transcripts.py", "--db", str(db_path), "--ticker", "BKNG", "--ir-only"],
+    )
+    rc = ingest_transcripts.main()
+    assert rc == 0
+    assert ingested_ids == [1]
+
+
+def test_ingest_sec_fpi_filings_accepts_explicit_db_path(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from execution import ingest_sec_fpi_filings
+
+    db_path = migrated_db(tmp_path / "external" / "portfolio.db")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["ingest_sec_fpi_filings.py", "--all-fpi", "--db", str(db_path)],
+    )
+    assert ingest_sec_fpi_filings.main() == 0

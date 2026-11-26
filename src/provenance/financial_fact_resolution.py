@@ -1228,8 +1228,14 @@ def canonical_fact_selections_as_known(
     effective_at: datetime,
     known_at: datetime,
     concept_keys: Sequence[str] = (),
+    logical_keys: Sequence[str] | None = None,
 ) -> tuple[CanonicalFactSelectionAsKnown, ...]:
-    """Return exact selections, rejecting any selected compatibility-row drift."""
+    """Return exact selections, rejecting any selected compatibility-row drift.
+
+    ``logical_keys`` limits selection and drift validation to those keys, so
+    drift in an unrelated issuer's row cannot fail this caller. ``None`` means
+    every key; an empty sequence selects nothing after the schema checks.
+    """
 
     if effective_at.tzinfo is None or known_at.tzinfo is None:
         raise ValueError("fact-resolution cutoffs must be timezone-aware")
@@ -1240,6 +1246,7 @@ def canonical_fact_selections_as_known(
             effective_at=effective_at,
             known_at=known_at,
             concept_keys=concept_keys,
+            logical_keys=logical_keys,
         )
     except (ValueError, TypeError, OverflowError, InvalidOperation, sqlite3.Error):
         raise HistoricalFactAuthorityUnavailableError(
@@ -1301,6 +1308,7 @@ def _canonical_fact_selections_as_known_snapshot(
     effective_at: datetime,
     known_at: datetime,
     concept_keys: Sequence[str] = (),
+    logical_keys: Sequence[str] | None = None,
     drift_samples: list[FactCompatibilityDriftSample] | None = None,
     drift_counts: list[int] | None = None,
     sample_limit: int = 0,
@@ -1392,6 +1400,16 @@ def _canonical_fact_selections_as_known_snapshot(
             f"AND (observation.concept_key IN ({','.join(concept_names)}) "
             "OR observation.observation_id IS NULL) "
         )
+    logical_key_predicate = ""
+    if logical_keys is not None and not logical_keys:
+        logical_key_predicate = "AND 0 "
+    elif logical_keys:
+        logical_key_names: list[str] = []
+        for index, logical_key in enumerate(dict.fromkeys(logical_keys)):
+            name = f"logical_key_{index}"
+            logical_key_names.append(f":{name}")
+            parameters[name] = logical_key
+        logical_key_predicate = f"AND resolution.logical_key IN ({','.join(logical_key_names)}) "
     rows = conn.execute(
         "SELECT resolution.resolution_id,resolution.logical_key,"  # nosec B608 -- only generated named placeholders are interpolated; values stay bound
         "resolution.revision AS resolution_revision,"
@@ -1421,6 +1439,7 @@ def _canonical_fact_selections_as_known_snapshot(
         "WHERE prior_link.logical_key=resolution.logical_key "
         "AND prior_link.fact_table=:fact_table)))) "
         + concept_predicate
+        + logical_key_predicate
         + "ORDER BY resolution.logical_key,resolution.revision",
         parameters,
     ).fetchall()
@@ -1938,6 +1957,46 @@ def require_exact_canonical_kpi_fact_payload(
         locator_json=None if row["locator"] is None else str(row["locator"]),
         source_excerpt=(None if row["source_excerpt"] is None else str(row["source_excerpt"])),
     )
+
+
+def fact_source_is_companyfacts_snapshot(
+    conn: sqlite3.Connection, *, source_document_id: int
+) -> bool:
+    """Return whether fact-capture triggers skip this source document.
+
+    Mirrors the ``trg_*_facts_observation_insert`` condition. CompanyFacts
+    admission captures its own matched observations; a derived ``kpi_facts``
+    row anchored to such a snapshot has no input-lineage capture route and is
+    refused (``companyfacts_derived_fact_requires_input_lineage``).
+    """
+
+    if not (
+        _object_exists(conn, "evidence_document_versions", object_type="table")
+        and _object_exists(conn, "evidence_source_observations", object_type="table")
+    ):
+        return False
+    lookups: list[str] = []
+    if _object_exists(conn, "v_legacy_document_evidence_bindings_current", object_type="view"):
+        lookups.append(
+            "(SELECT source.source_kind FROM v_legacy_document_evidence_bindings_current "
+            "AS binding JOIN evidence_document_versions AS version "
+            "ON version.document_version_id = binding.document_version_id "
+            "JOIN evidence_source_observations AS source "
+            "ON source.observation_id = version.observation_id "
+            "WHERE binding.legacy_document_id = :doc LIMIT 1)"
+        )
+    lookups.append(
+        "(SELECT source.source_kind FROM evidence_document_versions AS version "
+        "JOIN evidence_source_observations AS source "
+        "ON source.observation_id = version.observation_id "
+        "WHERE version.legacy_document_id = :doc "
+        "ORDER BY version.version_sequence DESC LIMIT 1)"
+    )
+    row = conn.execute(
+        f"SELECT COALESCE({','.join(lookups)}, '')",  # nosec B608 -- fixed internal SQL fragments
+        {"doc": source_document_id},
+    ).fetchone()
+    return row is not None and row[0] == "sec_companyfacts"
 
 
 def capture_fact_row_observation(

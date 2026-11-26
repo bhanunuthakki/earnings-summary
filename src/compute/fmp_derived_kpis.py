@@ -66,6 +66,7 @@ from pipeline.restatement_detector import insert_kpi_with_restatement_detection
 from provenance.financial_fact_resolution import (
     canonical_fact_relation,
     canonical_fact_selections_as_known,
+    fact_source_is_companyfacts_snapshot,
 )
 from provenance.overrides import KPI as OVERRIDE_KPI
 from provenance.overrides import active_scalar_override_map
@@ -164,6 +165,9 @@ class FmpDerivationReason(StrEnum):
     INVALID_SEGMENT_CURRENCY = "invalid_segment_currency"
     INCOMPATIBLE_SEGMENT_MARGIN_CURRENCY = "incompatible_segment_margin_currency"
     INCOMPATIBLE_SEGMENT_GROWTH_CURRENCY = "incompatible_segment_growth_currency"
+    COMPANYFACTS_DERIVED_FACT_REQUIRES_INPUT_LINEAGE = (
+        "companyfacts_derived_fact_requires_input_lineage"
+    )
 
 
 @dataclass(frozen=True)
@@ -207,8 +211,29 @@ def _canonical_input_refs(
     if not requested:
         return {}
     cutoff = datetime.now(UTC)
+    requested_ids = list(requested)
+    logical_keys: tuple[str, ...] = ()
+    # Without the revision table the resolver's own schema check fails closed.
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='fact_observation_revisions'"
+    ).fetchone():
+        key_placeholders = ",".join("?" for _ in requested_ids)
+        logical_keys = tuple(
+            str(row[0])
+            for row in conn.execute(
+                "SELECT DISTINCT logical_key FROM fact_observation_revisions "
+                f"WHERE fact_table=? AND fact_row_id IN ({key_placeholders})",  # nosec B608 -- placeholders only
+                (fact_table, *requested_ids),
+            )
+        )
+    # Scope selection and drift validation to this caller's rows: drift in an
+    # unrelated issuer's row must not fail this ticker's derivation.
     selections = canonical_fact_selections_as_known(
-        conn, fact_table=fact_table, effective_at=cutoff, known_at=cutoff
+        conn,
+        fact_table=fact_table,
+        effective_at=cutoff,
+        known_at=cutoff,
+        logical_keys=logical_keys,
     )
     selected_by_id = {selection.fact_row_id: selection for selection in selections}
     selected_ids = [fact_id for fact_id in requested if fact_id in selected_by_id]
@@ -1457,6 +1482,7 @@ def persist_derived_kpis(
     ticker: str,
     rows: list[DerivedKpiRow],
     extracted_by: str = "fmp_derived",
+    degradations: list[FmpDerivationReason] | None = None,
 ) -> int:
     """Insert kpi_facts rows for the derived metrics. Returns count actually inserted.
 
@@ -1467,13 +1493,28 @@ def persist_derived_kpis(
     `'fmp_derived'`; category-2 transforms over kpi_facts (see
     `derive_kpi_transforms`) pass `'kpi_transform_derived'` so the two are
     distinguishable from direct FMP ingestion and from each other.
+
+    A row anchored to a SEC CompanyFacts snapshot is skipped: fact capture
+    refuses derived facts there until input lineage is supported. The skip is
+    appended to ``degradations`` so the caller reports it instead of failing.
     """
     # Derived rows are mechanical arithmetic over FMP-tier inputs; the
     # deterministic prior (pipeline.confidence) replaces the unset 1.0.
     confidence = score_confidence(tier=SourceQualityTier.FMP_NORMALIZED, extracted_by=extracted_by)
     tier_by_doc = _input_doc_tiers(conn, rows)
     inserted = 0
+    refused_anchor: dict[int, bool] = {}
     for row in rows:
+        if row.source_doc_id not in refused_anchor:
+            refused_anchor[row.source_doc_id] = fact_source_is_companyfacts_snapshot(
+                conn, source_document_id=row.source_doc_id
+            )
+        if refused_anchor[row.source_doc_id]:
+            if degradations is not None:
+                degradations.append(
+                    FmpDerivationReason.COMPANYFACTS_DERIVED_FACT_REQUIRES_INPUT_LINEAGE
+                )
+            continue
         kpi_def_id = find_or_create_kpi_definition(
             conn,
             ticker=ticker,
@@ -1590,7 +1631,7 @@ def derive_for_ticker_outcome(conn: sqlite3.Connection, ticker: str) -> FmpDeriv
 
     inserted = 0
     if rows:
-        inserted += persist_derived_kpis(conn, ticker=ticker, rows=rows)
+        inserted += persist_derived_kpis(conn, ticker=ticker, rows=rows, degradations=degradations)
 
     # Phase 2: transforms over the now-persisted kpi_facts (incl. the Revenue
     # YoY Growth just written, plus IR-extracted bases like Risk-adjusted NIM).
@@ -1601,6 +1642,7 @@ def derive_for_ticker_outcome(conn: sqlite3.Connection, ticker: str) -> FmpDeriv
             ticker=ticker,
             rows=transform_rows,
             extracted_by="kpi_transform_derived",
+            degradations=degradations,
         )
 
     return FmpDerivationOutcome(

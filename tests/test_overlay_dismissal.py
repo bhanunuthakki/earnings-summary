@@ -179,7 +179,9 @@ eval(OVERLAY_SOURCE);
         check=False,
         capture_output=True,
         text=True,
-        timeout=5,
+        # The harness sleeps about 1 s and runs in 1.4 s locally; a loaded CI
+        # runner exceeded 5 s (merge-queue run 45659567981). 30 s still bounds a hang.
+        timeout=30,
     )
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout == "ok"

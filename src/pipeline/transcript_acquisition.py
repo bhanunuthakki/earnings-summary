@@ -1126,6 +1126,8 @@ def stage_pending_issuer_transcripts(
     planned: list[tuple[sqlite3.Row, TranscriptAcquisitionAuthorization, Path, Path, int, int]] = []
     pending_ids: list[int] = []
     for row in rows:
+        if str(row["source_url"] or "").startswith("reindex_subdir:"):
+            continue
         ticker_upper = str(row["ticker"]).upper()
         period = _resolve_document_period(
             conn,

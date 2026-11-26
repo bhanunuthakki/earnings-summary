@@ -395,7 +395,7 @@ def _backfill_existing_ir_transcripts(
     Returns (ingested_records, skipped_existing_count, failed_count).
     """
     evidence_root = PROJECT_ROOT if project_root is None else project_root
-    sql = "SELECT id, ticker, file_path FROM documents WHERE doc_type = 'ir_transcript'"
+    sql = "SELECT id, ticker, file_path, source_url FROM documents WHERE doc_type = 'ir_transcript'"
     params: tuple[str, ...] = ()
     if restrict_ticker is not None:
         sql += " AND ticker = ?"
@@ -408,6 +408,8 @@ def _backfill_existing_ir_transcripts(
     skipped_existing = 0
     failed = 0
     for row in rows:
+        if str(row["source_url"] or "").startswith("reindex_subdir:"):
+            continue
         doc_id = int(row["id"])
         if find_existing_transcript_id(conn, doc_id) is not None:
             skipped_existing += 1
@@ -496,7 +498,10 @@ def _ir_transcript_sources(
     project_root: Path | None = None,
 ) -> list[tuple[int, str, str | None, Path]]:
     evidence_root = PROJECT_ROOT if project_root is None else project_root
-    sql = "SELECT id, ticker, period_end, file_path FROM documents WHERE doc_type = 'ir_transcript'"
+    sql = (
+        "SELECT id, ticker, period_end, file_path, source_url "
+        "FROM documents WHERE doc_type = 'ir_transcript'"
+    )
     params: tuple[str, ...] = ()
     if restrict_ticker is not None:
         sql += " AND ticker = ?"
@@ -505,6 +510,8 @@ def _ir_transcript_sources(
     rows = conn.execute(sql, params).fetchall()
     sources: list[tuple[int, str, str | None, Path]] = []
     for row in rows:
+        if str(row["source_url"] or "").startswith("reindex_subdir:"):
+            continue
         raw_path = str(row["file_path"]) if row["file_path"] else ""
         path = Path(raw_path)
         if not path.is_absolute():
@@ -576,6 +583,12 @@ def main() -> int:
         "documents with doc_type='ir_transcript' that haven't been parsed yet.",
     )
     parser.add_argument(
+        "--ir-only",
+        action="store_true",
+        help="Only backfill existing doc_type='ir_transcript' documents without scanning "
+        "transcripts/raw or transcripts/processed.",
+    )
+    parser.add_argument(
         "--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"), help="Path to portfolio.db"
     )
     parser.add_argument(
@@ -589,6 +602,8 @@ def main() -> int:
         help="Ingest again even when the same immutable transcript inputs already completed.",
     )
     args = parser.parse_args()
+    if args.ir_only:
+        args.include_ir_transcripts = True
 
     conn = open_db(args.db)
     try:
@@ -606,7 +621,9 @@ def main() -> int:
         tracked = _load_tracked_tickers(conn)
         selected_artifacts: dict[Path, AuthorizedTranscriptArtifact] = {}
         try:
-            if args.receipt_id:
+            if args.ir_only:
+                candidates = []
+            elif args.receipt_id:
                 candidates, selected_artifacts = _receipt_scoped_candidates(
                     conn,
                     args.receipt_id,
