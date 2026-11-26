@@ -14,6 +14,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 from urllib.parse import unquote, urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -55,8 +56,147 @@ class EvidenceNativeDocumentCandidate(BaseModel):
     recorded_at: datetime
 
 
-def _index_member_exclusion_sql(conn: sqlite3.Connection) -> str:
-    """Exclude active index_member-only rows when tracked_companies and ticker are present."""
+_IndexMemberScope = Literal["none", "with_archived", "without_archived"]
+
+_SELECT_NATIVE_CANDIDATES_ALL_SQL = (
+    "SELECT document.rowid AS evidence_rowid, document.document_version_id, "
+    "lower(document.blob_sha256) AS blob_sha256, blob.byte_size, blob.media_type, "
+    "COALESCE(("
+    "SELECT location.storage_uri FROM v_evidence_blob_locations_current AS location "
+    "WHERE location.blob_sha256 = document.blob_sha256 "
+    "AND location.location_kind = 'local' AND location.availability_state = 'present' "
+    "AND location.verified_sha256 = document.blob_sha256 "
+    "AND location.verified_byte_size = blob.byte_size "
+    "ORDER BY location.verified_at DESC, location.storage_uri LIMIT 1"
+    "), blob.storage_uri) AS storage_uri, observation.source_url AS source_ref, "
+    "document.recorded_at "
+    "FROM evidence_document_versions AS document "
+    "JOIN evidence_content_blobs AS blob ON blob.sha256 = document.blob_sha256 "
+    "JOIN evidence_source_observations AS observation "
+    "ON observation.observation_id = document.observation_id "
+    "WHERE document.legacy_document_id IS NULL AND document.rowid > ? "
+    "AND (? = 0 OR lower(blob.media_type) = 'application/pdf' "
+    "OR lower(observation.source_url) LIKE '%.pdf' "
+    "OR lower(observation.source_url) LIKE '%.pdf?%' "
+    "OR lower(observation.source_url) LIKE '%.pdf#%') "
+    "ORDER BY document.rowid LIMIT ?"
+)
+_SELECT_NATIVE_CANDIDATES_EXCLUDE_INDEX_MEMBER_WITH_ARCHIVED_SQL = (
+    "SELECT document.rowid AS evidence_rowid, document.document_version_id, "
+    "lower(document.blob_sha256) AS blob_sha256, blob.byte_size, blob.media_type, "
+    "COALESCE(("
+    "SELECT location.storage_uri FROM v_evidence_blob_locations_current AS location "
+    "WHERE location.blob_sha256 = document.blob_sha256 "
+    "AND location.location_kind = 'local' AND location.availability_state = 'present' "
+    "AND location.verified_sha256 = document.blob_sha256 "
+    "AND location.verified_byte_size = blob.byte_size "
+    "ORDER BY location.verified_at DESC, location.storage_uri LIMIT 1"
+    "), blob.storage_uri) AS storage_uri, observation.source_url AS source_ref, "
+    "document.recorded_at "
+    "FROM evidence_document_versions AS document "
+    "JOIN evidence_content_blobs AS blob ON blob.sha256 = document.blob_sha256 "
+    "JOIN evidence_source_observations AS observation "
+    "ON observation.observation_id = document.observation_id "
+    "WHERE document.legacy_document_id IS NULL AND document.rowid > ? "
+    "AND (? = 0 OR lower(blob.media_type) = 'application/pdf' "
+    "OR lower(observation.source_url) LIKE '%.pdf' "
+    "OR lower(observation.source_url) LIKE '%.pdf?%' "
+    "OR lower(observation.source_url) LIKE '%.pdf#%') "
+    "AND NOT ("
+    "EXISTS (SELECT 1 FROM tracked_companies AS tc "
+    "WHERE UPPER(tc.ticker) = UPPER(document.ticker) AND tc.archived_at IS NULL "
+    "AND tc.list_type = 'index_member') "
+    "AND NOT EXISTS (SELECT 1 FROM tracked_companies AS tc_active "
+    "WHERE UPPER(tc_active.ticker) = UPPER(document.ticker) AND tc_active.archived_at IS NULL "
+    "AND tc_active.list_type IN ('portfolio', 'evaluation', 'watchlist'))"
+    ") "
+    "ORDER BY document.rowid LIMIT ?"
+)
+_SELECT_NATIVE_CANDIDATES_EXCLUDE_INDEX_MEMBER_NO_ARCHIVED_SQL = (
+    "SELECT document.rowid AS evidence_rowid, document.document_version_id, "
+    "lower(document.blob_sha256) AS blob_sha256, blob.byte_size, blob.media_type, "
+    "COALESCE(("
+    "SELECT location.storage_uri FROM v_evidence_blob_locations_current AS location "
+    "WHERE location.blob_sha256 = document.blob_sha256 "
+    "AND location.location_kind = 'local' AND location.availability_state = 'present' "
+    "AND location.verified_sha256 = document.blob_sha256 "
+    "AND location.verified_byte_size = blob.byte_size "
+    "ORDER BY location.verified_at DESC, location.storage_uri LIMIT 1"
+    "), blob.storage_uri) AS storage_uri, observation.source_url AS source_ref, "
+    "document.recorded_at "
+    "FROM evidence_document_versions AS document "
+    "JOIN evidence_content_blobs AS blob ON blob.sha256 = document.blob_sha256 "
+    "JOIN evidence_source_observations AS observation "
+    "ON observation.observation_id = document.observation_id "
+    "WHERE document.legacy_document_id IS NULL AND document.rowid > ? "
+    "AND (? = 0 OR lower(blob.media_type) = 'application/pdf' "
+    "OR lower(observation.source_url) LIKE '%.pdf' "
+    "OR lower(observation.source_url) LIKE '%.pdf?%' "
+    "OR lower(observation.source_url) LIKE '%.pdf#%') "
+    "AND NOT ("
+    "EXISTS (SELECT 1 FROM tracked_companies AS tc "
+    "WHERE UPPER(tc.ticker) = UPPER(document.ticker) "
+    "AND tc.list_type = 'index_member') "
+    "AND NOT EXISTS (SELECT 1 FROM tracked_companies AS tc_active "
+    "WHERE UPPER(tc_active.ticker) = UPPER(document.ticker) "
+    "AND tc_active.list_type IN ('portfolio', 'evaluation', 'watchlist'))"
+    ") "
+    "ORDER BY document.rowid LIMIT ?"
+)
+
+_HAS_NATIVE_AFTER_ALL_SQL = (
+    "SELECT 1 FROM evidence_document_versions AS document "
+    "JOIN evidence_content_blobs AS blob ON blob.sha256 = document.blob_sha256 "
+    "JOIN evidence_source_observations AS observation "
+    "ON observation.observation_id = document.observation_id "
+    "WHERE document.legacy_document_id IS NULL AND document.rowid > ? "
+    "AND (? = 0 OR lower(blob.media_type) = 'application/pdf' "
+    "OR lower(observation.source_url) LIKE '%.pdf' "
+    "OR lower(observation.source_url) LIKE '%.pdf?%' "
+    "OR lower(observation.source_url) LIKE '%.pdf#%') LIMIT 1"
+)
+_HAS_NATIVE_AFTER_EXCLUDE_INDEX_MEMBER_WITH_ARCHIVED_SQL = (
+    "SELECT 1 FROM evidence_document_versions AS document "
+    "JOIN evidence_content_blobs AS blob ON blob.sha256 = document.blob_sha256 "
+    "JOIN evidence_source_observations AS observation "
+    "ON observation.observation_id = document.observation_id "
+    "WHERE document.legacy_document_id IS NULL AND document.rowid > ? "
+    "AND (? = 0 OR lower(blob.media_type) = 'application/pdf' "
+    "OR lower(observation.source_url) LIKE '%.pdf' "
+    "OR lower(observation.source_url) LIKE '%.pdf?%' "
+    "OR lower(observation.source_url) LIKE '%.pdf#%') "
+    "AND NOT ("
+    "EXISTS (SELECT 1 FROM tracked_companies AS tc "
+    "WHERE UPPER(tc.ticker) = UPPER(document.ticker) AND tc.archived_at IS NULL "
+    "AND tc.list_type = 'index_member') "
+    "AND NOT EXISTS (SELECT 1 FROM tracked_companies AS tc_active "
+    "WHERE UPPER(tc_active.ticker) = UPPER(document.ticker) AND tc_active.archived_at IS NULL "
+    "AND tc_active.list_type IN ('portfolio', 'evaluation', 'watchlist'))"
+    ") LIMIT 1"
+)
+_HAS_NATIVE_AFTER_EXCLUDE_INDEX_MEMBER_NO_ARCHIVED_SQL = (
+    "SELECT 1 FROM evidence_document_versions AS document "
+    "JOIN evidence_content_blobs AS blob ON blob.sha256 = document.blob_sha256 "
+    "JOIN evidence_source_observations AS observation "
+    "ON observation.observation_id = document.observation_id "
+    "WHERE document.legacy_document_id IS NULL AND document.rowid > ? "
+    "AND (? = 0 OR lower(blob.media_type) = 'application/pdf' "
+    "OR lower(observation.source_url) LIKE '%.pdf' "
+    "OR lower(observation.source_url) LIKE '%.pdf?%' "
+    "OR lower(observation.source_url) LIKE '%.pdf#%') "
+    "AND NOT ("
+    "EXISTS (SELECT 1 FROM tracked_companies AS tc "
+    "WHERE UPPER(tc.ticker) = UPPER(document.ticker) "
+    "AND tc.list_type = 'index_member') "
+    "AND NOT EXISTS (SELECT 1 FROM tracked_companies AS tc_active "
+    "WHERE UPPER(tc_active.ticker) = UPPER(document.ticker) "
+    "AND tc_active.list_type IN ('portfolio', 'evaluation', 'watchlist'))"
+    ") LIMIT 1"
+)
+
+
+def _index_member_scope(conn: sqlite3.Connection) -> _IndexMemberScope:
+    """Return which tracked_companies index_member exclusion query applies."""
 
     if (
         conn.execute(
@@ -64,27 +204,16 @@ def _index_member_exclusion_sql(conn: sqlite3.Connection) -> str:
         ).fetchone()
         is None
     ):
-        return ""
+        return "none"
     doc_columns = {
         str(row[1]) for row in conn.execute("PRAGMA table_info(evidence_document_versions)")
     }
     if "ticker" not in doc_columns:
-        return ""
+        return "none"
     tc_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
     if not {"ticker", "list_type"} <= tc_columns:
-        return ""
-    archived = " AND tc.archived_at IS NULL" if "archived_at" in tc_columns else ""
-    archived_active = " AND tc_active.archived_at IS NULL" if "archived_at" in tc_columns else ""
-    return (
-        " AND NOT ("
-        "EXISTS (SELECT 1 FROM tracked_companies AS tc "
-        f"WHERE UPPER(tc.ticker) = UPPER(document.ticker){archived} "
-        "AND tc.list_type = 'index_member') "
-        "AND NOT EXISTS (SELECT 1 FROM tracked_companies AS tc_active "
-        f"WHERE UPPER(tc_active.ticker) = UPPER(document.ticker){archived_active} "
-        "AND tc_active.list_type IN ('portfolio', 'evaluation', 'watchlist'))"
-        ")"
-    )
+        return "none"
+    return "with_archived" if "archived_at" in tc_columns else "without_archived"
 
 
 def select_evidence_native_candidates(
@@ -103,32 +232,14 @@ def select_evidence_native_candidates(
     """
 
     _require_schema(conn)
-    index_member_exclusion = _index_member_exclusion_sql(conn)
-    rows = conn.execute(
-        "SELECT document.rowid AS evidence_rowid, document.document_version_id, "  # nosec B608 -- closed internal predicate; all values remain bound
-        "lower(document.blob_sha256) AS blob_sha256, blob.byte_size, blob.media_type, "
-        "COALESCE(("
-        "SELECT location.storage_uri FROM v_evidence_blob_locations_current AS location "
-        "WHERE location.blob_sha256 = document.blob_sha256 "
-        "AND location.location_kind = 'local' AND location.availability_state = 'present' "
-        "AND location.verified_sha256 = document.blob_sha256 "
-        "AND location.verified_byte_size = blob.byte_size "
-        "ORDER BY location.verified_at DESC, location.storage_uri LIMIT 1"
-        "), blob.storage_uri) AS storage_uri, observation.source_url AS source_ref, "
-        "document.recorded_at "
-        "FROM evidence_document_versions AS document "
-        "JOIN evidence_content_blobs AS blob ON blob.sha256 = document.blob_sha256 "
-        "JOIN evidence_source_observations AS observation "
-        "ON observation.observation_id = document.observation_id "
-        "WHERE document.legacy_document_id IS NULL AND document.rowid > ? "
-        "AND (? = 0 OR lower(blob.media_type) = 'application/pdf' "
-        "OR lower(observation.source_url) LIKE '%.pdf' "
-        "OR lower(observation.source_url) LIKE '%.pdf?%' "
-        "OR lower(observation.source_url) LIKE '%.pdf#%') "
-        f"{index_member_exclusion} "
-        "ORDER BY document.rowid LIMIT ?",
-        (after_rowid, pdf_only, batch_size),
-    ).fetchall()
+    scope = _index_member_scope(conn)
+    if scope == "with_archived":
+        query = _SELECT_NATIVE_CANDIDATES_EXCLUDE_INDEX_MEMBER_WITH_ARCHIVED_SQL
+    elif scope == "without_archived":
+        query = _SELECT_NATIVE_CANDIDATES_EXCLUDE_INDEX_MEMBER_NO_ARCHIVED_SQL
+    else:
+        query = _SELECT_NATIVE_CANDIDATES_ALL_SQL
+    rows = conn.execute(query, (after_rowid, pdf_only, batch_size)).fetchall()
     return [
         EvidenceNativeDocumentCandidate(
             evidence_rowid=_integer(row["evidence_rowid"], "evidence document rowid"),
@@ -149,23 +260,14 @@ def has_evidence_native_after(
 ) -> bool:
     """Return whether another legacy-free append exists after the cursor."""
 
-    index_member_exclusion = _index_member_exclusion_sql(conn)
-    return (
-        conn.execute(
-            "SELECT 1 FROM evidence_document_versions AS document "  # nosec B608 -- closed internal predicate; all values remain bound
-            "JOIN evidence_content_blobs AS blob ON blob.sha256 = document.blob_sha256 "
-            "JOIN evidence_source_observations AS observation "
-            "ON observation.observation_id = document.observation_id "
-            "WHERE document.legacy_document_id IS NULL AND document.rowid > ? "
-            "AND (? = 0 OR lower(blob.media_type) = 'application/pdf' "
-            "OR lower(observation.source_url) LIKE '%.pdf' "
-            "OR lower(observation.source_url) LIKE '%.pdf?%' "
-            "OR lower(observation.source_url) LIKE '%.pdf#%') "
-            f"{index_member_exclusion} LIMIT 1",
-            (after_rowid, pdf_only),
-        ).fetchone()
-        is not None
-    )
+    scope = _index_member_scope(conn)
+    if scope == "with_archived":
+        query = _HAS_NATIVE_AFTER_EXCLUDE_INDEX_MEMBER_WITH_ARCHIVED_SQL
+    elif scope == "without_archived":
+        query = _HAS_NATIVE_AFTER_EXCLUDE_INDEX_MEMBER_NO_ARCHIVED_SQL
+    else:
+        query = _HAS_NATIVE_AFTER_ALL_SQL
+    return conn.execute(query, (after_rowid, pdf_only)).fetchone() is not None
 
 
 def select_evidence_native_candidates_by_id(

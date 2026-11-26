@@ -1477,12 +1477,17 @@ def _is_index_member_only(conn: sqlite3.Connection, ticker: str) -> bool:
     columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
     if not {"ticker", "list_type"} <= columns:
         return False
-    archived_clause = "AND archived_at IS NULL" if "archived_at" in columns else ""
-    rows = conn.execute(
-        "SELECT lower(trim(list_type)) FROM tracked_companies "  # nosec B608 -- closed internal predicate
-        f"WHERE UPPER(trim(ticker)) = ? {archived_clause}",
-        (ticker.strip().upper(),),
-    ).fetchall()
+    if "archived_at" in columns:
+        rows = conn.execute(
+            "SELECT lower(trim(list_type)) FROM tracked_companies "
+            "WHERE UPPER(trim(ticker)) = ? AND archived_at IS NULL",
+            (ticker.strip().upper(),),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT lower(trim(list_type)) FROM tracked_companies WHERE UPPER(trim(ticker)) = ?",
+            (ticker.strip().upper(),),
+        ).fetchall()
     list_types = {str(row[0]) for row in rows if row[0] is not None}
     return "index_member" in list_types and not bool(
         list_types & {"portfolio", "evaluation", "watchlist"}

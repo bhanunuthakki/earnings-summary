@@ -1646,8 +1646,82 @@ def _is_structured_web_archive_identity(identity: FulltextExtractorIdentity) -> 
     }
 
 
-def _index_member_exclusion_sql(conn: sqlite3.Connection) -> str:
-    """Exclude active index_member-only legacy documents when tracked_companies is present."""
+_IndexMemberScope = Literal["none", "with_archived", "without_archived"]
+
+_CANDIDATES_AFTER_ALL_SQL = (
+    "WITH selected_documents AS ("
+    "SELECT * FROM documents WHERE id > ? ORDER BY id LIMIT ?"
+    ") SELECT document.id AS document_id, document.file_path, lower(document.sha256) "
+    "AS document_sha256, document.raw_bytes_size, document_version.document_version_id, "
+    "document_version.blob_sha256, document_version.recorded_at AS document_recorded_at "
+    "FROM selected_documents AS document LEFT JOIN evidence_document_versions AS document_version "
+    "ON document_version.legacy_document_id = document.id "
+    "ORDER BY document.id, document_version.version_sequence"
+)
+_CANDIDATES_AFTER_EXCLUDE_INDEX_MEMBER_WITH_ARCHIVED_SQL = (
+    "WITH selected_documents AS ("
+    "SELECT * FROM documents WHERE id > ? "
+    "AND NOT ("
+    "EXISTS (SELECT 1 FROM tracked_companies AS tc "
+    "WHERE UPPER(tc.ticker) = UPPER(documents.ticker) AND tc.archived_at IS NULL "
+    "AND tc.list_type = 'index_member') "
+    "AND NOT EXISTS (SELECT 1 FROM tracked_companies AS tc_active "
+    "WHERE UPPER(tc_active.ticker) = UPPER(documents.ticker) AND tc_active.archived_at IS NULL "
+    "AND tc_active.list_type IN ('portfolio', 'evaluation', 'watchlist'))"
+    ") ORDER BY id LIMIT ?"
+    ") SELECT document.id AS document_id, document.file_path, lower(document.sha256) "
+    "AS document_sha256, document.raw_bytes_size, document_version.document_version_id, "
+    "document_version.blob_sha256, document_version.recorded_at AS document_recorded_at "
+    "FROM selected_documents AS document LEFT JOIN evidence_document_versions AS document_version "
+    "ON document_version.legacy_document_id = document.id "
+    "ORDER BY document.id, document_version.version_sequence"
+)
+_CANDIDATES_AFTER_EXCLUDE_INDEX_MEMBER_NO_ARCHIVED_SQL = (
+    "WITH selected_documents AS ("
+    "SELECT * FROM documents WHERE id > ? "
+    "AND NOT ("
+    "EXISTS (SELECT 1 FROM tracked_companies AS tc "
+    "WHERE UPPER(tc.ticker) = UPPER(documents.ticker) "
+    "AND tc.list_type = 'index_member') "
+    "AND NOT EXISTS (SELECT 1 FROM tracked_companies AS tc_active "
+    "WHERE UPPER(tc_active.ticker) = UPPER(documents.ticker) "
+    "AND tc_active.list_type IN ('portfolio', 'evaluation', 'watchlist'))"
+    ") ORDER BY id LIMIT ?"
+    ") SELECT document.id AS document_id, document.file_path, lower(document.sha256) "
+    "AS document_sha256, document.raw_bytes_size, document_version.document_version_id, "
+    "document_version.blob_sha256, document_version.recorded_at AS document_recorded_at "
+    "FROM selected_documents AS document LEFT JOIN evidence_document_versions AS document_version "
+    "ON document_version.legacy_document_id = document.id "
+    "ORDER BY document.id, document_version.version_sequence"
+)
+
+_HAS_DOCUMENTS_AFTER_ALL_SQL = "SELECT 1 FROM documents WHERE id > ? LIMIT 1"
+_HAS_DOCUMENTS_AFTER_EXCLUDE_INDEX_MEMBER_WITH_ARCHIVED_SQL = (
+    "SELECT 1 FROM documents WHERE id > ? "
+    "AND NOT ("
+    "EXISTS (SELECT 1 FROM tracked_companies AS tc "
+    "WHERE UPPER(tc.ticker) = UPPER(documents.ticker) AND tc.archived_at IS NULL "
+    "AND tc.list_type = 'index_member') "
+    "AND NOT EXISTS (SELECT 1 FROM tracked_companies AS tc_active "
+    "WHERE UPPER(tc_active.ticker) = UPPER(documents.ticker) AND tc_active.archived_at IS NULL "
+    "AND tc_active.list_type IN ('portfolio', 'evaluation', 'watchlist'))"
+    ") LIMIT 1"
+)
+_HAS_DOCUMENTS_AFTER_EXCLUDE_INDEX_MEMBER_NO_ARCHIVED_SQL = (
+    "SELECT 1 FROM documents WHERE id > ? "
+    "AND NOT ("
+    "EXISTS (SELECT 1 FROM tracked_companies AS tc "
+    "WHERE UPPER(tc.ticker) = UPPER(documents.ticker) "
+    "AND tc.list_type = 'index_member') "
+    "AND NOT EXISTS (SELECT 1 FROM tracked_companies AS tc_active "
+    "WHERE UPPER(tc_active.ticker) = UPPER(documents.ticker) "
+    "AND tc_active.list_type IN ('portfolio', 'evaluation', 'watchlist'))"
+    ") LIMIT 1"
+)
+
+
+def _index_member_scope(conn: sqlite3.Connection) -> _IndexMemberScope:
+    """Return which tracked_companies index_member exclusion query applies."""
 
     if (
         conn.execute(
@@ -1655,25 +1729,14 @@ def _index_member_exclusion_sql(conn: sqlite3.Connection) -> str:
         ).fetchone()
         is None
     ):
-        return ""
+        return "none"
     doc_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(documents)")}
     if "ticker" not in doc_columns:
-        return ""
+        return "none"
     tc_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
     if not {"ticker", "list_type"} <= tc_columns:
-        return ""
-    archived = " AND tc.archived_at IS NULL" if "archived_at" in tc_columns else ""
-    archived_active = " AND tc_active.archived_at IS NULL" if "archived_at" in tc_columns else ""
-    return (
-        " AND NOT ("
-        "EXISTS (SELECT 1 FROM tracked_companies AS tc "
-        f"WHERE UPPER(tc.ticker) = UPPER(documents.ticker){archived} "
-        "AND tc.list_type = 'index_member') "
-        "AND NOT EXISTS (SELECT 1 FROM tracked_companies AS tc_active "
-        f"WHERE UPPER(tc_active.ticker) = UPPER(documents.ticker){archived_active} "
-        "AND tc_active.list_type IN ('portfolio', 'evaluation', 'watchlist'))"
-        ")"
-    )
+        return "none"
+    return "with_archived" if "archived_at" in tc_columns else "without_archived"
 
 
 def _has_substantive_coverage(
@@ -1715,18 +1778,14 @@ def _has_substantive_coverage(
 def _candidates_after(
     conn: sqlite3.Connection, last_document_id: int, batch_size: int
 ) -> list[_DocumentCandidate]:
-    index_member_exclusion = _index_member_exclusion_sql(conn)
-    rows = conn.execute(
-        "WITH selected_documents AS ("  # nosec B608 -- closed internal predicate; all values remain bound
-        f"SELECT * FROM documents WHERE id > ?{index_member_exclusion} ORDER BY id LIMIT ?"
-        ") SELECT document.id AS document_id, document.file_path, lower(document.sha256) "
-        "AS document_sha256, document.raw_bytes_size, document_version.document_version_id, "
-        "document_version.blob_sha256, document_version.recorded_at AS document_recorded_at "
-        "FROM selected_documents AS document LEFT JOIN evidence_document_versions AS document_version "
-        "ON document_version.legacy_document_id = document.id "
-        "ORDER BY document.id, document_version.version_sequence",
-        (last_document_id, batch_size),
-    ).fetchall()
+    scope = _index_member_scope(conn)
+    if scope == "with_archived":
+        query = _CANDIDATES_AFTER_EXCLUDE_INDEX_MEMBER_WITH_ARCHIVED_SQL
+    elif scope == "without_archived":
+        query = _CANDIDATES_AFTER_EXCLUDE_INDEX_MEMBER_NO_ARCHIVED_SQL
+    else:
+        query = _CANDIDATES_AFTER_ALL_SQL
+    rows = conn.execute(query, (last_document_id, batch_size)).fetchall()
     return [_candidate_from_row(row) for row in rows]
 
 
@@ -1792,14 +1851,14 @@ def _candidate_from_row(row: sqlite3.Row) -> _DocumentCandidate:
 
 
 def _has_documents_after(conn: sqlite3.Connection, last_document_id: int) -> bool:
-    index_member_exclusion = _index_member_exclusion_sql(conn)
-    return (
-        conn.execute(
-            f"SELECT 1 FROM documents WHERE id > ?{index_member_exclusion} LIMIT 1",  # nosec B608 -- closed internal predicate; all values remain bound
-            (last_document_id,),
-        ).fetchone()
-        is not None
-    )
+    scope = _index_member_scope(conn)
+    if scope == "with_archived":
+        query = _HAS_DOCUMENTS_AFTER_EXCLUDE_INDEX_MEMBER_WITH_ARCHIVED_SQL
+    elif scope == "without_archived":
+        query = _HAS_DOCUMENTS_AFTER_EXCLUDE_INDEX_MEMBER_NO_ARCHIVED_SQL
+    else:
+        query = _HAS_DOCUMENTS_AFTER_ALL_SQL
+    return conn.execute(query, (last_document_id,)).fetchone() is not None
 
 
 def _allowed_content_roots(request: FullTextBackfillRequest, repo_root: Path) -> tuple[Path, ...]:
