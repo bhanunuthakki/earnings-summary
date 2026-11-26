@@ -321,10 +321,11 @@ def _rows_to_sections(rows: Iterable[sqlite3.Row]) -> list[FilingSection]:
     out: list[FilingSection] = []
     dropped = 0
     for row in rows:
+        row_keys = set(row.keys())
         try:
             out.append(
                 FilingSection(
-                    id=row["id"] if "id" in row.keys() else None,  # noqa: SIM118
+                    id=row["id"] if "id" in row_keys else None,
                     ticker=row["ticker"],
                     source=SectionSource(row["source"]),
                     source_ref=row["source_ref"],
@@ -350,8 +351,8 @@ def _rows_to_sections(rows: Iterable[sqlite3.Row]) -> list[FilingSection]:
         except (ValueError, KeyError, TypeError) as exc:
             dropped += 1
             # sqlite3.Row implements keys() but not __contains__, so membership
-            # has to go through the key list here.
-            row_id = row["id"] if "id" in row.keys() else None  # noqa: SIM118
+            # has to go through the key set here.
+            row_id = row["id"] if "id" in row_keys else None
             log.warning(
                 {
                     "event": "filing_section_row_invalid",
@@ -568,6 +569,21 @@ def period_availability(
         key=lambda a: (a.fiscal_year or 0, a.fiscal_period.value, a.form.value),
         reverse=True,
     )
+
+
+def delete_sections_by_ids(conn: sqlite3.Connection, section_ids: Sequence[int]) -> int:
+    """Delete specific ``filing_sections`` rows by primary key.
+
+    Centralizes offline compaction/pruning deletes in the single authorized
+    ``filing_sections`` store module using static SQL.
+    """
+    if not section_ids or not table_exists(conn, SECTIONS_TABLE):
+        return 0
+    cur = conn.executemany(
+        "DELETE FROM filing_sections WHERE id = ?",
+        [(int(section_id),) for section_id in section_ids],
+    )
+    return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
 
 def section_timeline(

@@ -1012,3 +1012,46 @@ def test_unbound_legacy_checkpoint_requires_new_namespace(tmp_path: Path) -> Non
         assert conn.execute("SELECT COUNT(*) FROM evidence_document_versions").fetchone()[0] == 0
     finally:
         conn.close()
+
+
+def test_batch_evidence_backfill_skips_index_member_tickers_by_default(tmp_path: Path) -> None:
+    conn, _, repo_root = _connection(tmp_path)
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO tenants (id, created_at) VALUES ('bhanu', '2026-07-21 00:00:00')"
+        )
+        conn.executemany(
+            "INSERT INTO tracked_companies (ticker, name, list_type, archived_at) "
+            "VALUES (?, ?, ?, NULL)",
+            (("ACME", "Acme", "portfolio"), ("IDX", "Index Member", "index_member")),
+        )
+        raw = b"<html>index member</html>"
+        (repo_root / "data" / "IDX.html").write_bytes(raw)
+        conn.execute(
+            "INSERT INTO documents (id, ticker, source_type, doc_type, period_start, period_end, "
+            "file_path, sha256, fetched_at, fetch_status, raw_bytes_size, source_url, "
+            "accession_number) VALUES (2, 'IDX', 'ir_doc', '10-Q', NULL, NULL, "
+            "?, ?, ?, 'ok', ?, NULL, NULL)",
+            ("data/IDX.html", hashlib.sha256(raw).hexdigest(), "2026-07-21", len(raw)),
+        )
+        conn.commit()
+
+        batch = backfill_legacy_evidence(conn, _request(repo_root, apply=True))
+        assert batch.documents_considered == 1
+        assert batch.documents_backfilled == 1
+        assert batch.last_document_id_after == 1
+        assert batch.has_more is False
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM evidence_document_versions WHERE legacy_document_id = 2"
+            ).fetchone()[0]
+            == 0
+        )
+
+        targeted = backfill_legacy_evidence(
+            conn,
+            BackfillRequest(repo_root=repo_root, document_id=2, apply=True),
+        )
+        assert targeted.documents_backfilled == 1
+    finally:
+        conn.close()

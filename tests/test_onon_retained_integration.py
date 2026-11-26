@@ -186,6 +186,7 @@ def test_retained_publication_exact_admission_and_recipe_boundary(
                     content_roots=roots,
                     source_lane="evidence_native",
                     document_version_id=document,
+                    include_table_cells=True,
                     apply=True,
                 ),
             )

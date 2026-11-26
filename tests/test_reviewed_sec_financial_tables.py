@@ -244,7 +244,11 @@ def synthetic_sec_request(conn: sqlite3.Connection, root: Path) -> ReviewedSecFi
     backfill_fulltext_evidence(
         conn,
         FullTextBackfillRequest(
-            repo_root=root, source_lane="evidence_native", document_version_id="sec-doc", apply=True
+            repo_root=root,
+            source_lane="evidence_native",
+            document_version_id="sec-doc",
+            include_table_cells=True,
+            apply=True,
         ),
     )
     run = str(

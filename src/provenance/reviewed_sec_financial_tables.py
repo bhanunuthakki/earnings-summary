@@ -27,6 +27,7 @@ from provenance.evidence_native_candidates import (
     resolve_local_storage_uri,
     select_evidence_native_candidates_by_id,
 )
+from provenance.evidence_node_store import load_run_nodes, resolve_state_root_from_roots
 from provenance.fact_plane_v2 import (
     AccountingBasis,
     CanonicalJSONObject,
@@ -205,6 +206,7 @@ def load_reviewed_sec_html_evidence(
     source_doc_sha256: str,
     content_roots: tuple[Path, ...],
     knowledge_cutoff: datetime,
+    state_root: Path | None = None,
 ) -> ReviewedSecHtmlEvidence:
     """Read exact local bytes and replay the complete qualified HTML hierarchy."""
     row = conn.execute(
@@ -263,11 +265,15 @@ def load_reviewed_sec_html_evidence(
         raise ValueError("reviewed SEC raw byte commitment does not match")
     source = raw.decode("utf-8", errors="strict")
     nodes: list[ReviewedSecNode] = []
-    rows = conn.execute(
-        "SELECT node_id,node_kind,text,locator_json,locator_sha256,recorded_at FROM evidence_nodes WHERE extraction_run_id=? ORDER BY node_id",
-        (fulltext_run_id,),
-    ).fetchall()
-    for node_id, kind, text, locator_json, locator_sha256, recorded_at in rows:
+    effective_state_root = resolve_state_root_from_roots(state_root, content_roots)
+    rows = load_run_nodes(conn, fulltext_run_id, state_root=effective_state_root)
+    for node_row in rows:
+        node_id = node_row["node_id"]
+        kind = node_row["node_kind"]
+        text = node_row["text"]
+        locator_json = node_row["locator_json"]
+        locator_sha256 = node_row["locator_sha256"]
+        recorded_at = node_row["recorded_at"]
         if locator_json is None:
             raise ValueError("reviewed SEC native node requires an exact locator")
         locator = EvidenceLocator.model_validate_json(str(locator_json))
@@ -420,6 +426,7 @@ class ReviewedSecFinancialRequest(_Closed):
     rejections: tuple[ReviewedSecFinancialRejection, ...] = ()
     review_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     content_roots: tuple[Path, ...] = Field(min_length=1)
+    state_root: Path | None = Field(default=None, exclude_if=lambda value: value is None)
     recorded_at: datetime
     apply: bool = False
     expected_plan_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
@@ -438,6 +445,7 @@ class ReviewedSecFinancialRequest(_Closed):
             exclude={
                 "review_sha256",
                 "content_roots",
+                "state_root",
                 "recorded_at",
                 "apply",
                 "expected_plan_sha256",
@@ -526,6 +534,7 @@ def _publish(
                 source_doc_sha256=fact.source_doc_sha256,
                 content_roots=request.content_roots,
                 knowledge_cutoff=request.reviewed_at,
+                state_root=request.state_root,
             )
             evidences[fact.document_version_id] = evidence
         elif (evidence.fulltext_run_id, evidence.source_kind, evidence.blob_sha256) != (

@@ -475,3 +475,70 @@ def test_retrieval_observation_identity_uses_response_clock_not_recording_clock(
         assert datetime.fromisoformat(rows[0][1]) == observed
         assert datetime.fromisoformat(rows[0][2]) == retrieved
         assert rows[1][0] == second
+
+
+def test_sync_sec_filing_inventory_rejects_index_member_unless_explicitly_allowed(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    db = migrated_db(tmp_path / "inventory.db")
+    monkeypatch.setattr(sync, "PROJECT_ROOT", tmp_path)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, name, list_type, instrument_type) "
+            "VALUES ('IDX', 'Index Member', 'index_member', 'equity')"
+        )
+        conn.commit()
+
+    def forbidden_get(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("SEC HTTP request must not run for blocked index_member")
+
+    monkeypatch.setattr(requests.Session, "get", forbidden_get)
+    blocked = sync.main(
+        [
+            "--db",
+            str(db),
+            "--ticker",
+            "IDX",
+            "--cik",
+            "1001",
+            "--revision",
+            "1",
+            "--blob-root",
+            str(tmp_path / "blobs"),
+            "--package-checkpoint-root",
+            str(tmp_path / "checkpoint"),
+        ]
+    )
+    assert blocked == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "outcome": "blocked",
+        "reason_code": "index_member_excluded_by_default",
+        "retryable": False,
+        "ticker": "IDX",
+    }
+
+    # With --allow-non-active, the index_member wall is bypassed and normal
+    # identity resolution runs (failing closed on missing canonical issuer).
+    override = sync.main(
+        [
+            "--db",
+            str(db),
+            "--ticker",
+            "IDX",
+            "--cik",
+            "1001",
+            "--revision",
+            "1",
+            "--blob-root",
+            str(tmp_path / "blobs"),
+            "--package-checkpoint-root",
+            str(tmp_path / "checkpoint"),
+            "--allow-non-active",
+        ]
+    )
+    assert override == 2
+    assert "index_member_excluded_by_default" not in capsys.readouterr().out

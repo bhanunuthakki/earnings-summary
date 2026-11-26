@@ -36,6 +36,12 @@ from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.document_processing_evidence import (
     verify_document_processing_evidence,
 )
+from provenance.evidence_node_store import (
+    EvidenceArchiveError,
+    ExternalArchiveReceipt,
+    validate_archive_relpath,
+    verify_archive_receipt,
+)
 from provenance.filing_xbrl_extraction_ledger import (
     FilingXbrlExtractionDispositionRecord,
     FilingXbrlExtractionDispositionSeal,
@@ -95,6 +101,7 @@ class AuditOptions(BaseModel):
     deep_sqlite_checks: bool = True
     verify_bytes: bool = False
     repo_root: Path | None = None
+    state_root: Path | None = None
     content_roots: tuple[Path, ...] = ()
     max_verify_bytes: int = Field(default=100 * 1024 * 1024, ge=0)
     fact_drift_effective_at: datetime | None = None
@@ -103,9 +110,14 @@ class AuditOptions(BaseModel):
 
     @model_validator(mode="after")
     def _require_root_for_byte_verification(self) -> AuditOptions:
-        if self.verify_bytes and self.repo_root is None and not self.content_roots:
+        if (
+            self.verify_bytes
+            and self.repo_root is None
+            and self.state_root is None
+            and not self.content_roots
+        ):
             raise ValueError(
-                "repo_root or at least one content_root is required when verify_bytes is enabled"
+                "repo_root, state_root, or at least one content_root is required when verify_bytes is enabled"
             )
         if (self.fact_drift_effective_at is None) != (self.fact_drift_known_at is None):
             raise ValueError("fact compatibility drift requires both temporal cutoffs")
@@ -2482,6 +2494,119 @@ def _audit_evidence_ledger(
         ),
     )
     _audit_node_locator_hashes(conn, findings, options)
+    _audit_evidence_node_external_archives(conn, tables, findings, options)
+
+
+def _audit_evidence_node_external_archives(
+    conn: sqlite3.Connection,
+    tables: set[str],
+    findings: list[IntegrityFinding],
+    options: AuditOptions,
+) -> None:
+    if "evidence_node_external_archives" not in tables:
+        return
+    _query_finding(
+        conn,
+        findings,
+        options,
+        code="EVIDENCE_ARCHIVE_RUN_MISMATCH",
+        severity=Severity.BLOCKER,
+        remediation=RemediationClass.REINGEST,
+        query=(
+            "SELECT archive.extraction_run_id FROM evidence_node_external_archives AS archive "
+            "LEFT JOIN evidence_extraction_runs AS run "
+            "ON run.extraction_run_id = archive.extraction_run_id "
+            "WHERE run.extraction_run_id IS NULL "
+            "OR run.output_sha256 <> archive.original_output_sha256 "
+            "ORDER BY archive.extraction_run_id"
+        ),
+    )
+    rows = conn.execute(
+        "SELECT extraction_run_id, storage_relpath, archive_sha256, archived_node_count, "
+        "archived_node_kinds_json, original_output_sha256, archived_at "
+        "FROM evidence_node_external_archives ORDER BY extraction_run_id"
+    ).fetchall()
+    if not rows:
+        return
+    invalid_metadata: list[str] = []
+    valid_receipts: list[ExternalArchiveReceipt] = []
+    for (
+        extraction_run_id,
+        storage_relpath,
+        archive_sha256,
+        archived_node_count,
+        archived_node_kinds_json,
+        original_output_sha256,
+        archived_at,
+    ) in rows:
+        run_id = str(extraction_run_id)
+        try:
+            relpath = str(storage_relpath)
+            validate_archive_relpath(relpath)
+            parsed_kinds: object = json.loads(str(archived_node_kinds_json))
+            if (
+                not isinstance(parsed_kinds, list)
+                or not parsed_kinds
+                or not all(
+                    isinstance(kind, str) and kind for kind in cast(list[object], parsed_kinds)
+                )
+            ):
+                raise EvidenceArchiveError("invalid archived_node_kinds_json")
+            count = int(archived_node_count)
+            sha_hex = str(archive_sha256)
+            orig_sha = str(original_output_sha256)
+            if (
+                count <= 0
+                or len(sha_hex) != 64
+                or any(ch not in "0123456789abcdef" for ch in sha_hex)
+                or len(orig_sha) != 64
+                or any(ch not in "0123456789abcdef" for ch in orig_sha)
+            ):
+                raise EvidenceArchiveError("invalid archive receipt metadata")
+            valid_receipts.append(
+                ExternalArchiveReceipt(
+                    extraction_run_id=run_id,
+                    storage_relpath=relpath,
+                    archive_sha256=sha_hex,
+                    archived_node_count=count,
+                    archived_node_kinds=tuple(cast(list[str], parsed_kinds)),
+                    original_output_sha256=orig_sha,
+                    archived_at=str(archived_at),
+                )
+            )
+        except (EvidenceArchiveError, ValueError, TypeError, json.JSONDecodeError):
+            invalid_metadata.append(run_id)
+    _add(
+        findings,
+        code="EVIDENCE_ARCHIVE_INVALID_METADATA",
+        severity=Severity.BLOCKER,
+        remediation=RemediationClass.MANUAL,
+        count=len(invalid_metadata),
+        query_context="evidence_node_external_archives receipt metadata validation",
+        samples=tuple(invalid_metadata[: options.sample_limit]),
+    )
+    effective_state_root = (
+        options.state_root
+        if options.state_root is not None
+        else (options.repo_root if options.verify_bytes else None)
+    )
+    if effective_state_root is None:
+        return
+    invalid_files: list[str] = []
+    for receipt in valid_receipts:
+        try:
+            verify_archive_receipt(effective_state_root, receipt)
+        except EvidenceArchiveError:
+            invalid_files.append(receipt.extraction_run_id)
+    _add(
+        findings,
+        code="EVIDENCE_ARCHIVE_FILE_INVALID",
+        severity=Severity.BLOCKER,
+        remediation=RemediationClass.REINGEST,
+        count=len(invalid_files),
+        query_context="evidence_node_external_archives on-disk archive verification",
+        samples=tuple(invalid_files[: options.sample_limit]),
+    )
 
 
 def _audit_node_locator_hashes(
@@ -3381,7 +3506,11 @@ def _audit_blob_bytes(
     columns = _columns(conn, "evidence_content_blobs")
     if not {"sha256", "byte_size", "storage_uri"} <= columns:
         return
-    roots = (() if options.repo_root is None else (options.repo_root,)) + options.content_roots
+    roots = (
+        (() if options.repo_root is None else (options.repo_root,))
+        + (() if options.state_root is None else (options.state_root,))
+        + options.content_roots
+    )
     assert roots
     budget = options.max_verify_bytes
     consumed = 0

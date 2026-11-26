@@ -287,6 +287,7 @@ def seed_reported_html(
             repo_root=root,
             source_lane="evidence_native",
             document_version_id="table-document",
+            include_table_cells=True,
             apply=True,
         ),
     )

@@ -277,11 +277,48 @@ def test_backup_collector_performs_one_fresh_proof_without_source_full_checks(
     receipt = backup_receipt.collect_backup_restore_receipt(source_db=source, snapshot_db=snapshot)
     assert receipt.verified is True
     assert checked == [snapshot.resolve()]
-    # Creation verifies once. Fresh replay verifies both the artifact and its
-    # new source-derived candidate. The collector also verifies the artifact.
-    assert len(verified) == 3
-    assert len(checked) + len(verified) == 4
-    assert len(backed_up) == 2
+    # Creation backs up and verifies once. On a quiesced source, receipt
+    # collection verifies the artifact once and proves source equality via
+    # lockstep byte comparison without duplicating the backup or full scans.
+    assert len(verified) == 1
+    assert len(checked) + len(verified) == 2
+    assert len(backed_up) == 1
+
+
+def test_backup_collector_uses_backup_fallback_when_source_has_active_wal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _versioned_db(tmp_path / "source.db", revision=readiness.ACTIVE_HEAD)
+    writer = sqlite3.connect(source)
+    try:
+        assert writer.execute("PRAGMA journal_mode = WAL").fetchone() == ("wal",)
+        writer.execute("PRAGMA wal_autocheckpoint = 0")
+        writer.execute("CREATE TABLE facts (value TEXT NOT NULL)")
+        writer.execute("INSERT INTO facts VALUES ('active wal row')")
+        writer.commit()
+        snapshot = tmp_path / "snapshot.db"
+        backed_up: list[Path] = []
+        backup: Callable[
+            [sqlite3.Connection, Path, sqlite_snapshot.SnapshotLogger | None], None
+        ] = getattr(sqlite_snapshot, "_backup")
+
+        def record_backup(
+            connection: sqlite3.Connection,
+            path: Path,
+            logger: sqlite_snapshot.SnapshotLogger | None,
+        ) -> None:
+            backed_up.append(path)
+            backup(connection, path, logger)
+
+        monkeypatch.setattr(sqlite_snapshot, "_backup", record_backup)
+        create_snapshot(SnapshotRequest(source_path=source, destination_path=snapshot))
+        receipt = backup_receipt.collect_backup_restore_receipt(
+            source_db=source, snapshot_db=snapshot
+        )
+        assert receipt.verified is True
+        assert len(backed_up) == 2
+    finally:
+        writer.close()
 
 
 def test_backup_collector_applies_static_receipt_guard_before_returning_verified(
@@ -601,6 +638,188 @@ def test_collect_readiness_requires_fresh_origin_main_identity(tmp_path: Path) -
     assert receipt.ready is False
     assert receipt.origin_main_sha == "b" * 40
     assert "checkout_not_at_fresh_origin_main" in receipt.blocking_reasons
+
+
+def test_migration_mode_allows_ancestor_checkout_when_origin_changed_non_migration_paths(
+    tmp_path: Path,
+) -> None:
+    prior_revision = "0000_prior"
+    checkout = _revision_repo(
+        tmp_path / "checkout",
+        revision=readiness.ACTIVE_HEAD,
+        prior=prior_revision,
+    )
+    runtime = _revision_repo(
+        tmp_path / "runtime",
+        revision=readiness.ACTIVE_HEAD,
+        prior=prior_revision,
+    )
+    db_path = _versioned_db(runtime / "data" / "portfolio.db", revision=prior_revision)
+    restore_receipt = _backup_receipt(db_path, tmp_path / "backup")
+    kwargs = _aligned_kwargs(checkout, runtime)
+
+    def newer_origin(_root: Path) -> readiness.OriginMainObservation:
+        return readiness.OriginMainObservation(sha="b" * 40, fetched_at=NOW)
+
+    def non_migration_diff(_root: Path, _base: str, _target: str) -> tuple[str, ...]:
+        return ("docs/README.md", "tests/test_smoke.py", "src/dashboard/view.py")
+
+    kwargs["origin_resolver"] = newer_origin
+    receipt = readiness.collect_readiness(
+        checkout_root=checkout,
+        runtime_root=runtime,
+        db_path=db_path,
+        backup_restore_receipt_path=restore_receipt,
+        mode="migration",
+        origin_diff_resolver=non_migration_diff,
+        **kwargs,
+    )
+
+    assert receipt.ready is True
+    assert receipt.migration_preconditions_met is True
+    assert receipt.blocking_reasons == ()
+    assert "checkout_not_at_fresh_origin_main" in receipt.operational_blocking_reasons
+
+
+@pytest.mark.parametrize(
+    "critical_path",
+    (
+        "alembic/versions/0072_next.py",
+        "alembic/env.py",
+        "alembic.ini",
+        "src/schema_compat.py",
+        "src/sqlite_runtime.py",
+        "src/sqlite_snapshot.py",
+        "execution/upgrade_database.py",
+        "execution/portfolio_readiness_receipt.py",
+        "execution/backup_restore_readiness_receipt.py",
+    ),
+)
+def test_migration_mode_blocks_ancestor_checkout_when_migration_path_changed_on_origin(
+    tmp_path: Path,
+    critical_path: str,
+) -> None:
+    prior_revision = "0000_prior"
+    checkout = _revision_repo(
+        tmp_path / "checkout",
+        revision=readiness.ACTIVE_HEAD,
+        prior=prior_revision,
+    )
+    runtime = _revision_repo(
+        tmp_path / "runtime",
+        revision=readiness.ACTIVE_HEAD,
+        prior=prior_revision,
+    )
+    db_path = _versioned_db(runtime / "data" / "portfolio.db", revision=prior_revision)
+    restore_receipt = _backup_receipt(db_path, tmp_path / "backup")
+    kwargs = _aligned_kwargs(checkout, runtime)
+
+    def newer_origin(_root: Path) -> readiness.OriginMainObservation:
+        return readiness.OriginMainObservation(sha="b" * 40, fetched_at=NOW)
+
+    def critical_diff(_root: Path, _base: str, _target: str) -> tuple[str, ...]:
+        return ("docs/README.md", critical_path)
+
+    kwargs["origin_resolver"] = newer_origin
+    receipt = readiness.collect_readiness(
+        checkout_root=checkout,
+        runtime_root=runtime,
+        db_path=db_path,
+        backup_restore_receipt_path=restore_receipt,
+        mode="migration",
+        origin_diff_resolver=critical_diff,
+        **kwargs,
+    )
+
+    assert receipt.ready is False
+    assert "checkout_not_at_fresh_origin_main" in receipt.blocking_reasons
+
+
+def test_migration_mode_fails_closed_when_origin_diff_is_unavailable(tmp_path: Path) -> None:
+    prior_revision = "0000_prior"
+    checkout = _revision_repo(
+        tmp_path / "checkout",
+        revision=readiness.ACTIVE_HEAD,
+        prior=prior_revision,
+    )
+    runtime = _revision_repo(
+        tmp_path / "runtime",
+        revision=readiness.ACTIVE_HEAD,
+        prior=prior_revision,
+    )
+    db_path = _versioned_db(runtime / "data" / "portfolio.db", revision=prior_revision)
+    restore_receipt = _backup_receipt(db_path, tmp_path / "backup")
+    kwargs = _aligned_kwargs(checkout, runtime)
+
+    def newer_origin(_root: Path) -> readiness.OriginMainObservation:
+        return readiness.OriginMainObservation(sha="b" * 40, fetched_at=NOW)
+
+    def broken_diff(_root: Path, _base: str, _target: str) -> tuple[str, ...]:
+        raise ValueError("git diff unavailable")
+
+    kwargs["origin_resolver"] = newer_origin
+    receipt = readiness.collect_readiness(
+        checkout_root=checkout,
+        runtime_root=runtime,
+        db_path=db_path,
+        backup_restore_receipt_path=restore_receipt,
+        mode="migration",
+        origin_diff_resolver=broken_diff,
+        **kwargs,
+    )
+
+    assert receipt.ready is False
+    assert "checkout_not_at_fresh_origin_main" in receipt.blocking_reasons
+
+
+def test_migration_mode_validates_receipt_for_source_only_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prior_revision = "0000_prior"
+    checkout = _revision_repo(
+        tmp_path / "checkout",
+        revision=readiness.ACTIVE_HEAD,
+        prior=prior_revision,
+    )
+    runtime = _revision_repo(
+        tmp_path / "runtime",
+        revision=readiness.ACTIVE_HEAD,
+        prior=prior_revision,
+    )
+    db_path = _versioned_db(runtime / "data" / "portfolio.db", revision=prior_revision)
+    restore_receipt = _backup_receipt(db_path, tmp_path / "backup")
+
+    validate = readiness.validate_receipt_for_source
+    validation_modes: list[bool] = []
+
+    def count_validation(
+        receipt: backup_receipt.BackupRestoreReadinessReceipt,
+        *,
+        source_db: Path,
+        source_revision: str | None,
+        require_current_identity: bool = True,
+    ) -> tuple[str, ...]:
+        validation_modes.append(require_current_identity)
+        return validate(
+            receipt,
+            source_db=source_db,
+            source_revision=source_revision,
+            require_current_identity=require_current_identity,
+        )
+
+    monkeypatch.setattr(readiness, "validate_receipt_for_source", count_validation)
+    receipt = readiness.collect_readiness(
+        checkout_root=checkout,
+        runtime_root=runtime,
+        db_path=db_path,
+        backup_restore_receipt_path=restore_receipt,
+        mode="migration",
+        **_aligned_kwargs(checkout, runtime),
+    )
+
+    assert receipt.ready is True
+    assert validation_modes == [True]
 
 
 def test_collect_readiness_reports_schema_drift(tmp_path: Path) -> None:

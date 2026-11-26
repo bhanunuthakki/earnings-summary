@@ -1864,7 +1864,7 @@ def _tracked_reporting_scope(
         ):
             recorded_issuer_id = str(row[0]).strip()
             ticker = recorded_issuer_id[len(_LEGACY_TICKER_PREFIX) :].strip().upper()
-            if ticker and ticker not in active:
+            if ticker and ticker not in active and ticker not in excluded_index_members:
                 historical_tickers.add(ticker)
     tracked = tuple(
         _TrackedTicker(

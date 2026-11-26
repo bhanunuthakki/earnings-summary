@@ -38,6 +38,11 @@ from pathlib import Path
 from typing import cast
 
 from pipeline.research_panel_styles import RESEARCH_PANEL_STYLE
+from provenance.evidence_node_store import (
+    EvidenceArchiveError,
+    ExternalArchiveReceipt,
+    load_document_version_external_archives,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import controls_css
 from ui.tokens import FAVICON_LINK, palette_css
@@ -667,6 +672,9 @@ class DocumentVersionFact:
     locator_json: str | None
 
 
+DocumentVersionArchive = ExternalArchiveReceipt
+
+
 @dataclass(slots=True)
 class DocumentVersionView:
     """The complete provenance chain behind one sealed evidence citation."""
@@ -694,6 +702,7 @@ class DocumentVersionView:
     retrieved_at: str
     nodes: tuple[DocumentVersionNode, ...]
     facts: tuple[DocumentVersionFact, ...]
+    external_archives: tuple[DocumentVersionArchive, ...] = ()
 
 
 _DOCUMENT_VERSION_SELECT = (
@@ -744,18 +753,28 @@ def _optional_text(value: object) -> str | None:
     return None if value is None else str(value)
 
 
-def load_document_version(db_path: Path, document_version_id: str) -> DocumentVersionView | None:
+def load_document_version(
+    db_path: Path,
+    document_version_id: str,
+    *,
+    state_root: Path | None = None,
+) -> DocumentVersionView | None:
     """Read one immutable evidence document version, or None when it is absent.
 
     Schema-tolerant and fail-closed: a missing database, a missing row, or a
     query error all return None so the route answers an honest 404 rather than
     inventing a provenance chain.
     """
-    return _open_document_version(db_path, _DOCUMENT_VERSION_SQL, (document_version_id,))
+    return _open_document_version(
+        db_path, _DOCUMENT_VERSION_SQL, (document_version_id,), state_root=state_root
+    )
 
 
 def load_document_version_by_legacy_id(
-    db_path: Path, legacy_document_id: int
+    db_path: Path,
+    legacy_document_id: int,
+    *,
+    state_root: Path | None = None,
 ) -> DocumentVersionView | None:
     """The unambiguous Observation Version bound to a legacy document, or None.
 
@@ -766,11 +785,17 @@ def load_document_version_by_legacy_id(
     binding, missing evidence plane, or a query error → None (the caller
     renders the explicit degraded state, never a fabricated chain).
     """
-    return _open_document_version(db_path, _DOCUMENT_VERSION_BY_LEGACY_SQL, (legacy_document_id,))
+    return _open_document_version(
+        db_path, _DOCUMENT_VERSION_BY_LEGACY_SQL, (legacy_document_id,), state_root=state_root
+    )
 
 
 def _open_document_version(
-    db_path: Path, sql: str, params: tuple[object, ...]
+    db_path: Path,
+    sql: str,
+    params: tuple[object, ...],
+    *,
+    state_root: Path | None = None,
 ) -> DocumentVersionView | None:
     if not db_path.exists():
         return None
@@ -783,23 +808,32 @@ def _open_document_version(
         document = conn.execute(sql, params).fetchone()
         if document is None:
             return None
-        node_rows = conn.execute(
-            _DOCUMENT_VERSION_NODES_SQL, (str(document["document_version_id"]),)
-        ).fetchall()
-        fact_rows = conn.execute(
-            _DOCUMENT_VERSION_FACTS_SQL, (str(document["document_version_id"]),)
-        ).fetchall()
-    except sqlite3.Error:
+        doc_version_id = str(document["document_version_id"])
+        node_rows = conn.execute(_DOCUMENT_VERSION_NODES_SQL, (doc_version_id,)).fetchall()
+        fact_rows = conn.execute(_DOCUMENT_VERSION_FACTS_SQL, (doc_version_id,)).fetchall()
+        archive_receipts, archived_nodes = load_document_version_external_archives(
+            conn, doc_version_id, state_root=state_root
+        )
+    except (sqlite3.Error, EvidenceArchiveError):
         return None
     finally:
         conn.close()
-    return _build_document_version_view(document, node_rows, fact_rows)
+    return _build_document_version_view(
+        document,
+        node_rows,
+        fact_rows,
+        archive_receipts=archive_receipts,
+        archived_nodes=archived_nodes,
+    )
 
 
 def _build_document_version_view(
     document: sqlite3.Row,
     node_rows: list[sqlite3.Row],
     fact_rows: list[sqlite3.Row],
+    *,
+    archive_receipts: tuple[ExternalArchiveReceipt, ...] = (),
+    archived_nodes: list[dict[str, object]] | None = None,
 ) -> DocumentVersionView:
 
     nodes: dict[str, DocumentVersionNode] = {}
@@ -826,6 +860,19 @@ def _build_document_version_view(
                     char_end=int(node_row["char_end"]),
                 ),
             )
+    if archived_nodes:
+        for archived_row in sorted(archived_nodes, key=lambda item: str(item["node_id"])):
+            node_id = str(archived_row["node_id"])
+            if node_id not in nodes:
+                nodes[node_id] = DocumentVersionNode(
+                    node_id=node_id,
+                    node_kind=str(archived_row["node_kind"]),
+                    text=str(archived_row["text"]),
+                    locator_json=_optional_text(archived_row.get("locator_json")),
+                    chunks=(),
+                )
+                node_order.append(node_id)
+        node_order.sort()
 
     facts = tuple(
         DocumentVersionFact(
@@ -867,6 +914,7 @@ def _build_document_version_view(
         retrieved_at=str(document["retrieved_at"]),
         nodes=tuple(nodes[node_id] for node_id in node_order),
         facts=facts,
+        external_archives=archive_receipts,
     )
 
 
@@ -981,6 +1029,20 @@ def _document_version_body(
             )
         )
 
+    for archive in view.external_archives:
+        kinds_label = ", ".join(archive.archived_node_kinds)
+        rows.append(
+            _sv_row(
+                "external archive",
+                f"run {escape(archive.extraction_run_id)} · {archive.archived_node_count} "
+                f"archived node(s) ({escape(kinds_label)}) · sha256 {escape(archive.archive_sha256)}",
+                _sv_data_attr("archive-run-id", archive.extraction_run_id)
+                + _sv_data_attr("archive-relpath", archive.storage_relpath)
+                + _sv_data_attr("archive-sha256", archive.archive_sha256)
+                + _sv_data_attr("archive-node-count", archive.archived_node_count),
+            )
+        )
+
     for node in nodes:
         rows.append(
             _sv_row(
@@ -1056,6 +1118,7 @@ def render_document_version_page(
     *,
     node_id: str | None = None,
     fragment: bool = False,
+    state_root: Path | None = None,
 ) -> str | None:
     """The sealed citation destination: the full provenance chain, or None.
 
@@ -1063,7 +1126,7 @@ def render_document_version_page(
     ``node`` that is not part of that document version, never renders a
     fabricated chain.
     """
-    view = load_document_version(db_path, document_version_id)
+    view = load_document_version(db_path, document_version_id, state_root=state_root)
     if view is None:
         return None
     if node_id is not None:

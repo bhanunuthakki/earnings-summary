@@ -19,12 +19,14 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 from provenance.analysis_scope import ReportPdfTableScope
 from provenance.evidence_ledger import EvidenceLocator, EvidenceNode, EvidenceNodeKind
+from provenance.evidence_node_store import EvidenceArchiveError, load_run_nodes
 from provenance.fulltext_extractor_identity import (
     BASE_FULLTEXT_EXTRACTOR,
     OFFICE_FULLTEXT_EXTRACTOR,
     PDF_FULLTEXT_EXTRACTOR,
     PDF_TABLE_EXTRACTOR_NAME,
     STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR,
+    STRUCTURED_WEB_ARCHIVE_ROW_LEVEL_FULLTEXT_EXTRACTOR,
     pdf_table_extractor_code_version,
     readable_fulltext_extractor_identities,
     select_approved_fulltext_run,
@@ -352,19 +354,24 @@ def _all_run_nodes(
     cutoff_at: datetime,
     *,
     verify_output: bool = True,
+    state_root: Path | None = None,
 ) -> list[dict[str, object]]:
-    rows = _rows(
-        conn,
-        "SELECT rowid AS native_rowid, node_id, evidence_key, revision, "
-        "extraction_run_id, parent_node_id, supersedes_node_id, node_kind, "
-        "text, locator_json, locator_sha256, recorded_at "
-        "FROM evidence_nodes WHERE extraction_run_id=? "
-        # The legacy extraction output digest was defined over insertion order.
-        # This is the only use of SQLite rowid: the new sealed member ordinals
-        # below become the database-neutral authority for all future replay.
-        "ORDER BY native_rowid LIMIT ?",
-        (_require_text(run, "extraction_run_id"), _MAX_NATIVE_MEMBERS + 2),
-    )
+    # The legacy extraction output digest was defined over insertion order.
+    # load_run_nodes preserves SQLite rowid order (including any externalized
+    # archive rows) while enforcing fail-closed archive verification.
+    try:
+        rows = load_run_nodes(
+            conn,
+            _require_text(run, "extraction_run_id"),
+            state_root=state_root,
+            include_external=True,
+            include_rowid=True,
+            limit=_MAX_NATIVE_MEMBERS + 2,
+        )
+    except EvidenceArchiveError as exc:
+        raise DocumentProcessingEvidenceIntegrityError(
+            "external_evidence_archive_unavailable"
+        ) from exc
     if len(rows) > _MAX_NATIVE_MEMBERS + 1:
         raise DocumentProcessingEvidenceMissingError("native_member_limit_exceeded")
     if not rows:
@@ -1061,6 +1068,41 @@ def _node_derived(
             conn,
             _require_text(document, "document_version_id"),
             PDF_FULLTEXT_EXTRACTOR,
+            observed_through=cutoff_at,
+        )
+        if selected_run_id is None:
+            raise DocumentProcessingEvidenceMissingError("native_extraction_run_missing")
+        run = _run(
+            conn,
+            _require_text(document, "document_version_id"),
+            cutoff_at,
+            extractor_name=extractor_name,
+            pinned_run_id=selected_run_id,
+        )
+    elif lane == "html_native_hierarchy" and pinned_run_id is not None:
+        run = _run(
+            conn,
+            _require_text(document, "document_version_id"),
+            cutoff_at,
+            extractor_name=extractor_name,
+            pinned_run_id=pinned_run_id,
+        )
+        html_identities = {
+            (identity.code_version, identity.config_sha256)
+            for identity in readable_fulltext_extractor_identities(
+                STRUCTURED_WEB_ARCHIVE_ROW_LEVEL_FULLTEXT_EXTRACTOR
+            )
+        }
+        if (
+            _require_text(run, "extractor_code_version"),
+            _require_sha(run, "extractor_config_sha256"),
+        ) not in html_identities:
+            raise DocumentProcessingEvidenceIntegrityError("html_extractor_identity_not_approved")
+    elif lane == "html_native_hierarchy":
+        selected_run_id = select_approved_fulltext_run(
+            conn,
+            _require_text(document, "document_version_id"),
+            STRUCTURED_WEB_ARCHIVE_ROW_LEVEL_FULLTEXT_EXTRACTOR,
             observed_through=cutoff_at,
         )
         if selected_run_id is None:
