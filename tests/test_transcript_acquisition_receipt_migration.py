@@ -614,6 +614,7 @@ def test_migration_0071_admits_aggregator_providers_and_blocks_downgrade_when_us
     repo_root = tmp_path / "with_aggregator"
     database = migrated_db(repo_root / "portfolio.db")
     cfg = _config(database)
+    command.downgrade(cfg, "0071_admit_aggregator_transcript_providers")
     with sqlite3.connect(database) as conn:
         assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
             "0071_admit_aggregator_transcript_providers",

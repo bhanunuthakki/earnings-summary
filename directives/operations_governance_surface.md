@@ -1,5 +1,24 @@
 # Operations & Governance Surface Impact
 
+## Offline evidence externalization and DB compaction (PR 2B)
+
+Disposition: **bounded offline maintenance CLI, no new dashboard action or schedule**.
+`execution/compact_evidence_and_coverage.py` is a manual, dry-run-by-default,
+single-writer offline compaction entrypoint under `run_lock` / `portfolio-db`
+write-lock discipline. Migration `0072_evidence_node_external_archives` adds
+`evidence_node_external_archives` to record content-addressed `.jsonl.gz`
+archives written under `<state_root>/data/derived_evidence/` for unreferenced
+leaf `table_cell` rows from `fulltext-evidence-backfill` runs. Readers in
+`src/provenance/evidence_node_store.py`, `src/provenance/meli_reported_tables.py`,
+`src/provenance/reviewed_sec_financial_tables.py`,
+`src/provenance/document_processing_evidence.py`, `src/pipeline/source_viewers.py`,
+and `src/provenance/integrity_audit.py` read and verify archived runs fail-closed.
+Optional opt-in flags prune `index_member`-only coverage chains, inactive or
+`index_member`-only `filing_sections`, and unreferenced non-accepted
+`legacy_fact_evidence_match_revisions`, followed by optional `VACUUM` + `ANALYZE`
+after `PRAGMA foreign_key_check` and `PRAGMA integrity_check`. No dashboard
+route, scheduler task, or production service changes.
+
 ## Database size and growth tripwire — November 26, 2026
 
 Disposition: **existing diagnostics surface extended; no new panel, route, schedule, operator action, or database schema**.

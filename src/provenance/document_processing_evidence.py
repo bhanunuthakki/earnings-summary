@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 from provenance.analysis_scope import ReportPdfTableScope
 from provenance.evidence_ledger import EvidenceLocator, EvidenceNode, EvidenceNodeKind
+from provenance.evidence_node_store import EvidenceArchiveError, load_run_nodes
 from provenance.fulltext_extractor_identity import (
     BASE_FULLTEXT_EXTRACTOR,
     OFFICE_FULLTEXT_EXTRACTOR,
@@ -353,19 +354,24 @@ def _all_run_nodes(
     cutoff_at: datetime,
     *,
     verify_output: bool = True,
+    state_root: Path | None = None,
 ) -> list[dict[str, object]]:
-    rows = _rows(
-        conn,
-        "SELECT rowid AS native_rowid, node_id, evidence_key, revision, "
-        "extraction_run_id, parent_node_id, supersedes_node_id, node_kind, "
-        "text, locator_json, locator_sha256, recorded_at "
-        "FROM evidence_nodes WHERE extraction_run_id=? "
-        # The legacy extraction output digest was defined over insertion order.
-        # This is the only use of SQLite rowid: the new sealed member ordinals
-        # below become the database-neutral authority for all future replay.
-        "ORDER BY native_rowid LIMIT ?",
-        (_require_text(run, "extraction_run_id"), _MAX_NATIVE_MEMBERS + 2),
-    )
+    # The legacy extraction output digest was defined over insertion order.
+    # load_run_nodes preserves SQLite rowid order (including any externalized
+    # archive rows) while enforcing fail-closed archive verification.
+    try:
+        rows = load_run_nodes(
+            conn,
+            _require_text(run, "extraction_run_id"),
+            state_root=state_root,
+            include_external=True,
+            include_rowid=True,
+            limit=_MAX_NATIVE_MEMBERS + 2,
+        )
+    except EvidenceArchiveError as exc:
+        raise DocumentProcessingEvidenceIntegrityError(
+            "external_evidence_archive_unavailable"
+        ) from exc
     if len(rows) > _MAX_NATIVE_MEMBERS + 1:
         raise DocumentProcessingEvidenceMissingError("native_member_limit_exceeded")
     if not rows:
