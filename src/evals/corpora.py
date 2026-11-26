@@ -15,6 +15,7 @@ distinct from a grading failure.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -555,6 +556,97 @@ def load_investment_decision_card_corpus(repo_root: Path) -> list[AuditItem]:
     return out
 
 
+_DEEP_DIVE_SKIP_TOP_DIRS: frozenset[str] = frozenset(
+    {
+        "allocation",
+        "earnings-briefs",
+        "feedback",
+        "financial-grounding-audit",
+        "growth-allocation",
+        "hero-use-cases",
+        "investing-skill-assessment",
+        "meli-expanded-scope",
+        "moat-experiment",
+        "nu-meli-backfill-repair",
+    }
+)
+_DEEP_DIVE_SKIP_NAME_TOKENS: tuple[str, ...] = (
+    "backfill",
+    "superseded",
+    "readme",
+    "handoff",
+    "status",
+    "audit",
+    "record",
+    "proposal",
+    "checkpoint",
+    "gap-fixing",
+    "activation-status",
+)
+
+
+def _is_deep_dive_report_path(rel_path: Path) -> bool:
+    parts = rel_path.parts
+    if len(parts) < 2:
+        return False
+    top = parts[0]
+    if not (top.isupper() and top.isalpha() and 1 <= len(top) <= 6):
+        return False
+    parts_lower = [part.lower() for part in parts]
+    if any(top.lower().startswith(prefix) for prefix in _DEEP_DIVE_SKIP_TOP_DIRS):
+        return False
+    if any("backfill" in part or "superseded" in part for part in parts_lower):
+        return False
+    stem_lower = rel_path.stem.lower()
+    return not any(tok in stem_lower for tok in _DEEP_DIVE_SKIP_NAME_TOKENS)
+
+
+def load_deep_dive_analysis_corpus(repo_root: Path) -> list[AuditItem]:
+    """Substantive company research memos, briefs, and evaluations under
+    ``output/research/``, newest mtime first.
+
+    Excludes backfill-validation logs, allocation runs, skill audits, handoff
+    notes, and superseded drafts so the judge scores actual company analyses.
+    """
+    base = Path(repo_root) / "output" / "research"
+    if not base.is_dir():
+        return []
+    candidates: list[tuple[datetime, str, Path]] = []
+    for path in base.rglob("*.md"):
+        rel = path.relative_to(base)
+        if not _is_deep_dive_report_path(rel):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if len(text.strip()) < 800:
+            continue
+        mtime = _mtime_naive_utc(path) or datetime.min
+        candidates.append((mtime, rel.as_posix(), path))
+    candidates.sort(key=lambda row: (row[0], row[1]), reverse=True)
+    out: list[AuditItem] = []
+    seen_hashes: set[str] = set()
+    for mtime, rel_posix, path in candidates:
+        rel = Path(rel_posix)
+        ticker = rel.parts[0].upper() if len(rel.parts) > 1 and rel.parts[0].isalpha() else None
+        text = path.read_text(encoding="utf-8")
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        if digest in seen_hashes:
+            continue
+        seen_hashes.add(digest)
+        out.append(
+            AuditItem(
+                item_id=f"research:{rel_posix}",
+                label=f"deep_dive_analysis/{rel_posix}",
+                ticker=ticker,
+                content=_clip(text),
+                produced_at=None if mtime == datetime.min else mtime,
+            )
+        )
+    return out
+
+
 CORPUS_LOADERS: dict[str, CorpusLoader] = {
     "bear_case": load_bear_case_corpus,
     "transcript_summary": load_transcript_summary_corpus,
@@ -564,6 +656,7 @@ CORPUS_LOADERS: dict[str, CorpusLoader] = {
     "peer_selection": load_peer_selection_corpus,
     "earnings_themes_split": load_earnings_themes_corpus,
     "qa_topics": load_qa_topics_corpus,
+    "deep_dive_analysis": load_deep_dive_analysis_corpus,
 }
 
 
