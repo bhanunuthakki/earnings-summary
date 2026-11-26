@@ -285,19 +285,26 @@ def test_audio_is_a_canonical_bha29_grant_but_acquisition_remains_denied() -> No
     assert validate_transcript_acquisition_authorization(denied) == denied
 
 
-def test_aggregator_cannot_be_mislabeled_as_issuer_under_current_bha29_contract() -> None:
-    request = _request(
+def test_aggregator_is_admitted_under_ir_doc_but_cannot_use_wrong_source_type() -> None:
+    allowed_request = _request(
         source_type=SourceType.IR_DOC,
         document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
         provider=TranscriptProvider.ROIC,
     )
+    allowed = _authorization(allowed_request)
+    denied_request = _request(
+        source_type=SourceType.FMP,
+        document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+        provider=TranscriptProvider.ROIC,
+    )
     denied = _authorization(
-        request,
+        denied_request,
         status=TranscriptAuthorizationStatus.DENIED,
         reason=TranscriptAuthorizationReason.PROVIDER_SOURCE_MISMATCH,
         failure=TranscriptAuthorizationFailure.SOURCE_DOCUMENT_CLASS,
     )
 
+    assert validate_transcript_acquisition_authorization(allowed) == allowed
     assert validate_transcript_acquisition_authorization(denied) == denied
 
 
