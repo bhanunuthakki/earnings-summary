@@ -13,6 +13,7 @@ import pytest
 
 from execution import compact_evidence_and_coverage as compactor
 from provenance import document_processing_evidence as dpe
+from provenance import evidence_compaction
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -976,3 +977,53 @@ def test_step_b_coverage_filing_sections_and_step_c_legacy_matches_pruning(
                 is not None
             )
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_maintenance_transaction_restores_foreign_keys_on_commit_and_error(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    db_path = migrated_db(tmp_path / "fk_restore.db")
+    _seed_step_a_database(db_path)
+    maintenance_tx = getattr(evidence_compaction, "_maintenance_transaction")
+    trigger_name = "trg_evidence_nodes_append_only_delete"
+
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER) as conn:
+        assert int(conn.execute("PRAGMA foreign_keys").fetchone()[0]) == 1
+
+        # 1. Normal completion: FK is 0 inside block, restored to 1 on commit, trigger preserved.
+        with maintenance_tx(conn, (trigger_name,), defer_fk_checks=True):
+            assert int(conn.execute("PRAGMA foreign_keys").fetchone()[0]) == 0
+            conn.execute("DELETE FROM evidence_nodes WHERE node_id = 'n-leaf-cell-000'")
+        assert int(conn.execute("PRAGMA foreign_keys").fetchone()[0]) == 1
+        assert (
+            conn.execute(
+                "SELECT 1 FROM evidence_nodes WHERE node_id = 'n-leaf-cell-000'"
+            ).fetchone()
+            is None
+        )
+        assert (
+            conn.execute(
+                "SELECT 1 FROM sqlite_schema WHERE type='trigger' AND name=?", (trigger_name,)
+            ).fetchone()
+            is not None
+        )
+
+        # 2. Simulated failure: rolls back deletes, restores trigger verbatim, restores FK to 1.
+        with (
+            pytest.raises(RuntimeError, match="simulated crash"),
+            maintenance_tx(conn, (trigger_name,), defer_fk_checks=True),
+        ):
+            assert int(conn.execute("PRAGMA foreign_keys").fetchone()[0]) == 0
+            conn.execute("DELETE FROM evidence_nodes WHERE node_id = 'n-leaf-cell-001'")
+            raise RuntimeError("simulated crash")
+
+        assert int(conn.execute("PRAGMA foreign_keys").fetchone()[0]) == 1
+        assert (
+            conn.execute(
+                "SELECT 1 FROM evidence_nodes WHERE node_id = 'n-leaf-cell-001'"
+            ).fetchone()
+            is not None
+        )
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute("DELETE FROM evidence_nodes WHERE node_id = 'n-leaf-cell-001'")

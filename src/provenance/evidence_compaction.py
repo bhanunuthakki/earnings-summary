@@ -283,9 +283,20 @@ def _verify_triggers_present(conn: sqlite3.Connection, expected: Sequence[tuple[
 
 @contextmanager
 def _maintenance_transaction(
-    conn: sqlite3.Connection, trigger_names: Sequence[str]
+    conn: sqlite3.Connection,
+    trigger_names: Sequence[str],
+    *,
+    defer_fk_checks: bool = False,
 ) -> Generator[None]:
-    """Drop allowlisted delete triggers, execute inside BEGIN IMMEDIATE, and restore verbatim."""
+    """Drop allowlisted delete triggers, execute inside BEGIN IMMEDIATE, and restore verbatim.
+
+    When ``defer_fk_checks=True``, temporarily disables ``PRAGMA foreign_keys``
+    outside the transaction (SQLite ignores changes inside a transaction) so
+    bulk deletes on tables with unindexed incoming self-FKs avoid O(N^2) scans,
+    then unconditionally restores the prior ``PRAGMA foreign_keys`` state after
+    COMMIT or ROLLBACK. Callers must verify referential integrity before and
+    after via ``_check_table_foreign_keys``.
+    """
     if conn.in_transaction:
         raise RuntimeError("maintenance transaction requires an idle SQLite connection")
     captured: list[tuple[str, str]] = []
@@ -295,6 +306,12 @@ def _maintenance_transaction(
         sql = _capture_trigger_sql(conn, name)
         if sql is not None:
             captured.append((name, sql))
+
+    prev_fk = int(conn.execute("PRAGMA foreign_keys").fetchone()[0]) if defer_fk_checks else 0
+    if defer_fk_checks and prev_fk:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        if int(conn.execute("PRAGMA foreign_keys").fetchone()[0]) != 0:
+            raise RuntimeError("failed to defer PRAGMA foreign_keys before maintenance transaction")
 
     prev_isolation = conn.isolation_level
     conn.isolation_level = None
@@ -313,6 +330,13 @@ def _maintenance_transaction(
             raise
     finally:
         conn.isolation_level = prev_isolation
+        if defer_fk_checks and prev_fk:
+            conn.execute("PRAGMA foreign_keys = ON")
+            restored_fk = int(conn.execute("PRAGMA foreign_keys").fetchone()[0])
+            if restored_fk != prev_fk:
+                raise RuntimeError(
+                    f"failed to restore PRAGMA foreign_keys to {prev_fk} (got {restored_fk})"
+                )
         if captured:
             _verify_triggers_present(conn, captured)
 
@@ -422,6 +446,45 @@ def _run_step_a(
         )
 
     archived_runs = archived_nodes = deleted_nodes = archive_bytes_written = 0
+    pending_receipts: list[tuple[str, str, str, int, str, str, str]] = []
+    pending_node_ids: list[str] = []
+
+    def _flush_pending_batch() -> None:
+        nonlocal archived_runs, archived_nodes, deleted_nodes
+        if not pending_receipts:
+            return
+        with _maintenance_transaction(conn, (_EVIDENCE_NODE_TRIGGER,), defer_fk_checks=True):
+            conn.executemany(
+                "INSERT INTO evidence_node_external_archives ("
+                "extraction_run_id, storage_relpath, archive_sha256, archived_node_count, "
+                "archived_node_kinds_json, original_output_sha256, archived_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+                pending_receipts,
+            )
+            cur = conn.executemany(
+                "DELETE FROM evidence_nodes WHERE node_id = ?",
+                [(node_id,) for node_id in pending_node_ids],
+            )
+            if cur.rowcount != len(pending_node_ids):
+                raise RuntimeError(
+                    f"delete count mismatch for Step A batch: "
+                    f"expected {len(pending_node_ids)}, deleted {cur.rowcount}"
+                )
+        batch_runs = len(pending_receipts)
+        batch_nodes = len(pending_node_ids)
+        archived_runs += batch_runs
+        archived_nodes += batch_nodes
+        deleted_nodes += batch_nodes
+        log_event(
+            "compact_evidence_batch_committed",
+            batch_runs=batch_runs,
+            batch_nodes=batch_nodes,
+            total_archived_runs=archived_runs,
+            total_archived_nodes=archived_nodes,
+        )
+        pending_receipts.clear()
+        pending_node_ids.clear()
+
     for extraction_run_id in sorted(by_run):
         node_ids = by_run[extraction_run_id]
         run_row = conn.execute(
@@ -441,50 +504,28 @@ def _run_step_a(
                 f"expected {len(node_ids)}, fetched {len(rows_to_archive)}"
             )
 
+        # Write & verify archive on disk BEFORE queueing receipt+delete (crash-safe).
         artifact = write_run_nodes_archive(options.state_root, extraction_run_id, rows_to_archive)
         archived_at = datetime.now(UTC).isoformat()
         kinds_json = json.dumps(list(artifact.archived_node_kinds), separators=(",", ":"))
         archive_bytes_written += artifact.archive_path.stat().st_size
 
-        with _maintenance_transaction(conn, (_EVIDENCE_NODE_TRIGGER,)):
-            conn.execute(
-                "INSERT INTO evidence_node_external_archives ("
-                "extraction_run_id, storage_relpath, archive_sha256, archived_node_count, "
-                "archived_node_kinds_json, original_output_sha256, archived_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    extraction_run_id,
-                    artifact.storage_relpath,
-                    artifact.archive_sha256,
-                    artifact.archived_node_count,
-                    kinds_json,
-                    original_output_sha256,
-                    archived_at,
-                ),
+        pending_receipts.append(
+            (
+                extraction_run_id,
+                artifact.storage_relpath,
+                artifact.archive_sha256,
+                artifact.archived_node_count,
+                kinds_json,
+                original_output_sha256,
+                archived_at,
             )
-            run_deleted = 0
-            for batch in _chunked_str(node_ids, options.batch_size):
-                cur = conn.executemany(
-                    "DELETE FROM evidence_nodes WHERE extraction_run_id = ? AND node_id = ?",
-                    [(extraction_run_id, node_id) for node_id in batch],
-                )
-                run_deleted += cur.rowcount
-            if run_deleted != len(node_ids):
-                raise RuntimeError(
-                    f"delete count mismatch for run {extraction_run_id}: "
-                    f"expected {len(node_ids)}, deleted {run_deleted}"
-                )
-
-        archived_runs += 1
-        archived_nodes += artifact.archived_node_count
-        deleted_nodes += run_deleted
-        log_event(
-            "compact_evidence_run_archived",
-            extraction_run_id=extraction_run_id,
-            archived_nodes=artifact.archived_node_count,
-            storage_relpath=artifact.storage_relpath,
-            archive_sha256=artifact.archive_sha256,
         )
+        pending_node_ids.extend(node_ids)
+        if len(pending_node_ids) >= options.batch_size:
+            _flush_pending_batch()
+
+    _flush_pending_batch()
 
     _check_table_foreign_keys(conn, "evidence_nodes")
     _check_table_foreign_keys(conn, "evidence_node_external_archives")
@@ -710,7 +751,7 @@ def _run_step_b_coverage(
         return result
 
     trigger_names = [trg for tbl, trg in _COVERAGE_TRIGGERS if tbl in tables]
-    with _maintenance_transaction(conn, trigger_names):
+    with _maintenance_transaction(conn, trigger_names, defer_fk_checks=True):
         del_assessments = _delete_chain_leaf_to_root(
             conn,
             "source_coverage_assessments",
@@ -916,7 +957,7 @@ def _run_step_c_legacy_matches(
     if not options.apply or not target_ids:
         return result
 
-    with _maintenance_transaction(conn, (_LEGACY_MATCH_TRIGGER,)):
+    with _maintenance_transaction(conn, (_LEGACY_MATCH_TRIGGER,), defer_fk_checks=True):
         deleted = _delete_chain_leaf_to_root(
             conn,
             "legacy_fact_evidence_match_revisions",
