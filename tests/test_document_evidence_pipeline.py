@@ -675,7 +675,11 @@ def test_resume_receipt_binds_requested_context(
 # statistics the planner walked every current inventory and expected document
 # for each processed document: about 8 s per document on the canonical host.
 _PRODUCTION_STATISTICS = (
-    ("source_coverage_assessments", "ix_source_coverage_expected_revision", "229577 1 1"),
+    (
+        "source_coverage_assessments",
+        "sqlite_autoindex_source_coverage_assessments_2",
+        "229577 1 1",
+    ),
     ("source_coverage_assessments", "ix_source_coverage_document_version", "229577 2"),
     ("evidence_document_versions", "ix_evidence_document_filter", "13774 106 106 19 10 9"),
     ("evidence_document_versions", "sqlite_autoindex_evidence_document_versions_4", "13774 9"),
