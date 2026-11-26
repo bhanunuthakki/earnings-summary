@@ -607,14 +607,18 @@ def test_0063_preserves_historical_receipt_and_admits_current_receipt(
 
 def test_migration_0071_admits_aggregator_providers_and_blocks_downgrade_when_used(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
     darwin_staging_double: None,
 ) -> None:
-    database = tmp_path / "portfolio.db"
+    repo_root = tmp_path / "with_aggregator"
+    database = migrated_db(repo_root / "portfolio.db")
     cfg = _config(database)
-    command.upgrade(cfg, "0070_source_coverage_document_version_index")
+    with sqlite3.connect(database) as conn:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "0071_admit_aggregator_transcript_providers",
+        )
 
-    repo_root = tmp_path
     staging_root = repo_root / ".tmp" / "transcript-acquisition"
     staging_root.mkdir(parents=True, exist_ok=True)
     with connect_sqlite(database, role=SQLiteConnectionRole.WRITER, schema_preflight=False) as conn:
@@ -638,7 +642,6 @@ def test_migration_0071_admits_aggregator_providers_and_blocks_downgrade_when_us
     from pipeline import transcript_acquisition as acquisition
 
     monkeypatch.setattr(acquisition, "reported_period_window_from_inventory", _window)
-    command.upgrade(cfg, "0071_admit_aggregator_transcript_providers")
 
     roic_req = TranscriptAcquisitionRequest(
         schema_version="transcript-acquisition-request@2",
@@ -671,3 +674,16 @@ def test_migration_0071_admits_aggregator_providers_and_blocks_downgrade_when_us
         conn.commit()
     with pytest.raises(RuntimeError, match="cannot downgrade while aggregator transcript receipts"):
         command.downgrade(cfg, "0070_source_coverage_document_version_index")
+
+    clean_db = migrated_db(tmp_path / "clean" / "portfolio.db")
+    clean_cfg = _config(clean_db)
+    command.downgrade(clean_cfg, "0070_source_coverage_document_version_index")
+    with sqlite3.connect(clean_db) as conn:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "0070_source_coverage_document_version_index",
+        )
+        ddl = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='transcript_acquisition_receipts'"
+        ).fetchone()
+        assert ddl is not None
+        assert "CHECK(provider = 'issuer_ir')" in str(ddl[0])

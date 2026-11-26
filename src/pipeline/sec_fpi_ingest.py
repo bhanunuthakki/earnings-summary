@@ -63,6 +63,12 @@ _TICKER_EXHIBIT_HINT: dict[str, re.Pattern[str]] = {
     "ASML": re.compile(r"financialstatements|pressrelease", re.IGNORECASE),
 }
 
+# Per-ticker reporting currency fallback when a 6-K interim financial table omits
+# an explicit currency code (e.g. Brookfield Corporation reports in USD with bare "$" symbols).
+_ISSUER_FALLBACK_CURRENCY: dict[str, Currency] = {
+    "BN": Currency.USD,
+}
+
 # Fallback keywords for exhibit discovery when primary hint does not match
 _FALLBACK_EXHIBIT_KEYWORDS = [
     "interimreport",
@@ -1088,18 +1094,7 @@ def ingest_fpi_for_ticker(
         repo_root=repo_root,
     )
 
-    fallback_currency: Currency | None = None
-    cur_row = conn.execute(
-        "SELECT currency FROM financial_facts "
-        "WHERE UPPER(ticker) = ? AND currency IS NOT NULL "
-        "ORDER BY period_end DESC, id DESC LIMIT 1",
-        (ticker,),
-    ).fetchone()
-    if cur_row and cur_row[0]:
-        try:
-            fallback_currency = Currency(str(cur_row[0]).upper())
-        except ValueError:
-            fallback_currency = None
+    fallback_currency = _ISSUER_FALLBACK_CURRENCY.get(ticker)
 
     financial_facts = extract_fpi_financial_facts_html(
         fetched.raw_html,

@@ -1095,7 +1095,7 @@ def telemetry_retention(
             id_col = "rowid"
         fk_refs = _fk_referencing_tables(conn, table)
         fk_guards = "".join(
-            f' AND NOT EXISTS (SELECT 1 FROM main."{child}" AS _fk_c '
+            f' AND NOT EXISTS (SELECT 1 FROM main."{child}" AS _fk_c '  # nosec B608 -- child/column identifiers come from PRAGMA main.foreign_key_list
             f'WHERE _fk_c."{child_col}" = _t."{parent_col}")'
             for child, child_col, parent_col in fk_refs
         )
