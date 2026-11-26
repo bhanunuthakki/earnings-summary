@@ -1004,3 +1004,44 @@ def test_unbound_legacy_checkpoint_requires_new_namespace(tmp_path: Path) -> Non
         assert conn.execute("SELECT COUNT(*) FROM evidence_document_versions").fetchone()[0] == 0
     finally:
         conn.close()
+
+
+def test_batch_evidence_backfill_skips_index_member_tickers_by_default(tmp_path: Path) -> None:
+    conn, _, repo_root = _connection(tmp_path)
+    try:
+        conn.execute(
+            "CREATE TABLE tracked_companies ("
+            "ticker TEXT NOT NULL, list_type TEXT NOT NULL, archived_at TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO tracked_companies (ticker, list_type, archived_at) VALUES (?, ?, NULL)",
+            (("ACME", "portfolio"), ("IDX", "index_member")),
+        )
+        raw = b"<html>index member</html>"
+        (repo_root / "data" / "IDX.html").write_bytes(raw)
+        conn.execute(
+            "INSERT INTO documents VALUES (2, 'IDX', 'ir_doc', '10-Q', NULL, NULL, "
+            "?, ?, ?, 'ok', ?, NULL, NULL)",
+            ("data/IDX.html", hashlib.sha256(raw).hexdigest(), "2026-07-21", len(raw)),
+        )
+        conn.commit()
+
+        batch = backfill_legacy_evidence(conn, _request(repo_root, apply=True))
+        assert batch.documents_considered == 1
+        assert batch.documents_backfilled == 1
+        assert batch.last_document_id_after == 1
+        assert batch.has_more is False
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM evidence_document_versions WHERE legacy_document_id = 2"
+            ).fetchone()[0]
+            == 0
+        )
+
+        targeted = backfill_legacy_evidence(
+            conn,
+            BackfillRequest(repo_root=repo_root, document_id=2, apply=True),
+        )
+        assert targeted.documents_backfilled == 1
+    finally:
+        conn.close()

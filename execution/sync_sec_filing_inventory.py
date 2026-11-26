@@ -1330,6 +1330,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--apply", action="store_true")
     parser.add_argument(
+        "--allow-non-active",
+        action="store_true",
+        help="Allow syncing SEC filing inventory for non-active tickers such as index_member.",
+    )
+    parser.add_argument(
         "--package-subject-review",
         type=Path,
         help="Exact reviewed SEC 6-K exhibit subjects and reported-period witnesses.",
@@ -1460,6 +1465,35 @@ def _run(args: argparse.Namespace) -> int:
         receipt_conn.close()
 
 
+def _is_index_member_only(conn: sqlite3.Connection, ticker: str) -> bool:
+    """Return True when tracked_companies classifies ticker exclusively as an active index_member."""
+    if (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tracked_companies'"
+        ).fetchone()
+        is None
+    ):
+        return False
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
+    if not {"ticker", "list_type"} <= columns:
+        return False
+    if "archived_at" in columns:
+        rows = conn.execute(
+            "SELECT lower(trim(list_type)) FROM tracked_companies "
+            "WHERE UPPER(trim(ticker)) = ? AND archived_at IS NULL",
+            (ticker.strip().upper(),),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT lower(trim(list_type)) FROM tracked_companies WHERE UPPER(trim(ticker)) = ?",
+            (ticker.strip().upper(),),
+        ).fetchall()
+    list_types = {str(row[0]) for row in rows if row[0] is not None}
+    return "index_member" in list_types and not bool(
+        list_types & {"portfolio", "evaluation", "watchlist"}
+    )
+
+
 def _run_inventory(
     args: argparse.Namespace, *, completed: Callable[[SyncResult], None] | None = None
 ) -> int:
@@ -1521,6 +1555,27 @@ def _run_inventory(
         schema_preflight=False,
     )
     try:
+        if not bool(getattr(args, "allow_non_active", False)) and _is_index_member_only(
+            identity_conn, ticker
+        ):
+            _event(
+                "sec_filing_inventory_scope_rejected",
+                ticker=ticker,
+                reason_code="index_member_excluded_by_default",
+            )
+            sys.stdout.write(
+                json.dumps(
+                    {
+                        "outcome": "blocked",
+                        "reason_code": "index_member_excluded_by_default",
+                        "retryable": False,
+                        "ticker": ticker,
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            return 2
         if issuer_registry_available(identity_conn):
             try:
                 subject = resolve_sec_inventory_subject(

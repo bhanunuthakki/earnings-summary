@@ -2947,3 +2947,70 @@ def test_offline_cli_does_not_invent_owner_requests_for_automatic_scope(
     assert len(rows) == 3
     assert all(bool(row[0]) is explicit for row in rows)
     assert all((row[1] is not None) is explicit for row in rows)
+
+
+def test_index_member_corpus_admission_skips_db_documents_and_facts(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    project_root = tmp_path / "repo"
+    raw_dir = project_root / "data" / "historical" / "fmp"
+    raw_dir.mkdir(parents=True)
+    payload_text = json.dumps(
+        [
+            {
+                "date": "2026-06-30",
+                "symbol": "IDX",
+                "reportedCurrency": "USD",
+                "period": "Q2",
+                "fiscalYear": "2026",
+                "revenue": 500000000,
+                "netIncome": 50000000,
+            }
+        ]
+    )
+    raw_path = raw_dir / "IDX_income_statement_quarterly.json"
+    raw_path.write_text(payload_text, encoding="utf-8")
+    db_path = migrated_db(project_root / "data" / "runtime.db", target=ACTIVE_REVISION)
+    item = replace(
+        _item("IDX", suffix="income_statement_quarterly"),
+        list_type=ListType.INDEX_MEMBER.value,
+    )
+    with _connection(db_path) as connection:
+        connection.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,instrument_type) "
+            "VALUES ('IDX','Index Peer','index_member','equity')"
+        )
+        connection.commit()
+
+        result = refresh_cache.run_recovery_batch(
+            connection,
+            items=(item,),
+            credentials=CredentialAvailability.MISSING,
+            raw_corpus_dir=raw_dir,
+            project_root=project_root,
+            now=NOW,
+            run_id="index-member-disk-only",
+            dispatch=_unexpected_dispatch,
+            provider_call_budget=0,
+        )
+
+        assert result.corpus_count == 1
+        assert result.failed_count == 0
+        assert raw_path.read_text(encoding="utf-8") == payload_text
+        assert (
+            connection.execute("SELECT COUNT(*) FROM documents WHERE ticker='IDX'").fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM evidence_document_versions WHERE ticker='IDX'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM financial_facts WHERE ticker='IDX'"
+            ).fetchone()[0]
+            == 0
+        )
