@@ -952,6 +952,28 @@ def test_verify_gemini_setup_falls_back_to_fleet_env(
     assert gemini_backend._gemini_api_key == placeholder
 
 
+def test_call_gemini_coerces_rendered_prompt_to_plain_str_for_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from llm.prompt_registry import attribute_plain_prompt, template_meta
+
+    _no_budget(monkeypatch)
+    _gemini_ready(monkeypatch)
+    _FakeClient.last_instances.clear()
+    recorded: list[dict[str, object]] = []
+    monkeypatch.setattr(gemini_backend, "record_llm_call", _record_to(recorded))
+    monkeypatch.setattr(gemini_backend.genai, "Client", _FakeClient)
+    _FakeClient.returning(SimpleNamespace(text="ok", usage_metadata=None))
+
+    prompt = attribute_plain_prompt("hello world", purpose="bear_case")
+    out = gemini_backend.call_gemini(prompt, model="gemini-4-neon", purpose="bear_case")
+    assert out == "ok"
+    sent_contents = _FakeClient.last_instances[-1].calls[0]["contents"]
+    assert type(sent_contents) is str
+    assert sent_contents == "hello world"
+    assert template_meta(recorded[0]["prompt"]) == template_meta(prompt)
+
+
 # ---------------------------------------------------------------------------
 # Package layout + compare harness
 

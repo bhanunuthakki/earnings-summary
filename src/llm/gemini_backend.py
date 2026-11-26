@@ -512,7 +512,8 @@ def call_gemini(
             started_at = datetime.now(UTC)
             t0 = time.monotonic()
             try:
-                response = client.models.generate_content(model=_try_model, contents=prompt)
+                # Pass plain str: google-genai drops str subclasses (RenderedPrompt) to `{}`.
+                response = client.models.generate_content(model=_try_model, contents=str(prompt))
                 elapsed_ms = int((time.monotonic() - t0) * 1000)
                 text = (response.text or "").strip() if hasattr(response, "text") else ""
                 if not text:
