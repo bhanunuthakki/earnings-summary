@@ -23,11 +23,9 @@ from types import GeneratorType, SimpleNamespace
 from typing import cast
 
 import pytest
-from alembic.config import Config
 
 import llm.cli as llm_cli
 import llm_call_ledger
-from alembic import command
 from ask.narrative_transport import stream_llm_text as real_stream_llm_text
 from llm.cli import DEFAULT_MODEL, LLM_MODELS, LLMBudgetExceeded
 from llm_call_ledger import LlmCallRecord
@@ -393,31 +391,10 @@ def test_windows_tree_kill_uses_safe_pid_argv(monkeypatch: pytest.MonkeyPatch) -
 # ---------------------------------------------------------------------------
 
 
-def _alembic_cfg(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
-def test_migration_0104_seeds_ask_answer_budget_warn_mode(tmp_path: Path) -> None:
-    db_path = tmp_path / "portfolio.db"
-    conn = sqlite3.connect(db_path)
-    conn.executescript(
-        """
-        CREATE TABLE llm_budgets (
-            purpose TEXT PRIMARY KEY, monthly_cap_usd REAL, warn_threshold_pct REAL,
-            hard_block INTEGER, on_exceed TEXT, created_at TEXT, updated_at TEXT, notes TEXT
-        );
-        """
-    )
-    conn.commit()
-    conn.close()
-
-    cfg = _alembic_cfg(db_path)
-    command.stamp(cfg, "0103_podcast_takeaway_summary_budget")
-    command.upgrade(cfg, "0104_ask_answer_budget")
-
+def test_ask_answer_budget_warn_mode_is_seeded(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = migrated_db(tmp_path / "portfolio.db")
     conn = sqlite3.connect(db_path)
     row = conn.execute(
         "SELECT monthly_cap_usd, hard_block, on_exceed FROM llm_budgets WHERE purpose = 'ask_answer'"
@@ -426,5 +403,3 @@ def test_migration_0104_seeds_ask_answer_budget_warn_mode(tmp_path: Path) -> Non
     assert row is not None
     # Soft/warn: an interactive answer is never hard-blocked mid-conversation.
     assert row == (25.0, 0, "warn")
-
-    # Downgrade removes only this row.

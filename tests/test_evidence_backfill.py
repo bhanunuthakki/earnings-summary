@@ -8,13 +8,12 @@ import os
 import sqlite3
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from provenance import evidence_native_candidates as native_candidates_module
 from provenance.evidence_backfill import (
     BackfillRequest,
@@ -27,13 +26,13 @@ from provenance.immutable_artifact import ImmutableArtifactSnapshot
 from provenance.integrity_audit import AuditOptions, audit_connection
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_MIGRATED_DB_BUILDER: Callable[..., Path] | None = None
 
 
-def _config(db_path: Path) -> Config:
-    config = Config(str(PROJECT_ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return config
+@pytest.fixture(autouse=True)
+def _bind_migrated_db(migrated_db: Callable[..., Path]) -> None:
+    global _MIGRATED_DB_BUILDER
+    _MIGRATED_DB_BUILDER = migrated_db
 
 
 def _seed_legacy_schema(db_path: Path, repo_root: Path) -> None:
@@ -42,57 +41,47 @@ def _seed_legacy_schema(db_path: Path, repo_root: Path) -> None:
     raw_bytes = b"<html>official filing</html>"
     raw_path.write_bytes(raw_bytes)
     raw_sha = hashlib.sha256(raw_bytes).hexdigest()
+    assert _MIGRATED_DB_BUILDER is not None
+    _MIGRATED_DB_BUILDER(db_path)
     conn = sqlite3.connect(db_path)
     try:
-        conn.executescript(
-            """
-            CREATE TABLE documents (
-                id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, source_type TEXT NOT NULL,
-                doc_type TEXT NOT NULL, period_start TIMESTAMP, period_end TIMESTAMP,
-                file_path TEXT NOT NULL, sha256 TEXT NOT NULL, fetched_at TIMESTAMP NOT NULL,
-                fetch_status TEXT NOT NULL, raw_bytes_size INTEGER NOT NULL, source_url TEXT,
-                accession_number TEXT
-            );
-            CREATE TABLE transcripts (
-                id INTEGER PRIMARY KEY, document_id INTEGER NOT NULL, ticker TEXT NOT NULL,
-                fiscal_period_type TEXT, period_end TIMESTAMP, is_active INTEGER NOT NULL DEFAULT 1
-            );
-            CREATE TABLE transcript_segments (
-                id INTEGER PRIMARY KEY, transcript_id INTEGER NOT NULL, seq INTEGER NOT NULL,
-                speaker TEXT, speaker_role TEXT, time_code_start TEXT, time_code_end TEXT,
-                text TEXT NOT NULL
-            );
-            CREATE TABLE filing_sections (
-                id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, source TEXT NOT NULL,
-                source_ref TEXT NOT NULL, doc_id INTEGER, accession_number TEXT, form TEXT NOT NULL,
-                fiscal_period TEXT NOT NULL, section_key_raw TEXT NOT NULL, ordinal INTEGER NOT NULL,
-                text TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 1
-            );
-            """
-        )
         conn.execute(
-            "INSERT INTO documents VALUES (1, 'ACME', 'sec_edgar', '10-Q', NULL, ?, ?, ?, ?, "
+            "INSERT INTO documents (id, ticker, source_type, doc_type, period_start, "
+            "period_end, file_path, sha256, fetched_at, fetch_status, raw_bytes_size, "
+            "source_url, accession_number) "
+            "VALUES (1, 'ACME', 'sec_edgar', '10-Q', NULL, ?, ?, ?, ?, "
             "'ok', ?, 'https://sec.example/acme-10q', '0000000001-26-000001')",
             ("2026-06-30", "data/ACME_10q.html", raw_sha, "2026-07-20 12:00:00", len(raw_bytes)),
         )
-        conn.execute("INSERT INTO transcripts VALUES (1, 1, 'ACME', 'Q2', '2026-06-30', 1)")
-        conn.execute("INSERT INTO transcripts VALUES (2, 1, 'ACME', 'Q2', '2026-06-30', 0)")
         conn.execute(
-            "INSERT INTO transcript_segments VALUES (1, 1, 0, 'CEO', 'executive', '00:00', "
+            "INSERT INTO transcripts (id, document_id, ticker, fiscal_period_type, period_end, is_active) "
+            "VALUES (1, 1, 'ACME', 'Q2', '2026-06-30', 1)"
+        )
+        conn.execute(
+            "INSERT INTO transcript_segments (id, transcript_id, seq, speaker, speaker_role, "
+            "time_code_start, time_code_end, text) "
+            "VALUES (1, 1, 0, 'CEO', 'executive', '00:00', "
             "'00:05', 'Revenue grew 20%.')"
         )
         conn.execute(
-            "INSERT INTO transcript_segments VALUES (2, 2, 0, 'CEO', 'executive', '00:00', "
-            "'00:05', 'Superseded transcript.')"
+            "INSERT INTO filing_sections (id, ticker, source, source_ref, doc_id, "
+            "accession_number, form, fiscal_period, section_key_raw, section_stem, ordinal, "
+            "text, text_sha256, char_len, key_truncated, extractor_version, created_at, is_active) "
+            "VALUES (1, 'ACME', 'edgar_text', 'acc-1', 1, "
+            "'0000000001-26-000001', '10-Q', 'Q2', 'Item 1A', 'Item 1A', 0, 'Risks changed.', "
+            "?, 14, 0, 'test', '2026-07-20 12:00:00', 1)",
+            (hashlib.sha256(b"Risks changed.").hexdigest(),),
         )
         conn.execute(
-            "INSERT INTO filing_sections VALUES (1, 'ACME', 'edgar_text', 'acc-1', 1, "
-            "'0000000001-26-000001', '10-Q', 'Q2', 'Item 1A', 0, 'Risks changed.', 1)"
+            "INSERT INTO filing_sections (id, ticker, source, source_ref, doc_id, "
+            "accession_number, form, fiscal_period, section_key_raw, section_stem, ordinal, "
+            "text, text_sha256, char_len, key_truncated, extractor_version, created_at, is_active) "
+            "VALUES (2, 'ACME', 'edgar_text', 'acc-1', 1, "
+            "'0000000001-26-000001', '10-Q', 'Q2', 'Item 1A', 'Item 1A', 1, 'Old risks.', "
+            "?, 10, 0, 'test', '2026-07-20 12:00:00', 0)",
+            (hashlib.sha256(b"Old risks.").hexdigest(),),
         )
-        conn.execute(
-            "INSERT INTO filing_sections VALUES (2, 'ACME', 'edgar_text', 'acc-1', 1, "
-            "'0000000001-26-000001', '10-Q', 'Q2', 'Item 1A', 1, 'Old risks.', 0)"
-        )
+        conn.execute("DROP TRIGGER IF EXISTS trg_transcript_documents_immutable")
         conn.commit()
     finally:
         conn.close()
@@ -102,11 +91,6 @@ def _connection(tmp_path: Path) -> tuple[sqlite3.Connection, Path, Path]:
     db_path = tmp_path / "portfolio.db"
     repo_root = tmp_path / "repo"
     _seed_legacy_schema(db_path, repo_root)
-    config = _config(db_path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0213_evidence_ledger_foundation")
-    command.stamp(config, "0217_fact_selection_ledger")
-    command.upgrade(config, "0218_evidence_replica_links")
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -127,7 +111,7 @@ def _request(
 def _install_binding_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
-        CREATE TABLE legacy_document_evidence_binding_revisions (
+        CREATE TABLE IF NOT EXISTS legacy_document_evidence_binding_revisions (
             binding_revision_id TEXT PRIMARY KEY,
             idempotency_key TEXT UNIQUE NOT NULL,
             legacy_document_id INTEGER NOT NULL,
@@ -142,7 +126,7 @@ def _install_binding_schema(conn: sqlite3.Connection) -> None:
             recorded_at TEXT NOT NULL,
             supersedes_binding_revision_id TEXT
         );
-        CREATE VIEW v_legacy_document_evidence_bindings_current AS
+        CREATE VIEW IF NOT EXISTS v_legacy_document_evidence_bindings_current AS
         SELECT binding.* FROM legacy_document_evidence_binding_revisions AS binding
         WHERE NOT EXISTS (
             SELECT 1 FROM legacy_document_evidence_binding_revisions AS newer
@@ -243,7 +227,7 @@ def test_apply_is_idempotent_and_uses_only_active_evidence(tmp_path: Path) -> No
     conn, _, repo_root = _connection(tmp_path)
     try:
         first = backfill_legacy_evidence(conn, _request(repo_root, apply=True))
-        assert first.records_created == 9
+        assert first.records_created == 10
         assert conn.execute("SELECT COUNT(*) FROM evidence_nodes").fetchone()[0] == 3
         texts = {row[0] for row in conn.execute("SELECT text FROM evidence_nodes")}
         assert "Superseded transcript." not in texts
@@ -294,7 +278,7 @@ def test_apply_is_idempotent_and_uses_only_active_evidence(tmp_path: Path) -> No
             conn, _request(repo_root, apply=True, task_id="evidence-ledger-replay")
         )
         assert second.records_created == 0
-        assert second.records_replayed == 9
+        assert second.records_replayed == 10
     finally:
         conn.close()
 
@@ -351,7 +335,7 @@ def test_exact_replay_does_not_reinsert_into_a_sealed_extraction_run(
     conn, _, repo_root = _connection(tmp_path)
     try:
         first = backfill_legacy_evidence(conn, _request(repo_root, apply=True))
-        assert first.records_created == 9
+        assert first.records_created == 10
         conn.execute(
             "CREATE TRIGGER reject_sealed_extraction_run_reinsert "
             "BEFORE INSERT ON evidence_nodes "
@@ -365,7 +349,7 @@ def test_exact_replay_does_not_reinsert_into_a_sealed_extraction_run(
         )
 
         assert replay.records_created == 0
-        assert replay.records_replayed == 9
+        assert replay.records_replayed == 10
     finally:
         conn.close()
 
@@ -389,7 +373,7 @@ def test_apply_reuses_verified_legacy_file_observation_from_a_clone_root(
             conn, _request(clone_root, apply=True, task_id="clone-replay")
         )
 
-        assert result.records_created == 7
+        assert result.records_created == 8
         assert result.records_replayed == 2
         assert (
             conn.execute(
@@ -547,6 +531,8 @@ def test_apply_records_a_new_present_revision_after_location_was_missing(
 def test_active_only_falls_back_when_lifecycle_views_are_absent(tmp_path: Path) -> None:
     conn, _, repo_root = _connection(tmp_path)
     try:
+        conn.execute("DROP VIEW IF EXISTS v_active_filing_sections")
+        conn.execute("DROP VIEW IF EXISTS v_active_transcripts")
         result = backfill_legacy_evidence(conn, _request(repo_root, apply=True))
         assert result.selection_modes == {
             "filing_sections": "lifecycle_filter",
@@ -597,7 +583,10 @@ def test_legacy_capture_uses_admitted_exact_replica_without_rewriting_source_ide
         second_bytes = b"<html>second historical observation</html>"
         original.write_bytes(second_bytes)
         conn.execute(
-            "INSERT INTO documents VALUES (2, 'ACME', 'sec_edgar', '10-Q', NULL, NULL, ?, ?, "
+            "INSERT INTO documents (id, ticker, source_type, doc_type, period_start, "
+            "period_end, file_path, sha256, fetched_at, fetch_status, raw_bytes_size, "
+            "source_url, accession_number) "
+            "VALUES (2, 'ACME', 'sec_edgar', '10-Q', NULL, NULL, ?, ?, "
             "'2026-08-20 12:00:00', 'ok', ?, 'https://sec.example/acme-10q-v2', NULL)",
             ("data/ACME_10q.html", hashlib.sha256(second_bytes).hexdigest(), len(second_bytes)),
         )
@@ -665,9 +654,12 @@ def test_capture_preserves_declared_data_boundary_without_following_nested_links
         nested_link = retained_data / "nested-link.html"
         nested_link.symlink_to(source)
         conn.execute(
-            "INSERT INTO documents SELECT 2,ticker,source_type,doc_type,period_start,period_end,"
-            "'data/nested-link.html',sha256,fetched_at,fetch_status,raw_bytes_size,source_url,accession_number "
-            "FROM documents WHERE id=1"
+            "INSERT INTO documents (id, ticker, source_type, doc_type, period_start, period_end, "
+            "file_path, sha256, fetched_at, fetch_status, raw_bytes_size, source_url, accession_number) "
+            "SELECT 2,ticker,source_type,doc_type,period_start,period_end,"
+            "'data/nested-link.html',?,fetched_at,fetch_status,raw_bytes_size,source_url,accession_number "
+            "FROM documents WHERE id=1",
+            (hashlib.sha256(b"nested-link").hexdigest(),),
         )
         conn.commit()
         with pytest.raises(ValueError, match="evidence capture failed: content_unreadable"):
@@ -718,14 +710,21 @@ def test_changed_bytes_between_verification_and_persistence_fail_closed(
 def test_apply_checkpoints_and_resumes_bounded_documents(tmp_path: Path) -> None:
     conn, _, repo_root = _connection(tmp_path)
     try:
-        raw_path = repo_root / "data" / "ACME_10q.html"
-        raw = raw_path.read_bytes()
+        beta_bytes = b"<html>BETA deck</html>"
         beta_path = repo_root / "data" / "BETA_deck.html"
-        beta_path.write_bytes(raw)
+        beta_path.write_bytes(beta_bytes)
         conn.execute(
-            "INSERT INTO documents VALUES (2, 'BETA', 'ir_doc', 'investor_presentation', NULL, NULL, "
+            "INSERT INTO documents (id, ticker, source_type, doc_type, period_start, "
+            "period_end, file_path, sha256, fetched_at, fetch_status, raw_bytes_size, "
+            "source_url, accession_number) "
+            "VALUES (2, 'BETA', 'ir_doc', 'investor_presentation', NULL, NULL, "
             "?, ?, ?, 'ok', ?, NULL, NULL)",
-            ("data/BETA_deck.html", hashlib.sha256(raw).hexdigest(), "2026-07-21", len(raw)),
+            (
+                "data/BETA_deck.html",
+                hashlib.sha256(beta_bytes).hexdigest(),
+                "2026-07-21",
+                len(beta_bytes),
+            ),
         )
         conn.commit()
         first = backfill_legacy_evidence(conn, _request(repo_root, apply=True, batch_size=1))
@@ -747,7 +746,10 @@ def test_explicit_document_id_is_bounded_and_checkpoint_free(tmp_path: Path) -> 
         path = repo_root / "data" / "BETA_10q.html"
         path.write_bytes(raw)
         conn.execute(
-            "INSERT INTO documents VALUES (2, 'BETA', 'sec_edgar', '10-Q', NULL, NULL, "
+            "INSERT INTO documents (id, ticker, source_type, doc_type, period_start, "
+            "period_end, file_path, sha256, fetched_at, fetch_status, raw_bytes_size, "
+            "source_url, accession_number) "
+            "VALUES (2, 'BETA', 'sec_edgar', '10-Q', NULL, NULL, "
             "?, ?, '2026-07-21', 'ok', ?, NULL, NULL)",
             ("data/BETA_10q.html", hashlib.sha256(raw).hexdigest(), len(raw)),
         )
@@ -873,7 +875,9 @@ def test_sec_accession_identity_is_not_misreported_as_corrupt_source_bytes(
 def test_section_uses_legacy_created_clock_when_available(tmp_path: Path) -> None:
     conn, _, repo_root = _connection(tmp_path)
     try:
-        conn.execute("ALTER TABLE filing_sections ADD COLUMN created_at TIMESTAMP")
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(filing_sections)")}
+        if "created_at" not in cols:
+            conn.execute("ALTER TABLE filing_sections ADD COLUMN created_at TIMESTAMP")
         conn.execute("UPDATE filing_sections SET created_at = '2026-07-19 10:30:00' WHERE id = 1")
         conn.commit()
         backfill_legacy_evidence(conn, _request(repo_root, apply=True))
@@ -967,11 +971,15 @@ def test_quarantine_retry_does_not_block_new_documents(tmp_path: Path) -> None:
     try:
         raw_path = repo_root / "data" / "ACME_10q.html"
         raw = raw_path.read_bytes()
-        (repo_root / "data" / "BETA.html").write_bytes(raw)
+        beta_raw = b"<html>BETA release</html>"
+        (repo_root / "data" / "BETA.html").write_bytes(beta_raw)
         conn.execute(
-            "INSERT INTO documents VALUES (2, 'BETA', 'ir_doc', 'investor_presentation', NULL, NULL, "
+            "INSERT INTO documents (id, ticker, source_type, doc_type, period_start, "
+            "period_end, file_path, sha256, fetched_at, fetch_status, raw_bytes_size, "
+            "source_url, accession_number) "
+            "VALUES (2, 'BETA', 'ir_doc', 'investor_presentation', NULL, NULL, "
             "?, ?, ?, 'ok', ?, NULL, NULL)",
-            ("data/BETA.html", hashlib.sha256(raw).hexdigest(), "2026-07-21", len(raw)),
+            ("data/BETA.html", hashlib.sha256(beta_raw).hexdigest(), "2026-07-21", len(beta_raw)),
         )
         conn.commit()
         raw_path.unlink()

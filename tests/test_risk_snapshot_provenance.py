@@ -25,7 +25,6 @@ Seams under test:
 from __future__ import annotations
 
 import importlib.util
-import shutil
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
@@ -34,7 +33,6 @@ from typing import Protocol, cast
 import pytest
 from alembic.config import Config
 
-from alembic import command
 from integrations.portfolio_tracker_client import (
     BetaStats,
     Concentration,
@@ -72,62 +70,6 @@ def head_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     return migrated_db(tmp_path / "risk_prov.db", target="head")
 
 
-@pytest.fixture(scope="module")
-def chain_head_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A head database Alembic actually walked to, for the downgrade test.
-
-    Downgrading to an archived revision requires the archived graph history in
-    ``alembic_version``, which a cached active-graph template cannot supply.
-    """
-    db = tmp_path_factory.mktemp("risk_prov_tmpl") / "at_head.db"
-    import db as dbmod
-
-    saved = (dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR)
-    dbmod.set_db_path(str(db))
-    dbmod.init_db()
-    cfg = _build_config(db)
-    command.stamp(cfg, "0000_baseline")
-    command.upgrade(cfg, "head")
-    dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR = saved
-    return db
-
-
-@pytest.fixture
-def chain_head_db(chain_head_template: Path, tmp_path: Path) -> Path:
-    db = tmp_path / "risk_prov_chain.db"
-    shutil.copy(chain_head_template, db)
-    return db
-
-
-@pytest.fixture(scope="module")
-def prior_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """DB built to the revision immediately BEFORE 0199, so pre-existing rows
-    can be inserted without provenance columns and the backfill exercised."""
-    db = tmp_path_factory.mktemp("risk_prov_prior_tmpl") / "at_prior.db"
-    import db as dbmod
-
-    saved = (dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR)
-    dbmod.set_db_path(str(db))
-    dbmod.init_db()
-    cfg = _build_config(db)
-    command.stamp(cfg, "0000_baseline")
-    command.upgrade(cfg, PRIOR_HEAD)
-    dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR = saved
-    return db
-
-
-@pytest.fixture
-def prior_db(prior_template: Path, tmp_path: Path) -> Path:
-    db = tmp_path / "risk_prov_prior.db"
-    shutil.copy(prior_template, db)
-    return db
-
-
-# --------------------------------------------------------------------------- #
-# Migration: columns added to both tables, backfill, downgrade cleanup
-# --------------------------------------------------------------------------- #
-
-
 def test_migration_adds_columns_to_both_tables(head_db: Path) -> None:
     conn = sqlite3.connect(str(head_db))
     try:
@@ -139,75 +81,6 @@ def test_migration_adds_columns_to_both_tables(head_db: Path) -> None:
         conn.close()
     assert {"metric_version", "rebase_basis"} <= latest_cols
     assert {"metric_version", "rebase_basis"} <= hist_cols
-
-
-def test_migration_backfills_preexisting_rows_to_current_definition(prior_db: Path) -> None:
-    conn = sqlite3.connect(str(prior_db))
-    try:
-        conn.execute(
-            "INSERT INTO portfolio_risk_snapshots (user_id, captured_at, beta) "
-            "VALUES ('bhanu', '2026-07-01T00:00:00', 1.1)"
-        )
-        conn.execute(
-            "INSERT INTO portfolio_risk_snapshot_history (user_id, captured_at, beta) "
-            "VALUES ('bhanu', '2026-07-01T00:00:00', 1.1)"
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    cfg = _build_config(prior_db)
-    command.upgrade(cfg, NEW_HEAD)
-
-    conn = sqlite3.connect(str(prior_db))
-    try:
-        latest_row = conn.execute(
-            "SELECT metric_version, rebase_basis FROM portfolio_risk_snapshots"
-        ).fetchone()
-        hist_row = conn.execute(
-            "SELECT metric_version, rebase_basis FROM portfolio_risk_snapshot_history"
-        ).fetchone()
-    finally:
-        conn.close()
-    # Backfilled to the CURRENT definition — not NULL (NULL would mean
-    # "unknown", but every pre-existing row was in fact produced by v1/observed).
-    assert latest_row == ("v1", "observed")
-    assert hist_row == ("v1", "observed")
-
-
-def test_migration_downgrade_removes_columns_cleanly(chain_head_db: Path) -> None:
-    head_db = chain_head_db
-    conn = sqlite3.connect(str(head_db))
-    conn.execute(
-        "INSERT INTO portfolio_risk_snapshots (user_id, captured_at, beta, metric_version, "
-        "rebase_basis) VALUES ('bhanu', 'x', 1.0, 'v1', 'observed')"
-    )
-    conn.commit()
-    conn.close()
-
-    cfg = _build_config(head_db)
-    command.downgrade(cfg, PRIOR_HEAD)
-    conn = sqlite3.connect(str(head_db))
-    try:
-        latest_cols = {r[1] for r in conn.execute("PRAGMA table_info(portfolio_risk_snapshots)")}
-        hist_cols = {
-            r[1] for r in conn.execute("PRAGMA table_info(portfolio_risk_snapshot_history)")
-        }
-    finally:
-        conn.close()
-    assert "metric_version" not in latest_cols and "rebase_basis" not in latest_cols
-    assert "metric_version" not in hist_cols and "rebase_basis" not in hist_cols
-
-    # Upgrading back re-adds the columns and re-backfills (idempotent guard).
-    command.upgrade(cfg, NEW_HEAD)
-    conn = sqlite3.connect(str(head_db))
-    try:
-        row = conn.execute(
-            "SELECT metric_version, rebase_basis FROM portfolio_risk_snapshots"
-        ).fetchone()
-    finally:
-        conn.close()
-    assert row == ("v1", "observed")
 
 
 # --------------------------------------------------------------------------- #

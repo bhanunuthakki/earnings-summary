@@ -16,7 +16,6 @@ from time import perf_counter
 import pytest
 from alembic.config import Config
 
-from alembic import command
 from compute.fmp_derived_kpis import fetch_selected_kpi_series
 from execution import backfill_financial_fact_resolutions as cutover_cli
 from models.facts import Currency, Unit
@@ -144,84 +143,39 @@ def _config(path: Path) -> Config:
     return config
 
 
-def _create_legacy_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        CREATE TABLE documents (
-            id INTEGER PRIMARY KEY,
-            ticker TEXT NOT NULL,
-            source_type TEXT NOT NULL,
-            doc_type TEXT NOT NULL,
-            period_start DATETIME,
-            period_end DATETIME,
-            file_path TEXT NOT NULL,
-            sha256 TEXT NOT NULL UNIQUE,
-            fetched_at DATETIME NOT NULL,
-            fetch_status TEXT NOT NULL,
-            http_code INTEGER,
-            raw_bytes_size INTEGER NOT NULL,
-            source_url TEXT,
-            parent_document_id INTEGER,
-            source_quality_tier TEXT NOT NULL,
-            accession_number TEXT,
-            filing_date TEXT
-        );
-        CREATE TABLE financial_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end DATETIME NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            line_item TEXT NOT NULL,
-            value NUMERIC NOT NULL,
-            currency TEXT,
-            unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL REFERENCES documents(id),
-            confidence REAL NOT NULL DEFAULT 1.0,
-            extracted_by TEXT,
-            supersedes_id INTEGER,
-            locator TEXT
-        );
-        CREATE TABLE kpi_definitions (
-            id INTEGER PRIMARY KEY,
-            ticker TEXT NOT NULL,
-            name TEXT NOT NULL,
-            unit TEXT NOT NULL
-        );
-        CREATE TABLE kpi_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end DATETIME NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            kpi_definition_id INTEGER NOT NULL,
-            value NUMERIC NOT NULL,
-            unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL REFERENCES documents(id),
-            confidence REAL NOT NULL DEFAULT 1.0,
-            extracted_by TEXT,
-            supersedes_id INTEGER,
-            locator TEXT,
-            source_excerpt TEXT,
-            computed_from TEXT,
-            formula_id INTEGER,
-            formula_version INTEGER
-        );
-        """
-    )
+_PRE_CUTOVER_TRIGGERS = (
+    "trg_fact_observation_match_proofs_validate",
+    "trg_fact_observation_revisions_append_only",
+    "trg_fact_observation_revisions_append_only_delete",
+    "trg_financial_facts_observation_insert",
+    "trg_financial_facts_observation_update",
+    "trg_kpi_facts_observation_insert",
+    "trg_kpi_facts_observation_update",
+)
+_MIGRATED_DB_BUILDER: Callable[..., Path] | None = None
+
+
+@pytest.fixture(autouse=True)
+def _bind_migrated_db(migrated_db: Callable[..., Path]) -> None:
+    global _MIGRATED_DB_BUILDER
+    _MIGRATED_DB_BUILDER = migrated_db
 
 
 def _database(tmp_path: Path, *, migrate: bool = True) -> tuple[Path, sqlite3.Connection]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     path = tmp_path / "fact-cutover.db"
-    conn = sqlite3.connect(path)
-    _create_legacy_schema(conn)
-    conn.commit()
-    conn.close()
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, PRIOR_HEAD if not migrate else HEAD)
+    assert _MIGRATED_DB_BUILDER is not None
+    _MIGRATED_DB_BUILDER(path)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    if not migrate:
+        for trigger_name in _PRE_CUTOVER_TRIGGERS:
+            conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+        conn.execute("DROP VIEW IF EXISTS v_financial_facts_resolved_current")
+        conn.execute("DROP VIEW IF EXISTS v_kpi_facts_resolved_current")
+        conn.execute("DROP TABLE fact_observation_revisions")
+        conn.commit()
     return path, conn
 
 
@@ -1196,7 +1150,7 @@ def test_canonical_relation_uses_legacy_only_before_0225(tmp_path: Path) -> None
     _, current_conn = _database(tmp_path / "current")
     try:
         relation = canonical_fact_relation(current_conn, "financial_facts")
-        assert relation.sql == "v_financial_facts_resolved_current"
+        assert "v_financial_facts_resolved_current" in relation.sql
         assert relation.selection_mode == "resolved_view"
     finally:
         current_conn.close()

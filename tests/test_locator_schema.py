@@ -20,7 +20,6 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from backfill_document_accessions import (
     accession_filed_map,
     backfill,
@@ -29,7 +28,6 @@ from backfill_document_accessions import (
 )
 from pydantic import ValidationError
 
-from alembic import command
 from compute._common import insert_financial_facts
 from models.facts import (
     Currency,
@@ -109,24 +107,10 @@ CREATE TABLE kpi_facts (
 """
 
 
-def _alembic_cfg(db: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("version_locations", str(PROJECT_ROOT / "alembic" / "versions_archived"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    return cfg
-
-
 def _create_pre0075_db(db: Path) -> None:
     conn = sqlite3.connect(db)
     conn.executescript(_PRE0075_DDL)
     conn.close()
-
-
-def _migrate_to_head(db: Path, *, stamp: str = "0074_analyst_notes") -> None:
-    cfg = _alembic_cfg(db)
-    command.stamp(cfg, stamp)
-    command.upgrade(cfg, "head")
 
 
 def _connect(db: Path) -> sqlite3.Connection:
@@ -517,10 +501,10 @@ def test_backfill_requires_migrated_schema(tmp_path: Path) -> None:
 # ----------------------------------------------------------------------------
 
 
-def test_locator_round_trips_through_financial_fact_store(tmp_path: Path) -> None:
-    db = tmp_path / "facts.db"
-    _create_pre0075_db(db)
-    _migrate_to_head(db)
+def test_locator_round_trips_through_financial_fact_store(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db = migrated_db(tmp_path / "facts.db")
 
     conn = _connect(db)
     doc_id = _insert_document(conn)
@@ -584,10 +568,10 @@ def test_locator_round_trips_through_financial_fact_store(tmp_path: Path) -> Non
     conn.close()
 
 
-def test_locator_round_trips_through_kpi_fact_store(tmp_path: Path) -> None:
-    db = tmp_path / "kpis.db"
-    _create_pre0075_db(db)
-    _migrate_to_head(db)
+def test_locator_round_trips_through_kpi_fact_store(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db = migrated_db(tmp_path / "kpis.db")
 
     conn = _connect(db)
     doc_id = _insert_document(conn)

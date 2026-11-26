@@ -18,7 +18,6 @@ Four layers:
 from __future__ import annotations
 
 import json
-import shutil
 import sqlite3
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
@@ -29,7 +28,6 @@ from typing import Any, cast
 import pytest
 from alembic.config import Config
 
-from alembic import command
 from dcf import persist as persist_mod
 from dcf.provenance import DcfInputProvenance
 from pipeline.dcf_coverage_panel import collect_rows, render_dcf_coverage_panel
@@ -117,35 +115,16 @@ def _build_config(db_path: Path) -> Config:
     return cfg
 
 
-@pytest.fixture(scope="module")
-def prior_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    db = tmp_path_factory.mktemp("sync_cols_tmpl") / "at_0090.db"
-    import db as dbmod
-
-    dbmod.set_db_path(str(db))
-    dbmod.init_db()
-    cfg = _build_config(db)
-    command.stamp(cfg, "0000_baseline")
-    command.upgrade(cfg, PRIOR_HEAD)
-    return db
-
-
-def _columns(db: Path) -> set[str]:
+def test_migration_adds_nullable_sync_columns(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db = migrated_db(tmp_path / "sync_cols.db")
     conn = sqlite3.connect(str(db))
     try:
-        return {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
+        cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
     finally:
         conn.close()
-
-
-def test_migration_adds_nullable_sync_columns(prior_template: Path, tmp_path: Path) -> None:
-    db = tmp_path / "sync_cols.db"
-    shutil.copy(prior_template, db)
-    before = _columns(db)
-    assert "assumptions_sync_status" not in before
-    command.upgrade(_build_config(db), NEW_HEAD)
-    after = _columns(db)
-    assert {"assumptions_sync_status", "assumptions_synced_at"} <= after
+    assert {"assumptions_sync_status", "assumptions_synced_at"} <= cols
 
 
 # --------------------------------------------------------------------------- #

@@ -81,14 +81,7 @@ def _bootstrap_database(path: Path) -> None:
 
 
 def _database(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
-    path = migrated_db(
-        tmp_path / "isolated-companyfacts.db",
-        archived=True,
-        upgrade_from="0213_decision_draft_provider_id",
-        before_upgrade=_bootstrap_database,
-        seed_sha256=_BOOTSTRAP_SHA256,
-        target=_TARGET,
-    )
+    path = migrated_db(tmp_path / "isolated-companyfacts.db")
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")

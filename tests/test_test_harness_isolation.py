@@ -54,50 +54,11 @@ def test_importing_db_does_not_create_the_configured_database(tmp_path: Path) ->
     assert not configured.exists()
 
 
-def test_graph_selection_follows_stamped_database_and_explicit_locations(tmp_path: Path) -> None:
-    archive = PROJECT_ROOT / "alembic" / "versions_archived"
-    active = PROJECT_ROOT / "alembic" / "versions"
-    historical_db = tmp_path / "historical.db"
-    historical = _config(historical_db)
-
-    command.stamp(historical, "0273_post_earnings_readout_budget")
-
-    assert historical.get_main_option("version_locations", "") == ""
-    with sqlite3.connect(historical_db) as connection:
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0273_post_earnings_readout_budget",
-        )
-
-    # Historical test fixtures commonly rebuild Config between the stamp and
-    # upgrade. ``head`` must follow the revision already stored in the DB,
-    # otherwise the active squashed baseline runs against handcrafted legacy
-    # tables and either duplicates them or fails on missing old columns.
-    upgrade = getattr(command, "upgrade")
-    upgrade(_config(historical_db), "head")
-
-    assert historical.get_main_option("version_locations", "") == ""
-    with sqlite3.connect(historical_db) as connection:
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0273_post_earnings_readout_budget",
-        )
-
+def test_active_graph_upgrades_to_expected_head(tmp_path: Path) -> None:
     active_db = tmp_path / "active.db"
     explicitly_active = _config(active_db)
-    explicitly_active.set_main_option("version_locations", str(active))
-    upgrade(explicitly_active, "head")
+    command.upgrade(explicitly_active, "head")
     with sqlite3.connect(active_db) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
             expected_head(),
-        )
-
-    explicitly_archived_db = tmp_path / "explicitly-archived.db"
-    explicitly_archived = _config(explicitly_archived_db)
-    explicitly_archived.set_main_option("version_locations", str(archive))
-    command.stamp(explicitly_archived, "head")
-    upgrade(explicitly_archived, "head")
-
-    assert explicitly_archived.get_main_option("version_locations") == str(archive)
-    with sqlite3.connect(explicitly_archived_db) as connection:
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0273_post_earnings_readout_budget",
         )

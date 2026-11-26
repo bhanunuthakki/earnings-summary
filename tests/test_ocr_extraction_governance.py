@@ -13,7 +13,6 @@ from typing import Literal
 import pytest
 from alembic.config import Config
 
-from alembic import command
 from execution import backfill_ocr_evidence as cli
 from provenance.document_processing_evidence import (
     DocumentProcessingEvidenceError,
@@ -277,13 +276,10 @@ def _request(repo_root: Path, *, apply: bool, task_id: str = "ocr-test") -> OCRB
     return OCRBackfillRequest(repo_root=repo_root, apply=apply, task_id=task_id)
 
 
-def test_migration_creates_append_only_tables(tmp_path: Path) -> None:
-    db_path = tmp_path / "roundtrip.db"
-    config = _config(db_path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0213_evidence_ledger_foundation")
-    command.stamp(config, PRIOR_REVISION)
-    command.upgrade(config, OCR_REVISION)
+def test_migration_creates_append_only_tables(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = migrated_db(tmp_path / "roundtrip.db")
     conn = sqlite3.connect(db_path)
     try:
         tables = {

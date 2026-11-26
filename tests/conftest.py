@@ -8,8 +8,7 @@ import os
 import shutil
 import stat
 import tempfile
-from collections.abc import Callable, Generator, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -272,165 +271,6 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         )
 
 
-@pytest.fixture(scope="session", autouse=True)
-def archived_migration_harness() -> Iterator[None]:
-    """Route explicit historical revision tests to the archived Alembic graph.
-
-    Production keeps one active graph beginning at its consolidated baseline. Historical migration
-    unit tests still exercise their exact old revisions. A relative target or
-    ``head`` follows the graph already stamped in that SQLite database; a fresh
-    database defaults to the active graph. Explicit ``version_locations`` is
-    always authoritative, including the production upgrade bridge. Historical fixtures keep their real revision; they never claim the active schema.
-    """
-    from alembic.config import Config
-
-    from alembic import command
-
-    archive = Path(__file__).resolve().parents[1] / "alembic" / "versions_archived"
-    active = archive.parent / "versions"
-    original_stamp = command.stamp
-    original_upgrade = command.upgrade
-    original_downgrade = command.downgrade
-
-    def database_path(config: Config) -> Path | None:
-        from sqlalchemy.engine import make_url
-
-        raw_url = config.get_main_option("sqlalchemy.url", "").strip()
-        if not raw_url:
-            return None
-        url = make_url(raw_url)
-        if not url.drivername.startswith("sqlite") or url.database in {None, "", ":memory:"}:
-            return None
-        return Path(str(url.database)).resolve()
-
-    def database_revision(database: Path) -> str | None:
-        if not database.exists():
-            return None
-        try:
-            with sqlite3.connect(database) as connection:
-                row = connection.execute(
-                    "SELECT version_num FROM alembic_version LIMIT 1"
-                ).fetchone()
-        except sqlite3.OperationalError:
-            return None
-        return None if row is None else str(row[0])
-
-    def configured_graph(config: Config) -> str | None:
-        configured_locations = config.get_main_option("version_locations", "").strip()
-        if configured_locations:
-            location = Path(configured_locations).resolve()
-            if location == archive.resolve():
-                return "archive"
-            if location == active.resolve():
-                return "active"
-            return "configured"
-        return None
-
-    def database_graph(config: Config) -> str | None:
-        """Infer the graph for a new Config from its stamped SQLite revision."""
-        database = database_path(config)
-        if database is None:
-            return None
-        current = database_revision(database)
-        if current is None:
-            return None
-        if any(archive.glob(f"{current}*.py")):
-            return "archive"
-        if any(active.glob(f"{current}*.py")):
-            return "active"
-        return None
-
-    def graph_for_operation(
-        config: Config,
-        revision: str | list[str] | tuple[str, ...],
-    ) -> str:
-        configured = configured_graph(config)
-        if configured is not None:
-            return configured
-        revisions = (revision,) if isinstance(revision, str) else tuple(revision)
-        for requested in revisions:
-            for token in requested.split(":"):
-                if token in {"base", "head", "heads"} or token.startswith(("+", "-")):
-                    continue
-                if any(archive.glob(f"{token}*.py")):
-                    return "archive"
-                if any(active.glob(f"{token}*.py")):
-                    return "active"
-        remembered = config.attributes.get("pytest_last_migration_graph")
-        if remembered in {"archive", "active"}:
-            return str(remembered)
-        return database_graph(config) or "active"
-
-    @contextmanager
-    def selected_graph(config: Config, directory: Path) -> Generator[None, None, None]:
-        section = config.config_ini_section
-        had_locations = config.file_config.has_option(section, "version_locations")
-        previous = config.get_main_option("version_locations")
-        config.set_main_option("version_locations", str(directory))
-        try:
-            yield
-        finally:
-            if had_locations and previous is not None:
-                config.set_main_option("version_locations", previous)
-            else:
-                config.file_config.remove_option(section, "version_locations")
-
-    @contextmanager
-    def operation_graph(config: Config, graph: str) -> Generator[None, None, None]:
-        if graph == "configured":
-            yield
-            return
-        with selected_graph(config, archive if graph == "archive" else active):
-            yield
-
-    def record_graph(config: Config, graph: str) -> None:
-        if graph != "configured":
-            config.attributes["pytest_last_migration_graph"] = graph
-
-    def stamp(
-        config: Config,
-        revision: str | list[str] | tuple[str, ...],
-        sql: bool = False,
-        tag: str | None = None,
-        purge: bool = False,
-    ) -> None:
-        graph = graph_for_operation(config, revision)
-        with operation_graph(config, graph):
-            original_stamp(config, revision, sql=sql, tag=tag, purge=purge)
-        record_graph(config, graph)
-
-    def upgrade(
-        config: Config,
-        revision: str,
-        sql: bool = False,
-        tag: str | None = None,
-    ) -> None:
-        graph = graph_for_operation(config, revision)
-        with operation_graph(config, graph):
-            original_upgrade(config, revision, sql=sql, tag=tag)
-        record_graph(config, graph)
-
-    def downgrade(
-        config: Config,
-        revision: str,
-        sql: bool = False,
-        tag: str | None = None,
-    ) -> None:
-        graph = graph_for_operation(config, revision)
-        with operation_graph(config, graph):
-            original_downgrade(config, revision, sql=sql, tag=tag)
-        record_graph(config, graph)
-
-    patcher = pytest.MonkeyPatch()
-    patcher.setattr(command, "stamp", stamp)
-    patcher.setattr(command, "upgrade", upgrade)
-    patcher.setattr(command, "downgrade", downgrade)
-    try:
-        yield
-    finally:
-        patcher.undo()
-
-
 _worker_suffix = f"-{_worker_id}" if _worker_id != "controller" else ""
 os.environ.setdefault(
     "EARNINGS_SUMMARY_SECRETS_DIR",
@@ -577,11 +417,8 @@ def migrated_db(
     """Return a cached migration-template builder.
 
     Copies a session-cached migrated database instead of replaying migrations.
-    ``stamp`` remains accepted as compatibility metadata for older tests, but
-    the squashed graph normally builds directly to ``target``. Migration-only
-    downgrade tests may request the archived graph explicitly; they share one
-    archived-head template rather than attempting an unsafe cross-graph
-    downgrade from an active schema.
+    ``stamp`` remains accepted as compatibility metadata for older tests, while
+    the active graph always builds directly through ``target``.
     """
     from alembic.config import Config
 
@@ -590,14 +427,9 @@ def migrated_db(
     project_root = Path(__file__).resolve().parents[1]
     cache_dir = tmp_path_factory.mktemp("migrated_db_templates")
 
-    def _config(db: Path, *, archived: bool) -> Config:
+    def _config(db: Path) -> Config:
         cfg = Config(str(project_root / "alembic.ini"))
         cfg.set_main_option("script_location", str(project_root / "alembic"))
-        if archived:
-            cfg.set_main_option(
-                "version_locations",
-                str(project_root / "alembic" / "versions_archived"),
-            )
         cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db.as_posix()}")
         return cfg
 
@@ -606,12 +438,12 @@ def migrated_db(
         *,
         stamp: str = "head",
         target: str = "head",
-        archived: bool = False,
         upgrade_from: str | None = None,
         before_upgrade: Callable[[Path], None] | None = None,
         seed_sha256: str | None = None,
         upgrade_existing: bool = False,
     ) -> Path:
+        del stamp
         if (upgrade_from is None) != (before_upgrade is None):
             raise ValueError("upgrade_from and before_upgrade must be provided together")
         if seed_sha256 is not None and upgrade_from is None:
@@ -622,31 +454,22 @@ def migrated_db(
             or any(character not in "0123456789abcdef" for character in seed_sha256)
         ):
             raise ValueError("seed_sha256 must be a lowercase SHA-256 digest")
-        if upgrade_existing and (upgrade_from is not None or archived):
+        if upgrade_existing and upgrade_from is not None:
             raise ValueError("upgrade_existing cannot be combined with migration build options")
         if upgrade_existing:
-            command.upgrade(_config(dest, archived=False), target)
+            command.upgrade(_config(dest), target)
             return dest
         if upgrade_from is not None:
-            if archived and seed_sha256 is None:
-                raise ValueError("archived seeded upgrades require seed_sha256")
             if seed_sha256 is not None:
-                graph = "archived-seeded" if archived else "active-seeded"
-                key = (graph, upgrade_from, target, seed_sha256)
+                key = ("active-seeded", upgrade_from, target, seed_sha256)
                 template = _DB_TEMPLATES.get(key)
                 if template is None or not template.exists():
-                    template = cache_dir / f"{graph}_{upgrade_from}_{seed_sha256}_{target}.db"
+                    template = cache_dir / f"active-seeded_{upgrade_from}_{seed_sha256}_{target}.db"
                     template.unlink(missing_ok=True)
                     assert before_upgrade is not None
-                    if archived:
-                        before_upgrade(template)
-                        config = _config(template, archived=True)
-                        command.stamp(config, upgrade_from)
-                    else:
-                        build(template, target=upgrade_from)
-                        before_upgrade(template)
-                        config = _config(template, archived=False)
-                    command.upgrade(config, target)
+                    build(template, target=upgrade_from)
+                    before_upgrade(template)
+                    command.upgrade(_config(template), target)
                     _DB_TEMPLATES[key] = template
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(template, dest)
@@ -654,20 +477,14 @@ def migrated_db(
             build(dest, target=upgrade_from)
             assert before_upgrade is not None
             before_upgrade(dest)
-            command.upgrade(_config(dest, archived=False), target)
+            command.upgrade(_config(dest), target)
             return dest
-        graph = "archived" if archived else "active"
-        effective_stamp = stamp if archived else "squashed"
-        key = (graph, effective_stamp, target)
+        key = ("active", "squashed", target)
         template = _DB_TEMPLATES.get(key)
         if template is None or not template.exists():
             safe = target.replace("/", "_").replace("\\", "_")
-            stamp_safe = effective_stamp.replace("/", "_").replace("\\", "_")
-            template = cache_dir / f"{graph}_{stamp_safe}_{safe}.db"
-            config = _config(template, archived=archived)
-            if archived and stamp not in {"base", "head", "heads"}:
-                command.stamp(config, stamp)
-            command.upgrade(config, target)
+            template = cache_dir / f"active_squashed_{safe}.db"
+            command.upgrade(_config(template), target)
             _DB_TEMPLATES[key] = template
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(template, dest)
@@ -715,51 +532,6 @@ def direct_chain_db(
             cfg.set_main_option("sqlalchemy.url", f"sqlite:///{source.as_posix()}")
             command.upgrade(cfg, target)
             _DIRECT_CHAIN_DBS[target] = source
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, dest)
-        return dest
-
-    return build
-
-
-_ARCHIVED_CHAIN_DBS: dict[tuple[str, str], Path] = {}
-
-
-@pytest.fixture(scope="session")
-def archived_chain_db(
-    tmp_path_factory: pytest.TempPathFactory,
-) -> Callable[..., Path]:
-    """Return a builder that replays an archived stamp-to-head chain.
-
-    This is the parity control for ``migrated_db(..., archived=True)``.
-    The explicit historical stamp and subsequent upgrade use the archived
-    graph, preserving its historical revision.
-    """
-    from alembic.config import Config
-
-    from alembic import command
-
-    project_root = Path(__file__).resolve().parents[1]
-    cache_dir = tmp_path_factory.mktemp("archived_chain_dbs")
-
-    def build(
-        dest: Path,
-        *,
-        stamp: str = "0059_kpi_facts_restatement",
-        target: str = "head",
-    ) -> Path:
-        key = (stamp, target)
-        source = _ARCHIVED_CHAIN_DBS.get(key)
-        if source is None or not source.exists():
-            safe_stamp = stamp.replace("/", "_").replace("\\", "_")
-            safe_target = target.replace("/", "_").replace("\\", "_")
-            source = cache_dir / f"archived_{safe_stamp}_{safe_target}.db"
-            cfg = Config(str(project_root / "alembic.ini"))
-            cfg.set_main_option("script_location", str(project_root / "alembic"))
-            cfg.set_main_option("sqlalchemy.url", f"sqlite:///{source.as_posix()}")
-            command.stamp(cfg, stamp)
-            command.upgrade(cfg, target)
-            _ARCHIVED_CHAIN_DBS[key] = source
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, dest)
         return dest

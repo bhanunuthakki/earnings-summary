@@ -8,14 +8,13 @@ store, the persist-on-successful-fetch wiring, and the offline cached render.
 
 from __future__ import annotations
 
-import shutil
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 from alembic.config import Config
 
-from alembic import command
 from integrations.portfolio_tracker_client import (
     BetaStats,
     Concentration,
@@ -45,33 +44,16 @@ def _build_config(db_path: Path) -> Config:
     return cfg
 
 
-@pytest.fixture(scope="module")
-def migrated_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """One DB built to the real chain head (init_db + alembic upgrade) so the
-    migration runs against the production schema, shared across the module."""
-    db = tmp_path_factory.mktemp("risk_snap_tmpl") / "at_head.db"
-    import db as dbmod
-
-    dbmod.set_db_path(str(db))
-    dbmod.init_db()
-    cfg = _build_config(db)
-    command.stamp(cfg, "0000_baseline")
-    command.upgrade(cfg, NEW_HEAD)
-    return db
-
-
 @pytest.fixture
-def migrated_db(migrated_template: Path, tmp_path: Path) -> Path:
-    db = tmp_path / "risk_snap.db"
-    shutil.copy(migrated_template, db)
-    return db
+def risk_snapshot_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    return migrated_db(tmp_path / "risk_snap.db")
 
 
 # ----- migration -----
 
 
-def test_migration_creates_single_row_table(migrated_db: Path) -> None:
-    conn = sqlite3.connect(str(migrated_db))
+def test_migration_creates_single_row_table(risk_snapshot_db: Path) -> None:
+    conn = sqlite3.connect(str(risk_snapshot_db))
     cols = {r[1] for r in conn.execute("PRAGMA table_info(portfolio_risk_snapshots)")}
     assert {
         "user_id",
@@ -95,7 +77,7 @@ def test_migration_creates_single_row_table(migrated_db: Path) -> None:
 # ----- store -----
 
 
-def test_store_upsert_roundtrip(migrated_db: Path) -> None:
+def test_store_upsert_roundtrip(risk_snapshot_db: Path) -> None:
     snap = RiskSnapshot(
         benchmark="SPY",
         beta=1.12,
@@ -109,8 +91,8 @@ def test_store_upsert_roundtrip(migrated_db: Path) -> None:
         num_positions=11,
         top5_weight_pct=45.0,
     )
-    assert write_snapshot(snap, db_path=migrated_db) is True
-    got = read_latest_snapshot(db_path=migrated_db)
+    assert write_snapshot(snap, db_path=risk_snapshot_db) is True
+    got = read_latest_snapshot(db_path=risk_snapshot_db)
     assert got is not None
     assert got.beta == pytest.approx(1.12)
     assert got.max_drawdown_pct == pytest.approx(-14.2)
@@ -119,11 +101,11 @@ def test_store_upsert_roundtrip(migrated_db: Path) -> None:
     assert got.num_positions == 11
     assert got.captured_at  # stamped at write time
     # Second write overwrites (single row per user), never appends.
-    assert write_snapshot(RiskSnapshot(beta=1.5), db_path=migrated_db) is True
-    got2 = read_latest_snapshot(db_path=migrated_db)
+    assert write_snapshot(RiskSnapshot(beta=1.5), db_path=risk_snapshot_db) is True
+    got2 = read_latest_snapshot(db_path=risk_snapshot_db)
     assert got2 is not None and got2.beta == pytest.approx(1.5)
     assert got2.spy_beta is None  # the fresh row replaced the prior one wholesale
-    conn = sqlite3.connect(str(migrated_db))
+    conn = sqlite3.connect(str(risk_snapshot_db))
     assert conn.execute("SELECT COUNT(*) FROM portfolio_risk_snapshots").fetchone()[0] == 1
     conn.close()
 
@@ -204,7 +186,7 @@ def _populated_analytics() -> PortfolioAnalytics:
 
 
 def test_risk_panel_persists_snapshot_on_successful_fetch(
-    migrated_db: Path, monkeypatch: pytest.MonkeyPatch
+    risk_snapshot_db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import pipeline.portfolio_panel as pp
 
@@ -218,9 +200,9 @@ def test_risk_panel_persists_snapshot_on_successful_fetch(
 
     monkeypatch.setattr(pp, "probe_tracker", probe_tracker)
     monkeypatch.setattr(pp, "fetch_portfolio_analytics", fetch_analytics)
-    html = pp.render_portfolio_risk_panel(api_url="http://x", db_path=migrated_db)
+    html = pp.render_portfolio_risk_panel(api_url="http://x", db_path=risk_snapshot_db)
     assert "Factor &amp; style exposure" in html  # live render
-    snap = read_latest_snapshot(db_path=migrated_db)
+    snap = read_latest_snapshot(db_path=risk_snapshot_db)
     assert snap is not None
     assert snap.beta == pytest.approx(1.12)
     assert snap.spy_beta == pytest.approx((60 * 1.4 + 40 * 1.0) / 100)  # value-weighted

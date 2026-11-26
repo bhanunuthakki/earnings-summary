@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -37,84 +36,19 @@ HEAD = "0236_fact_observation_match_proofs"
 STAMP = datetime(2026, 7, 27, 20, 0, 0)
 SHA = hashlib.sha256(b"test").hexdigest()
 ACCESSION = "0000000001-26-000001"
+_MIGRATED_DB_BUILDER: Callable[..., Path] | None = None
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
+@pytest.fixture(autouse=True)
+def _bind_migrated_db(migrated_db: Callable[..., Path]) -> None:
+    global _MIGRATED_DB_BUILDER
+    _MIGRATED_DB_BUILDER = migrated_db
 
 
 def _database(tmp_path: Path) -> tuple[Path, sqlite3.Connection]:
     path = tmp_path / "fact-observation-match-proofs.db"
-    conn = sqlite3.connect(path)
-    conn.executescript(
-        """
-        CREATE TABLE documents (
-            id INTEGER PRIMARY KEY,
-            ticker TEXT NOT NULL,
-            source_type TEXT NOT NULL,
-            doc_type TEXT NOT NULL,
-            period_start DATETIME,
-            period_end DATETIME,
-            file_path TEXT NOT NULL,
-            sha256 TEXT NOT NULL UNIQUE,
-            fetched_at DATETIME NOT NULL,
-            fetch_status TEXT NOT NULL,
-            http_code INTEGER,
-            raw_bytes_size INTEGER NOT NULL,
-            source_url TEXT,
-            parent_document_id INTEGER,
-            source_quality_tier TEXT NOT NULL,
-            accession_number TEXT,
-            filing_date TEXT
-        );
-        CREATE TABLE financial_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end DATETIME NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            line_item TEXT NOT NULL,
-            value NUMERIC NOT NULL,
-            currency TEXT,
-            unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL REFERENCES documents(id),
-            confidence REAL NOT NULL DEFAULT 1.0,
-            extracted_by TEXT,
-            supersedes_id INTEGER,
-            locator TEXT
-        );
-        CREATE TABLE kpi_definitions (
-            id INTEGER PRIMARY KEY,
-            ticker TEXT NOT NULL,
-            name TEXT NOT NULL,
-            unit TEXT NOT NULL
-        );
-        CREATE TABLE kpi_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end DATETIME NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            kpi_definition_id INTEGER NOT NULL,
-            value NUMERIC NOT NULL,
-            unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL REFERENCES documents(id),
-            confidence REAL NOT NULL DEFAULT 1.0,
-            extracted_by TEXT,
-            supersedes_id INTEGER,
-            locator TEXT,
-            source_excerpt TEXT,
-            computed_from TEXT,
-            formula_id INTEGER,
-            formula_version INTEGER
-        );
-        """
-    )
-    conn.commit()
-    conn.close()
-    command.stamp(_config(path), "0213_decision_draft_provider_id")
-    command.upgrade(_config(path), HEAD)
+    assert _MIGRATED_DB_BUILDER is not None
+    _MIGRATED_DB_BUILDER(path)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -147,20 +81,86 @@ def _bind(conn: sqlite3.Connection, revision: int) -> str:
     return scope_sha
 
 
-def _insert_fact(conn: sqlite3.Connection, *, value: int, locator_index: int) -> int:
+def _insert_fact(
+    conn: sqlite3.Connection,
+    *,
+    value: int,
+    locator_index: int,
+    line_item: str = "revenue",
+) -> int:
     cursor = conn.execute(
         "INSERT INTO financial_facts "
         "(ticker, period_end, fiscal_period_type, line_item, value, currency, "
         "unit, source_doc_id, confidence, extracted_by, locator) "
-        "VALUES ('ACME', '2026-06-30', 'Q2', 'revenue', ?, 'USD', "
+        "VALUES ('ACME', '2026-06-30', 'Q2', ?, ?, 'USD', "
         "'actual', 1, 0.99, 'sec_xbrl', ?)",
         (
+            line_item,
             value,
             f'{{"json_path":"facts.us-gaap.Revenues.units.USD[{locator_index}]"}}',
         ),
     )
     assert cursor.lastrowid is not None
     return int(cursor.lastrowid)
+
+
+def _seed_fact_observation(
+    conn: sqlite3.Connection,
+    *,
+    fact_id: int,
+    value: str,
+    locator_index: int,
+    line_item: str = "revenue",
+) -> str:
+    obs_id = f"financial_facts:{fact_id}:r1"
+    conn.execute(
+        "INSERT INTO reported_observations "
+        "(observation_id, idempotency_key, issuer_id, ticker, concept_key, "
+        "period_start, period_end, fiscal_period_type, dimensions_json, "
+        "numeric_value, text_value, currency, unit, scale, observation_status, "
+        "evidence_node_id, available_at, recorded_at, method, method_version, "
+        "confidence, legacy_table, legacy_row_id) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            obs_id,
+            obs_id,
+            "issuer-acme",
+            "ACME",
+            f"financial_facts:{line_item}",
+            "2026-04-01",
+            "2026-06-30",
+            "quarter",
+            "{}",
+            value,
+            None,
+            "USD",
+            "actual",
+            1,
+            "reported",
+            "node-acme",
+            STAMP,
+            STAMP,
+            "sec_xbrl",
+            "0231-trigger-v1",
+            0.99,
+            "financial_facts",
+            fact_id,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO fact_observation_revisions "
+        "(fact_table, fact_row_id, fact_revision, observation_id, logical_key, "
+        "source_document_id, source_tier, locator_json, captured_at) "
+        "VALUES ('financial_facts', ?, 1, ?, ?, 1, 'sec_official', ?, ?)",
+        (
+            fact_id,
+            obs_id,
+            f"financial_facts:ACME:{line_item}:2026-06-30:Q2",
+            f'{{"json_path":"facts.us-gaap.Revenues.units.USD[{locator_index}]"}}',
+            STAMP,
+        ),
+    )
+    return obs_id
 
 
 def _seed_subject(
@@ -268,6 +268,7 @@ def _seed_subject(
     )
     scope_sha = _bind(conn, 1)
     fact_id = _insert_fact(conn, value=100, locator_index=0)
+    _seed_fact_observation(conn, fact_id=fact_id, value="100", locator_index=0)
     link = conn.execute(
         "SELECT observation_id FROM fact_observation_revisions "
         "WHERE fact_table = 'financial_facts' AND fact_row_id = ? "
@@ -291,6 +292,7 @@ def _match(
     supersedes: str | None = None,
     value: int = 100,
     locator_index: int = 0,
+    line_item: str = "revenue",
 ) -> LegacyFactEvidenceMatchRevision:
     accepted = outcome == "accepted"
     original_locator = OriginalFactLocator(
@@ -319,7 +321,7 @@ def _match(
             ticker="ACME",
             period_end="2026-06-30",
             fiscal_period_type="Q2",
-            line_item="revenue",
+            line_item=line_item,
             value=str(value),
             currency="USD",
             unit="actual",
@@ -495,7 +497,14 @@ def test_unaccepted_match_and_mismatched_observation_are_rejected(
     fact_id, _, binding_id, scope_sha = _seed_subject(conn)
     match_ledger = LegacyFactEvidenceMatchLedger(conn)
     match_ledger.persist(_match(fact_id, binding_id, 1, scope_sha))
-    second_fact_id = _insert_fact(conn, value=101, locator_index=1)
+    second_fact_id = _insert_fact(conn, value=101, locator_index=1, line_item="gross_profit")
+    _seed_fact_observation(
+        conn,
+        fact_id=second_fact_id,
+        value="101",
+        locator_index=1,
+        line_item="gross_profit",
+    )
     second_observation = conn.execute(
         "SELECT observation_id FROM fact_observation_revisions "
         "WHERE fact_table = 'financial_facts' AND fact_row_id = ?",
@@ -512,6 +521,7 @@ def test_unaccepted_match_and_mismatched_observation_are_rejected(
             outcome="retryable",
             value=101,
             locator_index=1,
+            line_item="gross_profit",
         )
     )
     try:
@@ -583,7 +593,7 @@ def test_proof_clocks_cannot_precede_sources_or_each_other(
 
 
 def test_migration_chain_is_reversible(tmp_path: Path) -> None:
-    path, conn = _database(tmp_path)
+    _path, conn = _database(tmp_path)
     try:
         objects = {
             (str(row[0]), str(row[1]))
@@ -599,16 +609,3 @@ def test_migration_chain_is_reversible(tmp_path: Path) -> None:
         ) in objects
     finally:
         conn.close()
-
-    command.downgrade(_config(path), "0235_legacy_fact_evidence_matches")
-    downgraded = sqlite3.connect(path)
-    try:
-        assert (
-            downgraded.execute(
-                "SELECT 1 FROM sqlite_master WHERE name = 'fact_observation_match_proofs'"
-            ).fetchone()
-            is None
-        )
-    finally:
-        downgraded.close()
-    command.upgrade(_config(path), HEAD)

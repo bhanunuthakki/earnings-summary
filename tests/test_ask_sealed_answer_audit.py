@@ -1,17 +1,12 @@
 # pyright: reportPrivateUsage=false
 from __future__ import annotations
 
-import importlib.util
+import ast
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from alembic.migration import MigrationContext
-from alembic.operations import Operations
-from sqlalchemy import create_engine
-from sqlalchemy.engine import Connection, Engine
-from sqlalchemy.pool import StaticPool
 
 import ask.audit_store as audit_store
 import ask.engine as ask_engine
@@ -36,10 +31,16 @@ from ask.audit_store import (
 
 NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)
 SHA = "a" * 64
-_MIGRATION_CONNECTIONS: list[tuple[Engine, Connection]] = []
 
 
 def _schema(conn: sqlite3.Connection) -> None:
+    from sqlite_runtime import (
+        _register_scope_identity_function,
+        register_sqlite_integrity_functions,
+    )
+
+    register_sqlite_integrity_functions(conn)
+    _register_scope_identity_function(conn)
     conn.executescript(
         """
         PRAGMA foreign_keys=ON;
@@ -121,28 +122,43 @@ def _schema(conn: sqlite3.Connection) -> None:
         );
         """
     )
-    migration_path = (
-        Path(__file__).parents[1]
-        / "alembic"
-        / "versions_archived"
-        / "0253_ask_sealed_answer_audit.py"
-    )
-    spec = importlib.util.spec_from_file_location(
-        "migration_0253_ask_sealed_answer_audit", migration_path
-    )
-    assert spec is not None and spec.loader is not None
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
-    engine = create_engine(
-        "sqlite://",
-        creator=lambda: conn,
-        poolclass=StaticPool,
-    )
-    sa_conn = engine.connect()
-    _MIGRATION_CONNECTIONS.append((engine, sa_conn))
-    context = MigrationContext.configure(sa_conn)
-    with Operations.context(context):
-        migration.upgrade()
+    initial_schema = Path(__file__).parents[1] / "alembic" / "versions" / "0001_initial_schema.py"
+    tree = ast.parse(initial_schema.read_text(encoding="utf-8"), filename=str(initial_schema))
+    statements: list[str] = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "execute"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+            and (
+                "ask_answer_audit" in node.args[0].value
+                or "ask_retrieval_scope_promotions" in node.args[0].value
+            )
+            and "latest_governed_" not in node.args[0].value
+            and "v_issuer_reporting_scope_current" not in node.args[0].value
+            and "population_cutover_receipts" not in node.args[0].value
+        ):
+            statements.append(node.args[0].value)
+    for sql in statements:
+        if "CREATE TRIGGER" not in sql:
+            conn.execute(sql)
+    for sql in statements:
+        if "CREATE TRIGGER" in sql:
+            conn.execute(sql)
+
+
+_PROMOTION_COLUMNS = (
+    "promotion_id,idempotency_key,scope_key,revision,issuer_id,"
+    "reporting_entity_id,research_snapshot_id,research_snapshot_sha256,"
+    "fact_generation_id,fact_projection_seal_sha256,"
+    "source_inventory_set_json,source_inventory_set_sha256,"
+    "narrative_bundles_json,narrative_bundles_sha256,cutoff_at,"
+    "policy_version,verifier_name,verifier_version,verifier_code_sha256,"
+    "verifier_config_sha256,status,supersedes_promotion_id,recorded_at"
+)
 
 
 def _seed_trace(conn: sqlite3.Connection) -> None:
@@ -229,7 +245,7 @@ def _seed_trace(conn: sqlite3.Connection) -> None:
         '"vector_index_run_id":"vector-1"}]'
     )
     conn.execute(
-        "INSERT INTO ask_retrieval_scope_promotions VALUES "
+        f"INSERT INTO ask_retrieval_scope_promotions ({_PROMOTION_COLUMNS}) VALUES "
         "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             "promotion-1",
@@ -601,7 +617,7 @@ def test_promotion_trigger_binds_research_universe_identity() -> None:
     _seed_trace(conn)
     with pytest.raises(sqlite3.IntegrityError, match="admitted Research Snapshot"):
         conn.execute(
-            "INSERT INTO ask_retrieval_scope_promotions "
+            f"INSERT INTO ask_retrieval_scope_promotions ({_PROMOTION_COLUMNS}) "
             "SELECT 'promotion-bad','promotion-bad','scope-bad',1,issuer_id,"
             "'reporting-other',research_snapshot_id,research_snapshot_sha256,"
             "fact_generation_id,fact_projection_seal_sha256,"
