@@ -111,8 +111,16 @@ MODEL_LADDER: dict[str, ModelCost] = {
     "gemini-3-flash-preview": ModelCost(
         "gemini-3-flash-preview", GEMINI, 0.50, 3.00, cached_input_usd_per_mtok=0.05
     ),
+    "gemini-3.5-flash-lite": ModelCost(
+        "gemini-3.5-flash-lite", GEMINI, 0.30, 2.50, cached_input_usd_per_mtok=0.03
+    ),
     "gemini-2.5-flash": ModelCost(
-        "gemini-2.5-flash", GEMINI, 0.30, 2.50, cached_input_usd_per_mtok=0.03
+        "gemini-2.5-flash",
+        GEMINI,
+        0.30,
+        2.50,
+        cached_input_usd_per_mtok=0.03,
+        retired=True,
     ),
     "gemini-3.1-pro-preview": ModelCost(
         "gemini-3.1-pro-preview",
