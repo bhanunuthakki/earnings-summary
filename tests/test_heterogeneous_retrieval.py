@@ -1,3 +1,5 @@
+# pyright: reportPrivateUsage=false
+
 from __future__ import annotations
 
 import hashlib
@@ -7,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from alembic.config import Config
@@ -335,10 +338,9 @@ def test_candidate_union_is_ranked_before_candidate_limit(
         cutoff_at=NOW,
         recorded_at=NOW,
     )
-    monkeypatch.setattr(
-        retrieval_module,
-        "_lexical_candidates",
-        lambda *_args, **_kwargs: [
+
+    def _fake_lexical_candidates(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+        return [
             {
                 "candidate_id": "a-low-score",
                 "candidate_kind": "narrative",
@@ -357,8 +359,9 @@ def test_candidate_union_is_ranked_before_candidate_limit(
                 "semantic_score": None,
                 "source_commitment_sha256": "b" * 64,
             },
-        ],
-    )
+        ]
+
+    monkeypatch.setattr(retrieval_module, "_lexical_candidates", _fake_lexical_candidates)
 
     conn = sqlite3.connect(":memory:")
     try:
@@ -397,24 +400,36 @@ def test_population_bound_trace_persists_v2_seal_and_conflicts_on_replay(
         population_receipt_set_sha256="b" * 64,
         population_observed_through=NOW,
     )
-    monkeypatch.setattr(
-        retrieval_module,
-        "_verify_research_coordinates",
-        lambda _conn, _request: {
+
+    def _fake_verify_research_coordinates(_conn: object, _request: object) -> dict[str, object]:
+        return {
             "fact_projection_seal_sha256": "c" * 64,
             "narrative": [],
             "research_snapshot_sha256": "d" * 64,
-        },
+        }
+
+    def _fake_collect_candidates(
+        _conn: object, _request: object, _runtimes: object, _local_runtime: object
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        return [], []
+
+    def _fake_verify_trace(*_args: object, **_kwargs: object) -> str:
+        return "verified"
+
+    monkeypatch.setattr(
+        retrieval_module,
+        "_verify_research_coordinates",
+        _fake_verify_research_coordinates,
     )
     monkeypatch.setattr(
         retrieval_module,
         "_collect_candidates",
-        lambda _conn, _request, _runtimes, _local_runtime: ([], []),
+        _fake_collect_candidates,
     )
     monkeypatch.setattr(
         retrieval_module,
         "verify_heterogeneous_retrieval_trace",
-        lambda *_args, **_kwargs: "verified",
+        _fake_verify_trace,
     )
     try:
         assert retrieve_heterogeneous(conn, request) == "verified"
@@ -915,15 +930,22 @@ def test_production_semantic_constructor_uses_verified_local_runtime_config(
     storage_uri = f"lance://{run_path.resolve().as_posix()}#evidence_chunks"
     conn, index, _test_runtime = _exact_semantic_runtime(storage_uri=storage_uri)
     try:
+
+        def _fake_vector_index(_root: object) -> object:
+            return index
+
+        def _fake_encoder_from_spec(*_args: object, **_kwargs: object) -> _ExactFakeEncoder:
+            return _ExactFakeEncoder()
+
         monkeypatch.setattr(
             exact_semantic_module,
             "LanceVectorIndex",
-            lambda _root: index,
+            _fake_vector_index,
         )
         monkeypatch.setattr(
             exact_semantic_module.FastEmbedEncoder,
             "from_spec",
-            lambda *_args, **_kwargs: _ExactFakeEncoder(),
+            _fake_encoder_from_spec,
         )
         runtime = retrieval_module._semantic_runtime(
             conn,
@@ -1025,10 +1047,14 @@ def test_exact_semantic_candidates_enter_the_heterogeneous_pool(
 ) -> None:
     conn, _index, runtime = _exact_semantic_runtime()
     try:
+
+        def _empty_lexical_candidates(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+            return []
+
         monkeypatch.setattr(
             retrieval_module,
             "_lexical_candidates",
-            lambda *_args, **_kwargs: [],
+            _empty_lexical_candidates,
         )
         request = HeterogeneousRetrievalRequest(
             trace_id="trace-semantic-pool",
@@ -1060,7 +1086,9 @@ def test_exact_semantic_candidates_enter_the_heterogeneous_pool(
         ]
         assert all(candidate["semantic_score"] is not None for candidate in candidates)
         assert len(receipts) == 1
-        assert len(receipts[0]["candidates"]) == 2
+        receipt_candidates = receipts[0]["candidates"]
+        assert isinstance(receipt_candidates, list)
+        assert len(cast(list[object], receipt_candidates)) == 2
     finally:
         conn.close()
 
@@ -1229,12 +1257,13 @@ def test_semantic_receipt_fails_closed_on_score_order_vector_query_and_cap() -> 
 
         backend = json.loads(receipt.backend_receipt_json)
         assert isinstance(backend, dict)
+        typed_backend = cast(dict[str, object], backend)
         for field, value in (
             ("query_vector_sha256", "d" * 64),
             ("model", "different-model"),
             ("embedding_promotion_sha256", "e" * 64),
         ):
-            tampered_backend = {**backend, field: value}
+            tampered_backend: dict[str, object] = {**typed_backend, field: value}
             tampered_backend_json = canonical_json(tampered_backend)
             tampered_backend_receipt = SemanticSearchReceipt.model_validate(
                 {
