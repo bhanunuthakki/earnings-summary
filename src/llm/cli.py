@@ -1848,8 +1848,14 @@ def call_llm(
             call_gemini,
             gemini_api_error_type,
             gemini_http_error_type,
+            gemini_model_for,
         )
 
+        gemini_model = (
+            resolved_model
+            if (family_of(resolved_model) == _GEMINI_FAMILY or resolved_model.startswith("gemini-"))
+            else gemini_model_for(purpose)
+        )
         gemini_operational_errors: tuple[type[Exception], ...] = (
             subprocess.SubprocessError,
             OSError,
@@ -1861,7 +1867,7 @@ def call_llm(
         try:
             text = call_gemini(
                 prompt,
-                model=resolved_model,
+                model=gemini_model,
                 timeout_seconds=timeout_seconds,
                 purpose=purpose,
                 ticker=ticker,
@@ -1876,7 +1882,7 @@ def call_llm(
                 purpose=purpose,
                 ticker=ticker,
                 scope=scope,
-                model=resolved_model,
+                model=gemini_model,
                 run_id=run_id,
                 backend="gemini",
             )

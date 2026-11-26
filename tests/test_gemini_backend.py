@@ -974,6 +974,21 @@ def test_call_gemini_coerces_rendered_prompt_to_plain_str_for_sdk(
     assert template_meta(recorded[0]["prompt"]) == template_meta(prompt)
 
 
+def test_forced_gemini_backend_translates_non_gemini_purpose_pin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[object] = []
+
+    def _fake_gemini(prompt: str, **kwargs: object) -> str:
+        seen.append(kwargs.get("model"))
+        return "G"
+
+    monkeypatch.setattr(gemini_backend, "call_gemini", _fake_gemini)
+    assert llm_cli.call_llm("p", purpose="backend_compare_judge", backend="gemini") == "G"
+    assert llm_cli.call_llm("p", purpose="transcript_metadata", backend="gemini") == "G"
+    assert seen == ["gemini-4-neon", "gemini-4-hydrogen"]
+
+
 # ---------------------------------------------------------------------------
 # Package layout + compare harness
 
