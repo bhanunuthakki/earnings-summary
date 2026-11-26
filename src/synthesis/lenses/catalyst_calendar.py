@@ -74,7 +74,7 @@ def _ctx_catalyst_calendar(ticker: str | None, repo_root: Path) -> LensContext |
 
 LENS = Lens(
     name="catalyst_calendar",
-    model="claude-sonnet-4-6",
+    model="claude-sonnet-5-5",
     scope="ticker",
     prompt_template=_PROMPT_CATALYST_CALENDAR,
     build_context=_ctx_catalyst_calendar,

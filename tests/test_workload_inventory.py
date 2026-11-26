@@ -132,10 +132,10 @@ def test_ranking_orders_by_headroom(inv_db: Path) -> None:
 def test_headroom_matches_ladder_math(inv_db: Path) -> None:
     alpha = _by_purpose(build_workload_inventory(inv_db))["alpha"]
     inc = model_cost("claude-opus-4-8")
-    cand = model_cost("gemini-3.5-flash-lite")
+    cand = model_cost("claude-haiku-5-5")
     assert inc is not None and cand is not None
     expected = 100.0 * (1.0 - cand.blended_usd_per_mtok / inc.blended_usd_per_mtok)
-    assert alpha.cheapest_candidate == "gemini-3.5-flash-lite"
+    assert alpha.cheapest_candidate == "claude-haiku-5-5"
     assert alpha.headroom_usd_30d == pytest.approx(expected)
 
 

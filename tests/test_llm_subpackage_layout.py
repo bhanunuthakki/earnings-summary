@@ -88,9 +88,9 @@ def test_kpi_registry_auto_proposal_routes_to_opus() -> None:
     to Sonnet — the two modes diverge cleanly."""
     from llm import cli
 
-    assert cli.LLM_MODELS["kpi_registry_auto_proposal"] == "claude-opus-4-8"
+    assert cli.LLM_MODELS["kpi_registry_auto_proposal"] == "claude-opus-5-5"
     resolve: Callable[[str], str] = getattr(cli, "_model_for")
-    assert resolve("kpi_registry_auto_proposal") == "claude-opus-4-8"
+    assert resolve("kpi_registry_auto_proposal") == "claude-opus-5-5"
     # Fail-closed routing requires every public purpose to be registered.
     assert cli.LLM_MODELS["kpi_registry_proposal"] == cli.DEFAULT_MODEL
     assert resolve("kpi_registry_proposal") == cli.DEFAULT_MODEL
@@ -110,9 +110,9 @@ def test_news_purpose_pins() -> None:
     from llm import cli
 
     resolve: Callable[[str], str] = getattr(cli, "_model_for")
-    assert cli.LLM_MODELS["material_news_classification"] == "claude-opus-4-8"
+    assert cli.LLM_MODELS["material_news_classification"] == "claude-opus-5-5"
     assert cli.LLM_MODELS["news_structuring"] == cli.DEFAULT_MODEL
-    assert resolve("material_news_classification") == "claude-opus-4-8"
+    assert resolve("material_news_classification") == "claude-opus-5-5"
     assert resolve("news_structuring") == cli.DEFAULT_MODEL
     # Recent-developments is pinned to Sonnet, not Opus.
     assert cli.LLM_MODELS["recent_developments"] == cli.DEFAULT_MODEL
@@ -130,13 +130,12 @@ def test_news_pins_do_not_disturb_existing_purposes() -> None:
     assert resolve("transcript_summary") == cli.DEFAULT_MODEL
     # company_description moved Opus -> Sonnet in #444 (model-eval verdict).
     assert resolve("company_description") == cli.DEFAULT_MODEL
-    # Pre-existing Opus pins — unchanged.
-    assert resolve("valuation_basis") == "claude-opus-4-8"
-    assert resolve("kpi_registry_auto_proposal") == "claude-opus-4-8"
-    # Gemini un-pinned 2026-07-02 (metered Gemini off the active pareto): these two
-    # classifier purposes reverted from Gemini Flash (#538) back to Claude Haiku.
-    assert resolve("intake_classifier") == cli.FAST_CLASSIFIER_MODEL
-    assert resolve("transcript_metadata") == cli.FAST_CLASSIFIER_MODEL
+    # Pre-existing Opus pins — upgraded to Opus 5.5.
+    assert resolve("valuation_basis") == "claude-opus-5-5"
+    assert resolve("kpi_registry_auto_proposal") == "claude-opus-5-5"
+    # Fast classifier extractors promoted to Gemini 4 Hydrogen (16/16 Set 5 eval).
+    assert resolve("intake_classifier") == "gemini-4-hydrogen"
+    assert resolve("transcript_metadata") == "gemini-4-hydrogen"
     # The manual KPI-proposal purpose stays explicitly pinned to Sonnet.
     assert cli.LLM_MODELS["kpi_registry_proposal"] == cli.DEFAULT_MODEL
     assert resolve("kpi_registry_proposal") == cli.DEFAULT_MODEL

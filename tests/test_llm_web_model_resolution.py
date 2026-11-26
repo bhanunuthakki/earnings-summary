@@ -95,7 +95,7 @@ def test_web_resolves_opus_pinned_purpose_when_model_omitted(
     )
     cmd = capture_web_cmd["cmd"]
     assert cmd is not None
-    assert _model_arg(cmd) == "claude-opus-4-8"
+    assert _model_arg(cmd) == "claude-opus-5-5"
     # Web tools still wired (guards the cmd assembly against regression).
     assert "--allowedTools" in cmd
 

@@ -178,10 +178,12 @@ def test_gemini_model_tiers_follow_claude_table(monkeypatch: pytest.MonkeyPatch)
     assert gemini_backend.gemini_model_for("gemini_pinned_purpose") == (
         gemini_backend.GEMINI_BACKEND_FAST_MODEL
     )
-    # viewspec_compile reverted to Haiku in the un-pin; its Gemini MIRROR is still
-    # Flash via tier derivation (the derivation path, not a verbatim pin).
-    assert llm_cli.LLM_MODELS["viewspec_compile"] == llm_cli.FAST_CLASSIFIER_MODEL
-    assert gemini_backend.gemini_model_for("viewspec_compile") == (
+    # viewspec_compile promoted to gemini-4-hydrogen (16/16 Set 5 eval).
+    assert llm_cli.LLM_MODELS["viewspec_compile"] == "gemini-4-hydrogen"
+    assert gemini_backend.gemini_model_for("viewspec_compile") == "gemini-4-hydrogen"
+    # Fast-classifier tier purposes still derive to GEMINI_BACKEND_FAST_MODEL.
+    assert llm_cli.LLM_MODELS["decision_extraction"] == llm_cli.FAST_CLASSIFIER_MODEL
+    assert gemini_backend.gemini_model_for("decision_extraction") == (
         gemini_backend.GEMINI_BACKEND_FAST_MODEL
     )
     # Haiku-tier purposes mirror to Flash via tier derivation.

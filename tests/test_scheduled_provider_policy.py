@@ -109,8 +109,8 @@ def test_scheduled_explicit_tier_uses_claude_primary(
     ("primary", "model", "backend", "expected_model"),
     [
         ("claude", "claude-opus-4-8", "claude", "claude-opus-4-8"),
-        ("claude", "gemini-3-flash-preview", "gemini", "claude-haiku-4-5-20251001"),
-        ("claude", "deepseek/deepseek-chat", "openrouter", "claude-haiku-4-5-20251001"),
+        ("claude", "gemini-3-flash-preview", "gemini", "claude-haiku-5-5"),
+        ("claude", "deepseek/deepseek-chat", "openrouter", "claude-haiku-5-5"),
     ],
 )
 def test_scheduled_explicit_provider_pins_are_primary_provider_capability_requests(

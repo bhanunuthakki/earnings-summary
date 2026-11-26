@@ -131,7 +131,7 @@ def _ctx_filing_diff(ticker: str | None, repo_root: Path) -> LensContext | None:
 
 LENS = Lens(
     name="filing_diff_narrative",
-    model="claude-sonnet-4-6",
+    model="claude-sonnet-5-5",
     scope="ticker",
     prompt_template=_PROMPT_FILING_DIFF,
     build_context=_ctx_filing_diff,
