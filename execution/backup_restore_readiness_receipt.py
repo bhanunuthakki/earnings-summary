@@ -24,8 +24,12 @@ from provenance.verifier_identity import verifier_source_artifact_sha256
 from sqlite_freshness import SQLiteFileToken, sqlite_file_token
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from sqlite_snapshot import (
+    SnapshotConflictError,
     SnapshotManifest,
     SnapshotRequest,
+    SnapshotVerification,
+    apply_verification_pragmas,
+    trusted_destination_verification,
     verify_snapshot_matches_source,
 )
 
@@ -84,6 +88,7 @@ def _sha256(path: Path) -> str:
 def _revision_and_verification(path: Path) -> tuple[str, tuple[str, ...], int]:
     conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY, schema_preflight=False)
     try:
+        apply_verification_pragmas(conn)
         revisions = tuple(
             str(row[0])
             for row in conn.execute("SELECT version_num FROM alembic_version ORDER BY version_num")
@@ -127,6 +132,48 @@ def evidence_id_is_valid(receipt: BackupRestoreReadinessReceipt) -> bool:
     return receipt.evidence_id == _evidence_id(receipt)
 
 
+def validate_receipt_binding_metadata(
+    receipt: BackupRestoreReadinessReceipt,
+    *,
+    source_db: Path,
+) -> tuple[str, ...]:
+    """Validate O(1) receipt commitment, verifier identity, path binding, and size.
+
+    This guard executes without hashing multi-gigabyte artifacts or opening any
+    SQLite database so callers can fail closed before touching untrusted paths.
+    """
+    reasons: list[str] = []
+    source = source_db.resolve()
+    if not evidence_id_is_valid(receipt):
+        reasons.append("backup_restore_evidence_id_invalid")
+    if receipt.verifier_code_sha256 != verifier_code_sha256():
+        reasons.append("backup_restore_verifier_code_changed")
+    if not receipt.verified or receipt.blocking_reasons:
+        reasons.append("backup_restore_not_verified")
+    if Path(receipt.source_db_resolved_path).resolve() != source:
+        reasons.append("backup_restore_source_path_mismatch")
+
+    # Receipt metadata is untrusted until its own evidence commitment, verifier
+    # identity, verified state, and source binding all pass. Fail before using
+    # any receipt-controlled path so a rewritten snapshot path cannot redirect
+    # a readiness probe (or even an artifact hash) to the live source.
+    if reasons:
+        return tuple(dict.fromkeys(reasons))
+
+    snapshot = Path(receipt.snapshot_resolved_path).resolve()
+    if _aliases_source(snapshot, source):
+        return ("backup_restore_snapshot_source_alias",)
+
+    try:
+        snapshot_stat = snapshot.stat()
+    except OSError:
+        reasons.append("backup_restore_snapshot_unavailable")
+    else:
+        if receipt.snapshot_byte_size != snapshot_stat.st_size:
+            reasons.append("backup_restore_snapshot_identity_mismatch")
+    return tuple(dict.fromkeys(reasons))
+
+
 def validate_receipt_for_source(
     receipt: BackupRestoreReadinessReceipt,
     *,
@@ -142,66 +189,69 @@ def validate_receipt_for_source(
     path without pretending the now-upgraded database still has the old bytes.
     """
 
-    reasons: list[str] = []
+    binding_reasons = validate_receipt_binding_metadata(receipt, source_db=source_db)
+    if binding_reasons:
+        return binding_reasons
+
     source = source_db.resolve()
-    if not evidence_id_is_valid(receipt):
-        reasons.append("backup_restore_evidence_id_invalid")
-    if receipt.verifier_code_sha256 != verifier_code_sha256():
-        reasons.append("backup_restore_verifier_code_changed")
-    if not receipt.verified or receipt.blocking_reasons:
-        reasons.append("backup_restore_not_verified")
-    if Path(receipt.source_db_resolved_path).resolve() != source:
-        reasons.append("backup_restore_source_path_mismatch")
-
-    # Receipt metadata is untrusted until its own evidence commitment, verifier
-    # identity, verified state, and source binding all pass.  Fail before using
-    # any receipt-controlled path so a rewritten snapshot path cannot redirect
-    # a readiness probe (or even an artifact hash) to the live source.
-    if reasons:
-        return tuple(dict.fromkeys(reasons))
-
     snapshot = Path(receipt.snapshot_resolved_path).resolve()
-    if _aliases_source(snapshot, source):
-        return ("backup_restore_snapshot_source_alias",)
+    if not require_current_identity:
+        if receipt.snapshot_sha256 != _sha256(snapshot):
+            return ("backup_restore_snapshot_identity_mismatch",)
+        return ()
 
+    reasons: list[str] = []
+    if receipt.source_db_revision != source_revision:
+        reasons.append("backup_restore_source_revision_mismatch")
     try:
-        snapshot_stat = snapshot.stat()
+        source_stat = source.stat()
     except OSError:
-        reasons.append("backup_restore_snapshot_unavailable")
+        reasons.append("backup_restore_source_unavailable")
     else:
         if (
-            receipt.snapshot_byte_size != snapshot_stat.st_size
-            or receipt.snapshot_sha256 != _sha256(snapshot)
+            receipt.source_db_byte_size != source_stat.st_size
+            or receipt.source_db_mtime_ns != source_stat.st_mtime_ns
         ):
-            reasons.append("backup_restore_snapshot_identity_mismatch")
-    if reasons:
-        return tuple(dict.fromkeys(reasons))
-
-    if require_current_identity:
-        if receipt.source_db_revision != source_revision:
-            reasons.append("backup_restore_source_revision_mismatch")
-        try:
-            source_stat = source.stat()
-        except OSError:
-            reasons.append("backup_restore_source_unavailable")
-        else:
-            if (
-                receipt.source_db_byte_size != source_stat.st_size
-                or receipt.source_db_mtime_ns != source_stat.st_mtime_ns
-            ):
-                reasons.append("backup_restore_source_identity_stale")
-        if receipt.source_db_file_token != sqlite_file_token(source):
             reasons.append("backup_restore_source_identity_stale")
-        try:
-            verify_snapshot_matches_source(
-                SnapshotRequest(
-                    source_path=source,
-                    destination_path=Path(receipt.snapshot_resolved_path),
+    if receipt.source_db_file_token != sqlite_file_token(source):
+        reasons.append("backup_restore_source_identity_stale")
+
+    request = SnapshotRequest(
+        source_path=source,
+        destination_path=snapshot,
+    )
+    manifest_file = Path(receipt.snapshot_manifest_resolved_path)
+    can_trust_verified_artifact = (
+        receipt.integrity_check == ("ok",)
+        and receipt.foreign_key_violation_count == 0
+        and receipt.snapshot_sha256 is not None
+    )
+    try:
+        if can_trust_verified_artifact:
+            with trusted_destination_verification(
+                snapshot,
+                verification=SnapshotVerification(
+                    integrity_check=receipt.integrity_check,
+                    foreign_key_check=(),
                 ),
-                manifest_path=Path(receipt.snapshot_manifest_resolved_path),
-            )
-        except Exception:
-            reasons.append("backup_restore_source_content_stale")
+                expected_sha256=receipt.snapshot_sha256,
+            ):
+                verified = verify_snapshot_matches_source(request, manifest_path=manifest_file)
+        else:
+            verified = verify_snapshot_matches_source(request, manifest_path=manifest_file)
+    except SnapshotConflictError as exc:
+        if "different checksum" in str(exc):
+            return ("backup_restore_snapshot_identity_mismatch",)
+        if not reasons and receipt.snapshot_sha256 != _sha256(snapshot):
+            return ("backup_restore_snapshot_identity_mismatch",)
+        reasons.append("backup_restore_source_content_stale")
+    except Exception:
+        if not reasons and receipt.snapshot_sha256 != _sha256(snapshot):
+            return ("backup_restore_snapshot_identity_mismatch",)
+        reasons.append("backup_restore_source_content_stale")
+    else:
+        if verified.snapshot_sha256 != receipt.snapshot_sha256:
+            return ("backup_restore_snapshot_identity_mismatch",)
     return tuple(dict.fromkeys(reasons))
 
 
@@ -248,6 +298,7 @@ def collect_backup_restore_receipt(
     source_file_token: SQLiteFileToken | None = None
     snapshot_sha: str | None = None
     snapshot_size: int | None = None
+    snapshot_verified_stat: tuple[int, int] | None = None
     restored_revision: str | None = None
     integrity: tuple[str, ...] = ()
     foreign_keys: int | None = None
@@ -259,21 +310,29 @@ def collect_backup_restore_receipt(
         source_size = stat.st_size
         source_mtime = stat.st_mtime_ns
         try:
-            # The fresh comparison below fully verifies a source-derived
-            # candidate. Only the exact revision is needed from this reader.
+            # The fresh comparison below fully proves source/snapshot identity.
+            # Only the exact revision is needed from this reader.
             source_revision = _revision(source)
         except Exception:
             reasons.append("source_database_unreadable")
     else:
         reasons.append("source_database_missing")
 
-    if snapshot.is_file():
-        snapshot_size = snapshot.stat().st_size
-        snapshot_sha = _sha256(snapshot)
+    snapshot_is_file = snapshot.is_file()
+    if snapshot_is_file:
+        stat_before = snapshot.stat()
+        snapshot_size = stat_before.st_size
         try:
             restored_revision, integrity, foreign_keys = _revision_and_verification(snapshot)
         except Exception:
             reasons.append("restored_database_unreadable")
+        else:
+            stat_after = snapshot.stat()
+            if (stat_before.st_size, stat_before.st_mtime_ns) == (
+                stat_after.st_size,
+                stat_after.st_mtime_ns,
+            ):
+                snapshot_verified_stat = (stat_after.st_size, stat_after.st_mtime_ns)
     else:
         reasons.append("restored_database_missing")
 
@@ -295,23 +354,52 @@ def collect_backup_restore_receipt(
             reasons.append("manifest_source_revision_mismatch")
         if manifest.source.byte_size != source_size or manifest.source.mtime_ns != source_mtime:
             reasons.append("source_identity_changed_since_snapshot")
-        if manifest.snapshot.sha256 != snapshot_sha or manifest.snapshot.byte_size != snapshot_size:
-            reasons.append("snapshot_identity_mismatch")
         if manifest.verification.integrity_check != integrity:
             reasons.append("manifest_integrity_mismatch")
         if len(manifest.verification.foreign_key_check) != foreign_keys:
             reasons.append("manifest_foreign_key_mismatch")
+        request = SnapshotRequest(
+            source_path=source,
+            destination_path=snapshot,
+            code_config_version=manifest.code_config_version,
+        )
+        can_trust_local_verify = (
+            snapshot_verified_stat is not None
+            and integrity == ("ok",)
+            and foreign_keys == 0
+            and manifest.verification.integrity_check == integrity
+            and not manifest.verification.foreign_key_check
+        )
         try:
-            verify_snapshot_matches_source(
-                SnapshotRequest(
-                    source_path=source,
-                    destination_path=snapshot,
-                    code_config_version=manifest.code_config_version,
-                ),
-                manifest_path=manifest_file,
-            )
+            if can_trust_local_verify:
+                with trusted_destination_verification(
+                    snapshot,
+                    verification=SnapshotVerification(
+                        integrity_check=integrity,
+                        foreign_key_check=(),
+                    ),
+                    file_stat=snapshot_verified_stat,
+                ):
+                    verified_snapshot = verify_snapshot_matches_source(
+                        request,
+                        manifest_path=manifest_file,
+                    )
+            else:
+                verified_snapshot = verify_snapshot_matches_source(
+                    request,
+                    manifest_path=manifest_file,
+                )
         except Exception:
             reasons.append("source_identity_changed_since_snapshot")
+        else:
+            snapshot_sha = verified_snapshot.snapshot_sha256
+
+    if snapshot_is_file and snapshot_sha is None:
+        snapshot_sha = _sha256(snapshot)
+    if manifest is not None and (
+        manifest.snapshot.sha256 != snapshot_sha or manifest.snapshot.byte_size != snapshot_size
+    ):
+        reasons.append("snapshot_identity_mismatch")
 
     if source_revision is not None and restored_revision != source_revision:
         reasons.append("restored_revision_mismatch")

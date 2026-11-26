@@ -114,3 +114,37 @@ def test_changed_survivor_between_plan_and_unlink_keeps_old_backup(
     with pytest.raises(RuntimeError, match="survivor changed"):
         retention.prune_uploaded(tmp_path, family="portfolio-db", retain=1)
     assert old.exists()
+
+
+def test_receipt_records_optional_source_size_bytes_and_accepts_legacy_payloads(
+    tmp_path: Path,
+) -> None:
+    snap = tmp_path / "portfolio.db.20261126.gz.enc"
+    snap.write_bytes(b"ciphertext")
+    source = tmp_path / "portfolio.db"
+    source.write_bytes(b"raw-database-bytes")
+
+    retention.record_snapshot(
+        snap,
+        family="portfolio-db",
+        source=source,
+        snapshot_sha256="a" * 64,
+        source_size_bytes=source.stat().st_size,
+    )
+    receipt = retention.validated_receipt(snap, family="portfolio-db")
+    assert receipt is not None
+    assert receipt.size_bytes == len(b"ciphertext")
+    assert receipt.source_size_bytes == len(b"raw-database-bytes")
+
+    # Legacy receipt payloads without source_size_bytes remain valid.
+    legacy = tmp_path / "portfolio.db.20261125.gz.enc"
+    legacy.write_bytes(b"legacy-ciphertext")
+    retention.record_snapshot(
+        legacy,
+        family="portfolio-db",
+        source=source,
+        snapshot_sha256="b" * 64,
+    )
+    legacy_receipt = retention.validated_receipt(legacy, family="portfolio-db")
+    assert legacy_receipt is not None
+    assert legacy_receipt.source_size_bytes is None
