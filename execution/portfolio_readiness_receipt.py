@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from backup_restore_readiness_receipt import (
     BackupRestoreReadinessReceipt,
+    validate_receipt_binding_metadata,
     validate_receipt_for_source,
 )
 from upgrade_database import ACTIVE_HEAD
@@ -54,9 +55,33 @@ _RELEVANT_GIT_PATHS = (
     "requirements.txt",
     "uv.lock",
 )
+_MIGRATION_CRITICAL_ORIGIN_PREFIXES = ("alembic/",)
+_MIGRATION_CRITICAL_ORIGIN_FILES = frozenset(
+    {
+        "alembic.ini",
+        "src/schema_compat.py",
+        "src/sqlite_runtime.py",
+        "src/sqlite_snapshot.py",
+        "execution/upgrade_database.py",
+        "execution/portfolio_readiness_receipt.py",
+        "execution/backup_restore_readiness_receipt.py",
+    }
+)
+_ARTIFACT_LEVEL_RECEIPT_REASONS = frozenset(
+    {
+        "backup_restore_evidence_id_invalid",
+        "backup_restore_verifier_code_changed",
+        "backup_restore_not_verified",
+        "backup_restore_source_path_mismatch",
+        "backup_restore_snapshot_source_alias",
+        "backup_restore_snapshot_unavailable",
+        "backup_restore_snapshot_identity_mismatch",
+    }
+)
 GitShaResolver = Callable[[Path], str]
 GitStatusResolver = Callable[[Path], tuple[str, ...]]
 GitAncestryResolver = Callable[[Path, str, str], bool]
+GitDiffResolver = Callable[[Path, str, str], tuple[str, ...]]
 DriftState = Literal[
     "clear",
     "unavailable",
@@ -204,6 +229,29 @@ def _is_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
     return completed.returncode == 0
 
 
+def _changed_paths_between(root: Path, base_sha: str, target_sha: str) -> tuple[str, ...]:
+    completed = subprocess.run(
+        ["git", "-C", str(root), "diff", "--name-only", "-z", f"{base_sha}..{target_sha}"],
+        check=False,
+        capture_output=True,
+        timeout=20,
+    )
+    if completed.returncode != 0:
+        raise ValueError("Git diff against origin/main is unavailable")
+    return tuple(
+        entry.decode("utf-8", errors="replace").replace("\\", "/")
+        for entry in completed.stdout.split(b"\0")
+        if entry
+    )
+
+
+def _is_migration_critical_path(path: str) -> bool:
+    normalized = path.replace("\\", "/").lstrip("./")
+    return normalized in _MIGRATION_CRITICAL_ORIGIN_FILES or normalized.startswith(
+        _MIGRATION_CRITICAL_ORIGIN_PREFIXES
+    )
+
+
 def _read_db_revision(db_path: Path) -> tuple[str | None, str | None]:
     """Return one revision or a stable blocking reason, without writing."""
 
@@ -241,6 +289,22 @@ def _evidence_id(receipt: PortfolioReadinessReceipt) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def evidence_id_is_valid(receipt: PortfolioReadinessReceipt) -> bool:
+    return receipt.evidence_id == _evidence_id(receipt)
+
+
+def is_verified_migration_readiness(receipt: object, *, db_path: Path) -> bool:
+    """True when ``receipt`` is a genuine, commitment-verified migration receipt for ``db_path``."""
+    return (
+        isinstance(receipt, PortfolioReadinessReceipt)
+        and receipt.ready is True
+        and receipt.requested_mode == "migration"
+        and receipt.migration_preconditions_met is True
+        and receipt.db_path_resolved == str(db_path.resolve())
+        and evidence_id_is_valid(receipt)
+    )
+
+
 def collect_readiness(
     *,
     checkout_root: Path,
@@ -252,6 +316,7 @@ def collect_readiness(
     git_status_resolver: GitStatusResolver = _relevant_changes,
     origin_resolver: OriginResolver = fetch_origin_main,
     ancestry_resolver: GitAncestryResolver = _is_ancestor,
+    origin_diff_resolver: GitDiffResolver = _changed_paths_between,
 ) -> PortfolioReadinessReceipt:
     """Collect an immutable readiness verdict from point-in-time evidence."""
 
@@ -260,6 +325,8 @@ def collect_readiness(
     runtime = runtime_root.resolve()
     database = (db_path or portfolio_db_path(runtime)).resolve()
     base_reasons: list[str] = []
+    operational_origin_reasons: list[str] = []
+    migration_origin_reasons: list[str] = []
 
     checkout_sha: str | None = None
     runtime_sha: str | None = None
@@ -305,7 +372,26 @@ def collect_readiness(
             if not checkout_ancestor:
                 base_reasons.append("checkout_not_ancestor_of_origin_main")
             if checkout_sha != origin.sha:
-                base_reasons.append("checkout_not_at_fresh_origin_main")
+                # Operational release alignment still requires the checkout to
+                # match fresh origin/main exactly. Migration preconditions may
+                # proceed when the checkout is a verified ancestor of
+                # origin/main and no migration-critical files changed between
+                # checkout_sha and origin/main (preventing unrelated docs/test
+                # PRs merged during a multi-gigabyte snapshot from aborting a
+                # safe migration). Any diff probe failure fails closed.
+                operational_origin_reasons.append("checkout_not_at_fresh_origin_main")
+                if not checkout_ancestor:
+                    migration_origin_reasons.append("checkout_not_at_fresh_origin_main")
+                else:
+                    try:
+                        origin_changed_paths = origin_diff_resolver(
+                            checkout, checkout_sha, origin.sha
+                        )
+                    except (OSError, subprocess.SubprocessError, ValueError):
+                        migration_origin_reasons.append("checkout_not_at_fresh_origin_main")
+                    else:
+                        if any(_is_migration_critical_path(path) for path in origin_changed_paths):
+                            migration_origin_reasons.append("checkout_not_at_fresh_origin_main")
     if origin is not None and runtime_sha is not None:
         try:
             runtime_ancestor = ancestry_resolver(checkout, runtime_sha, origin.sha)
@@ -355,12 +441,22 @@ def collect_readiness(
 
     artifact_reasons: tuple[str, ...] = ()
     if backup_receipt is not None:
-        artifact_reasons = validate_receipt_for_source(
-            backup_receipt,
-            source_db=database,
-            source_revision=None,
-            require_current_identity=False,
-        )
+        if mode == "migration":
+            # In migration mode, validate O(1) receipt commitment, verifier
+            # identity, source binding, alias guard, and snapshot byte size
+            # before opening the snapshot; the full cryptographic digest and
+            # source identity check runs once immediately below.
+            artifact_reasons = validate_receipt_binding_metadata(
+                backup_receipt,
+                source_db=database,
+            )
+        else:
+            artifact_reasons = validate_receipt_for_source(
+                backup_receipt,
+                source_db=database,
+                source_revision=None,
+                require_current_identity=False,
+            )
 
     database_probe: Path | None
     if mode == "migration":
@@ -416,6 +512,14 @@ def collect_readiness(
                     source_revision=db_revision,
                     require_current_identity=True,
                 )
+                if mode == "migration":
+                    propagated = tuple(
+                        reason
+                        for reason in current_source_reasons
+                        if reason in _ARTIFACT_LEVEL_RECEIPT_REASONS
+                    )
+                    if propagated:
+                        artifact_reasons = tuple(dict.fromkeys((*artifact_reasons, *propagated)))
             try:
                 snapshot_drift = describe_drift(
                     Path(backup_receipt.snapshot_resolved_path),
@@ -431,10 +535,10 @@ def collect_readiness(
                     )
 
     common = list(dict.fromkeys(base_reasons))
-    operational_reasons = [*common, *artifact_reasons]
+    operational_reasons = [*common, *operational_origin_reasons, *artifact_reasons]
     if drift_state != "clear":
         operational_reasons.append(f"schema_drift:{drift_state}")
-    migration_reasons = [*common, *current_source_reasons]
+    migration_reasons = [*common, *migration_origin_reasons, *current_source_reasons]
     if drift_state != "db_behind_code":
         migration_reasons.append(f"migration_requires_db_behind_code:{drift_state}")
     migration_blocking_reasons = tuple(dict.fromkeys(migration_reasons))
