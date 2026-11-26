@@ -572,16 +572,22 @@ def period_availability(
 
 
 def delete_sections_by_ids(conn: sqlite3.Connection, section_ids: Sequence[int]) -> int:
-    """Delete specific ``filing_sections`` rows by primary key.
+    """Delete specific ``filing_sections`` rows and their ``filing_section_items`` by section ID.
 
     Centralizes offline compaction/pruning deletes in the single authorized
     ``filing_sections`` store module using static SQL.
     """
     if not section_ids or not table_exists(conn, SECTIONS_TABLE):
         return 0
+    id_params = [(int(section_id),) for section_id in section_ids]
+    if table_exists(conn, "filing_section_items"):
+        conn.executemany(
+            "DELETE FROM filing_section_items WHERE section_id = ?",
+            id_params,
+        )
     cur = conn.executemany(
         "DELETE FROM filing_sections WHERE id = ?",
-        [(int(section_id),) for section_id in section_ids],
+        id_params,
     )
     return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 

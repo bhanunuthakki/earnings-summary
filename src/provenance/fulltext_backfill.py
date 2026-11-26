@@ -38,6 +38,7 @@ from provenance.evidence_native_candidates import (
     select_evidence_native_candidates,
     select_evidence_native_candidates_by_id,
 )
+from provenance.evidence_node_store import has_external_archives_table
 from provenance.fulltext_extractor_identity import (
     BASE_FULLTEXT_EXTRACTOR,
     PDF_FULLTEXT_EXTRACTOR,
@@ -1746,28 +1747,53 @@ def _has_substantive_coverage(
 ) -> bool:
     if identity == PDF_FULLTEXT_EXTRACTOR:
         return select_approved_fulltext_run(conn, document_version_id, identity) is not None
+    has_archives = has_external_archives_table(conn)
     for approved in readable_fulltext_extractor_identities(identity):
-        node_predicate = (
-            "(node.node_kind <> 'document' OR "
-            "(node.parent_node_id IS NOT NULL AND node.text LIKE "
-            '\'%"record_kind":"archive_binary_replica_reference"%\'))'
-            if _is_structured_web_archive_identity(approved)
-            else "node.node_kind <> 'document'"
+        params = (
+            document_version_id,
+            approved.name,
+            approved.config_sha256,
+            approved.code_version,
         )
-        if (
-            conn.execute(
-                "SELECT 1 FROM evidence_nodes AS node JOIN evidence_extraction_runs AS run "  # nosec B608 -- trusted internal SQL shape; values remain bound
+        if _is_structured_web_archive_identity(approved):
+            live_hit = conn.execute(
+                "SELECT 1 FROM evidence_nodes AS node JOIN evidence_extraction_runs AS run "
                 "ON run.extraction_run_id = node.extraction_run_id "
                 "WHERE run.document_version_id = ? AND run.outcome = 'succeeded' "
                 "AND run.extractor_name = ? AND run.extractor_config_sha256 = ? "
-                f"AND run.extractor_code_version = ? AND {node_predicate} "
+                "AND run.extractor_code_version = ? "
+                "AND (node.node_kind <> 'document' OR "
+                "(node.parent_node_id IS NOT NULL AND node.text LIKE "
+                '\'%"record_kind":"archive_binary_replica_reference"%\')) '
                 "AND length(trim(node.text)) > 0 LIMIT 1",
-                (
-                    document_version_id,
-                    approved.name,
-                    approved.config_sha256,
-                    approved.code_version,
-                ),
+                params,
+            ).fetchone()
+        else:
+            live_hit = conn.execute(
+                "SELECT 1 FROM evidence_nodes AS node JOIN evidence_extraction_runs AS run "
+                "ON run.extraction_run_id = node.extraction_run_id "
+                "WHERE run.document_version_id = ? AND run.outcome = 'succeeded' "
+                "AND run.extractor_name = ? AND run.extractor_config_sha256 = ? "
+                "AND run.extractor_code_version = ? AND node.node_kind <> 'document' "
+                "AND length(trim(node.text)) > 0 LIMIT 1",
+                params,
+            ).fetchone()
+        if live_hit is not None:
+            return True
+        if (
+            has_archives
+            and conn.execute(
+                "SELECT 1 FROM evidence_extraction_runs AS run "
+                "JOIN evidence_node_external_archives AS archive "
+                "ON archive.extraction_run_id = run.extraction_run_id "
+                "WHERE run.document_version_id = ? AND run.outcome = 'succeeded' "
+                "AND run.extractor_name = ? AND run.extractor_config_sha256 = ? "
+                "AND run.extractor_code_version = ? "
+                "AND EXISTS ("
+                "SELECT 1 FROM json_each(archive.archived_node_kinds_json) AS k "
+                "WHERE k.value <> 'document'"
+                ") LIMIT 1",
+                params,
             ).fetchone()
             is not None
         ):

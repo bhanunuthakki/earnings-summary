@@ -11,8 +11,10 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections import deque
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -21,6 +23,14 @@ from provenance.analysis_scope import (
     AnalysisEvidenceScope,
     require_analysis_documents,
     resolve_analysis_coverage,
+)
+from provenance.evidence_node_store import (
+    archive_receipt_for_run,
+    archive_receipt_has_substantive_kinds,
+    archive_receipts_for_document_version,
+    load_run_nodes,
+    resolve_state_root_for_connection,
+    verify_archive_receipt,
 )
 from provenance.fulltext_extractor_identity import (
     BASE_FULLTEXT_EXTRACTOR,
@@ -47,6 +57,7 @@ from provenance.source_inventory_seal import (
     InventoryManifestLink,
     SourceInventorySealStore,
 )
+from runtime.deterministic import as_utc, parse_instant
 from runtime.deterministic import sha256_text as _sha256_text
 from search.grounded import (
     CorpusDocumentMembership,
@@ -331,6 +342,7 @@ def build_grounded_search_corpus(
     on_chunk_batch_complete: Callable[[int], None] | None = None,
     *,
     before_publish: Callable[[], None] | None = None,
+    state_root: Path | None = None,
 ) -> CorpusBuildResult:
     """Plan or incrementally stage and atomically publish a lexical corpus.
 
@@ -347,9 +359,10 @@ def build_grounded_search_corpus(
 
     store = GroundedSearchStore(conn)
     inventory_store = SourceInventorySealStore(conn)
+    effective_state_root = resolve_state_root_for_connection(conn, state_root=state_root)
     if not request.apply:
         store.require_fts5()
-        plan = _plan(conn, request)
+        plan = _plan(conn, request, state_root=effective_state_root)
         return _result(plan, mode="dry_run", records_created=0, records_replayed=0)
 
     store.require_fts5()
@@ -378,7 +391,14 @@ def build_grounded_search_corpus(
 
     chunk_batch: list[SearchChunk] = []
     staged_chunks = 0
-    for chunk in _iter_manifest_chunks(conn, metadata.memberships, request, metadata.chunker_sha):
+    for chunk in _iter_manifest_chunks(
+        conn,
+        metadata.memberships,
+        request,
+        metadata.chunker_sha,
+        state_root=effective_state_root,
+        rehydrate_archived=True,
+    ):
         chunk_batch.append(chunk)
         if len(chunk_batch) == request.persist_batch_size:
             created, replayed = _persist_chunk_batch(conn, store, chunk_batch)
@@ -402,6 +422,7 @@ def build_grounded_search_corpus(
         metadata.memberships,
         request,
         metadata.chunker_sha,
+        state_root=effective_state_root,
     )
     chunk_config_sha = lexical_index_config_sha256(conn, manifest_id=metadata.manifest.manifest_id)
     lexical_index = _lexical_index(
@@ -484,7 +505,12 @@ class _CorpusMetadata(_ClosedModel):
     chunker_sha: str
 
 
-def _plan(conn: sqlite3.Connection, request: CorpusBuildRequest) -> _CorpusPlan:
+def _plan(
+    conn: sqlite3.Connection,
+    request: CorpusBuildRequest,
+    *,
+    state_root: Path | None = None,
+) -> _CorpusPlan:
     metadata = _metadata_plan(conn, request)
     chunks = tuple(
         _iter_manifest_chunks(
@@ -492,6 +518,8 @@ def _plan(conn: sqlite3.Connection, request: CorpusBuildRequest) -> _CorpusPlan:
             metadata.memberships,
             request,
             metadata.chunker_sha,
+            state_root=state_root,
+            rehydrate_archived=False,
         )
     )
     chunk_digest = _chunk_digest_from_models(chunks)
@@ -821,6 +849,10 @@ def _has_approved_substantive_extraction(
             return True
         if str(row[4]) == selected_run_id:
             return True
+    if FULLTEXT_EXTRACTOR_NAME in extractor_names and selected_run_id is not None:
+        receipt = archive_receipt_for_run(conn, selected_run_id)
+        if receipt is not None and archive_receipt_has_substantive_kinds(receipt):
+            return True
     return False
 
 
@@ -930,6 +962,9 @@ def _iter_manifest_chunks(
     memberships: Sequence[CorpusDocumentMembership],
     request: CorpusBuildRequest,
     chunker_sha: str,
+    *,
+    state_root: Path | None = None,
+    rehydrate_archived: bool = False,
 ) -> Iterator[SearchChunk]:
     """Yield each document version once, regardless of obligation aliases."""
 
@@ -946,7 +981,14 @@ def _iter_manifest_chunks(
         ),
     )
     for membership in included:
-        yield from _iter_chunks_for_document(conn, membership, request, chunker_sha)
+        yield from _iter_chunks_for_document(
+            conn,
+            membership,
+            request,
+            chunker_sha,
+            state_root=state_root,
+            rehydrate_archived=rehydrate_archived,
+        )
 
 
 def _iter_chunks_for_document(
@@ -954,6 +996,9 @@ def _iter_chunks_for_document(
     membership: CorpusDocumentMembership,
     request: CorpusBuildRequest,
     chunker_sha: str,
+    *,
+    state_root: Path | None = None,
+    rehydrate_archived: bool = False,
 ) -> Iterator[SearchChunk]:
     if membership.document_version_id is None:
         raise ValueError("included membership unexpectedly has no document version")
@@ -965,6 +1010,8 @@ def _iter_chunks_for_document(
         request.required_extractor_names,
         knowledge_cutoff=request.knowledge_cutoff or request.recorded_at,
         observed_through=request.recorded_at,
+        state_root=state_root,
+        rehydrate_archived=rehydrate_archived,
     )
     found = False
     for node_id, text, completed_at in rows:
@@ -1004,6 +1051,149 @@ def _iter_chunks_for_document(
         )
 
 
+def _rehydrate_selected_archived_nodes(
+    conn: sqlite3.Connection,
+    *,
+    document_version_id: str,
+    selected_run_id: str,
+    selected_node_ids: set[str],
+    run_nodes: Sequence[dict[str, object]],
+    state_root: Path | None,
+) -> None:
+    """Rehydrate selected archived evidence nodes (plus archived ancestors) into SQLite.
+
+    Uses ``INSERT OR IGNORE`` in root-to-leaf order so ``search_chunks`` FK and
+    ``trg_search_chunk_node_text`` constraints are satisfied without duplicating
+    live rows or altering external archive receipts.
+    """
+    if not selected_node_ids:
+        return
+    live_ids = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT node_id FROM evidence_nodes WHERE extraction_run_id = ?",
+            (selected_run_id,),
+        ).fetchall()
+    }
+    missing_seeds = selected_node_ids - live_ids
+    if not missing_seeds:
+        return
+
+    nodes_by_id: dict[str, dict[str, object]] = {str(node["node_id"]): node for node in run_nodes}
+    extra_loaded = False
+
+    def _ensure_extra_archives() -> None:
+        nonlocal extra_loaded
+        if extra_loaded or state_root is None:
+            return
+        extra_loaded = True
+        for receipt in archive_receipts_for_document_version(conn, document_version_id):
+            if receipt.extraction_run_id == selected_run_id:
+                continue
+            for archived_node in verify_archive_receipt(state_root, receipt):
+                nid = str(archived_node["node_id"])
+                nodes_by_id.setdefault(nid, archived_node)
+
+    to_rehydrate: dict[str, dict[str, object]] = {}
+    frontier: deque[str] = deque(sorted(missing_seeds))
+    while frontier:
+        nid = frontier.popleft()
+        if nid in live_ids or nid in to_rehydrate:
+            continue
+        node = nodes_by_id.get(nid)
+        if node is None:
+            exists = conn.execute(
+                "SELECT 1 FROM evidence_nodes WHERE node_id = ?", (nid,)
+            ).fetchone()
+            if exists is not None:
+                live_ids.add(nid)
+                continue
+            _ensure_extra_archives()
+            node = nodes_by_id.get(nid)
+            if node is None:
+                raise RuntimeError(
+                    f"unable to rehydrate missing ancestor evidence node {nid} for run {selected_run_id}"
+                )
+        to_rehydrate[nid] = node
+        for ref_key in ("parent_node_id", "supersedes_node_id"):
+            ref_val = node.get(ref_key)
+            if ref_val is not None:
+                ref_id = str(ref_val)
+                if ref_id not in live_ids and ref_id not in to_rehydrate:
+                    frontier.append(ref_id)
+
+    if not to_rehydrate:
+        return
+
+    # Kahn topological sort root-to-leaf: every parent/superseded node before its child/successor.
+    in_degree: dict[str, int] = dict.fromkeys(to_rehydrate, 0)
+    dependents: dict[str, list[str]] = {}
+    for nid, node in to_rehydrate.items():
+        refs: set[str] = set()
+        for ref_key in ("parent_node_id", "supersedes_node_id"):
+            ref_val = node.get(ref_key)
+            if ref_val is not None:
+                ref_id = str(ref_val)
+                if ref_id in to_rehydrate and ref_id != nid:
+                    refs.add(ref_id)
+        in_degree[nid] = len(refs)
+        for ref_id in refs:
+            dependents.setdefault(ref_id, []).append(nid)
+
+    ready: deque[str] = deque(sorted(nid for nid, deg in in_degree.items() if deg == 0))
+    ordered: list[dict[str, object]] = []
+    while ready:
+        nid = ready.popleft()
+        ordered.append(to_rehydrate[nid])
+        newly_ready: list[str] = []
+        for dep in dependents.get(nid, ()):
+            in_degree[dep] -= 1
+            if in_degree[dep] == 0:
+                newly_ready.append(dep)
+        for dep in sorted(newly_ready):
+            ready.append(dep)
+
+    if len(ordered) != len(to_rehydrate):
+        raise RuntimeError(
+            f"cycle detected while rehydrating archived evidence nodes for run {selected_run_id}"
+        )
+
+    params = [
+        (
+            str(node["node_id"]),
+            str(node["evidence_key"]),
+            int(cast(int, node["revision"])),
+            str(node["extraction_run_id"]),
+            None if node.get("parent_node_id") is None else str(node["parent_node_id"]),
+            None if node.get("supersedes_node_id") is None else str(node["supersedes_node_id"]),
+            str(node["node_kind"]),
+            str(node["text"]),
+            None if node.get("locator_json") is None else str(node["locator_json"]),
+            None if node.get("locator_sha256") is None else str(node["locator_sha256"]),
+            str(node["recorded_at"]),
+        )
+        for node in ordered
+    ]
+    started_tx = False
+    try:
+        if not conn.in_transaction:
+            conn.execute("BEGIN IMMEDIATE")
+            started_tx = True
+        conn.executemany(
+            "INSERT OR IGNORE INTO evidence_nodes ("
+            "node_id, evidence_key, revision, extraction_run_id, parent_node_id, "
+            "supersedes_node_id, node_kind, text, locator_json, locator_sha256, recorded_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params,
+        )
+        if started_tx:
+            conn.commit()
+    except Exception:
+        if started_tx and conn.in_transaction:
+            conn.rollback()
+        raise
+
+
 def _selected_substantive_nodes(
     conn: sqlite3.Connection,
     document_version_id: str,
@@ -1011,6 +1201,8 @@ def _selected_substantive_nodes(
     *,
     knowledge_cutoff: datetime,
     observed_through: datetime,
+    state_root: Path | None = None,
+    rehydrate_archived: bool = False,
 ) -> tuple[tuple[str, str, datetime], ...]:
     """Return the one canonical text projection approved for corpus use.
 
@@ -1044,47 +1236,125 @@ def _selected_substantive_nodes(
     selected_run_id = select_approved_fulltext_run(
         conn, document_version_id, fulltext_identity, observed_through=observed_through
     )
-    placeholders = ", ".join("?" for _ in extractor_names)
-    raw_rows = conn.execute(
-        "SELECT node.node_id, node.text, run.completed_at "  # nosec B608 -- trusted internal SQL shape; values remain bound
-        ", node.node_kind, node.locator_json, run.extractor_name "
-        ", node.parent_node_id, run.extractor_code_version "
-        ", run.extractor_config_sha256, run.extraction_run_id "
-        "FROM evidence_nodes AS node "
-        "JOIN evidence_extraction_runs AS run ON run.extraction_run_id = node.extraction_run_id "
-        "WHERE run.document_version_id = ? AND run.outcome = 'succeeded' "
-        "AND datetime(run.completed_at)<=datetime(?) "
-        "AND datetime(node.recorded_at)<=datetime(?) "
-        "AND NOT EXISTS (SELECT 1 FROM evidence_nodes newer "
-        "WHERE newer.evidence_key=node.evidence_key AND newer.revision>node.revision "
-        "AND (run.extractor_name<>'fulltext-evidence-backfill' "
-        "OR newer.extraction_run_id=node.extraction_run_id) "
-        "AND datetime(newer.recorded_at)<=datetime(?)) "
-        "AND node.node_kind <> 'document' "
-        f"AND run.extractor_name IN ({placeholders}) "
-        "ORDER BY node.evidence_key, node.revision, node.node_id",
-        (
-            document_version_id,
-            _db_clock(observed_through),
-            _db_clock(observed_through),
-            _db_clock(observed_through),
-            *extractor_names,
-        ),
-    ).fetchall()
+    extractor_json = json.dumps(list(extractor_names))
+    raw_rows: list[sqlite3.Row | tuple[object, ...]] = list(
+        conn.execute(
+            "SELECT node.node_id, node.text, run.completed_at "
+            ", node.node_kind, node.locator_json, run.extractor_name "
+            ", node.parent_node_id, run.extractor_code_version "
+            ", run.extractor_config_sha256, run.extraction_run_id "
+            ", node.evidence_key, node.revision "
+            "FROM evidence_nodes AS node "
+            "JOIN evidence_extraction_runs AS run ON run.extraction_run_id = node.extraction_run_id "
+            "WHERE run.document_version_id = ? AND run.outcome = 'succeeded' "
+            "AND datetime(run.completed_at)<=datetime(?) "
+            "AND datetime(node.recorded_at)<=datetime(?) "
+            "AND NOT EXISTS (SELECT 1 FROM evidence_nodes newer "
+            "WHERE newer.evidence_key=node.evidence_key AND newer.revision>node.revision "
+            "AND (run.extractor_name<>'fulltext-evidence-backfill' "
+            "OR newer.extraction_run_id=node.extraction_run_id) "
+            "AND datetime(newer.recorded_at)<=datetime(?)) "
+            "AND node.node_kind <> 'document' "
+            "AND run.extractor_name IN (SELECT value FROM json_each(?)) "
+            "ORDER BY node.evidence_key, node.revision, node.node_id",
+            (
+                document_version_id,
+                _db_clock(observed_through),
+                _db_clock(observed_through),
+                _db_clock(observed_through),
+                extractor_json,
+            ),
+        ).fetchall()
+    )
     if fulltext_identity != PDF_FULLTEXT_EXTRACTOR:
+        archive_receipt = (
+            archive_receipt_for_run(conn, selected_run_id)
+            if (selected_run_id is not None and FULLTEXT_EXTRACTOR_NAME in extractor_names)
+            else None
+        )
+        run_nodes_for_rehydration: list[dict[str, object]] | None = None
+        if archive_receipt is not None and selected_run_id is not None:
+            resolved_state_root = resolve_state_root_for_connection(conn, state_root=state_root)
+            run_meta = conn.execute(
+                "SELECT completed_at, extractor_name, extractor_code_version, "
+                "extractor_config_sha256 "
+                "FROM evidence_extraction_runs "
+                "WHERE extraction_run_id = ? AND document_version_id = ? "
+                "AND outcome = 'succeeded'",
+                (selected_run_id, document_version_id),
+            ).fetchone()
+            cutoff_utc = as_utc(observed_through)
+            if run_meta is not None and parse_instant(run_meta[0]) <= cutoff_utc:
+                run_nodes_for_rehydration = load_run_nodes(
+                    conn,
+                    selected_run_id,
+                    state_root=resolved_state_root,
+                )
+                visible_nodes = [
+                    node
+                    for node in run_nodes_for_rehydration
+                    if parse_instant(str(node["recorded_at"])) <= cutoff_utc
+                ]
+                max_revision_by_key: dict[str, int] = {}
+                for node in visible_nodes:
+                    ev_key = str(node["evidence_key"])
+                    rev = int(cast(int, node["revision"]))
+                    prev = max_revision_by_key.get(ev_key)
+                    if prev is None or rev > prev:
+                        max_revision_by_key[ev_key] = rev
+                archived_selected_rows: list[tuple[object, ...]] = [
+                    (
+                        str(node["node_id"]),
+                        str(node["text"]),
+                        str(run_meta[0]),
+                        str(node["node_kind"]),
+                        node.get("locator_json"),
+                        str(run_meta[1]),
+                        node.get("parent_node_id"),
+                        str(run_meta[2]),
+                        str(run_meta[3]),
+                        selected_run_id,
+                        str(node["evidence_key"]),
+                        int(cast(int, node["revision"])),
+                    )
+                    for node in visible_nodes
+                    if str(node["node_kind"]) != "document"
+                    and int(cast(int, node["revision"]))
+                    == max_revision_by_key[str(node["evidence_key"])]
+                ]
+                raw_rows = [row for row in raw_rows if str(row[9]) != selected_run_id]
+                raw_rows.extend(archived_selected_rows)
+                raw_rows.sort(
+                    key=lambda item: (str(item[10]), int(cast(int, item[11])), str(item[0]))
+                )
         accepted_image_node_ids = _accepted_current_image_ocr_node_ids(
             conn,
             document_version_id,
             media_type=str(media_row[1]),
             observed_through=observed_through,
         )
-        return _canonical_non_pdf_nodes(
+        selected_nodes = _canonical_non_pdf_nodes(
             _authoritative_non_pdf_rows(
                 raw_rows,
                 selected_run_id,
                 accepted_image_node_ids=accepted_image_node_ids,
             )
         )
+        if (
+            rehydrate_archived
+            and run_nodes_for_rehydration is not None
+            and selected_run_id is not None
+        ):
+            resolved_state_root = resolve_state_root_for_connection(conn, state_root=state_root)
+            _rehydrate_selected_archived_nodes(
+                conn,
+                document_version_id=document_version_id,
+                selected_run_id=selected_run_id,
+                selected_node_ids={node_id for node_id, _, _ in selected_nodes},
+                run_nodes=run_nodes_for_rehydration,
+                state_root=resolved_state_root,
+            )
+        return selected_nodes
 
     assessment = conn.execute(
         "SELECT assessment_id, page_count FROM ocr_document_assessments "
@@ -1414,6 +1684,8 @@ def _verify_complete_chunk_stage(
     memberships: Sequence[CorpusDocumentMembership],
     request: CorpusBuildRequest,
     chunker_sha: str,
+    *,
+    state_root: Path | None = None,
 ) -> int:
     """Prove all deterministic chunks exist exactly and no extra row exists."""
 
@@ -1430,7 +1702,14 @@ def _verify_complete_chunk_stage(
         )
     }
     expected_count = 0
-    for expected in _iter_manifest_chunks(conn, memberships, request, chunker_sha):
+    for expected in _iter_manifest_chunks(
+        conn,
+        memberships,
+        request,
+        chunker_sha,
+        state_root=state_root,
+        rehydrate_archived=False,
+    ):
         expected_count += 1
         _require_exact_chunk(conn, expected)
         row = lexical_rows.get(expected.chunk_id)

@@ -39,6 +39,7 @@ from provenance.document_processing_evidence import (
 from provenance.evidence_node_store import (
     EvidenceArchiveError,
     ExternalArchiveReceipt,
+    resolve_state_root_for_connection,
     validate_archive_relpath,
     verify_archive_receipt,
 )
@@ -2586,9 +2587,13 @@ def _audit_evidence_node_external_archives(
         samples=tuple(invalid_metadata[: options.sample_limit]),
     )
     effective_state_root = (
-        options.state_root
-        if options.state_root is not None
-        else (options.repo_root if options.verify_bytes else None)
+        resolve_state_root_for_connection(
+            conn,
+            state_root=options.state_root,
+            repo_root=options.repo_root,
+        )
+        if options.state_root is not None or options.verify_bytes
+        else None
     )
     if effective_state_root is None:
         return
@@ -2655,7 +2660,10 @@ def _audit_semantic_dispositions(
             code="SEMANTIC_DISPOSITION_SCHEMA_ABSENT",
             severity=Severity.BLOCKER,
             remediation=RemediationClass.BACKFILL,
-            query=_failed_substantive_extraction_query(require_missing_disposition=False),
+            query=_failed_substantive_extraction_query(
+                require_missing_disposition=False,
+                include_external_archives="evidence_node_external_archives" in tables,
+            ),
         )
         return
 
@@ -2789,7 +2797,10 @@ def _audit_semantic_dispositions(
         code="SEMANTIC_DISPOSITION_MISSING_AFTER_FAILED_EXTRACTION",
         severity=Severity.BLOCKER,
         remediation=RemediationClass.BACKFILL,
-        query=_failed_substantive_extraction_query(require_missing_disposition=True),
+        query=_failed_substantive_extraction_query(
+            require_missing_disposition=True,
+            include_external_archives="evidence_node_external_archives" in tables,
+        ),
     )
     if set(_SEARCH_TABLES).issubset(tables):
         _query_finding(
@@ -2838,42 +2849,36 @@ def _audit_semantic_dispositions(
         )
 
 
-def _failed_substantive_extraction_query(*, require_missing_disposition: bool) -> str:
-    disposition_predicate = (
-        "AND NOT EXISTS ("
-        "SELECT 1 FROM document_semantic_disposition_revisions AS disposition "
-        "WHERE disposition.document_version_id = failed.document_version_id "
-        "AND NOT EXISTS ("
-        "SELECT 1 FROM document_semantic_disposition_revisions AS newer "
-        "WHERE newer.document_version_id = disposition.document_version_id "
-        "AND newer.revision > disposition.revision"
-        ")) "
-        if require_missing_disposition
-        else ""
-    )
-    return (
-        "WITH failed_documents AS MATERIALIZED ("  # nosec B608 -- trusted internal SQL shape; values remain bound
-        "SELECT DISTINCT document_version_id "
-        "FROM evidence_extraction_runs "
-        "WHERE extractor_name = 'fulltext-evidence-backfill' AND outcome = 'failed'"
-        "), substantive_documents AS MATERIALIZED ("
-        "SELECT DISTINCT run.document_version_id "
-        "FROM evidence_extraction_runs AS run "
-        "JOIN evidence_nodes AS node ON node.extraction_run_id = run.extraction_run_id "
-        "WHERE run.outcome = 'succeeded' AND node.node_kind <> 'document' "
-        "AND length(trim(node.text)) > 0 "
-        "AND NOT EXISTS ("
-        "SELECT 1 FROM evidence_nodes AS newer "
-        "WHERE newer.evidence_key = node.evidence_key AND newer.revision > node.revision"
-        ")) "
-        "SELECT failed.document_version_id FROM failed_documents AS failed "
-        "WHERE NOT EXISTS ("
-        "SELECT 1 FROM substantive_documents AS substantive "
-        "WHERE substantive.document_version_id = failed.document_version_id"
-        ") "
-        f"{disposition_predicate}"
-        "ORDER BY failed.document_version_id"
-    )
+_FAILED_SUBSTANTIVE_QUERIES: dict[tuple[bool, bool], str] = {
+    (False, False): (
+        "WITH failed_documents AS MATERIALIZED (SELECT DISTINCT document_version_id FROM evidence_extraction_runs WHERE extractor_name = 'fulltext-evidence-backfill' AND outcome = 'failed'), "
+        "substantive_documents AS MATERIALIZED (SELECT DISTINCT run.document_version_id FROM evidence_extraction_runs AS run JOIN evidence_nodes AS node ON node.extraction_run_id = run.extraction_run_id WHERE run.outcome = 'succeeded' AND node.node_kind <> 'document' AND length(trim(node.text)) > 0 AND NOT EXISTS (SELECT 1 FROM evidence_nodes AS newer WHERE newer.evidence_key = node.evidence_key AND newer.revision > node.revision)) "
+        "SELECT failed.document_version_id FROM failed_documents AS failed WHERE NOT EXISTS (SELECT 1 FROM substantive_documents AS substantive WHERE substantive.document_version_id = failed.document_version_id) ORDER BY failed.document_version_id"
+    ),
+    (True, False): (
+        "WITH failed_documents AS MATERIALIZED (SELECT DISTINCT document_version_id FROM evidence_extraction_runs WHERE extractor_name = 'fulltext-evidence-backfill' AND outcome = 'failed'), "
+        "substantive_documents AS MATERIALIZED (SELECT DISTINCT run.document_version_id FROM evidence_extraction_runs AS run JOIN evidence_nodes AS node ON node.extraction_run_id = run.extraction_run_id WHERE run.outcome = 'succeeded' AND node.node_kind <> 'document' AND length(trim(node.text)) > 0 AND NOT EXISTS (SELECT 1 FROM evidence_nodes AS newer WHERE newer.evidence_key = node.evidence_key AND newer.revision > node.revision)) "
+        "SELECT failed.document_version_id FROM failed_documents AS failed WHERE NOT EXISTS (SELECT 1 FROM substantive_documents AS substantive WHERE substantive.document_version_id = failed.document_version_id) AND NOT EXISTS (SELECT 1 FROM document_semantic_disposition_revisions AS disposition WHERE disposition.document_version_id = failed.document_version_id AND NOT EXISTS (SELECT 1 FROM document_semantic_disposition_revisions AS newer WHERE newer.document_version_id = disposition.document_version_id AND newer.revision > disposition.revision)) ORDER BY failed.document_version_id"
+    ),
+    (False, True): (
+        "WITH failed_documents AS MATERIALIZED (SELECT DISTINCT document_version_id FROM evidence_extraction_runs WHERE extractor_name = 'fulltext-evidence-backfill' AND outcome = 'failed'), "
+        "substantive_documents AS MATERIALIZED (SELECT DISTINCT run.document_version_id FROM evidence_extraction_runs AS run JOIN evidence_nodes AS node ON node.extraction_run_id = run.extraction_run_id WHERE run.outcome = 'succeeded' AND node.node_kind <> 'document' AND length(trim(node.text)) > 0 AND NOT EXISTS (SELECT 1 FROM evidence_nodes AS newer WHERE newer.evidence_key = node.evidence_key AND newer.revision > node.revision) UNION SELECT DISTINCT run.document_version_id FROM evidence_extraction_runs AS run JOIN evidence_node_external_archives AS archive ON archive.extraction_run_id = run.extraction_run_id WHERE run.outcome = 'succeeded' AND EXISTS (SELECT 1 FROM json_each(archive.archived_node_kinds_json) AS k WHERE k.value <> 'document')) "
+        "SELECT failed.document_version_id FROM failed_documents AS failed WHERE NOT EXISTS (SELECT 1 FROM substantive_documents AS substantive WHERE substantive.document_version_id = failed.document_version_id) ORDER BY failed.document_version_id"
+    ),
+    (True, True): (
+        "WITH failed_documents AS MATERIALIZED (SELECT DISTINCT document_version_id FROM evidence_extraction_runs WHERE extractor_name = 'fulltext-evidence-backfill' AND outcome = 'failed'), "
+        "substantive_documents AS MATERIALIZED (SELECT DISTINCT run.document_version_id FROM evidence_extraction_runs AS run JOIN evidence_nodes AS node ON node.extraction_run_id = run.extraction_run_id WHERE run.outcome = 'succeeded' AND node.node_kind <> 'document' AND length(trim(node.text)) > 0 AND NOT EXISTS (SELECT 1 FROM evidence_nodes AS newer WHERE newer.evidence_key = node.evidence_key AND newer.revision > node.revision) UNION SELECT DISTINCT run.document_version_id FROM evidence_extraction_runs AS run JOIN evidence_node_external_archives AS archive ON archive.extraction_run_id = run.extraction_run_id WHERE run.outcome = 'succeeded' AND EXISTS (SELECT 1 FROM json_each(archive.archived_node_kinds_json) AS k WHERE k.value <> 'document')) "
+        "SELECT failed.document_version_id FROM failed_documents AS failed WHERE NOT EXISTS (SELECT 1 FROM substantive_documents AS substantive WHERE substantive.document_version_id = failed.document_version_id) AND NOT EXISTS (SELECT 1 FROM document_semantic_disposition_revisions AS disposition WHERE disposition.document_version_id = failed.document_version_id AND NOT EXISTS (SELECT 1 FROM document_semantic_disposition_revisions AS newer WHERE newer.document_version_id = disposition.document_version_id AND newer.revision > disposition.revision)) ORDER BY failed.document_version_id"
+    ),
+}
+
+
+def _failed_substantive_extraction_query(
+    *,
+    require_missing_disposition: bool,
+    include_external_archives: bool = False,
+) -> str:
+    return _FAILED_SUBSTANTIVE_QUERIES[(require_missing_disposition, include_external_archives)]
 
 
 def _audit_append_only_triggers(
