@@ -418,8 +418,6 @@ def _extract_10k_narrative(path: Path, *, cap: int = _TENK_TEXT_CAP_CHARS) -> st
 
     parts: list[str] = []
     for key, value in cast("dict[str, object]", payload).items():
-        if not isinstance(key, str):
-            continue
         if not _is_narrative_section_key(key):
             continue
         text = _extract_section_text(value)

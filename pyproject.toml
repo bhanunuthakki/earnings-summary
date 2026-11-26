@@ -45,12 +45,12 @@ gsheets = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["src*"]
-exclude = ["venv*", "data*", "transcripts*", "ir_documents*", ".tmp*", ".cache*", "scratch*"]
+exclude = ["venv*", "data*", "transcripts*", "ir_documents*", ".tmp*", ".cache*"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions"]
+extend-exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "alembic/versions"]
 
 [tool.ruff.lint]
 select = [
@@ -105,13 +105,13 @@ include = [
     "src",
     "tests",
 ]
-exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions", "alembic/versions_archived"]
+exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "alembic/versions", "alembic/versions_archived"]
 # `execution` is an import root too: its CLIs import each other as top-level
 # modules (e.g. `import refresh_dcf`) and tests import them (`import comments_server`)
 # after a runtime sys.path.insert. Listing it here lets pyright resolve those —
 # without it every such import is an unresolved-import error with a cascade of
 # Unknowns behind it.
-extraPaths = ["src", "execution", "scratch", "cron"]
+extraPaths = ["src", "execution", "cron"]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false
@@ -134,7 +134,7 @@ reportConstantRedefinition = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
-pythonpath = ["src", "scratch", "execution"]
+pythonpath = ["src", "execution"]
 markers = [
     "unit: Fast unit tests with no DB or network dependency",
     "integration: Subsystem integration tests using SQLite or disk",
