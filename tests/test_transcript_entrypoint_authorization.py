@@ -341,6 +341,92 @@ def test_fetch_qa_calls_only_authorized_issuer_and_replays_without_side_effects(
     assert second.status is fetch.FetchQaStatus.IDEMPOTENT_REPLAY
 
 
+def test_fetch_qa_falls_back_to_aggregator_roic_and_ingests_without_receipt_id(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: Callable[[Any], None],
+) -> None:
+    def validated_transcript(_path: object) -> SimpleNamespace:
+        return SimpleNamespace(status=QaStatus.OK, issues=(), model_dump=qa_dump)
+
+    def qa_dump(**_kwargs: object) -> dict[str, str]:
+        return {"status": "ok"}
+
+    from execution import fetch_qa_transcript as fetch
+    from execution import ingest_transcripts as ingest
+
+    darwin_staging_double(ingest)
+    repo_root = tmp_path / "repo"
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('ACME','Acme','portfolio','12-31','equity')"
+        )
+    fetch.RAW_DIR = repo_root / "transcripts" / "raw"
+    fetch.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
+    fetch.STAGING_DIR.mkdir(parents=True)
+    registrations: list[dict[str, Any]] = []
+
+    def roic_hit(*_args: object) -> AggregatorHit:
+        return fetch.AggregatorHit(
+            source_name="roic",
+            page_url="https://www.roic.ai/quote/ACME/transcripts/2026-year/2-quarter",
+            qa_text="Operator\nWelcome.\n\nJohn Doe\nOpening comments.\n\nJane Analyst\nQuestion?\n",
+            full_text_chars=90,
+        )
+
+    def no_hit(*_args: object) -> None:
+        return None
+
+    def record_registration(*_args: object, **kw: Any) -> None:
+        registrations.append(kw)
+
+    def ignore_local_path(**_kw: object) -> None:
+        return None
+
+    roic_source = next(s for s in fetch.SOURCES if s.provider is TranscriptProvider.ROIC)
+    issuer_source = next(s for s in fetch.SOURCES if s.provider is TranscriptProvider.ISSUER_IR)
+    monkeypatch.setattr(
+        fetch,
+        "SOURCES",
+        (
+            replace(issuer_source, fetch_qa=no_hit),
+            replace(roic_source, fetch_qa=roic_hit),
+        ),
+    )
+    monkeypatch.setattr(fetch, "validate_synthesized_transcript", validated_transcript)
+    monkeypatch.setattr(fetch.index_manager, "register_transcript", record_registration)
+
+    outcome = fetch.fetch_qa(
+        fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2),
+        db_path=db_path,
+        owner_requested=True,
+        as_of=date(2026, 8, 12),
+    )
+    assert outcome.status is fetch.FetchQaStatus.ACQUIRED
+    assert outcome.result is not None
+    assert outcome.result.authorization.request.provider is TranscriptProvider.ROIC
+    assert registrations[0]["source"] == "aggregator_roic"
+
+    monkeypatch.setattr(ingest, "PROJECT_ROOT", repo_root)
+    monkeypatch.setattr(
+        ingest,
+        "_TRANSCRIPT_DIRS",
+        (repo_root / "transcripts" / "processed", repo_root / "transcripts" / "raw"),
+    )
+    monkeypatch.setattr(ingest.index_manager, "update_local_path", ignore_local_path)
+    monkeypatch.setattr(
+        sys, "argv", ["ingest_transcripts.py", "--db", str(db_path), "--ticker", "ACME"]
+    )
+    assert ingest.main() == 0
+    with sqlite3.connect(db_path) as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM transcripts WHERE ticker='ACME'").fetchone()[0] == 1
+        )
+
+
 def test_backfill_split_root_acquisition_stages_and_receipts_under_state_root(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
@@ -529,7 +615,7 @@ def test_refetch_denial_precedes_work_manifest_and_accounting(
     from execution import refetch_aggregator_transcripts as refetch
 
     db_path = tmp_path / "portfolio.db"
-    _stored_company(db_path)
+    _stored_company(db_path, role="index_member")
     manifest_dir = tmp_path / "manifests"
     monkeypatch.setattr(refetch, "_MANIFEST_DIR", manifest_dir)
     monkeypatch.setattr(refetch, "_scope_tickers", selected_tickers)

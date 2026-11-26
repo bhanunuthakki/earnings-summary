@@ -442,6 +442,24 @@ def test_hung_ticker_fails_alone_on_its_unchanged_timeout(
     assert probe.steps_for("BBB") == CHAIN_ORDER
 
 
+def test_build_artifacts_step_uses_extended_timeout(
+    brief_repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _seed(brief_repo, "AAA")
+    probe = _StepProbe(timeouts={("AAA", BUILD)}, body_s=0.01)
+    _install(monkeypatch, probe)
+
+    rc = _run_with_argv(_queue_argv(brief_repo, workers=1, extra=["--force"]))
+
+    assert rc == 0
+    assert probe.timeouts_seen[("AAA", BUILD)] == daily_fetch_and_brief.BUILD_ARTIFACTS_TIMEOUT_S
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["tickers"][0]["status"] == "failed"
+    assert summary["tickers"][0]["stages"][3]["error"] == (
+        f"timeout after {daily_fetch_and_brief.BUILD_ARTIFACTS_TIMEOUT_S}s"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Output parity and summary ordering
 # ---------------------------------------------------------------------------

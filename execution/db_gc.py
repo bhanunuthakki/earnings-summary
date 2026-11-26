@@ -1049,6 +1049,27 @@ def collapse_validation_issues(
 # ---------------------------------------------------------------------------
 
 
+def _fk_referencing_tables(
+    conn: sqlite3.Connection, parent_table: str
+) -> list[tuple[str, str, str]]:
+    """Return ``(child_table, child_col, parent_col)`` for every FK pointing to ``parent_table``."""
+    refs: list[tuple[str, str, str]] = []
+    tables = [
+        str(r[0])
+        for r in conn.execute(
+            "SELECT name FROM main.sqlite_master "
+            "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        )
+    ]
+    for child in tables:
+        if child == parent_table:
+            continue
+        for fk in conn.execute(f'PRAGMA main.foreign_key_list("{child}")'):
+            if str(fk[2]) == parent_table:
+                refs.append((child, str(fk[3]), str(fk[4])))
+    return refs
+
+
 def telemetry_retention(
     conn: sqlite3.Connection,
     *,
@@ -1072,12 +1093,27 @@ def telemetry_retention(
         cols = {r[1] for r in conn.execute(f'PRAGMA table_info("{table}")')}
         if "id" not in cols:
             id_col = "rowid"
+        fk_refs = _fk_referencing_tables(conn, table)
+        fk_guards = "".join(
+            f' AND NOT EXISTS (SELECT 1 FROM main."{child}" AS _fk_c '
+            f'WHERE _fk_c."{child_col}" = _t."{parent_col}")'
+            for child, child_col, parent_col in fk_refs
+        )
         _reset_doomed(conn)
         conn.execute(
-            f'INSERT INTO _gc_doomed (id) SELECT "{id_col}" FROM "{table}" WHERE "{ts_col}" < ?',  # nosec B608 -- identifiers from the internal policy registry; cutoff bound
+            f'INSERT INTO _gc_doomed (id) SELECT _t."{id_col}" FROM main."{table}" AS _t '  # nosec B608 -- identifiers from the internal policy registry + PRAGMA foreign_key_list; cutoff bound
+            f'WHERE _t."{ts_col}" < ?{fk_guards}',
             (cutoff,),
         )
         n = conn.execute("SELECT COUNT(*) FROM _gc_doomed").fetchone()[0]
+        if fk_refs:
+            old_total = conn.execute(
+                f'SELECT COUNT(*) FROM main."{table}" WHERE "{ts_col}" < ?',  # nosec B608 -- identifiers from the internal policy registry; cutoff bound
+                (cutoff,),
+            ).fetchone()[0]
+            protected = max(0, int(old_total) - int(n))
+            if protected:
+                report.detail[f"{table}_protected_referenced"] = protected
         if apply and n:
             _archive_doomed(conn, table=table, run_at=run_at, policy="telemetry", id_col=id_col)
             _delete_batches(

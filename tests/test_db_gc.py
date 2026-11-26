@@ -485,6 +485,39 @@ class TestTelemetryRetention:
         arc = sqlite3.connect(gc_db.parent / "archive" / db_gc.ARCHIVE_NAME)
         assert arc.execute("SELECT COUNT(*) FROM source_calls").fetchone()[0] == 1
 
+    def test_preserves_ingestion_runs_referenced_by_child_fk(self, gc_db: Path) -> None:
+        conn = sqlite3.connect(gc_db)
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_ingestion_runs_run_id ON ingestion_runs(run_id)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS thesis_evaluation_episodes ("
+            "id INTEGER PRIMARY KEY, first_run_id TEXT REFERENCES ingestion_runs(run_id))"
+        )
+        conn.execute(
+            "INSERT INTO ingestion_runs (run_id, started_at) VALUES ('r-referenced', '2025-01-01')"
+        )
+        conn.execute(
+            "INSERT INTO ingestion_runs (run_id, started_at) VALUES ('r-unreferenced', '2025-01-01')"
+        )
+        conn.execute(
+            "INSERT INTO thesis_evaluation_episodes (id, first_run_id) VALUES (1, 'r-referenced')"
+        )
+        conn.commit()
+        conn.close()
+
+        report = _run(gc_db, apply=True, policies=["telemetry"], retention_days=90)
+        (pol,) = report.policies
+        assert pol.rows_deleted["ingestion_runs"] == 1
+        assert pol.detail["ingestion_runs_protected_referenced"] == 1
+
+        conn = sqlite3.connect(gc_db)
+        surviving = [
+            r[0] for r in conn.execute("SELECT run_id FROM ingestion_runs ORDER BY run_id")
+        ]
+        assert surviving == ["r-referenced"]
+        conn.close()
+
 
 class TestLlmArtifactRetention:
     @staticmethod

@@ -603,3 +603,71 @@ def test_0063_preserves_historical_receipt_and_admits_current_receipt(
         assert conn.execute("SELECT COUNT(*) FROM transcript_acquisition_receipts").fetchone() == (
             2,
         )
+
+
+def test_migration_0071_admits_aggregator_providers_and_blocks_downgrade_when_used(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: None,
+) -> None:
+    database = tmp_path / "portfolio.db"
+    cfg = _config(database)
+    command.upgrade(cfg, "0070_source_coverage_document_version_index")
+
+    repo_root = tmp_path
+    staging_root = repo_root / ".tmp" / "transcript-acquisition"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    with connect_sqlite(database, role=SQLiteConnectionRole.WRITER, schema_preflight=False) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies "
+            "(ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('ACME','Acme','portfolio','12-31','equity')"
+        )
+        conn.commit()
+
+    def _window(*_args: object, **_kwargs: object) -> ReportedPeriodWindow:
+        return ReportedPeriodWindow(
+            status=ReportedPeriodStatus.COMPLETE,
+            period_ends=(date(2026, 6, 30), date(2026, 3, 31)),
+            snapshot_ids=("sec-1",),
+            fiscal_year_end="12-31",
+            proof_sha256="a" * 64,
+            reason="qualified",
+        )
+
+    from pipeline import transcript_acquisition as acquisition
+
+    monkeypatch.setattr(acquisition, "reported_period_window_from_inventory", _window)
+    command.upgrade(cfg, "0071_admit_aggregator_transcript_providers")
+
+    roic_req = TranscriptAcquisitionRequest(
+        schema_version="transcript-acquisition-request@2",
+        entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
+        canonical_ticker="ACME",
+        fiscal_year=2026,
+        fiscal_quarter=2,
+        as_of=date(2026, 8, 12),
+        source_type=SourceType.IR_DOC,
+        document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+        provider=TranscriptProvider.ROIC,
+        owner_requested=True,
+        existing_artifact=False,
+        existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+        source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+        source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
+    )
+    with connect_sqlite(database, role=SQLiteConnectionRole.WRITER, schema_preflight=False) as conn:
+        auth = authorize_transcript_request(conn, roic_req)
+        artifact = stage_authorized_payload(
+            auth,
+            payload=b"Operator\nWelcome.\n",
+            private_root=staging_root,
+            source_url="https://www.roic.ai/quote/ACME/transcripts/2026-year/2-quarter",
+            canonical_document_path=Path("transcripts/raw/ACME_Q2_2026.txt"),
+        )
+        persist_authorized_transcript_artifact(
+            conn, artifact, project_root=repo_root, trusted_staging_root=staging_root
+        )
+        conn.commit()
+    with pytest.raises(RuntimeError, match="cannot downgrade while aggregator transcript receipts"):
+        command.downgrade(cfg, "0070_source_coverage_document_version_index")
