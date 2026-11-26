@@ -98,7 +98,6 @@ AUDITED_LEGACY_FACT_READS = {
     "execution/mark_kpi_cadence.py": 2,
     "execution/onboard_pending_tickers.py": 2,
     "execution/pressure_test_thesis.py": 1,
-    "execution/prune_misscaled_capture_facts.py": 1,
     "execution/retype_misfiled_sec_ir_docs.py": 2,
     # Promoted from scratch/: lists recent KPI observations for prompt seeding.
     "execution/seed_kpi_registry.py": 1,

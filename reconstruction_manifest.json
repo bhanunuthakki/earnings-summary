@@ -26,7 +26,6 @@
         "alembic/versions/0055_kpi_definition_subject_bindings.py",
         "src/pipeline/kpi_legacy_disposition_capture.py",
         "src/pipeline/kpi_semantics.py",
-        "src/provenance/financial_derivations.py",
         "src/provenance/research_snapshot.py",
         "src/provenance/population_research_snapshots.py",
         "execution/populate_research_snapshots.py",
@@ -126,7 +125,6 @@
         "src/provenance/report_evidence_contract.py",
         "execution/preview_meli_inputs.py",
         "src/filings/sec_submission_text.py",
-        "src/provenance/sec_submission_import.py",
         "src/provenance/historical_public_witness.py"
       ],
       "dependencies": [
@@ -141,7 +139,7 @@
         "pytest tests/test_analysis_scope.py tests/test_historical_analysis_scope.py tests/test_historical_research_boundary.py tests/test_report_evidence_scope.py tests/test_decision_brief_report_scope.py tests/test_analysis_scope_cli.py -q",
         "pytest tests/test_report_pdf_table_scope.py -q",
         "pytest tests/test_meli_input_evidence.py -q",
-        "pytest tests/test_sec_submission_text.py tests/test_sec_submission_import.py tests/test_sec_subject_date_witness.py -q"
+        "pytest tests/test_sec_submission_text.py tests/test_sec_subject_date_witness.py -q"
       ],
       "documentation": [
         "AGENTS.md",
